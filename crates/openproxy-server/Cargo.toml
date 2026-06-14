@@ -1,0 +1,30 @@
+[package]
+name = "openproxy-server"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[[bin]]
+name = "openproxy"
+path = "src/main.rs"
+
+[lib]
+name = "openproxy_server"
+path = "src/lib.rs"
+
+[dependencies]
+openproxy-core = { path = "../openproxy-core" }
+tokio = { workspace = true }
+axum = { workspace = true, features = ["ws"] }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+anyhow = { workspace = true }
+reqwest = { workspace = true }
+uuid = { workspace = true }
+futures = { workspace = true }
+chrono = { workspace = true }
+tokio-stream = { workspace = true }

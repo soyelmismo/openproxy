@@ -1,0 +1,3 @@
+-- 000003_add_race_to_usage.sql
+ALTER TABLE usage ADD COLUMN race_total INTEGER NOT NULL DEFAULT 1;
+ALTER TABLE usage ADD COLUMN race_lost INTEGER NOT NULL DEFAULT 0;

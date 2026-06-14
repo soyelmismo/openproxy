@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>OAuth Callback</title>
+  <style>
+    body { font-family: sans-serif; padding: 2rem; background: #1a1a1a; color: #e0e0e0; }
+    .status { margin-top: 2rem; }
+  </style>
+</head>
+<body>
+  <h2>OAuth Authorization</h2>
+  <div class="status" id="status">Processing authorization...</div>
+  <script>
+    (async function() {
+      const status = document.getElementById('status');
+      try {
+        const params = new URLSearchParams(window.location.search);
+        const code = params.get('code');
+        const error = params.get('error');
+
+        if (error) {
+          status.textContent = 'Authorization failed: ' + error;
+          return;
+        }
+
+        if (!code) {
+          status.textContent = 'No authorization code received';
+          return;
+        }
+
+        // Send the code to the parent window
+        if (window.opener) {
+          window.opener.postMessage({ type: 'oauth_code', code: code }, window.location.origin);
+          status.textContent = 'Authorization successful! You can close this window.';
+          setTimeout(() => window.close(), 2000);
+        } else {
+          status.textContent = 'Authorization code: ' + code;
+        }
+      } catch (err) {
+        status.textContent = 'Error: ' + err.message;
+      }
+    })();
+  </script>
+</body>
+</html>

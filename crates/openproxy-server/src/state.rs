@@ -1,0 +1,246 @@
+//! Application state shared across all handlers.
+//!
+//! `AppState` is constructed once at startup and then cloned (via `Arc`
+//! internally) into every axum handler. It owns:
+//!
+//! - The parsed [`AppConfig`] (timeouts, racing, logging, etc.).
+//! - The SQLite [`DbPool`] used for all persistence.
+//! - The [`MasterKey`] used to decrypt provider API keys at request time.
+//! - The registry of built-in [`ProviderAdapter`]s.
+//! - A shared [`reqwest::Client`] used for upstream LLM calls.
+//!
+//! All heavy fields are wrapped in `Arc` so handler signatures stay
+//! cheap-to-clone and the type itself is `Send + Sync` by construction.
+
+use openproxy_core::{
+    adapters, db,
+    oauth,
+    secrets::MasterKey,
+    usage, AppConfig,
+};
+use std::sync::Arc;
+
+/// Per-process application state.
+///
+/// Cheap to clone: every field is either an `Arc` or a cheap handle
+/// (`reqwest::Client` is internally `Arc`-backed, [`AppConfig`] is `Clone`).
+#[derive(Clone)]
+pub struct AppState {
+    config: AppConfig,
+    db_pool: Arc<db::DbPool>,
+    master_key: Arc<MasterKey>,
+    adapters: Arc<Vec<Arc<dyn adapters::ProviderAdapter>>>,
+    http_client: reqwest::Client,
+    usage_tx: tokio::sync::broadcast::Sender<usage::RecentUsageRow>,
+}
+
+impl AppState {
+    /// Build state from a fully-loaded config.
+    ///
+    /// Steps (in order, per spec §2 / §10):
+    /// 1. Expand the configured database path and ensure its parent dir
+    ///    exists.
+    /// 2. Open the SQLite pool and run embedded migrations on the writer
+    ///    connection.
+    /// 3. Load the master encryption key from the
+    ///    `OPENPROXY_MASTER_KEY` env var.
+    /// 4. Construct the shared HTTP client for upstream calls.
+    /// 5. Materialize the registry of built-in provider adapters.
+    pub async fn new(config: AppConfig) -> anyhow::Result<Self> {
+        // 1. Open DB and run migrations.
+        let path = config.expanded_database_path();
+        if let Some(parent) = path.parent() {
+            if !parent.as_os_str().is_empty() {
+                std::fs::create_dir_all(parent)?;
+            }
+        }
+        let db_pool = Arc::new(db::DbPool::open(&path)?);
+        {
+            let mut w = db_pool.writer();
+            db::migrations::run(&mut w)?;
+            // Auto-seed the three built-in providers (OpenRouter, MiniMax
+            // Coding, OpenCode Zen) so the dashboard shows them on first
+            // run. The seed is idempotent: existing rows are skipped.
+            let seeded = openproxy_core::seed::seed_builtin_providers(&w)?;
+            if seeded > 0 {
+                tracing::info!(
+                    seeded,
+                    "auto-seeded built-in providers on first start"
+                );
+            }
+            // Seed the virtual "combo" provider row used as a placeholder
+            // `provider_id` on sub-combo (combo-in-combo) targets. Idempotent
+            // and decoupled from the built-in list because there is no
+            // adapter registered against this id; it exists in the
+            // `providers` table only to satisfy the combo_targets FK and
+            // the `p.active = 1` filter in `list_targets`.
+            if openproxy_core::seed::seed_virtual_combo_provider(&w)? {
+                tracing::info!("auto-seeded virtual 'combo' provider for sub-combo targets");
+            }
+            // Backfill model metadata (context_length, capabilities, …)
+            // for any rows that pre-date migration 000014. Idempotent:
+            // a second start touches zero rows. Logged so operators can
+            // see the migration happened.
+            let backfilled = openproxy_core::seed::backfill_model_metadata(&w)?;
+            if backfilled > 0 {
+                tracing::info!(
+                    backfilled,
+                    "backfilled model metadata from heuristics on first start"
+                );
+            }
+            // First-run bootstrap: if the api_keys table is empty,
+            // create a single `["manage", "chat"]` key and print the
+            // plaintext to the logs + stderr. The operator copies it
+            // out of the boot logs and uses it for everything (admin
+            // calls, chat calls) until they rotate to a per-client
+            // key. No-op on subsequent boots.
+            if let Some(b) = openproxy_core::bootstrap::ensure_bootstrap_key(
+                &w, "bootstrap"
+            )? {
+                tracing::info!(
+                    id = b.id.0,
+                    prefix = ?b.key_prefix,
+                    "bootstrap key ready (see WARN log / stderr for plaintext)"
+                );
+            }
+        }
+
+        // 2. Master key from env.
+        let master_key = Arc::new(MasterKey::from_env()?);
+
+        // 3. HTTP client for upstream calls.
+        let http_client = reqwest::Client::builder()
+            .user_agent("openproxy/0.1")
+            .build()?;
+
+        // 4. Adapters.
+        let adapters = Arc::new(adapters::builtin_adapters());
+
+        // 5. Usage broadcast sender for admin live-log WebSockets.
+        let usage_tx = usage::init_usage_broadcast();
+
+        // 6. Background prune of expired cooldowns. The
+        //    `target_cooldowns` table is append-mostly (failures
+        //    insert, successes delete, the loop's own UPSERT on a
+        //    second failure just updates the existing row), but
+        //    abandoned rows — a target whose combo was deleted,
+        //    for example, or one that's been parked for hours —
+        //    would otherwise live forever. The 60-second cadence
+        //    is the same as the dashboard's poll interval, so the
+        //    "⏸ cooldown" badge can't visibly outlive its row by
+        //    more than a minute.
+        //
+        //    We spawn before returning `AppState` so the task is
+        //    anchored to the tokio runtime the caller is already
+        //    driving. The task holds only an `Arc<DbPool>`, so the
+        //    process can shut down without an explicit cancel
+        //    signal: dropping the last `DbPool` clone is enough.
+        let prune_pool = db_pool.clone();
+        tokio::spawn(async move {
+            let mut tick = tokio::time::interval(std::time::Duration::from_secs(60));
+            // First tick fires immediately; skip it so we don't
+            // double-prune on a fresh boot (migrations just ran,
+            // there are no expired rows yet).
+            tick.tick().await;
+            loop {
+                tick.tick().await;
+                let pruned = {
+                    let w = prune_pool.writer();
+                    openproxy_core::cooldown::prune_expired(&w)
+                };
+                match pruned {
+                    Ok(0) => {}
+                    Ok(n) => {
+                        tracing::info!(pruned = n, "pruned expired target cooldowns");
+                    }
+                    Err(e) => {
+                        tracing::warn!(error = %e, "cooldown prune tick failed");
+                    }
+                }
+            }
+        });
+
+        // 7. Background OAuth refresh scheduler. Walks the
+        //    `accounts` table every 60s looking for OAuth accounts
+        //    whose access token expires within the next 15 minutes
+        //    and proactively refreshes them. The 15-minute window
+        //    is large enough that the refreshed token is in place
+        //    before any in-flight chat call needs it, and small
+        //    enough that the scheduler is not constantly
+        //    thrashing on tokens that have years of validity
+        //    remaining. Like the cooldown pruner, the task
+        //    holds only an `Arc<DbPool>` and a `reqwest::Client`
+        //    (the latter is internally `Arc`-backed and cheaply
+        //    cloneable).
+        let refresh_pool = db_pool.clone();
+        let refresh_key = master_key.clone();
+        let refresh_client = reqwest::Client::builder()
+            .user_agent("openproxy/0.1")
+            .build()
+            .map_err(|e| {
+                anyhow::anyhow!("failed to build refresh http client: {e}")
+            })?;
+        // The registry of OAuth providers. For now we register the
+        // built-in OAuth providers (Antigravity, Antigravity CLI,
+        // Kiro); custom OAuth providers would extend this list. The
+        // trait object is `Send + Sync` so the scheduler can
+        // `await` its `refresh_token` method directly. The Vec is
+        // moved into the spawned task; the only reference is the
+        // one the task owns.
+        let refresh_providers: Arc<Vec<Box<dyn oauth::OAuthProvider + Send + Sync>>> =
+            Arc::new(vec![
+                Box::new(openproxy_core::oauth_antigravity::AntigravityOAuthProvider::new()),
+                Box::new(openproxy_core::oauth_kiro::KiroOAuthProvider::new()),
+            ]);
+        tokio::spawn(async move {
+            oauth::start_refresh_scheduler(
+                refresh_pool,
+                refresh_key,
+                refresh_client,
+                refresh_providers,
+                60,    // check every 60s
+                900,   // refresh tokens that expire in the next 15min
+            )
+            .await;
+        });
+
+        Ok(Self {
+            config,
+            db_pool,
+            master_key,
+            adapters,
+            http_client,
+            usage_tx,
+        })
+    }
+
+    /// Borrow the parsed configuration.
+    pub fn config(&self) -> &AppConfig {
+        &self.config
+    }
+
+    /// Borrow the SQLite connection pool.
+    pub fn db_pool(&self) -> &Arc<db::DbPool> {
+        &self.db_pool
+    }
+
+    /// Borrow the master encryption key.
+    pub fn master_key(&self) -> &Arc<MasterKey> {
+        &self.master_key
+    }
+
+    /// Borrow the registry of built-in provider adapters.
+    pub fn adapters(&self) -> &Arc<Vec<Arc<dyn adapters::ProviderAdapter>>> {
+        &self.adapters
+    }
+
+    /// Borrow the shared HTTP client used for upstream calls.
+    pub fn http_client(&self) -> &reqwest::Client {
+        &self.http_client
+    }
+
+    /// Borrow the usage broadcast sender.
+    pub fn usage_tx(&self) -> tokio::sync::broadcast::Sender<usage::RecentUsageRow> {
+        self.usage_tx.clone()
+    }
+}

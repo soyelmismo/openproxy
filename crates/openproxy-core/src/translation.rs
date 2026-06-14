@@ -1,0 +1,1056 @@
+//! Translation between OpenAI Chat Completions and Anthropic/Gemini formats.
+//! Also includes streaming SSE translation for Anthropic -> OpenAI.
+
+use crate::error::{CoreError, Result};
+use serde::de::Deserializer;
+use serde::{Deserialize, Serialize};
+use serde_json::{json, Value};
+
+// =====================
+// OpenAI Chat Completions types (input/output)
+// =====================
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OpenAIRequest {
+    pub model: String,
+    pub messages: Vec<OpenAIMessage>,
+    #[serde(default)]
+    pub stream: bool,
+    #[serde(default)]
+    pub temperature: Option<f32>,
+    #[serde(default)]
+    pub max_tokens: Option<u32>,
+    #[serde(default)]
+    pub top_p: Option<f32>,
+    #[serde(default)]
+    pub stop: Option<Vec<String>>,
+    #[serde(flatten)]
+    pub extra: serde_json::Map<String, serde_json::Value>,
+}
+
+fn deserialize_optional_content<'de, D>(deserializer: D) -> std::result::Result<Option<Value>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    Value::deserialize(deserializer).map(Some)
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OpenAIMessage {
+    /// "system" | "user" | "assistant" | "tool" | "function" | "developer"
+    pub role: String,
+    #[serde(default, deserialize_with = "deserialize_optional_content")]
+    pub content: Option<serde_json::Value>,
+    /// Optional `name` for the speaker (used by a few multi-user
+    /// prompts). Serialized only when `Some` — emitting `"name": null`
+    /// would trip up some upstream validators (notably OpenRouter's
+    /// Nemotron path, which uses the OpenAI Python SDK v1.x Pydantic
+    /// validator and resolves the discriminated
+    /// `ChatCompletionMessageParam` union to the `developer` variant
+    /// when a `name` key is present with a `null` value, then
+    /// complains the role is not `"developer"`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_call_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_calls: Option<Vec<serde_json::Value>>,
+    #[serde(default, flatten)]
+    pub extra: serde_json::Map<String, serde_json::Value>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OpenAIResponse {
+    pub id: String,
+    /// "chat.completion"
+    pub object: String,
+    pub created: u64,
+    pub model: String,
+    pub choices: Vec<OpenAIChoice>,
+    pub usage: Option<OpenAIUsage>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OpenAIChoice {
+    pub index: u32,
+    pub message: OpenAIMessage,
+    pub finish_reason: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OpenAIUsage {
+    pub prompt_tokens: u32,
+    pub completion_tokens: u32,
+    pub total_tokens: u32,
+}
+
+// =====================
+// Anthropic Messages types
+// =====================
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AnthropicRequest {
+    pub model: String,
+    pub messages: Vec<AnthropicMessage>,
+    pub max_tokens: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub system: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub temperature: Option<f32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub top_p: Option<f32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stop_sequences: Option<Vec<String>>,
+    #[serde(default)]
+    pub stream: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AnthropicMessage {
+    /// "user" | "assistant"
+    pub role: String,
+    pub content: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AnthropicResponse {
+    pub id: String,
+    /// "message"
+    #[serde(rename = "type")]
+    pub response_type: String,
+    /// "assistant"
+    pub role: String,
+    pub content: Vec<AnthropicContentBlock>,
+    pub model: String,
+    #[serde(default)]
+    pub stop_reason: Option<String>,
+    pub usage: AnthropicUsage,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AnthropicContentBlock {
+    /// "text"
+    #[serde(rename = "type")]
+    pub block_type: String,
+    pub text: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AnthropicUsage {
+    pub input_tokens: u32,
+    pub output_tokens: u32,
+}
+
+/// Default max_tokens used when the client doesn't provide one. Anthropic requires it.
+pub const DEFAULT_MAX_TOKENS: u32 = 4096;
+
+/// Default max_output_tokens for Gemini when the client doesn't provide one.
+pub const DEFAULT_GEMINI_MAX_OUTPUT_TOKENS: u32 = 8192;
+
+// =====================
+// Gemini types
+// =====================
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GeminiRequest {
+    pub contents: Vec<GeminiContent>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub system_instruction: Option<GeminiContent>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub generation_config: Option<GeminiGenerationConfig>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GeminiContent {
+    pub role: String,
+    pub parts: Vec<GeminiPart>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GeminiPart {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GeminiGenerationConfig {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_output_tokens: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub temperature: Option<f32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub top_p: Option<f32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stop_sequences: Option<Vec<String>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GeminiResponse {
+    #[serde(default)]
+    pub candidates: Vec<GeminiCandidate>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub usage_metadata: Option<GeminiUsageMetadata>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GeminiCandidate {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub content: Option<GeminiContent>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub finish_reason: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GeminiUsageMetadata {
+    #[serde(default)]
+    pub prompt_token_count: u32,
+    #[serde(default)]
+    pub candidates_token_count: u32,
+    #[serde(default)]
+    pub total_token_count: u32,
+}
+
+// =====================
+// Conversion functions
+// =====================
+
+fn message_content_to_text(content: &Option<serde_json::Value>) -> String {
+    match content {
+        Some(Value::String(s)) => s.clone(),
+        Some(Value::Array(parts)) => parts
+            .iter()
+            .map(openai_content_part_to_text)
+            .filter(|s| !s.is_empty())
+            .collect::<Vec<_>>()
+            .join(""),
+        Some(value) => value.to_string(),
+        None => String::new(),
+    }
+}
+
+fn openai_content_part_to_text(part: &serde_json::Value) -> String {
+    if let Some(text) = part.get("text").and_then(|v| v.as_str()) {
+        return text.to_string();
+    }
+
+    if let Some(content) = part.get("content").and_then(|v| v.as_str()) {
+        return content.to_string();
+    }
+
+    match part {
+        serde_json::Value::String(s) => s.clone(),
+        serde_json::Value::Null => String::new(),
+        other => other.to_string(),
+    }
+}
+
+fn message_content_to_gemini_parts(content: &Option<serde_json::Value>) -> Vec<GeminiPart> {
+    match content {
+        Some(Value::Array(parts)) => parts
+            .iter()
+            .map(|part| GeminiPart {
+                text: Some(openai_content_part_to_text(part)),
+            })
+            .collect(),
+        Some(Value::Null) => vec![GeminiPart { text: Some(String::new()) }],
+        Some(value) => vec![GeminiPart {
+            text: Some(value.to_string()),
+        }],
+        None => vec![GeminiPart { text: Some(String::new()) }],
+    }
+}
+
+/// Convert OpenAI request to Anthropic request.
+///
+/// - Extracts system messages (role=system) and joins them with "\n\n" into
+///   `AnthropicRequest.system`.
+/// - Remaining messages with role=user|assistant go into `AnthropicRequest.messages`.
+/// - Messages with other roles are dropped (validation concern is upstream).
+/// - If no system messages, system is None.
+/// - `max_tokens` is required by Anthropic; defaults to [`DEFAULT_MAX_TOKENS`] when absent.
+pub fn openai_to_anthropic(req: &OpenAIRequest) -> AnthropicRequest {
+    let mut system_parts: Vec<String> = Vec::new();
+    let mut conversation: Vec<AnthropicMessage> = Vec::with_capacity(req.messages.len());
+
+    for m in &req.messages {
+        match m.role.as_str() {
+            "system" => system_parts.push(message_content_to_text(&m.content)),
+            "user" | "assistant" => conversation.push(AnthropicMessage {
+                role: m.role.clone(),
+                content: message_content_to_text(&m.content),
+            }),
+            // Unknown roles are ignored at the translation boundary.
+            _ => {}
+        }
+    }
+
+    let system = if system_parts.is_empty() {
+        None
+    } else {
+        Some(system_parts.join("\n\n"))
+    };
+
+    AnthropicRequest {
+        model: req.model.clone(),
+        messages: conversation,
+        max_tokens: req.max_tokens.unwrap_or(DEFAULT_MAX_TOKENS),
+        system,
+        temperature: req.temperature,
+        top_p: req.top_p,
+        stop_sequences: req.stop.clone(),
+        stream: req.stream,
+    }
+}
+
+/// Convert Anthropic response to OpenAI response.
+///
+/// - `choices[0].message.content` = concatenation of all text content blocks.
+/// - `usage`: `prompt_tokens=input_tokens`, `completion_tokens=output_tokens`,
+///   `total_tokens=sum`.
+/// - `finish_reason` mapped from `stop_reason` using Anthropic -> OpenAI semantics.
+pub fn anthropic_to_openai(resp: &AnthropicResponse) -> OpenAIResponse {
+    let combined: String = resp
+        .content
+        .iter()
+        .filter(|b| b.block_type == "text")
+        .map(|b| b.text.as_str())
+        .collect::<Vec<_>>()
+        .join("");
+
+    let prompt_tokens = resp.usage.input_tokens;
+    let completion_tokens = resp.usage.output_tokens;
+    let total_tokens = prompt_tokens.saturating_add(completion_tokens);
+
+    let message = OpenAIMessage {
+        role: "assistant".to_string(),
+        content: Some(Value::String(combined)),
+        name: None,
+        tool_call_id: None,
+        tool_calls: None,
+        extra: serde_json::Map::new(),
+    };
+
+    let choice = OpenAIChoice {
+        index: 0,
+        message,
+        finish_reason: resp.stop_reason.as_deref().map(map_finish_reason),
+    };
+
+    OpenAIResponse {
+        id: resp.id.clone(),
+        object: "chat.completion".to_string(),
+        created: 0,
+        model: resp.model.clone(),
+        choices: vec![choice],
+        usage: Some(OpenAIUsage {
+            prompt_tokens,
+            completion_tokens,
+            total_tokens,
+        }),
+    }
+}
+
+/// Map an Anthropic stop_reason value to an OpenAI finish_reason value.
+fn map_finish_reason(stop_reason: &str) -> String {
+    match stop_reason {
+        "end_turn" => "stop".to_string(),
+        "max_tokens" => "length".to_string(),
+        "tool_use" => "tool_calls".to_string(),
+        // stop_sequence and unknown values fall back to "stop".
+        other => {
+            // Treat anything unknown as "stop" to stay close to OpenAI's vocabulary.
+            let _ = other;
+            "stop".to_string()
+        }
+    }
+}
+
+// =====================
+// Gemini conversion functions
+// =====================
+
+/// Convert OpenAI request to Gemini request.
+///
+/// - System messages → `system_instruction` (Gemini 1.5+).
+/// - User messages → `contents` with role "user".
+/// - Assistant messages → `contents` with role "model".
+/// - `max_tokens` → `generation_config.max_output_tokens`.
+/// - `temperature` → `generation_config.temperature`.
+/// - `top_p` → `generation_config.top_p`.
+/// - `stop` → `generation_config.stop_sequences`.
+pub fn openai_to_gemini(req: &OpenAIRequest) -> GeminiRequest {
+    let mut system_parts: Vec<String> = Vec::new();
+    let mut contents: Vec<GeminiContent> = Vec::with_capacity(req.messages.len());
+
+    for m in &req.messages {
+        match m.role.as_str() {
+            "system" => system_parts.push(message_content_to_text(&m.content)),
+            "user" => {
+                contents.push(GeminiContent {
+                    role: "user".to_string(),
+                    parts: message_content_to_gemini_parts(&m.content),
+                });
+            }
+            "assistant" => {
+                contents.push(GeminiContent {
+                    role: "model".to_string(),
+                    parts: message_content_to_gemini_parts(&m.content),
+                });
+            }
+            // Unknown roles are ignored at the translation boundary.
+            _ => {}
+        }
+    }
+
+    let system_instruction = if system_parts.is_empty() {
+        None
+    } else {
+        Some(GeminiContent {
+            role: "system".to_string(),
+            parts: vec![GeminiPart {
+                text: Some(system_parts.join("\n\n")),
+            }],
+        })
+    };
+
+    let generation_config = GeminiGenerationConfig {
+        max_output_tokens: req.max_tokens.or(Some(DEFAULT_GEMINI_MAX_OUTPUT_TOKENS)),
+        temperature: req.temperature,
+        top_p: req.top_p,
+        stop_sequences: req.stop.clone(),
+    };
+
+    GeminiRequest {
+        contents,
+        system_instruction,
+        generation_config: Some(generation_config),
+    }
+}
+
+/// Map a Gemini finish_reason to an OpenAI finish_reason.
+fn map_gemini_finish_reason(reason: &str) -> String {
+    match reason {
+        "STOP" => "stop".to_string(),
+        "MAX_TOKENS" => "length".to_string(),
+        "SAFETY" | "RECITATION" | "BLOCKLIST" => "content_filter".to_string(),
+        other => {
+            let _ = other;
+            "stop".to_string()
+        }
+    }
+}
+
+/// Convert Gemini response to OpenAI response.
+///
+/// - `candidates[0].content.parts[0].text` → `choices[0].message.content`.
+/// - `usage_metadata.prompt_token_count` → `usage.prompt_tokens`.
+/// - `usage_metadata.candidates_token_count` → `usage.completion_tokens`.
+/// - `usage_metadata.total_token_count` → `usage.total_tokens`.
+pub fn gemini_to_openai(resp: &GeminiResponse) -> OpenAIResponse {
+    let candidate = resp.candidates.first();
+
+    let content = candidate
+        .and_then(|c| c.content.as_ref())
+        .and_then(|c| {
+            let text: String = c
+                .parts
+                .iter()
+                .filter_map(|p| p.text.as_deref())
+                .collect();
+            if text.is_empty() {
+                None
+            } else {
+                Some(text)
+            }
+        })
+    .unwrap_or_default();
+
+    let finish_reason = candidate
+        .and_then(|c| c.finish_reason.as_deref())
+        .map(map_gemini_finish_reason);
+
+    let usage = resp.usage_metadata.as_ref().map(|u| OpenAIUsage {
+        prompt_tokens: u.prompt_token_count,
+        completion_tokens: u.candidates_token_count,
+        total_tokens: u.total_token_count,
+    });
+
+    OpenAIResponse {
+        id: format!("gemini-{}", chrono::Utc::now().timestamp_millis()),
+        object: "chat.completion".to_string(),
+        created: chrono::Utc::now().timestamp() as u64,
+        model: String::new(),
+        choices: vec![OpenAIChoice {
+            index: 0,
+                message: OpenAIMessage {
+                    role: "assistant".to_string(),
+                    content: Some(Value::String(content)),
+                    name: None,
+                    tool_call_id: None,
+                    tool_calls: None,
+                    extra: serde_json::Map::new(),
+                },
+            finish_reason,
+        }],
+        usage,
+    }
+}
+
+// =====================
+// Anthropic SSE event types
+// =====================
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum AnthropicSseEvent {
+    MessageStart {
+        message: AnthropicResponse,
+    },
+    ContentBlockStart {
+        index: u32,
+        content_block: AnthropicContentBlock,
+    },
+    ContentBlockDelta {
+        index: u32,
+        /// {type: "text_delta", text: "..."}
+        delta: serde_json::Value,
+    },
+    ContentBlockStop {
+        index: u32,
+    },
+    MessageDelta {
+        /// Contains stop_reason.
+        delta: serde_json::Value,
+        usage: Option<AnthropicUsage>,
+    },
+    MessageStop,
+    Ping,
+}
+
+/// Convert a single Anthropic SSE event to zero or more OpenAI SSE chunks.
+///
+/// Each returned string is a full SSE frame: `data: {json}\n\n`. Returns an
+/// empty `Vec` if the event should be skipped (e.g. `ping`).
+///
+/// `chunk_id`, `created`, and `model` are taken from the outer response context
+/// since Anthropic events don't repeat them on every frame.
+pub fn anthropic_sse_to_openai_chunks(
+    event: &AnthropicSseEvent,
+    chunk_id: &str,
+    created: u64,
+    model: &str,
+) -> Vec<String> {
+    match event {
+        AnthropicSseEvent::Ping => Vec::new(),
+
+        AnthropicSseEvent::MessageStart { .. } => {
+            // Emit a role-only chunk so clients can start streaming immediately.
+            let chunk = serde_json::json!({
+                "id": chunk_id,
+                "object": "chat.completion.chunk",
+                "created": created,
+                "model": model,
+                "choices": [{
+                    "index": 0,
+                    "delta": { "role": "assistant" },
+                    "finish_reason": serde_json::Value::Null
+                }]
+            });
+            vec![format_sse_data(&chunk)]
+        }
+
+        AnthropicSseEvent::ContentBlockStart { .. } | AnthropicSseEvent::ContentBlockStop { .. } => {
+            // No-op boundaries: text is delivered through deltas only.
+            Vec::new()
+        }
+
+        AnthropicSseEvent::ContentBlockDelta { delta, .. } => {
+            // Extract the text fragment if the delta is a text_delta.
+            let text = delta
+                .get("text")
+                .and_then(|v| v.as_str())
+                .unwrap_or_default();
+
+            let chunk = serde_json::json!({
+                "id": chunk_id,
+                "object": "chat.completion.chunk",
+                "created": created,
+                "model": model,
+                "choices": [{
+                    "index": 0,
+                    "delta": { "content": text },
+                    "finish_reason": serde_json::Value::Null
+                }]
+            });
+            vec![format_sse_data(&chunk)]
+        }
+
+        AnthropicSseEvent::MessageDelta { delta, .. } => {
+            // The delta carries stop_reason. Forward it as a finish_reason chunk.
+            let stop_reason = delta
+                .get("stop_reason")
+                .and_then(|v| v.as_str())
+                .map(map_finish_reason);
+
+            let choice = match stop_reason {
+                Some(reason) => json!({
+                    "index": 0,
+                    "delta": {},
+                    "finish_reason": reason,
+                }),
+                None => json!({
+                    "index": 0,
+                    "delta": {},
+                    "finish_reason": serde_json::Value::Null,
+                }),
+            };
+
+            let chunk = serde_json::json!({
+                "id": chunk_id,
+                "object": "chat.completion.chunk",
+                "created": created,
+                "model": model,
+                "choices": [choice],
+            });
+            vec![format_sse_data(&chunk)]
+        }
+
+        AnthropicSseEvent::MessageStop => {
+            // Final terminator. We send a chunk with finish_reason=stop and the
+            // [DONE] sentinel so both common client patterns work.
+            let chunk = serde_json::json!({
+                "id": chunk_id,
+                "object": "chat.completion.chunk",
+                "created": created,
+                "model": model,
+                "choices": [{
+                    "index": 0,
+                    "delta": {},
+                    "finish_reason": "stop"
+                }]
+            });
+            vec![format_sse_data(&chunk), "data: [DONE]\n\n".to_string()]
+        }
+    }
+}
+
+/// Parse a raw SSE `data:` line (with or without the `data: ` prefix) into an
+/// [`AnthropicSseEvent`]. Returns:
+///
+/// - `Ok(Some(event))` for valid event payloads.
+/// - `Ok(None)` for lines that should be ignored (ping, comments, empty payload,
+///   non-`data:` lines, `[DONE]` sentinel).
+/// - `Err(CoreError::Parse(_))` for malformed JSON or event payload that should
+///   be a valid event.
+pub fn parse_anthropic_sse_line(line: &str) -> Result<Option<AnthropicSseEvent>> {
+    let trimmed = line.trim_end_matches(['\r', '\n']);
+
+    // Empty / comment lines are ignored.
+    if trimmed.is_empty() || trimmed.starts_with(':') {
+        return Ok(None);
+    }
+
+    // We're only interested in the `data:` field. Other SSE fields (event:, id:, ...)
+    // are accepted for forward compatibility but ignored here.
+    let payload = match trimmed.strip_prefix("data:") {
+        Some(rest) => rest.trim_start(),
+        None => return Ok(None),
+    };
+
+    if payload.is_empty() {
+        return Ok(None);
+    }
+
+    // The OpenAI-style [DONE] sentinel is sometimes emitted by intermediate proxies.
+    if payload == "[DONE]" {
+        return Ok(None);
+    }
+
+    // Probe the JSON for the discriminator. A "ping" event from Anthropic
+    // must be ignored, not surfaced as a parse error.
+    let probe: serde_json::Value = serde_json::from_str(payload)
+        .map_err(|e| CoreError::Parse(format!("invalid SSE JSON: {e}")))?;
+
+    if let Some(t) = probe.get("type").and_then(|v| v.as_str()) {
+        if t == "ping" {
+            return Ok(None);
+        }
+    }
+
+    let event: AnthropicSseEvent = serde_json::from_value(probe)
+        .map_err(|e| CoreError::Parse(format!("invalid Anthropic SSE event: {e}")))?;
+
+    Ok(Some(event))
+}
+
+fn format_sse_data(payload: &serde_json::Value) -> String {
+    format!("data: {}\n\n", payload)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    fn openai_req_with(messages: Vec<(&str, &str)>) -> OpenAIRequest {
+        OpenAIRequest {
+            model: "claude-test".to_string(),
+            messages: messages
+                .into_iter()
+                .map(|(role, content)| OpenAIMessage {
+                    role: role.to_string(),
+                    content: Some(Value::String(content.to_string())),
+                    name: None,
+                    tool_call_id: None,
+                    tool_calls: None,
+                    extra: serde_json::Map::new(),
+                })
+                .collect(),
+            stream: false,
+            temperature: Some(0.5),
+            max_tokens: None,
+            top_p: None,
+            stop: None,
+            extra: serde_json::Map::new(),
+        }
+    }
+
+    #[test]
+    fn openai_to_anthropic_extracts_system() {
+        let req = openai_req_with(vec![
+            ("system", "You are helpful."),
+            ("system", "Be concise."),
+            ("user", "Hi"),
+            ("assistant", "Hello!"),
+        ]);
+
+        let out = openai_to_anthropic(&req);
+        assert_eq!(out.system.as_deref(), Some("You are helpful.\n\nBe concise."));
+        assert_eq!(out.messages.len(), 2);
+        assert_eq!(out.messages[0].role, "user");
+        assert_eq!(out.messages[0].content, "Hi");
+        assert_eq!(out.messages[1].role, "assistant");
+        assert_eq!(out.messages[1].content, "Hello!");
+    }
+
+    #[test]
+    fn openai_to_anthropic_no_system() {
+        let req = openai_req_with(vec![("user", "Hi"), ("assistant", "Hello!")]);
+        let out = openai_to_anthropic(&req);
+        assert!(out.system.is_none());
+        assert_eq!(out.messages.len(), 2);
+    }
+
+    #[test]
+    fn openai_to_anthropic_default_max_tokens() {
+        let mut req = openai_req_with(vec![("user", "Hi")]);
+        req.max_tokens = None;
+        let out = openai_to_anthropic(&req);
+        assert_eq!(out.max_tokens, DEFAULT_MAX_TOKENS);
+
+        // When the client does provide max_tokens, it's preserved.
+        let mut req = openai_req_with(vec![("user", "Hi")]);
+        req.max_tokens = Some(123);
+        let out = openai_to_anthropic(&req);
+        assert_eq!(out.max_tokens, 123);
+    }
+
+    #[test]
+    fn anthropic_to_openai_concat_text_blocks() {
+        let resp = AnthropicResponse {
+            id: "msg_1".to_string(),
+            response_type: "message".to_string(),
+            role: "assistant".to_string(),
+            content: vec![
+                AnthropicContentBlock {
+                    block_type: "text".to_string(),
+                    text: "Hello, ".to_string(),
+                },
+                AnthropicContentBlock {
+                    block_type: "text".to_string(),
+                    text: "world!".to_string(),
+                },
+            ],
+            model: "claude-test".to_string(),
+            stop_reason: Some("end_turn".to_string()),
+            usage: AnthropicUsage {
+                input_tokens: 10,
+                output_tokens: 5,
+            },
+        };
+
+        let out = anthropic_to_openai(&resp);
+        assert_eq!(out.id, "msg_1");
+        assert_eq!(out.object, "chat.completion");
+        assert_eq!(out.model, "claude-test");
+        assert_eq!(out.choices.len(), 1);
+        assert_eq!(out.choices[0].index, 0);
+        assert_eq!(out.choices[0].message.role, "assistant");
+        assert_eq!(out.choices[0].message.content.as_ref().and_then(Value::as_str), Some("Hello, world!"));
+        assert_eq!(out.choices[0].finish_reason.as_deref(), Some("stop"));
+    }
+
+    #[test]
+    fn anthropic_to_openai_maps_usage() {
+        let resp = AnthropicResponse {
+            id: "msg_1".to_string(),
+            response_type: "message".to_string(),
+            role: "assistant".to_string(),
+            content: vec![AnthropicContentBlock {
+                block_type: "text".to_string(),
+                text: "ok".to_string(),
+            }],
+            model: "claude-test".to_string(),
+            stop_reason: Some("max_tokens".to_string()),
+            usage: AnthropicUsage {
+                input_tokens: 7,
+                output_tokens: 11,
+            },
+        };
+
+        let out = anthropic_to_openai(&resp);
+        let usage = out.usage.expect("usage should be present");
+        assert_eq!(usage.prompt_tokens, 7);
+        assert_eq!(usage.completion_tokens, 11);
+        assert_eq!(usage.total_tokens, 18);
+        assert_eq!(out.choices[0].finish_reason.as_deref(), Some("length"));
+    }
+
+    #[test]
+    fn parse_anthropic_sse_line_text_delta() {
+        let line = r#"data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"hi"}}"#;
+        let event = parse_anthropic_sse_line(line)
+            .expect("parse ok")
+            .expect("event present");
+        match event {
+            AnthropicSseEvent::ContentBlockDelta { index, delta } => {
+                assert_eq!(index, 0);
+                assert_eq!(delta.get("text").and_then(|v| v.as_str()), Some("hi"));
+            }
+            other => panic!("unexpected variant: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_anthropic_sse_line_message_start() {
+        let line = r#"data: {"type":"message_start","message":{"id":"msg_1","type":"message","role":"assistant","content":[],"model":"claude-test","stop_reason":null,"usage":{"input_tokens":1,"output_tokens":0}}}"#;
+        let event = parse_anthropic_sse_line(line)
+            .expect("parse ok")
+            .expect("event present");
+        match event {
+            AnthropicSseEvent::MessageStart { message } => {
+                assert_eq!(message.id, "msg_1");
+                assert_eq!(message.model, "claude-test");
+                assert_eq!(message.usage.input_tokens, 1);
+            }
+            other => panic!("unexpected variant: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_anthropic_sse_line_ignores_ping() {
+        let line = r#"data: {"type":"ping"}"#;
+        let res = parse_anthropic_sse_line(line).expect("parse ok");
+        assert!(res.is_none());
+    }
+
+    #[test]
+    fn anthropic_sse_to_openai_text_delta_produces_chunk() {
+        let event = AnthropicSseEvent::ContentBlockDelta {
+            index: 0,
+            delta: json!({ "type": "text_delta", "text": "hello" }),
+        };
+        let chunks = anthropic_sse_to_openai_chunks(&event, "chunk-1", 1700000000, "claude-test");
+        assert_eq!(chunks.len(), 1);
+
+        let payload = chunks[0]
+            .trim_start_matches("data: ")
+            .trim_end()
+            .trim_end_matches('\n');
+        let v: serde_json::Value = serde_json::from_str(payload).expect("valid json");
+        assert_eq!(v["id"], "chunk-1");
+        assert_eq!(v["object"], "chat.completion.chunk");
+        assert_eq!(v["created"], 1700000000u64);
+        assert_eq!(v["model"], "claude-test");
+        assert_eq!(v["choices"][0]["index"], 0);
+        assert_eq!(v["choices"][0]["delta"]["content"], "hello");
+        assert!(v["choices"][0]["finish_reason"].is_null());
+    }
+
+    #[test]
+    fn anthropic_sse_to_openai_message_stop_produces_done() {
+        let event = AnthropicSseEvent::MessageStop;
+        let chunks = anthropic_sse_to_openai_chunks(&event, "chunk-1", 1700000000, "claude-test");
+
+        // Last frame is the [DONE] sentinel.
+        assert_eq!(chunks.last().map(String::as_str), Some("data: [DONE]\n\n"));
+
+        // Some preceding chunk carries finish_reason=stop.
+        let has_stop = chunks.iter().any(|c| {
+            let payload = c
+                .trim_start_matches("data: ")
+                .trim_end()
+                .trim_end_matches('\n');
+            if let Ok(v) = serde_json::from_str::<serde_json::Value>(payload) {
+                v["choices"][0]["finish_reason"] == "stop"
+            } else {
+                false
+            }
+        });
+        assert!(has_stop, "expected a chunk with finish_reason=stop");
+    }
+
+    // ---- Gemini -------------------------------------------------------
+
+    #[test]
+    fn openai_to_gemini_extracts_system() {
+        let req = openai_req_with(vec![
+            ("system", "You are helpful."),
+            ("system", "Be concise."),
+            ("user", "Hi"),
+            ("assistant", "Hello!"),
+        ]);
+
+        let out = openai_to_gemini(&req);
+        let sys = out.system_instruction.as_ref().unwrap();
+        assert_eq!(sys.role, "system");
+        let text = sys.parts[0].text.as_ref().unwrap();
+        assert_eq!(text, "You are helpful.\n\nBe concise.");
+        assert_eq!(out.contents.len(), 2);
+        assert_eq!(out.contents[0].role, "user");
+        assert_eq!(out.contents[1].role, "model");
+    }
+
+    #[test]
+    fn openai_to_gemini_no_system() {
+        let req = openai_req_with(vec![("user", "Hi"), ("assistant", "Hello!")]);
+        let out = openai_to_gemini(&req);
+        assert!(out.system_instruction.is_none());
+        assert_eq!(out.contents.len(), 2);
+    }
+
+    #[test]
+    fn openai_to_gemini_default_max_output_tokens() {
+        let mut req = openai_req_with(vec![("user", "Hi")]);
+        req.max_tokens = None;
+        let out = openai_to_gemini(&req);
+        let gen = out.generation_config.as_ref().unwrap();
+        assert_eq!(gen.max_output_tokens, Some(DEFAULT_GEMINI_MAX_OUTPUT_TOKENS));
+
+        // When the client does provide max_tokens, it's preserved.
+        let mut req = openai_req_with(vec![("user", "Hi")]);
+        req.max_tokens = Some(123);
+        let out = openai_to_gemini(&req);
+        let gen = out.generation_config.as_ref().unwrap();
+        assert_eq!(gen.max_output_tokens, Some(123));
+    }
+
+    #[test]
+    fn openai_to_gemini_temperature_and_top_p() {
+        let mut req = openai_req_with(vec![("user", "Hi")]);
+        req.temperature = Some(0.7);
+        req.top_p = Some(0.9);
+        let out = openai_to_gemini(&req);
+        let gen = out.generation_config.as_ref().unwrap();
+        assert_eq!(gen.temperature, Some(0.7));
+        assert_eq!(gen.top_p, Some(0.9));
+    }
+
+    #[test]
+    fn gemini_to_openai_extracts_content() {
+        let resp = GeminiResponse {
+            candidates: vec![GeminiCandidate {
+                content: Some(GeminiContent {
+                    role: "model".to_string(),
+                    parts: vec![GeminiPart {
+                        text: Some("Hello, world!".to_string()),
+                    }],
+                }),
+                finish_reason: Some("STOP".to_string()),
+            }],
+            usage_metadata: Some(GeminiUsageMetadata {
+                prompt_token_count: 10,
+                candidates_token_count: 5,
+                total_token_count: 15,
+            }),
+        };
+
+        let out = gemini_to_openai(&resp);
+        assert_eq!(out.choices.len(), 1);
+        assert_eq!(out.choices[0].message.role, "assistant");
+        assert_eq!(out.choices[0].message.content.as_ref().and_then(Value::as_str), Some("Hello, world!"));
+        assert_eq!(out.choices[0].finish_reason.as_deref(), Some("stop"));
+        let usage = out.usage.unwrap();
+        assert_eq!(usage.prompt_tokens, 10);
+        assert_eq!(usage.completion_tokens, 5);
+        assert_eq!(usage.total_tokens, 15);
+    }
+
+    #[test]
+    fn gemini_to_openai_maps_finish_reason() {
+        let resp = GeminiResponse {
+            candidates: vec![GeminiCandidate {
+                content: Some(GeminiContent {
+                    role: "model".to_string(),
+                    parts: vec![GeminiPart {
+                        text: Some("ok".to_string()),
+                    }],
+                }),
+                finish_reason: Some("MAX_TOKENS".to_string()),
+            }],
+            usage_metadata: None,
+        };
+
+        let out = gemini_to_openai(&resp);
+        assert_eq!(out.choices[0].finish_reason.as_deref(), Some("length"));
+    }
+
+    #[test]
+    fn gemini_to_openai_empty_response() {
+        let resp = GeminiResponse {
+            candidates: vec![],
+            usage_metadata: None,
+        };
+
+        let out = gemini_to_openai(&resp);
+        assert_eq!(out.choices.len(), 1);
+        assert_eq!(out.choices[0].message.content.as_ref().and_then(Value::as_str), Some(""));
+    }
+
+    #[test]
+    fn openai_message_preserves_tool_call_id() {
+        let raw = r#"{"model":"test","messages":[{"role":"user","content":"call tool"},{"role":"tool","tool_call_id":"call_abc","content":"result"}],"stream":false}"#;
+        let req: OpenAIRequest = serde_json::from_str(raw).unwrap();
+        assert_eq!(req.messages[1].tool_call_id.as_deref(), Some("call_abc"));
+        let serialized = serde_json::to_value(&req).unwrap();
+        assert_eq!(serialized["messages"][1]["tool_call_id"], "call_abc");
+    }
+
+    #[test]
+    fn openai_message_preserves_null_content_and_tool_calls() {
+        let raw = r#"{"model":"test","messages":[{"role":"assistant","content":null,"tool_calls":[{"id":"call_1","type":"function","function":{"name":"foo","arguments":"{}"}}]}],"stream":false}"#;
+        let req: OpenAIRequest = serde_json::from_str(raw).unwrap();
+        let msg = &req.messages[0];
+        assert!(msg.content.as_ref().map(|v| v.is_null()).unwrap_or(false));
+        assert_eq!(msg.tool_calls.as_ref().map(|v| v.len()), Some(1));
+        let serialized = serde_json::to_value(&req).unwrap();
+        assert_eq!(serialized["messages"][0]["content"], serde_json::Value::Null);
+        assert_eq!(
+            serialized["messages"][0]["tool_calls"],
+            serde_json::json!([{"id":"call_1","type":"function","function":{"name":"foo","arguments":"{}"}}])
+        );
+    }
+
+    #[test]
+    fn openai_message_preserves_content_array() {
+        let raw = r#"{"model":"test","messages":[{"role":"user","content":[{"type":"text","text":"hello"},{"type":"image_url","image_url":{"url":"https://example.com/img.png"}}]}],"stream":false}"#;
+        let req: OpenAIRequest = serde_json::from_str(raw).unwrap();
+        let msg = &req.messages[0];
+        assert!(msg.content.as_ref().map(|v| v.is_array()).unwrap_or(false));
+        let serialized = serde_json::to_value(&req).unwrap();
+        let arr = &serialized["messages"][0]["content"];
+        assert!(arr.is_array());
+        assert_eq!(arr[0]["type"], "text");
+        assert_eq!(arr[1]["type"], "image_url");
+    }
+}

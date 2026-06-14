@@ -1,0 +1,31 @@
+[package]
+name = "openproxy-web"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[[bin]]
+name = "openproxy-web"
+path = "src/main.rs"
+
+[lib]
+name = "openproxy_web"
+path = "src/lib.rs"
+
+[dependencies]
+openproxy-api-client = { path = "../openproxy-api-client" }
+openproxy-core = { path = "../openproxy-core" }
+tokio = { workspace = true }
+axum = { workspace = true, features = ["ws"] }
+reqwest = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+anyhow = { workspace = true }
+bytes = "1"
+futures = "0.3"
+tokio-tungstenite = { version = "0.21", features = ["rustls-tls-native-roots"] }
+tungstenite = "0.21"

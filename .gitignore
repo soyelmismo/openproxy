@@ -1,0 +1,11 @@
+/target
+**/*.rs.bk
+Cargo.lock.bak
+.env
+data.db*
+.openproxy/
+/other_projects_examples
+*.log
+*.db
+*.env
+*.pid

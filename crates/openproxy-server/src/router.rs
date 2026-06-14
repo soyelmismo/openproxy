@@ -1,0 +1,261 @@
+//! HTTP router.
+//!
+//! Spec §2: every public + admin endpoint is wired here, in axum 0.7
+//! syntax. Routes are grouped into two sub-routers (`chat_routes` and
+//! `admin_routes`) for readability, then merged into the root `Router`.
+//! The request-id middleware sits on the outermost layer so every
+//! response — public or admin — carries an `x-request-id` header.
+
+use axum::{
+    middleware,
+    routing::{get, post},
+    Json, Router,
+};
+use serde_json::json;
+
+use crate::{handlers, middleware::request_id, state::AppState};
+
+/// Build the root [`Router`] for the server.
+///
+/// The state is attached via `with_state` so individual handlers can
+/// accept `State<AppState>` in their extractor list. The request-id
+/// middleware is applied at the outermost layer.
+pub fn build_router(state: AppState) -> Router {
+    // Public + chat routes. `/v1/health` is a tiny liveness probe;
+    // `/v1/models` lists known models in OpenAI shape;
+    // `/v1/chat/completions` is the main entry point.
+    let chat_routes = Router::new()
+        .route("/v1/models", get(handlers::models::list_models))
+        .route(
+            "/v1/chat/completions",
+            post(handlers::chat::chat_completions),
+        );
+
+    // Admin surface (spec §2.3). CRUD for providers, accounts, combos,
+    // plus read-only usage analytics.
+    let admin_routes = Router::new()
+        .route(
+            "/v1/admin/health",
+            get(handlers::admin::admin_health),
+        )
+        .route(
+            "/v1/admin/providers",
+            get(handlers::admin::list_providers).post(handlers::admin::create_provider),
+        )
+        .route(
+            "/v1/admin/providers/:id",
+            get(handlers::admin::get_provider)
+                .delete(handlers::admin::delete_provider)
+                .patch(handlers::admin::update_provider),
+        )
+        .route(
+            "/v1/admin/accounts",
+            get(handlers::admin::list_accounts).post(handlers::admin::create_account),
+        )
+        .route(
+            "/v1/admin/accounts/:id",
+            axum::routing::delete(handlers::admin::delete_account),
+        )
+        .route(
+            "/v1/admin/accounts/:id/health",
+            post(handlers::admin::set_account_health),
+        )
+        .route(
+            "/v1/admin/accounts/:id/refresh-quota",
+            post(handlers::admin::refresh_account_quota),
+        )
+        .route(
+            "/v1/admin/combos",
+            get(handlers::admin::list_combos).post(handlers::admin::create_combo),
+        )
+        .route(
+            "/v1/admin/combos/:id",
+            get(handlers::admin::get_combo)
+                .delete(handlers::admin::delete_combo)
+                .patch(handlers::admin::update_combo),
+        )
+        .route(
+            "/v1/admin/combos/:id/test-all",
+            post(handlers::admin::test_combo_targets),
+        )
+        .route(
+            "/v1/admin/combos/:id/targets",
+            get(handlers::admin::list_combo_targets).post(handlers::admin::add_target),
+        )
+        // IMPORTANT: this literal-segment route MUST be registered
+        // before `/v1/admin/combos/:id/targets/:target_id`. axum 0.7
+        // matches routes in registration order; if `:target_id` is
+        // registered first it would happily swallow `valid-sub-combos`
+        // and 405 the GET (because the :target_id route only allows
+        // PATCH and DELETE).
+        .route(
+            "/v1/admin/combos/:id/targets/valid-sub-combos",
+            get(handlers::admin::list_valid_sub_combos),
+        )
+        // IMPORTANT: this literal-segment route MUST be registered
+        // before `/v1/admin/combos/:id/targets/:target_id`. axum 0.7
+        // matches routes in registration order; if `:target_id` is
+        // registered first it would happily swallow `reorder` and
+        // 405 every POST (because the :target_id route only allows
+        // PATCH and DELETE).
+        .route(
+            "/v1/admin/combos/:id/targets/reorder",
+            axum::routing::post(handlers::admin::reorder_combo_targets),
+        )
+        // IMPORTANT: this literal-segment route MUST be registered
+        // before `/v1/admin/combos/:id/targets/:target_id`. axum 0.7
+        // matches routes in registration order; if `:target_id` is
+        // registered first it would happily swallow `clear-cooldown`
+        // and 405 every POST (because the :target_id route only allows
+        // PATCH and DELETE).
+        .route(
+            "/v1/admin/combos/:id/targets/:target_id/clear-cooldown",
+            axum::routing::post(handlers::admin::clear_combo_target_cooldown),
+        )
+        .route(
+            "/v1/admin/combos/:id/targets/:target_id",
+            axum::routing::patch(handlers::admin::update_combo_target)
+                .delete(handlers::admin::delete_combo_target),
+        )
+        .route(
+            "/v1/admin/usage/summary",
+            get(handlers::admin::usage_summary),
+        )
+        .route(
+            "/v1/admin/usage/by-model",
+            get(handlers::admin::usage_by_model),
+        )
+        .route(
+            "/v1/admin/usage/by-account",
+            get(handlers::admin::usage_by_account),
+        )
+        .route(
+            "/v1/admin/usage/by-status",
+            get(handlers::admin::usage_by_status),
+        )
+        .route(
+            "/v1/admin/usage/errors",
+            get(handlers::admin::usage_errors),
+        )
+        .route(
+            "/v1/admin/usage/latency",
+            get(handlers::admin::usage_latency),
+        )
+        .route(
+            "/v1/admin/usage/races",
+            get(handlers::admin::usage_races),
+        )
+        .route(
+            "/v1/admin/usage/recent",
+            get(handlers::admin::usage_recent),
+        )
+        .route(
+            "/v1/admin/usage/stream",
+            get(handlers::admin::usage_stream),
+        )
+        .route(
+            "/v1/admin/usage/detail",
+            get(handlers::admin::usage_detail),
+        )
+        .route(
+            "/v1/admin/models/:id/refresh",
+            post(handlers::admin::refresh_models),
+        )
+        .route(
+            "/v1/admin/models/:id/toggle",
+            post(handlers::admin::toggle_model),
+        )
+        .route(
+            "/v1/admin/models/bulk-toggle",
+            post(handlers::admin::bulk_toggle_models),
+        )
+        .route(
+            "/v1/admin/models/:id",
+            axum::routing::delete(handlers::admin::delete_model),
+        )
+        .route(
+            "/v1/admin/models",
+            get(handlers::admin::list_models_admin),
+        )
+        .route(
+            "/v1/admin/models/custom",
+            post(handlers::admin::create_custom_model),
+        )
+        .route(
+            "/v1/admin/models/:id/test",
+            post(handlers::admin::test_model),
+        )
+        .route(
+            "/v1/admin/providers/:id/refresh",
+            post(handlers::admin::refresh_provider_models),
+        )
+        .route(
+            "/v1/admin/providers/:id/active",
+            post(handlers::admin::set_provider_active),
+        )
+        .route(
+            "/v1/admin/keys",
+            get(handlers::admin::list_api_keys).post(handlers::admin::create_api_key),
+        )
+        .route(
+            "/v1/admin/keys/:id",
+            get(handlers::admin::get_api_key)
+                .patch(handlers::admin::update_api_key)
+                .delete(handlers::admin::delete_api_key),
+        )
+        .route(
+            "/v1/admin/keys/:id/revoke",
+            post(handlers::admin::revoke_api_key),
+        )
+        .route(
+            "/v1/admin/keys/:id/regenerate",
+            post(handlers::admin::regenerate_api_key),
+        )
+        .route(
+            "/v1/admin/keys/:id/usage",
+            get(handlers::admin::api_key_usage),
+        )
+        // OAuth endpoints
+        .route(
+            "/v1/admin/oauth/:provider/authorize",
+            get(handlers::admin::oauth_authorize),
+        )
+        .route(
+            "/v1/admin/oauth/:provider/exchange",
+            post(handlers::admin::oauth_exchange),
+        )
+        .route(
+            "/v1/admin/oauth/:provider/device-code",
+            post(handlers::admin::oauth_device_code),
+        )
+        .route(
+            "/v1/admin/oauth/:provider/device-poll",
+            post(handlers::admin::oauth_device_poll),
+        )
+        .route(
+            "/v1/admin/oauth/callback",
+            get(handlers::admin::oauth_callback),
+        );
+
+    Router::new()
+        .route(
+            "/v1/health",
+            get(health),
+        )
+        .merge(chat_routes)
+        .merge(admin_routes)
+        .layer(middleware::from_fn(request_id))
+        .with_state(state)
+}
+
+/// `GET /v1/health` — unauthenticated liveness probe.
+///
+/// Returns `{"status": "ok", "version": <CARGO_PKG_VERSION>}`. The
+/// version string is baked at compile time and reflects the server
+/// crate's package version.
+async fn health() -> Json<serde_json::Value> {
+    Json(json!({
+        "status": "ok",
+        "version": env!("CARGO_PKG_VERSION"),
+    }))
+}

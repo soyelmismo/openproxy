@@ -1,0 +1,1467 @@
+//! Usage queries: list, summary, by-model, by-account, by-status, errors.
+//!
+//! See docs/mvp-spec.md §7 (Analytics Queries) and §8 (SQLite Schema).
+//!
+//! This module is the *read* side of the usage table; inserts live in
+//! [`crate::cost::record`]. All queries share a common filter shape and are
+//! race-aware: `winners` counts rows where `race_lost = 0`, `losers` counts
+//! `race_lost = 1`, and `unique_requests` is `COUNT(DISTINCT request_id)` so a
+//! race of N losers + 1 winner counts as one logical request.
+//!
+//! ## Broadcast channel
+//!
+//! The module also owns the canonical in-process broadcast channel for newly
+//! inserted usage rows. After [`crate::cost::record`] inserts a row, it calls
+//! [`publish_usage_row`] to push the new row to all connected WebSocket
+//! clients. The sender is stored in a `once_cell::sync::OnceCell` so it is
+//! initialized exactly once and accessible from any crate.
+
+use crate::error::{CoreError, Result};
+use crate::ids::{AccountId, ApiKeyId, ComboId, ComboTargetId, ModelRowId, ProviderId, UsageId};
+use once_cell::sync::OnceCell;
+use rusqlite::{params, params_from_iter, Connection, OptionalExtension, ToSql};
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
+use std::collections::{BTreeMap, VecDeque};
+use std::fmt::Write as _;
+use tokio::sync::broadcast;
+
+// ---------------------------------------------------------------------------
+// Broadcast channel (global, initialized once)
+// ---------------------------------------------------------------------------
+
+/// Channel capacity for the usage broadcast. Rows older than this are
+/// dropped for slow receivers.
+const BROADCAST_CAPACITY: usize = 256;
+
+static USAGE_SENDER: OnceCell<broadcast::Sender<RecentUsageRow>> = OnceCell::new();
+
+/// Initialize the global usage broadcast sender. Must be called exactly
+/// once before any call to [`usage_broadcast`] or [`publish_usage_row`].
+/// Returns a clone of the sender so callers (e.g. `AppState`) can store
+/// it for later subscription.
+pub fn init_usage_broadcast() -> broadcast::Sender<RecentUsageRow> {
+    let (tx, _rx) = broadcast::channel(BROADCAST_CAPACITY);
+    // We ignore the error: if already initialized, the existing sender
+    // is returned and we just discard the new one. This makes the function
+    // idempotent for tests that call it more than once.
+    let _ = USAGE_SENDER.set(tx);
+    usage_broadcast()
+}
+
+/// Return a clone of the global usage broadcast sender.
+/// Panics if [`init_usage_broadcast`] has not been called yet.
+pub fn usage_broadcast() -> broadcast::Sender<RecentUsageRow> {
+    USAGE_SENDER
+        .get()
+        .expect("init_usage_broadcast() must be called before usage_broadcast()")
+        .clone()
+}
+
+/// Publish a newly inserted usage row to all broadcast subscribers.
+/// Silently ignores errors (e.g. no subscribers) — broadcast send
+/// failures must never fail the caller.
+pub fn publish_usage_row(row: RecentUsageRow) {
+    if let Some(tx) = USAGE_SENDER.get() {
+        // `send` returns Err when there are no receivers, which is
+        // expected and harmless.
+        let _ = tx.send(row);
+    }
+}
+
+/// All optional filters shared by the read-side analytics queries.
+///
+/// Date bounds are ISO-8601 strings (e.g. `2026-01-15T00:00:00Z`) and apply
+/// directly to `usage.created_at`. `from` is inclusive; `to` is exclusive.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct UsageFilter {
+    /// Inclusive lower bound on `created_at` (ISO-8601).
+    pub from: Option<String>,
+    /// Exclusive upper bound on `created_at` (ISO-8601).
+    pub to: Option<String>,
+    pub provider_id: Option<ProviderId>,
+    /// Matches `usage.upstream_model_id`.
+    pub model_id: Option<String>,
+    pub account_id: Option<AccountId>,
+    pub combo_id: Option<ComboId>,
+    /// Restrict to rows produced under a specific API key. The
+    /// per-key usage view (the dashboard's "Usage" tab on the
+    /// keys page) sets this; the public-facing analytics endpoints
+    /// leave it `None` so the global roll-up is unaffected.
+    pub api_key_id: Option<ApiKeyId>,
+}
+
+impl UsageFilter {
+    /// Returns `true` if no filter is set.
+    fn is_empty(&self) -> bool {
+        self.from.is_none()
+            && self.to.is_none()
+            && self.provider_id.is_none()
+            && self.model_id.is_none()
+            && self.account_id.is_none()
+            && self.combo_id.is_none()
+            && self.api_key_id.is_none()
+    }
+}
+
+/// Aggregate roll-up of a filtered set of usage rows.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UsageSummary {
+    /// `COUNT(DISTINCT request_id)` — one per logical user request, regardless
+    /// of how many race losers it produced.
+    pub unique_requests: u64,
+    /// `COUNT(*)` — every row, including race losers and retry attempts.
+    pub total_rows: u64,
+    /// `COUNT(DISTINCT trace_id)` — every per-attempt trace.
+    pub total_attempts: u64,
+    /// Rows where `race_lost = 0`. Note: non-race rows are also winners.
+    pub winners: u64,
+    /// Rows where `race_lost = 1`.
+    pub losers: u64,
+    /// Rows with `status_code >= 400`.
+    pub errors: u64,
+    pub total_prompt_tokens: i64,
+    pub total_completion_tokens: i64,
+    pub total_cost_usd: f64,
+    /// `AVG(ttft_ms)` over rows where `ttft_ms IS NOT NULL`. `None` when no
+    /// such row exists in the filter.
+    pub avg_ttft_ms: Option<f64>,
+    /// `AVG(total_ms)` over all rows in the filter.
+    pub avg_total_ms: f64,
+}
+
+/// One row of the `by_model` aggregation.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ByModelRow {
+    pub provider_id: ProviderId,
+    pub upstream_model_id: String,
+    pub unique_requests: u64,
+    pub total_rows: u64,
+    pub winners: u64,
+    pub total_prompt_tokens: i64,
+    pub total_completion_tokens: i64,
+    pub total_cost_usd: f64,
+}
+
+/// One row of the `by_account` aggregation.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ByAccountRow {
+    pub account_id: AccountId,
+    pub provider_id: ProviderId,
+    pub unique_requests: u64,
+    pub total_rows: u64,
+    pub errors: u64,
+    pub total_cost_usd: f64,
+}
+
+/// One row of the `by_status` aggregation.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ByStatusRow {
+    pub status_code: u16,
+    pub count: u64,
+}
+
+/// One row of the `errors` query.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ErrorRow {
+    pub request_id: String,
+    pub trace_id: String,
+    pub provider_id: ProviderId,
+    pub upstream_model_id: String,
+    pub status_code: u16,
+    /// Pre-redacted error message; secrets already stripped by the writer
+    /// ([`crate::cost::redact_error_msg`]).
+    pub error_msg_redacted: Option<String>,
+    pub created_at: String,
+}
+
+// ---------------------------------------------------------------------------
+// WHERE-clause builder
+// ---------------------------------------------------------------------------
+
+/// A built `(where_sql, params)` pair ready to splice into a query.
+///
+/// `where_sql` is either the literal string `"WHERE ..."` (with the leading
+/// `WHERE` keyword) or the empty string if no filter is set. It is designed
+/// to be inserted directly into a SQL template via `format!`.
+struct BuiltWhere {
+    sql: String,
+    params: Vec<Box<dyn ToSql>>,
+}
+
+impl BuiltWhere {
+    fn from_filter(f: &UsageFilter) -> Self {
+        if f.is_empty() {
+            return Self { sql: String::new(), params: Vec::new() };
+        }
+
+        let mut clauses: Vec<&'static str> = Vec::new();
+        let mut params: Vec<Box<dyn ToSql>> = Vec::new();
+
+        if let Some(from) = &f.from {
+            clauses.push("created_at >= ?");
+            params.push(Box::new(from.clone()));
+        }
+        if let Some(to) = &f.to {
+            clauses.push("created_at < ?");
+            params.push(Box::new(to.clone()));
+        }
+        if let Some(pid) = &f.provider_id {
+            clauses.push("provider_id = ?");
+            params.push(Box::new(pid.0.clone()));
+        }
+        if let Some(mid) = &f.model_id {
+            clauses.push("upstream_model_id = ?");
+            params.push(Box::new(mid.clone()));
+        }
+        if let Some(aid) = f.account_id {
+            clauses.push("account_id = ?");
+            params.push(Box::new(aid.0));
+        }
+        if let Some(cid) = f.combo_id {
+            clauses.push("combo_id = ?");
+            params.push(Box::new(cid.0));
+        }
+        if let Some(kid) = f.api_key_id {
+            clauses.push("api_key_id = ?");
+            params.push(Box::new(kid.0));
+        }
+
+        let joined = clauses.join(" AND ");
+        // joined is non-empty because is_empty() returned false above.
+        let mut sql = String::with_capacity(joined.len() + 7);
+        sql.push_str("WHERE ");
+        sql.push_str(&joined);
+        Self { sql, params }
+    }
+}
+
+/// Wrapper that lets us call [`params_from_iter`] over a `Vec<Box<dyn ToSql>>`.
+///
+/// `params_from_iter` needs an `IntoIterator`; the boxed `ToSql` trait objects
+/// own their data and implement the trait via `dyn ToSql`, but `params_from_iter`
+/// is generic over `IntoIterator` so this pass-through is the cleanest way to
+/// keep the call site readable.
+fn to_params<'a>(v: &'a [Box<dyn ToSql>]) -> Vec<&'a dyn ToSql> {
+    v.iter().map(|b| b.as_ref() as &dyn ToSql).collect()
+}
+
+// ---------------------------------------------------------------------------
+// Public queries
+// ---------------------------------------------------------------------------
+
+/// Aggregate summary over all rows matching `f`.
+pub fn summary(conn: &Connection, f: &UsageFilter) -> Result<UsageSummary> {
+    let w = BuiltWhere::from_filter(f);
+    let sql = format!(
+        "SELECT \
+             COUNT(DISTINCT request_id)                                    AS unique_requests, \
+             COUNT(*)                                                      AS total_rows, \
+             COUNT(DISTINCT trace_id)                                      AS total_attempts, \
+             SUM(CASE WHEN race_lost = 0 THEN 1 ELSE 0 END)                AS winners, \
+             SUM(CASE WHEN race_lost = 1 THEN 1 ELSE 0 END)                AS losers, \
+             SUM(CASE WHEN status_code >= 400 THEN 1 ELSE 0 END)            AS errors, \
+             COALESCE(SUM(prompt_tokens), 0)                                AS total_prompt_tokens, \
+             COALESCE(SUM(completion_tokens), 0)                            AS total_completion_tokens, \
+             COALESCE(SUM(cost_usd), 0.0)                                   AS total_cost_usd, \
+             AVG(ttft_ms) FILTER (WHERE ttft_ms IS NOT NULL)               AS avg_ttft_ms, \
+             COALESCE(AVG(total_ms), 0.0)                                   AS avg_total_ms \
+         FROM usage {}",
+        w.sql,
+    );
+
+    let mut stmt = conn.prepare(&sql).map_err(|e| CoreError::Database {
+        message: format!("prepare usage summary: {}", e),
+        source: Some(Box::new(e)),
+    })?;
+
+    let params_slice = to_params(&w.params);
+    let summary = stmt
+        .query_row(params_from_iter(params_slice), |row| {
+            let unique_requests: i64 = row.get(0)?;
+            let total_rows: i64 = row.get(1)?;
+            let total_attempts: i64 = row.get(2)?;
+            // SUM(...) over an empty result set yields NULL in SQLite, not 0,
+            // so we accept Option<i64> and substitute 0. COALESCE only helps
+            // for nullable columns (prompt_tokens, cost_usd), not for the
+            // SUM(CASE WHEN...) zero-row edge case.
+            let winners: i64 = row.get::<_, Option<i64>>(3)?.unwrap_or(0);
+            let losers: i64 = row.get::<_, Option<i64>>(4)?.unwrap_or(0);
+            let errors: i64 = row.get::<_, Option<i64>>(5)?.unwrap_or(0);
+            let total_prompt_tokens: i64 = row.get(6)?;
+            let total_completion_tokens: i64 = row.get(7)?;
+            let total_cost_usd: f64 = row.get(8)?;
+            let avg_ttft_ms: Option<f64> = row.get(9)?;
+            let avg_total_ms: f64 = row.get(10)?;
+
+            Ok(UsageSummary {
+                unique_requests: as_u64(unique_requests, "unique_requests")?,
+                total_rows: as_u64(total_rows, "total_rows")?,
+                total_attempts: as_u64(total_attempts, "total_attempts")?,
+                winners: as_u64(winners, "winners")?,
+                losers: as_u64(losers, "losers")?,
+                errors: as_u64(errors, "errors")?,
+                total_prompt_tokens,
+                total_completion_tokens,
+                total_cost_usd,
+                avg_ttft_ms,
+                avg_total_ms,
+            })
+        })
+        .map_err(|e| CoreError::Database {
+            message: format!("query usage summary: {}", e),
+            source: Some(Box::new(e)),
+        })?;
+
+    Ok(summary)
+}
+
+/// Per-(provider, model) breakdown. Ordered by total cost descending.
+pub fn by_model(conn: &Connection, f: &UsageFilter) -> Result<Vec<ByModelRow>> {
+    let w = BuiltWhere::from_filter(f);
+    let sql = format!(
+        "SELECT \
+             provider_id, \
+             upstream_model_id, \
+             COUNT(DISTINCT request_id)                       AS unique_requests, \
+             COUNT(*)                                         AS total_rows, \
+             SUM(CASE WHEN race_lost = 0 THEN 1 ELSE 0 END)   AS winners, \
+             COALESCE(SUM(prompt_tokens), 0)                  AS total_prompt_tokens, \
+             COALESCE(SUM(completion_tokens), 0)              AS total_completion_tokens, \
+             COALESCE(SUM(cost_usd), 0.0)                     AS total_cost_usd \
+         FROM usage {} \
+         GROUP BY provider_id, upstream_model_id \
+         ORDER BY total_cost_usd DESC, provider_id ASC, upstream_model_id ASC",
+        w.sql,
+    );
+
+    let mut stmt = conn.prepare(&sql).map_err(|e| CoreError::Database {
+        message: format!("prepare usage by_model: {}", e),
+        source: Some(Box::new(e)),
+    })?;
+
+    let params_slice = to_params(&w.params);
+    let rows = stmt
+        .query_map(params_from_iter(params_slice), |row| {
+            let provider_id: String = row.get(0)?;
+            let upstream_model_id: String = row.get(1)?;
+            let unique_requests: i64 = row.get(2)?;
+            let total_rows: i64 = row.get(3)?;
+            let winners: i64 = row.get(4)?;
+            let total_prompt_tokens: i64 = row.get(5)?;
+            let total_completion_tokens: i64 = row.get(6)?;
+            let total_cost_usd: f64 = row.get(7)?;
+
+            Ok(ByModelRow {
+                provider_id: ProviderId::new(provider_id),
+                upstream_model_id,
+                unique_requests: as_u64(unique_requests, "unique_requests")?,
+                total_rows: as_u64(total_rows, "total_rows")?,
+                winners: as_u64(winners, "winners")?,
+                total_prompt_tokens,
+                total_completion_tokens,
+                total_cost_usd,
+            })
+        })
+        .map_err(|e| CoreError::Database {
+            message: format!("query usage by_model: {}", e),
+            source: Some(Box::new(e)),
+        })?;
+
+    collect_rows(rows, "by_model")
+}
+
+/// Per-(account, provider) breakdown. Ordered by total cost descending.
+///
+/// Note: an account's `provider_id` is technically redundant in a real schema
+/// with a FK on `accounts.provider_id`, but the `usage` table itself doesn't
+/// enforce that relationship, so we group by both for correctness and to
+/// avoid a join.
+pub fn by_account(conn: &Connection, f: &UsageFilter) -> Result<Vec<ByAccountRow>> {
+    let w = BuiltWhere::from_filter(f);
+    let sql = format!(
+        "SELECT \
+             account_id, \
+             provider_id, \
+             COUNT(DISTINCT request_id)                          AS unique_requests, \
+             COUNT(*)                                            AS total_rows, \
+             SUM(CASE WHEN status_code >= 400 THEN 1 ELSE 0 END) AS errors, \
+             COALESCE(SUM(cost_usd), 0.0)                        AS total_cost_usd \
+         FROM usage {} \
+         GROUP BY account_id, provider_id \
+         ORDER BY total_cost_usd DESC, account_id ASC",
+        w.sql,
+    );
+
+    let mut stmt = conn.prepare(&sql).map_err(|e| CoreError::Database {
+        message: format!("prepare usage by_account: {}", e),
+        source: Some(Box::new(e)),
+    })?;
+
+    let params_slice = to_params(&w.params);
+    let rows = stmt
+        .query_map(params_from_iter(params_slice), |row| {
+            let account_id: Option<i64> = row.get(0)?;
+            let provider_id: String = row.get(1)?;
+            let unique_requests: i64 = row.get(2)?;
+            let total_rows: i64 = row.get(3)?;
+            let errors: i64 = row.get(4)?;
+            let total_cost_usd: f64 = row.get(5)?;
+
+            // `account_id` is nullable in the schema. The group-by collapses
+            // NULLs into a single bucket in SQLite, so an account-less row
+            // is possible. Surface it as a stable synthetic id of -1 so
+            // downstream JSON has a numeric value, but keep the provider
+            // id alongside so callers can disambiguate.
+            let aid = account_id.unwrap_or(-1);
+            if aid == 0 {
+                return Err(rusqlite::Error::FromSqlConversionFailure(
+                    0,
+                    rusqlite::types::Type::Integer,
+                    Box::new(SimpleErr("account_id must be non-zero".into())),
+                ));
+            }
+
+            Ok(ByAccountRow {
+                account_id: AccountId::new(aid),
+                provider_id: ProviderId::new(provider_id),
+                unique_requests: as_u64(unique_requests, "unique_requests")?,
+                total_rows: as_u64(total_rows, "total_rows")?,
+                errors: as_u64(errors, "errors")?,
+                total_cost_usd,
+            })
+        })
+        .map_err(|e| CoreError::Database {
+            message: format!("query usage by_account: {}", e),
+            source: Some(Box::new(e)),
+        })?;
+
+    collect_rows(rows, "by_account")
+}
+
+/// Per-`status_code` count. Ordered by count descending so the busiest code
+/// comes first; ties broken by `status_code` ascending.
+pub fn by_status(conn: &Connection, f: &UsageFilter) -> Result<Vec<ByStatusRow>> {
+    let w = BuiltWhere::from_filter(f);
+    let sql = format!(
+        "SELECT status_code, COUNT(*) AS cnt \
+         FROM usage {} \
+         GROUP BY status_code \
+         ORDER BY cnt DESC, status_code ASC",
+        w.sql,
+    );
+
+    let mut stmt = conn.prepare(&sql).map_err(|e| CoreError::Database {
+        message: format!("prepare usage by_status: {}", e),
+        source: Some(Box::new(e)),
+    })?;
+
+    let params_slice = to_params(&w.params);
+    let rows = stmt
+        .query_map(params_from_iter(params_slice), |row| {
+            let status_code: i64 = row.get(0)?;
+            let count: i64 = row.get(1)?;
+            if !(0..=u16::MAX as i64).contains(&status_code) {
+                return Err(rusqlite::Error::FromSqlConversionFailure(
+                    0,
+                    rusqlite::types::Type::Integer,
+                    Box::new(SimpleErr(format!("status_code out of u16 range: {}", status_code))),
+                ));
+            }
+            Ok(ByStatusRow {
+                status_code: status_code as u16,
+                count: as_u64(count, "count")?,
+            })
+        })
+        .map_err(|e| CoreError::Database {
+            message: format!("query usage by_status: {}", e),
+            source: Some(Box::new(e)),
+        })?;
+
+    collect_rows(rows, "by_status")
+}
+
+/// Recent error rows (`status_code >= 400`), newest first, capped at `limit`.
+///
+/// `limit` is a hard cap on the number of returned rows; callers typically
+/// pass 100 (matching the spec example) and the value is forwarded verbatim
+/// to SQL as an integer parameter.
+pub fn errors(conn: &Connection, f: &UsageFilter, limit: u32) -> Result<Vec<ErrorRow>> {
+    let w = BuiltWhere::from_filter(f);
+
+    // Build the WHERE clause manually because we need to AND in the
+    // status_code predicate that isn't part of `UsageFilter`.
+    let mut clauses: Vec<String> = Vec::new();
+    if !w.sql.is_empty() {
+        // Strip the leading "WHERE " to get bare clauses we can AND with more.
+        let bare = w.sql.trim_start_matches("WHERE ").to_string();
+        clauses.push(format!("({})", bare));
+    }
+    clauses.push("status_code >= 400".to_string());
+    let where_clause = format!("WHERE {}", clauses.join(" AND "));
+
+    let mut sql = String::new();
+    write!(
+        &mut sql,
+        "SELECT request_id, trace_id, provider_id, upstream_model_id, \
+                status_code, error_msg_redacted, created_at \
+         FROM usage {} \
+         ORDER BY created_at DESC, id DESC \
+         LIMIT ?",
+        where_clause,
+    )
+    .expect("writing to String never fails");
+
+    // `limit` is a u32 — well under i64::MAX — so this cast is safe.
+    let limit_param: i64 = limit as i64;
+    let mut all_params: Vec<Box<dyn ToSql>> = w.params;
+    all_params.push(Box::new(limit_param));
+    let params_slice = to_params(&all_params);
+
+    let mut stmt = conn.prepare(&sql).map_err(|e| CoreError::Database {
+        message: format!("prepare usage errors: {}", e),
+        source: Some(Box::new(e)),
+    })?;
+
+    let rows = stmt
+        .query_map(params_from_iter(params_slice), |row| {
+            let request_id: String = row.get(0)?;
+            let trace_id: String = row.get(1)?;
+            let provider_id: String = row.get(2)?;
+            let upstream_model_id: String = row.get(3)?;
+            let status_code: i64 = row.get(4)?;
+            let error_msg_redacted: Option<String> = row.get(5)?;
+            let created_at: String = row.get(6)?;
+            if !(0..=u16::MAX as i64).contains(&status_code) {
+                return Err(rusqlite::Error::FromSqlConversionFailure(
+                    4,
+                    rusqlite::types::Type::Integer,
+                    Box::new(SimpleErr(format!("status_code out of u16 range: {}", status_code))),
+                ));
+            }
+            Ok(ErrorRow {
+                request_id,
+                trace_id,
+                provider_id: ProviderId::new(provider_id),
+                upstream_model_id,
+                status_code: status_code as u16,
+                error_msg_redacted,
+                created_at,
+            })
+        })
+        .map_err(|e| CoreError::Database {
+            message: format!("query usage errors: {}", e),
+            source: Some(Box::new(e)),
+        })?;
+
+    collect_rows(rows, "errors")
+}
+
+// ---------------------------------------------------------------------------
+// Recent rows (long-polling support)
+// ---------------------------------------------------------------------------
+
+/// A single `usage` row, projected for the dashboard's "live tail" view.
+///
+/// Mirrors the columns the spec calls out for the long-polling feed (and a
+/// couple more for convenience). Returned by [`recent`] in
+/// `(id ASC)` order, with `id > since_id` so the dashboard can paginate
+/// forward by remembering the last seen id.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RecentUsageRow {
+    pub id: UsageId,
+    pub request_id: String,
+    pub trace_id: String,
+    pub provider_id: ProviderId,
+    pub upstream_model_id: String,
+    pub status_code: u16,
+    pub total_ms: u64,
+    pub prompt_tokens: Option<u32>,
+    pub completion_tokens: Option<u32>,
+    pub cost_usd: Option<f64>,
+    pub connect_ms: Option<u64>,
+    pub ttft_ms: Option<u64>,
+    pub request_body_json: Option<Value>,
+    pub response_body_json: Option<Value>,
+    pub request_headers: Option<BTreeMap<String, String>>,
+    pub response_headers: Option<BTreeMap<String, String>>,
+    pub error_message: Option<String>,
+    pub race_total: Option<u8>,
+    pub race_attempts: Option<u8>,
+    pub is_streaming: bool,
+    pub stream_complete: bool,
+    pub race_lost: bool,
+    pub created_at: String,
+}
+
+/// Full `usage` row projection for live-log detail views.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UsageDetailRow {
+    pub id: UsageId,
+    pub request_id: String,
+    pub trace_id: String,
+    pub attempt: i64,
+    pub provider_id: ProviderId,
+    pub account_id: Option<AccountId>,
+    pub combo_id: Option<ComboId>,
+    pub combo_target_id: Option<ComboTargetId>,
+    pub model_row_id: Option<ModelRowId>,
+    pub upstream_model_id: String,
+    pub prompt_tokens: Option<i64>,
+    pub completion_tokens: Option<i64>,
+    pub connect_ms: Option<i64>,
+    pub ttft_ms: Option<i64>,
+    pub total_ms: i64,
+    pub tokens_per_sec: Option<f64>,
+    pub status_code: u16,
+    pub error_msg: Option<String>,
+    pub error_msg_redacted: Option<String>,
+    pub request_body_json: Option<Value>,
+    pub response_body_json: Option<Value>,
+    pub request_headers: Option<BTreeMap<String, String>>,
+    pub response_headers: Option<BTreeMap<String, String>>,
+    pub error_message: Option<String>,
+    pub race_total: i64,
+    pub race_attempts: i64,
+    pub race_lost: bool,
+    pub is_streaming: bool,
+    pub stream_complete: bool,
+    pub api_key_id: Option<ApiKeyId>,
+    pub created_at: String,
+}
+
+/// Return up to `limit` usage rows whose `id` is strictly greater than
+/// `since_id`, oldest first (so the dashboard can append in order).
+///
+/// The implementation is the read side of the long-polling feed the
+/// dashboard uses in place of an SSE channel: the client passes back the
+/// last id it has seen, and we return everything that arrived since.
+///
+/// `limit` is a hard cap and is forwarded verbatim to SQL.
+pub fn recent(conn: &Connection, since_id: i64, limit: u32) -> Result<Vec<RecentUsageRow>> {
+    let limit_param: i64 = limit as i64;
+    let mut stmt = conn
+        .prepare(
+            "SELECT id, request_id, trace_id, provider_id, upstream_model_id, \
+                    status_code, total_ms, prompt_tokens, completion_tokens, \
+                    cost_usd, connect_ms, ttft_ms, request_body_json, response_body_json, \
+                    request_headers, response_headers, error_msg_redacted, error_msg, \
+                    race_total, race_attempts, is_streaming, stream_complete, \
+                    race_lost, created_at \
+             FROM usage \
+             WHERE id > ?1 \
+             ORDER BY id ASC \
+             LIMIT ?2",
+        )
+        .map_err(|e| CoreError::Database {
+            message: format!("prepare usage recent: {}", e),
+            source: Some(Box::new(e)),
+        })?;
+
+    let rows = stmt
+        .query_map(params![since_id, limit_param], |row| {
+            let mut col_idx = 0;
+            let id: i64 = row.get(col_idx)?; col_idx += 1;
+            let request_id: String = row.get(col_idx)?; col_idx += 1;
+            let trace_id: String = row.get(col_idx)?; col_idx += 1;
+            let provider_id: String = row.get(col_idx)?; col_idx += 1;
+            let upstream_model_id: String = row.get(col_idx)?; col_idx += 1;
+            let status_code: i64 = row.get(col_idx)?; col_idx += 1;
+            let total_ms: i64 = row.get(col_idx)?; col_idx += 1;
+            let prompt_tokens: Option<i64> = row.get(col_idx)?; col_idx += 1;
+            let completion_tokens: Option<i64> = row.get(col_idx)?; col_idx += 1;
+            let cost_usd: Option<f64> = row.get(col_idx)?; col_idx += 1;
+            let connect_ms: Option<i64> = row.get(col_idx)?; col_idx += 1;
+            let ttft_ms: Option<i64> = row.get(col_idx)?; col_idx += 1;
+            let request_body_json: Option<serde_json::Value> = row.get::<_, Option<String>>(col_idx)?.and_then(|s| serde_json::from_str(&s).ok()); col_idx += 1;
+            let response_body_json: Option<serde_json::Value> = row.get::<_, Option<String>>(col_idx)?.and_then(|s| serde_json::from_str(&s).ok()); col_idx += 1;
+            let request_headers: Option<String> = row.get(col_idx)?; col_idx += 1;
+            let response_headers: Option<String> = row.get(col_idx)?; col_idx += 1;
+            let error_msg_redacted: Option<String> = row.get(col_idx)?; col_idx += 1;
+            let error_msg: Option<String> = row.get(col_idx)?; col_idx += 1;
+            let race_total: i64 = row.get(col_idx)?; col_idx += 1;
+            let race_attempts: i64 = row.get(col_idx)?; col_idx += 1;
+            let is_streaming: i64 = row.get(col_idx)?; col_idx += 1;
+            let stream_complete: i64 = row.get(col_idx)?; col_idx += 1;
+            let race_lost: i64 = row.get(col_idx)?; col_idx += 1;
+            let created_at: String = row.get(col_idx)?; col_idx += 1;
+
+            if !(0..=u16::MAX as i64).contains(&status_code) {
+                return Err(rusqlite::Error::FromSqlConversionFailure(
+                    5,
+                    rusqlite::types::Type::Integer,
+                    Box::new(SimpleErr(format!("status_code out of u16 range: {}", status_code))),
+                ));
+            }
+            if total_ms < 0 {
+                return Err(rusqlite::Error::FromSqlConversionFailure(
+                    6,
+                    rusqlite::types::Type::Integer,
+                    Box::new(SimpleErr(format!("total_ms unexpectedly negative: {}", total_ms))),
+                ));
+            }
+            let request_headers = request_headers.map(|s| serde_json::from_str(&s).ok()).flatten();
+            let response_headers = response_headers.map(|s| serde_json::from_str(&s).ok()).flatten();
+            let error_message = error_msg_redacted.or(error_msg);
+            let prompt_tokens = prompt_tokens.and_then(|v| u32::try_from(v).ok());
+            let completion_tokens = completion_tokens.and_then(|v| u32::try_from(v).ok());
+            let race_total_u8 = u8::try_from(race_total).ok();
+            let race_attempts_u8 = u8::try_from(race_attempts).ok();
+            let is_streaming_bool = is_streaming != 0;
+            let stream_complete_bool = stream_complete != 0;
+            Ok(RecentUsageRow {
+                id: UsageId(id),
+                request_id,
+                trace_id,
+                provider_id: ProviderId::new(provider_id),
+                upstream_model_id,
+                status_code: status_code as u16,
+                total_ms: total_ms as u64,
+                prompt_tokens,
+                completion_tokens,
+                cost_usd,
+                connect_ms: connect_ms.map(|v| v as u64),
+                ttft_ms: ttft_ms.map(|v| v as u64),
+                request_body_json,
+                response_body_json,
+                request_headers,
+                response_headers,
+                error_message,
+                race_total: race_total_u8,
+                race_attempts: race_attempts_u8,
+                is_streaming: is_streaming_bool,
+                stream_complete: stream_complete_bool,
+                race_lost: race_lost != 0,
+                created_at,
+            })
+        })
+        .map_err(|e| CoreError::Database {
+            message: format!("query usage recent: {}", e),
+            source: Some(Box::new(e)),
+        })?;
+
+    collect_rows(rows, "recent")
+}
+
+/// Return the most recent `limit` usage rows, newest first.
+pub fn recent_desc(conn: &Connection, limit: u32) -> Result<Vec<RecentUsageRow>> {
+    let limit_param: i64 = limit as i64;
+    let mut stmt = conn
+        .prepare(
+            "SELECT id, request_id, trace_id, provider_id, upstream_model_id, \
+                    status_code, total_ms, prompt_tokens, completion_tokens, \
+                    cost_usd, connect_ms, ttft_ms, request_body_json, response_body_json, \
+                    request_headers, response_headers, error_msg_redacted, error_msg, \
+                    race_total, race_attempts, is_streaming, stream_complete, \
+                    race_lost, created_at \
+             FROM usage \
+             ORDER BY id DESC \
+             LIMIT ?1",
+        )
+        .map_err(|e| CoreError::Database {
+            message: format!("prepare usage recent_desc: {}", e),
+            source: Some(Box::new(e)),
+        })?;
+
+    let rows = stmt
+        .query_map(params![limit_param], |row| {
+            let mut col_idx = 0;
+            let id: i64 = row.get(col_idx)?; col_idx += 1;
+            let request_id: String = row.get(col_idx)?; col_idx += 1;
+            let trace_id: String = row.get(col_idx)?; col_idx += 1;
+            let provider_id: String = row.get(col_idx)?; col_idx += 1;
+            let upstream_model_id: String = row.get(col_idx)?; col_idx += 1;
+            let status_code: i64 = row.get(col_idx)?; col_idx += 1;
+            let total_ms: i64 = row.get(col_idx)?; col_idx += 1;
+            let prompt_tokens: Option<i64> = row.get(col_idx)?; col_idx += 1;
+            let completion_tokens: Option<i64> = row.get(col_idx)?; col_idx += 1;
+            let cost_usd: Option<f64> = row.get(col_idx)?; col_idx += 1;
+            let connect_ms: Option<i64> = row.get(col_idx)?; col_idx += 1;
+            let ttft_ms: Option<i64> = row.get(col_idx)?; col_idx += 1;
+            let request_body_json: Option<serde_json::Value> = row.get::<_, Option<String>>(col_idx)?.and_then(|s| serde_json::from_str(&s).ok()); col_idx += 1;
+            let response_body_json: Option<serde_json::Value> = row.get::<_, Option<String>>(col_idx)?.and_then(|s| serde_json::from_str(&s).ok()); col_idx += 1;
+            let request_headers: Option<String> = row.get(col_idx)?; col_idx += 1;
+            let response_headers: Option<String> = row.get(col_idx)?; col_idx += 1;
+            let error_msg_redacted: Option<String> = row.get(col_idx)?; col_idx += 1;
+            let error_msg: Option<String> = row.get(col_idx)?; col_idx += 1;
+            let race_total: i64 = row.get(col_idx)?; col_idx += 1;
+            let race_attempts: i64 = row.get(col_idx)?; col_idx += 1;
+            let is_streaming: i64 = row.get(col_idx)?; col_idx += 1;
+            let stream_complete: i64 = row.get(col_idx)?; col_idx += 1;
+            let race_lost: i64 = row.get(col_idx)?; col_idx += 1;
+            let created_at: String = row.get(col_idx)?; col_idx += 1;
+
+            if !(0..=u16::MAX as i64).contains(&status_code) {
+                return Err(rusqlite::Error::FromSqlConversionFailure(
+                    5,
+                    rusqlite::types::Type::Integer,
+                    Box::new(SimpleErr(format!("status_code out of u16 range: {}", status_code))),
+                ));
+            }
+            if total_ms < 0 {
+                return Err(rusqlite::Error::FromSqlConversionFailure(
+                    6,
+                    rusqlite::types::Type::Integer,
+                    Box::new(SimpleErr(format!("total_ms unexpectedly negative: {}", total_ms))),
+                ));
+            }
+            let request_headers = request_headers.map(|s| serde_json::from_str(&s).ok()).flatten();
+            let response_headers = response_headers.map(|s| serde_json::from_str(&s).ok()).flatten();
+            let error_message = error_msg_redacted.or(error_msg);
+            let prompt_tokens = prompt_tokens.and_then(|v| u32::try_from(v).ok());
+            let completion_tokens = completion_tokens.and_then(|v| u32::try_from(v).ok());
+            let race_total_u8 = u8::try_from(race_total).ok();
+            let race_attempts_u8 = u8::try_from(race_attempts).ok();
+            let is_streaming_bool = is_streaming != 0;
+            let stream_complete_bool = stream_complete != 0;
+
+            Ok(RecentUsageRow {
+                id: UsageId(id),
+                request_id,
+                trace_id,
+                provider_id: ProviderId::new(provider_id),
+                upstream_model_id,
+                status_code: status_code as u16,
+                total_ms: total_ms as u64,
+                prompt_tokens,
+                completion_tokens,
+                cost_usd,
+                connect_ms: connect_ms.map(|v| v as u64),
+                ttft_ms: ttft_ms.map(|v| v as u64),
+                request_body_json,
+                response_body_json,
+                request_headers,
+                response_headers,
+                error_message,
+                race_total: race_total_u8,
+                race_attempts: race_attempts_u8,
+                is_streaming: is_streaming_bool,
+                stream_complete: stream_complete_bool,
+                race_lost: race_lost != 0,
+                created_at,
+            })
+        })
+        .map_err(|e| CoreError::Database {
+            message: format!("query usage recent_desc: {}", e),
+            source: Some(Box::new(e)),
+        })?;
+
+    collect_rows(rows, "recent_desc")
+}
+
+/// Return one full `usage` row by id.
+pub fn detail_by_id(conn: &Connection, id: i64) -> Result<Option<UsageDetailRow>> {
+    let mut stmt = conn
+        .prepare(
+            "SELECT id, request_id, trace_id, attempt, provider_id, account_id, \
+                    combo_id, combo_target_id, model_row_id, upstream_model_id, \
+                    prompt_tokens, completion_tokens, connect_ms, ttft_ms, \
+                    total_ms, tokens_per_sec, status_code, error_msg, \
+                    error_msg_redacted, race_total, race_attempts, race_lost, \
+                    api_key_id, created_at, is_streaming, stream_complete, \
+                    request_body_json, response_body_json, request_headers, \
+                    response_headers, error_message \
+             FROM usage \
+             WHERE id = ?1",
+        )
+        .map_err(|e| CoreError::Database {
+            message: format!("prepare usage detail_by_id: {}", e),
+            source: Some(Box::new(e)),
+        })?;
+
+    let row = stmt
+        .query_row(params![id], |row| {
+            let id: i64 = row.get(0)?;
+            let request_id: String = row.get(1)?;
+            let trace_id: String = row.get(2)?;
+            let attempt: i64 = row.get(3)?;
+            let provider_id: String = row.get(4)?;
+            let account_id: Option<i64> = row.get(5)?;
+            let combo_id: Option<i64> = row.get(6)?;
+            let combo_target_id: Option<i64> = row.get(7)?;
+            let model_row_id: Option<i64> = row.get(8)?;
+            let upstream_model_id: String = row.get(9)?;
+            let prompt_tokens: Option<i64> = row.get(10)?;
+            let completion_tokens: Option<i64> = row.get(11)?;
+            let connect_ms: Option<i64> = row.get(12)?;
+            let ttft_ms: Option<i64> = row.get(13)?;
+            let total_ms: i64 = row.get(14)?;
+            let tokens_per_sec: Option<f64> = row.get(15)?;
+            let status_code: i64 = row.get(16)?;
+            let error_msg: Option<String> = row.get(17)?;
+            let error_msg_redacted: Option<String> = row.get(18)?;
+            let race_total: i64 = row.get(19)?;
+            let race_attempts: i64 = row.get(20)?;
+            let race_lost: i64 = row.get(21)?;
+            let api_key_id: Option<i64> = row.get(22)?;
+            let created_at: String = row.get(23)?;
+            let is_streaming: i64 = row.get(24)?;
+            let stream_complete: i64 = row.get(25)?;
+            let mut col_idx = 26;
+            let request_body_json: Option<serde_json::Value> = row.get::<_, Option<String>>(col_idx)?.and_then(|s| serde_json::from_str(&s).ok()); col_idx += 1;
+            let response_body_json: Option<serde_json::Value> = row.get::<_, Option<String>>(col_idx)?.and_then(|s| serde_json::from_str(&s).ok()); col_idx += 1;
+            let request_headers: Option<String> = row.get(col_idx)?; col_idx += 1;
+            let response_headers: Option<String> = row.get(col_idx)?; col_idx += 1;
+            let error_message: Option<String> = row.get(col_idx)?; col_idx += 1;
+
+            if !(0..=u16::MAX as i64).contains(&status_code) {
+                return Err(rusqlite::Error::FromSqlConversionFailure(
+                    16,
+                    rusqlite::types::Type::Integer,
+                    Box::new(SimpleErr(format!("status_code out of u16 range: {}", status_code))),
+                ));
+            }
+            if total_ms < 0 {
+                return Err(rusqlite::Error::FromSqlConversionFailure(
+                    14,
+                    rusqlite::types::Type::Integer,
+                    Box::new(SimpleErr(format!("total_ms unexpectedly negative: {}", total_ms))),
+                ));
+            }
+            let request_headers = request_headers.map(|s| serde_json::from_str(&s).ok()).flatten();
+            let response_headers = response_headers.map(|s| serde_json::from_str(&s).ok()).flatten();
+
+            Ok(UsageDetailRow {
+                id: UsageId(id),
+                request_id,
+                trace_id,
+                attempt,
+                provider_id: ProviderId::new(provider_id),
+                account_id: account_id.map(AccountId),
+                combo_id: combo_id.map(ComboId),
+                combo_target_id: combo_target_id.map(ComboTargetId),
+                model_row_id: model_row_id.map(ModelRowId),
+                upstream_model_id,
+                prompt_tokens,
+                completion_tokens,
+                connect_ms,
+                ttft_ms,
+                total_ms,
+                tokens_per_sec,
+                status_code: status_code as u16,
+                error_msg,
+                error_msg_redacted,
+                request_body_json,
+                response_body_json,
+                request_headers,
+                response_headers,
+                race_total,
+                race_attempts,
+                race_lost: race_lost != 0,
+                is_streaming: is_streaming != 0,
+                stream_complete: stream_complete != 0,
+                created_at,
+                api_key_id: api_key_id.map(ApiKeyId),
+                error_message,
+            })
+        })
+        .optional()
+        .map_err(|e| CoreError::Database {
+            message: format!("query usage detail_by_id: {}", e),
+            source: Some(Box::new(e)),
+        })?;
+
+    Ok(row)
+}
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+/// Drain a `MappedRows` iterator into a `Vec`, converting each row's rusqlite
+/// error into a `CoreError::Database` with a query-specific message.
+fn collect_rows<T>(
+    iter: rusqlite::MappedRows<'_, impl FnMut(&rusqlite::Row<'_>) -> rusqlite::Result<T>>,
+    query_name: &'static str,
+) -> Result<Vec<T>> {
+    let mut out = Vec::new();
+    for r in iter {
+        out.push(r.map_err(|e| CoreError::Database {
+            message: format!("read {} row: {}", query_name, e),
+            source: Some(Box::new(e)),
+        })?);
+    }
+    Ok(out)
+}
+
+/// Coerce a non-negative `i64` (from `COUNT(*)` etc.) to `u64`, panicking on
+/// the unreachable negative case with a clear field name.
+fn as_u64(v: i64, field: &'static str) -> rusqlite::Result<u64> {
+    if v < 0 {
+        return Err(rusqlite::Error::FromSqlConversionFailure(
+            0,
+            rusqlite::types::Type::Integer,
+            Box::new(SimpleErr(format!("{} unexpectedly negative: {}", field, v))),
+        ));
+    }
+    Ok(v as u64)
+}
+
+/// Tiny `std::error::Error` shim for ad-hoc conversion errors.
+#[derive(Debug)]
+struct SimpleErr(String);
+impl std::fmt::Display for SimpleErr {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+impl std::error::Error for SimpleErr {}
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::db::migrations;
+    use crate::ids::{RequestId, TraceId};
+    use rusqlite::Connection;
+    use std::path::PathBuf;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn tempdir() -> PathBuf {
+        let base = std::env::temp_dir();
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let dir = base.join(format!("openproxy-usage-test-{}-{}", std::process::id(), nanos));
+        std::fs::create_dir_all(&dir).expect("mkdir");
+        dir
+    }
+
+    /// Build a fresh in-memory-style DB on disk, run migrations, and return
+    /// the connection plus a cleanup closure (we use a file because rusqlite
+    /// doesn't expose `:memory:` across `&Connection` borrows without
+    /// `OpenFlags::SQLITE_OPEN_URI`).
+    fn fresh_conn() -> (Connection, PathBuf) {
+        let dir = tempdir();
+        let path = dir.join("usage-test.db");
+        let mut conn = Connection::open(&path).expect("open");
+        migrations::run(&mut conn).expect("migrate");
+        (conn, path)
+    }
+
+    /// Insert one usage row with all defaults driven by the test fixture.
+    /// Counts start at 0/200ms ttft/1200ms total to make aggregate assertions
+    /// easy to write by inspection.
+    fn insert(
+        conn: &Connection,
+        request_id: &str,
+        trace_id: &str,
+        provider: &str,
+        model: &str,
+        account: Option<i64>,
+        status: u16,
+        prompt: i64,
+        completion: i64,
+        cost: f64,
+        ttft: Option<i64>,
+        total: i64,
+        race_lost: bool,
+        err: Option<&str>,
+    ) {
+        conn.execute(
+            "INSERT INTO usage (\
+                request_id, trace_id, attempt, provider_id, account_id, \
+                upstream_model_id, prompt_tokens, completion_tokens, cost_usd, \
+                connect_ms, ttft_ms, total_ms, status_code, error_msg, \
+                error_msg_redacted, race_total, race_lost, created_at\
+             ) VALUES (\
+                ?1, ?2, 1, ?3, ?4, ?5, ?6, ?7, ?8, 50, ?9, ?10, ?11, ?12, ?12, 1, ?13, datetime('now')\
+             )",
+            params![
+                request_id,
+                trace_id,
+                provider,
+                account,
+                model,
+                prompt,
+                completion,
+                cost,
+                ttft,
+                total,
+                status as i64,
+                err,
+                race_lost as i64,
+            ],
+        )
+        .expect("insert");
+    }
+
+    // -----------------------------------------------------------------------
+    // 1. summary_basic — 3 rows sharing one request_id, 1 winner + 2 losers.
+    // -----------------------------------------------------------------------
+    #[test]
+    fn summary_basic() {
+        let (conn, _p) = fresh_conn();
+        let req = RequestId::new().to_string();
+        let t1 = TraceId::new().to_string();
+        let t2 = TraceId::new().to_string();
+        let t3 = TraceId::new().to_string();
+        insert(&conn, &req, &t1, "openrouter", "openai/gpt-4o", Some(1), 200, 100, 50, 0.01, Some(200), 1200, false, None);
+        insert(&conn, &req, &t2, "openrouter", "openai/gpt-4o", Some(2), 200, 100, 50, 0.01, Some(200), 1200, true, None);
+        insert(&conn, &req, &t3, "openrouter", "openai/gpt-4o", Some(3), 200, 100, 50, 0.01, Some(200), 1200, true, None);
+
+        let s = summary(&conn, &UsageFilter::default()).expect("summary");
+        assert_eq!(s.unique_requests, 1, "three rows share one request_id");
+        assert_eq!(s.total_rows, 3);
+        assert_eq!(s.total_attempts, 3, "three distinct trace_ids");
+        assert_eq!(s.winners, 1);
+        assert_eq!(s.losers, 2);
+        assert_eq!(s.errors, 0);
+        assert_eq!(s.total_prompt_tokens, 300);
+        assert_eq!(s.total_completion_tokens, 150);
+        assert!((s.total_cost_usd - 0.03).abs() < 1e-9);
+        assert_eq!(s.avg_ttft_ms, Some(200.0));
+        assert!((s.avg_total_ms - 1200.0).abs() < 1e-9);
+    }
+
+    // -----------------------------------------------------------------------
+    // 2. summary_with_provider_filter
+    // -----------------------------------------------------------------------
+    #[test]
+    fn summary_with_provider_filter() {
+        let (conn, _p) = fresh_conn();
+        // 2 rows for openrouter, 1 row for anthropic.
+        let r1 = RequestId::new().to_string();
+        let r2 = RequestId::new().to_string();
+        let r3 = RequestId::new().to_string();
+        insert(&conn, &r1, &TraceId::new().to_string(), "openrouter", "openai/gpt-4o", Some(1), 200, 10, 5, 0.001, Some(100), 600, false, None);
+        insert(&conn, &r2, &TraceId::new().to_string(), "openrouter", "openai/gpt-4o", Some(2), 200, 10, 5, 0.001, Some(100), 600, false, None);
+        insert(&conn, &r3, &TraceId::new().to_string(), "anthropic", "claude-3.5-sonnet", Some(3), 200, 10, 5, 0.001, Some(100), 600, false, None);
+
+        let f = UsageFilter { provider_id: Some(ProviderId::new("openrouter")), ..Default::default() };
+        let s = summary(&conn, &f).expect("filtered summary");
+        assert_eq!(s.unique_requests, 2);
+        assert_eq!(s.total_rows, 2);
+        assert_eq!(s.total_cost_usd, 0.002);
+
+        let f_none = UsageFilter::default();
+        let s_all = summary(&conn, &f_none).expect("unfiltered summary");
+        assert_eq!(s_all.unique_requests, 3);
+        assert_eq!(s_all.total_rows, 3);
+    }
+
+    // -----------------------------------------------------------------------
+    // 3. by_model_groups_by_provider_and_model
+    // -----------------------------------------------------------------------
+    #[test]
+    fn by_model_groups_by_provider_and_model() {
+        let (conn, _p) = fresh_conn();
+        // gpt-4o x2, gpt-4o-mini x1, claude x1
+        let r1 = RequestId::new().to_string();
+        let r2 = RequestId::new().to_string();
+        let r3 = RequestId::new().to_string();
+        let r4 = RequestId::new().to_string();
+        insert(&conn, &r1, &TraceId::new().to_string(), "openrouter", "openai/gpt-4o", Some(1), 200, 100, 50, 0.5, Some(200), 1200, false, None);
+        insert(&conn, &r2, &TraceId::new().to_string(), "openrouter", "openai/gpt-4o", Some(1), 200, 100, 50, 0.5, Some(200), 1200, false, None);
+        insert(&conn, &r3, &TraceId::new().to_string(), "openrouter", "openai/gpt-4o-mini", Some(1), 200, 100, 50, 0.05, Some(200), 600, false, None);
+        insert(&conn, &r4, &TraceId::new().to_string(), "anthropic", "claude-3.5-sonnet", Some(2), 200, 100, 50, 1.0, Some(200), 1500, false, None);
+
+        let rows = by_model(&conn, &UsageFilter::default()).expect("by_model");
+        assert_eq!(rows.len(), 3, "three (provider, model) buckets");
+
+        // Order: total_cost_usd DESC. Costs are 1.0, 1.0, 0.05.
+        assert_eq!(rows[0].upstream_model_id, "claude-3.5-sonnet");
+        assert!((rows[0].total_cost_usd - 1.0).abs() < 1e-9);
+        assert_eq!(rows[0].unique_requests, 1);
+        assert_eq!(rows[0].winners, 1);
+
+        // openai/gpt-4o cost 1.0 (0.5 + 0.5) — second by cost.
+        let gpt = rows.iter().find(|r| r.upstream_model_id == "openai/gpt-4o").expect("gpt row");
+        assert_eq!(gpt.unique_requests, 2);
+        assert_eq!(gpt.total_rows, 2);
+        assert!((gpt.total_cost_usd - 1.0).abs() < 1e-9);
+        assert_eq!(gpt.provider_id, ProviderId::new("openrouter"));
+
+        let mini = rows.iter().find(|r| r.upstream_model_id == "openai/gpt-4o-mini").expect("mini row");
+        assert_eq!(mini.total_rows, 1);
+        assert!((mini.total_cost_usd - 0.05).abs() < 1e-9);
+    }
+
+    // -----------------------------------------------------------------------
+    // 4. by_account_groups_by_account
+    // -----------------------------------------------------------------------
+    #[test]
+    fn by_account_groups_by_account() {
+        let (conn, _p) = fresh_conn();
+        // account 1: 2 successes
+        // account 2: 1 success, 1 error
+        let r1 = RequestId::new().to_string();
+        let r2 = RequestId::new().to_string();
+        let r3 = RequestId::new().to_string();
+        let r4 = RequestId::new().to_string();
+        insert(&conn, &r1, &TraceId::new().to_string(), "openrouter", "openai/gpt-4o", Some(1), 200, 10, 5, 0.10, Some(100), 600, false, None);
+        insert(&conn, &r2, &TraceId::new().to_string(), "openrouter", "openai/gpt-4o", Some(1), 200, 10, 5, 0.10, Some(100), 600, false, None);
+        insert(&conn, &r3, &TraceId::new().to_string(), "openrouter", "openai/gpt-4o", Some(2), 200, 10, 5, 0.05, Some(100), 600, false, None);
+        insert(&conn, &r4, &TraceId::new().to_string(), "openrouter", "openai/gpt-4o", Some(2), 500, 10, 5, 0.0, Some(100), 600, false, Some("upstream 500"));
+
+        let rows = by_account(&conn, &UsageFilter::default()).expect("by_account");
+        assert_eq!(rows.len(), 2);
+
+        // Ordered by total_cost_usd DESC: acc 1 (0.20) before acc 2 (0.05).
+        assert_eq!(rows[0].account_id, AccountId::new(1));
+        assert_eq!(rows[0].total_rows, 2);
+        assert_eq!(rows[0].errors, 0);
+        assert_eq!(rows[0].unique_requests, 2);
+        assert!((rows[0].total_cost_usd - 0.20).abs() < 1e-9);
+        assert_eq!(rows[0].provider_id, ProviderId::new("openrouter"));
+
+        assert_eq!(rows[1].account_id, AccountId::new(2));
+        assert_eq!(rows[1].total_rows, 2);
+        assert_eq!(rows[1].errors, 1);
+        assert!((rows[1].total_cost_usd - 0.05).abs() < 1e-9);
+    }
+
+    // -----------------------------------------------------------------------
+    // 5. by_status_groups_by_code
+    // -----------------------------------------------------------------------
+    #[test]
+    fn by_status_groups_by_code() {
+        let (conn, _p) = fresh_conn();
+        // 3x 200, 2x 429, 1x 500
+        for _ in 0..3 {
+            insert(&conn, &RequestId::new().to_string(), &TraceId::new().to_string(),
+                "openrouter", "openai/gpt-4o", Some(1), 200, 10, 5, 0.01, Some(100), 600, false, None);
+        }
+        for _ in 0..2 {
+            insert(&conn, &RequestId::new().to_string(), &TraceId::new().to_string(),
+                "openrouter", "openai/gpt-4o", Some(1), 429, 10, 5, 0.0, Some(100), 600, false, Some("rate limited"));
+        }
+        insert(&conn, &RequestId::new().to_string(), &TraceId::new().to_string(),
+            "openrouter", "openai/gpt-4o", Some(1), 500, 10, 5, 0.0, Some(100), 600, false, Some("oops"));
+
+        let rows = by_status(&conn, &UsageFilter::default()).expect("by_status");
+        assert_eq!(rows.len(), 3);
+        // Ordered by count DESC: 200 (3) first, then 429 (2), then 500 (1).
+        assert_eq!(rows[0].status_code, 200);
+        assert_eq!(rows[0].count, 3);
+        assert_eq!(rows[1].status_code, 429);
+        assert_eq!(rows[1].count, 2);
+        assert_eq!(rows[2].status_code, 500);
+        assert_eq!(rows[2].count, 1);
+    }
+
+    // -----------------------------------------------------------------------
+    // 6. errors_returns_only_4xx_5xx
+    // -----------------------------------------------------------------------
+    #[test]
+    fn errors_returns_only_4xx_5xx() {
+        let (conn, _p) = fresh_conn();
+        // 1 success
+        insert(&conn, &RequestId::new().to_string(), &TraceId::new().to_string(),
+            "openrouter", "openai/gpt-4o", Some(1), 200, 10, 5, 0.01, Some(100), 600, false, None);
+        // 1 400, 1 502
+        insert(&conn, &RequestId::new().to_string(), &TraceId::new().to_string(),
+            "openrouter", "openai/gpt-4o", Some(1), 400, 10, 5, 0.0, Some(100), 600, false, Some("bad request"));
+        insert(&conn, &RequestId::new().to_string(), &TraceId::new().to_string(),
+            "openrouter", "openai/gpt-4o", Some(1), 502, 10, 5, 0.0, Some(100), 600, false, Some("upstream down"));
+
+        let rows = errors(&conn, &UsageFilter::default(), 50).expect("errors");
+        assert_eq!(rows.len(), 2);
+        // Both rows are >= 400, so we expect both.
+        let codes: Vec<u16> = rows.iter().map(|r| r.status_code).collect();
+        assert!(codes.contains(&400));
+        assert!(codes.contains(&502));
+        for r in &rows {
+            assert!(r.status_code >= 400);
+            assert!(r.error_msg_redacted.is_some());
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // 7. errors_respects_limit
+    // -----------------------------------------------------------------------
+    #[test]
+    fn errors_respects_limit() {
+        let (conn, _p) = fresh_conn();
+        for i in 0..5 {
+            let req = format!("req-{}", i);
+            let trace = format!("trace-{}", i);
+            insert(&conn, &req, &trace, "openrouter", "openai/gpt-4o", Some(1), 500, 10, 5, 0.0, Some(100), 600, false, Some("err"));
+        }
+        let rows = errors(&conn, &UsageFilter::default(), 2).expect("errors");
+        assert_eq!(rows.len(), 2, "limit caps the result set");
+    }
+
+    // -----------------------------------------------------------------------
+    // Bonus: filter composition + date bounds.
+    // -----------------------------------------------------------------------
+    #[test]
+    fn summary_with_combo_and_model_filter() {
+        let (conn, _p) = fresh_conn();
+        // Two rows, one with combo 7 and one without.
+        let r1 = RequestId::new().to_string();
+        let r2 = RequestId::new().to_string();
+        conn.execute(
+            "INSERT INTO usage (\
+                request_id, trace_id, attempt, provider_id, account_id, combo_id, \
+                upstream_model_id, prompt_tokens, completion_tokens, cost_usd, \
+                connect_ms, ttft_ms, total_ms, status_code, error_msg, \
+                error_msg_redacted, race_total, race_lost, created_at\
+             ) VALUES (\
+                ?1, ?2, 1, 'openrouter', 1, 7, 'openai/gpt-4o', 10, 5, 0.01, 50, 100, 600, 200, NULL, NULL, 1, 0, datetime('now')\
+             )",
+            params![r1, TraceId::new().to_string()],
+        ).expect("insert 1");
+        conn.execute(
+            "INSERT INTO usage (\
+                request_id, trace_id, attempt, provider_id, account_id, combo_id, \
+                upstream_model_id, prompt_tokens, completion_tokens, cost_usd, \
+                connect_ms, ttft_ms, total_ms, status_code, error_msg, \
+                error_msg_redacted, race_total, race_lost, created_at\
+             ) VALUES (\
+                ?1, ?2, 1, 'openrouter', 1, 8, 'openai/gpt-4o-mini', 10, 5, 0.02, 50, 100, 600, 200, NULL, NULL, 1, 0, datetime('now')\
+             )",
+            params![r2, TraceId::new().to_string()],
+        ).expect("insert 2");
+
+        let f = UsageFilter {
+            combo_id: Some(ComboId(7)),
+            model_id: Some("openai/gpt-4o".to_string()),
+            ..Default::default()
+        };
+        let s = summary(&conn, &f).expect("summary");
+        assert_eq!(s.total_rows, 1);
+        assert_eq!(s.total_cost_usd, 0.01);
+    }
+
+    #[test]
+    fn empty_db_returns_zero_summary() {
+        let (conn, _p) = fresh_conn();
+        let s = summary(&conn, &UsageFilter::default()).expect("summary");
+        assert_eq!(s.unique_requests, 0);
+        assert_eq!(s.total_rows, 0);
+        assert_eq!(s.winners, 0);
+        assert_eq!(s.losers, 0);
+        // AVG over zero rows is NULL in SQLite → None.
+        assert_eq!(s.avg_ttft_ms, None);
+        // COALESCE keeps AVG(total_ms) at 0.0 even with no rows.
+        assert_eq!(s.avg_total_ms, 0.0);
+    }
+
+    #[test]
+    fn avg_ttft_skips_null_rows() {
+        let (conn, _p) = fresh_conn();
+        // Row 1: ttft=100; Row 2: ttft NULL (race_lost pre-body).
+        insert(&conn, &RequestId::new().to_string(), &TraceId::new().to_string(),
+            "openrouter", "openai/gpt-4o", Some(1), 200, 10, 5, 0.01, Some(100), 600, false, None);
+        insert(&conn, &RequestId::new().to_string(), &TraceId::new().to_string(),
+            "openrouter", "openai/gpt-4o", Some(1), 200, 10, 5, 0.01, None, 600, true, Some("race lost"));
+        let s = summary(&conn, &UsageFilter::default()).expect("summary");
+        assert_eq!(s.avg_ttft_ms, Some(100.0), "NULL ttft is excluded from AVG");
+    }
+
+    // -----------------------------------------------------------------------
+    // 8. recent returns rows newer than since_id, in id ASC order.
+    // -----------------------------------------------------------------------
+    #[test]
+    fn recent_returns_rows_after_since_id() {
+        let (conn, _p) = fresh_conn();
+        // Three rows, ids will be 1, 2, 3.
+        insert(&conn, &RequestId::new().to_string(), &TraceId::new().to_string(),
+            "openrouter", "openai/gpt-4o", Some(1), 200, 10, 5, 0.01, Some(100), 600, false, None);
+        insert(&conn, &RequestId::new().to_string(), &TraceId::new().to_string(),
+            "openrouter", "openai/gpt-4o", Some(2), 200, 20, 10, 0.02, Some(150), 700, true, None);
+        insert(&conn, &RequestId::new().to_string(), &TraceId::new().to_string(),
+            "anthropic", "claude-3.5-sonnet", Some(3), 500, 0, 0, 0.0, None, 800, false, Some("oops"));
+
+        // since_id = 0 returns all three, in id ASC order.
+        let all = recent(&conn, 0, 50).expect("recent");
+        assert_eq!(all.len(), 3);
+        assert!(all.iter().map(|r| r.id.0).eq(1..=3));
+        // race_lost propagates (1 = true).
+        assert!(!all[0].race_lost);
+        assert!(all[1].race_lost);
+        assert!(!all[2].race_lost);
+        // cost_usd + tokens survive the round-trip.
+        assert_eq!(all[0].prompt_tokens, Some(10));
+        assert_eq!(all[0].completion_tokens, Some(5));
+        assert!((all[0].cost_usd.unwrap() - 0.01).abs() < 1e-9);
+        // The error row's cost is 0.0; the column is NOT NULL, so we get Some(0.0).
+        assert_eq!(all[2].cost_usd, Some(0.0));
+        assert_eq!(all[2].status_code, 500);
+
+        // since_id = 1 → only ids > 1, i.e. 2 and 3.
+        let after = recent(&conn, 1, 50).expect("recent");
+        assert_eq!(after.len(), 2);
+        assert!(after.iter().map(|r| r.id.0).eq(2..=3));
+
+        // since_id past the last id → empty.
+        let none = recent(&conn, 999, 50).expect("recent");
+        assert!(none.is_empty());
+
+        // limit caps the result.
+        let capped = recent(&conn, 0, 2).expect("recent");
+        assert_eq!(capped.len(), 2);
+        assert!(capped.iter().map(|r| r.id.0).eq(1..=2));
+    }
+
+    #[test]
+    fn recent_desc_returns_newest_first() {
+        let (conn, _p) = fresh_conn();
+        insert(&conn, &RequestId::new().to_string(), &TraceId::new().to_string(),
+            "openrouter", "openai/gpt-4o", Some(1), 200, 10, 5, 0.01, Some(100), 600, false, None);
+        insert(&conn, &RequestId::new().to_string(), &TraceId::new().to_string(),
+            "openrouter", "openai/gpt-4o", Some(2), 200, 20, 10, 0.02, Some(150), 700, true, None);
+        insert(&conn, &RequestId::new().to_string(), &TraceId::new().to_string(),
+            "anthropic", "claude-3.5-sonnet", Some(3), 500, 0, 0, 0.0, None, 800, false, Some("oops"));
+
+        let rows = recent_desc(&conn, 2).expect("recent_desc");
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].id.0, 3);
+        assert_eq!(rows[1].id.0, 2);
+    }
+
+    #[test]
+    fn detail_by_id_returns_full_usage_row() {
+        let (conn, _p) = fresh_conn();
+        let req = RequestId::new().to_string();
+        let trace = TraceId::new().to_string();
+        conn.execute(
+            "INSERT INTO usage (\
+                request_id, trace_id, attempt, provider_id, account_id, combo_id, \
+                model_row_id, upstream_model_id, combo_target_id, prompt_tokens, \
+                completion_tokens, connect_ms, ttft_ms, total_ms, tokens_per_sec, \
+                status_code, error_msg, error_msg_redacted, race_total, race_lost, \
+                api_key_id, created_at\
+             ) VALUES (\
+                ?1, ?2, 2, 'openrouter', 1, 7, 9, 'openai/gpt-4o', 11, 100, 50, \
+                25, 200, 1200, 50.0, 500, 'raw secret', 'raw secret', 3, 1, NULL, \
+                datetime('now')\
+             )",
+            params![req, trace],
+        )
+        .expect("insert detail");
+        let id = conn.last_insert_rowid();
+
+        let row = detail_by_id(&conn, id).expect("detail_by_id").expect("row exists");
+        assert_eq!(row.id.0, id);
+        assert_eq!(row.request_id, req);
+        assert_eq!(row.trace_id, trace);
+        assert_eq!(row.attempt, 2);
+        assert_eq!(row.provider_id, ProviderId::new("openrouter"));
+        assert_eq!(row.account_id, Some(AccountId::new(1)));
+        assert_eq!(row.combo_id, Some(ComboId(7)));
+        assert_eq!(row.model_row_id, Some(ModelRowId(9)));
+        assert_eq!(row.upstream_model_id, "openai/gpt-4o");
+        assert_eq!(row.combo_target_id, Some(ComboTargetId(11)));
+        assert_eq!(row.prompt_tokens, Some(100));
+        assert_eq!(row.completion_tokens, Some(50));
+        assert_eq!(row.connect_ms, Some(25));
+        assert_eq!(row.ttft_ms, Some(200));
+        assert_eq!(row.total_ms, 1200);
+        assert_eq!(row.tokens_per_sec, Some(50.0));
+        assert_eq!(row.status_code, 500);
+        assert_eq!(row.error_msg, Some("raw secret".to_string()));
+        assert_eq!(row.error_msg_redacted, Some("raw secret".to_string()));
+        assert_eq!(row.race_total, 3);
+        assert!(row.race_lost);
+        assert_eq!(row.api_key_id, None);
+        assert!(!row.created_at.is_empty());
+
+        assert!(detail_by_id(&conn, id + 1).expect("detail_by_id missing").is_none());
+    }
+}
