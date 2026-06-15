@@ -10,3 +10,4 @@ pub mod telemetry;
 pub mod middleware;
 pub mod router;
 pub mod handlers;
+pub mod disconnect;

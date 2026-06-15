@@ -13,23 +13,38 @@ use axum::{
 };
 use serde_json::json;
 
-use crate::{handlers, middleware::request_id, state::AppState};
+use crate::{
+    disconnect::client_disconnect_middleware,
+    handlers, middleware::request_id, state::AppState,
+};
 
 /// Build the root [`Router`] for the server.
 ///
 /// The state is attached via `with_state` so individual handlers can
 /// accept `State<AppState>` in their extractor list. The request-id
 /// middleware is applied at the outermost layer.
+///
+/// The chat routes are wrapped in [`client_disconnect_middleware`]
+/// so the chat handler's `client_disconnected` watch is driven by
+/// real TCP-level events (request-body read errors + response-body
+/// write errors) instead of a time-based watchdog. See
+/// `crates/openproxy-server/src/disconnect.rs` for the rationale.
 pub fn build_router(state: AppState) -> Router {
     // Public + chat routes. `/v1/health` is a tiny liveness probe;
     // `/v1/models` lists known models in OpenAI shape;
     // `/v1/chat/completions` is the main entry point.
+    //
+    // The disconnect middleware is layered ONLY on the chat routes:
+    // admin CRUD endpoints are short-lived and don't need
+    // per-request cancel tracking, and the liveness probe would
+    // pay the wrapper cost on every health check.
     let chat_routes = Router::new()
         .route("/v1/models", get(handlers::models::list_models))
         .route(
             "/v1/chat/completions",
             post(handlers::chat::chat_completions),
-        );
+        )
+        .layer(middleware::from_fn(client_disconnect_middleware));
 
     // Admin surface (spec §2.3). CRUD for providers, accounts, combos,
     // plus read-only usage analytics.

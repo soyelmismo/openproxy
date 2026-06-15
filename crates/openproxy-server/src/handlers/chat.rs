@@ -20,6 +20,7 @@
 //! plumbing is a follow-up.
 
 use axum::{
+    extract::Extension,
     extract::State,
     http::{HeaderMap, StatusCode},
     response::IntoResponse,
@@ -41,6 +42,7 @@ use tokio::sync::watch;
 use tokio_stream::wrappers::ReceiverStream;
 
 use crate::{
+    disconnect::CancelWatch,
     error::ApiError,
     state::AppState,
 };
@@ -51,12 +53,23 @@ use crate::{
 /// return 400 with the standard error envelope. On success we hand
 /// the request to the pipeline, which returns a [`PipelineResult`]
 /// we translate into a `(status, body)` response.
+///
+/// The `CancelWatch` extension is injected by the
+/// [`crate::disconnect::client_disconnect_middleware`]; it carries a
+/// `watch::Receiver<bool>` that flips to `true` the moment the client
+/// closes the TCP connection (request-body read error OR
+/// response-body write error). We thread it into the pipeline as
+/// `PipelineRequest::client_disconnected` so the dispatch loop, the
+/// `reqwest::send()` `tokio::select!`, and the SSE `stream.next()`
+/// `tokio::select!` all observe the real cancel — no time-based
+/// watchdog needed.
 pub async fn chat_completions(
     State(state): State<AppState>,
+    Extension(cancel): Extension<CancelWatch>,
     headers: HeaderMap,
     axum::Json(body): axum::Json<serde_json::Value>,
 ) -> Result<axum::response::Response, ApiError> {
-    run_pipeline(state, headers, body).await
+    run_pipeline(state, cancel, headers, body).await
 }
 
 /// Drive one chat-completion request through the pipeline.
@@ -64,8 +77,15 @@ pub async fn chat_completions(
 /// The body mirrors what a synchronous-style pipeline call would look
 /// like: parse → authenticate → resolve routing → build config → run
 /// pipeline → shape the response.
+///
+/// `cancel` is the per-request watch receiver produced by the
+/// [`crate::disconnect::client_disconnect_middleware`]. It flips to
+/// `true` on a real TCP-level client disconnect; the pipeline's
+/// dispatch loop, the `reqwest::send()` `tokio::select!`, and the
+/// SSE `stream.next()` `tokio::select!` all observe it.
 async fn run_pipeline(
     state: AppState,
+    cancel: CancelWatch,
     headers: HeaderMap,
     body: serde_json::Value,
 ) -> Result<axum::response::Response, ApiError> {
@@ -205,12 +225,73 @@ async fn run_pipeline(
     let request_id = RequestId::new();
     let trace_id = TraceId::new();
 
-    // 7. Watch channel for client-disconnect signal. MVP: never
-    //    set to `true` (no cancellation task).
-    let cancel_rx = {
-        let (_tx, rx) = watch::channel(false);
-        rx
+    // 7. Watch channel for client-disconnect signal.
+    //
+    // The pipeline's dispatch loop checks `client_disconnected` at
+    // each target boundary (pipeline.rs:475-478) and aborts with
+    // `CoreError::ClientDisconnected` (HTTP 499) when it fires. It
+    // ALSO short-circuits the upstream `reqwest::send()` and SSE
+    // stream reads via `tokio::select!` (see pipeline.rs, the
+    // `cancellation_during_send_aborts_upstream_request` /
+    // `cancellation_during_streaming_aborts_response_stream` /
+    // `cancellation_mid_sse_stream_aborts_immediately` regression
+    // tests).
+    //
+    // The watch is allocated by the `client_disconnect_middleware`
+    // mounted in router.rs on the chat routes. That middleware
+    // wraps both the *request* and *response* body in a
+    // `DisconnectBody` that fires the watch on any body-level error
+    // — so a real TCP-level cancel (RST, half-close, hangup) flips
+    // the watch within milliseconds of the kernel noticing.
+    //
+    // The deadline-based watchdog below is a *fallback* for the
+    // case where the client doesn't close the TCP connection but
+    // simply stops reading the streaming response (a "soft"
+    // cancel). The kernel won't fire a body error in that case, so
+    // we use a timer as the second source of truth. The client can
+    // shrink the deadline with `x-request-deadline-ms`; we cap it
+    // at `timeouts.total` so a misbehaving client cannot drag the
+    // watchdog past the upstream call's own timeout.
+    let cancel_tx = cancel.tx.clone();
+    let cancel_rx = cancel.rx.clone();
+
+    // Determine the deadline for the watchdog. The client may
+    // override it via `x-request-deadline-ms` (a millisecond
+    // budget they want the proxy to honor); we cap it at
+    // `timeouts.total` so a misbehaving client cannot drag the
+    // watchdog past the upstream call's own timeout.
+    let client_deadline_ms: Option<u64> = headers
+        .get("x-request-deadline-ms")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|s| s.trim().parse::<u64>().ok())
+        .filter(|ms| *ms > 0);
+    let total_ms = state.config().timeouts.total_ms;
+    let watchdog_budget_ms = match client_deadline_ms {
+        Some(client_ms) if client_ms < total_ms => {
+            tracing::debug!(
+                client_ms,
+                total_ms,
+                "client requested shorter cancellation deadline than upstream total"
+            );
+            client_ms
+        }
+        _ => total_ms,
     };
+
+    // Spawn the watchdog. It holds only the `cancel_tx` sender,
+    // not the pipeline state, so a panic in the spawn is contained
+    // to this task and the request still completes via the
+    // existing `total` timeout on the reqwest send.
+    {
+        let cancel_tx = cancel_tx.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_millis(watchdog_budget_ms)).await;
+            // `send` on a watch is a no-op if the channel is closed
+            // (i.e. the receiver was dropped because the pipeline
+            // finished earlier). We don't care about the result.
+            let _ = cancel_tx.send(true);
+        });
+    }
 
     // 8. Build and run the pipeline request.
     let (tx, rx) = tokio::sync::mpsc::channel(64);

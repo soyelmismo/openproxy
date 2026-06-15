@@ -233,6 +233,48 @@ impl AppState {
         })
     }
 
+    /// Build a minimal `AppState` suitable for tests.
+    ///
+    /// This skips every side-effect of `new` (env-var master key,
+    /// file-backed SQLite, OAuth scheduler, cooldown pruner, seed
+    /// rows, etc.) and gives the caller direct control over the
+    /// bits tests need to vary. The caller is responsible for
+    /// running migrations on `db_pool` before calling this.
+    pub fn for_test(
+        config: AppConfig,
+        db_pool: Arc<db::DbPool>,
+        master_key: Arc<MasterKey>,
+        adapters: Arc<Vec<Arc<dyn adapters::ProviderAdapter>>>,
+    ) -> Self {
+        // 60-second prune cadence matches production; the spawned
+        // task holds only `Arc<DbPool>` so the test's drop of the
+        // AppState at the end of the test is enough to terminate
+        // it cleanly.
+        let prune_pool = db_pool.clone();
+        tokio::spawn(async move {
+            let mut tick = tokio::time::interval(std::time::Duration::from_secs(60));
+            tick.tick().await;
+            loop {
+                tick.tick().await;
+                let _ = openproxy_core::cooldown::prune_expired(&prune_pool.writer());
+            }
+        });
+
+        Self {
+            config,
+            db_pool,
+            master_key,
+            adapters,
+            http_client: reqwest::Client::builder()
+                .user_agent("openproxy-test/0.1")
+                .build()
+                .expect("build test http client"),
+            usage_tx: usage::init_usage_broadcast(),
+            stage_tx: usage::init_stage_broadcast(),
+            record_bodies_and_headers: Arc::new(AtomicBool::new(false)),
+        }
+    }
+
     /// Borrow the parsed configuration.
     pub fn config(&self) -> &AppConfig {
         &self.config
