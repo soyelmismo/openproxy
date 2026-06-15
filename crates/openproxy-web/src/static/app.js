@@ -38,6 +38,53 @@ const state = {
     status: 'disconnected',
     selectedRow: null,
     liveTokens: new Map(),
+    /// Per-request stage timeline for the live-log "millisecond
+    /// debug" view. Key is `request_id`, value is the most recent
+    /// `StageEvent` payload received for that request. The
+    /// dashboard renders `state.logs.stagesByRequestId.get(rid)` in
+    /// the row's "phase" cell so the operator can watch a request
+    /// transition through `started → connecting → waiting_ttft →
+    /// streaming → completed` in real time.
+    ///
+    /// This is intentionally *append-only* within a request's
+    /// lifetime: the latest event wins (it carries the cumulative
+    /// timing info — `elapsed_ms`, `connect_ms`, `ttft_ms`). We
+    /// do NOT keep the full history; the user only cares about
+    /// "what phase is this row in right now, and how long has it
+    /// been there". The next click on the row opens the full
+    /// request detail (bodies, headers, raw status).
+    stagesByRequestId: new Map(),
+    /// In-flight placeholder rows for requests that have started
+    /// emitting stage events but whose final `RecentUsageRow`
+    /// has not yet arrived. The dashboard renders these
+    /// *above* the historical table so the operator sees the
+    /// request as soon as the pipeline picks it up, not only
+    /// after `cost::record` runs. The map is keyed by
+    /// `request_id`; when the final row lands, the entry is
+    /// removed and the row re-renders as a normal historical
+    /// row.
+    ///
+    /// Bounded by `state.logs.maxRows / 2` so a flood of
+    /// requests doesn't OOM the page; older placeholders are
+    /// discarded before newer ones.
+    inflightByRequestId: new Map(),
+    /// Whether the server is currently recording full request/response
+    /// bodies and headers in the `usage` table. Toggled from the
+    /// Live Logs header; fetched on first render so the button
+    /// reflects the real state.
+    recording: false,
+    /// Loading flag for the recording toggle so the user sees
+    /// "Saving…" while the POST is in flight.
+    recordingLoading: false,
+    // Pagination
+    page: 1,
+    rowsPerPage: 50,
+    maxRows: 500,
+    /// When true, every new row snaps the view to page 1 (the
+    /// newest end of the DESC-sorted list). When false, the user
+    /// keeps their place when new rows arrive — useful when
+    /// scrolling back to read older entries.
+    followTail: true,
   },
   // Background-refresh / view machinery. `currentView.handler` is the
   // last render fn that wrote to `#main`; `currentView.context` is the
@@ -2440,27 +2487,190 @@ function setLogsStatus(status) {
 function renderLogsRows() {
   const logsEl = document.getElementById('logs');
   if (!logsEl) return;
-  const rows = state.logs.rows.slice().sort((a, b) => (b.id || 0) - (a.id || 0));
-  logsEl.innerHTML = rows.length
-    ? rows.map(renderLogRowHtml).join('')
-    : '<div class="empty">No recent requests yet. Use the API to see logs appear here in real time.</div>';
+  // Build a single unified list: historical rows + in-flight
+  // placeholders. We sort by `id` DESC, but the in-flight
+  // placeholders have *string* ids like `"inflight-<uuid>"`;
+  // we use a synthetic numeric id of `Number.MAX_SAFE_INTEGER`
+  // minus the request's `created_at` epoch millis so newer
+  // in-flight placeholders sit at the top of page 1.
+  //
+  // `created_at` from the server is RFC-3339 with millisecond
+  // precision; `Date.parse(...)` handles it. We don't do
+  // timezone math — we just need a monotonic *within this
+  // session* ordering, so any monotonicity-preserving transform
+  // would do. We pick this one because it survives an
+  // `appendChild` of a page-1 row that the operator is staring
+  // at (the row keeps its position relative to other in-flight
+  // rows while the in-flight set churns).
+  const inflightRows = Array.from(state.logs.inflightByRequestId.values()).map(p => {
+    const t = Date.parse(p.created_at);
+    const syntheticId = isFinite(t) ? (Number.MAX_SAFE_INTEGER - t) : Number.MAX_SAFE_INTEGER;
+    return Object.assign({}, p, { id: syntheticId, __inflight: true });
+  });
+  const rows = state.logs.rows.concat(inflightRows)
+    .sort((a, b) => (b.id || 0) - (a.id || 0));
+  const totalRows = rows.length;
+  const rpp = state.logs.rowsPerPage;
+  const totalPages = Math.max(1, Math.ceil(totalRows / rpp));
+
+  // Clamp current page
+  if (state.logs.page > totalPages) state.logs.page = totalPages;
+  if (state.logs.page < 1) state.logs.page = 1;
+
+  const start = (state.logs.page - 1) * rpp;
+  const end = Math.min(start + rpp, totalRows);
+  const pageRows = rows.slice(start, end);
+
+  // Column header
+  const headerHtml = `
+    <div class="log-row" style="cursor:default;border-bottom:1px solid var(--border-strong);font-weight:600;font-size:0.72rem;text-transform:uppercase;color:var(--text-muted);background:#0f0d0b;position:sticky;top:0;z-index:1;">
+      <span>Time</span>
+      <span>Phase</span>
+      <span>Status</span>
+      <span>Provider</span>
+      <span>Model</span>
+      <span>Tokens</span>
+      <span>Latency</span>
+      <span>Cost</span>
+    </div>`;
+
+  const bodyHtml = pageRows.length
+    ? pageRows.map(renderLogRowHtml).join('')
+    : '<div class="empty" style="padding:2rem;">No recent requests yet. Use the API to see logs appear here in real time.</div>';
+
+  // Pagination controls
+  const isFirst = state.logs.page <= 1;
+  const isLast = state.logs.page >= totalPages;
+  const paginationHtml = totalRows > 0 ? `
+    <div class="logs-pagination">
+      <span class="rows-info">${totalRows} row${totalRows !== 1 ? 's' : ''}</span>
+      <button onclick="logsGoPage(1)" ${isFirst ? 'disabled' : ''}>⟨⟨</button>
+      <button onclick="logsPrevPage()" ${isFirst ? 'disabled' : ''}>‹ Prev</button>
+      <span class="page-info">Page ${state.logs.page} of ${totalPages}</span>
+      <button onclick="logsNextPage()" ${isLast ? 'disabled' : ''}>Next ›</button>
+      <button onclick="logsGoPage(${totalPages})" ${isLast ? 'disabled' : ''}>⟩⟩</button>
+      <label class="logs-follow-toggle" title="When ON, new rows automatically scroll the view to the most recent page. When OFF, the view stays on the page you're reading.">
+        <input type="checkbox" id="logs-follow-input" ${state.logs.followTail ? 'checked' : ''} onchange="logsSetFollow(this.checked)">
+        <span>Follow</span>
+      </label>
+    </div>` : '';
+
+  logsEl.innerHTML = headerHtml + bodyHtml + paginationHtml;
   attachLogRowHandlers();
 }
 
+window.logsPrevPage = function() {
+  if (state.logs.page > 1) {
+    state.logs.page--;
+    // Reaching page 1 (the newest end) re-enables follow-tail.
+    if (state.logs.page === 1) state.logs.followTail = true;
+    renderLogsRows();
+  }
+};
+
+window.logsNextPage = function() {
+  // Rows are sorted DESCENDING by id (newest first), so the FIRST
+  // page contains the freshest rows. "Next" therefore moves toward
+  // older rows (page N). Auto-scroll/follow-tail stays on page 1
+  // by design.
+  if (state.logs.page < totalPages()) {
+    state.logs.page++;
+    // If the user manually walked all the way to the last page,
+    // they've explicitly chosen to read the older end — leave
+    // followTail off so future broadcasts don't yank them back.
+    if (state.logs.page >= totalPages()) state.logs.followTail = false;
+    renderLogsRows();
+  }
+};
+
+window.logsGoPage = function(p) {
+  const total = totalPages();
+  state.logs.page = Math.max(1, Math.min(p, total));
+  // "Following the tail" means sitting on page 1 (newest end).
+  state.logs.followTail = (state.logs.page === 1);
+  renderLogsRows();
+};
+
+function totalPages() {
+  return Math.max(1, Math.ceil(state.logs.rows.length / state.logs.rowsPerPage));
+}
+
+window.logsSetFollow = function(enabled) {
+  state.logs.followTail = !!enabled;
+  if (enabled) {
+    // Jump to page 1 (the newest end) so the user sees the tail.
+    state.logs.page = 1;
+    renderLogsRows();
+  }
+};
+
 function mergeLogsByDescId(existing, incoming) {
-  const merged = new Map(state.logs.rowById);
+  // Build the map FROM existing first, so the merge is independent
+  // of any stale `state.logs.rowById` from previous renders. The
+  // prior code started with `new Map(state.logs.rowById)` and then
+  // re-added every `existing` row on top of it, which meant the
+  // request_id alias entries from a previous history batch kept
+  // accumulating (Map sizes grew from 50 to 200+ entries even when
+  // the visible row count stayed at 1 or 2). That stale alias
+  // baggage also confused the dedup filter below.
+  const merged = new Map();
+  // Bug #1 fix: also key rows by `request_id` so the in-flight
+  // "started" event (which arrives with id=0) and the terminal
+  // "row" event (which arrives with a real DB id) are merged into
+  // one entry instead of two. Without this, the dashboard would
+  // show the in-flight row, then duplicate it as a completed row.
   for (const row of existing) {
     const k = Number(row.id) || row.id;
     merged.set(k, row);
+    if (row.request_id) merged.set('req:' + row.request_id, row);
   }
   for (const row of incoming) {
     if (row == null || row.id == null) continue;
     const k = Number(row.id) || row.id;
-    merged.set(k, { ...(merged.get(k) || {}), ...row });
+    // Replace the entry keyed by `id`; if the incoming row has no
+    // real id yet (in-flight), prefer any existing row with the
+    // same request_id as the base for the merge so the user sees
+    // continuous updates of the same logical request.
+    let base = merged.get(k);
+    if ((!k || k === 0) && row.request_id) {
+      const reqKey = 'req:' + row.request_id;
+      if (merged.has(reqKey)) base = merged.get(reqKey);
+    }
+    merged.set(k, { ...(base || {}), ...row });
+    if (row.request_id) merged.set('req:' + row.request_id, merged.get(k));
     state.logs.lastSeenId = Math.max(state.logs.lastSeenId, row.id);
   }
-  state.logs.rowById = merged;
-  return Array.from(merged.values()).sort((a, b) => (b.id || 0) - (a.id || 0));
+  // Dedupe correctly: build a Set of seen identity keys in a single
+  // pass, then filter. A row can be indexed under both `id` and
+  // `req:<request_id>`, so `Array.from(merged.values())` may yield
+  // the same row twice. We must keep the first occurrence and drop
+  // the rest, *globally* — the previous per-element slice-based
+  // filter accidentally dropped the incoming row when the existing
+  // map had a request_id-aliased entry of the same id (see bug
+  // captured in E2E: row arrived id=141, map had 197 stale
+  // request_id aliases, filter saw newRow twice and rejected it).
+  const seenKeys = new Set();
+  let result = Array.from(merged.values()).filter((r) => {
+    const key = r.id != null ? Number(r.id) : (r.request_id ? 'r:' + r.request_id : Symbol());
+    if (key === Symbol() || seenKeys.has(key)) return false;
+    seenKeys.add(key);
+    return true;
+  }).sort((a, b) => (b.id || 0) - (a.id || 0));
+
+  // Enforce max row limit – discard oldest (highest id = newest, so remove from end)
+  const limit = state.logs.maxRows;
+  if (result.length > limit) {
+    const removed = result.slice(limit);
+    result = result.slice(0, limit);
+    for (const r of removed) {
+      const k = Number(r.id) || r.id;
+      merged.delete(k);
+    }
+    state.logs.rowById = merged;
+  } else {
+    state.logs.rowById = merged;
+  }
+  return result;
 }
 
 function renderLogRowHtml(row) {
@@ -2471,9 +2681,16 @@ function renderLogRowHtml(row) {
     row.race_lost ? 'loser' : '',
     streaming ? 'streaming' : '',
   ].filter(Boolean).join(' ');
+  // Look up the latest stage event for this request, if any.
+  // For rows that arrived via `history` (i.e. the request
+  // finished before the dashboard connected) there is no
+  // stage — fall back to the historical terminal state.
+  const stage = state.logs.stagesByRequestId.get(row.request_id);
+  const phaseCell = renderLogPhaseHtml(stage, row);
   return `
     <button class="${cls}" data-id="${escapeAttr(row.id)}" data-request-id="${escapeAttr(row.request_id || '')}" aria-label="Open usage detail for ${escapeAttr(row.request_id || row.id || '')}">
       <span class="log-time">${escapeHtml(row.created_at || '')}</span>
+      ${phaseCell}
       <span class="log-status">${row.status_code ?? '—'}</span>
       <span class="log-provider">${escapeHtml(row.provider_id || '')}</span>
       <span class="log-model">${escapeHtml(row.upstream_model_id || '')}</span>
@@ -2482,6 +2699,69 @@ function renderLogRowHtml(row) {
       <span class="log-cost">$${(row.cost_usd || 0).toFixed(4)}</span>
     </button>
   `;
+}
+
+/// Render the "phase" cell for a log row. Pulls the latest
+/// `StageEvent` for the request if any, else renders an empty
+/// placeholder (for historical rows).
+///
+/// The cell value is the human-readable phase label
+/// (e.g. `waiting_ttft`, `streaming`) with a colour-coded
+/// badge and a small "Xms" sublabel for the time spent in
+/// this phase. The exact `elapsed_ms` is already on the row's
+/// `total_ms` after the request finishes, so we show the
+/// *current* ms-from-start as the sublabel to give the
+/// operator a live feel even mid-request.
+function renderLogPhaseHtml(stage, row) {
+  if (!stage) {
+    return `<span class="log-phase log-phase--idle" title="No live phase info (request finished before live-log opened)">—</span>`;
+  }
+  const phase = stage.stage || 'started';
+  const elapsed = stage.elapsed_ms || 0;
+  const label = STAGE_LABELS[phase] || phase;
+  const cls = `log-phase log-phase--${phase}`;
+  // Sublabel: the *latest* per-stage value the operator cares
+  // about. We pick the most relevant of the available timings:
+  //   - `connecting` shows `elapsed_ms` (time to first byte)
+  //   - `waiting_ttft` shows `connect_ms` (time to first byte)
+  //   - `streaming` shows `ttft_ms` (time to first body byte)
+  //   - `started` shows `elapsed_ms` (always 0 in practice)
+  //   - `failed` shows `elapsed_ms` (total time-to-fail)
+  let sublabel;
+  if (phase === 'streaming' && stage.ttft_ms != null) {
+    sublabel = `ttft ${stage.ttft_ms}ms`;
+  } else if ((phase === 'waiting_ttft' || phase === 'streaming') && stage.connect_ms != null) {
+    sublabel = `connect ${stage.connect_ms}ms`;
+  } else {
+    sublabel = `${elapsed}ms`;
+  }
+  return `<span class="${cls}" title="${escapeAttr(label)} (${escapeAttr(sublabel)})">${escapeHtml(label)}<span class="log-phase-sub">${escapeHtml(sublabel)}</span></span>`;
+}
+
+/// Maps the server's coarse stage labels to human-friendly
+/// strings. The server publishes
+/// `started`/`connecting`/`waiting_ttft`/`streaming`/`failed` —
+/// we keep those exact keys in the `data-stage` attribute (and
+/// CSS) so the styling can target them directly, but render a
+/// friendlier label in the cell body.
+const STAGE_LABELS = {
+  started: 'procesando payload',
+  connecting: 'conectando a upstream',
+  waiting_ttft: 'esperando ttft',
+  streaming: 'recibiendo streaming',
+  completed: 'completado',
+  failed: 'falló',
+};
+
+/// CSS-escape a string for use inside an attribute selector.
+/// Browsers expose `CSS.escape(...)` natively; we use it
+/// directly and fall back to a no-op for environments that
+/// don't (older test runners). The dashboard's request_ids
+/// are random hex, so the risk of selector injection is
+/// nil, but a stray `-` or `\` would still break the lookup.
+function cssEscape(s) {
+  if (typeof CSS !== 'undefined' && CSS.escape) return CSS.escape(s);
+  return String(s).replace(/[^\w-]/g, (c) => '\\' + c);
 }
 
 function attachLogRowHandlers() {
@@ -2498,23 +2778,129 @@ function handleLogsMessage(raw) {
     showToast('Live Logs received an invalid WebSocket message.', 'error');
     return;
   }
+  window.__logMsgTrace = window.__logMsgTrace || [];
+  window.__logMsgTrace.push({ t: Date.now(), type: msg.type, hasData: !!msg.data, hasRow: !!msg.row, keys: Object.keys(msg || {}).slice(0, 10) });
   if (msg.type === 'history') {
     const rows = Array.isArray(msg.rows) ? msg.rows : [];
     state.logs.rows = mergeLogsByDescId(state.logs.rows, rows);
+    // History: go to page 1 by default (most recent data)
+    state.logs.page = 1;
+    state.logs.followTail = true;
     renderLogsRows();
   } else if (msg.type === 'row') {
     const row = msg.data || msg.row || msg;
     state.logs.rows = mergeLogsByDescId(state.logs.rows, [row]);
+    // When the final `RecentUsageRow` arrives, drop the
+    // in-flight placeholder for the same `request_id` (if any)
+    // so the row seamlessly becomes a historical row, not a
+    // duplicate.
+    if (row.request_id && state.logs.inflightByRequestId.has(row.request_id)) {
+      state.logs.inflightByRequestId.delete(row.request_id);
+    }
     if (row.is_streaming && !row.stream_complete) {
       state.logs.liveTokens.set(row.request_id, state.logs.liveTokens.get(row.request_id) || '');
     }
+    // Bug #2 fix: only snap to page 1 (the newest end) if the user
+    // is following the tail. If they scrolled away to read older
+    // rows (page > 1 with followTail off), leave them alone.
+    if (state.logs.followTail) {
+      state.logs.page = 1;
+    }
     renderLogsRows();
     updateOpenLogDetail(row);
+  } else if (msg.type === 'stage') {
+    handleStageEvent(msg.data || msg);
   } else if (msg.type === 'stream_tokens') {
     handleStreamTokens(msg);
   } else if (msg.type === 'error') {
     showToast(msg.message || 'Live Logs WebSocket error', 'error');
   }
+}
+
+/// Live-log stage event: an in-flight request transitioned
+/// through a phase. We update the row's "phase" cell in place
+/// (no row re-render — the operator wants to see the timeline
+/// blink, not the row jump around the DOM).
+///
+/// The match for the row is by `request_id` because stages are
+/// broadcast *before* the row's `cost::record` fires (and therefore
+/// before the `RecentUsageRow` reaches the client). In that
+/// window the request has no `usage_id` to anchor on, so
+/// `request_id` is the only stable key.
+function handleStageEvent(event) {
+  if (!event || !event.request_id) return;
+  const requestId = event.request_id;
+  // Stash the latest event for this request. The render fn reads
+  // this map to produce the "phase" cell value.
+  state.logs.stagesByRequestId.set(requestId, event);
+
+  // Three cases for the matching row in `state.logs.rows`:
+  //
+  //  A) Row exists in memory and is in the rendered page.
+  //     → Update the phase cell in place. Cheap, no flicker.
+  //
+  //  B) Row exists in memory but is paged out (page > 1).
+  //     → Force a re-render. The pagination logic will put the
+  //       user back on the page they're on; the phase cell is
+  //       included in the new HTML.
+  //
+  //  C) No row yet (this stage is the first signal of the
+  //     request). The operator still wants to see *something*
+  //     — a row showing only the live phase info, anchored by
+  //     `request_id`. We add an "in-flight" row to a separate
+  //     list and render that above the historical table.
+  //     When the final `RecentUsageRow` lands, we remove the
+  //     placeholder and the row seamlessly becomes the
+  //     historical one.
+  const existingRow = state.logs.rows.find(r => r.request_id === requestId);
+  if (existingRow) {
+    // Ensure `state.logs.rowById` knows about it too so
+    // pagination / detail panel lookups work after a re-render.
+    if (existingRow.id != null) {
+      state.logs.rowById.set(existingRow.id, existingRow);
+    }
+    if (state.logs.followTail) {
+      state.logs.page = 1;
+    }
+    renderLogsRows();
+    updateOpenLogDetail(existingRow);
+    return;
+  }
+
+  // Case C: in-flight placeholder. The placeholder is keyed by
+  // the negative form of the *latest* stage event's `elapsed_ms`
+  // timestamp so the DESC sort puts the most recent in-flight
+  // request at the top of page 1. The id is unique per
+  // `request_id` because the placeholders are stored in a
+  // separate map (see `state.logs.inflightByRequestId`).
+  if (!state.logs.inflightByRequestId.has(requestId)) {
+    state.logs.inflightByRequestId.set(requestId, {
+      id: `inflight-${requestId}`,
+      request_id: requestId,
+      // Copy the model/provider fields from the first stage
+      // event so the row already shows the right combo target.
+      provider_id: event.provider_id || '',
+      upstream_model_id: event.upstream_model_id || '',
+      // Synthetic timestamp from the event so the row's `log-time`
+      // cell is meaningful.
+      created_at: event.timestamp || new Date().toISOString(),
+      // Zero/dummy values for the rest — the row's render fn
+      // falls back to the phase cell for the operator's primary
+      // information.
+      status_code: 0,
+      prompt_tokens: null,
+      completion_tokens: null,
+      total_ms: 0,
+      cost_usd: 0,
+      is_streaming: false,
+      stream_complete: false,
+      race_lost: false,
+    });
+  }
+  if (state.logs.followTail) {
+    state.logs.page = 1;
+  }
+  renderLogsRows();
 }
 
 function handleStreamTokens(msg) {
@@ -2720,7 +3106,31 @@ function closeLogDetailModal() {
 
 function connectLogsWebSocket() {
   clearLogsReconnectTimer();
-  state.logs.ws?.close();
+
+  // Bug #3 fix: singleton guard. If we already have an open or
+  // connecting WebSocket, don't create a duplicate. A previous
+  // instance may also be in the process of being torn down (its
+  // close handshake not yet complete) — let that finish naturally
+  // rather than racing a new one.
+  if (state.logs.ws) {
+    const ready = state.logs.ws.readyState;
+    if (ready === WebSocket.OPEN) {
+      // Already open. The badge in the DOM may have been reset to
+      // "disconnected" by a fresh innerHTML render (e.g. user
+      // navigated away to another view and back). Sync the badge to
+      // reflect the real socket state.
+      setLogsStatus('connected');
+      return;
+    }
+    if (ready === WebSocket.CONNECTING) {
+      // Still handshaking; the open handler will update the badge.
+      return;
+    }
+    // CLOSING or CLOSED: fall through and create a fresh socket. The
+    // old one's listeners are still attached but they all check
+    // `state.logs.ws !== ws` so they're inert.
+  }
+
   setLogsStatus(state.logs.reconnectAttempt === 0 ? 'connecting' : 'reconnecting');
   const ws = new WebSocket(logsWsUrl());
   ws.addEventListener('open', () => {
@@ -2763,22 +3173,117 @@ function clearLogsReconnectTimer() {
 }
 
 async function renderLogs() {
+  // Idempotency guard: bgPoll calls rerenderCurrentView() every 3s when
+  // /providers, /accounts, /models, /keys, or /health change. If we
+  // re-render the logs view on every poll, we wipe the rows in memory,
+  // break the WS subscriptions, and thrash the DOM — the WS appears to
+  // drop shortly after opening. So: if the logs view is already in the
+  // DOM, just make sure the WS is connected and the recording toggle
+  // is in sync, then return.
+  const main = document.getElementById('main');
+  const alreadyRendered = main && main.querySelector('.logs-header') && main.querySelector('#logs');
+  if (alreadyRendered) {
+    // The WS is the source of truth for rows. We do not re-create it
+    // here; the singleton guard inside connectLogsWebSocket will do
+    // the right thing (skip if already open/connecting, sync the
+    // badge if the DOM was just rebuilt).
+    connectLogsWebSocket();
+    fetchRecordingState();
+    return;
+  }
+
   clearLogsReconnectTimer();
   state.logs.rows = [];
   state.logs.rowById = new Map();
   state.logs.lastSeenId = 0;
   state.logs.liveTokens = new Map();
   state.logs.reconnectAttempt = 0;
+  state.logs.page = 1;
+  state.logs.followTail = true;
   document.getElementById('main').innerHTML = `
     <div class="logs-header">
       <h2>Live Logs</h2>
-      <span id="logs-connection-status" class="logs-connection-badge disconnected">🔴 disconnected</span>
+      <div class="logs-header-actions">
+        <span id="logs-connection-status" class="logs-connection-badge disconnected">🔴 disconnected</span>
+        <button
+          id="logs-recording-toggle"
+          class="logs-recording-toggle"
+          type="button"
+          aria-pressed="false"
+          title="When ON, the server saves full request/response bodies and headers for every request (disk). When OFF, only metadata is kept."
+        >
+          <span class="logs-recording-dot" aria-hidden="true"></span>
+          <span class="logs-recording-label">⏺ Record: <strong>OFF</strong></span>
+        </button>
+      </div>
     </div>
     <div class="logs" id="logs">
-      <div class="empty">No recent requests yet. Use the API to see logs appear here in real time.</div>
+      <div class="empty" style="padding:2rem;">No recent requests yet. Use the API to see logs appear here in real time.</div>
     </div>
   `;
+  // Wire the recording toggle and sync its state with the server.
+  const recBtn = document.getElementById('logs-recording-toggle');
+  if (recBtn) {
+    recBtn.addEventListener('click', () => toggleRecording());
+  }
+  fetchRecordingState();
   connectLogsWebSocket();
+}
+
+/// Fetch the current recording flag from the server and update the
+/// toggle button. Safe to call multiple times.
+async function fetchRecordingState() {
+  try {
+    const data = await api('/recording');
+    state.logs.recording = !!data.recording;
+  } catch (err) {
+    console.warn('fetchRecordingState failed', err);
+    // Leave state.logs.recording at whatever it was; the button is
+    // a soft indicator and the server is the source of truth.
+  } finally {
+    renderRecordingToggle();
+  }
+}
+
+/// Flip the recording flag on the server, then re-sync local state.
+async function toggleRecording() {
+  if (state.logs.recordingLoading) return;
+  state.logs.recordingLoading = true;
+  renderRecordingToggle();
+  const desired = !state.logs.recording;
+  try {
+    const data = await api('/recording', {
+      method: 'POST',
+      body: JSON.stringify({ enabled: desired }),
+    });
+    state.logs.recording = !!data.recording;
+  } catch (err) {
+    console.error('toggleRecording failed', err);
+    alert('Failed to toggle recording: ' + err.message);
+  } finally {
+    state.logs.recordingLoading = false;
+    renderRecordingToggle();
+  }
+}
+
+/// Re-render the Record button to reflect state.logs.recording.
+function renderRecordingToggle() {
+  const btn = document.getElementById('logs-recording-toggle');
+  if (!btn) return;
+  const on = !!state.logs.recording;
+  const loading = !!state.logs.recordingLoading;
+  btn.classList.toggle('on', on);
+  btn.classList.toggle('off', !on);
+  btn.classList.toggle('loading', loading);
+  btn.setAttribute('aria-pressed', on ? 'true' : 'false');
+  btn.disabled = loading;
+  const label = btn.querySelector('.logs-recording-label');
+  if (label) {
+    label.innerHTML = `⏺ Record: <strong>${on ? 'ON' : 'OFF'}</strong>`;
+  }
+  btn.title = on
+    ? 'Recording is ON — full bodies and headers are being saved. Click to stop.'
+    : 'Recording is OFF — only metadata is being saved. Click to start recording full bodies and headers.';
 }
 
 function prettyJson(value) {

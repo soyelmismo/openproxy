@@ -192,7 +192,11 @@ async fn run_pipeline(
         // `CooldownConfig::default()` for the TOML case.
         cooldown_secs: state.config().cooldown.cooldown_secs,
     };
-    let pipeline = Pipeline::new(state.db_pool().writer_arc(), config);
+    let pipeline = Pipeline::with_recording_flag(
+        state.db_pool().writer_arc(),
+        config,
+        state.record_bodies_and_flags(),
+    );
 
     // 6. Per-request IDs. The middleware already stamped a
     //    `RequestId` in the request extensions; we use a fresh one
@@ -221,6 +225,10 @@ async fn run_pipeline(
         api_key_id,
         combo_override,
         targets_override,
+        request_headers: headers
+            .iter()
+            .map(|(k, v)| (k.as_str().to_string(), v.to_str().unwrap_or("").to_string()))
+            .collect(),
     };
 
     if openai_req.stream {

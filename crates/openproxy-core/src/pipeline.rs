@@ -24,6 +24,7 @@ use crate::translation::{OpenAIRequest, OpenAIResponse};
 use rusqlite::Connection;
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Instant;
 use tokio::sync::mpsc;
 use tokio::sync::watch;
@@ -84,6 +85,13 @@ pub struct PipelineRequest {
     ///
     /// `None` = normal path: load the targets from the DB.
     pub targets_override: Option<Vec<ComboTarget>>,
+    /// Request headers as captured by the HTTP layer. Used by the
+    /// recording path to persist the inbound headers in the
+    /// `usage.request_headers` column when recording is enabled.
+    /// Always populated for requests that pass through the chat
+    /// handler, so the failure path of the pipeline can still
+    /// record what the client sent.
+    pub request_headers: std::collections::BTreeMap<String, String>,
 }
 
 /// Outcome of a single `Pipeline::run()` call.
@@ -112,6 +120,10 @@ pub struct Pipeline {
     config: PipelineConfig,
     circuit_breaker: CircuitBreakerRegistry,
     rr_counters: Arc<parking_lot::Mutex<HashMap<ComboId, u64>>>,
+    /// If `true`, the pipeline records the full request and response bodies
+    /// and headers in the `usage` table. False by default to save disk.
+    /// Shared with `AppState` so the admin endpoint can toggle it.
+    record_bodies_and_headers: Arc<AtomicBool>,
 }
 
 impl Pipeline {
@@ -120,6 +132,19 @@ impl Pipeline {
     /// module rather than `AppConfig` because the spec (§5.2) treats it as
     /// a runtime concern, not a config-file concern.
     pub fn new(conn: Arc<parking_lot::Mutex<Connection>>, config: PipelineConfig) -> Self {
+        Self::with_recording_flag(conn, config, Arc::new(AtomicBool::new(false)))
+    }
+
+    /// Build a new `Pipeline` that shares the recording flag with the
+    /// caller (typically `AppState`). This is how the admin endpoint
+    /// can flip recording on and have it take effect on the next
+    /// in-flight request, since the `Pipeline` is constructed
+    /// per-request inside the chat handler.
+    pub fn with_recording_flag(
+        conn: Arc<parking_lot::Mutex<Connection>>,
+        config: PipelineConfig,
+        record_bodies_and_headers: Arc<AtomicBool>,
+    ) -> Self {
         let cb = CircuitBreakerRegistry::new(&CircuitBreakerConfig {
             failure_threshold: 5,
             unhealthy_duration_ms: 60_000,
@@ -129,7 +154,19 @@ impl Pipeline {
             config,
             circuit_breaker: cb,
             rr_counters: Arc::new(parking_lot::Mutex::new(HashMap::new())),
+            record_bodies_and_headers,
         }
+    }
+
+    /// Get the current recording state.
+    pub fn is_recording(&self) -> bool {
+        self.record_bodies_and_headers.load(Ordering::Relaxed)
+    }
+
+    /// Set the recording state. When `true`, the pipeline will record
+    /// full request/response bodies and headers in the `usage` table.
+    pub fn set_recording(&self, enabled: bool) {
+        self.record_bodies_and_headers.store(enabled, Ordering::Relaxed);
     }
 
     /// Drive one chat-completion request to completion.
@@ -635,6 +672,27 @@ impl Pipeline {
         let started = Instant::now();
         let trace_id = TraceId::new();
 
+        // Live-log stage event: request accepted by the pipeline.
+        // Only emitted when recording is ON — this is the switch
+        // the dashboard exposes. When OFF, the operator doesn't
+        // care about per-phase granularity and we save the broadcast
+        // channel some traffic.
+        if self.is_recording() {
+            crate::usage::publish_stage_event(crate::usage::StageEvent {
+                request_id: req.request_id.to_string(),
+                trace_id: trace_id.to_string(),
+                provider_id: target.provider_id.to_string(),
+                upstream_model_id: String::new(),
+                stage: "started".into(),
+                elapsed_ms: 0,
+                connect_ms: None,
+                ttft_ms: None,
+                status_code: 0,
+                error: None,
+                timestamp: chrono::Utc::now().format("%Y-%m-%dT%H:%M:%S%.3fZ").to_string(),
+            });
+        }
+
         // 0. Check if this provider uses a custom executor.
         //    Custom executors handle their own request translation,
         //    HTTP dispatch, and response parsing. We intercept here
@@ -762,6 +820,10 @@ impl Pipeline {
                             trace_id,
                             response.usage.as_ref().map(|u| u.prompt_tokens),
                             response.usage.as_ref().map(|u| u.completion_tokens),
+                            None, // request_body_json
+                            None, // response_body_json
+                            None, // request_headers
+                            None, // response_headers
                         );
                         PipelineResult {
                             status_code: 200,
@@ -1021,6 +1083,28 @@ impl Pipeline {
         let url = adapter.build_chat_url(target_format, &model.model_id);
         let headers = adapter.build_headers(&api_key, target_format, &model.model_id);
 
+        // Live-log stage event: about to open the upstream socket.
+        // We treat anything between `started` and the actual byte
+        // arrival (DB lookups, body translation, header resolve) as
+        // `connecting` — the operator cares about "how long until I
+        // see the first upstream byte", not about which micro-phase
+        // dominates.
+        if self.is_recording() {
+            crate::usage::publish_stage_event(crate::usage::StageEvent {
+                request_id: req.request_id.to_string(),
+                trace_id: trace_id.to_string(),
+                provider_id: target.provider_id.to_string(),
+                upstream_model_id: model.model_id.as_str().to_string(),
+                stage: "connecting".into(),
+                elapsed_ms: started.elapsed().as_millis() as u64,
+                connect_ms: None,
+                ttft_ms: None,
+                status_code: 0,
+                error: None,
+                timestamp: chrono::Utc::now().format("%Y-%m-%dT%H:%M:%S%.3fZ").to_string(),
+            });
+        }
+
         let result = self
             .dispatch_upstream(
                 target,
@@ -1075,7 +1159,7 @@ impl Pipeline {
         target_format: crate::models::TargetFormat,
         url: &str,
         headers: &[(String, String)],
-        body_value: &serde_json::Value,
+        body_value_param: &serde_json::Value,
         resolved_timeouts: &Timeouts,
         started: Instant,
         attempt: u8,
@@ -1103,7 +1187,7 @@ impl Pipeline {
         for (k, v) in headers {
             request_builder = request_builder.header(k.as_str(), v.as_str());
         }
-        request_builder = request_builder.json(body_value);
+        request_builder = request_builder.json(body_value_param);
 
         // STREAMING PATH: when the client requested streaming and we
         // have a stream_sink, read SSE lines from upstream and forward
@@ -1124,6 +1208,29 @@ impl Pipeline {
         let send_start = Instant::now();
         let response_result = request_builder.send().await;
         let connect_and_send_ms = send_start.elapsed().as_millis() as u64;
+
+        // Live-log stage helper closure. Only fires when recording
+        // is ON; OFF means the dashboard's "Record" toggle is off
+        // and the operator doesn't want per-phase noise. Throttled
+        // per-call: each caller site picks which stages matter.
+        let mut emit_stage = |stage: &str, status: u16, err: Option<String>| {
+            if !self.is_recording() {
+                return;
+            }
+            crate::usage::publish_stage_event(crate::usage::StageEvent {
+                request_id: req.request_id.to_string(),
+                trace_id: trace_id.to_string(),
+                provider_id: target.provider_id.to_string(),
+                upstream_model_id: model.model_id.as_str().to_string(),
+                stage: stage.into(),
+                elapsed_ms: started.elapsed().as_millis() as u64,
+                connect_ms: Some(connect_and_send_ms),
+                ttft_ms: None,
+                status_code: status,
+                error: err,
+                timestamp: chrono::Utc::now().format("%Y-%m-%dT%H:%M:%S%.3fZ").to_string(),
+            });
+        };
 
         let response = match response_result {
             Ok(r) => r,
@@ -1153,6 +1260,23 @@ impl Pipeline {
         };
 
         let status_code = response.status().as_u16();
+        // Extract response headers BEFORE consuming the body
+        let response_headers: Option<std::collections::BTreeMap<String, String>> = if self.is_recording() {
+            Some(
+                response
+                    .headers()
+                    .iter()
+                    .map(|(k, v)| (k.as_str().to_string(), v.to_str().unwrap_or_default().to_string()))
+                    .collect(),
+            )
+        } else {
+            None
+        };
+        // Live-log: socket+headers are in, body streaming next.
+        // For non-2xx we go to the error branch below; emit there.
+        if (200..300).contains(&status_code) {
+            emit_stage("waiting_ttft", status_code, None);
+        }
         // For non-streaming we have no first-chunk signal, so the
         // conservative thing is to record `ttft == total`. The cost
         // module's tokens/sec guard already turns this into `None`.
@@ -1198,7 +1322,7 @@ impl Pipeline {
 
         // 2xx: parse into the native wire format, then translate to
         // OpenAIResponse if needed.
-        let body_value: serde_json::Value = match serde_json::from_slice(&body_bytes) {
+        let response_body_raw: serde_json::Value = match serde_json::from_slice(&body_bytes) {
             Ok(v) => v,
             Err(e) => {
                 let err = CoreError::Parse(format!("upstream json: {e}"));
@@ -1210,8 +1334,14 @@ impl Pipeline {
             }
         };
 
+        // Snapshot the body JSON before it gets moved into the
+        // format-specific parser below; we need it both as the
+        // recorded response body and as a source for the request
+        // body we are about to send.
+        let response_body_value = response_body_raw.clone();
+
         let openai_response = match target_format {
-            crate::models::TargetFormat::Openai => match serde_json::from_value::<OpenAIResponse>(body_value) {
+            crate::models::TargetFormat::Openai => match serde_json::from_value::<OpenAIResponse>(response_body_raw) {
                 Ok(r) => r,
                 Err(e) => {
                     let err = CoreError::Parse(format!("parse openai response: {e}"));
@@ -1224,7 +1354,7 @@ impl Pipeline {
             },
             crate::models::TargetFormat::Anthropic => {
                 let anthropic_resp: crate::translation::AnthropicResponse =
-                    match serde_json::from_value(body_value) {
+                    match serde_json::from_value(response_body_raw) {
                         Ok(r) => r,
                         Err(e) => {
                             let err = CoreError::Parse(format!("parse anthropic response: {e}"));
@@ -1239,7 +1369,7 @@ impl Pipeline {
             }
             crate::models::TargetFormat::Gemini => {
                 let gemini_resp: crate::translation::GeminiResponse =
-                    match serde_json::from_value(body_value) {
+                    match serde_json::from_value(response_body_raw) {
                         Ok(r) => r,
                         Err(e) => {
                             let err = CoreError::Parse(format!("parse gemini response: {e}"));
@@ -1259,11 +1389,17 @@ impl Pipeline {
 
         // Record the successful attempt and return.
         let total_ms_now = started.elapsed().as_millis() as u64;
+        let request_headers_btm: std::collections::BTreeMap<String, String> =
+            headers.iter().cloned().collect();
         let _ = self.record_attempt_raw_with_tokens(
             req, combo, target, Some(model), None,
             Some(connect_and_send_ms), Some(ttft_ms), total_ms_now,
             status_code, attempt, race_size, trace_id,
             prompt_tokens, completion_tokens,
+            Some(body_value_param.clone()), // request body: original translated JSON sent upstream
+            Some(response_body_value),      // response body: snapshot captured before the parse consumed body_value
+            Some(request_headers_btm),      // request headers
+            response_headers,               // response headers (captured before body was read)
         );
 
         PipelineResult {
@@ -1344,6 +1480,17 @@ impl Pipeline {
         let created = chrono::Utc::now().timestamp() as u64;
         let model_name = model.model_id.as_str().to_string();
 
+        // The first SSE chunk emits the `streaming` stage event
+        // (see the `if ttft_ms.is_none()` branch below) so we know
+        // `ttft_ms` exactly at that moment. We deliberately do NOT
+        // emit a `streaming` event here at the start of the loop
+        // — the operator's "ttft" number is the time from socket
+        // open to first body byte, and a separate "headers in"
+        // event would imply we have a distinct timing for that,
+        // which we don't. The `waiting_ttft` event we emitted a
+        // few lines above already covers "headers received, body
+        // streaming next".
+
         // Read the response as a byte stream, split into lines,
         // and process each SSE line.
         use futures::StreamExt;
@@ -1382,6 +1529,25 @@ impl Pipeline {
                 // Record TTFT on the first data-bearing line.
                 if ttft_ms.is_none() {
                     ttft_ms = Some(first_chunk_time.elapsed().as_millis() as u64);
+                    // Live-log stage event: first byte-of-body
+                    // arrived. The dashboard updates the row's
+                    // "in phase" label from "waiting_ttft" to
+                    // "streaming" and shows the ttft value.
+                    if self.is_recording() {
+                        crate::usage::publish_stage_event(crate::usage::StageEvent {
+                            request_id: req.request_id.to_string(),
+                            trace_id: trace_id.to_string(),
+                            provider_id: target.provider_id.to_string(),
+                            upstream_model_id: model_name.clone(),
+                            stage: "streaming".into(),
+                            elapsed_ms: started.elapsed().as_millis() as u64,
+                            connect_ms: Some(connect_and_send_ms),
+                            ttft_ms,
+                            status_code: 200,
+                            error: None,
+                            timestamp: chrono::Utc::now().format("%Y-%m-%dT%H:%M:%S%.3fZ").to_string(),
+                        });
+                    }
                 }
 
                 // Parse based on upstream format.
@@ -1500,6 +1666,10 @@ impl Pipeline {
             Some(connect_and_send_ms), ttft_ms, total_ms,
             status_code, attempt, race_size, trace_id,
             prompt_tokens, completion_tokens,
+            None, // request_body_json
+            None, // response_body_json
+            None, // request_headers
+            None, // response_headers
         );
 
         PipelineResult {
@@ -1589,7 +1759,38 @@ impl Pipeline {
     ) -> PipelineResult {
         let trace_id = TraceId::new();
         let total_ms = started.elapsed().as_millis() as u64;
-        let _ = self.record_attempt_raw(
+        // Live-log stage event: the request failed. We emit this
+        // *before* the DB row so the dashboard's stage label and
+        // its "row inserted" notification can race — the frontend
+        // collapses both into a single visible row, so the
+        // ordering inside the broadcast is not user-visible.
+        if self.is_recording() {
+            crate::usage::publish_stage_event(crate::usage::StageEvent {
+                request_id: req.request_id.to_string(),
+                trace_id: trace_id.to_string(),
+                provider_id: target.provider_id.to_string(),
+                upstream_model_id: model
+                    .map(|m| m.model_id.as_str().to_string())
+                    .unwrap_or_default(),
+                stage: "failed".into(),
+                elapsed_ms: total_ms,
+                connect_ms,
+                ttft_ms,
+                status_code,
+                error: Some(err.to_string()),
+                timestamp: chrono::Utc::now().format("%Y-%m-%dT%H:%M:%S%.3fZ").to_string(),
+            });
+        }
+        // Bug #4 fix: the failure path used to drop the request body
+        // and headers, so even with recording=ON the DB row had
+        // NULL in those columns. Recover the body from the original
+        // OpenAI request (which we always have in `req`) and the
+        // headers from the new `req.request_headers` slot. Response
+        // side is None on this path — we never reached the upstream
+        // call.
+        let request_body_json = serde_json::to_value(&req.openai_request).ok();
+        let request_headers = req.request_headers.clone();
+        let _ = self.record_attempt_raw_with_tokens(
             req,
             combo,
             target,
@@ -1602,6 +1803,12 @@ impl Pipeline {
             attempt,
             race_size,
             trace_id,
+            None,
+            None,
+            request_body_json,
+            None,
+            Some(request_headers),
+            None,
         );
         PipelineResult {
             status_code: err.http_status(),
@@ -1634,7 +1841,7 @@ impl Pipeline {
         self.record_attempt_raw_with_tokens(
             req, combo, target, model, err,
             connect_ms, ttft_ms, total_ms, status_code, attempt, race_size, trace_id,
-            None, None,
+            None, None, None, None, None, None,
         )
     }
 
@@ -1659,7 +1866,12 @@ impl Pipeline {
         trace_id: TraceId,
         prompt_tokens: Option<u32>,
         completion_tokens: Option<u32>,
+        request_body_json: Option<serde_json::Value>,
+        response_body_json: Option<serde_json::Value>,
+        request_headers: Option<std::collections::BTreeMap<String, String>>,
+        response_headers: Option<std::collections::BTreeMap<String, String>>,
     ) -> Result<()> {
+        let recording = self.is_recording();
         let input = UsageInput {
             request_id: req.request_id,
             trace_id,
@@ -1682,10 +1894,10 @@ impl Pipeline {
             race_total: race_size,
             race_lost: false,
             api_key_id: req.api_key_id,
-            request_body_json: None,
-            response_body_json: None,
-            request_headers: None,
-            response_headers: None,
+            request_body_json: if recording { request_body_json } else { None },
+            response_body_json: if recording { response_body_json } else { None },
+            request_headers: if recording { request_headers } else { None },
+            response_headers: if recording { response_headers } else { None },
             error_message: None,
             race_attempts: race_size,
             is_streaming: false,
@@ -1694,6 +1906,39 @@ impl Pipeline {
         let conn = self.conn.lock();
         cost::record(&conn, &input)?;
         Ok(())
+    }
+
+    pub fn emit_started_event(&self, req: &PipelineRequest, target: &ComboTarget, combo: &Combo) {
+        let input = UsageInput {
+            request_id: req.request_id,
+            trace_id: req.trace_id,
+            attempt: 1,
+            provider_id: target.provider_id.clone(),
+            account_id: target.account_id,
+            combo_id: Some(combo.id),
+            combo_target_id: Some(target.id),
+            model_row_id: None,
+            upstream_model_id: String::new(),
+            prompt_tokens: Some(0),
+            completion_tokens: Some(0),
+            connect_ms: Some(0),
+            ttft_ms: Some(0),
+            total_ms: 0,
+            status_code: 0,
+            error_msg: None,
+            race_total: combo.race_size,
+            race_lost: false,
+            api_key_id: req.api_key_id,
+            request_body_json: None,
+            response_body_json: None,
+            request_headers: None,
+            response_headers: None,
+            error_message: None,
+            race_attempts: combo.race_size,
+            is_streaming: true,
+            stream_complete: false,
+        };
+        crate::usage::broadcast_usage_input(&input);
     }
 }
 
@@ -1917,6 +2162,7 @@ mod tests {
             api_key_id: None,
             combo_override: None,
             targets_override: None,
+            request_headers: std::collections::BTreeMap::new(),
         };
         (req, _dis_tx)
     }

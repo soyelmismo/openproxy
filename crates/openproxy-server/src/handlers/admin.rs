@@ -1007,8 +1007,9 @@ async fn stream_usage_rows(
         )
         .await?;
 
-        // 2. Subscribe to broadcast tx
-        let mut rx = state.usage_tx().subscribe();
+        // 2. Subscribe to broadcast tx (rows + stages)
+        let mut usage_rx = state.usage_tx().subscribe();
+        let mut stage_rx = state.stage_tx().subscribe();
         loop {
             tokio::select! {
                 incoming = socket.next() => {
@@ -1048,8 +1049,10 @@ async fn stream_usage_rows(
                         None => break,
                     }
                 }
-                broadcast = rx.recv() => {
-                    match broadcast {
+                // New row (final): published by `cost::record` after
+                // the request finishes and the usage row is committed.
+                usage = usage_rx.recv() => {
+                    match usage {
                         Ok(row) => {
                             send_ws_json(
                                 &mut socket,
@@ -1059,6 +1062,28 @@ async fn stream_usage_rows(
                         }
                         Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
                             send_ws_error(&mut socket, "broadcast channel lagged").await?;
+                        }
+                        Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                    }
+                }
+                // New stage (in-flight): published by the pipeline at
+                // every phase transition while recording is ON. The
+                // dashboard uses this to update the row's "in
+                // phase" label in real time. `bias = biased` is not
+                // needed here because both branches are independent
+                // and the operator cares about correctness, not
+                // strict ordering between a stage and a final row.
+                stage = stage_rx.recv() => {
+                    match stage {
+                        Ok(event) => {
+                            send_ws_json(
+                                &mut socket,
+                                json!({ "type": "stage", "data": event }),
+                            )
+                            .await?;
+                        }
+                        Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
+                            send_ws_error(&mut socket, "stage broadcast channel lagged").await?;
                         }
                         Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
                     }
@@ -1127,6 +1152,55 @@ pub struct DetailQuery {
 #[derive(Debug, Serialize)]
 pub struct UsageDetailResponse {
     pub row: usage::UsageDetailRow,
+}
+
+// =====================================================================
+// Recording toggle (Live Logs detail modal)
+// =====================================================================
+
+/// `GET /v1/admin/recording` — read the current recording state.
+///
+/// Returns `{"recording": true|false}`. Used by the dashboard's Live
+/// Logs section to render the "Record" toggle on initial load.
+pub async fn get_recording(
+    State(s): State<AppState>,
+    headers: HeaderMap,
+) -> ApiResult<Json<serde_json::Value>> {
+    if let Err(e) = authenticate_admin_ws(&s, &headers, None) {
+        return e.into();
+    }
+    let body: Result<Json<serde_json::Value>, ApiError> = async {
+        Ok(Json(serde_json::json!({ "recording": s.is_recording() })))
+    }
+    .await;
+    body.into()
+}
+
+/// `POST /v1/admin/recording` — flip the process-wide recording state.
+///
+/// Body: `{"enabled": true|false}`. When enabled, every new chat
+/// request will record the full request/response bodies and headers
+/// in the `usage` table. Useful for debugging from the Live Logs
+/// detail modal: turn it on, fire a few requests, click into a row
+/// to see the actual JSON.
+pub async fn set_recording(
+    State(s): State<AppState>,
+    headers: HeaderMap,
+    Json(body): Json<serde_json::Value>,
+) -> ApiResult<Json<serde_json::Value>> {
+    if let Err(e) = authenticate_admin_ws(&s, &headers, None) {
+        return e.into();
+    }
+    let body: Result<Json<serde_json::Value>, ApiError> = async {
+        let enabled = body
+            .get("enabled")
+            .and_then(|v| v.as_bool())
+            .ok_or_else(|| CoreError::Validation("missing 'enabled' bool".into()))?;
+        s.set_recording(enabled);
+        Ok(Json(serde_json::json!({ "recording": enabled })))
+    }
+    .await;
+    body.into()
 }
 // Model toggling
 // =====================================================================

@@ -36,7 +36,10 @@ async fn websocket_handler(
     } else {
         state.core_url.clone()
     };
-    let upstream_url = format!("{}/v1/admin/usage/stream", upstream_base);
+    let mut upstream_url = format!("{}/v1/admin/usage/stream", upstream_base);
+    if let Some(token) = &state.admin_token {
+        upstream_url = format!("{}?token={}", upstream_url, token);
+    }
     let mut upstream_headers = HeaderMap::new();
     
     // Copy all non‑hop‑by‑hop headers from the client request
@@ -105,6 +108,13 @@ async fn http_handler(State(state): State<WebState>, req: Request) -> Response {
             continue;
         }
         upstream_req = upstream_req.header(k.as_str(), v.as_bytes());
+    }
+    // Inject admin token if the client didn't send one. Required for
+    // admin endpoints that require auth (e.g. /v1/admin/recording).
+    if !headers.contains_key("authorization") {
+        if let Some(token) = &state.admin_token {
+            upstream_req = upstream_req.header("authorization", format!("Bearer {}", token));
+        }
     }
     if !headers.contains_key("x-forwarded-host") {
         if let Some(host) = headers.get("host").and_then(|h| h.to_str().ok()) {
