@@ -1,0 +1,15 @@
+{
+  "name": "openproxy-web-e2e",
+  "version": "1.0.0",
+  "description": "E2E tests for openproxy web dashboard",
+  "main": "index.js",
+  "scripts": {
+    "test": "playwright test"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "MIT",
+  "devDependencies": {
+    "@playwright/test": "^1.60.0"
+  }
+}

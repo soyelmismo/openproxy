@@ -19,6 +19,7 @@ use openproxy_core::{
     usage, AppConfig,
 };
 use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
 
 /// Per-process application state.
 ///
@@ -32,6 +33,17 @@ pub struct AppState {
     adapters: Arc<Vec<Arc<dyn adapters::ProviderAdapter>>>,
     http_client: reqwest::Client,
     usage_tx: tokio::sync::broadcast::Sender<usage::RecentUsageRow>,
+    /// Secondary broadcast sender for in-flight stage events
+    /// (`started`/`connecting`/`waiting_ttft`/`streaming`/`failed`).
+    /// The live-log dashboard subscribes to both senders and
+    /// multiplexes them into a single WS stream.
+    stage_tx: tokio::sync::broadcast::Sender<usage::StageEvent>,
+    /// Shared toggle that controls whether the pipeline records full
+    /// request/response bodies and headers in the `usage` table.
+    /// The chat handler passes a clone of this `Arc` into every
+    /// `Pipeline` it builds so the admin endpoint can flip the
+    /// state for the whole process at once.
+    record_bodies_and_headers: Arc<AtomicBool>,
 }
 
 impl AppState {
@@ -118,6 +130,11 @@ impl AppState {
 
         // 5. Usage broadcast sender for admin live-log WebSockets.
         let usage_tx = usage::init_usage_broadcast();
+        // 5b. Stage broadcast sender for in-flight per-phase updates.
+        //     Lives in the same process but a separate channel so
+        //     the dashboard can map stages to a row by `request_id`
+        //     without re-deriving from a `RecentUsageRow`.
+        let stage_tx = usage::init_stage_broadcast();
 
         // 6. Background prune of expired cooldowns. The
         //    `target_cooldowns` table is append-mostly (failures
@@ -211,6 +228,8 @@ impl AppState {
             adapters,
             http_client,
             usage_tx,
+            stage_tx,
+            record_bodies_and_headers: Arc::new(AtomicBool::new(false)),
         })
     }
 
@@ -242,5 +261,35 @@ impl AppState {
     /// Borrow the usage broadcast sender.
     pub fn usage_tx(&self) -> tokio::sync::broadcast::Sender<usage::RecentUsageRow> {
         self.usage_tx.clone()
+    }
+
+    /// Borrow the stage broadcast sender. The live-log dashboard
+    /// subscribes to this in addition to `usage_tx` so it can show
+    /// the operator each request's progress through
+    /// `started → connecting → waiting_ttft → streaming → completed`
+    /// in real time.
+    pub fn stage_tx(&self) -> tokio::sync::broadcast::Sender<usage::StageEvent> {
+        self.stage_tx.clone()
+    }
+
+    /// Return a clone of the shared recording flag. The chat handler
+    /// passes this into every `Pipeline` it builds so the toggle is
+    /// visible to all in-flight requests.
+    pub fn record_bodies_and_flags(&self) -> Arc<AtomicBool> {
+        self.record_bodies_and_headers.clone()
+    }
+
+    /// Read the current recording state.
+    pub fn is_recording(&self) -> bool {
+        self.record_bodies_and_headers
+            .load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    /// Flip the recording state. When `true`, every new pipeline call
+    /// will record the full request/response bodies and headers in
+    /// the `usage` table.
+    pub fn set_recording(&self, enabled: bool) {
+        self.record_bodies_and_headers
+            .store(enabled, std::sync::atomic::Ordering::Relaxed);
     }
 }

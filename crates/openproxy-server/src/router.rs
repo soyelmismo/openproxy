@@ -158,6 +158,10 @@ pub fn build_router(state: AppState) -> Router {
             get(handlers::admin::usage_detail),
         )
         .route(
+            "/v1/admin/recording",
+            get(handlers::admin::get_recording).post(handlers::admin::set_recording),
+        )
+        .route(
             "/v1/admin/models/:id/refresh",
             post(handlers::admin::refresh_models),
         )

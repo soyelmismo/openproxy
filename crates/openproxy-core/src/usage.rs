@@ -16,6 +16,7 @@
 //! clients. The sender is stored in a `once_cell::sync::OnceCell` so it is
 //! initialized exactly once and accessible from any crate.
 
+use crate::cost::UsageInput;
 use crate::error::{CoreError, Result};
 use crate::ids::{AccountId, ApiKeyId, ComboId, ComboTargetId, ModelRowId, ProviderId, UsageId};
 use once_cell::sync::OnceCell;
@@ -35,6 +36,26 @@ use tokio::sync::broadcast;
 const BROADCAST_CAPACITY: usize = 256;
 
 static USAGE_SENDER: OnceCell<broadcast::Sender<RecentUsageRow>> = OnceCell::new();
+
+/// Secondary broadcast channel for *in-flight* stage transitions of
+/// requests still being processed. Subscribers (the admin live-log
+/// WebSocket) re-emit these to the dashboard so the operator can see
+/// each request progress through phases like
+/// `connecting → waiting_ttft → streaming → completed`.
+///
+/// This is intentionally a *separate* channel from `USAGE_SENDER`:
+/// `USAGE_SENDER` carries full `RecentUsageRow`s stamped at the very
+/// end of a request (post-`cost::record`), and every row has a real
+/// `UsageId`. `STAGE_SENDER` carries transient `StageEvent`s keyed
+/// only by `request_id` and have no DB id — the dashboard uses
+/// `request_id` to update the row that the matching `recent` row
+/// (or its synthetic `emit_started_event` placeholder) lives under.
+///
+/// Channel capacity: stages fire in bursts. A typical request emits
+/// `started → connecting → waiting_ttft → streaming → completed`
+/// (~5 events). 1024 is plenty headroom for 100+ concurrent requests.
+const STAGE_BROADCAST_CAPACITY: usize = 1024;
+static STAGE_SENDER: OnceCell<broadcast::Sender<StageEvent>> = OnceCell::new();
 
 /// Initialize the global usage broadcast sender. Must be called exactly
 /// once before any call to [`usage_broadcast`] or [`publish_usage_row`].
@@ -67,6 +88,140 @@ pub fn publish_usage_row(row: RecentUsageRow) {
         // expected and harmless.
         let _ = tx.send(row);
     }
+}
+
+// ---------------------------------------------------------------------------
+// In-flight stage events (for the live-log dashboard's millisecond
+// debug view). These are NOT persisted to the database; they are
+// transient broadcasts that update the dashboard view of an in-flight
+// request as it transitions through phases. The wire shape is a JSON
+// object with `{ type: "stage", request_id, stage, elapsed_ms, ... }`.
+// ---------------------------------------------------------------------------
+
+/// One phase transition of an in-flight request. The dashboard maps
+/// these to the matching row by `request_id`.
+///
+/// `elapsed_ms` is the wall-clock milliseconds since the pipeline
+/// accepted the request (the `started` instant). The dashboard uses
+/// this for the "X ms in this phase" sublabel.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StageEvent {
+    /// Which request this stage belongs to. The dashboard uses this
+    /// to find the existing row in the live-log view.
+    pub request_id: String,
+    /// Trace id (per-attempt). Allows distinguishing race-lost
+    /// attempts of the same `request_id` if the dashboard grows
+    /// that view later.
+    pub trace_id: String,
+    /// Free-form provider id (e.g. `openrouter`, `kiro`).
+    pub provider_id: String,
+    /// Upstream model id. May be empty for the very first
+    /// `started` event when the model hasn't been resolved yet.
+    pub upstream_model_id: String,
+    /// Coarse stage label. The dashboard's `STAGE_LABELS` map renders
+    /// a human-friendly description and picks a colour class.
+    /// One of: `started`, `connecting`, `waiting_ttft`,
+    /// `streaming`, `completed`, `failed`.
+    pub stage: String,
+    /// Wall-clock ms since the request was accepted by the pipeline.
+    /// Lets the dashboard show "X ms in this phase" without
+    /// recomputing on the client.
+    pub elapsed_ms: u64,
+    /// `connect_ms` (ms from request build to first upstream byte)
+    /// when the stage event captures that, else `None`. Only set on
+    /// `waiting_ttft` and beyond.
+    pub connect_ms: Option<u64>,
+    /// `ttft_ms` (ms from first upstream byte to first SSE data line)
+    /// when the stage event captures that, else `None`. Only set on
+    /// `streaming` and beyond.
+    pub ttft_ms: Option<u64>,
+    /// HTTP status code. `0` while in flight; the final code on
+    /// `completed`/`failed`.
+    pub status_code: u16,
+    /// `Some(reason)` only on `failed`; `None` for all other stages.
+    pub error: Option<String>,
+    /// Wall-clock millis at the time the event was emitted
+    /// (RFC-3339). Used by the dashboard to keep the stage label
+    /// timeline accurate even if the WS delivery is slightly late.
+    pub timestamp: String,
+}
+
+/// Initialize the global stage broadcast sender. Idempotent (safe
+/// to call multiple times in tests).
+pub fn init_stage_broadcast() -> broadcast::Sender<StageEvent> {
+    let (tx, _rx) = broadcast::channel(STAGE_BROADCAST_CAPACITY);
+    let _ = STAGE_SENDER.set(tx);
+    stage_broadcast()
+}
+
+/// Return a clone of the global stage broadcast sender.
+/// Panics if [`init_stage_broadcast`] has not been called yet.
+pub fn stage_broadcast() -> broadcast::Sender<StageEvent> {
+    STAGE_SENDER
+        .get()
+        .expect("init_stage_broadcast() must be called before stage_broadcast()")
+        .clone()
+}
+
+/// Publish a stage event to all broadcast subscribers. Silently
+/// drops on send errors (no subscribers, lagged slow consumer).
+pub fn publish_stage_event(event: StageEvent) {
+    if let Some(tx) = STAGE_SENDER.get() {
+        let _ = tx.send(event);
+    }
+}
+
+/// Initialize BOTH broadcast senders in the canonical order.
+/// Idempotent. Returns a clone of the usage sender for callers
+/// that want to subscribe immediately (e.g. `AppState`).
+pub fn init_all_broadcasts() -> broadcast::Sender<RecentUsageRow> {
+    init_stage_broadcast();
+    init_usage_broadcast()
+}
+
+/// Broadcast a usage input to all subscribers (used for in-flight requests).
+/// This does not insert into the database; it only sends via the broadcast
+/// channel for live updates.
+pub fn broadcast_usage_input(input: &UsageInput) {
+    let (cost_usd, _tps) = crate::cost::compute(
+        crate::pricing::lookup(input.provider_id.as_str(), &input.upstream_model_id),
+        input,
+    );
+    let (error_msg_for_db, _error_msg_redacted_for_db) = match &input.error_msg {
+        Some(msg) => {
+            let (sanitized, _redacted) = crate::cost::redact_error_msg(msg);
+            (Some(sanitized.clone()), Some(sanitized))
+        }
+        None => (None, None),
+    };
+
+    let row = RecentUsageRow {
+        id: UsageId(0), // Placeholder ID for in-flight rows
+        request_id: input.request_id.to_string(),
+        trace_id: input.trace_id.to_string(),
+        provider_id: input.provider_id.clone(),
+        upstream_model_id: input.upstream_model_id.clone(),
+        status_code: input.status_code,
+        total_ms: input.total_ms,
+        prompt_tokens: input.prompt_tokens,
+        completion_tokens: input.completion_tokens,
+        cost_usd: Some(cost_usd),
+        connect_ms: input.connect_ms,
+        ttft_ms: input.ttft_ms,
+        request_body_json: input.request_body_json.clone(),
+        response_body_json: input.response_body_json.clone(),
+        request_headers: input.request_headers.clone(),
+        response_headers: input.response_headers.clone(),
+        error_message: input.error_message.clone(),
+        race_total: Some(input.race_total),
+        race_attempts: Some(input.race_attempts),
+        is_streaming: input.is_streaming,
+        stream_complete: input.stream_complete,
+        race_lost: input.race_lost,
+        created_at: chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string(),
+    };
+    // Ignore send errors - no subscribers is harmless
+    let _ = publish_usage_row(row);
 }
 
 /// All optional filters shared by the read-side analytics queries.
