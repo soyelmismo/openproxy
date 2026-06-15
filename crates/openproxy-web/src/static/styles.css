@@ -1653,6 +1653,25 @@ input[type="checkbox"] {
   color: var(--text-muted);
   opacity: 0.85;
 }
+/* When the latency ticker is actively rewriting the sublabel,
+ * paint a small pulsing dot to the left of the number so the
+ * operator can tell at a glance that the cell is live and not
+ * just frozen on the last `stage` event. Reuses the `phasePulse`
+ * keyframe already defined for `.log-phase--streaming` so we
+ * don't need a new animation.
+ */
+.log-phase-sub--ticking::before {
+  content: '';
+  display: inline-block;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  margin-right: 4px;
+  vertical-align: middle;
+  background: currentColor;
+  opacity: 0.7;
+  animation: phasePulse 1.2s infinite;
+}
 .log-phase--started {
   border-color: rgba(120, 167, 255, 0.4);
   color: #78a7ff;
@@ -2093,3 +2112,116 @@ input[type="checkbox"] {
 .mono {
   font-family: var(--font-mono);
 }
+
+/* ============================================
+   11. CONFIG VIEW (variant A — read-only)
+   ============================================ */
+
+/* The "Read-only view" banner that sits at the top of the
+ * #/config view. Mirrors the form-validation warning style
+ * but uses the accent color so it reads as informational,
+ * not error-y. */
+.banner {
+  padding: 0.9rem 1.1rem;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border);
+  margin: var(--space-md) 0;
+  line-height: 1.45;
+}
+.banner-info {
+  background: rgba(180, 130, 80, 0.08);
+  border-color: rgba(180, 130, 80, 0.4);
+  color: var(--text-primary);
+}
+
+/* Aplica a la vista #/config tras un PUT exitoso en timeouts.
+   Verde suave para distinguir visualmente "se aplicó" de "edita
+   y reinicia" (que es la copy de .banner-info). */
+.banner--success {
+  background: rgba(80, 160, 100, 0.08);
+  border-color: rgba(80, 160, 100, 0.45);
+  color: var(--text-primary);
+}
+
+/* A responsive 2-column grid for the field rows. Falls back
+ * to a single column on narrow viewports (the sidebar eats
+ * most of the width anyway). */
+.config-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 0.9rem 1.1rem;
+  margin-top: 0.6rem;
+}
+.config-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+.config-field input[type="number"] {
+  /* Visual reinforcement of the `disabled` attribute. The
+   * browser already blocks typing, but the muted background
+   * makes the read-only intent obvious. */
+  background: var(--bg-subtle);
+  color: var(--text-secondary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 0.45rem 0.6rem;
+  font-family: var(--font-mono);
+  font-size: 0.9rem;
+}
+.config-field input[type="number"]:disabled {
+  cursor: not-allowed;
+  opacity: 0.85;
+}
+.config-label {
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--text-secondary);
+  letter-spacing: 0.02em;
+}
+.config-help {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  line-height: 1.3;
+}
+
+/* Footer row with the (intentionally non-functional) Save
+ * button. The muted copy next to the button is the honesty
+ * signal that mirrors the toast the click triggers. */
+.config-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.9rem;
+  margin: var(--space-lg) 0;
+  flex-wrap: wrap;
+}
+
+/* The <details> block that explains the precedence chain.
+ * Uses the same border as a card but lighter, so it reads
+ * as a "learn more" panel. */
+.config-details {
+  margin: var(--space-md) 0 var(--space-xl);
+  padding: 0.9rem 1.1rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-elevated);
+}
+.config-details summary {
+  cursor: pointer;
+  font-weight: 600;
+  color: var(--text-secondary);
+  user-select: none;
+}
+.config-details summary:hover {
+  color: var(--text-primary);
+}
+.config-details > *:not(summary) {
+  margin-top: 0.7rem;
+  line-height: 1.5;
+}
+.config-details ol,
+.config-details p {
+  color: var(--text-secondary);
+  font-size: 0.9rem;
+}
+

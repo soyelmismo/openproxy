@@ -18,6 +18,7 @@ use openproxy_core::{
     secrets::MasterKey,
     usage, AppConfig,
 };
+use parking_lot::RwLock;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 
@@ -44,6 +45,12 @@ pub struct AppState {
     /// `Pipeline` it builds so the admin endpoint can flip the
     /// state for the whole process at once.
     record_bodies_and_headers: Arc<AtomicBool>,
+    /// Hot-swappable slot for [`openproxy_core::config::TimeoutsConfig`].
+    /// Reads in `chat.rs` go through [`AppState::timeouts`] which
+    /// copies the 5-u64 struct atomically. Writes are done by the
+    /// `PUT /v1/admin/config/timeouts` handler after the DB
+    /// row has been updated. See spec §5 / §7.
+    timeouts_cell: Arc<RwLock<openproxy_core::config::TimeoutsConfig>>,
 }
 
 impl AppState {
@@ -67,9 +74,26 @@ impl AppState {
             }
         }
         let db_pool = Arc::new(db::DbPool::open(&path)?);
+        let mut config = config;
         {
             let mut w = db_pool.writer();
             db::migrations::run(&mut w)?;
+            // 1b. (spec §4) If a previous run persisted a `timeouts`
+            //     override via the admin PUT endpoint, load it now
+            //     and overwrite the TOML-derived value. The TOML
+            //     value remains the fallback if the row is missing
+            //     or the JSON is corrupt.
+            if let Some(override_cfg) = db::app_config::load_timeouts_override_from_db(&w)? {
+                tracing::info!(
+                    connect_ms = override_cfg.connect_ms,
+                    request_send_ms = override_cfg.request_send_ms,
+                    ttft_ms = override_cfg.ttft_ms,
+                    idle_chunk_ms = override_cfg.idle_chunk_ms,
+                    total_ms = override_cfg.total_ms,
+                    "loaded persisted timeouts override from app_config"
+                );
+                config.timeouts = override_cfg;
+            }
             // Auto-seed the three built-in providers (OpenRouter, MiniMax
             // Coding, OpenCode Zen) so the dashboard shows them on first
             // run. The seed is idempotent: existing rows are skipped.
@@ -221,6 +245,7 @@ impl AppState {
             .await;
         });
 
+        let timeouts_initial = config.timeouts; // Copy, take it before moving config.
         Ok(Self {
             config,
             db_pool,
@@ -230,6 +255,7 @@ impl AppState {
             usage_tx,
             stage_tx,
             record_bodies_and_headers: Arc::new(AtomicBool::new(false)),
+            timeouts_cell: Arc::new(RwLock::new(timeouts_initial)),
         })
     }
 
@@ -260,6 +286,7 @@ impl AppState {
             }
         });
 
+        let timeouts_initial = config.timeouts; // Copy, take it before moving config.
         Self {
             config,
             db_pool,
@@ -272,6 +299,7 @@ impl AppState {
             usage_tx: usage::init_usage_broadcast(),
             stage_tx: usage::init_stage_broadcast(),
             record_bodies_and_headers: Arc::new(AtomicBool::new(false)),
+            timeouts_cell: Arc::new(RwLock::new(timeouts_initial)),
         }
     }
 
@@ -333,5 +361,26 @@ impl AppState {
     pub fn set_recording(&self, enabled: bool) {
         self.record_bodies_and_headers
             .store(enabled, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    /// Read the live [`TimeoutsConfig`]. Returns a `Copy` of the 5-u64
+    /// struct, so it's cheap and safe to call from any handler.
+    /// The read lock is held for the duration of the `Copy` and
+    /// released before the function returns.
+    ///
+    /// This is the value used by the chat pipeline and the watchdog
+    /// (see `chat.rs`). It may differ from `config().timeouts` after a
+    /// `PUT /v1/admin/config/timeouts` — `config()` is the startup
+    /// snapshot, this one is the live one.
+    pub fn timeouts(&self) -> openproxy_core::config::TimeoutsConfig {
+        *self.timeouts_cell.read()
+    }
+
+    /// Replace the live [`TimeoutsConfig`]. Called by the
+    /// `PUT /v1/admin/config/timeouts` handler *after* the DB UPSERT
+    /// has succeeded. Takes the write lock briefly; readers see the
+    /// new value as soon as this returns.
+    pub fn set_timeouts(&self, t: openproxy_core::config::TimeoutsConfig) {
+        *self.timeouts_cell.write() = t;
     }
 }

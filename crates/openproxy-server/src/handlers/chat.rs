@@ -199,7 +199,7 @@ async fn run_pipeline(
     // 5. Build the pipeline config from the app config.
     let config = PipelineConfig {
         defaults: openproxy_core::timeouts::Timeouts::from_config(
-            &state.config().timeouts,
+            &state.timeouts(),
         ),
         racing: state.config().racing.clone(),
         retries: state.config().retries,
@@ -265,7 +265,7 @@ async fn run_pipeline(
         .and_then(|v| v.to_str().ok())
         .and_then(|s| s.trim().parse::<u64>().ok())
         .filter(|ms| *ms > 0);
-    let total_ms = state.config().timeouts.total_ms;
+    let total_ms = state.timeouts().total_ms;
     let watchdog_budget_ms = match client_deadline_ms {
         Some(client_ms) if client_ms < total_ms => {
             tracing::debug!(

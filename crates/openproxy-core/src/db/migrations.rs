@@ -127,6 +127,11 @@ const MIGRATIONS: &[Migration] = &[
         name: "000023_add_live_log_columns",
         sql: include_str!("../../migrations/000023_add_live_log_columns.sql"),
     },
+    Migration {
+        version: 24,
+        name: "000024_add_app_config_kv",
+        sql: include_str!("../../migrations/000024_add_app_config_kv.sql"),
+    },
 ];
 
 /// Apply pending migrations on `conn`. Idempotent: skips versions already in
@@ -349,7 +354,7 @@ mod tests {
                 c.query_row("SELECT COUNT(*) FROM schema_migrations", [], |r| r.get(0))
                     .expect("count")
             });
-        assert_eq!(count_first, 22, "twenty-two migrations applied (versions 1-6, 8-23)");
+        assert_eq!(count_first, 23, "twenty-three migrations applied (versions 1-6, 8-24)");
 
         {
             let mut writer = pool.writer();

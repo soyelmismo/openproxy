@@ -1,0 +1,249 @@
+//! Persistent runtime config KV store.
+//!
+//! The `app_config` table is a tiny key/value sidecar for values that
+//! operators may want to edit from the dashboard without restarting
+//! the server. The MVP only stores one key (`timeouts` — the
+//! [`crate::config::TimeoutsConfig`]); the table is generic so future
+//! keys can be added without schema changes.
+//!
+//! ## Concurrency model
+//!
+//! - **Writes** go through the [`crate::db::conn::DbPool::writer`]
+//!   handle, which is serialized by a `parking_lot::Mutex`. The
+//!   `INSERT ... ON CONFLICT(key) DO UPDATE` is atomic in SQLite.
+//! - **Reads** are also taken from the writer handle today. A future
+//!   reader-side helper could move to the `reader()` handle; for the
+//!   small one-row case the writer is fine and keeps the code
+//!   single-path.
+//!
+//! ## Defensive JSON handling
+//!
+//! If an external script corrupts the JSON in the `value` column,
+//! [`load_timeouts_override_from_db`] logs a warning and returns
+//! `Ok(None)` so the server keeps booting with the TOML defaults
+//! rather than dying. A subsequent `PUT` will overwrite the corrupt
+//! row with a valid value.
+
+use crate::config::TimeoutsConfig;
+use crate::error::{CoreError, Result};
+use rusqlite::{params, Connection};
+
+/// Key under which the [`TimeoutsConfig`] override is stored.
+pub const TIMEOUTS_KEY: &str = "timeouts";
+
+/// Read the persisted `timeouts` override, if any.
+///
+/// Returns:
+/// - `Ok(Some(cfg))` if a row exists and parses cleanly.
+/// - `Ok(None)` if no row exists, **or** the row exists but the JSON
+///   is corrupt (logged at `WARN` — see §10 R2 of the spec).
+/// - `Err(CoreError::Database { .. })` only for actual DB I/O errors.
+pub fn load_timeouts_override_from_db(
+    conn: &Connection,
+) -> Result<Option<TimeoutsConfig>> {
+    let mut stmt = conn.prepare(
+        "SELECT value FROM app_config WHERE key = ?1"
+    ).map_err(|e| CoreError::Database {
+        message: format!("prepare load_timeouts_override: {}", e),
+        source: Some(Box::new(e)),
+    })?;
+    let mut rows = stmt.query(params![TIMEOUTS_KEY]).map_err(|e|
+        CoreError::Database {
+            message: format!("query load_timeouts_override: {}", e),
+            source: Some(Box::new(e)),
+        }
+    )?;
+    match rows.next() {
+        Ok(Some(row)) => {
+            let raw: String = row.get(0).map_err(|e| CoreError::Database {
+                message: format!("read app_config.value: {}", e),
+                source: Some(Box::new(e)),
+            })?;
+            match serde_json::from_str::<TimeoutsConfig>(&raw) {
+                Ok(cfg) => Ok(Some(cfg)),
+                Err(e) => {
+                    // Defensive: a corrupt row should NOT prevent the
+                    // server from booting. Log loudly and fall back
+                    // to the AppConfig defaults; a subsequent PUT
+                    // will overwrite the garbage.
+                    tracing::warn!(
+                        error = %e,
+                        key = TIMEOUTS_KEY,
+                        "app_config row exists but JSON is corrupt; \
+                         ignoring and falling back to AppConfig defaults"
+                    );
+                    Ok(None)
+                }
+            }
+        }
+        Ok(None) => Ok(None),
+        Err(e) => Err(CoreError::Database {
+            message: format!("iterate load_timeouts_override: {}", e),
+            source: Some(Box::new(e)),
+        }),
+    }
+}
+
+/// UPSERT the `timeouts` row.
+///
+/// `now_unix_secs` is injected by the caller (typically
+/// `chrono::Utc::now().timestamp()`) so this module doesn't depend on
+/// `chrono` directly. The `INSERT ... ON CONFLICT(key) DO UPDATE` form
+/// makes the operation idempotent and atomic in a single SQL
+/// statement.
+pub fn save_timeouts_to_db(
+    conn: &Connection,
+    cfg: &TimeoutsConfig,
+    now_unix_secs: i64,
+) -> Result<()> {
+    let json = serde_json::to_string(cfg).map_err(|e|
+        CoreError::Parse(format!("serialize timeouts: {}", e))
+    )?;
+    conn.execute(
+        "INSERT INTO app_config (key, value, updated_at) VALUES (?1, ?2, ?3)
+         ON CONFLICT(key) DO UPDATE SET value = excluded.value,
+                                        updated_at = excluded.updated_at",
+        params![TIMEOUTS_KEY, json, now_unix_secs],
+    ).map_err(|e| CoreError::Database {
+        message: format!("upsert app_config.timeouts: {}", e),
+        source: Some(Box::new(e)),
+    })?;
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::db::conn::DbPool;
+    use std::path::PathBuf;
+
+    fn tempdir() -> PathBuf {
+        let base = std::env::temp_dir();
+        let pid = std::process::id();
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let dir = base.join(format!("openproxy-appcfg-test-{}-{}", pid, nanos));
+        std::fs::create_dir_all(&dir).expect("mkdir");
+        dir
+    }
+
+    #[test]
+    fn timeouts_roundtrip_through_db() {
+        let dir = tempdir();
+        let pool = DbPool::open(&dir.join("rt.db")).unwrap();
+        {
+            let mut w = pool.writer();
+            crate::db::migrations::run(&mut w).unwrap();
+        }
+        let original = TimeoutsConfig {
+            connect_ms: 1234,
+            request_send_ms: 5678,
+            ttft_ms: 91011,
+            idle_chunk_ms: 121314,
+            total_ms: 600000,
+        };
+        {
+            let w = pool.writer();
+            save_timeouts_to_db(&w, &original, 1_700_000_000).unwrap();
+        }
+        let read_back = {
+            let w = pool.writer();
+            load_timeouts_override_from_db(&w).unwrap()
+        };
+        assert_eq!(read_back, Some(original));
+    }
+
+    #[test]
+    fn load_returns_none_when_no_row() {
+        let dir = tempdir();
+        let pool = DbPool::open(&dir.join("none.db")).unwrap();
+        {
+            let mut w = pool.writer();
+            crate::db::migrations::run(&mut w).unwrap();
+        }
+        let got = {
+            let w = pool.writer();
+            load_timeouts_override_from_db(&w).unwrap()
+        };
+        assert_eq!(got, None);
+    }
+
+    #[test]
+    fn load_returns_value_when_row_exists() {
+        let dir = tempdir();
+        let pool = DbPool::open(&dir.join("yes.db")).unwrap();
+        {
+            let mut w = pool.writer();
+            crate::db::migrations::run(&mut w).unwrap();
+        }
+        let cfg = TimeoutsConfig::default();
+        {
+            let w = pool.writer();
+            save_timeouts_to_db(&w, &cfg, 1_700_000_001).unwrap();
+        }
+        let got = {
+            let w = pool.writer();
+            load_timeouts_override_from_db(&w).unwrap()
+        };
+        assert_eq!(got, Some(cfg));
+    }
+
+    #[test]
+    fn save_is_idempotent() {
+        let dir = tempdir();
+        let pool = DbPool::open(&dir.join("idem.db")).unwrap();
+        {
+            let mut w = pool.writer();
+            crate::db::migrations::run(&mut w).unwrap();
+        }
+        let cfg = TimeoutsConfig::default();
+        {
+            let w = pool.writer();
+            save_timeouts_to_db(&w, &cfg, 1).unwrap();
+            save_timeouts_to_db(&w, &cfg, 2).unwrap();
+        }
+        // Only one row for the key.
+        let count: i64 = pool.with_conn(|c|
+            c.query_row(
+                "SELECT COUNT(*) FROM app_config WHERE key = ?1",
+                params![TIMEOUTS_KEY],
+                |r| r.get(0),
+            ).unwrap()
+        );
+        assert_eq!(count, 1, "UPSERT must collapse to a single row");
+        // updated_at reflects the last write.
+        let updated_at: i64 = pool.with_conn(|c|
+            c.query_row(
+                "SELECT updated_at FROM app_config WHERE key = ?1",
+                params![TIMEOUTS_KEY],
+                |r| r.get(0),
+            ).unwrap()
+        );
+        assert_eq!(updated_at, 2);
+    }
+
+    #[test]
+    fn load_returns_none_on_corrupt_json() {
+        // Defensive: a corrupt row must NOT crash the loader; it
+        // should log a warning and return Ok(None) so the server
+        // boots with the TOML defaults.
+        let dir = tempdir();
+        let pool = DbPool::open(&dir.join("corrupt.db")).unwrap();
+        {
+            let mut w = pool.writer();
+            crate::db::migrations::run(&mut w).unwrap();
+            // Bypass the helper to plant garbage.
+            w.execute(
+                "INSERT INTO app_config (key, value, updated_at) VALUES (?1, ?2, ?3)",
+                params![TIMEOUTS_KEY, "this is not json", 1_i64],
+            ).unwrap();
+        }
+        let got = {
+            let w = pool.writer();
+            load_timeouts_override_from_db(&w).unwrap()
+        };
+        assert_eq!(got, None, "corrupt JSON must fall back to None");
+    }
+}

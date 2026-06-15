@@ -85,6 +85,13 @@ const state = {
     /// keeps their place when new rows arrive — useful when
     /// scrolling back to read older entries.
     followTail: true,
+    /// setInterval handle for the 100ms latency ticker that
+    /// refreshes the `.log-phase-sub` sublabel of in-flight live-log
+    /// rows in place. Lives only while the dashboard is on the
+    /// `#/logs` view AND the WS is connected; cleared on view-leave
+    /// or WS disconnect. See `tickLogLatency` / `startLogLatencyTicker`
+    /// / `stopLogLatencyTicker`.
+    latencyTickerHandle: null,
   },
   // Background-refresh / view machinery. `currentView.handler` is the
   // last render fn that wrote to `#main`; `currentView.context` is the
@@ -138,6 +145,7 @@ const routes = [
   { pattern: /^#?\/?keys\/(\d+)\/usage$/, handler: renderKeyUsage, context: 'key' },
   { pattern: /^#?\/?analytics$/, handler: renderAnalytics, context: null },
   { pattern: /^#?\/?logs$/, handler: renderLogs, context: null },
+  { pattern: /^#?\/?config$/, handler: renderConfig, context: null },
 ];
 
 function currentRoute() {
@@ -177,6 +185,20 @@ function navigate() {
     }
 
     state.currentView = { handler: r.handler, context };
+    // View-leave hook: if we just navigated *away* from the logs
+    // view, stop the latency ticker. `navigate()` is the only
+    // entry point that mutates `state.currentViewKey`, so this
+    // check reliably fires on every cross-view transition.
+    // `startLogLatencyTicker` is called from `renderLogs` (which
+    // is the handler for the logs route) so re-entering the view
+    // re-mounts the ticker.
+    if (state.currentViewKey !== route) {
+      const wasLogs = /^\/?logs$/.test(state.currentViewKey.replace(/^#?/, ''));
+      const isLogs = r.handler === renderLogs;
+      if (wasLogs && !isLogs) {
+        stopLogLatencyTicker();
+      }
+    }
     state.currentViewKey = route;
 
     // Only show the loading placeholder on the first paint of this
@@ -250,6 +272,14 @@ function renderThemeToggle() {
 }
 
 window.addEventListener('hashchange', navigate);
+window.addEventListener('pagehide', () => {
+  // Defensive cleanup: if the user closes the tab while the
+  // ticker is running, the JS context is going away anyway, but
+  // calling `clearInterval` here avoids any chance of a stray
+  // callback firing during teardown (e.g. on slow browsers where
+  // `pagehide` fires before navigation finalises).
+  stopLogLatencyTicker();
+});
 window.addEventListener('load', () => {
   renderThemeToggle();
   navigate();
@@ -2701,6 +2731,106 @@ function renderLogRowHtml(row) {
   `;
 }
 
+/// Live-log latency ticker. While the dashboard is on `#/logs`
+/// and the WS is connected, this runs every 100ms and rewrites
+/// the `.log-phase-sub` sublabel of any in-flight row in place
+/// — without re-rendering the whole row, so the operator sees a
+/// smooth millisecond counter instead of a stale number that
+/// only updates when the next `stage` event lands.
+///
+/// The wall-clock is computed from `state.logs.stagesByRequestId`'s
+/// `stage.timestamp` field (RFC-3339) so the displayed number
+/// matches the server's clock, modulo whatever skew the WS
+/// delivery added.
+///
+/// We intentionally do NOT re-render rows whose stage is
+/// `completed` or `failed` (the number is final), nor rows that
+/// aren't on the current page (they aren't in the DOM, and the
+/// next `renderLogsRows` will repaint them anyway).
+function tickLogLatency() {
+  const stages = state.logs.stagesByRequestId;
+  if (!stages || stages.size === 0) return;
+  const now = Date.now();
+  // Build a per-request lookup of `data-request-id` -> row element
+  // for the currently rendered page only. We restrict to the live
+  // DOM (cheap, O(rows_on_page)) instead of scanning the full
+  // state; paged-out rows are handled by the next re-render.
+  const rowEls = document.querySelectorAll('#logs .log-row[data-request-id]');
+  if (rowEls.length === 0) return;
+  for (const rowEl of rowEls) {
+    const requestId = rowEl.dataset.requestId;
+    if (!requestId) continue;
+    const stage = stages.get(requestId);
+    if (!stage) continue;
+    // Terminal stages: the row already shows the final value in
+    // its sublabel (and `total_ms` in the latency cell). No-op.
+    if (stage.stage === 'completed' || stage.stage === 'failed') continue;
+    // Parse the server's RFC-3339 timestamp. If it's missing or
+    // unparseable, fall back to the stage's `elapsed_ms` (which
+    // the server already stamped for exactly this purpose).
+    const t = Date.parse(stage.timestamp);
+    let live;
+    if (isFinite(t)) {
+      live = Math.max(0, now - t);
+    } else {
+      live = stage.elapsed_ms || 0;
+    }
+    const sub = rowEl.querySelector('.log-phase-sub');
+    if (!sub) continue;
+    // Mirror `renderLogPhaseHtml`'s label rules so the visual
+    // meaning of the number is consistent between initial render
+    // and ticker-driven updates.
+    let label;
+    if (stage.stage === 'streaming' && stage.ttft_ms != null) {
+      label = `ttft ${stage.ttft_ms}ms`;
+    } else if ((stage.stage === 'waiting_ttft' || stage.stage === 'streaming') && stage.connect_ms != null) {
+      label = `connect ${stage.connect_ms}ms`;
+    } else {
+      label = `${live}ms`;
+    }
+    if (sub.textContent !== label) {
+      sub.textContent = label;
+      // Mark the row as "ticking" so the (optional) CSS dot can
+      // pulse. The class is harmless if no `.log-phase-sub--ticking`
+      // rule is defined — it's just a hook for future styling.
+      sub.classList.add('log-phase-sub--ticking');
+    }
+    // Bonus: also tick the row's `log-latency` cell (the corner
+    // total). Only when the stage is non-terminal — historical
+    // rows already show the final `total_ms` and should not be
+    // overwritten. We read `row.total_ms` from the row's data
+    // attribute fallback (none today) and otherwise just show
+    // `live` as a "running total" so the operator sees the
+    // cumulative time grow alongside the phase sublabel.
+    const latencyEl = rowEl.querySelector('.log-latency');
+    if (latencyEl) {
+      const newLatency = `${live}ms`;
+      if (latencyEl.textContent !== newLatency) {
+        latencyEl.textContent = newLatency;
+      }
+    }
+  }
+}
+
+/// Start the 100ms latency ticker. Idempotent: if a handle is
+/// already registered, this is a no-op so re-entering the view
+/// (e.g. via the bgPoll re-render path that calls `renderLogs`
+/// with the idempotency guard) doesn't double-up the interval.
+function startLogLatencyTicker() {
+  if (state.logs.latencyTickerHandle) return;
+  state.logs.latencyTickerHandle = setInterval(tickLogLatency, 100);
+}
+
+/// Stop the 100ms latency ticker. Idempotent and safe to call
+/// from the WS `disconnected` handler, the view-leave path, and
+/// page unload.
+function stopLogLatencyTicker() {
+  if (state.logs.latencyTickerHandle) {
+    clearInterval(state.logs.latencyTickerHandle);
+    state.logs.latencyTickerHandle = null;
+  }
+}
+
 /// Render the "phase" cell for a log row. Pulls the latest
 /// `StageEvent` for the request if any, else renders an empty
 /// placeholder (for historical rows).
@@ -3148,6 +3278,12 @@ function connectLogsWebSocket() {
   ws.addEventListener('close', () => {
     if (state.logs.ws !== ws) return;
     setLogsStatus('disconnected');
+    // Stop the latency ticker while we're disconnected: the map
+    // keeps growing stale (and the operator's view is no longer
+    // updating anyway), so the work would be wasted. Re-enabled
+    // on the next successful `open` via `startLogLatencyTicker` —
+    // see the `onopen` branch + the `renderLogs` re-entry path.
+    stopLogLatencyTicker();
     scheduleLogsReconnect();
   });
   ws.addEventListener('error', () => {
@@ -3189,6 +3325,11 @@ async function renderLogs() {
     // badge if the DOM was just rebuilt).
     connectLogsWebSocket();
     fetchRecordingState();
+    // (Re)start the 100ms latency ticker. The start fn is
+    // idempotent so it's safe to call on every re-render of the
+    // logs view (bgPoll re-renders, hashchange-into-the-same-route,
+    // etc.) without piling up intervals.
+    startLogLatencyTicker();
     return;
   }
 
@@ -3228,6 +3369,10 @@ async function renderLogs() {
   }
   fetchRecordingState();
   connectLogsWebSocket();
+  // Start the 100ms latency ticker. Idempotent — safe to call
+  // even if the ticker was somehow left running from a previous
+  // view-mount.
+  startLogLatencyTicker();
 }
 
 /// Fetch the current recording flag from the server and update the
@@ -3546,6 +3691,252 @@ function extractApiErrorMessage(e) {
     return m[1];
   }
 }
+
+// ===== Config =====
+//
+// **Variant A of the "Config" menu (honest stub).** The dashboard
+// displays the timeouts/retries/circuit-breaker/racing values that
+// were loaded from `config.toml` at server startup. The values are
+// read-only here — there is no PUT endpoint, no DB table, and no
+// in-memory mutation path. The intent is to keep the user informed
+// about the active configuration without lying about being able to
+// edit it.
+//
+// The "Save" button is intentionally non-functional: clicking it
+// shows a toast that explains *why* it can't do anything. Anyone who
+// needs to change a value must edit `config.toml` (or set the
+// `OPENPROXY_*` env override) and restart the process. When/if we
+// add hot-reload (variant B), the inputs flip from `disabled` to
+// editable and a `PUT /v1/admin/config` is wired up — but that's a
+// follow-up with its own scoping decision (see the spec notes).
+//
+// The view is *not* subscribed to the 3 s background poll: there's
+// nothing on the page that can change without a restart, and polling
+// would needlessly burn a request every 3 s for zero value.
+async function renderConfig() {
+  document.getElementById('main').innerHTML = `
+    <div class="page-header">
+      <h2>Config</h2>
+    </div>
+    <p class="muted">
+      These values are read from <code>config.toml</code> at server
+      startup (with <code>OPENPROXY_*</code> env-var overrides). Timeouts
+      are editable below; the other sections reflect the loaded TOML.
+    </p>
+    <div class="loading">Loading...</div>
+  `;
+  let cfg;
+  try {
+    cfg = await api('/config');
+  } catch (e) {
+    document.getElementById('main').innerHTML =
+      `<div class="error">Error: ${escapeHtml(e.message)}</div>`;
+    return;
+  }
+
+  // The wire shape is { timeouts, retries, circuit_breaker, racing }.
+  // Each sub-object's keys mirror the matching `[section]` in
+  // config.example.toml, so the operator can copy the values back
+  // into the file verbatim.
+  const t = cfg.timeouts || {};
+  const r = cfg.retries || {};
+  const cb = cfg.circuit_breaker || {};
+  const rc = cfg.racing || {};
+
+  const fmtMs = (v) => (v == null ? '—' : `${v} ms`);
+
+  // Renderer for a number input. `editable=false` keeps the legacy
+  // read-only look (`disabled` + muted background); `editable=true`
+  // omits `disabled` so the operator can type. The CSS
+  // `.config-field input[type="number"]:disabled` only matches
+  // when the attribute is present, so dropping it is enough to
+  // flip the visual.
+  const field = (label, name, value, help, opts = {}) => `
+    <label class="config-field">
+      <span class="config-label">${escapeHtml(label)}</span>
+      <input type="number" name="${escapeHtml(name)}"
+             value="${escapeHtml(String(value ?? ''))}"
+             min="0" step="100"
+             ${opts.editable ? '' : 'disabled'}
+             aria-label="${escapeHtml(label)}${opts.editable ? '' : ' (read-only)'}">
+      <span class="config-help">${escapeHtml(help)}</span>
+    </label>
+  `;
+
+  document.getElementById('main').innerHTML = `
+    <div class="page-header">
+      <h2>Config</h2>
+    </div>
+
+    <div id="config-banner" class="banner banner-info">
+      <strong>Live values.</strong>
+      The values below are the ones the server is currently using.
+      Timeouts are editable; the other sections reflect the loaded
+      <code>config.toml</code>. Changes to timeouts are persisted in
+      the database and apply to the next request.
+    </div>
+
+    <section class="card">
+      <h3>Timeouts <small>(ms)</small></h3>
+      <p class="muted">
+        Precedence (highest wins):
+        <code>model&nbsp;overrides</code> →
+        <code>provider_timeouts</code> →
+        <code>system&nbsp;default</code>. The system default is what
+        you see here. Editing these values takes effect on the next
+        request; in-flight requests keep the previous value.
+      </p>
+      <div class="config-grid">
+        ${field('connect_ms', 'timeouts.connect_ms', t.connect_ms, 'TCP connect to the upstream.', {editable: true})}
+        ${field('request_send_ms', 'timeouts.request_send_ms', t.request_send_ms, 'Max time to flush the request body.', {editable: true})}
+        ${field('ttft_ms', 'timeouts.ttft_ms', t.ttft_ms, 'Time-to-first-token for streaming responses.', {editable: true})}
+        ${field('idle_chunk_ms', 'timeouts.idle_chunk_ms', t.idle_chunk_ms, 'Max gap between SSE chunks.', {editable: true})}
+        ${field('total_ms', 'timeouts.total_ms', t.total_ms, 'Hard ceiling for the whole request.', {editable: true})}
+      </div>
+    </section>
+
+    <section class="card">
+      <h3>Retries</h3>
+      <div class="config-grid">
+        ${field('max_attempts', 'retries.max_attempts', r.max_attempts, 'Including the first try.')}
+        ${field('backoff_base_ms', 'retries.backoff_base_ms', r.backoff_base_ms, 'Initial backoff.')}
+        ${field('backoff_factor', 'retries.backoff_factor', r.backoff_factor, 'Exponential factor.')}
+        ${field('backoff_jitter_pct', 'retries.backoff_jitter_pct', r.backoff_jitter_pct, 'Random jitter % to avoid thundering herds.')}
+      </div>
+    </section>
+
+    <section class="card">
+      <h3>Circuit Breaker</h3>
+      <div class="config-grid">
+        ${field('failure_threshold', 'circuit_breaker.failure_threshold', cb.failure_threshold, 'Consecutive failures before a target is parked.')}
+        ${field('unhealthy_duration_ms', 'circuit_breaker.unhealthy_duration_ms', cb.unhealthy_duration_ms, 'How long a parked target stays out of rotation.')}
+      </div>
+    </section>
+
+    <section class="card">
+      <h3>Racing</h3>
+      <div class="config-grid">
+        ${field('default_race_size', 'racing.default_race_size', rc.default_race_size, 'Default number of parallel targets per combo.')}
+        ${field('max_race_size', 'racing.max_race_size', rc.max_race_size, 'Upper bound the dashboard can set.')}
+        ${field('abort_grace_ms', 'racing.abort_grace_ms', rc.abort_grace_ms, 'Grace period before aborting losing branches.')}
+      </div>
+    </section>
+
+    <div class="config-actions">
+      <button class="primary" type="button"
+              onclick="window.configSaveTimeouts(event)">Save</button>
+      <span class="muted">
+        Saves the timeouts above. The other sections are
+        read-only here; edit <code>config.toml</code> and restart
+        to change them.
+      </span>
+    </div>
+
+    <details class="config-details">
+      <summary>What does the precedence chain look like?</summary>
+      <p>
+        The pipeline resolves the effective timeouts on every
+        request via
+        <code>openproxy_core::timeouts::resolve</code>:
+      </p>
+      <ol>
+        <li>Start with the system defaults shown above (this view).</li>
+        <li>Override <code>connect</code>, <code>request_send</code>,
+            and <code>total</code> from
+            <code>provider_timeouts</code> if a row exists for the
+            selected provider.</li>
+        <li>Override <code>ttft</code> and <code>idle_chunk</code>
+            from <code>models.timeout_overrides_json</code> if the
+            target model sets them.</li>
+      </ol>
+      <p>
+        Provider/model overrides live in the database (not in
+        <code>config.toml</code>), so they <em>can</em> change
+        without a restart — but they are not exposed in this view.
+        Use the Providers / Combos detail screens for those.
+      </p>
+    </details>
+  `;
+}
+
+// Swap the banner at the top of the Config view to a new
+// "type"/"title"/"body" triple. `type` is one of 'info' / 'success'
+// (drives the CSS class). Used by `configSaveTimeouts` to flip from
+// the initial blue/amber `.banner-info` to the green `.banner--success`
+// after a successful PUT.
+function swapBanner(bannerType, title, body) {
+  const el = document.getElementById('config-banner');
+  if (!el) return;
+  // Strip the previous type-modifier class (banner-info / banner--success).
+  el.classList.remove('banner-info', 'banner--success');
+  el.classList.add('banner-' + bannerType);
+  el.innerHTML =
+    `<strong>${escapeHtml(title)}</strong> ${escapeHtml(body)}`;
+}
+
+// Read the five timeouts inputs and return a TimeoutsConfig-shaped
+// object. Returns `null` and toasts an error on any missing/empty/
+// non-numeric field, so the caller can short-circuit before hitting
+// the network.
+function readTimeoutsFromInputs() {
+  const fields = [
+    'connect_ms', 'request_send_ms', 'ttft_ms', 'idle_chunk_ms', 'total_ms',
+  ];
+  const out = {};
+  for (const f of fields) {
+    const el = document.querySelector(
+      `input[name="timeouts.${f}"]`
+    );
+    if (!el) {
+      showToast(`timeouts.${f} input is missing from the DOM`, 'error');
+      return null;
+    }
+    const raw = (el.value || '').trim();
+    if (raw === '') {
+      showToast(`timeouts.${f} is required`, 'error');
+      return null;
+    }
+    // Accept only non-negative integers; reject decimals / signs /
+    // scientific notation by going through Number and re-checking
+    // that it's a safe u64.
+    const n = Number(raw);
+    if (!Number.isFinite(n) || n < 0 || !Number.isInteger(n) || !/^\d+$/.test(raw)) {
+      showToast(`timeouts.${f} must be a non-negative integer`, 'error');
+      return null;
+    }
+    out[f] = n;
+  }
+  return out;
+}
+
+// Click handler for the "Save" button on the Config view. PUTs the
+// edited timeouts to the server, then flips the banner to a green
+// `.banner--success`. On failure, toasts the server's error message.
+window.configSaveTimeouts = async function(ev) {
+  if (ev) ev.preventDefault();
+  const t = readTimeoutsFromInputs();
+  if (!t) return; // readTimeoutsFromInputs already toasted.
+  try {
+    await api('/config/timeouts', {
+      method: 'PUT',
+      body: JSON.stringify(t),
+    });
+    showToast('Config updated — applies to next requests', 'success');
+    swapBanner(
+      'success',
+      'Live — applies to next requests',
+      'The values below are persisted in the database and will ' +
+      'take effect on the next request. Requests already in flight ' +
+      'continue with the previous values.'
+    );
+  } catch (e) {
+    // e.message is "<status>: <body>" from the api() helper. Pull
+    // the server's human-readable message out of the JSON envelope
+    // (it lives in {"error":{"message":"..."}}); fall back to the
+    // raw message if the envelope isn't there.
+    showToast(extractApiErrorMessage(e) || e.message, 'error');
+  }
+};
 
 // ===== API Keys =====
 //
