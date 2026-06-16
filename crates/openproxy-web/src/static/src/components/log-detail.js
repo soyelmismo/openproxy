@@ -118,6 +118,24 @@ export function renderLogDetailModal(log) {
   `;
 }
 
+// Initialize the log-detail tab UI: show only the first [data-log-tab]
+// section, hide the remaining ones, and mark the first detail-tab as
+// active. Centralized here so it can be re-invoked after any in-place
+// re-render (e.g. updateOpenLogDetail replacing the modal HTML).
+function initializeLogDetailTabs() {
+  const modal = document.getElementById("log-detail-modal");
+  if (!modal) return;
+  const sections = modal.querySelectorAll("[data-log-tab]");
+  if (sections.length === 0) return;
+  // Hide all but the first; mark first as active.
+  sections.forEach((s, i) => {
+    s.style.display = i === 0 ? "" : "none";
+  });
+  const firstTab = modal.querySelector("[data-log-detail-tab]");
+  modal.querySelectorAll("[data-log-detail-tab]").forEach((t) => t.classList.remove("active"));
+  if (firstTab) firstTab.classList.add("active");
+}
+
 // Public API
 export function showLogDetail(log) {
   const html = renderLogDetailModal(log);
@@ -130,6 +148,7 @@ export function showLogDetail(log) {
     if (firstSection) firstSection.style.display = "";
   }
   document.addEventListener("click", tabClickOnce);
+  initializeLogDetailTabs();
 }
 
 let tabClickOnce = (e) => {
@@ -174,6 +193,7 @@ export function updateOpenLogDetail(row) {
   modal.outerHTML = html;
   // Re-bind the tab click shim.
   document.addEventListener("click", tabClickOnce);
+  initializeLogDetailTabs();
 }
 
 // A row has complete detail if it carries a request body, a response

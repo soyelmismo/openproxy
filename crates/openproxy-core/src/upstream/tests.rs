@@ -135,8 +135,12 @@ impl std::future::Future for ResultSleep {
 }
 
 // -----------------------------------------------------------------------
-// Test 1: phase_timeout_dns (PRE-EXISTING; do not modify — environmental
-// flake unrelated to bug 2)
+// Test 1: phase_timeout_dns — `phase_hint` is now honoured by
+// `call_inner` (see `client.rs` around the new `phase_hint_sleep`
+// arm of the `select!`). With `dns_ms = 50` and `phase_hint =
+// Some(Dns)`, the dispatch fires at ~50ms and reports
+// `Timeout(Dns)` — not the `Timeout(Write)` mask from the
+// pre-fix behaviour.
 // -----------------------------------------------------------------------
 
 #[tokio::test]

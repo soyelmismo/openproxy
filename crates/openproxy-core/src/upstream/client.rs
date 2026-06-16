@@ -350,6 +350,16 @@ impl UpstreamClient {
             }
             HyperDispatch::Test(t) => t.clone(),
         };
+        // Bug 2 fix: read the dispatch's own `phase_hint()` BEFORE
+        // we move `dispatch` into the `send_fut` async block below.
+        // For test dispatches that inject a `phase_hint` (e.g.
+        // `Some(Dns)` with `dns_ms = 50`), this is what lets
+        // `call_inner` surface `Timeout(Dns)` instead of the
+        // generic `Timeout(Write)` mask from the write_sleep
+        // ceiling. In production, `phase_hint()` returns `None` and
+        // the `phase_hint_sleep` future never resolves, so the
+        // per-phase race below is unchanged.
+        let phase_hint = dispatch.phase_hint();
         let send_fut = async move {
             let res = dispatch.dispatch(request).await;
             // Bump the pool counter. We treat the very first request
@@ -395,6 +405,22 @@ impl UpstreamClient {
         // rejected soft-accumulation. The nested-timeouts design
         // honors the per-phase attribution because each ceiling
         // carries its own label.
+        // Bug 2 fix: build the phase_hint sleep future here. It
+        // only resolves when a dispatch declares a `phase_hint`;
+        // otherwise it stays pending forever and the
+        // `if phase_hint.is_some()` guard on the `select!` arm
+        // makes it a no-op.
+        let phase_hint_sleep = async {
+            match phase_hint {
+                Some(phase) => {
+                    tokio::time::sleep_until(tokio::time::Instant::from_std(
+                        deadlines.deadline_for(phase),
+                    ))
+                    .await;
+                }
+                None => std::future::pending::<()>().await,
+            }
+        };
         let total_sleep = tokio::time::sleep_until(tokio::time::Instant::from_std(deadlines.total_deadline));
         let write_sleep = tokio::time::sleep_until(tokio::time::Instant::from_std(deadlines.write_deadline));
         let headers_sleep = tokio::time::sleep_until(tokio::time::Instant::from_std(deadlines.headers_deadline));
@@ -413,6 +439,7 @@ impl UpstreamClient {
         tokio::pin!(total_sleep);
         tokio::pin!(write_sleep);
         tokio::pin!(headers_sleep);
+        tokio::pin!(phase_hint_sleep);
         tokio::pin!(cancel_wait);
         let response = tokio::select! {
             biased;
@@ -425,6 +452,16 @@ impl UpstreamClient {
             // per-phase budget surfaces as `Timeout(Headers)` from
             // this outermost race.
             _ = &mut total_sleep => return Err(UpstreamError::Timeout(UpstreamPhase::Headers)),
+            // Dispatch-supplied phase hint. When the test harness
+            // (or any future production wrapper) declares a
+            // `phase_hint`, we honour its exact deadline and
+            // attribute the timeout to that phase. Guarded by
+            // `if phase_hint.is_some()` so production dispatches
+            // (which return `None`) keep racing against the
+            // generic per-phase ceilings below.
+            _ = &mut phase_hint_sleep, if phase_hint.is_some() => {
+                return Err(UpstreamError::Timeout(phase_hint.unwrap_or(UpstreamPhase::Headers)));
+            }
             // OUTER per-phase ceiling. Fires at `start + write_ms`.
             // Labelled `Write` so a slow body upload is correctly
             // attributed.

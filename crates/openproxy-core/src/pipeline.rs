@@ -226,10 +226,21 @@ impl Pipeline {
             Err(e) => return self.failure(e, 0, ErrorPhase::Resolve),
         };
 
-        // Outer loop: sequential attempts (each attempt itself can race >1 target).
-        // For MVP we run a single attempt with race_size=1; the loop structure
-        // is in place so a future PR can flip on real retry-on-failure behaviour.
-        for attempt in 1..=self.config.max_attempts {
+        // Outer loop: a single combo walk. The pre-fix code used
+        // `for attempt in 1..=self.config.max_attempts` and let
+        // the inner walk re-fire N times, but that re-fired
+        // per-target calls too (it was the *only* retry mechanism
+        // for the whole combo). Bug 4 fix: retries are now
+        // applied per-target *inside* the per-target loop (see
+        // the `while let Some(e) = &result.error` block further
+        // down). The outer loop now runs exactly once; the
+        // `attempt` variable is still threaded through for usage
+        // recording and as a stable identifier across the
+        // per-target retry calls, but its count is no longer
+        // user-tunable from `PipelineConfig.max_attempts` — the
+        // per-target retry budget lives in
+        // `PipelineConfig.retries.max_attempts`.
+        for attempt in 1..=1 {
             // 2. Resolve and expand targets.
             let targets = match self.resolve_targets(&combo, req.targets_override.as_deref()) {
                 Ok(t) => t,
@@ -533,16 +544,13 @@ impl Pipeline {
             }
 
             // 6. Try each target in priority order. The first one
-            //    that returns Ok wins; a non-retryable error stops
-            //    the loop (e.g. a validation 4xx); a retryable error
-            //    moves us to the next target. The `attempt` counter
-            //    caps the *total* number of upstream attempts across
-            //    the whole iteration; if it runs out mid-target, the
-            //    loop returns whatever error the last target
-            //    produced. Real parallel race orchestration (multiple
-            //    lanes fired simultaneously) is still out of scope
-            //    for MVP — this loop is the serial analogue.
-            let mut last_error: Option<CoreError> = None;
+            //    that returns Ok wins; on a failure the per-target
+            //    retry loop above has already exhausted the
+            //    `retries.max_attempts` budget for this model, so
+            //    we fall through to the next target in the combo
+            //    (bug 3 contract). `last_result` is what we
+            //    return at the end if every target errored — it
+            //    carries the last per-target retry's final error.
             let mut last_result: Option<PipelineResult> = None;
             for target in to_run.iter() {
                 if {
@@ -575,9 +583,83 @@ impl Pipeline {
                     );
                     return self.client_disconnected_result(attempt);
                 }
-                let result = self
-                    .execute_single(&req, &combo, target, attempt, race_size as u8)
+                // Bug 4 fix: per-target retry. The retry policy is
+                // applied to the *individual model*, not to the
+                // whole combo walk: we try the same target up to
+                // `retries.max_attempts` times, with backoff
+                // between attempts. If every attempt on this
+                // target errors retryably, the inner loop breaks
+                // and the outer target loop falls through to the
+                // next target in the combo (bug 3 contract).
+                // Rationale: the pre-fix implementation had a
+                // *single* `for attempt in 1..=max_attempts`
+                // loop wrapping the whole combo walk, so a
+                // retryable failure on target A consumed the
+                // entire retry budget before target B was ever
+                // tried. This is what the user perceived as
+                // "retries don't fire on a per-model basis". The
+                // fix is to apply retries per-target: after
+                // target A's budget is exhausted, the pipeline
+                // moves on to target B with a fresh budget.
+                let policy = RetryPolicy::from_config(&self.config.retries);
+                let mut target_attempt: u8 = 1;
+                let mut result = self
+                    .execute_single(&req, &combo, target, target_attempt, race_size as u8)
                     .await;
+                // The retry loop body: only enter when the previous
+                // attempt errored *retryably* AND we still have
+                // attempts left AND the client hasn't cancelled.
+                // Any of the three break-out conditions hands the
+                // result (success or final failure) back to the
+                // outer target loop, which decides whether to
+                // continue to the next target (bug 3 fall-through)
+                // or to return.
+                while let Some(e) = &result.error {
+                    if !RetryPolicy::is_retryable(e) {
+                        // Non-retryable error (e.g. 4xx, validation).
+                        // Bug 3 takes over: the next target in the
+                        // combo gets a try.
+                        break;
+                    }
+                    if target_attempt >= policy.max_attempts {
+                        // Exhausted the per-target retry budget.
+                        // Bug 3 fall-through to the next target.
+                        break;
+                    }
+                    if {
+                        let mut rx = req.client_disconnected.clone();
+                        self.is_client_disconnected(&mut rx)
+                    } {
+                        // Client cancelled; abort the per-target
+                        // retry. The outer target loop's
+                        // disconnect check (a few lines above this
+                        // block) will fire on the next iteration
+                        // and short-circuit the whole pipeline.
+                        break;
+                    }
+                    let delay = match policy.delay_after_attempt(target_attempt) {
+                        Some(d) => d,
+                        None => break,
+                    };
+                    tracing::debug!(
+                        combo_id = combo.id.0,
+                        target_id = target.id.0,
+                        provider = %target.provider_id,
+                        target_attempt,
+                        next_attempt = target_attempt + 1,
+                        delay_ms = delay.as_millis() as u64,
+                        error = %e,
+                        "target failed retryably; retrying same target"
+                    );
+                    tokio::time::sleep(delay).await;
+                    // Saturate so a misconfigured `max_attempts` (or
+                    // a future bump to u16) can't wrap the counter
+                    // and turn the loop into an infinite retry.
+                    target_attempt = target_attempt.saturating_add(1);
+                    result = self
+                        .execute_single(&req, &combo, target, target_attempt, race_size as u8)
+                        .await;
+                }
                 // 6a. Update the persistent cooldown registry. A
                 //     successful attempt clears any existing row; a
                 //     retryable failure parks the target for
@@ -652,25 +734,24 @@ impl Pipeline {
                             error = %e,
                             "target failed; trying next target"
                         );
-                        last_error = Some(e.clone_for_result());
                         last_result = Some(result);
                     }
                 }
             }
 
-            // All targets failed retryably. If we have attempts left,
-            // sleep and retry the first target (preserve the
-            // pre-nested behaviour: per-attempt we walk the whole
-            // list). If not, surface the last failure.
-            if let Some(e) = &last_error {
-                if RetryPolicy::is_retryable(e) && attempt < self.config.max_attempts {
-                    let policy = RetryPolicy::from_config(&self.config.retries);
-                    if let Some(delay) = policy.delay_after_attempt(attempt) {
-                        tokio::time::sleep(delay).await;
-                    }
-                    continue;
-                }
-            }
+            // Bug 4 fix: the per-target retry is now done inside the
+            // target loop (the `while let Some(e) = &result.error`
+            // block above). The pre-fix code had a *second* retry
+            // loop here that re-walked the whole combo on every
+            // outer iteration, which is what gave the operator the
+            // illusion of "no retries happen" (one model that always
+            // 5xx'd would consume the whole combo-walk budget; the
+            // other models in the combo would never see the budget
+            // and would only get one shot per outer iteration). With
+            // per-target retries, the combo walk happens once and
+            // each target gets its own fresh retry budget. If every
+            // target errored, surface the last per-target retry's
+            // final result (which carries the last failure).
             return last_result.unwrap_or_else(|| self.failure(
                 CoreError::NoHealthyTargets(combo.id.0),
                 attempt,
@@ -4323,7 +4404,18 @@ mod tests {
         let cfg = PipelineConfig {
             defaults,
             racing: RacingConfig::default(),
-            retries: RetriesConfig::default(),
+            // Bug 4 fix: with per-target retry, the
+            // `retries.max_attempts` knob now controls how many
+            // times each individual target is retried. This
+            // test exists to assert the priority walk (bug 3
+            // fix), not the per-target retry (bug 4 fix), so
+            // pin `retries.max_attempts` to 1 to make the test
+            // insensitive to the bug 4 fix. Each target gets
+            // exactly one call → 5 calls total.
+            retries: RetriesConfig {
+                max_attempts: 1,
+                ..RetriesConfig::default()
+            },
             max_attempts: 1,
             master_key: mk,
             adapters: Arc::new(vec![Arc::new(mock) as Arc<dyn ProviderAdapter>]),
@@ -4895,6 +4987,269 @@ mod tests {
             result.attempts, 3,
             "expected PipelineResult.attempts == 3, got {}",
             result.attempts
+        );
+
+        drop(server_handle);
+    }
+
+    /// ADVERSARIAL (e) — `bug4_per_target_retry_exhausts_then_falls_through_to_next_target`.
+    ///
+    /// Bug 4 regression. The pre-fix pipeline applied the
+    /// `retries.max_attempts` knob at the *combo walk* level
+    /// (a single outer `for attempt in 1..=max_attempts` loop
+    /// re-walked the whole row of targets). With a 2-target
+    /// combo and `max_attempts=3`, the first target (always 5xx)
+    /// would consume the *entire* retry budget, and the second
+    /// target would only get one try (the third outer iteration
+    /// would re-walk the row, fail at the first target, and bail
+    /// out via the post-loop block). Net effect: the first target
+    /// got 3 tries, the second got 0.
+    ///
+    /// The post-fix per-target retry loop fires
+    /// `retries.max_attempts` times on the *same* model. Once
+    /// those are exhausted, the pipeline falls through to the
+    /// next target (bug 3 contract). For this test that means:
+    /// target 1 → 3 tries (all 503) → fall through → target 2 →
+    /// 1 try (200) → success. Total upstream calls: 4. The 4th
+    /// call is the one that succeeds.
+    #[tokio::test]
+    async fn bug4_per_target_retry_exhausts_then_falls_through_to_next_target() {
+        use crate::combos::AddTargetInput;
+        use std::sync::atomic::{AtomicU32, Ordering as AtomicOrdering};
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        use tokio::net::TcpListener;
+
+        use crate::adapters::{
+            AdapterAuthType, AdapterFormat, ProviderAdapter, ProviderAdapterConfig,
+        };
+        struct MockAdapter {
+            config: ProviderAdapterConfig,
+        }
+        #[async_trait::async_trait]
+        impl ProviderAdapter for MockAdapter {
+            fn id(&self) -> &ProviderId {
+                &self.config.id
+            }
+            fn config(&self) -> &ProviderAdapterConfig {
+                &self.config
+            }
+            fn build_chat_url(
+                &self,
+                _target_format: TargetFormat,
+                _model: &crate::ids::ModelId,
+            ) -> String {
+                self.config.base_url.clone()
+            }
+            fn build_auth_header(&self, api_key: &str) -> (String, String) {
+                ("Authorization".into(), format!("Bearer {api_key}"))
+            }
+            fn build_headers(
+                &self,
+                api_key: &str,
+                _target_format: TargetFormat,
+                _model: &crate::ids::ModelId,
+            ) -> Vec<(String, String)> {
+                vec![
+                    self.build_auth_header(api_key),
+                    ("Content-Type".into(), "application/json".into()),
+                ]
+            }
+            fn models_url(&self) -> Option<String> {
+                None
+            }
+            async fn fetch_models(
+                &self,
+                _upstream_client: &std::sync::Arc<crate::upstream::UpstreamClient>,
+                _api_key: &str,
+            ) -> Result<Vec<crate::models::DiscoveredModel>> {
+                Ok(Vec::new())
+            }
+        }
+
+        // Listener: per-call counter, returns 503 for the first
+        // `bug4_max_attempts_for_target1` calls and 200 for the
+        // rest. This lets us assert both the per-target retry
+        // budget and the fall-through to the next target.
+        const TARGET1_RETRY_BUDGET: u32 = 3;
+        let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
+        let local_addr = listener.local_addr().expect("local_addr");
+        let upstream_url = format!("http://{local_addr}");
+        let call_count = Arc::new(AtomicU32::new(0));
+        let server_call_count = call_count.clone();
+        let server_handle = tokio::spawn(async move {
+            loop {
+                let (mut sock, _peer) = match listener.accept().await {
+                    Ok(p) => p,
+                    Err(_) => break,
+                };
+                let n = server_call_count.fetch_add(1, AtomicOrdering::SeqCst);
+                let mut buf = vec![0u8; 64 * 1024];
+                let mut total = 0usize;
+                loop {
+                    if let Ok(Ok(rd)) = tokio::time::timeout(
+                        Duration::from_millis(500),
+                        sock.read(&mut buf[total..]),
+                    )
+                    .await
+                    {
+                        if rd == 0 {
+                            break;
+                        }
+                        total += rd;
+                        if buf[..total].windows(4).any(|w| w == b"\r\n\r\n") {
+                            break;
+                        }
+                    } else {
+                        break;
+                    }
+                }
+                let (status_line, body) = if n < TARGET1_RETRY_BUDGET {
+                    (
+                        "HTTP/1.1 503 Service Unavailable",
+                        r#"{"error":{"message":"flaky","type":"server_error"}}"#.to_string(),
+                    )
+                } else {
+                    (
+                        "HTTP/1.1 200 OK",
+                        r#"{"id":"chatcmpl-bug4","object":"chat.completion","created":1,"model":"m","choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}"#.to_string(),
+                    )
+                };
+                let response = format!(
+                    "{}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    status_line,
+                    body.len(),
+                    body,
+                );
+                let _ = sock.write_all(response.as_bytes()).await;
+                let _ = sock.flush().await;
+            }
+        });
+
+        // 2-target Priority combo. Two distinct accounts on the
+        // same provider/model yield two distinct targets,
+        // satisfying the (provider, account, model) uniqueness
+        // constraint. Target 1 is exhausted (3 × 503); target 2
+        // succeeds on its first call. Expected: 4 HTTP calls
+        // total (3 retry of target 1 + 1 success of target 2).
+        let (pool, conn, _path) = fresh_pool();
+        let mk = Arc::new(MasterKey::generate());
+        let combo_id = {
+            let w = pool.writer();
+            seed_provider(&w, "adv-mock", AuthType::Bearer);
+            w.execute(
+                "INSERT INTO models(provider_id, model_id, target_format) \
+                 VALUES ('adv-mock', 'm', 'openai')",
+                [],
+            )
+            .expect("seed model");
+            let model_rowid: i64 = w
+                .query_row("SELECT last_insert_rowid()", [], |r| r.get(0))
+                .expect("last_insert_rowid");
+            let model_id = crate::ids::ModelRowId(model_rowid);
+            let mut account_ids = Vec::new();
+            for label in ["bug4-a1", "bug4-a2"] {
+                let account_id = crate::accounts::create(
+                    &w,
+                    &ProviderId::new("adv-mock"),
+                    Some("sk-test"),
+                    mk.as_ref(),
+                    Some(label),
+                    10,
+                    None,
+                )
+                .expect("seed account");
+                account_ids.push(account_id);
+            }
+            let combo_id = combos::create_combo(&w, "adv-bug4", Strategy::Priority, 1)
+                .expect("create combo");
+            for (i, prio) in [10_i32, 20].iter().enumerate() {
+                combos::add_target(
+                    &w,
+                    AddTargetInput {
+                        combo_id,
+                        provider_id: ProviderId::new("adv-mock"),
+                        account_id: Some(account_ids[i]),
+                        model_row_id: Some(model_id),
+                        sub_combo_id: None,
+                        priority_order: *prio,
+                    },
+                )
+                .expect("add target");
+            }
+            combo_id
+        };
+
+        let defaults = Timeouts::from_config(&TimeoutsConfig::default());
+        let mock = MockAdapter {
+            config: ProviderAdapterConfig {
+                id: ProviderId::new("adv-mock"),
+                base_url: upstream_url.clone(),
+                auth_type: AdapterAuthType::Bearer,
+                format: AdapterFormat::Openai,
+                extra_headers: Vec::new(),
+            },
+        };
+        let cfg = PipelineConfig {
+            defaults,
+            racing: RacingConfig::default(),
+            // The per-target retry budget is the source of
+            // truth for the bug 4 fix. We set it to 3 so the
+            // first target is retried 3 times, then the
+            // pipeline falls through to the second target.
+            retries: RetriesConfig {
+                max_attempts: TARGET1_RETRY_BUDGET as u8,
+                backoff_base_ms: 1,
+                backoff_factor: 1,
+                backoff_jitter_pct: 0,
+            },
+            // PipelineConfig.max_attempts is now mostly a
+            // vestigial knob for the outer combo walk; the
+            // per-target retry is governed by
+            // `retries.max_attempts` above. Pin to 1 to make
+            // the test insensitive to future changes in the
+            // outer loop.
+            max_attempts: 1,
+            master_key: mk,
+            adapters: Arc::new(vec![Arc::new(mock) as Arc<dyn ProviderAdapter>]),
+            http_client: reqwest::Client::new(),
+            cooldown_secs: 60,
+            upstream_client: UpstreamClient::new(),
+        };
+        let p = Pipeline::new(conn, cfg);
+        let (req, _cancel_tx) = make_request(combo_id);
+        let result = tokio::time::timeout(Duration::from_secs(15), p.run(req))
+            .await
+            .expect("pipeline.run timed out");
+
+        let calls = call_count.load(AtomicOrdering::SeqCst);
+        // 3 retries on target 1 (all 503) + 1 success on target 2.
+        assert_eq!(
+            calls, 4,
+            "expected 4 upstream calls (3 retries of target 1 + 1 success of target 2), \
+             got {} — the per-target retry budget is not being applied to the same \
+             model before fall-through",
+            calls
+        );
+        // The 4th call (the first call to target 2) succeeded,
+        // so the pipeline returns a 200 with the upstream body.
+        assert!(
+            result.error.is_none(),
+            "expected success after target 2's first call, got error: {:?}",
+            result.error
+        );
+        assert_eq!(
+            result.status_code, 200,
+            "expected 200, got {}",
+            result.status_code
+        );
+        let body = result
+            .final_response
+            .as_ref()
+            .expect("final_response must be set on success");
+        assert_eq!(
+            body.id, "chatcmpl-bug4",
+            "expected the mock's success body id, got {:?}",
+            body.id
         );
 
         drop(server_handle);
