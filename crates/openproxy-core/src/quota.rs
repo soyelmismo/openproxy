@@ -15,8 +15,9 @@
 //! `quota_*` columns and the UI shows "not supported by provider".
 
 use crate::error::{CoreError, Result};
+use crate::upstream::{CancellationToken, TimeoutProfile, UpstreamClient, UpstreamError, UpstreamRequest};
 use serde::{Deserialize, Serialize};
-use std::time::Duration;
+use std::sync::Arc;
 
 /// Quota snapshot for a single account.
 ///
@@ -71,7 +72,7 @@ impl AccountQuota {
 /// decrypting it from the row. The function holds the key only for the
 /// lifetime of the HTTP call.
 pub async fn fetch_minimax_quota(
-    http: &reqwest::Client,
+    upstream: &Arc<UpstreamClient>,
     api_key: &str,
 ) -> Result<AccountQuota> {
     let urls = [
@@ -81,7 +82,7 @@ pub async fn fetch_minimax_quota(
 
     let mut last_err: Option<String> = None;
     for url in &urls {
-        match fetch_minimax_from_url(http, api_key, url).await {
+        match fetch_minimax_from_url(upstream, api_key, url).await {
             Ok(quota) => return Ok(quota),
             Err(e) => last_err = Some(format!("{}: {}", url, e)),
         }
@@ -106,32 +107,39 @@ pub async fn fetch_minimax_quota(
 /// `AccountQuota` or a `CoreError` describing the failure. Used
 /// internally by [`fetch_minimax_quota`]'s fallback loop.
 async fn fetch_minimax_from_url(
-    http: &reqwest::Client,
+    upstream: &Arc<UpstreamClient>,
     api_key: &str,
     url: &str,
 ) -> Result<AccountQuota> {
-    let resp = http
-        .get(url)
-        .header("Authorization", format!("Bearer {}", api_key))
-        .timeout(Duration::from_secs(15))
-        .send()
+    let mut req = UpstreamRequest::get(url);
+    if let Ok(v) = http::HeaderValue::from_str(&format!("Bearer {api_key}")) {
+        req.headers.insert(http::header::AUTHORIZATION, v);
+    }
+    let cancel = CancellationToken::new();
+    let response = upstream
+        .call(req, TimeoutProfile::Quota, cancel)
         .await
-        .map_err(|e| CoreError::UpstreamConnection(format!("{}: {}", url, e)))?;
+        .map_err(|e| match e {
+            UpstreamError::Cancel => CoreError::ClientDisconnected,
+            other => CoreError::UpstreamConnection(format!("{}: {}", url, other)),
+        })?;
 
-    if !resp.status().is_success() {
+    if !response.status.is_success() {
         return Err(CoreError::UpstreamConnection(format!(
             "{}: status {}",
             url,
-            resp.status().as_u16()
+            response.status.as_u16()
         )));
     }
 
-    let body: serde_json::Value = resp
-        .json()
+    let body = response
+        .collect()
         .await
-        .map_err(|e| CoreError::Parse(format!("{}: {}", url, e)))?;
+        .map_err(|e| CoreError::UpstreamConnection(format!("{}: {}", url, e)))?;
 
-    parse_minimax_quota(&body, url)
+    let json: serde_json::Value = serde_json::from_slice(&body)
+        .map_err(|e| CoreError::Parse(format!("{}: {}", url, e)))?;
+    parse_minimax_quota(&json, url)
 }
 
 /// Parse the JSON body MiniMax returns from its quota endpoints.
@@ -354,18 +362,18 @@ fn now_unix_secs_str() -> String {
 /// `access_token` is the *plaintext* OAuth access token — the caller
 /// is responsible for decrypting it from the account row.
 pub async fn fetch_antigravity_quota(
-    http: &reqwest::Client,
+    upstream: &Arc<UpstreamClient>,
     access_token: &str,
 ) -> Result<AccountQuota> {
-    match fetch_antigravity_models_quota(http, access_token).await {
+    match fetch_antigravity_models_quota(upstream, access_token).await {
         Ok(quota) => Ok(quota),
-        Err(_) => fetch_antigravity_user_quota(http, access_token).await,
+        Err(_) => fetch_antigravity_user_quota(upstream, access_token).await,
     }
 }
 
 /// Fetch quota from the `fetchAvailableModels` endpoint.
 async fn fetch_antigravity_models_quota(
-    http: &reqwest::Client,
+    upstream: &Arc<UpstreamClient>,
     access_token: &str,
 ) -> Result<AccountQuota> {
     let endpoints = [
@@ -376,21 +384,34 @@ async fn fetch_antigravity_models_quota(
     let ua = "Antigravity/4.2.0 (X11; Linux x86_64) Chrome/132.0.6834.160 Electron/39.2.3";
 
     for endpoint in &endpoints {
-        let response = http
-            .post(*endpoint)
-            .header("Authorization", format!("Bearer {access_token}"))
-            .header("Content-Type", "application/json")
-            .header("User-Agent", ua)
-            .header("X-Goog-Api-Client", "gl-node/22.21.1")
-            .body("{}".to_string())
-            .timeout(Duration::from_secs(15))
-            .send()
-            .await;
+        let mut req = UpstreamRequest::post_json(*endpoint, bytes::Bytes::from_static(b"{}"));
+        if let Ok(v) = http::HeaderValue::from_str(&format!("Bearer {access_token}")) {
+            req.headers.insert(http::header::AUTHORIZATION, v);
+        }
+        req.headers.insert(
+            http::header::CONTENT_TYPE,
+            http::HeaderValue::from_static("application/json"),
+        );
+        req.headers.insert(
+            http::header::USER_AGENT,
+            http::HeaderValue::from_static(ua),
+        );
+        req.headers.insert(
+            "x-goog-api-client",
+            http::HeaderValue::from_static("gl-node/22.21.1"),
+        );
+
+        let cancel = CancellationToken::new();
+        let response = upstream.call(req, TimeoutProfile::Quota, cancel).await;
 
         if let Ok(resp) = response {
-            if resp.status().is_success() {
-                if let Ok(body) = resp.json::<serde_json::Value>().await {
-                    return parse_antigravity_models_response(&body);
+            if resp.status.is_success() {
+                let body = match resp.collect().await {
+                    Ok(b) => b,
+                    Err(_) => continue,
+                };
+                if let Ok(json) = serde_json::from_slice::<serde_json::Value>(&body) {
+                    return parse_antigravity_models_response(&json);
                 }
             }
         }
@@ -452,32 +473,44 @@ fn parse_antigravity_models_response(body: &serde_json::Value) -> Result<Account
 
 /// Fetch quota from the `retrieveUserQuota` endpoint.
 async fn fetch_antigravity_user_quota(
-    http: &reqwest::Client,
+    upstream: &Arc<UpstreamClient>,
     access_token: &str,
 ) -> Result<AccountQuota> {
-    let resp = http
-        .post("https://cloudcode-pa.googleapis.com/v1internal:retrieveUserQuota")
-        .header("Authorization", format!("Bearer {access_token}"))
-        .header("Content-Type", "application/json")
-        .body("{}".to_string())
-        .timeout(Duration::from_secs(15))
-        .send()
-        .await
-        .map_err(|e| CoreError::UpstreamConnection(format!("retrieveUserQuota: {e}")))?;
+    let url = "https://cloudcode-pa.googleapis.com/v1internal:retrieveUserQuota";
+    let mut req = UpstreamRequest::post_json(url, bytes::Bytes::from_static(b"{}"));
+    if let Ok(v) = http::HeaderValue::from_str(&format!("Bearer {access_token}")) {
+        req.headers.insert(http::header::AUTHORIZATION, v);
+    }
+    req.headers.insert(
+        http::header::CONTENT_TYPE,
+        http::HeaderValue::from_static("application/json"),
+    );
 
-    if !resp.status().is_success() {
+    let cancel = CancellationToken::new();
+    let response = upstream
+        .call(req, TimeoutProfile::Quota, cancel)
+        .await
+        .map_err(|e| match e {
+            UpstreamError::Cancel => CoreError::ClientDisconnected,
+            other => CoreError::UpstreamConnection(format!("retrieveUserQuota: {other}")),
+        })?;
+
+    if !response.status.is_success() {
         return Err(CoreError::UpstreamConnection(format!(
             "retrieveUserQuota: status {}",
-            resp.status().as_u16()
+            response.status.as_u16()
         )));
     }
 
-    let body: serde_json::Value = resp
-        .json()
+    let body = response
+        .collect()
         .await
+        .map_err(|e| CoreError::UpstreamConnection(format!("retrieveUserQuota body: {e}")))?;
+
+    let json: serde_json::Value = serde_json::from_slice(&body)
         .map_err(|e| CoreError::Parse(format!("retrieveUserQuota parse: {e}")))?;
 
-    parse_antigravity_user_quota_response(&body)
+    parse_antigravity_user_quota_response(&json)
 }
 
 /// Parse `retrieveUserQuota` response into `AccountQuota`.
@@ -575,18 +608,18 @@ pub fn supports_quota(provider_id: &str) -> bool {
 /// string describing the last failure, mirroring the contract of
 /// [`fetch_minimax_quota`].
 pub async fn fetch_openrouter_quota(
-    http: &reqwest::Client,
+    upstream: &Arc<UpstreamClient>,
     api_key: &str,
 ) -> Result<AccountQuota> {
     let url = "https://openrouter.ai/api/v1/key";
 
-    let resp = match http
-        .get(url)
-        .header("Authorization", format!("Bearer {}", api_key))
-        .timeout(Duration::from_secs(15))
-        .send()
-        .await
-    {
+    let mut req = UpstreamRequest::get(url);
+    if let Ok(v) = http::HeaderValue::from_str(&format!("Bearer {api_key}")) {
+        req.headers.insert(http::header::AUTHORIZATION, v);
+    }
+
+    let cancel = CancellationToken::new();
+    let response = match upstream.call(req, TimeoutProfile::Quota, cancel).await {
         Ok(r) => r,
         Err(e) => {
             return Ok(AccountQuota {
@@ -598,22 +631,21 @@ pub async fn fetch_openrouter_quota(
                 weekly_reset_at: None,
                 plan_name: None,
                 last_fetched_at: now_unix_secs_str(),
-                fetch_error: Some(format!("network: {}", e)),
+                fetch_error: Some(format!("network: {e}")),
             });
         }
     };
 
-    if !resp.status().is_success() {
-        // Capture the status before consuming the body — `Response::text`
-        // takes `self` by value, so we can't borrow the status after.
-        let status = resp.status().as_u16();
+    if !response.status.is_success() {
+        // Capture the status before consuming the body — `collect`
+        // moves the response into the buffer, so we can't borrow
+        // the status after.
+        let status = response.status.as_u16();
         // Truncate the body in the error message — the upstream
         // sometimes returns a long HTML error page and we don't want
         // it all sitting in the SQLite quota column.
-        let snippet = resp
-            .text()
-            .await
-            .unwrap_or_default()
+        let body = response.collect().await.unwrap_or_default();
+        let snippet = String::from_utf8_lossy(&body)
             .chars()
             .take(200)
             .collect::<String>();
@@ -630,7 +662,7 @@ pub async fn fetch_openrouter_quota(
         });
     }
 
-    let body: serde_json::Value = match resp.json().await {
+    let body = match response.collect().await {
         Ok(b) => b,
         Err(e) => {
             return Ok(AccountQuota {
@@ -642,12 +674,29 @@ pub async fn fetch_openrouter_quota(
                 weekly_reset_at: None,
                 plan_name: None,
                 last_fetched_at: now_unix_secs_str(),
-                fetch_error: Some(format!("parse: {}", e)),
+                fetch_error: Some(format!("collect: {e}")),
             });
         }
     };
 
-    Ok(parse_openrouter_quota(&body, now_unix_secs_str()))
+    let json: serde_json::Value = match serde_json::from_slice(&body) {
+        Ok(b) => b,
+        Err(e) => {
+            return Ok(AccountQuota {
+                session_used: None,
+                session_limit: None,
+                session_reset_at: None,
+                weekly_used: None,
+                weekly_limit: None,
+                weekly_reset_at: None,
+                plan_name: None,
+                last_fetched_at: now_unix_secs_str(),
+                fetch_error: Some(format!("parse: {e}")),
+            });
+        }
+    };
+
+    Ok(parse_openrouter_quota(&json, now_unix_secs_str()))
 }
 
 /// Parse the OpenRouter `/api/v1/key` response into our

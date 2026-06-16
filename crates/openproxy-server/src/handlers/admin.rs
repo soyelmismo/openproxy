@@ -951,22 +951,23 @@ async fn run_refresh(
         Ok(c) => c,
         Err(e) => return ApiResult::err(ApiError(e)),
     };
-    let touched = match admin::refresh_models(
+    let upsert = match admin::refresh_models(
         conn_for_refresh,
         &provider_id,
         &api_key,
         adapter.as_ref(),
-        s.http_client(),
+        s.upstream_client(),
         ttl_seconds,
     )
     .await
     {
-        Ok(n) => n,
+        Ok(r) => r,
         Err(e) => return ApiResult::err(ApiError(e)),
     };
 
     ApiResult::ok(Json(serde_json::json!({
-        "touched": touched,
+        "touched": upsert.touched,
+        "new_model_ids": upsert.new_model_ids,
         "provider_id": provider_id.as_str(),
     })))
 }
@@ -1051,6 +1052,19 @@ async fn send_ws_error(socket: &mut WebSocket, message: impl Into<String>) -> Re
 }
 
 fn authenticate_admin_ws(state: &AppState, headers: &HeaderMap, query_token: Option<&str>) -> Result<(), ApiError> {
+    // Dev convenience: if the operator sets OPENPROXY_DASHBOARD_AUTH_BYPASS to a
+    // non-empty value in the server's environment, every admin request is
+    // accepted without an Authorization header or query token. Useful when the
+    // dashboard is the only admin client and rotating the manage-scope API key
+    // is more friction than it's worth. Public chat endpoints are unaffected.
+    // Never set this in production.
+    if let Ok(bypass) = std::env::var("OPENPROXY_DASHBOARD_AUTH_BYPASS") {
+        if !bypass.is_empty() {
+            tracing::debug!("admin auth bypassed via OPENPROXY_DASHBOARD_AUTH_BYPASS");
+            return Ok(());
+        }
+    }
+
     // Extract token from Authorization header or from query parameter
     let header_token = headers
         .get("authorization")
@@ -1951,8 +1965,9 @@ async fn run_test_for_model(
                     )
                     .unwrap_or_default()
                 };
+                let http_client = s.upstream_client();
                 openproxy_core::executor_antigravity::execute_antigravity(
-                    s.http_client(),
+                    http_client,
                     &access_token,
                     &project_id,
                     &openai_req,
@@ -1974,8 +1989,9 @@ async fn run_test_for_model(
                         meta.as_ref().and_then(|m| m.profile_arn.clone()),
                     )
                 };
+                let http_client = s.upstream_client();
                 openproxy_core::executor_kiro::execute_kiro(
-                    s.http_client(),
+                    http_client,
                     &access_token,
                     &region,
                     profile_arn.as_deref(),
@@ -2310,9 +2326,10 @@ pub async fn refresh_account_quota(
         // 4: fire the upstream quota call. Returns an `AccountQuota`
         //    even on failure (with `fetch_error` set), so we always
         //    have a row to persist.
+        let upstream_client = s_clone.upstream_client();
         let q = admin::fetch_account_quota(
             &provider_id_str,
-            s_clone.http_client(),
+            upstream_client,
             &api_key,
             access_token.as_deref(),
         )
@@ -2349,8 +2366,9 @@ pub async fn refresh_account_quota(
                         }
                     };
                 if let Some(provider_impl) = provider_impl {
+                    let upstream_client = s_clone.upstream_client();
                     match provider_impl
-                        .refresh_token(&refresh_token, s_clone.http_client())
+                        .refresh_token(&refresh_token, upstream_client)
                         .await
                     {
                         Ok(new_tokens) => {
@@ -2378,7 +2396,7 @@ pub async fn refresh_account_quota(
                             // Retry the quota call with the new access token.
                             admin::fetch_account_quota(
                                 &provider_id_str,
-                                s_clone.http_client(),
+                                upstream_client,
                                 &api_key,
                                 Some(&new_tokens.access_token),
                             )
@@ -2557,7 +2575,8 @@ async fn refresh_oauth_if_needed(
         "oauth refresh-on-demand: refreshing expired/expiring token"
     );
 
-    match provider.refresh_token(&refresh_token, s.http_client()).await {
+    let upstream_client = s.upstream_client();
+    match provider.refresh_token(&refresh_token, upstream_client).await {
         Ok(token) => {
             let expires_at = token.expires_in.map(|secs| {
                 (chrono::Utc::now() + chrono::Duration::seconds(secs as i64))
@@ -2756,17 +2775,17 @@ async fn run_provider_refresh(
 
     // 6. Run the refresh. This is the only `await` on the upstream
     //    HTTP call; everything else is sync DB work.
-    let touched = match admin::refresh_models(
+    let upsert = match admin::refresh_models(
         conn_for_refresh,
         &provider,
         &api_key,
         adapter.as_ref(),
-        s.http_client(),
+        s.upstream_client(),
         ttl_seconds,
     )
     .await
     {
-        Ok(n) => n,
+        Ok(r) => r,
         Err(e) => return ApiResult::err(ApiError(e)),
     };
 
@@ -2793,7 +2812,8 @@ async fn run_provider_refresh(
 
     ApiResult::ok(Json(serde_json::json!({
         "provider": provider_id_str,
-        "models_refreshed": touched,
+        "models_refreshed": upsert.touched,
+        "new_model_ids": upsert.new_model_ids,
         "models_activated": activated,
     })))
 }
@@ -3123,8 +3143,9 @@ pub async fn oauth_exchange(
             }
         };
 
+        let upstream_client = s.upstream_client();
         let token = provider_impl
-            .exchange_code(code, code_verifier, s.http_client(), redirect_uri)
+            .exchange_code(code, code_verifier, upstream_client, redirect_uri)
             .await?;
 
         // If no account_id provided, create a new account for this OAuth provider.
@@ -3215,7 +3236,8 @@ pub async fn oauth_device_code(
             }
         };
 
-        let dar = provider_impl.request_device_code(s.http_client()).await?;
+        let upstream_client = s.upstream_client();
+        let dar = provider_impl.request_device_code(upstream_client).await?;
 
         Ok(Json(serde_json::json!({
             "device_code": dar.device_code,
@@ -3262,8 +3284,9 @@ pub async fn oauth_device_poll(
             }
         };
 
+        let upstream_client = s.upstream_client();
         match provider_impl
-            .poll_device_token(device_code, s.http_client())
+            .poll_device_token(device_code, upstream_client)
             .await?
         {
             Some(token) => {

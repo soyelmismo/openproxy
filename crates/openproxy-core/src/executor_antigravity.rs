@@ -33,8 +33,10 @@ use crate::ids::AccountId;
 use crate::translation::{
     OpenAIChoice, OpenAIMessage, OpenAIRequest, OpenAIResponse, OpenAIUsage, openai_to_gemini,
 };
+use crate::upstream::{CancellationToken, TimeoutProfile, UpstreamClient, UpstreamError, UpstreamRequest};
 use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
+use std::sync::Arc;
 use uuid::Uuid;
 
 // ---------------------------------------------------------------------------
@@ -297,48 +299,91 @@ fn parse_antigravity_line(
 /// 3. POSTs to `streamGenerateContent?alt=sse`
 /// 4. Parses SSE stream (markdown or Gemini format)
 /// 5. Returns assembled `OpenAIResponse`
+///
+/// **Gate 3 migration:** the previous `&reqwest::Client` parameter
+/// was replaced with `&Arc<UpstreamClient>`. Call sites in the
+/// chat pipeline (`pipeline.rs:962`) were updated to pass
+/// `&self.config.upstream_client`. The server-side admin test
+/// endpoint at `crates/openproxy-server/src/handlers/admin.rs:1972`
+/// is an out-of-scope call site that still passes a `reqwest::Client`
+/// and is tracked as a follow-up (see Gate 3 report).
 pub async fn execute_antigravity(
-    http_client: &reqwest::Client,
+    upstream_client: &Arc<UpstreamClient>,
     access_token: &str,
     project_id: &str,
     openai: &OpenAIRequest,
 ) -> Result<OpenAIResponse, CoreError> {
     // 1. Build Cloud Code envelope
     let envelope = build_antigravity_request(openai, project_id)?;
-    let envelope_json = serde_json::to_string(&envelope)
+    let body_bytes = serde_json::to_vec(&envelope)
         .map_err(|e| CoreError::Internal(format!("failed to serialize envelope: {e}")))?;
 
-    // 3. POST to upstream
+    // 2. Build the upstream request. POST to the streamGenerateContent
+    //    endpoint with JSON body, bearer auth, and SSE accept.
     let url =
         "https://daily-cloudcode-pa.googleapis.com/v1internal:streamGenerateContent?alt=sse";
+    let mut upstream_request =
+        UpstreamRequest::post_json(url.to_string(), bytes::Bytes::from(body_bytes));
+    if let Ok(value) = http::HeaderValue::from_str(&format!("Bearer {access_token}")) {
+        upstream_request
+            .headers
+            .insert(http::header::AUTHORIZATION, value);
+    }
+    upstream_request.headers.insert(
+        http::header::ACCEPT,
+        http::HeaderValue::from_static("text/event-stream"),
+    );
 
-    let response = http_client
-        .post(url)
-        .header("Content-Type", "application/json")
-        .header("Authorization", format!("Bearer {access_token}"))
-        .header("Accept", "text/event-stream")
-        .body(envelope_json)
-        .send()
+    // 3. Fire the request. Same rationale as the kiro executor: use
+    //    `TimeoutProfile::Chat` (no per-call `Timeouts` is plumbed
+    //    through to the executors today; `state.rs` only sets a
+    //    `connect_ms` for the legacy reqwest client).
+    let cancel = CancellationToken::new();
+    let response = match upstream_client
+        .call(upstream_request, TimeoutProfile::Chat, cancel)
         .await
-        .map_err(|e| CoreError::UpstreamConnection(format!("antigravity request failed: {e}")))?;
+    {
+        Ok(r) => r,
+        Err(e) => {
+            return Err(match e {
+                UpstreamError::Cancel => CoreError::ClientDisconnected,
+                other => {
+                    CoreError::UpstreamConnection(format!("antigravity request failed: {other}"))
+                }
+            });
+        }
+    };
 
-    let status = response.status().as_u16();
+    let status = response.status.as_u16();
+    // 4. Collect the full body. The pre-migration code used
+    //    `response.text().await` to slurp the SSE stream into a
+    //    `String`; the upstream client exposes `collect()` which
+    //    returns `Bytes`. The body is bounded to 32 MiB at the
+    //    upstream layer; an Antigravity SSE stream is well under
+    //    that in practice.
+    let body_bytes = match response.collect().await {
+        Ok(b) => b,
+        Err(e) => {
+            return Err(match e {
+                UpstreamError::Cancel => CoreError::ClientDisconnected,
+                other => CoreError::UpstreamConnection(format!(
+                    "failed to read antigravity response: {other}"
+                )),
+            });
+        }
+    };
+    let body_text = String::from_utf8_lossy(&body_bytes);
+
     if !(200..300).contains(&status) {
-        let body = response.text().await.unwrap_or_default();
         return Err(CoreError::UpstreamError {
             status,
             provider: "antigravity".to_string(),
             model: openai.model.clone(),
-            body,
+            body: body_text.to_string(),
         });
     }
 
-    // 4. Parse SSE stream
-    let body_text = response
-        .text()
-        .await
-        .map_err(|e| CoreError::UpstreamConnection(format!("failed to read antigravity response: {e}")))?;
-
+    // 5. Parse SSE stream
     let mut accumulated_text = String::new();
     let mut usage: Option<OpenAIUsage> = None;
 
@@ -349,7 +394,7 @@ pub async fn execute_antigravity(
         }
     }
 
-    // 5. Assemble OpenAIResponse
+    // 6. Assemble OpenAIResponse
     Ok(OpenAIResponse {
         id: format!("chatcmpl-{}", Uuid::new_v4()),
         object: "chat.completion".to_string(),

@@ -38,9 +38,11 @@
 use crate::error::{CoreError, Result};
 use crate::ids::AccountId;
 use crate::translation::{OpenAIMessage, OpenAIRequest, OpenAIResponse, OpenAIUsage};
+use crate::upstream::{CancellationToken, TimeoutProfile, UpstreamClient, UpstreamError, UpstreamRequest};
 use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::sync::Arc;
 
 /// Default Kiro runtime region. The OAuth provider is hardcoded
 /// to `us-east-1`; the chat executor uses the same default until
@@ -370,12 +372,20 @@ fn extract_kiro_content(v: &Value) -> Option<String> {
 ///
 /// `region` is the AWS region (from the account's OAuth metadata,
 /// or [`KIRO_DEFAULT_REGION`]). `profile_arn` is the optional
-/// CodeWhisperer profile ARN. `http_client` is the shared
-/// `reqwest::Client`. `access_token` is the (already-decrypted)
-/// bearer token. The returned [`OpenAIResponse`] is the parsed
-/// (best-effort) body.
+/// CodeWhisperer profile ARN. `upstream_client` is the shared
+/// hyper-based `UpstreamClient`. `access_token` is the
+/// (already-decrypted) bearer token. The returned [`OpenAIResponse`]
+/// is the parsed (best-effort) body.
+///
+/// **Gate 3 migration:** the previous `&reqwest::Client` parameter
+/// was replaced with `&Arc<UpstreamClient>`. Call sites in the
+/// chat pipeline (`pipeline.rs:951`) were updated to pass
+/// `&self.config.upstream_client`. The server-side admin test
+/// endpoint at `crates/openproxy-server/src/handlers/admin.rs:1996`
+/// is an out-of-scope call site that still passes a `reqwest::Client`
+/// and is tracked as a follow-up (see Gate 3 report).
 pub async fn execute_kiro(
-    http_client: &reqwest::Client,
+    upstream_client: &Arc<UpstreamClient>,
     access_token: &str,
     region: &str,
     profile_arn: Option<&str>,
@@ -384,25 +394,66 @@ pub async fn execute_kiro(
     // 1. Build the request body.
     let req = build_kiro_request(openai, profile_arn);
 
-    // 2. POST to Kiro.
+    // 2. Build the upstream request. The body is JSON; the URL
+    //    is the regional Kiro endpoint; the auth header is the
+    //    bearer token.
     let url = kiro_runtime_url(region);
-    let body_json = serde_json::to_string(&req)
+    let body_bytes = serde_json::to_vec(&req)
         .map_err(|e| CoreError::Parse(format!("kiro request serialize: {e}")))?;
-    let resp = http_client
-        .post(&url)
-        .bearer_auth(access_token)
-        .header("Content-Type", "application/json")
-        .header("x-amz-user-agent", KIRO_USER_AGENT)
-        .body(body_json)
-        .send()
-        .await
-        .map_err(|e| CoreError::UpstreamConnection(format!("kiro upstream: {e}")))?;
+    let mut upstream_request = UpstreamRequest::post_json(url, bytes::Bytes::from(body_bytes));
+    // `post_json` already sets `Content-Type: application/json`;
+    // `Authorization` and `x-amz-user-agent` are added here as
+    // they are caller-specific (not generic to all POSTs).
+    if let Ok(value) = http::HeaderValue::from_str(&format!("Bearer {access_token}")) {
+        upstream_request.headers.insert(
+            http::header::AUTHORIZATION,
+            value,
+        );
+    }
+    upstream_request.headers.insert(
+        http::header::HeaderName::from_static("x-amz-user-agent"),
+        http::HeaderValue::from_static(KIRO_USER_AGENT),
+    );
 
-    let status = resp.status();
-    let body = resp
-        .bytes()
+    // 3. Fire the request. The Kiro/Antigravity executors do not
+    //    currently receive a per-call `Timeouts` value (only the
+    //    chat pipeline does). For backward-compat with the
+    //    pre-migration behavior (no enforced request-level
+    //    timeouts beyond the client-wide `connect_ms` from
+    //    `state.rs`), we use the `Chat` profile: a tight
+    //    `headers_ms` (20s) and a generous `body_chunk_ms` (90s)
+    //    match what an interactive chat would expect. Future
+    //    gates can plumb a `Timeouts` value through and switch
+    //    to `TimeoutProfile::Custom(as_resolved())`.
+    let cancel = CancellationToken::new();
+    let response = match upstream_client
+        .call(upstream_request, TimeoutProfile::Chat, cancel)
         .await
-        .map_err(|e| CoreError::UpstreamConnection(format!("kiro body read: {e}")))?;
+    {
+        Ok(r) => r,
+        Err(e) => {
+            return Err(match e {
+                UpstreamError::Cancel => CoreError::ClientDisconnected,
+                // Map all transport / decode / timeout errors to
+                // `UpstreamConnection` with a `kiro upstream:` prefix,
+                // matching the pre-migration shape.
+                other => CoreError::UpstreamConnection(format!("kiro upstream: {other}")),
+            });
+        }
+    };
+
+    let status = response.status;
+    // Collect the body. On read failure we map any `UpstreamError`
+    // to `UpstreamConnection` with a `kiro body read:` prefix.
+    let body = match response.collect().await {
+        Ok(b) => b,
+        Err(e) => {
+            return Err(match e {
+                UpstreamError::Cancel => CoreError::ClientDisconnected,
+                other => CoreError::UpstreamConnection(format!("kiro body read: {other}")),
+            });
+        }
+    };
 
     if !status.is_success() {
         let body_str = String::from_utf8_lossy(&body).to_string();
