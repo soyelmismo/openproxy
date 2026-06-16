@@ -6,6 +6,18 @@ rust-version.workspace = true
 license.workspace = true
 authors.workspace = true
 
+[features]
+# Default-on: build the new `upstream/` hyper-based client alongside the
+# existing reqwest-based call sites. Setting `--no-default-features` (or
+# `default-features = false`) for openproxy-core disables the module.
+# Call sites that still use reqwest are NOT touched in this gate; the
+# feature flag is only a compile-time switch for the new module.
+default = ["upstream-hyper"]
+upstream-hyper = ["dep:hyper", "dep:hyper-util", "dep:http", "dep:http-body", "dep:http-body-util", "dep:tower", "dep:tower-service", "dep:futures-util"]
+# Stub gate for callers that want to disable just this client (e.g.
+# downstream consumers building with `default-features = false`).
+upstream-stub = []
+
 [dependencies]
 tokio = { workspace = true }
 axum = { workspace = true }
@@ -35,3 +47,18 @@ dashmap = { workspace = true }
 regex = { workspace = true }
 sha2 = { workspace = true }
 urlencoding = { workspace = true }
+
+# --- hyper-based upstream client (Gate 0) ---
+# Pinned to versions that are already present in the workspace lockfile
+# (transitively via reqwest). The `upstream-hyper` feature gates these
+# so disabling the module also disables the direct dep; that keeps
+# `cargo build -p openproxy-core --no-default-features` working.
+hyper = { version = "1.10", default-features = false, features = ["client", "http1"], optional = true }
+hyper-util = { version = "0.1", default-features = false, features = ["client-legacy", "tokio"], optional = true }
+http = { version = "1", optional = true }
+http-body = { version = "1", optional = true }
+http-body-util = { version = "0.1", default-features = false, features = ["channel"], optional = true }
+bytes = "1"
+tower = { version = "0.5", default-features = false, features = ["util"], optional = true }
+tower-service = { version = "0.3", optional = true }
+futures-util = { version = "0.3", default-features = false, features = ["std"], optional = true }
