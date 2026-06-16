@@ -33,6 +33,7 @@ use openproxy_core::{
     pipeline::{Pipeline, PipelineConfig, PipelineRequest},
     routing::{self, build_synthetic_combo, RoutingPlan, SYNTHETIC_COMBO_ID},
     translation::OpenAIRequest,
+    upstream::UpstreamClient,
     CoreError,
 };
 use serde_json::json;
@@ -211,6 +212,15 @@ async fn run_pipeline(
         // Default 60s when neither is set; the loader fills in
         // `CooldownConfig::default()` for the TOML case.
         cooldown_secs: state.config().cooldown.cooldown_secs,
+        // Gate 1: non-streaming chat uses the hyper-based upstream
+        // client. A follow-up gate will move this onto `AppState` so
+        // the per-host connection pool is shared across all in-flight
+        // requests — for now, a per-request `UpstreamClient` is
+        // functionally equivalent (the legacy reqwest client is also
+        // rebuilt on every `set_timeouts` call) and unblocks the
+        // migration. See `docs/upstream-migration-report.md` for
+        // the plan.
+        upstream_client: UpstreamClient::new(),
     };
     let pipeline = Pipeline::with_recording_flag(
         state.db_pool().writer_arc(),

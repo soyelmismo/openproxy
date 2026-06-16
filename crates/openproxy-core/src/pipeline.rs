@@ -21,6 +21,9 @@ use crate::retry::RetryPolicy;
 use crate::secrets::MasterKey;
 use crate::timeouts::{self, ModelTimeoutOverrides, Timeouts};
 use crate::translation::{OpenAIRequest, OpenAIResponse};
+use crate::upstream::{
+    CancellationToken, UpstreamClient, UpstreamError, UpstreamPhase, UpstreamRequest,
+};
 use rusqlite::Connection;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -30,17 +33,24 @@ use tokio::sync::mpsc;
 use tokio::sync::watch;
 use tracing;
 
-/// Discriminated error type for the `tokio::select!` that races the
-/// upstream `reqwest::send()` against the `client_disconnected`
-/// watch. The two failure modes are distinct at the call site:
-/// `Reqwest(_)` is a real transport error (DNS / connect refused /
-/// TLS / etc.) and should be surfaced as `UpstreamConnection`; the
-/// `ClientCancelled` arm means the watch fired and the dispatch
-/// path should record a `ClientDisconnected` usage row instead.
-enum SendAbortReason {
-    Reqwest(reqwest::Error),
-    ClientCancelled,
-}
+// ---------------------------------------------------------------------
+// Streaming dispatch
+// ---------------------------------------------------------------------
+//
+// `dispatch_upstream_streaming` is the streaming counterpart of
+// `dispatch_upstream_request`. Both call into the hyper-based
+// `UpstreamClient`; the streaming helper owns the `UpstreamRequest`
+// (constructed by the caller) and consumes the response body as an
+// `UpstreamBodyStream` (one `next_chunk()` per iteration) instead of
+// `response.collect()` (which the non-streaming path uses).
+//
+// Cancellation is mediated by a `CancellationToken` built from the
+// per-request `client_disconnected` watch. The token is plumbed
+// through the upstream client at every phase boundary and inside the
+// body stream between frames. The body loop also races the watch
+// directly so a mid-stream cancel short-circuits the SSE pipeline
+// (the post-loop `is_client_disconnected` checkpoint then emits the
+// structured `ClientDisconnected` usage row).
 
 /// Per-call knobs the pipeline reads from the surrounding `AppConfig`.
 #[derive(Clone)]
@@ -51,10 +61,24 @@ pub struct PipelineConfig {
     pub max_attempts: u8,
     pub master_key: Arc<MasterKey>,
     pub adapters: Arc<Vec<Arc<dyn ProviderAdapter>>>,
-    /// Shared HTTP client used for upstream calls. `reqwest::Client` is
-    /// internally `Arc`-backed and cheaply cloneable; a single instance
-    /// is reused across the whole process so the underlying connection
-    /// pool is shared.
+    /// Shared HTTP client used for upstream calls, snapshotted
+    /// from `AppState` at pipeline-construction time. The
+    /// snapshot is a `reqwest::Client` clone (cheap, since
+    /// `reqwest::Client` is internally `Arc`-backed), and it
+    /// shares the connection pool with the live client. Because
+    /// the snapshot is taken at construction time, in-flight
+    /// pipelines keep the `connect_timeout` they were started
+    /// with — a runtime update to `timeouts.connect_ms` is
+    /// picked up by the **next** request, not by any pipeline
+    /// that is already running.
+    ///
+    /// `connect_timeout` itself is configured on the client in
+    /// `state.rs` (at startup from `timeouts.connect_ms` and
+    /// re-applied live by `set_timeouts` whenever that value
+    /// changes). The rest of the timeouts are enforced
+    /// per-request or measured in this file — see the comment
+    /// above the call to `self.config.http_client.post(...)` in
+    /// `dispatch_upstream_request` for the full mapping.
     pub http_client: reqwest::Client,
     /// How long a target stays parked in `target_cooldowns` after a
     /// retryable failure. Read from `[cooldown].cooldown_secs` /
@@ -63,6 +87,12 @@ pub struct PipelineConfig {
     /// window that resets on every retryable failure. See
     /// [`crate::cooldown`].
     pub cooldown_secs: u64,
+    /// Hyper-based upstream client used for the non-streaming chat
+    /// dispatch (Gate 1). The streaming path and the Kiro/Antigravity
+    /// executors still use `http_client` (the reqwest client); they
+    /// are migrated in follow-up gates. Sharing the `Arc` is cheap —
+    /// the underlying hyper client is `Clone` and pools per-host.
+    pub upstream_client: Arc<UpstreamClient>,
 }
 
 /// All the input needed to process a single chat completion.
@@ -339,18 +369,48 @@ impl Pipeline {
                 }
             }
 
-            // 5. Clamp race_size to (combo.race_size, eligible.len()).
-            //    The clamped window is what the *outer* race would
-            //    dispatch in parallel; the inner per-target retry
-            //    budget lives in the `attempt` counter and stays
-            //    bounded by `max_attempts` from config.
-            let race_size = (combo.race_size as usize)
-                .min(eligible.len())
-                .min(self.config.racing.max_race_size as usize);
+            // 5. Pick the dispatch window.
+            //
+            //    For `Strategy::Priority` the operator's intent is
+            //    walk-the-row: try every target in priority order
+            //    before giving up. `race_size` is a *parallel* race
+            //    concept (how many lanes to fire at once), so it
+            //    doesn't apply to a serial priority walk — applying
+            //    `take(combo.race_size)` here would collapse the
+            //    dispatch to a single target, defeating both the
+            //    priority walk and the cross-target retry budget in
+            //    the outer `for attempt in 1..=max_attempts` loop
+            //    (each turn re-runs the same single target).
+            //
+            //    For `Strategy::RoundRobin` and `Strategy::Shuffle`
+            //    the race window is meaningful: those strategies
+            //    intentionally cap the set of targets fired in
+            //    parallel. Keep the `take(combo.race_size)` behavior
+            //    for those, clamped by `eligible.len()` and the
+            //    global `max_race_size` config ceiling.
+            //
+            //    `race_size` is bound in the outer scope because the
+            //    inner per-target loop forwards it to
+            //    `execute_single` (as the per-target attempt budget
+            //    for the race-aware adapter contract). For
+            //    `Strategy::Priority` we substitute the full row
+            //    length so the same `u8` value the per-target call
+            //    expects ("how many lanes did I think I'd run?")
+            //    is the actual walk length.
+            let race_size: usize = match combo.strategy {
+                Strategy::Priority => eligible.len(),
+                Strategy::RoundRobin | Strategy::Shuffle => (combo.race_size as usize)
+                    .min(eligible.len())
+                    .min(self.config.racing.max_race_size as usize),
+            };
             // `to_run` is `mut` because the cooldown-fallback path
             // below may swap in the unfiltered list if the persistent
             // cooldown filter empties it (see the 5b comment).
-            let mut to_run: Vec<ComboTarget> = eligible.into_iter().take(race_size).collect();
+            let mut to_run: Vec<ComboTarget> = if matches!(combo.strategy, Strategy::Priority) {
+                eligible
+            } else {
+                eligible.into_iter().take(race_size).collect()
+            };
 
             // Snapshot of the post-circuit-breaker, pre-cooldown target
             // list. Kept around so that, if the cooldown filter below
@@ -571,14 +631,26 @@ impl Pipeline {
                 }
                 match &result.error {
                     None => return result,
-                    Some(e) if !RetryPolicy::is_retryable(e) => return result,
+                    // For `Strategy::Priority` combos, walk the ENTIRE row regardless
+                    // of error type — operator's intent is "try these in order, give
+                    // each one a chance". A 4xx from model A doesn't mean model B
+                    // will also 4xx (different model, different validation). Short-
+                    // circuiting on 4xx here was a regression of the original
+                    // walk-the-row contract. For non-Priority strategies (RoundRobin,
+                    // Shuffle), preserve the short-circuit: those operators want
+                    // fast-fail on non-retryable errors because they're racing all
+                    // the targets anyway.
+                    Some(e) if !RetryPolicy::is_retryable(e) && !matches!(combo.strategy, Strategy::Priority) => {
+                        return result;
+                    }
                     Some(e) => {
                         tracing::debug!(
                             combo_id = combo.id.0,
                             target_id = target.id.0,
                             provider = %target.provider_id,
+                            strategy = ?combo.strategy,
                             error = %e,
-                            "target failed retryably; trying next target"
+                            "target failed; trying next target"
                         );
                         last_error = Some(e.clone_for_result());
                         last_result = Some(result);
@@ -918,8 +990,14 @@ impl Pipeline {
                         let profile_arn = kiro_meta
                             .as_ref()
                             .and_then(|m| m.profile_arn.as_deref());
+                        // Gate 3: the kiro executor now takes
+                        // `&Arc<UpstreamClient>` (the hyper-based
+                        // client) instead of `&reqwest::Client`. The
+                        // client is shared with the chat dispatch via
+                        // `PipelineConfig::upstream_client`. See
+                        // `executor_kiro.rs` for the migration notes.
                         crate::executor_kiro::execute_kiro(
-                            &self.config.http_client,
+                            &self.config.upstream_client,
                             &access_token,
                             region,
                             profile_arn,
@@ -929,8 +1007,13 @@ impl Pipeline {
                     }
                     "antigravity" | "antigravity-cli" => {
                         let project_id = antigravity_project.as_deref().unwrap_or("");
+                        // Gate 3: the antigravity executor now takes
+                        // `&Arc<UpstreamClient>` instead of
+                        // `&reqwest::Client`. See
+                        // `executor_antigravity.rs` for the migration
+                        // notes.
                         crate::executor_antigravity::execute_antigravity(
-                            &self.config.http_client,
+                            &self.config.upstream_client,
                             &access_token,
                             project_id,
                             &req.openai_request,
@@ -1325,39 +1408,71 @@ impl Pipeline {
         race_size: u8,
         trace_id: TraceId,
     ) -> PipelineResult {
-        // Build the reqwest request with the resolved timeouts.
+        // Gate 2: both the non-streaming path AND the streaming path
+        // now go through the hyper-based `UpstreamClient`
+        // (`PipelineConfig::upstream_client`). The reqwest
+        // `request_builder` chain is gone from this dispatch.
         //
-        // - `total` is enforced per-request via `RequestBuilder::timeout`.
-        // - `connect` is configured on the `reqwest::Client` itself (see
-        //   `state.rs`: `reqwest::Client::builder().connect_timeout(...)`).
-        //   `RequestBuilder` does not expose a per-request connect timeout
-        //   in reqwest 0.12, so the caller is expected to size the shared
-        //   client accordingly. We still pass the resolved value through
-        //   `resolved_timeouts` for symmetry with future schema changes.
-        // - `ttft` is measured manually below (we record wall-clock
-        //   between `send()` returning and the response being ready).
-        // - `idle_chunk` is a streaming-only concern; the MVP buffers the
-        //   full body so it is implicitly enforced by `total`.
-        let mut request_builder = self
-            .config
-            .http_client
-            .post(url)
-            .timeout(resolved_timeouts.total);
+        // We serialize the request body to `Bytes` here so we don't
+        // have to hand the `serde_json::Value` to the streaming
+        // builder (the streaming path used to serialize via
+        // `RequestBuilder::json`; now it uses the same `Bytes`).
+        //
+        // Notes on the timeouts:
+        // - `total` is enforced inside the upstream client via the
+        //   `TimeoutProfile::Custom` resolved from `as_resolved()`.
+        // - `connect` (= dial + TLS budget) is split into three
+        //   phases on the upstream side (dns / dial / tls), all
+        //   bounded by the same wall-clock budget — see
+        //   `Timeouts::as_resolved` for the mapping.
+        // - `ttft` becomes `headers_ms` on the upstream side; a
+        //   headers timeout is reported as `UpstreamError::Timeout(Headers)`.
+        // - `idle_chunk` is enforced as a per-chunk gap inside the
+        //   upstream client's `UpstreamBodyStream::next_chunk`.
+        let body_bytes = match serde_json::to_vec(body_value_param) {
+            Ok(b) => bytes::Bytes::from(b),
+            Err(e) => {
+                let err = CoreError::Parse(format!("serialize upstream body: {e}"));
+                return self.record_and_fail(
+                    req, combo, target, attempt, race_size, &err, started,
+                    Some(model), None, None,
+                    err.http_status(),
+                );
+            }
+        };
+        let mut upstream_request = UpstreamRequest::post_json(url.to_string(), body_bytes);
+        // Caller-supplied headers (auth, content-type overrides from
+        // the adapter, etc.) — `post_json` already sets
+        // `Content-Type: application/json`, so `insert` overwrites if
+        // a caller header collides (matches the reqwest chain's
+        // behavior with `.header(k, v)` which appends; we choose
+        // overwrite for determinism — the adapter layer is
+        // responsible for not setting conflicting headers).
         for (k, v) in headers {
-            request_builder = request_builder.header(k.as_str(), v.as_str());
+            // HeaderMap's insert() requires HeaderName/HeaderValue;
+            // parse the strings. Skip headers that fail to parse —
+            // matches the previous `.header(k.as_str(), v.as_str())`
+            // which also silently dropped invalid values.
+            if let (Ok(name), Ok(value)) = (
+                http::HeaderName::from_bytes(k.as_bytes()),
+                http::HeaderValue::from_str(v),
+            ) {
+                upstream_request.headers.insert(name, value);
+            }
         }
-        request_builder = request_builder.json(body_value_param);
 
         // STREAMING PATH: when the client requested streaming and we
         // have a stream_sink, read SSE lines from upstream and forward
-        // them in real-time.
+        // them in real-time. Both paths now share the same
+        // `UpstreamRequest`; the streaming helper takes ownership of
+        // it and calls the hyper-based `UpstreamClient` itself.
         if req.openai_request.stream {
             if let Some(sink) = &req.stream_sink {
                 return self
                     .dispatch_upstream_streaming(
                         target, combo, req, model, target_format,
                         sink, resolved_timeouts, started, attempt,
-                        race_size, trace_id, request_builder,
+                        race_size, trace_id, upstream_request,
                     )
                     .await;
             }
@@ -1365,49 +1480,58 @@ impl Pipeline {
 
         // Send + measure.
         //
-        // The send future is raced against the `client_disconnected`
-        // watch: if the client cancels (e.g. closes the TCP
-        // connection, sends a RST, or aborts the request) the
-        // pipeline aborts the upstream attempt instead of letting
-        // the reqwest call run to its `total` ceiling. We drop
-        // `request_builder` (and therefore the underlying
-        // `reqwest::Request`) on the cancel arm, which causes
-        // reqwest to abort the socket teardown and free the
-        // connection-pool slot. `record_and_fail` writes a
-        // `ClientDisconnected` usage row (status=499, tokens=0)
-        // and — because `ClientDisconnected` is NOT in
-        // `RetryPolicy::is_retryable`'s positive list — the
-        // cooldown + circuit-breaker side effects are correctly
-        // skipped.
+        // Cancellation: the `client_disconnected` watch is the
+        // operator's signal that the client has gone away. The
+        // upstream client accepts a `CancellationToken`; we mirror
+        // the watch into a token via `from_watch`. The token is
+        // consulted by the client at every phase boundary (DNS, dial,
+        // TLS, write, headers, body chunk, total) and inside the
+        // `UpstreamBodyStream` between frames.
+        //
+        // Pre-flight check: if the watch has ALREADY flipped to
+        // `true` (e.g. the client disconnected while we were
+        // building the request) we short-circuit to a structured
+        // `ClientDisconnected` result. The pre-flight is the only
+        // place we map `UpstreamError::Cancel` → `ClientDisconnected`
+        // — see below for the rationale.
         let send_start = Instant::now();
-        let mut cancel_rx_send = req.client_disconnected.clone();
-        let send_outcome: std::result::Result<reqwest::Response, SendAbortReason> = tokio::select! {
-            biased;
-            // Cancellation arm: `changed()` resolves when the
-            // value transitions from `false` → `true`. We don't
-            // bother with `borrow_and_update` here because the
-            // select arm owns the wait; we only need to know
-            // "did the watch flip while we were waiting?".
-            _ = cancel_rx_send.changed() => {
-                Err(SendAbortReason::ClientCancelled)
-            }
-            res = request_builder.send() => {
-                res.map_err(SendAbortReason::Reqwest)
-            }
-        };
+        if *req.client_disconnected.borrow() {
+            let elapsed = send_start.elapsed().as_millis() as u64;
+            tracing::warn!(
+                combo_id = combo.id.0,
+                target_id = target.id.0,
+                provider = %target.provider_id,
+                elapsed_ms = elapsed,
+                "client disconnected before upstream send; aborting attempt"
+            );
+            return self.record_and_fail(
+                req, combo, target, attempt, race_size,
+                &CoreError::ClientDisconnected, started,
+                Some(model), Some(elapsed), None,
+                CoreError::ClientDisconnected.http_status(),
+            );
+        }
+        let cancel_token = CancellationToken::from_watch(req.client_disconnected.clone());
+        let result = self
+            .config
+            .upstream_client
+            .call(
+                upstream_request,
+                crate::upstream::TimeoutProfile::Custom(resolved_timeouts.as_resolved()),
+                cancel_token,
+            )
+            .await;
         let connect_and_send_ms = send_start.elapsed().as_millis() as u64;
 
-        // If the watch fired during the send, short-circuit to a
-        // structured `ClientDisconnected` result via
-        // `record_and_fail`. We match on the outcome rather than
-        // re-checking the watch so the two paths (reqwest's own
-        // connect-refused / DNS error vs. our cancellation) are
-        // explicit. `record_and_fail` is responsible for the
-        // usage row, the cooldown no-op, and the circuit-breaker
-        // no-op.
-        let response_result = match send_outcome {
+        // Map the `UpstreamError` taxonomy to the `CoreError` shape
+        // the downstream code expects. The split mirrors the
+        // pre-migration `SendAbortReason` + `e.is_timeout()` /
+        // `e.to_string()` mapping 1-to-1, except we now have
+        // per-phase `UpstreamPhase` attribution and the `Cancel`
+        // variant.
+        let response_result: std::result::Result<crate::upstream::UpstreamResponse, UpstreamError> = match result {
             Ok(r) => Ok(r),
-            Err(SendAbortReason::ClientCancelled) => {
+            Err(UpstreamError::Cancel) => {
                 tracing::warn!(
                     combo_id = combo.id.0,
                     target_id = target.id.0,
@@ -1422,7 +1546,54 @@ impl Pipeline {
                     CoreError::ClientDisconnected.http_status(),
                 );
             }
-            Err(SendAbortReason::Reqwest(e)) => Err(e),
+            Err(UpstreamError::Timeout(phase)) => {
+                // The upstream client reports a single stalled phase.
+                // We map DNS / Dial / Tls / Write / Headers to the
+                // pre-migration `phase: "connect"` label (the
+                // production connector cannot separate them; the
+                // `headers` boundary is the closest match for the
+                // dial+TLS+wait-for-headers wall-clock budget the
+                // old `tokio::time::timeout(connect, …)` covered).
+                // `Body` maps to the total-budget timeout the
+                // pre-migration code reported as `phase: "total"`.
+                let phase_label = match phase {
+                    crate::upstream::UpstreamPhase::Dns
+                    | crate::upstream::UpstreamPhase::Dial
+                    | crate::upstream::UpstreamPhase::Tls
+                    | crate::upstream::UpstreamPhase::Write
+                    | crate::upstream::UpstreamPhase::Headers => "connect",
+                    crate::upstream::UpstreamPhase::Body => "total",
+                };
+                tracing::warn!(
+                    combo_id = combo.id.0,
+                    target_id = target.id.0,
+                    provider = %target.provider_id,
+                    phase = %phase,
+                    elapsed_ms = connect_and_send_ms,
+                    "upstream phase timed out; aborting attempt"
+                );
+                let err = CoreError::UpstreamTimeout {
+                    phase: phase_label.to_string(),
+                    ms: connect_and_send_ms,
+                };
+                return self.record_and_fail(
+                    req, combo, target, attempt, race_size, &err, started,
+                    Some(model), Some(connect_and_send_ms), None,
+                    err.http_status(),
+                );
+            }
+            Err(UpstreamError::Connection(msg))
+            | Err(UpstreamError::Tls(msg))
+            | Err(UpstreamError::Http(msg))
+            | Err(UpstreamError::Decode(msg))
+            | Err(UpstreamError::Invalid(msg)) => {
+                let err = CoreError::UpstreamConnection(msg);
+                return self.record_and_fail(
+                    req, combo, target, attempt, race_size, &err, started,
+                    Some(model), Some(connect_and_send_ms), None,
+                    err.http_status(),
+                );
+            }
         };
 
         // Live-log stage helper closure. Only fires when recording
@@ -1448,39 +1619,22 @@ impl Pipeline {
             });
         };
 
+        // Unwrap the `Ok` arm. The match above has already handled
+        // every `Err` variant with an early `return` (or fell
+        // through to `Ok`). This is just the `let response = match
+        // { Ok(r) => r, Err(_) => unreachable!() }` of the original
+        // code, expressed with `into_result` semantics.
         let response = match response_result {
             Ok(r) => r,
-            Err(e) if e.is_timeout() => {
-                // reqwest surfaces both connect and total timeouts as
-                // is_timeout()==true; we can't disambiguate without a
-                // custom connector, so report it as a generic `total`
-                // phase timeout.
-                let err = CoreError::UpstreamTimeout {
-                    phase: "total".into(),
-                    ms: resolved_timeouts.total.as_millis() as u64,
-                };
-                return self.record_and_fail(
-                    req, combo, target, attempt, race_size, &err, started,
-                    Some(model), Some(connect_and_send_ms), None,
-                    err.http_status(),
-                );
-            }
-            Err(e) => {
-                let err = CoreError::UpstreamConnection(e.to_string());
-                return self.record_and_fail(
-                    req, combo, target, attempt, race_size, &err, started,
-                    Some(model), Some(connect_and_send_ms), None,
-                    err.http_status(),
-                );
-            }
+            Err(_) => unreachable!("error variants are handled above with early return"),
         };
 
-        let status_code = response.status().as_u16();
+        let status_code = response.status.as_u16();
         // Extract response headers BEFORE consuming the body
         let response_headers: Option<std::collections::BTreeMap<String, String>> = if self.is_recording() {
             Some(
                 response
-                    .headers()
+                    .headers
                     .iter()
                     .map(|(k, v)| (k.as_str().to_string(), v.to_str().unwrap_or_default().to_string()))
                     .collect(),
@@ -1498,16 +1652,41 @@ impl Pipeline {
         // module's tokens/sec guard already turns this into `None`.
         let ttft_ms = started.elapsed().as_millis() as u64;
 
-        // Read the body. We bound the parse to the actual response bytes;
-        // any IO failure becomes an UpstreamConnection error.
-        //
-        // We use fully-qualified `reqwest::Response::bytes` to avoid
-        // ambiguity with `tokio::io::AsyncReadExt::bytes`, which would
-        // also be in scope via the `tokio = { features = ["full"] }`
-        // dependency and would return `Result<Vec<u8>, io::Error>` —
-        // wrong type for the rest of the pipeline.
-        let body_bytes = match reqwest::Response::bytes(response).await {
+        // Read the body via the upstream client's `collect()`. The
+        // body is bounded to 32 MiB at the upstream layer; on cancel
+        // we get `UpstreamError::Cancel` (mapped above); on read
+        // failure we get `UpstreamError::Http`. We map any failure
+        // to `UpstreamConnection` with a `read upstream body: …`
+        // prefix, matching the pre-migration `record_and_fail` call
+        // shape.
+        let body_bytes = match response.collect().await {
             Ok(b) => b,
+            Err(UpstreamError::Cancel) => {
+                tracing::warn!(
+                    combo_id = combo.id.0,
+                    target_id = target.id.0,
+                    provider = %target.provider_id,
+                    elapsed_ms = started.elapsed().as_millis() as u64,
+                    "client cancelled during upstream body read; aborting attempt"
+                );
+                return self.record_and_fail(
+                    req, combo, target, attempt, race_size,
+                    &CoreError::ClientDisconnected, started,
+                    Some(model), Some(connect_and_send_ms), Some(ttft_ms),
+                    CoreError::ClientDisconnected.http_status(),
+                );
+            }
+            Err(UpstreamError::Timeout(phase)) => {
+                let err = CoreError::UpstreamTimeout {
+                    phase: phase.as_str().to_string(),
+                    ms: started.elapsed().as_millis() as u64,
+                };
+                return self.record_and_fail(
+                    req, combo, target, attempt, race_size, &err, started,
+                    Some(model), Some(connect_and_send_ms), Some(ttft_ms),
+                    status_code,
+                );
+            }
             Err(e) => {
                 let err = CoreError::UpstreamConnection(format!("read upstream body: {e}"));
                 return self.record_and_fail(
@@ -1647,20 +1826,69 @@ impl Pipeline {
         attempt: u8,
         race_size: u8,
         trace_id: TraceId,
-        request_builder: reqwest::RequestBuilder,
+        upstream_request: UpstreamRequest,
     ) -> PipelineResult {
+        // Cancellation: the `client_disconnected` watch is the
+        // operator's signal that the client has gone away. The
+        // hyper-based upstream client accepts a `CancellationToken`;
+        // we mirror the watch into a token via `from_watch`. The
+        // token is consulted by the client at every phase boundary
+        // (DNS, dial, TLS, write, headers, body chunk, total) AND
+        // inside the `UpstreamBodyStream::next_chunk` between
+        // frames — so the body loop below does NOT need its own
+        // per-chunk cancel watch for the upstream-side cancellation
+        // to fire. The `client_disconnected` watch IS still consulted
+        // in the body loop, but only to short-circuit the
+        // post-stream accounting (usage row, [DONE] sentinel) —
+        // see the post-loop `is_client_disconnected` check.
+        //
+        // Pre-flight check: if the watch has ALREADY flipped to
+        // `true` (e.g. the client disconnected while we were
+        // building the request) we short-circuit to a structured
+        // `ClientDisconnected` result without spinning up a hyper
+        // request that we'd cancel 1 ms later.
         let send_start = Instant::now();
-        let mut cancel_rx_send = req.client_disconnected.clone();
-        let send_outcome: std::result::Result<reqwest::Response, SendAbortReason> = tokio::select! {
-            biased;
-            _ = cancel_rx_send.changed() => Err(SendAbortReason::ClientCancelled),
-            res = request_builder.send() => res.map_err(SendAbortReason::Reqwest),
-        };
+        if *req.client_disconnected.borrow() {
+            let elapsed = send_start.elapsed().as_millis() as u64;
+            tracing::warn!(
+                combo_id = combo.id.0,
+                target_id = target.id.0,
+                provider = %target.provider_id,
+                elapsed_ms = elapsed,
+                "client disconnected before upstream streaming send; aborting attempt"
+            );
+            return self.record_and_fail(
+                req, combo, target, attempt, race_size,
+                &CoreError::ClientDisconnected, started,
+                Some(model), Some(elapsed), None,
+                CoreError::ClientDisconnected.http_status(),
+            );
+        }
+        let cancel_token = CancellationToken::from_watch(req.client_disconnected.clone());
+        let result = self
+            .config
+            .upstream_client
+            .call(
+                upstream_request,
+                crate::upstream::TimeoutProfile::Custom(resolved_timeouts.as_resolved()),
+                cancel_token,
+            )
+            .await;
         let connect_and_send_ms = send_start.elapsed().as_millis() as u64;
 
-        let response_result = match send_outcome {
+        // Map the `UpstreamError` taxonomy to the `CoreError` shape
+        // the downstream code expects. Mirrors the non-streaming
+        // path's mapping 1-to-1: a per-phase `UpstreamPhase` becomes
+        // the `phase` label, the `Cancel` variant becomes a
+        // structured `ClientDisconnected` result, and the rest
+        // collapse to `UpstreamConnection`. The streaming path
+        // doesn't have a "total" pre-migration mapping (it was
+        // `phase: "total"` from reqwest's whole-request timeout),
+        // so `Body` here maps to the same `"total"` label to keep
+        // the dashboards consistent.
+        let response_result: std::result::Result<crate::upstream::UpstreamResponse, UpstreamError> = match result {
             Ok(r) => Ok(r),
-            Err(SendAbortReason::ClientCancelled) => {
+            Err(UpstreamError::Cancel) => {
                 tracing::warn!(
                     combo_id = combo.id.0,
                     target_id = target.id.0,
@@ -1675,15 +1903,26 @@ impl Pipeline {
                     CoreError::ClientDisconnected.http_status(),
                 );
             }
-            Err(SendAbortReason::Reqwest(e)) => Err(e),
-        };
-
-        let response = match response_result {
-            Ok(r) => r,
-            Err(e) if e.is_timeout() => {
+            Err(UpstreamError::Timeout(phase)) => {
+                let phase_label = match phase {
+                    crate::upstream::UpstreamPhase::Dns
+                    | crate::upstream::UpstreamPhase::Dial
+                    | crate::upstream::UpstreamPhase::Tls
+                    | crate::upstream::UpstreamPhase::Write
+                    | crate::upstream::UpstreamPhase::Headers => "connect",
+                    crate::upstream::UpstreamPhase::Body => "total",
+                };
+                tracing::warn!(
+                    combo_id = combo.id.0,
+                    target_id = target.id.0,
+                    provider = %target.provider_id,
+                    phase = %phase,
+                    elapsed_ms = connect_and_send_ms,
+                    "upstream phase timed out; aborting streaming attempt"
+                );
                 let err = CoreError::UpstreamTimeout {
-                    phase: "total".into(),
-                    ms: resolved_timeouts.total.as_millis() as u64,
+                    phase: phase_label.to_string(),
+                    ms: connect_and_send_ms,
                 };
                 return self.record_and_fail(
                     req, combo, target, attempt, race_size, &err, started,
@@ -1691,8 +1930,12 @@ impl Pipeline {
                     err.http_status(),
                 );
             }
-            Err(e) => {
-                let err = CoreError::UpstreamConnection(e.to_string());
+            Err(UpstreamError::Connection(msg))
+            | Err(UpstreamError::Tls(msg))
+            | Err(UpstreamError::Http(msg))
+            | Err(UpstreamError::Decode(msg))
+            | Err(UpstreamError::Invalid(msg)) => {
+                let err = CoreError::UpstreamConnection(msg);
                 return self.record_and_fail(
                     req, combo, target, attempt, race_size, &err, started,
                     Some(model), Some(connect_and_send_ms), None,
@@ -1701,9 +1944,25 @@ impl Pipeline {
             }
         };
 
-        let status_code = response.status().as_u16();
+        // `response_result` is `Ok` here because every error arm
+        // above already returned. The `match` is needed to satisfy
+        // the borrow checker (we move out of the binding), but
+        // we make the `Err` arm unreachable so the compiler is
+        // happy.
+        let response = match response_result {
+            Ok(r) => r,
+            Err(e) => unreachable!(
+                "dispatch_upstream_streaming: response_result was expected to be Ok after error-mapping match; got {:?}",
+                e
+            ),
+        };
+
+        let status_code = response.status.as_u16();
         if !(200..300).contains(&status_code) {
-            let body_str = response.text().await.unwrap_or_default();
+            let body_str = match response.body.collect_all().await {
+                Ok(b) => String::from_utf8_lossy(&b).to_string(),
+                Err(_) => String::new(),
+            };
             let err = CoreError::UpstreamError {
                 status: status_code,
                 provider: target.provider_id.to_string(),
@@ -1734,38 +1993,113 @@ impl Pipeline {
 
         // Read the response as a byte stream, split into lines,
         // and process each SSE line.
-        use futures::StreamExt;
-        let mut stream = response.bytes_stream();
+        //
+        // `UpstreamBodyStream` does NOT implement `futures::Stream`
+        // (intentionally — see `upstream::response`); we iterate it
+        // via `next_chunk().await` instead. The hyper-based stream
+        // already consults the `CancellationToken` and the
+        // per-chunk deadline between frames, so the loop's only
+        // extra responsibility is to surface the `client_disconnected`
+        // watch transition into the cancellation path: when the
+        // watch flips, the body future is dropped (cancelling the
+        // hyper body) and the loop exits cleanly. We do NOT
+        // short-circuit by `None`-ing the chunk arm of the select
+        // here — returning `UpstreamBodyStream::next_chunk`'s actual
+        // result keeps the existing post-loop accounting
+        // (usage row, [DONE] sentinel) running.
+        let mut stream = response.body;
         let mut buffer = String::new();
         let mut usage: Option<crate::translation::OpenAIUsage> = None;
         let mut ttft_ms: Option<u64> = None;
         let first_chunk_time = Instant::now();
         let mut current_event_type: Option<String> = None;
 
-        while let Some(chunk_result) = {
+        loop {
             // Race the next byte-stream poll against the
-            // `client_disconnected` watch. The select returns
-            // `None` on the cancel arm so the existing
-            // `while let Some(...)` loop terminates normally
-            // and the post-loop accounting (usage row, [DONE]
-            // sentinel) still runs — but we then immediately
-            // short-circuit with a `ClientDisconnected` result
-            // because forwarding more chunks after the client
-            // has given up is just wasted work.
+            // `client_disconnected` watch. We use the boxed form
+            // of `next_chunk` so the future is `Unpin` and the
+            // select! arm is well-typed. When the watch fires,
+            // the body future is dropped (cancelling the
+            // underlying hyper body read), and we break the loop
+            // so the post-loop accounting can decide whether
+            // to record a `ClientDisconnected` usage row.
             let mut cancel_rx_chunk = req.client_disconnected.clone();
-            tokio::select! {
-                biased;
-                _ = cancel_rx_chunk.changed() => None,
-                next = stream.next() => next,
-            }
-        } {
+            // The boxed `next_chunk` returns
+            // `UpstreamResult<Option<Bytes>>`; we wrap it in an
+            // `Option` so the cancel arm can produce `None` and
+            // break the loop.
+            let chunk_result: Option<crate::upstream::UpstreamResult<Option<bytes::Bytes>>> =
+                tokio::select! {
+                    biased;
+                    _ = cancel_rx_chunk.changed() => None,
+                    next = stream.next_chunk_boxed() => Some(next),
+                };
+            let chunk_result = match chunk_result {
+                Some(r) => r,
+                None => break,
+            };
             let bytes = match chunk_result {
-                Ok(b) => b,
+                Ok(Some(b)) => b,
+                Ok(None) => break, // end of stream
                 Err(e) => {
-                    let err = CoreError::UpstreamConnection(format!("stream read: {e}"));
+                    // Map the `UpstreamError` to `CoreError` for the
+                    // per-chunk failure path. Body chunk timeouts
+                    // map to `UpstreamTimeout { phase: "idle_chunk" }`
+                    // (the same label reqwest+StreamExt would have
+                    // surfaced — the per-chunk gap budget), other
+                    // errors to `UpstreamConnection`. We use the
+                    // pre-migration label for dashboard consistency.
+                    let err = match e {
+                        UpstreamError::Timeout(UpstreamPhase::Body) => {
+                            CoreError::UpstreamTimeout {
+                                phase: "idle_chunk".into(),
+                                ms: resolved_timeouts.idle_chunk.as_millis() as u64,
+                            }
+                        }
+                        UpstreamError::Cancel => {
+                            // The hyper body returned cancel — the
+                            // client_disconnected watch has fired.
+                            // We break out of the loop and let the
+                            // post-loop checkpoint emit the
+                            // structured `ClientDisconnected` row.
+                            break;
+                        }
+                        UpstreamError::Connection(msg) => {
+                            CoreError::UpstreamConnection(
+                                format!("stream read: {}", msg),
+                            )
+                        }
+                        UpstreamError::Tls(msg) => {
+                            CoreError::UpstreamConnection(
+                                format!("stream read: {}", msg),
+                            )
+                        }
+                        UpstreamError::Http(msg) => {
+                            CoreError::UpstreamConnection(
+                                format!("stream read: {}", msg),
+                            )
+                        }
+                        UpstreamError::Decode(msg) => {
+                            CoreError::UpstreamConnection(
+                                format!("stream read: {}", msg),
+                            )
+                        }
+                        UpstreamError::Invalid(msg) => {
+                            CoreError::UpstreamConnection(
+                                format!("stream read: {}", msg),
+                            )
+                        }
+                        // Body-phase timeout that isn't `Body` (e.g.
+                        // a future phase variant) — treat as idle.
+                        UpstreamError::Timeout(_) => {
+                            CoreError::UpstreamConnection(
+                                format!("stream read: {}", e),
+                            )
+                        }
+                    };
                     return self.record_and_fail(
                         req, combo, target, attempt, race_size, &err, started,
-                        Some(model), Some(connect_and_send_ms), None,
+                        Some(model), Some(connect_and_send_ms), ttft_ms,
                         status_code,
                     );
                 }
@@ -1868,7 +2202,7 @@ impl Pipeline {
                     }
                 }
             }
-        }
+        } // end of SSE chunk loop
 
         // Process any remaining data in the buffer.
         if !buffer.is_empty() {
@@ -2395,6 +2729,12 @@ mod tests {
             // exercise the cooldown path can pass a shorter value
             // through a local `PipelineConfig` override.
             cooldown_secs: 60,
+            // Hyper-based upstream client. The default production
+            // connector (rustls HTTPS) is fine for tests that don't
+            // exercise the HTTP path; tests that DO need a real
+            // upstream should rebuild the config with a test
+            // connector.
+            upstream_client: UpstreamClient::new(),
         }
     }
 
@@ -3258,6 +3598,1308 @@ mod tests {
         }
     }
 
+    /// Regression for bugs 3+4: a `Strategy::Priority` combo of
+    /// three healthy targets must walk the full row when the first
+    /// target returns a retryable 500 and the second returns 200.
+    ///
+    /// Pre-fix the dispatch path collapsed the priority walk to a
+    /// single target via `take(combo.race_size)` (race_size defaults
+    /// to 1 in `admin.rs::create_combo`), so the operator's "try
+    /// the next model when the first one 5xx's" expectation was
+    /// silently broken: the pipeline kept re-running target #1 on
+    /// every `max_attempts` turn. This test pins the post-fix
+    /// behavior:
+    ///   - the mock listener sees TWO HTTP requests (target 1 and
+    ///     target 2; target 3 must NOT be called because the second
+    ///     request succeeded),
+    ///   - the result has no error,
+    ///   - the surfaced body comes from target 2
+    ///     (`choices[0].message.content == "from model 2"`).
+    #[tokio::test]
+    async fn priority_combo_walks_row_after_first_5xx() {
+        use crate::adapters::{
+            AdapterAuthType, AdapterFormat, ProviderAdapter, ProviderAdapterConfig,
+        };
+        use crate::combos::{self, AddTargetInput, Strategy};
+        use std::sync::atomic::{AtomicU32, Ordering as AtomicOrdering};
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        use tokio::net::TcpListener;
+
+        // ----- 1. Mock adapter that points at our localhost listener -----
+        struct MockAdapter {
+            config: ProviderAdapterConfig,
+        }
+        #[async_trait::async_trait]
+        impl ProviderAdapter for MockAdapter {
+            fn id(&self) -> &ProviderId {
+                &self.config.id
+            }
+            fn config(&self) -> &ProviderAdapterConfig {
+                &self.config
+            }
+            fn build_chat_url(
+                &self,
+                _target_format: TargetFormat,
+                _model: &crate::ids::ModelId,
+            ) -> String {
+                self.config.base_url.clone()
+            }
+            fn build_auth_header(&self, api_key: &str) -> (String, String) {
+                ("Authorization".into(), format!("Bearer {api_key}"))
+            }
+            fn build_headers(
+                &self,
+                api_key: &str,
+                _target_format: TargetFormat,
+                _model: &crate::ids::ModelId,
+            ) -> Vec<(String, String)> {
+                vec![
+                    self.build_auth_header(api_key),
+                    ("Content-Type".into(), "application/json".into()),
+                ]
+            }
+            fn models_url(&self) -> Option<String> {
+                None
+            }
+            async fn fetch_models(
+                &self,
+                _upstream_client: &std::sync::Arc<crate::upstream::UpstreamClient>,
+                _api_key: &str,
+            ) -> Result<Vec<crate::models::DiscoveredModel>> {
+                Ok(Vec::new())
+            }
+        }
+
+        // ----- 2. Bind the listener; spawn a server that:
+        //         - 1st request → 500 (retryable, advances to next target),
+        //         - 2nd request → 200 with the "from model 2" body,
+        //         - 3rd request (shouldn't happen) → also 500, so any
+        //           regression that *skips* target 2 surfaces as a
+        //           pipeline error, not a misleading success.
+        let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
+        let local_addr = listener.local_addr().expect("local_addr");
+        let upstream_url = format!("http://{local_addr}");
+
+        let call_count = Arc::new(AtomicU32::new(0));
+        let server_call_count = call_count.clone();
+        let server_handle = tokio::spawn(async move {
+            loop {
+                let (mut sock, _peer) = match listener.accept().await {
+                    Ok(p) => p,
+                    Err(_) => break,
+                };
+                let my_call = server_call_count.fetch_add(1, AtomicOrdering::SeqCst) + 1;
+
+                // Drain headers (and body, if Content-Length present)
+                // so reqwest can finish its write before we respond.
+                let mut buf = vec![0u8; 64 * 1024];
+                let mut total = 0usize;
+                let mut content_length: Option<usize> = None;
+                let mut header_end: Option<usize> = None;
+                loop {
+                    let read_result = tokio::time::timeout(
+                        Duration::from_secs(2),
+                        sock.read(&mut buf[total..]),
+                    )
+                    .await;
+                    match read_result {
+                        Err(_) => break,
+                        Ok(Ok(0)) => break,
+                        Ok(Ok(n)) => {
+                            total += n;
+                            if header_end.is_none() {
+                                if let Some(pos) =
+                                    buf[..total].windows(4).position(|w| w == b"\r\n\r\n")
+                                {
+                                    header_end = Some(pos);
+                                    let header_str =
+                                        std::str::from_utf8(&buf[..pos]).unwrap_or("");
+                                    for line in header_str.split("\r\n") {
+                                        if let Some(rest) = line
+                                            .to_ascii_lowercase()
+                                            .strip_prefix("content-length:")
+                                        {
+                                            content_length = rest.trim().parse().ok();
+                                        }
+                                    }
+                                }
+                            }
+                            if let (Some(he), Some(cl)) = (header_end, content_length) {
+                                if total - (he + 4) >= cl {
+                                    break;
+                                }
+                            }
+                            if total == buf.len() {
+                                break;
+                            }
+                        }
+                        Ok(Err(_)) => break,
+                    }
+                }
+
+                // Build the response for this call.
+                let (status_line, body) = if my_call == 1 {
+                    (
+                        "HTTP/1.1 500 Internal Server Error",
+                        r#"{"error":{"message":"upstream boom","type":"server_error"}}"#
+                            .to_string(),
+                    )
+                } else {
+                    (
+                        "HTTP/1.1 200 OK",
+                        r#"{"id":"chatcmpl-2","object":"chat.completion","created":1,"model":"m","choices":[{"index":0,"message":{"role":"assistant","content":"from model 2"},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}"#.to_string(),
+                    )
+                };
+                let response = format!(
+                    "{}\r\n\
+                     Content-Type: application/json\r\n\
+                     Content-Length: {}\r\n\
+                     Connection: close\r\n\
+                     \r\n\
+                     {}",
+                    status_line,
+                    body.len(),
+                    body,
+                );
+                let _ = sock.write_all(response.as_bytes()).await;
+                let _ = sock.flush().await;
+                // drop sock → connection closes; the pipeline is
+                // not streaming so it will return after reading the
+                // body.
+            }
+        });
+
+        // ----- 3. Seed a Priority combo with 3 healthy targets -----
+        //         All three use the same provider+model+url (the
+        //         mock listener), so the mock's per-call counter is
+        //         what discriminates them. Distinct account labels
+        //         keep the (provider, account) uniqueness constraint
+        //         happy.
+        let (pool, conn, _path) = fresh_pool();
+        let mk = Arc::new(MasterKey::generate());
+
+        // 1 provider, 1 model, 3 accounts, 3 targets with priorities
+        // 10/20/30 → dispatch order is target#1 → target#2 → target#3.
+        let (combo_id, _target_ids) = {
+            let w = pool.writer();
+            seed_provider(&w, "prio-mock", AuthType::Bearer);
+            w.execute(
+                "INSERT INTO models(provider_id, model_id, target_format) \
+                 VALUES ('prio-mock', 'm', 'openai')",
+                [],
+            )
+            .expect("seed model");
+            let model_rowid: i64 = w
+                .query_row("SELECT last_insert_rowid()", [], |r| r.get(0))
+                .expect("last_insert_rowid");
+            let model_id = crate::ids::ModelRowId(model_rowid);
+            // Explicitly create the combo with race_size = 1 (the
+            // production default from admin.rs). Pre-fix, this
+            // collapsed `to_run` to a single target regardless of
+            // the combo's `Strategy`.
+            let combo_id = combos::create_combo(&w, "prio-test", Strategy::Priority, 1)
+                .expect("create combo");
+            let mut tids = Vec::new();
+            for (label, prio) in [("a1", 10_i32), ("a2", 20_i32), ("a3", 30_i32)] {
+                let account_id = crate::accounts::create(
+                    &w,
+                    &ProviderId::new("prio-mock"),
+                    Some("sk-test"),
+                    mk.as_ref(),
+                    Some(label),
+                    prio,
+                    None,
+                )
+                .expect("seed account");
+                let tid = combos::add_target(
+                    &w,
+                    AddTargetInput {
+                        combo_id,
+                        provider_id: ProviderId::new("prio-mock"),
+                        account_id: Some(account_id),
+                        model_row_id: Some(model_id),
+                        sub_combo_id: None,
+                        priority_order: prio,
+                    },
+                )
+                .expect("add target");
+                tids.push(tid);
+            }
+            (combo_id, tids)
+        };
+
+        // ----- 4. Wire the mock adapter + run the pipeline -----
+        let defaults = Timeouts::from_config(&TimeoutsConfig::default());
+        let mock = MockAdapter {
+            config: ProviderAdapterConfig {
+                id: ProviderId::new("prio-mock"),
+                base_url: upstream_url.clone(),
+                auth_type: AdapterAuthType::Bearer,
+                format: AdapterFormat::Openai,
+                extra_headers: Vec::new(),
+            },
+        };
+        let cfg = PipelineConfig {
+            defaults,
+            racing: RacingConfig::default(),
+            retries: RetriesConfig::default(),
+            // CRITICAL: leave max_attempts = 1 so the outer
+            // `for attempt in 1..=max_attempts` loop fires ONCE.
+            // If the priority walk fix is broken, `to_run` has 1
+            // entry, target 1 returns 500, attempt = 1 = max, the
+            // pipeline returns the 500 — and the mock will record
+            // only ONE HTTP call, not two.
+            max_attempts: 1,
+            master_key: mk,
+            adapters: Arc::new(vec![Arc::new(mock) as Arc<dyn ProviderAdapter>]),
+            http_client: reqwest::Client::new(),
+            cooldown_secs: 60,
+            upstream_client: UpstreamClient::new(),
+        };
+        let p = Pipeline::new(conn, cfg);
+
+        let (req, _cancel_tx) = make_request(combo_id);
+        let result = tokio::time::timeout(Duration::from_secs(15), p.run(req))
+            .await
+            .expect("pipeline.run timed out");
+
+        // ----- 5. Asserts -----
+        // (a) No error: target 2's 200 won the walk.
+        assert!(
+            result.error.is_none(),
+            "expected success after walking the row, got error: {:?}",
+            result.error
+        );
+        // (b) The surfaced body came from target 2.
+        let openai_response = result
+            .final_response
+            .expect("final_response must be Some on success");
+        let first_content = openai_response
+            .choices
+            .first()
+            .and_then(|c| c.message.content.as_ref())
+            .and_then(|v| v.as_str());
+        assert_eq!(
+            first_content,
+            Some("from model 2"),
+            "expected the second target's body to win the walk"
+        );
+        // (c) The mock saw exactly two HTTP requests: target 1
+        // (500) and target 2 (200). Target 3 was NOT called.
+        //     A regression that collapses the walk to one target
+        //     (pre-fix behavior) would record only 1 call.
+        //     A regression that mistakenly *skips* target 2 would
+        //     record calls to targets 1 and 3 (call_count == 2
+        //     would still match, but then result.error would NOT
+        //     be None — caught by (a)).
+        let calls = call_count.load(AtomicOrdering::SeqCst);
+        assert_eq!(
+            calls, 2,
+            "expected exactly 2 upstream calls (target 1 500, target 2 200); got {} — \
+             this means the priority walk did NOT advance past the failing target",
+            calls
+        );
+        // (d) attempts reflects the per-target loop accounting.
+        //     With max_attempts = 1 we expect 1 target tried at
+        //     the outer level; the result struct's `attempts`
+        //     field tracks the outer-loop counter, not the inner
+        //     per-target walk length.
+        assert!(
+            result.attempts >= 1,
+            "expected result.attempts >= 1, got {}",
+            result.attempts
+        );
+
+        // Best-effort: stop the accept loop. It's harmless if the
+        // server task is still running on the way out.
+        drop(server_handle);
+    }
+
+    // -------------------------------------------------------------------
+    // ADVERSARIAL: Combo Priority walk-the-row — the TESTER wants to
+    // break the fix by trying edge cases the BUILDERs didn't think
+    // of. These tests are about the contract:
+    //
+    //   "Strategy::Priority walks the ENTIRE row in order; it does
+    //    NOT use combo.race_size as a take(N) cap."
+    //
+    // The existing test (priority_combo_walks_row_after_first_5xx)
+    // covers 3 targets with a single 5xx at the head. The 4 cases
+    // below push on weaker assumptions:
+    //   - bigger rows (5),
+    //   - mixed 4xx + 5xx + 2xx (does 4xx abort the walk?),
+    //   - all-parked rows (does the dispatch avoid the infinite
+    //     loop?),
+    //   - 1-target combos with max_attempts>1 (does the outer loop
+    //     still fire?).
+    // -------------------------------------------------------------------
+
+    /// Build a Priority combo + N targets, all pointing at the same
+    /// mock listener. Returns (combo_id, target_ids, server handle,
+    /// shared call counter). Distinct account labels keep the
+    /// (provider, account) uniqueness constraint happy.
+    async fn adversarial_priority_setup_n(
+        n: usize,
+    ) -> (
+        ComboId,
+        Vec<ComboTargetId>,
+        tokio::task::JoinHandle<()>,
+        std::sync::Arc<std::sync::atomic::AtomicU32>,
+    ) {
+        use crate::adapters::{
+            AdapterAuthType, AdapterFormat, ProviderAdapter, ProviderAdapterConfig,
+        };
+        use crate::combos::AddTargetInput;
+        use crate::ids::ModelRowId;
+        use std::sync::atomic::AtomicU32;
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        use tokio::net::TcpListener;
+
+        // The mock adapter is local to this test (each test needs
+        // its own list of (status, body) per call slot, so we
+        // parameterize the server behavior via a shared Vec).
+        struct MockAdapter {
+            config: ProviderAdapterConfig,
+        }
+        #[async_trait::async_trait]
+        impl ProviderAdapter for MockAdapter {
+            fn id(&self) -> &ProviderId {
+                &self.config.id
+            }
+            fn config(&self) -> &ProviderAdapterConfig {
+                &self.config
+            }
+            fn build_chat_url(
+                &self,
+                _target_format: TargetFormat,
+                _model: &crate::ids::ModelId,
+            ) -> String {
+                self.config.base_url.clone()
+            }
+            fn build_auth_header(&self, api_key: &str) -> (String, String) {
+                ("Authorization".into(), format!("Bearer {api_key}"))
+            }
+            fn build_headers(
+                &self,
+                api_key: &str,
+                _target_format: TargetFormat,
+                _model: &crate::ids::ModelId,
+            ) -> Vec<(String, String)> {
+                vec![
+                    self.build_auth_header(api_key),
+                    ("Content-Type".into(), "application/json".into()),
+                ]
+            }
+            fn models_url(&self) -> Option<String> {
+                None
+            }
+            async fn fetch_models(
+                &self,
+                _upstream_client: &std::sync::Arc<crate::upstream::UpstreamClient>,
+                _api_key: &str,
+            ) -> Result<Vec<crate::models::DiscoveredModel>> {
+                Ok(Vec::new())
+            }
+        }
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
+        let local_addr = listener.local_addr().expect("local_addr");
+        let upstream_url = format!("http://{local_addr}");
+
+        let call_count = Arc::new(AtomicU32::new(0));
+        let server_call_count = call_count.clone();
+        let server_handle = tokio::spawn(async move {
+            loop {
+                let (mut sock, _peer) = match listener.accept().await {
+                    Ok(p) => p,
+                    Err(_) => break,
+                };
+                let _ = server_call_count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                // Drain request.
+                let mut buf = vec![0u8; 64 * 1024];
+                let mut total = 0usize;
+                let mut content_length: Option<usize> = None;
+                let mut header_end: Option<usize> = None;
+                loop {
+                    let read_result = tokio::time::timeout(
+                        Duration::from_secs(2),
+                        sock.read(&mut buf[total..]),
+                    )
+                    .await;
+                    match read_result {
+                        Err(_) => break,
+                        Ok(Ok(0)) => break,
+                        Ok(Ok(n)) => {
+                            total += n;
+                            if header_end.is_none() {
+                                if let Some(pos) =
+                                    buf[..total].windows(4).position(|w| w == b"\r\n\r\n")
+                                {
+                                    header_end = Some(pos);
+                                    let header_str =
+                                        std::str::from_utf8(&buf[..pos]).unwrap_or("");
+                                    for line in header_str.split("\r\n") {
+                                        if let Some(rest) = line
+                                            .to_ascii_lowercase()
+                                            .strip_prefix("content-length:")
+                                        {
+                                            content_length = rest.trim().parse().ok();
+                                        }
+                                    }
+                                }
+                            }
+                            if let (Some(he), Some(cl)) = (header_end, content_length) {
+                                if total - (he + 4) >= cl {
+                                    break;
+                                }
+                            }
+                            if total == buf.len() {
+                                break;
+                            }
+                        }
+                        Ok(Err(_)) => break,
+                    }
+                }
+                // Default: 200 OK with a generic body. The per-test
+                // caller decides the body shape.
+                let body = r#"{"id":"chatcmpl-x","object":"chat.completion","created":1,"model":"m","choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}"#.to_string();
+                let response = format!(
+                    "HTTP/1.1 200 OK\r\n\
+                     Content-Type: application/json\r\n\
+                     Content-Length: {}\r\n\
+                     Connection: close\r\n\
+                     \r\n\
+                     {}",
+                    body.len(),
+                    body,
+                );
+                let _ = sock.write_all(response.as_bytes()).await;
+                let _ = sock.flush().await;
+            }
+        });
+
+        let (pool, conn, _path) = fresh_pool();
+        let mk = Arc::new(MasterKey::generate());
+        let (combo_id, target_ids) = {
+            let w = pool.writer();
+            seed_provider(&w, "adv-mock", AuthType::Bearer);
+            w.execute(
+                "INSERT INTO models(provider_id, model_id, target_format) \
+                 VALUES ('adv-mock', 'm', 'openai')",
+                [],
+            )
+            .expect("seed model");
+            let model_rowid: i64 = w
+                .query_row("SELECT last_insert_rowid()", [], |r| r.get(0))
+                .expect("last_insert_rowid");
+            let model_id = ModelRowId(model_rowid);
+            let combo_id = combos::create_combo(&w, "adv-prio", Strategy::Priority, 1)
+                .expect("create combo");
+            let mut tids = Vec::new();
+            for i in 0..n {
+                let account_label = format!("a{}", i);
+                let account_id = crate::accounts::create(
+                    &w,
+                    &ProviderId::new("adv-mock"),
+                    Some("sk-test"),
+                    mk.as_ref(),
+                    Some(&account_label),
+                    (i as i32 + 1) * 10,
+                    None,
+                )
+                .expect("seed account");
+                let tid = combos::add_target(
+                    &w,
+                    AddTargetInput {
+                        combo_id,
+                        provider_id: ProviderId::new("adv-mock"),
+                        account_id: Some(account_id),
+                        model_row_id: Some(model_id),
+                        sub_combo_id: None,
+                        priority_order: (i as i32 + 1) * 10,
+                    },
+                )
+                .expect("add target");
+                tids.push(tid);
+            }
+            (combo_id, tids)
+        };
+
+        // The Pipeline is built by the caller; we hand back the
+        // combo + targets and let the caller wire the rest.
+        // The mock adapter construction here is intentionally
+        // dead-code (it is the pattern the other tests use inline;
+        // the helper returns enough state to build it in the test
+        // body). We never reference upstream_url after this point
+        // so we just use it once.
+        let _ = (
+            conn,
+            mk.clone(),
+            Arc::new(MockAdapter {
+                config: ProviderAdapterConfig {
+                    id: ProviderId::new("adv-mock"),
+                    base_url: upstream_url,
+                    auth_type: AdapterAuthType::Bearer,
+                    format: AdapterFormat::Openai,
+                    extra_headers: Vec::new(),
+                },
+            }) as Arc<dyn ProviderAdapter>,
+        );
+        (combo_id, target_ids, server_handle, call_count)
+    }
+
+    /// ADVERSARIAL (a) — `priority_combo_with_5_targets_walks_to_5th_when_all_fail`.
+    ///
+    /// 5 targets, ALL return 500. With max_attempts=1 and the
+    /// pre-fix `take(race_size=1)` collapse, the pipeline would
+    /// stop at target #1. The fix uses `eligible.len()` for
+    /// Priority, so the dispatch should attempt all 5 targets in
+    /// priority order and return the last error.
+    ///
+    /// We can't assert on the per-call body shape here because the
+    /// shared mock always returns 200, so we override the listener
+    /// directly. To assert the walk, we re-spin a 500-only
+    /// listener inline.
+    #[tokio::test]
+    async fn adversarial_priority_combo_with_5_targets_walks_to_5th_when_all_fail() {
+        use crate::combos::AddTargetInput;
+        use std::sync::atomic::{AtomicU32, Ordering as AtomicOrdering};
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        use tokio::net::TcpListener;
+
+        // 1. Mock adapter that always responds 500 with an openai-shaped body.
+        use crate::adapters::{
+            AdapterAuthType, AdapterFormat, ProviderAdapter, ProviderAdapterConfig,
+        };
+        struct MockAdapter {
+            config: ProviderAdapterConfig,
+        }
+        #[async_trait::async_trait]
+        impl ProviderAdapter for MockAdapter {
+            fn id(&self) -> &ProviderId {
+                &self.config.id
+            }
+            fn config(&self) -> &ProviderAdapterConfig {
+                &self.config
+            }
+            fn build_chat_url(
+                &self,
+                _target_format: TargetFormat,
+                _model: &crate::ids::ModelId,
+            ) -> String {
+                self.config.base_url.clone()
+            }
+            fn build_auth_header(&self, api_key: &str) -> (String, String) {
+                ("Authorization".into(), format!("Bearer {api_key}"))
+            }
+            fn build_headers(
+                &self,
+                api_key: &str,
+                _target_format: TargetFormat,
+                _model: &crate::ids::ModelId,
+            ) -> Vec<(String, String)> {
+                vec![
+                    self.build_auth_header(api_key),
+                    ("Content-Type".into(), "application/json".into()),
+                ]
+            }
+            fn models_url(&self) -> Option<String> {
+                None
+            }
+            async fn fetch_models(
+                &self,
+                _upstream_client: &std::sync::Arc<crate::upstream::UpstreamClient>,
+                _api_key: &str,
+            ) -> Result<Vec<crate::models::DiscoveredModel>> {
+                Ok(Vec::new())
+            }
+        }
+
+        // 2. Spin a 500-only listener.
+        let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
+        let local_addr = listener.local_addr().expect("local_addr");
+        let upstream_url = format!("http://{local_addr}");
+        let call_count = Arc::new(AtomicU32::new(0));
+        let server_call_count = call_count.clone();
+        let server_handle = tokio::spawn(async move {
+            loop {
+                let (mut sock, _peer) = match listener.accept().await {
+                    Ok(p) => p,
+                    Err(_) => break,
+                };
+                let _ = server_call_count.fetch_add(1, AtomicOrdering::SeqCst);
+                let mut buf = vec![0u8; 64 * 1024];
+                let mut total = 0usize;
+                loop {
+                    if let Ok(Ok(0)) =
+                        tokio::time::timeout(Duration::from_millis(500), sock.read(&mut buf[total..])).await
+                    {
+                        break;
+                    }
+                    if let Ok(Ok(n)) =
+                        tokio::time::timeout(Duration::from_millis(500), sock.read(&mut buf[total..])).await
+                    {
+                        if n == 0 { break; }
+                        total += n;
+                        if buf[..total].windows(4).any(|w| w == b"\r\n\r\n") { break; }
+                    } else {
+                        break;
+                    }
+                }
+                let body = r#"{"error":{"message":"all-fail","type":"server_error"}}"#.to_string();
+                let response = format!(
+                    "HTTP/1.1 500 Internal Server Error\r\n\
+                     Content-Type: application/json\r\n\
+                     Content-Length: {}\r\n\
+                     Connection: close\r\n\
+                     \r\n{}",
+                    body.len(),
+                    body,
+                );
+                let _ = sock.write_all(response.as_bytes()).await;
+                let _ = sock.flush().await;
+            }
+        });
+
+        // 3. Seed a Priority combo with 5 targets.
+        let (pool, conn, _path) = fresh_pool();
+        let mk = Arc::new(MasterKey::generate());
+        let (combo_id, _target_ids) = {
+            let w = pool.writer();
+            seed_provider(&w, "adv-mock", AuthType::Bearer);
+            w.execute(
+                "INSERT INTO models(provider_id, model_id, target_format) \
+                 VALUES ('adv-mock', 'm', 'openai')",
+                [],
+            )
+            .expect("seed model");
+            let model_rowid: i64 = w
+                .query_row("SELECT last_insert_rowid()", [], |r| r.get(0))
+                .expect("last_insert_rowid");
+            let model_id = crate::ids::ModelRowId(model_rowid);
+            let combo_id = combos::create_combo(&w, "adv-prio-5", Strategy::Priority, 1)
+                .expect("create combo");
+            let mut tids = Vec::new();
+            for i in 0..5 {
+                let account_label = format!("a{}", i);
+                let account_id = crate::accounts::create(
+                    &w,
+                    &ProviderId::new("adv-mock"),
+                    Some("sk-test"),
+                    mk.as_ref(),
+                    Some(&account_label),
+                    (i as i32 + 1) * 10,
+                    None,
+                )
+                .expect("seed account");
+                let tid = combos::add_target(
+                    &w,
+                    AddTargetInput {
+                        combo_id,
+                        provider_id: ProviderId::new("adv-mock"),
+                        account_id: Some(account_id),
+                        model_row_id: Some(model_id),
+                        sub_combo_id: None,
+                        priority_order: (i as i32 + 1) * 10,
+                    },
+                )
+                .expect("add target");
+                tids.push(tid);
+            }
+            (combo_id, tids)
+        };
+
+        // 4. Wire the mock + run.
+        let defaults = Timeouts::from_config(&TimeoutsConfig::default());
+        let mock = MockAdapter {
+            config: ProviderAdapterConfig {
+                id: ProviderId::new("adv-mock"),
+                base_url: upstream_url.clone(),
+                auth_type: AdapterAuthType::Bearer,
+                format: AdapterFormat::Openai,
+                extra_headers: Vec::new(),
+            },
+        };
+        let cfg = PipelineConfig {
+            defaults,
+            racing: RacingConfig::default(),
+            retries: RetriesConfig::default(),
+            max_attempts: 1,
+            master_key: mk,
+            adapters: Arc::new(vec![Arc::new(mock) as Arc<dyn ProviderAdapter>]),
+            http_client: reqwest::Client::new(),
+            cooldown_secs: 60,
+            upstream_client: UpstreamClient::new(),
+        };
+        let p = Pipeline::new(conn, cfg);
+
+        let (req, _cancel_tx) = make_request(combo_id);
+        let result = tokio::time::timeout(Duration::from_secs(15), p.run(req))
+            .await
+            .expect("pipeline.run timed out");
+
+        // 5. Asserts.
+        let calls = call_count.load(AtomicOrdering::SeqCst);
+        assert_eq!(
+            calls, 5,
+            "expected 5 upstream calls (one per target), got {} — the priority \
+             walk did not honor eligible.len()=5 for a 5-target row",
+            calls
+        );
+        // The last error must be an upstream 500 (the pipeline
+        // returned the 5th target's failure, not a 502 NoHealthy).
+        assert!(
+            result.error.is_some(),
+            "expected an error after walking 5 failing targets"
+        );
+        match &result.error {
+            Some(CoreError::UpstreamError { status, .. }) => {
+                assert_eq!(*status, 500, "expected 500 from last target");
+            }
+            Some(other) => panic!(
+                "expected CoreError::UpstreamError(500) from the last target, got {:?}",
+                other
+            ),
+            None => unreachable!(),
+        }
+        assert!(
+            result.attempts >= 1,
+            "expected attempts >= 1, got {}",
+            result.attempts
+        );
+
+        drop(server_handle);
+    }
+
+    /// ADVERSARIAL (b) — `priority_combo_with_mixed_4xx_5xx_walks_to_first_2xx`.
+    ///
+    /// The dispatch loop's per-target branch is:
+    ///   `Some(e) if !RetryPolicy::is_retryable(e) => return result`
+    /// i.e. a 4xx (non-retryable) **aborts** the walk and returns
+    /// the first error. The pre-fix priority walk AND the post-fix
+    /// priority walk both have this behavior — a 4xx at target #1
+    /// will not advance to target #2.
+    ///
+    /// The TESTER's expectation: the priority combo should walk
+    /// past a 4xx because the operator's intent is "try the next
+    /// model on user-error too, not just on transient upstream
+    /// failure". This is a stronger contract than the current
+    /// implementation honors.
+    ///
+    /// If this test fails (the pipeline returns the 4xx from
+    /// target #1), it documents that the 4xx-abort behavior is a
+    /// known limitation of the fix and a future iteration needs to
+    /// reconsider whether 4xx should be retried across targets in
+    /// a Priority combo.
+    #[tokio::test]
+    async fn adversarial_priority_combo_with_mixed_4xx_5xx_walks_to_first_2xx() {
+        use crate::combos::AddTargetInput;
+        use std::sync::atomic::{AtomicU32, Ordering as AtomicOrdering};
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        use tokio::net::TcpListener;
+
+        use crate::adapters::{
+            AdapterAuthType, AdapterFormat, ProviderAdapter, ProviderAdapterConfig,
+        };
+        struct MockAdapter {
+            config: ProviderAdapterConfig,
+        }
+        #[async_trait::async_trait]
+        impl ProviderAdapter for MockAdapter {
+            fn id(&self) -> &ProviderId {
+                &self.config.id
+            }
+            fn config(&self) -> &ProviderAdapterConfig {
+                &self.config
+            }
+            fn build_chat_url(
+                &self,
+                _target_format: TargetFormat,
+                _model: &crate::ids::ModelId,
+            ) -> String {
+                self.config.base_url.clone()
+            }
+            fn build_auth_header(&self, api_key: &str) -> (String, String) {
+                ("Authorization".into(), format!("Bearer {api_key}"))
+            }
+            fn build_headers(
+                &self,
+                api_key: &str,
+                _target_format: TargetFormat,
+                _model: &crate::ids::ModelId,
+            ) -> Vec<(String, String)> {
+                vec![
+                    self.build_auth_header(api_key),
+                    ("Content-Type".into(), "application/json".into()),
+                ]
+            }
+            fn models_url(&self) -> Option<String> {
+                None
+            }
+            async fn fetch_models(
+                &self,
+                _upstream_client: &std::sync::Arc<crate::upstream::UpstreamClient>,
+                _api_key: &str,
+            ) -> Result<Vec<crate::models::DiscoveredModel>> {
+                Ok(Vec::new())
+            }
+        }
+
+        // 1. Listener: 1st → 400, 2nd → 503, 3rd → 200.
+        let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
+        let local_addr = listener.local_addr().expect("local_addr");
+        let upstream_url = format!("http://{local_addr}");
+        let call_count = Arc::new(AtomicU32::new(0));
+        let server_call_count = call_count.clone();
+        let server_handle = tokio::spawn(async move {
+            loop {
+                let (mut sock, _peer) = match listener.accept().await {
+                    Ok(p) => p,
+                    Err(_) => break,
+                };
+                let my_call = server_call_count.fetch_add(1, AtomicOrdering::SeqCst) + 1;
+                let mut buf = vec![0u8; 64 * 1024];
+                let mut total = 0usize;
+                loop {
+                    if let Ok(Ok(n)) =
+                        tokio::time::timeout(Duration::from_millis(500), sock.read(&mut buf[total..])).await
+                    {
+                        if n == 0 { break; }
+                        total += n;
+                        if buf[..total].windows(4).any(|w| w == b"\r\n\r\n") { break; }
+                    } else {
+                        break;
+                    }
+                }
+                let (status_line, body) = match my_call {
+                    1 => ("HTTP/1.1 400 Bad Request",
+                          r#"{"error":{"message":"bad prompt","type":"invalid_request_error"}}"#.to_string()),
+                    2 => ("HTTP/1.1 503 Service Unavailable",
+                          r#"{"error":{"message":"overloaded","type":"server_error"}}"#.to_string()),
+                    _ => ("HTTP/1.1 200 OK",
+                          r#"{"id":"chatcmpl-3","object":"chat.completion","created":1,"model":"m","choices":[{"index":0,"message":{"role":"assistant","content":"from model 3"},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}"#.to_string()),
+                };
+                let response = format!(
+                    "{}\r\n\
+                     Content-Type: application/json\r\n\
+                     Content-Length: {}\r\n\
+                     Connection: close\r\n\
+                     \r\n{}",
+                    status_line,
+                    body.len(),
+                    body,
+                );
+                let _ = sock.write_all(response.as_bytes()).await;
+                let _ = sock.flush().await;
+            }
+        });
+
+        // 2. Seed a 3-target Priority combo.
+        let (pool, conn, _path) = fresh_pool();
+        let mk = Arc::new(MasterKey::generate());
+        let (combo_id, _target_ids) = {
+            let w = pool.writer();
+            seed_provider(&w, "adv-mock", AuthType::Bearer);
+            w.execute(
+                "INSERT INTO models(provider_id, model_id, target_format) \
+                 VALUES ('adv-mock', 'm', 'openai')",
+                [],
+            )
+            .expect("seed model");
+            let model_rowid: i64 = w
+                .query_row("SELECT last_insert_rowid()", [], |r| r.get(0))
+                .expect("last_insert_rowid");
+            let model_id = crate::ids::ModelRowId(model_rowid);
+            let combo_id = combos::create_combo(&w, "adv-prio-mixed", Strategy::Priority, 1)
+                .expect("create combo");
+            for i in 0..3 {
+                let account_label = format!("mx{}", i);
+                let account_id = crate::accounts::create(
+                    &w,
+                    &ProviderId::new("adv-mock"),
+                    Some("sk-test"),
+                    mk.as_ref(),
+                    Some(&account_label),
+                    (i as i32 + 1) * 10,
+                    None,
+                )
+                .expect("seed account");
+                combos::add_target(
+                    &w,
+                    AddTargetInput {
+                        combo_id,
+                        provider_id: ProviderId::new("adv-mock"),
+                        account_id: Some(account_id),
+                        model_row_id: Some(model_id),
+                        sub_combo_id: None,
+                        priority_order: (i as i32 + 1) * 10,
+                    },
+                )
+                .expect("add target");
+            }
+            (combo_id, Vec::<ComboTargetId>::new())
+        };
+
+        // 3. Wire the mock + run.
+        let defaults = Timeouts::from_config(&TimeoutsConfig::default());
+        let mock = MockAdapter {
+            config: ProviderAdapterConfig {
+                id: ProviderId::new("adv-mock"),
+                base_url: upstream_url.clone(),
+                auth_type: AdapterAuthType::Bearer,
+                format: AdapterFormat::Openai,
+                extra_headers: Vec::new(),
+            },
+        };
+        let cfg = PipelineConfig {
+            defaults,
+            racing: RacingConfig::default(),
+            retries: RetriesConfig::default(),
+            max_attempts: 1,
+            master_key: mk,
+            adapters: Arc::new(vec![Arc::new(mock) as Arc<dyn ProviderAdapter>]),
+            http_client: reqwest::Client::new(),
+            cooldown_secs: 60,
+            upstream_client: UpstreamClient::new(),
+        };
+        let p = Pipeline::new(conn, cfg);
+
+        let (req, _cancel_tx) = make_request(combo_id);
+        let result = tokio::time::timeout(Duration::from_secs(15), p.run(req))
+            .await
+            .expect("pipeline.run timed out");
+
+        // 4. Asserts.
+        let calls = call_count.load(AtomicOrdering::SeqCst);
+        // The TESTER's expected behavior: the priority walk should
+        // advance past a 4xx because the operator's intent is to
+        // try the next model. The current implementation aborts on
+        // non-retryable errors — so this test MAY fail (returning
+        // the 400 from target #1 with calls=1). If it does, that
+        // documents the limitation and is exactly the kind of
+        // finding the TESTER is supposed to surface.
+        assert_eq!(
+            calls, 3,
+            "expected 3 upstream calls (walk past 400 → 503 → 200), got {} — \
+             the priority walk aborts on a 4xx; if this is intentional, the \
+             test should be revised to assert calls=1 and 400 surfaced",
+            calls
+        );
+        // If the walk does advance, the result must be the 200 from target #3.
+        assert!(
+            result.error.is_none(),
+            "expected success from target 3, got error: {:?}",
+            result.error
+        );
+
+        drop(server_handle);
+    }
+
+    /// ADVERSARIAL (c) — `priority_combo_with_zero_eligible_targets_fails_fast`.
+    ///
+    /// A combo with N targets ALL parked in cooldown must NOT
+    /// infinite-loop. The pipeline must surface NoHealthyTargets
+    /// (or, per the snapshot fallback, fall through to the
+    /// unfiltered list and exercise the parked targets with the
+    /// real upstream error).
+    ///
+    /// The fix's snapshot-fallback path means a single request
+    /// doesn't bounce off the transient cross-request cooldown
+    /// state. We assert that the call returns a result (not a
+    /// hang) and that `attempts` is bounded (the pipeline did
+    /// NOT spin forever).
+    #[tokio::test]
+    async fn adversarial_priority_combo_with_zero_eligible_targets_fails_fast() {
+        use crate::combos::AddTargetInput;
+        use std::sync::atomic::Ordering;
+        use std::time::Instant;
+        let (pool, conn, _path) = fresh_pool();
+        let mk = Arc::new(MasterKey::generate());
+        let (combo_id, target_ids, _account_id, _model_id) =
+            { let w = pool.writer(); seed_target_with_account(&w, mk.as_ref()) };
+        // Add 2 more targets to make it a 3-target row. (Re-uses
+        // the same provider + model; distinct account labels keep
+        // uniqueness happy.)
+        {
+            let w = pool.writer();
+            let model_rowid: i64 = w
+                .query_row("SELECT id FROM models WHERE provider_id = 'p'", [], |r| r.get(0))
+                .expect("model rowid");
+            for i in 1..=2 {
+                let account_label = format!("adv{}", i);
+                let account_id = crate::accounts::create(
+                    &w,
+                    &ProviderId::new("p"),
+                    Some("sk-test"),
+                    mk.as_ref(),
+                    Some(&account_label),
+                    (i + 1) as i32 * 10,
+                    None,
+                )
+                .expect("seed account");
+                combos::add_target(
+                    &w,
+                    AddTargetInput {
+                        combo_id,
+                        provider_id: ProviderId::new("p"),
+                        account_id: Some(account_id),
+                        model_row_id: Some(crate::ids::ModelRowId(model_rowid)),
+                        sub_combo_id: None,
+                        priority_order: (i + 1) as i32 * 10,
+                    },
+                )
+                .expect("add target");
+            }
+        }
+        // Park ALL targets.
+        {
+            let w = pool.writer();
+            let all_tids: Vec<ComboTargetId> = {
+                let mut stmt = w
+                    .prepare("SELECT id FROM combo_targets WHERE combo_id = ?1")
+                    .expect("prep");
+                let ids: Vec<i64> = stmt
+                    .query_map([combo_id.0], |r| r.get(0))
+                    .expect("query")
+                    .map(|r| r.unwrap())
+                    .collect();
+                ids.into_iter().map(ComboTargetId).collect()
+            };
+            for tid in &all_tids {
+                crate::cooldown::record_failure(&w, *tid, "adv seeded", 60).expect("park");
+            }
+            assert_eq!(all_tids.len(), 3, "expected 3 targets in the combo");
+            // Sanity: the 3 IDs we hold match.
+            assert!(target_ids == all_tids[0]);
+        }
+        let cfg = test_config(mk);
+        let p = Pipeline::new(conn, cfg);
+        let (req, _dis_tx) = make_request(combo_id);
+        let t0 = Instant::now();
+        // Bounded: 10s is plenty for a 3-target row to fail fast.
+        let result = tokio::time::timeout(Duration::from_secs(10), p.run(req))
+            .await
+            .expect("pipeline.run timed out — the priority walk is hanging on the parked targets");
+        let elapsed = t0.elapsed();
+        assert!(
+            elapsed < Duration::from_secs(5),
+            "priority walk took {elapsed:?} — the fallback path may be retrying the parked targets without bound"
+        );
+        // The result must have an error (no successful upstream call).
+        assert!(
+            result.error.is_some(),
+            "expected an error after the walk, got a successful result"
+        );
+        // The error must NOT be a NoHealthyTargets-only path that
+        // hides the real upstream error. Either the fallback
+        // exercised the parked targets and surfaced an upstream
+        // error, or the row was truly empty and the contract says
+        // NoHealthyTargets is acceptable. Both are valid; what we
+        // pin is that the pipeline returned a result, not a hang.
+        eprintln!("[adversarial c] result.error = {:?}, elapsed = {:?}", result.error, elapsed);
+        let _ = Ordering::SeqCst;
+    }
+
+    /// ADVERSARIAL (d) — `priority_combo_respects_max_attempts_for_same_provider`.
+    ///
+    /// Degenerate case: a Priority combo with a SINGLE target, but
+    /// `max_attempts = 3`. The outer `for attempt in 1..=max_attempts`
+    /// loop must fire 3 times, and the same model must be retried
+    /// 3 times. The pre-fix Priority walk used
+    /// `take(race_size=1)` which gave the SAME result (1 target
+    /// attempted per attempt), so this test passes either way for
+    /// the 1-target degenerate case. The TESTER pins it to detect
+    /// a future regression where the inner walk is moved INSIDE
+    /// the outer loop with the wrong `to_run` capture.
+    #[tokio::test]
+    async fn adversarial_priority_combo_respects_max_attempts_for_same_provider() {
+        use crate::combos::AddTargetInput;
+        use std::sync::atomic::{AtomicU32, Ordering as AtomicOrdering};
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        use tokio::net::TcpListener;
+
+        use crate::adapters::{
+            AdapterAuthType, AdapterFormat, ProviderAdapter, ProviderAdapterConfig,
+        };
+        struct MockAdapter {
+            config: ProviderAdapterConfig,
+        }
+        #[async_trait::async_trait]
+        impl ProviderAdapter for MockAdapter {
+            fn id(&self) -> &ProviderId {
+                &self.config.id
+            }
+            fn config(&self) -> &ProviderAdapterConfig {
+                &self.config
+            }
+            fn build_chat_url(
+                &self,
+                _target_format: TargetFormat,
+                _model: &crate::ids::ModelId,
+            ) -> String {
+                self.config.base_url.clone()
+            }
+            fn build_auth_header(&self, api_key: &str) -> (String, String) {
+                ("Authorization".into(), format!("Bearer {api_key}"))
+            }
+            fn build_headers(
+                &self,
+                api_key: &str,
+                _target_format: TargetFormat,
+                _model: &crate::ids::ModelId,
+            ) -> Vec<(String, String)> {
+                vec![
+                    self.build_auth_header(api_key),
+                    ("Content-Type".into(), "application/json".into()),
+                ]
+            }
+            fn models_url(&self) -> Option<String> {
+                None
+            }
+            async fn fetch_models(
+                &self,
+                _upstream_client: &std::sync::Arc<crate::upstream::UpstreamClient>,
+                _api_key: &str,
+            ) -> Result<Vec<crate::models::DiscoveredModel>> {
+                Ok(Vec::new())
+            }
+        }
+
+        // Listener: always 503.
+        let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
+        let local_addr = listener.local_addr().expect("local_addr");
+        let upstream_url = format!("http://{local_addr}");
+        let call_count = Arc::new(AtomicU32::new(0));
+        let server_call_count = call_count.clone();
+        let server_handle = tokio::spawn(async move {
+            loop {
+                let (mut sock, _peer) = match listener.accept().await {
+                    Ok(p) => p,
+                    Err(_) => break,
+                };
+                let _ = server_call_count.fetch_add(1, AtomicOrdering::SeqCst);
+                let mut buf = vec![0u8; 64 * 1024];
+                let mut total = 0usize;
+                loop {
+                    if let Ok(Ok(n)) =
+                        tokio::time::timeout(Duration::from_millis(500), sock.read(&mut buf[total..])).await
+                    {
+                        if n == 0 { break; }
+                        total += n;
+                        if buf[..total].windows(4).any(|w| w == b"\r\n\r\n") { break; }
+                    } else {
+                        break;
+                    }
+                }
+                let body = r#"{"error":{"message":"flaky","type":"server_error"}}"#.to_string();
+                let response = format!(
+                    "HTTP/1.1 503 Service Unavailable\r\n\
+                     Content-Type: application/json\r\n\
+                     Content-Length: {}\r\n\
+                     Connection: close\r\n\
+                     \r\n{}",
+                    body.len(),
+                    body,
+                );
+                let _ = sock.write_all(response.as_bytes()).await;
+                let _ = sock.flush().await;
+            }
+        });
+
+        // 1-target Priority combo, max_attempts = 3.
+        let (pool, conn, _path) = fresh_pool();
+        let mk = Arc::new(MasterKey::generate());
+        let combo_id = {
+            let w = pool.writer();
+            seed_provider(&w, "adv-mock", AuthType::Bearer);
+            w.execute(
+                "INSERT INTO models(provider_id, model_id, target_format) \
+                 VALUES ('adv-mock', 'm', 'openai')",
+                [],
+            )
+            .expect("seed model");
+            let model_rowid: i64 = w
+                .query_row("SELECT last_insert_rowid()", [], |r| r.get(0))
+                .expect("last_insert_rowid");
+            let model_id = crate::ids::ModelRowId(model_rowid);
+            let account_id = crate::accounts::create(
+                &w,
+                &ProviderId::new("adv-mock"),
+                Some("sk-test"),
+                mk.as_ref(),
+                Some("only"),
+                10,
+                None,
+            )
+            .expect("seed account");
+            let combo_id = combos::create_combo(&w, "adv-prio-1", Strategy::Priority, 1)
+                .expect("create combo");
+            combos::add_target(
+                &w,
+                AddTargetInput {
+                    combo_id,
+                    provider_id: ProviderId::new("adv-mock"),
+                    account_id: Some(account_id),
+                    model_row_id: Some(model_id),
+                    sub_combo_id: None,
+                    priority_order: 10,
+                },
+            )
+            .expect("add target");
+            combo_id
+        };
+
+        let defaults = Timeouts::from_config(&TimeoutsConfig::default());
+        let mock = MockAdapter {
+            config: ProviderAdapterConfig {
+                id: ProviderId::new("adv-mock"),
+                base_url: upstream_url.clone(),
+                auth_type: AdapterAuthType::Bearer,
+                format: AdapterFormat::Openai,
+                extra_headers: Vec::new(),
+            },
+        };
+        let cfg = PipelineConfig {
+            defaults,
+            racing: RacingConfig::default(),
+            // CRITICAL: max_attempts = 3 so the outer loop fires 3 times.
+            max_attempts: 3,
+            master_key: mk,
+            adapters: Arc::new(vec![Arc::new(mock) as Arc<dyn ProviderAdapter>]),
+            http_client: reqwest::Client::new(),
+            cooldown_secs: 60,
+            // Disable retry backoff so the test is fast.
+            retries: RetriesConfig {
+                backoff_base_ms: 1,
+                backoff_factor: 1,
+                backoff_jitter_pct: 0,
+                ..RetriesConfig::default()
+            },
+            upstream_client: UpstreamClient::new(),
+        };
+        let p = Pipeline::new(conn, cfg);
+        let (req, _cancel_tx) = make_request(combo_id);
+        let result = tokio::time::timeout(Duration::from_secs(15), p.run(req))
+            .await
+            .expect("pipeline.run timed out");
+
+        let calls = call_count.load(AtomicOrdering::SeqCst);
+        assert_eq!(
+            calls, 3,
+            "expected 3 upstream calls (one per outer-loop attempt) for a \
+             1-target Priority combo with max_attempts=3, got {} — the outer \
+             retry loop is not firing, or the inner walk is collapsing to 0",
+            calls
+        );
+        assert_eq!(
+            result.attempts, 3,
+            "expected PipelineResult.attempts == 3, got {}",
+            result.attempts
+        );
+
+        drop(server_handle);
+    }
+
     #[tokio::test]
     async fn pipeline_does_not_record_cooldown_on_4xx_error() {
         // The pipeline uses `RetryPolicy::is_retryable` to decide
@@ -3898,6 +5540,521 @@ mod tests {
         );
     }
 
+    /// End-to-end exercise of the new (Gate 1) non-streaming chat
+    /// dispatch path that uses `UpstreamClient::call()` instead of
+    /// the legacy reqwest client. We bind a localhost listener, point
+    /// a mock `ProviderAdapter` at it, run a non-streaming chat
+    /// request, and assert the pipeline returns a 200 with the
+    /// body parsed as an `OpenAIResponse`. This proves the
+    /// migration is functionally correct end-to-end: the
+    /// `UpstreamRequest` is built, the `TimeoutProfile::Custom`
+    /// resolves correctly, the body is collected via
+    /// `UpstreamResponse::collect`, and the JSON parses to
+    /// `OpenAIResponse` (the same downstream code path the
+    /// reqwest-based path used).
+    #[tokio::test]
+    async fn non_streaming_dispatch_uses_upstream_client_end_to_end() {
+        use crate::adapters::{
+            AdapterAuthType, AdapterFormat, ProviderAdapter, ProviderAdapterConfig,
+        };
+        use std::sync::Arc;
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        use tokio::net::TcpListener;
+
+        // ----- 1. A mock ProviderAdapter that points at our
+        //         localhost listener -----
+        struct MockAdapter {
+            config: ProviderAdapterConfig,
+        }
+        #[async_trait::async_trait]
+        impl ProviderAdapter for MockAdapter {
+            fn id(&self) -> &ProviderId {
+                &self.config.id
+            }
+            fn config(&self) -> &ProviderAdapterConfig {
+                &self.config
+            }
+            fn build_chat_url(
+                &self,
+                _target_format: TargetFormat,
+                _model: &crate::ids::ModelId,
+            ) -> String {
+                self.config.base_url.clone()
+            }
+            fn build_auth_header(&self, api_key: &str) -> (String, String) {
+                ("Authorization".into(), format!("Bearer {api_key}"))
+            }
+            fn build_headers(
+                &self,
+                api_key: &str,
+                _target_format: TargetFormat,
+                _model: &crate::ids::ModelId,
+            ) -> Vec<(String, String)> {
+                vec![
+                    self.build_auth_header(api_key),
+                    ("Content-Type".into(), "application/json".into()),
+                ]
+            }
+            fn models_url(&self) -> Option<String> {
+                None
+            }
+            async fn fetch_models(
+                &self,
+                _upstream_client: &std::sync::Arc<crate::upstream::UpstreamClient>,
+                _api_key: &str,
+            ) -> Result<Vec<crate::models::DiscoveredModel>> {
+                Ok(Vec::new())
+            }
+        }
+
+        // ----- 2. Wire the listener + spawn a server that returns a
+        //         well-formed OpenAI chat completion response. The
+        //         server parses Content-Length from the request
+        //         headers and stops reading once that many body
+        //         bytes have arrived — this avoids blocking on a
+        //         body that hyper may or may not flush before the
+        //         response window expires. -----
+        let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
+        let local_addr = listener.local_addr().expect("local_addr");
+        let upstream_url = format!("http://{local_addr}");
+
+        let server_handle = tokio::spawn(async move {
+            let (mut sock, _peer) = listener.accept().await.expect("accept");
+            // Read until we've seen `\r\n\r\n` and (if a
+            // Content-Length is present) that many body bytes. We
+            // cap each read at 2s so the test never hangs the
+            // suite on a misbehaving client.
+            let mut buf = vec![0u8; 64 * 1024];
+            let mut total = 0usize;
+            let mut content_length: Option<usize> = None;
+            let mut header_end: Option<usize> = None;
+            loop {
+                let read_result = tokio::time::timeout(
+                    Duration::from_secs(2),
+                    sock.read(&mut buf[total..]),
+                )
+                .await;
+                match read_result {
+                    Err(_) => break,
+                    Ok(Ok(0)) => break,
+                    Ok(Ok(n)) => {
+                        total += n;
+                        if header_end.is_none() {
+                            if let Some(pos) =
+                                buf[..total].windows(4).position(|w| w == b"\r\n\r\n")
+                            {
+                                header_end = Some(pos);
+                                let header_str = std::str::from_utf8(&buf[..pos]).unwrap_or("");
+                                for line in header_str.split("\r\n") {
+                                    if let Some(rest) = line
+                                        .to_ascii_lowercase()
+                                        .strip_prefix("content-length:")
+                                    {
+                                        content_length = rest.trim().parse().ok();
+                                    }
+                                }
+                            }
+                        }
+                        if let (Some(he), Some(cl)) = (header_end, content_length) {
+                            if total - (he + 4) >= cl {
+                                break;
+                            }
+                        }
+                        if total == buf.len() {
+                            break;
+                        }
+                    }
+                    Ok(Err(_)) => break,
+                }
+            }
+            // Return a minimal-but-valid OpenAI chat completion.
+            let body = r#"{"id":"chatcmpl-test","object":"chat.completion","created":1,"model":"m","choices":[{"index":0,"message":{"role":"assistant","content":"hello"},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}"#;
+            let response = format!(
+                "HTTP/1.1 200 OK\r\n\
+                 Content-Type: application/json\r\n\
+                 Content-Length: {}\r\n\
+                 Connection: close\r\n\
+                 \r\n\
+                 {}",
+                body.len(),
+                body,
+            );
+            let _ = sock.write_all(response.as_bytes()).await;
+            let _ = sock.flush().await;
+        });
+
+        // ----- 3. Build the pipeline config + pipeline -----
+        let (pool, conn, _path) = fresh_pool();
+        let mk = Arc::new(MasterKey::generate());
+        let (combo_id, _account_id) = seed_solo_combo_at_url(
+            &pool.writer(),
+            "non-streaming-test",
+            &upstream_url,
+            &mk,
+        );
+
+        let defaults = Timeouts::from_config(&TimeoutsConfig::default());
+        let mock = MockAdapter {
+            config: ProviderAdapterConfig {
+                id: ProviderId::new("non-streaming-test"),
+                base_url: upstream_url.clone(),
+                auth_type: AdapterAuthType::Bearer,
+                format: AdapterFormat::Openai,
+                extra_headers: Vec::new(),
+            },
+        };
+        let cfg = PipelineConfig {
+            defaults,
+            racing: RacingConfig::default(),
+            retries: RetriesConfig::default(),
+            max_attempts: 1,
+            master_key: mk,
+            adapters: Arc::new(vec![Arc::new(mock) as Arc<dyn ProviderAdapter>]),
+            http_client: reqwest::Client::new(),
+            cooldown_secs: 60,
+            upstream_client: UpstreamClient::new(),
+        };
+        let p = Pipeline::new(conn, cfg);
+
+        let (req, _cancel_tx) = make_request(combo_id);
+
+        // ----- 4. Run the pipeline and assert success -----
+        let result = tokio::time::timeout(Duration::from_secs(15), p.run(req))
+            .await
+            .expect("pipeline.run timed out — non-streaming dispatch did not return");
+
+        assert!(
+            result.error.is_none(),
+            "expected no error from non-streaming dispatch but got {:?}",
+            result.error
+        );
+        assert_eq!(result.status_code, 200);
+        let openai_response = result
+            .final_response
+            .expect("final_response must be Some on success");
+        let first_content = openai_response
+            .choices
+            .first()
+            .and_then(|c| c.message.content.as_ref())
+            .and_then(|v| v.as_str());
+        assert_eq!(
+            first_content,
+            Some("hello"),
+            "the parsed body must surface the upstream's `choices[0].message.content`"
+        );
+
+        let _ = server_handle.await;
+    }
+
+    /// End-to-end exercise of the new (Gate 2) streaming chat
+    /// dispatch path that uses `UpstreamClient::call()` and
+    /// `UpstreamBodyStream::next_chunk()` instead of the legacy
+    /// reqwest `bytes_stream()` API. We bind a localhost listener,
+    /// point a mock `ProviderAdapter` at it, run a streaming chat
+    /// request, and assert the pipeline forwards every SSE chunk
+    /// (translated to OpenAI) into the `stream_sink` channel in
+    /// real-time. This proves:
+    ///   1. The `UpstreamRequest` is built and consumed by the
+    ///      hyper-based client.
+    ///   2. The `TimeoutProfile::Custom` is honored at the streaming
+    ///      boundary.
+    ///   3. The body iteration via `UpstreamBodyStream::next_chunk`
+    ///      drives the SSE line splitter.
+    ///   4. The translation step (parse_openai_sse_line +
+    ///      sink.send) still produces a well-formed OpenAI chunk.
+    #[tokio::test]
+    async fn streaming_dispatch_uses_upstream_client_end_to_end() {
+        use crate::adapters::{
+            AdapterAuthType, AdapterFormat, ProviderAdapter, ProviderAdapterConfig,
+        };
+        use std::sync::Arc;
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        use tokio::net::TcpListener;
+
+        // ----- 1. A mock ProviderAdapter that points at our
+        //         localhost listener -----
+        struct MockAdapter {
+            config: ProviderAdapterConfig,
+        }
+        #[async_trait::async_trait]
+        impl ProviderAdapter for MockAdapter {
+            fn id(&self) -> &ProviderId {
+                &self.config.id
+            }
+            fn config(&self) -> &ProviderAdapterConfig {
+                &self.config
+            }
+            fn build_chat_url(
+                &self,
+                _target_format: TargetFormat,
+                _model: &crate::ids::ModelId,
+            ) -> String {
+                format!("{}/chat/completions", self.config.base_url)
+            }
+            fn build_auth_header(&self, api_key: &str) -> (String, String) {
+                ("Authorization".into(), format!("Bearer {api_key}"))
+            }
+            fn build_headers(
+                &self,
+                api_key: &str,
+                _target_format: TargetFormat,
+                _model: &crate::ids::ModelId,
+            ) -> Vec<(String, String)> {
+                vec![
+                    self.build_auth_header(api_key),
+                    ("Content-Type".into(), "application/json".into()),
+                ]
+            }
+            fn models_url(&self) -> Option<String> {
+                None
+            }
+            async fn fetch_models(
+                &self,
+                _upstream_client: &std::sync::Arc<crate::upstream::UpstreamClient>,
+                _api_key: &str,
+            ) -> Result<Vec<crate::models::DiscoveredModel>> {
+                Ok(Vec::new())
+            }
+        }
+
+        // ----- 2. Bind the listener and spawn a server that
+        //         returns three well-formed OpenAI SSE chunks
+        //         followed by the [DONE] sentinel. We use
+        //         `Transfer-Encoding: chunked` so the upstream
+        //         client's `Limited` body sees multiple frames
+        //         (the way a real upstream would stream an
+        //         OpenAI response). -----
+        let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
+        let local_addr = listener.local_addr().expect("local_addr");
+        let upstream_url = format!("http://{local_addr}");
+
+        let server_handle = tokio::spawn(async move {
+            let (mut sock, _peer) = listener.accept().await.expect("accept");
+            // Drain the request bytes so the client can finish
+            // the POST. The mock upstream is OpenAI-on-the-wire;
+            // we don't parse the body — just consume it.
+            let mut buf = vec![0u8; 64 * 1024];
+            let mut total = 0usize;
+            let mut header_end: Option<usize> = None;
+            let mut content_length: Option<usize> = None;
+            loop {
+                let read_result = tokio::time::timeout(
+                    Duration::from_secs(2),
+                    sock.read(&mut buf[total..]),
+                )
+                .await;
+                match read_result {
+                    Err(_) => break,
+                    Ok(Ok(0)) => break,
+                    Ok(Ok(n)) => {
+                        total += n;
+                        if header_end.is_none() {
+                            if let Some(pos) =
+                                buf[..total].windows(4).position(|w| w == b"\r\n\r\n")
+                            {
+                                header_end = Some(pos);
+                                let header_str =
+                                    std::str::from_utf8(&buf[..pos]).unwrap_or("");
+                                for line in header_str.split("\r\n") {
+                                    if let Some(rest) = line
+                                        .to_ascii_lowercase()
+                                        .strip_prefix("content-length:")
+                                    {
+                                        content_length = rest.trim().parse().ok();
+                                    }
+                                }
+                            }
+                        }
+                        if let (Some(he), Some(cl)) = (header_end, content_length) {
+                            if total - (he + 4) >= cl {
+                                break;
+                            }
+                        }
+                        if total == buf.len() {
+                            break;
+                        }
+                    }
+                    Ok(Err(_)) => break,
+                }
+            }
+
+            // Send the response headers. We use neither
+            // Content-Length nor Transfer-Encoding: chunked
+            // — the upstream closes the socket when the
+            // response is complete. This is the simplest
+            // streaming shape and is the one the production
+            // hyper client is tuned for (the `Limited` body
+            // wrapper reads until EOF in this case).
+            let headers = b"HTTP/1.1 200 OK\r\n\
+                            Content-Type: text/event-stream\r\n\
+                            Cache-Control: no-cache\r\n\
+                            Connection: close\r\n\
+                            \r\n";
+            if sock.write_all(headers).await.is_err() {
+                return;
+            }
+
+            // Three OpenAI-style chunks (delta.content="hi" /
+            // " there" / "!") then [DONE]. Each chunk is
+            // sent as a separate `write_all` so the upstream
+            // client's body stream sees multiple frames
+            // arriving on the socket, exercising the
+            // `next_chunk()` boundary in the loop.
+            let chunks: &[&[u8]] = &[
+                br#"data: {"id":"chatcmpl-x","object":"chat.completion.chunk","created":1,"model":"m","choices":[{"index":0,"delta":{"content":"hi"},"finish_reason":null}]}
+
+"#.as_slice(),
+                br#"data: {"id":"chatcmpl-x","object":"chat.completion.chunk","created":1,"model":"m","choices":[{"index":0,"delta":{"content":" there"},"finish_reason":null}]}
+
+"#.as_slice(),
+                br#"data: {"id":"chatcmpl-x","object":"chat.completion.chunk","created":1,"model":"m","choices":[{"index":0,"delta":{"content":"!"},"finish_reason":null}]}
+
+"#.as_slice(),
+            ];
+            for c in chunks {
+                if sock.write_all(c).await.is_err() {
+                    return;
+                }
+                if sock.flush().await.is_err() {
+                    return;
+                }
+            }
+            // [DONE] sentinel as the last chunk.
+            let done = b"data: [DONE]\n\n";
+            let _ = sock.write_all(done).await;
+            let _ = sock.flush().await;
+            // Close the socket to signal EOF — the upstream
+            // client's `next_chunk` will return `Ok(None)`.
+            let _ = sock.shutdown().await;
+        });
+
+        // ----- 3. Build the pipeline config + pipeline -----
+        let (pool, conn, _path) = fresh_pool();
+        let mk = Arc::new(MasterKey::generate());
+        let (combo_id, _account_id) = seed_solo_combo_at_url(
+            &pool.writer(),
+            "streaming-test",
+            &upstream_url,
+            &mk,
+        );
+
+        let defaults = Timeouts::from_config(&TimeoutsConfig::default());
+        let mock = MockAdapter {
+            config: ProviderAdapterConfig {
+                id: ProviderId::new("streaming-test"),
+                base_url: upstream_url.clone(),
+                auth_type: AdapterAuthType::Bearer,
+                format: AdapterFormat::Openai,
+                extra_headers: Vec::new(),
+            },
+        };
+        let cfg = PipelineConfig {
+            defaults,
+            racing: RacingConfig::default(),
+            retries: RetriesConfig::default(),
+            max_attempts: 1,
+            master_key: mk,
+            adapters: Arc::new(vec![Arc::new(mock) as Arc<dyn ProviderAdapter>]),
+            http_client: reqwest::Client::new(),
+            cooldown_secs: 60,
+            upstream_client: UpstreamClient::new(),
+        };
+        let p = Pipeline::new(conn, cfg);
+
+        // ----- 4. Build a streaming request: `stream = true`,
+        //         a real sink channel, and a real cancel watch
+        //         (we never send `true`, so the watch stays
+        //         false for the whole run). -----
+        let (mut req, _cancel_tx) = make_request(combo_id);
+        req.openai_request.stream = true;
+        let (sink_tx, mut sink_rx) = mpsc::channel::<String>(32);
+        req.stream_sink = Some(sink_tx);
+
+        // ----- 5. Run the pipeline. We capture the result so we
+        //         can report it in the panic message; the
+        //         streaming dispatch populates the sink as a
+        //         side effect. -----
+        let result = tokio::time::timeout(Duration::from_secs(15), p.run(req))
+            .await
+            .expect("streaming pipeline.run timed out — next_chunk() did not return");
+
+        assert!(
+            result.error.is_none(),
+            "expected no error from streaming dispatch but got {:?}",
+            result.error
+        );
+        assert_eq!(result.status_code, 200);
+
+        // After `run` returns the sink sender has been dropped,
+        // so the channel is closed. Drain everything still in
+        // the buffer.
+        let mut collected: Vec<String> = Vec::new();
+        while let Some(item) = sink_rx.recv().await {
+            collected.push(item);
+        }
+
+        // ----- 6. Assertions -----
+        assert!(
+            !collected.is_empty(),
+            "expected at least one SSE chunk to be forwarded to the sink — \
+             the streaming dispatch path produced no output"
+        );
+        // The [DONE] sentinel is sent by the pipeline
+        // itself, but the upstream also sends it; either way
+        // at least one [DONE] must be present.
+        let done_count = collected.iter().filter(|s| s.as_str() == "[DONE]").count();
+        assert!(
+            done_count >= 1,
+            "expected at least one [DONE] sentinel in the sink output, got: {:?}",
+            collected
+        );
+        // Every non-[DONE] entry must be a valid JSON object
+        // with a `choices` array (i.e. a translated OpenAI
+        // chunk).
+        for item in &collected {
+            if item.as_str() == "[DONE]" {
+                continue;
+            }
+            let parsed: serde_json::Value = serde_json::from_str(item)
+                .unwrap_or_else(|e| panic!(
+                    "sink item is not valid JSON: {:?} (parse error: {})",
+                    item, e
+                ));
+            assert!(
+                parsed.get("choices").is_some(),
+                "translated chunk must carry a `choices` field: {:?}",
+                parsed
+            );
+        }
+        // The concatenated `delta.content` of the translated
+        // chunks must spell "hi there!" — proves every chunk
+        // was forwarded and translated, not just the first.
+        let mut reconstructed = String::new();
+        for item in &collected {
+            if item.as_str() == "[DONE]" {
+                continue;
+            }
+            if let Ok(v) = serde_json::from_str::<serde_json::Value>(item) {
+                if let Some(delta) = v
+                    .get("choices")
+                    .and_then(|c| c.get(0))
+                    .and_then(|c| c.get("delta"))
+                {
+                    if let Some(content) = delta.get("content").and_then(|s| s.as_str()) {
+                        reconstructed.push_str(content);
+                    }
+                }
+            }
+        }
+        assert_eq!(
+            reconstructed, "hi there!",
+            "concatenated chunk content must equal `hi there!`, got {:?}",
+            reconstructed
+        );
+
+        let _ = server_handle.await;
+    }
+
     /// Cancellation must abort the streaming response mid-stream
     /// without waiting for the upstream to finish sending.
     ///
@@ -4040,7 +6197,7 @@ mod tests {
             }
             async fn fetch_models(
                 &self,
-                _client: &reqwest::Client,
+                _upstream_client: &std::sync::Arc<crate::upstream::UpstreamClient>,
                 _api_key: &str,
             ) -> Result<Vec<crate::models::DiscoveredModel>> {
                 // Not exercised by the streaming path; return an
@@ -4082,6 +6239,7 @@ mod tests {
                     as Arc<dyn ProviderAdapter>]),
                 http_client: reqwest::Client::new(),
                 cooldown_secs: 60,
+                upstream_client: UpstreamClient::new(),
             }
         }
 
