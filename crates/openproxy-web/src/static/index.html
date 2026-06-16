@@ -1,29 +1,12 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>openproxy dashboard</title>
-  <link rel="stylesheet" href="/styles.css">
-</head>
-<body>
-  <div id="app">
-    <aside class="sidebar">
-      <h1>openproxy</h1>
-      <nav>
-        <a href="#/providers" data-route="providers">Providers</a>
-        <a href="#/combos" data-route="combos">Combos</a>
-        <a href="#/keys" data-route="keys">API Keys</a>
-        <a href="#/analytics" data-route="analytics">Analytics</a>
-        <a href="#/logs" data-route="logs">Live Logs</a>
-        <a href="#/config" data-route="config">Config</a>
-      </nav>
-      <div id="health-status">checking...</div>
-    </aside>
-    <main id="main">
-      <div class="loading">Loading...</div>
-    </main>
-  </div>
-  <script src="/app.js"></script>
-</body>
+<!doctype html>
+<html lang="en" data-theme="light">
+  <head>
+    <meta charset="utf-8">
+    <title>openproxy admin</title>
+    <link rel="stylesheet" href="/styles/index.css">
+  </head>
+  <body>
+    <div id="app"></div>
+    <script type="module" src="/src/app.js"></script>
+  </body>
 </html>

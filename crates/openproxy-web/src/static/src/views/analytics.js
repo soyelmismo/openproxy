@@ -1,0 +1,67 @@
+// views/analytics.js — analytics dashboards: summary, latency
+// percentiles, race stats, by-model breakdown. Pulls from
+// /usage/summary, /usage/by-model, /usage/latency, /usage/races.
+
+import { api } from "../state/api.js";
+import { escapeHtml } from "../lib/escape.js";
+import { pageHeader } from "../components/page-header.js";
+import { card } from "../components/card.js";
+
+function fmtMs(v) { return v == null ? "—" : `${v.toFixed(0)} ms`; }
+
+export async function mountAnalytics() {
+  const main = document.getElementById("main");
+  main.innerHTML = pageHeader({ title: "Analytics" }) + `<div class="loading">Loading...</div>`;
+  try {
+    const [summary, byModel, latency, races] = await Promise.all([
+      api("/usage/summary"),
+      api("/usage/by-model"),
+      api("/usage/latency"),
+      api("/usage/races"),
+    ]);
+    const summaryBlock = card("Summary", `
+      <div class="metrics">
+        <div><label>Unique requests</label><div class="value">${summary.unique_requests}</div></div>
+        <div><label>Total rows</label><div class="value">${summary.total_rows}</div></div>
+        <div><label>Winners</label><div class="value">${summary.winners}</div></div>
+        <div><label>Losers</label><div class="value">${summary.losers}</div></div>
+        <div><label>Errors</label><div class="value">${summary.errors}</div></div>
+        <div><label>Prompt tokens</label><div class="value">${summary.total_prompt_tokens}</div></div>
+        <div><label>Completion tokens</label><div class="value">${summary.total_completion_tokens}</div></div>
+        <div><label>Total cost USD</label><div class="value">$${summary.total_cost_usd.toFixed(4)}</div></div>
+        <div><label>Avg TTFT ms</label><div class="value">${summary.avg_ttft_ms ? summary.avg_ttft_ms.toFixed(1) : "—"}</div></div>
+      </div>
+    `);
+    const latencyBlock = card("Latency percentiles (winners only)", `
+      <div class="metrics">
+        <div><label>Samples</label><div class="value">${latency.samples}</div></div>
+        <div><label>p50 connect ms</label><div class="value">${fmtMs(latency.p50_connect_ms)}</div></div>
+        <div><label>p95 connect ms</label><div class="value">${fmtMs(latency.p95_connect_ms)}</div></div>
+        <div><label>p50 TTFT ms</label><div class="value">${fmtMs(latency.p50_ttft_ms)}</div></div>
+        <div><label>p95 TTFT ms</label><div class="value">${fmtMs(latency.p95_ttft_ms)}</div></div>
+        <div><label>p50 total ms</label><div class="value">${fmtMs(latency.p50_total_ms)}</div></div>
+        <div><label>p95 total ms</label><div class="value">${fmtMs(latency.p95_total_ms)}</div></div>
+      </div>
+    `);
+    const raceBlock = card("Race stats", `
+      <div class="metrics">
+        <div><label>Total races</label><div class="value">${races.total_races}</div></div>
+        <div><label>Winners</label><div class="value">${races.winners}</div></div>
+        <div><label>Losers</label><div class="value">${races.losers}</div></div>
+      </div>
+    `);
+    const byModelRows = byModel.map(r =>
+      `<tr><td>${escapeHtml(r.provider_id)}</td><td>${escapeHtml(r.upstream_model_id)}</td><td>${r.unique_requests}</td><td>${r.total_rows}</td><td>$${r.total_cost_usd.toFixed(4)}</td></tr>`
+    ).join("");
+    const byModelBlock = card("By model", `
+      <table>
+        <thead><tr><th>Provider</th><th>Model</th><th>Unique</th><th>Total</th><th>Cost USD</th></tr></thead>
+        <tbody>${byModelRows}</tbody>
+      </table>
+    `);
+    main.innerHTML = pageHeader({ title: "Analytics" }) + summaryBlock + latencyBlock + raceBlock + byModelBlock;
+  } catch (e) {
+    main.innerHTML = pageHeader({ title: "Analytics" }) +
+      `<div class="banner banner-error">${escapeHtml(e.message)}</div>`;
+  }
+}

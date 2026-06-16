@@ -1,0 +1,142 @@
+/* ============================================
+   THEMES — light / dark
+   ------------------------------------------
+   Per spec §4.3: dark inverts canvas <-> frame-ink,
+   desaturates the tints ~30% for AA contrast.
+   Light is the default; dark via [data-theme="dark"].
+   ============================================ */
+
+/* ---------- Light (explicit) ---------- */
+:root[data-theme="light"] {
+  --color-bg:           var(--c-canvas);
+  --color-surface:      var(--c-canvas);
+  --color-surface-2:    #f5f5f5;
+  --color-text:         var(--c-ink);
+  --color-text-muted:   #5a5a5a;
+  --color-text-inverse: var(--c-canvas);
+  --color-link:         var(--c-link);
+  --color-border:       var(--c-frame-ink);
+  --color-border-soft:  #d4d4d4;
+  --color-frame-ink:    var(--c-frame-ink);
+
+  --color-primary:        var(--c-dell-red);
+  --color-primary-hover:  #c91825;
+  --color-primary-fg:     var(--c-canvas);
+  --color-primary-soft:   #f6dada;
+
+  --color-success:        #4d7c2a;
+  --color-success-soft:   #d8e2c8;
+  --color-warn:           #a86a00;
+  --color-warn-soft:      #f5d9b8;
+  --color-error:          #b21f1f;
+  --color-error-soft:     #f3cdcd;
+  --color-info:           #2b5a78;
+  --color-info-soft:      #cfdde5;
+
+  --color-status-ok:        var(--color-success);
+  --color-status-ok-soft:   var(--color-success-soft);
+  --color-status-err:       var(--color-error);
+  --color-status-err-soft:  var(--color-error-soft);
+  --color-status-warn:      var(--color-warn);
+  --color-status-warn-soft: var(--color-warn-soft);
+  --color-status-lost:      #5a5a5a;
+  --color-status-lost-soft: #e6e6e6;
+
+  --color-phase-soft:     #ece9e2;
+  --color-phase-text:     #1a1a1a;
+
+  --color-log-header-bg:  #0f0d0b;
+  --color-log-header-fg:  #d8d4c8;
+}
+
+/* ---------- Dark ---------- */
+:root[data-theme="dark"] {
+  --color-bg:           #121212;
+  --color-surface:      #1c1c1c;
+  --color-surface-2:    #2a2a2a;
+  --color-text:         #f0f0f0;
+  --color-text-muted:   #a8a8a8;
+  --color-text-inverse: #121212;
+  --color-link:         #6e8eff;
+  --color-border:       #3a3a3a;
+  --color-border-soft:  #2a2a2a;
+  --color-frame-ink:    #f0f0f0;
+
+  --color-primary:        #ff4d57;     /* Dell red lifted ~20% */
+  --color-primary-hover:  #ff6b73;
+  --color-primary-fg:     #121212;
+  --color-primary-soft:   #2a1414;
+
+  --color-success:        #88b870;     /* sage desat -30% */
+  --color-success-soft:   #2a3a20;
+  --color-warn:           #d4a070;     /* peach desat */
+  --color-warn-soft:      #3a2a18;
+  --color-error:          #e08080;     /* salmon desat */
+  --color-error-soft:     #3a1e1e;
+  --color-info:           #8ab0c5;     /* sky desat */
+  --color-info-soft:      #1e2a32;
+
+  --color-status-ok:        var(--color-success);
+  --color-status-ok-soft:   var(--color-success-soft);
+  --color-status-err:       var(--color-error);
+  --color-status-err-soft:  var(--color-error-soft);
+  --color-status-warn:      var(--color-warn);
+  --color-status-warn-soft: var(--color-warn-soft);
+  --color-status-lost:      #707070;
+  --color-status-lost-soft: #2a2a2a;
+
+  --color-phase-soft:     #2a2a2a;
+  --color-phase-text:     #d8d4c8;
+
+  --color-log-header-bg:  #050505;
+  --color-log-header-fg:  #a8a89a;
+}
+
+/* ---------- prefers-color-scheme fallback ----------
+   Used only when there is NO explicit data-theme on
+   <html>. state/theme.js always sets data-theme after
+   bootstrap, so these rules are only a first-paint
+   safety net. */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme]) {
+    --color-bg:           #121212;
+    --color-surface:      #1c1c1c;
+    --color-surface-2:    #2a2a2a;
+    --color-text:         #f0f0f0;
+    --color-text-muted:   #a8a8a8;
+    --color-text-inverse: #121212;
+    --color-link:         #6e8eff;
+    --color-border:       #3a3a3a;
+    --color-border-soft:  #2a2a2a;
+    --color-frame-ink:    #f0f0f0;
+
+    --color-primary:      #ff4d57;
+    --color-primary-hover:#ff6b73;
+    --color-primary-fg:   #121212;
+    --color-primary-soft: #2a1414;
+
+    --color-success:      #88b870;
+    --color-success-soft: #2a3a20;
+    --color-warn:         #d4a070;
+    --color-warn-soft:    #3a2a18;
+    --color-error:        #e08080;
+    --color-error-soft:   #3a1e1e;
+    --color-info:         #8ab0c5;
+    --color-info-soft:    #1e2a32;
+
+    --color-status-ok:        var(--color-success);
+    --color-status-ok-soft:   var(--color-success-soft);
+    --color-status-err:       var(--color-error);
+    --color-status-err-soft:  var(--color-error-soft);
+    --color-status-warn:      var(--color-warn);
+    --color-status-warn-soft: var(--color-warn-soft);
+    --color-status-lost:      #707070;
+    --color-status-lost-soft: #2a2a2a;
+
+    --color-phase-soft:     #2a2a2a;
+    --color-phase-text:     #d8d4c8;
+
+    --color-log-header-bg:  #050505;
+    --color-log-header-fg:  #a8a89a;
+  }
+}

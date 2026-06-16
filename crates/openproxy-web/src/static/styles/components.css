@@ -1,0 +1,509 @@
+/* ============================================
+   COMPONENTS — buttons, badges, tables, forms,
+   status-pill, modal, toast, banner, key-display,
+   model-chip, theme-toggle, bulk-actions, filter-bar,
+   combo-card, recording-toggle
+   ============================================ */
+
+/* ----- Buttons ----- */
+button.primary,
+.btn-primary {
+  background: var(--color-primary);
+  color: var(--color-primary-fg);
+  border-color: var(--color-primary);
+  font-weight: 600;
+}
+button.primary:hover,
+.btn-primary:hover {
+  background: var(--color-primary-hover);
+  border-color: var(--color-primary-hover);
+}
+button.danger {
+  background: var(--color-surface);
+  color: var(--color-error);
+  border-color: var(--color-error);
+}
+button.danger:hover:not(:disabled) {
+  background: var(--color-error-soft);
+  color: var(--color-error);
+}
+button.small { padding: 0.2rem 0.5rem; font-size: var(--fs-xs); }
+button.link {
+  background: transparent;
+  border: none;
+  color: var(--color-link);
+  padding: 0.2rem 0.4rem;
+  text-decoration: underline;
+}
+button.link:hover { color: var(--color-link-hover); background: transparent; }
+button.close-btn {
+  background: transparent;
+  border: none;
+  font-size: 1.4rem;
+  line-height: 1;
+  padding: 0 var(--space-2);
+}
+
+/* ----- Tables ----- */
+table {
+  width: 100%;
+  border-collapse: collapse;
+  background: var(--color-surface);
+  font-size: var(--fs-sm);
+}
+th, td {
+  text-align: left;
+  padding: 0.45rem 0.6rem;
+  border-bottom: var(--border-w) var(--border-style) var(--color-border);
+  vertical-align: top;
+}
+th {
+  background: var(--color-surface-2);
+  font-family: var(--font-display);
+  font-size: var(--fs-xs);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--color-text-muted);
+}
+tbody tr:hover { background: var(--color-surface-2); }
+tr.selected { background: var(--color-primary-soft); }
+
+/* ----- Forms ----- */
+.field { margin-bottom: var(--space-4); display: flex; flex-direction: column; gap: var(--space-1); }
+.field label, .field .field-label, .field-label {
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  color: var(--color-text-muted);
+}
+.field small { color: var(--color-text-muted); font-size: var(--fs-xs); }
+.radio-group { display: flex; gap: var(--space-3); flex-wrap: wrap; }
+
+/* ----- Badges & Chips ----- */
+.badge {
+  display: inline-block;
+  padding: 0.1rem 0.5rem;
+  font-size: var(--fs-xs);
+  border: var(--border-w) var(--border-style) var(--color-border);
+  background: var(--color-surface);
+  color: var(--color-text);
+}
+.badge-info    { background: var(--color-info-soft);    color: var(--color-info);    border-color: var(--color-info); }
+.badge-success { background: var(--color-success-soft); color: var(--color-success); border-color: var(--color-success); }
+.badge-warn    { background: var(--color-warn-soft);    color: var(--color-warn);    border-color: var(--color-warn); }
+.badge-error   { background: var(--color-error-soft);   color: var(--color-error);   border-color: var(--color-error); }
+.badge-cooldown{ background: var(--color-warn-soft);    color: var(--color-warn);    border-color: var(--color-warn); }
+.badge-virtual { background: var(--color-phase-soft);   color: var(--color-phase-text);   border-color: var(--color-border-soft); font-style: italic; }
+
+.chip {
+  display: inline-block;
+  padding: 0.15rem 0.5rem;
+  background: var(--color-surface-2);
+  border: var(--border-w) var(--border-style) var(--color-border);
+  font-size: var(--fs-xs);
+  font-family: var(--font-mono);
+}
+.chip.combo-chip { background: var(--color-info-soft); color: var(--color-info); border-color: var(--color-info); }
+.virtual-provider { font-style: italic; color: var(--color-text-muted); }
+
+.model-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0.15rem 0.5rem;
+  background: var(--color-info-soft);
+  color: var(--color-info);
+  border: var(--border-w) var(--border-style) var(--color-info);
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+}
+.model-chip button {
+  background: transparent;
+  border: none;
+  padding: 0 0.15rem;
+  color: var(--color-info);
+  font-size: 1rem;
+  line-height: 1;
+}
+
+/* ----- Status pill ----- */
+.status-pill {
+  display: inline-block;
+  padding: 0.1rem 0.5rem;
+  font-size: var(--fs-xs);
+  font-family: var(--font-mono);
+  border: var(--border-w) var(--border-style) currentColor;
+  background: transparent;
+}
+.status-pill.ok, .status-pill.on, .status-pill.success {
+  color: var(--color-success);
+  background: var(--color-success-soft);
+  border-color: var(--color-success);
+}
+.status-pill.warn {
+  color: var(--color-warn);
+  background: var(--color-warn-soft);
+  border-color: var(--color-warn);
+}
+.status-pill.err, .status-pill.error, .status-pill.off, .status-pill.danger {
+  color: var(--color-error);
+  background: var(--color-error-soft);
+  border-color: var(--color-error);
+}
+.status-pill.lost {
+  color: var(--color-status-lost);
+  background: var(--color-status-lost-soft);
+  border-color: var(--color-status-lost);
+}
+
+/* ----- Modal ----- */
+.modal-bg {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.45);
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  z-index: var(--z-modal);
+  padding: var(--space-6);
+  overflow-y: auto;
+}
+.modal {
+  background: var(--color-bg);
+  border: var(--border-w-2) var(--border-style) var(--color-border);
+  min-width: 400px;
+  max-width: 640px;
+  width: 100%;
+}
+.modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--space-3) var(--space-4);
+  border-bottom: var(--border-w) var(--border-style) var(--color-border);
+  background: var(--color-surface-2);
+}
+.modal-header h2 { margin: 0; font-size: var(--fs-lg); }
+.modal-body { padding: var(--space-4); }
+.modal-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--space-2);
+  padding: var(--space-3) var(--space-4);
+  border-top: var(--border-w) var(--border-style) var(--color-border);
+  background: var(--color-surface-2);
+}
+.modal-picker { max-width: 720px; }
+.modal-picker-bg { z-index: calc(var(--z-modal) + 1); }
+
+/* ----- Modal — responsive base overrides (≤768px) ----- */
+/* The modal has min-width: 400px and max-width: 640px
+   for desktop. Below 768px we strip the min-width ceiling
+   and clamp the width to the viewport so modals don't force
+   horizontal scroll on mobile. The desktop styles above
+   remain untouched. */
+@media (max-width: 768px) {
+  .modal-bg { padding: var(--space-3); }
+  .modal {
+    min-width: 0;
+    max-width: calc(100vw - 1rem);
+    width: 100%;
+  }
+  .modal-picker { max-width: calc(100vw - 1rem); }
+}
+
+/* ----- Toast ----- */
+.toast {
+  position: fixed;
+  bottom: var(--space-6);
+  right: var(--space-6);
+  padding: 0.75rem 1.25rem;
+  font-size: var(--fs-sm);
+  font-weight: 500;
+  z-index: var(--z-toast);
+  transform: translateY(20px);
+  opacity: 0;
+  transition: transform var(--t-base), opacity var(--t-base);
+  border: var(--border-w) var(--border-style) var(--color-border);
+  background: var(--color-surface);
+  color: var(--color-text);
+}
+.toast.show { transform: translateY(0); opacity: 1; }
+.toast-success { background: var(--color-success-soft); color: var(--color-success); border-color: var(--color-success); }
+.toast-error   { background: var(--color-error-soft);   color: var(--color-error);   border-color: var(--color-error);   }
+.toast-info    { background: var(--color-info-soft);    color: var(--color-info);    border-color: var(--color-info);    }
+
+/* ----- Banner ----- */
+.banner {
+  padding: 0.9rem 1.1rem;
+  border: var(--border-w) var(--border-style) var(--color-border);
+  margin: var(--space-4) 0;
+  line-height: 1.45;
+}
+.banner-info {
+  background: var(--color-warn-soft);
+  border-color: var(--color-warn);
+  color: var(--color-text);
+}
+.banner--success {
+  background: var(--color-success-soft);
+  border-color: var(--color-success);
+  color: var(--color-text);
+}
+.banner-error {
+  background: var(--color-error-soft);
+  border-color: var(--color-error);
+  color: var(--color-text);
+}
+
+/* ----- Quota bar ----- */
+.quota-bar {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  margin: var(--space-2) 0;
+}
+.quota-bar-track {
+  height: 8px;
+  background: var(--color-surface-2);
+  border: var(--border-w) var(--border-style) var(--color-border);
+  position: relative;
+  overflow: hidden;
+}
+.quota-bar-fill {
+  height: 100%;
+  background: var(--color-primary);
+  transition: width var(--t-base);
+}
+.quota-bar-fill.warn    { background: var(--color-warn); }
+.quota-bar-fill.error   { background: var(--color-error); }
+.quota-bar-label { font-size: var(--fs-xs); color: var(--color-text-muted); }
+
+/* ----- Bulk actions bar ----- */
+.bulk-actions-bar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  background: var(--color-primary-soft);
+  border: var(--border-w) var(--border-style) var(--color-primary);
+  margin: var(--space-2) 0;
+  font-size: var(--fs-sm);
+  flex-wrap: wrap;
+}
+
+/* ----- Filter bar ----- */
+.filter-bar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2);
+  background: var(--color-surface-2);
+  border: var(--border-w) var(--border-style) var(--color-border);
+  margin-bottom: var(--space-3);
+  flex-wrap: wrap;
+}
+.filter-bar input[type="text"] { flex: 1; min-width: 200px; }
+.filter-bar .filter-info { font-size: var(--fs-xs); color: var(--color-text-muted); }
+
+/* ----- Combo card ----- */
+.combo-card {
+  display: block;
+  padding: var(--space-3);
+  background: var(--color-surface);
+  border: var(--border-w-2) var(--border-style) var(--color-border);
+  text-decoration: none;
+  color: var(--color-text);
+  transition: background var(--t-fast);
+}
+.combo-card:hover { background: var(--color-primary-soft); color: var(--color-text); border-color: var(--color-primary); }
+.combo-card h3 { margin: 0 0 var(--space-2); font-size: var(--fs-md); }
+.combo-card .targets-mini { font-size: var(--fs-xs); color: var(--color-text-muted); }
+.combo-card .targets-mini .target-chip {
+  display: inline-block;
+  margin: 1px 2px;
+  padding: 0 0.4rem;
+  background: var(--color-surface-2);
+  border: var(--border-w) var(--border-style) var(--color-border-soft);
+  font-family: var(--font-mono);
+}
+
+/* ----- Key display ----- */
+.key-display {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2);
+  background: var(--color-surface-2);
+  border: var(--border-w) var(--border-style) var(--color-border);
+}
+.key-display code {
+  flex: 1;
+  font-size: var(--fs-sm);
+  word-break: break-all;
+  background: var(--color-bg);
+  padding: 0.4rem 0.6rem;
+  border: var(--border-w) var(--border-style) var(--color-border);
+}
+
+/* ----- Model picker ----- */
+.model-picker-display {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+  padding: var(--space-2);
+  background: var(--color-surface-2);
+  border: var(--border-w) var(--border-style) var(--color-border);
+}
+.model-picker-display > button.link-btn {
+  margin-left: auto;
+  background: transparent;
+  border: none;
+  color: var(--color-link);
+  text-decoration: underline;
+  padding: 0 0.4rem;
+  font-size: var(--fs-sm);
+}
+.picker-search { padding: var(--space-2) var(--space-3); border-bottom: var(--border-w) var(--border-style) var(--color-border); }
+.picker-search input { width: 100%; }
+.model-picker-list {
+  max-height: 360px;
+  overflow-y: auto;
+}
+.model-picker-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: 0.4rem var(--space-3);
+  border-bottom: var(--border-w) var(--border-style) var(--color-border-soft);
+  cursor: pointer;
+}
+.model-picker-row:hover { background: var(--color-surface-2); }
+.model-picker-row .model-id { font-family: var(--font-mono); flex: 1; font-size: var(--fs-sm); }
+.model-picker-row .model-provider { font-size: var(--fs-xs); color: var(--color-text-muted); }
+
+/* ----- Theme toggle ----- */
+.theme-toggle {
+  position: absolute;
+  bottom: var(--space-4);
+  left: var(--space-4);
+  width: 36px;
+  height: 36px;
+  background: var(--color-surface);
+  border: var(--border-w) var(--border-style) var(--color-border);
+  color: var(--color-text-muted);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 1.05rem;
+  padding: 0;
+  margin: 0;
+  transition: background var(--t-fast), color var(--t-fast), border-color var(--t-fast), transform var(--t-fast);
+}
+.theme-toggle:hover {
+  border-color: var(--color-primary);
+  color: var(--color-primary);
+  background: var(--color-primary-soft);
+  transform: rotate(15deg);
+}
+
+/* ----- Recording toggle ----- */
+.logs-recording-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: var(--fs-sm);
+  font-family: var(--font-sans);
+  padding: 0.25rem 0.6rem;
+  background: var(--color-surface-2);
+  color: var(--color-text);
+  border: var(--border-w) var(--border-style) var(--color-border);
+  cursor: pointer;
+  transition: background var(--t-fast), border-color var(--t-fast), opacity var(--t-fast);
+  user-select: none;
+}
+.logs-recording-toggle:hover { border-color: var(--color-text-muted); }
+.logs-recording-toggle:focus-visible { outline: 2px solid var(--color-primary); outline-offset: 2px; }
+.logs-recording-toggle.loading { opacity: 0.6; cursor: progress; }
+.logs-recording-toggle .logs-recording-dot {
+  width: 0.55rem;
+  height: 0.55rem;
+  background: var(--color-text-muted);
+  display: inline-block;
+}
+.logs-recording-toggle.on {
+  background: var(--color-error-soft);
+  color: var(--color-error);
+  border-color: var(--color-error);
+}
+.logs-recording-toggle.on .logs-recording-dot {
+  background: var(--color-error);
+  animation: logs-recording-pulse 1.5s ease-out infinite;
+}
+.logs-recording-toggle.off .logs-recording-dot { background: var(--color-text-muted); }
+.logs-recording-toggle strong { font-weight: 600; }
+
+/* ----- Logs header ----- */
+.logs-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  margin-bottom: var(--space-3);
+}
+.logs-header h2 { margin: 0; }
+.logs-header-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+/* ----- Connection badge ----- */
+.logs-connection-badge {
+  display: inline-block;
+  padding: 0.2rem 0.6rem;
+  font-size: var(--fs-xs);
+  font-family: var(--font-mono);
+  border: var(--border-w) var(--border-style) var(--color-border);
+  background: var(--color-surface);
+}
+.logs-connection-badge.connected    { background: var(--color-success-soft); color: var(--color-success); border-color: var(--color-success); }
+.logs-connection-badge.connecting,
+.logs-connection-badge.reconnecting { background: var(--color-warn-soft);    color: var(--color-warn);    border-color: var(--color-warn); }
+.logs-connection-badge.disconnected { background: var(--color-error-soft);   color: var(--color-error);   border-color: var(--color-error); }
+
+/* ----- Logs container ----- */
+#logs {
+  border: var(--border-w) var(--border-style) var(--color-border);
+  background: var(--color-bg);
+  max-height: 70vh;
+  overflow-y: auto;
+}
+
+/* ----- Sortable table headers ----- */
+/* The models table lets the user click any column header to sort
+   by that column. The active column gets a tinted background and
+   an inline ▲/▼ indicator; inactive sortable columns get a hover
+   background so the affordance is obvious. Non-sortable headers
+   (checkbox, Capabilities, Status, Actions) are untouched. */
+th.sortable {
+  cursor: pointer;
+  user-select: none;
+  position: relative;
+  transition: background-color 80ms ease-out;
+}
+th.sortable:hover {
+  background: var(--color-surface-hover, rgba(0, 0, 0, 0.04));
+}
+th.sortable.sorted {
+  background: var(--color-primary-soft, rgba(59, 130, 246, 0.08));
+  color: var(--color-primary, inherit);
+}
+th.sortable .sort-indicator {
+  display: inline-block;
+  margin-left: 0.3em;
+  font-size: 0.85em;
+  color: var(--color-primary, inherit);
+  min-width: 0.9em;
+}

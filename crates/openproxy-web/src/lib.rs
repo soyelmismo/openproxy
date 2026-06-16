@@ -31,12 +31,13 @@ pub fn build_router(state: WebState) -> axum::Router {
     Router::new()
         // Dashboard UI
         .route("/", get(handlers::index_html))
-        .route("/app.js", get(handlers::app_js))
-        .route("/styles.css", get(handlers::styles_css))
         .route("/callback.html", get(handlers::callback_html))
         // API proxy: todo /web/api/* se forwarda al core
         .nest("/web/api", api_proxy::router())
         // Health check del web
         .route("/web/health", get(handlers::web_health))
+        // Static assets (src/, styles/) — catches the refactored
+        // frontend bundle served from crates/openproxy-web/src/static.
+        .fallback(handlers::serve_static)
         .with_state(state)
 }
