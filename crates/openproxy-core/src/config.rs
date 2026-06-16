@@ -56,7 +56,7 @@ impl Default for RacingConfig {
     }
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 pub struct TimeoutsConfig {
     pub connect_ms: u64,
     pub request_send_ms: u64,

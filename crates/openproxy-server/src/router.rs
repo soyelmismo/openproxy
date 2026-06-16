@@ -54,6 +54,14 @@ pub fn build_router(state: AppState) -> Router {
             get(handlers::admin::admin_health),
         )
         .route(
+            "/v1/admin/config",
+            get(handlers::admin::get_runtime_config),
+        )
+        .route(
+            "/v1/admin/config/timeouts",
+            axum::routing::put(handlers::admin::put_runtime_timeouts),
+        )
+        .route(
             "/v1/admin/providers",
             get(handlers::admin::list_providers).post(handlers::admin::create_provider),
         )

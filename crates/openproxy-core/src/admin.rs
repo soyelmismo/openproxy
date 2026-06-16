@@ -26,8 +26,10 @@ use crate::models;
 use crate::providers::{self, AuthType, ProviderFormat};
 use crate::quota::{self, AccountQuota};
 use crate::secrets::MasterKey;
+use crate::upstream::UpstreamClient;
 use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
+use std::sync::Arc;
 use std::time::Duration;
 
 // =====================================================================
@@ -337,12 +339,12 @@ pub fn quota_capable_providers() -> &'static [&'static str] {
 /// for OAuth-based providers like Antigravity.
 pub async fn fetch_account_quota(
     provider_id: &str,
-    http: &reqwest::Client,
+    upstream: &Arc<UpstreamClient>,
     api_key: &str,
     access_token: Option<&str>,
 ) -> AccountQuota {
     match provider_id {
-        "minimax" | "minimax-cn" => match quota::fetch_minimax_quota(http, api_key).await {
+        "minimax" | "minimax-cn" => match quota::fetch_minimax_quota(upstream, api_key).await {
             Ok(q) => q,
             Err(e) => AccountQuota {
                 session_used: None,
@@ -356,7 +358,7 @@ pub async fn fetch_account_quota(
                 fetch_error: Some(e.to_string()),
             },
         },
-        "openrouter" => match quota::fetch_openrouter_quota(http, api_key).await {
+        "openrouter" => match quota::fetch_openrouter_quota(upstream, api_key).await {
             // OpenRouter's fetcher already returns an AccountQuota
             // (never a `CoreError`) — it catches its own network and
             // parse errors and surfaces them via `fetch_error`. The
@@ -395,7 +397,7 @@ pub async fn fetch_account_quota(
                     };
                 }
             };
-            match quota::fetch_antigravity_quota(http, token).await {
+            match quota::fetch_antigravity_quota(upstream, token).await {
                 Ok(q) => q,
                 Err(e) => AccountQuota {
                     session_used: None,
@@ -485,6 +487,12 @@ pub struct AddTargetInput {
 /// the next chat request.
 pub fn create_combo(conn: &Connection, input: CreateComboInput) -> Result<ComboId> {
     let strategy = combos::Strategy::parse(&input.strategy)?;
+    // Default of 1 is the "serial / one target at a time" race
+    // window. NOTE: for `Strategy::Priority` the pipeline ignores
+    // `race_size` entirely (the operator wants walk-the-row
+    // behavior), so this default only meaningfully applies to
+    // `Strategy::RoundRobin` and `Strategy::Shuffle`. Don't
+    // change it without revisiting `pipeline.rs` step 5.
     let race_size = input.race_size.unwrap_or(1);
     let combo_id = combos::create_combo(conn, &input.name, strategy, race_size)?;
     // Best-effort auto-fill. Errors are non-fatal: the combo exists
@@ -769,13 +777,17 @@ pub fn create_custom_model(
 /// The caller is responsible for:
 /// - resolving the right adapter for `provider`,
 /// - decrypting an account's API key and passing it in plaintext,
-/// - building a configured `reqwest::Client` (timeouts, TLS, etc.),
+/// - supplying the shared [`crate::upstream::UpstreamClient`] (the
+///   hyper-based client, with per-phase timeouts driven by
+///   `TimeoutProfile::ModelDiscovery`),
 /// - choosing `ttl_seconds` (typically the duration after which rows
 ///   should be re-discovered).
 ///
-/// On success, returns the number of rows touched (inserts + updates) by
-/// [`models::upsert_many`]. On failure, returns an [`CoreError`] describing
-/// the upstream or DB failure.
+/// On success, returns an [`models::UpsertResult`] with the touched
+/// count and the list of `model_id`s that were newly inserted (i.e.
+/// not present in the table for this provider before the call). On
+/// failure, returns an [`CoreError`] describing the upstream or DB
+/// failure.
 ///
 /// ## `Send` and the connection
 ///
@@ -794,9 +806,9 @@ pub async fn refresh_models(
     provider: &ProviderId,
     api_key: &str,
     adapter: &dyn crate::adapters::ProviderAdapter,
-    http_client: &reqwest::Client,
+    upstream_client: &std::sync::Arc<crate::upstream::UpstreamClient>,
     ttl_seconds: i64,
-) -> Result<usize> {
+) -> Result<models::UpsertResult> {
     // Sanity: the provider must exist; otherwise we'd silently create rows
     // referencing a non-existent parent (the FK would actually reject them
     // later, but failing fast is friendlier).
@@ -804,7 +816,7 @@ pub async fn refresh_models(
         return Err(CoreError::ProviderNotFound(provider.to_string()));
     }
 
-    let discovered = adapter.fetch_models(http_client, api_key).await?;
+    let discovered = adapter.fetch_models(upstream_client, api_key).await?;
     let ttl = Duration::from_secs(ttl_seconds.max(0) as u64);
     models::upsert_many(&conn, provider, &discovered, ttl)
 }
@@ -1201,7 +1213,7 @@ mod tests {
             }
             async fn fetch_models(
                 &self,
-                _client: &reqwest::Client,
+                _upstream_client: &std::sync::Arc<crate::upstream::UpstreamClient>,
                 _api_key: &str,
             ) -> Result<Vec<crate::models::DiscoveredModel>> {
                 unimplemented!("not called in this branch")
@@ -1209,7 +1221,7 @@ mod tests {
         }
 
         let adapter = StubAdapter;
-        let client = reqwest::Client::new();
+        let upstream = crate::upstream::UpstreamClient::new();
 
         let rt = tokio::runtime::Builder::new_current_thread()
             .enable_all()
@@ -1220,7 +1232,7 @@ mod tests {
             &ProviderId::new("does-not-exist"),
             "sk-doesnt-matter",
             &adapter,
-            &client,
+            &upstream,
             3600,
         ));
         match res {
@@ -1231,9 +1243,10 @@ mod tests {
 
     // NOTE: integration tests that actually hit the network via
     // `refresh_models` are intentionally not included here. The signature
-    // takes a fully wired `&dyn ProviderAdapter` and a `&reqwest::Client`
-    // precisely so the server crate can drive it end-to-end; any
-    // wire-level exercise belongs in the server's integration test suite.
+    // takes a fully wired `&dyn ProviderAdapter` and an
+    // `&Arc<UpstreamClient>` precisely so the server crate can drive
+    // it end-to-end; any wire-level exercise belongs in the server's
+    // integration test suite.
 
     #[test]
     fn update_provider_changes_name_and_keyword() {

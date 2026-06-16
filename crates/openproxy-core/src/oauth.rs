@@ -10,6 +10,7 @@ use crate::accounts::HealthStatus;
 use crate::error::{CoreError, Result};
 use crate::ids::AccountId;
 use crate::secrets::MasterKey;
+use crate::upstream::UpstreamClient;
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -128,14 +129,14 @@ pub trait OAuthProvider: Send + Sync {
         &self,
         code: &str,
         code_verifier: &str,
-        http_client: &reqwest::Client,
+        upstream_client: &Arc<UpstreamClient>,
         redirect_uri: &str,
     ) -> Result<TokenResponse>;
 
     /// Request a device code and user code (Device Code flow).
     async fn request_device_code(
         &self,
-        http_client: &reqwest::Client,
+        upstream_client: &Arc<UpstreamClient>,
     ) -> Result<DeviceAuthorizationResponse>;
 
     /// Poll the token endpoint with a device code (Device Code flow).
@@ -145,14 +146,14 @@ pub trait OAuthProvider: Send + Sync {
     async fn poll_device_token(
         &self,
         device_code: &str,
-        http_client: &reqwest::Client,
+        upstream_client: &Arc<UpstreamClient>,
     ) -> Result<Option<TokenResponse>>;
 
     /// Refresh an access token using a refresh token.
     async fn refresh_token(
         &self,
         refresh_token: &str,
-        http_client: &reqwest::Client,
+        upstream_client: &Arc<UpstreamClient>,
     ) -> Result<TokenResponse>;
 
     /// Post-exchange hook. Called after tokens are stored. Providers can
@@ -252,7 +253,7 @@ type ProviderMutexMap = Arc<Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>>
 pub async fn start_refresh_scheduler(
     db_pool: std::sync::Arc<crate::db::DbPool>,
     master_key: std::sync::Arc<MasterKey>,
-    http_client: reqwest::Client,
+    upstream_client: Arc<UpstreamClient>,
     providers: std::sync::Arc<Vec<Box<dyn OAuthProvider + Send + Sync>>>,
     check_interval_secs: u64,
     _refresh_before_secs: i64, // Deprecated: now per-provider
@@ -374,7 +375,7 @@ pub async fn start_refresh_scheduler(
 
             last_refresh_attempts.insert(account_id, chrono::Utc::now());
 
-            match provider.refresh_token(&refresh_token, &http_client).await {
+            match provider.refresh_token(&refresh_token, &upstream_client).await {
                 Ok(token) => {
                     // Reset failure tracking on success.
                     failure_counts.remove(&account_id);

@@ -53,6 +53,8 @@ use openproxy_core::{
     analytics,
     api_keys as core_api_keys,
     combos,
+    config::{CircuitBreakerConfig, RacingConfig, RetriesConfig, TimeoutsConfig},
+    db as core_db,
     ids::{AccountId, ApiKeyId, ComboId, ComboTargetId, ModelRowId, ProviderId},
     models,
     oauth,
@@ -130,6 +132,117 @@ pub async fn admin_health() -> Json<serde_json::Value> {
         "status": "ok",
         "version": env!("CARGO_PKG_VERSION"),
     }))
+}
+
+// =====================================================================
+// Runtime configuration (read-only view of the parsed AppConfig)
+// =====================================================================
+
+/// Read-only view of the relevant `AppConfig` sections.
+///
+/// Surfaced to the dashboard as a single JSON envelope so the UI can
+/// render the current values without five round-trips. The shape
+/// intentionally mirrors the `[timeouts]` / `[retries]` /
+/// `[circuit_breaker]` / `[racing]` blocks of `config.example.toml`
+/// so the operator can copy the values back into the file verbatim.
+///
+/// **Variant A of the "Config" menu** — these values are read once
+/// at startup from `config.toml` (with `OPENPROXY_*` env overrides);
+/// they cannot be mutated from this endpoint. The dashboard's
+/// `#/config` view is honest about this and shows the inputs as
+/// disabled with a banner explaining "edit `config.toml` and
+/// restart". When/if we ever want hot-reload (variant B), this
+/// struct is the read-side of that contract — adding a `PUT`
+/// companion is a forward-compatible change.
+#[derive(Debug, Clone, Serialize)]
+pub struct RuntimeConfigResponse {
+    pub timeouts: TimeoutsConfig,
+    pub retries: RetriesConfig,
+    pub circuit_breaker: CircuitBreakerConfig,
+    pub racing: RacingConfig,
+}
+
+/// `GET /v1/admin/config` — return the currently-loaded runtime
+/// configuration (timeouts, retries, circuit-breaker, racing).
+///
+/// This is a thin, side-effect-free snapshot of `AppState::config()`:
+/// no DB, no DB writer, no I/O. The auth check mirrors
+/// `get_recording` / `usage_*` because the operator might consider
+/// these values sensitive (they leak upstream connection budgets).
+pub async fn get_runtime_config(
+    State(s): State<AppState>,
+    headers: HeaderMap,
+) -> ApiResult<Json<RuntimeConfigResponse>> {
+    if let Err(e) = authenticate_admin_ws(&s, &headers, None) {
+        return e.into();
+    }
+    let body: Result<Json<RuntimeConfigResponse>, ApiError> = async {
+        let cfg = s.config();
+        Ok(Json(RuntimeConfigResponse {
+            timeouts: cfg.timeouts,
+            retries: cfg.retries,
+            circuit_breaker: cfg.circuit_breaker,
+            // `RacingConfig` is `Clone` but not `Copy` (the other
+            // three are); `.clone()` is fine, it's three `u*` fields.
+            racing: cfg.racing.clone(),
+        }))
+    }
+    .await;
+    body.into()
+}
+
+/// `PUT /v1/admin/config/timeouts` — hot-reload the system default
+/// timeouts. Body is a full [`TimeoutsConfig`] (5 `u64` fields, all
+/// required). On success the value is persisted in the `app_config`
+/// table and the in-memory `timeouts_cell` slot is updated. Future
+/// chat requests see the new values; requests already in flight keep
+/// the previous value (consistent with the per-pipeline
+/// `PipelineConfig::defaults` snapshot taken in `chat.rs:201-203`).
+///
+/// **Auth**: same as `get_runtime_config` — `manage` scope via
+/// `authenticate_admin_ws`.
+///
+/// **Validation**: structural only. serde rejects missing or
+/// wrong-type fields; we do not check business ranges (a zero is
+/// allowed, matching the current `TimeoutsConfig` policy).
+///
+/// **Side-effect order**: DB first, memory second. If the DB UPSERT
+/// fails, the response is 500 and the in-memory value is unchanged.
+pub async fn put_runtime_timeouts(
+    State(s): State<AppState>,
+    headers: HeaderMap,
+    Json(body): Json<TimeoutsConfig>,
+) -> ApiResult<Json<serde_json::Value>> {
+    if let Err(e) = authenticate_admin_ws(&s, &headers, None) {
+        return e.into();
+    }
+    let inner: Result<Json<serde_json::Value>, ApiError> = async {
+        // 1. Persist to DB first. The UPSERT is atomic in SQLite.
+        //    We let the application timestamp it (rather than relying
+        //    on `strftime('%s','now')`) so the value matches what
+        //    `load_timeouts_override_from_db` expects on the next
+        //    boot: an `i64` unix seconds.
+        {
+            let w = s.db_pool().writer();
+            let now = chrono::Utc::now().timestamp();
+            core_db::app_config::save_timeouts_to_db(&w, &body, now)?;
+        }
+        // 2. Update the in-memory slot. Readers see the new value
+        //    as soon as this returns. Note: requests already in
+        //    flight captured a `Copy` of the old value into their
+        //    PipelineConfig and are unaffected.
+        s.set_timeouts(body);
+        Ok(Json(serde_json::json!({
+            "connect_ms": body.connect_ms,
+            "request_send_ms": body.request_send_ms,
+            "ttft_ms": body.ttft_ms,
+            "idle_chunk_ms": body.idle_chunk_ms,
+            "total_ms": body.total_ms,
+            "applies_to": "next_requests",
+        })))
+    }
+    .await;
+    inner.into()
 }
 
 // =====================================================================
@@ -838,22 +951,23 @@ async fn run_refresh(
         Ok(c) => c,
         Err(e) => return ApiResult::err(ApiError(e)),
     };
-    let touched = match admin::refresh_models(
+    let upsert = match admin::refresh_models(
         conn_for_refresh,
         &provider_id,
         &api_key,
         adapter.as_ref(),
-        s.http_client(),
+        s.upstream_client(),
         ttl_seconds,
     )
     .await
     {
-        Ok(n) => n,
+        Ok(r) => r,
         Err(e) => return ApiResult::err(ApiError(e)),
     };
 
     ApiResult::ok(Json(serde_json::json!({
-        "touched": touched,
+        "touched": upsert.touched,
+        "new_model_ids": upsert.new_model_ids,
         "provider_id": provider_id.as_str(),
     })))
 }
@@ -938,6 +1052,19 @@ async fn send_ws_error(socket: &mut WebSocket, message: impl Into<String>) -> Re
 }
 
 fn authenticate_admin_ws(state: &AppState, headers: &HeaderMap, query_token: Option<&str>) -> Result<(), ApiError> {
+    // Dev convenience: if the operator sets OPENPROXY_DASHBOARD_AUTH_BYPASS to a
+    // non-empty value in the server's environment, every admin request is
+    // accepted without an Authorization header or query token. Useful when the
+    // dashboard is the only admin client and rotating the manage-scope API key
+    // is more friction than it's worth. Public chat endpoints are unaffected.
+    // Never set this in production.
+    if let Ok(bypass) = std::env::var("OPENPROXY_DASHBOARD_AUTH_BYPASS") {
+        if !bypass.is_empty() {
+            tracing::debug!("admin auth bypassed via OPENPROXY_DASHBOARD_AUTH_BYPASS");
+            return Ok(());
+        }
+    }
+
     // Extract token from Authorization header or from query parameter
     let header_token = headers
         .get("authorization")
@@ -1838,8 +1965,9 @@ async fn run_test_for_model(
                     )
                     .unwrap_or_default()
                 };
+                let http_client = s.upstream_client();
                 openproxy_core::executor_antigravity::execute_antigravity(
-                    s.http_client(),
+                    http_client,
                     &access_token,
                     &project_id,
                     &openai_req,
@@ -1861,8 +1989,9 @@ async fn run_test_for_model(
                         meta.as_ref().and_then(|m| m.profile_arn.clone()),
                     )
                 };
+                let http_client = s.upstream_client();
                 openproxy_core::executor_kiro::execute_kiro(
-                    s.http_client(),
+                    http_client,
                     &access_token,
                     &region,
                     profile_arn.as_deref(),
@@ -2197,9 +2326,10 @@ pub async fn refresh_account_quota(
         // 4: fire the upstream quota call. Returns an `AccountQuota`
         //    even on failure (with `fetch_error` set), so we always
         //    have a row to persist.
+        let upstream_client = s_clone.upstream_client();
         let q = admin::fetch_account_quota(
             &provider_id_str,
-            s_clone.http_client(),
+            upstream_client,
             &api_key,
             access_token.as_deref(),
         )
@@ -2236,8 +2366,9 @@ pub async fn refresh_account_quota(
                         }
                     };
                 if let Some(provider_impl) = provider_impl {
+                    let upstream_client = s_clone.upstream_client();
                     match provider_impl
-                        .refresh_token(&refresh_token, s_clone.http_client())
+                        .refresh_token(&refresh_token, upstream_client)
                         .await
                     {
                         Ok(new_tokens) => {
@@ -2265,7 +2396,7 @@ pub async fn refresh_account_quota(
                             // Retry the quota call with the new access token.
                             admin::fetch_account_quota(
                                 &provider_id_str,
-                                s_clone.http_client(),
+                                upstream_client,
                                 &api_key,
                                 Some(&new_tokens.access_token),
                             )
@@ -2444,7 +2575,8 @@ async fn refresh_oauth_if_needed(
         "oauth refresh-on-demand: refreshing expired/expiring token"
     );
 
-    match provider.refresh_token(&refresh_token, s.http_client()).await {
+    let upstream_client = s.upstream_client();
+    match provider.refresh_token(&refresh_token, upstream_client).await {
         Ok(token) => {
             let expires_at = token.expires_in.map(|secs| {
                 (chrono::Utc::now() + chrono::Duration::seconds(secs as i64))
@@ -2643,17 +2775,17 @@ async fn run_provider_refresh(
 
     // 6. Run the refresh. This is the only `await` on the upstream
     //    HTTP call; everything else is sync DB work.
-    let touched = match admin::refresh_models(
+    let upsert = match admin::refresh_models(
         conn_for_refresh,
         &provider,
         &api_key,
         adapter.as_ref(),
-        s.http_client(),
+        s.upstream_client(),
         ttl_seconds,
     )
     .await
     {
-        Ok(n) => n,
+        Ok(r) => r,
         Err(e) => return ApiResult::err(ApiError(e)),
     };
 
@@ -2680,7 +2812,8 @@ async fn run_provider_refresh(
 
     ApiResult::ok(Json(serde_json::json!({
         "provider": provider_id_str,
-        "models_refreshed": touched,
+        "models_refreshed": upsert.touched,
+        "new_model_ids": upsert.new_model_ids,
         "models_activated": activated,
     })))
 }
@@ -3010,8 +3143,9 @@ pub async fn oauth_exchange(
             }
         };
 
+        let upstream_client = s.upstream_client();
         let token = provider_impl
-            .exchange_code(code, code_verifier, s.http_client(), redirect_uri)
+            .exchange_code(code, code_verifier, upstream_client, redirect_uri)
             .await?;
 
         // If no account_id provided, create a new account for this OAuth provider.
@@ -3102,7 +3236,8 @@ pub async fn oauth_device_code(
             }
         };
 
-        let dar = provider_impl.request_device_code(s.http_client()).await?;
+        let upstream_client = s.upstream_client();
+        let dar = provider_impl.request_device_code(upstream_client).await?;
 
         Ok(Json(serde_json::json!({
             "device_code": dar.device_code,
@@ -3149,8 +3284,9 @@ pub async fn oauth_device_poll(
             }
         };
 
+        let upstream_client = s.upstream_client();
         match provider_impl
-            .poll_device_token(device_code, s.http_client())
+            .poll_device_token(device_code, upstream_client)
             .await?
         {
             Some(token) => {
@@ -3291,4 +3427,218 @@ fn determine_base_url(headers: &HeaderMap) -> String {
         .unwrap_or("http");
 
     format!("{}://{}", proto, host)
+}
+
+// =====================================================================
+// Tests for the runtime-config endpoints
+// =====================================================================
+//
+// Spec §9 documents the smoke test as either a manual `curl` against
+// a running server OR a Rust test that calls the handler directly.
+// The handler is small (auth + DB UPSERT + in-memory slot update), so
+// the most informative test is an in-process end-to-end one that
+// inserts a `manage`-scope API key in the DB, mounts the handler on
+// an `axum::Router`, fires a PUT, and asserts (a) the response shape,
+// (b) the DB row was written, and (c) `AppState::timeouts()` reflects
+// the new value.
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::{
+        body::Body,
+        http::{Request, StatusCode},
+        routing::put,
+        Router,
+    };
+    use openproxy_core::config::TimeoutsConfig;
+    use openproxy_core::db as core_db;
+    use openproxy_core::secrets::MasterKey;
+    use openproxy_core::{adapters, api_keys as core_api_keys};
+    use std::path::PathBuf;
+    use tower::ServiceExt;
+
+    fn tempdir() -> PathBuf {
+        let base = std::env::temp_dir();
+        let pid = std::process::id();
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let dir = base.join(format!("openproxy-admin-test-{}-{}", pid, nanos));
+        std::fs::create_dir_all(&dir).expect("mkdir");
+        dir
+    }
+
+    fn insert_manage_key(pool: &core_db::DbPool, plaintext: &str) {
+        // Plant a `manage`-scope, non-expired key directly via the
+        // helper. The auth path matches by hash.
+        let w = pool.writer();
+        let key_hash = core_api_keys::hash_key(plaintext);
+        w.execute(
+            "INSERT INTO api_keys (key_hash, key_prefix, label, scopes_json, \
+                allowed_models_json, allowed_combos_json, expires_at, created_by) \
+             VALUES (?1, ?2, ?3, ?4, NULL, NULL, NULL, 'test')",
+            rusqlite::params![
+                key_hash,
+                &plaintext[..plaintext.len().min(12)],
+                "smoke-test",
+                "[\"manage\"]",
+            ],
+        )
+        .expect("insert api key");
+    }
+
+    fn make_state_with_key(dir: &std::path::Path) -> (AppState, String) {
+        let pool = std::sync::Arc::new(
+            core_db::DbPool::open(&dir.join("smoke.db")).expect("open pool"),
+        );
+        // Migrations + bootstrap are required for api_keys to exist
+        // and for `authenticate_admin_ws` to find the row.
+        {
+            let mut w = pool.writer();
+            core_db::migrations::run(&mut w).expect("migrations");
+        }
+        let plaintext = format!("sk-smoke-{}", "x".repeat(40));
+        insert_manage_key(&pool, &plaintext);
+
+        // MasterKey for tests: any 32 bytes is fine. Use the
+        // built-in generator rather than baking a private constructor.
+        let mk = MasterKey::generate();
+        let adapters = std::sync::Arc::new(adapters::builtin_adapters());
+        let state = AppState::for_test(
+            openproxy_core::AppConfig::default(),
+            pool,
+            std::sync::Arc::new(mk),
+            adapters,
+        );
+        (state, plaintext)
+    }
+
+    #[tokio::test]
+    async fn put_runtime_timeouts_writes_db_and_updates_slot() {
+        let dir = tempdir();
+        let (state, plaintext) = make_state_with_key(&dir);
+
+        // Sanity: the slot starts at the TOML defaults (5000/10000/...).
+        let initial = state.timeouts();
+        assert_eq!(initial.connect_ms, 5_000);
+
+        let app = Router::new()
+            .route(
+                "/v1/admin/config/timeouts",
+                put(put_runtime_timeouts),
+            )
+            .with_state(state.clone());
+
+        let body = serde_json::json!({
+            "connect_ms": 1_u64,
+            "request_send_ms": 2_u64,
+            "ttft_ms": 3_u64,
+            "idle_chunk_ms": 4_u64,
+            "total_ms": 5_u64,
+        });
+        let req = Request::builder()
+            .method("PUT")
+            .uri("/v1/admin/config/timeouts")
+            .header("authorization", format!("Bearer {}", plaintext))
+            .header("content-type", "application/json")
+            .body(Body::from(body.to_string()))
+            .expect("build req");
+
+        let resp = app.oneshot(req).await.expect("oneshot");
+        assert_eq!(resp.status(), StatusCode::OK, "PUT should be 200");
+
+        // Body shape: the 5 fields echoed back + `applies_to`.
+        let bytes = axum::body::to_bytes(resp.into_body(), 16 * 1024)
+            .await
+            .expect("body");
+        let parsed: serde_json::Value = serde_json::from_slice(&bytes)
+            .expect("json body");
+        assert_eq!(parsed["connect_ms"], 1);
+        assert_eq!(parsed["request_send_ms"], 2);
+        assert_eq!(parsed["ttft_ms"], 3);
+        assert_eq!(parsed["idle_chunk_ms"], 4);
+        assert_eq!(parsed["total_ms"], 5);
+        assert_eq!(parsed["applies_to"], "next_requests");
+
+        // The slot was updated in-memory.
+        let after = state.timeouts();
+        assert_eq!(after.connect_ms, 1);
+        assert_eq!(after.total_ms, 5);
+        assert_eq!(after, TimeoutsConfig {
+            connect_ms: 1,
+            request_send_ms: 2,
+            ttft_ms: 3,
+            idle_chunk_ms: 4,
+            total_ms: 5,
+        });
+
+        // The row landed in the DB (one row, key='timeouts').
+        let count: i64 = state.db_pool().with_conn(|c| {
+            c.query_row(
+                "SELECT COUNT(*) FROM app_config WHERE key = 'timeouts'",
+                [],
+                |r| r.get(0),
+            ).unwrap()
+        });
+        assert_eq!(count, 1, "PUT must have written a row");
+    }
+
+    #[tokio::test]
+    async fn put_runtime_timeouts_without_auth_returns_401() {
+        let dir = tempdir();
+        let (state, _plaintext) = make_state_with_key(&dir);
+        let app = Router::new()
+            .route(
+                "/v1/admin/config/timeouts",
+                put(put_runtime_timeouts),
+            )
+            .with_state(state);
+        let body = serde_json::json!({
+            "connect_ms": 1_u64, "request_send_ms": 2_u64, "ttft_ms": 3_u64,
+            "idle_chunk_ms": 4_u64, "total_ms": 5_u64,
+        });
+        let req = Request::builder()
+            .method("PUT")
+            .uri("/v1/admin/config/timeouts")
+            .header("content-type", "application/json")
+            .body(Body::from(body.to_string()))
+            .expect("build req");
+        let resp = app.oneshot(req).await.expect("oneshot");
+        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    // Sanity: a caller passing a malformed body (missing field) gets
+    // axum's default 400 from the JSON extractor.
+    #[tokio::test]
+    async fn put_runtime_timeouts_malformed_body_returns_400() {
+        let dir = tempdir();
+        let (state, plaintext) = make_state_with_key(&dir);
+        let app = Router::new()
+            .route(
+                "/v1/admin/config/timeouts",
+                put(put_runtime_timeouts),
+            )
+            .with_state(state);
+        let req = Request::builder()
+            .method("PUT")
+            .uri("/v1/admin/config/timeouts")
+            .header("authorization", format!("Bearer {}", plaintext))
+            .header("content-type", "application/json")
+            // Missing `total_ms` — serde will reject.
+            .body(Body::from(
+                r#"{"connect_ms":1,"request_send_ms":2,"ttft_ms":3,"idle_chunk_ms":4}"#,
+            ))
+            .expect("build req");
+        let resp = app.oneshot(req).await.expect("oneshot");
+        // axum's Json extractor reports malformed bodies as 422
+        // (Unprocessable Entity), not 400. Either is a "client did
+        // something wrong"; we just want to confirm the handler
+        // doesn't 500 / leak internal state.
+        assert!(
+            resp.status() == StatusCode::BAD_REQUEST
+                || resp.status() == StatusCode::UNPROCESSABLE_ENTITY,
+            "expected 400 or 422, got {:?}", resp.status()
+        );
+    }
 }

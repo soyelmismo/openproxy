@@ -1,0 +1,267 @@
+/* ============================================
+   LAYOUT — #app shell, sidebar, main, page header
+   ------------------------------------------
+   Page-frame: 1px solid var(--color-frame-ink) on #app
+   ============================================ */
+
+#app {
+  display: grid;
+  grid-template-columns: var(--layout-sidebar-w) 1fr;
+  min-height: 100vh;
+  border: var(--border-w) var(--border-style) var(--color-frame-ink);
+  margin: 0;
+  background: var(--color-bg);
+  color: var(--color-text);
+}
+
+/* When the user has collapsed the sidebar, swap the wide column
+   for the narrow one. The body class is toggled by renderSidebar()
+   in components/sidebar.js based on state.ui.sidebarCollapsed. */
+body.sidebar-collapsed #app {
+  grid-template-columns: var(--layout-sidebar-w-collapsed) 1fr;
+}
+
+.sidebar {
+  background: var(--color-surface-2);
+  border-right: var(--border-w) var(--border-style) var(--color-border);
+  padding: var(--space-4);
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.sidebar .brand {
+  font-family: var(--font-display);
+  font-size: var(--fs-lg);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  padding-bottom: var(--space-3);
+  border-bottom: var(--border-w-2) var(--border-style) var(--color-border);
+  margin-bottom: var(--space-3);
+}
+
+.sidebar nav {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.sidebar nav a {
+  display: block;
+  padding: 0.45rem 0.6rem;
+  color: var(--color-text);
+  border: var(--border-w) var(--border-style) transparent;
+  border-bottom-color: transparent;
+  font-size: var(--fs-sm);
+  transition: background var(--t-fast);
+}
+.sidebar nav a:hover { background: var(--color-surface-2); }
+.sidebar nav a.active {
+  background: var(--color-primary-soft);
+  color: var(--color-primary);
+  border-color: var(--color-primary);
+  font-weight: 600;
+}
+
+.sidebar .health {
+  margin-top: auto;
+  padding-top: var(--space-3);
+  border-top: var(--border-w) var(--border-style) var(--color-border-soft);
+  font-size: var(--fs-xs);
+  color: var(--color-text-muted);
+}
+#health-status { font-family: var(--font-mono); }
+#health-status.ok      { color: var(--color-success); }
+#health-status.error   { color: var(--color-error); }
+#health-status.loading { color: var(--color-warn); }
+
+/* ----- Collapsed sidebar ----- */
+/* The browser's user-agent [hidden] rule already does display:none,
+   but we restate it explicitly so the collapse is robust even if a
+   host stylesheet later overrides `[hidden]`. */
+.nav-label[hidden] { display: none; }
+
+/* Each nav <a> shows a single-character icon + a label span. When
+   the sidebar is collapsed, the label span is hidden and the link
+   is left as a centered icon. */
+.sidebar nav a {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  line-height: 1.2;
+}
+body.sidebar-collapsed .sidebar nav a { justify-content: center; }
+
+/* The brand reads "OpenProxy" when expanded and just "OP" when
+   collapsed. We render both spans in the HTML and toggle the
+   label one with the same [hidden] pattern as the nav links. */
+body.sidebar-collapsed .sidebar .brand { text-align: center; }
+
+/* The collapse toggle sits at the bottom of the sidebar, just
+   above the absolutely-positioned theme toggle. It's a plain
+   full-width button that uses the same surface palette as the
+   theme toggle but anchors to the flex flow rather than the
+   corner. */
+.sidebar-toggle {
+  background: var(--color-surface);
+  border: var(--border-w) var(--border-style) var(--color-border);
+  color: var(--color-text-muted);
+  padding: 0.3rem 0.5rem;
+  font-size: var(--fs-sm);
+  font-family: var(--font-mono);
+  cursor: pointer;
+  position: relative;
+  z-index: 2;
+  transition: background var(--t-fast), color var(--t-fast), border-color var(--t-fast);
+}
+.sidebar-toggle:hover {
+  border-color: var(--color-primary);
+  color: var(--color-primary);
+  background: var(--color-primary-soft);
+}
+body.sidebar-collapsed .sidebar-toggle { text-align: center; }
+
+/* When the sidebar is collapsed, the theme toggle (absolutely
+   positioned at bottom-left) would sit on top of the bottom
+   sidebar-toggle row. Lift it up by the height of the toggle so
+   the two no longer overlap and both remain clickable. The
+   expanded state is unchanged — the theme toggle keeps its
+   original bottom-left anchor over the health pill. */
+body.sidebar-collapsed .sidebar .theme-toggle {
+  bottom: calc(var(--space-4) + 38px);
+}
+
+
+
+main {
+  padding: var(--space-6);
+  overflow-x: auto;
+  min-width: 0;
+}
+
+.page-header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+  padding-bottom: var(--space-3);
+  border-bottom: var(--border-w-2) var(--border-style) var(--color-border);
+  margin-bottom: var(--space-5);
+}
+.page-header h2 { margin: 0; }
+.page-header .back-link {
+  font-size: var(--fs-sm);
+  margin-right: var(--space-2);
+}
+.page-header small { color: var(--color-text-muted); font-weight: 400; }
+
+.detail-section,
+section.card {
+  background: var(--color-surface);
+  border: var(--border-w) var(--border-style) var(--color-border);
+  padding: var(--space-4);
+  margin-bottom: var(--space-4);
+}
+.section-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: var(--space-3);
+  gap: var(--space-2);
+}
+.section-header h3 { margin: 0; }
+
+.metric-row {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+}
+
+/* ============================================
+   RESPONSIVE — mobile base.
+   ------------------------------------------
+   Two breakpoints only: 768px (tablet / mobile) and
+   480px (small mobile). Desktop is the default
+   block above; everything below this section is
+   progressive overrides. NO additional breakpoints.
+   ============================================ */
+
+@media (max-width: 768px) {
+  /* App shell: drop the fixed sidebar column and stack
+     sidebar + main vertically. Sidebar becomes a top bar.
+
+     Important: we must beat the `body.sidebar-collapsed #app`
+     rule above, otherwise a user who left the sidebar collapsed
+     on desktop would still see a narrow sidebar column on
+     mobile. Repeating the body class in the selector keeps the
+     specificity the same (0,1,1,0), and putting it AFTER the
+     desktop rule lets the cascade flip the columns. */
+  #app,
+  body.sidebar-collapsed #app {
+    grid-template-columns: 1fr;
+    grid-template-rows: auto 1fr;
+  }
+
+  /* In mobile the sidebar is always expanded. If a user left it
+     collapsed from desktop (persisted in localStorage), we
+     force the nav labels and brand back to visible. The
+     .nav-label[hidden] rule above is overridden here. */
+  .sidebar nav a { justify-content: flex-start; }
+  .sidebar .brand { text-align: left; }
+  .nav-label[hidden] { display: inline !important; }
+
+  /* The collapse toggle and the theme toggle make no sense in
+     a mobile top-bar: the sidebar is always expanded, and the
+     theme toggle is absolutely positioned at bottom-left of
+     the sidebar (which is now a short strip on top). */
+  .sidebar-toggle,
+  .sidebar .theme-toggle { display: none; }
+
+  .sidebar {
+    flex-direction: row;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.5rem;
+    border-right: none;
+    border-bottom: var(--border-w) var(--border-style) var(--color-border);
+    padding: var(--space-2) var(--space-3);
+  }
+  .sidebar .brand {
+    font-size: 0.9rem;
+    padding: 0.25rem 0.5rem;
+    border-bottom: none;
+    margin-bottom: 0;
+    flex: 0 0 auto;
+  }
+  .sidebar nav {
+    flex-direction: row;
+    flex-wrap: wrap;
+    gap: 0.25rem;
+    flex: 1 1 100%;
+  }
+  .sidebar nav a {
+    padding: 0.3rem 0.5rem;
+    font-size: 0.85rem;
+  }
+  .sidebar .health {
+    margin-top: 0;
+    padding-top: 0;
+    border-top: none;
+    font-size: var(--fs-xs);
+    flex: 0 0 auto;
+    margin-left: auto;
+  }
+}
+
+@media (max-width: 480px) {
+  /* Tighter main padding for small mobile. */
+  main { padding: var(--space-3); }
+
+  /* Smaller page header on small screens. */
+  .page-header h2 { font-size: 1.1rem; }
+
+  /* Pre/code: a touch smaller so JSON blobs in modals
+     don't push the viewport sideways. */
+  pre, code { font-size: 0.8rem; }
+}

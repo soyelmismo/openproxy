@@ -33,6 +33,7 @@ use openproxy_core::{
     pipeline::{Pipeline, PipelineConfig, PipelineRequest},
     routing::{self, build_synthetic_combo, RoutingPlan, SYNTHETIC_COMBO_ID},
     translation::OpenAIRequest,
+    upstream::UpstreamClient,
     CoreError,
 };
 use serde_json::json;
@@ -199,7 +200,7 @@ async fn run_pipeline(
     // 5. Build the pipeline config from the app config.
     let config = PipelineConfig {
         defaults: openproxy_core::timeouts::Timeouts::from_config(
-            &state.config().timeouts,
+            &state.timeouts(),
         ),
         racing: state.config().racing.clone(),
         retries: state.config().retries,
@@ -211,6 +212,15 @@ async fn run_pipeline(
         // Default 60s when neither is set; the loader fills in
         // `CooldownConfig::default()` for the TOML case.
         cooldown_secs: state.config().cooldown.cooldown_secs,
+        // Gate 1: non-streaming chat uses the hyper-based upstream
+        // client. A follow-up gate will move this onto `AppState` so
+        // the per-host connection pool is shared across all in-flight
+        // requests — for now, a per-request `UpstreamClient` is
+        // functionally equivalent (the legacy reqwest client is also
+        // rebuilt on every `set_timeouts` call) and unblocks the
+        // migration. See `docs/upstream-migration-report.md` for
+        // the plan.
+        upstream_client: UpstreamClient::new(),
     };
     let pipeline = Pipeline::with_recording_flag(
         state.db_pool().writer_arc(),
@@ -265,7 +275,7 @@ async fn run_pipeline(
         .and_then(|v| v.to_str().ok())
         .and_then(|s| s.trim().parse::<u64>().ok())
         .filter(|ms| *ms > 0);
-    let total_ms = state.config().timeouts.total_ms;
+    let total_ms = state.timeouts().total_ms;
     let watchdog_budget_ms = match client_deadline_ms {
         Some(client_ms) if client_ms < total_ms => {
             tracing::debug!(

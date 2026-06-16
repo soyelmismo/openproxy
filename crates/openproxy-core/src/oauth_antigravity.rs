@@ -21,6 +21,8 @@ use crate::error::{CoreError, Result};
 use crate::ids::AccountId;
 use crate::oauth::{OAuthFlow, OAuthProvider, TokenResponse};
 use crate::secrets::MasterKey;
+use crate::upstream::{CancellationToken, TimeoutProfile, UpstreamClient, UpstreamError, UpstreamRequest};
+use std::sync::Arc;
 
 /// Google OAuth client_id for Cloud Code (Antigravity).
 const CLIENT_ID: &str = "1071006060591-tmhssin2h21lcre235vtolojh4g403ep";
@@ -112,7 +114,7 @@ impl OAuthProvider for AntigravityOAuthProvider {
         &self,
         code: &str,
         code_verifier: &str,
-        http_client: &reqwest::Client,
+        upstream_client: &Arc<UpstreamClient>,
         redirect_uri: &str,
     ) -> Result<TokenResponse> {
         // Add client_secret if available (from config or env)
@@ -134,34 +136,68 @@ impl OAuthProvider for AntigravityOAuthProvider {
             params.push(("client_secret", &client_secret));
         }
 
-        let resp = http_client
-            .post(TOKEN_URL)
-            .header("User-Agent", "vscode/1.100.0 (Antigravity/1.2.17)")
-            .form(&params)
-            .timeout(std::time::Duration::from_secs(30))
-            .send()
-            .await
-            .map_err(|e| CoreError::UpstreamConnection(format!("google token exchange: {}", e)))?;
+        // Build the form-encoded body. UpstreamRequest takes a
+        // `Bytes` body, so we serialize the params into
+        // `application/x-www-form-urlencoded` by hand.
+        let body = urlencoded_body(&params);
+        let mut req = UpstreamRequest::post_json(TOKEN_URL, body);
+        // Replace the default `application/json` content-type with
+        // the form-urlencoded one Google expects.
+        req.headers.insert(
+            http::header::CONTENT_TYPE,
+            http::HeaderValue::from_static("application/x-www-form-urlencoded"),
+        );
+        req.headers.insert(
+            http::header::USER_AGENT,
+            http::HeaderValue::from_static("vscode/1.100.0 (Antigravity/1.2.17)"),
+        );
 
-        if !resp.status().is_success() {
-            let status = resp.status().as_u16();
-            let body = resp.text().await.unwrap_or_default();
+        let cancel = CancellationToken::new();
+        let response = match upstream_client
+            .call(req, TimeoutProfile::OAuth, cancel)
+            .await
+        {
+            Ok(r) => r,
+            Err(e) => {
+                return Err(match e {
+                    UpstreamError::Cancel => CoreError::ClientDisconnected,
+                    other => CoreError::UpstreamConnection(format!(
+                        "google token exchange: {other}"
+                    )),
+                });
+            }
+        };
+
+        let status = response.status;
+        let body = match response.collect().await {
+            Ok(b) => b,
+            Err(e) => {
+                return Err(match e {
+                    UpstreamError::Cancel => CoreError::ClientDisconnected,
+                    other => CoreError::UpstreamConnection(format!(
+                        "google token exchange body read: {other}"
+                    )),
+                });
+            }
+        };
+
+        if !status.is_success() {
+            let body_str = String::from_utf8_lossy(&body).to_string();
             return Err(CoreError::UpstreamError {
-                status,
+                status: status.as_u16(),
                 provider: "antigravity".into(),
                 model: "<oauth>".into(),
-                body,
+                body: body_str,
             });
         }
 
-        resp.json::<TokenResponse>()
-            .await
-            .map_err(|e| CoreError::Parse(format!("google token response parse: {}", e)))
+        serde_json::from_slice::<TokenResponse>(&body)
+            .map_err(|e| CoreError::Parse(format!("google token response parse: {e}")))
     }
 
     async fn request_device_code(
         &self,
-        _http_client: &reqwest::Client,
+        _upstream_client: &Arc<UpstreamClient>,
     ) -> Result<crate::oauth::DeviceAuthorizationResponse> {
         Err(CoreError::Validation(
             "antigravity uses PKCE flow, not device code".into(),
@@ -171,7 +207,7 @@ impl OAuthProvider for AntigravityOAuthProvider {
     async fn poll_device_token(
         &self,
         _device_code: &str,
-        _http_client: &reqwest::Client,
+        _upstream_client: &Arc<UpstreamClient>,
     ) -> Result<Option<TokenResponse>> {
         Err(CoreError::Validation(
             "antigravity uses PKCE flow, not device code".into(),
@@ -181,7 +217,7 @@ impl OAuthProvider for AntigravityOAuthProvider {
     async fn refresh_token(
         &self,
         refresh_token: &str,
-        http_client: &reqwest::Client,
+        upstream_client: &Arc<UpstreamClient>,
     ) -> Result<TokenResponse> {
         let params = [
             ("grant_type", "refresh_token"),
@@ -189,28 +225,54 @@ impl OAuthProvider for AntigravityOAuthProvider {
             ("refresh_token", refresh_token),
         ];
 
-        let resp = http_client
-            .post(TOKEN_URL)
-            .form(&params)
-            .timeout(std::time::Duration::from_secs(30))
-            .send()
-            .await
-            .map_err(|e| CoreError::UpstreamConnection(format!("google token refresh: {}", e)))?;
+        let body = urlencoded_body(&params);
+        let mut req = UpstreamRequest::post_json(TOKEN_URL, body);
+        req.headers.insert(
+            http::header::CONTENT_TYPE,
+            http::HeaderValue::from_static("application/x-www-form-urlencoded"),
+        );
 
-        if !resp.status().is_success() {
-            let status = resp.status().as_u16();
-            let body = resp.text().await.unwrap_or_default();
+        let cancel = CancellationToken::new();
+        let response = match upstream_client
+            .call(req, TimeoutProfile::OAuth, cancel)
+            .await
+        {
+            Ok(r) => r,
+            Err(e) => {
+                return Err(match e {
+                    UpstreamError::Cancel => CoreError::ClientDisconnected,
+                    other => CoreError::UpstreamConnection(format!(
+                        "google token refresh: {other}"
+                    )),
+                });
+            }
+        };
+
+        let status = response.status;
+        let body = match response.collect().await {
+            Ok(b) => b,
+            Err(e) => {
+                return Err(match e {
+                    UpstreamError::Cancel => CoreError::ClientDisconnected,
+                    other => CoreError::UpstreamConnection(format!(
+                        "google token refresh body read: {other}"
+                    )),
+                });
+            }
+        };
+
+        if !status.is_success() {
+            let body_str = String::from_utf8_lossy(&body).to_string();
             return Err(CoreError::UpstreamError {
-                status,
+                status: status.as_u16(),
                 provider: "antigravity".into(),
                 model: "<oauth>".into(),
-                body,
+                body: body_str,
             });
         }
 
-        resp.json::<TokenResponse>()
-            .await
-            .map_err(|e| CoreError::Parse(format!("google token refresh parse: {}", e)))
+        serde_json::from_slice::<TokenResponse>(&body)
+            .map_err(|e| CoreError::Parse(format!("google token refresh parse: {e}")))
     }
 
     async fn post_exchange(
@@ -482,6 +544,23 @@ fn generate_code_verifier() -> String {
 fn code_challenge_s256(verifier: &str) -> String {
     let digest = Sha256::digest(verifier.as_bytes());
     base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(digest)
+}
+
+/// Build an `application/x-www-form-urlencoded` body from a list of
+/// `(name, value)` pairs. The values are URL-encoded with
+/// `urlencoding::encode` so they round-trip through the same parser
+/// Google's token endpoint uses.
+fn urlencoded_body(params: &[(&str, &str)]) -> bytes::Bytes {
+    let mut s = String::new();
+    for (i, (k, v)) in params.iter().enumerate() {
+        if i > 0 {
+            s.push('&');
+        }
+        s.push_str(&urlencoding::encode(k));
+        s.push('=');
+        s.push_str(&urlencoding::encode(v));
+    }
+    bytes::Bytes::from(s)
 }
 
 #[cfg(test)]

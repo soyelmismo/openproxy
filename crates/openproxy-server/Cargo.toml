@@ -31,3 +31,8 @@ tokio-stream = { workspace = true }
 http-body = "1.0"
 http-body-util = "0.1"
 bytes = "1"
+parking_lot = { workspace = true }
+
+[dev-dependencies]
+tower = { version = "0.5", features = ["util"] }
+rusqlite = { workspace = true }

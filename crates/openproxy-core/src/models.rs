@@ -239,21 +239,79 @@ fn map_row(row: &Row<'_>) -> rusqlite::Result<Model> {
 ///     with a fresh `discovered_at` on the next refresh that lists it
 ///     again.
 ///
-/// Returns the number of rows touched (inserts + updates). The operation
-/// runs inside a single transaction so partial failures roll back.
+/// Result of [`upsert_many`]. `touched` counts inserts + updates
+/// (the previous return value, kept stable for callers that only
+/// need the size). `new_model_ids` lists the `model_id` values that
+/// were inserted as **new** rows — i.e. they did not exist in the
+/// table for this provider before this call. Updated rows are NOT
+/// included.
+///
+/// The frontend uses `new_model_ids` to surface "X new models were
+/// discovered" in the post-refresh toast (or an empty list when the
+/// refresh found nothing new). The list is ordered in the same
+/// order the upstream returned the discovered models, so the toast
+/// reads naturally ("added: gpt-5, claude-opus-4-1, …"). Each entry
+/// is the upstream `model_id` (e.g. `anthropic/claude-sonnet-4`),
+/// not the local row id — the dashboard routes/display values are
+/// keyed on `model_id`.
+#[derive(Debug, Clone)]
+pub struct UpsertResult {
+    /// Total rows touched (inserts + updates).
+    pub touched: usize,
+    /// `model_id`s that were new for this provider.
+    pub new_model_ids: Vec<crate::ids::ModelId>,
+}
+
+/// Insert or update a batch of discovered models for a provider.
+///
+/// See module docs for the full upsert semantics. Returns an
+/// [`UpsertResult`] with the touched count and the list of model_ids
+/// that were newly inserted (i.e. not present in the table before
+/// the call).
 pub fn upsert_many(
     conn: &Connection,
     provider: &ProviderId,
     discovered: &[DiscoveredModel],
     ttl: Duration,
-) -> Result<usize> {
+) -> Result<UpsertResult> {
     let mut total = 0usize;
+    let mut new_model_ids: Vec<crate::ids::ModelId> = Vec::new();
     let ttl_secs = ttl.as_secs() as i64;
 
     let tx = conn.unchecked_transaction().map_err(|e| CoreError::Database {
         message: format!("begin upsert_many tx: {}", e),
         source: Some(Box::new(e)),
     })?;
+
+    // Snapshot the provider's existing model_ids BEFORE the upsert
+    // so we can diff against the discovered set and report which
+    // rows are new. The select uses the same connection/transaction
+    // so it sees a consistent point-in-time view (no rows from this
+    // call are visible yet). We key on the raw `String` because
+    // `ModelId` does not derive `Hash`/`Eq`; the diff only needs
+    // structural equality on the inner value.
+    let existing: std::collections::HashSet<String> = {
+        let mut stmt = tx
+            .prepare("SELECT model_id FROM models WHERE provider_id = ?")
+            .map_err(|e| CoreError::Database {
+                message: format!("prepare snapshot existing: {}", e),
+                source: Some(Box::new(e)),
+            })?;
+        let rows = stmt
+            .query_map([provider.as_str()], |r| r.get::<_, String>(0))
+            .map_err(|e| CoreError::Database {
+                message: format!("query snapshot existing: {}", e),
+                source: Some(Box::new(e)),
+            })?;
+        let mut set = std::collections::HashSet::new();
+        for id in rows {
+            set.insert(id.map_err(|e| CoreError::Database {
+                message: format!("row snapshot existing: {}", e),
+                source: Some(Box::new(e)),
+            })?);
+        }
+        set
+    };
 
     {
         let mut stmt = tx
@@ -294,6 +352,11 @@ pub fn upsert_many(
                 .as_ref()
                 .and_then(|v| serde_json::to_string(v).ok());
 
+            let is_new = !existing.contains(d.model_id.as_str());
+            if is_new {
+                new_model_ids.push(d.model_id.clone());
+            }
+
             let changed = stmt
                 .execute(params![
                     provider.as_str(),            // 1. provider_id
@@ -322,7 +385,7 @@ pub fn upsert_many(
         source: Some(Box::new(e)),
     })?;
 
-    Ok(total)
+    Ok(UpsertResult { touched: total, new_model_ids })
 }
 
 /// List all non-expired, non-disabled models for a given provider.
@@ -961,7 +1024,7 @@ mod tests {
         .expect("upsert_many");
 
         // One row inserted per call, both fresh -> 2 changes reported.
-        assert_eq!(n, 2);
+        assert_eq!(n.touched, 2);
 
         let all = list_all(&conn).expect("list_all");
         assert_eq!(all.len(), 2);
@@ -1024,7 +1087,7 @@ mod tests {
             Duration::from_secs(7200),
         )
         .expect("second upsert");
-        assert_eq!(n, 1, "update should report 1 changed row");
+        assert_eq!(n.touched, 1, "update should report 1 changed row");
 
         let all = list_all(&conn).unwrap();
         assert_eq!(all.len(), 1, "no new row, just update");
@@ -1218,7 +1281,7 @@ mod tests {
             Duration::from_secs(3600),
         )
         .expect("first upsert");
-        assert_eq!(n, 1);
+        assert_eq!(n.touched, 1);
 
         // Capture the original timestamps.
         let original = list_all(&conn).unwrap().pop().unwrap();
@@ -1249,7 +1312,7 @@ mod tests {
             Duration::from_secs(3600),
         )
         .expect("second upsert");
-        assert_eq!(n2, 1, "re-upsert should report 1 changed row");
+        assert_eq!(n2.touched, 1, "re-upsert should report 1 changed row");
 
         let updated = list_all(&conn).unwrap().pop().unwrap();
         assert_eq!(
@@ -1300,7 +1363,7 @@ mod tests {
             Duration::from_secs(3600),
         )
         .expect("first upsert");
-        assert_eq!(n, 1);
+        assert_eq!(n.touched, 1);
 
         // Operator hand-toggles the model OFF.
         let m = list_all(&conn).unwrap().pop().unwrap();
@@ -1345,7 +1408,7 @@ mod tests {
             Duration::from_secs(3600),
         )
         .expect("refresh upsert");
-        assert_eq!(n2, 1, "refresh should report 1 changed row");
+        assert_eq!(n2.touched, 1, "refresh should report 1 changed row");
 
         // discovered_at must still be the backdated value — the
         // refresh didn't bump it back to "now".

@@ -7,6 +7,7 @@
 
 use crate::error::{CoreError, Result};
 use crate::ids::ProviderId;
+use crate::upstream::ResolvedTimeouts;
 use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
@@ -30,6 +31,40 @@ impl Timeouts {
             ttft: Duration::from_millis(c.ttft_ms),
             idle_chunk: Duration::from_millis(c.idle_chunk_ms),
             total: Duration::from_millis(c.total_ms),
+        }
+    }
+
+    /// Map the pipeline-level `Timeouts` shape to the
+    /// `upstream::profile::ResolvedTimeouts` shape used by
+    /// `UpstreamClient::call`.
+    ///
+    /// Mapping (see `upstream-migration-report.md` §1 + task spec):
+    /// - `dns_ms`     = `connect_ms / 2`     (best-effort split of the
+    ///                  single connect timeout into a DNS sub-phase)
+    /// - `dial_ms`    = `connect_ms`         (TCP connect inherits the
+    ///                  full budget; hyper's default connector
+    ///                  doesn't separate dial from TLS)
+    /// - `tls_ms`     = `connect_ms`         (TLS inherits the full
+    ///                  budget, same rationale)
+    /// - `write_ms`   = `request_send_ms`
+    /// - `headers_ms` = `ttft_ms`
+    /// - `body_chunk_ms` = `idle_chunk_ms`
+    /// - `total_ms`   = `total_ms`
+    ///
+    /// Note: hyper's `DefaultConnector` does not separate dial from
+    /// TLS in the `Service::call` future, so a stalled connector is
+    /// attributed to a single phase boundary (`Headers`) by the
+    /// production dispatch. Splitting connect from TLS in production
+    /// requires a custom DNS resolver and is a follow-up gate.
+    pub fn as_resolved(&self) -> ResolvedTimeouts {
+        ResolvedTimeouts {
+            dns_ms: self.connect.as_millis() as u64 / 2,
+            dial_ms: self.connect.as_millis() as u64,
+            tls_ms: self.connect.as_millis() as u64,
+            write_ms: self.request_send.as_millis() as u64,
+            headers_ms: self.ttft.as_millis() as u64,
+            body_chunk_ms: self.idle_chunk.as_millis() as u64,
+            total_ms: self.total.as_millis() as u64,
         }
     }
 }
@@ -268,5 +303,44 @@ mod tests {
         assert!(empty.is_empty());
         assert!(empty.ttft_ms.is_none());
         assert!(empty.idle_chunk_ms.is_none());
+    }
+
+    #[test]
+    fn as_resolved_maps_pipeline_timeouts_to_upstream_phases() {
+        // Use the system defaults: connect=5s, request_send=10s,
+        // ttft=30s, idle_chunk=120s, total=300s.
+        let t = defaults();
+        let r = t.as_resolved();
+        // connect -> dns (half), dial, tls.
+        assert_eq!(r.dns_ms, 2_500);
+        assert_eq!(r.dial_ms, 5_000);
+        assert_eq!(r.tls_ms, 5_000);
+        // 1:1 mappings.
+        assert_eq!(r.write_ms, 10_000);
+        assert_eq!(r.headers_ms, 30_000);
+        assert_eq!(r.body_chunk_ms, 120_000);
+        assert_eq!(r.total_ms, 300_000);
+    }
+
+    #[test]
+    fn as_resolved_handles_zero_connect() {
+        // Edge case: a tight connect budget rounds down to 0 ms DNS,
+        // which the upstream client treats as "no DNS budget" (it
+        // races against the deadline; an instant deadline is OK).
+        let t = Timeouts {
+            connect: Duration::from_millis(1),
+            request_send: Duration::from_millis(2),
+            ttft: Duration::from_millis(3),
+            idle_chunk: Duration::from_millis(4),
+            total: Duration::from_millis(5),
+        };
+        let r = t.as_resolved();
+        assert_eq!(r.dns_ms, 0);
+        assert_eq!(r.dial_ms, 1);
+        assert_eq!(r.tls_ms, 1);
+        assert_eq!(r.write_ms, 2);
+        assert_eq!(r.headers_ms, 3);
+        assert_eq!(r.body_chunk_ms, 4);
+        assert_eq!(r.total_ms, 5);
     }
 }

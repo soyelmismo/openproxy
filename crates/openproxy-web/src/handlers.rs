@@ -1,35 +1,15 @@
 use axum::{
+    body::Body,
     extract::State,
-    http::{header, HeaderValue},
-    response::{Html, IntoResponse, Json},
+    http::{header, HeaderValue, StatusCode},
+    response::{Html, IntoResponse, Json, Response},
 };
+use std::path::PathBuf;
 
 use crate::WebState;
 
 pub async fn index_html() -> Html<&'static str> {
     Html(include_str!("static/index.html"))
-}
-
-pub async fn app_js() -> (
-    [(header::HeaderName, HeaderValue); 1],
-    &'static str,
-) {
-    let h = [(
-        header::CONTENT_TYPE,
-        HeaderValue::from_static("application/javascript; charset=utf-8"),
-    )];
-    (h, include_str!("static/app.js"))
-}
-
-pub async fn styles_css() -> (
-    [(header::HeaderName, HeaderValue); 1],
-    &'static str,
-) {
-    let h = [(
-        header::CONTENT_TYPE,
-        HeaderValue::from_static("text/css; charset=utf-8"),
-    )];
-    (h, include_str!("static/styles.css"))
 }
 
 pub async fn web_health(State(s): State<WebState>) -> impl IntoResponse {
@@ -45,4 +25,41 @@ pub async fn web_health(State(s): State<WebState>) -> impl IntoResponse {
 
 pub async fn callback_html() -> Html<&'static str> {
     Html(include_str!("static/callback.html"))
+}
+
+/// Static fallback for the refactored frontend. Maps a request
+/// path to `crates/openproxy-web/src/static/...` and streams the
+/// file with the appropriate Content-Type. This is the minimal
+/// addition needed so the new ES-modules entrypoint under
+/// `/src/app.js` and the CSS bundle under `/styles/index.css`
+/// can be served without a bundler. The `static/` directory is
+/// the same folder the legacy `app.js` / `styles.css` lived in,
+/// so old code paths keep working until they are deleted.
+pub async fn serve_static(uri: axum::http::Uri) -> Response {
+    let path = uri.path().trim_start_matches('/');
+    // Block path traversal — anything with ".." gets rejected.
+    if path.is_empty() || path.contains("..") || path.starts_with('/') {
+        return (StatusCode::NOT_FOUND, "not found").into_response();
+    }
+    let fs_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("src")
+        .join("static")
+        .join(path);
+    match tokio::fs::read(&fs_path).await {
+        Ok(bytes) => {
+            let mime = match fs_path.extension().and_then(|s| s.to_str()) {
+                Some("js") | Some("mjs") => "application/javascript; charset=utf-8",
+                Some("css") => "text/css; charset=utf-8",
+                Some("html") => "text/html; charset=utf-8",
+                Some("json") => "application/json; charset=utf-8",
+                Some("svg") => "image/svg+xml",
+                Some("png") => "image/png",
+                Some("ico") => "image/x-icon",
+                _ => "application/octet-stream",
+            };
+            let h = [(header::CONTENT_TYPE, HeaderValue::from_static(mime))];
+            (StatusCode::OK, h, Body::from(bytes)).into_response()
+        }
+        Err(_) => (StatusCode::NOT_FOUND, "not found").into_response(),
+    }
 }

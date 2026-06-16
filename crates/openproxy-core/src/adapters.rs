@@ -15,7 +15,10 @@
 use crate::error::{CoreError, Result};
 use crate::ids::{ModelId, ProviderId};
 use crate::models::{DiscoveredModel, TargetFormat};
+use crate::upstream::{CancellationToken, TimeoutProfile, UpstreamClient, UpstreamRequest};
 use async_trait::async_trait;
+use bytes::Bytes;
+use http::HeaderValue;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
@@ -113,16 +116,153 @@ pub trait ProviderAdapter: Send + Sync {
     /// if the provider does not expose a model list (e.g. MiniMax).
     fn models_url(&self) -> Option<String>;
 
-    /// Fetch the live model list using the provided HTTP client and API key.
+    /// Fetch the live model list using the provided hyper-based
+    /// upstream client and API key.
     ///
-    /// The default implementation GETs [`Self::models_url`] with a `Bearer`
-    /// auth header and parses an OpenRouter-style `{"data": [{...}]}` payload.
-    /// Providers with a different response shape override this method.
+    /// The default implementation GETs [`Self::models_url`] with a
+    /// `Bearer` auth header and parses an OpenRouter-style
+    /// `{"data": [{...}]}` payload. Providers with a different
+    /// response shape override this method. As of Gate 6 the
+    /// HTTP transport is the [`UpstreamClient`] (hyper-based, with
+    /// per-phase timeouts); the legacy `reqwest::Client` is no
+    /// longer threaded through this trait.
     async fn fetch_models(
         &self,
-        client: &reqwest::Client,
+        upstream_client: &Arc<UpstreamClient>,
         api_key: &str,
     ) -> Result<Vec<DiscoveredModel>>;
+}
+
+// =====================================================================
+// Shared upstream helpers
+// =====================================================================
+
+/// GET `url` via the [`UpstreamClient`] with the given `(header, value)`
+/// pairs attached, then collect and parse the body as a JSON value.
+///
+/// The previous helper chain (`client.get(...).header(...).send().await`
+/// + `resp.json().await`) was the same across eight of the ten
+/// adapters; consolidating it here drops ~25 lines per impl and
+/// keeps the `TimeoutProfile::ModelDiscovery` knob in one place. The
+/// caller is responsible for mapping [`crate::upstream::UpstreamError`]
+/// into the provider-specific [`CoreError`] (most call sites return
+/// `CoreError::UpstreamConnection` on transport failure and
+/// `CoreError::Parse` on JSON failure).
+async fn upstream_get_json(
+    upstream_client: &Arc<UpstreamClient>,
+    url: &str,
+    headers: &[(&str, String)],
+) -> std::result::Result<serde_json::Value, String> {
+    let mut req = UpstreamRequest::get(url);
+    for (k, v) in headers {
+        if let Ok(hv) = HeaderValue::from_str(v) {
+            // Map common header names to typed `http::header` constants
+            // so case-insensitive matching works; fall back to a raw
+            // insertion when the name is non-standard.
+            if let Some(name) = header_name(k) {
+                req.headers.insert(name, hv);
+            } else {
+                req.headers.insert(
+                    http::header::HeaderName::from_bytes(k.as_bytes())
+                        .map_err(|e| format!("invalid header name '{}': {}", k, e))?,
+                    hv,
+                );
+            }
+        }
+    }
+    let cancel = CancellationToken::new();
+    let response = upstream_client
+        .call(req, TimeoutProfile::ModelDiscovery, cancel)
+        .await
+        .map_err(|e| format!("{}: {}", url, e))?;
+
+    if !response.status.is_success() {
+        let status = response.status.as_u16();
+        let body = response
+            .collect()
+            .await
+            .map_err(|e| format!("{}: failed to read error body: {}", url, e))?;
+        return Err(format!(
+            "{}: status {}: {}",
+            url,
+            status,
+            String::from_utf8_lossy(&body)
+        ));
+    }
+
+    let bytes = response
+        .collect()
+        .await
+        .map_err(|e| format!("{}: {}", url, e))?;
+    serde_json::from_slice(&bytes).map_err(|e| format!("{}: parse: {}", url, e))
+}
+
+/// Map a header name to its typed `http::header::HeaderName` constant
+/// when one exists; return `None` for non-standard names. This keeps
+/// the common cases (`Authorization`, `Content-Type`, `User-Agent`)
+/// case-insensitive without paying the cost of `HeaderName::from_bytes`
+/// for every call.
+fn header_name(name: &str) -> Option<http::header::HeaderName> {
+    use http::header;
+    match name.to_ascii_lowercase().as_str() {
+        "authorization" => Some(header::AUTHORIZATION),
+        "content-type" => Some(header::CONTENT_TYPE),
+        "user-agent" => Some(header::USER_AGENT),
+        "x-api-key" => Some(http::HeaderName::from_static("x-api-key")),
+        "x-goog-api-key" => Some(http::HeaderName::from_static("x-goog-api-key")),
+        _ => None,
+    }
+}
+
+/// POST `url` via the [`UpstreamClient`] with the given `(header, value)`
+/// pairs and a JSON body, then collect and parse the response body as
+/// a JSON value. Used by the Antigravity adapters (and any other
+/// provider whose `/models` endpoint takes a POST + small JSON body).
+async fn upstream_post_json(
+    upstream_client: &Arc<UpstreamClient>,
+    url: &str,
+    headers: &[(&str, String)],
+    body: &[u8],
+) -> std::result::Result<serde_json::Value, String> {
+    let mut req = UpstreamRequest::post_json(url, Bytes::copy_from_slice(body));
+    for (k, v) in headers {
+        if let Ok(hv) = HeaderValue::from_str(v) {
+            if let Some(name) = header_name(k) {
+                req.headers.insert(name, hv);
+            } else {
+                req.headers.insert(
+                    http::header::HeaderName::from_bytes(k.as_bytes())
+                        .map_err(|e| format!("invalid header name '{}': {}", k, e))?,
+                    hv,
+                );
+            }
+        }
+    }
+    let cancel = CancellationToken::new();
+    let response = upstream_client
+        .call(req, TimeoutProfile::ModelDiscovery, cancel)
+        .await
+        .map_err(|e| format!("{}: {}", url, e))?;
+
+    if !response.status.is_success() {
+        let status = response.status.as_u16();
+        let body = response
+            .collect()
+            .await
+            .map_err(|e| format!("{}: failed to read error body: {}", url, e))?;
+        return Err(format!(
+            "{}: status {}: {}",
+            url,
+            status,
+            String::from_utf8_lossy(&body)
+        ));
+    }
+
+    let bytes = response
+        .collect()
+        .await
+        .map_err(|e| format!("{}: {}", url, e))?;
+    serde_json::from_slice(&bytes).map_err(|e| format!("{}: parse: {}", url, e))
 }
 
 // =====================================================================
@@ -202,32 +342,20 @@ impl ProviderAdapter for OpenRouterAdapter {
 
     async fn fetch_models(
         &self,
-        client: &reqwest::Client,
+        upstream_client: &Arc<UpstreamClient>,
         api_key: &str,
     ) -> Result<Vec<DiscoveredModel>> {
         let url = self.models_url().ok_or_else(|| {
             crate::error::CoreError::Internal("openrouter has no models_url".into())
         })?;
 
-        let resp = client
-            .get(&url)
-            .header("Authorization", format!("Bearer {}", api_key))
-            .timeout(std::time::Duration::from_secs(30))
-            .send()
-            .await
-            .map_err(|e| crate::error::CoreError::UpstreamConnection(e.to_string()))?;
-
-        if !resp.status().is_success() {
-            return Err(crate::error::CoreError::UpstreamConnection(format!(
-                "openrouter /models returned status {}",
-                resp.status().as_u16()
-            )));
-        }
-
-        let body: serde_json::Value = resp
-            .json()
-            .await
-            .map_err(|e| crate::error::CoreError::Parse(e.to_string()))?;
+        let body = upstream_get_json(
+            upstream_client,
+            &url,
+            &[("Authorization", format!("Bearer {api_key}"))],
+        )
+        .await
+        .map_err(|e| crate::error::CoreError::UpstreamConnection(e.to_string()))?;
 
         let arr = body.get("data").and_then(|v| v.as_array()).ok_or_else(|| {
             crate::error::CoreError::Parse("openrouter response missing 'data' array".into())
@@ -637,38 +765,23 @@ impl ProviderAdapter for MiniMaxAdapter {
 
     async fn fetch_models(
         &self,
-        client: &reqwest::Client,
+        upstream_client: &Arc<UpstreamClient>,
         api_key: &str,
     ) -> Result<Vec<DiscoveredModel>> {
         let url = self.models_url().ok_or_else(|| {
             CoreError::Internal("minimax: models_url is None (impossible)".into())
         })?;
 
-        let resp = client
-            .get(&url)
-            .header("Authorization", format!("Bearer {}", api_key))
-            .timeout(std::time::Duration::from_secs(15))
-            .send()
-            .await
-            .map_err(|e| {
-                CoreError::UpstreamConnection(format!("minimax /v1/models: {}", e))
-            })?;
-
-        if !resp.status().is_success() {
-            let status = resp.status().as_u16();
-            let body = resp.text().await.unwrap_or_default();
-            return Err(CoreError::UpstreamError {
-                status,
-                provider: self.config.id.to_string(),
-                model: "<models>".into(),
-                body,
-            });
-        }
-
-        let body: serde_json::Value = resp
-            .json()
-            .await
-            .map_err(|e| CoreError::Parse(format!("minimax /v1/models parse: {}", e)))?;
+        // MiniMax returns a small payload and the request is
+        // fast; we let `TimeoutProfile::ModelDiscovery` drive the
+        // budget (30s headers / 60s body / 120s total).
+        let body = upstream_get_json(
+            upstream_client,
+            &url,
+            &[("Authorization", format!("Bearer {api_key}"))],
+        )
+        .await
+        .map_err(|e| CoreError::UpstreamConnection(format!("minimax /v1/models: {e}")))?;
 
         // MiniMax returns an OpenAI-shaped list: {"object": "list",
         // "data": [{...}, ...]}. We accept a few equivalent shapes to
@@ -811,35 +924,28 @@ impl ProviderAdapter for OpenCodeZenAdapter {
 
     async fn fetch_models(
         &self,
-        client: &reqwest::Client,
+        upstream_client: &Arc<UpstreamClient>,
         api_key: &str,
     ) -> Result<Vec<DiscoveredModel>> {
         let url = self
             .models_url()
             .ok_or_else(|| CoreError::Validation("opencode-zen: models_url is None".into()))?;
 
-        let resp = client
-            .get(&url)
-            .bearer_auth(api_key)
-            .send()
-            .await
-            .map_err(|e| CoreError::UpstreamConnection(format!("opencode-zen /models: {}", e)))?;
+        // `bearer_auth(api_key)` is the equivalent of the old
+        // `.bearer_auth(api_key)` reqwest call: it sets the
+        // `Authorization: Bearer ***` header. We pass the same
+        // string in via the helper.
+        let body = upstream_get_json(
+            upstream_client,
+            &url,
+            &[("Authorization", format!("Bearer {api_key}"))],
+        )
+        .await
+        .map_err(|e| CoreError::UpstreamConnection(format!("opencode-zen /models: {e}")))?;
 
-        if !resp.status().is_success() {
-            let status = resp.status().as_u16();
-            let body = resp.text().await.unwrap_or_default();
-            return Err(CoreError::UpstreamError {
-                status,
-                provider: self.config.id.to_string(),
-                model: "<models>".into(),
-                body,
-            });
-        }
-
-        let payload: OpenAIModelsResponse = resp
-            .json()
-            .await
-            .map_err(|e| CoreError::Validation(format!("opencode-zen /models parse: {}", e)))?;
+        let payload: OpenAIModelsResponse = serde_json::from_value(body).map_err(|e| {
+            CoreError::Validation(format!("opencode-zen /models parse: {e}"))
+        })?;
 
         let out = payload
             .data
@@ -964,36 +1070,23 @@ impl ProviderAdapter for OllamaCloudAdapter {
 
     async fn fetch_models(
         &self,
-        client: &reqwest::Client,
+        upstream_client: &Arc<UpstreamClient>,
         api_key: &str,
     ) -> Result<Vec<DiscoveredModel>> {
         let url = self.models_url().ok_or_else(|| {
             CoreError::Internal("ollama-cloud: models_url is None (impossible)".into())
         })?;
 
-        let resp = client
-            .get(&url)
-            .bearer_auth(api_key)
-            .timeout(std::time::Duration::from_secs(30))
-            .send()
-            .await
-            .map_err(|e| {
-                CoreError::UpstreamConnection(format!("ollama-cloud /api/tags: {}", e))
-            })?;
+        let body = upstream_get_json(
+            upstream_client,
+            &url,
+            &[("Authorization", format!("Bearer {api_key}"))],
+        )
+        .await
+        .map_err(|e| CoreError::UpstreamConnection(format!("ollama-cloud /api/tags: {e}")))?;
 
-        if !resp.status().is_success() {
-            let status = resp.status().as_u16();
-            let body = resp.text().await.unwrap_or_default();
-            return Err(CoreError::UpstreamError {
-                status,
-                provider: self.config.id.to_string(),
-                model: "<models>".into(),
-                body,
-            });
-        }
-
-        let payload: OllamaTagsResponse = resp.json().await.map_err(|e| {
-            CoreError::Parse(format!("ollama-cloud /api/tags parse: {}", e))
+        let payload: OllamaTagsResponse = serde_json::from_value(body).map_err(|e| {
+            CoreError::Parse(format!("ollama-cloud /api/tags parse: {e}"))
         })?;
 
         let out = payload
@@ -1131,12 +1224,12 @@ impl ProviderAdapter for NousResearchAdapter {
 
     async fn fetch_models(
         &self,
-        client: &reqwest::Client,
+        upstream_client: &Arc<UpstreamClient>,
         api_key: &str,
     ) -> Result<Vec<DiscoveredModel>> {
         fetch_openai_models(
             &self.models_url().expect("always Some"),
-            client,
+            upstream_client,
             api_key,
             "nous-research",
         )
@@ -1213,12 +1306,12 @@ impl ProviderAdapter for NvidiaNimAdapter {
 
     async fn fetch_models(
         &self,
-        client: &reqwest::Client,
+        upstream_client: &Arc<UpstreamClient>,
         api_key: &str,
     ) -> Result<Vec<DiscoveredModel>> {
         fetch_openai_models(
             &self.models_url().expect("always Some"),
-            client,
+            upstream_client,
             api_key,
             "nvidia-nim",
         )
@@ -1298,12 +1391,12 @@ impl ProviderAdapter for KilocodeAdapter {
 
     async fn fetch_models(
         &self,
-        client: &reqwest::Client,
+        upstream_client: &Arc<UpstreamClient>,
         api_key: &str,
     ) -> Result<Vec<DiscoveredModel>> {
         fetch_openai_models(
             "https://api.kilo.ai/api/openrouter/models",
-            client,
+            upstream_client,
             api_key,
             "kilocode",
         )
@@ -1322,33 +1415,20 @@ impl ProviderAdapter for KilocodeAdapter {
 /// avoids duplicating the HTTP + deserialization boilerplate.
 async fn fetch_openai_models(
     url: &str,
-    client: &reqwest::Client,
+    upstream_client: &Arc<UpstreamClient>,
     api_key: &str,
     provider_name: &str,
 ) -> Result<Vec<DiscoveredModel>> {
-    let resp = client
-        .get(url)
-        .bearer_auth(api_key)
-        .timeout(std::time::Duration::from_secs(30))
-        .send()
-        .await
-        .map_err(|e| CoreError::UpstreamConnection(format!("{} /models: {}", provider_name, e)))?;
+    let body = upstream_get_json(
+        upstream_client,
+        url,
+        &[("Authorization", format!("Bearer {api_key}"))],
+    )
+    .await
+    .map_err(|e| CoreError::UpstreamConnection(format!("{provider_name} /models: {e}")))?;
 
-    if !resp.status().is_success() {
-        let status = resp.status().as_u16();
-        let body = resp.text().await.unwrap_or_default();
-        return Err(CoreError::UpstreamError {
-            status,
-            provider: provider_name.to_string(),
-            model: "<models>".into(),
-            body,
-        });
-    }
-
-    let payload: OpenAIModelsResponse = resp
-        .json()
-        .await
-        .map_err(|e| CoreError::Parse(format!("{} /models parse: {}", provider_name, e)))?;
+    let payload: OpenAIModelsResponse = serde_json::from_value(body)
+        .map_err(|e| CoreError::Parse(format!("{provider_name} /models parse: {e}")))?;
 
     let out = payload
         .data
@@ -1448,36 +1528,24 @@ impl ProviderAdapter for GeminiAdapter {
 
     async fn fetch_models(
         &self,
-        client: &reqwest::Client,
+        upstream_client: &Arc<UpstreamClient>,
         api_key: &str,
     ) -> Result<Vec<DiscoveredModel>> {
         let url = self.models_url().ok_or_else(|| {
             CoreError::Internal("gemini: models_url is None (impossible)".into())
         })?;
 
-        let resp = client
-            .get(&url)
-            .header("x-goog-api-key", api_key)
-            .timeout(std::time::Duration::from_secs(30))
-            .send()
-            .await
-            .map_err(|e| CoreError::UpstreamConnection(format!("gemini /models: {}", e)))?;
-
-        if !resp.status().is_success() {
-            let status = resp.status().as_u16();
-            let body = resp.text().await.unwrap_or_default();
-            return Err(CoreError::UpstreamError {
-                status,
-                provider: "gemini".into(),
-                model: "<models>".into(),
-                body,
-            });
-        }
-
-        let body: serde_json::Value = resp
-            .json()
-            .await
-            .map_err(|e| CoreError::Parse(format!("gemini /models parse: {}", e)))?;
+        // Gemini uses `x-goog-api-key: <key>` (not Bearer). The
+        // header name is non-standard so we still pass it through
+        // the `header_name` map for proper case-insensitive
+        // handling.
+        let body = upstream_get_json(
+            upstream_client,
+            &url,
+            &[("x-goog-api-key", api_key.to_string())],
+        )
+        .await
+        .map_err(|e| CoreError::UpstreamConnection(format!("gemini /models: {e}")))?;
 
         // Gemini returns {"models": [{"name": "models/gemini-2.0-flash", ...}]}
         let arr = body
@@ -1780,7 +1848,7 @@ impl ProviderAdapter for AntigravityAdapter {
 
     async fn fetch_models(
         &self,
-        http_client: &reqwest::Client,
+        upstream_client: &Arc<UpstreamClient>,
         api_key: &str,
     ) -> Result<Vec<DiscoveredModel>> {
         if api_key.is_empty() {
@@ -1795,23 +1863,35 @@ impl ProviderAdapter for AntigravityAdapter {
         let ua = "Antigravity/4.2.0 (X11; Linux x86_64) Chrome/132.0.6834.160 Electron/39.2.3";
 
         for endpoint in &endpoints {
-            let response = http_client
-                .post(*endpoint)
-                .header("Authorization", format!("Bearer {api_key}"))
-                .header("Content-Type", "application/json")
-                .header("User-Agent", ua)
-                .header("X-Goog-Api-Client", "gl-node/22.21.1")
-                .body("{}".to_string())
-                .send()
-                .await;
-
-            if let Ok(resp) = response {
-                if resp.status().is_success() {
-                    if let Ok(body) = resp.json::<serde_json::Value>().await {
-                        if let Some(models) = self.parse_models_response(&body) {
-                            return Ok(models);
-                        }
+            // Cloud Code's `:fetchAvailableModels` endpoint expects a
+            // POST with a small JSON body (the empty object works in
+            // practice) and a Chromium-flavored User-Agent. We
+            // propagate transient transport / non-2xx errors via the
+            // helper's `Err` return; on success we hand the body to
+            // `parse_models_response`. If the parser decides the
+            // response is empty (e.g. an `isInternal` filter strips
+            // every model), we try the next endpoint before falling
+            // back to the hardcoded list.
+            match upstream_post_json(
+                upstream_client,
+                endpoint,
+                &[
+                    ("Authorization", format!("Bearer {api_key}")),
+                    ("User-Agent", ua.to_string()),
+                    ("X-Goog-Api-Client", "gl-node/22.21.1".to_string()),
+                ],
+                b"{}",
+            )
+            .await
+            {
+                Ok(body) => {
+                    if let Some(models) = self.parse_models_response(&body) {
+                        return Ok(models);
                     }
+                }
+                Err(_) => {
+                    // Try the next endpoint; the final fallback is
+                    // the hardcoded list.
                 }
             }
         }
@@ -2080,7 +2160,7 @@ impl ProviderAdapter for AntigravityCliAdapter {
 
     async fn fetch_models(
         &self,
-        http_client: &reqwest::Client,
+        upstream_client: &Arc<UpstreamClient>,
         api_key: &str,
     ) -> Result<Vec<DiscoveredModel>> {
         if api_key.is_empty() {
@@ -2095,23 +2175,35 @@ impl ProviderAdapter for AntigravityCliAdapter {
         let ua = "Antigravity/4.2.0 (X11; Linux x86_64) Chrome/132.0.6834.160 Electron/39.2.3";
 
         for endpoint in &endpoints {
-            let response = http_client
-                .post(*endpoint)
-                .header("Authorization", format!("Bearer {api_key}"))
-                .header("Content-Type", "application/json")
-                .header("User-Agent", ua)
-                .header("X-Goog-Api-Client", "gl-node/22.21.1")
-                .body("{}".to_string())
-                .send()
-                .await;
-
-            if let Ok(resp) = response {
-                if resp.status().is_success() {
-                    if let Ok(body) = resp.json::<serde_json::Value>().await {
-                        if let Some(models) = self.parse_models_response(&body) {
-                            return Ok(models);
-                        }
+            // Cloud Code's `:fetchAvailableModels` endpoint expects a
+            // POST with a small JSON body (the empty object works in
+            // practice) and a Chromium-flavored User-Agent. We
+            // propagate transient transport / non-2xx errors via the
+            // helper's `Err` return; on success we hand the body to
+            // `parse_models_response`. If the parser decides the
+            // response is empty (e.g. an `isInternal` filter strips
+            // every model), we try the next endpoint before falling
+            // back to the hardcoded list.
+            match upstream_post_json(
+                upstream_client,
+                endpoint,
+                &[
+                    ("Authorization", format!("Bearer {api_key}")),
+                    ("User-Agent", ua.to_string()),
+                    ("X-Goog-Api-Client", "gl-node/22.21.1".to_string()),
+                ],
+                b"{}",
+            )
+            .await
+            {
+                Ok(body) => {
+                    if let Some(models) = self.parse_models_response(&body) {
+                        return Ok(models);
                     }
+                }
+                Err(_) => {
+                    // Try the next endpoint; the final fallback is
+                    // the hardcoded list.
                 }
             }
         }

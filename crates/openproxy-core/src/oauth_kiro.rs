@@ -19,6 +19,8 @@ use crate::error::{CoreError, Result};
 use crate::ids::AccountId;
 use crate::oauth::{DeviceAuthorizationResponse, OAuthFlow, OAuthProvider, TokenResponse};
 use crate::secrets::MasterKey;
+use crate::upstream::{CancellationToken, TimeoutProfile, UpstreamClient, UpstreamError, UpstreamRequest};
+use std::sync::Arc;
 
 /// AWS SSO OIDC endpoints.
 const REGISTER_URL: &str = "https://oidc.us-east-1.amazonaws.com/client/register";
@@ -122,6 +124,23 @@ pub fn take_last_client() -> Option<(String, String)> {
     })
 }
 
+/// Build an `application/x-www-form-urlencoded` body from a list of
+/// `(name, value)` pairs. Mirrors the helper in `oauth_antigravity.rs`
+/// (kept here to avoid a cross-module dep — the two providers have
+/// no shared helper module today).
+fn urlencoded_body(params: &[(&str, &str)]) -> bytes::Bytes {
+    let mut s = String::new();
+    for (i, (k, v)) in params.iter().enumerate() {
+        if i > 0 {
+            s.push('&');
+        }
+        s.push_str(&urlencoding::encode(k));
+        s.push('=');
+        s.push_str(&urlencoding::encode(v));
+    }
+    bytes::Bytes::from(s)
+}
+
 pub struct KiroOAuthProvider;
 
 impl KiroOAuthProvider {
@@ -159,7 +178,7 @@ impl OAuthProvider for KiroOAuthProvider {
         &self,
         _code: &str,
         _code_verifier: &str,
-        _http_client: &reqwest::Client,
+        _upstream_client: &Arc<UpstreamClient>,
         _redirect_uri: &str,
     ) -> Result<TokenResponse> {
         Err(CoreError::Validation(
@@ -169,64 +188,108 @@ impl OAuthProvider for KiroOAuthProvider {
 
     async fn request_device_code(
         &self,
-        http_client: &reqwest::Client,
+        upstream_client: &Arc<UpstreamClient>,
     ) -> Result<DeviceAuthorizationResponse> {
         // Step 1: Register a dynamic OIDC client.
-        let register_resp = http_client
-            .post(REGISTER_URL)
-            .json(&RegisterClientRequest {
-                client_name: "openproxy-kiro".into(),
-            })
-            .timeout(std::time::Duration::from_secs(15))
-            .send()
-            .await
-            .map_err(|e| CoreError::UpstreamConnection(format!("kiro client register: {}", e)))?;
+        let register_body = serde_json::to_vec(&RegisterClientRequest {
+            client_name: "openproxy-kiro".into(),
+        })
+        .map_err(|e| CoreError::Parse(format!("kiro register serialize: {e}")))?;
+        let register_req = UpstreamRequest::post_json(REGISTER_URL, bytes::Bytes::from(register_body));
 
-        if !register_resp.status().is_success() {
-            let status = register_resp.status().as_u16();
-            let body = register_resp.text().await.unwrap_or_default();
+        let cancel = CancellationToken::new();
+        let register_response = upstream_client
+            .call(register_req, TimeoutProfile::OAuth, cancel.clone())
+            .await;
+        let register_response = match register_response {
+            Ok(r) => r,
+            Err(e) => {
+                return Err(match e {
+                    UpstreamError::Cancel => CoreError::ClientDisconnected,
+                    other => CoreError::UpstreamConnection(format!(
+                        "kiro client register: {other}"
+                    )),
+                });
+            }
+        };
+
+        let register_status = register_response.status;
+        let register_body = match register_response.collect().await {
+            Ok(b) => b,
+            Err(e) => {
+                return Err(match e {
+                    UpstreamError::Cancel => CoreError::ClientDisconnected,
+                    other => CoreError::UpstreamConnection(format!(
+                        "kiro register body read: {other}"
+                    )),
+                });
+            }
+        };
+        if !register_status.is_success() {
+            let body_str = String::from_utf8_lossy(&register_body).to_string();
             return Err(CoreError::UpstreamError {
-                status,
+                status: register_status.as_u16(),
                 provider: "kiro".into(),
                 model: "<oauth>".into(),
-                body,
+                body: body_str,
             });
         }
 
-        let client: RegisterClientResponse = register_resp
-            .json()
-            .await
-            .map_err(|e| CoreError::Parse(format!("kiro register response parse: {}", e)))?;
+        let client: RegisterClientResponse = serde_json::from_slice(&register_body)
+            .map_err(|e| CoreError::Parse(format!("kiro register response parse: {e}")))?;
 
         // Step 2: Request device authorization.
         let scope = SCOPES.join(" ");
-        let device_auth_resp = http_client
-            .post(DEVICE_AUTH_URL)
-            .form(&DeviceAuthRequest {
-                client_id: client.client_id.clone(),
-                scope: scope.clone(),
-            })
-            .timeout(std::time::Duration::from_secs(15))
-            .send()
-            .await
-            .map_err(|e| {
-                CoreError::UpstreamConnection(format!("kiro device authorization: {}", e))
-            })?;
+        let auth_body = urlencoded_body(&[
+            ("clientId", &client.client_id),
+            ("scope", &scope),
+        ]);
+        let mut device_auth_req =
+            UpstreamRequest::post_json(DEVICE_AUTH_URL, auth_body);
+        device_auth_req.headers.insert(
+            http::header::CONTENT_TYPE,
+            http::HeaderValue::from_static("application/x-www-form-urlencoded"),
+        );
 
-        if !device_auth_resp.status().is_success() {
-            let status = device_auth_resp.status().as_u16();
-            let body = device_auth_resp.text().await.unwrap_or_default();
+        let device_auth_response = upstream_client
+            .call(device_auth_req, TimeoutProfile::OAuth, cancel)
+            .await;
+        let device_auth_response = match device_auth_response {
+            Ok(r) => r,
+            Err(e) => {
+                return Err(match e {
+                    UpstreamError::Cancel => CoreError::ClientDisconnected,
+                    other => CoreError::UpstreamConnection(format!(
+                        "kiro device authorization: {other}"
+                    )),
+                });
+            }
+        };
+
+        let device_auth_status = device_auth_response.status;
+        let device_auth_body = match device_auth_response.collect().await {
+            Ok(b) => b,
+            Err(e) => {
+                return Err(match e {
+                    UpstreamError::Cancel => CoreError::ClientDisconnected,
+                    other => CoreError::UpstreamConnection(format!(
+                        "kiro device auth body read: {other}"
+                    )),
+                });
+            }
+        };
+        if !device_auth_status.is_success() {
+            let body_str = String::from_utf8_lossy(&device_auth_body).to_string();
             return Err(CoreError::UpstreamError {
-                status,
+                status: device_auth_status.as_u16(),
                 provider: "kiro".into(),
                 model: "<oauth>".into(),
-                body,
+                body: body_str,
             });
         }
 
-        let dar: DeviceAuthorizationResponse = device_auth_resp.json().await.map_err(|e| {
-            CoreError::Parse(format!("kiro device auth response parse: {}", e))
-        })?;
+        let dar: DeviceAuthorizationResponse = serde_json::from_slice(&device_auth_body)
+            .map_err(|e| CoreError::Parse(format!("kiro device auth response parse: {e}")))?;
 
         // Stash the freshly-registered OIDC credentials on a
         // thread-local cell so the admin handler can persist
@@ -250,23 +313,46 @@ impl OAuthProvider for KiroOAuthProvider {
     async fn poll_device_token(
         &self,
         device_code: &str,
-        http_client: &reqwest::Client,
+        upstream_client: &Arc<UpstreamClient>,
     ) -> Result<Option<TokenResponse>> {
-        let params = [
+        let body = urlencoded_body(&[
             ("grant_type", "urn:ietf:params:oauth:grant-type:device_code"),
             ("device_code", device_code),
-        ];
+        ]);
+        let mut req = UpstreamRequest::post_json(TOKEN_URL, body);
+        req.headers.insert(
+            http::header::CONTENT_TYPE,
+            http::HeaderValue::from_static("application/x-www-form-urlencoded"),
+        );
 
-        let resp = http_client
-            .post(TOKEN_URL)
-            .form(&params)
-            .timeout(std::time::Duration::from_secs(15))
-            .send()
+        let cancel = CancellationToken::new();
+        let response = match upstream_client
+            .call(req, TimeoutProfile::OAuth, cancel)
             .await
-            .map_err(|e| CoreError::UpstreamConnection(format!("kiro device poll: {}", e)))?;
+        {
+            Ok(r) => r,
+            Err(e) => {
+                return Err(match e {
+                    UpstreamError::Cancel => CoreError::ClientDisconnected,
+                    other => CoreError::UpstreamConnection(format!(
+                        "kiro device poll: {other}"
+                    )),
+                });
+            }
+        };
 
-        let status = resp.status();
-        let body = resp.text().await.unwrap_or_default();
+        let status = response.status;
+        let body = match response.collect().await {
+            Ok(b) => b,
+            Err(e) => {
+                return Err(match e {
+                    UpstreamError::Cancel => CoreError::ClientDisconnected,
+                    other => CoreError::UpstreamConnection(format!(
+                        "kiro device poll body read: {other}"
+                    )),
+                });
+            }
+        };
 
         if status.as_u16() == 400 || status.as_u16() == 428 {
             // Authorization_pending or similar — caller should retry.
@@ -274,51 +360,76 @@ impl OAuthProvider for KiroOAuthProvider {
         }
 
         if !status.is_success() {
+            let body_str = String::from_utf8_lossy(&body).to_string();
             return Err(CoreError::UpstreamError {
                 status: status.as_u16(),
                 provider: "kiro".into(),
                 model: "<oauth>".into(),
-                body,
+                body: body_str,
             });
         }
 
-        let token: TokenResponse =
-            serde_json::from_str(&body).map_err(|e| CoreError::Parse(format!("kiro token parse: {}", e)))?;
-        Ok(Some(token))
+        serde_json::from_slice::<TokenResponse>(&body)
+            .map(|t| Some(t))
+            .map_err(|e| CoreError::Parse(format!("kiro token parse: {e}")))
     }
 
     async fn refresh_token(
         &self,
         refresh_token: &str,
-        http_client: &reqwest::Client,
+        upstream_client: &Arc<UpstreamClient>,
     ) -> Result<TokenResponse> {
-        let params = [
+        let body = urlencoded_body(&[
             ("grant_type", "refresh_token"),
             ("refresh_token", refresh_token),
-        ];
+        ]);
+        let mut req = UpstreamRequest::post_json(TOKEN_URL, body);
+        req.headers.insert(
+            http::header::CONTENT_TYPE,
+            http::HeaderValue::from_static("application/x-www-form-urlencoded"),
+        );
 
-        let resp = http_client
-            .post(TOKEN_URL)
-            .form(&params)
-            .timeout(std::time::Duration::from_secs(30))
-            .send()
+        let cancel = CancellationToken::new();
+        let response = match upstream_client
+            .call(req, TimeoutProfile::OAuth, cancel)
             .await
-            .map_err(|e| CoreError::UpstreamConnection(format!("kiro token refresh: {}", e)))?;
+        {
+            Ok(r) => r,
+            Err(e) => {
+                return Err(match e {
+                    UpstreamError::Cancel => CoreError::ClientDisconnected,
+                    other => CoreError::UpstreamConnection(format!(
+                        "kiro token refresh: {other}"
+                    )),
+                });
+            }
+        };
 
-        if !resp.status().is_success() {
-            let status = resp.status().as_u16();
-            let body = resp.text().await.unwrap_or_default();
+        let status = response.status;
+        let body = match response.collect().await {
+            Ok(b) => b,
+            Err(e) => {
+                return Err(match e {
+                    UpstreamError::Cancel => CoreError::ClientDisconnected,
+                    other => CoreError::UpstreamConnection(format!(
+                        "kiro token refresh body read: {other}"
+                    )),
+                });
+            }
+        };
+
+        if !status.is_success() {
+            let body_str = String::from_utf8_lossy(&body).to_string();
             return Err(CoreError::UpstreamError {
-                status,
+                status: status.as_u16(),
                 provider: "kiro".into(),
                 model: "<oauth>".into(),
-                body,
+                body: body_str,
             });
         }
 
-        resp.json::<TokenResponse>()
-            .await
-            .map_err(|e| CoreError::Parse(format!("kiro token refresh parse: {}", e)))
+        serde_json::from_slice::<TokenResponse>(&body)
+            .map_err(|e| CoreError::Parse(format!("kiro token refresh parse: {e}")))
     }
 
     async fn post_exchange(

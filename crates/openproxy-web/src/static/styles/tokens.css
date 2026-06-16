@@ -1,0 +1,137 @@
+/* ============================================
+   TOKENS — primitives + semantic (light)
+   ------------------------------------------
+   Reference palette: Dell 1996 web design system
+   (spec §4 of the refactor).
+   - Hard 1px borders, generous whitespace
+   - Saturated accent tints (Dell red, yellow sticker,
+     purple stripe) over a near-white canvas
+   - Typography: Arial Black / Helvetica / Times Roman
+     with system fallbacks (no webfonts)
+   - Two themes: light (default) and dark.
+   ============================================ */
+
+:root {
+  /* ----- Primitives: Dell brand palette (spec §4.1) ----- */
+  --c-dell-red:      #e91d2a;
+  --c-yellow-sticker:#fcc20f;
+  --c-purple-stripe: #6a26a4;
+
+  /* Surface */
+  --c-frame-ink:     #000000;
+  --c-canvas:        #ffffff;
+
+  /* Text */
+  --c-ink:           #000000;
+  --c-link:          #0000ee;
+
+  /* 8 ribbon-card tints (Dell 1996 catalog) */
+  --c-tint-olive:      #8e8a25;
+  --c-tint-sage:       #b3bd95;
+  --c-tint-salmon:     #d77a7a;
+  --c-tint-peach:      #e6915d;
+  --c-tint-lime:       #c0d4a7;
+  --c-tint-sky:        #9ab6c8;
+  --c-tint-steel:      #a5b8c0;
+  --c-tint-periwinkle: #8c9ae0;
+
+  /* ----- Semantic (light = default, spec §4.2) ----- */
+  --color-bg:           var(--c-canvas);
+  --color-surface:      var(--c-canvas);
+  --color-surface-2:    #f5f5f5;   /* table headers, input fills */
+  --color-text:         var(--c-ink);
+  --color-text-muted:   #5a5a5a;
+  --color-text-inverse: var(--c-canvas);
+  --color-link:         var(--c-link);
+  --color-border:       var(--c-frame-ink);
+  --color-border-soft:  #d4d4d4;
+  --color-frame-ink:    var(--c-frame-ink);
+
+  --color-primary:      var(--c-dell-red);
+  --color-primary-hover:#c91825;
+  --color-primary-fg:   var(--c-canvas);
+
+  /* Soft surfaces for primary / semantic states */
+  --color-primary-soft: #f6dada;   /* hover/active bg */
+
+  /* Success/Warn/Error/Info (spec §4.2) */
+  --color-success:      #4d7c2a;   /* sage darkened for AA */
+  --color-success-soft: #d8e2c8;
+  --color-warn:         #a86a00;   /* peach dark */
+  --color-warn-soft:    #f5d9b8;
+  --color-error:        #b21f1f;   /* salmon dark */
+  --color-error-soft:   #f3cdcd;
+  --color-info:         #2b5a78;   /* sky dark */
+  --color-info-soft:    #cfdde5;
+
+  /* Status pills (log row) — spec-aligned aliases */
+  --color-status-ok:        var(--color-success);
+  --color-status-ok-soft:   var(--color-success-soft);
+  --color-status-err:       var(--color-error);
+  --color-status-err-soft:  var(--color-error-soft);
+  --color-status-warn:      var(--color-warn);
+  --color-status-warn-soft: var(--color-warn-soft);
+  --color-status-lost:      #5a5a5a;
+  --color-status-lost-soft: #e6e6e6;
+
+  /* Phase pills (log rows) — kept for views.css */
+  --color-phase-soft:       #ece9e2;
+  --color-phase-text:       #1a1a1a;
+
+  /* Log row header (sticky) — kept for views.css */
+  --color-log-header-bg:    #0f0d0b;
+  --color-log-header-fg:    #d8d4c8;
+
+  /* ----- Spacing ----- */
+  --space-1: 0.25rem;
+  --space-2: 0.5rem;
+  --space-3: 0.75rem;
+  --space-4: 1rem;
+  --space-5: 1.25rem;
+  --space-6: 1.5rem;
+  --space-8: 2rem;
+  --space-10: 2.5rem;
+
+  /* ----- Typography (spec §4.4) ----- */
+  --font-display: "Arial Black", "Helvetica Black", Helvetica, sans-serif;
+  --font-sans:    Helvetica, "Arial Bold", Arial, sans-serif;
+  --font-serif:   "Times New Roman", Times, serif;
+  --font-mono:    "Courier New", "Lucida Console", "Courier", monospace;
+
+  --fs-xs:   0.72rem;
+  --fs-sm:   0.85rem;
+  --fs-md:   0.95rem;
+  --fs-lg:   1.1rem;
+  --fs-xl:   1.3rem;
+  --fs-2xl:  1.7rem;
+  --fs-3xl:  2.1rem;
+
+  --lh-tight: 1.2;
+  --lh-base:  1.45;
+
+  /* ----- Radius (only 0 or pill, spec §4.5) ----- */
+  --radius-0:    0;
+  --radius-pill: 9999px;
+  --radius-md:   var(--radius-0);
+  --radius-sm:   var(--radius-0);
+
+  /* ----- Borders (hard 1px, spec §4.5) ----- */
+  --border-w:     1px;
+  --border-w-2:   2px;
+  --border-style: solid;
+
+  /* ----- Transitions ----- */
+  --t-fast:  120ms ease;
+  --t-base:  180ms ease;
+
+  /* ----- Layout ----- */
+  --layout-sidebar-w:          200px;
+  --layout-sidebar-w-collapsed: 56px;
+  --layout-max-w:              1280px;
+
+  /* ----- Z layers ----- */
+  --z-sidebar: 10;
+  --z-header:  20;
+  --z-modal:   1000;
+  --z-toast:   2000;
+}
