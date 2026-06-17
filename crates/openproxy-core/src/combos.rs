@@ -931,14 +931,19 @@ pub fn resolve_combo_to_targets(
 /// The selection rule is intentionally simple: the first provider (alphabetical
 /// by `provider_id`) that has `active = 1` AND at least one account with
 /// `health_status = 'healthy'` AND at least one row in `models` with
-/// `active = 1` (and not expired). Every active model of that provider gets
-/// one `combo_target` row with `account_id = NULL` (which the engine expands
-/// to one row per healthy account at request time).
+/// `active = 1`. Model visibility is enforced at write time by
+/// [`crate::models::upsert_many`] (rows the upstream dropped are removed
+/// on refresh), so the `active = 1` filter alone is the source of truth.
+/// Every active model of that provider gets one `combo_target` row with
+/// `account_id = NULL` (which the engine expands to one row per healthy
+/// account at request time).
 pub fn auto_populate_empty_combo(conn: &Connection, combo_id: ComboId) -> Result<usize> {
     // Find the first candidate provider. The query is written defensively
-    // so a missing FK or an expired model can't poison the result: a
-    // missing `accounts` row simply means the EXISTS subquery evaluates
-    // to 0 and the provider is skipped.
+    // so a missing FK can't poison the result: a missing `accounts` row
+    // simply means the EXISTS subquery evaluates to 0 and the provider
+    // is skipped. The `models` half of the predicate uses the same
+    // `active = 1` filter the routing layer uses, so what we auto-populate
+    // is exactly what the engine would route to.
     let provider: Option<String> = conn
         .query_row(
             "SELECT p.id \
@@ -954,7 +959,6 @@ pub fn auto_populate_empty_combo(conn: &Connection, combo_id: ComboId) -> Result
                    SELECT 1 FROM models m \
                    WHERE m.provider_id = p.id \
                      AND m.active = 1 \
-                     AND (m.expires_at IS NULL OR m.expires_at > datetime('now')) \
                ) \
              ORDER BY p.id ASC \
              LIMIT 1",
@@ -986,6 +990,13 @@ pub fn auto_populate_empty_combo(conn: &Connection, combo_id: ComboId) -> Result
 ///
 /// Exposed at module scope so both `auto_populate_empty_combo` and the
 /// admin `create_combo` path can call it without duplicating the SQL.
+///
+/// Model visibility is enforced at write time by
+/// [`crate::models::upsert_many`] (rows the upstream dropped are removed
+/// on refresh), so the `active = 1` filter is the source of truth — we
+/// deliberately do NOT add an `expires_at > now()` clause here, for the
+/// same reason the routing layer doesn't: a row in the table with
+/// `active = 1` reflects a model the upstream currently lists.
 fn combos_insert_targets_for_active_models(
     conn: &Connection,
     combo_id: ComboId,
@@ -999,7 +1010,6 @@ fn combos_insert_targets_for_active_models(
             "SELECT id, model_id FROM models \
              WHERE provider_id = ?1 \
                AND active = 1 \
-               AND (expires_at IS NULL OR expires_at > datetime('now')) \
              ORDER BY id ASC",
         )
         .map_err(|e| CoreError::Database {
