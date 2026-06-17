@@ -14,6 +14,7 @@
 
 use openproxy_core::{
     adapters, db,
+    discovery_scheduler::{self, DiscoveryScheduler},
     oauth,
     secrets::MasterKey,
     upstream::UpstreamClient,
@@ -70,6 +71,20 @@ pub struct AppState {
     /// `PUT /v1/admin/config/timeouts` handler after the DB
     /// row has been updated. See spec §5 / §7.
     timeouts_cell: Arc<RwLock<openproxy_core::config::TimeoutsConfig>>,
+    /// Background model-discovery scheduler (Gate A). Owns one
+    /// `tokio::sync::Notify` shared by all per-provider tasks;
+    /// dropping the `AppState` does NOT cancel the running tasks
+    /// (they keep going until the runtime shuts down), but a
+    /// future Drop impl can call `.cancel()` on this handle to
+    /// stop them explicitly. Today no caller cancels it — the
+    /// scheduler is fire-and-forget at boot.
+    ///
+    /// Marked `dead_code` because Gate B (read side) hasn't
+    /// landed yet; suppressing the warning keeps the field
+    /// discoverable for the Drop impl / future admin endpoints
+    /// without sprinkling `#[allow]` on every reference.
+    #[allow(dead_code)]
+    discovery_scheduler: Arc<DiscoveryScheduler>,
 }
 
 impl AppState {
@@ -247,9 +262,15 @@ impl AppState {
         //    holds only an `Arc<DbPool>` and the shared
         //    `UpstreamClient` (cloned out of the `Arc` we
         //    build for `upstream_client` below).
+        //
+        //    Built once and shared with the discovery scheduler
+        //    (step 8) so both background paths talk to upstreams
+        //    through the same client. The `Arc<UpstreamClient>`
+        //    field is a cheap clone of the same handle.
+        let upstream_client = UpstreamClient::new();
         let refresh_pool = db_pool.clone();
         let refresh_key = master_key.clone();
-        let refresh_upstream = UpstreamClient::new();
+        let refresh_upstream = upstream_client.clone();
         // The registry of OAuth providers. For now we register the
         // built-in OAuth providers (Antigravity, Antigravity CLI,
         // Kiro); custom OAuth providers would extend this list. The
@@ -274,6 +295,28 @@ impl AppState {
             .await;
         });
 
+        // 8. Background model discovery scheduler (Gate A).
+        //    Spawns one task per built-in provider that refreshes
+        //    the `models` table for that provider on a recurring
+        //    interval (default 1h, staggered uniformly in
+        //    [0, interval) on boot so providers don't all fire
+        //    at t=0). Tasks are fire-and-forget: dropping the
+        //    AppState at shutdown does NOT cancel them (they
+        //    hold their own `Arc<DbPool>` + `Arc<UpstreamClient>`
+        //    clones), and the spec does not require an explicit
+        //    shutdown path. The returned handle is stored on
+        //    AppState so a future `Drop` impl can call
+        //    `.cancel()` if needed.
+        let discovery_scheduler = discovery_scheduler::start(
+            db_pool.clone(),
+            master_key.clone(),
+            adapters.clone(),
+            upstream_client.clone(),
+            discovery_scheduler::DiscoverySchedulerConfig::default(),
+        )
+        .await;
+        let discovery_scheduler = Arc::new(discovery_scheduler);
+
         let timeouts_initial = config.timeouts; // Copy, take it before moving config.
         Ok(Self {
             config,
@@ -281,11 +324,12 @@ impl AppState {
             master_key,
             adapters,
             http_client: Arc::new(RwLock::new(http_client)),
-            upstream_client: UpstreamClient::new(),
+            upstream_client,
             usage_tx,
             stage_tx,
             record_bodies_and_headers: Arc::new(AtomicBool::new(false)),
             timeouts_cell: Arc::new(RwLock::new(timeouts_initial)),
+            discovery_scheduler,
         })
     }
 
@@ -296,7 +340,14 @@ impl AppState {
     /// rows, etc.) and gives the caller direct control over the
     /// bits tests need to vary. The caller is responsible for
     /// running migrations on `db_pool` before calling this.
-    pub fn for_test(
+    ///
+    /// The discovery scheduler is started with a 1-hour cadence
+    /// and a 0-second initial stagger so the loop fires its first
+    /// tick immediately at boot. Tests that want to drive the
+    /// scheduler's tick cadence construct their own scheduler
+    /// directly via [`openproxy_core::discovery_scheduler::start`]
+    /// rather than going through `for_test`.
+    pub async fn for_test(
         config: AppConfig,
         db_pool: Arc<db::DbPool>,
         master_key: Arc<MasterKey>,
@@ -315,6 +366,29 @@ impl AppState {
                 let _ = openproxy_core::cooldown::prune_expired(&prune_pool.writer());
             }
         });
+
+        // Test-only discovery scheduler: the test path doesn't
+        // need a real `UpstreamClient` because the per-provider
+        // task body short-circuits on provider rows that don't
+        // exist or providers with no accounts. Spinning it up
+        // here keeps the field wired and matches the production
+        // shape so handler tests can hit the same code path.
+        let upstream_client = UpstreamClient::new();
+        let discovery_scheduler = discovery_scheduler::start(
+            db_pool.clone(),
+            master_key.clone(),
+            adapters.clone(),
+            upstream_client.clone(),
+            discovery_scheduler::DiscoverySchedulerConfig {
+                // 1h cadence + 0 stagger = first tick is
+                // immediate, subsequent ticks are well outside
+                // the test's lifetime. The test never awaits
+                // the second tick.
+                interval_secs: 3_600,
+                initial_stagger_secs: 0,
+            },
+        )
+        .await;
 
         let timeouts_initial = config.timeouts; // Copy, take it before moving config.
         Self {
@@ -336,11 +410,12 @@ impl AppState {
                     .build()
                     .expect("build test http client"),
             )),
-            upstream_client: UpstreamClient::new(),
+            upstream_client,
             usage_tx: usage::init_usage_broadcast(),
             stage_tx: usage::init_stage_broadcast(),
             record_bodies_and_headers: Arc::new(AtomicBool::new(false)),
             timeouts_cell: Arc::new(RwLock::new(timeouts_initial)),
+            discovery_scheduler: Arc::new(discovery_scheduler),
         }
     }
 

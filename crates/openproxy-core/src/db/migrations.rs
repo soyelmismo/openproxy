@@ -132,6 +132,11 @@ const MIGRATIONS: &[Migration] = &[
         name: "000024_add_app_config_kv",
         sql: include_str!("../../migrations/000024_add_app_config_kv.sql"),
     },
+    Migration {
+        version: 25,
+        name: "000025_combo_targets_model_fk_set_null",
+        sql: include_str!("../../migrations/000025_combo_targets_model_fk_set_null.sql"),
+    },
 ];
 
 /// Apply pending migrations on `conn`. Idempotent: skips versions already in
@@ -354,7 +359,7 @@ mod tests {
                 c.query_row("SELECT COUNT(*) FROM schema_migrations", [], |r| r.get(0))
                     .expect("count")
             });
-        assert_eq!(count_first, 23, "twenty-three migrations applied (versions 1-6, 8-24)");
+        assert_eq!(count_first, 24, "twenty-four migrations applied (versions 1-6, 8-25)");
 
         {
             let mut writer = pool.writer();
@@ -557,5 +562,161 @@ mod tests {
                 .expect("count version 20");
             assert_eq!(count, 1, "version 20 should be tracked");
         }
+    }
+
+    // =====================================================================
+    // Migration 000025 specific tests
+    // =====================================================================
+
+    /// Gate D: the rebuilt `combo_targets` FK must be
+    /// `model_row_id ... REFERENCES models(id) ON DELETE SET NULL`.
+    /// After the migration, deleting a `models` row that a
+    /// `combo_targets` row points at must not abort the
+    /// transaction; the target must survive with
+    /// `model_row_id = NULL`.
+    #[test]
+    fn migration_25_sets_model_fk_to_on_delete_set_null() {
+        use crate::db::conn::DbPool;
+
+        let dir = tempdir();
+        let path = dir.join("mig25_fk_set_null.db");
+        let pool = DbPool::open(&path).expect("open pool");
+
+        // Run all migrations to land on the post-000025 shape.
+        {
+            let mut writer = pool.writer();
+            crate::db::migrations::run(&mut writer).expect("migrations");
+        }
+
+        // 1. Insert a `combo_targets` row referencing a `models` row.
+        let (model_row_id, target_id) = {
+            let conn = pool.writer();
+            conn.execute_batch(
+                "INSERT INTO providers(id, name, base_url, auth_type, format) \
+                 VALUES ('p25', 'Provider 25', 'https://example.com', 'bearer', 'openai');\
+                 INSERT INTO models(provider_id, model_id, target_format) \
+                 VALUES ('p25', 'm25', 'openai');",
+            )
+            .expect("insert provider + model");
+
+            let model_id: i64 = conn
+                .query_row(
+                    "SELECT id FROM models WHERE provider_id = 'p25' AND model_id = 'm25'",
+                    [],
+                    |r| r.get(0),
+                )
+                .expect("model row id");
+
+            // Use a standalone connection with FKs on (the default
+            // for connections from the pool) so the insert proves
+            // the FK is wired up.
+            conn.execute(
+                "INSERT INTO combos(name, strategy) VALUES ('c25', 'priority');",
+                [],
+            )
+            .expect("insert combo");
+            let combo_id: i64 = conn
+                .query_row("SELECT id FROM combos WHERE name = 'c25'", [], |r| r.get(0))
+                .expect("combo id");
+            conn.execute(
+                "INSERT INTO combo_targets(combo_id, provider_id, model_row_id, priority_order) \
+                 VALUES (?1, 'p25', ?2, 1);",
+                rusqlite::params![combo_id, model_id],
+            )
+            .expect("insert combo_target");
+
+            (model_id, combo_id)
+        };
+
+        // 2. Delete the `models` row. With `ON DELETE SET NULL`
+        //    the DELETE must succeed; with the pre-migration
+        //    `RESTRICT` default it would have aborted.
+        {
+            let conn = pool.writer();
+            conn.execute("DELETE FROM models WHERE id = ?1", rusqlite::params![model_row_id])
+                .expect("delete model must succeed under SET NULL");
+        }
+
+        // 3. Assert the `combo_targets` row still exists and its
+        //    `model_row_id` is now NULL.
+        {
+            let conn = pool.writer();
+            let (count, model_row_after): (i64, Option<i64>) = conn
+                .query_row(
+                    "SELECT COUNT(*), \
+                            (SELECT model_row_id FROM combo_targets \
+                              WHERE combo_id = ?1 AND provider_id = 'p25') \
+                       FROM combo_targets WHERE combo_id = ?1",
+                    rusqlite::params![target_id],
+                    |r| Ok((r.get(0)?, r.get(1)?)),
+                )
+                .expect("query surviving target");
+            assert_eq!(
+                count, 1,
+                "the combo_target row must survive the delete"
+            );
+            assert!(
+                model_row_after.is_none(),
+                "model_row_id must be NULL after the referenced \
+                 models row was deleted; got {:?}",
+                model_row_after
+            );
+        }
+
+        // 4. Sanity: trying to delete a *different* model that
+        //    has no references still works (the rebuild did not
+        //    break the happy path).
+        {
+            let conn = pool.writer();
+            conn.execute(
+                "INSERT INTO models(provider_id, model_id, target_format) \
+                 VALUES ('p25', 'm25-extra', 'openai');",
+                [],
+            )
+            .expect("insert extra model");
+            let extra_id: i64 = conn
+                .query_row(
+                    "SELECT id FROM models WHERE model_id = 'm25-extra'",
+                    [],
+                    |r| r.get(0),
+                )
+                .expect("extra model id");
+            conn.execute("DELETE FROM models WHERE id = ?1", rusqlite::params![extra_id])
+                .expect("delete extra model must still work");
+        }
+    }
+
+    /// Gate D — the migration must be idempotent (re-applying
+    /// the runner against a DB that's already at version 25 must
+    /// not fail and must not duplicate the `schema_migrations`
+    /// row). The runner's `applied` set already guards against
+    /// re-execution; this test just makes the guarantee
+    /// explicit.
+    #[test]
+    fn migration_25_is_idempotent() {
+        use crate::db::conn::DbPool;
+
+        let dir = tempdir();
+        let path = dir.join("mig25_idem.db");
+        let pool = DbPool::open(&path).expect("open pool");
+
+        {
+            let mut writer = pool.writer();
+            crate::db::migrations::run(&mut writer).expect("first run");
+        }
+        {
+            let mut writer = pool.writer();
+            crate::db::migrations::run(&mut writer).expect("second run must not fail");
+        }
+
+        let count: i64 = pool.with_conn(|c| {
+            c.query_row(
+                "SELECT COUNT(*) FROM schema_migrations WHERE version = 25",
+                [],
+                |r| r.get(0),
+            )
+            .expect("count version 25")
+        });
+        assert_eq!(count, 1, "version 25 must be recorded exactly once");
     }
 }

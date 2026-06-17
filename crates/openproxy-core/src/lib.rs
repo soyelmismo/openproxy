@@ -37,6 +37,7 @@ pub mod admin;
 pub mod quota;
 pub mod seed;
 pub mod bootstrap;
+pub mod discovery_scheduler;
 
 // Gate 0: hyper-based upstream client. See `upstream/mod.rs` for the
 // architecture and the `upstream-hyper` feature flag in `Cargo.toml`.

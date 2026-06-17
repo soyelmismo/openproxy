@@ -4,6 +4,41 @@
 //! needed by the discovery loop, the `/v1/models` admin endpoint, and the
 //! request-routing pipeline.
 //!
+//! # Visibility semantic: presence-in-last-refresh
+//!
+//! A row is considered live iff it was in the most recent successful
+//! refresh of its provider. Concretely, the only filter [`list_active`]
+//! (and the cross-provider [`list_active_all`]) applies on the hot path
+//! is `active = 1`. The `expires_at` column stays in the schema for
+//! diagnostic / debug purposes, but it is no longer a visibility gate:
+//! the background [`crate::discovery_scheduler`] (Gate A) calls
+//! [`upsert_many`] on every tick, and an upsert whose `discovered` list
+//! does not contain a model deletes that model's non-custom row from
+//! the table. So "expired" no longer means "old enough to be stale";
+//! it means "the upstream no longer lists it".
+//!
+//! The hard-delete is preferred over an `expires_at` filter because:
+//!   - it makes the registry reflect upstream truth with no
+//!     `datetime('now')` math at query time;
+//!   - a hand-curated `custom = 1` row is preserved automatically
+//!     (the delete branch is gated on `custom = 0`);
+//!   - `combo_targets` rows that point at a vanished model are
+//!     orphaned harmlessly — routing code already filters on
+//!     `model_row_id IN (live models)` at request time.
+//!
+//! # Manual cleanup: `mark_expired`
+//!
+//! [`mark_expired`] is a *manual* cleanup utility for orphan rows
+//! (e.g. the provider was deleted while models still pointed at it, or
+//! a process crashed mid-upsert and left inconsistent state). It is
+//! NOT part of the normal hot path: that role belongs to
+//! [`upsert_many`]'s hard-delete of vanished models. The threshold is
+//! intentionally long (>7 days) so it never races the background
+//! scheduler. Rows with `expires_at IS NULL` are never deleted by
+//! `mark_expired` — a NULL there is a legitimate "no expiry set" state
+//! (e.g. `create_custom` with `ttl_seconds = 0`) and is not, by itself,
+//! evidence of an orphan.
+//!
 //! Note: this is *not* where OpenAI/Anthropic serde structs live — those are
 //! in `crate::translation`. The two namespaces are kept separate on purpose.
 
@@ -220,24 +255,36 @@ fn map_row(row: &Row<'_>) -> rusqlite::Result<Model> {
     })
 }
 
-/// Insert or update models reported by a provider's `/models` endpoint.
+/// Insert or update models reported by a provider's `/models` endpoint,
+/// and remove the ones the upstream stopped listing.
 ///
 /// For each entry in `discovered`:
 /// - if `(provider_id, model_id)` does not exist, insert a new row with
 ///   `discovered_at = now` and `expires_at = now + ttl`;
-/// - otherwise refresh only the mutable metadata (`display_name` and
-///   `target_format`). `discovered_at` and `expires_at` are **preserved**
-///   so that:
-///   - The 60-second recency window used by [`apply_auto_activation`]
-///     only flags truly *new* rows. If we refreshed `discovered_at` on
-///     re-upsert, a hand-disabled model that the provider keeps listing
-///     would be considered "new" on every refresh and have its
-///     `active` bit clobbered.
-///   - The TTL-based expiry/purge cycle keeps working: a model that
-///     stops being listed by the provider will eventually hit
-///     `expires_at`, get purged by [`mark_expired`], and be re-inserted
-///     with a fresh `discovered_at` on the next refresh that lists it
-///     again.
+/// - otherwise refresh only the mutable metadata (`display_name`,
+///   `target_format`, and the optional OpenRouter-derived columns).
+///   `discovered_at` and `expires_at` are **preserved** so that the
+///   60-second recency window used by [`apply_auto_activation`] only
+///   flags truly *new* rows. If we refreshed `discovered_at` on
+///   re-upsert, a hand-disabled model that the provider keeps listing
+///   would be considered "new" on every refresh and have its `active`
+///   bit clobbered.
+///
+/// After the upsert phase, the same transaction runs a hard delete:
+/// every non-custom row of `provider` whose `model_id` is not in the
+/// just-upserted set is removed. The `custom = 0` gate preserves
+/// operator-curated rows from accidental purge. An empty `discovered`
+/// slice is interpreted as "the upstream lists nothing for this
+/// provider" and removes all non-custom rows for the provider.
+///
+/// Why hard-delete instead of an `expires_at` filter?
+///   - the registry reflects upstream truth with no `datetime('now')`
+///     math at query time;
+///   - the `combo_targets` rows that referenced a vanished model
+///     become orphans, but routing already filters on
+///     `model_row_id IN (live models)` at request time.
+///
+/// See the module-level docs for the visibility semantic.
 ///
 /// Result of [`upsert_many`]. `touched` counts inserts + updates
 /// (the previous return value, kept stable for callers that only
@@ -380,6 +427,77 @@ pub fn upsert_many(
         }
     }
 
+    // Delete disappeared rows. The catalog size for an OpenAI-compatible
+    // provider is typically <1000 entries, so a literal IN list is fine.
+    // Two cases:
+    //   - `discovered` is non-empty: build a `model_id IN (?, ?, ...)`
+    //     list from the just-upserted set. Rows the upstream no longer
+    //     lists are removed.
+    //   - `discovered` is empty: the upstream says nothing for this
+    //     provider. The spec's "if discovered is empty, delete all
+    //     non-custom rows" semantic is implemented by inverting the
+    //     join: we issue a separate DELETE that matches every non-custom
+    //     row of the provider. This is also a single statement, so
+    //     the transaction stays one-statement-per-phase.
+    //
+    // The `custom = 0` gate preserves operator-curated rows from
+    // accidental purge. `combo_targets` rows that point at a deleted
+    // model become orphans; routing code already filters on
+    // `model_row_id IN (live models)` at request time, so they are
+    // harmless.
+    {
+        if discovered.is_empty() {
+            tx.execute(
+                "DELETE FROM models WHERE provider_id = ?1 AND custom = 0",
+                params![provider.as_str()],
+            )
+            .map_err(|e| CoreError::Database {
+                message: format!("execute upsert_many delete-all: {}", e),
+                source: Some(Box::new(e)),
+            })?;
+        } else {
+            // Build "model_id IN (?, ?, ?, ...)" with the right number
+            // of placeholders, then bind the strings. We do the
+            // string-build manually so the number of `?` matches the
+            // length of `discovered` (sqlite does not accept `IN (SELECT
+            // ... FROM json_each(?))` on this codebase's pinned version
+            // without a feature flag, and a literal list is simpler).
+            let placeholders = std::iter::repeat("?")
+                .take(discovered.len())
+                .collect::<Vec<_>>()
+                .join(", ");
+            let sql = format!(
+                "DELETE FROM models \
+                 WHERE provider_id = ? AND custom = 0 \
+                   AND model_id NOT IN ({})",
+                placeholders
+            );
+            // Build the params: provider, then one slot per discovered
+            // model_id. We use `params_from_iter` to accept the
+            // heterogeneous mix without enumerating each variant. The
+            // values must be owned (or `'static`-ish) because the bound
+            // Vec outlives the temporaries `discovered` iterates over,
+            // so we hoist the model_id strings into a local Vec<String>
+            // and borrow from there.
+            let discovered_ids: Vec<String> =
+                discovered.iter().map(|d| d.model_id.as_str().to_string()).collect();
+            let provider_str = provider.as_str().to_string();
+            let mut bound: Vec<&dyn rusqlite::ToSql> = Vec::with_capacity(discovered_ids.len() + 1);
+            bound.push(&provider_str);
+            for id in &discovered_ids {
+                bound.push(id);
+            }
+            tx.execute(
+                &sql,
+                rusqlite::params_from_iter(bound.iter().copied()),
+            )
+            .map_err(|e| CoreError::Database {
+                message: format!("execute upsert_many delete-disappeared: {}", e),
+                source: Some(Box::new(e)),
+            })?;
+        }
+    }
+
     tx.commit().map_err(|e| CoreError::Database {
         message: format!("commit upsert_many: {}", e),
         source: Some(Box::new(e)),
@@ -388,15 +506,23 @@ pub fn upsert_many(
     Ok(UpsertResult { touched: total, new_model_ids })
 }
 
-/// List all non-expired, non-disabled models for a given provider.
+/// List all active (live) models for a given provider.
 ///
-/// A row is considered active when both:
-/// - `active = 1` (the soft-disable bit set by [`set_active`]), and
-/// - `expires_at IS NULL` or `expires_at > datetime('now')` (UTC).
+/// A row is considered live when:
+/// - `active = 1` (the soft-disable bit set by [`set_active`]).
+///
+/// Presence in the most recent successful refresh of the provider is
+/// enforced at *write* time, not at *read* time: [`upsert_many`] deletes
+/// the rows the upstream stopped listing, so by the time this query
+/// runs the table is already a faithful mirror of the provider's
+/// `/models` response. There is no `expires_at > now()` filter on the
+/// hot path — a row with `active = 1` is live, period. (`expires_at`
+/// stays in the schema for diagnostic / debug purposes.)
 ///
 /// An admin can flip a model out of routing without deleting the row by
 /// calling [`set_active`] with `false`; the row stays in the table for
-/// audit / re-enable.
+/// audit / re-enable. Hand-curated `custom = 1` rows are also returned
+/// here as long as they're `active = 1`.
 pub fn list_active(conn: &Connection, provider: &ProviderId) -> Result<Vec<Model>> {
     let mut stmt = conn
         .prepare(
@@ -408,8 +534,7 @@ pub fn list_active(conn: &Connection, provider: &ProviderId) -> Result<Vec<Model
                     output_modalities_json \
              FROM models \
              WHERE provider_id = ? \
-               AND active = 1 \
-               AND (expires_at IS NULL OR expires_at > datetime('now'))",
+               AND active = 1",
         )
         .map_err(|e| CoreError::Database {
             message: format!("prepare list_active: {}", e),
@@ -433,11 +558,14 @@ pub fn list_active(conn: &Connection, provider: &ProviderId) -> Result<Vec<Model
     Ok(out)
 }
 
-/// List all active (non-disabled, non-expired) models across every provider.
+/// List all active (live) models across every provider.
 ///
-/// A row is considered active when both:
-/// - `active = 1` (the soft-disable bit set by [`set_active`]), and
-/// - `expires_at IS NULL` or `expires_at > datetime('now')` (UTC).
+/// A row is considered live when `active = 1`. Visibility is enforced
+/// at *write* time by [`upsert_many`] (the row is removed when the
+/// upstream drops it from `/models`), so the hot path here is a plain
+/// `active = 1` filter — no `expires_at > now()` math. See
+/// [`list_active`] for the rationale and the module-level doc for the
+/// full semantic.
 ///
 /// This is the cross-provider variant of [`list_active`]. The public
 /// `GET /v1/models` endpoint consumes it so SDKs/CLIs pointing at
@@ -456,8 +584,7 @@ pub fn list_active_all(conn: &Connection) -> Result<Vec<Model>> {
                     family, model_type, input_modalities_json, \
                     output_modalities_json \
              FROM models \
-             WHERE active = 1 \
-               AND (expires_at IS NULL OR expires_at > datetime('now'))",
+             WHERE active = 1",
         )
         .map_err(|e| CoreError::Database {
             message: format!("prepare list_active_all: {}", e),
@@ -515,16 +642,36 @@ pub fn list_all(conn: &Connection) -> Result<Vec<Model>> {
     Ok(out)
 }
 
-/// Delete all expired models. Returns the number of rows removed.
+/// Delete orphaned model rows that haven't been refreshed in more than
+/// 7 days. Returns the number of rows removed.
 ///
-/// "Expired" means `expires_at` is set and strictly less than `datetime('now')`.
-/// This is intended to be called periodically (e.g. by a sweep job) — leaving
-/// expired rows around is harmless; they simply don't show up in [`list_active`].
+/// This is a **manual cleanup utility** for orphan rows, NOT part of
+/// the normal hot path. Normal model lifecycle is handled by
+/// [`upsert_many`], which removes rows the upstream stopped listing
+/// on the next refresh. `mark_expired` exists to clean up edge cases
+/// such as:
+///   - the provider was deleted while model rows were still in place
+///     (the `combo_targets` FK to `models` would otherwise dangle);
+///   - a process crashed mid-upsert and left rows in an inconsistent
+///     state;
+///   - a hand-curated `custom = 1` row whose upstream still lists the
+///     model but the upstream was removed from the registry.
+///
+/// The 7-day threshold is intentionally long: it must be longer than
+/// any plausible refresh interval so we never delete a row the
+/// background scheduler (Gate A) is about to refresh anyway. Rows
+/// that are still in the table this long are orphans by definition.
+///
+/// Rows with `expires_at IS NULL` are never deleted — `expires_at`
+/// is no longer the visibility gate, so a NULL there is a legitimate
+/// "no expiry set" state (e.g. `create_custom` with `ttl_seconds = 0`)
+/// and is not, by itself, evidence of an orphan.
 pub fn mark_expired(conn: &Connection) -> Result<usize> {
     let n = conn
         .execute(
             "DELETE FROM models \
-             WHERE expires_at IS NOT NULL AND expires_at < datetime('now')",
+             WHERE expires_at IS NOT NULL \
+               AND expires_at < datetime('now', '-7 days')",
             [],
         )
         .map_err(|e| CoreError::Database {
@@ -601,11 +748,13 @@ pub fn get_by_row_id(conn: &Connection, row_id: ModelRowId) -> Result<Option<Mod
 
 /// Find an active model by its (exact, case-sensitive) `model_id`.
 ///
-/// "Active" means `active = 1` AND not expired. The match is exact
-/// because upstream model ids are looked up verbatim by adapters and
-/// downstream tools; a fuzzy/prefix match here would silently alias
-/// models that share a namespace and lead to surprising routing
-/// decisions.
+/// "Active" means `active = 1`. The match is exact because upstream
+/// model ids are looked up verbatim by adapters and downstream tools;
+/// a fuzzy/prefix match here would silently alias models that share a
+/// namespace and lead to surprising routing decisions. Rows the
+/// upstream dropped are removed by [`upsert_many`] at refresh time,
+/// so the table itself is the source of truth — there is no
+/// `expires_at` filter on this query.
 ///
 /// The function returns at most one row. If two providers happened to
 /// both register the same `model_id` (the schema's `UNIQUE` constraint
@@ -630,7 +779,6 @@ pub fn find_active_by_name(conn: &Connection, model_id: &str) -> Result<Option<M
              FROM models \
              WHERE model_id = ?1 \
                AND active = 1 \
-               AND (expires_at IS NULL OR expires_at > datetime('now')) \
              ORDER BY id ASC \
              LIMIT 1",
         )
@@ -676,7 +824,6 @@ pub fn find_active_by_provider_and_name(
              WHERE provider_id = ?1 \
                AND model_id = ?2 \
                AND active = 1 \
-               AND (expires_at IS NULL OR expires_at > datetime('now')) \
              ORDER BY id ASC \
              LIMIT 1",
         )
@@ -720,10 +867,12 @@ pub fn set_test_status(conn: &Connection, id: ModelRowId, status: i32) -> Result
     Ok(())
 }
 
-/// Hard-delete a model row. References in `combo_targets` are removed
-/// first to satisfy the FK constraint (the schema declares the FK with
-/// `ON DELETE CASCADE` for `provider_id` but the combo-target FK targets
-/// `model_row_id` and is not cascading — see the migrations).
+/// Hard-delete a model row. The `combo_targets.model_row_id` FK is
+/// declared with `ON DELETE SET NULL` (see migration 000025), so the
+/// `DELETE FROM models` below automatically nulls the FK on any
+/// `combo_targets` row that referenced this model. Those orphaned
+/// target rows are filtered from routing by `combos::list_targets`
+/// (Gate E3).
 ///
 /// A missing id is a silent no-op (0 rows affected), matching the
 /// idempotent style of the other admin deletions.
@@ -735,20 +884,10 @@ pub fn delete(conn: &Connection, id: ModelRowId) -> Result<u64> {
         source: Some(Box::new(e)),
     })?;
 
-    // combo_targets.model_row_id has no ON DELETE CASCADE in the
-    // current schema; clean those rows up first so the FK check on
-    // the model delete doesn't fire. We do it explicitly rather than
-    // relying on cascade so the SQL stays self-documenting at the
-    // call site.
-    tx.execute(
-        "DELETE FROM combo_targets WHERE model_row_id = ?1",
-        params![id.0],
-    )
-    .map_err(|e| CoreError::Database {
-        message: format!("delete combo_targets for model {}: {}", id.0, e),
-        source: Some(Box::new(e)),
-    })?;
-
+    // combo_targets.model_row_id has ON DELETE SET NULL (migration 000025);
+    // the target row is preserved with `model_row_id = NULL` and is
+    // filtered from routing by `combos::list_targets`. No pre-emptive
+    // cleanup needed.
     let removed = tx
         .execute("DELETE FROM models WHERE id = ?1", params![id.0])
         .map_err(|e| CoreError::Database {
@@ -1443,12 +1582,31 @@ mod tests {
         );
     }
 
+    /// `list_active` no longer filters on `expires_at`. Visibility is
+    /// enforced at *write* time by [`upsert_many`]: rows the upstream
+    /// stopped listing are physically deleted on the next refresh, so
+    /// any row sitting in the table with `active = 1` is, by
+    /// construction, the most recent truth the registry has of the
+    /// upstream. `expires_at` is kept around for diagnostic /
+    /// auto-activation-recency purposes but is no longer a visibility
+    /// gate.
+    ///
+    /// Concretely, a row with `expires_at` in the past is still
+    /// considered live: the `list_active` filter is just `active = 1`.
+    /// This is intentional — it lets a still-listed model keep being
+    /// routable through a transient `/models` cache miss, and it
+    /// matches the design doc that says "presence in the last refresh
+    /// is the source of truth".
     #[test]
     fn list_active_excludes_expired() {
         let conn = fresh_db();
         let provider = ProviderId::new("provA");
 
-        // Manually insert one already-expired row and one with a long TTL.
+        // Manually insert one already-expired row, one with a long
+        // TTL, and one with NULL (e.g. a `create_custom` with
+        // `ttl_seconds = 0`). Under Gate B all three are live because
+        // visibility is decided by presence in the most recent
+        // successful upsert, not by `expires_at`.
         conn.execute(
             "INSERT INTO models (provider_id, model_id, display_name, target_format, expires_at) \
              VALUES ('provA', 'live', 'Live Model', 'openai', datetime('now', '+1 hour'))",
@@ -1470,19 +1628,32 @@ mod tests {
 
         let active = list_active(&conn, &provider).expect("list_active");
         let ids: Vec<&str> = active.iter().map(|m| m.model_id.as_str()).collect();
-        assert!(ids.contains(&"live"));
-        assert!(ids.contains(&"null_expiry"), "NULL expires_at counts as active");
-        assert!(!ids.contains(&"stale"), "past expires_at excluded");
-        assert_eq!(active.len(), 2);
+        assert!(ids.contains(&"live"), "long-TTL row live");
+        assert!(
+            ids.contains(&"null_expiry"),
+            "NULL expires_at counts as live (e.g. create_custom ttl=0)"
+        );
+        assert!(
+            ids.contains(&"stale"),
+            "past expires_at still counts as live — \
+             visibility is presence-in-last-refresh, not expiry"
+        );
+        assert_eq!(active.len(), 3, "all three rows are live");
 
-        // list_all sees all three.
+        // list_all sees the same three.
         assert_eq!(list_all(&conn).unwrap().len(), 3);
     }
 
-    /// Cross-provider variant of the list_active contract. The public
-    /// `GET /v1/models` endpoint feeds off this and must never leak
-    /// disabled rows; this test guards the filter so a future refactor
-    /// can't quietly regress to `list_all`.
+    /// Cross-provider variant of the `list_active_all` contract. The
+    /// public `GET /v1/models` endpoint feeds off this and must never
+    /// leak soft-disabled rows; this test guards the filter so a
+    /// future refactor can't quietly regress to `list_all`.
+    ///
+    /// Under Gate B the contract is: `active = 1`. `expires_at` no
+    /// longer filters at read time. The expired row here stays live
+    /// for the same reason the `stale` row does in
+    /// `list_active_excludes_expired` — visibility is decided by the
+    /// last successful upsert, not by the clock.
     #[test]
     fn list_active_all_excludes_disabled_and_expired_across_providers() {
         let conn = fresh_db();
@@ -1509,7 +1680,7 @@ mod tests {
         )
         .expect("a-off");
 
-        // provB: one live + one expired.
+        // provB: one live + one with expires_at in the past.
         conn.execute(
             "INSERT INTO models (provider_id, model_id, display_name, target_format, expires_at, active) \
              VALUES ('provB', 'b-live', 'B live', 'openai', datetime('now', '+1 hour'), 1)",
@@ -1526,21 +1697,29 @@ mod tests {
         // Sanity: list_all sees all four rows.
         assert_eq!(list_all(&conn).unwrap().len(), 4);
 
-        // list_active_all returns only the two live-and-active rows,
-        // spanning both providers.
+        // list_active_all returns the three live-and-active rows,
+        // spanning both providers. The expired row stays in because
+        // `expires_at` is no longer a visibility gate — Gate B relies
+        // on `upsert_many` to physically delete rows the upstream
+        // dropped, not on a clock-based filter here.
         let active = list_active_all(&conn).expect("list_active_all");
         let ids: Vec<&str> = active.iter().map(|m| m.model_id.as_str()).collect();
         assert!(ids.contains(&"a-live"), "provA live row included");
         assert!(ids.contains(&"b-live"), "provB live row included");
+        assert!(ids.contains(&"b-stale"), "past expires_at still counts as live");
         assert!(!ids.contains(&"a-off"), "soft-disabled row excluded");
-        assert!(!ids.contains(&"b-stale"), "expired row excluded");
-        assert_eq!(active.len(), 2);
+        assert_eq!(active.len(), 3);
     }
 
     #[test]
     fn mark_expired_deletes_old() {
         let conn = fresh_db();
 
+        // Threshold is now > 7 days. A row at "-1 hour" is the hottest
+        // possible fresh model; "-10 minutes" is the same. Neither
+        // should be touched. The two we want gone are explicitly
+        // older than 7 days. The `forever` row (NULL expires_at) is
+        // also preserved — `mark_expired` never deletes NULL rows.
         conn.execute(
             "INSERT INTO models (provider_id, model_id, display_name, target_format, expires_at) \
              VALUES ('provA', 'live', 'L', 'openai', datetime('now', '+1 hour'))",
@@ -1549,13 +1728,25 @@ mod tests {
         .unwrap();
         conn.execute(
             "INSERT INTO models (provider_id, model_id, display_name, target_format, expires_at) \
-             VALUES ('provA', 'old1', 'O1', 'openai', datetime('now', '-1 hour'))",
+             VALUES ('provA', 'hour_old', 'H', 'openai', datetime('now', '-1 hour'))",
             [],
         )
         .unwrap();
         conn.execute(
             "INSERT INTO models (provider_id, model_id, display_name, target_format, expires_at) \
-             VALUES ('provA', 'old2', 'O2', 'openai', datetime('now', '-10 minutes'))",
+             VALUES ('provA', 'ten_min_old', 'M', 'openai', datetime('now', '-10 minutes'))",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO models (provider_id, model_id, display_name, target_format, expires_at) \
+             VALUES ('provA', 'week_old1', 'W1', 'openai', datetime('now', '-8 days'))",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO models (provider_id, model_id, display_name, target_format, expires_at) \
+             VALUES ('provA', 'week_old2', 'W2', 'openai', datetime('now', '-30 days'))",
             [],
         )
         .unwrap();
@@ -1567,13 +1758,21 @@ mod tests {
         .unwrap();
 
         let n = mark_expired(&conn).expect("mark_expired");
-        assert_eq!(n, 2, "only the two past-dated rows deleted");
+        assert_eq!(n, 2, "only the two >7d-old rows deleted");
 
         let remaining = list_all(&conn).unwrap();
         let ids: Vec<&str> = remaining.iter().map(|m| m.model_id.as_str()).collect();
-        assert_eq!(remaining.len(), 2);
+        // Six rows were seeded; two got deleted. The other four stay
+        // in the table: `live` (future expires_at), `hour_old` and
+        // `ten_min_old` (under the 7-day threshold), and `forever`
+        // (NULL expires_at is never deleted by `mark_expired`).
+        assert_eq!(remaining.len(), 4);
         assert!(ids.contains(&"live"));
+        assert!(ids.contains(&"hour_old"));
+        assert!(ids.contains(&"ten_min_old"));
         assert!(ids.contains(&"forever"), "NULL expires_at never deleted");
+        assert!(!ids.contains(&"week_old1"), ">7d old row 1 deleted");
+        assert!(!ids.contains(&"week_old2"), ">7d old row 2 deleted");
     }
 
     #[test]
@@ -1844,19 +2043,26 @@ mod tests {
     fn apply_auto_activation_with_keyword_matches_substring() {
         let conn = fresh_db();
         let provider = ProviderId::new("provA");
-        for id in ["claude-3", "claude-2", "gpt-4", "gemini-pro"] {
-            upsert_many(
-                &conn,
-                &provider,
-                &[discovered(id, TargetFormat::Openai)],
-                Duration::from_secs(3600),
-            )
-            .expect("seed");
-        }
+        // Under Gate B, `upsert_many` deletes the rows whose model_ids
+        // are NOT in the `discovered` list. So we MUST seed all four
+        // rows in a single call — otherwise each iteration would wipe
+        // the rows seeded by previous iterations.
+        upsert_many(
+            &conn,
+            &provider,
+            &[
+                discovered("claude-3", TargetFormat::Openai),
+                discovered("claude-2", TargetFormat::Openai),
+                discovered("gpt-4", TargetFormat::Openai),
+                discovered("gemini-pro", TargetFormat::Openai),
+            ],
+            Duration::from_secs(3600),
+        )
+        .expect("seed");
 
-        let updated = apply_auto_activation(&conn, &provider, Some("claude"))
-            .expect("apply with keyword");
-        assert!(updated >= 3, "all 4 rows touched (claude ones -> 1, gpt/gemini -> 0)");
+        let updated =
+            apply_auto_activation(&conn, &provider, Some("claude")).expect("apply with keyword");
+        assert!(updated >= 2, "both claude rows touched, non-claude ones skipped");
 
         // claude-3 and claude-2 should now be active; the others inactive.
         let active = list_active(&conn, &provider).expect("list_active");
@@ -1871,15 +2077,20 @@ mod tests {
     fn apply_auto_activation_with_no_keyword_enables_all() {
         let conn = fresh_db();
         let provider = ProviderId::new("provA");
-        for id in ["a", "b", "c"] {
-            upsert_many(
-                &conn,
-                &provider,
-                &[discovered(id, TargetFormat::Openai)],
-                Duration::from_secs(3600),
-            )
-            .expect("seed");
-        }
+        // Seed all three rows in a single `upsert_many` call so the
+        // hard-delete of vanished models doesn't wipe out anything
+        // we just seeded (Gate B).
+        upsert_many(
+            &conn,
+            &provider,
+            &[
+                discovered("a", TargetFormat::Openai),
+                discovered("b", TargetFormat::Openai),
+                discovered("c", TargetFormat::Openai),
+            ],
+            Duration::from_secs(3600),
+        )
+        .expect("seed");
         // Start with all rows inactive to make the test meaningful.
         for m in list_all(&conn).unwrap() {
             set_active(&conn, m.row_id, false).expect("disable");
@@ -1895,17 +2106,18 @@ mod tests {
     fn apply_auto_activation_skips_custom_rows() {
         let conn = fresh_db();
         let provider = ProviderId::new("provA");
-        // Two discovered + one custom. The custom one stays as-is
-        // regardless of the keyword.
-        for id in ["claude-3", "gpt-4"] {
-            upsert_many(
-                &conn,
-                &provider,
-                &[discovered(id, TargetFormat::Openai)],
-                Duration::from_secs(3600),
-            )
-            .expect("seed");
-        }
+        // Seed discovered + custom in a single `upsert_many` call
+        // (Gate B: vanished models are hard-deleted inside the tx).
+        upsert_many(
+            &conn,
+            &provider,
+            &[
+                discovered("claude-3", TargetFormat::Openai),
+                discovered("gpt-4", TargetFormat::Openai),
+            ],
+            Duration::from_secs(3600),
+        )
+        .expect("seed");
         // Pre-seed a custom row that is currently INACTIVE to prove
         // the auto-activation path leaves it alone.
         conn.execute(
@@ -2082,13 +2294,14 @@ mod tests {
     }
 
     #[test]
-    fn delete_removes_model_and_combo_target_references() {
+    fn delete_model_nulls_combo_target_model_row_id() {
         let conn = fresh_db();
         let provider = ProviderId::new("provA");
 
         // Seed two models; the test will delete one and verify the
-        // other survives plus a combo_target pointing at the deleted
-        // model is wiped out by the same transaction.
+        // other survives plus the combo_target pointing at the deleted
+        // model has its `model_row_id` nulled by the FK's SET NULL
+        // (no FK violation either way).
         upsert_many(
             &conn,
             &provider,
@@ -2103,12 +2316,18 @@ mod tests {
         // Seed a combo + a target pointing at m1. The schema requires
         // a combos table; mirror the FK columns we depend on with a
         // tiny DDL rather than re-running the full migration set.
+        // We declare `model_row_id` as nullable with `ON DELETE SET
+        // NULL` to mirror the production schema (migration 000025).
+        // We also include `sub_combo_id` because the spec's T
+        // assertion requires us to verify it stays NULL.
         conn.execute_batch(
             "CREATE TABLE combos (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, \
-                                   strategy TEXT NOT NULL, race_size INTEGER NOT NULL DEFAULT 1); \
+                                  strategy TEXT NOT NULL, race_size INTEGER NOT NULL DEFAULT 1); \
              CREATE TABLE combo_targets (id INTEGER PRIMARY KEY AUTOINCREMENT, \
                                           combo_id INTEGER NOT NULL, provider_id TEXT NOT NULL, \
-                                          account_id INTEGER, model_row_id INTEGER NOT NULL);",
+                                          account_id INTEGER, sub_combo_id INTEGER, \
+                                          model_row_id INTEGER \
+                                          REFERENCES models(id) ON DELETE SET NULL);",
         )
         .expect("combo tables");
         let combo_id: i64 = conn
@@ -2124,7 +2343,7 @@ mod tests {
         )
         .expect("insert target");
 
-        // Pre-condition: the target exists.
+        // Pre-condition: the target exists with model_row_id = m1.id.
         let pre_targets: i64 = conn
             .query_row(
                 "SELECT COUNT(*) FROM combo_targets WHERE model_row_id = ?1",
@@ -2138,21 +2357,361 @@ mod tests {
         let removed = delete(&conn, m1_id).expect("delete m1");
         assert_eq!(removed, 1, "one row removed");
 
-        // m1 is gone, m2 survives, and the combo_target was cleaned
-        // up in the same transaction (no FK violation either way).
+        // m1 is gone, m2 survives, and the combo_target was *preserved*
+        // (not wiped) with `model_row_id` nulled by the SET NULL clause.
         assert!(get_by_row_id(&conn, m1_id).unwrap().is_none(), "m1 gone");
         assert!(get_by_row_id(&conn, m2_id).unwrap().is_some(), "m2 alive");
-        let post_targets: i64 = conn
+        let (count_targets, count_with_null_fk): (i64, i64) = conn
             .query_row(
-                "SELECT COUNT(*) FROM combo_targets WHERE model_row_id = ?1",
-                [m1_id.0],
-                |r| r.get(0),
+                "SELECT COUNT(*), \
+                        COALESCE(SUM(CASE WHEN model_row_id IS NULL THEN 1 ELSE 0 END), 0) \
+                 FROM combo_targets WHERE combo_id = ?1",
+                [combo_id],
+                |r| Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?)),
             )
-            .expect("count targets post");
-        assert_eq!(post_targets, 0, "combo_target pointing at m1 was wiped");
+            .expect("count + null-fk count");
+        assert_eq!(count_targets, 1, "combo_target row preserved");
+        assert_eq!(
+            count_with_null_fk, 1,
+            "combo_target.model_row_id is NULL after delete"
+        );
 
         // Idempotent: a second delete returns 0, not an error.
         let removed_again = delete(&conn, m1_id).expect("delete again");
         assert_eq!(removed_again, 0, "missing id is a no-op");
     }
+
+    // -------------------------------------------------------------------
+    // Gate E2 — upsert_many delete-on-disappear unit tests
+    //
+    // These four tests pin the storage-layer behavior introduced in
+    // Gate B (branch `feat/gate-B-delete-on-disappear`):
+    //
+    //   1. `upsert_many` removes non-custom rows the upstream no longer
+    //      lists (a diff against the just-upserted `model_id` set).
+    //   2. `custom = 1` rows are NEVER touched by the delete phase,
+    //      even if the upstream stopped listing them. They survive a
+    //      refresh.
+    //   3. An empty `discovered` slice is interpreted as "the upstream
+    //      lists nothing for this provider" and removes all non-custom
+    //      rows. Custom rows again survive.
+    //   4. `list_active` is no longer gated on `expires_at > now()` —
+    //      a row with `active = 1` and `expires_at` in the past is
+    //      visible, because visibility is now driven by `active` (and
+    //      the upstream-presence invariant maintained by `upsert_many`).
+    //
+    // They use the existing `fresh_db()` helper (in-memory, single
+    // `provA` row) and add sibling providers via the same `INSERT INTO
+    // providers` pattern used in `list_active_all_*` tests above.
+    // `create_custom` is the public API for hand-curated rows; the
+    // raw `INSERT INTO models ... custom = 1` is only used in the
+    // "backdate `expires_at`" test where we need to start from a known
+    // expired state.
+    // -------------------------------------------------------------------
+
+    /// Helper used by the Gate E2 tests: register an extra provider
+    /// row alongside the `provA` that `fresh_db()` already creates.
+    /// Mirrors the `INSERT INTO providers` snippet from
+    /// `list_active_all_excludes_disabled_and_expired_across_providers`.
+    fn add_provider(conn: &Connection, id: &str) {
+        conn.execute(
+            "INSERT INTO providers (id, display_name, base_url, auth_kind) \
+             VALUES (?1, ?2, ?3, 'none')",
+            rusqlite::params![id, format!("Provider {}", id), "https://example.test"],
+        )
+        .expect("insert provider");
+    }
+
+    /// Gate E2 test 1: a model the upstream stops listing between
+    /// refreshes must be hard-deleted from the `models` table on the
+    /// next `upsert_many` call. This is the core delete-on-disappear
+    /// contract.
+    #[test]
+    fn upsert_many_deletes_models_dropped_by_upstream() {
+        let conn = fresh_db();
+        add_provider(&conn, "prov-a");
+        let provider = ProviderId::new("prov-a");
+
+        // First refresh: upstream lists m1, m2, m3.
+        upsert_many(
+            &conn,
+            &provider,
+            &[
+                discovered("m1", TargetFormat::Openai),
+                discovered("m2", TargetFormat::Openai),
+                discovered("m3", TargetFormat::Openai),
+            ],
+            Duration::from_secs(3600),
+        )
+        .expect("first upsert");
+
+        // Pre-condition: all three rows are live.
+        let after_first: Vec<String> = list_active(&conn, &provider)
+            .expect("list_active after first")
+            .into_iter()
+            .map(|m| m.model_id.as_str().to_string())
+            .collect();
+        assert_eq!(
+            after_first,
+            vec!["m1".to_string(), "m2".to_string(), "m3".to_string()],
+            "first refresh seeds m1, m2, m3"
+        );
+
+        // Second refresh: upstream dropped m3.
+        upsert_many(
+            &conn,
+            &provider,
+            &[discovered("m1", TargetFormat::Openai), discovered("m2", TargetFormat::Openai)],
+            Duration::from_secs(3600),
+        )
+        .expect("second upsert");
+
+        // list_active now shows only m1, m2.
+        let after_second: Vec<String> = list_active(&conn, &provider)
+            .expect("list_active after second")
+            .into_iter()
+            .map(|m| m.model_id.as_str().to_string())
+            .collect();
+        assert_eq!(
+            after_second,
+            vec!["m1".to_string(), "m2".to_string()],
+            "m3 dropped by upstream -> removed from list_active"
+        );
+
+        // And m3 is gone from the table entirely (hard delete, not a
+        // soft disable). Probing via `list_all` would also work; the
+        // spec called out `COUNT(*) WHERE model_id = 'm3'` and we
+        // follow it for clarity.
+        let m3_count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM models WHERE model_id = 'm3'",
+                [],
+                |r| r.get(0),
+            )
+            .expect("count m3");
+        assert_eq!(m3_count, 0, "m3 hard-deleted from the models table");
+    }
+
+    /// Gate E2 test 2: a `custom = 1` row whose `model_id` is not in
+    /// the upstream's diff must NOT be deleted. This is the operator-
+    /// curation safety net: the system must never wipe a hand-added
+    /// model just because the provider stopped mentioning it.
+    #[test]
+    fn upsert_many_preserves_custom_rows_when_not_in_diff() {
+        let conn = fresh_db();
+        add_provider(&conn, "prov-b");
+        let provider = ProviderId::new("prov-b");
+
+        // Seed one discovered row.
+        upsert_many(
+            &conn,
+            &provider,
+            &[discovered("m1", TargetFormat::Openai)],
+            Duration::from_secs(3600),
+        )
+        .expect("first upsert");
+
+        // Insert a hand-curated row via the public API.
+        let custom_id = create_custom(
+            &conn,
+            &provider,
+            &ModelId::new("operator-curated"),
+            Some("Curated by operator"),
+            TargetFormat::Openai,
+            3600,
+        )
+        .expect("create_custom");
+        assert!(custom_id.0 > 0);
+
+        // Second refresh: upstream now lists m1 + m2. `operator-curated`
+        // is intentionally NOT in the diff. The non-custom row
+        // disappeared (m1) and a new non-custom row appears (m2); the
+        // custom row must survive untouched.
+        upsert_many(
+            &conn,
+            &provider,
+            &[discovered("m1", TargetFormat::Openai), discovered("m2", TargetFormat::Openai)],
+            Duration::from_secs(3600),
+        )
+        .expect("second upsert");
+
+        // list_active returns all three: m1, m2, operator-curated.
+        let active: Vec<String> = list_active(&conn, &provider)
+            .expect("list_active")
+            .into_iter()
+            .map(|m| m.model_id.as_str().to_string())
+            .collect();
+        assert_eq!(
+            active,
+            vec![
+                "m1".to_string(),
+                "m2".to_string(),
+                "operator-curated".to_string(),
+            ],
+            "custom row survives even though the upstream no longer mentions it"
+        );
+
+        // The custom row is still in the table with custom=1 and
+        // active=1 — defensive belt-and-suspenders on top of the
+        // list_active assertion.
+        let row = get_by_row_id(&conn, custom_id)
+            .expect("get_by_row_id")
+            .expect("present");
+        assert!(row.custom, "custom bit still set");
+        assert!(row.active, "custom row's active bit untouched");
+    }
+
+    /// Gate E2 test 3: when upstream returns an empty catalog, the
+    /// next `upsert_many` call must remove every non-custom row of the
+    /// provider. Custom rows again survive. This is the "absent
+    /// upstream" edge case — it must not leave stale rows behind.
+    #[test]
+    fn upsert_many_with_empty_discovered_deletes_all_non_custom() {
+        let conn = fresh_db();
+        add_provider(&conn, "prov-c");
+        let provider = ProviderId::new("prov-c");
+
+        // Seed two non-custom rows.
+        upsert_many(
+            &conn,
+            &provider,
+            &[discovered("m1", TargetFormat::Openai), discovered("m2", TargetFormat::Anthropic)],
+            Duration::from_secs(3600),
+        )
+        .expect("seed");
+
+        // And a hand-curated row.
+        let keep_id = create_custom(
+            &conn,
+            &provider,
+            &ModelId::new("keep"),
+            Some("Hand-curated"),
+            TargetFormat::Openai,
+            3600,
+        )
+        .expect("create_custom keep");
+
+        // Pre-condition: 3 rows total.
+        let pre_total: i64 = conn
+            .query_row("SELECT COUNT(*) FROM models WHERE provider_id = ?1", ["prov-c"], |r| {
+                r.get(0)
+            })
+            .expect("count pre");
+        assert_eq!(pre_total, 3, "pre-condition: 3 rows for prov-c");
+
+        // Upstream returns an empty catalog.
+        upsert_many(&conn, &provider, &[], Duration::from_secs(3600))
+            .expect("empty upsert");
+
+        // list_active for prov-c returns just the custom row.
+        let active: Vec<String> = list_active(&conn, &provider)
+            .expect("list_active")
+            .into_iter()
+            .map(|m| m.model_id.as_str().to_string())
+            .collect();
+        assert_eq!(active, vec!["keep".to_string()], "only the custom row remains");
+
+        // Sanity: the table itself has exactly one row, and it is the
+        // custom one. m1 and m2 must be hard-deleted, not just hidden
+        // from list_active.
+        let all: Vec<String> = list_all(&conn)
+            .expect("list_all")
+            .into_iter()
+            .map(|m| m.model_id.as_str().to_string())
+            .collect();
+        assert_eq!(all, vec!["keep".to_string()], "only the custom row in the table");
+
+        // The custom row is still active+custom.
+        let row = get_by_row_id(&conn, keep_id)
+            .expect("get_by_row_id")
+            .expect("present");
+        assert!(row.custom);
+        assert!(row.active);
+
+        // Belt-and-suspenders: nothing for prov-c has custom=0 left.
+        let non_custom_remaining: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM models WHERE provider_id = ?1 AND custom = 0",
+                ["prov-c"],
+                |r| r.get(0),
+            )
+            .expect("count non-custom");
+        assert_eq!(non_custom_remaining, 0, "no non-custom rows survive empty refresh");
+    }
+
+    /// Gate E2 test 4: pin the new visibility semantic. A row with
+    /// `active = 1` whose `expires_at` is in the past is STILL live
+    /// from `list_active`'s point of view. The reason is that
+    /// `upsert_many` already enforces "presence in the last
+    /// successful refresh" at write time, so by the time
+    /// `list_active` runs the table is a faithful mirror of upstream.
+    /// `expires_at` is kept around for diagnostics and the recency
+    /// filter inside `apply_auto_activation`, but it is no longer a
+    /// visibility gate.
+    #[test]
+    fn expires_at_in_the_past_with_active_1_is_visible() {
+        let conn = fresh_db();
+        add_provider(&conn, "prov-d");
+        let provider = ProviderId::new("prov-d");
+
+        // Seed a row via the public API. `active` defaults to 1
+        // through the schema.
+        upsert_many(
+            &conn,
+            &provider,
+            &[discovered("stale", TargetFormat::Openai)],
+            Duration::from_secs(3600),
+        )
+        .expect("seed");
+
+        // Backdate `expires_at` by hand: we want to prove that a past
+        // `expires_at` does NOT hide a row from `list_active`.
+        let updated = conn
+            .execute(
+                "UPDATE models SET expires_at = datetime('now', '-1 hour') \
+                 WHERE provider_id = ?1 AND model_id = ?2",
+                rusqlite::params!["prov-d", "stale"],
+            )
+            .expect("backdate expires_at");
+        assert_eq!(updated, 1, "the one seeded row was backdated");
+
+        // Belt-and-suspenders: confirm `expires_at` is now in the
+        // past. If the next assertion fails, the test should not be
+        // blindly retried without diagnosing the SQLite datetime
+        // comparison.
+        let row = get_by_row_id(
+            &conn,
+            list_all(&conn)
+                .expect("list_all")
+                .into_iter()
+                .find(|m| m.model_id.as_str() == "stale")
+                .expect("present")
+                .row_id,
+        )
+        .expect("get")
+        .expect("present");
+        let now_minus_one_hour: String = conn
+            .query_row("SELECT datetime('now', '-1 hour')", [], |r| r.get(0))
+            .expect("now-1h");
+        assert_eq!(
+            row.expires_at.as_deref(),
+            Some(now_minus_one_hour.as_str()),
+            "pre-condition: expires_at is now 1h in the past"
+        );
+        assert!(row.active, "pre-condition: active=1");
+
+        // The actual pin: a past `expires_at` does NOT hide the row
+        // from `list_active` under Gate B's semantic.
+        let active: Vec<String> = list_active(&conn, &provider)
+            .expect("list_active")
+            .into_iter()
+            .map(|m| m.model_id.as_str().to_string())
+            .collect();
+        assert_eq!(
+            active,
+            vec!["stale".to_string()],
+            "active=1 with past expires_at is still visible"
+        );
+    }
+
 }

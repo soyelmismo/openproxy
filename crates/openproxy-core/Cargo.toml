@@ -35,6 +35,11 @@ chrono = { workspace = true }
 uuid = { workspace = true }
 futures = { workspace = true }
 async-trait = { workspace = true }
+# `tokio_util::sync::CancellationToken` lives behind the `rt` feature.
+# We promote the transitive dep (it already arrives via reqwest) to a
+# direct dep so the discovery scheduler can fan out `cancel()` to every
+# per-provider task with broadcast semantics. See Gate E1 spec.
+tokio-util = { workspace = true, features = ["rt"] }
 parking_lot = { workspace = true }
 rand = { workspace = true }
 hex = { workspace = true }
@@ -62,3 +67,14 @@ bytes = "1"
 tower = { version = "0.5", default-features = false, features = ["util"], optional = true }
 tower-service = { version = "0.3", optional = true }
 futures-util = { version = "0.3", default-features = false, features = ["std"], optional = true }
+
+[dev-dependencies]
+# Re-enable `tokio`'s `test-util` feature ONLY for the test
+# build. The `start_paused` and `advance` helpers on
+# `tokio::time` live behind this feature; we use them in the
+# discovery scheduler's unit tests to step a paused clock
+# through several tick boundaries in microseconds, instead of
+# burning wall-clock seconds in `sleep`. Not a runtime
+# dep — `cargo build --release` of the production binary
+# does NOT pull this in.
+tokio = { workspace = true, features = ["test-util"] }
