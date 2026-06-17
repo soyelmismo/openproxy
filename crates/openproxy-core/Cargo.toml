@@ -62,3 +62,14 @@ bytes = "1"
 tower = { version = "0.5", default-features = false, features = ["util"], optional = true }
 tower-service = { version = "0.3", optional = true }
 futures-util = { version = "0.3", default-features = false, features = ["std"], optional = true }
+
+[dev-dependencies]
+# Re-enable `tokio`'s `test-util` feature ONLY for the test
+# build. The `start_paused` and `advance` helpers on
+# `tokio::time` live behind this feature; we use them in the
+# discovery scheduler's unit tests to step a paused clock
+# through several tick boundaries in microseconds, instead of
+# burning wall-clock seconds in `sleep`. Not a runtime
+# dep — `cargo build --release` of the production binary
+# does NOT pull this in.
+tokio = { workspace = true, features = ["test-util"] }

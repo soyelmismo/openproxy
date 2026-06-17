@@ -3488,7 +3488,7 @@ mod tests {
         .expect("insert api key");
     }
 
-    fn make_state_with_key(dir: &std::path::Path) -> (AppState, String) {
+    async fn make_state_with_key(dir: &std::path::Path) -> (AppState, String) {
         let pool = std::sync::Arc::new(
             core_db::DbPool::open(&dir.join("smoke.db")).expect("open pool"),
         );
@@ -3510,14 +3510,15 @@ mod tests {
             pool,
             std::sync::Arc::new(mk),
             adapters,
-        );
+        )
+        .await;
         (state, plaintext)
     }
 
     #[tokio::test]
     async fn put_runtime_timeouts_writes_db_and_updates_slot() {
         let dir = tempdir();
-        let (state, plaintext) = make_state_with_key(&dir);
+        let (state, plaintext) = make_state_with_key(&dir).await;
 
         // Sanity: the slot starts at the TOML defaults (5000/10000/...).
         let initial = state.timeouts();
@@ -3587,7 +3588,7 @@ mod tests {
     #[tokio::test]
     async fn put_runtime_timeouts_without_auth_returns_401() {
         let dir = tempdir();
-        let (state, _plaintext) = make_state_with_key(&dir);
+        let (state, _plaintext) = make_state_with_key(&dir).await;
         let app = Router::new()
             .route(
                 "/v1/admin/config/timeouts",
@@ -3613,7 +3614,7 @@ mod tests {
     #[tokio::test]
     async fn put_runtime_timeouts_malformed_body_returns_400() {
         let dir = tempdir();
-        let (state, plaintext) = make_state_with_key(&dir);
+        let (state, plaintext) = make_state_with_key(&dir).await;
         let app = Router::new()
             .route(
                 "/v1/admin/config/timeouts",
