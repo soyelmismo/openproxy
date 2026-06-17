@@ -41,34 +41,21 @@ use super::*;
 // Helpers: a stalling connector
 // -----------------------------------------------------------------------
 
-/// A `Service<Uri>` whose `call` future never completes. The phase
-/// the future emulates is configured up-front.
+/// A `Service<Uri>` whose `call` future never completes. Used to
+/// stall a request at the connect layer so that per-phase deadlines
+/// (e.g. `dns_ms`) fire from the call site, not from any
+/// hyper-internal timer.
 ///
-/// The `Response` type is a `TokioIo<DuplexStream>`, which satisfies
+/// The `Response` type is a `TokioIo<TcpStream>`, which satisfies
 /// hyper-util's `Connect` blanket impl (`Read + Write + Connection +
 /// Unpin + Send + 'static`) but the future sleeps forever so no
 /// instance is ever produced.
 #[derive(Clone)]
-struct StallingConnector {
-    phase: UpstreamPhase,
-    /// `true` to simulate "TCP accept, no TLS" — the future
-    /// pretends to have completed the TCP layer (we hold a
-    /// `DuplexStream` half) but never returns a `Connection`.
-    tcp_first: bool,
-}
+struct StallingConnector {}
 
 impl StallingConnector {
-    fn new(phase: UpstreamPhase) -> Self {
-        Self {
-            phase,
-            tcp_first: false,
-        }
-    }
-    fn with_tcp_first(phase: UpstreamPhase) -> Self {
-        Self {
-            phase,
-            tcp_first: true,
-        }
+    fn new() -> Self {
+        Self {}
     }
 }
 
@@ -91,9 +78,6 @@ where
     }
 
     fn call(&mut self, _uri: Uri) -> Self::Future {
-        let _phase = self.phase;
-        let _tcp_first = self.tcp_first;
-        let _ = (_phase, _tcp_first);
         let sleep = tokio::time::sleep(Duration::from_secs(300));
         Box::pin(ResultSleep { sleep: Box::pin(sleep) })
     }
@@ -146,7 +130,7 @@ impl std::future::Future for ResultSleep {
 #[tokio::test]
 async fn phase_timeout_dns() {
     let client = UpstreamClient::for_test_with_connector(
-        StallingConnector::new(UpstreamPhase::Dns),
+        StallingConnector::new(),
         Some(UpstreamPhase::Dns),
     );
     let cancel = CancellationToken::new();
