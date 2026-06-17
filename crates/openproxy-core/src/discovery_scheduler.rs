@@ -684,22 +684,38 @@ mod tests {
             adapters,
             UpstreamClient::new(),
             DiscoverySchedulerConfig {
-                interval_secs: 1,
+                // Use a 2s interval so the second tick has
+                // enough virtual time to land BEFORE the
+                // test gives up. 1s is tight because
+                // `tokio::time::advance(4s)` may not poll the
+                // task enough cycles to fire the second
+                // tick on slower machines.
+                interval_secs: 2,
                 // Use a non-zero stagger so we exercise the
                 // first-sleep-then-loop path; 0 would skip the
-                // first sleep entirely.
+                // first sleep entirely. Bound to 1s so
+                // `advance(4s)` covers 1s stagger + ≥1 full
+                // tick.
                 initial_stagger_secs: 1,
             },
         )
         .await;
 
-        // Step the runtime forward enough for 2 ticks (2s
-        // stagger + 1s tick = 3s total) plus a safety margin.
-        tokio::time::advance(Duration::from_secs(4)).await;
-        // Yield a few times so the spawned tasks can pick up
-        // the advance and process the tick.
-        for _ in 0..16 {
-            tokio::task::yield_now().await;
+        // Step the runtime forward enough for 1s stagger + 1
+        // full tick (2s) = 3s total, plus a 1s safety margin.
+        // We also yield many times after each advance step
+        // so the spawned task can pick the virtual time up.
+        // The flake we hit with `advance(4s)` and then
+        // yielding 16 times was that, on a busy CI box,
+        // `advance` itself doesn't always poll the
+        // `current_thread` runtime to exhaustion across
+        // every virtual time step; we step in 1s chunks
+        // and yield between them.
+        for _ in 0..6 {
+            tokio::time::advance(Duration::from_secs(1)).await;
+            for _ in 0..32 {
+                tokio::task::yield_now().await;
+            }
         }
 
         assert!(
