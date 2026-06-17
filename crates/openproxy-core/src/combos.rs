@@ -411,15 +411,42 @@ pub fn add_target(conn: &Connection, input: AddTargetInput) -> Result<ComboTarge
         }
     }
 
+    // Look up the upstream `model_id` from the `models` table so we
+    // can stamp it onto `combo_targets.upstream_model_id` (Gate F1).
+    // Sub-combo targets have no associated `models` row and get
+    // `NULL` (they reference a combo, not a model). This is the
+    // bookkeeping the reconnect path in [`models::upsert_many`]
+    // uses to re-bind an orphan target when its upstream model
+    // reappears after a transient absence (Gate B → Gate D cascade).
+    let upstream_model_id: Option<String> = if let Some(mrid) = model_row_id {
+        Some(
+            conn.query_row(
+                "SELECT model_id FROM models WHERE id = ?1",
+                params![mrid.0],
+                |r| r.get::<_, String>(0),
+            )
+            .map_err(|e| CoreError::Database {
+                message: format!(
+                    "read model {} upstream model_id: {}",
+                    mrid.0, e
+                ),
+                source: Some(Box::new(e)),
+            })?,
+        )
+    } else {
+        None
+    };
+
     let result = conn.execute(
-        "INSERT INTO combo_targets(combo_id, provider_id, account_id, model_row_id, sub_combo_id, priority_order) \
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+        "INSERT INTO combo_targets(combo_id, provider_id, account_id, model_row_id, sub_combo_id, upstream_model_id, priority_order) \
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
         params![
             combo_id.0,
             provider_id.as_str(),
             account_id.map(|a| a.0),
             model_row_id.map(|m| m.0),
             sub_combo_id.map(|c| c.0),
+            upstream_model_id,
             priority_order,
         ],
     );
@@ -454,6 +481,60 @@ pub fn add_target(conn: &Connection, input: AddTargetInput) -> Result<ComboTarge
             source: Some(Box::new(e)),
         })?;
     Ok(ComboTargetId(id))
+}
+
+/// Gate F1: re-bind orphaned `combo_targets` rows that referenced a
+/// vanished upstream model.
+///
+/// This helper is the heart of the reconnect path. The call shape is
+/// `reconnect_orphan_targets(conn, provider, upstream_model_id,
+/// new_model_row_id)` and is intended to be called from
+/// [`crate::models::upsert_many`] *inside the same transaction* that
+/// just deleted the old `models` row and inserted the new one. The
+/// atomicity is the whole point: the re-bind cannot survive a
+/// crash between the model INSERT and the UPDATE here.
+///
+/// Matching is by `(provider_id, upstream_model_id)`. Only rows with
+/// `model_row_id IS NULL` (the orphan state Gate D's `ON DELETE
+/// SET NULL` cascade leaves behind) and `sub_combo_id IS NULL`
+/// (flat targets only — sub-combo targets are out of scope, per the
+/// spec) are candidates.
+///
+/// Returns the number of rows updated. A row whose
+/// `upstream_model_id` is `NULL` (because the orphan existed BEFORE
+/// the 000026 migration ran, or because the operator created a
+/// target without recording an upstream model id) is left alone —
+/// it cannot be re-bound without manual intervention, exactly as
+/// the spec documents.
+///
+/// `conn` is typed as `&Connection` because rusqlite's
+/// `Transaction<'_>` derefs to `Connection` and `&mut Connection`
+/// is what `unchecked_transaction()` returns; either caller shape
+/// compiles against this signature.
+pub fn reconnect_orphan_targets(
+    conn: &Connection,
+    provider: &ProviderId,
+    upstream_model_id: &str,
+    new_model_row_id: ModelRowId,
+) -> Result<usize> {
+    let updated = conn
+        .execute(
+            "UPDATE combo_targets \
+             SET model_row_id = ?1 \
+             WHERE provider_id = ?2 \
+               AND upstream_model_id = ?3 \
+               AND model_row_id IS NULL \
+               AND sub_combo_id IS NULL",
+            params![new_model_row_id.0, provider.as_str(), upstream_model_id],
+        )
+        .map_err(|e| CoreError::Database {
+            message: format!(
+                "execute reconnect_orphan_targets (provider={}, upstream={}, new_id={}): {}",
+                provider, upstream_model_id, new_model_row_id.0, e
+            ),
+            source: Some(Box::new(e)),
+        })?;
+    Ok(updated)
 }
 
 /// Maximum depth of sub-combo nesting (root combo → sub → sub → …).

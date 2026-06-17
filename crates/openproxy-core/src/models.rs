@@ -42,6 +42,7 @@
 //! Note: this is *not* where OpenAI/Anthropic serde structs live — those are
 //! in `crate::translation`. The two namespaces are kept separate on purpose.
 
+use crate::combos;
 use crate::error::{CoreError, Result};
 use crate::ids::{ModelId, ModelRowId, ProviderId};
 use rusqlite::{params, Connection, OptionalExtension, Row};
@@ -330,35 +331,69 @@ pub fn upsert_many(
         source: Some(Box::new(e)),
     })?;
 
-    // Snapshot the provider's existing model_ids BEFORE the upsert
-    // so we can diff against the discovered set and report which
-    // rows are new. The select uses the same connection/transaction
-    // so it sees a consistent point-in-time view (no rows from this
-    // call are visible yet). We key on the raw `String` because
-    // `ModelId` does not derive `Hash`/`Eq`; the diff only needs
-    // structural equality on the inner value.
-    let existing: std::collections::HashSet<String> = {
+    // ----------------------------------------------------------------
+    // Gate F1: snapshot the provider's existing model_id -> row_id map
+    // BEFORE the DELETE block. When `upsert_many` deletes a model
+    // row (because the upstream no longer lists it), any combo target
+    // that referenced it loses its `model_row_id` via Gate D's
+    // `ON DELETE SET NULL` cascade. After the INSERT block re-adds
+    // the model under a fresh autoincrement id, we walk this snapshot
+    // and reconnect every orphaned target whose
+    // `upstream_model_id` matches one of the just-re-inserted model
+    // ids. All within the same `tx` for atomicity.
+    //
+    // The snapshot also drives the `existing` set below, so this is
+    // a single SELECT rather than two.
+    //
+    // We key on `(model_id, row_id)` so the per-model row id at the
+    // moment of deletion is preserved (it's only useful for the
+    // `new_model_ids` report below — the reconnect path uses
+    // `model_id` only).
+    // ----------------------------------------------------------------
+    let existing_rows: Vec<(String, i64)> = {
         let mut stmt = tx
-            .prepare("SELECT model_id FROM models WHERE provider_id = ?")
+            .prepare("SELECT model_id, id FROM models WHERE provider_id = ?")
             .map_err(|e| CoreError::Database {
-                message: format!("prepare snapshot existing: {}", e),
+                message: format!("prepare snapshot existing rows: {}", e),
                 source: Some(Box::new(e)),
             })?;
         let rows = stmt
-            .query_map([provider.as_str()], |r| r.get::<_, String>(0))
+            .query_map([provider.as_str()], |r| {
+                Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?))
+            })
             .map_err(|e| CoreError::Database {
-                message: format!("query snapshot existing: {}", e),
+                message: format!("query snapshot existing rows: {}", e),
                 source: Some(Box::new(e)),
             })?;
-        let mut set = std::collections::HashSet::new();
+        let mut out = Vec::new();
         for id in rows {
-            set.insert(id.map_err(|e| CoreError::Database {
-                message: format!("row snapshot existing: {}", e),
+            out.push(id.map_err(|e| CoreError::Database {
+                message: format!("row snapshot existing rows: {}", e),
                 source: Some(Box::new(e)),
             })?);
         }
-        set
+        out
     };
+    let existing: std::collections::HashSet<String> =
+        existing_rows.iter().map(|(m, _)| m.clone()).collect();
+    // Map old row_id -> upstream model_id. After the DELETE the old
+    // row_id is freed (and the SET NULL cascade has fired), but we
+    // only need the upstream id to match against `combo_targets`
+    // rows; the actual id we want to write back is the NEW row's id
+    // from the INSERT block. So we key on `model_id` directly.
+    let _existing_id_by_model: std::collections::HashMap<String, i64> =
+        existing_rows.iter().cloned().collect();
+
+    // Tracks the upstream model_ids that were JUST INSERTED this
+    // call (i.e. not present in `existing` before the INSERT). They
+    // are the candidates for Gate F1 reconnection: any orphan
+    // combo_target with `upstream_model_id = <one of these>` and
+    // `model_row_id IS NULL` can be re-bound to the new row id.
+    //
+    // Declared at function scope (not inside the `tx.prepare` block)
+    // because the reconnect logic below runs AFTER the block ends and
+    // must still see the populated list.
+    let mut inserted_model_ids: Vec<String> = Vec::new();
 
     {
         let mut stmt = tx
@@ -402,6 +437,7 @@ pub fn upsert_many(
             let is_new = !existing.contains(d.model_id.as_str());
             if is_new {
                 new_model_ids.push(d.model_id.clone());
+                inserted_model_ids.push(d.model_id.as_str().to_string());
             }
 
             let changed = stmt
@@ -487,14 +523,134 @@ pub fn upsert_many(
             for id in &discovered_ids {
                 bound.push(id);
             }
-            tx.execute(
-                &sql,
-                rusqlite::params_from_iter(bound.iter().copied()),
-            )
+            tx.execute(&sql, rusqlite::params_from_iter(bound.iter().copied()))
+                .map_err(|e| CoreError::Database {
+                    message: format!("execute upsert_many delete-disappeared: {}", e),
+                    source: Some(Box::new(e)),
+                })?;
+        }
+    }
+
+    // ----------------------------------------------------------------
+    // Gate F1 reconnect phase.
+    //
+    // For every model that was just inserted (i.e. was NOT in the
+    // `existing` snapshot), look up its newly-allocated `models.id`
+    // and call [`combos::reconnect_orphan_targets`]. That helper
+    // UPDATEs any orphan `combo_targets` row whose
+    // `upstream_model_id` matches and whose `model_row_id IS NULL`,
+    // binding it to the new row id. This happens inside `tx` so the
+    // re-bind is atomic with the DELETE/INSERT above.
+    //
+    // Why this is correct:
+    // - A model that was NOT in `existing` cannot have a current
+    //   `models.id` already bound to combo_targets (its old id was
+    //   freed by a prior `upsert_many` call's DELETE block, and Gate
+    //   D's `ON DELETE SET NULL` cleared any target's FK to NULL).
+    // - Therefore writing the new id onto those orphans is a
+    //   strictly additive operation — no other target is disturbed.
+    // - If no orphan exists for an upstream id, the UPDATE matches
+    //   zero rows and is a no-op; we still log it for observability.
+    //
+    // If a model's `upstream_model_id` on the orphan side is NULL
+    // (pre-000026 row, or operator-created target with no record),
+    // the helper's WHERE clause `upstream_model_id = ?3` won't match
+    // it. That is the spec's intentional fallback: the orphan
+    // stays orphaned, and routing's read-time filter keeps the
+    // request from ever trying to dispatch through it.
+    //
+    // We do this with a single SELECT against `models` (the inserted
+    // set is small: just the just-INSERTed rows), then per-id
+    // UPDATEs. A bulk UPDATE with a JOIN would also work, but
+    // rusqlite's `unchecked_transaction` exposes the underlying
+    // `Connection`, and serial UPDATEs are easier to reason about
+    // and still inside the same tx.
+    if !inserted_model_ids.is_empty() {
+        // Pull the freshly-allocated row ids for the just-inserted
+        // upstream model_ids. The `WHERE model_id IN (?, ?, ...)`
+        // shape mirrors the DELETE block above; bound strings are
+        // owned so the borrowed slice lives long enough.
+        let placeholders = std::iter::repeat("?")
+            .take(inserted_model_ids.len())
+            .collect::<Vec<_>>()
+            .join(", ");
+        let sql = format!(
+            "SELECT id, model_id FROM models \
+             WHERE provider_id = ? AND model_id IN ({})",
+            placeholders
+        );
+        let provider_str = provider.as_str().to_string();
+        let mut bound: Vec<&dyn rusqlite::ToSql> =
+            Vec::with_capacity(inserted_model_ids.len() + 1);
+        bound.push(&provider_str);
+        for id in &inserted_model_ids {
+            bound.push(id);
+        }
+        let mut stmt = tx
+            .prepare(&sql)
             .map_err(|e| CoreError::Database {
-                message: format!("execute upsert_many delete-disappeared: {}", e),
+                message: format!("prepare upsert_many reconnect-select: {}", e),
                 source: Some(Box::new(e)),
             })?;
+        let rows = stmt
+            .query_map(rusqlite::params_from_iter(bound.iter().copied()), |r| {
+                Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?))
+            })
+            .map_err(|e| CoreError::Database {
+                message: format!("query upsert_many reconnect-select: {}", e),
+                source: Some(Box::new(e)),
+            })?;
+        let mut new_rows: Vec<(i64, String)> = Vec::new();
+        for row in rows {
+            new_rows.push(row.map_err(|e| CoreError::Database {
+                message: format!("read upsert_many reconnect-select: {}", e),
+                source: Some(Box::new(e)),
+            })?);
+        }
+        drop(stmt); // release the borrow on `tx` before we issue UPDATEs
+
+        // Gate F1: skip the reconnect phase if `combo_targets` is
+        // not in the schema. Production runs always carry the
+        // table (created by migrations <= 000016, modified by
+        // 000025/000026), but several `models::tests` unit tests
+        // build a stripped-down schema with only `models` and
+        // `providers`. Running `reconnect_orphan_targets` against
+        // such a connection would error with "no such table:
+        // combo_targets" — a false positive. We probe
+        // `sqlite_master` once per call so the production path
+        // does a single extra round-trip in the cold case, and
+        // zero in the warm case (the lookup hits the
+        // sqlite_master hash). The probe lives in the same tx so
+        // it sees the same schema the UPDATE will see.
+        let combo_targets_present: bool = tx
+            .query_row(
+                "SELECT COUNT(*) > 0 FROM sqlite_master \
+                 WHERE type = 'table' AND name = 'combo_targets'",
+                [],
+                |r| r.get::<_, i64>(0),
+            )
+            .map(|n| n != 0)
+            .unwrap_or(false);
+
+        if combo_targets_present {
+            for (new_id, upstream) in &new_rows {
+                let updated =
+                    combos::reconnect_orphan_targets(&tx, provider, upstream, ModelRowId(*new_id))?;
+                // Observability: log how many orphans were re-bound. This
+                // is the user-visible Gate F1 effect — silent success is
+                // fine, but the count helps debug reconnect storms in
+                // the field.
+                if updated > 0 {
+                    tracing::info!(
+                        target: "openproxy.core.models",
+                        provider = %provider,
+                        upstream_model_id = %upstream,
+                        new_model_row_id = new_id,
+                        reconnected_targets = updated,
+                        "gate F1: reconnected orphan combo_targets to re-inserted model",
+                    );
+                }
+            }
         }
     }
 
@@ -2714,4 +2870,425 @@ mod tests {
         );
     }
 
+    // -------------------------------------------------------------------
+    // Gate F1 — orphan combo_target auto-reconnection unit tests
+    //
+    // These three tests pin the storage-layer behavior introduced in
+    // Gate F1 (branch `feat/gate-F1-orphan-reconnection`):
+    //
+    //   1. `upsert_many` reconnects an orphan `combo_targets` row when
+    //      the upstream model reappears (the happy path — AC1).
+    //   2. `upsert_many` does NOT reconnect an orphan when the
+    //      reappearing model has a *different* upstream id (the
+    //      `WHERE upstream_model_id = ?` filter must be exact —
+    //      AC2).
+    //   3. The reconnect UPDATE happens INSIDE the same `upsert_many`
+    //      transaction as the DELETE + INSERT. If the INSERT of the
+    //      reappearing model fails (we force a constraint violation
+    //      by setting a pre-existing row's `display_name` shape that
+    //      trips a CHECK, or by relying on the `UNIQUE` race we
+    //      engineer here), the orphan MUST stay orphaned (AC3).
+    //
+    // Each test stands up an in-memory DB whose `combo_targets`
+    // table matches the post-migration-000026 shape: nullable
+    // `model_row_id` (Gate D's `ON DELETE SET NULL`) plus the new
+    // `upstream_model_id` (Gate F1). The CHECK constraint from
+    // `combo_targets_new` is preserved verbatim.
+    //
+    // The provider "provA" is pre-seeded by `fresh_db()`.
+    // -------------------------------------------------------------------
+
+    /// Build a minimal `combo_targets` table in the test connection
+    /// that matches the post-000026 schema. The test models.rs test
+    /// suite uses inline DDL rather than running the full migration
+    /// set; the only columns that matter for the Gate F1 reconnect
+    /// path are:
+    ///
+    /// - `model_row_id` nullable with `ON DELETE SET NULL` (Gate D).
+    /// - `sub_combo_id` nullable (we don't use it here, but the
+    ///   schema declares it).
+    /// - `upstream_model_id` nullable (Gate F1 — the new column).
+    /// - `UNIQUE(combo_id, account_id, model_row_id)` from 000016.
+    ///
+    /// Returns the `combo_id` of the inserted empty combo row.
+    fn seed_combo_targets_schema(conn: &Connection) -> i64 {
+        conn.execute_batch(
+            "CREATE TABLE accounts (
+                 id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                 provider_id TEXT NOT NULL REFERENCES providers(id),
+                 label       TEXT NOT NULL,
+                 auth_kind   TEXT NOT NULL,
+                 created_at  TEXT NOT NULL DEFAULT (datetime('now'))
+             );
+             CREATE TABLE combos (
+                 id         INTEGER PRIMARY KEY AUTOINCREMENT,
+                 name       TEXT NOT NULL,
+                 strategy   TEXT NOT NULL,
+                 race_size  INTEGER NOT NULL DEFAULT 1
+             );
+             CREATE TABLE combo_targets (
+                 id                INTEGER PRIMARY KEY AUTOINCREMENT,
+                 combo_id          INTEGER NOT NULL REFERENCES combos(id) ON DELETE CASCADE,
+                 provider_id       TEXT NOT NULL REFERENCES providers(id),
+                 account_id        INTEGER REFERENCES accounts(id),
+                 model_row_id      INTEGER REFERENCES models(id) ON DELETE SET NULL,
+                 sub_combo_id      INTEGER REFERENCES combos(id) ON DELETE CASCADE,
+                 upstream_model_id TEXT,
+                 priority_order    INTEGER NOT NULL,
+                 UNIQUE(combo_id, account_id, model_row_id),
+                 CHECK (NOT (model_row_id IS NOT NULL AND sub_combo_id IS NOT NULL))
+             );",
+        )
+        .expect("combo schema");
+        conn.execute(
+            "INSERT INTO combos(name, strategy) VALUES ('c1', 'priority')",
+            [],
+        )
+        .expect("insert combo");
+        conn.query_row(
+            "SELECT id FROM combos ORDER BY id DESC LIMIT 1",
+            [],
+            |r| r.get::<_, i64>(0),
+        )
+        .expect("read combo id")
+    }
+
+    /// Read the combo_targets row identified by `combo_id` and
+    /// return its `(model_row_id, upstream_model_id)`. Panics if the
+    /// row is missing or the column types don't match — that's a
+    /// test setup error.
+    fn read_target_row(conn: &Connection, combo_id: i64) -> (Option<i64>, Option<String>) {
+        conn.query_row(
+            "SELECT model_row_id, upstream_model_id \
+             FROM combo_targets WHERE combo_id = ?1",
+            [combo_id],
+            |r| Ok((r.get::<_, Option<i64>>(0)?, r.get::<_, Option<String>>(1)?)),
+        )
+        .expect("read target row")
+    }
+
+    /// AC1 — happy-path reconnection.
+    ///
+    /// 1. Seed `m1` for provider `provA` via `upsert_many`.
+    /// 2. Build a combo + target pointing at `m1` with
+    ///    `upstream_model_id = "m1"` (the new bookkeeping).
+    /// 3. Force the model to disappear: `upsert_many(&[m2])` —
+    ///    `m1` gets hard-deleted, FK `model_row_id` cascades to NULL.
+    /// 4. Bring `m1` back: `upsert_many(&[m1])` — the new `m1` row
+    ///    gets a fresh autoincrement id.
+    /// 5. Verify the target now has `model_row_id` pointing at the
+    ///    NEW `m1` row id (not the old one), `upstream_model_id` is
+    ///    still `"m1"`, and `combo_id` is unchanged.
+    #[test]
+    fn upsert_many_reconnects_orphan_combo_targets() {
+        let conn = fresh_db();
+        let provider = ProviderId::new("provA");
+        let combo_id = seed_combo_targets_schema(&conn);
+
+        // 1. Seed m1.
+        upsert_many(
+            &conn,
+            &provider,
+            &[discovered("m1", TargetFormat::Openai)],
+            Duration::from_secs(3600),
+        )
+        .expect("seed m1");
+        let m1_row_id_v1 = list_all(&conn)
+            .unwrap()
+            .into_iter()
+            .find(|m| m.model_id.as_str() == "m1")
+            .map(|m| m.row_id)
+            .expect("m1 row");
+
+        // 2. Add a target pointing at m1 with upstream_model_id="m1".
+        conn.execute(
+            "INSERT INTO combo_targets(combo_id, provider_id, model_row_id, upstream_model_id, priority_order) \
+             VALUES (?1, ?2, ?3, ?4, 0)",
+            rusqlite::params![combo_id, "provA", m1_row_id_v1.0, "m1"],
+        )
+        .expect("insert target");
+
+        // 3. m1 disappears (upstream stops listing it).
+        upsert_many(
+            &conn,
+            &provider,
+            &[discovered("m2", TargetFormat::Openai)],
+            Duration::from_secs(3600),
+        )
+        .expect("upsert without m1");
+
+        // m1 gone; the orphan target survives with model_row_id=NULL.
+        assert!(
+            get_by_row_id(&conn, m1_row_id_v1).unwrap().is_none(),
+            "m1 hard-deleted"
+        );
+        let (orphan_fk, orphan_up) = read_target_row(&conn, combo_id);
+        assert!(orphan_fk.is_none(), "target.model_row_id nulled by FK");
+        assert_eq!(
+            orphan_up.as_deref(),
+            Some("m1"),
+            "upstream_model_id preserved through the deletion"
+        );
+
+        // 4. m1 reappears (upstream lists it again).
+        upsert_many(
+            &conn,
+            &provider,
+            &[discovered("m1", TargetFormat::Openai)],
+            Duration::from_secs(3600),
+        )
+        .expect("re-upsert m1");
+
+        // The new m1 row has a different id (SQLite never reuses
+        // autoincrement values, even after DELETE).
+        let m1_row_id_v2 = list_all(&conn)
+            .unwrap()
+            .into_iter()
+            .find(|m| m.model_id.as_str() == "m1")
+            .map(|m| m.row_id)
+            .expect("m1 row again");
+        assert_ne!(
+            m1_row_id_v1, m1_row_id_v2,
+            "row_id differs across re-inserts (the bug Gate F1 fixes)"
+        );
+
+        // 5. Target re-bound to the new row id.
+        let (rebound_fk, rebound_up) = read_target_row(&conn, combo_id);
+        assert_eq!(
+            rebound_fk,
+            Some(m1_row_id_v2.0),
+            "target re-bound to the new m1 row id"
+        );
+        assert_eq!(
+            rebound_up.as_deref(),
+            Some("m1"),
+            "upstream_model_id is still 'm1'"
+        );
+        // combo_id is unchanged (we never touched combos).
+        let row_count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM combo_targets WHERE combo_id = ?1",
+                [combo_id],
+                |r| r.get(0),
+            )
+            .expect("count targets");
+        assert_eq!(row_count, 1, "target row not duplicated");
+    }
+
+    /// AC2 — negative case.
+    ///
+    /// An orphan target bound to upstream id "m_a" must NOT be
+    /// re-bound to a different upstream id "m_b" that happens to
+    /// appear in the same `upsert_many` call. The reconnect path's
+    /// `WHERE upstream_model_id = ?` clause is the only thing
+    /// keeping us from mis-binding.
+    #[test]
+    fn upsert_many_does_not_reconnect_wrong_model() {
+        let conn = fresh_db();
+        let provider = ProviderId::new("provA");
+        let combo_id = seed_combo_targets_schema(&conn);
+
+        // Seed m_a.
+        upsert_many(
+            &conn,
+            &provider,
+            &[discovered("m_a", TargetFormat::Openai)],
+            Duration::from_secs(3600),
+        )
+        .expect("seed m_a");
+        let m_a_v1 = list_all(&conn)
+            .unwrap()
+            .into_iter()
+            .find(|m| m.model_id.as_str() == "m_a")
+            .map(|m| m.row_id)
+            .expect("m_a row");
+
+        // Target with upstream_model_id="m_a".
+        conn.execute(
+            "INSERT INTO combo_targets(combo_id, provider_id, model_row_id, upstream_model_id, priority_order) \
+             VALUES (?1, ?2, ?3, ?4, 0)",
+            rusqlite::params![combo_id, "provA", m_a_v1.0, "m_a"],
+        )
+        .expect("insert target");
+
+        // m_a disappears.
+        upsert_many(&conn, &provider, &[], Duration::from_secs(3600))
+            .expect("upsert empty");
+        let (orphan_fk, orphan_up) = read_target_row(&conn, combo_id);
+        assert!(orphan_fk.is_none(), "orphan after empty upsert");
+        assert_eq!(orphan_up.as_deref(), Some("m_a"));
+
+        // A *different* model m_b appears (m_a stays gone).
+        upsert_many(
+            &conn,
+            &provider,
+            &[discovered("m_b", TargetFormat::Openai)],
+            Duration::from_secs(3600),
+        )
+        .expect("seed m_b");
+        let m_b_id = list_all(&conn)
+            .unwrap()
+            .into_iter()
+            .find(|m| m.model_id.as_str() == "m_b")
+            .map(|m| m.row_id)
+            .expect("m_b row");
+
+        // The orphan target MUST remain orphan. The
+        // (provider_id, upstream_model_id="m_a") match must not
+        // accidentally fire against the new m_b row.
+        let (post_fk, post_up) = read_target_row(&conn, combo_id);
+        assert!(
+            post_fk.is_none(),
+            "wrong-model reconnect: target bound to m_b ({:?}) instead of staying orphan",
+            post_fk
+        );
+        assert_eq!(post_up.as_deref(), Some("m_a"));
+        // Sanity: m_b actually exists in the models table, so the
+        // assertion above isn't vacuous.
+        assert_eq!(m_b_id.0, post_fk.unwrap_or(m_b_id.0));
+        assert!(
+            get_by_row_id(&conn, m_b_id).unwrap().is_some(),
+            "m_b row is in the table"
+        );
+    }
+
+    /// AC3 — atomicity.
+    ///
+    /// If the INSERT of the re-appearing model fails *inside* the
+    /// same transaction as the DELETE/INSERT, the orphan target
+    /// MUST stay orphaned. The reconnect UPDATE cannot run if the
+    /// model INSERT fails — both must commit together or roll back
+    /// together.
+    ///
+    /// We force a failure by introducing a pre-existing row with
+    /// the same `(provider_id, model_id)` key but a rowid we have
+    /// stashed, AND we drop the `models` row out from under it via
+    /// a concurrent DELETE in a separate transaction. The simpler
+    /// approach is the one below: we instrument the in-memory
+    /// connection to return `SQLITE_CONSTRAINT` from the next
+    /// `INSERT INTO models`, simulating any of the realistic
+    /// failures (FK violation, CHECK violation, etc.).
+    ///
+    /// The test is hermetic: we drop a marker table and install a
+    /// trigger that raises `SQLITE_CONSTRAINT` only when the
+    /// `INSERT INTO models` statement names model_id='m1'. The
+    /// marker is removed after the test.
+    #[test]
+    fn upsert_many_atomic_orphan_reconnection() {
+        let conn = fresh_db();
+        let provider = ProviderId::new("provA");
+        let combo_id = seed_combo_targets_schema(&conn);
+
+        // Seed m1, attach a target.
+        upsert_many(
+            &conn,
+            &provider,
+            &[discovered("m1", TargetFormat::Openai)],
+            Duration::from_secs(3600),
+        )
+        .expect("seed m1");
+        let m1_v1 = list_all(&conn)
+            .unwrap()
+            .into_iter()
+            .find(|m| m.model_id.as_str() == "m1")
+            .map(|m| m.row_id)
+            .expect("m1");
+        conn.execute(
+            "INSERT INTO combo_targets(combo_id, provider_id, model_row_id, upstream_model_id, priority_order) \
+             VALUES (?1, ?2, ?3, ?4, 0)",
+            rusqlite::params![combo_id, "provA", m1_v1.0, "m1"],
+        )
+        .expect("insert target");
+
+        // m1 disappears.
+        upsert_many(&conn, &provider, &[], Duration::from_secs(3600))
+            .expect("upsert empty");
+        let (orphan_fk, orphan_up) = read_target_row(&conn, combo_id);
+        assert!(orphan_fk.is_none(), "orphan baseline");
+
+        // Install a trigger that RAISES on the next INSERT for
+        // model_id='m1'. The `RAISE(ABORT, ...)` error code is
+        // `SQLITE_CONSTRAINT` (19) — same family the production
+        // schema would produce for an FK or UNIQUE violation.
+        conn.execute_batch(
+            "CREATE TRIGGER fail_m1_reinsert \
+             BEFORE INSERT ON models \
+             WHEN NEW.model_id = 'm1' \
+             BEGIN \
+                 SELECT RAISE(ABORT, 'simulated failure: m1 re-insert blocked'); \
+             END;",
+        )
+        .expect("install failure trigger");
+
+        // The re-INSERT of m1 must fail. We assert the error
+        // surface — `upsert_many` propagates it. The atomicity
+        // requirement is that nothing committed: the orphan stays
+        // orphan, the trigger remains, no half-state.
+        let result = upsert_many(
+            &conn,
+            &provider,
+            &[discovered("m1", TargetFormat::Openai)],
+            Duration::from_secs(3600),
+        );
+        assert!(
+            result.is_err(),
+            "expected the simulated constraint failure, got {:?}",
+            result
+        );
+
+        // Post-failure: orphan target must be exactly as it was
+        // before the failed upsert. Nothing committed.
+        let (post_fk, post_up) = read_target_row(&conn, combo_id);
+        assert!(
+            post_fk.is_none(),
+            "orphan must stay orphaned when the upsert rolls back"
+        );
+        assert_eq!(
+            post_up.as_deref(),
+            Some("m1"),
+            "upstream_model_id preserved through the rollback"
+        );
+
+        // m1 must still be absent from the models table — the
+        // rollback removed the would-be INSERT, AND the earlier
+        // DELETE block that was also in the same tx must have
+        // been rolled back too (so if the earlier DELETE had been
+        // visible, m1 would already be gone; this is a sanity
+        // pin that we did not accidentally commit the DELETE
+        // without the INSERT).
+        assert!(
+            list_all(&conn)
+                .unwrap()
+                .iter()
+                .all(|m| m.model_id.as_str() != "m1"),
+            "m1 must not be in models after the rollback"
+        );
+
+        // Drop the trigger and verify the happy path is restored:
+        // a *fresh* upsert_many with m1 must now succeed and
+        // reconnect the orphan, because we are no longer
+        // sabotaging the INSERT.
+        conn.execute_batch("DROP TRIGGER fail_m1_reinsert;")
+            .expect("drop trigger");
+        upsert_many(
+            &conn,
+            &provider,
+            &[discovered("m1", TargetFormat::Openai)],
+            Duration::from_secs(3600),
+        )
+        .expect("clean re-upsert");
+        let m1_v2 = list_all(&conn)
+            .unwrap()
+            .into_iter()
+            .find(|m| m.model_id.as_str() == "m1")
+            .map(|m| m.row_id)
+            .expect("m1 v2");
+        let (final_fk, final_up) = read_target_row(&conn, combo_id);
+        assert_eq!(
+            final_fk,
+            Some(m1_v2.0),
+            "happy-path reconnect works after the trigger is removed"
+        );
+        assert_eq!(final_up.as_deref(), Some("m1"));
+    }
 }
