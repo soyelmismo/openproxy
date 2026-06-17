@@ -280,8 +280,9 @@ impl UpstreamClient {
         let host_key = HostKey::new(scheme, host.clone(), port);
 
         // Build the hyper::Request<B> for the legacy client.
+        let body_bytes = spec.body.clone();
         let body: Pin<Box<dyn http_body::Body<Data = Bytes, Error = Box<dyn std::error::Error + Send + Sync>> + Send + Unpin>> =
-            match spec.body.clone() {
+            match body_bytes.clone() {
                 Some(bytes) => Box::pin(Full::<Bytes>::new(bytes).map_err(|never| -> Box<dyn std::error::Error + Send + Sync> { match never {} })),
                 None => Box::pin(Empty::<Bytes>::new().map_err(|never| -> Box<dyn std::error::Error + Send + Sync> { match never {} })),
             };
@@ -294,6 +295,33 @@ impl UpstreamClient {
             })?;
             for (k, v) in spec.headers.iter() {
                 headers.append(k.clone(), v.clone());
+            }
+            // Set `Content-Length` when the body is a known-size
+            // buffer. hyper-util's legacy client does NOT auto-set
+            // `Content-Length` (verified against hyper 1.10
+            // `src/proto/h1/dispatch.rs` and
+            // `hyper-util 0.1.20/src/client/legacy/client.rs`:
+            // `set_content_length_if_missing` is only called from
+            // the h2 client, NOT the h1 client used by the legacy
+            // builder). With chunked encoding as the only fallback,
+            // strict upstreams (Google's `oauth2.googleapis.com`
+            // returns `411 Length Required`, OpenRouter returns
+            // `400 JSON parsing failed` on the chunked body)
+            // reject the request.
+            //
+            // ponytail: only emit when the caller did NOT set the
+            // header themselves (i.e. the adapter didn't ask for a
+            // specific value). For `UpstreamRequest::post_json` the
+            // caller sets `Content-Type` but not `Content-Length`,
+            // so we always add it. For `get` we skip it (no body).
+            if let Some(ref bytes) = body_bytes {
+                if !headers.contains_key(http::header::CONTENT_LENGTH) {
+                    if let Ok(v) =
+                        http::HeaderValue::from_str(&bytes.len().to_string())
+                    {
+                        headers.insert(http::header::CONTENT_LENGTH, v);
+                    }
+                }
             }
         }
         let request: Request<Pin<Box<dyn http_body::Body<Data = Bytes, Error = Box<dyn std::error::Error + Send + Sync>> + Send + Unpin>>> =
