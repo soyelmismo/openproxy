@@ -815,6 +815,176 @@ async fn e2e_discovery_and_delete_on_disappear() {
             raw_orphan, 1,
             "the orphan bookkeeping row is still in combo_targets"
         );
+
+        // Sanity-pinned Gate F1 bookkeeping: the orphan's
+        // `upstream_model_id` survives the model wipe. Without this
+        // string, the reconnect path in step 9.g has no key to
+        // match on, and Gate F1 cannot re-bind anything. Migration
+        // 000026 added the column and Gate B → Gate D's cascade
+        // preserves it (we never write to `upstream_model_id` from
+        // the cascade path; only `model_row_id` flips to NULL).
+        let orphan_upstream: Option<String> = w
+            .query_row(
+                "SELECT upstream_model_id FROM combo_targets WHERE id = ?1",
+                rusqlite::params![c_target_id.0],
+                |r| r.get(0),
+            )
+            .expect("read orphan upstream_model_id");
+        assert_eq!(
+            orphan_upstream.as_deref(),
+            Some("c"),
+            "upstream_model_id survives the Gate B → Gate D cascade; \
+             it is the lookup key Gate F1 needs to reconnect"
+        );
+    }
+
+    // ============================================================
+    // 9.g. AC4: Gate F1 reconnection.
+    //
+    // The next refresh brings `c` back into the catalog. SQLite
+    // will hand the new row a fresh autoincrement id — it never
+    // reuses — but the orphan target still carries
+    // `upstream_model_id = "c"`. Gate F1's reconnect path inside
+    // `models::upsert_many` must match on
+    // `(provider_id, upstream_model_id = "c")`, look up the new
+    // row id, and UPDATE the orphan's `model_row_id` to the new
+    // value. After the refresh, the combo target is routable
+    // again, the catalogue has `c` (with the new id), and the
+    // audit trail is preserved.
+    // ============================================================
+    mock.replace(vec!["a".into(), "b".into(), "c".into()]);
+    let r4 = call_refresh(&state, &provider, "sk-e2e-fake", &adapter)
+        .await
+        .expect("refresh against a catalog that re-introduces c");
+
+    // The refresh must report `c` as a *new* model_id — SQLite
+    // allocated it a fresh autoincrement id, so the
+    // (provider_id, model_id) pair is genuinely a new row from
+    // Gate B's perspective (the old `c` row was hard-deleted in
+    // step 9.e and the new one came back via INSERT).
+    assert!(
+        r4.new_model_ids.iter().any(|m| m.as_str() == "c"),
+        "Gate B must classify the re-introduced c as a new model; \
+         got {:?}",
+        r4.new_model_ids
+    );
+
+    {
+        let w = state.db_pool().writer();
+
+        // 9.g.i. The catalog has `c` again, with a fresh row id.
+        // We capture the new id so we can compare it to the
+        // previous (deleted) one — they must differ, otherwise the
+        // test is racing its own state in some unfortunate way.
+        let new_c_id: i64 = w
+            .query_row(
+                "SELECT id FROM models \
+                 WHERE provider_id = ?1 AND model_id = 'c' AND custom = 0",
+                [provider.as_str()],
+                |r| r.get(0),
+            )
+            .expect("read new c row id");
+        assert_ne!(
+            new_c_id, c_row_id.0,
+            "the re-inserted c row must have a fresh autoincrement id; \
+             got the same id as before the Gate B wipe — that \
+             means Gate F1's reconnect path can't be observed",
+        );
+
+        // 9.g.ii. Gate F1: the orphan target is re-bound to the
+        // new id, not just to *some* id.
+        let rebound_fk: Option<i64> = w
+            .query_row(
+                "SELECT model_row_id FROM combo_targets WHERE id = ?1",
+                rusqlite::params![c_target_id.0],
+                |r| r.get(0),
+            )
+            .expect("read rebound model_row_id");
+        assert_eq!(
+            rebound_fk,
+            Some(new_c_id),
+            "Gate F1: orphan target re-bound to the NEW c row id \
+             inside the same upsert_many tx"
+        );
+
+        // 9.g.iii. `upstream_model_id` is still "c" (it's the
+        // lookup key; Gate F1 only updates `model_row_id`).
+        let rebound_up: Option<String> = w
+            .query_row(
+                "SELECT upstream_model_id FROM combo_targets WHERE id = ?1",
+                rusqlite::params![c_target_id.0],
+                |r| r.get(0),
+            )
+            .expect("read rebound upstream_model_id");
+        assert_eq!(
+            rebound_up.as_deref(),
+            Some("c"),
+            "Gate F1: upstream_model_id is preserved across the reconnect"
+        );
+
+        // 9.g.iv. Routing — `combos::list_targets` (the routable
+        // set the pipeline uses) returns exactly ONE entry again.
+        // Before Gate F1 this was the broken state: the orphan
+        // target stayed in `combo_targets` (audit trail) but was
+        // invisible to the router. After Gate F1 the router sees
+        // the same `c` it saw on step 9.d, with the new id.
+        let routable = combos::list_targets(&w, combo_id)
+            .expect("list_targets after reconnect");
+        assert_eq!(
+            routable.len(),
+            1,
+            "Gate F1: the combo is routable again after c reappears"
+        );
+        assert_eq!(
+            routable[0].id, c_target_id,
+            "Gate F1: the routable target is the same bookkeeping id"
+        );
+        assert_eq!(
+            routable[0].model_row_id,
+            Some(ModelRowId(new_c_id)),
+            "Gate F1: the routable target carries the NEW c row id"
+        );
+
+        // 9.g.v. The bookkeeping view surfaces `c` again — this is
+        // the view the admin API serves and the one operators
+        // read.
+        let detailed =
+            combos::list_targets_with_model(&w, combo_id)
+                .expect("list_targets_with_model after reconnect");
+        assert_eq!(
+            detailed.len(),
+            1,
+            "Gate F1: exactly one target in the bookkeeping view"
+        );
+        assert_eq!(
+            detailed[0].id, c_target_id,
+            "Gate F1: the bookkeeping target is the same bookkeeping id"
+        );
+        assert_eq!(
+            detailed[0].model_id, "c",
+            "Gate F1: the bookkeeping target surfaces 'c' again"
+        );
+        assert_eq!(
+            detailed[0].model_row_id,
+            Some(ModelRowId(new_c_id)),
+            "Gate F1: the bookkeeping target carries the NEW c row id"
+        );
+
+        // 9.g.vi. The reconnect must NOT have created a *new*
+        // target row — the audit trail was a single row throughout,
+        // and the reconnect updated that row in place.
+        let target_count: i64 = w
+            .query_row(
+                "SELECT COUNT(*) FROM combo_targets WHERE combo_id = ?1",
+                [combo_id.0],
+                |r| r.get(0),
+            )
+            .expect("count combo targets");
+        assert_eq!(
+            target_count, 1,
+            "Gate F1: reconnect must update the existing target, \
+             not insert a new one"
+        );
     }
 
     // ============================================================
