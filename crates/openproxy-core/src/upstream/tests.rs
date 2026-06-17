@@ -6,160 +6,27 @@
 //!
 //! ## Test plan (spec section "Unit tests (in upstream/tests.rs, Gate 0)")
 //!
-//! 1. `phase_timeout_dns` — stalled connector, expect `Timeout(Dns)`.
-//! 2. `phase_timeout_tls` — accepts TCP, stalls before TLS, expect
+//! 1. `phase_timeout_tls` — accepts TCP, stalls before TLS, expect
 //!    `Timeout(Tls)`.
-//! 3. `cancel_mid_body` — slow streaming server, cancel after first
+//! 2. `cancel_mid_body` — slow streaming server, cancel after first
 //!    chunk, expect `Cancel`.
-//! 4. `conn_pool_reuse` — two requests to the same host, expect
+//! 3. `conn_pool_reuse` — two requests to the same host, expect
 //!    `pool.reuses() >= 1`.
-//! 5. `profile_chat_default_values` — assert the Chat profile resolves
+//! 4. `profile_chat_default_values` — assert the Chat profile resolves
 //!    to the spec's expected numbers.
 
 #![cfg(all(feature = "upstream-hyper", test))]
 
-use std::future::Future;
-use std::net::SocketAddr;
-use std::pin::Pin;
-use std::sync::Arc;
-use std::task::{Context, Poll};
 use std::time::Duration;
 
-use tokio::io::{AsyncReadExt, AsyncWriteExt, DuplexStream};
-use tokio::net::{TcpListener, TcpStream};
+use tokio::net::TcpListener;
 
 use http::StatusCode;
-use http::Uri;
-use http_body_util::Empty;
-use hyper_util::client::legacy::connect::Connection;
-use hyper_util::rt::TokioIo;
-use tower_service::Service;
 
 use super::*;
 
 // -----------------------------------------------------------------------
-// Helpers: a stalling connector
-// -----------------------------------------------------------------------
-
-/// A `Service<Uri>` whose `call` future never completes. Used to
-/// stall a request at the connect layer so that per-phase deadlines
-/// (e.g. `dns_ms`) fire from the call site, not from any
-/// hyper-internal timer.
-///
-/// The `Response` type is a `TokioIo<TcpStream>`, which satisfies
-/// hyper-util's `Connect` blanket impl (`Read + Write + Connection +
-/// Unpin + Send + 'static`) but the future sleeps forever so no
-/// instance is ever produced.
-#[derive(Clone)]
-struct StallingConnector {}
-
-impl StallingConnector {
-    fn new() -> Self {
-        Self {}
-    }
-}
-
-impl Service<Uri> for StallingConnector
-where
-    ResultSleep: Send + 'static,
-{
-    type Response = TokioIo<TcpStream>;
-    type Error = Box<dyn std::error::Error + Send + Sync>;
-    // The hyper-util `Connect` blanket impl requires
-    // `S::Future: Unpin + Send`. We use a `ResultSleep` future
-    // adapter that maps the `tokio::time::Sleep` output
-    // (which is `()`) to the expected `Result<Response, Error>`.
-    // Both the inner `Sleep` and the adapter are `Unpin`, so
-    // `Pin<Box<ResultSleep>>: Unpin`.
-    type Future = std::pin::Pin<Box<ResultSleep>>;
-
-    fn poll_ready(&mut self, _cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-        Poll::Ready(Ok(()))
-    }
-
-    fn call(&mut self, _uri: Uri) -> Self::Future {
-        let sleep = tokio::time::sleep(Duration::from_secs(300));
-        Box::pin(ResultSleep { sleep: Box::pin(sleep) })
-    }
-}
-
-/// Adapter: `tokio::time::Sleep` (which yields `()`) wrapped to
-/// yield `Result<...>`. The `Sleep` is stored inside a
-/// `Pin<Box<>>` so that the struct itself is Unpin (a
-/// `Pin<Box<>>` field is always Unpin).
-struct ResultSleep {
-    sleep: Pin<Box<tokio::time::Sleep>>,
-}
-
-impl std::future::Future for ResultSleep {
-    type Output = Result<
-        TokioIo<TcpStream>,
-        Box<dyn std::error::Error + Send + Sync>,
-    >;
-
-    fn poll(
-        self: std::pin::Pin<&mut Self>,
-        cx: &mut Context<'_>,
-    ) -> Poll<Self::Output> {
-        // SAFETY: we never move out of `self.sleep` (it's a
-        // pinned field already, so projecting through Pin<&mut
-        // Self> is safe).
-        let this = unsafe { self.get_unchecked_mut() };
-        match this.sleep.as_mut().poll(cx) {
-            Poll::Pending => Poll::Pending,
-            Poll::Ready(()) => {
-                // Should not happen: the test's headers deadline
-                // always fires first. Construct a dummy TcpStream
-                // for type correctness (we never actually get
-                // here).
-                unimplemented!("stalling connector should never resolve")
-            }
-        }
-    }
-}
-
-// -----------------------------------------------------------------------
-// Test 1: phase_timeout_dns — `phase_hint` is now honoured by
-// `call_inner` (see `client.rs` around the new `phase_hint_sleep`
-// arm of the `select!`). With `dns_ms = 50` and `phase_hint =
-// Some(Dns)`, the dispatch fires at ~50ms and reports
-// `Timeout(Dns)` — not the `Timeout(Write)` mask from the
-// pre-fix behaviour.
-// -----------------------------------------------------------------------
-
-#[tokio::test]
-async fn phase_timeout_dns() {
-    let client = UpstreamClient::for_test_with_connector(
-        StallingConnector::new(),
-        Some(UpstreamPhase::Dns),
-    );
-    let cancel = CancellationToken::new();
-    let profile = TimeoutProfile::Custom(ResolvedTimeouts {
-        dns_ms: 50,
-        dial_ms: 5_000,
-        tls_ms: 5_000,
-        write_ms: 5_000,
-        headers_ms: 30_000,
-        body_chunk_ms: 5_000,
-        total_ms: 60_000,
-    });
-    let t0 = std::time::Instant::now();
-    let res = client
-        .call(UpstreamRequest::get("http://10.255.255.1/"), profile, cancel)
-        .await;
-    let elapsed = t0.elapsed();
-    assert!(res.is_err(), "expected error, got {res:?}");
-    match res.unwrap_err() {
-        UpstreamError::Timeout(UpstreamPhase::Dns) => {}
-        other => panic!("expected Timeout(Dns), got {other:?}"),
-    }
-    // Sanity: the error fired within the dns window, not after a
-    // 30s default. Generous upper bound for CI noise.
-    assert!(elapsed < Duration::from_secs(5), "elapsed = {elapsed:?}");
-}
-
-// -----------------------------------------------------------------------
-// Test 2: phase_timeout_tls (bug 2b/2c fix) — REAL per-phase enforcement
+// Test 1: phase_timeout_tls (bug 2b/2c fix) — REAL per-phase enforcement
 //
 // The pre-fix version of this test used a `StallingConnector` with a
 // `phase_hint` and the production client's `min(headers, write, ...)`

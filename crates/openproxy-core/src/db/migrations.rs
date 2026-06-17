@@ -423,7 +423,7 @@ mod tests {
 
         // Now manually apply migration 20's SQL to simulate the migration.
         {
-            let mut conn = pool.writer();
+            let conn = pool.writer();
             conn.execute_batch(
                 "UPDATE providers SET format = 'gemini' WHERE id IN ('antigravity', 'antigravity-cli');",
             )
@@ -478,7 +478,7 @@ mod tests {
 
         // Apply migration 20 SQL.
         {
-            let mut conn = pool.writer();
+            let conn = pool.writer();
             conn.execute_batch(
                 "UPDATE providers SET format = 'gemini' WHERE id IN ('antigravity', 'antigravity-cli');",
             )

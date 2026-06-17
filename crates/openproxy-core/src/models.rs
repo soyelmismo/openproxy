@@ -3195,7 +3195,7 @@ mod tests {
         // m1 disappears.
         upsert_many(&conn, &provider, &[], Duration::from_secs(3600))
             .expect("upsert empty");
-        let (orphan_fk, orphan_up) = read_target_row(&conn, combo_id);
+        let (orphan_fk, _orphan_up) = read_target_row(&conn, combo_id);
         assert!(orphan_fk.is_none(), "orphan baseline");
 
         // Install a trigger that RAISES on the next INSERT for
