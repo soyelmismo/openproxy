@@ -1,0 +1,81 @@
+# .github/workflows/ci.yml — openproxy CI: typecheck del frontend TS,
+# build de tsc, y cargo check + test del workspace Rust.
+#
+# NO incluye playwright test (requiere el server en :8788 con core en :8787,
+# fuera de scope). Los tests e2e se corren localmente.
+
+name: CI
+
+on:
+  push:
+    branches: [master, main, 'hermes/**']
+  pull_request:
+    branches: [master, main, 'hermes/**']
+
+env:
+  CARGO_TERM_COLOR: always
+  PNPM_VERSION: 9
+
+jobs:
+  frontend-typecheck:
+    name: Frontend TypeScript typecheck + build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: ${{ env.PNPM_VERSION }}
+          run_install: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'pnpm'
+          cache-dependency-path: crates/openproxy-web/pnpm-lock.yaml
+
+      - name: Install dependencies
+        working-directory: crates/openproxy-web
+        run: pnpm install --frozen-lockfile
+
+      - name: Typecheck app
+        working-directory: crates/openproxy-web
+        run: pnpm typecheck
+
+      - name: Typecheck e2e tests
+        working-directory: crates/openproxy-web
+        run: pnpm typecheck:tests
+
+      - name: Build tsc
+        working-directory: crates/openproxy-web
+        run: pnpm build
+
+      - name: Verify critical emit
+        working-directory: crates/openproxy-web
+        run: |
+          test -f src/static/dist/app.js || (echo "ERROR: app.js not emitted" && exit 1)
+          test -f src/static/dist/lib/escape.js || (echo "ERROR: escape.js not emitted" && exit 1)
+          test -f src/static/dist/handlers/registry.js || (echo "ERROR: registry.js not emitted" && exit 1)
+          echo "Critical emit OK"
+
+  rust-check:
+    name: Rust cargo check + test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: 'crates'
+
+      - name: cargo check
+        run: cargo check --all-targets --workspace
+
+      - name: cargo test
+        run: cargo test --workspace

@@ -1,0 +1,11 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "rootDir": ".",
+    "outDir": "./tests/e2e/.tsbuild",
+    "noEmit": true,
+    "types": ["@playwright/test", "node"]
+  },
+  "include": ["tests/e2e/**/*", "playwright.config.cjs"],
+  "exclude": ["node_modules", "src/static/dist", "tests/e2e/.tsbuild"]
+}
