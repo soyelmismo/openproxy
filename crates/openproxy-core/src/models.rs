@@ -867,10 +867,12 @@ pub fn set_test_status(conn: &Connection, id: ModelRowId, status: i32) -> Result
     Ok(())
 }
 
-/// Hard-delete a model row. References in `combo_targets` are removed
-/// first to satisfy the FK constraint (the schema declares the FK with
-/// `ON DELETE CASCADE` for `provider_id` but the combo-target FK targets
-/// `model_row_id` and is not cascading — see the migrations).
+/// Hard-delete a model row. The `combo_targets.model_row_id` FK is
+/// declared with `ON DELETE SET NULL` (see migration 000025), so the
+/// `DELETE FROM models` below automatically nulls the FK on any
+/// `combo_targets` row that referenced this model. Those orphaned
+/// target rows are filtered from routing by `combos::list_targets`
+/// (Gate E3).
 ///
 /// A missing id is a silent no-op (0 rows affected), matching the
 /// idempotent style of the other admin deletions.
@@ -882,20 +884,10 @@ pub fn delete(conn: &Connection, id: ModelRowId) -> Result<u64> {
         source: Some(Box::new(e)),
     })?;
 
-    // combo_targets.model_row_id has no ON DELETE CASCADE in the
-    // current schema; clean those rows up first so the FK check on
-    // the model delete doesn't fire. We do it explicitly rather than
-    // relying on cascade so the SQL stays self-documenting at the
-    // call site.
-    tx.execute(
-        "DELETE FROM combo_targets WHERE model_row_id = ?1",
-        params![id.0],
-    )
-    .map_err(|e| CoreError::Database {
-        message: format!("delete combo_targets for model {}: {}", id.0, e),
-        source: Some(Box::new(e)),
-    })?;
-
+    // combo_targets.model_row_id has ON DELETE SET NULL (migration 000025);
+    // the target row is preserved with `model_row_id = NULL` and is
+    // filtered from routing by `combos::list_targets`. No pre-emptive
+    // cleanup needed.
     let removed = tx
         .execute("DELETE FROM models WHERE id = ?1", params![id.0])
         .map_err(|e| CoreError::Database {
@@ -2302,13 +2294,14 @@ mod tests {
     }
 
     #[test]
-    fn delete_removes_model_and_combo_target_references() {
+    fn delete_model_nulls_combo_target_model_row_id() {
         let conn = fresh_db();
         let provider = ProviderId::new("provA");
 
         // Seed two models; the test will delete one and verify the
-        // other survives plus a combo_target pointing at the deleted
-        // model is wiped out by the same transaction.
+        // other survives plus the combo_target pointing at the deleted
+        // model has its `model_row_id` nulled by the FK's SET NULL
+        // (no FK violation either way).
         upsert_many(
             &conn,
             &provider,
@@ -2323,12 +2316,18 @@ mod tests {
         // Seed a combo + a target pointing at m1. The schema requires
         // a combos table; mirror the FK columns we depend on with a
         // tiny DDL rather than re-running the full migration set.
+        // We declare `model_row_id` as nullable with `ON DELETE SET
+        // NULL` to mirror the production schema (migration 000025).
+        // We also include `sub_combo_id` because the spec's T
+        // assertion requires us to verify it stays NULL.
         conn.execute_batch(
             "CREATE TABLE combos (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, \
-                                   strategy TEXT NOT NULL, race_size INTEGER NOT NULL DEFAULT 1); \
+                                  strategy TEXT NOT NULL, race_size INTEGER NOT NULL DEFAULT 1); \
              CREATE TABLE combo_targets (id INTEGER PRIMARY KEY AUTOINCREMENT, \
                                           combo_id INTEGER NOT NULL, provider_id TEXT NOT NULL, \
-                                          account_id INTEGER, model_row_id INTEGER NOT NULL);",
+                                          account_id INTEGER, sub_combo_id INTEGER, \
+                                          model_row_id INTEGER \
+                                          REFERENCES models(id) ON DELETE SET NULL);",
         )
         .expect("combo tables");
         let combo_id: i64 = conn
@@ -2344,7 +2343,7 @@ mod tests {
         )
         .expect("insert target");
 
-        // Pre-condition: the target exists.
+        // Pre-condition: the target exists with model_row_id = m1.id.
         let pre_targets: i64 = conn
             .query_row(
                 "SELECT COUNT(*) FROM combo_targets WHERE model_row_id = ?1",
@@ -2358,18 +2357,24 @@ mod tests {
         let removed = delete(&conn, m1_id).expect("delete m1");
         assert_eq!(removed, 1, "one row removed");
 
-        // m1 is gone, m2 survives, and the combo_target was cleaned
-        // up in the same transaction (no FK violation either way).
+        // m1 is gone, m2 survives, and the combo_target was *preserved*
+        // (not wiped) with `model_row_id` nulled by the SET NULL clause.
         assert!(get_by_row_id(&conn, m1_id).unwrap().is_none(), "m1 gone");
         assert!(get_by_row_id(&conn, m2_id).unwrap().is_some(), "m2 alive");
-        let post_targets: i64 = conn
+        let (count_targets, count_with_null_fk): (i64, i64) = conn
             .query_row(
-                "SELECT COUNT(*) FROM combo_targets WHERE model_row_id = ?1",
-                [m1_id.0],
-                |r| r.get(0),
+                "SELECT COUNT(*), \
+                        COALESCE(SUM(CASE WHEN model_row_id IS NULL THEN 1 ELSE 0 END), 0) \
+                 FROM combo_targets WHERE combo_id = ?1",
+                [combo_id],
+                |r| Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?)),
             )
-            .expect("count targets post");
-        assert_eq!(post_targets, 0, "combo_target pointing at m1 was wiped");
+            .expect("count + null-fk count");
+        assert_eq!(count_targets, 1, "combo_target row preserved");
+        assert_eq!(
+            count_with_null_fk, 1,
+            "combo_target.model_row_id is NULL after delete"
+        );
 
         // Idempotent: a second delete returns 0, not an error.
         let removed_again = delete(&conn, m1_id).expect("delete again");
@@ -2708,4 +2713,5 @@ mod tests {
             "active=1 with past expires_at is still visible"
         );
     }
+
 }
