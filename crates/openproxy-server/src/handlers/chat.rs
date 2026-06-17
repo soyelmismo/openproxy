@@ -39,7 +39,6 @@ use openproxy_core::{
 use serde_json::json;
 use std::convert::Infallible;
 use std::time::Instant;
-use tokio::sync::watch;
 use tokio_stream::wrappers::ReceiverStream;
 
 use crate::{

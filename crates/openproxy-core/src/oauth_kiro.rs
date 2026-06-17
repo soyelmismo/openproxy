@@ -57,15 +57,6 @@ struct RegisterClientResponse {
     client_secret: String,
 }
 
-/// Device authorization request body.
-#[derive(Debug, Serialize)]
-struct DeviceAuthRequest {
-    #[serde(rename = "clientId")]
-    client_id: String,
-    #[serde(rename = "scope")]
-    scope: String,
-}
-
 /// Stored Kiro provider metadata in `accounts.oauth_provider_specific`.
 ///
 /// `client_id` / `client_secret` are the OIDC credentials returned

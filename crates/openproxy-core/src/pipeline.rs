@@ -414,10 +414,10 @@ impl Pipeline {
                     .min(eligible.len())
                     .min(self.config.racing.max_race_size as usize),
             };
-            // `to_run` is `mut` because the cooldown-fallback path
-            // below may swap in the unfiltered list if the persistent
-            // cooldown filter empties it (see the 5b comment).
-            let mut to_run: Vec<ComboTarget> = if matches!(combo.strategy, Strategy::Priority) {
+            // The cooldown-fallback path below reassigns this via
+            // shadowing (see the 5b comment), so the binding itself
+            // doesn't need `mut`.
+            let to_run: Vec<ComboTarget> = if matches!(combo.strategy, Strategy::Priority) {
                 eligible
             } else {
                 eligible.into_iter().take(race_size).collect()
@@ -1681,7 +1681,7 @@ impl Pipeline {
         // is ON; OFF means the dashboard's "Record" toggle is off
         // and the operator doesn't want per-phase noise. Throttled
         // per-call: each caller site picks which stages matter.
-        let mut emit_stage = |stage: &str, status: u16, err: Option<String>| {
+        let emit_stage = |stage: &str, status: u16, err: Option<String>| {
             if !self.is_recording() {
                 return;
             }
@@ -2546,37 +2546,13 @@ impl Pipeline {
         }
     }
 
-    /// Lowest-level helper: build a [`UsageInput`] and call
-    /// [`crate::cost::record`]. A write failure is logged via `tracing`
-    /// and silently swallowed: the request has already been serviced
-    /// and a missing usage row is preferable to a 500.
-    #[allow(clippy::too_many_arguments)]
-    fn record_attempt_raw(
-        &self,
-        req: &PipelineRequest,
-        combo: &Combo,
-        target: &ComboTarget,
-        model: Option<&Model>,
-        err: Option<&CoreError>,
-        connect_ms: Option<u64>,
-        ttft_ms: Option<u64>,
-        total_ms: u64,
-        status_code: u16,
-        attempt: u8,
-        race_size: u8,
-        trace_id: TraceId,
-    ) -> Result<()> {
-        self.record_attempt_raw_with_tokens(
-            req, combo, target, model, err,
-            connect_ms, ttft_ms, total_ms, status_code, attempt, race_size, trace_id,
-            None, None, None, None, None, None,
-        )
-    }
-
-    /// Same as [`Self::record_attempt_raw`] but lets the caller pass
-    /// the parsed token counts. Used by the success path of
-    /// `dispatch_upstream` so the usage row carries the real prompt /
-    /// completion token totals.
+    /// Build a [`UsageInput`] and call [`crate::cost::record`]. A
+    /// write failure is logged via `tracing` and silently swallowed:
+    /// the request has already been serviced and a missing usage row
+    /// is preferable to a 500. The `_with_tokens` suffix lets the
+    /// caller pass the parsed token counts (used by the success
+    /// path of `dispatch_upstream` so the usage row carries the real
+    /// prompt / completion token totals).
     #[allow(clippy::too_many_arguments)]
     fn record_attempt_raw_with_tokens(
         &self,
@@ -2668,35 +2644,6 @@ impl Pipeline {
         };
         crate::usage::broadcast_usage_input(&input);
     }
-}
-
-/// Return a copy of `req` whose `model` field has the proxy-level
-/// `<provider>/` prefix stripped off, if present. Used at the boundary
-/// between the public chat API (which returns `<provider>/<model_id>`)
-/// and the upstream call (which expects only the upstream model id).
-///
-/// The strip is intentionally conservative:
-/// - If `req.model` does not start with `<provider>/`, the value is
-///   returned unchanged. This keeps backward compatibility for
-///   clients that send the bare upstream id (or that target a
-///   different provider than the one we picked).
-/// - Only the first `/` is the separator; any subsequent `/` is
-///   treated as part of the upstream model id and is preserved
-///   (matches LiteLLM / OpenRouter conventions for nested model
-///   namespaces like `nex-agi/nex-n2-pro:free`).
-fn strip_provider_prefix(
-    req: &OpenAIRequest,
-    provider_id: &crate::ids::ProviderId,
-) -> OpenAIRequest {
-    let prefix = format!("{}/", provider_id.as_str());
-    let stripped = if let Some(rest) = req.model.strip_prefix(&prefix) {
-        rest.to_string()
-    } else {
-        req.model.clone()
-    };
-    let mut out = req.clone();
-    out.model = stripped;
-    out
 }
 
 /// Phase label for tracing/debug. Currently unused in production code
@@ -3313,6 +3260,25 @@ mod tests {
     // -------------------------------------------------------------------
     // strip_provider_prefix
     // -------------------------------------------------------------------
+
+    /// Strip a `<provider>/` prefix off `req.model` if it matches
+    /// `provider_id`. Otherwise return the request unchanged. Used
+    /// only by the tests below; production never calls this because
+    /// upstream targets receive the bare upstream id directly.
+    fn strip_provider_prefix(
+        req: &OpenAIRequest,
+        provider_id: &crate::ids::ProviderId,
+    ) -> OpenAIRequest {
+        let prefix = format!("{}/", provider_id.as_str());
+        let stripped = if let Some(rest) = req.model.strip_prefix(&prefix) {
+            rest.to_string()
+        } else {
+            req.model.clone()
+        };
+        let mut out = req.clone();
+        out.model = stripped;
+        out
+    }
 
     fn make_request_with_model(model: &str) -> OpenAIRequest {
         OpenAIRequest {

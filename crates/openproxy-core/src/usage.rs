@@ -23,7 +23,7 @@ use once_cell::sync::OnceCell;
 use rusqlite::{params, params_from_iter, Connection, OptionalExtension, ToSql};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::BTreeMap;
 use std::fmt::Write as _;
 use tokio::sync::broadcast;
 
@@ -839,7 +839,7 @@ pub fn recent(conn: &Connection, since_id: i64, limit: u32) -> Result<Vec<Recent
             let is_streaming: i64 = row.get(col_idx)?; col_idx += 1;
             let stream_complete: i64 = row.get(col_idx)?; col_idx += 1;
             let race_lost: i64 = row.get(col_idx)?; col_idx += 1;
-            let created_at: String = row.get(col_idx)?; col_idx += 1;
+            let created_at: String = row.get(col_idx)?;
 
             if !(0..=u16::MAX as i64).contains(&status_code) {
                 return Err(rusqlite::Error::FromSqlConversionFailure(
@@ -944,7 +944,7 @@ pub fn recent_desc(conn: &Connection, limit: u32) -> Result<Vec<RecentUsageRow>>
             let is_streaming: i64 = row.get(col_idx)?; col_idx += 1;
             let stream_complete: i64 = row.get(col_idx)?; col_idx += 1;
             let race_lost: i64 = row.get(col_idx)?; col_idx += 1;
-            let created_at: String = row.get(col_idx)?; col_idx += 1;
+            let created_at: String = row.get(col_idx)?;
 
             if !(0..=u16::MAX as i64).contains(&status_code) {
                 return Err(rusqlite::Error::FromSqlConversionFailure(
@@ -1057,7 +1057,7 @@ pub fn detail_by_id(conn: &Connection, id: i64) -> Result<Option<UsageDetailRow>
             let response_body_json: Option<serde_json::Value> = row.get::<_, Option<String>>(col_idx)?.and_then(|s| serde_json::from_str(&s).ok()); col_idx += 1;
             let request_headers: Option<String> = row.get(col_idx)?; col_idx += 1;
             let response_headers: Option<String> = row.get(col_idx)?; col_idx += 1;
-            let error_message: Option<String> = row.get(col_idx)?; col_idx += 1;
+            let error_message: Option<String> = row.get(col_idx)?;
 
             if !(0..=u16::MAX as i64).contains(&status_code) {
                 return Err(rusqlite::Error::FromSqlConversionFailure(

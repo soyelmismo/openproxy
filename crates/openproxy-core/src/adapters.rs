@@ -429,31 +429,11 @@ impl ProviderAdapter for OpenRouterAdapter {
 }
 
 #[derive(Debug, Deserialize)]
-struct OpenRouterModelsResponse {
-    #[serde(default)]
-    data: Vec<OpenRouterModelEntry>,
-}
-
-#[derive(Debug, Deserialize)]
 struct OpenRouterArchitecture {
     #[serde(default)]
     input_modalities: Vec<String>,
     #[serde(default)]
     output_modalities: Vec<String>,
-    #[serde(default)]
-    modality: Option<String>,
-    #[serde(default)]
-    tokenizer: Option<String>,
-    #[serde(default)]
-    instruct_type: Option<String>,
-}
-
-#[derive(Debug, Deserialize)]
-struct OpenRouterPricing {
-    #[serde(default)]
-    prompt: Option<String>,
-    #[serde(default)]
-    completion: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -462,8 +442,6 @@ struct OpenRouterTopProvider {
     context_length: Option<i64>,
     #[serde(default)]
     max_completion_tokens: Option<i64>,
-    #[serde(default)]
-    is_moderated: Option<bool>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -480,13 +458,9 @@ struct OpenRouterModelEntry {
     #[serde(default)]
     architecture: Option<OpenRouterArchitecture>,
     #[serde(default)]
-    pricing: Option<OpenRouterPricing>,
-    #[serde(default)]
     top_provider: Option<OpenRouterTopProvider>,
     #[serde(default)]
     supported_parameters: Option<Vec<String>>,
-    #[serde(default)]
-    description: Option<String>,
 }
 
 /// Build a [`crate::capabilities::ModelCapabilities`] from an OpenRouter
@@ -1123,7 +1097,6 @@ struct OllamaTagsResponse {
 #[derive(Debug, Deserialize)]
 struct OllamaTagEntry {
     name: Option<String>,
-    model: Option<String>,
     #[serde(default)]
     display_name: Option<String>,
 }
