@@ -13,7 +13,7 @@ authors.workspace = true
 # Call sites that still use reqwest are NOT touched in this gate; the
 # feature flag is only a compile-time switch for the new module.
 default = ["upstream-hyper"]
-upstream-hyper = ["dep:hyper", "dep:hyper-util", "dep:http", "dep:http-body", "dep:http-body-util", "dep:tower", "dep:tower-service", "dep:futures-util"]
+upstream-hyper = ["dep:hyper", "dep:hyper-util", "dep:http", "dep:http-body", "dep:http-body-util", "dep:tower", "dep:tower-service", "dep:futures-util", "dep:tokio-rustls", "dep:rustls", "dep:rustls-pki-types", "dep:webpki-roots"]
 # Stub gate for callers that want to disable just this client (e.g.
 # downstream consumers building with `default-features = false`).
 upstream-stub = []
@@ -67,6 +67,15 @@ bytes = "1"
 tower = { version = "0.5", default-features = false, features = ["util"], optional = true }
 tower-service = { version = "0.3", optional = true }
 futures-util = { version = "0.3", default-features = false, features = ["std"], optional = true }
+# TLS for the upstream/ connector. Only the production HTTPS path
+# uses these (HTTP uses a plain `tokio::net::TcpStream`). The
+# versions track the `tokio-rustls 0.26 / rustls 0.23` pair that
+# reqwest already pulls in transitively; pinning them as direct
+# deps here keeps the feature flag self-contained.
+tokio-rustls = { version = "0.26", optional = true }
+rustls = { version = "0.23", default-features = false, features = ["logging", "std", "tls12"], optional = true }
+rustls-pki-types = { version = "1", optional = true }
+webpki-roots = { version = "0.26", optional = true }
 
 [dev-dependencies]
 # Re-enable `tokio`'s `test-util` feature ONLY for the test

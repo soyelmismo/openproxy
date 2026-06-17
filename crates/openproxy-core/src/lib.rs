@@ -47,3 +47,26 @@ pub mod upstream;
 
 pub use config::AppConfig;
 pub use error::{CoreError, ErrorContext, Result};
+
+/// Install the rustls process-level crypto provider.
+///
+/// Mandatory since rustls 0.23. Without this, the first TLS
+/// handshake to an upstream HTTPS endpoint panics with
+/// `Could not automatically determine the process-level
+/// CryptoProvider`.
+///
+/// `install_default` is idempotent (it populates a
+/// `process-level OnceLock`); a second call is a no-op. The
+/// server binary calls this at the very top of `main` so
+/// the install is in place before any tokio worker
+/// processes an inbound request.
+///
+/// ponytail: choosing `ring` over `aws-lc-rs` because it's
+/// pure-Rust, smaller in binary size, and has no native
+/// build step. `aws-lc-rs` is also pulled in transitively
+/// by `reqwest` (for the OAuth admin HTTPS calls) but
+/// rustls only accepts a single provider per process.
+#[cfg(feature = "upstream-hyper")]
+pub fn install_rustls_crypto_provider() {
+    let _ = rustls::crypto::ring::default_provider().install_default();
+}

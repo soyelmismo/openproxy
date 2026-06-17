@@ -7,6 +7,10 @@
 //! - `*    /v1/admin/*`  (CRUD for providers, accounts, combos, models, usage)
 //!
 //! Startup sequence:
+//! 0. Install a process-wide rustls crypto provider (mandatory since
+//!    rustls 0.23 — without this, the first TLS handshake to an
+//!    upstream HTTPS endpoint panics with `Could not automatically
+//!    determine the process-level CryptoProvider`).
 //! 1. Load config from `OPENPROXY_CONFIG` (defaults to `./config.toml`).
 //! 2. Init `tracing`.
 //! 3. Build the shared [`AppState`] (DB pool, master key, adapters, HTTP client).
@@ -18,6 +22,18 @@ use std::env;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    // 0. Install rustls crypto provider. `ring` is pure-Rust and
+    // transitively available; `aws-lc-rs` is also pulled in by
+    // `reqwest`. `install_default` is idempotent — a second call in
+    // the same process is a no-op, so it's safe even if a future
+    // test harness re-instruments startup.
+    //
+    // ponytail: this is a single line and mandatory since
+    // rustls 0.23; without it, the first TLS handshake to an
+    // upstream HTTPS endpoint panics with `Could not
+    // automatically determine the process-level CryptoProvider`.
+    openproxy_core::install_rustls_crypto_provider();
+
     // 1. Load config
     let config_path = env::var("OPENPROXY_CONFIG").unwrap_or_else(|_| "config.toml".to_string());
     let config = AppConfig::load_or_default(&config_path)?;

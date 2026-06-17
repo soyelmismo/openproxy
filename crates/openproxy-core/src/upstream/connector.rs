@@ -32,14 +32,24 @@
 //!
 //! - **Total** is the outermost ceiling.
 //!
-//! ## TLS in Gate 0
+//! ## TLS
 //!
-//! The TLS step is a structural placeholder that returns success for
-//! the production path. The real TLS integration (via
-//! `tokio_rustls::TlsConnector`) is a Gate-1 follow-up; the per-phase
-//! timeout infrastructure is fully wired up so the Gate 1 integration
-//! is a one-line change inside the `tls_handshake` function below. No
-//! API surface changes.
+//! The production HTTPS path upgrades the `TcpStream` to TLS via
+//! `tokio_rustls::TlsConnector::connect`, bounded by `timeouts.tls`.
+//! The per-phase timeout infrastructure is fully wired up; this module
+//! is the only place TLS is configured. The HTTP path stays plain
+//! `TcpStream` and skips this step entirely. The `PhasedConnection`
+//! enum below holds either shape; both satisfy hyper-util's
+//! `Connect` blanket impl (`Read + Write + Connection + Unpin + Send`).
+//!
+//! Historical note: an earlier revision of this module used a
+//! no-op `tls_handshake` placeholder that returned `Ok(())` for
+//! HTTPS URIs, with a `// TODO (gate 1+)` comment. The symptom was
+//! that hyper wrote a plaintext `HTTP/1.1` request line on top of
+//! the unencrypted TCP socket, and the upstream (e.g. NVIDIA NIM)
+//! replied with `400 The plain HTTP request was sent to HTTPS port`.
+//! Every HTTPS upstream failed. The fix is the real
+//! `tokio-rustls` integration below.
 //!
 //! ## Why a custom connector (not wrap-the-future)
 //!
@@ -56,6 +66,7 @@ use std::future::Future;
 use std::io;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::pin::Pin;
+use std::sync::Arc;
 use std::task::{Context, Poll};
 use std::time::Duration;
 
@@ -63,15 +74,93 @@ use http::Uri;
 use hyper::rt::{Read, Write};
 use hyper_util::client::legacy::connect::Connection as HyperConnection;
 use hyper_util::rt::TokioIo;
+use rustls::pki_types::ServerName;
 use tokio::net::TcpStream;
+use tokio_rustls::{client::TlsStream as ClientTlsStream, TlsConnector};
 use tower_service::Service;
 
 use super::phases::UpstreamPhase;
 
-/// The connection type returned by the connector. Always
-/// `TokioIo<TcpStream>` in this Gate 0 (TLS is a Gate-1 follow-up that
-/// wraps this in a `TokioIo<tokio_rustls::client::TlsStream<TcpStream>>`).
-pub type PhasedConnection = TokioIo<TcpStream>;
+/// The connection type returned by the connector. Plain HTTP keeps a
+/// `TokioIo<TcpStream>`; HTTPS wraps it in `TokioIo<ClientTlsStream<TcpStream>>`.
+/// Both variants satisfy hyper-util's `Connect` blanket impl bounds
+/// (`Read + Write + Connection + Unpin + Send + 'static`).
+pub enum PhasedConnection {
+    Plain(TokioIo<TcpStream>),
+    Tls(TokioIo<ClientTlsStream<TcpStream>>),
+}
+
+impl Read for PhasedConnection {
+    fn poll_read(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: hyper::rt::ReadBufCursor<'_>,
+    ) -> Poll<Result<(), io::Error>> {
+        match &mut *self {
+            PhasedConnection::Plain(io) => Pin::new(io).poll_read(cx, buf),
+            PhasedConnection::Tls(io) => Pin::new(io).poll_read(cx, buf),
+        }
+    }
+}
+
+impl Write for PhasedConnection {
+    fn poll_write(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &[u8],
+    ) -> Poll<Result<usize, io::Error>> {
+        match &mut *self {
+            PhasedConnection::Plain(io) => Pin::new(io).poll_write(cx, buf),
+            PhasedConnection::Tls(io) => Pin::new(io).poll_write(cx, buf),
+        }
+    }
+
+    fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), io::Error>> {
+        match &mut *self {
+            PhasedConnection::Plain(io) => Pin::new(io).poll_flush(cx),
+            PhasedConnection::Tls(io) => Pin::new(io).poll_flush(cx),
+        }
+    }
+
+    fn poll_shutdown(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+    ) -> Poll<Result<(), io::Error>> {
+        match &mut *self {
+            PhasedConnection::Plain(io) => Pin::new(io).poll_shutdown(cx),
+            PhasedConnection::Tls(io) => Pin::new(io).poll_shutdown(cx),
+        }
+    }
+}
+
+/// HTTP/1.1 connection metadata stub. hyper-util's `Connection` trait
+/// carries the HTTP protocol version; for our purposes both variants
+/// are HTTP/1.1, so we return `None` for both (the legacy client
+/// doesn't rely on this).
+impl HyperConnection for PhasedConnection {
+    fn connected(&self) -> hyper_util::client::legacy::connect::Connected {
+        hyper_util::client::legacy::connect::Connected::new()
+    }
+}
+
+/// A process-wide `TlsConnector` configured with webpki roots. The
+/// rustls `ClientConfig` is cheap to clone (internally `Arc`) and is
+/// shared across every HTTPS request. Loading webpki roots is a few
+/// KB and happens once at first use.
+fn tls_connector() -> TlsConnector {
+    static CONFIG: std::sync::OnceLock<Arc<rustls::ClientConfig>> =
+        std::sync::OnceLock::new();
+    let cfg = CONFIG.get_or_init(|| {
+        let mut roots = rustls::RootCertStore::empty();
+        roots.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
+        Arc::new(
+            rustls::ClientConfig::builder()
+                .with_root_certificates(roots)
+                .with_no_client_auth(),
+        )
+    });
+    TlsConnector::from(cfg.clone())
+}
 
 /// Per-phase timeouts carried by a `PhasedConnector`. All values are
 /// "max duration" for the corresponding phase; the connector enforces
@@ -354,7 +443,7 @@ async fn run_phased_connect(
             }
         }
     }
-    let mut stream = match stream {
+    let stream = match stream {
         Some(s) => s,
         None => {
             return Err(Box::new(PhasedConnectorError {
@@ -371,12 +460,30 @@ async fn run_phased_connect(
     let _ = stream.set_nodelay(true);
 
     // ---- Phase 3: TLS ---------------------------------------------------
-    // Gate 0: structural placeholder. The real implementation plugs
-    // `tokio_rustls::client::TlsConnector::connect` in here, bounded
-    // by `timeouts.tls`.
+    // Real `tokio-rustls` handshake. The connector is process-wide
+    // (rustls `ClientConfig` is `Arc`-backed). The handshake is
+    // bounded by `timeouts.tls`; a stalled or rejected TLS
+    // handshake surfaces as `Timeout(Tls)` or `Io(Tls)`.
     if is_https {
-        match tokio::time::timeout(timeouts.tls, tls_handshake(&mut stream)).await {
-            Ok(Ok(())) => {}
+        let server_name = match ServerName::try_from(host.clone()) {
+            Ok(n) => n,
+            Err(e) => {
+                return Err(Box::new(PhasedConnectorError {
+                    phase: UpstreamPhase::Tls,
+                    kind: PhasedErrorKind::InvalidUri(format!("bad SNI host: {e}")),
+                }));
+            }
+        };
+        let connector = tls_connector();
+        match tokio::time::timeout(
+            timeouts.tls,
+            connector.connect(server_name, stream),
+        )
+        .await
+        {
+            Ok(Ok(tls_stream)) => {
+                return Ok(PhasedConnection::Tls(TokioIo::new(tls_stream)));
+            }
             Ok(Err(e)) => {
                 return Err(Box::new(PhasedConnectorError {
                     phase: UpstreamPhase::Tls,
@@ -392,7 +499,7 @@ async fn run_phased_connect(
         }
     }
 
-    Ok(TokioIo::new(stream))
+    Ok(PhasedConnection::Plain(TokioIo::new(stream)))
 }
 
 /// `host:port` -> (host, port) with sensible defaults. Returns an
@@ -436,17 +543,6 @@ async fn resolve_host(host: &str, port: u16) -> io::Result<Vec<SocketAddr>> {
     Ok(addrs.collect())
 }
 
-/// Gate-0 placeholder for the TLS handshake. The real implementation
-/// will plug `tokio_rustls::client::TlsConnector::connect` here; for
-/// now we just return success so the HTTP path keeps working and the
-/// per-phase timeout machinery is testable end-to-end via the unit
-/// tests.
-async fn tls_handshake(_stream: &mut TcpStream) -> io::Result<()> {
-    // TODO (gate 1+): plug tokio_rustls in here. The signature is
-    // compatible: we receive a `&mut TcpStream` and return `io::Result<()>`.
-    Ok(())
-}
-
 // ---------------------------------------------------------------------
 // Downcast helper used by `client::call_inner` to recover the phase
 // from a boxed connector error.
@@ -469,13 +565,18 @@ pub fn phased_phase(err: &(dyn std::error::Error + 'static)) -> Option<UpstreamP
     None
 }
 
-// Silence the unused-import warning for `Read`/`Write`/`HyperConnection`
-// in builds where the `Service` impl is not exercised; they're needed
-// to satisfy the `Connect` blanket impl's bounds. We assert at
-// compile time that the `TokioIo<TcpStream>` response type is a valid
-// hyper-util connect response.
+// Compile-time pin: the production `PhasedConnection` (both
+// variants) must satisfy the hyper-util `Connect` blanket impl's
+// bounds. The blanket impl lives in
+// `hyper_util::client::legacy::connect` and is applied to any
+// `S::Response` that implements `Read + Write + Connection +
+// Unpin + Send + 'static`. We hand-implement `Connection` for
+// `PhasedConnection` above; the assertions below make the
+// contract statically checkable from the editor (and from CI via
+// `cargo check`).
 #[allow(dead_code)]
 fn _assert_impl_bounds() {
     fn _assert<R: Read + Write + HyperConnection + Unpin + Send + 'static>() {}
+    _assert::<PhasedConnection>();
     _assert::<TokioIo<TcpStream>>();
 }
