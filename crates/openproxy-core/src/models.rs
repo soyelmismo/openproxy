@@ -3283,4 +3283,173 @@ mod tests {
         );
         assert_eq!(final_up.as_deref(), Some("m1"));
     }
+
+    // -------------------------------------------------------------------
+    // Gate E4 — second alignment test: `delete_model_sets_combo_target_model_row_id_to_null`
+    //
+    // Companion to `delete_model_nulls_combo_target_model_row_id` above.
+    // The previous test pins the *single-target* invariant: deleting a
+    // model nulls `combo_targets.model_row_id` for the one row that
+    // pointed at it. This one pins the *isolation* invariant: deleting
+    // model M nulls the FK on the target T that pointed at M, while
+    // leaving the other target T2 (pointing at a different, surviving
+    // model M2) completely untouched. It also verifies the row is
+    // preserved (not hard-deleted) — same SET NULL semantic the
+    // production schema (migration 000025) installs.
+    #[test]
+    fn delete_model_sets_combo_target_model_row_id_to_null() {
+        let conn = fresh_db();
+        let provider = ProviderId::new("provA");
+
+        // Set up: providers (already seeded by fresh_db), models M
+        // and M2, combo C, and two combo_targets T and T2 — T points
+        // at M, T2 points at M2. Only T should be affected by
+        // `delete(&conn, M.id)`.
+        upsert_many(
+            &conn,
+            &provider,
+            &[
+                discovered("m-to-delete", TargetFormat::Openai),
+                discovered("m-keep", TargetFormat::Anthropic),
+            ],
+            Duration::from_secs(3600),
+        )
+        .expect("seed");
+        let all = list_all(&conn).unwrap();
+        let m_id = all
+            .iter()
+            .find(|m| m.model_id.as_str() == "m-to-delete")
+            .unwrap()
+            .row_id;
+        let m2_id = all
+            .iter()
+            .find(|m| m.model_id.as_str() == "m-keep")
+            .unwrap()
+            .row_id;
+
+        // Mirror the production schema: combo_targets.model_row_id
+        // is nullable with `ON DELETE SET NULL` (migration 000025).
+        // `sub_combo_id` is also nullable, mirroring the real schema
+        // — the spec's step 4 asks us to assert it stays NULL.
+        conn.execute_batch(
+            "CREATE TABLE combos (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, \
+                                  strategy TEXT NOT NULL, race_size INTEGER NOT NULL DEFAULT 1); \
+             CREATE TABLE combo_targets (id INTEGER PRIMARY KEY AUTOINCREMENT, \
+                                          combo_id INTEGER NOT NULL, provider_id TEXT NOT NULL, \
+                                          account_id INTEGER, sub_combo_id INTEGER, \
+                                          model_row_id INTEGER \
+                                          REFERENCES models(id) ON DELETE SET NULL);",
+        )
+        .expect("combo tables");
+        let combo_id: i64 = conn
+            .execute(
+                "INSERT INTO combos(name, strategy) VALUES ('c', 'priority')",
+                [],
+            )
+            .expect("insert combo") as i64;
+        // T points at M, sub_combo_id is NULL.
+        conn.execute(
+            "INSERT INTO combo_targets(combo_id, provider_id, model_row_id) \
+             VALUES (?1, ?2, ?3)",
+            rusqlite::params![combo_id, "provA", m_id.0],
+        )
+        .expect("insert T");
+        // T2 points at M2, sub_combo_id is NULL — must survive untouched.
+        conn.execute(
+            "INSERT INTO combo_targets(combo_id, provider_id, model_row_id) \
+             VALUES (?1, ?2, ?3)",
+            rusqlite::params![combo_id, "provA", m2_id.0],
+        )
+        .expect("insert T2");
+
+        // Pre-conditions.
+        assert_eq!(
+            count_targets_for(&conn, combo_id),
+            2,
+            "two targets pre-delete"
+        );
+        let pre_t: Option<i64> = conn
+            .query_row(
+                "SELECT model_row_id FROM combo_targets WHERE combo_id = ?1 \
+                 AND provider_id = ?2 AND model_row_id = ?3",
+                rusqlite::params![combo_id, "provA", m_id.0],
+                |r| r.get(0),
+            )
+            .expect("query T");
+        assert_eq!(pre_t, Some(m_id.0), "T is the row pointing at M pre-delete");
+        let pre_t2: Option<i64> = conn
+            .query_row(
+                "SELECT model_row_id FROM combo_targets WHERE combo_id = ?1 \
+                 AND provider_id = ?2 AND model_row_id = ?3",
+                rusqlite::params![combo_id, "provA", m2_id.0],
+                |r| r.get(0),
+            )
+            .expect("query T2");
+        assert_eq!(
+            pre_t2,
+            Some(m2_id.0),
+            "T2 is the row pointing at M2 pre-delete"
+        );
+
+        // Action: delete M.
+        let removed = delete(&conn, m_id).expect("delete M");
+        assert_eq!(removed, 1, "one row removed from models");
+
+        // (3) M is gone.
+        assert!(
+            get_by_row_id(&conn, m_id).unwrap().is_none(),
+            "M is gone from models"
+        );
+        // M2 survives.
+        assert!(
+            get_by_row_id(&conn, m2_id).unwrap().is_some(),
+            "M2 still present"
+        );
+
+        // (4) T is preserved with model_row_id = NULL and
+        // sub_combo_id = NULL.
+        let t_state: (Option<i64>, Option<i64>) = conn
+            .query_row(
+                "SELECT model_row_id, sub_combo_id FROM combo_targets \
+                 WHERE combo_id = ?1 AND provider_id = ?2 \
+                 ORDER BY id",
+                rusqlite::params![combo_id, "provA"],
+                |r| Ok((r.get::<_, Option<i64>>(0)?, r.get::<_, Option<i64>>(1)?)),
+            )
+            .expect("query orphan state");
+        // The first row (lowest id) is T, the original one pointing at M.
+        assert_eq!(t_state.0, None, "T.model_row_id is NULL after delete");
+        assert_eq!(t_state.1, None, "T.sub_combo_id is NULL");
+
+        // (5) T2 is unchanged.
+        let t2_post: Option<i64> = conn
+            .query_row(
+                "SELECT model_row_id FROM combo_targets WHERE combo_id = ?1 \
+                 AND provider_id = ?2 AND model_row_id = ?3",
+                rusqlite::params![combo_id, "provA", m2_id.0],
+                |r| r.get(0),
+            )
+            .expect("query T2 post");
+        assert_eq!(
+            t2_post,
+            Some(m2_id.0),
+            "T2 still points at M2 (not touched by M's delete)"
+        );
+        // Both rows still present in combo_targets (no row was hard-deleted).
+        assert_eq!(
+            count_targets_for(&conn, combo_id),
+            2,
+            "both target rows preserved (T becomes orphan, T2 intact)"
+        );
+    }
+
+    /// Local helper used by `delete_model_sets_combo_target_model_row_id_to_null`.
+    fn count_targets_for(conn: &Connection, combo_id: i64) -> i64 {
+        conn.query_row(
+            "SELECT COUNT(*) FROM combo_targets WHERE combo_id = ?1",
+            [combo_id],
+            |r| r.get(0),
+        )
+        .expect("count targets")
+    }
 }
