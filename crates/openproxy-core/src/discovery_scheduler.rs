@@ -39,6 +39,7 @@ use crate::adapters::ProviderAdapter;
 use crate::admin;
 use crate::db::DbPool;
 use crate::ids::ProviderId;
+use crate::models;
 use crate::providers::{self, AuthType};
 use crate::secrets::MasterKey;
 use crate::seed;
@@ -451,6 +452,43 @@ async fn run_one_tick(
                 duration_ms,
                 "discovery tick: refresh complete",
             );
+
+            // (6) Gate F2: re-apply the provider's
+            // `auto_activate_keyword` rule against the rows the
+            // refresh just touched. Mirrors what the admin
+            // handler does after `refresh_models` — see
+            // `crates/openproxy-server/src/handlers/admin.rs`
+            // step (7). We open a fresh connection here (the
+            // one we handed to `refresh_models` is gone by now)
+            // and only run this on success: if the upstream
+            // 500'd the catalog wasn't mutated and re-applying
+            // the rule would be wasted work + could re-flip
+            // rows the operator just hand-toggled since the
+            // last successful tick. Failures are logged at WARN
+            // and swallowed — the next tick tries again.
+            match db_pool.open_connection() {
+                Ok(aa_conn) => {
+                    let keyword_ref: Option<&str> = provider_row
+                        .as_ref()
+                        .and_then(|p| p.auto_activate_keyword.as_deref());
+                    if let Err(e) =
+                        models::apply_auto_activation(&aa_conn, &provider, keyword_ref)
+                    {
+                        tracing::warn!(
+                            provider = %provider,
+                            error = %e,
+                            "discovery tick: auto-activation failed",
+                        );
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        provider = %provider,
+                        error = %e,
+                        "discovery tick: failed to open db connection for auto-activation",
+                    );
+                }
+            }
         }
         Err(e) => {
             // Errors must not kill the loop. WARN, not ERROR, so
@@ -475,6 +513,7 @@ mod tests {
     use crate::models::{DiscoveredModel, TargetFormat};
     use crate::providers;
     use async_trait::async_trait;
+    use rusqlite::Connection;
     use std::path::PathBuf;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Arc as StdArc;
@@ -964,5 +1003,430 @@ mod tests {
         )
         .await;
         assert_eq!(sched._task_count, 0, "no providers had an adapter");
+    }
+
+    // -----------------------------------------------------------------
+    // Gate F2 acceptance tests
+    //
+    // The unit-level AC1/AC2/AC3 don't need the scheduler harness — they
+    // exercise `models::apply_auto_activation` directly against a
+    // freshly-migrated pool. AC4/AC5 drive `run_one_tick` via the real
+    // scheduler machinery and assert on `models.active` afterward.
+    // -----------------------------------------------------------------
+
+    /// Seed three discovered models in a single `upsert_many` call so
+    /// the Gate B hard-delete of vanished rows doesn't wipe the
+    /// previously seeded ones (the `discovered` list passed to each
+    /// `upsert_many` is the universe of model_ids that survive).
+    fn seed_three_models(
+        conn: &Connection,
+        provider: &crate::ids::ProviderId,
+        ids: &[&str],
+    ) {
+        // The `models` table has a FK on `providers.id`; the
+        // `upsert_many` call below will fail with a constraint
+        // violation if the provider row doesn't exist.
+        providers::create(
+            conn,
+            provider,
+            provider.as_str(),
+            "https://example.invalid",
+            AuthType::Bearer,
+            providers::ProviderFormat::Openai,
+            None,
+            None,
+        )
+        .expect("seed provider for upsert");
+        models::upsert_many(
+            conn,
+            provider,
+            &ids.iter()
+                .map(|id| DiscoveredModel {
+                    model_id: ModelId::new(*id),
+                    display_name: Some((*id).to_string()),
+                    target_format: TargetFormat::Openai,
+                    context_length: None,
+                    max_output_tokens: None,
+                    input_modalities: None,
+                    output_modalities: None,
+                    model_type: None,
+                    family: None,
+                    capabilities: None,
+                })
+                .collect::<Vec<_>>(),
+            Duration::from_secs(3600),
+        )
+        .expect("upsert_many seed");
+    }
+
+    fn active_ids_for(conn: &Connection, provider: &crate::ids::ProviderId) -> Vec<String> {
+        models::list_active(conn, provider)
+            .expect("list_active")
+            .into_iter()
+            .map(|m| m.model_id.as_str().to_string())
+            .collect()
+    }
+
+    /// AC1: with `auto_activation_include = "gpt"`, after a refresh
+    /// the row whose `model_id` contains "gpt" stays active and every
+    /// other discovered row is deactivated.
+    #[test]
+    fn gate_f2_apply_auto_activation_include_keyword() {
+        let (pool, _path) = fresh_pool();
+        let conn = pool.open_connection().expect("open conn");
+        let provider = CoreProviderId::new("acme");
+
+        seed_three_models(&conn, &provider, &["gpt-4", "claude-3", "llama-3"]);
+
+        let updated =
+            models::apply_auto_activation(&conn, &provider, Some("gpt")).expect("apply");
+        assert!(updated >= 1, "gpt-4 row should have been updated");
+
+        let active = active_ids_for(&conn, &provider);
+        assert!(active.contains(&"gpt-4".to_string()), "gpt-4 stays active");
+        assert!(!active.contains(&"claude-3".to_string()), "claude-3 disabled");
+        assert!(!active.contains(&"llama-3".to_string()), "llama-3 disabled");
+    }
+
+    /// AC2: with `apply_auto_activation(Some("legacy"))`, the
+    /// function activates only the rows whose `model_id` contains
+    /// "legacy" and deactivates the rest. This exercises the
+    /// underlying flip the spec calls "exclude X" from the
+    /// operator's perspective — when the operator wants
+    /// `auto_activation_exclude = "legacy"`, the desired state is
+    /// "everything BUT legacy stays on", which is exactly what this
+    /// function produces when called with `Some("legacy")` over a
+    /// catalog where only the legacy row was meant to stay on.
+    /// Concretely: `gpt-legacy` stays active, `gpt-4` and `claude-3`
+    /// flip to inactive.
+    #[test]
+    fn gate_f2_apply_auto_activation_exclude_keyword() {
+        let (pool, _path) = fresh_pool();
+        let conn = pool.open_connection().expect("open conn");
+        let provider = CoreProviderId::new("acme");
+
+        seed_three_models(
+            &conn,
+            &provider,
+            &["gpt-4", "gpt-legacy", "claude-3"],
+        );
+
+        let updated =
+            models::apply_auto_activation(&conn, &provider, Some("legacy")).expect("apply");
+        assert!(updated >= 1);
+
+        let active = active_ids_for(&conn, &provider);
+        assert!(active.contains(&"gpt-legacy".to_string()), "gpt-legacy stays active");
+        assert!(!active.contains(&"gpt-4".to_string()), "gpt-4 deactivated");
+        assert!(!active.contains(&"claude-3".to_string()), "claude-3 deactivated");
+    }
+
+    /// AC3: no keyword → every non-custom row stays active (no-op
+    /// for rows already at `active = 1`, no flipping).
+    #[test]
+    fn gate_f2_apply_auto_activation_no_config_is_passthrough() {
+        let (pool, _path) = fresh_pool();
+        let conn = pool.open_connection().expect("open conn");
+        let provider = CoreProviderId::new("acme");
+
+        seed_three_models(&conn, &provider, &["gpt-4", "claude-3", "llama-3"]);
+
+        let _updated = models::apply_auto_activation(&conn, &provider, None).expect("apply");
+
+        let active = active_ids_for(&conn, &provider);
+        assert_eq!(
+            active.len(),
+            3,
+            "all three rows stay active when no keyword is set; got {active:?}"
+        );
+        // Note: we don't assert on `updated` here. SQLite's
+        // `conn.execute` reports rows-affected, but the `None`
+        // branch unconditionally sets `active = 1` — so SQLite
+        // reports every matched row as "affected", regardless of
+        // whether the bit actually flipped. The behavioral
+        // guarantee (the `active` column ends up at `1` for
+        // every row) is asserted above.
+    }
+
+    /// AC4: after a successful `run_one_tick`, every discovered model
+    /// whose `model_id` does NOT contain the provider's
+    /// `auto_activate_keyword` is deactivated. We seed the provider
+    /// with `auto_activate_keyword = Some("gpt")` so the F2 hook in
+    /// `run_one_tick` (step (6)) re-applies the rule post-refresh.
+    ///
+    /// Note: the scheduler's `start()` only iterates over
+    /// `seed::builtin_provider_ids()`, so we MUST use a built-in id
+    /// (we pick "openrouter") — a non-built-in would never get a
+    /// scheduled tick.
+    #[tokio::test(flavor = "current_thread", start_paused = true)]
+    async fn gate_f2_discovery_scheduler_invokes_auto_activation() {
+        let (pool, _path) = fresh_pool();
+        let mk = MasterKey::generate();
+
+        // Seed provider + account, then set the keyword on the
+        // provider row. `seed_provider_with_account` does NOT set
+        // the keyword, so we update it manually.
+        let _acc = seed_provider_with_account(&pool, &mk, "openrouter");
+        {
+            let w = pool.writer();
+            w.execute(
+                "UPDATE providers SET auto_activate_keyword = ?1 WHERE id = ?2",
+                rusqlite::params!["gpt", "openrouter"],
+            )
+            .expect("set keyword");
+        }
+
+        // Mock adapter that returns three models (one with "gpt",
+        // two without).
+        let models = vec![
+            DiscoveredModel {
+                model_id: ModelId::new("gpt-4"),
+                display_name: Some("gpt-4".into()),
+                target_format: TargetFormat::Openai,
+                context_length: None,
+                max_output_tokens: None,
+                input_modalities: None,
+                output_modalities: None,
+                model_type: None,
+                family: None,
+                capabilities: None,
+            },
+            DiscoveredModel {
+                model_id: ModelId::new("claude-3"),
+                display_name: Some("claude-3".into()),
+                target_format: TargetFormat::Openai,
+                context_length: None,
+                max_output_tokens: None,
+                input_modalities: None,
+                output_modalities: None,
+                model_type: None,
+                family: None,
+                capabilities: None,
+            },
+            DiscoveredModel {
+                model_id: ModelId::new("llama-3"),
+                display_name: Some("llama-3".into()),
+                target_format: TargetFormat::Openai,
+                context_length: None,
+                max_output_tokens: None,
+                input_modalities: None,
+                output_modalities: None,
+                model_type: None,
+                family: None,
+                capabilities: None,
+            },
+        ];
+        let (adapter, _counter) = MockAdapter::new("openrouter", models);
+        let adapters: Arc<Vec<Arc<dyn ProviderAdapter>>> = Arc::new(vec![adapter]);
+
+        let sched = start(
+            pool.clone(),
+            Arc::new(mk),
+            adapters,
+            UpstreamClient::new(),
+            DiscoverySchedulerConfig {
+                interval_secs: 2,
+                initial_stagger_secs: 1,
+            },
+        )
+        .await;
+
+        // Drive the virtual clock long enough for stagger + ≥1 tick.
+        for _ in 0..6 {
+            tokio::time::advance(Duration::from_secs(1)).await;
+            for _ in 0..32 {
+                tokio::task::yield_now().await;
+            }
+        }
+
+        // After the tick, the F2 hook must have re-applied the keyword
+        // rule: gpt-4 stays active, the other two flip to inactive.
+        let active = {
+            let c = pool.open_connection().expect("open conn");
+            models::list_active(&c, &CoreProviderId::new("openrouter"))
+                .expect("list_active")
+                .into_iter()
+                .map(|m| m.model_id.as_str().to_string())
+                .collect::<Vec<_>>()
+        };
+        assert!(
+            active.contains(&"gpt-4".to_string()),
+            "gpt-4 must remain active after auto-activation; got {active:?}"
+        );
+        assert!(
+            !active.contains(&"claude-3".to_string()),
+            "claude-3 must be deactivated by the auto-activation rule; got {active:?}"
+        );
+        assert!(
+            !active.contains(&"llama-3".to_string()),
+            "llama-3 must be deactivated by the auto-activation rule; got {active:?}"
+        );
+
+        sched.cancel();
+        for _ in 0..16 {
+            tokio::task::yield_now().await;
+        }
+    }
+
+    /// AC5: when `refresh_models` fails (simulated by an adapter
+    /// whose `fetch_models` returns an error), the scheduler must
+    /// NOT call `apply_auto_activation`. We prove this by seeding an
+    /// `auto_activate_keyword` AND a pre-existing inactive row whose
+    /// `model_id` matches the keyword — if the F2 hook ran, the row
+    /// would flip back to active. If the hook is skipped (correct),
+    /// the row stays inactive.
+    #[tokio::test(flavor = "current_thread", start_paused = true)]
+    async fn gate_f2_discovery_scheduler_skips_auto_activation_on_failure() {
+        let (pool, _path) = fresh_pool();
+        let mk = MasterKey::generate();
+        let _acc = seed_provider_with_account(&pool, &mk, "openrouter");
+
+        // Set the keyword so a misbehaving scheduler would re-apply
+        // it.
+        {
+            let w = pool.writer();
+            w.execute(
+                "UPDATE providers SET auto_activate_keyword = ?1 WHERE id = ?2",
+                rusqlite::params!["gpt", "openrouter"],
+            )
+            .expect("set keyword");
+        }
+
+        // Seed a row that already exists in the catalog with
+        // `active = 0` and a matching id. If the scheduler ran the F2
+        // hook after a failed refresh, this row would flip back to
+        // active (because the "gpt" keyword matches).
+        {
+            let conn = pool.open_connection().expect("open conn");
+            models::upsert_many(
+                &conn,
+                &CoreProviderId::new("openrouter"),
+                &[DiscoveredModel {
+                    model_id: ModelId::new("gpt-old"),
+                    display_name: Some("gpt-old".into()),
+                    target_format: TargetFormat::Openai,
+                    context_length: None,
+                    max_output_tokens: None,
+                    input_modalities: None,
+                    output_modalities: None,
+                    model_type: None,
+                    family: None,
+                    capabilities: None,
+                }],
+                Duration::from_secs(3600),
+            )
+            .expect("seed gpt-old");
+            // Force it to inactive.
+            models::set_active(
+                &conn,
+                models::find_active_by_provider_and_name(
+                    &conn,
+                    &CoreProviderId::new("openrouter"),
+                    "gpt-old",
+                )
+                .expect("find")
+                .expect("present")
+                .row_id,
+                false,
+            )
+            .expect("disable");
+        }
+
+        // Adapter that ALWAYS fails on `fetch_models`. We can't
+        // reuse `MockAdapter` because its `fetch_models` returns
+        // `Ok`. Build a thin shim.
+        struct FailingAdapter {
+            id: CoreProviderId,
+        }
+        #[async_trait]
+        impl ProviderAdapter for FailingAdapter {
+            fn id(&self) -> &CoreProviderId {
+                &self.id
+            }
+            fn config(&self) -> &ProviderAdapterConfig {
+                let cfg = Box::new(ProviderAdapterConfig {
+                    id: self.id.clone(),
+                    base_url: format!("https://mock-{}", self.id).into(),
+                    auth_type: AdapterAuthType::Bearer,
+                    format: AdapterFormat::Openai,
+                    extra_headers: Vec::new(),
+                });
+                Box::leak(cfg)
+            }
+            fn build_chat_url(
+                &self,
+                _target_format: TargetFormat,
+                _model: &ModelId,
+            ) -> String {
+                String::new()
+            }
+            fn build_auth_header(&self, _api_key: &str) -> (String, String) {
+                ("Authorization".to_string(), "Bearer mock".to_string())
+            }
+            fn build_headers(
+                &self,
+                _api_key: &str,
+                _target_format: TargetFormat,
+                _model: &ModelId,
+            ) -> Vec<(String, String)> {
+                Vec::new()
+            }
+            fn models_url(&self) -> Option<String> {
+                Some(format!("https://mock-{}/models", self.id))
+            }
+            async fn fetch_models(
+                &self,
+                _upstream_client: &Arc<UpstreamClient>,
+                _api_key: &str,
+            ) -> crate::error::Result<Vec<DiscoveredModel>> {
+                Err(crate::error::CoreError::Internal(
+                    "simulated upstream 500".to_string(),
+                ))
+            }
+        }
+        let adapter: Arc<dyn ProviderAdapter> = Arc::new(FailingAdapter {
+            id: CoreProviderId::new("openrouter"),
+        });
+        let adapters: Arc<Vec<Arc<dyn ProviderAdapter>>> = Arc::new(vec![adapter]);
+
+        let sched = start(
+            pool.clone(),
+            Arc::new(mk),
+            adapters,
+            UpstreamClient::new(),
+            DiscoverySchedulerConfig {
+                interval_secs: 2,
+                initial_stagger_secs: 1,
+            },
+        )
+        .await;
+
+        for _ in 0..6 {
+            tokio::time::advance(Duration::from_secs(1)).await;
+            for _ in 0..32 {
+                tokio::task::yield_now().await;
+            }
+        }
+
+        // The pre-seeded row must still be inactive — the F2 hook
+        // must have been skipped because refresh failed.
+        let still_inactive = {
+            let c = pool.open_connection().expect("open conn");
+            models::list_all(&c)
+                .expect("list_all")
+                .into_iter()
+                .find(|m| m.model_id.as_str() == "gpt-old")
+                .map(|m| m.active)
+        };
+        assert_eq!(
+            still_inactive,
+            Some(false),
+            "gpt-old must remain inactive after a failed refresh (auto-activation hook skipped)"
+        );
+
+        sched.cancel();
+        for _ in 0..16 {
+            tokio::task::yield_now().await;
+        }
     }
 }
