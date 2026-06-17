@@ -18,20 +18,21 @@
 //! - A failed refresh (network down, upstream 5xx, bad key) is
 //!   logged at WARN; the next tick runs as scheduled. The loop has
 //!   no `?` past the `refresh_models` call.
-//! - Shutdown: the scheduler struct owns a `tokio::sync::Notify`
-//!   shared by all tasks. `cancel()` triggers it; each task wakes
-//!   up on its next sleep boundary, logs "shutting down", and
-//!   returns.
+//! - Shutdown: the scheduler struct owns a
+//!   `tokio_util::sync::CancellationToken` shared (via `Arc` +
+//!   `child_token()`) by all tasks. `cancel()` flips the parent
+//!   token; every task's `cancelled()` future resolves on the next
+//!   `select!` poll, the task logs "shutting down", and returns.
 //!
-//! Why `tokio::sync::Notify` and not `tokio_util::sync::CancellationToken`?
-//! The codebase has its own cancel primitive in
-//! [`crate::upstream::CancellationToken`] (see `upstream/cancel.rs`)
-//! whose module doc explicitly avoids `tokio_util` to keep the
-//! dep tree slim. We follow that convention here: a `Notify` gives
-//! us the same "wake one waiter" semantic with zero new direct
-//! dependencies, and the per-task loop is a `tokio::select!` on
-//! `sleep` vs. `notified()` — the same shape the rest of the
-//! codebase uses for cancellable sleeps.
+//! Why `CancellationToken` and not a one-shot notify primitive?
+//! The previous version of this module used a one-shot
+//! primitive from `tokio::sync` whose `notify_one()` method
+//! only releases a single pending permit — the other parked
+//! tasks keep sleeping. With 11 built-in providers that meant a
+//! `cancel()` could leave 10 tasks dormant for up to an hour.
+//! The token is broadcast by design: one `.cancel()` wakes
+//! every child holding a `cancelled()` future, with no permit
+//! accounting.
 
 use crate::accounts;
 use crate::adapters::ProviderAdapter;
@@ -44,8 +45,8 @@ use crate::seed;
 use crate::upstream::UpstreamClient;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use tokio::sync::Notify;
 use tokio::time::sleep;
+use tokio_util::sync::CancellationToken;
 
 /// Per-provider refresh cadence. Spec: 1 hour. Bumped in tests via
 /// [`DiscoverySchedulerConfig::interval_secs`].
@@ -92,14 +93,11 @@ impl Default for DiscoverySchedulerConfig {
 /// Drop the handle and the tasks keep running — drop is a no-op,
 /// not a cancel. To stop the tasks, call [`Self::cancel`].
 pub struct DiscoveryScheduler {
-    /// `Notify` shared by every spawned task. `cancel()` triggers
-    /// one wake-up; each task's `select!` arm fires and the task
-    /// returns. We don't need to fan out — every task is
-    /// `select!`-ing on this same `Notify` and a single permit is
-    /// enough to wake them all (the `Notify` is `notified()`-once
-    /// semantics: one permit, one waiter; the rest queue up and
-    /// see the flag on the next `notified()` poll).
-    cancel: Arc<Notify>,
+    /// Parent `CancellationToken` that every per-provider task
+    /// clones a child from. `cancel()` flips the parent; the
+    /// children's `cancelled()` futures resolve on the very next
+    /// `select!` poll, no matter how many tasks are parked.
+    cancel: CancellationToken,
     /// Kept for symmetry / introspection; the live task count is
     /// visible in tests via a future enhancement.
     _task_count: usize,
@@ -107,16 +105,18 @@ pub struct DiscoveryScheduler {
 
 impl DiscoveryScheduler {
     /// Signal all per-provider tasks to stop. They wake up on
-    /// their next sleep boundary (within at most
-    /// `interval_secs`), log "shutting down", and return. Idempotent.
+    /// their next `select!` poll (essentially immediately, since
+    /// `CancellationToken` is broadcast-aware), log
+    /// "shutting down", and return. Idempotent: calling
+    /// `cancel()` more than once is a no-op.
     pub fn cancel(&self) {
-        // `notify_one()` is enough: a `Notify` stores at most one
-        // pending permit, and `notified()` consumes it. Each task's
-        // `select!` will see the permit, return, and exit. If a
-        // task is mid-`refresh_models` (not awaiting `notified()`),
-        // it'll wake at the next sleep boundary regardless — the
-        // `is_cancelled` flag on the scheduler guards that.
-        self.cancel.notify_one();
+        // `CancellationToken::cancel()` is broadcast: it sets
+        // the cancelled flag and resolves every `cancelled()`
+        // future currently outstanding, regardless of how many
+        // tasks hold one. This is the contrast with the
+        // previous one-shot notify primitive, which only
+        // released a single permit.
+        self.cancel.cancel();
     }
 }
 
@@ -129,8 +129,9 @@ impl std::fmt::Debug for DiscoveryScheduler {
 }
 
 /// Spawn one task per built-in provider and return a handle that
-/// can cancel them. The handle owns the `Notify`; tasks keep
-/// independent `Arc` clones of it.
+/// can cancel them. The handle owns the parent `CancellationToken`;
+/// each task holds a child token, derived via `child_token()`, so a
+/// single `cancel()` on the parent broadcasts to every child.
 ///
 /// `interval_secs` is taken from `config`; the caller is expected
 /// to pass the production default (`DISCOVERY_INTERVAL_SECS = 3600`)
@@ -144,7 +145,7 @@ pub async fn start(
     upstream_client: Arc<UpstreamClient>,
     config: DiscoverySchedulerConfig,
 ) -> DiscoveryScheduler {
-    let cancel = Arc::new(Notify::new());
+    let parent_cancel = CancellationToken::new();
     let mut task_count = 0usize;
 
     for pid_str in seed::builtin_provider_ids() {
@@ -168,7 +169,7 @@ pub async fn start(
         let pool = db_pool.clone();
         let key = master_key.clone();
         let upstream = upstream_client.clone();
-        let task_cancel = cancel.clone();
+        let task_cancel = parent_cancel.child_token();
         let interval = config.interval_secs.max(1);
         let initial_stagger = config.initial_stagger_secs;
 
@@ -211,7 +212,7 @@ pub async fn start(
     }
 
     DiscoveryScheduler {
-        cancel,
+        cancel: parent_cancel,
         _task_count: task_count,
     }
 }
@@ -227,7 +228,7 @@ pub async fn start(
 ///     run_one_tick(provider, ...).await;     // errors are logged, never `?`'d
 ///     select! {
 ///       _ = sleep(interval) => continue,
-///       _ = cancel.notified() => return,
+///       _ = cancel.cancelled() => return,
 ///     }
 ///   }
 /// ```
@@ -239,7 +240,7 @@ async fn run_one_provider(
     upstream_client: Arc<UpstreamClient>,
     interval_secs: u64,
     first_delay: Duration,
-    cancel: Arc<Notify>,
+    cancel: CancellationToken,
 ) {
     // First sleep honors the stagger and the cancel signal in
     // the same `select!`. If the operator cancels before the
@@ -248,7 +249,7 @@ async fn run_one_provider(
     if !first_delay.is_zero() {
         tokio::select! {
             _ = sleep(first_delay) => {}
-            _ = cancel.notified() => {
+            _ = cancel.cancelled() => {
                 tracing::info!(
                     provider = %provider,
                     "discovery scheduler for {provider} shutting down",
@@ -270,7 +271,7 @@ async fn run_one_provider(
 
         tokio::select! {
             _ = sleep(Duration::from_secs(interval_secs)) => {}
-            _ = cancel.notified() => {
+            _ = cancel.cancelled() => {
                 tracing::info!(
                     provider = %provider,
                     "discovery scheduler for {provider} shutting down",
@@ -802,22 +803,60 @@ mod tests {
     }
 
     /// A `cancel()`'d scheduler stops firing within roughly one
-    /// tick. We use a very long interval (1h) so the only way
-    /// the task can wake up after `cancel()` is through the
-    /// `Notify` arm of the `select!`.
+    /// tick, AND the broadcast semantic is exercised: with 4
+    /// fake providers, calling `cancel()` once must wake ALL of
+    /// them, not just the first waiter. We assert this by
+    /// running 4 parallel per-provider tasks, observing that
+    /// every adapter received its first tick (4 total calls),
+    /// then `cancel()`'ing and advancing virtual time by more
+    /// than one full `interval_secs` (1h). With the previous
+    /// one-shot notify primitive, 3 of the 4 tasks would
+    /// stay parked in their 1h sleep, each fire exactly one
+    /// extra `fetch_models` call when virtual time finally
+    /// crossed the 1h boundary, and the per-adapter counters
+    /// would end at 2 / 2 / 2 / 1 (or some permutation, sum = 7).
+    /// With the broadcast `CancellationToken`, all 4 tasks
+    /// exit on cancel and every counter stays at 1.
+    ///
+    /// This is the regression test for the Gate-A reviewer
+    /// BLOCKER (the misleading "single permit is enough"
+    /// comment) — without `CancellationToken` the assertions
+    /// below would fail.
     #[tokio::test(flavor = "current_thread", start_paused = true)]
     async fn cancelled_scheduler_stops_within_one_tick() {
+        // Four distinct built-in provider ids, picked from the
+        // first 4 entries of `seed::builtin_provider_ids()`. All
+        // four are also real built-ins, so `start()` will spawn
+        // a task for each (the other 7 built-ins are skipped at
+        // the adapter lookup because we only register 4
+        // adapters).
+        let provider_ids = ["openrouter", "minimax", "opencode-zen", "ollama-cloud"];
+
         let (pool, _path) = fresh_pool();
         let mk = MasterKey::generate();
-        let _acc = seed_provider_with_account(&pool, &mk, "openrouter");
+        for pid in provider_ids {
+            seed_provider_with_account(&pool, &mk, pid);
+        }
 
-        let (adapter, counter) = MockAdapter::new("openrouter", three_models());
-        let adapters: Arc<Vec<Arc<dyn ProviderAdapter>>> = Arc::new(vec![adapter]);
+        // Build 4 mock adapters, each with its own per-adapter
+        // call counter so we can assert broadcast behavior at
+        // the per-task granularity.
+        let (adapters, counters): (Vec<Arc<dyn ProviderAdapter>>, Vec<Arc<AtomicUsize>>) =
+            provider_ids
+                .iter()
+                .map(|pid| {
+                    let (a, c) = MockAdapter::new(pid, three_models());
+                    (a as Arc<dyn ProviderAdapter>, c)
+                })
+                .unzip();
+        let adapters = Arc::new(adapters);
 
-        // 1h interval: the only way the per-provider task
-        // wakes up after we call `cancel()` is the `Notify`.
-        // First tick fires immediately because stagger is 0
-        // and the loop body is "refresh, then sleep 1h".
+        // 1h interval: the only way a per-provider task can
+        // call `fetch_models` a second time is the cancel
+        // primitive (or waiting an actual hour, which the test
+        // does virtually to confirm the cancel broadcast
+        // suppressed the 1h sleep for ALL of them). Stagger is
+        // 0 so every first tick fires immediately.
         let sched = start(
             pool.clone(),
             Arc::new(mk),
@@ -830,43 +869,77 @@ mod tests {
         )
         .await;
 
-        // Advance enough for the first tick to land.
-        tokio::time::advance(Duration::from_millis(50)).await;
-        for _ in 0..16 {
-            tokio::task::yield_now().await;
+        // Advance a hair so the first tick of every task lands.
+        // Each of the 4 adapters should have been called exactly
+        // once. We step in 50ms chunks and yield between
+        // chunks to let the `current_thread` runtime drain.
+        for _ in 0..4 {
+            tokio::time::advance(Duration::from_millis(50)).await;
+            for _ in 0..32 {
+                tokio::task::yield_now().await;
+            }
         }
-        let calls_after_first_tick = counter.load(Ordering::SeqCst);
-        assert!(
-            calls_after_first_tick >= 1,
-            "first tick should have fired; got {}",
-            calls_after_first_tick
-        );
+        for (pid, c) in provider_ids.iter().zip(counters.iter()) {
+            let n = c.load(Ordering::SeqCst);
+            assert_eq!(
+                n, 1,
+                "adapter for {pid} should have been called exactly once after the first tick, got {n}",
+            );
+        }
 
-        // Cancel and step a little. The task is now parked in
-        // the 1h sleep; the `Notify` must wake it.
+        // Record the wall-clock time at which we ask the
+        // scheduler to shut down. We don't strictly enforce a
+        // 500ms deadline (the runtime is `current_thread` with
+        // paused time so wall-clock is meaningless), but the
+        // "no further calls after cancel" assertion below is
+        // the structural counterpart: if the broadcast worked,
+        // no task will ever reach the next 1h boundary and
+        // call `fetch_models` a second time.
+        let cancel_started_at = std::time::Instant::now();
+
+        // Cancel and step virtual time. The 1h interval means
+        // a non-cancelled task would fire its next tick after
+        // a full virtual hour; advancing 1h + 1s is enough to
+        // give any surviving task a chance to misbehave.
         sched.cancel();
-        for _ in 0..16 {
-            tokio::task::yield_now().await;
-        }
-
-        // Advance a small amount; the task should have already
-        // exited before this point because the `Notify` doesn't
-        // depend on time advancing. We advance just to be
-        // sure any pending waker fires.
-        tokio::time::advance(Duration::from_millis(50)).await;
         for _ in 0..32 {
             tokio::task::yield_now().await;
         }
+        // 1h + 1s of virtual time, in 1s chunks.
+        for _ in 0..(3_600 + 1) {
+            tokio::time::advance(Duration::from_secs(1)).await;
+            for _ in 0..4 {
+                tokio::task::yield_now().await;
+            }
+        }
 
-        let calls_after_cancel = counter.load(Ordering::SeqCst);
-        // No more ticks should fire. The exact number after
-        // cancel equals the number of calls already made; the
-        // 1h sleep would have to complete for another tick
-        // to happen, and we deliberately don't wait that long.
-        assert_eq!(
-            calls_after_cancel, calls_after_first_tick,
-            "no additional ticks should fire after cancel()"
+        // Wall-clock sanity check: cancel + 1h+1s of virtual
+        // advance should not have taken long. We allow a
+        // generous bound so a slow CI box doesn't flake, but
+        // the headline assertion is the call-count check
+        // below.
+        let elapsed = cancel_started_at.elapsed();
+        assert!(
+            elapsed < Duration::from_millis(500),
+            "cancel + 1h+1s virtual advance should be near-instant; took {elapsed:?}",
         );
+
+        // The key broadcast assertion: every adapter's call
+        // count is STILL 1. If the cancel primitive had been a
+        // one-shot notify instead of a `CancellationToken`,
+        // exactly one task would have woken on cancel; the
+        // other 3 would have each advanced through their 1h
+        // sleep above and made a second call, pushing their
+        // counter to 2. We don't care which 1 task is the
+        // lucky one — we care that the broadcast hit all 4.
+        for (pid, c) in provider_ids.iter().zip(counters.iter()) {
+            let n = c.load(Ordering::SeqCst);
+            assert_eq!(
+                n, 1,
+                "broadcast cancel failed: adapter for {pid} received {n} calls (expected 1) \
+                 — the cancel primitive did not wake every per-provider task",
+            );
+        }
     }
 
     /// Built-in providers with no matching adapter are

@@ -35,6 +35,11 @@ chrono = { workspace = true }
 uuid = { workspace = true }
 futures = { workspace = true }
 async-trait = { workspace = true }
+# `tokio_util::sync::CancellationToken` lives behind the `rt` feature.
+# We promote the transitive dep (it already arrives via reqwest) to a
+# direct dep so the discovery scheduler can fan out `cancel()` to every
+# per-provider task with broadcast semantics. See Gate E1 spec.
+tokio-util = { workspace = true, features = ["rt"] }
 parking_lot = { workspace = true }
 rand = { workspace = true }
 hex = { workspace = true }
