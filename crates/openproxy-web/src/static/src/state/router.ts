@@ -63,7 +63,12 @@ export interface ParsedHash {
 export function parseHash(hash: string): ParsedHash | null {
   for (const r of ROUTES) {
     const m: RegExpMatchArray | null = (hash || "").match(r.pattern);
-    if (m && m[1] !== undefined) return { name: r.name, context: m[1], mount: r.mount };
+    // Any match is a valid route. Routes with a capture group (e.g.
+    // `#/providers/:id`) carry the captured string as context; routes
+    // without a group (e.g. `#/providers`, `#/`) get an empty context.
+    // The previous `m[1] !== undefined` check wrongly rejected every
+    // top-level route (7 of 10) and left <main> empty.
+    if (m) return { name: r.name, context: m[1] ?? "", mount: r.mount };
   }
   return null;
 }
