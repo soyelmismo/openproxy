@@ -781,24 +781,39 @@ async fn e2e_discovery_and_delete_on_disappear() {
              model_row_id to ''"
         );
 
-        // The plain `list_targets` returns the bookkeeping row
-        // as well, but now with `model_row_id = None` (the
-        // ON DELETE SET NULL cascade nulled it in the same
-        // transaction that wiped the `c` row). This is the
-        // *clean* end-state Gate D is meant to produce — the
-        // bookkeeping id matches reality (the model is gone)
-        // without any FK-bypass hack.
+        // The plain `list_targets` (the routing layer) returns
+        // ZERO entries for this combo: the surviving target is the
+        // `(model_row_id IS NULL, sub_combo_id IS NULL)` orphan
+        // state, and the Gate E3 filter excludes it from the
+        // routable set. The row is still in `combo_targets` for
+        // audit and re-activation when the model reappears — we
+        // verify that separately below. The booking id matches
+        // reality (the model is gone) and the routable set is
+        // empty, so the pipeline will surface `NoHealthyTargets`,
+        // not the confusing `5xx Internal: ... sub-combo target`
+        // that motivated Gate E3.
         let plain = combos::list_targets(&w, combo_id)
             .expect("list_targets after");
-        assert_eq!(plain.len(), 1);
-        assert_eq!(plain[0].id, c_target_id);
         assert_eq!(
-            plain[0].model_row_id, None,
-            "model_row_id must be NULL on the surviving target \
-             after the catalog row for c was deleted, courtesy of \
-             ON DELETE SET NULL (Gate D / migration 000025); got \
-             {:?}",
-            plain[0].model_row_id
+            plain.len(),
+            0,
+            "Gate E3: the (NULL, NULL) orphan target is excluded \
+             from the routable list_targets result"
+        );
+
+        // Sanity: the orphan row is still in the table — the Gate
+        // E3 filter is read-time only, the row is the audit trail.
+        let raw_orphan: i64 = w
+            .query_row(
+                "SELECT COUNT(*) FROM combo_targets WHERE id = ?1 \
+                 AND model_row_id IS NULL AND sub_combo_id IS NULL",
+                rusqlite::params![c_target_id.0],
+                |r| r.get(0),
+            )
+            .expect("count orphan row");
+        assert_eq!(
+            raw_orphan, 1,
+            "the orphan bookkeeping row is still in combo_targets"
         );
     }
 
