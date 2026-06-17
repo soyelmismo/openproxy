@@ -460,7 +460,6 @@ mod tests {
     async fn cancel_watch_clone_is_independent() {
         let cw = CancelWatch::new();
         let rx2 = cw.rx.clone();
-        let _tx2 = cw.tx.clone();
 
         // Firing via the original `cw.tx` is visible on the clone.
         let _ = cw.tx.send(true);

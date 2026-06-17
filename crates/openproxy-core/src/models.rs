@@ -376,14 +376,6 @@ pub fn upsert_many(
     };
     let existing: std::collections::HashSet<String> =
         existing_rows.iter().map(|(m, _)| m.clone()).collect();
-    // Map old row_id -> upstream model_id. After the DELETE the old
-    // row_id is freed (and the SET NULL cascade has fired), but we
-    // only need the upstream id to match against `combo_targets`
-    // rows; the actual id we want to write back is the NEW row's id
-    // from the INSERT block. So we key on `model_id` directly.
-    let _existing_id_by_model: std::collections::HashMap<String, i64> =
-        existing_rows.iter().cloned().collect();
-
     // Tracks the upstream model_ids that were JUST INSERTED this
     // call (i.e. not present in `existing` before the INSERT). They
     // are the candidates for Gate F1 reconnection: any orphan

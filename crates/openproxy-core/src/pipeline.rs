@@ -3071,7 +3071,7 @@ mod tests {
 
             // One healthy account exists, so the target is expanded to one row.
             let mk = MasterKey::generate();
-            let _aid = crate::accounts::create(
+            crate::accounts::create(
                 &writer,
                 &ProviderId::new("p"),
                 Some("sk-test-1"),
@@ -5820,7 +5820,7 @@ mod tests {
         // incrementing the CB.
         cancel_tx.send(true).expect("send cancel");
 
-        let _result = p.run(req).await;
+        p.run(req).await;
 
         // 1. target_cooldowns is empty. The schema is keyed by
         //    `combo_target_id` (not `target_id`); see

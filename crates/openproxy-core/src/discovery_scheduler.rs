@@ -705,7 +705,7 @@ mod tests {
     async fn scheduler_upserts_models_after_a_few_ticks() {
         let (pool, _path) = fresh_pool();
         let mk = MasterKey::generate();
-        let _acc = seed_provider_with_account(&pool, &mk, "openrouter");
+        seed_provider_with_account(&pool, &mk, "openrouter");
 
         // Insert only the OpenRouter adapter; the other built-ins
         // would fail to find a matching adapter if we tried to
@@ -1131,7 +1131,7 @@ mod tests {
 
         seed_three_models(&conn, &provider, &["gpt-4", "claude-3", "llama-3"]);
 
-        let _updated = models::apply_auto_activation(&conn, &provider, None).expect("apply");
+        models::apply_auto_activation(&conn, &provider, None).expect("apply");
 
         let active = active_ids_for(&conn, &provider);
         assert_eq!(
@@ -1166,7 +1166,7 @@ mod tests {
         // Seed provider + account, then set the keyword on the
         // provider row. `seed_provider_with_account` does NOT set
         // the keyword, so we update it manually.
-        let _acc = seed_provider_with_account(&pool, &mk, "openrouter");
+        seed_provider_with_account(&pool, &mk, "openrouter");
         {
             let w = pool.writer();
             w.execute(
@@ -1279,7 +1279,7 @@ mod tests {
     async fn gate_f2_discovery_scheduler_skips_auto_activation_on_failure() {
         let (pool, _path) = fresh_pool();
         let mk = MasterKey::generate();
-        let _acc = seed_provider_with_account(&pool, &mk, "openrouter");
+        seed_provider_with_account(&pool, &mk, "openrouter");
 
         // Set the keyword so a misbehaving scheduler would re-apply
         // it.
