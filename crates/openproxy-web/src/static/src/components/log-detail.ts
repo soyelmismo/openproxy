@@ -262,7 +262,12 @@ export function closeLogDetailModal(e: Event | null): void {
   if (!m) return;
   const matched: HTMLElement | null = target.closest("[data-action]");
   // Case 1: click was directly on the backdrop (the wrapper itself).
-  if (matched === m) { m.remove(); return; }
+  // Use `target === m` (strict identity) so clicks on descendants
+  // like the <pre> text body or the JSON viewer don't bubble up and
+  // close the modal — only an actual click on the empty wrapper area
+  // should close it. `target.closest("[data-action]")` would always
+  // return the wrapper for descendants, so we cannot use it here.
+  if (target === m) { m.remove(); return; }
   // Case 2: click was on the explicit X close button in the header.
   if (matched && matched.classList && matched.classList.contains("close-btn")) {
     m.remove(); return;
