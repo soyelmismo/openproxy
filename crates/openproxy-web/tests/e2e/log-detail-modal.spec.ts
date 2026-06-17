@@ -1,4 +1,4 @@
-// e2e/log-detail-modal.spec.js — ADVERSARIAL tests for the log
+// e2e/log-detail-modal.spec.ts — ADVERSARIAL tests for the log
 // detail modal tab behavior. Targets Fix 3 of the recent batch:
 //
 //   Bug 3a: jsonSection did not emit data-log-tab, so the 4
@@ -14,13 +14,15 @@
 //   - The 4 tabs are mutually exclusive (no stacking).
 //   - Empty request body renders the "No request body recorded."
 //     fallback instead of crashing or showing `{}`.
+//
+// @see tsconfig.test.json for type settings.
 
-const { test, expect } = require('@playwright/test');
+import { test, expect, type Page } from '@playwright/test';
 
 // Helper: wait for the log detail modal to be open and a log row to
 // be present, then click a row. Returns the request_id of the row
 // that was clicked.
-async function openFirstLogRow(page) {
+async function openFirstLogRow(page: Page): Promise<string | null> {
   await page.goto('http://localhost:8788/');
   await page.click('text=Live Logs');
   await expect(page.locator('#main')).toBeVisible();
@@ -36,7 +38,7 @@ async function openFirstLogRow(page) {
 
 test.describe('Log detail modal — adversarial', () => {
 
-  test('j) Request tab shows request body, not raw log content', async ({ page }) => {
+  test('j) Request tab shows request body, not raw log content', async ({ page }: { page: Page }) => {
     // Bug 3b was: the tab named "Stages" was bound to
     // log.requests || log.stages (the backend never sends those),
     // so users saw an empty panel. After the fix, the tab is
@@ -64,7 +66,7 @@ test.describe('Log detail modal — adversarial', () => {
     expect(rowId).not.toBeNull();
   });
 
-  test('j2) No "Stages" tab; "Request" tab has data-log-tab wiring', async ({ page }) => {
+  test('j2) No "Stages" tab; "Request" tab has data-log-tab wiring', async ({ page }: { page: Page }) => {
     // ADVERSARIAL assertion that the rename is complete: a
     // "Stages" button must not exist anywhere, and the Request
     // section must carry data-log-tab="request" (the pre-fix
@@ -85,7 +87,7 @@ test.describe('Log detail modal — adversarial', () => {
     expect(dataTabCount).toBe(sectionCount);
   });
 
-  test('k) Tabs are mutually exclusive — clicking each hides the others', async ({ page }) => {
+  test('k) Tabs are mutually exclusive — clicking each hides the others', async ({ page }: { page: Page }) => {
     // Bug 3a was: jsonSection didn't emit data-log-tab, so all 4
     // sections (Response, Errors, Raw, and pre-fix "Stages")
     // stacked visually on top of each other. After the fix, every
@@ -93,7 +95,7 @@ test.describe('Log detail modal — adversarial', () => {
     // toggles display: none on the non-active ones.
     await openFirstLogRow(page);
 
-    const tabs = ['request', 'response', 'errors', 'raw'];
+    const tabs: readonly string[] = ['request', 'response', 'errors', 'raw'];
     for (const tab of tabs) {
       const btn = page.locator(`.detail-tab[data-arg1="${tab}"]`);
       await expect(btn).toBeVisible();
@@ -126,7 +128,7 @@ test.describe('Log detail modal — adversarial', () => {
     }
   });
 
-  test('k4) On open, only the first section is visible (idempotent re-open)', async ({ page }) => {
+  test('k4) On open, only the first section is visible (idempotent re-open)', async ({ page }: { page: Page }) => {
     // Fix 1's wrap-up: even after the modal has been closed and
     // re-opened N times, the pre-walk hide of sections (run by
     // initializeLogDetailTabs) must still hide the non-first
@@ -137,7 +139,7 @@ test.describe('Log detail modal — adversarial', () => {
       await openFirstLogRow(page);
       // The first section (request) is visible; the other 3 must
       // be hidden.
-      const tabs = ['response', 'errors', 'raw'];
+      const tabs: readonly string[] = ['response', 'errors', 'raw'];
       for (const tab of tabs) {
         const sec = page.locator(`#log-detail-content [data-log-tab="${tab}"]`);
         if (await sec.count() === 0) continue;
@@ -150,7 +152,7 @@ test.describe('Log detail modal — adversarial', () => {
     }
   });
 
-  test('l) Modal handles empty request body without crashing', async ({ page }) => {
+  test('l) Modal handles empty request body without crashing', async ({ page }: { page: Page }) => {
     // The fix renders request_body_json in the "Request" section.
     // If request_body_json is null/empty, the modal should show
     // the fallback message "No request body recorded." and not
