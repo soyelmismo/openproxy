@@ -2626,7 +2626,7 @@ impl Pipeline {
             response_body_json: if recording { response_body_json } else { None },
             request_headers: if recording { request_headers } else { None },
             response_headers: if recording { response_headers } else { None },
-            error_message: None,
+            error_message: err.map(|e| format!("{}", e)),
             race_attempts: race_size,
             is_streaming: false,
             stream_complete: false,

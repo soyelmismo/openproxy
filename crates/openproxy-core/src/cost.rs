@@ -177,7 +177,7 @@ pub fn record(conn: &Connection, input: &UsageInput) -> Result<UsageId> {
             response_body_json: input.response_body_json.clone(),
             request_headers: input.request_headers.clone(),
             response_headers: input.response_headers.clone(),
-            error_message: input.error_message.clone(),
+            error_message: error_msg_redacted_for_db.clone(),
             race_total: Some(input.race_total),
             race_attempts: Some(input.race_attempts),
             is_streaming: input.is_streaming,
