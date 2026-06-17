@@ -54,6 +54,40 @@ log "working tree: $(git status --porcelain | wc -l) cambios sucios"
 log "cargo check --workspace $FEATURES --release"
 cargo check --workspace $FEATURES --release
 
+# 1.5) Frontend TS bundle: openproxy-web embebe src/static/index.html vía
+#      include_str! y sirve el bundle TS desde static/dist/ (commit 19514e1
+#      flipeó /src/app.js a /dist/app.js). El dist/ está en .gitignore, hay
+#      que regenerarlo en cada build, ANTES de que cargo compila el binario.
+WEB_CRATE_DIR="$PROJECT_DIR/crates/openproxy-web"
+if [[ -d "$WEB_CRATE_DIR" && -f "$WEB_CRATE_DIR/package.json" ]]; then
+  # pnpm puede no estar en el PATH default del script (ej. corre bajo sudo
+  # con un PATH limpio). Buscamos en las rutas comunes antes de fallar.
+  if ! command -v pnpm >/dev/null 2>&1; then
+    for pnpm_dir in /root/.hermes/node/bin /root/.local/share/pnpm /usr/local/bin /usr/bin; do
+      if [[ -x "$pnpm_dir/pnpm" ]]; then
+        export PATH="$pnpm_dir:$PATH"
+        log "pnpm encontrado en $pnpm_dir, agregado al PATH"
+        break
+      fi
+    done
+  fi
+  if ! command -v pnpm >/dev/null 2>&1; then
+    die "pnpm no está en PATH; instalá con 'npm i -g pnpm' o 'corepack enable' (o agregá /root/.hermes/node/bin a PATH) y reintentá"
+  fi
+  log "pnpm install --frozen-lockfile  (en $WEB_CRATE_DIR)"
+  (cd "$WEB_CRATE_DIR" && pnpm install --frozen-lockfile)
+  log "pnpm build  (tsc emite a $WEB_CRATE_DIR/src/static/dist/)"
+  (cd "$WEB_CRATE_DIR" && pnpm build)
+  # Sanity check: 3 archivos críticos que el HTML flipado va a pedir.
+  for f in dist/app.js dist/lib/escape.js dist/handlers/registry.js; do
+    [[ -f "$WEB_CRATE_DIR/src/static/$f" ]] \
+      || die "tsc no emitió $f en $WEB_CRATE_DIR/src/static/$f; corré 'cd $WEB_CRATE_DIR && pnpm build' a mano para ver el error"
+  done
+  log "pnpm build OK (dist/app.js, lib/escape.js, handlers/registry.js presentes)"
+else
+  log "saltando frontend TS: $WEB_CRATE_DIR no es crate web o no tiene package.json"
+fi
+
 # 2) Build de los dos binarios. --workspace cubre todo; los servicios
 #    sólo arrancan los dos bins listados, pero el resto del workspace
 #    debe compilar (openproxy-server, openproxy-api-client).
