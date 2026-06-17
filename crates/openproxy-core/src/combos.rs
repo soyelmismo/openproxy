@@ -1549,7 +1549,7 @@ mod tests {
         seed_provider(&conn, "lonely");
         let m = seed_model(&conn, "lonely", "m");
         let cid = create_combo(&conn, "c", Strategy::Priority, 1).expect("create");
-        let _tid = add_target(
+        add_target(
             &conn,
             AddTargetInput {
                 combo_id: cid,
@@ -1578,7 +1578,7 @@ mod tests {
         seed_provider(&conn, "solo");
         let m = seed_model(&conn, "solo", "m");
         let cid = create_combo(&conn, "c", Strategy::Priority, 1).expect("create");
-        let _tid = add_target(
+        add_target(
             &conn,
             AddTargetInput {
                 combo_id: cid,
@@ -1612,7 +1612,7 @@ mod tests {
         seed_provider(&conn, "multi");
         let m = seed_model(&conn, "multi", "m");
         let cid = create_combo(&conn, "c", Strategy::Priority, 1).expect("create");
-        let _tid = add_target(
+        add_target(
             &conn,
             AddTargetInput {
                 combo_id: cid,

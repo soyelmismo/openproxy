@@ -374,7 +374,7 @@ mod tests {
         let (pool, _path) = fresh_pool();
         let conn = pool.writer();
         seed_provider(&conn, "openrouter");
-        let _account = seed_healthy_account(&conn, "openrouter");
+        seed_healthy_account(&conn, "openrouter");
         let model_row = seed_model(&conn, "openrouter", "anthropic/claude-3.5");
 
         let plan = resolve(&conn, "anthropic/claude-3.5").expect("resolve");

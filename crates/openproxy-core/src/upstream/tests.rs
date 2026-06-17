@@ -245,7 +245,7 @@ async fn phase_timeout_tls() {
     // the **inner** `headers_ms` ceiling would fire with
     // `Timeout(Headers)` if the write budget were loose. This is
     // the real per-phase contract.
-    let _addr = spawn_silent_tcp_server().await;
+    spawn_silent_tcp_server().await;
     // The actual TLS-attribution test uses a custom connector that
     // goes through the `PhasedConnector` steps and stalls on TLS.
     // For Gate 0 we demonstrate the same contract by exercising

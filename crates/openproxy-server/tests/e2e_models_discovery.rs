@@ -653,7 +653,7 @@ async fn e2e_discovery_and_delete_on_disappear() {
     //       directly, so the test exercises the same code path
     //       a live scheduler would.
     mock.replace(vec!["a".into(), "b".into(), "c".into()]);
-    let _r3b = call_refresh(&state, &provider, "sk-e2e-fake", &adapter)
+    call_refresh(&state, &provider, "sk-e2e-fake", &adapter)
         .await
         .expect("refresh_models 9.a (re-establish [a, b, c])");
 
