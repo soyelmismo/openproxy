@@ -2375,4 +2375,337 @@ mod tests {
         let removed_again = delete(&conn, m1_id).expect("delete again");
         assert_eq!(removed_again, 0, "missing id is a no-op");
     }
+
+    // -------------------------------------------------------------------
+    // Gate E2 — upsert_many delete-on-disappear unit tests
+    //
+    // These four tests pin the storage-layer behavior introduced in
+    // Gate B (branch `feat/gate-B-delete-on-disappear`):
+    //
+    //   1. `upsert_many` removes non-custom rows the upstream no longer
+    //      lists (a diff against the just-upserted `model_id` set).
+    //   2. `custom = 1` rows are NEVER touched by the delete phase,
+    //      even if the upstream stopped listing them. They survive a
+    //      refresh.
+    //   3. An empty `discovered` slice is interpreted as "the upstream
+    //      lists nothing for this provider" and removes all non-custom
+    //      rows. Custom rows again survive.
+    //   4. `list_active` is no longer gated on `expires_at > now()` —
+    //      a row with `active = 1` and `expires_at` in the past is
+    //      visible, because visibility is now driven by `active` (and
+    //      the upstream-presence invariant maintained by `upsert_many`).
+    //
+    // They use the existing `fresh_db()` helper (in-memory, single
+    // `provA` row) and add sibling providers via the same `INSERT INTO
+    // providers` pattern used in `list_active_all_*` tests above.
+    // `create_custom` is the public API for hand-curated rows; the
+    // raw `INSERT INTO models ... custom = 1` is only used in the
+    // "backdate `expires_at`" test where we need to start from a known
+    // expired state.
+    // -------------------------------------------------------------------
+
+    /// Helper used by the Gate E2 tests: register an extra provider
+    /// row alongside the `provA` that `fresh_db()` already creates.
+    /// Mirrors the `INSERT INTO providers` snippet from
+    /// `list_active_all_excludes_disabled_and_expired_across_providers`.
+    fn add_provider(conn: &Connection, id: &str) {
+        conn.execute(
+            "INSERT INTO providers (id, display_name, base_url, auth_kind) \
+             VALUES (?1, ?2, ?3, 'none')",
+            rusqlite::params![id, format!("Provider {}", id), "https://example.test"],
+        )
+        .expect("insert provider");
+    }
+
+    /// Gate E2 test 1: a model the upstream stops listing between
+    /// refreshes must be hard-deleted from the `models` table on the
+    /// next `upsert_many` call. This is the core delete-on-disappear
+    /// contract.
+    #[test]
+    fn upsert_many_deletes_models_dropped_by_upstream() {
+        let conn = fresh_db();
+        add_provider(&conn, "prov-a");
+        let provider = ProviderId::new("prov-a");
+
+        // First refresh: upstream lists m1, m2, m3.
+        upsert_many(
+            &conn,
+            &provider,
+            &[
+                discovered("m1", TargetFormat::Openai),
+                discovered("m2", TargetFormat::Openai),
+                discovered("m3", TargetFormat::Openai),
+            ],
+            Duration::from_secs(3600),
+        )
+        .expect("first upsert");
+
+        // Pre-condition: all three rows are live.
+        let after_first: Vec<String> = list_active(&conn, &provider)
+            .expect("list_active after first")
+            .into_iter()
+            .map(|m| m.model_id.as_str().to_string())
+            .collect();
+        assert_eq!(
+            after_first,
+            vec!["m1".to_string(), "m2".to_string(), "m3".to_string()],
+            "first refresh seeds m1, m2, m3"
+        );
+
+        // Second refresh: upstream dropped m3.
+        upsert_many(
+            &conn,
+            &provider,
+            &[discovered("m1", TargetFormat::Openai), discovered("m2", TargetFormat::Openai)],
+            Duration::from_secs(3600),
+        )
+        .expect("second upsert");
+
+        // list_active now shows only m1, m2.
+        let after_second: Vec<String> = list_active(&conn, &provider)
+            .expect("list_active after second")
+            .into_iter()
+            .map(|m| m.model_id.as_str().to_string())
+            .collect();
+        assert_eq!(
+            after_second,
+            vec!["m1".to_string(), "m2".to_string()],
+            "m3 dropped by upstream -> removed from list_active"
+        );
+
+        // And m3 is gone from the table entirely (hard delete, not a
+        // soft disable). Probing via `list_all` would also work; the
+        // spec called out `COUNT(*) WHERE model_id = 'm3'` and we
+        // follow it for clarity.
+        let m3_count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM models WHERE model_id = 'm3'",
+                [],
+                |r| r.get(0),
+            )
+            .expect("count m3");
+        assert_eq!(m3_count, 0, "m3 hard-deleted from the models table");
+    }
+
+    /// Gate E2 test 2: a `custom = 1` row whose `model_id` is not in
+    /// the upstream's diff must NOT be deleted. This is the operator-
+    /// curation safety net: the system must never wipe a hand-added
+    /// model just because the provider stopped mentioning it.
+    #[test]
+    fn upsert_many_preserves_custom_rows_when_not_in_diff() {
+        let conn = fresh_db();
+        add_provider(&conn, "prov-b");
+        let provider = ProviderId::new("prov-b");
+
+        // Seed one discovered row.
+        upsert_many(
+            &conn,
+            &provider,
+            &[discovered("m1", TargetFormat::Openai)],
+            Duration::from_secs(3600),
+        )
+        .expect("first upsert");
+
+        // Insert a hand-curated row via the public API.
+        let custom_id = create_custom(
+            &conn,
+            &provider,
+            &ModelId::new("operator-curated"),
+            Some("Curated by operator"),
+            TargetFormat::Openai,
+            3600,
+        )
+        .expect("create_custom");
+        assert!(custom_id.0 > 0);
+
+        // Second refresh: upstream now lists m1 + m2. `operator-curated`
+        // is intentionally NOT in the diff. The non-custom row
+        // disappeared (m1) and a new non-custom row appears (m2); the
+        // custom row must survive untouched.
+        upsert_many(
+            &conn,
+            &provider,
+            &[discovered("m1", TargetFormat::Openai), discovered("m2", TargetFormat::Openai)],
+            Duration::from_secs(3600),
+        )
+        .expect("second upsert");
+
+        // list_active returns all three: m1, m2, operator-curated.
+        let active: Vec<String> = list_active(&conn, &provider)
+            .expect("list_active")
+            .into_iter()
+            .map(|m| m.model_id.as_str().to_string())
+            .collect();
+        assert_eq!(
+            active,
+            vec![
+                "m1".to_string(),
+                "m2".to_string(),
+                "operator-curated".to_string(),
+            ],
+            "custom row survives even though the upstream no longer mentions it"
+        );
+
+        // The custom row is still in the table with custom=1 and
+        // active=1 — defensive belt-and-suspenders on top of the
+        // list_active assertion.
+        let row = get_by_row_id(&conn, custom_id)
+            .expect("get_by_row_id")
+            .expect("present");
+        assert!(row.custom, "custom bit still set");
+        assert!(row.active, "custom row's active bit untouched");
+    }
+
+    /// Gate E2 test 3: when upstream returns an empty catalog, the
+    /// next `upsert_many` call must remove every non-custom row of the
+    /// provider. Custom rows again survive. This is the "absent
+    /// upstream" edge case — it must not leave stale rows behind.
+    #[test]
+    fn upsert_many_with_empty_discovered_deletes_all_non_custom() {
+        let conn = fresh_db();
+        add_provider(&conn, "prov-c");
+        let provider = ProviderId::new("prov-c");
+
+        // Seed two non-custom rows.
+        upsert_many(
+            &conn,
+            &provider,
+            &[discovered("m1", TargetFormat::Openai), discovered("m2", TargetFormat::Anthropic)],
+            Duration::from_secs(3600),
+        )
+        .expect("seed");
+
+        // And a hand-curated row.
+        let keep_id = create_custom(
+            &conn,
+            &provider,
+            &ModelId::new("keep"),
+            Some("Hand-curated"),
+            TargetFormat::Openai,
+            3600,
+        )
+        .expect("create_custom keep");
+
+        // Pre-condition: 3 rows total.
+        let pre_total: i64 = conn
+            .query_row("SELECT COUNT(*) FROM models WHERE provider_id = ?1", ["prov-c"], |r| {
+                r.get(0)
+            })
+            .expect("count pre");
+        assert_eq!(pre_total, 3, "pre-condition: 3 rows for prov-c");
+
+        // Upstream returns an empty catalog.
+        upsert_many(&conn, &provider, &[], Duration::from_secs(3600))
+            .expect("empty upsert");
+
+        // list_active for prov-c returns just the custom row.
+        let active: Vec<String> = list_active(&conn, &provider)
+            .expect("list_active")
+            .into_iter()
+            .map(|m| m.model_id.as_str().to_string())
+            .collect();
+        assert_eq!(active, vec!["keep".to_string()], "only the custom row remains");
+
+        // Sanity: the table itself has exactly one row, and it is the
+        // custom one. m1 and m2 must be hard-deleted, not just hidden
+        // from list_active.
+        let all: Vec<String> = list_all(&conn)
+            .expect("list_all")
+            .into_iter()
+            .map(|m| m.model_id.as_str().to_string())
+            .collect();
+        assert_eq!(all, vec!["keep".to_string()], "only the custom row in the table");
+
+        // The custom row is still active+custom.
+        let row = get_by_row_id(&conn, keep_id)
+            .expect("get_by_row_id")
+            .expect("present");
+        assert!(row.custom);
+        assert!(row.active);
+
+        // Belt-and-suspenders: nothing for prov-c has custom=0 left.
+        let non_custom_remaining: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM models WHERE provider_id = ?1 AND custom = 0",
+                ["prov-c"],
+                |r| r.get(0),
+            )
+            .expect("count non-custom");
+        assert_eq!(non_custom_remaining, 0, "no non-custom rows survive empty refresh");
+    }
+
+    /// Gate E2 test 4: pin the new visibility semantic. A row with
+    /// `active = 1` whose `expires_at` is in the past is STILL live
+    /// from `list_active`'s point of view. The reason is that
+    /// `upsert_many` already enforces "presence in the last
+    /// successful refresh" at write time, so by the time
+    /// `list_active` runs the table is a faithful mirror of upstream.
+    /// `expires_at` is kept around for diagnostics and the recency
+    /// filter inside `apply_auto_activation`, but it is no longer a
+    /// visibility gate.
+    #[test]
+    fn expires_at_in_the_past_with_active_1_is_visible() {
+        let conn = fresh_db();
+        add_provider(&conn, "prov-d");
+        let provider = ProviderId::new("prov-d");
+
+        // Seed a row via the public API. `active` defaults to 1
+        // through the schema.
+        upsert_many(
+            &conn,
+            &provider,
+            &[discovered("stale", TargetFormat::Openai)],
+            Duration::from_secs(3600),
+        )
+        .expect("seed");
+
+        // Backdate `expires_at` by hand: we want to prove that a past
+        // `expires_at` does NOT hide a row from `list_active`.
+        let updated = conn
+            .execute(
+                "UPDATE models SET expires_at = datetime('now', '-1 hour') \
+                 WHERE provider_id = ?1 AND model_id = ?2",
+                rusqlite::params!["prov-d", "stale"],
+            )
+            .expect("backdate expires_at");
+        assert_eq!(updated, 1, "the one seeded row was backdated");
+
+        // Belt-and-suspenders: confirm `expires_at` is now in the
+        // past. If the next assertion fails, the test should not be
+        // blindly retried without diagnosing the SQLite datetime
+        // comparison.
+        let row = get_by_row_id(
+            &conn,
+            list_all(&conn)
+                .expect("list_all")
+                .into_iter()
+                .find(|m| m.model_id.as_str() == "stale")
+                .expect("present")
+                .row_id,
+        )
+        .expect("get")
+        .expect("present");
+        let now_minus_one_hour: String = conn
+            .query_row("SELECT datetime('now', '-1 hour')", [], |r| r.get(0))
+            .expect("now-1h");
+        assert_eq!(
+            row.expires_at.as_deref(),
+            Some(now_minus_one_hour.as_str()),
+            "pre-condition: expires_at is now 1h in the past"
+        );
+        assert!(row.active, "pre-condition: active=1");
+
+        // The actual pin: a past `expires_at` does NOT hide the row
+        // from `list_active` under Gate B's semantic.
+        let active: Vec<String> = list_active(&conn, &provider)
+            .expect("list_active")
+            .into_iter()
+            .map(|m| m.model_id.as_str().to_string())
+            .collect();
+        assert_eq!(
+            active,
+            vec!["stale".to_string()],
+            "active=1 with past expires_at is still visible"
+        );
+    }
 }
