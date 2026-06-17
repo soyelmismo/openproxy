@@ -23,8 +23,6 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
-use super::phases::UpstreamPhase;
-
 /// `scheme://host:port` tuple that keys a pooled connection.
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
 pub struct HostKey {
@@ -176,114 +174,5 @@ impl std::fmt::Debug for UpstreamConnectionPool {
             .field("reuses", &g.values().map(|e| e.reuses.load(Ordering::SeqCst)).sum::<usize>())
             .field("total", &g.values().map(|e| e.total.load(Ordering::SeqCst)).sum::<usize>())
             .finish()
-    }
-}
-
-/// Phase-aware connector wrapper.
-///
-/// The spec calls out a `phase_timeout_dns` and `phase_timeout_tls`
-/// test, which means the connector must surface which phase is
-/// stalling. The standard `HttpConnector` / `HttpsConnector` report a
-/// single `Box<dyn Error>` per connection attempt. To get a
-/// phase-attributed timeout we wrap the underlying I/O into a custom
-/// `tower::Service<Uri>` that reports failures through the `phase`
-/// channel. This is the connector shape used by every test in
-/// `tests.rs`.
-///
-/// When the `upstream-hyper` feature is on, `phase_for_uri` is used
-/// to label each phase. When off, the connector is unused and the
-/// client returns `UpstreamError::Invalid` for every call.
-#[cfg(feature = "upstream-hyper")]
-pub mod connector {
-    use super::super::phases::UpstreamPhase;
-    use super::Scheme;
-    use bytes::Bytes;
-    use http::Uri;
-    use hyper::body::Body;
-    use hyper_util::client::legacy::connect::{Connection as HyperConnection, HttpConnector};
-    use hyper_util::rt::TokioIo;
-    use std::future::Future;
-    use std::pin::Pin;
-    use std::sync::Arc;
-    use std::task::{Context, Poll};
-    use tokio::net::TcpStream;
-    use tower_service::Service;
-
-    // The `PhaseReportingConnector` trait was speculatively added
-    // here but isn't used; the test connectors implement
-    // `tower_service::Service<Uri>` directly and the
-    // `UpstreamClient::for_test_with_connector` takes a generic
-    // over the connector type with no separate trait.
-
-    /// The default connector: HTTP via `HttpConnector`. HTTPS is a
-    /// follow-up gate (the `HttpsConnector` from `hyper-rustls` is
-    /// already in the lockfile and will be wired in via a builder
-    /// in Gate 1+). For Gate 0 the production path handles HTTP
-    /// only; HTTPS is supported in unit tests via a custom
-    /// test connector.
-    ///
-    /// Phase reporting is done at the `UpstreamClient::call` level
-    /// (it wraps the connect future in a per-phase timer).
-    #[derive(Clone)]
-    pub struct DefaultConnector {
-        http: HttpConnector,
-    }
-
-    impl DefaultConnector {
-        pub fn new() -> Self {
-            let mut http = HttpConnector::new();
-            http.enforce_http(false);
-            http.set_nodelay(true);
-            Self { http }
-        }
-    }
-
-    impl Default for DefaultConnector {
-        fn default() -> Self {
-            Self::new()
-        }
-    }
-
-    impl Service<Uri> for DefaultConnector {
-        // The hyper-util `Connect` blanket impl requires the
-        // response type to be a CONCRETE `Read + Write +
-        // Connection + Unpin + Send + 'static` (not a trait
-        // object). We therefore return `TokioIo<TcpStream>` for
-        // HTTP and a boxed error for HTTPS.
-        type Response = TokioIo<TcpStream>;
-        type Error = Box<dyn std::error::Error + Send + Sync>;
-        type Future = Pin<Box<dyn Future<Output = Result<Self::Response, Self::Error>> + Send>>;
-
-        fn poll_ready(&mut self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-            self.http.poll_ready(cx).map_err(Into::into)
-        }
-
-        fn call(&mut self, dst: Uri) -> Self::Future {
-            // We only support HTTP in the Gate 0 production
-            // connector. HTTPS requests will fail with an error
-            // here; the unit tests that need HTTPS use a custom
-            // connector via `for_test_with_connector`.
-            if dst.scheme_str() == Some("https") {
-                return Box::pin(async move {
-                    Err(Box::new(std::io::Error::other(
-                        "https not yet supported by DefaultConnector in Gate 0",
-                    ))
-                        as Box<dyn std::error::Error + Send + Sync>)
-                });
-            }
-            let http_fut = self.http.call(dst);
-            Box::pin(async move {
-                let io = http_fut
-                    .await
-                    .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> {
-                        Box::new(std::io::Error::other(e.to_string()))
-                    })?;
-                // `HttpConnector` already returns
-                // `TokioIo<TcpStream>`, which implements
-                // `hyper::rt::Read`/`Write` and the `Connection`
-                // marker trait.
-                Ok(io)
-            })
-        }
     }
 }

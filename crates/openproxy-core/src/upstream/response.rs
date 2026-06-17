@@ -11,11 +11,7 @@ use super::phases::UpstreamPhase;
 use bytes::Bytes;
 use http::{HeaderMap, StatusCode};
 use std::pin::Pin;
-use std::task::{Context, Poll};
 use std::time::{Duration, Instant};
-
-#[cfg(feature = "upstream-hyper")]
-use http_body_util::BodyExt;
 
 /// The response returned by `UpstreamClient::call`.
 #[derive(Debug)]
@@ -126,7 +122,6 @@ impl UpstreamBodyStream {
     /// see the start instant + `now` vs. `total_deadline` to
     /// disambiguate; we only carry one phase here for simplicity).
     pub async fn collect_all(mut self) -> UpstreamResult<Bytes> {
-        use futures_util::StreamExt;
         let mut buf = Vec::new();
         while let Some(chunk) = self.next_chunk().await? {
             buf.extend_from_slice(&chunk);

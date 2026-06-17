@@ -42,11 +42,11 @@
 use axum::{
     extract::{Path, Query, State},
     extract::ws::{Message, WebSocket, WebSocketUpgrade},
-    http::{HeaderMap, StatusCode},
+    http::HeaderMap,
     response::IntoResponse,
     Json,
 };
-use futures::{SinkExt, StreamExt};
+use futures::StreamExt;
 use openproxy_core::{
     accounts,
     admin,

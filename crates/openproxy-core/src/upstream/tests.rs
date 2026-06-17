@@ -16,7 +16,7 @@
 //! 5. `profile_chat_default_values` — assert the Chat profile resolves
 //!    to the spec's expected numbers.
 
-#![cfg(feature = "upstream-hyper")]
+#![cfg(all(feature = "upstream-hyper", test))]
 
 use std::future::Future;
 use std::net::SocketAddr;

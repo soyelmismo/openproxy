@@ -22,8 +22,6 @@ use super::response::{UpstreamBodyStream, UpstreamResponse};
 #[cfg(feature = "upstream-hyper")]
 use super::connector::{phased_phase, PhasedConnector, PhasedTimeouts};
 #[cfg(feature = "upstream-hyper")]
-use hyper::body::Body as _;
-#[cfg(feature = "upstream-hyper")]
 use hyper_util::client::legacy::connect::Connection as HyperConnection;
 #[cfg(feature = "upstream-hyper")]
 use hyper_util::client::legacy::Client as HyperClient;
@@ -216,7 +214,6 @@ impl UpstreamClient {
             + Send
             + 'static,
     {
-        use http_body::Body as _;
         let hyper: HyperClient<C, Empty<Bytes>> =
             HyperClient::builder(TokioExecutor::new()).build(connector.clone());
         let arc: Arc<dyn HyperDispatchDyn> = Arc::new(TestDispatch {
@@ -525,10 +522,8 @@ fn spawn_eviction_loop(pool: Pool) {
         return;
     }
     tokio::spawn(async move {
-        let mut tick = 0u64;
         loop {
             tokio::time::sleep(std::time::Duration::from_secs(30)).await;
-            tick += 1;
             // 60s window = 2 ticks (we sleep 30s). Drop entries whose
             // last_used_tick is more than 2 ticks old.
             let evicted = pool.evict_older_than(2);
