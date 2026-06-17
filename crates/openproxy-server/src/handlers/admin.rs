@@ -1390,9 +1390,10 @@ pub async fn bulk_toggle_models(
 ///
 /// Companion to [`toggle_model`]: that endpoint hides a row from
 /// routing while preserving the audit trail; this one removes the row
-/// outright. Combo-targets referencing the model are dropped in the
-/// same transaction (the schema's FK on `combo_targets.model_row_id` is
-/// not cascading).
+/// outright. Combo-targets referencing the model are preserved with
+/// `model_row_id = NULL` (migration 000025 `ON DELETE SET NULL`); they
+/// are filtered from routing by `combos::list_targets` (Gate E3). The
+/// row is kept in the table for audit / re-binding.
 ///
 /// A missing id is a silent no-op — `models::delete` reports 0 rows
 /// removed and we surface that as `{"deleted": 0}` so the dashboard can

@@ -1847,11 +1847,12 @@ mod tests {
 
         // Trigger the orphan state by deleting the `models` row
         // directly. We deliberately do NOT go through
-        // `models::delete` here: that admin path explicitly pre-cleans
-        // `combo_targets` rows pointing at the model (see
-        // `models::delete` in models.rs), which would suppress the
-        // orphan state we are testing for. Bypassing the helper lets
-        // the FK `ON DELETE SET NULL` cascade do its Gate-D job.
+        // `models::delete` here: we want to exercise the FK
+        // `combo_targets.model_row_id ... ON DELETE SET NULL` cascade
+        // (Gate D) and the Gate E3 filter on the resulting orphan row
+        // in isolation, independent of the admin delete path. The
+        // helper and the raw `DELETE` are now behaviorally equivalent
+        // w.r.t. combo_targets (the helper no longer pre-cleans them).
         conn.execute("DELETE FROM models WHERE id = ?1", params![m_drop.0])
             .expect("raw delete model");
 
@@ -1930,8 +1931,10 @@ mod tests {
         let before = list_targets(&conn, cid).expect("list before");
         assert_eq!(before.len(), 2);
 
-        // Bypass `models::delete` so the cascade fires and creates
-        // orphans (see the note in the previous test).
+        // We delete the underlying `models` rows directly so this test
+        // isolates the Gate E3 filter behaviour (orphan rows being
+        // filtered from `list_targets`) from the admin `models::delete`
+        // path, which is covered separately.
         conn.execute("DELETE FROM models WHERE id = ?1", params![m1.0])
             .expect("raw delete m1");
         conn.execute("DELETE FROM models WHERE id = ?1", params![m2.0])
