@@ -137,6 +137,11 @@ const MIGRATIONS: &[Migration] = &[
         name: "000025_combo_targets_model_fk_set_null",
         sql: include_str!("../../migrations/000025_combo_targets_model_fk_set_null.sql"),
     },
+    Migration {
+        version: 26,
+        name: "000026_combo_targets_upstream_model_id",
+        sql: include_str!("../../migrations/000026_combo_targets_upstream_model_id.sql"),
+    },
 ];
 
 /// Apply pending migrations on `conn`. Idempotent: skips versions already in
@@ -359,7 +364,7 @@ mod tests {
                 c.query_row("SELECT COUNT(*) FROM schema_migrations", [], |r| r.get(0))
                     .expect("count")
             });
-        assert_eq!(count_first, 24, "twenty-four migrations applied (versions 1-6, 8-25)");
+        assert_eq!(count_first, 25, "twenty-five migrations applied (versions 1-6, 8-26)");
 
         {
             let mut writer = pool.writer();
