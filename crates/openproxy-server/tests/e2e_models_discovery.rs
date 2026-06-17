@@ -630,34 +630,22 @@ async fn e2e_discovery_and_delete_on_disappear() {
     //     actually be gone, otherwise the LEFT JOIN would still
     //     match and `model_id = "c"` would survive.
     //
-    // The two sides are normally coupled: a successful
-    // `admin::refresh_models` against the updated catalog wipes
-    // the `c` row in one go, and the orphan target starts
-    // reporting `model_id = ""` automatically. That's the happy
-    // path the spec describes.
+    // The two sides are coupled by Gate D's
+    // `combo_targets.model_row_id ... ON DELETE SET NULL`
+    // (migration 000025): a successful `admin::refresh_models`
+    // against the updated catalog wipes the `c` row in one go,
+    // the SET NULL cascade lands on the orphan target's
+    // `model_row_id`, and `list_targets_with_model` starts
+    // reporting `model_id = ""` automatically. That's the
+    // happy path the spec describes, and it's what this step
+    // exercises end-to-end.
     //
-    // However, the FK declared on
-    // `combo_targets.model_row_id REFERENCES models(id)`
-    // (migration 000016) is `NO ACTION` by default, which
-    // SQLite implements as `RESTRICT`. That means the happy
-    // path *as written* would abort the refresh transaction the
-    // moment the hard-delete in `upsert_many` tries to remove
-    // `c` while a `combo_targets` row still points at it. The
-    // transaction rolls back, the catalog row for `c` survives,
-    // and the orphan contract never gets exercised. This is an
-    // interaction issue between Gate B's hard-delete and the
-    // existing FK that the spec's "what the upstream drops, the
-    // catalog drops" sentence did not anticipate.
-    //
-    // This test deliberately exercises the *visibility* contract
-    // in isolation, by simulating the post-refresh state
-    // (catalog row gone, target row still present) through a
-    // direct SQL bypass with `PRAGMA foreign_keys = OFF` on a
-    // throwaway connection. The bypass is local to the test —
-    // no production code path is touched — and the test
-    // *also* asserts the interaction issue (a real refresh
-    // against a blocking target aborts) so the failure is
-    // loud, not silent.
+    // (Before Gate D, the FK defaulted to `NO ACTION` /
+    // `RESTRICT`, the refresh transaction aborted, and the
+    // catalog row for `c` survived — the spec for Gate C
+    // documented this in step 9.e/9.f as an interaction
+    // failure. With Gate D in place, the bypass is no longer
+    // needed.)
     //
     // 9.a. Re-establish the catalog so `c` is alive and we can
     //       build a target against its row id. We re-do the
@@ -730,74 +718,33 @@ async fn e2e_discovery_and_delete_on_disappear() {
         );
     }
 
-    // 9.e. Try the real `admin::refresh_models` against a
+    // 9.e. Run the real `admin::refresh_models` against a
     //       catalog that drops `c` while a target still
-    //       references it. This is the interaction issue called
-    //       out in the comment block above: the
-    //       `combo_targets.model_row_id` FK is `RESTRICT`, so
-    //       the transaction aborts and the catalog row for `c`
-    //       survives. We assert that the abort *does* happen
-    //       (i.e. the system is consistent — it doesn't
-    //       silently drop the target or wipe `c` behind the
-    //       admin's back).
+    //       references it. With Gate D's
+    //       `ON DELETE SET NULL` on
+    //       `combo_targets.model_row_id` (migration 000025),
+    //       the hard-delete in `upsert_many` succeeds: the
+    //       `models` row for `c` is removed and the orphan
+    //       target's `model_row_id` is set to NULL in the
+    //       same transaction. We assert the refresh succeeds
+    //       (i.e. Gate B and Gate D cooperate cleanly).
     mock.replace(vec!["a".into(), "b".into()]);
-    let refresh_with_blocking_target = call_refresh(
-        &state,
-        &provider,
-        "sk-e2e-fake",
-        &adapter,
-    )
-    .await;
-    assert!(
-        refresh_with_blocking_target.is_none(),
-        "expected refresh against a catalog that drops c to fail \
-         because combo_targets.model_row_id REFERENCES models(id) \
-         with RESTRICT semantics, leaving the target in place; \
-         this is the Gate B ↔ Gate C interaction issue the spec \
-         exposes. Got Ok instead."
-    );
+    call_refresh(&state, &provider, "sk-e2e-fake", &adapter)
+        .await
+        .expect(
+            "refresh against a catalog that drops c must succeed \
+             now that combo_targets.model_row_id has \
+             ON DELETE SET NULL (Gate D / migration 000025); \
+             a failure here means Gate B ↔ Gate D regressed.",
+        );
 
-    // 9.f. Bypass the FK locally and reproduce the post-refresh
-    //       state the spec's step 9 wants to verify: the catalog
-    //       row for `c` is gone, the target row survives. We
-    //       open a throwaway connection with
-    //       `PRAGMA foreign_keys = OFF` so the hard-delete goes
-    //       through; this is the same end-state the
-    //       production code would reach if the FK were
-    //       `ON DELETE SET NULL` (or the FK were dropped) on
-    //       `combo_targets.model_row_id`, which the spec
-    //       implicitly requires.
-    //
-    //       The DB file path is reconstructed from the
-    //       `TempDir` the test fixture wrote to in step 2 —
-    //       `DbPool` doesn't expose its path publicly, but the
-    //       test owns the dir and knows the file name.
-    {
-        let db_path = tmp.path().join("e2e.db");
-        let raw_conn = rusqlite::Connection::open(&db_path)
-            .expect("open raw conn for the FK-off bypass");
-        raw_conn
-            .execute_batch("PRAGMA foreign_keys = OFF;")
-            .expect("disable FK on the bypass connection");
-        raw_conn
-            .execute(
-                "DELETE FROM models \
-                 WHERE provider_id = ?1 AND model_id = 'c' AND custom = 0",
-                [provider.as_str()],
-            )
-            .expect("bypass-delete c");
-        // The PRAGMA is per-connection; closing the handle
-        // restores normal FK enforcement on the next
-        // connection the pool hands out.
-        drop(raw_conn);
-    }
-
-    // 9.g. After the bypass-delete:
+    // 9.f. After the refresh:
     //   - the catalog row for `c` is gone,
-    //   - the combo target's `model_row_id` is now a dangling
-    //     foreign key,
-    //   - `combos::list_targets_with_model` returns the orphan
-    //     target but with `model_id = ""` (the COALESCE).
+    //   - the combo target's `model_row_id` was set to NULL
+    //     by the ON DELETE SET NULL cascade,
+    //   - `combos::list_targets_with_model` returns the
+    //     bookkeeping row but with `model_id = ""` (the
+    //     COALESCE).
     {
         let w = state.db_pool().writer();
 
@@ -807,13 +754,14 @@ async fn e2e_discovery_and_delete_on_disappear() {
             rows.iter().map(|r| r.model_id.clone()).collect();
         assert!(
             !ids.contains("c"),
-            "the catalog row for c must be gone after the wipe: \
+            "the catalog row for c must be gone after the refresh: \
              got {ids:?}"
         );
 
-        // The target row is still there (no FK cascade), but
-        // the model_id it surfaces is empty. This is the
-        // "no longer returns c" contract the spec asks for.
+        // The target row is still there (the SET NULL preserves
+        // it for bookkeeping / re-activation), but the model_id
+        // it surfaces is empty. This is the "no longer returns c"
+        // contract the spec asks for.
         let after = combos::list_targets_with_model(&w, combo_id)
             .expect("list_targets_with_model after");
         assert_eq!(
@@ -833,22 +781,25 @@ async fn e2e_discovery_and_delete_on_disappear() {
              model_row_id to ''"
         );
 
-        // The plain `list_targets` (the spec mentions it as an
-        // alternative) returns the bookkeeping row regardless
-        // of the orphan status — it's the *visibility* layer
-        // (`list_targets_with_model`) that enforces the "no
-        // longer returns c" contract.
+        // The plain `list_targets` returns the bookkeeping row
+        // as well, but now with `model_row_id = None` (the
+        // ON DELETE SET NULL cascade nulled it in the same
+        // transaction that wiped the `c` row). This is the
+        // *clean* end-state Gate D is meant to produce — the
+        // bookkeeping id matches reality (the model is gone)
+        // without any FK-bypass hack.
         let plain = combos::list_targets(&w, combo_id)
             .expect("list_targets after");
         assert_eq!(plain.len(), 1);
         assert_eq!(plain[0].id, c_target_id);
-        // The bookkeeping row keeps its `model_row_id` —
-        // the FK has been compromised by the bypass, but the
-        // raw value is the original `c_row_id` we captured.
-        // This is fine: the contract the spec cares about is
-        // *what the admin API returns for the surfaced model*,
-        // not the integrity of the bookkeeping id.
-        assert_eq!(plain[0].model_row_id, Some(c_row_id));
+        assert_eq!(
+            plain[0].model_row_id, None,
+            "model_row_id must be NULL on the surviving target \
+             after the catalog row for c was deleted, courtesy of \
+             ON DELETE SET NULL (Gate D / migration 000025); got \
+             {:?}",
+            plain[0].model_row_id
+        );
     }
 
     // ============================================================
