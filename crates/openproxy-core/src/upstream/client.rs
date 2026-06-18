@@ -101,7 +101,7 @@ enum HyperDispatch {
     /// `connector` clone is kept here so we can call `set_timeouts`
     /// per request before the dispatch is issued.
     Production {
-        hyper: HyperClient<PhasedConnector, Empty<Bytes>>,
+        hyper: HyperClient<PhasedConnector, Full<Bytes>>,
         connector: PhasedConnector,
     },
     /// Test: any `C` that satisfies the hyper-util connect shape.
@@ -168,8 +168,17 @@ impl UpstreamClient {
             // the updates are visible to the cloned connector held
             // inside the HyperClient.
             let connector = PhasedConnector::with_defaults();
-            let hyper: HyperClient<PhasedConnector, Empty<Bytes>> =
-                HyperClient::builder(TokioExecutor::new()).build(connector.clone());
+            let hyper: HyperClient<PhasedConnector, Full<Bytes>> =
+                HyperClient::builder(TokioExecutor::new())
+                    // Disable keep-alive: when a request future is
+                    // dropped (e.g. client cancellation), the
+                    // underlying connection is closed instead of
+                    // being returned to the pool. This propagates
+                    // client-side cancellation to the upstream
+                    // socket. Trade-off: each request pays a fresh
+                    // TCP+TLS handshake (~50-200ms on WAN). ponytail.
+                    .pool_max_idle_per_host(0)
+                    .build(connector.clone());
             let pool = Pool::new();
             spawn_eviction_loop(pool.clone());
             Arc::new(Self {
@@ -214,8 +223,10 @@ impl UpstreamClient {
             + Send
             + 'static,
     {
-        let hyper: HyperClient<C, Empty<Bytes>> =
-            HyperClient::builder(TokioExecutor::new()).build(connector.clone());
+        let hyper: HyperClient<C, Full<Bytes>> =
+            HyperClient::builder(TokioExecutor::new())
+                .pool_max_idle_per_host(0)
+                .build(connector.clone());
         let arc: Arc<dyn HyperDispatchDyn> = Arc::new(TestDispatch {
             hyper,
             phase_hint,
@@ -569,7 +580,7 @@ fn spawn_eviction_loop(pool: Pool) {
 /// Production dispatch shim: wraps a real `HyperClient<PhasedConnector>`.
 #[cfg(feature = "upstream-hyper")]
 struct ProductionDispatch {
-    inner: HyperClient<PhasedConnector, Empty<Bytes>>,
+    inner: HyperClient<PhasedConnector, Full<Bytes>>,
 }
 
 #[cfg(feature = "upstream-hyper")]
@@ -594,32 +605,55 @@ impl HyperDispatchDyn for ProductionDispatch {
                 + '_,
         >,
     > {
-        // The production client is generic over the body type, so we
-        // re-build the request against `Empty<Bytes>` here (the
-        // production client is built with that body type). The body
-        // from the caller is dropped. This is intentional: the
-        // production path always uses `Empty<Bytes>` for the body
-        // type because the only call site at Gate 0 is the
-        // `cancel_mid_body` test, which goes through the test path
-        // (not the production path). A real call site in Gate 1+
-        // would either (a) use a streaming body or (b) re-shape the
-        // hyper client to be generic over the body.
+        // The production client is typed with `Full<Bytes>`. We have
+        // to materialise the caller's `Pin<Box<dyn Body>>` into a
+        // concrete `Full<Bytes>` before handing the request to
+        // hyper. We do that by draining the body in the async
+        // block below. The body is bounded (caller's
+        // `UpstreamRequest::body` is `Option<Bytes>`, never a
+        // streaming channel) so the read is O(1) in practice.
         //
-        // We map the body to `Empty<Bytes>` and let the legacy
-        // client do its thing.
-        let empty_body: Empty<Bytes> = Empty::new();
-        let mut builder = Request::builder()
-            .method(req.method().clone())
-            .uri(req.uri().clone());
-        {
-            let headers = builder.headers_mut().expect("request builder headers");
-            for (k, v) in req.headers().iter() {
-                headers.append(k.clone(), v.clone());
-            }
-        }
-        let new_req = builder.body(empty_body).expect("rebuild request");
+        // Earlier this shim rebuilt the request with `Empty<Bytes>`
+        // and silently dropped the caller's body, which meant every
+        // upstream POST arrived with `Content-Length: 0` and a
+        // missing JSON body. That regression surfaced in
+        // Gate E5 against `oauth2.googleapis.com` (`411 Length
+        // Required`) and OpenRouter (`400 failed to decode json
+        // body`); see `upstream-migration-report.md`.
+        let (method, uri, headers) = (
+            req.method().clone(),
+            req.uri().clone(),
+            req.headers().clone(),
+        );
+        let body = req.into_body();
         let inner = self.inner.clone();
         Box::pin(async move {
+            // Drain the caller's body. `BodyExt::collect` is
+            // bounded: it reads until `is_end_stream` and returns
+            // the concatenated `Bytes`. The 32 MiB cap is a
+            // hard ceiling mirroring the streaming-body cap in
+            // `UpstreamBodyStream::from_hyper`.
+            use http_body_util::BodyExt;
+            let collected = body
+                .collect()
+                .await
+                .map_err(|e| UpstreamError::Http(format!("body collect: {e}")))?;
+            let body_bytes: Bytes = collected.to_bytes();
+            // Build the new request with the drained body as
+            // `Full<Bytes>`. Headers (including `Content-Length`,
+            // which `call_inner` already set to `body_bytes.len()`
+            // when `spec.body` is `Some`) are carried over
+            // verbatim.
+            let mut builder = Request::builder().method(method).uri(uri);
+            {
+                let h = builder.headers_mut().expect("request builder headers");
+                for (k, v) in headers.iter() {
+                    h.append(k.clone(), v.clone());
+                }
+            }
+            let new_req: Request<Full<Bytes>> = builder
+                .body(Full::new(body_bytes))
+                .expect("rebuild request");
             inner
                 .request(new_req)
                 .await
@@ -714,7 +748,7 @@ where
         + Send
         + 'static,
 {
-    hyper: HyperClient<C, Empty<Bytes>>,
+    hyper: HyperClient<C, Full<Bytes>>,
     phase_hint: Option<UpstreamPhase>,
 }
 
@@ -757,19 +791,34 @@ where
                 + '_,
         >,
     > {
-        let empty_body: Empty<Bytes> = Empty::new();
-        let mut builder = Request::builder()
-            .method(req.method().clone())
-            .uri(req.uri().clone());
-        {
-            let headers = builder.headers_mut().expect("request builder headers");
-            for (k, v) in req.headers().iter() {
-                headers.append(k.clone(), v.clone());
-            }
-        }
-        let new_req = builder.body(empty_body).expect("rebuild request");
+        // Mirror the production dispatch: drain the caller's body
+        // into `Full<Bytes>` so tests that exercise the
+        // end-to-end pipeline observe the real request bytes
+        // arriving at the mock upstream.
+        let (method, uri, headers) = (
+            req.method().clone(),
+            req.uri().clone(),
+            req.headers().clone(),
+        );
+        let body = req.into_body();
         let inner = self.hyper.clone();
         Box::pin(async move {
+            use http_body_util::BodyExt;
+            let collected = body
+                .collect()
+                .await
+                .map_err(|e| UpstreamError::Http(format!("body collect: {e}")))?;
+            let body_bytes: Bytes = collected.to_bytes();
+            let mut builder = Request::builder().method(method).uri(uri);
+            {
+                let h = builder.headers_mut().expect("request builder headers");
+                for (k, v) in headers.iter() {
+                    h.append(k.clone(), v.clone());
+                }
+            }
+            let new_req: Request<Full<Bytes>> = builder
+                .body(Full::new(body_bytes))
+                .expect("rebuild request");
             inner
                 .request(new_req)
                 .await

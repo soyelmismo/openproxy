@@ -5857,6 +5857,206 @@ mod tests {
         let _ = server_handle.await;
     }
 
+    /// Regression test for the body-discard bug in
+    /// `ProductionDispatch::dispatch`. The hyper client is
+    /// `HyperClient<PhasedConnector, Full<Bytes>>` and the dispatch
+    /// shim must materialise the caller's `Pin<Box<dyn Body>>` into
+    /// a concrete `Full<Bytes>` before handing the request to
+    /// hyper. This test exercises the full pipeline end-to-end and
+    /// asserts that the mock upstream actually receives the JSON
+    /// body — not an empty `Content-Length: 0`.
+    #[tokio::test]
+    async fn bug_a_body_reaches_upstream() {
+        use crate::adapters::{
+            AdapterAuthType, AdapterFormat, ProviderAdapter, ProviderAdapterConfig,
+        };
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::sync::Arc;
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        use tokio::net::TcpListener;
+
+        struct MockAdapter {
+            config: ProviderAdapterConfig,
+        }
+        #[async_trait::async_trait]
+        impl ProviderAdapter for MockAdapter {
+            fn id(&self) -> &ProviderId {
+                &self.config.id
+            }
+            fn config(&self) -> &ProviderAdapterConfig {
+                &self.config
+            }
+            fn build_chat_url(
+                &self,
+                _target_format: TargetFormat,
+                _model: &crate::ids::ModelId,
+            ) -> String {
+                self.config.base_url.clone()
+            }
+            fn build_auth_header(&self, api_key: &str) -> (String, String) {
+                ("Authorization".into(), format!("Bearer {api_key}"))
+            }
+            fn build_headers(
+                &self,
+                api_key: &str,
+                _target_format: TargetFormat,
+                _model: &crate::ids::ModelId,
+            ) -> Vec<(String, String)> {
+                vec![
+                    self.build_auth_header(api_key),
+                    ("Content-Type".into(), "application/json".into()),
+                ]
+            }
+            fn models_url(&self) -> Option<String> {
+                None
+            }
+            async fn fetch_models(
+                &self,
+                _upstream_client: &std::sync::Arc<crate::upstream::UpstreamClient>,
+                _api_key: &str,
+            ) -> Result<Vec<crate::models::DiscoveredModel>> {
+                Ok(Vec::new())
+            }
+        }
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
+        let local_addr = listener.local_addr().expect("local_addr");
+        let upstream_url = format!("http://{local_addr}");
+
+        // Count body bytes the upstream actually receives. The
+        // `MARKER` substring in the body lets us verify the JSON
+        // round-trips intact (i.e. we're not getting a default /
+        // empty body).
+        let bytes_received = Arc::new(AtomicUsize::new(0));
+        let bytes_received_clone = bytes_received.clone();
+        let server_handle = tokio::spawn(async move {
+            let (mut sock, _peer) = listener.accept().await.expect("accept");
+            let mut buf = vec![0u8; 64 * 1024];
+            let mut total = 0usize;
+            let mut content_length: Option<usize> = None;
+            let mut header_end: Option<usize> = None;
+            loop {
+                let r = tokio::time::timeout(
+                    Duration::from_secs(2),
+                    sock.read(&mut buf[total..]),
+                )
+                .await;
+                match r {
+                    Err(_) | Ok(Ok(0)) | Ok(Err(_)) => break,
+                    Ok(Ok(n)) => {
+                        total += n;
+                        if header_end.is_none() {
+                            if let Some(pos) =
+                                buf[..total].windows(4).position(|w| w == b"\r\n\r\n")
+                            {
+                                header_end = Some(pos);
+                                let header_str =
+                                    std::str::from_utf8(&buf[..pos]).unwrap_or("");
+                                for line in header_str.split("\r\n") {
+                                    if let Some(rest) = line
+                                        .to_ascii_lowercase()
+                                        .strip_prefix("content-length:")
+                                    {
+                                        content_length = rest.trim().parse().ok();
+                                    }
+                                }
+                            }
+                        }
+                        if let (Some(he), Some(cl)) = (header_end, content_length) {
+                            if total - (he + 4) >= cl {
+                                break;
+                            }
+                        }
+                        if total == buf.len() {
+                            break;
+                        }
+                    }
+                }
+            }
+            // Count body bytes (everything after the header
+            // terminator, capped at `content_length`).
+            if let (Some(he), Some(cl)) = (header_end, content_length) {
+                let body_start = he + 4;
+                let body_end = std::cmp::min(body_start + cl, total);
+                if body_end > body_start {
+                    bytes_received_clone.store(
+                        body_end - body_start,
+                        Ordering::SeqCst,
+                    );
+                }
+            }
+            let body = r#"{"id":"chatcmpl-test","object":"chat.completion","created":1,"model":"m","choices":[{"index":0,"message":{"role":"assistant","content":"hello"},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}"#;
+            let response = format!(
+                "HTTP/1.1 200 OK\r\n\
+                 Content-Type: application/json\r\n\
+                 Content-Length: {}\r\n\
+                 Connection: close\r\n\
+                 \r\n\
+                 {}",
+                body.len(),
+                body,
+            );
+            let _ = sock.write_all(response.as_bytes()).await;
+            let _ = sock.flush().await;
+        });
+
+        let (pool, conn, _path) = fresh_pool();
+        let mk = Arc::new(MasterKey::generate());
+        let (combo_id, _account_id) = seed_solo_combo_at_url(
+            &pool.writer(),
+            "body-bug-test",
+            &upstream_url,
+            &mk,
+        );
+
+        let defaults = Timeouts::from_config(&TimeoutsConfig::default());
+        let mock = MockAdapter {
+            config: ProviderAdapterConfig {
+                id: ProviderId::new("body-bug-test"),
+                base_url: upstream_url.clone(),
+                auth_type: AdapterAuthType::Bearer,
+                format: AdapterFormat::Openai,
+                extra_headers: Vec::new(),
+            },
+        };
+        let cfg = PipelineConfig {
+            defaults,
+            racing: RacingConfig::default(),
+            retries: RetriesConfig::default(),
+            max_attempts: 1,
+            master_key: mk,
+            adapters: Arc::new(vec![Arc::new(mock) as Arc<dyn ProviderAdapter>]),
+            http_client: reqwest::Client::new(),
+            cooldown_secs: 60,
+            upstream_client: UpstreamClient::new(),
+        };
+        let p = Pipeline::new(conn, cfg);
+
+        let (req, _cancel_tx) = make_request(combo_id);
+
+        let result = tokio::time::timeout(Duration::from_secs(15), p.run(req))
+            .await
+            .expect("pipeline.run timed out — body-reaches-upstream did not return");
+
+        assert!(
+            result.error.is_none(),
+            "expected no error from body-bug dispatch but got {:?}",
+            result.error
+        );
+        let _ = server_handle.await;
+        let received = bytes_received.load(Ordering::SeqCst);
+        // A real OpenAI chat body is well over 200 bytes; the old
+        // `Empty<Bytes>` body would land at 0. We allow a generous
+        // floor (50) so the test is robust against small format
+        // tweaks while still catching the "body dropped to 0" bug.
+        assert!(
+            received > 50,
+            "upstream received only {received} body bytes; expected the full \
+             OpenAI chat JSON body (regression: ProductionDispatch::dispatch \
+             was discarding the caller's body before Gate E5)"
+        );
+    }
+
     /// End-to-end exercise of the new (Gate 2) streaming chat
     /// dispatch path that uses `UpstreamClient::call()` and
     /// `UpstreamBodyStream::next_chunk()` instead of the legacy
@@ -6428,22 +6628,32 @@ mod tests {
             // well-formed JSON so `parse_openai_sse_line` returns
             // `Ok(Some(_))` and the pipeline records TTFT and
             // enters the steady-state `while let` loop.
+            // `Content-Type: text/event-stream` here is critical:
+            // with `Transfer-Encoding: chunked` the body is a
+            // proper byte stream that only ends when the server
+            // closes the socket. Without chunked encoding, the
+            // client hyper derives `Content-Length` from the first
+            // chunk and treats subsequent writes as protocol
+            // errors, masking the very signal we want to observe.
             let headers = b"HTTP/1.1 200 OK\r\n\
                             Content-Type: text/event-stream\r\n\
                             Cache-Control: no-cache\r\n\
-                            Connection: keep-alive\r\n\
+                            Transfer-Encoding: chunked\r\n\
+                            Connection: close\r\n\
                             \r\n";
             let chunk = b"data: {\"id\":\"chatcmpl-x\",\"object\":\"chat.completion.chunk\",\
                           \"created\":1,\"model\":\"m\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"hi\"},\"finish_reason\":null}]}\n\n";
             if sock.write_all(headers).await.is_err() {
                 return;
             }
-            if sock.write_all(chunk).await.is_err() {
+            // Wrap the chunk in chunked-encoding framing so the
+            // client sees a proper open-ended stream.
+            let framed = format!("{:x}\r\n{}\r\n", chunk.len(), std::str::from_utf8(chunk).unwrap());
+            if sock.write_all(framed.as_bytes()).await.is_err() {
                 return;
             }
             if sock.flush().await.is_err() {
                 return;
-
             }
 
             // Now STALL: read the socket until either the client
@@ -6456,6 +6666,7 @@ mod tests {
             let mut stall_buf = [0u8; 1024];
             let stall_deadline = std::time::Instant::now()
                 + std::time::Duration::from_secs(10);
+            let mut poll_count = 0u32;
             loop {
                 let now = std::time::Instant::now();
                 if now >= stall_deadline {
@@ -6467,28 +6678,36 @@ mod tests {
                     sock.read(&mut stall_buf),
                 )
                 .await;
+                poll_count += 1;
                 match read {
                     // Client closed the connection — this is the
                     // signal that reqwest propagated the
                     // cancellation all the way down to the socket.
                     Ok(Ok(0)) => {
+                        eprintln!("[test server] client closed connection after {} polls", poll_count);
                         server_client_closed.store(true, Ordering::SeqCst);
                         break;
                     }
                     Ok(Ok(n)) => {
+                        eprintln!("[test server] received {} bytes from client (poll {})", n, poll_count);
                         server_bytes
                             .fetch_add(n as u64, Ordering::SeqCst);
                     }
                     // Read errored out (typically a reset from the
                     // peer once reqwest drops the body future).
                     Ok(Err(_)) => {
+                        eprintln!("[test server] read errored (poll {})", poll_count);
                         server_client_closed.store(true, Ordering::SeqCst);
                         break;
                     }
                     // Timeout with no data: the client is still
                     // holding the socket open. Loop and try again
                     // so we keep watching for the close.
-                    Err(_) => {}
+                    Err(_) => {
+                        if poll_count % 20 == 0 {
+                            eprintln!("[test server] still waiting for close (poll {})", poll_count);
+                        }
+                    }
                 }
             }
         });
@@ -6582,36 +6801,51 @@ mod tests {
             ),
         }
 
-        // Stop the server (it has a 10s internal deadline but we
-        // don't want to wait for it on a successful test).
-        server_handle.abort();
-        let _ = server_handle.await;
-
+        // Verify the server actually accepted a TCP connection.
+        // If accepted=false, the pipeline never reached the HTTP
+        // layer and this test is not exercising the cancel path.
         assert!(
             accepted.load(Ordering::SeqCst),
             "the mock upstream never accepted a connection — the pipeline did \
              not actually reach the HTTP layer, so this test is not exercising \
              the stream-side select! at all"
         );
-        // We do not strictly require `client_closed.load(...)` to be
-        // true: reqwest MAY keep the connection in its pool until the
-        // keepalive timer fires, especially if the body future is
-        // dropped before any bytes have been consumed on the wire.
-        // The contract that matters for cancellation is that the
-        // pipeline's `bytes_stream().next()` future is dropped (so
-        // it stops reading the socket); the underlying TCP close is
-        // best-effort. We surface the observed value in the message
-        // so a regression is obvious in the test logs.
-        let observed_close = client_closed.load(Ordering::SeqCst);
-        if !observed_close {
+        // Poll the server-side close flag for up to 5s. This
+        // gives the hyper-util Pooled -> Idle -> drop chain
+        // enough time to close the TCP connection on the wire.
+        // We surface the observed value in the test logs so a
+        // regression in the cancellation path is visible even
+        // if the connection eventually reuses elsewhere.
+        let close_deadline = std::time::Instant::now()
+            + std::time::Duration::from_secs(5);
+        while !client_closed.load(Ordering::SeqCst)
+            && std::time::Instant::now() < close_deadline
+        {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        let client_closed_observed = client_closed.load(Ordering::SeqCst);
+        let bytes_observed = bytes_after_headers.load(Ordering::SeqCst);
+        if !client_closed_observed {
+            // Soft warning instead of panic: a cancelled
+            // request whose connection stays pooled for the
+            // 5s window is not a correctness regression in
+            // the cancellation logic (the pipeline still
+            // short-circuits its own `select!` and the hyper
+            // body is dropped), it just means the underlying
+            // TCP close is best-effort and depends on the
+            // upstream side holding the socket open long
+            // enough. The `bug_a_body_reaches_upstream` test
+            // is the load-bearing regression guard for
+            // "request body is sent to upstream".
             eprintln!(
-                "[test note] mock upstream did not observe a client close within \
-                 the stall window ({} bytes received after the chunk). This is \
-                 acceptable — reqwest may return the connection to its pool — \
-                 but a future regression that keeps the body future alive would \
-                 manifest as 'observed_close=true' transitioning to false.",
-                bytes_after_headers.load(Ordering::SeqCst)
+                "[test note] client_close not observed within 5s; \
+                 bytes_after_headers={bytes_observed} — this is acceptable \
+                 when the upstream side closes its end first"
             );
         }
+
+        // Stop the server.
+        server_handle.abort();
+        let _ = server_handle.await;
     }
 }
