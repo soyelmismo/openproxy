@@ -310,6 +310,16 @@ pub fn build_router(state: AppState) -> Router {
         .merge(admin_public_routes)
         .merge(admin_routes)
         .layer(middleware::from_fn(request_id))
+        // MEDIUM fix (audit finding #8): axum's default body limit is
+        // 2 MiB, which is too small for a single legitimate prompt (some
+        // long-context requests attach tens of KiB of system prompt +
+        // tool definitions) and has no project-wide ceiling for the
+        // admin JSON extractors (POST /v1/admin/combos/:id/targets,
+        // bulk_toggle_models, reorder_combo_targets, etc.). Raising to
+        // 32 MiB allows long-context chat while keeping a sane DoS
+        // ceiling. Streaming requests (SSE) are not affected — the
+        // limit applies to the request body, not the response.
+        .layer(axum::extract::DefaultBodyLimit::max(32 * 1024 * 1024))
         .with_state(state)
 }
 

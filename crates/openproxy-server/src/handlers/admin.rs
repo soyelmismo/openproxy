@@ -4009,4 +4009,71 @@ mod tests {
         assert!(f.from.is_none());
         assert!(f.to.is_none());
     }
+
+    // ---- MEDIUM fix: DefaultBodyLimit is raised to 32 MiB ----
+    //
+    // axum's default is 2 MiB. We raise it so long-context chat
+    // requests (system prompt + tool definitions + history) are not
+    // rejected. The smoke test below confirms a 10 MiB body is
+    // accepted and a 100 MiB body is rejected (the upper bound is
+    // configurable but currently 32 MiB; 100 MiB exceeds that).
+
+    #[tokio::test]
+    async fn body_limit_accepts_10_mib_chat_body() {
+        // Build a minimal chat request with a 10 MiB system prompt.
+        // 10 MiB ≪ 32 MiB ceiling → must be accepted (the handler
+        // still rejects it for missing auth, but the rejection is
+        // NOT 413 Payload Too Large).
+        use axum::body::Body;
+        use axum::http::{Request, StatusCode};
+        use tower::ServiceExt;
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let (state, _key) = make_state_with_key(tmp.path()).await;
+        let app = crate::router::build_router(state);
+        let big = "x".repeat(10 * 1024 * 1024);
+        let body_json = format!(
+            r#"{{"model":"gpt-4o","messages":[{{"role":"system","content":"{}"}}]}}"#,
+            big
+        );
+        let req = Request::builder()
+            .method("POST")
+            .uri("/v1/chat/completions")
+            .header("content-type", "application/json")
+            .body(Body::from(body_json))
+            .expect("build req");
+        let resp = app.oneshot(req).await.expect("oneshot");
+        assert_ne!(
+            resp.status(),
+            StatusCode::PAYLOAD_TOO_LARGE,
+            "10 MiB body must not be rejected by the body limit"
+        );
+    }
+
+    #[tokio::test]
+    async fn body_limit_rejects_100_mib_chat_body() {
+        // 100 MiB ≫ 32 MiB ceiling → must be rejected with 413.
+        use axum::body::Body;
+        use axum::http::{Request, StatusCode};
+        use tower::ServiceExt;
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let (state, _key) = make_state_with_key(tmp.path()).await;
+        let app = crate::router::build_router(state);
+        let big = "x".repeat(100 * 1024 * 1024);
+        let body_json = format!(
+            r#"{{"model":"gpt-4o","messages":[{{"role":"system","content":"{}"}}]}}"#,
+            big
+        );
+        let req = Request::builder()
+            .method("POST")
+            .uri("/v1/chat/completions")
+            .header("content-type", "application/json")
+            .body(Body::from(body_json))
+            .expect("build req");
+        let resp = app.oneshot(req).await.expect("oneshot");
+        assert_eq!(
+            resp.status(),
+            StatusCode::PAYLOAD_TOO_LARGE,
+            "100 MiB body must be rejected by the 32 MiB body limit"
+        );
+    }
 }
