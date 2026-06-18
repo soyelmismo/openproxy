@@ -37,6 +37,7 @@ use crate::upstream::{CancellationToken, TimeoutProfile, UpstreamClient, Upstrea
 use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
+use tokio::sync::watch;
 use uuid::Uuid;
 
 // ---------------------------------------------------------------------------
@@ -307,11 +308,23 @@ fn parse_antigravity_line(
 /// endpoint at `crates/openproxy-server/src/handlers/admin.rs:1972`
 /// is an out-of-scope call site that still passes a `reqwest::Client`
 /// and is tracked as a follow-up (see Gate 3 report).
+///
+/// **C3 fix:** the function now accepts the per-request
+/// `client_disconnected: watch::Receiver<bool>` and wires it into
+/// the upstream call as a [`CancellationToken::from_watch`]. The
+/// previous implementation created a fresh `CancellationToken::new()`
+/// that was never flipped by the client's TCP-level disconnect, so
+/// a streaming request the user closed early kept running on the
+/// Antigravity backend for the full `body_chunk_ms` and billed
+/// tokens the client never saw. Plumbing the watch through here
+/// means a real cancel propagates into the upstream call within a
+/// few milliseconds.
 pub async fn execute_antigravity(
     upstream_client: &Arc<UpstreamClient>,
     access_token: &str,
     project_id: &str,
     openai: &OpenAIRequest,
+    client_disconnected: watch::Receiver<bool>,
 ) -> Result<OpenAIResponse, CoreError> {
     // 1. Build Cloud Code envelope
     let envelope = build_antigravity_request(openai, project_id)?;
@@ -338,7 +351,13 @@ pub async fn execute_antigravity(
     //    `TimeoutProfile::Chat` (no per-call `Timeouts` is plumbed
     //    through to the executors today; `state.rs` only sets a
     //    `connect_ms` for the legacy reqwest client).
-    let cancel = CancellationToken::new();
+    //
+    //    The cancellation token is sourced from
+    //    `client_disconnected` (the per-request watch) so a real
+    //    client cancel propagates into the upstream send /
+    //    streaming reads via `tokio::select!`. See the function
+    //    docstring for the C3 audit context.
+    let cancel = CancellationToken::from_watch(client_disconnected);
     let response = match upstream_client
         .call(upstream_request, TimeoutProfile::Chat, cancel)
         .await

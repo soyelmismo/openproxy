@@ -31,6 +31,7 @@ use openproxy_core::{
     api_keys,
     ids::{ApiKeyId, ComboId, RequestId, TraceId},
     pipeline::{Pipeline, PipelineConfig, PipelineRequest},
+    redact::redact_sensitive_headers,
     routing::{self, build_synthetic_combo, RoutingPlan, SYNTHETIC_COMBO_ID},
     translation::OpenAIRequest,
     upstream::UpstreamClient,
@@ -315,10 +316,14 @@ async fn run_pipeline(
         api_key_id,
         combo_override,
         targets_override,
-        request_headers: headers
-            .iter()
-            .map(|(k, v)| (k.as_str().to_string(), v.to_str().unwrap_or("").to_string()))
-            .collect(),
+        // Strip the secret-bearing headers BEFORE the BTreeMap
+        // crosses into the pipeline. The full HeaderMap would
+        // persist verbatim into `usage.request_headers` whenever
+        // recording is on, which would leak the caller's
+        // `Authorization: Bearer *** ` `Cookie: ...`, etc. The
+        // helper is the single source of truth for what counts as
+        // "sensitive" (see `openproxy_core::redact`).
+        request_headers: redact_sensitive_headers(&headers),
     };
 
     if openai_req.stream {

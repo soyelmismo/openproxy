@@ -49,6 +49,17 @@ interface WsEnvelope {
   delta?: string;
   complete?: boolean;
   id?: number;
+  // H7 fix: `lag_warning` and `resync` envelopes
+  // (RACE-F-5) carry extra fields the dashboard uses to
+  // recover from a lagged broadcast channel. The plan said
+  // we MUST NOT change the wire contract of WS envelopes,
+  // so these are additional fields on an extensible
+  // JSON object — old clients that don't know about them
+  // simply ignore the unknown keys. We mark both as
+  // optional so existing usage of `WsEnvelope` keeps
+  // type-checking.
+  skipped?: number;
+  since_id?: number;
 }
 
 function totalPages(): number {
@@ -192,7 +203,10 @@ function renderLogsRows(): void {
           // only for the edge case where a row's `trace_id` is
           // empty (synthetic events emitted from the frontend
           // itself).
-          const stage: StageEvent | undefined = getStageForRow(r);
+          const stage: StageEvent | undefined =
+            (r.trace_id && state.logs.stagesByTraceId.get(r.trace_id)) ||
+            (r.request_id && state.logs.stagesByRequestId.get(r.request_id)) ||
+            undefined;
           return renderLogRowHtml(r, stage, visibleColKeys, r.total_ms);
         })
         .join("")
@@ -413,52 +427,32 @@ function setStage(event: StageEvent, requestId: string): void {
   }
 }
 
-// Build a synthetic terminal `StageEvent` from a finalized
-// `RecentUsageRow`. Used in two places:
-//  - The history envelope handler (rows that come back from
-//    `usage::recent_desc` — they never went through the live
-//    stage pipeline, so we synthesize the terminal event from
-//    the row's columns).
-//  - The `row` envelope R3 handler (when a row arrives but the
-//    operator missed the terminal stage — defensive).
-//
-// Both call sites used to inline a 11-field object literal; this
-// helper is the single source of truth for the mapping.
-function rowToTerminalStageEvent(r: RecentUsageRow): StageEvent {
-  return {
-    request_id: r.request_id,
-    trace_id: r.trace_id,
-    provider_id: r.provider_id,
-    upstream_model_id: r.upstream_model_id,
-    stage: r.status_code >= 400 ? "failed" : "completed",
-    elapsed_ms: r.total_ms || 0,
-    connect_ms: r.connect_ms,
-    ttft_ms: r.ttft_ms,
-    status_code: r.status_code,
-    error: r.error_message ?? null,
-    timestamp: r.created_at || new Date().toISOString(),
-  };
-}
-
-// Look up the live stage for a row, preferring the per-attempt
-// `trace_id` map and falling back to the per-request map. The
-// fallback exists because some synthetic events (history envelope
-// reconstructions, row-envelope terminal shims) come through with
-// an empty `trace_id` — those still need to drive the cell.
-//
-// Used by:
-//  - `views/logs.ts` (row render and "first paint after subscribe")
-//  - `state/ticker.ts` (live counter lookup)
-//
-// Centralizing the lookup means a future third index (e.g.
-// `byRequestIdOnly` for synthetic history rows) only has to be
-// added in one place.
-export function getStageForRow(
-  row: Pick<RecentUsageRow, "trace_id" | "request_id">,
-): StageEvent | undefined {
-  if (row.trace_id) return state.logs.stagesByTraceId.get(row.trace_id);
-  if (row.request_id) return state.logs.stagesByRequestId.get(row.request_id);
-  return undefined;
+// H7 fix: when the server reports it lost us on a
+// broadcast channel, it sends a `{"type":"resync",
+// "since_id":N}` envelope. We then fetch any rows newer than
+// N from the `usage/recent` endpoint and merge them in.
+// Without this, a slow dashboard would permanently lose the
+// rows it failed to consume in time.
+async function resyncUsageRows(sinceId: number): Promise<void> {
+  try {
+    const rows = await api(
+      `/usage/recent?since_id=${encodeURIComponent(String(sinceId))}&limit=500`,
+    ) as RecentUsageRow[] | null;
+    if (Array.isArray(rows) && rows.length > 0) {
+      state.logs.rows = mergeLogsByDescId(state.logs.rows, rows);
+      for (const r of rows) {
+        if (r && typeof r.id === "number") {
+          state.logs.rowById.set(r.id, r);
+        }
+      }
+      if (state.logs.followTail) state.logs.page = 1;
+      renderLogsRows();
+    }
+  } catch (e: unknown) {
+    const err = e instanceof Error ? e : null;
+    const msg = err ? err.message : String(e);
+    showToast(`Failed to refetch missed log rows: ${msg}`, "error");
+  }
 }
 
 function handleStreamTokens(msg: WsEnvelope): void {
@@ -530,7 +524,19 @@ function handleLogsMessage(raw: MessageEvent): void {
         // phase. With this, the historical row's phase is locked
         // to its own attempt and is not overwritten when a later
         // attempt of the same `request_id` arrives.
-        const synth: StageEvent = rowToTerminalStageEvent(r);
+        const synth: StageEvent = {
+          request_id: r.request_id,
+          stage: r.status_code >= 400 ? "failed" : "completed",
+          elapsed_ms: r.total_ms || 0,
+          status_code: r.status_code,
+          timestamp: r.created_at || new Date().toISOString(),
+          trace_id: r.trace_id,
+          provider_id: r.provider_id,
+          upstream_model_id: r.upstream_model_id,
+          connect_ms: r.connect_ms,
+          ttft_ms: r.ttft_ms,
+          error: r.error_message ?? null,
+        };
         if (r.trace_id) {
           state.logs.stagesByTraceId.set(r.trace_id, synth);
         } else {
@@ -589,7 +595,9 @@ function handleLogsMessage(raw: MessageEvent): void {
         // Look up the currently-stored stage for this attempt.
         // The lookup uses the same `trace_id` → `request_id`
         // fallback the rest of the module uses.
-        const existingStage: StageEvent | undefined = getStageForRow(row);
+        const existingStage: StageEvent | undefined = row.trace_id
+          ? state.logs.stagesByTraceId.get(row.trace_id)
+          : state.logs.stagesByRequestId.get(row.request_id);
         const existingIsTerminal: boolean = !!existingStage &&
           (existingStage.stage === "completed" || existingStage.stage === "failed");
         if (!existingIsTerminal) {
@@ -597,13 +605,26 @@ function handleLogsMessage(raw: MessageEvent): void {
           // `setStage` helper indexes by `trace_id` (primary)
           // and `request_id` (fallback) — same as the live
           // stage path — so the next ticker tick finds the
-          // frozen value. The 11-field shape is built by
-          // `rowToTerminalStageEvent` (single source of truth).
-          // `elapsed_ms` is informational here; the ticker
-          // short-circuits on stage === "completed" /
-          // "failed" so this value isn't read for finished
-          // requests.
-          setStage(rowToTerminalStageEvent(row), row.request_id);
+          // frozen value.
+          const synth: StageEvent = {
+            request_id: row.request_id,
+            stage: row.status_code >= 400 ? "failed" : "completed",
+            // elapsed_ms is informational here; the ticker
+            // short-circuits on stage === "completed" /
+            // "failed" so this value isn't read for finished
+            // requests. Keep it consistent with the row's
+            // total_ms for any future caller.
+            elapsed_ms: row.total_ms || 0,
+            status_code: row.status_code,
+            timestamp: row.created_at || new Date().toISOString(),
+            trace_id: row.trace_id,
+            provider_id: row.provider_id,
+            upstream_model_id: row.upstream_model_id,
+            connect_ms: row.connect_ms,
+            ttft_ms: row.ttft_ms,
+            error: row.error_message ?? null,
+          };
+          setStage(synth, row.request_id);
         }
       }
     }
@@ -619,6 +640,26 @@ function handleLogsMessage(raw: MessageEvent): void {
     handleStreamTokens(msg);
   } else if (msg.type === "error") {
     showToast(msg.message || "Live Logs WebSocket error", "error");
+  } else if (msg.type === "lag_warning") {
+    // H7 fix: the server detected a broadcast `Lagged(_)` on
+    // either the row or the stage channel. A `resync` envelope
+    // follows immediately (handled below). Show a persistent
+    // banner so the operator knows the displayed log is not
+    // a complete picture; the resync fetch will fill in the
+    // gap in the background.
+    const skipped = Number(msg.skipped || 0);
+    showToast(
+      `Live Logs broadcast lagged; ${skipped} event(s) skipped. ` +
+        `Refetching to catch up…`,
+      "warning",
+    );
+  } else if (msg.type === "resync") {
+    // H7 fix: the server lost us on a broadcast channel and
+    // is asking the dashboard to fetch any rows newer than
+    // `since_id` to recover. This is the only path that
+    // prevents permanent state loss for slow dashboards.
+    const sinceId = Number(msg.since_id || 0);
+    void resyncUsageRows(sinceId);
   }
 }
 

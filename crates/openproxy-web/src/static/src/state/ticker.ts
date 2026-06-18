@@ -12,12 +12,11 @@
 // frontend emits from the row/history completion paths.
 
 import { state } from "./index.js";
-import { getStageForRow } from "../views/logs.js";
-import { phaseSublabel } from "../lib/constants.js";
 import type { RecentUsageRow, StageEvent } from "../lib/types/api.js";
 
 function tickLogLatency(): void {
   const stagesByTraceId: Map<string, StageEvent> = state.logs.stagesByTraceId;
+  const stagesByRequestId: Map<string, StageEvent> = state.logs.stagesByRequestId;
   if (!stagesByTraceId || stagesByTraceId.size === 0) return;
   const now: number = Date.now();
   const rowEls: NodeListOf<Element> = document.querySelectorAll("#logs .log-row[data-request-id]");
@@ -45,7 +44,14 @@ function tickLogLatency(): void {
     // "counters-double-on-failed-entries" bug.
     const traceId: string = el.dataset["traceId"] || "";
     const requestId: string = el.dataset["requestId"] || "";
-    const stage: StageEvent | undefined = getStageForRow({ trace_id: traceId, request_id: requestId });
+    let stage: StageEvent | undefined;
+    if (traceId) {
+      stage = stagesByTraceId.get(traceId);
+    } else {
+      // Fallback for synthetic events emitted without a
+      // `trace_id`. We accept the request_id-keyed map here.
+      if (requestId) stage = stagesByRequestId.get(requestId);
+    }
     if (!stage) continue;
     if (stage.stage === "completed" || stage.stage === "failed") continue;
     // Row-finalized freeze (R3 defense-in-depth). If the
@@ -82,31 +88,19 @@ function tickLogLatency(): void {
     }
     const sub: Element | null = rowEl.querySelector(".log-phase-sub");
     if (sub) {
-      // Use the unified `phaseSublabel` helper (the same one used
-      // by `renderLogPhaseHtml` in `components/log-row.ts`) for
-      // every branch that has a deterministic answer
-      // (`total Nms`, `${total}ms stale`, `ttft Xms`,
-      // `connect Yms`). For the live-ticker fallback we keep
-      // `${live}ms` (the wall-clock counter) instead of the
-      // helper's stage-snapshot fallback, because the ticker is
-      // the only path the operator sees actually ticking.
-      const helperLabel: string = phaseSublabel(stage, finalizedRow?.total_ms);
       let label: string;
-      // If the helper returned anything other than its
-      // snapshot fallback (`${stage.elapsed_ms}ms` or `0ms`),
-      // it produced a deterministic sublabel — use it.
-      // Otherwise we're in the live-fallback case.
-      const snapshotMs: number = stage.elapsed_ms || 0;
-      const isLiveFallback: boolean =
-        helperLabel === `${snapshotMs}ms` || helperLabel === "0ms";
-      if (isLiveFallback) {
-        label = `${live}ms`;
-      } else {
-        label = helperLabel;
-        // The frozen sublabels (total / stale / ttft / connect)
-        // are deterministic — the row is no longer climbing.
+      if (finalizedRow && finalizedRow.total_ms > 0) {
+        // The row is finalized; show the row's `total_ms`
+        // rather than the (frozen) live counter. The
+        // `renderLogPhaseHtml` in `components/log-row.ts`
+        // also handles this, but the ticker is the path the
+        // user actually sees ticking — set the sublabel
+        // here so the next paint is coherent with the freeze.
+        label = `total ${finalizedRow.total_ms}ms`;
         sub.classList.remove("log-phase-sub--ticking");
-      }
+      } else if (stage.stage === "streaming" && stage.ttft_ms != null) label = `ttft ${stage.ttft_ms}ms`;
+      else if ((stage.stage === "waiting_ttft" || stage.stage === "streaming") && stage.connect_ms != null) label = `connect ${stage.connect_ms}ms`;
+      else label = `${live}ms`;
       if (sub.textContent !== label) {
         sub.textContent = label;
         // Don't add the "ticking" class to a row whose stage

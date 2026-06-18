@@ -43,6 +43,7 @@ use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::sync::Arc;
+use tokio::sync::watch;
 
 /// Default Kiro runtime region. The OAuth provider is hardcoded
 /// to `us-east-1`; the chat executor uses the same default until
@@ -384,12 +385,24 @@ fn extract_kiro_content(v: &Value) -> Option<String> {
 /// endpoint at `crates/openproxy-server/src/handlers/admin.rs:1996`
 /// is an out-of-scope call site that still passes a `reqwest::Client`
 /// and is tracked as a follow-up (see Gate 3 report).
+///
+/// **C3 fix:** the function now accepts the per-request
+/// `client_disconnected: watch::Receiver<bool>` and wires it into
+/// the upstream call as a [`CancellationToken::from_watch`]. The
+/// previous implementation created a fresh `CancellationToken::new()`
+/// that was never flipped by the client's TCP-level disconnect,
+/// so a streaming request that the user closed early kept running
+/// on the Kiro backend for the full `body_chunk_ms` (90s) and
+/// billed tokens the client never saw. Plumbing the watch through
+/// here means a real cancel propagates into the upstream call
+/// within a few milliseconds.
 pub async fn execute_kiro(
     upstream_client: &Arc<UpstreamClient>,
     access_token: &str,
     region: &str,
     profile_arn: Option<&str>,
     openai: &OpenAIRequest,
+    client_disconnected: watch::Receiver<bool>,
 ) -> Result<OpenAIResponse> {
     // 1. Build the request body.
     let req = build_kiro_request(openai, profile_arn);
@@ -425,7 +438,13 @@ pub async fn execute_kiro(
     //    match what an interactive chat would expect. Future
     //    gates can plumb a `Timeouts` value through and switch
     //    to `TimeoutProfile::Custom(as_resolved())`.
-    let cancel = CancellationToken::new();
+    //
+    //    The cancellation token is sourced from
+    //    `client_disconnected` (the per-request watch) so a real
+    //    client cancel propagates into the upstream send /
+    //    streaming reads via `tokio::select!`. See the function
+    //    docstring for the C3 audit context.
+    let cancel = CancellationToken::from_watch(client_disconnected);
     let response = match upstream_client
         .call(upstream_request, TimeoutProfile::Chat, cancel)
         .await

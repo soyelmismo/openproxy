@@ -48,7 +48,8 @@ static USAGE_SENDER: OnceCell<broadcast::Sender<RecentUsageRow>> = OnceCell::new
 /// end of a request (post-`cost::record`), and every row has a real
 /// `UsageId`. `STAGE_SENDER` carries transient `StageEvent`s keyed
 /// only by `request_id` and have no DB id — the dashboard uses
-/// `request_id` to update the row that the matching `recent` row lives under.
+/// `request_id` to update the row that the matching `recent` row
+/// (or its synthetic `emit_started_event` placeholder) lives under.
 ///
 /// Channel capacity: stages fire in bursts. A typical request emits
 /// `started → connecting → waiting_ttft → streaming → completed`
@@ -168,6 +169,59 @@ pub fn publish_stage_event(event: StageEvent) {
     if let Some(tx) = STAGE_SENDER.get() {
         let _ = tx.send(event);
     }
+}
+
+/// Initialize BOTH broadcast senders in the canonical order.
+/// Idempotent. Returns a clone of the usage sender for callers
+/// that want to subscribe immediately (e.g. `AppState`).
+pub fn init_all_broadcasts() -> broadcast::Sender<RecentUsageRow> {
+    init_stage_broadcast();
+    init_usage_broadcast()
+}
+
+/// Broadcast a usage input to all subscribers (used for in-flight requests).
+/// This does not insert into the database; it only sends via the broadcast
+/// channel for live updates.
+pub fn broadcast_usage_input(input: &UsageInput) {
+    let (cost_usd, _tps) = crate::cost::compute(
+        crate::pricing::lookup(input.provider_id.as_str(), &input.upstream_model_id),
+        input,
+    );
+    let (error_msg_for_db, _error_msg_redacted_for_db) = match &input.error_msg {
+        Some(msg) => {
+            let (sanitized, _redacted) = crate::cost::redact_error_msg(msg);
+            (Some(sanitized.clone()), Some(sanitized))
+        }
+        None => (None, None),
+    };
+
+    let row = RecentUsageRow {
+        id: UsageId(0), // Placeholder ID for in-flight rows
+        request_id: input.request_id.to_string(),
+        trace_id: input.trace_id.to_string(),
+        provider_id: input.provider_id.clone(),
+        upstream_model_id: input.upstream_model_id.clone(),
+        status_code: input.status_code,
+        total_ms: input.total_ms,
+        prompt_tokens: input.prompt_tokens,
+        completion_tokens: input.completion_tokens,
+        cost_usd: Some(cost_usd),
+        connect_ms: input.connect_ms,
+        ttft_ms: input.ttft_ms,
+        request_body_json: input.request_body_json.clone(),
+        response_body_json: input.response_body_json.clone(),
+        request_headers: input.request_headers.clone(),
+        response_headers: input.response_headers.clone(),
+        error_message: error_msg_for_db.clone(),
+        race_total: Some(input.race_total),
+        race_attempts: Some(input.race_attempts),
+        is_streaming: input.is_streaming,
+        stream_complete: input.stream_complete,
+        race_lost: input.race_lost,
+        created_at: chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string(),
+    };
+    // Ignore send errors - no subscribers is harmless
+    let _ = publish_usage_row(row);
 }
 
 /// All optional filters shared by the read-side analytics queries.
@@ -659,68 +713,8 @@ pub fn errors(conn: &Connection, f: &UsageFilter, limit: u32) -> Result<Vec<Erro
 }
 
 // ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
-// `now_rfc3339_millis` and `row_from_input` are defined below in the
-// "Helpers" section right above the `RecentUsageRow` struct definition.
-
-// ---------------------------------------------------------------------------
 // Recent rows (long-polling support)
 // ---------------------------------------------------------------------------
-
-/// Render the current wall-clock instant as an RFC3339 string with
-/// millisecond precision (e.g. `2026-06-18T14:23:11.482Z`). Used by
-/// the live-log stage events which the dashboard renders at sub-second
-/// granularity, and is intentionally different from the
-/// second-precision `%Y-%m-%dT%H:%M:%SZ` format that [`cost::record`]
-/// stores on the `usage` table.
-pub fn now_rfc3339_millis() -> String {
-    chrono::Utc::now()
-        .format("%Y-%m-%dT%H:%M:%S%.3fZ")
-        .to_string()
-}
-
-/// Build a [`RecentUsageRow`] from a [`UsageInput`] and a freshly
-/// allocated [`UsageId`]. Centralizes the 22-field struct literal so
-/// [`cost::record`] and any future in-flight broadcaster share one
-/// source of truth.
-pub fn row_from_input(id: UsageId, input: &UsageInput, cost_usd: f64) -> RecentUsageRow {
-    let (error_msg_for_db, _error_msg_redacted) = match &input.error_msg {
-        Some(msg) => {
-            let (sanitized, _) = crate::cost::redact_error_msg(msg);
-            (Some(sanitized.clone()), Some(sanitized))
-        }
-        None => (None, None),
-    };
-    RecentUsageRow {
-        id,
-        request_id: input.request_id.to_string(),
-        trace_id: input.trace_id.to_string(),
-        provider_id: input.provider_id.clone(),
-        upstream_model_id: input.upstream_model_id.clone(),
-        status_code: input.status_code,
-        total_ms: input.total_ms,
-        prompt_tokens: input.prompt_tokens,
-        completion_tokens: input.completion_tokens,
-        cost_usd: Some(cost_usd),
-        connect_ms: input.connect_ms,
-        ttft_ms: input.ttft_ms,
-        request_body_json: input.request_body_json.clone(),
-        response_body_json: input.response_body_json.clone(),
-        request_headers: input.request_headers.clone(),
-        response_headers: input.response_headers.clone(),
-        error_message: error_msg_for_db,
-        race_total: Some(input.race_total),
-        race_attempts: Some(input.race_attempts),
-        is_streaming: input.is_streaming,
-        stream_complete: input.stream_complete,
-        race_lost: input.race_lost,
-        created_at: chrono::Utc::now()
-            .format("%Y-%m-%dT%H:%M:%SZ")
-            .to_string(),
-    }
-}
 
 /// A single `usage` row, projected for the dashboard's "live tail" view.
 ///
@@ -798,100 +792,62 @@ pub struct UsageDetailRow {
 /// dashboard uses in place of an SSE channel: the client passes back the
 /// last id it has seen, and we return everything that arrived since.
 ///
-/// Build a `RecentUsageRow` from a raw rusqlite row produced by the
-/// `usage` SELECT in [`recent`]. Shared with [`recent_desc`] so the
-/// 24-column mapping lives in one place.
-fn map_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<RecentUsageRow> {
-    let mut col_idx = 0;
-    let id: i64 = row.get(col_idx)?; col_idx += 1;
-    let request_id: String = row.get(col_idx)?; col_idx += 1;
-    let trace_id: String = row.get(col_idx)?; col_idx += 1;
-    let provider_id: String = row.get(col_idx)?; col_idx += 1;
-    let upstream_model_id: String = row.get(col_idx)?; col_idx += 1;
-    let status_code: i64 = row.get(col_idx)?; col_idx += 1;
-    let total_ms: i64 = row.get(col_idx)?; col_idx += 1;
-    let prompt_tokens: Option<i64> = row.get(col_idx)?; col_idx += 1;
-    let completion_tokens: Option<i64> = row.get(col_idx)?; col_idx += 1;
-    let cost_usd: Option<f64> = row.get(col_idx)?; col_idx += 1;
-    let connect_ms: Option<i64> = row.get(col_idx)?; col_idx += 1;
-    let ttft_ms: Option<i64> = row.get(col_idx)?; col_idx += 1;
-    let request_body_json: Option<serde_json::Value> = row.get::<_, Option<String>>(col_idx)?.and_then(|s| serde_json::from_str(&s).ok()); col_idx += 1;
-    let response_body_json: Option<serde_json::Value> = row.get::<_, Option<String>>(col_idx)?.and_then(|s| serde_json::from_str(&s).ok()); col_idx += 1;
-    let request_headers: Option<String> = row.get(col_idx)?; col_idx += 1;
-    let response_headers: Option<String> = row.get(col_idx)?; col_idx += 1;
-    let error_msg_redacted: Option<String> = row.get(col_idx)?; col_idx += 1;
-    let error_msg: Option<String> = row.get(col_idx)?; col_idx += 1;
-    let race_total: i64 = row.get(col_idx)?; col_idx += 1;
-    let race_attempts: i64 = row.get(col_idx)?; col_idx += 1;
-    let is_streaming: i64 = row.get(col_idx)?; col_idx += 1;
-    let stream_complete: i64 = row.get(col_idx)?; col_idx += 1;
-    let race_lost: i64 = row.get(col_idx)?; col_idx += 1;
-    let created_at: String = row.get(col_idx)?;
-
-    if !(0..=u16::MAX as i64).contains(&status_code) {
-        return Err(rusqlite::Error::FromSqlConversionFailure(
-            5,
-            rusqlite::types::Type::Integer,
-            Box::new(SimpleErr(format!("status_code out of u16 range: {}", status_code))),
-        ));
-    }
-    if total_ms < 0 {
-        return Err(rusqlite::Error::FromSqlConversionFailure(
-            6,
-            rusqlite::types::Type::Integer,
-            Box::new(SimpleErr(format!("total_ms unexpectedly negative: {}", total_ms))),
-        ));
-    }
-    let request_headers = request_headers.map(|s| serde_json::from_str(&s).ok()).flatten();
-    let response_headers = response_headers.map(|s| serde_json::from_str(&s).ok()).flatten();
-    let error_message = error_msg_redacted.or(error_msg);
-    let prompt_tokens = prompt_tokens.and_then(|v| u32::try_from(v).ok());
-    let completion_tokens = completion_tokens.and_then(|v| u32::try_from(v).ok());
-    let race_total_u8 = u8::try_from(race_total).ok();
-    let race_attempts_u8 = u8::try_from(race_attempts).ok();
-    let is_streaming_bool = is_streaming != 0;
-    let stream_complete_bool = stream_complete != 0;
-    Ok(RecentUsageRow {
-        id: UsageId(id),
-        request_id,
-        trace_id,
-        provider_id: ProviderId::new(provider_id),
-        upstream_model_id,
-        status_code: status_code as u16,
-        total_ms: total_ms as u64,
-        prompt_tokens,
-        completion_tokens,
-        cost_usd,
-        connect_ms: connect_ms.map(|v| v as u64),
-        ttft_ms: ttft_ms.map(|v| v as u64),
-        request_body_json,
-        response_body_json,
-        request_headers,
-        response_headers,
-        error_message,
-        race_total: race_total_u8,
-        race_attempts: race_attempts_u8,
-        is_streaming: is_streaming_bool,
-        stream_complete: stream_complete_bool,
-        race_lost: race_lost != 0,
-        created_at,
-    })
-}
-
 /// `limit` is a hard cap and is forwarded verbatim to SQL.
 pub fn recent(conn: &Connection, since_id: i64, limit: u32) -> Result<Vec<RecentUsageRow>> {
+    // H1 fix: each retry within a single request writes a
+    // separate row to the `usage` table (the per-attempt row is
+    // what the operator sees when they want to inspect a
+    // particular 5xx/4xx/timeout), but the dashboard groups
+    // rows by `request_id` and the cost/token SUMs MUST come
+    // from the GROUP BY. We do the aggregation in SQL with
+    // scalar fields pulled from the first-attempt row
+    // (`MIN(id)`), the SUMs for the per-attempt-additive
+    // billing fields, and a deterministic status_code rule:
+    //   1. if any attempt is 2xx, take the MIN of the 2xx rows
+    //      (i.e. the earliest success);
+    //   2. otherwise take the MAX of the failing rows (the
+    //      most-recent failure — what the user actually saw).
+    // The `id` returned to the dashboard is the first attempt's
+    // id so long-polling `since_id` continues to work.
     let limit_param: i64 = limit as i64;
     let mut stmt = conn
         .prepare(
-            "SELECT id, request_id, trace_id, provider_id, upstream_model_id, \
-                    status_code, total_ms, prompt_tokens, completion_tokens, \
-                    cost_usd, connect_ms, ttft_ms, request_body_json, response_body_json, \
-                    request_headers, response_headers, error_msg_redacted, error_msg, \
-                    race_total, race_attempts, is_streaming, stream_complete, \
-                    race_lost, created_at \
-             FROM usage \
-             WHERE id > ?1 \
-             ORDER BY id ASC \
+            "WITH grouped AS ( \
+                 SELECT request_id, \
+                        MIN(id)         AS agg_id, \
+                        MIN(created_at) AS agg_created_at, \
+                        COALESCE( \
+                            (SELECT u2.status_code FROM usage u2 \
+                             WHERE u2.request_id = usage.request_id \
+                               AND u2.status_code BETWEEN 200 AND 299 \
+                             ORDER BY u2.id ASC LIMIT 1), \
+                            (SELECT MAX(u3.status_code) FROM usage u3 \
+                             WHERE u3.request_id = usage.request_id) \
+                        ) AS agg_status_code, \
+                        MAX(total_ms)   AS agg_total_ms, \
+                        SUM(COALESCE(prompt_tokens, 0))     AS agg_prompt_tokens, \
+                        SUM(COALESCE(completion_tokens, 0)) AS agg_completion_tokens, \
+                        SUM(COALESCE(cost_usd, 0.0))        AS agg_cost_usd, \
+                        MAX(connect_ms) AS agg_connect_ms, \
+                        MAX(ttft_ms)    AS agg_ttft_ms, \
+                        MAX(race_total) AS agg_race_total, \
+                        MAX(race_attempts) AS agg_race_attempts, \
+                        MAX(is_streaming)  AS agg_is_streaming, \
+                        MAX(stream_complete) AS agg_stream_complete, \
+                        MAX(race_lost) AS agg_race_lost \
+                 FROM usage \
+                 WHERE id > ?1 \
+                 GROUP BY request_id \
+             ) \
+             SELECT g.agg_id, u.request_id, u.trace_id, u.provider_id, u.upstream_model_id, \
+                    g.agg_status_code, g.agg_total_ms, g.agg_prompt_tokens, g.agg_completion_tokens, \
+                    g.agg_cost_usd, g.agg_connect_ms, g.agg_ttft_ms, u.request_body_json, u.response_body_json, \
+                    u.request_headers, u.response_headers, u.error_msg_redacted, u.error_msg, \
+                    g.agg_race_total, g.agg_race_attempts, g.agg_is_streaming, g.agg_stream_complete, \
+                    g.agg_race_lost, g.agg_created_at \
+             FROM grouped g \
+             JOIN usage u ON u.id = g.agg_id \
+             ORDER BY g.agg_id ASC \
              LIMIT ?2",
         )
         .map_err(|e| CoreError::Database {
@@ -900,7 +856,82 @@ pub fn recent(conn: &Connection, since_id: i64, limit: u32) -> Result<Vec<Recent
         })?;
 
     let rows = stmt
-        .query_map(params![since_id, limit_param], map_row)
+        .query_map(params![since_id, limit_param], |row| {
+            let mut col_idx = 0;
+            let id: i64 = row.get(col_idx)?; col_idx += 1;
+            let request_id: String = row.get(col_idx)?; col_idx += 1;
+            let trace_id: String = row.get(col_idx)?; col_idx += 1;
+            let provider_id: String = row.get(col_idx)?; col_idx += 1;
+            let upstream_model_id: String = row.get(col_idx)?; col_idx += 1;
+            let status_code: i64 = row.get(col_idx)?; col_idx += 1;
+            let total_ms: i64 = row.get(col_idx)?; col_idx += 1;
+            let prompt_tokens: Option<i64> = row.get(col_idx)?; col_idx += 1;
+            let completion_tokens: Option<i64> = row.get(col_idx)?; col_idx += 1;
+            let cost_usd: Option<f64> = row.get(col_idx)?; col_idx += 1;
+            let connect_ms: Option<i64> = row.get(col_idx)?; col_idx += 1;
+            let ttft_ms: Option<i64> = row.get(col_idx)?; col_idx += 1;
+            let request_body_json: Option<serde_json::Value> = row.get::<_, Option<String>>(col_idx)?.and_then(|s| serde_json::from_str(&s).ok()); col_idx += 1;
+            let response_body_json: Option<serde_json::Value> = row.get::<_, Option<String>>(col_idx)?.and_then(|s| serde_json::from_str(&s).ok()); col_idx += 1;
+            let request_headers: Option<String> = row.get(col_idx)?; col_idx += 1;
+            let response_headers: Option<String> = row.get(col_idx)?; col_idx += 1;
+            let error_msg_redacted: Option<String> = row.get(col_idx)?; col_idx += 1;
+            let error_msg: Option<String> = row.get(col_idx)?; col_idx += 1;
+            let race_total: i64 = row.get(col_idx)?; col_idx += 1;
+            let race_attempts: i64 = row.get(col_idx)?; col_idx += 1;
+            let is_streaming: i64 = row.get(col_idx)?; col_idx += 1;
+            let stream_complete: i64 = row.get(col_idx)?; col_idx += 1;
+            let race_lost: i64 = row.get(col_idx)?; col_idx += 1;
+            let created_at: String = row.get(col_idx)?;
+
+            if !(0..=u16::MAX as i64).contains(&status_code) {
+                return Err(rusqlite::Error::FromSqlConversionFailure(
+                    5,
+                    rusqlite::types::Type::Integer,
+                    Box::new(SimpleErr(format!("status_code out of u16 range: {}", status_code))),
+                ));
+            }
+            if total_ms < 0 {
+                return Err(rusqlite::Error::FromSqlConversionFailure(
+                    6,
+                    rusqlite::types::Type::Integer,
+                    Box::new(SimpleErr(format!("total_ms unexpectedly negative: {}", total_ms))),
+                ));
+            }
+            let request_headers = request_headers.map(|s| serde_json::from_str(&s).ok()).flatten();
+            let response_headers = response_headers.map(|s| serde_json::from_str(&s).ok()).flatten();
+            let error_message = error_msg_redacted.or(error_msg);
+            let prompt_tokens = prompt_tokens.and_then(|v| u32::try_from(v).ok());
+            let completion_tokens = completion_tokens.and_then(|v| u32::try_from(v).ok());
+            let race_total_u8 = u8::try_from(race_total).ok();
+            let race_attempts_u8 = u8::try_from(race_attempts).ok();
+            let is_streaming_bool = is_streaming != 0;
+            let stream_complete_bool = stream_complete != 0;
+            Ok(RecentUsageRow {
+                id: UsageId(id),
+                request_id,
+                trace_id,
+                provider_id: ProviderId::new(provider_id),
+                upstream_model_id,
+                status_code: status_code as u16,
+                total_ms: total_ms as u64,
+                prompt_tokens,
+                completion_tokens,
+                cost_usd,
+                connect_ms: connect_ms.map(|v| v as u64),
+                ttft_ms: ttft_ms.map(|v| v as u64),
+                request_body_json,
+                response_body_json,
+                request_headers,
+                response_headers,
+                error_message,
+                race_total: race_total_u8,
+                race_attempts: race_attempts_u8,
+                is_streaming: is_streaming_bool,
+                stream_complete: stream_complete_bool,
+                race_lost: race_lost != 0,
+                created_at,
+            })
+        })
         .map_err(|e| CoreError::Database {
             message: format!("query usage recent: {}", e),
             source: Some(Box::new(e)),
@@ -911,27 +942,51 @@ pub fn recent(conn: &Connection, since_id: i64, limit: u32) -> Result<Vec<Recent
 
 /// Return the most recent `limit` usage rows, newest first.
 ///
-/// SPEC NOTE: §6.2 ring buffer not implemented; see this fn.
-/// We poll the persisted `usage` table for the live-tail feed
-/// instead of keeping an in-memory bounded queue of recent
-/// events. The cost is one SQL round-trip per WS `subscribe`;
-/// the benefit is that the history survives server restarts
-/// and that two open dashboards see the same rows. If we ever
-/// need a tight-latency live tail (sub-millisecond handoff),
-/// the ring buffer from §6.2 is the right primitive — but
-/// we'd also need to think about cross-replica fanout.
+/// H1 fix: this mirrors the per-request aggregation in
+/// `recent()` so the dashboard sees the same grouped
+/// cost/token SUMs whether it's polling (`recent`) or
+/// fetching the head (`recent_desc`). Without this, the
+/// same 3-attempt request that `recent()` shows as 0.03
+/// cost would show as 0.01 in the admin table at the top.
 pub fn recent_desc(conn: &Connection, limit: u32) -> Result<Vec<RecentUsageRow>> {
     let limit_param: i64 = limit as i64;
     let mut stmt = conn
         .prepare(
-            "SELECT id, request_id, trace_id, provider_id, upstream_model_id, \
-                    status_code, total_ms, prompt_tokens, completion_tokens, \
-                    cost_usd, connect_ms, ttft_ms, request_body_json, response_body_json, \
-                    request_headers, response_headers, error_msg_redacted, error_msg, \
-                    race_total, race_attempts, is_streaming, stream_complete, \
-                    race_lost, created_at \
-             FROM usage \
-             ORDER BY id DESC \
+            "WITH grouped AS ( \
+                 SELECT request_id, \
+                        MIN(id)         AS agg_id, \
+                        MIN(created_at) AS agg_created_at, \
+                        COALESCE( \
+                            (SELECT u2.status_code FROM usage u2 \
+                             WHERE u2.request_id = usage.request_id \
+                               AND u2.status_code BETWEEN 200 AND 299 \
+                             ORDER BY u2.id ASC LIMIT 1), \
+                            (SELECT MAX(u3.status_code) FROM usage u3 \
+                             WHERE u3.request_id = usage.request_id) \
+                        ) AS agg_status_code, \
+                        MAX(total_ms)   AS agg_total_ms, \
+                        SUM(COALESCE(prompt_tokens, 0))     AS agg_prompt_tokens, \
+                        SUM(COALESCE(completion_tokens, 0)) AS agg_completion_tokens, \
+                        SUM(COALESCE(cost_usd, 0.0))        AS agg_cost_usd, \
+                        MAX(connect_ms) AS agg_connect_ms, \
+                        MAX(ttft_ms)    AS agg_ttft_ms, \
+                        MAX(race_total) AS agg_race_total, \
+                        MAX(race_attempts) AS agg_race_attempts, \
+                        MAX(is_streaming)  AS agg_is_streaming, \
+                        MAX(stream_complete) AS agg_stream_complete, \
+                        MAX(race_lost) AS agg_race_lost \
+                 FROM usage \
+                 GROUP BY request_id \
+             ) \
+             SELECT g.agg_id, u.request_id, u.trace_id, u.provider_id, u.upstream_model_id, \
+                    g.agg_status_code, g.agg_total_ms, g.agg_prompt_tokens, g.agg_completion_tokens, \
+                    g.agg_cost_usd, g.agg_connect_ms, g.agg_ttft_ms, u.request_body_json, u.response_body_json, \
+                    u.request_headers, u.response_headers, u.error_msg_redacted, u.error_msg, \
+                    g.agg_race_total, g.agg_race_attempts, g.agg_is_streaming, g.agg_stream_complete, \
+                    g.agg_race_lost, g.agg_created_at \
+             FROM grouped g \
+             JOIN usage u ON u.id = g.agg_id \
+             ORDER BY g.agg_id DESC \
              LIMIT ?1",
         )
         .map_err(|e| CoreError::Database {
@@ -940,7 +995,83 @@ pub fn recent_desc(conn: &Connection, limit: u32) -> Result<Vec<RecentUsageRow>>
         })?;
 
     let rows = stmt
-        .query_map(params![limit_param], map_row)
+        .query_map(params![limit_param], |row| {
+            let mut col_idx = 0;
+            let id: i64 = row.get(col_idx)?; col_idx += 1;
+            let request_id: String = row.get(col_idx)?; col_idx += 1;
+            let trace_id: String = row.get(col_idx)?; col_idx += 1;
+            let provider_id: String = row.get(col_idx)?; col_idx += 1;
+            let upstream_model_id: String = row.get(col_idx)?; col_idx += 1;
+            let status_code: i64 = row.get(col_idx)?; col_idx += 1;
+            let total_ms: i64 = row.get(col_idx)?; col_idx += 1;
+            let prompt_tokens: Option<i64> = row.get(col_idx)?; col_idx += 1;
+            let completion_tokens: Option<i64> = row.get(col_idx)?; col_idx += 1;
+            let cost_usd: Option<f64> = row.get(col_idx)?; col_idx += 1;
+            let connect_ms: Option<i64> = row.get(col_idx)?; col_idx += 1;
+            let ttft_ms: Option<i64> = row.get(col_idx)?; col_idx += 1;
+            let request_body_json: Option<serde_json::Value> = row.get::<_, Option<String>>(col_idx)?.and_then(|s| serde_json::from_str(&s).ok()); col_idx += 1;
+            let response_body_json: Option<serde_json::Value> = row.get::<_, Option<String>>(col_idx)?.and_then(|s| serde_json::from_str(&s).ok()); col_idx += 1;
+            let request_headers: Option<String> = row.get(col_idx)?; col_idx += 1;
+            let response_headers: Option<String> = row.get(col_idx)?; col_idx += 1;
+            let error_msg_redacted: Option<String> = row.get(col_idx)?; col_idx += 1;
+            let error_msg: Option<String> = row.get(col_idx)?; col_idx += 1;
+            let race_total: i64 = row.get(col_idx)?; col_idx += 1;
+            let race_attempts: i64 = row.get(col_idx)?; col_idx += 1;
+            let is_streaming: i64 = row.get(col_idx)?; col_idx += 1;
+            let stream_complete: i64 = row.get(col_idx)?; col_idx += 1;
+            let race_lost: i64 = row.get(col_idx)?; col_idx += 1;
+            let created_at: String = row.get(col_idx)?;
+
+            if !(0..=u16::MAX as i64).contains(&status_code) {
+                return Err(rusqlite::Error::FromSqlConversionFailure(
+                    5,
+                    rusqlite::types::Type::Integer,
+                    Box::new(SimpleErr(format!("status_code out of u16 range: {}", status_code))),
+                ));
+            }
+            if total_ms < 0 {
+                return Err(rusqlite::Error::FromSqlConversionFailure(
+                    6,
+                    rusqlite::types::Type::Integer,
+                    Box::new(SimpleErr(format!("total_ms unexpectedly negative: {}", total_ms))),
+                ));
+            }
+            let request_headers = request_headers.map(|s| serde_json::from_str(&s).ok()).flatten();
+            let response_headers = response_headers.map(|s| serde_json::from_str(&s).ok()).flatten();
+            let error_message = error_msg_redacted.or(error_msg);
+            let prompt_tokens = prompt_tokens.and_then(|v| u32::try_from(v).ok());
+            let completion_tokens = completion_tokens.and_then(|v| u32::try_from(v).ok());
+            let race_total_u8 = u8::try_from(race_total).ok();
+            let race_attempts_u8 = u8::try_from(race_attempts).ok();
+            let is_streaming_bool = is_streaming != 0;
+            let stream_complete_bool = stream_complete != 0;
+
+            Ok(RecentUsageRow {
+                id: UsageId(id),
+                request_id,
+                trace_id,
+                provider_id: ProviderId::new(provider_id),
+                upstream_model_id,
+                status_code: status_code as u16,
+                total_ms: total_ms as u64,
+                prompt_tokens,
+                completion_tokens,
+                cost_usd,
+                connect_ms: connect_ms.map(|v| v as u64),
+                ttft_ms: ttft_ms.map(|v| v as u64),
+                request_body_json,
+                response_body_json,
+                request_headers,
+                response_headers,
+                error_message,
+                race_total: race_total_u8,
+                race_attempts: race_attempts_u8,
+                is_streaming: is_streaming_bool,
+                stream_complete: stream_complete_bool,
+                race_lost: race_lost != 0,
+                created_at,
+            })
+        })
         .map_err(|e| CoreError::Database {
             message: format!("query usage recent_desc: {}", e),
             source: Some(Box::new(e)),
@@ -1513,6 +1644,141 @@ mod tests {
         assert_eq!(rows.len(), 2);
         assert_eq!(rows[0].id.0, 3);
         assert_eq!(rows[1].id.0, 2);
+    }
+
+    /// H1 regression: three rows for the same request_id (the
+    /// retry attempts) must be aggregated into a single
+    /// `RecentUsageRow` whose `cost_usd` and token counts are
+    /// the SUMs across all three attempts. Status_code picks
+    /// the earliest 2xx (which here is the last attempt's
+    /// `200`); `id` is the first attempt's id so the
+    /// long-polling `since_id` cursor is still monotonically
+    /// increasing.
+    #[test]
+    fn recent_aggregates_retry_attempts_by_request_id() {
+        let (conn, _p) = fresh_conn();
+        let shared_req = RequestId::new().to_string();
+        // Attempt 1: 502 upstream failure (we still pay for
+        // the tokens up to the failure; cost_usd = 0 here).
+        insert(
+            &conn,
+            &shared_req,
+            "trace-a",
+            "openrouter",
+            "openai/gpt-4o",
+            Some(1),
+            502,
+            10,
+            0,
+            0.0,
+            Some(100),
+            600,
+            false,
+            Some("upstream 502"),
+        );
+        // Attempt 2: 429 rate limit.
+        insert(
+            &conn,
+            &shared_req,
+            "trace-b",
+            "openrouter",
+            "openai/gpt-4o",
+            Some(2),
+            429,
+            10,
+            0,
+            0.0,
+            Some(100),
+            600,
+            false,
+            Some("rate limited"),
+        );
+        // Attempt 3: 200 success, full tokens.
+        insert(
+            &conn,
+            &shared_req,
+            "trace-c",
+            "openrouter",
+            "openai/gpt-4o",
+            Some(3),
+            200,
+            100,
+            50,
+            0.03,
+            Some(150),
+            700,
+            true,
+            None,
+        );
+
+        let rows = recent(&conn, 0, 50).expect("recent");
+        assert_eq!(rows.len(), 1, "three attempts collapse to one row");
+        let row = &rows[0];
+        // id is the first attempt's id.
+        assert_eq!(row.id.0, 1);
+        assert_eq!(row.request_id, shared_req);
+        // status_code is the earliest 2xx — attempt 3's 200.
+        assert_eq!(row.status_code, 200);
+        // SUM(prompt_tokens) = 10 + 10 + 100 = 120.
+        assert_eq!(row.prompt_tokens, Some(120));
+        // SUM(completion_tokens) = 0 + 0 + 50 = 50.
+        assert_eq!(row.completion_tokens, Some(50));
+        // SUM(cost_usd) = 0.03.
+        let cost = row.cost_usd.expect("cost_usd present");
+        assert!((cost - 0.03).abs() < 1e-9, "cost_usd was {}", cost);
+        // trace_id is the first attempt's trace (the one we
+        // JOINed to from the grouped.MIN(id) row).
+        assert_eq!(row.trace_id, "trace-a");
+    }
+
+    /// H1 mirror: `recent_desc` (the head-of-table fetch the
+    /// admin table uses) must apply the same per-request
+    /// aggregation as `recent` (the long-poll feed). Without
+    /// this, the admin table at the top of the dashboard
+    /// would show the cost of the LAST attempt only, even
+    /// though the same request's history in the log would
+    /// show the summed cost.
+    #[test]
+    fn recent_desc_aggregates_retry_attempts_by_request_id() {
+        let (conn, _p) = fresh_conn();
+        let shared_req = RequestId::new().to_string();
+        insert(
+            &conn,
+            &shared_req,
+            "trace-a",
+            "openrouter",
+            "openai/gpt-4o",
+            Some(1),
+            502,
+            10,
+            0,
+            0.0,
+            Some(100),
+            600,
+            false,
+            Some("upstream 502"),
+        );
+        insert(
+            &conn,
+            &shared_req,
+            "trace-b",
+            "openrouter",
+            "openai/gpt-4o",
+            Some(2),
+            200,
+            100,
+            50,
+            0.03,
+            Some(150),
+            700,
+            true,
+            None,
+        );
+        let rows = recent_desc(&conn, 50).expect("recent_desc");
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].request_id, shared_req);
+        assert_eq!(rows[0].prompt_tokens, Some(110));
+        assert_eq!(rows[0].completion_tokens, Some(50));
     }
 
     #[test]

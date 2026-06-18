@@ -1007,12 +1007,8 @@ pub struct RecentQuery {
 /// "live tail" effect for the dashboard.
 pub async fn usage_recent(
     State(s): State<AppState>,
-    headers: HeaderMap,
     Query(q): Query<RecentQuery>,
 ) -> ApiResult<Json<Vec<usage::RecentUsageRow>>> {
-    if let Err(e) = authenticate_admin_ws(&s, &headers, None) {
-        return e.into();
-    }
     let body: Result<Json<Vec<usage::RecentUsageRow>>, ApiError> = async {
         let since_id = q.since_id.unwrap_or(0).max(0);
         let limit = q
@@ -1055,9 +1051,6 @@ async fn send_ws_error(socket: &mut WebSocket, message: impl Into<String>) -> Re
     send_ws_json(socket, json!({ "type": "error", "message": message.into() })).await
 }
 
-// TODO: rename to `authenticate_admin` — this is a regular HTTP auth
-// fn (no WebSocket-specific logic); the `_ws` suffix is a leftover
-// from when the WS usage stream was the only authenticated handler.
 fn authenticate_admin_ws(state: &AppState, headers: &HeaderMap, query_token: Option<&str>) -> Result<(), ApiError> {
     // Dev convenience: if the operator sets OPENPROXY_DASHBOARD_AUTH_BYPASS to a
     // non-empty value in the server's environment, every admin request is
@@ -1125,40 +1118,33 @@ fn authenticate_admin_ws(state: &AppState, headers: &HeaderMap, query_token: Opt
     Ok(())
 }
 
-/// `{"type":"history","rows":[...]}` envelope for the live-log WS
-/// stream. Used for the initial history batch and for the
-/// `subscribe` resend. The HTTP `usage_recent` endpoint intentionally
-/// returns `Json<Vec<RecentUsageRow>>` (not this envelope) so it
-/// stays a plain array.
-fn history_envelope(rows: Vec<usage::RecentUsageRow>) -> serde_json::Value {
-    serde_json::json!({ "type": "history", "rows": rows })
-}
-
-/// Translate one `recv()` from a broadcast channel into the WS frame
-/// the dashboard expects, OR the decision to break out of the relay
-/// loop. Returning `Ok(None)` means "channel closed, stop relaying".
-async fn recv_to_envelope<T, F>(
-    rx: &mut tokio::sync::broadcast::Receiver<T>,
-    lagged_msg: &str,
-    envelope: F,
-) -> Result<Option<serde_json::Value>, ApiError>
-where
-    T: serde::Serialize + Clone,
-    F: FnOnce(T) -> serde_json::Value,
-{
-    match rx.recv().await {
-        Ok(value) => Ok(Some(envelope(value))),
-        Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
-            // Surface the lag to the dashboard via the error channel.
-            // `recv_to_envelope` doesn't have the socket, so return
-            // an envelope the call site forwards via `send_ws_json`.
-            Ok(Some(serde_json::json!({
-                "type": "error",
-                "message": lagged_msg,
-            })))
-        }
-        Err(tokio::sync::broadcast::error::RecvError::Closed) => Ok(None),
+/// Axum middleware wrapper around [`authenticate_admin_ws`].
+///
+/// Runs on every request that flows through the admin router
+/// (registered via `axum::middleware::from_fn_with_state` in
+/// `router.rs`). On success it forwards to the inner handler; on
+/// failure it short-circuits with a 401 from the same
+/// [`ApiError::IntoResponse`] impl the per-handler calls use, so
+/// the wire shape (`{"error": {"code", "message"}}`) is identical
+/// to the per-handler path.
+///
+/// The middleware does NOT touch the `?token=` query parameter on
+/// its own — the WebSocket upgrade handler (`usage_stream`) needs
+/// that path, and the per-handler `authenticate_admin_ws` already
+/// accepts the query token. The middleware reads only the
+/// `Authorization` header, which is the contract for the HTTP
+/// path. WebSocket clients that pass `?token=` get a single auth
+/// call inside `usage_stream` after the upgrade completes.
+pub async fn admin_auth_middleware(
+    axum::extract::State(state): axum::extract::State<AppState>,
+    req: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> axum::response::Response {
+    let headers = req.headers().clone();
+    if let Err(e) = authenticate_admin_ws(&state, &headers, None) {
+        return e.into_response();
     }
+    next.run(req).await
 }
 
 async fn stream_usage_rows(
@@ -1171,7 +1157,22 @@ async fn stream_usage_rows(
             let w = state.db_pool().writer();
             usage::recent_desc(&w, 100)?
         };
-        send_ws_json(&mut socket, history_envelope(rows)).await?;
+        send_ws_json(
+            &mut socket,
+            json!({ "type": "history", "rows": rows }),
+        )
+        .await?;
+        // H7 fix: track the highest usage `id` we have
+        // streamed to the dashboard so a `Lagged` broadcast
+        // error can be answered with a targeted resync
+        // (`{"type":"resync","since_id":last_known}`) rather
+        // than a fatal error. The frontend then fetches
+        // `usage::recent(since_id=last_known, limit=...)` to
+        // catch up. Without this, a slow dashboard would
+        // permanently lose rows it could not consume in time
+        // and a toast was the only signal — see the audit
+        // finding RACE-F-5.
+        let mut last_known_id: i64 = rows.iter().map(|r| r.id.0).max().unwrap_or(0);
 
         // 2. Subscribe to broadcast tx (rows + stages)
         let mut usage_rx = state.usage_tx().subscribe();
@@ -1194,7 +1195,14 @@ async fn stream_usage_rows(
                                     let since_id = msg.since_id.unwrap_or(0).max(0);
                                     let w = state.db_pool().writer();
                                     let rows = usage::recent(&w, since_id, 100)?;
-                                    send_ws_json(&mut socket, history_envelope(rows)).await?;
+                                    if let Some(mx) = rows.iter().map(|r| r.id.0).max() {
+                                        last_known_id = last_known_id.max(mx);
+                                    }
+                                    send_ws_json(
+                                        &mut socket,
+                                        json!({ "type": "history", "rows": rows }),
+                                    )
+                                    .await?;
                                 }
                                 "ping" => {
                                     let now_str = chrono::Utc::now().to_rfc3339();
@@ -1213,14 +1221,48 @@ async fn stream_usage_rows(
                 }
                 // New row (final): published by `cost::record` after
                 // the request finishes and the usage row is committed.
-                envelope = recv_to_envelope(
-                    &mut usage_rx,
-                    "broadcast channel lagged",
-                    |row| json!({ "type": "row", "data": row }),
-                ) => {
-                    match envelope? {
-                        Some(env) => send_ws_json(&mut socket, env).await?,
-                        None => break,
+                usage = usage_rx.recv() => {
+                    match usage {
+                        Ok(row) => {
+                            if row.id.0 > last_known_id {
+                                last_known_id = row.id.0;
+                            }
+                            send_ws_json(
+                                &mut socket,
+                                json!({ "type": "row", "data": row }),
+                            )
+                            .await?;
+                        }
+                        // H7 fix: instead of a fatal `error`
+                        // envelope that the dashboard could only
+                        // show as a toast, emit a `resync`
+                        // envelope with the last id we have
+                        // already streamed. The frontend calls
+                        // `usage::recent(since_id=last_known_id, ...)`
+                        // to catch up. We also keep the
+                        // `lag_warning` envelope as a fallback so
+                        // an old client can still surface the
+                        // gap in the UI.
+                        Err(tokio::sync::broadcast::error::RecvError::Lagged(skipped)) => {
+                            send_ws_json(
+                                &mut socket,
+                                json!({
+                                    "type": "lag_warning",
+                                    "skipped": skipped,
+                                    "message": format!(
+                                        "broadcast channel lagged; {} row(s) skipped",
+                                        skipped
+                                    ),
+                                }),
+                            )
+                            .await?;
+                            send_ws_json(
+                                &mut socket,
+                                json!({ "type": "resync", "since_id": last_known_id }),
+                            )
+                            .await?;
+                        }
+                        Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
                     }
                 }
                 // New stage (in-flight): published by the pipeline at
@@ -1230,14 +1272,42 @@ async fn stream_usage_rows(
                 // needed here because both branches are independent
                 // and the operator cares about correctness, not
                 // strict ordering between a stage and a final row.
-                envelope = recv_to_envelope(
-                    &mut stage_rx,
-                    "stage broadcast channel lagged",
-                    |event| json!({ "type": "stage", "data": event }),
-                ) => {
-                    match envelope? {
-                        Some(env) => send_ws_json(&mut socket, env).await?,
-                        None => break,
+                stage = stage_rx.recv() => {
+                    match stage {
+                        Ok(event) => {
+                            send_ws_json(
+                                &mut socket,
+                                json!({ "type": "stage", "data": event }),
+                            )
+                            .await?;
+                        }
+                        // H7 fix: same resync treatment as the
+                        // usage row channel. Stage events are
+                        // ephemeral (the terminal one is also
+                        // re-emitted after the row lands, so the
+                        // dashboard can reconstruct state) but a
+                        // slow consumer still benefits from a
+                        // `resync` hint.
+                        Err(tokio::sync::broadcast::error::RecvError::Lagged(skipped)) => {
+                            send_ws_json(
+                                &mut socket,
+                                json!({
+                                    "type": "lag_warning",
+                                    "skipped": skipped,
+                                    "message": format!(
+                                        "stage broadcast channel lagged; {} event(s) skipped",
+                                        skipped
+                                    ),
+                                }),
+                            )
+                            .await?;
+                            send_ws_json(
+                                &mut socket,
+                                json!({ "type": "resync", "since_id": last_known_id }),
+                            )
+                            .await?;
+                        }
+                        Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
                     }
                 }
             }
@@ -1992,11 +2062,16 @@ async fn run_test_for_model(
                     .unwrap_or_default()
                 };
                 let http_client = s.upstream_client();
+                // No client connection of its own on the admin
+                // test path (it runs against a synthetic request);
+                // see the symmetric note on the kiro branch below.
+                let (_cancel_tx, cancel_rx) = tokio::sync::watch::channel(false);
                 openproxy_core::executor_antigravity::execute_antigravity(
                     http_client,
                     &access_token,
                     &project_id,
                     &openai_req,
+                    cancel_rx,
                 )
                 .await
             }
@@ -2016,12 +2091,22 @@ async fn run_test_for_model(
                     )
                 };
                 let http_client = s.upstream_client();
+                // The admin test endpoint runs against a single
+                // short-lived request. It has no client connection
+                // of its own (no chat client), so the watch stays
+                // at `false` for the duration; the token is
+                // therefore effectively never-cancelled and the
+                // request is bounded by the executor's
+                // `TimeoutProfile::Chat` envelope (see
+                // `executor_kiro.rs:438-445`).
+                let (_cancel_tx, cancel_rx) = tokio::sync::watch::channel(false);
                 openproxy_core::executor_kiro::execute_kiro(
                     http_client,
                     &access_token,
                     &region,
                     profile_arn.as_deref(),
                     &openai_req,
+                    cancel_rx,
                 )
                 .await
             }

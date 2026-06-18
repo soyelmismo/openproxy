@@ -15,7 +15,9 @@ use serde_json::json;
 
 use crate::{
     disconnect::client_disconnect_middleware,
-    handlers, middleware::request_id, state::AppState,
+    handlers::{self, admin::admin_auth_middleware},
+    middleware::request_id,
+    state::AppState,
 };
 
 /// Build the root [`Router`] for the server.
@@ -48,11 +50,37 @@ pub fn build_router(state: AppState) -> Router {
 
     // Admin surface (spec §2.3). CRUD for providers, accounts, combos,
     // plus read-only usage analytics.
-    let admin_routes = Router::new()
+    //
+    // Authorization model: every admin route EXCEPT the liveness
+    // probe (`/v1/admin/health`) and the OAuth browser callback
+    // (`/v1/admin/oauth/callback`) requires a `manage`-scope API
+    // key, verified by [`admin_auth_middleware`]. The two exempt
+    // routes are intentionally public: the liveness probe is for
+    // load balancers and uptime monitors that should not need
+    // credentials, and the OAuth callback is the URL the upstream
+    // provider (Google, etc.) redirects the user's browser to —
+    // by design the browser arrives without admin credentials, and
+    // the handler just echoes back the `code` for the user to copy
+    // into the dashboard.
+    //
+    // The middleware reads only the `Authorization` header, which
+    // is the contract for the HTTP path. The WebSocket upgrade
+    // handler (`usage_stream`) also accepts `?token=` in the query
+    // string — that path is handled inside the handler itself
+    // (the middleware would not see the WS upgrade as a normal
+    // request), so the per-handler auth check there is the source
+    // of truth for the WebSocket path.
+    let admin_public_routes = Router::new()
         .route(
             "/v1/admin/health",
             get(handlers::admin::admin_health),
         )
+        .route(
+            "/v1/admin/oauth/callback",
+            get(handlers::admin::oauth_callback),
+        );
+
+    let admin_routes = Router::new()
         .route(
             "/v1/admin/config",
             get(handlers::admin::get_runtime_config),
@@ -259,10 +287,19 @@ pub fn build_router(state: AppState) -> Router {
             "/v1/admin/oauth/:provider/device-poll",
             post(handlers::admin::oauth_device_poll),
         )
-        .route(
-            "/v1/admin/oauth/callback",
-            get(handlers::admin::oauth_callback),
-        );
+        // NOTE: `/v1/admin/oauth/callback` is intentionally NOT
+        // registered here — it lives in `admin_public_routes` (the
+        // browser-callback URL, no auth required).
+        ;
+
+    // Apply the admin auth middleware to the protected admin routes
+    // ONLY. The state-clone is required because `from_fn_with_state`
+    // takes ownership of the state; we still attach the same state
+    // to the root router via `with_state(state)` below.
+    let admin_routes = admin_routes.layer(middleware::from_fn_with_state(
+        state.clone(),
+        admin_auth_middleware,
+    ));
 
     Router::new()
         .route(
@@ -270,6 +307,7 @@ pub fn build_router(state: AppState) -> Router {
             get(health),
         )
         .merge(chat_routes)
+        .merge(admin_public_routes)
         .merge(admin_routes)
         .layer(middleware::from_fn(request_id))
         .with_state(state)

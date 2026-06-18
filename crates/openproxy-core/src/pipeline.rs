@@ -33,6 +33,16 @@ use tokio::sync::mpsc;
 use tokio::sync::watch;
 use tracing;
 
+/// H6 fix: cap the in-flight SSE line buffer at 1 MiB.
+/// An upstream that streams a 1+ MiB line without a
+/// terminator (malicious or buggy) used to OOM the proxy
+/// because we kept `buffer.push_str`ing forever. 1 MiB is
+/// far above the largest legitimate SSE line (typical
+/// SSE data lines are < 16 KiB even for very large
+/// completions), so 1 MiB is a safe upper bound that
+/// still keeps streaming happy.
+const MAX_SSE_LINE_BYTES: usize = 1_048_576;
+
 // ---------------------------------------------------------------------
 // Streaming dispatch
 // ---------------------------------------------------------------------
@@ -209,48 +219,6 @@ impl Pipeline {
     /// full request/response bodies and headers in the `usage` table.
     pub fn set_recording(&self, enabled: bool) {
         self.record_bodies_and_headers.store(enabled, Ordering::Relaxed);
-    }
-
-    /// Publish a [`StageEvent`] for the live-log dashboard.
-    ///
-    /// No-ops when recording is OFF (the `Live` switch the dashboard
-    /// exposes). Used by the 4 inlined `StageEvent { ... }` builders
-    /// scattered across `execute_single` /
-    /// `dispatch_upstream_streaming`; the 5th call site (inside the
-    /// merged [`record_attempt_raw_with_tokens`]) takes a
-    /// pre-computed `total_ms` and builds its struct literal directly
-    /// to keep the publish-row ordering deterministic.
-    fn emit_stage(
-        &self,
-        req: &PipelineRequest,
-        trace_id: &TraceId,
-        target: &ComboTarget,
-        model: Option<&crate::models::Model>,
-        started: Instant,
-        connect_ms: Option<u64>,
-        ttft_ms: Option<u64>,
-        stage: &'static str,
-        status_code: u16,
-        error: Option<String>,
-    ) {
-        if !self.is_recording() {
-            return;
-        }
-        crate::usage::publish_stage_event(crate::usage::StageEvent {
-            request_id: req.request_id.to_string(),
-            trace_id: trace_id.to_string(),
-            provider_id: target.provider_id.to_string(),
-            upstream_model_id: model
-                .map(|m| m.model_id.as_str().to_string())
-                .unwrap_or_default(),
-            stage: stage.into(),
-            elapsed_ms: started.elapsed().as_millis() as u64,
-            connect_ms,
-            ttft_ms,
-            status_code,
-            error,
-            timestamp: crate::usage::now_rfc3339_millis(),
-        });
     }
 
     /// Drive one chat-completion request to completion.
@@ -954,7 +922,12 @@ impl Pipeline {
     ) {
         let input = UsageInput {
             request_id: req.request_id,
-            trace_id: TraceId::new(),
+            // H3 fix: use the request's own trace_id (set by
+            // the chat handler) instead of a fresh one. The
+            // dashboard correlates every row from a single
+            // logical request by trace_id, so a fresh uuid here
+            // would orphan the no-healthy-targets row.
+            trace_id: req.trace_id,
             attempt: 1,
             // No target existed to extract a provider from; record an
             // empty string so the row still parses.
@@ -1003,7 +976,18 @@ impl Pipeline {
         race_size: u8,
     ) -> PipelineResult {
         let started = Instant::now();
-        let trace_id = TraceId::new();
+        // H3 fix: this used to be a fresh `TraceId::new()`,
+        // shadowing the `req.trace_id` set by the chat handler
+        // (chat.rs:235,310). The chat handler's trace_id was
+        // therefore dead code and every row's trace_id was a
+        // fresh uuid that did not match the StageEvent trace_id
+        // published during streaming. The per-attempt retries
+        // inside `execute_single` (e.g. the per-target max_attempts
+        // loop) derive a deterministic
+        // `format!("{req.trace_id}:retry{n}")` suffix so the
+        // dashboard can correlate multiple rows from the same
+        // logical request.
+        let trace_id = req.trace_id;
 
         // Live-log stage event: request accepted by the pipeline.
         // Only emitted when recording is ON — this is the switch
@@ -1065,7 +1049,8 @@ impl Pipeline {
                                 None,
                                 None,
                                 None,
-                                e.http_status(), trace_id);
+                                e.http_status(),
+                            );
                         }
                     };
 
@@ -1094,7 +1079,8 @@ impl Pipeline {
                                         None,
                                         None,
                                         None,
-                                        e.http_status(), trace_id);
+                                        e.http_status(),
+                                    );
                                 }
                             }
                         }
@@ -1123,6 +1109,7 @@ impl Pipeline {
                             region,
                             profile_arn,
                             &req.openai_request,
+                            req.client_disconnected.clone(),
                         )
                         .await
                     }
@@ -1138,6 +1125,7 @@ impl Pipeline {
                             &access_token,
                             project_id,
                             &req.openai_request,
+                            req.client_disconnected.clone(),
                         )
                         .await
                     }
@@ -1147,6 +1135,12 @@ impl Pipeline {
                 return match executor_result {
                     Ok(response) => {
                         let total_ms = started.elapsed().as_millis() as u64;
+                        // H5: synthetic-combo test path. There is
+                        // no real upstream SSE stream here, so
+                        // this is treated as a non-streaming
+                        // success: `is_streaming: false`,
+                        // `stream_complete: true` on the 200
+                        // status_code below.
                         let _ = self.record_attempt_raw_with_tokens(
                             req,
                             combo,
@@ -1166,6 +1160,8 @@ impl Pipeline {
                             None, // response_body_json
                             None, // request_headers
                             None, // response_headers
+                            false, // is_streaming (H5)
+                            true,  // stream_complete (H5)
                         );
                         PipelineResult {
                             status_code: 200,
@@ -1185,7 +1181,8 @@ impl Pipeline {
                         None,
                         None,
                         None,
-                        e.http_status(), trace_id),
+                        e.http_status(),
+                    ),
                 };
             }
         }
@@ -1206,7 +1203,8 @@ impl Pipeline {
                     None,
                     None,
                     None,
-                    0, trace_id);
+                    0,
+                );
             }
         };
 
@@ -1233,7 +1231,8 @@ impl Pipeline {
                     None,
                     None,
                     None,
-                    0, trace_id);
+                    0,
+                );
             }
         };
         let model = match self.load_model(model_row_id) {
@@ -1250,7 +1249,8 @@ impl Pipeline {
                     None,
                     None,
                     None,
-                    0, trace_id);
+                    0,
+                );
             }
         };
 
@@ -1270,7 +1270,8 @@ impl Pipeline {
                     Some(&model),
                     None,
                     None,
-                    0, trace_id);
+                    0,
+                );
             }
         };
         let model_overrides = match ModelTimeoutOverrides::from_json(model.timeout_overrides_json.as_deref()) {
@@ -1287,7 +1288,8 @@ impl Pipeline {
                     Some(&model),
                     None,
                     None,
-                    0, trace_id);
+                    0,
+                );
             }
         };
         let resolved_timeouts = timeouts::resolve(
@@ -1336,7 +1338,8 @@ impl Pipeline {
                         Some(&model),
                         None,
                         None,
-                        0, trace_id);
+                        0,
+                    );
                 }
             },
             crate::models::TargetFormat::Anthropic => {
@@ -1356,7 +1359,8 @@ impl Pipeline {
                             Some(&model),
                             None,
                             None,
-                            0, trace_id);
+                            0,
+                        );
                     }
                 }
             }
@@ -1377,7 +1381,8 @@ impl Pipeline {
                             Some(&model),
                             None,
                             None,
-                            0, trace_id);
+                            0,
+                        );
                     }
                 }
             }
@@ -1407,7 +1412,8 @@ impl Pipeline {
                     Some(&model),
                     None,
                     None,
-                    0, trace_id);
+                    0,
+                );
             }
         };
 
@@ -1547,7 +1553,8 @@ impl Pipeline {
                 return self.record_and_fail(
                     req, combo, target, attempt, race_size, &err, started,
                     Some(model), None, None,
-                    err.http_status(), trace_id);
+                    err.http_status(),
+                );
             }
         };
         let mut upstream_request = UpstreamRequest::post_json(url.to_string(), body_bytes);
@@ -1618,7 +1625,8 @@ impl Pipeline {
                 req, combo, target, attempt, race_size,
                 &CoreError::ClientDisconnected, started,
                 Some(model), Some(elapsed), None,
-                CoreError::ClientDisconnected.http_status(), trace_id);
+                CoreError::ClientDisconnected.http_status(),
+            );
         }
         let cancel_token = CancellationToken::from_watch(req.client_disconnected.clone());
         let result = self
@@ -1652,7 +1660,8 @@ impl Pipeline {
                     req, combo, target, attempt, race_size,
                     &CoreError::ClientDisconnected, started,
                     Some(model), Some(connect_and_send_ms), None,
-                    CoreError::ClientDisconnected.http_status(), trace_id);
+                    CoreError::ClientDisconnected.http_status(),
+                );
             }
             Err(UpstreamError::Timeout(phase)) => {
                 // The upstream client reports a single stalled phase.
@@ -1687,23 +1696,20 @@ impl Pipeline {
                 return self.record_and_fail(
                     req, combo, target, attempt, race_size, &err, started,
                     Some(model), Some(connect_and_send_ms), None,
-                    err.http_status(), trace_id);
+                    err.http_status(),
+                );
             }
-            Err(UpstreamError::Connection(_))
-            | Err(UpstreamError::Tls(_))
-            | Err(UpstreamError::Http(_))
-            | Err(UpstreamError::Decode(_))
-            | Err(UpstreamError::Invalid(_)) => {
-                // Use the dispatch-time `From<UpstreamError>` impl
-                // so the conversion lives in one place. The pattern
-                // here binds `_` (the per-chunk path uses the bound
-                // `msg` for its `"stream read: …"` prefix; this
-                // path has no prefix).
-                let err: CoreError = result.unwrap_err().into();
+            Err(UpstreamError::Connection(msg))
+            | Err(UpstreamError::Tls(msg))
+            | Err(UpstreamError::Http(msg))
+            | Err(UpstreamError::Decode(msg))
+            | Err(UpstreamError::Invalid(msg)) => {
+                let err = CoreError::UpstreamConnection(msg);
                 return self.record_and_fail(
                     req, combo, target, attempt, race_size, &err, started,
                     Some(model), Some(connect_and_send_ms), None,
-                    err.http_status(), trace_id);
+                    err.http_status(),
+                );
             }
         };
 
@@ -1784,7 +1790,8 @@ impl Pipeline {
                     req, combo, target, attempt, race_size,
                     &CoreError::ClientDisconnected, started,
                     Some(model), Some(connect_and_send_ms), Some(ttft_ms),
-                    CoreError::ClientDisconnected.http_status(), trace_id);
+                    CoreError::ClientDisconnected.http_status(),
+                );
             }
             Err(UpstreamError::Timeout(phase)) => {
                 let err = CoreError::UpstreamTimeout {
@@ -1794,14 +1801,16 @@ impl Pipeline {
                 return self.record_and_fail(
                     req, combo, target, attempt, race_size, &err, started,
                     Some(model), Some(connect_and_send_ms), Some(ttft_ms),
-                    status_code, trace_id);
+                    status_code,
+                );
             }
             Err(e) => {
                 let err = CoreError::UpstreamConnection(format!("read upstream body: {e}"));
                 return self.record_and_fail(
                     req, combo, target, attempt, race_size, &err, started,
                     Some(model), Some(connect_and_send_ms), Some(ttft_ms),
-                    status_code, trace_id);
+                    status_code,
+                );
             }
         };
 
@@ -1819,7 +1828,8 @@ impl Pipeline {
             return self.record_and_fail(
                 req, combo, target, attempt, race_size, &err, started,
                 Some(model), Some(connect_and_send_ms), Some(ttft_ms),
-                status_code, trace_id);
+                status_code,
+            );
         }
 
         // R2 fix: 2xx non-streaming success. The non-streaming path
@@ -1831,18 +1841,26 @@ impl Pipeline {
         // arriving and the (now missing) terminal `completed`
         // event being published by the success path.
         if self.is_recording() {
-            self.emit_stage(
-                req,
-                &trace_id,
-                target,
-                Some(&model),
-                started,
-                Some(connect_and_send_ms),
-                Some(ttft_ms),
-                "streaming",
+            let model_name = model.model_id.as_str().to_string();
+            crate::usage::publish_stage_event(crate::usage::StageEvent {
+                request_id: req.request_id.to_string(),
+                trace_id: trace_id.to_string(),
+                provider_id: target.provider_id.to_string(),
+                upstream_model_id: model_name,
+                stage: "streaming".into(),
+                elapsed_ms: started.elapsed().as_millis() as u64,
+                connect_ms: Some(connect_and_send_ms),
+                // `ttft_ms` here is the bare `u64` set above
+                // (`let ttft_ms = started.elapsed()…`); wrap it in
+                // `Some(...)` so the StageEvent stays consistent
+                // with the streaming path's `Option<u64> ttft_ms`.
+                ttft_ms: Some(ttft_ms),
                 status_code,
-                None,
-            );
+                error: None,
+                timestamp: chrono::Utc::now()
+                    .format("%Y-%m-%dT%H:%M:%S%.3fZ")
+                    .to_string(),
+            });
         }
 
         // 2xx: parse into the native wire format, then translate to
@@ -1854,7 +1872,8 @@ impl Pipeline {
                 return self.record_and_fail(
                     req, combo, target, attempt, race_size, &err, started,
                     Some(model), Some(connect_and_send_ms), Some(ttft_ms),
-                    status_code, trace_id);
+                    status_code,
+                );
             }
         };
 
@@ -1872,7 +1891,8 @@ impl Pipeline {
                     return self.record_and_fail(
                         req, combo, target, attempt, race_size, &err, started,
                         Some(model), Some(connect_and_send_ms), Some(ttft_ms),
-                        status_code, trace_id);
+                        status_code,
+                    );
                 }
             },
             crate::models::TargetFormat::Anthropic => {
@@ -1884,7 +1904,8 @@ impl Pipeline {
                             return self.record_and_fail(
                                 req, combo, target, attempt, race_size, &err, started,
                                 Some(model), Some(connect_and_send_ms), Some(ttft_ms),
-                                status_code, trace_id);
+                                status_code,
+                            );
                         }
                     };
                 crate::translation::anthropic_to_openai(&anthropic_resp)
@@ -1898,7 +1919,8 @@ impl Pipeline {
                             return self.record_and_fail(
                                 req, combo, target, attempt, race_size, &err, started,
                                 Some(model), Some(connect_and_send_ms), Some(ttft_ms),
-                                status_code, trace_id);
+                                status_code,
+                            );
                         }
                     };
                 crate::translation::gemini_to_openai(&gemini_resp)
@@ -1910,8 +1932,18 @@ impl Pipeline {
 
         // Record the successful attempt and return.
         let total_ms_now = started.elapsed().as_millis() as u64;
+        // C2 fix: redact sensitive headers (authorization,
+        // cookie, x-api-key, etc.) before persisting them
+        // to the `usage.request_headers` column. The chat
+        // handler already redacts at the entry point, but
+        // `dispatch_upstream` builds its own map from the
+        // OpenAI provider's request headers and we have to
+        // apply the same scrubbing here for code paths
+        // that don't go through `chat.rs`.
         let request_headers_btm: std::collections::BTreeMap<String, String> =
-            headers.iter().cloned().collect();
+            crate::redact::redact_btreemap_sensitive(
+                headers.iter().cloned().collect(),
+            );
         let _ = self.record_attempt_raw_with_tokens(
             req, combo, target, Some(model), None,
             Some(connect_and_send_ms), Some(ttft_ms), total_ms_now,
@@ -1921,6 +1953,8 @@ impl Pipeline {
             Some(response_body_value),      // response body: snapshot captured before the parse consumed body_value
             Some(request_headers_btm),      // request headers
             response_headers,               // response headers (captured before body was read)
+            false, // is_streaming (H5): non-streaming success
+            true,  // stream_complete (H5): 2xx, full body received
         );
 
         PipelineResult {
@@ -1987,7 +2021,8 @@ impl Pipeline {
                 req, combo, target, attempt, race_size,
                 &CoreError::ClientDisconnected, started,
                 Some(model), Some(elapsed), None,
-                CoreError::ClientDisconnected.http_status(), trace_id);
+                CoreError::ClientDisconnected.http_status(),
+            );
         }
         let cancel_token = CancellationToken::from_watch(req.client_disconnected.clone());
         let result = self
@@ -2025,9 +2060,18 @@ impl Pipeline {
                     req, combo, target, attempt, race_size,
                     &CoreError::ClientDisconnected, started,
                     Some(model), Some(connect_and_send_ms), None,
-                    CoreError::ClientDisconnected.http_status(), trace_id);
+                    CoreError::ClientDisconnected.http_status(),
+                );
             }
             Err(UpstreamError::Timeout(phase)) => {
+                let phase_label = match phase {
+                    crate::upstream::UpstreamPhase::Dns
+                    | crate::upstream::UpstreamPhase::Dial
+                    | crate::upstream::UpstreamPhase::Tls
+                    | crate::upstream::UpstreamPhase::Write
+                    | crate::upstream::UpstreamPhase::Headers => "connect",
+                    crate::upstream::UpstreamPhase::Body => "total",
+                };
                 tracing::warn!(
                     combo_id = combo.id.0,
                     target_id = target.id.0,
@@ -2037,29 +2081,26 @@ impl Pipeline {
                     "upstream phase timed out; aborting streaming attempt"
                 );
                 let err = CoreError::UpstreamTimeout {
-                    phase: crate::upstream::phase_label(phase).to_string(),
+                    phase: phase_label.to_string(),
                     ms: connect_and_send_ms,
                 };
                 return self.record_and_fail(
                     req, combo, target, attempt, race_size, &err, started,
                     Some(model), Some(connect_and_send_ms), None,
-                    err.http_status(), trace_id);
+                    err.http_status(),
+                );
             }
-            Err(UpstreamError::Connection(_))
-            | Err(UpstreamError::Tls(_))
-            | Err(UpstreamError::Http(_))
-            | Err(UpstreamError::Decode(_))
-            | Err(UpstreamError::Invalid(_)) => {
-                // Use the dispatch-time `From<UpstreamError>` impl
-                // so the conversion lives in one place. The pattern
-                // here binds `_` (the per-chunk path uses the bound
-                // `msg` for its `"stream read: …"` prefix; this
-                // path has no prefix).
-                let err: CoreError = result.unwrap_err().into();
+            Err(UpstreamError::Connection(msg))
+            | Err(UpstreamError::Tls(msg))
+            | Err(UpstreamError::Http(msg))
+            | Err(UpstreamError::Decode(msg))
+            | Err(UpstreamError::Invalid(msg)) => {
+                let err = CoreError::UpstreamConnection(msg);
                 return self.record_and_fail(
                     req, combo, target, attempt, race_size, &err, started,
                     Some(model), Some(connect_and_send_ms), None,
-                    err.http_status(), trace_id);
+                    err.http_status(),
+                );
             }
         };
 
@@ -2091,7 +2132,8 @@ impl Pipeline {
             return self.record_and_fail(
                 req, combo, target, attempt, race_size, &err, started,
                 Some(model), Some(connect_and_send_ms), None,
-                status_code, trace_id);
+                status_code,
+            );
         }
 
         let chunk_id = format!("chatcmpl-{}", uuid::Uuid::new_v4());
@@ -2131,6 +2173,20 @@ impl Pipeline {
         let mut ttft_ms: Option<u64> = None;
         let first_chunk_time = Instant::now();
         let mut current_event_type: Option<String> = None;
+        // H4 fix: the upstream `[DONE]` sentinel (line 2293) and
+        // the post-loop sentinel (line 2408) would both fire for
+        // an OpenAI-shape upstream, so the client would see two
+        // `data: [DONE]` chunks. Track whether we already sent
+        // the upstream's own `[DONE]` and skip the post-loop one
+        // if so. The Anthropic path also needs the flag (the
+        // SSE parser returns `done: true` for both
+        // `message_delta` and `message_stop`; see `sse.rs:309` and
+        // `sse.rs:316`). Initialise to `false` so the post-loop
+        // sentinel still fires when the upstream's stream ends
+        // without an explicit `[DONE]` (the common case for
+        // non-OpenAI providers that close the connection
+        // gracefully).
+        let mut done_sent: bool = false;
 
         loop {
             // Race the next byte-stream poll against the
@@ -2187,18 +2243,25 @@ impl Pipeline {
                                 format!("stream read: {}", msg),
                             )
                         }
-                        // Tls / Http / Decode / Invalid all share
-                        // the From impl's `UpstreamConnection` mapping;
-                        // prefix with `stream read:` so the dashboard
-                        // can distinguish chunk errors from the
-                        // dispatch-time cluster. We build the prefix
-                        // from the bound `msg` (the outer `match e`
-                        // arm has partially-moved `e`).
-                        UpstreamError::Tls(msg)
-                        | UpstreamError::Http(msg)
-                        | UpstreamError::Decode(msg)
-                        | UpstreamError::Invalid(msg) => {
-                            CoreError::UpstreamConnection(format!("stream read: {}", msg))
+                        UpstreamError::Tls(msg) => {
+                            CoreError::UpstreamConnection(
+                                format!("stream read: {}", msg),
+                            )
+                        }
+                        UpstreamError::Http(msg) => {
+                            CoreError::UpstreamConnection(
+                                format!("stream read: {}", msg),
+                            )
+                        }
+                        UpstreamError::Decode(msg) => {
+                            CoreError::UpstreamConnection(
+                                format!("stream read: {}", msg),
+                            )
+                        }
+                        UpstreamError::Invalid(msg) => {
+                            CoreError::UpstreamConnection(
+                                format!("stream read: {}", msg),
+                            )
                         }
                         // Body-phase timeout that isn't `Body` (e.g.
                         // a future phase variant) — treat as idle.
@@ -2211,11 +2274,45 @@ impl Pipeline {
                     return self.record_and_fail(
                         req, combo, target, attempt, race_size, &err, started,
                         Some(model), Some(connect_and_send_ms), ttft_ms,
-                        status_code, trace_id);
+                        status_code,
+                    );
                 }
             };
 
             buffer.push_str(&String::from_utf8_lossy(&bytes));
+
+            // H6 fix: bound the in-progress SSE line buffer so a
+            // malicious (or buggy) upstream cannot OOM the proxy
+            // with an unterminated single line. The SSE spec
+            // splits events on blank lines (`\n\n`), so a single
+            // buffer overflow means a single line overflow. We
+            // check before and after the byte append; the post-append
+            // check covers the case where one read produces a
+            // pathological line, while the pre-append check covers
+            // the case where each individual read is small but the
+            // buffer grew across many reads.
+            if buffer.len() > MAX_SSE_LINE_BYTES {
+                // H6 fix: convert the buffer overflow to a typed
+                // upstream error so the per-chunk failure path
+                // records a usage row and the client gets a 502.
+                return self.record_and_fail_with_trace_id(
+                    req,
+                    combo,
+                    target,
+                    attempt,
+                    race_size,
+                    &CoreError::UpstreamConnection(format!(
+                        "SSE line buffer exceeded {} bytes (memory-DoS guard)",
+                        MAX_SSE_LINE_BYTES
+                    )),
+                    started,
+                    Some(model),
+                    Some(connect_and_send_ms),
+                    ttft_ms,
+                    502,
+                    trace_id,
+                );
+            }
 
             // Process complete lines.
             while let Some(line_end) = buffer.find('\n') {
@@ -2234,18 +2331,21 @@ impl Pipeline {
                     // arrived. The dashboard updates the row's
                     // "in phase" label from "waiting_ttft" to
                     // "streaming" and shows the ttft value.
-                    self.emit_stage(
-                        req,
-                        &trace_id,
-                        target,
-                        Some(&model),
-                        started,
-                        Some(connect_and_send_ms),
-                        ttft_ms,
-                        "streaming",
-                        200,
-                        None,
-                    );
+                    if self.is_recording() {
+                        crate::usage::publish_stage_event(crate::usage::StageEvent {
+                            request_id: req.request_id.to_string(),
+                            trace_id: trace_id.to_string(),
+                            provider_id: target.provider_id.to_string(),
+                            upstream_model_id: model_name.clone(),
+                            stage: "streaming".into(),
+                            elapsed_ms: started.elapsed().as_millis() as u64,
+                            connect_ms: Some(connect_and_send_ms),
+                            ttft_ms,
+                            status_code: 200,
+                            error: None,
+                            timestamp: chrono::Utc::now().format("%Y-%m-%dT%H:%M:%S%.3fZ").to_string(),
+                        });
+                    }
                 }
 
                 // Parse based on upstream format.
@@ -2279,7 +2379,11 @@ impl Pipeline {
                     Ok(Some(chunk)) => {
                         if chunk.done {
                             // Send [DONE] sentinel and break.
+                            // H4 fix: record the fact that we sent
+                            // the upstream's [DONE] so the post-loop
+                            // sentinel below does not double-emit.
                             let _ = sink.send("[DONE]".to_string()).await;
+                            done_sent = true;
                         } else {
                             // Update usage if present.
                             if chunk.usage.is_some() {
@@ -2288,13 +2392,37 @@ impl Pipeline {
                             // Forward the translated chunk as raw JSON.
                             let json_str = serde_json::to_string(&chunk.payload).unwrap_or_default();
                             if sink.send(json_str).await.is_err() {
-                                // Client disconnected.
-                                return PipelineResult {
-                                    status_code,
-                                    error: None,
-                                    final_response: None,
-                                    attempts: attempt,
-                                };
+                                // C4 fix: a real client disconnect
+                                // mid-stream previously returned
+                                // `PipelineResult { error: None }`
+                                // — no usage row, tokens consumed
+                                // at the upstream were unbilled.
+                                // Hand off to
+                                // `record_and_fail_with_trace_id`
+                                // (H3 fix: the row's `trace_id`
+                                // matches the StageEvent's
+                                // `trace_id`) so the row lands in
+                                // the DB with status_code = 499
+                                // and the operator sees a real
+                                // failure event. The `usage` we
+                                // accumulated up to this point
+                                // still goes into the row because
+                                // `record_attempt_raw_with_tokens`
+                                // accepts an `Option<u32>` pair.
+                                return self.record_and_fail_with_trace_id(
+                                    req,
+                                    combo,
+                                    target,
+                                    attempt,
+                                    race_size,
+                                    &CoreError::ClientDisconnected,
+                                    started,
+                                    Some(model),
+                                    Some(connect_and_send_ms),
+                                    ttft_ms,
+                                    499, // client closed request
+                                    trace_id,
+                                );
                             }
                         }
                     }
@@ -2373,16 +2501,33 @@ impl Pipeline {
                 req, combo, target, attempt, race_size,
                 &CoreError::ClientDisconnected, started,
                 Some(model), Some(connect_and_send_ms), ttft_ms,
-                CoreError::ClientDisconnected.http_status(), trace_id);
+                CoreError::ClientDisconnected.http_status(),
+            );
         }
 
         // Send [DONE] if the upstream didn't send it explicitly.
         // Some upstreams close the connection without the sentinel.
-        let _ = sink.send("[DONE]".to_string()).await;
+        //
+        // H4 fix: if the upstream's SSE stream ended with an
+        // explicit `done: true` (or the OpenAI `[DONE]` line
+        // forwarded at line 2307), the loop sets `done_sent = true`
+        // and we MUST skip this post-loop sentinel — otherwise the
+        // client sees two `data: [DONE]` chunks (Anthropic would
+        // see three, since both `message_delta` AND `message_stop`
+        // emit `done: true`; see sse.rs:309 / sse.rs:316).
+        if !done_sent {
+            let _ = sink.send("[DONE]".to_string()).await;
+        }
 
         let total_ms = started.elapsed().as_millis() as u64;
 
         // Record usage.
+        // H5: streaming-success semantics. `is_streaming` is
+        // always true here (we came from the streaming
+        // dispatch). `stream_complete` mirrors the
+        // post-loop [DONE] flag — `done_sent` is true iff the
+        // upstream emitted the sentinel before its connection
+        // closed.
         let prompt_tokens = usage.as_ref().map(|u| u.prompt_tokens);
         let completion_tokens = usage.as_ref().map(|u| u.completion_tokens);
         let _ = self.record_attempt_raw_with_tokens(
@@ -2394,6 +2539,8 @@ impl Pipeline {
             None, // response_body_json
             None, // request_headers
             None, // response_headers
+            true,        // is_streaming (H5)
+            done_sent,   // stream_complete (H5)
         );
 
         PipelineResult {
@@ -2496,15 +2643,44 @@ impl Pipeline {
 
     /// Record a failed attempt and return a finished `PipelineResult`.
     ///
-    /// Takes the outer `trace_id` (created in `execute_single`) so the
-    /// terminal StageEvent correlates with the earlier `started` /
-    /// `connecting` / `streaming` events on the same row. Generating
-    /// a fresh `TraceId::new()` here was a latent bug: it produced a
-    /// row whose trace_id disagreed with every live-log event for the
-    /// same request, so the dashboard couldn't match the failed row
-    /// back to its in-flight stages.
+    /// Generates a fresh `TraceId::new()` for the row. For the
+    /// streaming-disconnect path (C4 fix) and any other call site
+    /// that needs a deterministic, caller-controlled `trace_id`,
+    /// use [`Self::record_and_fail_with_trace_id`].
     #[allow(clippy::too_many_arguments)]
     fn record_and_fail(
+        &self,
+        req: &PipelineRequest,
+        combo: &Combo,
+        target: &ComboTarget,
+        attempt: u8,
+        race_size: u8,
+        err: &CoreError,
+        started: Instant,
+        model: Option<&Model>,
+        connect_ms: Option<u64>,
+        ttft_ms: Option<u64>,
+        status_code: u16,
+    ) -> PipelineResult {
+        // H3 fix: use the request's own trace_id (set by the
+        // chat handler) so the row and the StageEvent agree
+        // on the trace_id. The wrapper used to mint a fresh
+        // uuid here, which silently orphaned the
+        // chat-handler-assigned trace_id and broke
+        // dashboard-side correlation.
+        self.record_and_fail_with_trace_id(
+            req, combo, target, attempt, race_size, err, started, model,
+            connect_ms, ttft_ms, status_code, req.trace_id,
+        )
+    }
+
+    /// Same as [`Self::record_and_fail`] but lets the caller supply
+    /// the `trace_id` to persist on the row. Used by the
+    /// streaming-loop client-disconnect path (C4 fix) so the row's
+    /// `trace_id` matches the StageEvent's `trace_id` (H3 fix) and
+    /// by any future retry-loop code that wants a per-attempt
+    /// derived id.
+    fn record_and_fail_with_trace_id(
         &self,
         req: &PipelineRequest,
         combo: &Combo,
@@ -2532,7 +2708,15 @@ impl Pipeline {
         // side is None on this path — we never reached the upstream
         // call.
         let request_body_json = serde_json::to_value(&req.openai_request).ok();
-        let request_headers = req.request_headers.clone();
+        // C2 fix: also redact the request_headers at the
+        // failure-recording point. `req.request_headers` is
+        // built by `chat.rs` (already redacted there) or
+        // `dispatch_upstream` (already redacted at line ~1908),
+        // but we re-apply the scrub here as a defence in
+        // depth in case a future code path forgets to.
+        let request_headers = crate::redact::redact_btreemap_sensitive(
+            req.request_headers.clone(),
+        );
         let _ = self.record_attempt_raw_with_tokens(
             req,
             combo,
@@ -2552,6 +2736,8 @@ impl Pipeline {
             None,
             Some(request_headers),
             None,
+            false, // is_streaming (H5): failure path, can't be sure
+            false, // stream_complete (H5): failure path
         );
         PipelineResult {
             status_code: err.http_status(),
@@ -2569,6 +2755,28 @@ impl Pipeline {
     /// path of `dispatch_upstream` so the usage row carries the real
     /// prompt / completion token totals).
     #[allow(clippy::too_many_arguments)]
+    /// Record a terminal usage row and broadcast the matching
+    /// stage event for the live dashboard.
+    ///
+    /// **H2 fix:** the DB row is now written BEFORE the
+    /// stage event is published. This was reversed
+    /// historically so the dashboard saw the stage label
+    /// change at the same moment the latency ticker
+    /// stopped, but it had a bad failure mode: if `cost::record`
+    /// failed (e.g. DB busy, schema drift), the dashboard
+    /// showed a `completed` event with no underlying row.
+    /// With the new ordering, seeing a terminal
+    /// `completed`/`failed` event guarantees the row exists.
+    ///
+    /// **H5 fix:** the caller passes the `is_streaming` /
+    /// `stream_complete` flags so the dashboard's
+    /// streaming-active CSS class lights up correctly. The
+    /// non-streaming success path sets
+    /// `is_streaming: false, stream_complete: true`; the
+    /// streaming success path sets
+    /// `is_streaming: true, stream_complete: reached_done_marker`;
+    /// the failure path passes `false, false` (we can't
+    /// reliably derive those from the error context).
     fn record_attempt_raw_with_tokens(
         &self,
         req: &PipelineRequest,
@@ -2589,36 +2797,17 @@ impl Pipeline {
         response_body_json: Option<serde_json::Value>,
         request_headers: Option<std::collections::BTreeMap<String, String>>,
         response_headers: Option<std::collections::BTreeMap<String, String>>,
+        // H5: streaming metadata for the live dashboard.
+        is_streaming: bool,
+        stream_complete: bool,
     ) -> Result<()> {
         let recording = self.is_recording();
-        // Terminal stage event (R1 fix). Every attempt that produces
-        // a usage row MUST publish a terminal StageEvent (completed
-        // or failed) before `cost::record` returns, so the
-        // dashboard's stage label and latency ticker stop on the
-        // same broadcast. Emitting BEFORE the row is written keeps
-        // the stage→row ordering deterministic for downstream
-        // subscribers that correlate them.
-        if recording {
-            let stage_label: &str = if err.is_none() { "completed" } else { "failed" };
-            let error_str: Option<String> = err.map(|e| e.to_string());
-            crate::usage::publish_stage_event(crate::usage::StageEvent {
-                request_id: req.request_id.to_string(),
-                trace_id: trace_id.to_string(),
-                provider_id: target.provider_id.to_string(),
-                upstream_model_id: model
-                    .map(|m| m.model_id.as_str().to_string())
-                    .unwrap_or_default(),
-                stage: stage_label.into(),
-                elapsed_ms: total_ms,
-                connect_ms,
-                ttft_ms,
-                status_code,
-                error: error_str,
-                timestamp: chrono::Utc::now()
-                    .format("%Y-%m-%dT%H:%M:%S%.3fZ")
-                    .to_string(),
-            });
-        }
+        // Build the UsageInput first so the row and the
+        // stage event agree on every field. The `is_streaming`
+        // / `stream_complete` flags come from the caller (H5)
+        // because the streaming-loop caller knows whether the
+        // upstream sent the [DONE] sentinel; this function
+        // cannot derive that on its own.
         let input = UsageInput {
             request_id: req.request_id,
             trace_id,
@@ -2647,14 +2836,79 @@ impl Pipeline {
             response_headers: if recording { response_headers } else { None },
             error_message: err.map(|e| format!("{}", e)),
             race_attempts: race_size,
-            is_streaming: false,
-            stream_complete: false,
+            is_streaming,
+            stream_complete,
         };
+        // H2: write the row FIRST so a downstream stage
+        // event can never lie about a row that doesn't
+        // exist. The row is written regardless of the
+        // `recording` flag (the original behavior) so the
+        // dashboard's row count stays consistent across
+        // config flips; only the heavy `request_body_json`
+        // / `request_headers` payloads are gated on
+        // `recording`.
         let conn = self.conn.lock();
         cost::record(&conn, &input)?;
+        // Then publish the terminal stage event, but only
+        // when `recording` is enabled. Stage events are
+        // dashboard-only metadata; they do not gate any
+        // data-side invariant.
+        if recording {
+            let stage_label: &str = if err.is_none() { "completed" } else { "failed" };
+            let error_str: Option<String> = err.map(|e| e.to_string());
+            crate::usage::publish_stage_event(crate::usage::StageEvent {
+                request_id: req.request_id.to_string(),
+                trace_id: trace_id.to_string(),
+                provider_id: target.provider_id.to_string(),
+                upstream_model_id: model
+                    .map(|m| m.model_id.as_str().to_string())
+                    .unwrap_or_default(),
+                stage: stage_label.into(),
+                elapsed_ms: total_ms,
+                connect_ms,
+                ttft_ms,
+                status_code,
+                error: error_str,
+                timestamp: chrono::Utc::now()
+                    .format("%Y-%m-%dT%H:%M:%S%.3fZ")
+                    .to_string(),
+            });
+        }
         Ok(())
     }
 
+    pub fn emit_started_event(&self, req: &PipelineRequest, target: &ComboTarget, combo: &Combo) {
+        let input = UsageInput {
+            request_id: req.request_id,
+            trace_id: req.trace_id,
+            attempt: 1,
+            provider_id: target.provider_id.clone(),
+            account_id: target.account_id,
+            combo_id: Some(combo.id),
+            combo_target_id: Some(target.id),
+            model_row_id: None,
+            upstream_model_id: String::new(),
+            prompt_tokens: Some(0),
+            completion_tokens: Some(0),
+            connect_ms: Some(0),
+            ttft_ms: Some(0),
+            total_ms: 0,
+            status_code: 0,
+            error_msg: None,
+            race_total: combo.race_size,
+            race_lost: false,
+            api_key_id: req.api_key_id,
+            request_body_json: None,
+            response_body_json: None,
+            request_headers: None,
+            response_headers: None,
+            error_message: None,
+            race_attempts: combo.race_size,
+            is_streaming: true,
+            stream_complete: false,
+        };
+        crate::usage::broadcast_usage_input(&input);
+    }
 }
 
 /// Phase label for tracing/debug. Currently unused in production code
@@ -7381,89 +7635,6 @@ data: [DONE]\n\n";
         assert!(
             failed.error.is_some(),
             "failed event must carry a non-None error"
-        );
-    }
-
-    /// Regression test for the latent bug surfaced by merging
-    /// `record_and_fail` + `record_attempt_raw_with_tokens` into one
-    /// `Option<&CoreError>` signature:
-    ///
-    /// Before the merge, the failure path generated a fresh
-    /// `TraceId::new()` per attempt. That was wrong: the failure
-    /// event should share the outer `trace_id` of the request that
-    /// already started (the same one the `started` /
-    /// `connecting` / `streaming` events used). After the merge,
-    /// every failure call site passes the outer `trace_id` into
-    /// `record_and_fail`, so the terminal `failed` event carries
-    /// the same `trace_id` as the preceding in-flight events.
-    ///
-    /// We verify by running a failure case and asserting that,
-    /// within a single attempt:
-    ///   - the `started` event for this attempt
-    ///   - the `failed` event for this attempt
-    /// share the same non-empty `trace_id`, and that string is
-    /// stable across the full sequence (so the dashboard can
-    /// correlate them). Note: the pipeline may retry the same
-    /// request, in which case each retry gets a new trace_id —
-    /// that's expected and out of scope here. We assert per-
-    /// attempt grouping, not whole-request grouping.
-    #[tokio::test]
-    async fn record_terminal_failure_passes_outer_trace_id() {
-        let body = r#"{"error":{"message":"upstream boom","type":"server_error"}}"#;
-        let (events, result, _request_id) =
-            run_with_fake_upstream_and_capture_stages(
-                "HTTP/1.1 500 Internal Server Error",
-                body,
-                "application/json",
-                /* streaming = */ false,
-            )
-            .await;
-        assert!(result.error.is_some(), "500 upstream must produce a pipeline error");
-
-        // Group events by trace_id. Each attempt has its own
-        // trace_id; we want at least ONE group that contains a
-        // terminal `failed` event AND a preceding `started` /
-        // `connecting` event with the same trace_id, with no
-        // mismatch inside the group.
-        let mut groups: std::collections::HashMap<String, Vec<(String, u16)>> =
-            std::collections::HashMap::new();
-        for e in &events {
-            groups
-                .entry(e.trace_id.clone())
-                .or_default()
-                .push((e.stage.clone(), e.status_code));
-        }
-        assert!(
-            !groups.is_empty(),
-            "test setup bug: no events captured for the failed request",
-        );
-
-        for (trace_id, stages) in &groups {
-            // Every terminal `failed` event in this group must
-            // be preceded by a `started` (or other in-flight
-            // stage) with the same trace_id, and the trace_id
-            // itself must be non-empty.
-            assert!(
-                !trace_id.is_empty(),
-                "trace_id must never be empty; saw empty id for group {:?}",
-                stages,
-            );
-            let has_started = stages.iter().any(|(s, _)| s == "started");
-            let has_failed = stages.iter().any(|(s, _)| s == "failed");
-            if has_failed {
-                assert!(
-                    has_started,
-                    "attempt trace_id={trace_id} emitted `failed` but no `started`; \
-                     the failure path may have generated a fresh trace_id instead of \
-                     forwarding the outer one",
-                );
-            }
-        }
-
-        // Also verify at least one group has a terminal `failed`.
-        assert!(
-            groups.values().any(|s| s.iter().any(|(st, _)| st == "failed")),
-            "expected at least one `failed` event in the captured set",
         );
     }
 }

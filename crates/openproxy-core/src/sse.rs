@@ -311,11 +311,14 @@ pub fn translate_anthropic_sse_payload(
             }))
         }
         "message_stop" => {
-            Ok(Some(UpstreamSseChunk {
-                payload: serde_json::json!({}),
-                done: true,
-                usage: None,
-            }))
+            // H4 fix: `message_delta` already emitted the
+            // `done: true` chunk (line 307). `message_stop` is just
+            // Anthropic's closing handshake and would otherwise
+            // produce a SECOND `done: true` chunk downstream — and
+            // combined with the post-loop `[DONE]` at pipeline.rs
+            // :2431 the client would see three end-of-stream
+            // signals. Swallow it.
+            Ok(None)
         }
         _ => Ok(None), // content_block_start, content_block_stop, etc.
     }
@@ -751,9 +754,13 @@ mod tests {
 
     #[test]
     fn anthropic_translate_message_stop() {
+        // H4 fix: `message_stop` is the closing handshake after
+        // `message_delta` already emitted the `done: true` chunk.
+        // Returning `Ok(None)` here prevents a duplicate end-of-
+        // stream signal in the downstream SSE stream.
         let payload = "message_stop\n{}";
-        let chunk = translate_anthropic_sse_payload(payload, "chunk-1", 1000, "claude-3").unwrap().unwrap();
-        assert!(chunk.done);
+        let result = translate_anthropic_sse_payload(payload, "chunk-1", 1000, "claude-3").unwrap();
+        assert!(result.is_none());
     }
 
     #[test]
@@ -802,8 +809,11 @@ mod tests {
             }
         }
 
-        // Should have: message_start, 2 content_block_delta, message_delta, message_stop
-        assert_eq!(chunks.len(), 5);
+        // Should have: message_start, 2 content_block_delta, message_delta.
+        // H4 fix: `message_stop` no longer produces a chunk
+        // (it's a no-op handshake that would otherwise produce a
+        // second `done: true` chunk — see H4 / sse.rs:316).
+        assert_eq!(chunks.len(), 4);
         // First chunk: role assignment
         assert_eq!(chunks[0].payload["choices"][0]["delta"]["role"].as_str().unwrap(), "assistant");
         // Second chunk: "Hi"
@@ -812,8 +822,10 @@ mod tests {
         assert_eq!(chunks[2].payload["choices"][0]["delta"]["content"].as_str().unwrap(), " there");
         // Fourth chunk: finish_reason
         assert_eq!(chunks[3].payload["choices"][0]["finish_reason"].as_str().unwrap(), "stop");
-        assert!(chunks[3].done);
-        // Fifth chunk: message_stop (done=true)
-        assert!(chunks[4].done);
+        // The single `done: true` chunk comes from `message_delta`
+        // — exactly one downstream end-of-stream signal for the
+        // full stream, which is the invariant H4 is enforcing.
+        let done_chunks: usize = chunks.iter().filter(|c| c.done).count();
+        assert_eq!(done_chunks, 1);
     }
 }
