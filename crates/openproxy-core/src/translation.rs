@@ -24,6 +24,24 @@ pub struct OpenAIRequest {
     pub top_p: Option<f32>,
     #[serde(default)]
     pub stop: Option<Vec<String>>,
+    // H4 fix: function-calling fields. None of these are translated
+    // by the openai_to_anthropic boundary yet, which means a caller
+    // that asks for `tools=[...]` on the OpenAI chat endpoint and
+    // is routed to an Anthropic upstream silently loses the tool
+    // declarations — the model then has no way to know which tools
+    // exist, and any tool_use response is rejected because the
+    // tool definition is missing. Adding typed fields here forces
+    // the translator to surface them; serde keeps the unknown-
+    // key tolerance of `extra` for callers using newer/draft
+    // field names that haven't been added here yet.
+    #[serde(default)]
+    pub tools: Option<Vec<serde_json::Value>>,
+    #[serde(default)]
+    pub tool_choice: Option<serde_json::Value>,
+    #[serde(default)]
+    pub top_k: Option<u32>,
+    #[serde(default)]
+    pub user: Option<String>,
     #[serde(flatten)]
     pub extra: serde_json::Map<String, serde_json::Value>,
 }
@@ -100,7 +118,15 @@ pub struct AnthropicRequest {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub top_p: Option<f32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub top_k: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stop_sequences: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tools: Option<Vec<serde_json::Value>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_choice: Option<serde_json::Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub metadata: Option<serde_json::Value>,
     #[serde(default)]
     pub stream: bool,
 }
@@ -297,7 +323,24 @@ pub fn openai_to_anthropic(req: &OpenAIRequest) -> AnthropicRequest {
         system,
         temperature: req.temperature,
         top_p: req.top_p,
+        top_k: req.top_k,
         stop_sequences: req.stop.clone(),
+        // H4 fix: tools, tool_choice, and user are now passed
+        // through to the Anthropic upstream. Without this, a
+        // request to /v1/chat/completions with a `tools` array
+        // silently gets re-routed to the upstream without tool
+        // declarations; the model then has no way to know which
+        // tools exist, and any tool_use response is rejected
+        // because the upstream never received the definitions.
+        tools: req.tools.clone(),
+        tool_choice: req.tool_choice.clone(),
+        // OpenAI's `user` field maps to Anthropic's `metadata.user_id`
+        // (Anthropic reserves metadata for traceability, not for
+        // function-calling). When the caller didn't set `user`, we
+        // leave metadata None rather than synthesise an empty object.
+        metadata: req.user.as_ref().map(|u| {
+            serde_json::json!({ "user_id": u })
+        }),
         stream: req.stream,
     }
 }
@@ -711,6 +754,10 @@ mod tests {
             max_tokens: None,
             top_p: None,
             stop: None,
+            tools: None,
+            tool_choice: None,
+            top_k: None,
+            user: None,
             extra: serde_json::Map::new(),
         }
     }
@@ -1052,5 +1099,88 @@ mod tests {
         assert!(arr.is_array());
         assert_eq!(arr[0]["type"], "text");
         assert_eq!(arr[1]["type"], "image_url");
+    }
+
+    // ---- H4 fix: function-calling fields pass-through ----
+
+    #[test]
+    fn h4_tools_array_passes_through_to_anthropic() {
+        // Without this fix the openai_to_anthropic boundary drops
+        // the `tools` field, so the Anthropic upstream never sees the
+        // tool definitions and any tool_use response is rejected.
+        let mut req = openai_req_with(vec![("user", "What is the weather in SF?")]);
+        req.tools = Some(vec![json!({
+            "type": "function",
+            "function": {
+                "name": "get_weather",
+                "description": "Look up weather",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "location": {"type": "string"}
+                    },
+                    "required": ["location"]
+                }
+            }
+        })]);
+        let out = openai_to_anthropic(&req);
+        let tools = out.tools.as_ref().expect("tools should pass through");
+        assert_eq!(tools.len(), 1);
+        assert_eq!(tools[0]["function"]["name"], "get_weather");
+    }
+
+    #[test]
+    fn h4_tool_choice_passes_through_to_anthropic() {
+        let mut req = openai_req_with(vec![("user", "go")]);
+        req.tool_choice = Some(json!("auto"));
+        let out = openai_to_anthropic(&req);
+        assert_eq!(out.tool_choice.as_ref().unwrap(), &json!("auto"));
+
+        // Object form (`{"type": "function", "function": {"name": "..."}}`)
+        // must also pass through untouched — Anthropic supports both
+        // the string and object forms.
+        req.tool_choice = Some(json!({
+            "type": "function",
+            "function": {"name": "search"}
+        }));
+        let out = openai_to_anthropic(&req);
+        let tc = out.tool_choice.as_ref().unwrap();
+        assert_eq!(tc["type"], "function");
+        assert_eq!(tc["function"]["name"], "search");
+    }
+
+    #[test]
+    fn h4_top_k_passes_through_to_anthropic() {
+        let mut req = openai_req_with(vec![("user", "go")]);
+        req.top_k = Some(40);
+        let out = openai_to_anthropic(&req);
+        assert_eq!(out.top_k, Some(40));
+    }
+
+    #[test]
+    fn h4_user_field_maps_to_anthropic_metadata_user_id() {
+        // OpenAI's `user` field is documented as an opaque end-user
+        // identifier for abuse detection. Anthropic has no direct
+        // equivalent but reserves `metadata.user_id` for the same
+        // purpose. The translator should produce exactly that shape.
+        let mut req = openai_req_with(vec![("user", "go")]);
+        req.user = Some("user-abc-123".to_string());
+        let out = openai_to_anthropic(&req);
+        let metadata = out.metadata.as_ref().expect("metadata set when user is set");
+        assert_eq!(metadata["user_id"], "user-abc-123");
+    }
+
+    #[test]
+    fn h4_absent_optional_fields_default_to_none() {
+        // The fix must not regress existing behaviour: a request
+        // that does not set tools / tool_choice / top_k / user must
+        // still serialise to a valid Anthropic request with those
+        // fields absent (serde skip_serializing_if = "Option::is_none").
+        let req = openai_req_with(vec![("user", "hi")]);
+        let out = openai_to_anthropic(&req);
+        assert!(out.tools.is_none());
+        assert!(out.tool_choice.is_none());
+        assert!(out.top_k.is_none());
+        assert!(out.metadata.is_none());
     }
 }

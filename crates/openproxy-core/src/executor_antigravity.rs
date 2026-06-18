@@ -463,6 +463,10 @@ mod tests {
             stream: false,
             top_p: None,
             stop: None,
+            tools: None,
+            tool_choice: None,
+            top_k: None,
+            user: None,
             extra: serde_json::Map::new(),
         }
     }
@@ -619,6 +623,10 @@ mod tests {
             stream: false,
             top_p: None,
             stop: None,
+            tools: None,
+            tool_choice: None,
+            top_k: None,
+            user: None,
             extra: serde_json::Map::new(),
         };
         let env2 = build_antigravity_request(&req2, "proj").unwrap();
@@ -640,6 +648,10 @@ mod tests {
             stream: false,
             top_p: None,
             stop: None,
+            tools: None,
+            tool_choice: None,
+            top_k: None,
+            user: None,
             extra: serde_json::Map::new(),
         };
         let envelope = build_antigravity_request(&req, "proj").unwrap();
@@ -656,6 +668,10 @@ mod tests {
             stream: false,
             top_p: None,
             stop: None,
+            tools: None,
+            tool_choice: None,
+            top_k: None,
+            user: None,
             extra: serde_json::Map::new(),
         };
         let envelope = build_antigravity_request(&req, "proj-empty").unwrap();

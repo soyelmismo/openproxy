@@ -3243,6 +3243,10 @@ mod tests {
                 max_tokens: None,
                 top_p: None,
                 stop: None,
+                tools: None,
+                tool_choice: None,
+                top_k: None,
+                user: None,
                 extra: serde_json::Map::new(),
             },
             client_disconnected: dis_rx,
@@ -3702,6 +3706,10 @@ mod tests {
             max_tokens: None,
             top_p: None,
             stop: None,
+            tools: None,
+            tool_choice: None,
+            top_k: None,
+            user: None,
             extra: serde_json::Map::new(),
         }
     }

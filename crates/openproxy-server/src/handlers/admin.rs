@@ -2006,6 +2006,10 @@ async fn run_test_for_model(
         max_tokens: Some(5),
         top_p: None,
         stop: None,
+        tools: None,
+        tool_choice: None,
+        top_k: None,
+        user: None,
         extra: serde_json::Map::new(),
     };
 

@@ -512,6 +512,10 @@ mod tests {
             max_tokens: Some(2048),
             top_p: None,
             stop: None,
+            tools: None,
+            tool_choice: None,
+            top_k: None,
+            user: None,
             extra: serde_json::Map::new(),
         }
     }
