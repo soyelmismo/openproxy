@@ -17,4 +17,3 @@ data.db*
 node_modules/
 test-results/
 package-lock.json
-.hermes/
