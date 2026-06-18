@@ -1273,4 +1273,122 @@ mod tests {
         let done_chunks: usize = chunks.iter().filter(|c| c.done).count();
         assert_eq!(done_chunks, 1);
     }
+
+    // ---- REVIEWER audit #9 (SSE chunk allocation reuses buffer across
+    // providers, 2026-06-18): DISMISSED with a non-regression test. The
+    // claim was that bytes read from one upstream's body could leak into
+    // another upstream's response because of a shared `BytesMut` or
+    // thread-local buffer. After auditing `dispatch_upstream_streaming`
+    // (pipeline.rs:2016), `UpstreamBodyStream` (upstream/response.rs:58),
+    // and `format_sse_data` (translation.rs:729), every buffer on the
+    // streaming path is *local* to the per-call stack frame: the SSE
+    // `String` line buffer at pipeline.rs:2211, the per-chunk
+    // `String::from_utf8_lossy(&bytes)` at pipeline.rs:2338, and the
+    // `serde_json::to_string(&chunk.payload)` at pipeline.rs:2465 all
+    // allocate fresh per iteration with no global, no thread-local, and
+    // no `Arc<[u8]>` shared buffer. The anthropic tool_use accumulator
+    // is passed as `&mut Option<...>` from the caller — i.e. the
+    // caller owns it, no global state.
+    //
+    // This test pins the invariant at the function level: 64 parallel
+    // `translate_anthropic_sse_event` callers, each with a distinct
+    // chunk_id and tool_call counter, must produce non-interleaved
+    // outputs. If a future change introduces a shared buffer this
+    // test fails with cross-contamination.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn sse_translation_isolates_parallel_requests() {
+        use std::sync::Arc;
+        use tokio::task::JoinSet;
+
+        const N: usize = 64;
+        let mut joins = JoinSet::new();
+        let barrier = Arc::new(tokio::sync::Barrier::new(N));
+
+        for i in 0..N {
+            let barrier = barrier.clone();
+            joins.spawn(async move {
+                let chunk_id = format!("chatcmpl-{}", i);
+                let model = format!("claude-isolated-{}", i);
+                let mut tool_use_acc: Option<AnthropicToolUseAccumulator> = None;
+                let mut tool_call_index_counter: u32 = 0;
+
+                // Wait until all tasks are queued so they race in
+                // parallel (not sequentially).
+                barrier.wait().await;
+
+                // Sequence: content_block_start (tool_use) → deltas →
+                // message_delta (stop). Each task sees a distinct
+                // tool id+name so any cross-talk would be visible.
+                let id = format!("toolu_{:08x}", i);
+                let name = format!("fn_{}", i);
+                let start_payload = format!(
+                    "content_block_start\n{{\"content_block\":{{\"type\":\"tool_use\",\"id\":\"{}\",\"name\":\"{}\",\"input\":{{}}}}}}",
+                    id, name
+                );
+                let delta_payload = format!(
+                    "content_block_delta\n{{\"delta\":{{\"type\":\"input_json_delta\",\"partial_json\":\"{{}}\"}}}}"
+                );
+                let stop_payload = format!(
+                    "message_delta\n{{\"delta\":{{\"stop_reason\":\"tool_use\"}}}}"
+                );
+
+                let mut outs = Vec::new();
+                for payload in [&start_payload, &delta_payload, &stop_payload] {
+                    let out = translate_anthropic_sse_event(
+                        payload,
+                        &chunk_id,
+                        1_700_000_000 + i as u64,
+                        &model,
+                        &mut tool_use_acc,
+                        &mut tool_call_index_counter,
+                    )
+                    .expect("translate");
+                    outs.push(out);
+                }
+                (i, chunk_id, model, outs)
+            });
+        }
+
+        let mut seen_ids = std::collections::HashSet::new();
+        let mut seen_models = std::collections::HashSet::new();
+        while let Some(j) = joins.join_next().await {
+            let (i, chunk_id, model, outs) = j.expect("join");
+            // chunk_id must round-trip exactly, no cross-talk from peers.
+            assert_eq!(chunk_id, format!("chatcmpl-{}", i));
+            assert_eq!(model, format!("claude-isolated-{}", i));
+            assert!(seen_ids.insert(chunk_id.clone()), "duplicate chunk_id");
+            assert!(seen_models.insert(model.clone()), "duplicate model");
+
+            // First chunk must carry THIS task's tool id and name,
+            // not any other task's.
+            let first_payload = outs[0]
+                .as_ref()
+                .expect("first chunk")
+                .payload
+                .clone();
+            let tool_id = first_payload["choices"][0]["delta"]["tool_calls"][0]["id"]
+                .as_str()
+                .expect("tool id");
+            let tool_name = first_payload["choices"][0]["delta"]["tool_calls"][0]
+                ["function"]["name"]
+                .as_str()
+                .expect("tool name");
+            assert_eq!(
+                tool_id,
+                format!("toolu_{:08x}", i),
+                "tool id leaked from another parallel task"
+            );
+            assert_eq!(
+                tool_name,
+                format!("fn_{}", i),
+                "tool name leaked from another parallel task"
+            );
+
+            // Model and chunk_id in the wire payload also must be
+            // THIS task's, not a peer's.
+            assert_eq!(first_payload["model"].as_str().unwrap(), model);
+            assert_eq!(first_payload["id"].as_str().unwrap(), chunk_id);
+        }
+        assert_eq!(seen_ids.len(), N, "expected {} unique chunk_ids", N);
+    }
 }
