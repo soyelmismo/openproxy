@@ -96,13 +96,52 @@ pub const REDACTED_PLACEHOLDER: &str = "[REDACTED]";
 /// assert_eq!(out.get("authorization").unwrap(), "[REDACTED]");
 /// assert_eq!(out.get("content-type").unwrap(), "application/json");
 /// ```
+/// Maximum length, in bytes, of a single header value after
+/// redaction. axum's request body limit (32 MiB, see
+/// `openproxy_server::router`) does not bound the HeaderMap;
+/// the HeaderMap is parsed before the body extractor runs, so a
+/// client that sends `User-Agent: <megabyte>` makes the
+/// BTreeMap grow unbounded and, when `usage.request_headers` is
+/// persisted, the database row inflates to a size that the
+/// admin UI can no longer display. 4 KiB is generous for any
+/// legitimate header (the longest RFC-defined `User-Agent` is
+/// 1 KiB; no header an LLM proxy cares about is longer).
+pub const REDACTED_HEADER_VALUE_MAX: usize = 4 * 1024;
+
+/// Truncate a header value to [`REDACTED_HEADER_VALUE_MAX`] bytes,
+/// appending an ellipsis marker so the dashboard can see the
+/// value was cut off.
+fn truncate_header_value(v: &str) -> String {
+    if v.len() <= REDACTED_HEADER_VALUE_MAX {
+        v.to_string()
+    } else {
+        // `char_indices` is byte-accurate; cutting at a non-char
+        // boundary would panic on the next `.to_string()`.
+        let cut = v
+            .char_indices()
+            .take_while(|(i, _)| *i < REDACTED_HEADER_VALUE_MAX)
+            .last()
+            .map(|(i, c)| i + c.len_utf8())
+            .unwrap_or(0);
+        let mut s = String::with_capacity(cut + "...[truncated]".len());
+        s.push_str(&v[..cut]);
+        s.push_str("...[truncated]");
+        s
+    }
+}
+
 pub fn redact_sensitive_headers(headers: &HeaderMap) -> BTreeMap<String, String> {
     let mut out = BTreeMap::new();
     for (k, v) in headers.iter() {
         let value = if is_sensitive(k.as_str()) {
             REDACTED_PLACEHOLDER.to_string()
         } else {
-            v.to_str().unwrap_or("").to_string()
+            // `HeaderValue::to_str()` returns Err on non-ASCII
+            // bytes; the pre-existing code dropped those silently
+            // (empty string). Keep that behaviour but cap the
+            // length so a megabyte User-Agent cannot blow up
+            // the persisted `usage.request_headers` row.
+            truncate_header_value(v.to_str().unwrap_or(""))
         };
         out.insert(k.as_str().to_string(), value);
     }
@@ -124,14 +163,24 @@ pub fn redact_sensitive_headers(headers: &HeaderMap) -> BTreeMap<String, String>
 /// [`REDACTED_PLACEHOLDER`] for sensitive entries. Keys
 /// are not deleted — the dashboard wants to see WHICH
 /// headers were sent, not just the non-sensitive values.
-pub fn redact_btreemap_sensitive(
-    headers: BTreeMap<String, String>,
-) -> BTreeMap<String, String> {
+pub fn redact_btreemap_sensitive(headers: BTreeMap<String, String>) -> BTreeMap<String, String> {
     let mut out = headers;
     let keys: Vec<String> = out.keys().cloned().collect();
     for k in keys {
         if is_sensitive(&k) {
             out.insert(k, REDACTED_PLACEHOLDER.to_string());
+        } else {
+            // Mirror the cap in `redact_sensitive_headers` so both
+            // entry points produce the same shape. Without this,
+            // the `dispatch_upstream` path (which builds the map
+            // upstream-side) could still write a megabyte value
+            // while the chat-handler path was capped.
+            if let Some(v) = out.get(&k).cloned() {
+                let capped = truncate_header_value(&v);
+                if capped != v {
+                    out.insert(k, capped);
+                }
+            }
         }
     }
     out
@@ -277,5 +326,59 @@ mod tests {
         assert_eq!(out.get("x-request-id"), Some(&"abc-123".to_string()));
         // Length preserved (we replace, not remove).
         assert_eq!(out.len(), 5);
+    }
+
+    // ---- LOW fix: cap header value length to REDACTED_HEADER_VALUE_MAX
+    // (4 KiB) so a megabyte User-Agent cannot blow up the persisted
+    // usage.request_headers row.
+
+    #[test]
+    fn header_value_under_cap_is_preserved() {
+        // A normal User-Agent is well under 4 KiB and must round-trip.
+        let mut h = HeaderMap::new();
+        let ua = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36";
+        h.insert("user-agent", HeaderValue::from_str(ua).unwrap());
+        let out = redact_sensitive_headers(&h);
+        assert_eq!(out.get("user-agent"), Some(&ua.to_string()));
+        assert!(!out["user-agent"].ends_with("...[truncated]"));
+    }
+
+    #[test]
+    fn header_value_over_cap_is_truncated_with_marker() {
+        // 64 KiB User-Agent: 62× the cap. Must be truncated to
+        // REDACTED_HEADER_VALUE_MAX and the marker appended.
+        let mut h = HeaderMap::new();
+        let huge = "x".repeat(64 * 1024);
+        h.insert("user-agent", HeaderValue::from_str(&huge).unwrap());
+        let out = redact_sensitive_headers(&h);
+        let v = out.get("user-agent").expect("present");
+        assert!(
+            v.ends_with("...[truncated]"),
+            "truncation marker missing, got len={}",
+            v.len()
+        );
+        // The kept prefix must be at most REDACTED_HEADER_VALUE_MAX
+        // bytes (we cut at a char boundary which is byte 4096 for
+        // ASCII 'x').
+        let kept = v.strip_suffix("...[truncated]").unwrap();
+        assert!(kept.len() <= REDACTED_HEADER_VALUE_MAX);
+        assert!(kept.len() >= REDACTED_HEADER_VALUE_MAX - 4);
+    }
+
+    #[test]
+    fn btreemap_path_also_caps() {
+        // dispatch_upstream builds the map directly; the cap must
+        // be enforced here too or the two entry points diverge.
+        use std::collections::BTreeMap;
+        let mut h = BTreeMap::new();
+        h.insert(
+            "user-agent".to_string(),
+            "x".repeat(64 * 1024),
+        );
+        let out = redact_btreemap_sensitive(h);
+        let v = out.get("user-agent").expect("present");
+        assert!(v.ends_with("...[truncated]"));
+        let kept = v.strip_suffix("...[truncated]").unwrap();
+        assert!(kept.len() <= REDACTED_HEADER_VALUE_MAX);
     }
 }
