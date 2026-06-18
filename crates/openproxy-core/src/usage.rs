@@ -82,12 +82,32 @@ pub fn usage_broadcast() -> broadcast::Sender<RecentUsageRow> {
 /// Publish a newly inserted usage row to all broadcast subscribers.
 /// Silently ignores errors (e.g. no subscribers) — broadcast send
 /// failures must never fail the caller.
+///
+/// SEC-MEDIUM-C fix: the raw row includes `request_body_json`,
+/// `response_body_json`, `request_headers`, and `response_headers`,
+/// whose combined size can be multi-MB. The dashboard's WS broadcast
+/// was fan-outing the full row to every subscriber (PII + bandwidth
+/// amplifier). Strip the heavy fields before sending — the detail view
+/// at `GET /v1/admin/usage/detail?id=...` reads them straight from
+/// the database so on-demand access is preserved.
 pub fn publish_usage_row(row: RecentUsageRow) {
     if let Some(tx) = USAGE_SENDER.get() {
         // `send` returns Err when there are no receivers, which is
         // expected and harmless.
-        let _ = tx.send(row);
+        let _ = tx.send(redact_for_broadcast(row));
     }
+}
+
+/// Strip the heavyweight fields from a row before it leaves the
+/// process. The dashboard subscribes to recent rows via WS and
+/// `GET /v1/admin/usage/recent`; both routes return this redacted shape.
+/// The full fields remain available on demand via the detail endpoint.
+pub fn redact_for_broadcast(mut row: RecentUsageRow) -> RecentUsageRow {
+    row.request_body_json = None;
+    row.response_body_json = None;
+    row.request_headers = None;
+    row.response_headers = None;
+    row
 }
 
 // ---------------------------------------------------------------------------

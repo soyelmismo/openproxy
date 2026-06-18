@@ -145,7 +145,17 @@ pub fn record(conn: &Connection, input: &UsageInput) -> Result<UsageId> {
             input.response_body_json.as_ref().map(|j| serde_json::to_string(j).ok()).flatten(),
             input.request_headers.as_ref().map(|h| serde_json::to_string(h).ok()).flatten(),
             input.response_headers.as_ref().map(|h| serde_json::to_string(h).ok()).flatten(),
-            input.error_message.clone(),
+            // SEC-HIGH-E fix: the legacy `error_message` column was being
+            // written verbatim from `pipeline.rs` (raw, unredacted), while
+            // the parallel `error_msg` / `error_msg_redacted` columns
+            // carry the redacted form. `log-detail.js` and
+            // `GET /v1/admin/usage/:id` prefer `error_message` over
+            // `error_msg_redacted`, so the redaction was being bypassed.
+            // Mirror the redacted form into `error_message` so the two
+            // columns stay in sync and neither leaks the raw upstream
+            // body (which can contain internal IPs, debug stacks, and
+            // PII echoed back by misbehaving upstreams).
+            error_msg_redacted_for_db.clone(),
             input.is_streaming as i64,
             input.stream_complete as i64,
         ],

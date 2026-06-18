@@ -1016,7 +1016,14 @@ pub async fn usage_recent(
             .unwrap_or(USAGE_RECENT_DEFAULT_LIMIT)
             .clamp(1, USAGE_RECENT_MAX_LIMIT);
         let w = s.db_pool().writer();
-        let rows = usage::recent(&w, since_id, limit)?;
+        // SEC-MEDIUM-C fix: drop the heavy request/response payloads
+        // from the WS/REST surface — they can be multi-MB and would
+        // fan out PII to every dashboard subscriber. The detail
+        // endpoint reads them straight from the database on demand.
+        let rows = usage::recent(&w, since_id, limit)?
+            .into_iter()
+            .map(usage::redact_for_broadcast)
+            .collect();
         Ok(Json(rows))
     }
     .await;
@@ -1194,7 +1201,16 @@ async fn stream_usage_rows(
                                 "subscribe" => {
                                     let since_id = msg.since_id.unwrap_or(0).max(0);
                                     let w = state.db_pool().writer();
-                                    let rows = usage::recent(&w, since_id, 100)?;
+                                    // SEC-MEDIUM-C fix: strip the heavy request/response
+                                    // fields from the initial history batch — the
+                                    // publisher already redacts the per-event broadcast,
+                                    // but `recent()` still returns the full rows so
+                                    // this initial replay matched the publisher.
+                                    let rows: Vec<usage::RecentUsageRow> =
+                                        usage::recent(&w, since_id, 100)?
+                                            .into_iter()
+                                            .map(usage::redact_for_broadcast)
+                                            .collect();
                                     if let Some(mx) = rows.iter().map(|r| r.id.0).max() {
                                         last_known_id = last_known_id.max(mx);
                                     }

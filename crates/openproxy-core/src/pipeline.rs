@@ -651,6 +651,20 @@ impl Pipeline {
                         Some(d) => d,
                         None => break,
                     };
+                    // NEW-2 fix: when the upstream sent a `Retry-After`
+                    // header (surfaced as `CoreError::RateLimited`), the
+                    // upstream-requested delay must take precedence over
+                    // the fixed exponential backoff. The default backoff
+                    // is sub-second; an upstream that asks for 30s gets
+                    // 30s. A malicious upstream trying to lock the proxy
+                    // out for hours gets capped to 5 minutes (enforced
+                    // inside `parse_retry_after_ms`).
+                    let delay = if let CoreError::RateLimited { retry_after_ms, .. } = e {
+                        let upstream = std::time::Duration::from_millis(*retry_after_ms);
+                        if upstream > delay { upstream } else { delay }
+                    } else {
+                        delay
+                    };
                     tracing::debug!(
                         combo_id = combo.id.0,
                         target_id = target.id.0,
@@ -1817,8 +1831,34 @@ impl Pipeline {
         // Non-2xx upstream responses are surfaced as UpstreamError, with
         // the body included for the usage row. We still consume the body
         // so the connection is released back to the pool cleanly.
+        //
+        // NEW-2 fix: when the upstream returns 429 (or 408/503) with a
+        // `Retry-After` header, surface the error as `CoreError::RateLimited`
+        // so the per-target retry loop honors the upstream-requested delay
+        // instead of using the fixed exponential backoff. The default
+        // backoff is < 1 s; an upstream that asks for 30 s gets 30 s.
         if !(200..300).contains(&status_code) {
             let body_str = String::from_utf8_lossy(&body_bytes).to_string();
+            // Parse `Retry-After` from response_headers (extracted at L1751
+            // before the body was consumed). Accepts either an integer
+            // number of seconds or an HTTP-date (RFC 7231).
+            let retry_after_ms: Option<u64> = response_headers
+                .as_ref()
+                .and_then(|h| h.get("retry-after").or_else(|| h.get("Retry-After")))
+                .and_then(|v| parse_retry_after_ms(v));
+            let is_rate_limited_status =
+                status_code == 429 || status_code == 408 || status_code == 503;
+            if is_rate_limited_status && retry_after_ms.is_some() {
+                let err = CoreError::RateLimited {
+                    provider: target.provider_id.to_string(),
+                    retry_after_ms: retry_after_ms.unwrap(),
+                };
+                return self.record_and_fail(
+                    req, combo, target, attempt, race_size, &err, started,
+                    Some(model), Some(connect_and_send_ms), Some(ttft_ms),
+                    status_code,
+                );
+            }
             let err = CoreError::UpstreamError {
                 status: status_code,
                 provider: target.provider_id.to_string(),
@@ -2937,6 +2977,47 @@ impl std::fmt::Display for ErrorPhase {
 #[allow(dead_code)]
 fn _strategy_marker(_: Strategy) {}
 
+/// Parse an HTTP `Retry-After` header value (RFC 7231 §7.1.3) into
+/// milliseconds. Accepts either an integer number of seconds
+/// (`Retry-After: 30`) or an HTTP-date
+/// (`Retry-After: Wed, 21 Oct 2026 07:28:00 GMT`). Returns `None` for
+/// empty, unparseable, or already-past HTTP-dates.
+///
+/// NEW-2 fix: the per-target retry loop must honor the upstream-requested
+/// delay instead of the fixed exponential backoff, otherwise a
+/// `429 Retry-After: 30` becomes a sub-second retry that hammers the
+/// rate-limited account.
+fn parse_retry_after_ms(value: &str) -> Option<u64> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    // Cap the parsed delay at 5 minutes: a malicious upstream could
+    // ask for hours/days and lock the proxy out.
+    const MAX_RETRY_AFTER_MS: u64 = 5 * 60 * 1000;
+
+    // Integer-seconds form: `"30"`, `"30.5"`, etc.
+    if let Ok(secs) = trimmed.parse::<f64>() {
+        if !secs.is_finite() || secs < 0.0 {
+            return None;
+        }
+        let ms = (secs * 1000.0) as u64;
+        return Some(ms.min(MAX_RETRY_AFTER_MS));
+    }
+    // HTTP-date form: `Wed, 21 Oct 2026 07:28:00 GMT`.
+    if let Ok(parsed) = chrono::DateTime::parse_from_rfc2822(trimmed) {
+        let now = chrono::Utc::now();
+        if parsed.with_timezone(&chrono::Utc) <= now {
+            return Some(0);
+        }
+        let delta = (parsed.with_timezone(&chrono::Utc) - now)
+            .num_milliseconds()
+            .max(0) as u64;
+        return Some(delta.min(MAX_RETRY_AFTER_MS));
+    }
+    None
+}
+
 // `ErrorContext` is reserved for a future structured-logging upgrade that
 // will let the pipeline attach req/trace/provider metadata to every error.
 // Keep the import live so the symbol is available when that work lands.
@@ -2973,6 +3054,34 @@ mod tests {
     use std::sync::atomic::AtomicU64;
     use std::time::Duration;
     use tokio::sync::{mpsc, watch};
+
+    // NEW-2 fix unit tests: parse_retry_after_ms handles integer-seconds
+    // and HTTP-date forms, applies the 5-minute cap to malicious values,
+    // and returns None for empty/unparseable input.
+    #[test]
+    fn parse_retry_after_ms_integer_seconds() {
+        assert_eq!(parse_retry_after_ms("30"), Some(30_000));
+        assert_eq!(parse_retry_after_ms("0"), Some(0));
+        assert_eq!(parse_retry_after_ms("0.5"), Some(500));
+    }
+
+    #[test]
+    fn parse_retry_after_ms_caps_at_5_minutes() {
+        // 3600s (1h) must be capped to 5 minutes = 300_000ms.
+        assert_eq!(parse_retry_after_ms("3600"), Some(5 * 60 * 1000));
+        // 600s (10m) also capped.
+        assert_eq!(parse_retry_after_ms("600"), Some(5 * 60 * 1000));
+        // 30s passes through.
+        assert_eq!(parse_retry_after_ms("30"), Some(30_000));
+    }
+
+    #[test]
+    fn parse_retry_after_ms_invalid_inputs() {
+        assert_eq!(parse_retry_after_ms(""), None);
+        assert_eq!(parse_retry_after_ms("   "), None);
+        assert_eq!(parse_retry_after_ms("not-a-number"), None);
+        assert_eq!(parse_retry_after_ms("-1"), None);
+    }
 
     /// Build a fresh on-disk pool with migrations applied, plus an
     /// independent `Connection` wrapped in a `Mutex<Connection>` for the
