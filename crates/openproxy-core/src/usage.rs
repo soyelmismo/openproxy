@@ -160,6 +160,10 @@ pub struct StageEvent {
     pub status_code: u16,
     /// `Some(reason)` only on `failed`; `None` for all other stages.
     pub error: Option<String>,
+    /// Upstream stop reason (e.g. "end_turn", "max_tokens",
+    /// "stop_sequence" for Anthropic; "stop", "length" for OpenAI).
+    /// Only set on terminal events (`completed`/`failed`).
+    pub stop_reason: Option<String>,
     /// Wall-clock millis at the time the event was emitted
     /// (RFC-3339). Used by the dashboard to keep the stage label
     /// timeline accurate even if the WS delivery is slightly late.
@@ -238,6 +242,7 @@ pub fn broadcast_usage_input(input: &UsageInput) {
         is_streaming: input.is_streaming,
         stream_complete: input.stream_complete,
         race_lost: input.race_lost,
+        stop_reason: input.stop_reason.clone(),
         created_at: chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string(),
     };
     // Ignore send errors - no subscribers is harmless
@@ -766,6 +771,9 @@ pub struct RecentUsageRow {
     pub is_streaming: bool,
     pub stream_complete: bool,
     pub race_lost: bool,
+    /// Upstream stop reason (e.g. "end_turn", "max_tokens",
+    /// "stop_sequence" for Anthropic; "stop", "length" for OpenAI).
+    pub stop_reason: Option<String>,
     pub created_at: String,
 }
 
@@ -864,7 +872,7 @@ pub fn recent(conn: &Connection, since_id: i64, limit: u32) -> Result<Vec<Recent
                     g.agg_cost_usd, g.agg_connect_ms, g.agg_ttft_ms, u.request_body_json, u.response_body_json, \
                     u.request_headers, u.response_headers, u.error_msg_redacted, u.error_msg, \
                     g.agg_race_total, g.agg_race_attempts, g.agg_is_streaming, g.agg_stream_complete, \
-                    g.agg_race_lost, g.agg_created_at \
+                    g.agg_race_lost, g.agg_created_at, u.stop_reason \
              FROM grouped g \
              JOIN usage u ON u.id = g.agg_id \
              ORDER BY g.agg_id ASC \
@@ -901,7 +909,8 @@ pub fn recent(conn: &Connection, since_id: i64, limit: u32) -> Result<Vec<Recent
             let is_streaming: i64 = row.get(col_idx)?; col_idx += 1;
             let stream_complete: i64 = row.get(col_idx)?; col_idx += 1;
             let race_lost: i64 = row.get(col_idx)?; col_idx += 1;
-            let created_at: String = row.get(col_idx)?;
+            let created_at: String = row.get(col_idx)?; col_idx += 1;
+            let stop_reason: Option<String> = row.get(col_idx)?;
 
             if !(0..=u16::MAX as i64).contains(&status_code) {
                 return Err(rusqlite::Error::FromSqlConversionFailure(
@@ -951,6 +960,7 @@ pub fn recent(conn: &Connection, since_id: i64, limit: u32) -> Result<Vec<Recent
                 is_streaming: is_streaming_bool,
                 stream_complete: stream_complete_bool,
                 race_lost: race_lost != 0,
+                stop_reason,
                 created_at,
             })
         })
@@ -1005,7 +1015,7 @@ pub fn recent_desc(conn: &Connection, limit: u32) -> Result<Vec<RecentUsageRow>>
                     g.agg_cost_usd, g.agg_connect_ms, g.agg_ttft_ms, u.request_body_json, u.response_body_json, \
                     u.request_headers, u.response_headers, u.error_msg_redacted, u.error_msg, \
                     g.agg_race_total, g.agg_race_attempts, g.agg_is_streaming, g.agg_stream_complete, \
-                    g.agg_race_lost, g.agg_created_at \
+                    g.agg_race_lost, g.agg_created_at, u.stop_reason \
              FROM grouped g \
              JOIN usage u ON u.id = g.agg_id \
              ORDER BY g.agg_id DESC \
@@ -1042,7 +1052,8 @@ pub fn recent_desc(conn: &Connection, limit: u32) -> Result<Vec<RecentUsageRow>>
             let is_streaming: i64 = row.get(col_idx)?; col_idx += 1;
             let stream_complete: i64 = row.get(col_idx)?; col_idx += 1;
             let race_lost: i64 = row.get(col_idx)?; col_idx += 1;
-            let created_at: String = row.get(col_idx)?;
+            let created_at: String = row.get(col_idx)?; col_idx += 1;
+            let stop_reason: Option<String> = row.get(col_idx)?;
 
             if !(0..=u16::MAX as i64).contains(&status_code) {
                 return Err(rusqlite::Error::FromSqlConversionFailure(
@@ -1093,6 +1104,7 @@ pub fn recent_desc(conn: &Connection, limit: u32) -> Result<Vec<RecentUsageRow>>
                 is_streaming: is_streaming_bool,
                 stream_complete: stream_complete_bool,
                 race_lost: race_lost != 0,
+                stop_reason,
                 created_at,
             })
         })

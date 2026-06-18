@@ -6,7 +6,6 @@
 
 import { state } from "../state/index.js";
 import { api } from "../state/api.js";
-import { cssEscape } from "../lib/css-escape.js";
 import { escapeHtml } from "../lib/escape.js";
 import { renderLogRowHtml } from "../components/log-row.js";
 import { LOG_COLUMNS, LOGS_VISIBLE_COLUMNS_STORAGE_KEY } from "../lib/constants.js";
@@ -384,6 +383,7 @@ function handleStageEvent(event: StageEvent): void {
       race_total: null,
       race_attempts: null,
       error_message: null,
+      stop_reason: null,
     });
   } else if (!traceId && !state.logs.inflightByRequestId.has(requestId)) {
     // Trace_id-less event: fall back to the request_id-keyed
@@ -408,6 +408,7 @@ function handleStageEvent(event: StageEvent): void {
       race_total: null,
       race_attempts: null,
       error_message: null,
+      stop_reason: null,
     });
   }
   if (state.logs.followTail) state.logs.page = 1;
@@ -420,11 +421,49 @@ function handleStageEvent(event: StageEvent): void {
 // to update one of the two.
 function setStage(event: StageEvent, requestId: string): void {
   const traceId = event.trace_id || "";
-  if (traceId) {
-    state.logs.stagesByTraceId.set(traceId, event);
-  } else {
-    state.logs.stagesByRequestId.set(requestId, event);
+  // Terminal events ("completed" / "failed") are sticky — a late
+  // non-terminal event (e.g. a reordered "streaming" broadcast)
+  // must not clobber a terminal that's already in the map.
+  const map = traceId ? state.logs.stagesByTraceId : state.logs.stagesByRequestId;
+  const key = traceId || requestId;
+  const existing = map.get(key);
+  if (existing &&
+      (existing.stage === "completed" || existing.stage === "failed") &&
+      (event.stage !== "completed" && event.stage !== "failed")) {
+    return;
   }
+  map.set(key, event);
+}
+
+// Synthesize a terminal stage event from a finalized usage row
+// when the backend's terminal event was missed (lagged subscriber,
+// resync, history, or recording=OFF). Only emits when the
+// currently-stored stage is still non-terminal.
+function synthesizeTerminalEvent(row: RecentUsageRow): void {
+  if (!row.request_id) return;
+  if (row.status_code <= 0) return;
+  // Look up the currently-stored stage for this attempt.
+  const existingStage: StageEvent | undefined = row.trace_id
+    ? state.logs.stagesByTraceId.get(row.trace_id)
+    : state.logs.stagesByRequestId.get(row.request_id);
+  const existingIsTerminal: boolean = !!existingStage &&
+    (existingStage.stage === "completed" || existingStage.stage === "failed");
+  if (existingIsTerminal) return;
+  const synth: StageEvent = {
+    request_id: row.request_id,
+    stage: row.status_code >= 400 ? "failed" : "completed",
+    elapsed_ms: row.total_ms || 0,
+    status_code: row.status_code,
+    timestamp: row.created_at || new Date().toISOString(),
+    trace_id: row.trace_id,
+    provider_id: row.provider_id,
+    upstream_model_id: row.upstream_model_id,
+    connect_ms: row.connect_ms,
+    ttft_ms: row.ttft_ms,
+    error: row.error_message ?? null,
+    stop_reason: row.stop_reason ?? null,
+  };
+  setStage(synth, row.request_id);
 }
 
 // H7 fix: when the server reports it lost us on a
@@ -444,6 +483,16 @@ async function resyncUsageRows(sinceId: number): Promise<void> {
         if (r && typeof r.id === "number") {
           state.logs.rowById.set(r.id, r);
         }
+        // Clear inflight placeholders for resynced rows.
+        if (r.request_id && state.logs.inflightByRequestId.has(r.request_id)) {
+          state.logs.inflightByRequestId.delete(r.request_id);
+        }
+        if (r.trace_id && state.logs.inflightByTraceId.has(r.trace_id)) {
+          state.logs.inflightByTraceId.delete(r.trace_id);
+        }
+        // Synthesize terminal events for finished rows so the
+        // ticker doesn't keep growing on resynced data.
+        synthesizeTerminalEvent(r);
       }
       if (state.logs.followTail) state.logs.page = 1;
       renderLogsRows();
@@ -453,29 +502,6 @@ async function resyncUsageRows(sinceId: number): Promise<void> {
     const msg = err ? err.message : String(e);
     showToast(`Failed to refetch missed log rows: ${msg}`, "error");
   }
-}
-
-function handleStreamTokens(msg: WsEnvelope): void {
-  const requestId = msg.request_id;
-  if (!requestId) return;
-  // `liveTokens` is typed as `Map<LogsRequestId, number>` in the
-  // state, but the live code stores strings (it's a running
-  // concatenation of SSE deltas). The state type is a pre-existing
-  // mis-shape; the runtime works with a string here. We cast
-  // through unknown to keep the type checker happy without
-  // rewriting the state contract.
-  const tokensMap = state.logs.liveTokens as unknown as Map<string, string>;
-  const prev = tokensMap.get(requestId) || "";
-  const next = prev + (msg.delta || "");
-  tokensMap.set(requestId, next);
-  if (msg.complete) {
-    const row = state.logs.rowById.get(msg.id ?? -1) || state.logs.rows.find((r) => r.request_id === requestId);
-    if (row) { row.stream_complete = true; renderLogsRows(); }
-  }
-  const panel = document.querySelector('[data-token-panel="' + cssEscape(requestId) + '"]');
-  const body = document.getElementById("stream-token-body");
-  if (panel) panel.textContent = next;
-  if (body) { body.textContent = next; body.scrollTop = body.scrollHeight; }
 }
 
 function isStageEventShape(x: unknown): x is StageEvent {
@@ -513,36 +539,10 @@ function handleLogsMessage(raw: MessageEvent): void {
     const rows: RecentUsageRow[] = rawRows.filter(isRecentUsageRowShape);
     state.logs.rows = mergeLogsByDescId(state.logs.rows, rows);
     // Historical rows are by definition finished (they came from
-    // the DB, not a live stream). Mark each one as completed/failed
-    // in the stage map so the latency ticker doesn't keep ticking
-    // on them when the user scrolls the page.
+    // the DB, not a live stream). Synthesize terminal events so
+    // the latency ticker doesn't keep ticking on them.
     for (const r of rows) {
-      if (!r || !r.request_id) continue;
-      if ((!r.is_streaming || r.stream_complete) && r.status_code > 0) {
-        // Index by `trace_id` so each attempt of a multi-attempt
-        // request (per-target retry, fallback) keeps its own
-        // phase. With this, the historical row's phase is locked
-        // to its own attempt and is not overwritten when a later
-        // attempt of the same `request_id` arrives.
-        const synth: StageEvent = {
-          request_id: r.request_id,
-          stage: r.status_code >= 400 ? "failed" : "completed",
-          elapsed_ms: r.total_ms || 0,
-          status_code: r.status_code,
-          timestamp: r.created_at || new Date().toISOString(),
-          trace_id: r.trace_id,
-          provider_id: r.provider_id,
-          upstream_model_id: r.upstream_model_id,
-          connect_ms: r.connect_ms,
-          ttft_ms: r.ttft_ms,
-          error: r.error_message ?? null,
-        };
-        if (r.trace_id) {
-          state.logs.stagesByTraceId.set(r.trace_id, synth);
-        } else {
-          state.logs.stagesByRequestId.set(r.request_id, synth);
-        }
-      }
+      synthesizeTerminalEvent(r);
     }
     state.logs.page = 1; state.logs.followTail = true; renderLogsRows();
   } else if (msg.type === "row") {
@@ -564,70 +564,10 @@ function handleLogsMessage(raw: MessageEvent): void {
       const tokensMap = state.logs.liveTokens as unknown as Map<string, string>;
       tokensMap.set(row.request_id, tokensMap.get(row.request_id) || "");
     }
-    // A request is considered "finished" when one of these is true:
-    //   * a non-streaming row arrived (status_code > 0 and not
-    //     flagged as still streaming)
-    //   * a streaming row arrived that has stream_complete = true
-    //   * the row has a non-zero status_code with no streaming flags
-    // (i.e. the response is no longer in flight).
-    //
-    // Fallback for R3: until the backend's terminal `completed`
-    // stage event (R1 fix in `record_attempt_raw_with_tokens`)
-    // reaches the dashboard, the only signal we have is the latest
-    // `stage` event. The backend publishes a terminal event
-    // BEFORE writing the row, so the row is supposed to arrive
-    // *after* the terminal stage — but a slow consumer / lagged
-    // subscriber can miss the stage event while still seeing the
-    // row. Synthesize the terminal event from the row itself so
-    // the ticker doesn't keep recomputing `Date.now() -
-    // stage.timestamp` and growing the latency cell without
-    // bound. We only emit the synthetic event when the
-    // currently-stored stage is still non-terminal — if the
-    // backend's terminal event is already in the map, we leave
-    // it alone.
-    if (row.request_id) {
-      const isFinished = (
-        (!row.is_streaming || row.stream_complete) ||
-        (row.status_code > 0 && !row.is_streaming) ||
-        (row.status_code > 0 && row.stream_complete)
-      );
-      if (isFinished) {
-        // Look up the currently-stored stage for this attempt.
-        // The lookup uses the same `trace_id` → `request_id`
-        // fallback the rest of the module uses.
-        const existingStage: StageEvent | undefined = row.trace_id
-          ? state.logs.stagesByTraceId.get(row.trace_id)
-          : state.logs.stagesByRequestId.get(row.request_id);
-        const existingIsTerminal: boolean = !!existingStage &&
-          (existingStage.stage === "completed" || existingStage.stage === "failed");
-        if (!existingIsTerminal) {
-          // Synthesize a terminal event from the row. The
-          // `setStage` helper indexes by `trace_id` (primary)
-          // and `request_id` (fallback) — same as the live
-          // stage path — so the next ticker tick finds the
-          // frozen value.
-          const synth: StageEvent = {
-            request_id: row.request_id,
-            stage: row.status_code >= 400 ? "failed" : "completed",
-            // elapsed_ms is informational here; the ticker
-            // short-circuits on stage === "completed" /
-            // "failed" so this value isn't read for finished
-            // requests. Keep it consistent with the row's
-            // total_ms for any future caller.
-            elapsed_ms: row.total_ms || 0,
-            status_code: row.status_code,
-            timestamp: row.created_at || new Date().toISOString(),
-            trace_id: row.trace_id,
-            provider_id: row.provider_id,
-            upstream_model_id: row.upstream_model_id,
-            connect_ms: row.connect_ms,
-            ttft_ms: row.ttft_ms,
-            error: row.error_message ?? null,
-          };
-          setStage(synth, row.request_id);
-        }
-      }
-    }
+    // Synthesize a terminal stage event if the backend's
+    // terminal event was missed (lagged subscriber, recording=OFF,
+    // or streaming without [DONE]).
+    synthesizeTerminalEvent(row);
     if (state.logs.followTail) state.logs.page = 1;
     renderLogsRows();
     updateOpenLogDetail(row as unknown as LogDetailLog);
@@ -636,8 +576,6 @@ function handleLogsMessage(raw: MessageEvent): void {
     if (isStageEventShape(candidate)) {
       handleStageEvent(candidate);
     }
-  } else if (msg.type === "stream_tokens") {
-    handleStreamTokens(msg);
   } else if (msg.type === "error") {
     showToast(msg.message || "Live Logs WebSocket error", "error");
   } else if (msg.type === "lag_warning") {
@@ -677,6 +615,7 @@ async function openLogDetail(id: string, requestId: string): Promise<void> {
       request_headers: null, response_headers: null,
       race_total: null, race_attempts: null,
       error_message: null,
+      stop_reason: null,
     };
   if (!state.logs.rows.find((r) => r.id === row.id)) {
     state.logs.rows = mergeLogsByDescId(state.logs.rows, [row]);

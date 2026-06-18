@@ -16,6 +16,10 @@ pub struct UpstreamSseChunk {
     pub done: bool,
     /// Usage stats if present in this chunk (usually only the final one).
     pub usage: Option<OpenAIUsage>,
+    /// Upstream stop reason (e.g. "end_turn", "max_tokens", "stop_sequence"
+    /// for Anthropic; mapped finish_reason for OpenAI). Only set on the
+    /// final chunk.
+    pub stop_reason: Option<String>,
 }
 
 // =====================================================================
@@ -67,6 +71,7 @@ pub fn parse_openai_sse_line(line: &str) -> Result<Option<UpstreamSseChunk>> {
             payload: Value::Null,
             done: true,
             usage: None,
+            stop_reason: None,
         }));
     }
     let v: Value = serde_json::from_str(payload)
@@ -78,10 +83,18 @@ pub fn parse_openai_sse_line(line: &str) -> Result<Option<UpstreamSseChunk>> {
             total_tokens: u.get("total_tokens")?.as_u64()? as u32,
         })
     });
+    // Extract finish_reason if present (OpenAI upstream).
+    let finish_reason = v.get("choices")
+        .and_then(|c| c.as_array())
+        .and_then(|arr| arr.first())
+        .and_then(|c| c.get("finish_reason"))
+        .and_then(|f| f.as_str())
+        .map(|s| s.to_string());
     Ok(Some(UpstreamSseChunk {
         payload: v,
         done: false,
         usage,
+        stop_reason: finish_reason,
     }))
 }
 
@@ -122,6 +135,7 @@ pub fn parse_gemini_sse_line(
             payload: Value::Null,
             done: true,
             usage: None,
+            stop_reason: None,
         }));
     }
     let v: Value = serde_json::from_str(payload)
@@ -187,7 +201,7 @@ pub fn parse_gemini_sse_line(
         })
     });
 
-    Ok(Some(UpstreamSseChunk { payload: chunk, done: false, usage }))
+    Ok(Some(UpstreamSseChunk { payload: chunk, done: false, usage, stop_reason: finish_reason }))
 }
 
 // =====================================================================
@@ -270,6 +284,7 @@ pub fn translate_anthropic_sse_payload(
                 payload: chunk,
                 done: false,
                 usage: None,
+                stop_reason: None,
             }))
         }
         "content_block_delta" => {
@@ -298,6 +313,7 @@ pub fn translate_anthropic_sse_payload(
                 payload: chunk,
                 done: false,
                 usage: None,
+                stop_reason: None,
             }))
         }
         "message_delta" => {
@@ -335,6 +351,7 @@ pub fn translate_anthropic_sse_payload(
                 payload: chunk,
                 done: true,
                 usage,
+                stop_reason: stop_reason.map(|s| s.to_string()),
             }))
         }
         "message_stop" => {
@@ -446,6 +463,7 @@ pub fn translate_anthropic_sse_event(
                     payload: chunk,
                     done: false,
                     usage: None,
+                    stop_reason: None,
                 }));
             }
             // Non-tool_use content_block_start (e.g. text block) — fall
@@ -499,6 +517,7 @@ pub fn translate_anthropic_sse_event(
                         payload: chunk,
                         done: false,
                         usage: None,
+                        stop_reason: None,
                     }));
                 }
                 // No accumulator open — drop the fragment.
@@ -531,6 +550,7 @@ pub fn translate_anthropic_sse_event(
                 payload: chunk,
                 done: false,
                 usage: None,
+                stop_reason: None,
             }))
         }
         "content_block_stop" => {

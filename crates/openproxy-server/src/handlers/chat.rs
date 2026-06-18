@@ -570,6 +570,7 @@ fn record_model_not_found_usage_row(
         race_attempts: 1,
         is_streaming: false,
         stream_complete: false,
+        stop_reason: None,
     };
     // A write failure is logged but never propagates: the request
     // has already failed with a 404, and a missing usage row is

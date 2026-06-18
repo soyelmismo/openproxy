@@ -43,6 +43,9 @@ pub struct UsageInput {
     pub race_attempts: u8,
     pub is_streaming: bool,
     pub stream_complete: bool,
+    /// Upstream stop reason (e.g. "end_turn", "max_tokens",
+    /// "stop_sequence" for Anthropic; "stop", "length" for OpenAI).
+    pub stop_reason: Option<String>,
 }
 
 /// Computes (cost_usd, tokens_per_sec) from pricing + tokens + timing.
@@ -112,11 +115,12 @@ pub fn record(conn: &Connection, input: &UsageInput) -> Result<UsageId> {
             tokens_per_sec, status_code, error_msg, error_msg_redacted, \
             race_total, race_attempts, race_lost, api_key_id, created_at, \
             request_body_json, response_body_json, request_headers, \
-            response_headers, error_message, is_streaming, stream_complete\
+            response_headers, error_message, is_streaming, stream_complete, \
+            stop_reason\
          ) VALUES (\
             ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, \
             ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, \
-            ?21, ?22, ?23, datetime('now'), ?24, ?25, ?26, ?27, ?28, ?29, ?30\
+            ?21, ?22, ?23, datetime('now'), ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31\
          )",
         params![
             request_id,
@@ -171,6 +175,7 @@ pub fn record(conn: &Connection, input: &UsageInput) -> Result<UsageId> {
             error_msg_redacted_for_db.clone(),
             input.is_streaming as i64,
             input.stream_complete as i64,
+            input.stop_reason,
         ],
     )
 
@@ -205,6 +210,7 @@ pub fn record(conn: &Connection, input: &UsageInput) -> Result<UsageId> {
             race_attempts: Some(input.race_attempts),
             is_streaming: input.is_streaming,
             stream_complete: input.stream_complete,
+            stop_reason: input.stop_reason.clone(),
         };
     crate::usage::publish_usage_row(row);
 
@@ -244,6 +250,7 @@ mod tests {
             race_attempts: 1,
             is_streaming: false,
             stream_complete: false,
+            stop_reason: None,
         }
     }
 

@@ -984,6 +984,7 @@ impl Pipeline {
             race_attempts: 1,
             is_streaming: false,
             stream_complete: false,
+            stop_reason: None,
         };
         let conn = self.conn.lock();
         let _ = crate::cost::record(&conn, &input);
@@ -1032,6 +1033,7 @@ impl Pipeline {
                 ttft_ms: None,
                 status_code: 0,
                 error: None,
+                stop_reason: None,
                 timestamp: chrono::Utc::now().format("%Y-%m-%dT%H:%M:%S%.3fZ").to_string(),
             });
         }
@@ -1192,6 +1194,7 @@ impl Pipeline {
                             None, // response_headers
                             false, // is_streaming (H5)
                             true,  // stream_complete (H5)
+                            None,  // stop_reason
                         );
                         PipelineResult {
                             status_code: 200,
@@ -1492,6 +1495,7 @@ impl Pipeline {
                 ttft_ms: None,
                 status_code: 0,
                 error: None,
+                stop_reason: None,
                 timestamp: chrono::Utc::now().format("%Y-%m-%dT%H:%M:%S%.3fZ").to_string(),
             });
         }
@@ -1833,6 +1837,7 @@ impl Pipeline {
                 ttft_ms: None,
                 status_code: status,
                 error: err,
+                stop_reason: None,
                 timestamp: chrono::Utc::now().format("%Y-%m-%dT%H:%M:%S%.3fZ").to_string(),
             });
         };
@@ -2026,13 +2031,10 @@ impl Pipeline {
                 stage: "streaming".into(),
                 elapsed_ms: started.elapsed().as_millis() as u64,
                 connect_ms: Some(connect_and_send_ms),
-                // `ttft_ms` here is the bare `u64` set above
-                // (`let ttft_ms = started.elapsed()…`); wrap it in
-                // `Some(...)` so the StageEvent stays consistent
-                // with the streaming path's `Option<u64> ttft_ms`.
                 ttft_ms: Some(ttft_ms),
                 status_code,
                 error: None,
+                stop_reason: None,
                 timestamp: chrono::Utc::now()
                     .format("%Y-%m-%dT%H:%M:%S%.3fZ")
                     .to_string(),
@@ -2171,6 +2173,7 @@ impl Pipeline {
             response_headers,               // response headers (captured before body was read)
             false, // is_streaming (H5): non-streaming success
             true,  // stream_complete (H5): 2xx, full body received
+            None,  // stop_reason (non-streaming: extracted from response, not SSE)
         );
 
         PipelineResult {
@@ -2435,6 +2438,7 @@ impl Pipeline {
         let mut buffer = String::new();
         let mut usage: Option<crate::translation::OpenAIUsage> = None;
         let mut ttft_ms: Option<u64> = None;
+        let mut stop_reason: Option<String> = None;
         let first_chunk_time = Instant::now();
         // H5 fix: Anthropic tool_use blocks stream across multiple
         // SSE events. content_block_start announces the block with
@@ -2635,6 +2639,7 @@ impl Pipeline {
                             ttft_ms,
                             status_code: 200,
                             error: None,
+                            stop_reason: None,
                             timestamp: chrono::Utc::now().format("%Y-%m-%dT%H:%M:%S%.3fZ").to_string(),
                         });
                     }
@@ -2686,6 +2691,10 @@ impl Pipeline {
                 match parsed {
                     Ok(Some(chunk)) => {
                         if chunk.done {
+                            // Capture stop_reason from the final chunk.
+                            if chunk.stop_reason.is_some() {
+                                stop_reason = chunk.stop_reason;
+                            }
                             // Send [DONE] sentinel and break.
                             // H4 fix: record the fact that we sent
                             // the upstream's [DONE] so the post-loop
@@ -2696,6 +2705,11 @@ impl Pipeline {
                             // Update usage if present.
                             if chunk.usage.is_some() {
                                 usage = chunk.usage;
+                            }
+                            // Capture stop_reason if present (OpenAI
+                            // sends finish_reason on non-final chunks too).
+                            if chunk.stop_reason.is_some() && stop_reason.is_none() {
+                                stop_reason = chunk.stop_reason;
                             }
                             // Forward the translated chunk as raw JSON.
                             let json_str = serde_json::to_string(&chunk.payload).unwrap_or_default();
@@ -2862,6 +2876,7 @@ impl Pipeline {
             None, // response_headers
             true,        // is_streaming (H5)
             done_sent,   // stream_complete (H5)
+            stop_reason, // captured from upstream SSE chunk
         );
 
         PipelineResult {
@@ -3064,6 +3079,7 @@ impl Pipeline {
             None,
             false, // is_streaming (H5): failure path, can't be sure
             false, // stream_complete (H5): failure path
+            None,  // stop_reason: failures don't have a stop_reason
         );
         PipelineResult {
             status_code: err.http_status(),
@@ -3126,6 +3142,8 @@ impl Pipeline {
         // H5: streaming metadata for the live dashboard.
         is_streaming: bool,
         stream_complete: bool,
+        // Upstream stop reason (e.g. "end_turn", "max_tokens").
+        stop_reason: Option<String>,
     ) -> Result<()> {
         let recording = self.is_recording();
         // Build the UsageInput first so the row and the
@@ -3164,54 +3182,16 @@ impl Pipeline {
             race_attempts: race_size,
             is_streaming,
             stream_complete,
+            stop_reason: stop_reason.clone(),
         };
-        // H2: write the row FIRST so a downstream stage
-        // event can never lie about a row that doesn't
-        // exist. The row is written regardless of the
-        // `recording` flag (the original behavior) so the
-        // dashboard's row count stays consistent across
-        // config flips; only the heavy `request_body_json`
-        // / `request_headers` payloads are gated on
-        // `recording`.
-        //
-        // LOW fix (#14): try-lock the writer with a short
-        // ceiling (HOT_PATH_LOCK_TIMEOUT = 100ms). A long
-        // admin query holding the writer must NOT freeze the
-        // chat hot path. If we lose the race we drop the row
-        // (the request still succeeded for the client; we
-        // just lose the per-attempt analytics) and log a
-        // counter so the operator can see this is happening.
-        let conn = match self
-            .conn
-            .try_lock_for(crate::db::conn::HOT_PATH_LOCK_TIMEOUT)
+        // Publish the terminal stage event FIRST, before the
+        // writer lock attempt. This ensures the dashboard always
+        // sees the terminal signal even if the writer lock times
+        // out and the row is dropped. The terminal event is the
+        // only signal that synchronizes the dashboard's phase
+        // label and stops the ticker from growing indefinitely.
         {
-            Some(g) => g,
-            None => {
-                tracing::warn!(
-                    request_id = %req.request_id,
-                    "writer lock unavailable within 100ms; dropping usage row"
-                );
-                // The client request still completed — the row is
-                // best-effort analytics. Return OK so the caller
-                // doesn't fail the request because of bookkeeping.
-                return Ok(());
-            }
-        };
-        cost::record(&conn, &input)?;
-        // Then publish the terminal stage event, but only
-        // when `recording` is enabled. Stage events are
-        // dashboard-only metadata; they do not gate any
-        // data-side invariant.
-        if recording {
             let stage_label: &str = if err.is_none() { "completed" } else { "failed" };
-            // LOW fix: the live-logs WebSocket is a SECOND consumer
-            // of the upstream error string (the first is the DB row,
-            // written a few lines above via `cost::record`, which
-            // already applies `cost::redact_error_msg`). Without this
-            // redact the dashboard would see the raw upstream body
-            // — including secrets like `sk-...` and `Bearer
-            // *** — live, while the same row in the DB shows
-            // them masked. The DB and the live view must agree.
             let error_str: Option<String> = err
                 .map(|e| crate::cost::redact_error_msg(&e.to_string()).0);
             crate::usage::publish_stage_event(crate::usage::StageEvent {
@@ -3227,11 +3207,47 @@ impl Pipeline {
                 ttft_ms,
                 status_code,
                 error: error_str,
+                stop_reason: stop_reason.clone(),
                 timestamp: chrono::Utc::now()
                     .format("%Y-%m-%dT%H:%M:%S%.3fZ")
                     .to_string(),
             });
         }
+        // H2: write the row. The row is written regardless of
+        // the `recording` flag (the original behavior) so the
+        // dashboard's row count stays consistent across config
+        // flips; only the heavy `request_body_json` /
+        // `request_headers` payloads are gated on `recording`.
+        //
+        // LOW fix (#14): try-lock the writer with a short
+        // ceiling (HOT_PATH_LOCK_TIMEOUT = 100ms). A long
+        // admin query holding the writer must NOT freeze the
+        // chat hot path. If we lose the race we drop the row
+        // (the request still succeeded for the client; we
+        // just lose the per-attempt analytics) and log a
+        // counter so the operator can see this is happening.
+        // The terminal stage event was already published above,
+        // so the dashboard will freeze correctly even if the
+        // row is dropped.
+        let conn = match self
+            .conn
+            .try_lock_for(crate::db::conn::HOT_PATH_LOCK_TIMEOUT)
+        {
+            Some(g) => g,
+            None => {
+                tracing::warn!(
+                    request_id = %req.request_id,
+                    "writer lock unavailable within 100ms; dropping usage row"
+                );
+                // The client request still completed — the row is
+                // best-effort analytics. Return OK so the caller
+                // doesn't fail the request because of bookkeeping.
+                // The terminal stage event was already published,
+                // so the dashboard is synchronized.
+                return Ok(());
+            }
+        };
+        cost::record(&conn, &input)?;
         Ok(())
     }
 
@@ -3264,6 +3280,7 @@ impl Pipeline {
             race_attempts: combo.race_size,
             is_streaming: true,
             stream_complete: false,
+            stop_reason: None,
         };
         crate::usage::broadcast_usage_input(&input);
     }

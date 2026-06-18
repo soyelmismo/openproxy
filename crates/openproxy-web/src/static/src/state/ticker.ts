@@ -73,17 +73,12 @@ function tickLogLatency(): void {
       live = finalizedRow.total_ms;
     } else if (stage.stage === "streaming") {
       // Stale-`streaming` cap (R3). Once a `streaming` event
-      // is older than 2 s without a follow-up event, the
-      // counter MUST freeze. We use the same `now - t`
-      // formula the rest of the function uses so the next
-      // reader doesn't have to reason about a different
-      // monotonic-math scheme; the semantic effect is that
-      // `live` is no longer recomputed from `stage.elapsed_ms`
-      // — it ticks at the wall-clock rate, not the per-event
-      // rate. The freeze is semantic, not numerical.
-      if (isFinite(t)) {
-        const stale: number = now - t;
-        if (stale > 2_000) live = stale;
+      // is older than 2 s without a follow-up event, freeze
+      // the counter to a stable value (event timestamp + 2 s).
+      // This prevents the wall-clock growth that made the
+      // counter climb indefinitely on stuck requests.
+      if (isFinite(t) && (now - t) > 2_000) {
+        live = 2_000;
       }
     }
     const sub: Element | null = rowEl.querySelector(".log-phase-sub");

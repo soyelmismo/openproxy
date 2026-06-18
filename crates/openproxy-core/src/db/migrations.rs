@@ -147,6 +147,11 @@ const MIGRATIONS: &[Migration] = &[
         name: "000027_oauth_device_tickets",
         sql: include_str!("../../migrations/000027_oauth_device_tickets.sql"),
     },
+    Migration {
+        version: 28,
+        name: "000028_add_stop_reason",
+        sql: include_str!("../../migrations/000028_add_stop_reason.sql"),
+    },
 ];
 
 /// Apply pending migrations on `conn`. Idempotent: skips versions already in
@@ -369,7 +374,7 @@ mod tests {
                 c.query_row("SELECT COUNT(*) FROM schema_migrations", [], |r| r.get(0))
                     .expect("count")
             });
-        assert_eq!(count_first, 26, "twenty-six migrations applied (versions 1-6, 8-27)");
+        assert_eq!(count_first, 27, "twenty-seven migrations applied (versions 1-6, 8-28)");
 
         {
             let mut writer = pool.writer();

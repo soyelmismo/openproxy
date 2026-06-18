@@ -303,6 +303,10 @@ export interface StageEvent {
   /** 0 mientras está in-flight; código final en `completed`/`failed`. */
   status_code: number;
   error: string | null;
+  /** Upstream stop reason (e.g. "end_turn", "max_tokens", "stop_sequence"
+   *  for Anthropic; "stop", "length" for OpenAI). Only set on terminal
+   *  events (`completed`/`failed`). */
+  stop_reason: string | null;
   /** RFC-3339 del momento de emisión. */
   timestamp: string;
 }
@@ -374,6 +378,9 @@ export interface RecentUsageRow {
   is_streaming: boolean;
   stream_complete: boolean;
   race_lost: boolean;
+  /** Upstream stop reason (e.g. "end_turn", "max_tokens", "stop_sequence"
+   *  for Anthropic; "stop", "length" for OpenAI). */
+  stop_reason: string | null;
   created_at: string;
 }
 
