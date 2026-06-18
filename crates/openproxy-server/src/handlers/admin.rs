@@ -1192,10 +1192,16 @@ fn authenticate_admin_ws(state: &AppState, headers: &HeaderMap, query_token: Opt
     }
 
     if let Some(exp) = &key.expires_at {
-        let now_utc = chrono::Utc::now()
-            .format("%Y-%m-%d %H:%M:%S")
-            .to_string();
-        if exp.as_str() < now_utc.as_str() {
+        // LOW fix (#15): previously a lexicographic string
+        // comparison against `now.format("%Y-%m-%d %H:%M:%S")`. The
+        // stored value uses `%Y-%m-%dT%H:%M:%SZ` (RFC3339-ish), so
+        // the `T` (ASCII 84) sorted AFTER the space (ASCII 32) and
+        // every key with `expires_at` was effectively never-expiring.
+        // The helper parses both sides through `chrono` so the
+        // check now means what it says.
+        if core_api_keys::is_expired(Some(exp), chrono::Utc::now())
+            .map_err(|e| ApiError(CoreError::Internal(format!("expires_at check: {e}"))))?
+        {
             return Err(ApiError(CoreError::Auth("api key expired".into())));
         }
     }

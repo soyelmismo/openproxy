@@ -13,6 +13,7 @@
 
 use crate::error::{CoreError, Result};
 use crate::ids::ApiKeyId;
+use chrono::{DateTime, Utc};
 use rusqlite::{params, Connection, OptionalExtension, Row};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -96,6 +97,41 @@ pub fn hash_key(plaintext: &str) -> String {
     let mut hasher = Sha256::new();
     hasher.update(plaintext.as_bytes());
     hex::encode(hasher.finalize())
+}
+
+/// LOW fix (#15): parse an `expires_at` string into a UTC timestamp
+/// and return whether `now >= expires_at`.
+///
+/// The previous implementation compared the stored string
+/// lexicographically against `now.format("%Y-%m-%d %H:%M:%S")`. That
+/// works ONLY if the stored value uses the exact same zero-padded
+/// format with a SPACE between the date and the time. The codebase
+/// actually writes `%Y-%m-%dT%H:%M:%SZ` (RFC3339), where `T` (ASCII
+/// 84) sorts AFTER the space (ASCII 32). The consequence: the
+/// lexicographic check treated `2026-01-01T00:00:00Z` as greater
+/// than any `2026-...` `now` string, so EVERY key with an
+/// `expires_at` was effectively considered never-expiring.
+///
+/// This helper parses both sides through `chrono` and compares
+/// timestamps directly. The wire format is unchanged
+/// (RFC3339-ish strings in the column); the fix is in the reader.
+///
+/// Returns `Ok(None)` when `expires_at` is `None` (no expiry
+/// configured). Returns `Err(_)` when the stored string cannot be
+/// parsed as a timestamp — the caller should treat parse failure
+/// as "expired" because we can't reason about a value we can't
+/// understand.
+pub fn is_expired(expires_at: Option<&str>, now: DateTime<Utc>) -> Result<bool> {
+    let Some(s) = expires_at else {
+        return Ok(false);
+    };
+    let dt = DateTime::parse_from_rfc3339(s)
+        .map_err(|e| CoreError::Database {
+            message: format!("invalid expires_at {:?}: {}", s, e),
+            source: None,
+        })?
+        .with_timezone(&Utc);
+    Ok(now >= dt)
 }
 
 /// Create a new API key. Returns the persisted row plus the plaintext
@@ -649,6 +685,56 @@ mod tests {
         assert_eq!(p.len(), 40);
         // Two calls produce different outputs (32 chars of randomness).
         assert_ne!(p, generate_plaintext());
+    }
+
+    // ---- LOW fix (#15): expires_at must be parsed, not lex-compared.
+    // The bug: stored value uses `%Y-%m-%dT%H:%M:%SZ` and the old check
+    // compared against `now.format("%Y-%m-%d %H:%M:%S")`. Because `T`
+    // (0x54) sorts AFTER space (0x20), the lexicographic check treated
+    // every T-formatted future date as "not yet expired". These tests
+    // pin down the new parser-based semantics.
+
+    #[test]
+    fn is_expired_returns_false_when_none() {
+        let now = chrono::Utc::now();
+        assert!(!is_expired(None, now).expect("ok"));
+    }
+
+    #[test]
+    fn is_expired_returns_true_when_now_is_after_rfc3339() {
+        // Stored in the exact format the codebase writes today.
+        let stored = "2020-01-01T00:00:00Z";
+        let now = "2025-06-18T12:00:00Z".parse::<chrono::DateTime<Utc>>().unwrap();
+        assert!(
+            is_expired(Some(stored), now).expect("ok"),
+            "2020 timestamp with a 2025 now must be expired"
+        );
+    }
+
+    #[test]
+    fn is_expired_returns_false_when_future_rfc3339() {
+        let stored = "2099-12-31T23:59:59Z";
+        let now = chrono::Utc::now();
+        assert!(!is_expired(Some(stored), now).expect("ok"));
+    }
+
+    #[test]
+    fn is_expired_treats_malformed_as_error() {
+        let now = chrono::Utc::now();
+        let err = is_expired(Some("not-a-date"), now).expect_err("parse error");
+        assert!(matches!(err, CoreError::Database { .. }));
+    }
+
+    #[test]
+    fn is_expired_handles_offset_timezone() {
+        // RFC3339 with a non-Z timezone must be normalised to UTC
+        // before comparison. 2025-06-18T15:00:00+02:00 == 13:00 UTC.
+        let stored = "2025-06-18T15:00:00+02:00";
+        let now_just_before = "2025-06-18T12:59:59Z".parse::<chrono::DateTime<Utc>>().unwrap();
+        let now_just_after  = "2025-06-18T13:00:01Z".parse::<chrono::DateTime<Utc>>().unwrap();
+
+        assert!(!is_expired(Some(stored), now_just_before).expect("ok"));
+        assert!( is_expired(Some(stored), now_just_after).expect("ok"));
     }
 
     #[test]

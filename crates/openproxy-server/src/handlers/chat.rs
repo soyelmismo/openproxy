@@ -28,7 +28,7 @@ use axum::{
 };
 use tokio_stream::StreamExt;
 use openproxy_core::{
-    api_keys,
+    api_keys as core_api_keys,
     ids::{ApiKeyId, ComboId, RequestId, TraceId},
     pipeline::{Pipeline, PipelineConfig, PipelineRequest},
     redact::redact_sensitive_headers,
@@ -453,7 +453,7 @@ fn authenticate(
             // As soon as the operator creates the first key, the
             // chat endpoint requires that key. The transition is
             // automatic — no config knob needed.
-            let active = api_keys::count_active(&state.db_pool().writer())
+            let active = core_api_keys::count_active(&state.db_pool().writer())
                 .map_err(ApiError)?;
             if active == 0 {
                 tracing::debug!(
@@ -468,7 +468,7 @@ fn authenticate(
     if token.is_empty() {
         // Same gate: a bare `Authorization: Bearer ` (empty
         // token) is treated as "no header".
-        let active = api_keys::count_active(&state.db_pool().writer())
+        let active = core_api_keys::count_active(&state.db_pool().writer())
             .map_err(ApiError)?;
         if active == 0 {
             return Ok(None);
@@ -476,9 +476,9 @@ fn authenticate(
         return Err(ApiError(CoreError::Auth("missing api key".into())));
     }
 
-    let key_hash = api_keys::hash_key(token);
+    let key_hash = core_api_keys::hash_key(token);
     let w = state.db_pool().writer();
-    let key = match api_keys::get_by_hash(&w, &key_hash).map_err(ApiError)? {
+    let key = match core_api_keys::get_by_hash(&w, &key_hash).map_err(ApiError)? {
         Some(k) => k,
         None => {
             return Err(ApiError(CoreError::Auth("invalid api key".into())));
@@ -492,11 +492,11 @@ fn authenticate(
     }
 
     if let Some(exp) = &key.expires_at {
-        let now_utc = match chrono::Utc::now().format("%Y-%m-%d %H:%M:%S").to_string() {
-            s if !s.is_empty() => s,
-            _ => String::new(),
-        };
-        if !now_utc.is_empty() && exp.as_str() < now_utc.as_str() {
+        // LOW fix (#15): same parser-based check as in admin.rs —
+        // see api_keys.rs::is_expired for the rationale.
+        if core_api_keys::is_expired(Some(exp), chrono::Utc::now())
+            .map_err(|e| ApiError(CoreError::Internal(format!("expires_at check: {e}"))))?
+        {
             return Err(ApiError(CoreError::Auth("api key expired".into())));
         }
     }
@@ -517,7 +517,7 @@ fn authenticate(
         }
     }
 
-    let _ = api_keys::touch_last_used(&w, key.id).map_err(ApiError);
+    let _ = core_api_keys::touch_last_used(&w, key.id).map_err(ApiError);
 
     Ok(Some(key.id))
 }
