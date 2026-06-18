@@ -57,8 +57,32 @@ pub async fn serve_static(uri: axum::http::Uri) -> Response {
                 Some("ico") => "image/x-icon",
                 _ => "application/octet-stream",
             };
-            let h = [(header::CONTENT_TYPE, HeaderValue::from_static(mime))];
-            (StatusCode::OK, h, Body::from(bytes)).into_response()
+            let cache = HeaderValue::from_static("no-cache, no-store, must-revalidate");
+            let h_no_cache = [
+                (header::CONTENT_TYPE, HeaderValue::from_static(mime)),
+                (header::CACHE_CONTROL, cache),
+            ];
+            let h_default = [(header::CONTENT_TYPE, HeaderValue::from_static(mime))];
+            // The dashboard frontend is a multi-step refactor
+            // (TypeScript strict migration, then the per-attempt
+            // stage-isolation gate). The browser was caching old
+            // `dist/views/logs.js` / `dist/components/log-row.js`
+            // payloads across deploys and re-introducing a fixed
+            // bug; the user-facing symptom was the "retry
+            // duplicates counters" regression returning after a
+            // confirmed fix. Force a strong no-cache for the JS
+            // and CSS bundles so the next page load always picks
+            // up the latest build. HTML responses keep the
+            // browser default (the `index.html` is hand-managed).
+            let response: Response = if matches!(
+                fs_path.extension().and_then(|s| s.to_str()),
+                Some("js") | Some("mjs") | Some("css")
+            ) {
+                (StatusCode::OK, h_no_cache, Body::from(bytes)).into_response()
+            } else {
+                (StatusCode::OK, h_default, Body::from(bytes)).into_response()
+            };
+            response
         }
         Err(_) => (StatusCode::NOT_FOUND, "not found").into_response(),
     }

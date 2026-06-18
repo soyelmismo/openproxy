@@ -14,6 +14,8 @@ import { loadSidebarCollapsedFromStorage } from "./components/sidebar.js";
 import { startBgPoll } from "./state/bg-poll.js";
 import { installRouter, navigate } from "./state/router.js";
 import { HANDLERS, collectArgs } from "./handlers/registry.js";
+import { state } from "./state/index.js";
+import { logsGoPage } from "./views/logs.js";
 
 // Click / change / submit shim. Looks for the closest ancestor
 // carrying `data-action` and dispatches to HANDLERS[action]
@@ -96,3 +98,21 @@ mountShell();
 installRouter();
 startBgPoll();
 navigate();
+
+// Expose the global `state` for the e2e suite (and operator
+// debugging in the browser console). The dashboard is an internal
+// admin tool — no public auth boundary is crossed by exposing
+// the in-memory state object. The e2e tests at
+// `tests/e2e/live-logs-retry.spec.ts` rely on this hook to
+// inject synthetic `StageEvent`s and assert the per-attempt
+// stage isolation introduced in the
+// `fix(web): live-logs view — isolate per-attempt stage to its
+// own row` gate.
+declare global {
+  interface Window {
+    __openproxyState: typeof state;
+    __openproxyLogsGoPage: typeof logsGoPage;
+  }
+}
+window.__openproxyState = state;
+window.__openproxyLogsGoPage = logsGoPage;
