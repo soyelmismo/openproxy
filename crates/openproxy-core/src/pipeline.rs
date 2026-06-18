@@ -2212,6 +2212,22 @@ impl Pipeline {
         let mut usage: Option<crate::translation::OpenAIUsage> = None;
         let mut ttft_ms: Option<u64> = None;
         let first_chunk_time = Instant::now();
+        // H5 fix: Anthropic tool_use blocks stream across multiple
+        // SSE events. content_block_start announces the block with
+        // id+name, subsequent content_block_delta/input_json_delta
+        // events append JSON fragments, and content_block_stop
+        // closes it. We need state across events to emit a single
+        // OpenAI tool_calls chunk (with the full arguments string)
+        // — which is what the existing `message_start`/`content_block_delta`
+        // arms do for text, but for tool_use. The accumulator lives
+        // in the caller because the SSE parser is stateless.
+        let mut tool_use_acc: Option<crate::sse::AnthropicToolUseAccumulator> = None;
+        // Allocates tool_call indices across the lifetime of this
+        // streaming turn. The H5 tool_use translator increments
+        // this when it sees a new `content_block_start` of type
+        // `tool_use` and stamps the index into the OpenAI-style
+        // chunk it emits.
+        let mut tool_call_index_counter: u32 = 0;
         let mut current_event_type: Option<String> = None;
         // H4 fix: the upstream `[DONE]` sentinel (line 2293) and
         // the post-loop sentinel (line 2408) would both fire for
@@ -2398,11 +2414,27 @@ impl Pipeline {
                     }
                     crate::models::TargetFormat::Anthropic => {
                         // Anthropic SSE: track event type across lines
+                        // and run the stateful translator that can
+                        // accumulate Anthropic `tool_use` blocks into
+                        // OpenAI-style `tool_calls` chunks. The
+                        // accumulator lives across iterations of the
+                        // outer loop.
                         match crate::sse::parse_anthropic_sse_stream_line(&line, &mut current_event_type) {
                             Ok(Some(payload)) => {
-                                // Translate Anthropic payload to OpenAI chunk
-                                match crate::sse::translate_anthropic_sse_payload(
-                                    &payload, &chunk_id, created, &model_name,
+                                // H5 fix: thread the tool_use accumulator
+                                // through the translator. The counter
+                                // allocates fresh indices for each
+                                // content_block_start that opens a
+                                // tool_use; the accumulator carries the
+                                // in-flight id+name+arguments across
+                                // deltas.
+                                match crate::sse::translate_anthropic_sse_event(
+                                    &payload,
+                                    &chunk_id,
+                                    created,
+                                    &model_name,
+                                    &mut tool_use_acc,
+                                    &mut tool_call_index_counter,
                                 ) {
                                     Ok(Some(chunk)) => Ok(Some(chunk)),
                                     Ok(None) => Ok(None),

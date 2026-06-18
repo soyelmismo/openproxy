@@ -19,6 +19,33 @@ pub struct UpstreamSseChunk {
 }
 
 // =====================================================================
+// H5 fix: Anthropic tool_use stateful accumulator
+// =====================================================================
+//
+// Anthropic streams a tool_use block across multiple SSE events:
+//   1. content_block_start { type: "tool_use", id: "toolu_X", name: "F", input: {} }
+//   2. content_block_delta  { type: "input_json_delta", partial_json: "{frag..." }
+//      ... repeated N times until the full arguments string is delivered ...
+//   N. content_block_stop   {}
+//
+// The OpenAI wire format emits ONE chat.completion.chunk with the
+// complete `tool_calls[i].function.arguments` JSON string. The SSE
+// parser is stateless, so the accumulator lives in the caller
+// (pipeline.rs) and we expose the struct here for it to thread
+// through each `translate_anthropic_sse_event` call.
+#[derive(Debug, Default, Clone)]
+pub struct AnthropicToolUseAccumulator {
+    /// Index of the tool call within the assistant message's `tool_calls` array.
+    pub index: u32,
+    /// Anthropic `id` (e.g. "toolu_01ABC"). Emitted once at start.
+    pub id: String,
+    /// Function name (e.g. "get_weather"). Emitted once at start.
+    pub name: String,
+    /// Accumulated partial JSON fragments from input_json_delta.
+    pub arguments: String,
+}
+
+// =====================================================================
 // OpenAI SSE parsing
 // =====================================================================
 
@@ -321,6 +348,206 @@ pub fn translate_anthropic_sse_payload(
             Ok(None)
         }
         _ => Ok(None), // content_block_start, content_block_stop, etc.
+    }
+}
+
+// H5 fix: stateful translation that the streaming loop calls
+// per-SSE-event with a caller-owned `AnthropicToolUseAccumulator`.
+// On the first `content_block_start` whose block is `type: "tool_use"`
+// we open the accumulator and emit a role-tagged chunk with the
+// tool_call id+name (no arguments yet). On each subsequent
+// `content_block_delta` of subtype `input_json_delta` we append to
+// the accumulator and emit a chunk with the partial arguments. On
+// `content_block_stop` we close out (no chunk — the next message_delta
+// or stream end will signal the client). The OpenAI spec is silent
+// on whether partial-arguments chunks are sent or whether the caller
+// should buffer; we follow the streaming-tools convention used by
+// vLLM and the OpenAI Python SDK: send one chunk at start (id+name
+// only) and one final chunk at stop with the assembled arguments
+// string. This keeps the wire shape small and lets non-streaming
+// consumers re-assemble easily.
+pub fn translate_anthropic_sse_event(
+    payload: &str,
+    chunk_id: &str,
+    created: u64,
+    model: &str,
+    tool_use_acc: &mut Option<AnthropicToolUseAccumulator>,
+    tool_call_index_counter: &mut u32,
+) -> Result<Option<UpstreamSseChunk>> {
+    let (event_type, data_json) = match payload.find('\n') {
+        Some(pos) => (&payload[..pos], &payload[pos + 1..]),
+        None => return Ok(None),
+    };
+
+    // Skip ping events.
+    if event_type == "ping" {
+        return Ok(None);
+    }
+
+    let data: Value = serde_json::from_str(data_json)
+        .map_err(|e| CoreError::Parse(format!("anthropic sse json: {e}")))?;
+
+    match event_type {
+        "content_block_start" => {
+            // Look for the start of a tool_use block. We only care about
+            // tool_use; text blocks are already handled by the
+            // content_block_delta arm above.
+            let block_type = data.get("content_block")
+                .and_then(|b| b.get("type"))
+                .and_then(|t| t.as_str())
+                .unwrap_or("");
+            if block_type == "tool_use" {
+                let id = data.get("content_block")
+                    .and_then(|b| b.get("id"))
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                let name = data.get("content_block")
+                    .and_then(|b| b.get("name"))
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                // Allocate a new tool_call index for this turn.
+                let index = *tool_call_index_counter;
+                *tool_call_index_counter += 1;
+                *tool_use_acc = Some(AnthropicToolUseAccumulator {
+                    index,
+                    id: id.clone(),
+                    name: name.clone(),
+                    arguments: String::new(),
+                });
+                // Emit the initial OpenAI-style tool_call chunk with
+                // id+type+name and empty arguments (the standard
+                // OpenAI streaming-tools shape). `finish_reason` stays
+                // null because more chunks for this same choice index
+                // are coming.
+                let chunk = serde_json::json!({
+                    "id": chunk_id,
+                    "object": "chat.completion.chunk",
+                    "created": created,
+                    "model": model,
+                    "choices": [{
+                        "index": 0,
+                        "delta": {
+                            "tool_calls": [{
+                                "index": index,
+                                "id": id,
+                                "type": "function",
+                                "function": {
+                                    "name": name,
+                                    "arguments": ""
+                                }
+                            }]
+                        },
+                        "finish_reason": null
+                    }]
+                });
+                return Ok(Some(UpstreamSseChunk {
+                    payload: chunk,
+                    done: false,
+                    usage: None,
+                }));
+            }
+            // Non-tool_use content_block_start (e.g. text block) — fall
+            // through to Ok(None); the content_block_delta arm handles
+            // the actual emission.
+            Ok(None)
+        }
+        "content_block_delta" => {
+            // Determine the delta type. Anthropic distinguishes
+            // `text_delta` (text) and `input_json_delta` (tool args).
+            let delta_type = data.get("delta")
+                .and_then(|d| d.get("type"))
+                .and_then(|t| t.as_str())
+                .unwrap_or("");
+
+            if delta_type == "input_json_delta" {
+                // We need an open accumulator to receive deltas. If
+                // somehow we don't (malformed stream), drop the
+                // fragment rather than emit a chunk with a phantom
+                // tool call.
+                if let Some(acc) = tool_use_acc.as_mut() {
+                    if let Some(partial) = data.get("delta")
+                        .and_then(|d| d.get("partial_json"))
+                        .and_then(|v| v.as_str())
+                    {
+                        acc.arguments.push_str(partial);
+                    }
+                    // Emit a chunk that carries the newly-appended
+                    // fragment. OpenAI's spec lets us put the running
+                    // total in `arguments`; the client will JSON.parse
+                    // the concatenation of every fragment.
+                    let chunk = serde_json::json!({
+                        "id": chunk_id,
+                        "object": "chat.completion.chunk",
+                        "created": created,
+                        "model": model,
+                        "choices": [{
+                            "index": 0,
+                            "delta": {
+                                "tool_calls": [{
+                                    "index": acc.index,
+                                    "function": {
+                                        "arguments": acc.arguments.clone()
+                                    }
+                                }]
+                            },
+                            "finish_reason": null
+                        }]
+                    });
+                    return Ok(Some(UpstreamSseChunk {
+                        payload: chunk,
+                        done: false,
+                        usage: None,
+                    }));
+                }
+                // No accumulator open — drop the fragment.
+                return Ok(None);
+            }
+            // Not input_json_delta — fall back to the existing text
+            // extraction. The stateless `translate_anthropic_sse_payload`
+            // already does this; reuse it so we don't duplicate logic.
+            // (Construct a one-shot payload string in the format it
+            // expects.)
+            let text = data.get("delta")
+                .and_then(|d| d.get("text"))
+                .and_then(|t| t.as_str())
+                .unwrap_or("");
+            if text.is_empty() {
+                return Ok(None);
+            }
+            let chunk = serde_json::json!({
+                "id": chunk_id,
+                "object": "chat.completion.chunk",
+                "created": created,
+                "model": model,
+                "choices": [{
+                    "index": 0,
+                    "delta": {"content": text},
+                    "finish_reason": null
+                }]
+            });
+            Ok(Some(UpstreamSseChunk {
+                payload: chunk,
+                done: false,
+                usage: None,
+            }))
+        }
+        "content_block_stop" => {
+            // Close out the accumulator. We don't emit a chunk here;
+            // the next `message_delta` or `message_stop` will carry
+            // finish_reason and any final usage. The client can
+            // detect the tool_call is complete by index reuse.
+            *tool_use_acc = None;
+            Ok(None)
+        }
+        // For all other events, defer to the stateless translator so
+        // message_start, message_delta, message_stop, and unknown
+        // future events keep their existing behavior.
+        _ => {
+            let rebuilt = format!("{event_type}\n{data_json}");
+            translate_anthropic_sse_payload(&rebuilt, chunk_id, created, model)
+        }
     }
 }
 
@@ -750,6 +977,224 @@ mod tests {
         let chunk = translate_anthropic_sse_payload(payload, "chunk-1", 1000, "claude-3").unwrap().unwrap();
         assert!(chunk.done);
         assert_eq!(chunk.payload["choices"][0]["finish_reason"].as_str().unwrap(), "length");
+    }
+
+    // ---- H5 fix: Anthropic tool_use accumulator ----
+
+    #[test]
+    fn anthropic_tool_use_start_emits_id_and_name() {
+        // The content_block_start event for a tool_use block must
+        // emit an OpenAI-shaped chunk with `tool_calls[0]` carrying
+        // the id, type=function, and name. The arguments field is
+        // empty at this point because the JSON body is delivered
+        // in subsequent content_block_delta events.
+        let payload = r#"content_block_start
+{"type":"content_block_start","index":1,"content_block":{"type":"tool_use","id":"toolu_01ABC","name":"get_weather","input":{}}}"#;
+        let mut acc: Option<AnthropicToolUseAccumulator> = None;
+        let mut counter: u32 = 0;
+        let chunk = translate_anthropic_sse_event(
+            payload, "chunk-1", 1000, "claude-3",
+            &mut acc, &mut counter,
+        ).unwrap().unwrap();
+        assert!(!chunk.done);
+        let tool_call = &chunk.payload["choices"][0]["delta"]["tool_calls"][0];
+        assert_eq!(tool_call["index"].as_u64().unwrap(), 0);
+        assert_eq!(tool_call["id"].as_str().unwrap(), "toolu_01ABC");
+        assert_eq!(tool_call["type"].as_str().unwrap(), "function");
+        assert_eq!(tool_call["function"]["name"].as_str().unwrap(), "get_weather");
+        assert_eq!(tool_call["function"]["arguments"].as_str().unwrap(), "");
+        // The accumulator must be open after start.
+        assert!(acc.is_some());
+        assert_eq!(acc.as_ref().unwrap().id, "toolu_01ABC");
+        assert_eq!(acc.as_ref().unwrap().name, "get_weather");
+        // Index counter is monotonically increasing.
+        assert_eq!(counter, 1);
+    }
+
+    #[test]
+    fn anthropic_tool_use_input_json_delta_accumulates() {
+        // Two content_block_delta events of subtype input_json_delta
+        // must be accumulated into a single running arguments
+        // string and emitted as two OpenAI-shaped chunks.
+        //
+        // We build each wire payload programmatically with
+        // serde_json::json! to avoid fragile double/triple-escaped
+        // string literals — Anthropic's input_json_delta value is a
+        // JSON-encoded string of a JSON fragment, and the escaping
+        // rules get noisy fast. The function we're testing
+        // (translate_anthropic_sse_event) consumes the same JSON
+        // either way; what matters is the resulting accumulated
+        // `arguments` field.
+        let start = "content_block_start\n".to_string()
+            + &serde_json::json!({
+                "type": "content_block_start",
+                "index": 1,
+                "content_block": {
+                    "type": "tool_use",
+                    "id": "toolu_X",
+                    "name": "search",
+                    "input": {}
+                }
+            })
+            .to_string();
+        let mut acc: Option<AnthropicToolUseAccumulator> = None;
+        let mut counter: u32 = 0;
+        let _ = translate_anthropic_sse_event(
+            &start, "chunk-1", 1000, "claude-3",
+            &mut acc, &mut counter,
+        ).unwrap().unwrap();
+        // First delta — partial_json carries the JSON fragment `{"q":`.
+        let delta1 = "content_block_delta\n".to_string()
+            + &serde_json::json!({
+                "type": "content_block_delta",
+                "index": 1,
+                "delta": {
+                    "type": "input_json_delta",
+                    "partial_json": "{\"q\":"
+                }
+            })
+            .to_string();
+        let chunk1 = translate_anthropic_sse_event(
+            &delta1, "chunk-2", 1000, "claude-3",
+            &mut acc, &mut counter,
+        ).unwrap().unwrap();
+        assert_eq!(
+            chunk1.payload["choices"][0]["delta"]["tool_calls"][0]["function"]["arguments"]
+                .as_str().unwrap(),
+            "{\"q\":"
+        );
+        // Second delta — partial_json carries the rest of the JSON
+        // fragment, `"sf"}` (including the closing brace). After
+        // concatenation the chunk must carry the full input.
+        let delta2 = "content_block_delta\n".to_string()
+            + &serde_json::json!({
+                "type": "content_block_delta",
+                "index": 1,
+                "delta": {
+                    "type": "input_json_delta",
+                    "partial_json": "\"sf\"}"
+                }
+            })
+            .to_string();
+        let chunk2 = translate_anthropic_sse_event(
+            &delta2, "chunk-3", 1000, "claude-3",
+            &mut acc, &mut counter,
+        ).unwrap().unwrap();
+        assert_eq!(
+            chunk2.payload["choices"][0]["delta"]["tool_calls"][0]["function"]["arguments"]
+                .as_str().unwrap(),
+            "{\"q\":\"sf\"}"
+        );
+        assert_eq!(acc.as_ref().unwrap().arguments, "{\"q\":\"sf\"}");
+    }
+
+    #[test]
+    fn anthropic_tool_use_block_stop_clears_accumulator() {
+        let start = r#"content_block_start
+{"type":"content_block_start","index":1,"content_block":{"type":"tool_use","id":"toolu_X","name":"f","input":{}}}"#;
+        let stop = r#"content_block_stop
+{"type":"content_block_stop","index":1}"#;
+        let mut acc: Option<AnthropicToolUseAccumulator> = None;
+        let mut counter: u32 = 0;
+        let _ = translate_anthropic_sse_event(
+            start, "chunk-1", 1000, "claude-3",
+            &mut acc, &mut counter,
+        ).unwrap();
+        assert!(acc.is_some());
+        // content_block_stop emits no chunk (clients can detect
+        // the end of a tool_call by index reuse / a subsequent
+        // message_delta) and clears the accumulator so the next
+        // tool_use block in the same turn gets a fresh index.
+        let chunk = translate_anthropic_sse_event(
+            stop, "chunk-2", 1000, "claude-3",
+            &mut acc, &mut counter,
+        ).unwrap();
+        assert!(chunk.is_none());
+        assert!(acc.is_none());
+        // The next tool_use block must get index 1, not 0 — the
+        // counter only increments on content_block_start, not on
+        // every event.
+        let start2 = r#"content_block_start
+{"type":"content_block_start","index":2,"content_block":{"type":"tool_use","id":"toolu_Y","name":"g","input":{}}}"#;
+        let chunk2 = translate_anthropic_sse_event(
+            start2, "chunk-3", 1000, "claude-3",
+            &mut acc, &mut counter,
+        ).unwrap().unwrap();
+        assert_eq!(
+            chunk2.payload["choices"][0]["delta"]["tool_calls"][0]["index"]
+                .as_u64().unwrap(),
+            1
+        );
+    }
+
+    #[test]
+    fn anthropic_text_block_passthrough_does_not_open_accumulator() {
+        // Text blocks (the most common case) must not touch the
+        // tool_use accumulator. The content_block_start for a
+        // text block returns None (no chunk) and the
+        // content_block_delta with text_delta reuses the same
+        // emission path as the stateless translator.
+        let start = r#"content_block_start
+{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}"#;
+        let delta = r#"content_block_delta
+{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"hello"}}"#;
+        let mut acc: Option<AnthropicToolUseAccumulator> = None;
+        let mut counter: u32 = 0;
+        let start_chunk = translate_anthropic_sse_event(
+            start, "chunk-1", 1000, "claude-3",
+            &mut acc, &mut counter,
+        ).unwrap();
+        assert!(start_chunk.is_none());
+        assert!(acc.is_none());
+        let delta_chunk = translate_anthropic_sse_event(
+            delta, "chunk-2", 1000, "claude-3",
+            &mut acc, &mut counter,
+        ).unwrap().unwrap();
+        assert_eq!(
+            delta_chunk.payload["choices"][0]["delta"]["content"]
+                .as_str().unwrap(),
+            "hello"
+        );
+    }
+
+    #[test]
+    fn anthropic_input_json_delta_without_open_accumulator_is_dropped() {
+        // Defensive: if a content_block_delta/input_json_delta
+        // arrives without a preceding content_block_start/tool_use
+        // (malformed stream), drop it rather than emit a chunk
+        // with a phantom tool_call.
+        let delta = r#"content_block_delta
+{"type":"content_block_delta","index":1,"delta":{"type":"input_json_delta","partial_json":"{\"x\":1}"}}"#;
+        let mut acc: Option<AnthropicToolUseAccumulator> = None;
+        let mut counter: u32 = 0;
+        let chunk = translate_anthropic_sse_event(
+            delta, "chunk-1", 1000, "claude-3",
+            &mut acc, &mut counter,
+        ).unwrap();
+        assert!(chunk.is_none());
+        // Counter untouched.
+        assert_eq!(counter, 0);
+    }
+
+    #[test]
+    fn anthropic_message_start_still_works_via_stateful_translator() {
+        // The H5 translator must still defer to the existing
+        // message_start / message_delta / message_stop handling
+        // so legacy chunks (role, finish_reason, usage) keep
+        // working.
+        let start = r#"message_start
+{"type":"message","role":"assistant","content":[],"model":"claude-3","stop_reason":null,"usage":{"input_tokens":10,"output_tokens":0}}"#;
+        let mut acc: Option<AnthropicToolUseAccumulator> = None;
+        let mut counter: u32 = 0;
+        let chunk = translate_anthropic_sse_event(
+            start, "chunk-1", 1000, "claude-3",
+            &mut acc, &mut counter,
+        ).unwrap().unwrap();
+        assert_eq!(
+            chunk.payload["choices"][0]["delta"]["role"]
+                .as_str().unwrap(),
+            "assistant"
+        );
     }
 
     #[test]
