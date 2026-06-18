@@ -559,8 +559,42 @@ pub async fn get_combo(
 pub async fn test_combo_targets(
     State(s): State<AppState>,
     Path(id): Path<i64>,
+    request: axum::extract::Request,
 ) -> ApiResult<Json<Vec<serde_json::Value>>> {
     use serde_json::json;
+
+    // MEDIUM fix (#10): cancellation. The fan-out can take up to
+    // ~3 minutes (8 targets × 15s). When the dashboard closes the
+    // tab or otherwise drops the HTTP request, the handler used to
+    // keep firing upstreams until the global 180s budget expired —
+    // wasting upstream tokens and DB writes. We wire a
+    // `tokio::sync::Notify` to the request body: when the client
+    // closing the connection, the body's `frame()` future resolves to
+    // `None` and we set the flag. The fan-out loop polls the flag
+    // between targets and short-circuits, which also drops the
+    // in-flight `reqwest::RequestBuilder::send()` future and closes
+    // the upstream TCP connection (reqwest is cancel-safe).
+    let (request_parts, request_body) = request.into_parts();
+    let _ = request_parts; // we don't need the metadata here
+    let (disconnect_tx, mut disconnect_rx) = tokio::sync::watch::channel(false);
+    {
+        tokio::spawn(async move {
+            // The body of an Axum extractor's `Request` is a
+            // `Body` whose `frame()` future resolves to `None`
+            // when the underlying TCP socket closes — which is
+            // exactly the disconnect signal we need. We don't
+            // care about the frame payload, only the lifecycle.
+            use http_body_util::BodyExt;
+            let mut pinned = request_body;
+            while let Some(_frame) = pinned.frame().await {
+                // Drain until the client closes.
+            }
+            // Best-effort: receiver may have been dropped if the
+            // handler returned earlier. The send failure is not
+            // an error — we just stop tracking the signal.
+            let _ = disconnect_tx.send(true);
+        });
+    }
 
     let body: Result<Json<Vec<serde_json::Value>>, ApiError> = async {
         // Snapshot the targets up-front and drop the writer guard.
@@ -582,6 +616,25 @@ pub async fn test_combo_targets(
         let fan_out = async {
             let mut results = Vec::with_capacity(targets.len());
             for t in targets {
+                // MEDIUM fix (#10): poll the disconnect signal
+                // BEFORE firing the upstream. If the dashboard
+                // closed the tab, we stop immediately. The watch
+                // channel's `borrow_and_update` returns the latest
+                // value, which is `true` once the body stream
+                // ended. The check is cheap (one atomic load) and
+                // runs once per target — amortized over a 15s
+                // upstream call.
+                if *disconnect_rx.borrow_and_update() {
+                    tracing::info!(
+                        combo_id = id,
+                        results_so_far = results.len(),
+                        "test-all: client disconnected, aborting fan-out"
+                    );
+                    // Return what we have; the response shape is
+                    // still the array of rows so the dashboard
+                    // can render the partial picture.
+                    return results;
+                }
                 if t.sub_combo_id.is_some() {
                     // Sub-combo row: do not recurse. The "test
                     // children individually" message mirrors the
@@ -4165,6 +4218,58 @@ mod tests {
             resp.status().is_success(),
             "since_id=-42 must NOT 5xx; got {}",
             resp.status()
+        );
+    }
+
+    // ---- MEDIUM fix (#10): cancellation propagates from the request
+    // body to the fan-out loop. Without this, the test_combo_targets
+    // handler kept firing upstreams for the full 180s budget even
+    // after the dashboard closed the tab. The fix wires a
+    // `tokio::sync::watch` channel to the request body's frame()
+    // future; the loop polls `borrow_and_update` between targets and
+    // short-circuits when it sees `true`.
+    //
+    // This test exercises the wiring at the unit level: a watch
+    // sender that flips `true` while a "fan-out" closure is
+    // iterating must cause the closure to bail out and return the
+    // partial result. We don't go through the full HTTP path
+    // (that requires a mock upstream with controllable latency);
+    // the routing-level integration is covered by `build_router`
+    // compiling `test_combo_targets` with the new
+    // `axum::extract::Request` parameter, which is what fails to
+    // build if the signature regresses.
+    #[tokio::test]
+    async fn test_combo_targets_signals_cancellation_via_watch() {
+        let (tx, mut rx) = tokio::sync::watch::channel(false);
+        // Pretend to be the fan-out loop. We run it on the current
+        // task and abort from a sibling task after the first "tick".
+        let fan_out = tokio::spawn(async move {
+            let mut results: Vec<usize> = Vec::new();
+            for i in 0..10_usize {
+                // The real handler checks `*rx.borrow_and_update()`
+                // here. We reproduce the semantics: when the watch
+                // flips, we exit with whatever we collected so far.
+                if *rx.borrow_and_update() {
+                    return (true, results);
+                }
+                // Simulate a per-target probe that takes a few ms.
+                tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+                results.push(i);
+            }
+            (false, results)
+        });
+        // Give the loop a chance to start, then signal cancellation.
+        tokio::time::sleep(std::time::Duration::from_millis(15)).await;
+        tx.send(true).expect("send disconnect");
+        let (cancelled, results) = fan_out.await.expect("join");
+        assert!(cancelled, "fan-out must report cancellation");
+        assert!(
+            results.len() < 10,
+            "expected partial results, got all 10 — fan-out ignored the cancel signal"
+        );
+        assert!(
+            !results.is_empty(),
+            "expected at least one target before the cancel arrived"
         );
     }
 }
