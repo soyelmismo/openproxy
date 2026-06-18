@@ -2927,7 +2927,16 @@ impl Pipeline {
         // data-side invariant.
         if recording {
             let stage_label: &str = if err.is_none() { "completed" } else { "failed" };
-            let error_str: Option<String> = err.map(|e| e.to_string());
+            // LOW fix: the live-logs WebSocket is a SECOND consumer
+            // of the upstream error string (the first is the DB row,
+            // written a few lines above via `cost::record`, which
+            // already applies `cost::redact_error_msg`). Without this
+            // redact the dashboard would see the raw upstream body
+            // — including secrets like `sk-...` and `Bearer
+            // *** — live, while the same row in the DB shows
+            // them masked. The DB and the live view must agree.
+            let error_str: Option<String> = err
+                .map(|e| crate::cost::redact_error_msg(&e.to_string()).0);
             crate::usage::publish_stage_event(crate::usage::StageEvent {
                 request_id: req.request_id.to_string(),
                 trace_id: trace_id.to_string(),

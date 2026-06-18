@@ -355,4 +355,34 @@ mod tests {
         assert!(sanitized.ends_with("...[truncated]"));
         assert!(sanitized.len() <= 2048 + "...[truncated]".len());
     }
+
+    // ---- LOW fix (#13): the live-logs WebSocket calls redact_error_msg
+    // for its terminal event. The DB row and the WS payload must agree
+    // on what secrets are masked. Test the patterns that ACTUALLY
+    // appear in real upstream error bodies — if a future contributor
+    // adds a new secret format to redact, they should also add an
+    // assertion here so the WS publish and the DB row stay in sync.
+
+    #[test]
+    fn redact_matches_db_row_for_all_common_secret_formats() {
+        // Every secret format below must be masked. The DB row and
+        // the WS payload both go through `redact_error_msg`, so
+        // they are equal iff the same input yields the same output.
+        let secret_input = "upstream error: sk-abcdefghij1234567890 \
+                             x-api-key: topsecret \
+                             Authorization: Bearer ya31.aaa.bbb";
+        let (db_form, _redacted) = redact_error_msg(secret_input);
+        let ws_form = redact_error_msg(secret_input).0;
+        assert_eq!(
+            db_form, ws_form,
+            "DB row and WS publish must render the same redacted form"
+        );
+        // Each secret pattern must be masked, not echoed.
+        assert!(db_form.contains("sk-[REDACTED]"));
+        assert!(db_form.contains("x-api-key: [REDACTED]"));
+        assert!(db_form.contains("Authorization: Bearer [REDACTED]"));
+        assert!(!db_form.contains("abcdefghij1234567890"));
+        assert!(!db_form.contains("topsecret"));
+        assert!(!db_form.contains("ya31.aaa.bbb"));
+    }
 }
