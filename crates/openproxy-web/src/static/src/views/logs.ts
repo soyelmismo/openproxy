@@ -202,10 +202,36 @@ function renderLogsRows(): void {
           // only for the edge case where a row's `trace_id` is
           // empty (synthetic events emitted from the frontend
           // itself).
-          const stage: StageEvent | undefined =
-            (r.trace_id && state.logs.stagesByTraceId.get(r.trace_id)) ||
-            (r.request_id && state.logs.stagesByRequestId.get(r.request_id)) ||
-            undefined;
+          //
+          // CRITICAL: for finalized rows (status_code > 0), derive
+          // the stage from the row's own status_code instead of
+          // looking up the shared stage map. When a request is
+          // retried, trace_id is reused across attempts, so the
+          // stage map only holds one entry — the retry's
+          // "completed" would overwrite the failed attempt's
+          // "failed", causing the failed row to show "completado".
+          let stage: StageEvent | undefined;
+          if (r.status_code > 0) {
+            stage = {
+              request_id: r.request_id,
+              trace_id: r.trace_id,
+              provider_id: r.provider_id,
+              upstream_model_id: r.upstream_model_id,
+              stage: r.status_code >= 400 ? "failed" : "completed",
+              elapsed_ms: r.total_ms || 0,
+              connect_ms: r.connect_ms,
+              ttft_ms: r.ttft_ms,
+              status_code: r.status_code,
+              error: r.error_message ?? null,
+              stop_reason: r.stop_reason ?? null,
+              timestamp: r.created_at || new Date().toISOString(),
+            };
+          } else {
+            stage =
+              (r.trace_id && state.logs.stagesByTraceId.get(r.trace_id)) ||
+              (r.request_id && state.logs.stagesByRequestId.get(r.request_id)) ||
+              undefined;
+          }
           return renderLogRowHtml(r, stage, visibleColKeys, r.total_ms);
         })
         .join("")
