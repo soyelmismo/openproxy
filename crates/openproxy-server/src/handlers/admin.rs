@@ -1039,6 +1039,15 @@ const USAGE_RECENT_DEFAULT_LIMIT: u32 = 50;
 /// table in a single request.
 const USAGE_RECENT_MAX_LIMIT: u32 = 500;
 
+// Sanity cap on `?since_id=`. The `usage.id` PK is autoincrement i64;
+// a legitimate client polls forward from "the last id it has seen",
+// which is bounded by the highest value the server has ever produced.
+// A request passing a `since_id` larger than this is either a bug or
+// malicious — clamp instead of forwarding, so the SQL plan stays
+// index-driven (`WHERE id > ?1` on the PK) and the response is empty
+// rather than scanning garbage.
+const USAGE_RECENT_MAX_SINCE_ID: i64 = i64::MAX / 2;
+
 /// Query string for `GET /v1/admin/usage/recent`.
 ///
 /// `since_id` is the largest `usage.id` the caller has already seen; the
@@ -1065,7 +1074,11 @@ pub async fn usage_recent(
     Query(q): Query<RecentQuery>,
 ) -> ApiResult<Json<Vec<usage::RecentUsageRow>>> {
     let body: Result<Json<Vec<usage::RecentUsageRow>>, ApiError> = async {
-        let since_id = q.since_id.unwrap_or(0).max(0);
+        let since_id = q
+            .since_id
+            .unwrap_or(0)
+            .max(0)
+            .min(USAGE_RECENT_MAX_SINCE_ID);
         let limit = q
             .limit
             .unwrap_or(USAGE_RECENT_DEFAULT_LIMIT)
@@ -1260,7 +1273,11 @@ async fn stream_usage_rows(
 
                             match msg.msg_type.as_str() {
                                 "subscribe" => {
-                                    let since_id = msg.since_id.unwrap_or(0).max(0);
+                                    let since_id = msg
+                                        .since_id
+                                        .unwrap_or(0)
+                                        .max(0)
+                                        .min(USAGE_RECENT_MAX_SINCE_ID);
                                     let w = state.db_pool().writer();
                                     // SEC-MEDIUM-C fix: strip the heavy request/response
                                     // fields from the initial history batch — the
@@ -4074,6 +4091,61 @@ mod tests {
             resp.status(),
             StatusCode::PAYLOAD_TOO_LARGE,
             "100 MiB body must be rejected by the 32 MiB body limit"
+        );
+    }
+
+    // ---- LOW fix: clamp `since_id` to USAGE_RECENT_MAX_SINCE_ID so a
+    // client passing `?since_id=i64::MAX` cannot force the SQL planner
+    // to consider garbage keys. Negative values are still clamped to 0
+    // (existing behavior). The behavior we test is "doesn't blow up",
+    // not "returns the right rows" — the SQL is exercised elsewhere
+    // (usage::recent's tests); here we only validate input handling.
+
+    #[tokio::test]
+    async fn usage_recent_clamps_since_id_at_max() {
+        // Build a request with `since_id=i64::MAX`. The handler must
+        // clamp instead of forwarding; if it forwarded, the SQL `WHERE
+        // id > ?1` on the PK is still index-driven and returns [] in
+        // microseconds, but a malicious client shouldn't get the
+        // satisfaction of forcing a comparison against MAX.
+        use axum::http::Request;
+        use tower::ServiceExt;
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let (state, key) = make_state_with_key(tmp.path()).await;
+        let app = crate::router::build_router(state);
+        let req = Request::builder()
+            .uri("/v1/admin/usage/recent?since_id=9223372036854775807&limit=1")
+            .header("authorization", format!("Bearer {key}"))
+            .body(axum::body::Body::empty())
+            .expect("build req");
+        let resp = app.oneshot(req).await.expect("oneshot");
+        assert!(
+            resp.status().is_success(),
+            "since_id=MAX must NOT 5xx; got {}",
+            resp.status()
+        );
+    }
+
+    #[tokio::test]
+    async fn usage_recent_rejects_negative_since_id() {
+        // Negative since_id is meaningless (PK is positive). Existing
+        // behavior clamps to 0, so the request returns the most-recent
+        // rows. We assert it doesn't 5xx.
+        use axum::http::Request;
+        use tower::ServiceExt;
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let (state, key) = make_state_with_key(tmp.path()).await;
+        let app = crate::router::build_router(state);
+        let req = Request::builder()
+            .uri("/v1/admin/usage/recent?since_id=-42&limit=1")
+            .header("authorization", format!("Bearer {key}"))
+            .body(axum::body::Body::empty())
+            .expect("build req");
+        let resp = app.oneshot(req).await.expect("oneshot");
+        assert!(
+            resp.status().is_success(),
+            "since_id=-42 must NOT 5xx; got {}",
+            resp.status()
         );
     }
 }
