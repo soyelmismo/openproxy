@@ -196,7 +196,7 @@ function renderLogsRows(): void {
             (r.trace_id && state.logs.stagesByTraceId.get(r.trace_id)) ||
             (r.request_id && state.logs.stagesByRequestId.get(r.request_id)) ||
             undefined;
-          return renderLogRowHtml(r, stage, visibleColKeys);
+          return renderLogRowHtml(r, stage, visibleColKeys, r.total_ms);
         })
         .join("")
     : '<div class="empty" style="padding:2rem;">No recent requests yet. Use the API to see logs appear here in real time.</div>';
@@ -532,16 +532,20 @@ function handleLogsMessage(raw: MessageEvent): void {
     //   * the row has a non-zero status_code with no streaming flags
     // (i.e. the response is no longer in flight).
     //
-    // Until the row arrives, the only signal we have is the latest
-    // `stage` event (which is "streaming" while chunks are coming
-    // in and "failed" on a hard error). The backend doesn't emit a
-    // "completed" stage event on the success path — the row IS the
-    // completion signal — so we synthesize one here. Without this,
-    // `state.logs.stagesByRequestId` keeps the last "streaming"
-    // entry forever, and the latency ticker (state/ticker.ts) keeps
-    // recomputing `Date.now() - stage.timestamp`, which grows
-    // without bound, so the latency cell shows a number that climbs
-    // indefinitely and the phase cell stays on "streaming".
+    // Fallback for R3: until the backend's terminal `completed`
+    // stage event (R1 fix in `record_attempt_raw_with_tokens`)
+    // reaches the dashboard, the only signal we have is the latest
+    // `stage` event. The backend publishes a terminal event
+    // BEFORE writing the row, so the row is supposed to arrive
+    // *after* the terminal stage — but a slow consumer / lagged
+    // subscriber can miss the stage event while still seeing the
+    // row. Synthesize the terminal event from the row itself so
+    // the ticker doesn't keep recomputing `Date.now() -
+    // stage.timestamp` and growing the latency cell without
+    // bound. We only emit the synthetic event when the
+    // currently-stored stage is still non-terminal — if the
+    // backend's terminal event is already in the map, we leave
+    // it alone.
     if (row.request_id) {
       const isFinished = (
         (!row.is_streaming || row.stream_complete) ||
@@ -549,34 +553,39 @@ function handleLogsMessage(raw: MessageEvent): void {
         (row.status_code > 0 && row.stream_complete)
       );
       if (isFinished) {
-        // Index by `trace_id` (the row's own trace_id, not the
-        // request_id) so the row's phase does not get clobbered
-        // by a later attempt of the same `request_id`. The
-        // previous request_id-keyed write here is what caused
-        // the user-reported "failed rows get their phase
-        // rewritten to 'Started' when a retry comes in" bug.
-        const synth: StageEvent = {
-          request_id: row.request_id,
-          stage: row.status_code >= 400 ? "failed" : "completed",
-          // elapsed_ms is informational here; the ticker uses
-          // timestamp to compute live, but it short-circuits on
-          // stage === "completed" / "failed" so this value isn't
-          // read for finished requests. Keep it consistent with
-          // the row's total_ms for any future caller.
-          elapsed_ms: row.total_ms || 0,
-          status_code: row.status_code,
-          timestamp: row.created_at || new Date().toISOString(),
-          trace_id: row.trace_id,
-          provider_id: row.provider_id,
-          upstream_model_id: row.upstream_model_id,
-          connect_ms: row.connect_ms,
-          ttft_ms: row.ttft_ms,
-          error: row.error_message ?? null,
-        };
-        if (row.trace_id) {
-          state.logs.stagesByTraceId.set(row.trace_id, synth);
-        } else {
-          state.logs.stagesByRequestId.set(row.request_id, synth);
+        // Look up the currently-stored stage for this attempt.
+        // The lookup uses the same `trace_id` → `request_id`
+        // fallback the rest of the module uses.
+        const existingStage: StageEvent | undefined = row.trace_id
+          ? state.logs.stagesByTraceId.get(row.trace_id)
+          : state.logs.stagesByRequestId.get(row.request_id);
+        const existingIsTerminal: boolean = !!existingStage &&
+          (existingStage.stage === "completed" || existingStage.stage === "failed");
+        if (!existingIsTerminal) {
+          // Synthesize a terminal event from the row. The
+          // `setStage` helper indexes by `trace_id` (primary)
+          // and `request_id` (fallback) — same as the live
+          // stage path — so the next ticker tick finds the
+          // frozen value.
+          const synth: StageEvent = {
+            request_id: row.request_id,
+            stage: row.status_code >= 400 ? "failed" : "completed",
+            // elapsed_ms is informational here; the ticker
+            // short-circuits on stage === "completed" /
+            // "failed" so this value isn't read for finished
+            // requests. Keep it consistent with the row's
+            // total_ms for any future caller.
+            elapsed_ms: row.total_ms || 0,
+            status_code: row.status_code,
+            timestamp: row.created_at || new Date().toISOString(),
+            trace_id: row.trace_id,
+            provider_id: row.provider_id,
+            upstream_model_id: row.upstream_model_id,
+            connect_ms: row.connect_ms,
+            ttft_ms: row.ttft_ms,
+            error: row.error_message ?? null,
+          };
+          setStage(synth, row.request_id);
         }
       }
     }

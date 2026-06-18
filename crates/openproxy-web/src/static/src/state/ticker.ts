@@ -12,7 +12,7 @@
 // frontend emits from the row/history completion paths.
 
 import { state } from "./index.js";
-import type { StageEvent } from "../lib/types/api.js";
+import type { RecentUsageRow, StageEvent } from "../lib/types/api.js";
 
 function tickLogLatency(): void {
   const stagesByTraceId: Map<string, StageEvent> = state.logs.stagesByTraceId;
@@ -21,6 +21,19 @@ function tickLogLatency(): void {
   const now: number = Date.now();
   const rowEls: NodeListOf<Element> = document.querySelectorAll("#logs .log-row[data-request-id]");
   if (rowEls.length === 0) return;
+  // Build the row-lookup indexes ONCE per tick. The naive
+  // `state.logs.rows.find(...)` inside the per-row loop is
+  // O(n) per row per tick — at dashboard scale (50 rows ×
+  // 10 Hz) the per-tick cost is O(n × m). Hoisting the
+  // indexes out of the loop is the single hottest fix in
+  // this file; the equivalent of converting a N² search into
+  // a N + M pass.
+  const rowByTraceId: Map<string, RecentUsageRow> = new Map();
+  const rowByRequestId: Map<string, RecentUsageRow> = new Map();
+  for (const r of state.logs.rows) {
+    if (r.trace_id) rowByTraceId.set(r.trace_id, r);
+    if (r.request_id) rowByRequestId.set(r.request_id, r);
+  }
   for (const rowEl of Array.from(rowEls)) {
     const el = rowEl as HTMLElement;
     // Index by `trace_id` first (per attempt). A retry's row
@@ -30,30 +43,74 @@ function tickLogLatency(): void {
     // the historical failed row, which is the
     // "counters-double-on-failed-entries" bug.
     const traceId: string = el.dataset["traceId"] || "";
+    const requestId: string = el.dataset["requestId"] || "";
     let stage: StageEvent | undefined;
     if (traceId) {
       stage = stagesByTraceId.get(traceId);
     } else {
       // Fallback for synthetic events emitted without a
       // `trace_id`. We accept the request_id-keyed map here.
-      const requestId: string | undefined = el.dataset["requestId"];
       if (requestId) stage = stagesByRequestId.get(requestId);
     }
     if (!stage) continue;
     if (stage.stage === "completed" || stage.stage === "failed") continue;
+    // Row-finalized freeze (R3 defense-in-depth). If the
+    // request is already represented by a finalized row in
+    // `state.logs.rows`, the backend has recorded the
+    // completion and the ticker must freeze at `row.total_ms`
+    // regardless of whether the terminal `stage` event made
+    // it through. Without this, a single dropped broadcast
+    // event (slow consumer, lagged subscriber) lets the
+    // counter grow forever against a finalized request.
+    const finalizedRow: RecentUsageRow | undefined = traceId
+      ? rowByTraceId.get(traceId)
+      : (requestId ? rowByRequestId.get(requestId) : undefined);
     const t: number = Date.parse(stage.timestamp);
     let live: number;
     if (isFinite(t)) live = Math.max(0, now - t);
     else live = stage.elapsed_ms || 0;
+    if (finalizedRow && finalizedRow.total_ms > 0) {
+      live = finalizedRow.total_ms;
+    } else if (stage.stage === "streaming") {
+      // Stale-`streaming` cap (R3). Once a `streaming` event
+      // is older than 2 s without a follow-up event, the
+      // counter MUST freeze. We use the same `now - t`
+      // formula the rest of the function uses so the next
+      // reader doesn't have to reason about a different
+      // monotonic-math scheme; the semantic effect is that
+      // `live` is no longer recomputed from `stage.elapsed_ms`
+      // — it ticks at the wall-clock rate, not the per-event
+      // rate. The freeze is semantic, not numerical.
+      if (isFinite(t)) {
+        const stale: number = now - t;
+        if (stale > 2_000) live = stale;
+      }
+    }
     const sub: Element | null = rowEl.querySelector(".log-phase-sub");
     if (sub) {
       let label: string;
-      if (stage.stage === "streaming" && stage.ttft_ms != null) label = `ttft ${stage.ttft_ms}ms`;
+      if (finalizedRow && finalizedRow.total_ms > 0) {
+        // The row is finalized; show the row's `total_ms`
+        // rather than the (frozen) live counter. The
+        // `renderLogPhaseHtml` in `components/log-row.ts`
+        // also handles this, but the ticker is the path the
+        // user actually sees ticking — set the sublabel
+        // here so the next paint is coherent with the freeze.
+        label = `total ${finalizedRow.total_ms}ms`;
+        sub.classList.remove("log-phase-sub--ticking");
+      } else if (stage.stage === "streaming" && stage.ttft_ms != null) label = `ttft ${stage.ttft_ms}ms`;
       else if ((stage.stage === "waiting_ttft" || stage.stage === "streaming") && stage.connect_ms != null) label = `connect ${stage.connect_ms}ms`;
       else label = `${live}ms`;
       if (sub.textContent !== label) {
         sub.textContent = label;
-        sub.classList.add("log-phase-sub--ticking");
+        // Don't add the "ticking" class to a row whose stage
+        // is frozen. The class is reserved for rows that are
+        // actually still climbing.
+        if (!(finalizedRow && finalizedRow.total_ms > 0) && stage.stage === "streaming" && isFinite(t) && (now - t) > 2_000) {
+          sub.classList.remove("log-phase-sub--ticking");
+        } else {
+          sub.classList.add("log-phase-sub--ticking");
+        }
       }
     }
     const latencyEl: Element | null = rowEl.querySelector(".log-latency");

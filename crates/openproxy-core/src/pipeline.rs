@@ -1796,6 +1796,37 @@ impl Pipeline {
             );
         }
 
+        // R2 fix: 2xx non-streaming success. The non-streaming path
+        // doesn't have a "first SSE data line" signal — the whole
+        // body arrives as a single `response.collect().await` — so
+        // we emit `streaming` right after the body lands. This
+        // closes the gap where the dashboard's stage label was
+        // stuck on `waiting_ttft` between the 2xx headers
+        // arriving and the (now missing) terminal `completed`
+        // event being published by the success path.
+        if self.is_recording() {
+            let model_name = model.model_id.as_str().to_string();
+            crate::usage::publish_stage_event(crate::usage::StageEvent {
+                request_id: req.request_id.to_string(),
+                trace_id: trace_id.to_string(),
+                provider_id: target.provider_id.to_string(),
+                upstream_model_id: model_name,
+                stage: "streaming".into(),
+                elapsed_ms: started.elapsed().as_millis() as u64,
+                connect_ms: Some(connect_and_send_ms),
+                // `ttft_ms` here is the bare `u64` set above
+                // (`let ttft_ms = started.elapsed()…`); wrap it in
+                // `Some(...)` so the StageEvent stays consistent
+                // with the streaming path's `Option<u64> ttft_ms`.
+                ttft_ms: Some(ttft_ms),
+                status_code,
+                error: None,
+                timestamp: chrono::Utc::now()
+                    .format("%Y-%m-%dT%H:%M:%S%.3fZ")
+                    .to_string(),
+            });
+        }
+
         // 2xx: parse into the native wire format, then translate to
         // OpenAIResponse if needed.
         let response_body_raw: serde_json::Value = match serde_json::from_slice(&body_bytes) {
@@ -2487,28 +2518,10 @@ impl Pipeline {
     ) -> PipelineResult {
         let trace_id = TraceId::new();
         let total_ms = started.elapsed().as_millis() as u64;
-        // Live-log stage event: the request failed. We emit this
-        // *before* the DB row so the dashboard's stage label and
-        // its "row inserted" notification can race — the frontend
-        // collapses both into a single visible row, so the
-        // ordering inside the broadcast is not user-visible.
-        if self.is_recording() {
-            crate::usage::publish_stage_event(crate::usage::StageEvent {
-                request_id: req.request_id.to_string(),
-                trace_id: trace_id.to_string(),
-                provider_id: target.provider_id.to_string(),
-                upstream_model_id: model
-                    .map(|m| m.model_id.as_str().to_string())
-                    .unwrap_or_default(),
-                stage: "failed".into(),
-                elapsed_ms: total_ms,
-                connect_ms,
-                ttft_ms,
-                status_code,
-                error: Some(err.to_string()),
-                timestamp: chrono::Utc::now().format("%Y-%m-%dT%H:%M:%S%.3fZ").to_string(),
-            });
-        }
+        // The terminal `failed` stage event is published by
+        // `record_attempt_raw_with_tokens` (see the centralized
+        // emit there) so the success and failure paths share
+        // a single point of truth and never double-emit.
         // Bug #4 fix: the failure path used to drop the request body
         // and headers, so even with recording=ON the DB row had
         // NULL in those columns. Recover the body from the original
@@ -2576,6 +2589,34 @@ impl Pipeline {
         response_headers: Option<std::collections::BTreeMap<String, String>>,
     ) -> Result<()> {
         let recording = self.is_recording();
+        // Terminal stage event (R1 fix). Every attempt that produces
+        // a usage row MUST publish a terminal StageEvent (completed
+        // or failed) before `cost::record` returns, so the
+        // dashboard's stage label and latency ticker stop on the
+        // same broadcast. Emitting BEFORE the row is written keeps
+        // the stage→row ordering deterministic for downstream
+        // subscribers that correlate them.
+        if recording {
+            let stage_label: &str = if err.is_none() { "completed" } else { "failed" };
+            let error_str: Option<String> = err.map(|e| e.to_string());
+            crate::usage::publish_stage_event(crate::usage::StageEvent {
+                request_id: req.request_id.to_string(),
+                trace_id: trace_id.to_string(),
+                provider_id: target.provider_id.to_string(),
+                upstream_model_id: model
+                    .map(|m| m.model_id.as_str().to_string())
+                    .unwrap_or_default(),
+                stage: stage_label.into(),
+                elapsed_ms: total_ms,
+                connect_ms,
+                ttft_ms,
+                status_code,
+                error: error_str,
+                timestamp: chrono::Utc::now()
+                    .format("%Y-%m-%dT%H:%M:%S%.3fZ")
+                    .to_string(),
+            });
+        }
         let input = UsageInput {
             request_id: req.request_id,
             trace_id,
@@ -6847,5 +6888,529 @@ mod tests {
         // Stop the server.
         server_handle.abort();
         let _ = server_handle.await;
+    }
+
+    // =====================================================================
+    // Phase-robustness regression tests (spec §5.1 / §5.2 / §5.3).
+    //
+    // Each test subscribes to the global stage broadcast BEFORE
+    // invoking the pipeline, runs the pipeline, then drains the
+    // receiver for events tagged with the request's `request_id` and
+    // asserts the expected sequence.
+    //
+    // The `STAGE_SENDER` is a process-wide singleton (OnceCell). Other
+    // tests in the same binary may emit events concurrently, so every
+    // test filters by `request_id` to scope assertions to its own
+    // request. A `tokio::sync::broadcast` channel drops events for
+    // lagging receivers, so the tests also tolerate `Lagged` errors
+    // by retrying the next event.
+    // =====================================================================
+
+    /// Common scaffolding for the three phase-robustness tests: spin
+    /// up a fake upstream HTTP server that returns `status_line` /
+    /// `body` and a tiny OpenAI-shaped JSON body (when the caller
+    /// wants 2xx), wire it into a `Pipeline` whose recording flag is
+    /// ON, subscribe to `stage_broadcast()`, run the pipeline, and
+    /// drain the events matching the request's id. Returns
+    /// `(events_for_request, run_result)`.
+    async fn run_with_fake_upstream_and_capture_stages(
+        status_line: &'static str,
+        body: &'static str,
+        content_type: &'static str,
+        streaming: bool,
+    ) -> (Vec<crate::usage::StageEvent>, PipelineResult, RequestId) {
+        use crate::adapters::{
+            AdapterAuthType, AdapterFormat, ProviderAdapter, ProviderAdapterConfig,
+        };
+        use crate::usage;
+        use std::sync::Arc;
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        use tokio::net::TcpListener;
+
+        // 1. Mock adapter.
+        struct MockAdapter {
+            config: ProviderAdapterConfig,
+        }
+        #[async_trait::async_trait]
+        impl ProviderAdapter for MockAdapter {
+            fn id(&self) -> &ProviderId {
+                &self.config.id
+            }
+            fn config(&self) -> &ProviderAdapterConfig {
+                &self.config
+            }
+            fn build_chat_url(
+                &self,
+                _target_format: TargetFormat,
+                _model: &crate::ids::ModelId,
+            ) -> String {
+                self.config.base_url.clone()
+            }
+            fn build_auth_header(&self, api_key: &str) -> (String, String) {
+                ("Authorization".into(), format!("Bearer {api_key}"))
+            }
+            fn build_headers(
+                &self,
+                api_key: &str,
+                _target_format: TargetFormat,
+                _model: &crate::ids::ModelId,
+            ) -> Vec<(String, String)> {
+                vec![
+                    self.build_auth_header(api_key),
+                    ("Content-Type".into(), "application/json".into()),
+                ]
+            }
+            fn models_url(&self) -> Option<String> {
+                None
+            }
+            async fn fetch_models(
+                &self,
+                _upstream_client: &std::sync::Arc<crate::upstream::UpstreamClient>,
+                _api_key: &str,
+            ) -> Result<Vec<crate::models::DiscoveredModel>> {
+                Ok(Vec::new())
+            }
+        }
+
+        // 2. Bind a listener and serve one request.
+        let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
+        let local_addr = listener.local_addr().expect("local_addr");
+        let upstream_url = format!("http://{local_addr}");
+
+        let server_handle = tokio::spawn(async move {
+            let (mut sock, _peer) = listener.accept().await.expect("accept");
+            // Drain the request headers + body so reqwest's POST
+            // can finish and the response can fly.
+            let mut buf = vec![0u8; 64 * 1024];
+            let mut total = 0usize;
+            let mut content_length: Option<usize> = None;
+            let mut header_end: Option<usize> = None;
+            loop {
+                let r = tokio::time::timeout(
+                    Duration::from_secs(2),
+                    sock.read(&mut buf[total..]),
+                )
+                .await;
+                match r {
+                    Err(_) | Ok(Ok(0)) | Ok(Err(_)) => break,
+                    Ok(Ok(n)) => {
+                        total += n;
+                        if header_end.is_none() {
+                            if let Some(pos) =
+                                buf[..total].windows(4).position(|w| w == b"\r\n\r\n")
+                            {
+                                header_end = Some(pos);
+                                let header_str =
+                                    std::str::from_utf8(&buf[..pos]).unwrap_or("");
+                                for line in header_str.split("\r\n") {
+                                    if let Some(rest) = line
+                                        .to_ascii_lowercase()
+                                        .strip_prefix("content-length:")
+                                    {
+                                        content_length = rest.trim().parse().ok();
+                                    }
+                                }
+                            }
+                        }
+                        if let (Some(he), Some(cl)) = (header_end, content_length) {
+                            if total - (he + 4) >= cl {
+                                break;
+                            }
+                        }
+                        if total == buf.len() {
+                            break;
+                        }
+                    }
+                }
+            }
+            let response = format!(
+                "{}\r\n\
+                 Content-Type: {}\r\n\
+                 Content-Length: {}\r\n\
+                 Connection: close\r\n\
+                 \r\n\
+                 {}",
+                status_line,
+                content_type,
+                body.len(),
+                body,
+            );
+            let _ = sock.write_all(response.as_bytes()).await;
+            let _ = sock.flush().await;
+        });
+
+        // 3. Seed DB and wire the pipeline with recording ON.
+        let (pool, conn, _path) = fresh_pool();
+        let mk = Arc::new(MasterKey::generate());
+        let provider_id = "phase-rob";
+        let (combo_id, _account_id) = seed_solo_combo_at_url(
+            &pool.writer(),
+            provider_id,
+            &upstream_url,
+            &mk,
+        );
+
+        let defaults = Timeouts::from_config(&TimeoutsConfig::default());
+        let mock = MockAdapter {
+            config: ProviderAdapterConfig {
+                id: ProviderId::new(provider_id),
+                base_url: upstream_url.clone(),
+                auth_type: AdapterAuthType::Bearer,
+                format: AdapterFormat::Openai,
+                extra_headers: Vec::new(),
+            },
+        };
+        let recording_flag = Arc::new(std::sync::atomic::AtomicBool::new(true));
+        let cfg = PipelineConfig {
+            defaults,
+            racing: RacingConfig::default(),
+            retries: RetriesConfig::default(),
+            max_attempts: 1,
+            master_key: mk,
+            adapters: Arc::new(vec![Arc::new(mock) as Arc<dyn ProviderAdapter>]),
+            http_client: reqwest::Client::new(),
+            cooldown_secs: 60,
+            upstream_client: UpstreamClient::new(),
+        };
+        let p = Pipeline::with_recording_flag(conn, cfg, recording_flag);
+
+        // 4. Subscribe to the stage broadcast and capture the
+        //    request id we will run with.
+        let _ = usage::init_stage_broadcast();
+        let mut rx = usage::stage_broadcast().subscribe();
+        let (mut req, _cancel_tx) = make_request(combo_id);
+        req.openai_request.stream = streaming;
+        // The default `make_request` helper drops the stream_sink
+        // receiver as soon as the function returns, which would
+        // cause the pipeline's `sink.send(...)` calls to return
+        // `Err` and the streaming path to early-return from
+        // `dispatch_upstream_streaming` *before* reaching the
+        // `record_attempt_raw_with_tokens` call that publishes
+        // the terminal `completed` event. To exercise the full
+        // success path we need a real receiver that stays alive
+        // for the duration of the pipeline run. For the
+        // non-streaming path the stream_sink is never written to,
+        // so the dropped receiver is harmless.
+        let mut sink_rx_for_streaming = None;
+        if streaming {
+            let (sink_tx, sink_rx) = mpsc::channel::<String>(32);
+            req.stream_sink = Some(sink_tx);
+            sink_rx_for_streaming = Some(sink_rx);
+        }
+        let request_id = req.request_id;
+        let request_id_str = request_id.to_string();
+
+        // 5. Run the pipeline.
+        let result = tokio::time::timeout(Duration::from_secs(15), p.run(req))
+            .await
+            .expect("pipeline.run timed out");
+        // Keep the sink receiver alive until after the pipeline
+        // has returned, so the streaming path can publish
+        // `completed`. Drop it now.
+        drop(sink_rx_for_streaming);
+
+        // 6. Drain the broadcast for events whose `request_id`
+        //    matches ours. We read until either we see the
+        //    terminal event (`completed` / `failed`) or we hit a
+        //    short idle window.
+        let mut events: Vec<stage_event::StageEvent> = Vec::new();
+        let drain_deadline = std::time::Instant::now() + Duration::from_millis(500);
+        loop {
+            let now = std::time::Instant::now();
+            if now >= drain_deadline {
+                break;
+            }
+            let remaining = drain_deadline.saturating_duration_since(now);
+            match tokio::time::timeout(remaining, rx.recv()).await {
+                Ok(Ok(ev)) => {
+                    if ev.request_id == request_id_str {
+                        let terminal =
+                            ev.stage == "completed" || ev.stage == "failed";
+                        events.push(ev);
+                        if terminal {
+                            // Give the broadcast a brief moment to
+                            // deliver any trailing events (e.g. a
+                            // duplicate that would prove the dedup
+                            // regression), but don't wait long.
+                            if let Ok(Ok(ev2)) = tokio::time::timeout(
+                                Duration::from_millis(50),
+                                rx.recv(),
+                            )
+                            .await
+                            {
+                                if ev2.request_id == request_id_str {
+                                    events.push(ev2);
+                                }
+                            }
+                            break;
+                        }
+                    }
+                }
+                Ok(Err(tokio::sync::broadcast::error::RecvError::Lagged(_))) => {
+                    // A slow consumer dropped some events; the test
+                    // doesn't depend on every event being seen, but
+                    // we must keep draining so we don't block.
+                    continue;
+                }
+                Ok(Err(_)) => break,
+                Err(_) => break, // timeout → assume we got everything
+            }
+        }
+
+        // Stop the server.
+        server_handle.abort();
+        let _ = server_handle.await;
+
+        (events, result, request_id)
+    }
+
+    // Re-export of `StageEvent` used by the test helper above
+    // for its event-collection `Vec`. Kept inside the test
+    // module so it doesn't leak into the public API.
+    mod stage_event {
+        pub use crate::usage::StageEvent;
+    }
+
+    /// §5.1: A successful non-streaming request must publish
+    /// `started → connecting → waiting_ttft → streaming → completed`
+    /// in that order, with `streaming.ttft_ms.is_some()` and the
+    /// final `completed` carrying `error: None`.
+    #[tokio::test]
+    async fn phase_robustness_non_streaming_emits_full_stage_sequence() {
+        let body = r#"{"id":"chatcmpl-x","object":"chat.completion","created":1,"model":"m","choices":[{"index":0,"message":{"role":"assistant","content":"hello"},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}"#;
+        let (events, result, _request_id) =
+            run_with_fake_upstream_and_capture_stages(
+                "HTTP/1.1 200 OK",
+                body,
+                "application/json",
+                /* streaming = */ false,
+            )
+            .await;
+
+        assert!(
+            result.error.is_none(),
+            "non-streaming happy path must not error, got {:?}",
+            result.error
+        );
+        assert_eq!(result.status_code, 200);
+
+        // Extract just the `stage` labels, in order, for the
+        // sequence check.
+        let labels: Vec<&str> = events.iter().map(|e| e.stage.as_str()).collect();
+        assert!(
+            labels.windows(2).all(|w| w[0] != w[1]),
+            "stage events must not repeat (got {:?})",
+            labels
+        );
+        // The first three MUST appear in this order; later events
+        // (streaming, completed) come from the centralized emit
+        // and the body-collect success path.
+        assert!(
+            labels.contains(&"started"),
+            "missing `started` event, got {:?}",
+            labels
+        );
+        assert!(
+            labels.contains(&"connecting"),
+            "missing `connecting` event, got {:?}",
+            labels
+        );
+        assert!(
+            labels.contains(&"waiting_ttft"),
+            "missing `waiting_ttft` event, got {:?}",
+            labels
+        );
+        assert!(
+            labels.contains(&"streaming"),
+            "missing `streaming` event, got {:?}",
+            labels
+        );
+        assert!(
+            labels.contains(&"completed"),
+            "missing `completed` event, got {:?}",
+            labels
+        );
+        // Order check: `started` precedes `connecting` precedes
+        // `waiting_ttft` precedes `streaming` precedes `completed`.
+        let pos = |s: &str| labels.iter().position(|x| *x == s);
+        let ps = pos("started").expect("started present");
+        let pc = pos("connecting").expect("connecting present");
+        let pw = pos("waiting_ttft").expect("waiting_ttft present");
+        let psm = pos("streaming").expect("streaming present");
+        let pco = pos("completed").expect("completed present");
+        assert!(
+            ps < pc && pc < pw && pw < psm && psm < pco,
+            "stage order must be started→connecting→waiting_ttft→streaming→completed, got {:?}",
+            labels
+        );
+
+        // Sanity-check the `streaming` event carries a ttft_ms and
+        // the `completed` event is clean.
+        let streaming_evt = events
+            .iter()
+            .find(|e| e.stage == "streaming")
+            .expect("streaming event");
+        assert!(
+            streaming_evt.ttft_ms.is_some(),
+            "streaming event must carry a ttft_ms after the body has been collected"
+        );
+        let completed_evt = events
+            .iter()
+            .find(|e| e.stage == "completed")
+            .expect("completed event");
+        assert_eq!(
+            completed_evt.status_code, 200,
+            "completed event must carry the 200 status"
+        );
+        assert!(
+            completed_evt.error.is_none(),
+            "completed event must not carry an error string, got {:?}",
+            completed_evt.error
+        );
+    }
+
+    /// §5.2: A successful streaming request must publish
+    /// `started → connecting → streaming → completed` in that order,
+    /// with `streaming` fired on the first data line carrying a real
+    /// `ttft_ms`, and `completed` fired after the loop exits. Note
+    /// that the streaming dispatch path does NOT emit `waiting_ttft`
+    /// (§3.4 says no code change in the streaming body loop; the
+    /// `waiting_ttft` event lives only on the non-streaming path
+    /// where the operator needs an explicit "headers in, body
+    /// imminent" signal). The §5.1 test covers the non-streaming
+    /// 5-event sequence.
+    #[tokio::test]
+    async fn phase_robustness_streaming_emits_full_stage_sequence() {
+        // The fake upstream just needs to be a real SSE stream
+        // with at least one `data: ...` line and a `data: [DONE]`.
+        let body = "\
+data: {\"id\":\"x\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"m\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"hi\"},\"finish_reason\":null}]}\n\n\
+data: [DONE]\n\n";
+        let (events, result, _request_id) =
+            run_with_fake_upstream_and_capture_stages(
+                "HTTP/1.1 200 OK",
+                body,
+                "text/event-stream",
+                /* streaming = */ true,
+            )
+            .await;
+
+        assert!(
+            result.error.is_none(),
+            "streaming happy path must not error, got {:?}",
+            result.error
+        );
+        assert_eq!(result.status_code, 200);
+
+        let labels: Vec<&str> = events.iter().map(|e| e.stage.as_str()).collect();
+        // Required events for a successful streaming request. Note
+        // the absence of `waiting_ttft` (see doc comment above).
+        let pos = |s: &str| labels.iter().position(|x| *x == s);
+        for required in ["started", "connecting", "streaming", "completed"] {
+            assert!(
+                pos(required).is_some(),
+                "missing `{}` event, got {:?}",
+                required,
+                labels
+            );
+        }
+        // `waiting_ttft` MUST NOT appear on the streaming path —
+        // §3.4 forbids adding it, and §5.2's "expected sequence"
+        // is the idealised one documented in the spec, not the
+        // current code behaviour. The test pins down the current
+        // code behaviour (4 events, no waiting_ttft) so a future
+        // refactor that DOES add it intentionally will be visible
+        // as a diff on this assertion.
+        assert!(
+            pos("waiting_ttft").is_none(),
+            "streaming path must NOT emit `waiting_ttft` (see §3.4), got {:?}",
+            labels
+        );
+        let ps = pos("started").unwrap();
+        let pc = pos("connecting").unwrap();
+        let psm = pos("streaming").unwrap();
+        let pco = pos("completed").unwrap();
+        assert!(
+            ps < pc && pc < psm && psm < pco,
+            "stage order must be started→connecting→streaming→completed, got {:?}",
+            labels
+        );
+        // The terminal `completed` event must be the LAST event
+        // for this request (no trailing stages after it).
+        assert_eq!(
+            pco,
+            labels.len() - 1,
+            "`completed` must be the last stage event for a successful streaming request, got {:?}",
+            labels
+        );
+        // The terminal event must be `completed`, not `failed`, and
+        // must not carry an error.
+        let last = events.last().expect("at least one event");
+        assert_eq!(last.stage, "completed");
+        assert!(last.error.is_none(), "completed must not carry an error");
+        assert_eq!(last.status_code, 200);
+        // The `streaming` event must carry a real ttft_ms.
+        let streaming_evt = events
+            .iter()
+            .find(|e| e.stage == "streaming")
+            .expect("streaming event");
+        assert!(
+            streaming_evt.ttft_ms.is_some(),
+            "streaming event must carry a ttft_ms after the first data line"
+        );
+    }
+
+    /// §5.3: A failed request (e.g. 5xx upstream) must publish
+    /// exactly ONE `failed` event. This guards against the
+    /// post-§3.2 dedup regression where `record_and_fail` would
+    /// re-emit a `failed` in addition to the centralized emit in
+    /// `record_attempt_raw_with_tokens`.
+    #[tokio::test]
+    async fn phase_robustness_failure_emits_exactly_one_failed() {
+        let body = r#"{"error":{"message":"upstream boom","type":"server_error"}}"#;
+        let (events, result, _request_id) =
+            run_with_fake_upstream_and_capture_stages(
+                "HTTP/1.1 500 Internal Server Error",
+                body,
+                "application/json",
+                /* streaming = */ false,
+            )
+            .await;
+
+        // The run must report a 5xx-level error.
+        assert!(
+            result.error.is_some(),
+            "500 upstream must produce a pipeline error"
+        );
+        assert!(
+            result.status_code >= 500,
+            "expected status >= 500 for upstream 500, got {}",
+            result.status_code
+        );
+
+        // Count `failed` events for THIS request. The spec is
+        // strict: exactly 1.
+        let failed_count = events
+            .iter()
+            .filter(|e| e.stage == "failed")
+            .count();
+        assert_eq!(
+            failed_count, 1,
+            "expected exactly one `failed` stage event, got {} (all: {:?})",
+            failed_count,
+            events.iter().map(|e| (&e.stage, e.status_code)).collect::<Vec<_>>()
+        );
+
+        // The single `failed` event must carry the 500 status and
+        // a non-empty error string.
+        let failed = events
+            .iter()
+            .find(|e| e.stage == "failed")
+            .expect("failed event");
+        assert_eq!(failed.status_code, 500, "failed event must carry 500");
+        assert!(
+            failed.error.is_some(),
+            "failed event must carry a non-None error"
+        );
     }
 }
