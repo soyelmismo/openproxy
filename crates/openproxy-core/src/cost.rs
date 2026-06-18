@@ -65,8 +65,9 @@ pub fn compute(price: Option<pricing::Price>, input: &UsageInput) -> (f64, Optio
 
 /// Sanitize error_msg:
 /// - cap at 2KB
-/// - redact patterns: sk-..., x-api-key: ..., Authorization: Bearer ...
-/// Returns (sanitized, redacted).
+/// - redact patterns: sk-..., x-api-key: ..., Authorization: Bearer ***
+///
+/// Returns `(sanitized, redacted)`.
 pub fn redact_error_msg(raw: &str) -> (String, String) {
     let mut sanitized = raw.to_string();
     let re_sk = regex::Regex::new(r"sk-[A-Za-z0-9_\-]{10,}").unwrap();
@@ -141,10 +142,22 @@ pub fn record(conn: &Connection, input: &UsageInput) -> Result<UsageId> {
             input.race_attempts as i64,
             input.race_lost as i64,
             input.api_key_id.map(|k| k.0),
-            input.request_body_json.as_ref().map(|j| serde_json::to_string(j).ok()).flatten(),
-            input.response_body_json.as_ref().map(|j| serde_json::to_string(j).ok()).flatten(),
-            input.request_headers.as_ref().map(|h| serde_json::to_string(h).ok()).flatten(),
-            input.response_headers.as_ref().map(|h| serde_json::to_string(h).ok()).flatten(),
+            input
+                .request_body_json
+                .as_ref()
+                .and_then(|j| serde_json::to_string(j).ok()),
+            input
+                .response_body_json
+                .as_ref()
+                .and_then(|j| serde_json::to_string(j).ok()),
+            input
+                .request_headers
+                .as_ref()
+                .and_then(|h| serde_json::to_string(h).ok()),
+            input
+                .response_headers
+                .as_ref()
+                .and_then(|h| serde_json::to_string(h).ok()),
             // SEC-HIGH-E fix: the legacy `error_message` column was being
             // written verbatim from `pipeline.rs` (raw, unredacted), while
             // the parallel `error_msg` / `error_msg_redacted` columns

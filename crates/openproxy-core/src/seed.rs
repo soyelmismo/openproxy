@@ -177,7 +177,7 @@ pub const VIRTUAL_COMBO_PROVIDER_ID: &str = "combo";
 /// providers? Used by the admin handlers to reject delete attempts
 /// on built-ins (see [`builtin_provider_ids`] for the rationale).
 pub fn is_builtin(id: &str) -> bool {
-    builtin_provider_ids().iter().any(|b| *b == id)
+    builtin_provider_ids().contains(&id)
 }
 
 /// Insert any missing built-in providers. Returns the number of rows
@@ -219,13 +219,15 @@ pub fn seed_builtin_providers(conn: &Connection) -> Result<usize> {
 
         providers::create(
             conn,
-            &id_typed,
-            b.name,
-            b.base_url,
-            auth,
-            fmt,
-            b.extra_headers_json,
-            b.auto_activate_keyword,
+            providers::NewProvider {
+                id: &id_typed,
+                name: b.name,
+                base_url: b.base_url,
+                auth_type: auth,
+                format: fmt,
+                extra_headers_json: b.extra_headers_json,
+                auto_activate_keyword: b.auto_activate_keyword,
+            },
         )?;
         seeded += 1;
     }
@@ -252,13 +254,15 @@ pub fn seed_virtual_combo_provider(conn: &Connection) -> Result<bool> {
     }
     providers::create(
         conn,
-        &id_typed,
-        "Virtual provider for sub-combo targets",
-        "https://invalid.local/combo",
-        AuthType::Bearer,
-        ProviderFormat::Openai,
-        None,
-        None,
+        providers::NewProvider {
+            id: &id_typed,
+            name: "Virtual provider for sub-combo targets",
+            base_url: "https://invalid.local/combo",
+            auth_type: AuthType::Bearer,
+            format: ProviderFormat::Openai,
+            extra_headers_json: None,
+            auto_activate_keyword: None,
+        },
     )?;
     Ok(true)
 }
@@ -408,13 +412,15 @@ mod tests {
         // Pre-seed one of the ten manually.
         providers::create(
             &conn,
-            &ProviderId::new("openrouter"),
-            "Custom name override",
-            "https://example.test",
-            AuthType::Bearer,
-            ProviderFormat::Openai,
-            None,
-            None,
+            providers::NewProvider {
+                id: &ProviderId::new("openrouter"),
+                name: "Custom name override",
+                base_url: "https://example.test",
+                auth_type: AuthType::Bearer,
+                format: ProviderFormat::Openai,
+                extra_headers_json: None,
+                auto_activate_keyword: None,
+            },
         )
         .expect("pre-seed");
 

@@ -328,7 +328,6 @@ pub fn race_stats(conn: &Connection, f: &UsageFilter) -> Result<RaceStats> {
 
     let params_slice = to_params(&w.params);
 
-    let total_races: u64;
     let mut winners: u64 = 0;
     let mut losers: u64 = 0;
 
@@ -393,8 +392,6 @@ pub fn race_stats(conn: &Connection, f: &UsageFilter) -> Result<RaceStats> {
         }
     }
 
-    total_races = race_ids.len() as u64;
-
     let avg_winner_position = if winner_pos_n > 0 {
         Some(winner_pos_sum / winner_pos_n as f64)
     } else {
@@ -403,16 +400,16 @@ pub fn race_stats(conn: &Connection, f: &UsageFilter) -> Result<RaceStats> {
 
     // Sort wins_by_target DESC by count, then ASC by target id for a stable
     // ordering that matches the spec's contract.
-    let mut wins_by_target: Vec<(i64, u64)> = wins_by_target.into_iter().collect();
-    wins_by_target.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
+    let mut wins_by_target_sorted: Vec<(i64, u64)> = wins_by_target.into_iter().collect();
+    wins_by_target_sorted.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
 
     Ok(RaceStats {
-        total_races,
+        total_races: race_ids.len() as u64,
         winners,
         losers,
         avg_winner_position,
         avg_ttft_savings_ms: None,
-        wins_by_target,
+        wins_by_target: wins_by_target_sorted,
     })
 }
 

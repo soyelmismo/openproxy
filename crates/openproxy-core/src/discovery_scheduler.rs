@@ -646,13 +646,15 @@ mod tests {
         let provider_id = CoreProviderId::new(provider_id_str);
         providers::create(
             &conn,
-            &provider_id,
-            provider_id_str,
-            "https://example.invalid",
-            AuthType::Bearer,
-            providers::ProviderFormat::Openai,
-            None,
-            None,
+            providers::NewProvider {
+                id: &provider_id,
+                name: provider_id_str,
+                base_url: "https://example.invalid",
+                auth_type: AuthType::Bearer,
+                format: providers::ProviderFormat::Openai,
+                extra_headers_json: None,
+                auto_activate_keyword: None,
+            },
         )
         .expect("seed provider");
         let acc = accounts::create(
@@ -791,13 +793,15 @@ mod tests {
             let provider_id = CoreProviderId::new("openrouter");
             providers::create(
                 &conn,
-                &provider_id,
-                "openrouter",
-                "https://example.invalid",
-                AuthType::Bearer,
-                providers::ProviderFormat::Openai,
-                None,
-                None,
+                providers::NewProvider {
+                    id: &provider_id,
+                    name: "openrouter",
+                    base_url: "https://example.invalid",
+                    auth_type: AuthType::Bearer,
+                    format: providers::ProviderFormat::Openai,
+                    extra_headers_json: None,
+                    auto_activate_keyword: None,
+                },
             )
             .expect("seed provider");
         }
@@ -1028,13 +1032,15 @@ mod tests {
         // violation if the provider row doesn't exist.
         providers::create(
             conn,
-            provider,
-            provider.as_str(),
-            "https://example.invalid",
-            AuthType::Bearer,
-            providers::ProviderFormat::Openai,
-            None,
-            None,
+            providers::NewProvider {
+                id: provider,
+                name: provider.as_str(),
+                base_url: "https://example.invalid",
+                auth_type: AuthType::Bearer,
+                format: providers::ProviderFormat::Openai,
+                extra_headers_json: None,
+                auto_activate_keyword: None,
+            },
         )
         .expect("seed provider for upsert");
         models::upsert_many(

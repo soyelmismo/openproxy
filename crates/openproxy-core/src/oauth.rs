@@ -319,7 +319,7 @@ pub async fn start_refresh_scheduler(
                 tokio::time::sleep(std::time::Duration::from_secs(STAGGER_DELAY_SECS)).await;
             }
 
-            let provider = match find_oauth_provider(&providers, &account.provider_id.as_str()) {
+            let provider = match find_oauth_provider(&providers, account.provider_id.as_str()) {
                 Some(p) => p,
                 None => {
                     tracing::debug!(

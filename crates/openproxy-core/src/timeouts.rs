@@ -40,12 +40,12 @@ impl Timeouts {
     ///
     /// Mapping (see `upstream-migration-report.md` §1 + task spec):
     /// - `dns_ms`     = `connect_ms / 2`     (best-effort split of the
-    ///                  single connect timeout into a DNS sub-phase)
+    ///   single connect timeout into a DNS sub-phase)
     /// - `dial_ms`    = `connect_ms`         (TCP connect inherits the
-    ///                  full budget; hyper's default connector
-    ///                  doesn't separate dial from TLS)
+    ///   full budget; hyper's default connector doesn't separate dial
+    ///   from TLS)
     /// - `tls_ms`     = `connect_ms`         (TLS inherits the full
-    ///                  budget, same rationale)
+    ///   budget, same rationale)
     /// - `write_ms`   = `request_send_ms`
     /// - `headers_ms` = `ttft_ms`
     /// - `body_chunk_ms` = `idle_chunk_ms`

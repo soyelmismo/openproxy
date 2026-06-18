@@ -418,9 +418,9 @@ pub fn update(
     // the SQL with zero writes.
     let mut sets: Vec<&'static str> = Vec::new();
     let mut bound: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
-    if label.is_some() {
+    if let Some(label_value) = label {
         sets.push("label = ?");
-        bound.push(Box::new(label.unwrap().to_string()));
+        bound.push(Box::new(label_value.to_string()));
     }
     if let Some(s) = &scopes_json {
         sets.push("scopes_json = ?");

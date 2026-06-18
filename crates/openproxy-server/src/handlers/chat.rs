@@ -176,7 +176,7 @@ async fn run_pipeline(
                 Some(synthetic_targets),
             )
         }
-        RoutingPlan::Combo { combo_id, .. } => (combo_id.clone(), None, None),
+        RoutingPlan::Combo { combo_id, .. } => (*combo_id, None, None),
         RoutingPlan::NotFound { model, hint } => {
             // Write a usage row so the dashboard's Live Logs tail
             // shows the misroute.

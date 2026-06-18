@@ -57,7 +57,7 @@ const ONBOARD_USER_URL: &str =
 /// Cloud Code `metadata.ideType` used when the operator has not
 /// configured a custom IDE identity. The Antigravity client sends
 /// `ANTIGRAVITY` as the IDE type.
-
+///
 /// `projectId` recovered from `loadCodeAssist` (or `onboardUser`) and
 /// persisted in `accounts.oauth_provider_specific` as JSON.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -537,7 +537,7 @@ pub fn read_project_id(conn: &Connection, account_id: AccountId) -> Result<Optio
 fn generate_code_verifier() -> String {
     let mut buf = [0u8; 32];
     rand::thread_rng().fill_bytes(&mut buf);
-    base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(&buf)
+    base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(buf)
 }
 
 /// Compute the S256 code challenge from a verifier.

@@ -161,6 +161,26 @@ pub struct PipelineResult {
     pub attempts: u8,
 }
 
+/// Bundle of "what kind of failure" inputs for [`Pipeline::record_and_fail`]
+/// and [`Pipeline::record_and_fail_with_trace_id`].
+///
+/// Groups the 8 scalar inputs the failure helpers need into a single
+/// argument so the public signatures stay below the 7-argument
+/// `clippy::too_many_arguments` threshold without resorting to
+/// `#[allow]` attributes. The lifetime parameter carries the borrowed
+/// `CoreError` and `Option<&Model>` through the destructure-and-use
+/// pattern at the call sites.
+pub struct FailureContext<'a> {
+    pub attempt: u8,
+    pub race_size: u8,
+    pub err: &'a CoreError,
+    pub started: Instant,
+    pub model: Option<&'a Model>,
+    pub connect_ms: Option<u64>,
+    pub ttft_ms: Option<u64>,
+    pub status_code: u16,
+}
+
 /// Orchestrates a single request end-to-end.
 ///
 /// `Pipeline` is cheaply cloneable: the expensive state (the DB mutex, the
@@ -247,549 +267,541 @@ impl Pipeline {
         // `attempt` variable is still threaded through for usage
         // recording and as a stable identifier across the
         // per-target retry calls, but its count is no longer
-        // user-tunable from `PipelineConfig.max_attempts` — the
-        // per-target retry budget lives in
-        // `PipelineConfig.retries.max_attempts`.
-        for attempt in 1..=1 {
-            // 2. Resolve and expand targets.
-            let targets = match self.resolve_targets(&combo, req.targets_override.as_deref()) {
-                Ok(t) => t,
-                Err(e) => return self.failure(e, attempt - 1, ErrorPhase::Resolve),
-            };
+        let attempt: u8 = 1;
+        // 2. Resolve and expand targets.
+        let targets = match self.resolve_targets(&combo, req.targets_override.as_deref()) {
+            Ok(t) => t,
+            Err(e) => return self.failure(e, attempt - 1, ErrorPhase::Resolve),
+        };
 
-            // 3. Flatten sub-combos. A combo can have sub-combo
-            //    targets (combo-in-combo); before we hand the list to
-            //    the per-target dispatch loop we resolve each
-            //    sub-combo recursively into its children. The result
-            //    is a flat `Vec<ComboTarget>` in which every entry
-            //    has `sub_combo_id = None` and is directly
-            //    executable. Cycle / max-depth errors from the
-            //    resolver abort the request before any upstream call.
-            let flat_targets = match self.flatten_targets(&combo.id, targets) {
-                Ok(t) => t,
-                Err(e) => return self.failure(e, attempt - 1, ErrorPhase::Resolve),
-            };
+        // 3. Flatten sub-combos. A combo can have sub-combo
+        //    targets (combo-in-combo); before we hand the list to
+        //    the per-target dispatch loop we resolve each
+        //    sub-combo recursively into its children. The result
+        //    is a flat `Vec<ComboTarget>` in which every entry
+        //    has `sub_combo_id = None` and is directly
+        //    executable. Cycle / max-depth errors from the
+        //    resolver abort the request before any upstream call.
+        let flat_targets = match self.flatten_targets(&combo.id, targets) {
+            Ok(t) => t,
+            Err(e) => return self.failure(e, attempt - 1, ErrorPhase::Resolve),
+        };
 
-            // 4. Filter out accounts that the circuit breaker marks unhealthy.
-            // Declared `mut` because the `NoHealthyTargets` fallback below
-            // may re-evaluate this set after auto-populating the combo.
-            //
-            // The `pre_cb_snapshot` is the post-flatten, pre-circuit-breaker
-            // target list. We keep it so that, if the CB filter empties
-            // `eligible` but the snapshot had content, we can fall through
-            // to the dispatch loop with the unfiltered list instead of
-            // short-circuiting to a 502. This mirrors the snapshot/fallback
-            // we do for the persistent `target_cooldowns` filter a few
-            // blocks down: both the CB and the cooldown table protect
-            // *between* requests, not *within* a single request when doing
-            // so would deny a priority combo the chance to walk its full
-            // row. The CB itself is re-evaluated on every dispatch (an
-            // upstream that came back online mid-window and is now
-            // `Healthy` in the registry will pass the filter normally on
-            // the next request), and `record_success` clears the failure
-            // counter when an attempt succeeds.
-            let pre_cb_snapshot: Vec<ComboTarget> = flat_targets.clone();
-            let mut eligible: Vec<ComboTarget> = flat_targets
+        // 4. Filter out accounts that the circuit breaker marks unhealthy.
+        // Declared `mut` because the `NoHealthyTargets` fallback below
+        // may re-evaluate this set after auto-populating the combo.
+        //
+        // The `pre_cb_snapshot` is the post-flatten, pre-circuit-breaker
+        // target list. We keep it so that, if the CB filter empties
+        // `eligible` but the snapshot had content, we can fall through
+        // to the dispatch loop with the unfiltered list instead of
+        // short-circuiting to a 502. This mirrors the snapshot/fallback
+        // we do for the persistent `target_cooldowns` filter a few
+        // blocks down: both the CB and the cooldown table protect
+        // *between* requests, not *within* a single request when doing
+        // so would deny a priority combo the chance to walk its full
+        // row. The CB itself is re-evaluated on every dispatch (an
+        // upstream that came back online mid-window and is now
+        // `Healthy` in the registry will pass the filter normally on
+        // the next request), and `record_success` clears the failure
+        // counter when an attempt succeeds.
+        let pre_cb_snapshot: Vec<ComboTarget> = flat_targets.clone();
+        let mut eligible: Vec<ComboTarget> = flat_targets
+            .into_iter()
+            .filter(|t| match t.account_id {
+                Some(aid) => self.circuit_breaker.is_healthy(aid) == Health::Healthy,
+                None => true,
+            })
+            .take(self.config.racing.max_race_size as usize)
+            .collect();
+
+        if eligible.is_empty() && !pre_cb_snapshot.is_empty() {
+            // Circuit breaker emptied `eligible` but the pre-CB list
+            // had content. The same rationale as the cooldown
+            // snapshot below applies: a priority combo's contract
+            // is "walk the row", not "fail fast on the first parked
+            // target we see". We re-evaluate with the unfiltered
+            // list; the dispatch loop's success path will clear the
+            // CB via `record_success`, and its failure path will
+            // re-record and re-park the account for the next
+            // request.
+            tracing::warn!(
+                combo_id = combo.id.0,
+                parked = pre_cb_snapshot.len(),
+                "all targets' accounts unhealthy in circuit_breaker; falling through to pre-CB dispatch"
+            );
+            eligible = pre_cb_snapshot
                 .into_iter()
-                .filter(|t| match t.account_id {
-                    Some(aid) => self.circuit_breaker.is_healthy(aid) == Health::Healthy,
-                    None => true,
-                })
                 .take(self.config.racing.max_race_size as usize)
                 .collect();
+        }
 
-            if eligible.is_empty() && !pre_cb_snapshot.is_empty() {
-                // Circuit breaker emptied `eligible` but the pre-CB list
-                // had content. The same rationale as the cooldown
-                // snapshot below applies: a priority combo's contract
-                // is "walk the row", not "fail fast on the first parked
-                // target we see". We re-evaluate with the unfiltered
-                // list; the dispatch loop's success path will clear the
-                // CB via `record_success`, and its failure path will
-                // re-record and re-park the account for the next
-                // request.
-                tracing::warn!(
-                    combo_id = combo.id.0,
-                    parked = pre_cb_snapshot.len(),
-                    "all targets' accounts unhealthy in circuit_breaker; falling through to pre-CB dispatch"
-                );
-                eligible = pre_cb_snapshot
-                    .into_iter()
-                    .take(self.config.racing.max_race_size as usize)
-                    .collect();
-            }
-
-            if eligible.is_empty() {
-                // Auto-populate fallback: if this combo is empty (zero
-                // targets) try to fill it with the first provider's
-                // active models so an operator who just created a combo
-                // can hit the API without manually wiring targets. After
-                // a successful fill we re-evaluate the target list; if
-                // there are still no eligible targets we fall through to
-                // the NoHealthyTargets recording below.
-                //
-                // This branch is only entered on `attempt == 1` because
-                // retries don't re-run it (the repopulate guard below
-                // would be a no-op for any subsequent attempt and we'd
-                // risk an infinite re-population).
-                if attempt == 1 {
-                    let repopulated = match self.auto_populate_if_empty(&combo) {
-                        Ok(n) => n,
-                        Err(e) => {
-                            tracing::warn!(
-                                combo_id = combo.id.0,
-                                combo_name = %combo.name,
-                                error = %e,
-                                "auto_populate on NoHealthyTargets failed; recording failure"
-                            );
-                            let started = std::time::Instant::now();
-                            self.record_no_healthy_targets_row(&req, &combo, started);
-                            return self.failure(e, attempt - 1, ErrorPhase::Route);
-                        }
+        if eligible.is_empty() {
+            // Auto-populate fallback: if this combo is empty (zero
+            // targets) try to fill it with the first provider's
+            // active models so an operator who just created a combo
+            // can hit the API without manually wiring targets. After
+            // a successful fill we re-evaluate the target list; if
+            // there are still no eligible targets we fall through to
+            // the NoHealthyTargets recording below.
+            //
+            // This branch is only entered on `attempt == 1` because
+            // retries don't re-run it (the repopulate guard below
+            // would be a no-op for any subsequent attempt and we'd
+            // risk an infinite re-population).
+            if attempt == 1 {
+                let repopulated = match self.auto_populate_if_empty(&combo) {
+                    Ok(n) => n,
+                    Err(e) => {
+                        tracing::warn!(
+                            combo_id = combo.id.0,
+                            combo_name = %combo.name,
+                            error = %e,
+                            "auto_populate on NoHealthyTargets failed; recording failure"
+                        );
+                        let started = std::time::Instant::now();
+                        self.record_no_healthy_targets_row(&req, &combo, started);
+                        return self.failure(e, attempt - 1, ErrorPhase::Route);
+                    }
+                };
+                if repopulated > 0 {
+                    // The combo now has targets. Re-resolve and
+                    // re-filter and continue the attempt with the
+                    // new eligible set. We don't `continue` because
+                    // the loop bounds + this `if` would re-enter
+                    // auto_populate on the next pass; the
+                    // `attempt > 1` guard above prevents that, but
+                    // restarting the loop body is cheaper than
+                    // re-validating.
+                    let targets = match self.resolve_targets(&combo, req.targets_override.as_deref()) {
+                        Ok(t) => t,
+                        Err(e) => return self.failure(e, attempt - 1, ErrorPhase::Resolve),
                     };
-                    if repopulated > 0 {
-                        // The combo now has targets. Re-resolve and
-                        // re-filter and continue the attempt with the
-                        // new eligible set. We don't `continue` because
-                        // the loop bounds + this `if` would re-enter
-                        // auto_populate on the next pass; the
-                        // `attempt > 1` guard above prevents that, but
-                        // restarting the loop body is cheaper than
-                        // re-validating.
-                        let targets = match self.resolve_targets(&combo, req.targets_override.as_deref()) {
-                            Ok(t) => t,
-                            Err(e) => return self.failure(e, attempt - 1, ErrorPhase::Resolve),
-                        };
-                        let flat_targets = match self.flatten_targets(&combo.id, targets) {
-                            Ok(t) => t,
-                            Err(e) => return self.failure(e, attempt - 1, ErrorPhase::Resolve),
-                        };
-                        let re_eligible: Vec<ComboTarget> = flat_targets
-                            .into_iter()
-                            .filter(|t| match t.account_id {
-                                Some(aid) => {
-                                    self.circuit_breaker.is_healthy(aid) == Health::Healthy
-                                }
-                                None => true,
-                            })
-                            .take(self.config.racing.max_race_size as usize)
-                            .collect();
-                        if !re_eligible.is_empty() {
-                            eligible = re_eligible;
-                        }
+                    let flat_targets = match self.flatten_targets(&combo.id, targets) {
+                        Ok(t) => t,
+                        Err(e) => return self.failure(e, attempt - 1, ErrorPhase::Resolve),
+                    };
+                    let re_eligible: Vec<ComboTarget> = flat_targets
+                        .into_iter()
+                        .filter(|t| match t.account_id {
+                            Some(aid) => {
+                                self.circuit_breaker.is_healthy(aid) == Health::Healthy
+                            }
+                            None => true,
+                        })
+                        .take(self.config.racing.max_race_size as usize)
+                        .collect();
+                    if !re_eligible.is_empty() {
+                        eligible = re_eligible;
                     }
                 }
-                if eligible.is_empty() {
-                    // NoHealthyTargets is not retryable per spec — short-circuit
-                    // and write a usage row so the dashboard's Live Logs
-                    // tail isn't permanently empty.
-                    let err = CoreError::NoHealthyTargets(combo.id.0);
-                    let started = std::time::Instant::now();
-                    self.record_no_healthy_targets_row(&req, &combo, started);
-                    return self.failure(err, attempt - 1, ErrorPhase::Route);
-                }
             }
+            if eligible.is_empty() {
+                // NoHealthyTargets is not retryable per spec — short-circuit
+                // and write a usage row so the dashboard's Live Logs
+                // tail isn't permanently empty.
+                let err = CoreError::NoHealthyTargets(combo.id.0);
+                let started = std::time::Instant::now();
+                self.record_no_healthy_targets_row(&req, &combo, started);
+                return self.failure(err, attempt - 1, ErrorPhase::Route);
+            }
+        }
 
-            // 5. Pick the dispatch window.
-            //
-            //    For `Strategy::Priority` the operator's intent is
-            //    walk-the-row: try every target in priority order
-            //    before giving up. `race_size` is a *parallel* race
-            //    concept (how many lanes to fire at once), so it
-            //    doesn't apply to a serial priority walk — applying
-            //    `take(combo.race_size)` here would collapse the
-            //    dispatch to a single target, defeating both the
-            //    priority walk and the cross-target retry budget in
-            //    the outer `for attempt in 1..=max_attempts` loop
-            //    (each turn re-runs the same single target).
-            //
-            //    For `Strategy::RoundRobin` and `Strategy::Shuffle`
-            //    the race window is meaningful: those strategies
-            //    intentionally cap the set of targets fired in
-            //    parallel. Keep the `take(combo.race_size)` behavior
-            //    for those, clamped by `eligible.len()` and the
-            //    global `max_race_size` config ceiling.
-            //
-            //    `race_size` is bound in the outer scope because the
-            //    inner per-target loop forwards it to
-            //    `execute_single` (as the per-target attempt budget
-            //    for the race-aware adapter contract). For
-            //    `Strategy::Priority` we substitute the full row
-            //    length so the same `u8` value the per-target call
-            //    expects ("how many lanes did I think I'd run?")
-            //    is the actual walk length.
-            let race_size: usize = match combo.strategy {
-                Strategy::Priority => eligible.len(),
-                Strategy::RoundRobin | Strategy::Shuffle => (combo.race_size as usize)
-                    .min(eligible.len())
-                    .min(self.config.racing.max_race_size as usize),
+        // 5. Pick the dispatch window.
+        //
+        //    For `Strategy::Priority` the operator's intent is
+        //    walk-the-row: try every target in priority order
+        //    before giving up. `race_size` is a *parallel* race
+        //    concept (how many lanes to fire at once), so it
+        //    doesn't apply to a serial priority walk — applying
+        //    `take(combo.race_size)` here would collapse the
+        //    dispatch to a single target, defeating both the
+        //    priority walk and the cross-target retry budget in
+        //    the outer `for attempt in 1..=max_attempts` loop
+        //    (each turn re-runs the same single target).
+        //
+        //    For `Strategy::RoundRobin` and `Strategy::Shuffle`
+        //    the race window is meaningful: those strategies
+        //    intentionally cap the set of targets fired in
+        //    parallel. Keep the `take(combo.race_size)` behavior
+        //    for those, clamped by `eligible.len()` and the
+        //    global `max_race_size` config ceiling.
+        //
+        //    `race_size` is bound in the outer scope because the
+        //    inner per-target loop forwards it to
+        //    `execute_single` (as the per-target attempt budget
+        //    for the race-aware adapter contract). For
+        //    `Strategy::Priority` we substitute the full row
+        //    length so the same `u8` value the per-target call
+        //    expects ("how many lanes did I think I'd run?")
+        //    is the actual walk length.
+        let race_size: usize = match combo.strategy {
+            Strategy::Priority => eligible.len(),
+            Strategy::RoundRobin | Strategy::Shuffle => (combo.race_size as usize)
+                .min(eligible.len())
+                .min(self.config.racing.max_race_size as usize),
+        };
+        // The cooldown-fallback path below reassigns this via
+        // shadowing (see the 5b comment), so the binding itself
+        // doesn't need `mut`.
+        let to_run: Vec<ComboTarget> = if matches!(combo.strategy, Strategy::Priority) {
+            eligible
+        } else {
+            eligible.into_iter().take(race_size).collect()
+        };
+
+        // Snapshot of the post-circuit-breaker, pre-cooldown target
+        // list. Kept around so that, if the cooldown filter below
+        // empties `to_run`, we can fall through to the dispatch
+        // loop with this unfiltered list instead of returning a
+        // premature 502. See the 5b block comment for the full
+        // rationale (cooldown protects BETWEEN requests, not WITHIN
+        // a single request when doing so would deny a priority
+        // combo the chance to walk its full row).
+        let to_run_unfiltered_snapshot: Vec<ComboTarget> = to_run.clone();
+
+        // 5b. Filter out targets currently parked in the persistent
+        //     cooldown registry. The DB read is cheap (indexed on
+        //     `combo_target_id`) and keeps the in-loop path off the
+        //     hot path's mutex. Sub-combo rows (`model_row_id = None`)
+        //     never reach this point — `flatten_targets` already
+        //     replaced them with their children, so each child is
+        //     independently checkable.
+        //
+        //     IMPORTANT: this filter runs *after* `to_run` is built,
+        //     so a target that was eligible when we picked the race
+        //     window but entered cooldown between then and now is
+        //     also skipped. The race window itself stays as-is (no
+        //     backfill): a request that found N targets, then saw M
+        //     of them go into cooldown, will run on N-M and not
+        //     chase the next best substitute. That keeps the
+        //     cooldown behavior predictable from the operator's POV.
+        //
+        //     Cooldown semantics: the persistent cooldown protects
+        //     *between* requests, not *within* a single request. If
+        //     the cooldown filter empties `to_run` we don't want
+        //     the request to give up with a 502 — for a priority
+        //     combo the operator expects the request to walk the
+        //     full row of targets until one succeeds. We preserve
+        //     the pre-filter list as `to_run_unfiltered` and, when
+        //     the post-filter list is empty, fall through to the
+        //     dispatch loop using the unfiltered list. The per-
+        //     target cooldown is *re-checked* in the dispatch loop
+        //     via `record_failure` only on the *result* of trying
+        //     the target, so an upstream that has come back online
+        //     during the gap (and would no longer be in cooldown)
+        //     still gets exercised. The DB row stays in the table
+        //     until `prune_expired` sweeps it, so the cross-request
+        //     protection is preserved.
+        let mut to_run: Vec<ComboTarget> = {
+            let cooldown_conn = self.conn.lock();
+            to_run
+                .into_iter()
+                .filter(|t| match crate::cooldown::is_in_cooldown(&cooldown_conn, t.id) {
+                    Ok(true) => {
+                        tracing::debug!(
+                            combo_id = combo.id.0,
+                            target_id = t.id.0,
+                            provider = %t.provider_id,
+                            "target in cooldown, skipping"
+                        );
+                        false
+                    }
+                    Ok(false) => true,
+                    Err(e) => {
+                        // DB read failure on the cooldown table
+                        // is non-fatal: fall through to the
+                        // upstream call rather than block the
+                        // whole combo on a bookkeeping error.
+                        tracing::warn!(
+                            combo_id = combo.id.0,
+                            target_id = t.id.0,
+                            error = %e,
+                            "is_in_cooldown check failed; proceeding without filter"
+                        );
+                        true
+                    }
+                })
+                .collect()
+        };
+
+        // `to_run_unfiltered` is the post-circuit-breaker, pre-cooldown
+        // list — i.e. the targets we *would* have walked if there were
+        // no persistent cooldown in effect. If the cooldown filter
+        // emptied `to_run` but `to_run_unfiltered` still has entries,
+        // we fall through to the dispatch loop with the unfiltered list
+        // so a single request doesn't bounce off a transient cross-
+        // request cooldown state. See the comment on the 5b block above
+        // for the full rationale.
+        let to_run_unfiltered: Vec<ComboTarget> = to_run_unfiltered_snapshot;
+
+        if to_run.is_empty() {
+            if to_run_unfiltered.is_empty() {
+                // Truly nothing to do: the post-circuit-breaker
+                // eligible set was empty, so the cooldown filter
+                // can't be blamed. Surface the same
+                // NoHealthyTargets error the circuit-breaker branch
+                // would have surfaced, with the same usage-row side
+                // effect, so the dashboard's Live Logs tail is
+                // consistent across the two "no usable target"
+                // scenarios.
+                let err = CoreError::NoHealthyTargets(combo.id.0);
+                let started = std::time::Instant::now();
+                self.record_no_healthy_targets_row(&req, &combo, started);
+                return self.failure(err, attempt - 1, ErrorPhase::Route);
+            }
+            // Cooldown filter emptied `to_run` but the pre-filter
+            // list had content. For a priority combo, the
+            // operator's expectation is "walk the whole row before
+            // giving up", not "fail fast on the first parked
+            // target we see". Re-try using the unfiltered list —
+            // the upstream may have come back online since the
+            // last request parked these targets (in which case the
+            // next record_failure on success will clear the row),
+            // and even if it hasn't, the dispatch loop's failure
+            // path will record the real error (and re-park the
+            // target). Either way, the request will not silently
+            // degrade to a 502 NoHealthyTargets.
+            tracing::warn!(
+                combo_id = combo.id.0,
+                parked = to_run_unfiltered.len(),
+                "all targets in cooldown for this request; falling through to unfiltered dispatch"
+            );
+            to_run = to_run_unfiltered;
+        }
+
+        // 6. Try each target in priority order. The first one
+        //    that returns Ok wins; on a failure the per-target
+        //    retry loop above has already exhausted the
+        //    `retries.max_attempts` budget for this model, so
+        //    we fall through to the next target in the combo
+        //    (bug 3 contract). `last_result` is what we
+        //    return at the end if every target errored — it
+        //    carries the last per-target retry's final error.
+        let mut last_result: Option<PipelineResult> = None;
+        for target in to_run.iter() {
+            let client_disconnected = {
+                let mut rx = req.client_disconnected.clone();
+                self.is_client_disconnected(&mut rx)
             };
-            // The cooldown-fallback path below reassigns this via
-            // shadowing (see the 5b comment), so the binding itself
-            // doesn't need `mut`.
-            let to_run: Vec<ComboTarget> = if matches!(combo.strategy, Strategy::Priority) {
-                eligible
-            } else {
-                eligible.into_iter().take(race_size).collect()
-            };
-
-            // Snapshot of the post-circuit-breaker, pre-cooldown target
-            // list. Kept around so that, if the cooldown filter below
-            // empties `to_run`, we can fall through to the dispatch
-            // loop with this unfiltered list instead of returning a
-            // premature 502. See the 5b block comment for the full
-            // rationale (cooldown protects BETWEEN requests, not WITHIN
-            // a single request when doing so would deny a priority
-            // combo the chance to walk its full row).
-            let to_run_unfiltered_snapshot: Vec<ComboTarget> = to_run.clone();
-
-            // 5b. Filter out targets currently parked in the persistent
-            //     cooldown registry. The DB read is cheap (indexed on
-            //     `combo_target_id`) and keeps the in-loop path off the
-            //     hot path's mutex. Sub-combo rows (`model_row_id = None`)
-            //     never reach this point — `flatten_targets` already
-            //     replaced them with their children, so each child is
-            //     independently checkable.
-            //
-            //     IMPORTANT: this filter runs *after* `to_run` is built,
-            //     so a target that was eligible when we picked the race
-            //     window but entered cooldown between then and now is
-            //     also skipped. The race window itself stays as-is (no
-            //     backfill): a request that found N targets, then saw M
-            //     of them go into cooldown, will run on N-M and not
-            //     chase the next best substitute. That keeps the
-            //     cooldown behavior predictable from the operator's POV.
-            //
-            //     Cooldown semantics: the persistent cooldown protects
-            //     *between* requests, not *within* a single request. If
-            //     the cooldown filter empties `to_run` we don't want
-            //     the request to give up with a 502 — for a priority
-            //     combo the operator expects the request to walk the
-            //     full row of targets until one succeeds. We preserve
-            //     the pre-filter list as `to_run_unfiltered` and, when
-            //     the post-filter list is empty, fall through to the
-            //     dispatch loop using the unfiltered list. The per-
-            //     target cooldown is *re-checked* in the dispatch loop
-            //     via `record_failure` only on the *result* of trying
-            //     the target, so an upstream that has come back online
-            //     during the gap (and would no longer be in cooldown)
-            //     still gets exercised. The DB row stays in the table
-            //     until `prune_expired` sweeps it, so the cross-request
-            //     protection is preserved.
-            let mut to_run: Vec<ComboTarget> = {
-                let cooldown_conn = self.conn.lock();
-                to_run
-                    .into_iter()
-                    .filter(|t| match crate::cooldown::is_in_cooldown(&cooldown_conn, t.id) {
-                        Ok(true) => {
-                            tracing::debug!(
-                                combo_id = combo.id.0,
-                                target_id = t.id.0,
-                                provider = %t.provider_id,
-                                "target in cooldown, skipping"
-                            );
-                            false
-                        }
-                        Ok(false) => true,
-                        Err(e) => {
-                            // DB read failure on the cooldown table
-                            // is non-fatal: fall through to the
-                            // upstream call rather than block the
-                            // whole combo on a bookkeeping error.
-                            tracing::warn!(
-                                combo_id = combo.id.0,
-                                target_id = t.id.0,
-                                error = %e,
-                                "is_in_cooldown check failed; proceeding without filter"
-                            );
-                            true
-                        }
-                    })
-                    .collect()
-            };
-
-            // `to_run_unfiltered` is the post-circuit-breaker, pre-cooldown
-            // list — i.e. the targets we *would* have walked if there were
-            // no persistent cooldown in effect. If the cooldown filter
-            // emptied `to_run` but `to_run_unfiltered` still has entries,
-            // we fall through to the dispatch loop with the unfiltered list
-            // so a single request doesn't bounce off a transient cross-
-            // request cooldown state. See the comment on the 5b block above
-            // for the full rationale.
-            let to_run_unfiltered: Vec<ComboTarget> = to_run_unfiltered_snapshot;
-
-            if to_run.is_empty() {
-                if to_run_unfiltered.is_empty() {
-                    // Truly nothing to do: the post-circuit-breaker
-                    // eligible set was empty, so the cooldown filter
-                    // can't be blamed. Surface the same
-                    // NoHealthyTargets error the circuit-breaker branch
-                    // would have surfaced, with the same usage-row side
-                    // effect, so the dashboard's Live Logs tail is
-                    // consistent across the two "no usable target"
-                    // scenarios.
-                    let err = CoreError::NoHealthyTargets(combo.id.0);
-                    let started = std::time::Instant::now();
-                    self.record_no_healthy_targets_row(&req, &combo, started);
-                    return self.failure(err, attempt - 1, ErrorPhase::Route);
-                }
-                // Cooldown filter emptied `to_run` but the pre-filter
-                // list had content. For a priority combo, the
-                // operator's expectation is "walk the whole row before
-                // giving up", not "fail fast on the first parked
-                // target we see". Re-try using the unfiltered list —
-                // the upstream may have come back online since the
-                // last request parked these targets (in which case the
-                // next record_failure on success will clear the row),
-                // and even if it hasn't, the dispatch loop's failure
-                // path will record the real error (and re-park the
-                // target). Either way, the request will not silently
-                // degrade to a 502 NoHealthyTargets.
+            if client_disconnected {
+                // Per-target boundary check: the request's
+                // `client_disconnected` watch (driven by the
+                // chat handler's watchdog task) has fired
+                // between targets. We don't `record_and_fail`
+                // here because (a) we haven't actually tried
+                // the next target and (b) cancellation is
+                // user-driven, not upstream-driven: there's no
+                // upstream error to attribute, and the usage
+                // row for this request (if any) is written by
+                // the path that owns the most recent work in
+                // flight — the *previous* target's
+                // `record_and_fail` if it was mid-flight, or
+                // a fresh row written by the post-loop
+                // `record_and_fail` below for a boundary-only
+                // disconnect. We trace at warn level so
+                // operators can see cancellation in the logs
+                // without grepping for status_code=499.
                 tracing::warn!(
                     combo_id = combo.id.0,
-                    parked = to_run_unfiltered.len(),
-                    "all targets in cooldown for this request; falling through to unfiltered dispatch"
+                    target_id = target.id.0,
+                    provider = %target.provider_id,
+                    attempt,
+                    "client cancelled between targets; aborting pipeline"
                 );
-                to_run = to_run_unfiltered;
+                return self.client_disconnected_result(attempt);
             }
-
-            // 6. Try each target in priority order. The first one
-            //    that returns Ok wins; on a failure the per-target
-            //    retry loop above has already exhausted the
-            //    `retries.max_attempts` budget for this model, so
-            //    we fall through to the next target in the combo
-            //    (bug 3 contract). `last_result` is what we
-            //    return at the end if every target errored — it
-            //    carries the last per-target retry's final error.
-            let mut last_result: Option<PipelineResult> = None;
-            for target in to_run.iter() {
-                if {
+            // Bug 4 fix: per-target retry. The retry policy is
+            // applied to the *individual model*, not to the
+            // whole combo walk: we try the same target up to
+            // `retries.max_attempts` times, with backoff
+            // between attempts. If every attempt on this
+            // target errors retryably, the inner loop breaks
+            // and the outer target loop falls through to the
+            // next target in the combo (bug 3 contract).
+            // Rationale: the pre-fix implementation had a
+            // *single* `for attempt in 1..=max_attempts`
+            // loop wrapping the whole combo walk, so a
+            // retryable failure on target A consumed the
+            // entire retry budget before target B was ever
+            // tried. This is what the user perceived as
+            // "retries don't fire on a per-model basis". The
+            // fix is to apply retries per-target: after
+            // target A's budget is exhausted, the pipeline
+            // moves on to target B with a fresh budget.
+            let policy = RetryPolicy::from_config(&self.config.retries);
+            let mut target_attempt: u8 = 1;
+            let mut result = self
+                .execute_single(&req, &combo, target, target_attempt, race_size as u8)
+                .await;
+            // The retry loop body: only enter when the previous
+            // attempt errored *retryably* AND we still have
+            // attempts left AND the client hasn't cancelled.
+            // Any of the three break-out conditions hands the
+            // result (success or final failure) back to the
+            // outer target loop, which decides whether to
+            // continue to the next target (bug 3 fall-through)
+            // or to return.
+            while let Some(e) = &result.error {
+                if !RetryPolicy::is_retryable(e) {
+                    // Non-retryable error (e.g. 4xx, validation).
+                    // Bug 3 takes over: the next target in the
+                    // combo gets a try.
+                    break;
+                }
+                if target_attempt >= policy.max_attempts {
+                    // Exhausted the per-target retry budget.
+                    // Bug 3 fall-through to the next target.
+                    break;
+                }
+                let client_disconnected = {
                     let mut rx = req.client_disconnected.clone();
                     self.is_client_disconnected(&mut rx)
-                } {
-                    // Per-target boundary check: the request's
-                    // `client_disconnected` watch (driven by the
-                    // chat handler's watchdog task) has fired
-                    // between targets. We don't `record_and_fail`
-                    // here because (a) we haven't actually tried
-                    // the next target and (b) cancellation is
-                    // user-driven, not upstream-driven: there's no
-                    // upstream error to attribute, and the usage
-                    // row for this request (if any) is written by
-                    // the path that owns the most recent work in
-                    // flight — the *previous* target's
-                    // `record_and_fail` if it was mid-flight, or
-                    // a fresh row written by the post-loop
-                    // `record_and_fail` below for a boundary-only
-                    // disconnect. We trace at warn level so
-                    // operators can see cancellation in the logs
-                    // without grepping for status_code=499.
-                    tracing::warn!(
-                        combo_id = combo.id.0,
-                        target_id = target.id.0,
-                        provider = %target.provider_id,
-                        attempt,
-                        "client cancelled between targets; aborting pipeline"
-                    );
-                    return self.client_disconnected_result(attempt);
+                };
+                if client_disconnected {
+                    // Client cancelled; abort the per-target
+                    // retry. The outer target loop's
+                    // disconnect check (a few lines above this
+                    // block) will fire on the next iteration
+                    // and short-circuit the whole pipeline.
+                    break;
                 }
-                // Bug 4 fix: per-target retry. The retry policy is
-                // applied to the *individual model*, not to the
-                // whole combo walk: we try the same target up to
-                // `retries.max_attempts` times, with backoff
-                // between attempts. If every attempt on this
-                // target errors retryably, the inner loop breaks
-                // and the outer target loop falls through to the
-                // next target in the combo (bug 3 contract).
-                // Rationale: the pre-fix implementation had a
-                // *single* `for attempt in 1..=max_attempts`
-                // loop wrapping the whole combo walk, so a
-                // retryable failure on target A consumed the
-                // entire retry budget before target B was ever
-                // tried. This is what the user perceived as
-                // "retries don't fire on a per-model basis". The
-                // fix is to apply retries per-target: after
-                // target A's budget is exhausted, the pipeline
-                // moves on to target B with a fresh budget.
-                let policy = RetryPolicy::from_config(&self.config.retries);
-                let mut target_attempt: u8 = 1;
-                let mut result = self
+                let delay = match policy.delay_after_attempt(target_attempt) {
+                    Some(d) => d,
+                    None => break,
+                };
+                // NEW-2 fix: when the upstream sent a `Retry-After`
+                // header (surfaced as `CoreError::RateLimited`), the
+                // upstream-requested delay must take precedence over
+                // the fixed exponential backoff. The default backoff
+                // is sub-second; an upstream that asks for 30s gets
+                // 30s. A malicious upstream trying to lock the proxy
+                // out for hours gets capped to 5 minutes (enforced
+                // inside `parse_retry_after_ms`).
+                let delay = if let CoreError::RateLimited { retry_after_ms, .. } = e {
+                    let upstream = std::time::Duration::from_millis(*retry_after_ms);
+                    if upstream > delay { upstream } else { delay }
+                } else {
+                    delay
+                };
+                tracing::debug!(
+                    combo_id = combo.id.0,
+                    target_id = target.id.0,
+                    provider = %target.provider_id,
+                    target_attempt,
+                    next_attempt = target_attempt + 1,
+                    delay_ms = delay.as_millis() as u64,
+                    error = %e,
+                    "target failed retryably; retrying same target"
+                );
+                tokio::time::sleep(delay).await;
+                // Saturate so a misconfigured `max_attempts` (or
+                // a future bump to u16) can't wrap the counter
+                // and turn the loop into an infinite retry.
+                target_attempt = target_attempt.saturating_add(1);
+                result = self
                     .execute_single(&req, &combo, target, target_attempt, race_size as u8)
                     .await;
-                // The retry loop body: only enter when the previous
-                // attempt errored *retryably* AND we still have
-                // attempts left AND the client hasn't cancelled.
-                // Any of the three break-out conditions hands the
-                // result (success or final failure) back to the
-                // outer target loop, which decides whether to
-                // continue to the next target (bug 3 fall-through)
-                // or to return.
-                while let Some(e) = &result.error {
-                    if !RetryPolicy::is_retryable(e) {
-                        // Non-retryable error (e.g. 4xx, validation).
-                        // Bug 3 takes over: the next target in the
-                        // combo gets a try.
-                        break;
+            }
+            // 6a. Update the persistent cooldown registry. A
+            //     successful attempt clears any existing row; a
+            //     retryable failure parks the target for
+            //     `cooldown_secs`. 4xx and other non-retryable
+            //     errors do not touch the cooldown (they're
+            //     user-side bugs that will just keep coming
+            //     back; the circuit breaker on the account is
+            //     what handles those, if anything).
+            let cooldown_op = match &result.error {
+                None => Some("clear"),
+                Some(e) if RetryPolicy::is_retryable(e) => Some("record"),
+                Some(_) => None,
+            };
+            if cooldown_op.is_some() {
+                let cooldown_conn = self.conn.lock();
+                match cooldown_op {
+                    Some("clear") => {
+                        if let Err(e) =
+                            crate::cooldown::clear(&cooldown_conn, target.id)
+                        {
+                            tracing::warn!(
+                                combo_id = combo.id.0,
+                                target_id = target.id.0,
+                                error = %e,
+                                "cooldown::clear failed; non-fatal"
+                            );
+                        }
                     }
-                    if target_attempt >= policy.max_attempts {
-                        // Exhausted the per-target retry budget.
-                        // Bug 3 fall-through to the next target.
-                        break;
+                    Some("record") => {
+                        let reason = result
+                            .error
+                            .as_ref()
+                            .map(|e| e.to_string())
+                            .unwrap_or_else(|| "retryable failure".to_string());
+                        if let Err(e) = crate::cooldown::record_failure(
+                            &cooldown_conn,
+                            target.id,
+                            &reason,
+                            self.config.cooldown_secs,
+                        ) {
+                            tracing::warn!(
+                                combo_id = combo.id.0,
+                                target_id = target.id.0,
+                                error = %e,
+                                "cooldown::record_failure failed; non-fatal"
+                            );
+                        }
                     }
-                    if {
-                        let mut rx = req.client_disconnected.clone();
-                        self.is_client_disconnected(&mut rx)
-                    } {
-                        // Client cancelled; abort the per-target
-                        // retry. The outer target loop's
-                        // disconnect check (a few lines above this
-                        // block) will fire on the next iteration
-                        // and short-circuit the whole pipeline.
-                        break;
-                    }
-                    let delay = match policy.delay_after_attempt(target_attempt) {
-                        Some(d) => d,
-                        None => break,
-                    };
-                    // NEW-2 fix: when the upstream sent a `Retry-After`
-                    // header (surfaced as `CoreError::RateLimited`), the
-                    // upstream-requested delay must take precedence over
-                    // the fixed exponential backoff. The default backoff
-                    // is sub-second; an upstream that asks for 30s gets
-                    // 30s. A malicious upstream trying to lock the proxy
-                    // out for hours gets capped to 5 minutes (enforced
-                    // inside `parse_retry_after_ms`).
-                    let delay = if let CoreError::RateLimited { retry_after_ms, .. } = e {
-                        let upstream = std::time::Duration::from_millis(*retry_after_ms);
-                        if upstream > delay { upstream } else { delay }
-                    } else {
-                        delay
-                    };
+                    _ => unreachable!(),
+                }
+            }
+            match &result.error {
+                None => return result,
+                // For `Strategy::Priority` combos, walk the ENTIRE row regardless
+                // of error type — operator's intent is "try these in order, give
+                // each one a chance". A 4xx from model A doesn't mean model B
+                // will also 4xx (different model, different validation). Short-
+                // circuiting on 4xx here was a regression of the original
+                // walk-the-row contract. For non-Priority strategies (RoundRobin,
+                // Shuffle), preserve the short-circuit: those operators want
+                // fast-fail on non-retryable errors because they're racing all
+                // the targets anyway.
+                Some(e) if !RetryPolicy::is_retryable(e) && !matches!(combo.strategy, Strategy::Priority) => {
+                    return result;
+                }
+                Some(e) => {
                     tracing::debug!(
                         combo_id = combo.id.0,
                         target_id = target.id.0,
                         provider = %target.provider_id,
-                        target_attempt,
-                        next_attempt = target_attempt + 1,
-                        delay_ms = delay.as_millis() as u64,
+                        strategy = ?combo.strategy,
                         error = %e,
-                        "target failed retryably; retrying same target"
+                        "target failed; trying next target"
                     );
-                    tokio::time::sleep(delay).await;
-                    // Saturate so a misconfigured `max_attempts` (or
-                    // a future bump to u16) can't wrap the counter
-                    // and turn the loop into an infinite retry.
-                    target_attempt = target_attempt.saturating_add(1);
-                    result = self
-                        .execute_single(&req, &combo, target, target_attempt, race_size as u8)
-                        .await;
-                }
-                // 6a. Update the persistent cooldown registry. A
-                //     successful attempt clears any existing row; a
-                //     retryable failure parks the target for
-                //     `cooldown_secs`. 4xx and other non-retryable
-                //     errors do not touch the cooldown (they're
-                //     user-side bugs that will just keep coming
-                //     back; the circuit breaker on the account is
-                //     what handles those, if anything).
-                let cooldown_op = match &result.error {
-                    None => Some("clear"),
-                    Some(e) if RetryPolicy::is_retryable(e) => Some("record"),
-                    Some(_) => None,
-                };
-                if cooldown_op.is_some() {
-                    let cooldown_conn = self.conn.lock();
-                    match cooldown_op {
-                        Some("clear") => {
-                            if let Err(e) =
-                                crate::cooldown::clear(&cooldown_conn, target.id)
-                            {
-                                tracing::warn!(
-                                    combo_id = combo.id.0,
-                                    target_id = target.id.0,
-                                    error = %e,
-                                    "cooldown::clear failed; non-fatal"
-                                );
-                            }
-                        }
-                        Some("record") => {
-                            let reason = result
-                                .error
-                                .as_ref()
-                                .map(|e| e.to_string())
-                                .unwrap_or_else(|| "retryable failure".to_string());
-                            if let Err(e) = crate::cooldown::record_failure(
-                                &cooldown_conn,
-                                target.id,
-                                &reason,
-                                self.config.cooldown_secs,
-                            ) {
-                                tracing::warn!(
-                                    combo_id = combo.id.0,
-                                    target_id = target.id.0,
-                                    error = %e,
-                                    "cooldown::record_failure failed; non-fatal"
-                                );
-                            }
-                        }
-                        _ => unreachable!(),
-                    }
-                }
-                match &result.error {
-                    None => return result,
-                    // For `Strategy::Priority` combos, walk the ENTIRE row regardless
-                    // of error type — operator's intent is "try these in order, give
-                    // each one a chance". A 4xx from model A doesn't mean model B
-                    // will also 4xx (different model, different validation). Short-
-                    // circuiting on 4xx here was a regression of the original
-                    // walk-the-row contract. For non-Priority strategies (RoundRobin,
-                    // Shuffle), preserve the short-circuit: those operators want
-                    // fast-fail on non-retryable errors because they're racing all
-                    // the targets anyway.
-                    Some(e) if !RetryPolicy::is_retryable(e) && !matches!(combo.strategy, Strategy::Priority) => {
-                        return result;
-                    }
-                    Some(e) => {
-                        tracing::debug!(
-                            combo_id = combo.id.0,
-                            target_id = target.id.0,
-                            provider = %target.provider_id,
-                            strategy = ?combo.strategy,
-                            error = %e,
-                            "target failed; trying next target"
-                        );
-                        last_result = Some(result);
-                    }
+                    last_result = Some(result);
                 }
             }
+        }
 
-            // Bug 4 fix: the per-target retry is now done inside the
-            // target loop (the `while let Some(e) = &result.error`
-            // block above). The pre-fix code had a *second* retry
-            // loop here that re-walked the whole combo on every
-            // outer iteration, which is what gave the operator the
-            // illusion of "no retries happen" (one model that always
-            // 5xx'd would consume the whole combo-walk budget; the
-            // other models in the combo would never see the budget
-            // and would only get one shot per outer iteration). With
-            // per-target retries, the combo walk happens once and
-            // each target gets its own fresh retry budget. If every
-            // target errored, surface the last per-target retry's
-            // final result (which carries the last failure).
-            return last_result.unwrap_or_else(|| self.failure(
+        // Bug 4 fix: the per-target retry is now done inside the
+        // target loop (the `while let Some(e) = &result.error`
+        // block above). The pre-fix code had a *second* retry
+        // loop here that re-walked the whole combo on every
+        // outer iteration, which is what gave the operator the
+        // illusion of "no retries happen" (one model that always
+        // 5xx'd would consume the whole combo-walk budget; the
+        // other models in the combo would never see the budget
+        // and would only get one shot per outer iteration). With
+        // per-target retries, the combo walk happens once and
+        // each target gets its own fresh retry budget. If every
+        // target errored, surface the last per-target retry's
+        // final result (which carries the last failure).
+        last_result.unwrap_or_else(|| {
+            self.failure(
                 CoreError::NoHealthyTargets(combo.id.0),
                 attempt,
                 ErrorPhase::Route,
-            ));
-        }
-
-        // Unreachable: the loop always returns on the last attempt's match arm.
-        // Emit a defensive Internal error so the type-checker stays happy.
-        self.failure(
-            CoreError::Internal("pipeline loop exited without result".into()),
-            self.config.max_attempts,
-            ErrorPhase::Route,
-        )
+            )
+        })
     }
 
     /// Recursively flatten a list of `ComboTarget` rows (as returned by
@@ -1056,15 +1068,17 @@ impl Pipeline {
                                 req,
                                 combo,
                                 target,
+                                FailureContext {
                                 attempt,
                                 race_size,
-                                &e,
+                                err: &e,
                                 started,
-                                None,
-                                None,
-                                None,
-                                e.http_status(),
-                            );
+                                model: None,
+                                connect_ms: None,
+                                ttft_ms: None,
+                                status_code: e.http_status(),
+},
+);
                         }
                     };
 
@@ -1086,15 +1100,17 @@ impl Pipeline {
                                         req,
                                         combo,
                                         target,
+                                        FailureContext {
                                         attempt,
                                         race_size,
-                                        &e,
+                                        err: &e,
                                         started,
-                                        None,
-                                        None,
-                                        None,
-                                        e.http_status(),
-                                    );
+                                        model: None,
+                                        connect_ms: None,
+                                        ttft_ms: None,
+                                        status_code: e.http_status(),
+},
+);
                                 }
                             }
                         }
@@ -1188,15 +1204,17 @@ impl Pipeline {
                         req,
                         combo,
                         target,
+                        FailureContext {
                         attempt,
                         race_size,
-                        &e,
+                        err: &e,
                         started,
-                        None,
-                        None,
-                        None,
-                        e.http_status(),
-                    ),
+                        model: None,
+                        connect_ms: None,
+                        ttft_ms: None,
+                        status_code: e.http_status(),
+},
+),
                 };
             }
         }
@@ -1210,15 +1228,17 @@ impl Pipeline {
                     req,
                     combo,
                     target,
+                    FailureContext {
                     attempt,
                     race_size,
-                    &err,
+                    err: &err,
                     started,
-                    None,
-                    None,
-                    None,
-                    0,
-                );
+                    model: None,
+                    connect_ms: None,
+                    ttft_ms: None,
+                    status_code: 0,
+},
+);
             }
         };
 
@@ -1238,15 +1258,17 @@ impl Pipeline {
                     req,
                     combo,
                     target,
+                    FailureContext {
                     attempt,
                     race_size,
-                    &err,
+                    err: &err,
                     started,
-                    None,
-                    None,
-                    None,
-                    0,
-                );
+                    model: None,
+                    connect_ms: None,
+                    ttft_ms: None,
+                    status_code: 0,
+},
+);
             }
         };
         let model = match self.load_model(model_row_id) {
@@ -1256,62 +1278,71 @@ impl Pipeline {
                     req,
                     combo,
                     target,
+                    FailureContext {
                     attempt,
                     race_size,
-                    &e,
+                    err: &e,
                     started,
-                    None,
-                    None,
-                    None,
-                    0,
-                );
+                    model: None,
+                    connect_ms: None,
+                    ttft_ms: None,
+                    status_code: 0,
+},
+);
             }
         };
 
         // 3. Resolve timeouts via the 3-level precedence rule.
-        let conn = self.conn.lock();
-        let provider_timeouts = match timeouts::load_provider_timeouts(&conn, &target.provider_id) {
-            Ok(t) => t,
-            Err(e) => {
-                return self.record_and_fail(
-                    req,
-                    combo,
-                    target,
-                    attempt,
-                    race_size,
-                    &e,
-                    started,
-                    Some(&model),
-                    None,
-                    None,
-                    0,
-                );
-            }
+        //    Scope the lock guard into its own block so clippy can
+        //    see it's dropped well before the dispatch `.await`.
+        let resolved_timeouts = {
+            let conn = self.conn.lock();
+            let provider_timeouts = match timeouts::load_provider_timeouts(&conn, &target.provider_id) {
+                Ok(t) => t,
+                Err(e) => {
+                    return self.record_and_fail(
+                        req,
+                        combo,
+                        target,
+                        FailureContext {
+                        attempt,
+                        race_size,
+                        err: &e,
+                        started,
+                        model: Some(&model),
+                        connect_ms: None,
+                        ttft_ms: None,
+                        status_code: 0,
+},
+);
+                }
+            };
+            let model_overrides = match ModelTimeoutOverrides::from_json(model.timeout_overrides_json.as_deref()) {
+                Ok(o) => o,
+                Err(e) => {
+                    return self.record_and_fail(
+                        req,
+                        combo,
+                        target,
+                        FailureContext {
+                        attempt,
+                        race_size,
+                        err: &e,
+                        started,
+                        model: Some(&model),
+                        connect_ms: None,
+                        ttft_ms: None,
+                        status_code: 0,
+},
+);
+                }
+            };
+            timeouts::resolve(
+                &self.config.defaults,
+                provider_timeouts.as_ref(),
+                Some(&model_overrides),
+            )
         };
-        let model_overrides = match ModelTimeoutOverrides::from_json(model.timeout_overrides_json.as_deref()) {
-            Ok(o) => o,
-            Err(e) => {
-                return self.record_and_fail(
-                    req,
-                    combo,
-                    target,
-                    attempt,
-                    race_size,
-                    &e,
-                    started,
-                    Some(&model),
-                    None,
-                    None,
-                    0,
-                );
-            }
-        };
-        let resolved_timeouts = timeouts::resolve(
-            &self.config.defaults,
-            provider_timeouts.as_ref(),
-            Some(&model_overrides),
-        );
-        drop(conn);
 
         // 4. Decide the wire format. Mixed providers consult the model row.
         let target_format = match adapter.format() {
@@ -1345,15 +1376,17 @@ impl Pipeline {
                         req,
                         combo,
                         target,
+                        FailureContext {
                         attempt,
                         race_size,
-                        &err,
+                        err: &err,
                         started,
-                        Some(&model),
-                        None,
-                        None,
-                        0,
-                    );
+                        model: Some(&model),
+                        connect_ms: None,
+                        ttft_ms: None,
+                        status_code: 0,
+},
+);
                 }
             },
             crate::models::TargetFormat::Anthropic => {
@@ -1366,15 +1399,17 @@ impl Pipeline {
                             req,
                             combo,
                             target,
+                            FailureContext {
                             attempt,
                             race_size,
-                            &err,
+                            err: &err,
                             started,
-                            Some(&model),
-                            None,
-                            None,
-                            0,
-                        );
+                            model: Some(&model),
+                            connect_ms: None,
+                            ttft_ms: None,
+                            status_code: 0,
+},
+);
                     }
                 }
             }
@@ -1388,15 +1423,17 @@ impl Pipeline {
                             req,
                             combo,
                             target,
+                            FailureContext {
                             attempt,
                             race_size,
-                            &err,
+                            err: &err,
                             started,
-                            Some(&model),
-                            None,
-                            None,
-                            0,
-                        );
+                            model: Some(&model),
+                            connect_ms: None,
+                            ttft_ms: None,
+                            status_code: 0,
+},
+);
                     }
                 }
             }
@@ -1419,15 +1456,17 @@ impl Pipeline {
                     req,
                     combo,
                     target,
+                    FailureContext {
                     attempt,
                     race_size,
-                    &e,
+                    err: &e,
                     started,
-                    Some(&model),
-                    None,
-                    None,
-                    0,
-                );
+                    model: Some(&model),
+                    connect_ms: None,
+                    ttft_ms: None,
+                    status_code: 0,
+},
+);
             }
         };
 
@@ -1565,10 +1604,20 @@ impl Pipeline {
             Err(e) => {
                 let err = CoreError::Parse(format!("serialize upstream body: {e}"));
                 return self.record_and_fail(
-                    req, combo, target, attempt, race_size, &err, started,
-                    Some(model), None, None,
-                    err.http_status(),
-                );
+                    req,
+                    combo,
+                    target,
+                    FailureContext {
+                    attempt,
+                    race_size,
+                    err: &err,
+                    started,
+                    model: Some(model),
+                    connect_ms: None,
+                    ttft_ms: None,
+                    status_code: err.http_status(),
+},
+);
             }
         };
         let mut upstream_request = UpstreamRequest::post_json(url.to_string(), body_bytes);
@@ -1636,11 +1685,20 @@ impl Pipeline {
                 "client disconnected before upstream send; aborting attempt"
             );
             return self.record_and_fail(
-                req, combo, target, attempt, race_size,
-                &CoreError::ClientDisconnected, started,
-                Some(model), Some(elapsed), None,
-                CoreError::ClientDisconnected.http_status(),
-            );
+                req,
+                combo,
+                target,
+                FailureContext {
+                attempt,
+                race_size,
+                err: &CoreError::ClientDisconnected,
+                started,
+                model: Some(model),
+                connect_ms: Some(elapsed),
+                ttft_ms: None,
+                status_code: CoreError::ClientDisconnected.http_status(),
+},
+);
         }
         let cancel_token = CancellationToken::from_watch(req.client_disconnected.clone());
         let result = self
@@ -1671,11 +1729,20 @@ impl Pipeline {
                     "client cancelled during upstream send; aborting attempt"
                 );
                 return self.record_and_fail(
-                    req, combo, target, attempt, race_size,
-                    &CoreError::ClientDisconnected, started,
-                    Some(model), Some(connect_and_send_ms), None,
-                    CoreError::ClientDisconnected.http_status(),
-                );
+                    req,
+                    combo,
+                    target,
+                    FailureContext {
+                    attempt,
+                    race_size,
+                    err: &CoreError::ClientDisconnected,
+                    started,
+                    model: Some(model),
+                    connect_ms: Some(connect_and_send_ms),
+                    ttft_ms: None,
+                    status_code: CoreError::ClientDisconnected.http_status(),
+},
+);
             }
             Err(UpstreamError::Timeout(phase)) => {
                 // The upstream client reports a single stalled phase.
@@ -1708,10 +1775,20 @@ impl Pipeline {
                     ms: connect_and_send_ms,
                 };
                 return self.record_and_fail(
-                    req, combo, target, attempt, race_size, &err, started,
-                    Some(model), Some(connect_and_send_ms), None,
-                    err.http_status(),
-                );
+                    req,
+                    combo,
+                    target,
+                    FailureContext {
+                    attempt,
+                    race_size,
+                    err: &err,
+                    started,
+                    model: Some(model),
+                    connect_ms: Some(connect_and_send_ms),
+                    ttft_ms: None,
+                    status_code: err.http_status(),
+},
+);
             }
             Err(UpstreamError::Connection(msg))
             | Err(UpstreamError::Tls(msg))
@@ -1720,10 +1797,20 @@ impl Pipeline {
             | Err(UpstreamError::Invalid(msg)) => {
                 let err = CoreError::UpstreamConnection(msg);
                 return self.record_and_fail(
-                    req, combo, target, attempt, race_size, &err, started,
-                    Some(model), Some(connect_and_send_ms), None,
-                    err.http_status(),
-                );
+                    req,
+                    combo,
+                    target,
+                    FailureContext {
+                    attempt,
+                    race_size,
+                    err: &err,
+                    started,
+                    model: Some(model),
+                    connect_ms: Some(connect_and_send_ms),
+                    ttft_ms: None,
+                    status_code: err.http_status(),
+},
+);
             }
         };
 
@@ -1801,11 +1888,20 @@ impl Pipeline {
                     "client cancelled during upstream body read; aborting attempt"
                 );
                 return self.record_and_fail(
-                    req, combo, target, attempt, race_size,
-                    &CoreError::ClientDisconnected, started,
-                    Some(model), Some(connect_and_send_ms), Some(ttft_ms),
-                    CoreError::ClientDisconnected.http_status(),
-                );
+                    req,
+                    combo,
+                    target,
+                    FailureContext {
+                    attempt,
+                    race_size,
+                    err: &CoreError::ClientDisconnected,
+                    started,
+                    model: Some(model),
+                    connect_ms: Some(connect_and_send_ms),
+                    ttft_ms: Some(ttft_ms),
+                    status_code: CoreError::ClientDisconnected.http_status(),
+},
+);
             }
             Err(UpstreamError::Timeout(phase)) => {
                 let err = CoreError::UpstreamTimeout {
@@ -1813,18 +1909,38 @@ impl Pipeline {
                     ms: started.elapsed().as_millis() as u64,
                 };
                 return self.record_and_fail(
-                    req, combo, target, attempt, race_size, &err, started,
-                    Some(model), Some(connect_and_send_ms), Some(ttft_ms),
+                    req,
+                    combo,
+                    target,
+                    FailureContext {
+                    attempt,
+                    race_size,
+                    err: &err,
+                    started,
+                    model: Some(model),
+                    connect_ms: Some(connect_and_send_ms),
+                    ttft_ms: Some(ttft_ms),
                     status_code,
-                );
+},
+);
             }
             Err(e) => {
                 let err = CoreError::UpstreamConnection(format!("read upstream body: {e}"));
                 return self.record_and_fail(
-                    req, combo, target, attempt, race_size, &err, started,
-                    Some(model), Some(connect_and_send_ms), Some(ttft_ms),
+                    req,
+                    combo,
+                    target,
+                    FailureContext {
+                    attempt,
+                    race_size,
+                    err: &err,
+                    started,
+                    model: Some(model),
+                    connect_ms: Some(connect_and_send_ms),
+                    ttft_ms: Some(ttft_ms),
                     status_code,
-                );
+},
+);
             }
         };
 
@@ -1848,16 +1964,26 @@ impl Pipeline {
                 .and_then(|v| parse_retry_after_ms(v));
             let is_rate_limited_status =
                 status_code == 429 || status_code == 408 || status_code == 503;
-            if is_rate_limited_status && retry_after_ms.is_some() {
+            if let Some(retry_ms) = retry_after_ms.filter(|_| is_rate_limited_status) {
                 let err = CoreError::RateLimited {
                     provider: target.provider_id.to_string(),
-                    retry_after_ms: retry_after_ms.unwrap(),
+                    retry_after_ms: retry_ms,
                 };
                 return self.record_and_fail(
-                    req, combo, target, attempt, race_size, &err, started,
-                    Some(model), Some(connect_and_send_ms), Some(ttft_ms),
+                    req,
+                    combo,
+                    target,
+                    FailureContext {
+                    attempt,
+                    race_size,
+                    err: &err,
+                    started,
+                    model: Some(model),
+                    connect_ms: Some(connect_and_send_ms),
+                    ttft_ms: Some(ttft_ms),
                     status_code,
-                );
+},
+);
             }
             let err = CoreError::UpstreamError {
                 status: status_code,
@@ -1866,10 +1992,20 @@ impl Pipeline {
                 body: body_str,
             };
             return self.record_and_fail(
-                req, combo, target, attempt, race_size, &err, started,
-                Some(model), Some(connect_and_send_ms), Some(ttft_ms),
+                req,
+                combo,
+                target,
+                FailureContext {
+                attempt,
+                race_size,
+                err: &err,
+                started,
+                model: Some(model),
+                connect_ms: Some(connect_and_send_ms),
+                ttft_ms: Some(ttft_ms),
                 status_code,
-            );
+},
+);
         }
 
         // R2 fix: 2xx non-streaming success. The non-streaming path
@@ -1910,10 +2046,20 @@ impl Pipeline {
             Err(e) => {
                 let err = CoreError::Parse(format!("upstream json: {e}"));
                 return self.record_and_fail(
-                    req, combo, target, attempt, race_size, &err, started,
-                    Some(model), Some(connect_and_send_ms), Some(ttft_ms),
+                    req,
+                    combo,
+                    target,
+                    FailureContext {
+                    attempt,
+                    race_size,
+                    err: &err,
+                    started,
+                    model: Some(model),
+                    connect_ms: Some(connect_and_send_ms),
+                    ttft_ms: Some(ttft_ms),
                     status_code,
-                );
+},
+);
             }
         };
 
@@ -1929,10 +2075,20 @@ impl Pipeline {
                 Err(e) => {
                     let err = CoreError::Parse(format!("parse openai response: {e}"));
                     return self.record_and_fail(
-                        req, combo, target, attempt, race_size, &err, started,
-                        Some(model), Some(connect_and_send_ms), Some(ttft_ms),
+                        req,
+                        combo,
+                        target,
+                        FailureContext {
+                        attempt,
+                        race_size,
+                        err: &err,
+                        started,
+                        model: Some(model),
+                        connect_ms: Some(connect_and_send_ms),
+                        ttft_ms: Some(ttft_ms),
                         status_code,
-                    );
+},
+);
                 }
             },
             crate::models::TargetFormat::Anthropic => {
@@ -1942,10 +2098,20 @@ impl Pipeline {
                         Err(e) => {
                             let err = CoreError::Parse(format!("parse anthropic response: {e}"));
                             return self.record_and_fail(
-                                req, combo, target, attempt, race_size, &err, started,
-                                Some(model), Some(connect_and_send_ms), Some(ttft_ms),
+                                req,
+                                combo,
+                                target,
+                                FailureContext {
+                                attempt,
+                                race_size,
+                                err: &err,
+                                started,
+                                model: Some(model),
+                                connect_ms: Some(connect_and_send_ms),
+                                ttft_ms: Some(ttft_ms),
                                 status_code,
-                            );
+},
+);
                         }
                     };
                 crate::translation::anthropic_to_openai(&anthropic_resp)
@@ -1957,10 +2123,20 @@ impl Pipeline {
                         Err(e) => {
                             let err = CoreError::Parse(format!("parse gemini response: {e}"));
                             return self.record_and_fail(
-                                req, combo, target, attempt, race_size, &err, started,
-                                Some(model), Some(connect_and_send_ms), Some(ttft_ms),
+                                req,
+                                combo,
+                                target,
+                                FailureContext {
+                                attempt,
+                                race_size,
+                                err: &err,
+                                started,
+                                model: Some(model),
+                                connect_ms: Some(connect_and_send_ms),
+                                ttft_ms: Some(ttft_ms),
                                 status_code,
-                            );
+},
+);
                         }
                     };
                 crate::translation::gemini_to_openai(&gemini_resp)
@@ -2058,11 +2234,20 @@ impl Pipeline {
                 "client disconnected before upstream streaming send; aborting attempt"
             );
             return self.record_and_fail(
-                req, combo, target, attempt, race_size,
-                &CoreError::ClientDisconnected, started,
-                Some(model), Some(elapsed), None,
-                CoreError::ClientDisconnected.http_status(),
-            );
+                req,
+                combo,
+                target,
+                FailureContext {
+                attempt,
+                race_size,
+                err: &CoreError::ClientDisconnected,
+                started,
+                model: Some(model),
+                connect_ms: Some(elapsed),
+                ttft_ms: None,
+                status_code: CoreError::ClientDisconnected.http_status(),
+},
+);
         }
         let cancel_token = CancellationToken::from_watch(req.client_disconnected.clone());
         let result = self
@@ -2097,11 +2282,20 @@ impl Pipeline {
                     "client cancelled during upstream streaming send; aborting attempt"
                 );
                 return self.record_and_fail(
-                    req, combo, target, attempt, race_size,
-                    &CoreError::ClientDisconnected, started,
-                    Some(model), Some(connect_and_send_ms), None,
-                    CoreError::ClientDisconnected.http_status(),
-                );
+                    req,
+                    combo,
+                    target,
+                    FailureContext {
+                    attempt,
+                    race_size,
+                    err: &CoreError::ClientDisconnected,
+                    started,
+                    model: Some(model),
+                    connect_ms: Some(connect_and_send_ms),
+                    ttft_ms: None,
+                    status_code: CoreError::ClientDisconnected.http_status(),
+},
+);
             }
             Err(UpstreamError::Timeout(phase)) => {
                 let phase_label = match phase {
@@ -2125,10 +2319,20 @@ impl Pipeline {
                     ms: connect_and_send_ms,
                 };
                 return self.record_and_fail(
-                    req, combo, target, attempt, race_size, &err, started,
-                    Some(model), Some(connect_and_send_ms), None,
-                    err.http_status(),
-                );
+                    req,
+                    combo,
+                    target,
+                    FailureContext {
+                    attempt,
+                    race_size,
+                    err: &err,
+                    started,
+                    model: Some(model),
+                    connect_ms: Some(connect_and_send_ms),
+                    ttft_ms: None,
+                    status_code: err.http_status(),
+},
+);
             }
             Err(UpstreamError::Connection(msg))
             | Err(UpstreamError::Tls(msg))
@@ -2137,10 +2341,20 @@ impl Pipeline {
             | Err(UpstreamError::Invalid(msg)) => {
                 let err = CoreError::UpstreamConnection(msg);
                 return self.record_and_fail(
-                    req, combo, target, attempt, race_size, &err, started,
-                    Some(model), Some(connect_and_send_ms), None,
-                    err.http_status(),
-                );
+                    req,
+                    combo,
+                    target,
+                    FailureContext {
+                    attempt,
+                    race_size,
+                    err: &err,
+                    started,
+                    model: Some(model),
+                    connect_ms: Some(connect_and_send_ms),
+                    ttft_ms: None,
+                    status_code: err.http_status(),
+},
+);
             }
         };
 
@@ -2170,10 +2384,20 @@ impl Pipeline {
                 body: body_str,
             };
             return self.record_and_fail(
-                req, combo, target, attempt, race_size, &err, started,
-                Some(model), Some(connect_and_send_ms), None,
+                req,
+                combo,
+                target,
+                FailureContext {
+                attempt,
+                race_size,
+                err: &err,
+                started,
+                model: Some(model),
+                connect_ms: Some(connect_and_send_ms),
+                ttft_ms: None,
                 status_code,
-            );
+},
+);
         }
 
         let chunk_id = format!("chatcmpl-{}", uuid::Uuid::new_v4());
@@ -2328,10 +2552,20 @@ impl Pipeline {
                         }
                     };
                     return self.record_and_fail(
-                        req, combo, target, attempt, race_size, &err, started,
-                        Some(model), Some(connect_and_send_ms), ttft_ms,
+                        req,
+                        combo,
+                        target,
+                        FailureContext {
+                        attempt,
+                        race_size,
+                        err: &err,
+                        started,
+                        model: Some(model),
+                        connect_ms: Some(connect_and_send_ms),
+                        ttft_ms,
                         status_code,
-                    );
+},
+);
                 }
             };
 
@@ -2355,19 +2589,21 @@ impl Pipeline {
                     req,
                     combo,
                     target,
+                    FailureContext {
                     attempt,
                     race_size,
-                    &CoreError::UpstreamConnection(format!(
+                    err: &CoreError::UpstreamConnection(format!(
                         "SSE line buffer exceeded {} bytes (memory-DoS guard)",
                         MAX_SSE_LINE_BYTES
                     )),
                     started,
-                    Some(model),
-                    Some(connect_and_send_ms),
+                    model: Some(model),
+                    connect_ms: Some(connect_and_send_ms),
                     ttft_ms,
-                    502,
+                    status_code: 502,
+},
                     trace_id,
-                );
+);
             }
 
             // Process complete lines.
@@ -2407,10 +2643,10 @@ impl Pipeline {
                 // Parse based on upstream format.
                 let parsed = match target_format {
                     crate::models::TargetFormat::Openai => {
-                        crate::sse::parse_openai_sse_line(&line)
+                        crate::sse::parse_openai_sse_line(line)
                     }
                     crate::models::TargetFormat::Gemini => {
-                        crate::sse::parse_gemini_sse_line(&line, &chunk_id, created, &model_name)
+                        crate::sse::parse_gemini_sse_line(line, &chunk_id, created, &model_name)
                     }
                     crate::models::TargetFormat::Anthropic => {
                         // Anthropic SSE: track event type across lines
@@ -2419,7 +2655,7 @@ impl Pipeline {
                         // OpenAI-style `tool_calls` chunks. The
                         // accumulator lives across iterations of the
                         // outer loop.
-                        match crate::sse::parse_anthropic_sse_stream_line(&line, &mut current_event_type) {
+                        match crate::sse::parse_anthropic_sse_stream_line(line, &mut current_event_type) {
                             Ok(Some(payload)) => {
                                 // H5 fix: thread the tool_use accumulator
                                 // through the translator. The counter
@@ -2485,16 +2721,19 @@ impl Pipeline {
                                     req,
                                     combo,
                                     target,
+                                    FailureContext {
                                     attempt,
                                     race_size,
-                                    &CoreError::ClientDisconnected,
+                                    err: &CoreError::ClientDisconnected,
                                     started,
-                                    Some(model),
-                                    Some(connect_and_send_ms),
+                                    model: Some(model),
+                                    connect_ms: Some(connect_and_send_ms),
                                     ttft_ms,
-                                    499, // client closed request
+                                    status_code: 499,
+},
+                                    // client closed request
                                     trace_id,
-                                );
+);
                             }
                         }
                     }
@@ -2559,10 +2798,11 @@ impl Pipeline {
         // The `tracing::warn!` is the same line the dispatch-loop
         // emit for boundary-only disconnects, so operators see a
         // single shape in their logs.
-        if {
+        let client_disconnected = {
             let mut rx = req.client_disconnected.clone();
             self.is_client_disconnected(&mut rx)
-        } {
+        };
+        if client_disconnected {
             tracing::warn!(
                 combo_id = combo.id.0,
                 target_id = target.id.0,
@@ -2570,11 +2810,20 @@ impl Pipeline {
                 "client cancelled during SSE stream; aborting attempt"
             );
             return self.record_and_fail(
-                req, combo, target, attempt, race_size,
-                &CoreError::ClientDisconnected, started,
-                Some(model), Some(connect_and_send_ms), ttft_ms,
-                CoreError::ClientDisconnected.http_status(),
-            );
+                req,
+                combo,
+                target,
+                FailureContext {
+                attempt,
+                race_size,
+                err: &CoreError::ClientDisconnected,
+                started,
+                model: Some(model),
+                connect_ms: Some(connect_and_send_ms),
+                ttft_ms,
+                status_code: CoreError::ClientDisconnected.http_status(),
+},
+);
         }
 
         // Send [DONE] if the upstream didn't send it explicitly.
@@ -2719,20 +2968,12 @@ impl Pipeline {
     /// streaming-disconnect path (C4 fix) and any other call site
     /// that needs a deterministic, caller-controlled `trace_id`,
     /// use [`Self::record_and_fail_with_trace_id`].
-    #[allow(clippy::too_many_arguments)]
     fn record_and_fail(
         &self,
         req: &PipelineRequest,
         combo: &Combo,
         target: &ComboTarget,
-        attempt: u8,
-        race_size: u8,
-        err: &CoreError,
-        started: Instant,
-        model: Option<&Model>,
-        connect_ms: Option<u64>,
-        ttft_ms: Option<u64>,
-        status_code: u16,
+        ctx: FailureContext<'_>,
     ) -> PipelineResult {
         // H3 fix: use the request's own trace_id (set by the
         // chat handler) so the row and the StageEvent agree
@@ -2741,8 +2982,11 @@ impl Pipeline {
         // chat-handler-assigned trace_id and broke
         // dashboard-side correlation.
         self.record_and_fail_with_trace_id(
-            req, combo, target, attempt, race_size, err, started, model,
-            connect_ms, ttft_ms, status_code, req.trace_id,
+            req,
+            combo,
+            target,
+            ctx,
+            req.trace_id,
         )
     }
 
@@ -2752,21 +2996,31 @@ impl Pipeline {
     /// `trace_id` matches the StageEvent's `trace_id` (H3 fix) and
     /// by any future retry-loop code that wants a per-attempt
     /// derived id.
+    ///
+    /// The 8 "what kind of failure" inputs are bundled in
+    /// [`FailureContext`] so the public signature stays short enough
+    /// to silence `clippy::too_many_arguments` without resorting to
+    /// a project-wide `#[allow]`. The remaining args are the
+    /// 3 identity refs (req/combo/target) plus the 1 caller-chosen
+    /// trace_id.
     fn record_and_fail_with_trace_id(
         &self,
         req: &PipelineRequest,
         combo: &Combo,
         target: &ComboTarget,
-        attempt: u8,
-        race_size: u8,
-        err: &CoreError,
-        started: Instant,
-        model: Option<&Model>,
-        connect_ms: Option<u64>,
-        ttft_ms: Option<u64>,
-        status_code: u16,
+        ctx: FailureContext<'_>,
         trace_id: TraceId,
     ) -> PipelineResult {
+        let FailureContext {
+            attempt,
+            race_size,
+            err,
+            started,
+            model,
+            connect_ms,
+            ttft_ms,
+            status_code,
+        } = ctx;
         let total_ms = started.elapsed().as_millis() as u64;
         // The terminal `failed` stage event is published by
         // `record_attempt_raw_with_tokens` (see the centralized
@@ -3208,13 +3462,15 @@ mod tests {
     fn seed_provider(conn: &Connection, provider_id: &str, auth_type: AuthType) {
         providers::create(
             conn,
-            &ProviderId::new(provider_id),
-            provider_id,
-            "https://example.com",
-            auth_type,
-            ProviderFormat::Openai,
-            None,
-            None,
+            providers::NewProvider {
+                id: &ProviderId::new(provider_id),
+                name: provider_id,
+                base_url: "https://example.com",
+                auth_type,
+                format: ProviderFormat::Openai,
+                extra_headers_json: None,
+                auto_activate_keyword: None,
+            },
         )
         .expect("seed provider");
     }
@@ -3228,17 +3484,19 @@ mod tests {
     ) -> ModelRowId {
         providers::create(
             conn,
-            &ProviderId::new(provider_id),
-            provider_id,
-            "https://example.com",
-            AuthType::Bearer,
-            match fmt {
-                TargetFormat::Openai => ProviderFormat::Openai,
-                TargetFormat::Anthropic => ProviderFormat::Anthropic,
-                TargetFormat::Gemini => ProviderFormat::Openai,
+            providers::NewProvider {
+                id: &ProviderId::new(provider_id),
+                name: provider_id,
+                base_url: "https://example.com",
+                auth_type: AuthType::Bearer,
+                format: match fmt {
+                    TargetFormat::Openai => ProviderFormat::Openai,
+                    TargetFormat::Anthropic => ProviderFormat::Anthropic,
+                    TargetFormat::Gemini => ProviderFormat::Openai,
+                },
+                extra_headers_json: None,
+                auto_activate_keyword: None,
             },
-            None,
-            None,
         )
         .expect("seed provider");
         conn.execute(
@@ -3331,13 +3589,15 @@ mod tests {
             // Seed an active provider with no accounts and no models.
             providers::create(
                 &writer,
-                &ProviderId::new("p"),
-                "p",
-                "https://example.com",
-                AuthType::Bearer,
-                ProviderFormat::Openai,
-                None,
-                None,
+                providers::NewProvider {
+                    id: &ProviderId::new("p"),
+                    name: "p",
+                    base_url: "https://example.com",
+                    auth_type: AuthType::Bearer,
+                    format: ProviderFormat::Openai,
+                    extra_headers_json: None,
+                    auto_activate_keyword: None,
+                },
             )
             .expect("seed provider");
             combos::create_combo(&writer, "no-targets", Strategy::Priority, 1).expect("create")
@@ -3369,13 +3629,15 @@ mod tests {
             let writer = pool.writer();
             providers::create(
                 &writer,
-                &ProviderId::new("p"),
-                "p",
-                "https://example.com",
-                AuthType::Bearer,
-                ProviderFormat::Openai,
-                None,
-                None,
+                providers::NewProvider {
+                    id: &ProviderId::new("p"),
+                    name: "p",
+                    base_url: "https://example.com",
+                    auth_type: AuthType::Bearer,
+                    format: ProviderFormat::Openai,
+                    extra_headers_json: None,
+                    auto_activate_keyword: None,
+                },
             )
             .expect("seed provider");
             combos::create_combo(&writer, "nerd", Strategy::Priority, 1).expect("create")
@@ -3422,13 +3684,15 @@ mod tests {
             let writer = pool.writer();
             providers::create(
                 &writer,
-                &ProviderId::new("p"),
-                "p",
-                "https://example.com",
-                AuthType::Bearer,
-                ProviderFormat::Openai,
-                None,
-                None,
+                providers::NewProvider {
+                    id: &ProviderId::new("p"),
+                    name: "p",
+                    base_url: "https://example.com",
+                    auth_type: AuthType::Bearer,
+                    format: ProviderFormat::Openai,
+                    extra_headers_json: None,
+                    auto_activate_keyword: None,
+                },
             )
             .expect("seed provider");
             // Two active models on the same provider.
@@ -3814,13 +4078,15 @@ mod tests {
     ) -> (ComboId, ComboTargetId, AccountId, ModelRowId) {
         providers::create(
             conn,
-            &ProviderId::new("p"),
-            "p",
-            "https://example.com",
-            AuthType::Bearer,
-            ProviderFormat::Openai,
-            None,
-            None,
+            providers::NewProvider {
+                id: &ProviderId::new("p"),
+                name: "p",
+                base_url: "https://example.com",
+                auth_type: AuthType::Bearer,
+                format: ProviderFormat::Openai,
+                extra_headers_json: None,
+                auto_activate_keyword: None,
+            },
         )
         .expect("seed provider");
         conn.execute(
@@ -5595,13 +5861,15 @@ mod tests {
                 let pid_str = format!("p{}", prov_idx);
                 providers::create(
                     &w,
-                    &ProviderId::new(&pid_str),
-                    &pid_str,
-                    "https://example.com",
-                    AuthType::Bearer,
-                    ProviderFormat::Openai,
-                    None,
-                    None,
+                    providers::NewProvider {
+                        id: &ProviderId::new(&pid_str),
+                        name: &pid_str,
+                        base_url: "https://example.com",
+                        auth_type: AuthType::Bearer,
+                        format: ProviderFormat::Openai,
+                        extra_headers_json: None,
+                        auto_activate_keyword: None,
+                    },
                 )
                 .expect("seed provider");
                 w.execute(
@@ -5794,13 +6062,15 @@ mod tests {
             let w = pool.writer();
             providers::create(
                 &w,
-                &ProviderId::new("p"),
-                "p",
-                "https://example.com",
-                AuthType::Bearer,
-                ProviderFormat::Openai,
-                None,
-                None,
+                providers::NewProvider {
+                    id: &ProviderId::new("p"),
+                    name: "p",
+                    base_url: "https://example.com",
+                    auth_type: AuthType::Bearer,
+                    format: ProviderFormat::Openai,
+                    extra_headers_json: None,
+                    auto_activate_keyword: None,
+                },
             )
             .expect("seed provider");
             w.execute(
@@ -5937,13 +6207,15 @@ mod tests {
     ) -> (ComboId, AccountId) {
         providers::create(
             conn,
-            &ProviderId::new(provider_id),
-            provider_id,
-            upstream_url,
-            AuthType::Bearer,
-            ProviderFormat::Openai,
-            None,
-            None,
+            providers::NewProvider {
+                id: &ProviderId::new(provider_id),
+                name: provider_id,
+                base_url: upstream_url,
+                auth_type: AuthType::Bearer,
+                format: ProviderFormat::Openai,
+                extra_headers_json: None,
+                auto_activate_keyword: None,
+            },
         )
         .expect("seed provider");
         conn.execute(

@@ -361,7 +361,7 @@ impl OAuthProvider for KiroOAuthProvider {
         }
 
         serde_json::from_slice::<TokenResponse>(&body)
-            .map(|t| Some(t))
+            .map(Some)
             .map_err(|e| CoreError::Parse(format!("kiro token parse: {e}")))
     }
 

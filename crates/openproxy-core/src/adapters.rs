@@ -140,14 +140,16 @@ pub trait ProviderAdapter: Send + Sync {
 /// GET `url` via the [`UpstreamClient`] with the given `(header, value)`
 /// pairs attached, then collect and parse the body as a JSON value.
 ///
-/// The previous helper chain (`client.get(...).header(...).send().await`
-/// + `resp.json().await`) was the same across eight of the ten
-/// adapters; consolidating it here drops ~25 lines per impl and
-/// keeps the `TimeoutProfile::ModelDiscovery` knob in one place. The
-/// caller is responsible for mapping [`crate::upstream::UpstreamError`]
-/// into the provider-specific [`CoreError`] (most call sites return
-/// `CoreError::UpstreamConnection` on transport failure and
-/// `CoreError::Parse` on JSON failure).
+/// The previous helper chain
+/// (`client.get(...).header(...).send().await` + `resp.json().await`)
+/// was the same across eight of the ten adapters; consolidating it here
+/// drops ~25 lines per impl and keeps the
+/// `TimeoutProfile::ModelDiscovery` knob in one place.
+///
+/// The caller is responsible for mapping
+/// [`crate::upstream::UpstreamError`] into the provider-specific
+/// [`CoreError`] (most call sites return `CoreError::UpstreamConnection`
+/// on transport failure and `CoreError::Parse` on JSON failure).
 async fn upstream_get_json(
     upstream_client: &Arc<UpstreamClient>,
     url: &str,

@@ -1143,8 +1143,7 @@ pub async fn usage_recent(
         let since_id = q
             .since_id
             .unwrap_or(0)
-            .max(0)
-            .min(USAGE_RECENT_MAX_SINCE_ID);
+            .clamp(0, USAGE_RECENT_MAX_SINCE_ID);
         let limit = q
             .limit
             .unwrap_or(USAGE_RECENT_DEFAULT_LIMIT)
@@ -1348,19 +1347,21 @@ async fn stream_usage_rows(
                                     let since_id = msg
                                         .since_id
                                         .unwrap_or(0)
-                                        .max(0)
-                                        .min(USAGE_RECENT_MAX_SINCE_ID);
-                                    let w = state.db_pool().writer();
-                                    // SEC-MEDIUM-C fix: strip the heavy request/response
-                                    // fields from the initial history batch — the
-                                    // publisher already redacts the per-event broadcast,
-                                    // but `recent()` still returns the full rows so
-                                    // this initial replay matched the publisher.
-                                    let rows: Vec<usage::RecentUsageRow> =
-                                        usage::recent(&w, since_id, 100)?
+                                        .clamp(0, USAGE_RECENT_MAX_SINCE_ID);
+                                    let rows: Vec<usage::RecentUsageRow> = {
+                                        let w = state.db_pool().writer();
+                                        // SEC-MEDIUM-C fix: strip the heavy request/response
+                                        // fields from the initial history batch — the
+                                        // publisher already redacts the per-event broadcast,
+                                        // but `recent()` still returns the full rows so
+                                        // this initial replay matched the publisher.
+                                        let rows = usage::recent(&w, since_id, 100)?
                                             .into_iter()
                                             .map(usage::redact_for_broadcast)
                                             .collect();
+                                        drop(w);
+                                        rows
+                                    };
                                     if let Some(mx) = rows.iter().map(|r| r.id.0).max() {
                                         last_known_id = last_known_id.max(mx);
                                     }
@@ -1830,7 +1831,7 @@ pub async fn reorder_combo_targets(
             .into_iter()
             .map(ComboTargetId)
             .collect();
-        admin::reorder_combo_targets(&mut *w, ComboId(combo_id), &ordered)?;
+        admin::reorder_combo_targets(&mut w, ComboId(combo_id), &ordered)?;
         Ok(Json(serde_json::json!({
             "reordered": combo_id,
             "count": ordered.len(),
@@ -2051,14 +2052,8 @@ async fn run_test_for_model(
     //    accounts while still using accounts when they exist.
     let (is_anonymous, accounts_list) = {
         let w = s.db_pool().writer();
-        let provider_row = match providers::get(&w, &model.provider_id) {
-            Ok(p) => p,
-            Err(_) => None,
-        };
-        let accs = match accounts::list(&w, Some(&model.provider_id)) {
-            Ok(l) => l,
-            Err(_) => vec![],
-        };
+        let provider_row = providers::get(&w, &model.provider_id).unwrap_or_default();
+        let accs = accounts::list(&w, Some(&model.provider_id)).unwrap_or_default();
         let anon = match &provider_row {
             Some(p) if matches!(p.auth_type, providers::AuthType::None) => true,
             _ if accs.is_empty() => true, // No accounts → try anonymous
@@ -2086,26 +2081,27 @@ async fn run_test_for_model(
         //    not api_key_encrypted, so we fall back to that if the
         //    primary decrypt fails (e.g. NULL column).
         let api_key = match account_id {
-            Some(aid) => match (|| -> Result<String, ApiError> {
+            Some(aid) => {
                 let w = s.db_pool().writer();
-                accounts::decrypt_api_key(&w, aid, s.master_key().as_ref())
+                match accounts::decrypt_api_key(&w, aid, s.master_key().as_ref())
                     .or_else(|_| {
                         accounts::decrypt_access_token(&w, aid, s.master_key().as_ref())
                     })
                     .map_err(ApiError)
-            })() {
-                Ok(k) => k,
-                Err(ApiError(e)) => {
-                    return TestResult {
-                        row_id: model_row_id,
-                        status: e.http_status(),
-                        elapsed_ms: 0,
-                        error_msg: Some(e.to_string()),
-                        skipped: true,
-                        skip_reason: Some(e.to_string()),
-                    };
+                {
+                    Ok(k) => k,
+                    Err(ApiError(e)) => {
+                        return TestResult {
+                            row_id: model_row_id,
+                            status: e.http_status(),
+                            elapsed_ms: 0,
+                            error_msg: Some(e.to_string()),
+                            skipped: true,
+                            skip_reason: Some(e.to_string()),
+                        };
+                    }
                 }
-            },
+            }
             None => String::new(),
         };
 
@@ -2187,17 +2183,15 @@ async fn run_test_for_model(
             // The list was consumed by `into_iter()` above, so we
             // re-query. This only happens for the per-row path when
             // the model has accounts but the caller didn't pin one.
-            (|| -> Option<AccountId> {
-                let w = s.db_pool().writer();
-                accounts::list(&w, Some(&model.provider_id))
-                    .ok()
-                    .and_then(|l| {
-                        l.into_iter()
-                            .find(|a| a.health_status == accounts::HealthStatus::Healthy)
-                            .map(|a| a.id)
-                    })
-            })()
-            .unwrap_or(AccountId(0))
+            let w = s.db_pool().writer();
+            accounts::list(&w, Some(&model.provider_id))
+                .ok()
+                .and_then(|l| {
+                    l.into_iter()
+                        .find(|a| a.health_status == accounts::HealthStatus::Healthy)
+                        .map(|a| a.id)
+                })
+                .unwrap_or(AccountId(0))
         });
 
         // Decrypt the access token.

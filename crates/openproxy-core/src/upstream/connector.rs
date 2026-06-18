@@ -28,7 +28,7 @@
 //!   `headers_ms` and reports `Timeout(Headers)`. Whichever ceiling
 //!   fires first wins. With `write_ms=200` and `headers_ms=30000` the
 //!   outer race fires first and the caller sees `Timeout(Write)` —
-//! which is the contract the previous version silently violated.
+//!   which is the contract the previous version silently violated.
 //!
 //! - **Total** is the outermost ceiling.
 //!
@@ -87,7 +87,7 @@ use super::phases::UpstreamPhase;
 /// (`Read + Write + Connection + Unpin + Send + 'static`).
 pub enum PhasedConnection {
     Plain(TokioIo<TcpStream>),
-    Tls(TokioIo<ClientTlsStream<TcpStream>>),
+    Tls(Box<TokioIo<ClientTlsStream<TcpStream>>>),
 }
 
 impl Read for PhasedConnection {
@@ -98,7 +98,7 @@ impl Read for PhasedConnection {
     ) -> Poll<Result<(), io::Error>> {
         match &mut *self {
             PhasedConnection::Plain(io) => Pin::new(io).poll_read(cx, buf),
-            PhasedConnection::Tls(io) => Pin::new(io).poll_read(cx, buf),
+            PhasedConnection::Tls(io) => Pin::new(&mut **io).poll_read(cx, buf),
         }
     }
 }
@@ -111,14 +111,14 @@ impl Write for PhasedConnection {
     ) -> Poll<Result<usize, io::Error>> {
         match &mut *self {
             PhasedConnection::Plain(io) => Pin::new(io).poll_write(cx, buf),
-            PhasedConnection::Tls(io) => Pin::new(io).poll_write(cx, buf),
+            PhasedConnection::Tls(io) => Pin::new(&mut **io).poll_write(cx, buf),
         }
     }
 
     fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), io::Error>> {
         match &mut *self {
             PhasedConnection::Plain(io) => Pin::new(io).poll_flush(cx),
-            PhasedConnection::Tls(io) => Pin::new(io).poll_flush(cx),
+            PhasedConnection::Tls(io) => Pin::new(&mut **io).poll_flush(cx),
         }
     }
 
@@ -128,7 +128,7 @@ impl Write for PhasedConnection {
     ) -> Poll<Result<(), io::Error>> {
         match &mut *self {
             PhasedConnection::Plain(io) => Pin::new(io).poll_shutdown(cx),
-            PhasedConnection::Tls(io) => Pin::new(io).poll_shutdown(cx),
+            PhasedConnection::Tls(io) => Pin::new(&mut **io).poll_shutdown(cx),
         }
     }
 }
@@ -301,7 +301,7 @@ pub struct PhasedConnector {
 impl PhasedConnector {
     /// Build a connector with the given per-phase timeouts.
     pub fn new(timeouts: PhasedTimeouts) -> Self {
-        let s = Self {
+        Self {
             dns_ms: std::sync::Arc::new(
                 std::sync::atomic::AtomicU64::new(timeouts.dns.as_millis() as u64),
             ),
@@ -311,8 +311,7 @@ impl PhasedConnector {
             tls_ms: std::sync::Arc::new(
                 std::sync::atomic::AtomicU64::new(timeouts.tls.as_millis() as u64),
             ),
-        };
-        s
+        }
     }
 
     /// Build a connector with the system default timeouts (5s each).
@@ -449,7 +448,7 @@ async fn run_phased_connect(
             return Err(Box::new(PhasedConnectorError {
                 phase: UpstreamPhase::Dial,
                 kind: PhasedErrorKind::Io(last_err.unwrap_or_else(|| {
-                    io::Error::new(io::ErrorKind::Other, "no addresses to dial")
+                    io::Error::other("no addresses to dial")
                 })),
             }));
         }
@@ -482,7 +481,7 @@ async fn run_phased_connect(
         .await
         {
             Ok(Ok(tls_stream)) => {
-                return Ok(PhasedConnection::Tls(TokioIo::new(tls_stream)));
+                return Ok(PhasedConnection::Tls(Box::new(TokioIo::new(tls_stream))));
             }
             Ok(Err(e)) => {
                 return Err(Box::new(PhasedConnectorError {

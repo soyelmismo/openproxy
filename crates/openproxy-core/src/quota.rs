@@ -522,40 +522,48 @@ fn parse_antigravity_user_quota_response(body: &serde_json::Value) -> Result<Acc
         .and_then(|b| b.as_array())
         .ok_or_else(|| CoreError::Internal("missing 'buckets' in response".into()))?;
 
-    for bucket in buckets {
-        let remaining_fraction = bucket
-            .get("remainingFraction")
-            .and_then(|f| f.as_f64())
-            .unwrap_or(1.0);
+    // Build the quota record from the first bucket. The map closure always
+    // returns `Some(...)` for every bucket, so we use `.map(..).next()` (the
+    // closure produces exactly one value per element) — `.next()` yields
+    // `Some(AccountQuota)` for non-empty `buckets` and `None` when empty,
+    // which `.ok_or_else(...)` then maps to the empty-buckets error.
+    let quota = buckets
+        .iter()
+        .map(|bucket| {
+            let remaining_fraction = bucket
+                .get("remainingFraction")
+                .and_then(|f| f.as_f64())
+                .unwrap_or(1.0);
 
-        let reset_time = bucket
-            .get("resetTime")
-            .and_then(|r| r.as_str())
-            .map(String::from);
+            let reset_time = bucket
+                .get("resetTime")
+                .and_then(|r| r.as_str())
+                .map(String::from);
 
-        let is_unlimited = reset_time.is_none() && remaining_fraction >= 1.0;
+            let is_unlimited = reset_time.is_none() && remaining_fraction >= 1.0;
 
-        let remaining = (NORMALIZED_BASE as f64 * remaining_fraction) as i64;
-        let used = if is_unlimited {
-            0
-        } else {
-            NORMALIZED_BASE.saturating_sub(remaining)
-        };
+            let remaining = (NORMALIZED_BASE as f64 * remaining_fraction) as i64;
+            let used = if is_unlimited {
+                0
+            } else {
+                NORMALIZED_BASE.saturating_sub(remaining)
+            };
 
-        return Ok(AccountQuota {
-            plan_name: Some("Antigravity".to_string()),
-            session_used: Some(used),
-            session_limit: Some(NORMALIZED_BASE),
-            session_reset_at: reset_time,
-            weekly_used: None,
-            weekly_limit: None,
-            weekly_reset_at: None,
-            last_fetched_at: now_unix_secs_str(),
-            fetch_error: None,
-        });
-    }
+            AccountQuota {
+                plan_name: Some("Antigravity".to_string()),
+                session_used: Some(used),
+                session_limit: Some(NORMALIZED_BASE),
+                session_reset_at: reset_time,
+                weekly_used: None,
+                weekly_limit: None,
+                weekly_reset_at: None,
+                last_fetched_at: now_unix_secs_str(),
+                fetch_error: None,
+            }
+        })
+        .next();
 
-    Err(CoreError::Internal("no buckets in response".into()))
+    quota.ok_or_else(|| CoreError::Internal("no buckets in response".into()))
 }
 
 // =====================================================================
@@ -585,9 +593,7 @@ pub fn quota_capable_providers() -> &'static [&'static str] {
 /// Convenience wrapper used by the HTTP handler and the front-end
 /// mirror: is `provider_id` in the supported set?
 pub fn supports_quota(provider_id: &str) -> bool {
-    quota_capable_providers()
-        .iter()
-        .any(|p| *p == provider_id)
+    quota_capable_providers().contains(&provider_id)
 }
 
 // =====================================================================

@@ -632,13 +632,15 @@ mod tests {
     fn seed_provider(conn: &Connection, id: &str) {
         providers::create(
             conn,
-            &ProviderId::new(id),
-            id,
-            "https://example.com",
-            AuthType::Bearer,
-            ProviderFormat::Openai,
-            None,
-            None,
+            providers::NewProvider {
+                id: &ProviderId::new(id),
+                name: id,
+                base_url: "https://example.com",
+                auth_type: AuthType::Bearer,
+                format: ProviderFormat::Openai,
+                extra_headers_json: None,
+                auto_activate_keyword: None,
+            },
         )
         .expect("seed provider");
     }

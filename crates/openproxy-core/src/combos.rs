@@ -130,7 +130,7 @@ pub fn create_combo(
     race_size: u8,
 ) -> Result<ComboId> {
     // Validate race_size against the schema CHECK constraint (1..=8).
-    if race_size < 1 || race_size > 8 {
+    if !(1..=8).contains(&race_size) {
         return Err(CoreError::Validation(format!(
             "race_size must be in 1..=8, got {}",
             race_size
@@ -835,7 +835,7 @@ pub fn reorder_targets(
     // the SELECT above is scoped by `combo_id`.
     let mut current_sorted = current.clone();
     current_sorted.sort();
-    let mut incoming: Vec<i64> = ordered_ids.iter().map(|i| i.0 as i64).collect();
+    let mut incoming: Vec<i64> = ordered_ids.iter().map(|i| i.0).collect();
     incoming.sort();
     if current_sorted != incoming {
         return Err(CoreError::Validation(
@@ -878,7 +878,7 @@ pub fn update_combo(
     race_size: Option<u8>,
 ) -> Result<()> {
     if let Some(rs) = race_size {
-        if rs < 1 || rs > 8 {
+        if !(1..=8).contains(&rs) {
             return Err(CoreError::Validation(format!(
                 "race_size must be in 1..=8, got {}",
                 rs
@@ -986,7 +986,7 @@ pub fn resolve_combo_to_targets(
             MAX_SUB_COMBO_DEPTH, combo_id.0
         )));
     }
-    if visited.iter().any(|c| *c == combo_id) {
+    if visited.contains(&combo_id) {
         return Err(CoreError::Validation(format!(
             "cycle detected: combo {} appears twice in resolution chain {:?}",
             combo_id.0, visited
@@ -1233,7 +1233,7 @@ fn row_to_combo(row: &Row<'_>) -> rusqlite::Result<Combo> {
         )
     })?;
 
-    if race_size < 1 || race_size > 8 {
+    if !(1..=8).contains(&race_size) {
         return Err(rusqlite::Error::FromSqlConversionFailure(
             3,
             rusqlite::types::Type::Integer,
@@ -1358,13 +1358,15 @@ mod tests {
     fn seed_provider(conn: &Connection, id: &str) {
         providers::create(
             conn,
-            &ProviderId::new(id),
-            id,
-            "https://example.com",
-            AuthType::Bearer,
-            ProviderFormat::Openai,
-            None,
-            None,
+            providers::NewProvider {
+                id: &ProviderId::new(id),
+                name: id,
+                base_url: "https://example.com",
+                auth_type: AuthType::Bearer,
+                format: ProviderFormat::Openai,
+                extra_headers_json: None,
+                auto_activate_keyword: None,
+            },
         )
         .expect("seed provider");
     }

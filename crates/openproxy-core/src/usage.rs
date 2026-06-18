@@ -241,7 +241,7 @@ pub fn broadcast_usage_input(input: &UsageInput) {
         created_at: chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string(),
     };
     // Ignore send errors - no subscribers is harmless
-    let _ = publish_usage_row(row);
+    publish_usage_row(row);
 }
 
 /// All optional filters shared by the read-side analytics queries.
@@ -417,7 +417,7 @@ impl BuiltWhere {
 /// own their data and implement the trait via `dyn ToSql`, but `params_from_iter`
 /// is generic over `IntoIterator` so this pass-through is the cleanest way to
 /// keep the call site readable.
-fn to_params<'a>(v: &'a [Box<dyn ToSql>]) -> Vec<&'a dyn ToSql> {
+fn to_params(v: &[Box<dyn ToSql>]) -> Vec<&dyn ToSql> {
     v.iter().map(|b| b.as_ref() as &dyn ToSql).collect()
 }
 
@@ -917,8 +917,10 @@ pub fn recent(conn: &Connection, since_id: i64, limit: u32) -> Result<Vec<Recent
                     Box::new(SimpleErr(format!("total_ms unexpectedly negative: {}", total_ms))),
                 ));
             }
-            let request_headers = request_headers.map(|s| serde_json::from_str(&s).ok()).flatten();
-            let response_headers = response_headers.map(|s| serde_json::from_str(&s).ok()).flatten();
+            let request_headers =
+                request_headers.and_then(|s| serde_json::from_str(&s).ok());
+            let response_headers =
+                response_headers.and_then(|s| serde_json::from_str(&s).ok());
             let error_message = error_msg_redacted.or(error_msg);
             let prompt_tokens = prompt_tokens.and_then(|v| u32::try_from(v).ok());
             let completion_tokens = completion_tokens.and_then(|v| u32::try_from(v).ok());
@@ -1056,8 +1058,10 @@ pub fn recent_desc(conn: &Connection, limit: u32) -> Result<Vec<RecentUsageRow>>
                     Box::new(SimpleErr(format!("total_ms unexpectedly negative: {}", total_ms))),
                 ));
             }
-            let request_headers = request_headers.map(|s| serde_json::from_str(&s).ok()).flatten();
-            let response_headers = response_headers.map(|s| serde_json::from_str(&s).ok()).flatten();
+            let request_headers =
+                request_headers.and_then(|s| serde_json::from_str(&s).ok());
+            let response_headers =
+                response_headers.and_then(|s| serde_json::from_str(&s).ok());
             let error_message = error_msg_redacted.or(error_msg);
             let prompt_tokens = prompt_tokens.and_then(|v| u32::try_from(v).ok());
             let completion_tokens = completion_tokens.and_then(|v| u32::try_from(v).ok());
@@ -1169,8 +1173,10 @@ pub fn detail_by_id(conn: &Connection, id: i64) -> Result<Option<UsageDetailRow>
                     Box::new(SimpleErr(format!("total_ms unexpectedly negative: {}", total_ms))),
                 ));
             }
-            let request_headers = request_headers.map(|s| serde_json::from_str(&s).ok()).flatten();
-            let response_headers = response_headers.map(|s| serde_json::from_str(&s).ok()).flatten();
+            let request_headers =
+                request_headers.and_then(|s| serde_json::from_str(&s).ok());
+            let response_headers =
+                response_headers.and_then(|s| serde_json::from_str(&s).ok());
 
             Ok(UsageDetailRow {
                 id: UsageId(id),

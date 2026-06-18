@@ -133,19 +133,33 @@ fn default_true() -> bool {
     true
 }
 
+/// Inputs for [`providers::create`]. Bundled as a struct so the call site
+/// can use field names instead of positional args; the DB row is keyed on
+/// `id` (PRIMARY KEY) and validates `auth_type` / `format` against the
+/// CHECK constraints, so a duplicate id surfaces as `CoreError::Validation`.
+pub struct NewProvider<'a> {
+    pub id: &'a ProviderId,
+    pub name: &'a str,
+    pub base_url: &'a str,
+    pub auth_type: AuthType,
+    pub format: ProviderFormat,
+    pub extra_headers_json: Option<&'a str>,
+    pub auto_activate_keyword: Option<&'a str>,
+}
+
 /// Insert a new provider. The DB enforces uniqueness on `id` (PRIMARY KEY)
 /// and validates `auth_type` / `format` against the CHECK constraints; a
 /// duplicate id surfaces here as `CoreError::Validation`.
-pub fn create(
-    conn: &Connection,
-    id: &ProviderId,
-    name: &str,
-    base_url: &str,
-    auth_type: AuthType,
-    format: ProviderFormat,
-    extra_headers_json: Option<&str>,
-    auto_activate_keyword: Option<&str>,
-) -> Result<()> {
+pub fn create(conn: &Connection, new: NewProvider<'_>) -> Result<()> {
+    let NewProvider {
+        id,
+        name,
+        base_url,
+        auth_type,
+        format,
+        extra_headers_json,
+        auto_activate_keyword,
+    } = new;
     let result = conn.execute(
         "INSERT INTO providers(id, name, base_url, auth_type, format, extra_headers_json, auto_activate_keyword) \
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
@@ -489,13 +503,15 @@ mod tests {
         let id = ProviderId::new("openrouter");
         create(
             &conn,
-            &id,
-            "OpenRouter",
-            "https://openrouter.ai/api/v1",
-            AuthType::Bearer,
-            ProviderFormat::Openai,
-            Some(r#"{"X-Title":"openproxy"}"#),
-            Some("claude"),
+            NewProvider {
+                id: &id,
+                name: "OpenRouter",
+                base_url: "https://openrouter.ai/api/v1",
+                auth_type: AuthType::Bearer,
+                format: ProviderFormat::Openai,
+                extra_headers_json: Some(r#"{"X-Title":"openproxy"}"#),
+                auto_activate_keyword: Some("claude"),
+            },
         )
         .expect("create");
 
@@ -518,25 +534,29 @@ mod tests {
         let id = ProviderId::new("anthropic");
         create(
             &conn,
-            &id,
-            "Anthropic",
-            "https://api.anthropic.com",
-            AuthType::XApiKey,
-            ProviderFormat::Anthropic,
-            None,
-            None,
+            NewProvider {
+                id: &id,
+                name: "Anthropic",
+                base_url: "https://api.anthropic.com",
+                auth_type: AuthType::XApiKey,
+                format: ProviderFormat::Anthropic,
+                extra_headers_json: None,
+                auto_activate_keyword: None,
+            },
         )
         .expect("first create");
 
         let err = create(
             &conn,
-            &id,
-            "Dup",
-            "https://dup.example",
-            AuthType::Bearer,
-            ProviderFormat::Openai,
-            None,
-            None,
+            NewProvider {
+                id: &id,
+                name: "Dup",
+                base_url: "https://dup.example",
+                auth_type: AuthType::Bearer,
+                format: ProviderFormat::Openai,
+                extra_headers_json: None,
+                auto_activate_keyword: None,
+            },
         )
         .expect_err("duplicate must fail");
         match err {
@@ -553,13 +573,15 @@ mod tests {
         for (id, name) in [("a", "A"), ("b", "B"), ("c", "C")] {
             create(
                 &conn,
-                &ProviderId::new(id),
-                name,
-                "https://example.com",
-                AuthType::Bearer,
-                ProviderFormat::Openai,
-                None,
-                None,
+                NewProvider {
+                    id: &ProviderId::new(id),
+                    name,
+                    base_url: "https://example.com",
+                    auth_type: AuthType::Bearer,
+                    format: ProviderFormat::Openai,
+                    extra_headers_json: None,
+                    auto_activate_keyword: None,
+                },
             )
             .expect("create");
         }
@@ -580,13 +602,15 @@ mod tests {
         let id = ProviderId::new("to-delete");
         create(
             &conn,
-            &id,
-            "X",
-            "https://x.example",
-            AuthType::Bearer,
-            ProviderFormat::Openai,
-            None,
-            None,
+            NewProvider {
+                id: &id,
+                name: "X",
+                base_url: "https://x.example",
+                auth_type: AuthType::Bearer,
+                format: ProviderFormat::Openai,
+                extra_headers_json: None,
+                auto_activate_keyword: None,
+            },
         )
         .expect("create");
 
@@ -631,13 +655,15 @@ mod tests {
         let id = ProviderId::new("upd");
         create(
             &conn,
-            &id,
-            "Original",
-            "https://original.example",
-            AuthType::Bearer,
-            ProviderFormat::Openai,
-            Some(r#"{"old":true}"#),
-            None,
+            NewProvider {
+                id: &id,
+                name: "Original",
+                base_url: "https://original.example",
+                auth_type: AuthType::Bearer,
+                format: ProviderFormat::Openai,
+                extra_headers_json: Some(r#"{"old":true}"#),
+                auto_activate_keyword: None,
+            },
         )
         .expect("create");
 
@@ -725,13 +751,15 @@ mod tests {
         let id = ProviderId::new("active-by-default");
         create(
             &conn,
-            &id,
-            "X",
-            "https://x.example",
-            AuthType::Bearer,
-            ProviderFormat::Openai,
-            None,
-            None,
+            NewProvider {
+                id: &id,
+                name: "X",
+                base_url: "https://x.example",
+                auth_type: AuthType::Bearer,
+                format: ProviderFormat::Openai,
+                extra_headers_json: None,
+                auto_activate_keyword: None,
+            },
         )
         .expect("create");
         let got = get(&conn, &id).expect("get").expect("present");
@@ -745,13 +773,15 @@ mod tests {
         let id = ProviderId::new("toggle");
         create(
             &conn,
-            &id,
-            "T",
-            "https://t.example",
-            AuthType::Bearer,
-            ProviderFormat::Openai,
-            None,
-            None,
+            NewProvider {
+                id: &id,
+                name: "T",
+                base_url: "https://t.example",
+                auth_type: AuthType::Bearer,
+                format: ProviderFormat::Openai,
+                extra_headers_json: None,
+                auto_activate_keyword: None,
+            },
         )
         .expect("create");
 
@@ -780,13 +810,15 @@ mod tests {
         for (id, name) in [("a", "A"), ("b", "B"), ("c", "C")] {
             create(
                 &conn,
-                &ProviderId::new(id),
-                name,
-                "https://x.example",
-                AuthType::Bearer,
-                ProviderFormat::Openai,
-                None,
-                None,
+                NewProvider {
+                    id: &ProviderId::new(id),
+                    name,
+                    base_url: "https://x.example",
+                    auth_type: AuthType::Bearer,
+                    format: ProviderFormat::Openai,
+                    extra_headers_json: None,
+                    auto_activate_keyword: None,
+                },
             )
             .expect("create");
         }
@@ -827,13 +859,15 @@ mod tests {
         for (id, name) in [("a", "A"), ("b", "B")] {
             create(
                 &conn,
-                &ProviderId::new(id),
-                name,
-                "https://x.example",
-                AuthType::Bearer,
-                ProviderFormat::Openai,
-                None,
-                None,
+                NewProvider {
+                    id: &ProviderId::new(id),
+                    name,
+                    base_url: "https://x.example",
+                    auth_type: AuthType::Bearer,
+                    format: ProviderFormat::Openai,
+                    extra_headers_json: None,
+                    auto_activate_keyword: None,
+                },
             )
             .expect("create");
         }

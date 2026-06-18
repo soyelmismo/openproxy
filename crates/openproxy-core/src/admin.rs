@@ -62,13 +62,15 @@ pub fn create_provider(conn: &Connection, input: CreateProviderInput) -> Result<
     let format = ProviderFormat::parse(&input.format)?;
     providers::create(
         conn,
-        &id,
-        &input.name,
-        &input.base_url,
-        auth,
-        format,
-        input.extra_headers_json.as_deref(),
-        None,
+        providers::NewProvider {
+            id: &id,
+            name: &input.name,
+            base_url: &input.base_url,
+            auth_type: auth,
+            format,
+            extra_headers_json: input.extra_headers_json.as_deref(),
+            auto_activate_keyword: None,
+        },
     )?;
     Ok(id)
 }

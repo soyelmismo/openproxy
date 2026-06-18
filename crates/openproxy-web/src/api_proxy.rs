@@ -222,7 +222,7 @@ async fn connect_async_with_headers(
 
     let request = request_builder
         .body(())
-        .map_err(|e| tokio_tungstenite::tungstenite::Error::Io(std::io::Error::new(std::io::ErrorKind::Other, e)))?;
+        .map_err(|e| tokio_tungstenite::tungstenite::Error::Io(std::io::Error::other(e)))?;
 
     let (ws_stream, response) = connect_async(request).await?;
 

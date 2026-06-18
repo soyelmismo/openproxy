@@ -299,13 +299,15 @@ mod tests {
     fn seed_target(conn: &Connection) -> (ComboId, ComboTargetId) {
         providers::create(
             conn,
-            &ProviderId::new("p"),
-            "p",
-            "https://example.com",
-            AuthType::Bearer,
-            ProviderFormat::Openai,
-            None,
-            None,
+            providers::NewProvider {
+                id: &ProviderId::new("p"),
+                name: "p",
+                base_url: "https://example.com",
+                auth_type: AuthType::Bearer,
+                format: ProviderFormat::Openai,
+                extra_headers_json: None,
+                auto_activate_keyword: None,
+            },
         )
         .expect("seed provider");
         conn.execute(
