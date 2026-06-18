@@ -1059,15 +1059,21 @@ async fn send_ws_error(socket: &mut WebSocket, message: impl Into<String>) -> Re
 }
 
 fn authenticate_admin_ws(state: &AppState, headers: &HeaderMap, query_token: Option<&str>) -> Result<(), ApiError> {
-    // Dev convenience: if the operator sets OPENPROXY_DASHBOARD_AUTH_BYPASS to a
-    // non-empty value in the server's environment, every admin request is
-    // accepted without an Authorization header or query token. Useful when the
-    // dashboard is the only admin client and rotating the manage-scope API key
-    // is more friction than it's worth. Public chat endpoints are unaffected.
-    // Never set this in production.
+    // Dev convenience: when the operator explicitly opts in by setting
+    // OPENPROXY_DASHBOARD_AUTH_BYPASS=1 in the server's environment, every
+    // admin request is accepted without an Authorization header or query
+    // token. The match is on the exact sentinel `1` — NOT "any non-empty
+    // value" — so a typo or stray config (e.g. `=false`, `=yes`, `=0`,
+    // `=legacy-token`) cannot silently grant full admin access. The match
+    // is logged at WARN level so the bypass is visible in production logs
+    // and dashboards alerting on auth-bypass are wired correctly.
     if let Ok(bypass) = std::env::var("OPENPROXY_DASHBOARD_AUTH_BYPASS") {
-        if !bypass.is_empty() {
-            tracing::debug!("admin auth bypassed via OPENPROXY_DASHBOARD_AUTH_BYPASS");
+        if bypass == "1" {
+            tracing::warn!(
+                target: "openproxy::security",
+                "admin auth bypassed via OPENPROXY_DASHBOARD_AUTH_BYPASS=1 — \
+                 every admin endpoint is open. Remove this env var to restore auth."
+            );
             return Ok(());
         }
     }
@@ -3772,5 +3778,81 @@ mod tests {
                 || resp.status() == StatusCode::UNPROCESSABLE_ENTITY,
             "expected 400 or 422, got {:?}", resp.status()
         );
+    }
+
+    // ---- HIGH fix: OPENPROXY_DASHBOARD_AUTH_BYPASS is an exact-match
+    // sentinel, not "any non-empty value". The old behaviour silently
+    // granted full admin access for `=false`, `=yes`, `=0`, etc.
+
+    #[tokio::test]
+    async fn auth_bypass_sentinel_1_admits_admin_request_without_key() {
+        // When OPENPROXY_DASHBOARD_AUTH_BYPASS=*** is set AND no API key
+        // exists, the request must succeed. This is the legitimate
+        // "dev convenience" path and the operator has explicitly opted
+        // in.
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let (state, _key) = make_state_with_key(tmp.path()).await;
+        // Drop the API key the helper just created so the request
+        // would otherwise 401.
+        {
+            let mut w = state.db_pool().writer();
+            w.execute("DELETE FROM api_keys", []).expect("delete keys");
+        }
+        let headers = HeaderMap::new();
+        // SAFETY: tests in this module are not run in parallel and
+        // each one restores the env var to its previous value (or
+        // removes it) before returning.
+        let prev = std::env::var("OPENPROXY_DASHBOARD_AUTH_BYPASS").ok();
+        // SAFETY: set_var is unsafe in 2024 edition; the test runs
+        // single-threaded and restores the value on every exit path.
+        unsafe { std::env::set_var("OPENPROXY_DASHBOARD_AUTH_BYPASS", "1") };
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            authenticate_admin_ws(&state, &headers, None)
+        }));
+        match prev {
+            Some(v) => unsafe { std::env::set_var("OPENPROXY_DASHBOARD_AUTH_BYPASS", v) },
+            None => unsafe { std::env::remove_var("OPENPROXY_DASHBOARD_AUTH_BYPASS") },
+        }
+        let result = result.expect("authenticate_admin_ws should not panic");
+        assert!(
+            result.is_ok(),
+            "authenticate_admin_ws should succeed when bypass=*** is set, got {:?}",
+            result.err()
+        );
+    }
+
+    #[tokio::test]
+    async fn auth_bypass_does_not_admit_on_non_sentinel_values() {
+        // The old bug: any non-empty value of OPENPROXY_DASHBOARD_AUTH_BYPASS
+        // bypassed auth. That meant `=false`, `=yes`, `=0`, `=legacy-token`
+        // and other operator typos silently granted full admin access. The
+        // fix restricts the bypass to the exact sentinel `1`; everything
+        // else must fall through to normal auth, which fails here because
+        // no API key is configured.
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let (state, _key) = make_state_with_key(tmp.path()).await;
+        {
+            let mut w = state.db_pool().writer();
+            w.execute("DELETE FROM api_keys", []).expect("delete keys");
+        }
+        for sentinel in ["false", "yes", "0", "true", "TRUE", "legacy-token", " "] {
+            let headers = HeaderMap::new();
+            let prev = std::env::var("OPENPROXY_DASHBOARD_AUTH_BYPASS").ok();
+            unsafe { std::env::set_var("OPENPROXY_DASHBOARD_AUTH_BYPASS", sentinel) };
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                authenticate_admin_ws(&state, &headers, None)
+            }));
+            match prev {
+                Some(v) => unsafe { std::env::set_var("OPENPROXY_DASHBOARD_AUTH_BYPASS", v) },
+                None => unsafe { std::env::remove_var("OPENPROXY_DASHBOARD_AUTH_BYPASS") },
+            }
+            let result = result.expect("authenticate_admin_ws should not panic");
+            assert!(
+                result.is_err(),
+                "OPENPROXY_DASHBOARD_AUTH_BYPASS={:?} must NOT bypass auth \
+                 (sentinel must be exactly \"1\")",
+                sentinel
+            );
+        }
     }
 }
