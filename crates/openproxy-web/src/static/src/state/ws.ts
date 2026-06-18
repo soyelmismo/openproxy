@@ -4,7 +4,6 @@
 
 import { state } from "./index.js";
 import { LOGS_WS_RECONNECT_DELAYS } from "../lib/constants.js";
-import type { StageEvent } from "../lib/types/api.js";
 
 /** Connection status for the live-logs view. */
 export type LogsStatus = "connected" | "connecting" | "reconnecting" | "disconnected";
@@ -42,24 +41,6 @@ function scheduleLogsReconnect(): void {
   const delay: number = delays[idx] ?? delays[delays.length - 1] ?? 1000;
   state.logs.reconnectAttempt += 1;
   state.logs.reconnectTimer = setTimeout(connectLogsWebSocket, delay);
-}
-
-/** Type guard for StageEvent. The server emits a JSON object that
- *  matches this shape; anything else is ignored. Exported so
- *  views/logs.js (G4) can reuse it. */
-export function isStageEvent(x: unknown): x is StageEvent {
-  if (typeof x !== "object" || x === null) return false;
-  const o: Record<string, unknown> = x as Record<string, unknown>;
-  if (typeof o["request_id"] !== "string") return false;
-  if (typeof o["trace_id"] !== "string") return false;
-  if (typeof o["provider_id"] !== "string") return false;
-  if (typeof o["upstream_model_id"] !== "string") return false;
-  if (typeof o["stage"] !== "string") return false;
-  if (typeof o["elapsed_ms"] !== "number") return false;
-  if (typeof o["status_code"] !== "number") return false;
-  if (typeof o["timestamp"] !== "string") return false;
-  // `connect_ms`, `ttft_ms`, `error` are nullable.
-  return true;
 }
 
 // Connected message handler. Set by views/logs.js during mount.

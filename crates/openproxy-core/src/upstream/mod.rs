@@ -64,7 +64,7 @@ pub use conn_pool::{HostKey, Scheme, UpstreamConnectionPool};
 #[cfg(feature = "upstream-hyper")]
 pub use connector::{PhasedConnector, PhasedConnectorError, PhasedTimeouts, phased_phase};
 #[cfg(feature = "upstream-hyper")]
-pub use error::{UpstreamError, UpstreamResult};
+pub use error::{phase_label, UpstreamError, UpstreamResult};
 #[cfg(feature = "upstream-hyper")]
 pub use phases::{ResolvedPhaseDeadlines, UpstreamPhase};
 #[cfg(feature = "upstream-hyper")]

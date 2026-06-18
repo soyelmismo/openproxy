@@ -157,32 +157,7 @@ pub fn record(conn: &Connection, input: &UsageInput) -> Result<UsageId> {
     })?;
 
     let rowid = conn.last_insert_rowid();
-
-        let row = crate::usage::RecentUsageRow {
-            id: UsageId(rowid),
-            request_id,
-            trace_id,
-            provider_id: input.provider_id.clone(),
-            upstream_model_id: input.upstream_model_id.clone(),
-            status_code: input.status_code,
-            total_ms: input.total_ms,
-            prompt_tokens: input.prompt_tokens,
-            completion_tokens: input.completion_tokens,
-            cost_usd: Some(cost_usd),
-            race_lost: input.race_lost,
-            created_at: chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string(),
-            connect_ms: input.connect_ms,
-            ttft_ms: input.ttft_ms,
-            request_body_json: input.request_body_json.clone(),
-            response_body_json: input.response_body_json.clone(),
-            request_headers: input.request_headers.clone(),
-            response_headers: input.response_headers.clone(),
-            error_message: error_msg_redacted_for_db.clone(),
-            race_total: Some(input.race_total),
-            race_attempts: Some(input.race_attempts),
-            is_streaming: input.is_streaming,
-            stream_complete: input.stream_complete,
-        };
+    let row = crate::usage::row_from_input(UsageId(rowid), input, cost_usd);
     crate::usage::publish_usage_row(row);
 
     Ok(UsageId(rowid))

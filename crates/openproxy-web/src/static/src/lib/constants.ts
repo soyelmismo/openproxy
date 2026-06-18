@@ -1,6 +1,8 @@
 // lib/constants.ts — app-wide constants. Kept here so the views
 // and handlers do not litter the codebase with magic strings/numbers.
 
+import type { StageEvent } from "./types/api.js";
+
 // OAuth-capable provider ids. The provider-detail view uses these
 // to decide when to show the login section.
 const OAUTH_ALL = ["antigravity", "antigravity-cli", "kiro"] as const;
@@ -25,6 +27,41 @@ export const STAGE_LABELS: Readonly<Record<string, string>> = {
 
 // Live logs WS reconnect backoff in ms.
 export const LOGS_WS_RECONNECT_DELAYS: readonly number[] = [1000, 2000, 4000, 8000, 16000, 30000];
+
+// Compute the small "sublabel" string shown next to the stage label
+// in the live-log row (e.g. `connect 412ms`, `ttft 871ms`,
+// `total 4231ms`, `12500ms stale`, or the live `elapsed_ms`).
+//
+// Priority:
+//  1. Terminal stages (`completed` / `failed`) — show the row's
+//     `total_ms` if known, otherwise the stage's `elapsed_ms`.
+//  2. Non-terminal with a `total_ms` — the row is finalized but the
+//     stage hasn't caught up; surface that as `${total}ms stale`
+//     (matches §4.1 in the spec).
+//  3. `streaming` with `ttft_ms` — show `ttft`.
+//  4. `waiting_ttft` / `streaming` with `connect_ms` — show `connect`.
+//  5. Fallback: live `elapsed_ms`.
+//
+// Used by both `components/log-row.ts` (the row HTML renderer) and
+// `state/ticker.ts` (the live counter) so the two sublabels stay in
+// sync as the row moves through its lifecycle.
+export function phaseSublabel(stage: StageEvent, totalMs?: number | null): string {
+  if (stage.stage === "completed" || stage.stage === "failed") {
+    return (totalMs != null && totalMs > 0)
+      ? `total ${totalMs}ms`
+      : `${stage.elapsed_ms || 0}ms`;
+  }
+  if (totalMs != null && totalMs > 0) {
+    return `${totalMs}ms stale`;
+  }
+  if (stage.stage === "streaming" && stage.ttft_ms != null) {
+    return `ttft ${stage.ttft_ms}ms`;
+  }
+  if ((stage.stage === "waiting_ttft" || stage.stage === "streaming") && stage.connect_ms != null) {
+    return `connect ${stage.connect_ms}ms`;
+  }
+  return `${stage.elapsed_ms || 0}ms`;
+}
 
 // Local-storage key for the user theme choice.
 export const THEME_STORAGE_KEY = "openproxy-theme";

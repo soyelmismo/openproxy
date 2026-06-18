@@ -5,6 +5,7 @@
 //! gates can add context without a breaking change.
 
 use super::phases::UpstreamPhase;
+use crate::error::CoreError;
 use std::fmt;
 
 /// Errors returned by `UpstreamClient::call`.
@@ -47,3 +48,59 @@ impl std::error::Error for UpstreamError {}
 
 /// Convenience result alias.
 pub type UpstreamResult<T> = std::result::Result<T, UpstreamError>;
+
+/// Map an [`UpstreamError`] to the public [`CoreError`] used by the
+/// pipeline. Only the *dispatch-time* clusters are covered: the
+/// `Connection | Tls | Http | Decode | Invalid` variants all surface as
+/// `CoreError::UpstreamConnection(msg)` because the dispatch error
+/// paths in `dispatch_upstream` / `dispatch_upstream_streaming` do not
+/// have an enclosing read prefix (the per-chunk streaming path uses a
+/// `"stream read: …"` prefix and therefore keeps its own match).
+///
+/// `Timeout`, `Cancel`, and the HTTP status-code `UpstreamError`
+/// path are NOT covered here because they need contextual info
+/// (elapsed ms, the model name, etc.) that is only available at the
+/// call site.
+impl From<UpstreamError> for CoreError {
+    fn from(e: UpstreamError) -> Self {
+        match e {
+            UpstreamError::Connection(msg)
+            | UpstreamError::Tls(msg)
+            | UpstreamError::Http(msg)
+            | UpstreamError::Decode(msg)
+            | UpstreamError::Invalid(msg) => CoreError::UpstreamConnection(msg),
+            // The other variants require context the pipeline must
+            // supply; constructing them here would lose the elapsed
+            // ms and provider identity that the wire-level logs carry.
+            UpstreamError::Timeout(_) | UpstreamError::Cancel => {
+                unreachable!(
+                    "UpstreamError::Timeout/Cancel must be mapped at the call site \
+                     with elapsed_ms context; From is for the no-context clusters only"
+                )
+            }
+        }
+    }
+}
+
+/// Stable label used by the dispatch error paths when they report a
+/// timeout to the dashboard. The legacy `reqwest`-era code used
+/// `"connect"` for everything up to and including response headers
+/// (because the legacy `tokio::time::timeout(connect, …)` covered the
+/// dial + TLS + wait-for-headers wall-clock budget) and `"total"`
+/// for body-phase stalls. The new phase model distinguishes them, so
+/// collapse the pre-headers phases onto `"connect"` and the body
+/// phase onto `"total"` to keep the dashboard's strings stable.
+///
+/// The streaming per-chunk path uses a different label
+/// (`"idle_chunk"` for the per-chunk gap budget) and therefore does
+/// not call this helper.
+pub fn phase_label(phase: UpstreamPhase) -> &'static str {
+    match phase {
+        UpstreamPhase::Dns
+        | UpstreamPhase::Dial
+        | UpstreamPhase::Tls
+        | UpstreamPhase::Write
+        | UpstreamPhase::Headers => "connect",
+        UpstreamPhase::Body => "total",
+    }
+}

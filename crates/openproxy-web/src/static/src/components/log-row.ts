@@ -3,7 +3,7 @@
 
 import { escapeHtml, escapeAttr } from "../lib/escape.js";
 import { formatContext } from "../lib/format.js";
-import { STAGE_LABELS } from "../lib/constants.js";
+import { STAGE_LABELS, phaseSublabel } from "../lib/constants.js";
 import type { StageEvent, RecentUsageRow } from "../lib/types/api.js";
 
 /** Narrow row shape for `renderLogPhaseHtml`. The live stage can be
@@ -18,29 +18,13 @@ export function renderLogPhaseHtml(
     return `<span class="log-phase log-phase--idle" title="No live phase info (request finished before live-log opened)">—</span>`;
   }
   const phase: string = stage.stage || "started";
-  const elapsed: number = stage.elapsed_ms || 0;
   const label: string = STAGE_LABELS[phase] || phase;
   const cls: string = `log-phase log-phase--${phase}`;
-  let sublabel: string;
-  // When the row is finalized (caller passed a `total_ms` and
-  // the stage is `completed`/`failed`), the sublabel MUST be
-  // the row's `total_ms` (e.g. `"total 4231ms"`) — the live
-  // ticker is frozen but the operator should still see the
-  // final number. The "stale" branch handles the
-  // defense-in-depth case from §4.1: the row is finalized
-  // (so the backend wrote it) but the stage is still
-  // non-terminal (a slow consumer / lagged subscriber missed
-  // the terminal event). We surface that explicitly so the
-  // operator knows the row is not actually live anymore.
-  if (phase === "completed" || phase === "failed") {
-    sublabel = (total_ms != null && total_ms > 0)
-      ? `total ${total_ms}ms`
-      : `${elapsed}ms`;
-  } else if (total_ms != null && total_ms > 0) {
-    sublabel = `${total_ms}ms stale`;
-  } else if (phase === "streaming" && stage.ttft_ms != null) sublabel = `ttft ${stage.ttft_ms}ms`;
-  else if ((phase === "waiting_ttft" || phase === "streaming") && stage.connect_ms != null) sublabel = `connect ${stage.connect_ms}ms`;
-  else sublabel = `${elapsed}ms`;
+  // The phase cell sublabel (e.g. `connect 412ms`, `ttft 871ms`,
+  // `total 4231ms`, `${total}ms stale`, or the live `elapsed_ms`).
+  // The unified `phaseSublabel` helper is also used by the live
+  // ticker (`state/ticker.ts`) so the two paths can never drift.
+  const sublabel: string = phaseSublabel(stage, total_ms);
   return `<span class="${cls}" title="${escapeAttr(label)} (${escapeAttr(sublabel)})">${escapeHtml(label)}<span class="log-phase-sub">${escapeHtml(sublabel)}</span></span>`;
 }
 

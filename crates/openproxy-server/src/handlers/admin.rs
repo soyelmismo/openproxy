@@ -1007,8 +1007,12 @@ pub struct RecentQuery {
 /// "live tail" effect for the dashboard.
 pub async fn usage_recent(
     State(s): State<AppState>,
+    headers: HeaderMap,
     Query(q): Query<RecentQuery>,
 ) -> ApiResult<Json<Vec<usage::RecentUsageRow>>> {
+    if let Err(e) = authenticate_admin_ws(&s, &headers, None) {
+        return e.into();
+    }
     let body: Result<Json<Vec<usage::RecentUsageRow>>, ApiError> = async {
         let since_id = q.since_id.unwrap_or(0).max(0);
         let limit = q
@@ -1051,6 +1055,9 @@ async fn send_ws_error(socket: &mut WebSocket, message: impl Into<String>) -> Re
     send_ws_json(socket, json!({ "type": "error", "message": message.into() })).await
 }
 
+// TODO: rename to `authenticate_admin` — this is a regular HTTP auth
+// fn (no WebSocket-specific logic); the `_ws` suffix is a leftover
+// from when the WS usage stream was the only authenticated handler.
 fn authenticate_admin_ws(state: &AppState, headers: &HeaderMap, query_token: Option<&str>) -> Result<(), ApiError> {
     // Dev convenience: if the operator sets OPENPROXY_DASHBOARD_AUTH_BYPASS to a
     // non-empty value in the server's environment, every admin request is
@@ -1118,6 +1125,42 @@ fn authenticate_admin_ws(state: &AppState, headers: &HeaderMap, query_token: Opt
     Ok(())
 }
 
+/// `{"type":"history","rows":[...]}` envelope for the live-log WS
+/// stream. Used for the initial history batch and for the
+/// `subscribe` resend. The HTTP `usage_recent` endpoint intentionally
+/// returns `Json<Vec<RecentUsageRow>>` (not this envelope) so it
+/// stays a plain array.
+fn history_envelope(rows: Vec<usage::RecentUsageRow>) -> serde_json::Value {
+    serde_json::json!({ "type": "history", "rows": rows })
+}
+
+/// Translate one `recv()` from a broadcast channel into the WS frame
+/// the dashboard expects, OR the decision to break out of the relay
+/// loop. Returning `Ok(None)` means "channel closed, stop relaying".
+async fn recv_to_envelope<T, F>(
+    rx: &mut tokio::sync::broadcast::Receiver<T>,
+    lagged_msg: &str,
+    envelope: F,
+) -> Result<Option<serde_json::Value>, ApiError>
+where
+    T: serde::Serialize + Clone,
+    F: FnOnce(T) -> serde_json::Value,
+{
+    match rx.recv().await {
+        Ok(value) => Ok(Some(envelope(value))),
+        Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
+            // Surface the lag to the dashboard via the error channel.
+            // `recv_to_envelope` doesn't have the socket, so return
+            // an envelope the call site forwards via `send_ws_json`.
+            Ok(Some(serde_json::json!({
+                "type": "error",
+                "message": lagged_msg,
+            })))
+        }
+        Err(tokio::sync::broadcast::error::RecvError::Closed) => Ok(None),
+    }
+}
+
 async fn stream_usage_rows(
     mut socket: WebSocket,
     state: AppState,
@@ -1128,11 +1171,7 @@ async fn stream_usage_rows(
             let w = state.db_pool().writer();
             usage::recent_desc(&w, 100)?
         };
-        send_ws_json(
-            &mut socket,
-            json!({ "type": "history", "rows": rows }),
-        )
-        .await?;
+        send_ws_json(&mut socket, history_envelope(rows)).await?;
 
         // 2. Subscribe to broadcast tx (rows + stages)
         let mut usage_rx = state.usage_tx().subscribe();
@@ -1155,11 +1194,7 @@ async fn stream_usage_rows(
                                     let since_id = msg.since_id.unwrap_or(0).max(0);
                                     let w = state.db_pool().writer();
                                     let rows = usage::recent(&w, since_id, 100)?;
-                                    send_ws_json(
-                                        &mut socket,
-                                        json!({ "type": "history", "rows": rows }),
-                                    )
-                                    .await?;
+                                    send_ws_json(&mut socket, history_envelope(rows)).await?;
                                 }
                                 "ping" => {
                                     let now_str = chrono::Utc::now().to_rfc3339();
@@ -1178,19 +1213,14 @@ async fn stream_usage_rows(
                 }
                 // New row (final): published by `cost::record` after
                 // the request finishes and the usage row is committed.
-                usage = usage_rx.recv() => {
-                    match usage {
-                        Ok(row) => {
-                            send_ws_json(
-                                &mut socket,
-                                json!({ "type": "row", "data": row }),
-                            )
-                            .await?;
-                        }
-                        Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
-                            send_ws_error(&mut socket, "broadcast channel lagged").await?;
-                        }
-                        Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                envelope = recv_to_envelope(
+                    &mut usage_rx,
+                    "broadcast channel lagged",
+                    |row| json!({ "type": "row", "data": row }),
+                ) => {
+                    match envelope? {
+                        Some(env) => send_ws_json(&mut socket, env).await?,
+                        None => break,
                     }
                 }
                 // New stage (in-flight): published by the pipeline at
@@ -1200,19 +1230,14 @@ async fn stream_usage_rows(
                 // needed here because both branches are independent
                 // and the operator cares about correctness, not
                 // strict ordering between a stage and a final row.
-                stage = stage_rx.recv() => {
-                    match stage {
-                        Ok(event) => {
-                            send_ws_json(
-                                &mut socket,
-                                json!({ "type": "stage", "data": event }),
-                            )
-                            .await?;
-                        }
-                        Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
-                            send_ws_error(&mut socket, "stage broadcast channel lagged").await?;
-                        }
-                        Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                envelope = recv_to_envelope(
+                    &mut stage_rx,
+                    "stage broadcast channel lagged",
+                    |event| json!({ "type": "stage", "data": event }),
+                ) => {
+                    match envelope? {
+                        Some(env) => send_ws_json(&mut socket, env).await?,
+                        None => break,
                     }
                 }
             }

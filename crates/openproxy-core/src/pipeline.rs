@@ -211,6 +211,48 @@ impl Pipeline {
         self.record_bodies_and_headers.store(enabled, Ordering::Relaxed);
     }
 
+    /// Publish a [`StageEvent`] for the live-log dashboard.
+    ///
+    /// No-ops when recording is OFF (the `Live` switch the dashboard
+    /// exposes). Used by the 4 inlined `StageEvent { ... }` builders
+    /// scattered across `execute_single` /
+    /// `dispatch_upstream_streaming`; the 5th call site (inside the
+    /// merged [`record_attempt_raw_with_tokens`]) takes a
+    /// pre-computed `total_ms` and builds its struct literal directly
+    /// to keep the publish-row ordering deterministic.
+    fn emit_stage(
+        &self,
+        req: &PipelineRequest,
+        trace_id: &TraceId,
+        target: &ComboTarget,
+        model: Option<&crate::models::Model>,
+        started: Instant,
+        connect_ms: Option<u64>,
+        ttft_ms: Option<u64>,
+        stage: &'static str,
+        status_code: u16,
+        error: Option<String>,
+    ) {
+        if !self.is_recording() {
+            return;
+        }
+        crate::usage::publish_stage_event(crate::usage::StageEvent {
+            request_id: req.request_id.to_string(),
+            trace_id: trace_id.to_string(),
+            provider_id: target.provider_id.to_string(),
+            upstream_model_id: model
+                .map(|m| m.model_id.as_str().to_string())
+                .unwrap_or_default(),
+            stage: stage.into(),
+            elapsed_ms: started.elapsed().as_millis() as u64,
+            connect_ms,
+            ttft_ms,
+            status_code,
+            error,
+            timestamp: crate::usage::now_rfc3339_millis(),
+        });
+    }
+
     /// Drive one chat-completion request to completion.
     ///
     /// Returns a [`PipelineResult`] describing the outcome. The function is
@@ -1023,8 +1065,7 @@ impl Pipeline {
                                 None,
                                 None,
                                 None,
-                                e.http_status(),
-                            );
+                                e.http_status(), trace_id);
                         }
                     };
 
@@ -1053,8 +1094,7 @@ impl Pipeline {
                                         None,
                                         None,
                                         None,
-                                        e.http_status(),
-                                    );
+                                        e.http_status(), trace_id);
                                 }
                             }
                         }
@@ -1145,8 +1185,7 @@ impl Pipeline {
                         None,
                         None,
                         None,
-                        e.http_status(),
-                    ),
+                        e.http_status(), trace_id),
                 };
             }
         }
@@ -1167,8 +1206,7 @@ impl Pipeline {
                     None,
                     None,
                     None,
-                    0,
-                );
+                    0, trace_id);
             }
         };
 
@@ -1195,8 +1233,7 @@ impl Pipeline {
                     None,
                     None,
                     None,
-                    0,
-                );
+                    0, trace_id);
             }
         };
         let model = match self.load_model(model_row_id) {
@@ -1213,8 +1250,7 @@ impl Pipeline {
                     None,
                     None,
                     None,
-                    0,
-                );
+                    0, trace_id);
             }
         };
 
@@ -1234,8 +1270,7 @@ impl Pipeline {
                     Some(&model),
                     None,
                     None,
-                    0,
-                );
+                    0, trace_id);
             }
         };
         let model_overrides = match ModelTimeoutOverrides::from_json(model.timeout_overrides_json.as_deref()) {
@@ -1252,8 +1287,7 @@ impl Pipeline {
                     Some(&model),
                     None,
                     None,
-                    0,
-                );
+                    0, trace_id);
             }
         };
         let resolved_timeouts = timeouts::resolve(
@@ -1302,8 +1336,7 @@ impl Pipeline {
                         Some(&model),
                         None,
                         None,
-                        0,
-                    );
+                        0, trace_id);
                 }
             },
             crate::models::TargetFormat::Anthropic => {
@@ -1323,8 +1356,7 @@ impl Pipeline {
                             Some(&model),
                             None,
                             None,
-                            0,
-                        );
+                            0, trace_id);
                     }
                 }
             }
@@ -1345,8 +1377,7 @@ impl Pipeline {
                             Some(&model),
                             None,
                             None,
-                            0,
-                        );
+                            0, trace_id);
                     }
                 }
             }
@@ -1376,8 +1407,7 @@ impl Pipeline {
                     Some(&model),
                     None,
                     None,
-                    0,
-                );
+                    0, trace_id);
             }
         };
 
@@ -1517,8 +1547,7 @@ impl Pipeline {
                 return self.record_and_fail(
                     req, combo, target, attempt, race_size, &err, started,
                     Some(model), None, None,
-                    err.http_status(),
-                );
+                    err.http_status(), trace_id);
             }
         };
         let mut upstream_request = UpstreamRequest::post_json(url.to_string(), body_bytes);
@@ -1589,8 +1618,7 @@ impl Pipeline {
                 req, combo, target, attempt, race_size,
                 &CoreError::ClientDisconnected, started,
                 Some(model), Some(elapsed), None,
-                CoreError::ClientDisconnected.http_status(),
-            );
+                CoreError::ClientDisconnected.http_status(), trace_id);
         }
         let cancel_token = CancellationToken::from_watch(req.client_disconnected.clone());
         let result = self
@@ -1624,8 +1652,7 @@ impl Pipeline {
                     req, combo, target, attempt, race_size,
                     &CoreError::ClientDisconnected, started,
                     Some(model), Some(connect_and_send_ms), None,
-                    CoreError::ClientDisconnected.http_status(),
-                );
+                    CoreError::ClientDisconnected.http_status(), trace_id);
             }
             Err(UpstreamError::Timeout(phase)) => {
                 // The upstream client reports a single stalled phase.
@@ -1660,20 +1687,23 @@ impl Pipeline {
                 return self.record_and_fail(
                     req, combo, target, attempt, race_size, &err, started,
                     Some(model), Some(connect_and_send_ms), None,
-                    err.http_status(),
-                );
+                    err.http_status(), trace_id);
             }
-            Err(UpstreamError::Connection(msg))
-            | Err(UpstreamError::Tls(msg))
-            | Err(UpstreamError::Http(msg))
-            | Err(UpstreamError::Decode(msg))
-            | Err(UpstreamError::Invalid(msg)) => {
-                let err = CoreError::UpstreamConnection(msg);
+            Err(UpstreamError::Connection(_))
+            | Err(UpstreamError::Tls(_))
+            | Err(UpstreamError::Http(_))
+            | Err(UpstreamError::Decode(_))
+            | Err(UpstreamError::Invalid(_)) => {
+                // Use the dispatch-time `From<UpstreamError>` impl
+                // so the conversion lives in one place. The pattern
+                // here binds `_` (the per-chunk path uses the bound
+                // `msg` for its `"stream read: …"` prefix; this
+                // path has no prefix).
+                let err: CoreError = result.unwrap_err().into();
                 return self.record_and_fail(
                     req, combo, target, attempt, race_size, &err, started,
                     Some(model), Some(connect_and_send_ms), None,
-                    err.http_status(),
-                );
+                    err.http_status(), trace_id);
             }
         };
 
@@ -1754,8 +1784,7 @@ impl Pipeline {
                     req, combo, target, attempt, race_size,
                     &CoreError::ClientDisconnected, started,
                     Some(model), Some(connect_and_send_ms), Some(ttft_ms),
-                    CoreError::ClientDisconnected.http_status(),
-                );
+                    CoreError::ClientDisconnected.http_status(), trace_id);
             }
             Err(UpstreamError::Timeout(phase)) => {
                 let err = CoreError::UpstreamTimeout {
@@ -1765,16 +1794,14 @@ impl Pipeline {
                 return self.record_and_fail(
                     req, combo, target, attempt, race_size, &err, started,
                     Some(model), Some(connect_and_send_ms), Some(ttft_ms),
-                    status_code,
-                );
+                    status_code, trace_id);
             }
             Err(e) => {
                 let err = CoreError::UpstreamConnection(format!("read upstream body: {e}"));
                 return self.record_and_fail(
                     req, combo, target, attempt, race_size, &err, started,
                     Some(model), Some(connect_and_send_ms), Some(ttft_ms),
-                    status_code,
-                );
+                    status_code, trace_id);
             }
         };
 
@@ -1792,8 +1819,7 @@ impl Pipeline {
             return self.record_and_fail(
                 req, combo, target, attempt, race_size, &err, started,
                 Some(model), Some(connect_and_send_ms), Some(ttft_ms),
-                status_code,
-            );
+                status_code, trace_id);
         }
 
         // R2 fix: 2xx non-streaming success. The non-streaming path
@@ -1805,26 +1831,18 @@ impl Pipeline {
         // arriving and the (now missing) terminal `completed`
         // event being published by the success path.
         if self.is_recording() {
-            let model_name = model.model_id.as_str().to_string();
-            crate::usage::publish_stage_event(crate::usage::StageEvent {
-                request_id: req.request_id.to_string(),
-                trace_id: trace_id.to_string(),
-                provider_id: target.provider_id.to_string(),
-                upstream_model_id: model_name,
-                stage: "streaming".into(),
-                elapsed_ms: started.elapsed().as_millis() as u64,
-                connect_ms: Some(connect_and_send_ms),
-                // `ttft_ms` here is the bare `u64` set above
-                // (`let ttft_ms = started.elapsed()…`); wrap it in
-                // `Some(...)` so the StageEvent stays consistent
-                // with the streaming path's `Option<u64> ttft_ms`.
-                ttft_ms: Some(ttft_ms),
+            self.emit_stage(
+                req,
+                &trace_id,
+                target,
+                Some(&model),
+                started,
+                Some(connect_and_send_ms),
+                Some(ttft_ms),
+                "streaming",
                 status_code,
-                error: None,
-                timestamp: chrono::Utc::now()
-                    .format("%Y-%m-%dT%H:%M:%S%.3fZ")
-                    .to_string(),
-            });
+                None,
+            );
         }
 
         // 2xx: parse into the native wire format, then translate to
@@ -1836,8 +1854,7 @@ impl Pipeline {
                 return self.record_and_fail(
                     req, combo, target, attempt, race_size, &err, started,
                     Some(model), Some(connect_and_send_ms), Some(ttft_ms),
-                    status_code,
-                );
+                    status_code, trace_id);
             }
         };
 
@@ -1855,8 +1872,7 @@ impl Pipeline {
                     return self.record_and_fail(
                         req, combo, target, attempt, race_size, &err, started,
                         Some(model), Some(connect_and_send_ms), Some(ttft_ms),
-                        status_code,
-                    );
+                        status_code, trace_id);
                 }
             },
             crate::models::TargetFormat::Anthropic => {
@@ -1868,8 +1884,7 @@ impl Pipeline {
                             return self.record_and_fail(
                                 req, combo, target, attempt, race_size, &err, started,
                                 Some(model), Some(connect_and_send_ms), Some(ttft_ms),
-                                status_code,
-                            );
+                                status_code, trace_id);
                         }
                     };
                 crate::translation::anthropic_to_openai(&anthropic_resp)
@@ -1883,8 +1898,7 @@ impl Pipeline {
                             return self.record_and_fail(
                                 req, combo, target, attempt, race_size, &err, started,
                                 Some(model), Some(connect_and_send_ms), Some(ttft_ms),
-                                status_code,
-                            );
+                                status_code, trace_id);
                         }
                     };
                 crate::translation::gemini_to_openai(&gemini_resp)
@@ -1973,8 +1987,7 @@ impl Pipeline {
                 req, combo, target, attempt, race_size,
                 &CoreError::ClientDisconnected, started,
                 Some(model), Some(elapsed), None,
-                CoreError::ClientDisconnected.http_status(),
-            );
+                CoreError::ClientDisconnected.http_status(), trace_id);
         }
         let cancel_token = CancellationToken::from_watch(req.client_disconnected.clone());
         let result = self
@@ -2012,18 +2025,9 @@ impl Pipeline {
                     req, combo, target, attempt, race_size,
                     &CoreError::ClientDisconnected, started,
                     Some(model), Some(connect_and_send_ms), None,
-                    CoreError::ClientDisconnected.http_status(),
-                );
+                    CoreError::ClientDisconnected.http_status(), trace_id);
             }
             Err(UpstreamError::Timeout(phase)) => {
-                let phase_label = match phase {
-                    crate::upstream::UpstreamPhase::Dns
-                    | crate::upstream::UpstreamPhase::Dial
-                    | crate::upstream::UpstreamPhase::Tls
-                    | crate::upstream::UpstreamPhase::Write
-                    | crate::upstream::UpstreamPhase::Headers => "connect",
-                    crate::upstream::UpstreamPhase::Body => "total",
-                };
                 tracing::warn!(
                     combo_id = combo.id.0,
                     target_id = target.id.0,
@@ -2033,26 +2037,29 @@ impl Pipeline {
                     "upstream phase timed out; aborting streaming attempt"
                 );
                 let err = CoreError::UpstreamTimeout {
-                    phase: phase_label.to_string(),
+                    phase: crate::upstream::phase_label(phase).to_string(),
                     ms: connect_and_send_ms,
                 };
                 return self.record_and_fail(
                     req, combo, target, attempt, race_size, &err, started,
                     Some(model), Some(connect_and_send_ms), None,
-                    err.http_status(),
-                );
+                    err.http_status(), trace_id);
             }
-            Err(UpstreamError::Connection(msg))
-            | Err(UpstreamError::Tls(msg))
-            | Err(UpstreamError::Http(msg))
-            | Err(UpstreamError::Decode(msg))
-            | Err(UpstreamError::Invalid(msg)) => {
-                let err = CoreError::UpstreamConnection(msg);
+            Err(UpstreamError::Connection(_))
+            | Err(UpstreamError::Tls(_))
+            | Err(UpstreamError::Http(_))
+            | Err(UpstreamError::Decode(_))
+            | Err(UpstreamError::Invalid(_)) => {
+                // Use the dispatch-time `From<UpstreamError>` impl
+                // so the conversion lives in one place. The pattern
+                // here binds `_` (the per-chunk path uses the bound
+                // `msg` for its `"stream read: …"` prefix; this
+                // path has no prefix).
+                let err: CoreError = result.unwrap_err().into();
                 return self.record_and_fail(
                     req, combo, target, attempt, race_size, &err, started,
                     Some(model), Some(connect_and_send_ms), None,
-                    err.http_status(),
-                );
+                    err.http_status(), trace_id);
             }
         };
 
@@ -2084,8 +2091,7 @@ impl Pipeline {
             return self.record_and_fail(
                 req, combo, target, attempt, race_size, &err, started,
                 Some(model), Some(connect_and_send_ms), None,
-                status_code,
-            );
+                status_code, trace_id);
         }
 
         let chunk_id = format!("chatcmpl-{}", uuid::Uuid::new_v4());
@@ -2181,25 +2187,18 @@ impl Pipeline {
                                 format!("stream read: {}", msg),
                             )
                         }
-                        UpstreamError::Tls(msg) => {
-                            CoreError::UpstreamConnection(
-                                format!("stream read: {}", msg),
-                            )
-                        }
-                        UpstreamError::Http(msg) => {
-                            CoreError::UpstreamConnection(
-                                format!("stream read: {}", msg),
-                            )
-                        }
-                        UpstreamError::Decode(msg) => {
-                            CoreError::UpstreamConnection(
-                                format!("stream read: {}", msg),
-                            )
-                        }
-                        UpstreamError::Invalid(msg) => {
-                            CoreError::UpstreamConnection(
-                                format!("stream read: {}", msg),
-                            )
+                        // Tls / Http / Decode / Invalid all share
+                        // the From impl's `UpstreamConnection` mapping;
+                        // prefix with `stream read:` so the dashboard
+                        // can distinguish chunk errors from the
+                        // dispatch-time cluster. We build the prefix
+                        // from the bound `msg` (the outer `match e`
+                        // arm has partially-moved `e`).
+                        UpstreamError::Tls(msg)
+                        | UpstreamError::Http(msg)
+                        | UpstreamError::Decode(msg)
+                        | UpstreamError::Invalid(msg) => {
+                            CoreError::UpstreamConnection(format!("stream read: {}", msg))
                         }
                         // Body-phase timeout that isn't `Body` (e.g.
                         // a future phase variant) — treat as idle.
@@ -2212,8 +2211,7 @@ impl Pipeline {
                     return self.record_and_fail(
                         req, combo, target, attempt, race_size, &err, started,
                         Some(model), Some(connect_and_send_ms), ttft_ms,
-                        status_code,
-                    );
+                        status_code, trace_id);
                 }
             };
 
@@ -2236,21 +2234,18 @@ impl Pipeline {
                     // arrived. The dashboard updates the row's
                     // "in phase" label from "waiting_ttft" to
                     // "streaming" and shows the ttft value.
-                    if self.is_recording() {
-                        crate::usage::publish_stage_event(crate::usage::StageEvent {
-                            request_id: req.request_id.to_string(),
-                            trace_id: trace_id.to_string(),
-                            provider_id: target.provider_id.to_string(),
-                            upstream_model_id: model_name.clone(),
-                            stage: "streaming".into(),
-                            elapsed_ms: started.elapsed().as_millis() as u64,
-                            connect_ms: Some(connect_and_send_ms),
-                            ttft_ms,
-                            status_code: 200,
-                            error: None,
-                            timestamp: chrono::Utc::now().format("%Y-%m-%dT%H:%M:%S%.3fZ").to_string(),
-                        });
-                    }
+                    self.emit_stage(
+                        req,
+                        &trace_id,
+                        target,
+                        Some(&model),
+                        started,
+                        Some(connect_and_send_ms),
+                        ttft_ms,
+                        "streaming",
+                        200,
+                        None,
+                    );
                 }
 
                 // Parse based on upstream format.
@@ -2378,8 +2373,7 @@ impl Pipeline {
                 req, combo, target, attempt, race_size,
                 &CoreError::ClientDisconnected, started,
                 Some(model), Some(connect_and_send_ms), ttft_ms,
-                CoreError::ClientDisconnected.http_status(),
-            );
+                CoreError::ClientDisconnected.http_status(), trace_id);
         }
 
         // Send [DONE] if the upstream didn't send it explicitly.
@@ -2501,6 +2495,14 @@ impl Pipeline {
     }
 
     /// Record a failed attempt and return a finished `PipelineResult`.
+    ///
+    /// Takes the outer `trace_id` (created in `execute_single`) so the
+    /// terminal StageEvent correlates with the earlier `started` /
+    /// `connecting` / `streaming` events on the same row. Generating
+    /// a fresh `TraceId::new()` here was a latent bug: it produced a
+    /// row whose trace_id disagreed with every live-log event for the
+    /// same request, so the dashboard couldn't match the failed row
+    /// back to its in-flight stages.
     #[allow(clippy::too_many_arguments)]
     fn record_and_fail(
         &self,
@@ -2515,8 +2517,8 @@ impl Pipeline {
         connect_ms: Option<u64>,
         ttft_ms: Option<u64>,
         status_code: u16,
+        trace_id: TraceId,
     ) -> PipelineResult {
-        let trace_id = TraceId::new();
         let total_ms = started.elapsed().as_millis() as u64;
         // The terminal `failed` stage event is published by
         // `record_attempt_raw_with_tokens` (see the centralized
@@ -2653,38 +2655,6 @@ impl Pipeline {
         Ok(())
     }
 
-    pub fn emit_started_event(&self, req: &PipelineRequest, target: &ComboTarget, combo: &Combo) {
-        let input = UsageInput {
-            request_id: req.request_id,
-            trace_id: req.trace_id,
-            attempt: 1,
-            provider_id: target.provider_id.clone(),
-            account_id: target.account_id,
-            combo_id: Some(combo.id),
-            combo_target_id: Some(target.id),
-            model_row_id: None,
-            upstream_model_id: String::new(),
-            prompt_tokens: Some(0),
-            completion_tokens: Some(0),
-            connect_ms: Some(0),
-            ttft_ms: Some(0),
-            total_ms: 0,
-            status_code: 0,
-            error_msg: None,
-            race_total: combo.race_size,
-            race_lost: false,
-            api_key_id: req.api_key_id,
-            request_body_json: None,
-            response_body_json: None,
-            request_headers: None,
-            response_headers: None,
-            error_message: None,
-            race_attempts: combo.race_size,
-            is_streaming: true,
-            stream_complete: false,
-        };
-        crate::usage::broadcast_usage_input(&input);
-    }
 }
 
 /// Phase label for tracing/debug. Currently unused in production code
@@ -7411,6 +7381,89 @@ data: [DONE]\n\n";
         assert!(
             failed.error.is_some(),
             "failed event must carry a non-None error"
+        );
+    }
+
+    /// Regression test for the latent bug surfaced by merging
+    /// `record_and_fail` + `record_attempt_raw_with_tokens` into one
+    /// `Option<&CoreError>` signature:
+    ///
+    /// Before the merge, the failure path generated a fresh
+    /// `TraceId::new()` per attempt. That was wrong: the failure
+    /// event should share the outer `trace_id` of the request that
+    /// already started (the same one the `started` /
+    /// `connecting` / `streaming` events used). After the merge,
+    /// every failure call site passes the outer `trace_id` into
+    /// `record_and_fail`, so the terminal `failed` event carries
+    /// the same `trace_id` as the preceding in-flight events.
+    ///
+    /// We verify by running a failure case and asserting that,
+    /// within a single attempt:
+    ///   - the `started` event for this attempt
+    ///   - the `failed` event for this attempt
+    /// share the same non-empty `trace_id`, and that string is
+    /// stable across the full sequence (so the dashboard can
+    /// correlate them). Note: the pipeline may retry the same
+    /// request, in which case each retry gets a new trace_id —
+    /// that's expected and out of scope here. We assert per-
+    /// attempt grouping, not whole-request grouping.
+    #[tokio::test]
+    async fn record_terminal_failure_passes_outer_trace_id() {
+        let body = r#"{"error":{"message":"upstream boom","type":"server_error"}}"#;
+        let (events, result, _request_id) =
+            run_with_fake_upstream_and_capture_stages(
+                "HTTP/1.1 500 Internal Server Error",
+                body,
+                "application/json",
+                /* streaming = */ false,
+            )
+            .await;
+        assert!(result.error.is_some(), "500 upstream must produce a pipeline error");
+
+        // Group events by trace_id. Each attempt has its own
+        // trace_id; we want at least ONE group that contains a
+        // terminal `failed` event AND a preceding `started` /
+        // `connecting` event with the same trace_id, with no
+        // mismatch inside the group.
+        let mut groups: std::collections::HashMap<String, Vec<(String, u16)>> =
+            std::collections::HashMap::new();
+        for e in &events {
+            groups
+                .entry(e.trace_id.clone())
+                .or_default()
+                .push((e.stage.clone(), e.status_code));
+        }
+        assert!(
+            !groups.is_empty(),
+            "test setup bug: no events captured for the failed request",
+        );
+
+        for (trace_id, stages) in &groups {
+            // Every terminal `failed` event in this group must
+            // be preceded by a `started` (or other in-flight
+            // stage) with the same trace_id, and the trace_id
+            // itself must be non-empty.
+            assert!(
+                !trace_id.is_empty(),
+                "trace_id must never be empty; saw empty id for group {:?}",
+                stages,
+            );
+            let has_started = stages.iter().any(|(s, _)| s == "started");
+            let has_failed = stages.iter().any(|(s, _)| s == "failed");
+            if has_failed {
+                assert!(
+                    has_started,
+                    "attempt trace_id={trace_id} emitted `failed` but no `started`; \
+                     the failure path may have generated a fresh trace_id instead of \
+                     forwarding the outer one",
+                );
+            }
+        }
+
+        // Also verify at least one group has a terminal `failed`.
+        assert!(
+            groups.values().any(|s| s.iter().any(|(st, _)| st == "failed")),
+            "expected at least one `failed` event in the captured set",
         );
     }
 }
