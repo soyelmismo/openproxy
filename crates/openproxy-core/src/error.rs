@@ -86,6 +86,14 @@ pub enum CoreError {
     /// bug. The caller should retry after a short backoff.
     #[error("service unavailable: {0}")]
     ServiceUnavailable(String),
+
+    /// LOW fix (#12): a generic "not found" for resources that
+    /// don't warrant a dedicated variant. Used by
+    /// `oauth_tickets::mark_consumed` to signal a double-redeem
+    /// attempt (the row exists but the WHERE clause
+    /// `consumed_at IS NULL` no longer matches). Maps to HTTP 404.
+    #[error("{what} not found: {id}")]
+    NotFound { what: String, id: String },
 }
 
 impl CoreError {
@@ -141,6 +149,10 @@ impl CoreError {
             CoreError::Validation(s) => CoreError::Validation(s.clone()),
             CoreError::Internal(s) => CoreError::Internal(s.clone()),
             CoreError::ServiceUnavailable(s) => CoreError::ServiceUnavailable(s.clone()),
+            CoreError::NotFound { what, id } => CoreError::NotFound {
+                what: what.clone(),
+                id: id.clone(),
+            },
         }
     }
 
@@ -149,8 +161,9 @@ impl CoreError {
         match self {
             CoreError::Auth(_) => 401,
             CoreError::Validation(_) => 400,
-            CoreError::ProviderNotFound(_) | CoreError::AccountNotFound(_) 
-                | CoreError::ComboNotFound(_) | CoreError::ModelNotFound { .. } => 404,
+            CoreError::ProviderNotFound(_) | CoreError::AccountNotFound(_)
+                | CoreError::ComboNotFound(_) | CoreError::ModelNotFound { .. }
+                | CoreError::NotFound { .. } => 404,
             CoreError::RateLimited { .. } => 429,
             CoreError::UpstreamError { status, .. } => *status,
             CoreError::UpstreamTimeout { .. } | CoreError::UpstreamConnection(_) 
@@ -188,6 +201,7 @@ impl CoreError {
             CoreError::Config(_) => "config",
             CoreError::Internal(_) => "internal",
             CoreError::ServiceUnavailable(_) => "service_unavailable",
+            CoreError::NotFound { .. } => "not_found",
         }
     }
 }

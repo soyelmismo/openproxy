@@ -31,6 +31,7 @@ pub mod secrets;
 pub mod oauth;
 pub mod oauth_antigravity;
 pub mod oauth_kiro;
+pub mod oauth_tickets;
 pub mod executor_kiro;
 pub mod executor_antigravity;
 pub mod admin;

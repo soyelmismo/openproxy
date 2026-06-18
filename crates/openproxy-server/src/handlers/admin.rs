@@ -3520,6 +3520,18 @@ pub async fn oauth_device_code(
         let upstream_client = s.upstream_client();
         let dar = provider_impl.request_device_code(upstream_client).await?;
 
+        // LOW fix (#12): persist the device code ticket so the
+        // dashboard can survive a page refresh between the
+        // user-code entry and the polling phase. Without this the
+        // upstream `device_code` only lived in the response
+        // payload — a reload / state eviction / server restart
+        // would force the user to restart the whole flow. See
+        // `openproxy_core::oauth_tickets` for the storage shape.
+        {
+            let w = s.db_pool().writer();
+            openproxy_core::oauth_tickets::create_ticket(&w, &provider, &dar)?;
+        }
+
         Ok(Json(serde_json::json!({
             "device_code": dar.device_code,
             "user_code": dar.user_code,
@@ -3551,6 +3563,37 @@ pub async fn oauth_device_poll(
         let account_id_input = input
             .get("account_id")
             .and_then(|v| v.as_i64());
+
+        // LOW fix (#12): validate the ticket before any upstream
+        // call. An expired, consumed, or unknown device_code is
+        // rejected here so the dashboard sees a coherent error
+        // instead of a confusing upstream "authorization_pending"
+        // loop or a silent double-redeem. `lookup_active` does
+        // not mutate state, so a stalled poll never burns the
+        // ticket — only `mark_consumed` on success.
+        {
+            let w = s.db_pool().writer();
+            match openproxy_core::oauth_tickets::lookup_active(&w, device_code)? {
+                openproxy_core::oauth_tickets::TicketStatus::Active(_) => {}
+                openproxy_core::oauth_tickets::TicketStatus::Expired => {
+                    return Err(ApiError(CoreError::Validation(
+                        "device_code has expired; restart the OAuth flow".into(),
+                    )));
+                }
+                openproxy_core::oauth_tickets::TicketStatus::Consumed => {
+                    return Err(ApiError(CoreError::NotFound {
+                        what: "oauth_device_ticket".into(),
+                        id: device_code.into(),
+                    }));
+                }
+                openproxy_core::oauth_tickets::TicketStatus::Unknown => {
+                    return Err(ApiError(CoreError::NotFound {
+                        what: "oauth_device_ticket".into(),
+                        id: device_code.into(),
+                    }));
+                }
+            }
+        }
 
         let provider_impl = match provider.as_str() {
             "kiro" => {
@@ -3628,6 +3671,27 @@ pub async fn oauth_device_poll(
                         provider_specific.as_deref(),
                         None,
                     )?;
+                }
+
+                // LOW fix (#12): single-use enforcement. After a
+                // successful exchange the ticket is consumed so a
+                // retry (legitimate or replayed) cannot redeem the
+                // same device_code twice. The WHERE clause in
+                // `mark_consumed` is atomic, so a racing second
+                // poll will see the first redeem as Consumed and
+                // fail here too.
+                if let Err(e) = (|| -> Result<(), ApiError> {
+                    let w = s.db_pool().writer();
+                    openproxy_core::oauth_tickets::mark_consumed(&w, device_code)
+                        .map_err(ApiError)?;
+                    Ok(())
+                })() {
+                    tracing::warn!(
+                        device_code = %device_code,
+                        error = %e.0,
+                        "mark_consumed failed; downstream was already wired — \
+                         a replay may now succeed before the next cleanup sweep"
+                    );
                 }
 
                 // Post-exchange hook. For Kiro this hits
