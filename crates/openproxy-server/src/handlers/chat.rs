@@ -420,9 +420,10 @@ async fn run_pipeline(
 ///
 /// | Header state                          | Result    |
 /// | ------------------------------------- | --------- |
-/// | absent                                 | `Ok(None)` — anonymous, full access. |
-/// | `Authorization: <other-scheme> ...`    | `Ok(None)` — we don't recognize the scheme; treat as anonymous. |
-/// | `Authorization: Bearer <key>`          | look up by SHA-256, enforce active+unexpired+scope+allowlist. |
+/// | absent, no active keys configured     | `Ok(None)` — anonymous OK (local-dev). |
+/// | absent, ≥1 active key configured      | 401 `missing api key`. |
+/// | `Authorization: <other-scheme> ...`   | treated as missing → falls into the two rows above. |
+/// | `Authorization: Bearer *** | look up by SHA-256, enforce active+unexpired+scope+allowlist. |
 /// | `Bearer <key>` not in the table        | 401 `invalid api key`. |
 /// | key is revoked / inactive              | 401 `api key revoked or inactive`. |
 /// | key has expired                       | 401 `api key expired`. |
@@ -439,10 +440,40 @@ fn authenticate(
         .and_then(|s| s.strip_prefix("Bearer "))
     {
         Some(t) => t.trim(),
-        None => return Ok(None),
+        None => {
+            // MEDIUM fix (audit finding #5): the previous behaviour
+            // silently admitted anonymous traffic, so an open proxy
+            // on the public internet would forward any client's
+            // prompts to paid upstreams — the operator would foot
+            // the bill with no visibility or per-key rate limits.
+            //
+            // Backward-compat path: if NO active API keys are
+            // configured, this is a fresh install (local-dev /
+            // docker / first run) and anonymous traffic is fine.
+            // As soon as the operator creates the first key, the
+            // chat endpoint requires that key. The transition is
+            // automatic — no config knob needed.
+            let active = api_keys::count_active(&state.db_pool().writer())
+                .map_err(ApiError)?;
+            if active == 0 {
+                tracing::debug!(
+                    target: "openproxy::auth",
+                    "anonymous request admitted (no active api keys configured)"
+                );
+                return Ok(None);
+            }
+            return Err(ApiError(CoreError::Auth("missing api key".into())));
+        }
     };
     if token.is_empty() {
-        return Ok(None);
+        // Same gate: a bare `Authorization: Bearer ` (empty
+        // token) is treated as "no header".
+        let active = api_keys::count_active(&state.db_pool().writer())
+            .map_err(ApiError)?;
+        if active == 0 {
+            return Ok(None);
+        }
+        return Err(ApiError(CoreError::Auth("missing api key".into())));
     }
 
     let key_hash = api_keys::hash_key(token);

@@ -3850,7 +3850,7 @@ mod tests {
         // Drop the API key the helper just created so the request
         // would otherwise 401.
         {
-            let mut w = state.db_pool().writer();
+            let w = state.db_pool().writer();
             w.execute("DELETE FROM api_keys", []).expect("delete keys");
         }
         let headers = HeaderMap::new();
@@ -3887,7 +3887,7 @@ mod tests {
         let tmp = tempfile::tempdir().expect("tempdir");
         let (state, _key) = make_state_with_key(tmp.path()).await;
         {
-            let mut w = state.db_pool().writer();
+            let w = state.db_pool().writer();
             w.execute("DELETE FROM api_keys", []).expect("delete keys");
         }
         for sentinel in ["false", "yes", "0", "true", "TRUE", "legacy-token", " "] {

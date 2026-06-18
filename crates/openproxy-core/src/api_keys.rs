@@ -193,6 +193,26 @@ pub fn get_by_hash(conn: &Connection, key_hash: &str) -> Result<Option<ApiKey>> 
     Ok(row)
 }
 
+/// Count the number of *active* API keys. Used by the chat
+/// endpoint's anonymous-access gate: when at least one active key
+/// is configured, the operator has explicitly opted into per-key
+/// auth, so anonymous traffic must be rejected. When zero active
+/// keys exist (typical local-dev / first-run state), the chat
+/// endpoint stays open for backwards compatibility.
+pub fn count_active(conn: &Connection) -> Result<u64> {
+    let n: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM api_keys WHERE is_active = 1",
+            [],
+            |row| row.get(0),
+        )
+        .map_err(|e| CoreError::Database {
+            message: format!("count_active api_keys: {e}"),
+            source: Some(Box::new(e)),
+        })?;
+    Ok(n.max(0) as u64)
+}
+
 /// List every API key, newest first.
 pub fn list(conn: &Connection) -> Result<Vec<ApiKey>> {
     let mut stmt = conn
@@ -896,5 +916,34 @@ mod tests {
         assert!(k.revoked_at.is_none());
         assert!(k.expires_at.is_none());
         assert!(k.last_used_at.is_none());
+    }
+
+    // ---- MEDIUM fix: count_active drives the anonymous-access gate
+    // in `chat::authenticate`. A fresh DB has zero → anonymous OK
+    // (local-dev). After the operator creates the first key the
+    // count is ≥ 1 → chat endpoint requires a key. Revoked keys
+    // must NOT count (they cannot authenticate either).
+
+    #[test]
+    fn count_active_is_zero_on_fresh_db() {
+        let (conn, _p) = fresh_pool();
+        assert_eq!(count_active(&conn).expect("count"), 0);
+    }
+
+    #[test]
+    fn count_active_returns_one_after_create() {
+        let (conn, _p) = fresh_pool();
+        create(&conn, make_input("a"), "admin").expect("create");
+        assert_eq!(count_active(&conn).expect("count"), 1);
+    }
+
+    #[test]
+    fn count_active_excludes_revoked_keys() {
+        let (conn, _p) = fresh_pool();
+        let (k1, _) = create(&conn, make_input("a"), "admin").expect("create");
+        create(&conn, make_input("b"), "admin").expect("create");
+        // Revoke k1. count_active must drop back to 1.
+        revoke(&conn, k1.id).expect("revoke");
+        assert_eq!(count_active(&conn).expect("count"), 1);
     }
 }
