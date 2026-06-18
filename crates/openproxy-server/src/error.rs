@@ -41,13 +41,84 @@ impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
         let status = StatusCode::from_u16(self.0.http_status())
             .unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
+        // LOW fix: cap the serialized error message so an upstream
+        // returning a multi-MiB HTML error page, a Python traceback,
+        // or any other verbose body does NOT get amplified into the
+        // JSON response we ship back to our own client. The cap is
+        // applied at the HTTP boundary, AFTER `Display` produces the
+        // full string, so all the existing error variants are covered
+        // (validation messages, database messages, upstream bodies)
+        // without having to add a cap to each variant.
+        let raw = self.0.to_string();
+        let message = truncate_error_message(&raw);
         let body = json!({
             "error": {
                 "code": self.0.code(),
-                "message": self.0.to_string(),
+                "message": message,
             }
         });
         (status, Json(body)).into_response()
+    }
+}
+
+/// Maximum length, in bytes, of the `error.message` we ship back to
+/// our client. Matches the `redact_error_msg` cap used for the DB
+/// (`cost.rs`), so the API response and the persisted row never
+/// disagree on how big an error message can be.
+const API_ERROR_MESSAGE_MAX: usize = 2048;
+
+fn truncate_error_message(raw: &str) -> String {
+    if raw.len() <= API_ERROR_MESSAGE_MAX {
+        return raw.to_string();
+    }
+    // Walk back to a valid UTF-8 boundary so we never slice a code
+    // point in half. `is_char_boundary` is O(1) so this stays cheap.
+    let mut idx = API_ERROR_MESSAGE_MAX;
+    while idx > 0 && !raw.is_char_boundary(idx) {
+        idx -= 1;
+    }
+    let mut out = String::with_capacity(idx + "...[truncated]".len());
+    out.push_str(&raw[..idx]);
+    out.push_str("...[truncated]");
+    out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn truncate_error_message_returns_short_strings_unchanged() {
+        let s = "upstream error: status=503 body=Service Unavailable";
+        assert_eq!(truncate_error_message(s), s);
+    }
+
+    #[test]
+    fn truncate_error_message_caps_long_strings() {
+        // 1 MiB of garbage simulating a verbose upstream body.
+        let huge = "x".repeat(1024 * 1024);
+        let out = truncate_error_message(&huge);
+        assert!(
+            out.len() <= API_ERROR_MESSAGE_MAX + "...[truncated]".len(),
+            "output len {} exceeds cap {}",
+            out.len(),
+            API_ERROR_MESSAGE_MAX + "...[truncated]".len()
+        );
+        assert!(out.ends_with("...[truncated]"));
+    }
+
+    #[test]
+    fn truncate_error_message_respects_utf8_boundaries() {
+        // Multi-byte chars at the cap boundary. The truncation must
+        // land on a char boundary, not split a code point.
+        let mut s = String::new();
+        while s.len() < API_ERROR_MESSAGE_MAX + 10 {
+            s.push('\u{2603}'); // 3-byte snowman
+        }
+        let out = truncate_error_message(&s);
+        assert!(out.ends_with("...[truncated]"));
+        // Round-trip via std::str to verify we did not produce invalid UTF-8.
+        assert!(std::str::from_utf8(out.as_bytes()).is_ok());
     }
 }
 
