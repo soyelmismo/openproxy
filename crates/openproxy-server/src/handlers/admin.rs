@@ -91,6 +91,28 @@ pub struct UsageQuery {
     pub api_key_id: Option<i64>,
 }
 
+/// Parse a `from` or `to` timestamp from the dashboard into the
+/// canonical RFC-3339 form the SQL builder expects. Returns a
+/// 400-style [`CoreError::Validation`] on malformed input.
+fn parse_usage_timestamp(s: &str, field: &str) -> Result<String, ApiError> {
+    // Try RFC-3339 first (the canonical form `created_at` is stored in).
+    if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(s) {
+        return Ok(dt.with_timezone(&chrono::Utc).to_rfc3339_opts(chrono::SecondsFormat::Secs, true));
+    }
+    // Fall back to the SQLite "YYYY-MM-DD HH:MM:SS" form (the format
+    // operators sometimes paste from a log line). We require the
+    // space — a `T` here is the RFC-3339 form, already handled above.
+    if let Ok(naive) = chrono::NaiveDateTime::parse_from_str(s, "%Y-%m-%d %H:%M:%S") {
+        return Ok(naive.and_utc().to_rfc3339_opts(chrono::SecondsFormat::Secs, true));
+    }
+    Err(CoreError::Validation(format!(
+        "{} must be an RFC-3339 timestamp (e.g. 2026-06-18T07:00:00Z) or \
+         SQLite-style (e.g. 2026-06-18 07:00:00); got `{}`",
+        field, s
+    ))
+    .into())
+}
+
 impl UsageQuery {
     /// Project into a [`UsageFilter`]. An empty `provider_id` string
     /// surfaces here as a 400 via [`CoreError::Validation`].
@@ -107,12 +129,45 @@ impl UsageQuery {
                 }
             })
             .transpose()?;
+        // MEDIUM fix: validate `from` and `to` are well-formed timestamps
+        // before they reach the SQL builder. Without this, a query
+        // like `?from=garbage` returns 0 rows silently (the SQLite
+        // string comparison fails the row against every `created_at`)
+        // and the operator gets a misleading "no data" result. A
+        // malformed timestamp is a client error and must surface as 400.
+        //
+        // Accept the two timestamp shapes the dashboard sends:
+        //   - RFC-3339 (e.g. `2026-06-18T07:00:00Z`)
+        //   - SQLite-style (e.g. `2026-06-18 07:00:00`)
+        //
+        // Both round-trip through `chrono::DateTime<Utc>` and we
+        // re-emit the canonical RFC-3339 form so the SQL comparison
+        // is consistent.
+        let from = self
+            .from
+            .map(|s| parse_usage_timestamp(&s, "from"))
+            .transpose()?;
+        let to = self
+            .to
+            .map(|s| parse_usage_timestamp(&s, "to"))
+            .transpose()?;
+        // If both are present, from must not be after to. (Both
+        // are inclusive at the lower bound in the SQL.)
+        if let (Some(f), Some(t)) = (&from, &to) {
+            if f > t {
+                return Err(CoreError::Validation(format!(
+                    "from ({}) must be <= to ({})",
+                    f, t
+                ))
+                .into());
+            }
+        }
         let account_id = self.account_id.map(AccountId::new);
         let combo_id = self.combo_id.map(ComboId);
         let api_key_id = self.api_key_id.map(ApiKeyId);
         Ok(UsageFilter {
-            from: self.from,
-            to: self.to,
+            from,
+            to,
             provider_id,
             model_id: self.model_id,
             account_id,
@@ -3854,5 +3909,104 @@ mod tests {
                 sentinel
             );
         }
+    }
+
+    // ---- MEDIUM fix: from/to usage filter validation ----
+
+    #[test]
+    fn usage_filter_rejects_garbage_timestamp_with_400() {
+        // Pre-fix, `?from=garbage` returned zero rows with no error.
+        // The operator got a misleading "no data" view. Post-fix it
+        // surfaces as a validation error.
+        let q = UsageQuery {
+            from: Some("garbage".to_string()),
+            to: None,
+            provider_id: None,
+            model_id: None,
+            account_id: None,
+            combo_id: None,
+            api_key_id: None,
+        };
+        let result = q.into_filter();
+        let err = result.expect_err("garbage timestamp must be rejected");
+        let msg = format!("{:?}", err);
+        assert!(msg.contains("from"), "error must mention the bad field, got: {}", msg);
+        assert!(msg.contains("garbage"), "error must include the bad value, got: {}", msg);
+    }
+
+    #[test]
+    fn usage_filter_accepts_rfc3339_and_canonicalises() {
+        // The dashboard sends RFC-3339; the SQL builder compares against
+        // canonical RFC-3339 in `created_at`. We must accept and
+        // canonicalise (not reject) RFC-3339 input.
+        let q = UsageQuery {
+            from: Some("2026-06-18T07:00:00+02:00".to_string()),
+            to: None,
+            provider_id: None,
+            model_id: None,
+            account_id: None,
+            combo_id: None,
+            api_key_id: None,
+        };
+        let f = q.into_filter().expect("RFC-3339 with offset is valid");
+        let from = f.from.expect("from present");
+        // The offset is normalised to UTC and the suffix is `Z`.
+        assert!(from.ends_with('Z'), "expected Z-suffix, got: {}", from);
+        assert!(from.starts_with("2026-06-18T05:00:00"), "expected 05:00 UTC, got: {}", from);
+    }
+
+    #[test]
+    fn usage_filter_accepts_sqlite_format() {
+        // Operators paste `2026-06-18 07:00:00` from log lines; this
+        // form must also be accepted.
+        let q = UsageQuery {
+            from: None,
+            to: Some("2026-06-18 07:00:00".to_string()),
+            provider_id: None,
+            model_id: None,
+            account_id: None,
+            combo_id: None,
+            api_key_id: None,
+        };
+        let f = q.into_filter().expect("SQLite-style timestamp is valid");
+        let to = f.to.expect("to present");
+        assert_eq!(to, "2026-06-18T07:00:00Z");
+    }
+
+    #[test]
+    fn usage_filter_rejects_from_after_to() {
+        // A reversed range is a client error: it would return zero
+        // rows silently otherwise.
+        let q = UsageQuery {
+            from: Some("2026-06-18T08:00:00Z".to_string()),
+            to: Some("2026-06-18T07:00:00Z".to_string()),
+            provider_id: None,
+            model_id: None,
+            account_id: None,
+            combo_id: None,
+            api_key_id: None,
+        };
+        let err = q.into_filter().expect_err("reversed range must be rejected");
+        let msg = format!("{:?}", err);
+        assert!(msg.contains("must be <="), "expected ordering error, got: {}", msg);
+    }
+
+    #[test]
+    fn usage_filter_absent_timestamps_still_pass() {
+        // Backward compat: when both fields are absent (the common
+        // case in the dashboard's "show all" view), validation must
+        // be a no-op.
+        let q = UsageQuery {
+            from: None,
+            to: None,
+            provider_id: None,
+            model_id: None,
+            account_id: None,
+            combo_id: None,
+            api_key_id: None,
+        };
+        let f = q.into_filter().expect("absent timestamps are valid");
+        assert!(f.from.is_none());
+        assert!(f.to.is_none());
     }
 }
