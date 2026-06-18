@@ -31,10 +31,34 @@ pub struct DbPool {
     reader: Arc<Mutex<Connection>>,
     /// Path to the SQLite file the pool was opened against. Used by
     /// [`DbPool::open_connection`] to spin up an *additional* owned
-    /// handle on the same file when a caller needs an owned
+    /// handle on the same handle when a caller needs an owned
     /// `Connection` (rusqlite 0.31's `Connection: !Clone`, so the
     /// only way to get a second handle is to open a new one).
     path: Arc<Path>,
+}
+
+/// Time budget for the writer lock on hot-path inserts.
+///
+/// The hot path is `cost::record`: every chat request takes the
+/// writer briefly to persist a usage row. If the writer is held by
+/// a long-running admin query (e.g. a 30-day usage summary that
+/// touches ~10k rows), every concurrent chat request would block
+/// until the admin query finishes. With 100ms ceiling the worst
+/// case is a lost usage row (logged + returned as `None`), never
+/// a hung client request.
+pub const HOT_PATH_LOCK_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(100);
+
+/// Time budget for the writer lock on admin/dashboard queries. Much
+/// longer than the hot path because the operator explicitly asked
+/// for the result; we'd rather wait a few seconds than 500.
+pub const ADMIN_LOCK_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// Reason a `try_lock` returned `None` instead of a guard. Used by
+/// the hot path to log + count dropped writes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LockTimeout {
+    Hot,
+    Admin,
 }
 
 impl std::fmt::Debug for DbPool {
@@ -77,6 +101,18 @@ impl DbPool {
     /// Acquire the serialized writer. Blocks until the previous writer is released.
     pub fn writer(&self) -> WriterGuard<'_> {
         self.writer.lock()
+    }
+
+    /// Try to acquire the writer lock for at most `timeout` (blocking).
+    /// Returns `None` if the lock could not be acquired in time — the
+    /// caller decides what to do (drop the write, log + retry, 503 the
+    /// request, etc.).
+    ///
+    /// This is the LOW fix for `db_pool` write-lock starvation: a
+    /// long-running admin query holding the writer no longer freezes
+    /// the hot path indefinitely.
+    pub fn try_writer_for(&self, timeout: std::time::Duration) -> Option<WriterGuard<'_>> {
+        self.writer.try_lock_for(timeout)
     }
 
     /// Clone the writer mutex's [`Arc`] handle. Used by long-lived consumers
@@ -186,5 +222,50 @@ mod tests {
         let dir = base.join(format!("openproxy-db-test-{}-{}", pid, nanos));
         std::fs::create_dir_all(&dir).expect("mkdir tempdir");
         dir
+    }
+
+    // ---- LOW fix (#14): the writer lock must respect a timeout
+    // budget. Holding the lock for 500ms while another caller asks
+    // for a 50ms budget must NOT block the second caller — it must
+    // return None immediately so the caller can decide what to do.
+
+    #[test]
+    fn try_writer_for_returns_none_when_lock_is_held() {
+        let dir = tempdir();
+        let path = dir.join("test.db");
+        let pool = DbPool::open(&path).expect("open");
+
+        // Take the writer lock and hold it.
+        let _guard = pool.writer();
+
+        // A second caller with a 50ms budget must NOT block until
+        // _guard drops — it must return None within 50ms.
+        let start = std::time::Instant::now();
+        let result = pool.try_writer_for(std::time::Duration::from_millis(50));
+        let elapsed = start.elapsed();
+
+        assert!(result.is_none(), "lock should not be acquirable while held");
+        assert!(
+            elapsed < std::time::Duration::from_millis(150),
+            "try_writer_for waited {:?}; should have failed fast",
+            elapsed
+        );
+    }
+
+    #[test]
+    fn try_writer_for_succeeds_when_lock_is_free() {
+        let dir = tempdir();
+        let path = dir.join("test.db");
+        let pool = DbPool::open(&path).expect("open");
+
+        // Lock is free, so a 100ms budget must acquire immediately.
+        let start = std::time::Instant::now();
+        let guard = pool
+            .try_writer_for(std::time::Duration::from_millis(100))
+            .expect("lock should be available");
+        let elapsed = start.elapsed();
+
+        assert!(elapsed < std::time::Duration::from_millis(50));
+        drop(guard);
     }
 }

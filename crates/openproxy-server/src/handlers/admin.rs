@@ -55,6 +55,7 @@ use openproxy_core::{
     combos,
     config::{CircuitBreakerConfig, RacingConfig, RetriesConfig, TimeoutsConfig},
     db as core_db,
+    db::conn::ADMIN_LOCK_TIMEOUT,
     ids::{AccountId, ApiKeyId, ComboId, ComboTargetId, ModelRowId, ProviderId},
     models,
     oauth,
@@ -768,7 +769,19 @@ pub async fn usage_summary(
     Query(q): Query<UsageQuery>,
 ) -> ApiResult<Json<usage::UsageSummary>> {
     let body: Result<Json<usage::UsageSummary>, ApiError> = async {
-        let w = s.db_pool().writer();
+        // LOW fix (#14): admin queries must not block forever on
+        // the writer lock. We wait up to ADMIN_LOCK_TIMEOUT (5s)
+        // and return 503 if we lose the race — better a clear
+        // error than an indefinite hang for the operator.
+        let w = s
+            .db_pool()
+            .try_writer_for(ADMIN_LOCK_TIMEOUT)
+            .ok_or_else(|| {
+                ApiError(CoreError::ServiceUnavailable(
+                    "writer lock busy: another query is holding the database; retry in a few seconds"
+                        .into(),
+                ))
+            })?;
         let f = q.into_filter()?;
         Ok(Json(usage::summary(&w, &f)?))
     }

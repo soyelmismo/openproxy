@@ -2919,7 +2919,30 @@ impl Pipeline {
         // config flips; only the heavy `request_body_json`
         // / `request_headers` payloads are gated on
         // `recording`.
-        let conn = self.conn.lock();
+        //
+        // LOW fix (#14): try-lock the writer with a short
+        // ceiling (HOT_PATH_LOCK_TIMEOUT = 100ms). A long
+        // admin query holding the writer must NOT freeze the
+        // chat hot path. If we lose the race we drop the row
+        // (the request still succeeded for the client; we
+        // just lose the per-attempt analytics) and log a
+        // counter so the operator can see this is happening.
+        let conn = match self
+            .conn
+            .try_lock_for(crate::db::conn::HOT_PATH_LOCK_TIMEOUT)
+        {
+            Some(g) => g,
+            None => {
+                tracing::warn!(
+                    request_id = %req.request_id,
+                    "writer lock unavailable within 100ms; dropping usage row"
+                );
+                // The client request still completed — the row is
+                // best-effort analytics. Return OK so the caller
+                // doesn't fail the request because of bookkeeping.
+                return Ok(());
+            }
+        };
         cost::record(&conn, &input)?;
         // Then publish the terminal stage event, but only
         // when `recording` is enabled. Stage events are

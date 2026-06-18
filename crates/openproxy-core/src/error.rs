@@ -79,6 +79,13 @@ pub enum CoreError {
 
     #[error("internal: {0}")]
     Internal(String),
+
+    /// LOW fix (#14): the writer lock could not be acquired
+    /// within its timeout budget. Maps to HTTP 503 in
+    /// `http_status()` — a transient service condition, not a
+    /// bug. The caller should retry after a short backoff.
+    #[error("service unavailable: {0}")]
+    ServiceUnavailable(String),
 }
 
 impl CoreError {
@@ -133,6 +140,7 @@ impl CoreError {
             CoreError::Auth(s) => CoreError::Auth(s.clone()),
             CoreError::Validation(s) => CoreError::Validation(s.clone()),
             CoreError::Internal(s) => CoreError::Internal(s.clone()),
+            CoreError::ServiceUnavailable(s) => CoreError::ServiceUnavailable(s.clone()),
         }
     }
 
@@ -151,6 +159,10 @@ impl CoreError {
             CoreError::RaceLost => 499,
             CoreError::Parse(_) | CoreError::Database { .. } | CoreError::Migration { .. }
                 | CoreError::Config(_) | CoreError::Internal(_) => 500,
+            // LOW fix (#14): 503 Service Unavailable for transient
+            // resource exhaustion. The client (or the operator's
+            // dashboard) should retry after a short backoff.
+            CoreError::ServiceUnavailable(_) => 503,
         }
     }
 
@@ -175,6 +187,7 @@ impl CoreError {
             CoreError::Migration { .. } => "migration",
             CoreError::Config(_) => "config",
             CoreError::Internal(_) => "internal",
+            CoreError::ServiceUnavailable(_) => "service_unavailable",
         }
     }
 }
