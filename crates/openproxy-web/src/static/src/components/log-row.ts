@@ -56,8 +56,13 @@ export function renderLogRowHtml(row: RecentUsageRow, stage: StageEvent | undefi
     row.race_lost ? "loser" : "",
     streaming ? "streaming" : "",
   ].filter(Boolean).join(" ");
+  // `data-trace-id` lets `state/ticker.ts` look up the live stage
+  // for this row in `stagesByTraceId` (keyed per-attempt), so
+  // retries do not bleed counters over the historical failed row
+  // (see the comment on `state.logs.stagesByTraceId` in
+  // `state/index.ts`).
   return `
-    <button class="${cls}" data-id="${escapeAttr(row.id)}" data-request-id="${escapeAttr(row.request_id || "")}" aria-label="Open usage detail for ${escapeAttr(row.request_id || String(row.id) || "")}">
+    <button class="${cls}" data-id="${escapeAttr(row.id)}" data-request-id="${escapeAttr(row.request_id || "")}" data-trace-id="${escapeAttr(row.trace_id || "")}" aria-label="Open usage detail for ${escapeAttr(row.request_id || String(row.id) || "")}">
       ${buildLogRowCells(row, stage, visibleColumns)}
     </button>
   `;

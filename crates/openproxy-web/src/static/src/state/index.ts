@@ -62,12 +62,39 @@ export type ComboTestResults = Record<number, unknown>;
 export type ProviderDetailUi = Record<string, Record<string, unknown>>;
 
 /** Shape of the live-logs sub-state. Mirrors the `state.logs`
- *  literal in the original `state/index.js`. */
+ *  literal in the original `state/index.js`.
+ *
+ *  Note on the `stagesBy*` maps: a single client request can fan
+ *  out into multiple pipeline attempts (per-target retry, fallback
+ *  to the next combo target, race losers still get a row). Each
+ *  attempt has its own `trace_id` (per the `UsageInput.trace_id`
+ *  column in `crates/openproxy-core/src/usage.rs:758`), so we key
+ *  the live stage map by `trace_id` to keep per-attempt phase
+ *  labels isolated. Keying by `request_id` — as the original code
+ *  did — bleeds the latest attempt's phase over every historical
+ *  row of the same `request_id`, which is the user-visible bug
+ *  "retries duplicate counters on the failed entries".
+ *  `stagesByRequestId` is kept (and only written) as a
+ *  compatibility fallback for the rare case where a `StageEvent`
+ *  arrives with an empty `trace_id` (it then keys by `request_id`
+ *  to avoid losing the signal entirely). */
 export interface LogsState {
   rows: RecentUsageRow[];
   rowById: Map<number, RecentUsageRow>;
   lastSeenId: number;
+  /** Primary: keyed by `trace_id` (per attempt). */
+  stagesByTraceId: Map<string, StageEvent>;
+  /** Fallback: keyed by `request_id` for stage events with an
+   *  empty `trace_id` (very rare; can happen for synthetic events
+   *  emitted from inside the frontend itself). */
   stagesByRequestId: Map<LogsRequestId, StageEvent>;
+  /** Per-attempt inflight placeholders, keyed by `trace_id`. The
+   *  original code keyed this by `request_id` which again caused
+   *  retry attempts to overwrite the in-flight placeholder of the
+   *  first attempt. The view renders these mixed with the real
+   *  rows (see `renderLogsRows` in `views/logs.ts`). */
+  inflightByTraceId: Map<string, RecentUsageRow>;
+  /** Fallback: inflight placeholders for trace_id-less rows. */
   inflightByRequestId: Map<LogsRequestId, RecentUsageRow>;
   liveTokens: Map<LogsRequestId, number>;
   selectedRow: RecentUsageRow | null;
@@ -193,7 +220,9 @@ export const state: DashboardState = {
     rows: [],
     rowById: new Map<number, RecentUsageRow>(),
     lastSeenId: 0,
+    stagesByTraceId: new Map<string, StageEvent>(),
     stagesByRequestId: new Map<LogsRequestId, StageEvent>(),
+    inflightByTraceId: new Map<string, RecentUsageRow>(),
     inflightByRequestId: new Map<LogsRequestId, RecentUsageRow>(),
     liveTokens: new Map<LogsRequestId, number>(),
     selectedRow: null,

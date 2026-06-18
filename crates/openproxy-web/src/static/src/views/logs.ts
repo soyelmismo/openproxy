@@ -153,7 +153,10 @@ function attachLogRowHandlers(): void {
 function renderLogsRows(): void {
   const logsEl = document.getElementById("logs");
   if (!logsEl) return;
-  const inflightRows: (RecentUsageRow & { __inflight: boolean })[] = Array.from(state.logs.inflightByRequestId.values()).map((p) => {
+  const inflightRows: (RecentUsageRow & { __inflight: boolean })[] = [
+    ...Array.from(state.logs.inflightByTraceId.values()),
+    ...Array.from(state.logs.inflightByRequestId.values()),
+  ].map((p) => {
     const t = Date.parse(p.created_at);
     const syntheticId = isFinite(t) ? (Number.MAX_SAFE_INTEGER - t) : Number.MAX_SAFE_INTEGER;
     return Object.assign({}, p, { id: syntheticId, __inflight: true });
@@ -180,7 +183,22 @@ function renderLogsRows(): void {
       ${headerCells}
     </div>`;
   const bodyHtml = pageRows.length
-    ? pageRows.map((r) => renderLogRowHtml(r, state.logs.stagesByRequestId.get(r.request_id), visibleColKeys)).join("")
+    ? pageRows
+        .map((r) => {
+          // Resolve the live stage for this row. Primary key is
+          // `trace_id` so each attempt of a multi-attempt request
+          // (per-target retry, fallback to next combo target, race
+          // loser) has its own phase. The request_id fallback is
+          // only for the edge case where a row's `trace_id` is
+          // empty (synthetic events emitted from the frontend
+          // itself).
+          const stage: StageEvent | undefined =
+            (r.trace_id && state.logs.stagesByTraceId.get(r.trace_id)) ||
+            (r.request_id && state.logs.stagesByRequestId.get(r.request_id)) ||
+            undefined;
+          return renderLogRowHtml(r, stage, visibleColKeys);
+        })
+        .join("")
     : '<div class="empty" style="padding:2rem;">No recent requests yet. Use the API to see logs appear here in real time.</div>';
   const isFirst = state.logs.page <= 1;
   const isLast = state.logs.page >= totalP;
@@ -296,17 +314,44 @@ export function toggleColumn(key: string): void {
 function handleStageEvent(event: StageEvent): void {
   if (!event || !event.request_id) return;
   const requestId = event.request_id;
-  state.logs.stagesByRequestId.set(requestId, event);
-  const existingRow = state.logs.rows.find((r) => r.request_id === requestId);
-  if (existingRow) {
-    if (existingRow.id != null) state.logs.rowById.set(existingRow.id, existingRow);
+  // Index the live stage by `trace_id` (per attempt), not by
+  // `request_id`. A request with retries has multiple `trace_id`s
+  // — keying by `request_id` would overwrite the stage of every
+  // previous attempt of that request, which is the user-visible
+  // "phase of the failed attempt got rewritten to 'Started' on
+  // retry" bug. The request_id-keyed map is the fallback for the
+  // rare case where the event has no `trace_id` (we keep both
+  // maps in sync via `setStage`, but only `stagesByTraceId` is
+  // read by the renderer).
+  setStage(event, requestId);
+  // Find an existing row in the rendered list that matches this
+  // event's `(request_id, trace_id)`. A matching row is either:
+  //   * a row whose `trace_id` equals the event's — the normal
+  //     case for a fresh request or a retry whose row already
+  //     arrived, or
+  //   * a historical row (status_code > 0) for the same
+  //     `request_id` but with a *different* `trace_id` — this is
+  //     the retry case the user reported: the old row stays
+  //     visible with its failed/completed stage, and we don't
+  //     want to mutate it. We also don't want to bind the new
+  //     event to it (its phase would be misleading).
+  const traceId = event.trace_id || "";
+  const exactRow = traceId
+    ? state.logs.rows.find((r) => r.request_id === requestId && r.trace_id === traceId)
+    : undefined;
+  if (exactRow) {
+    if (exactRow.id != null) state.logs.rowById.set(exactRow.id, exactRow);
     if (state.logs.followTail) state.logs.page = 1;
     renderLogsRows();
-    updateOpenLogDetail(existingRow as unknown as LogDetailLog);
+    updateOpenLogDetail(exactRow as unknown as LogDetailLog);
     return;
   }
-  if (!state.logs.inflightByRequestId.has(requestId)) {
-    state.logs.inflightByRequestId.set(requestId, {
+  // A row exists for this `request_id` but with a different
+  // `trace_id` (retry against a fresh trace_id): the new attempt
+  // gets its own inflight placeholder, leaving the historical row
+  // untouched.
+  if (traceId && !state.logs.inflightByTraceId.has(traceId)) {
+    state.logs.inflightByTraceId.set(traceId, {
       id: 0,
       request_id: requestId,
       provider_id: event.provider_id || "",
@@ -314,7 +359,7 @@ function handleStageEvent(event: StageEvent): void {
       created_at: event.timestamp || new Date().toISOString(),
       status_code: 0, prompt_tokens: null, completion_tokens: null,
       total_ms: 0, cost_usd: 0, is_streaming: false, stream_complete: false, race_lost: false,
-      trace_id: "",
+      trace_id: traceId,
       connect_ms: null,
       ttft_ms: null,
       request_body_json: null,
@@ -329,9 +374,46 @@ function handleStageEvent(event: StageEvent): void {
       race_attempts: null,
       error_message: null,
     });
+  } else if (!traceId && !state.logs.inflightByRequestId.has(requestId)) {
+    // Trace_id-less event: fall back to the request_id-keyed
+    // inflight map (and the request_id-keyed stage map, handled
+    // by setStage above). This branch is only reachable for
+    // synthetic events emitted from the frontend itself.
+    state.logs.inflightByRequestId.set(requestId, {
+      id: 0,
+      request_id: requestId,
+      provider_id: event.provider_id || "",
+      upstream_model_id: event.upstream_model_id || "",
+      created_at: event.timestamp || new Date().toISOString(),
+      status_code: 0, prompt_tokens: null, completion_tokens: null,
+      total_ms: 0, cost_usd: 0, is_streaming: false, stream_complete: false, race_lost: false,
+      trace_id: "",
+      connect_ms: null,
+      ttft_ms: null,
+      request_body_json: null,
+      response_body_json: null,
+      request_headers: null,
+      response_headers: null,
+      race_total: null,
+      race_attempts: null,
+      error_message: null,
+    });
   }
   if (state.logs.followTail) state.logs.page = 1;
   renderLogsRows();
+}
+
+// Mirror the stage event into the two stage maps keyed by
+// `trace_id` (primary) and `request_id` (fallback for events
+// with an empty `trace_id`). Centralized so callers can't forget
+// to update one of the two.
+function setStage(event: StageEvent, requestId: string): void {
+  const traceId = event.trace_id || "";
+  if (traceId) {
+    state.logs.stagesByTraceId.set(traceId, event);
+  } else {
+    state.logs.stagesByRequestId.set(requestId, event);
+  }
 }
 
 function handleStreamTokens(msg: WsEnvelope): void {
@@ -398,7 +480,12 @@ function handleLogsMessage(raw: MessageEvent): void {
     for (const r of rows) {
       if (!r || !r.request_id) continue;
       if ((!r.is_streaming || r.stream_complete) && r.status_code > 0) {
-        state.logs.stagesByRequestId.set(r.request_id, {
+        // Index by `trace_id` so each attempt of a multi-attempt
+        // request (per-target retry, fallback) keeps its own
+        // phase. With this, the historical row's phase is locked
+        // to its own attempt and is not overwritten when a later
+        // attempt of the same `request_id` arrives.
+        const synth: StageEvent = {
           request_id: r.request_id,
           stage: r.status_code >= 400 ? "failed" : "completed",
           elapsed_ms: r.total_ms || 0,
@@ -410,7 +497,12 @@ function handleLogsMessage(raw: MessageEvent): void {
           connect_ms: r.connect_ms,
           ttft_ms: r.ttft_ms,
           error: r.error_message ?? null,
-        });
+        };
+        if (r.trace_id) {
+          state.logs.stagesByTraceId.set(r.trace_id, synth);
+        } else {
+          state.logs.stagesByRequestId.set(r.request_id, synth);
+        }
       }
     }
     state.logs.page = 1; state.logs.followTail = true; renderLogsRows();
@@ -421,6 +513,13 @@ function handleLogsMessage(raw: MessageEvent): void {
     state.logs.rows = mergeLogsByDescId(state.logs.rows, [row]);
     if (row.request_id && state.logs.inflightByRequestId.has(row.request_id)) {
       state.logs.inflightByRequestId.delete(row.request_id);
+    }
+    if (row.trace_id && state.logs.inflightByTraceId.has(row.trace_id)) {
+      // Drop the per-attempt inflight placeholder once the row
+      // arrives. The row carries the same `trace_id` as the
+      // placeholder (set by `handleStageEvent`), so this lookup
+      // is well-defined even when retries are active.
+      state.logs.inflightByTraceId.delete(row.trace_id);
     }
     if (row.is_streaming && !row.stream_complete) {
       const tokensMap = state.logs.liveTokens as unknown as Map<string, string>;
@@ -450,7 +549,13 @@ function handleLogsMessage(raw: MessageEvent): void {
         (row.status_code > 0 && row.stream_complete)
       );
       if (isFinished) {
-        state.logs.stagesByRequestId.set(row.request_id, {
+        // Index by `trace_id` (the row's own trace_id, not the
+        // request_id) so the row's phase does not get clobbered
+        // by a later attempt of the same `request_id`. The
+        // previous request_id-keyed write here is what caused
+        // the user-reported "failed rows get their phase
+        // rewritten to 'Started' when a retry comes in" bug.
+        const synth: StageEvent = {
           request_id: row.request_id,
           stage: row.status_code >= 400 ? "failed" : "completed",
           // elapsed_ms is informational here; the ticker uses
@@ -467,7 +572,12 @@ function handleLogsMessage(raw: MessageEvent): void {
           connect_ms: row.connect_ms,
           ttft_ms: row.ttft_ms,
           error: row.error_message ?? null,
-        });
+        };
+        if (row.trace_id) {
+          state.logs.stagesByTraceId.set(row.trace_id, synth);
+        } else {
+          state.logs.stagesByRequestId.set(row.request_id, synth);
+        }
       }
     }
     if (state.logs.followTail) state.logs.page = 1;
