@@ -26,7 +26,13 @@ use axum::{
     response::IntoResponse,
     Json,
 };
-use tokio_stream::StreamExt;
+use bytes::Bytes;
+use futures::stream::Stream;
+use std::convert::Infallible;
+use std::pin::Pin;
+use std::task::{Context, Poll};
+use std::time::Duration;
+use tokio_stream::wrappers::ReceiverStream;
 use openproxy_core::{
     api_keys as core_api_keys,
     ids::{ApiKeyId, ComboId, RequestId, TraceId},
@@ -38,9 +44,7 @@ use openproxy_core::{
     CoreError,
 };
 use serde_json::json;
-use std::convert::Infallible;
 use std::time::Instant;
-use tokio_stream::wrappers::ReceiverStream;
 
 use crate::{
     disconnect::CancelWatch,
@@ -64,6 +68,45 @@ use crate::{
 /// `reqwest::send()` `tokio::select!`, and the SSE `stream.next()`
 /// `tokio::select!` all observe the real cancel — no time-based
 /// watchdog needed.
+
+/// SSE keepalive interval. Sends `: keep-alive\n\n` (an SSE comment)
+/// every 15 seconds so proxies and load balancers don't close the
+/// connection while the upstream is still generating tokens.
+const SSE_KEEPALIVE_INTERVAL: Duration = Duration::from_secs(15);
+
+/// A stream that yields pre-formatted SSE frames (`Bytes`) from an
+/// mpsc channel, interleaved with periodic SSE keepalive comments.
+/// Unlike `axum::response::Sse`, this writes raw `Bytes` directly to
+/// the HTTP body with zero additional wrapping — the pipeline already
+/// formats each chunk as `data: {payload}\n\n`.
+struct SseBytesStream {
+    inner: futures::stream::SelectAll<ReceiverStream<Bytes>>,
+    keepalive: tokio::time::Interval,
+}
+
+impl Stream for SseBytesStream {
+    type Item = Result<Bytes, Infallible>;
+
+    fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        // All fields are `Unpin`, so `get_mut()` is safe.
+        let this = self.get_mut();
+
+        // Check keepalive first (biased): if the keepalive timer
+        // has elapsed, emit a comment to keep the connection alive
+        // without adding data to the stream.
+        if this.keepalive.poll_tick(cx).is_ready() {
+            return Poll::Ready(Some(Ok(Bytes::from_static(b": keep-alive\n\n"))));
+        }
+
+        // Poll the merged channel stream and wrap each item in Ok.
+        match Pin::new(&mut this.inner).poll_next(cx) {
+            Poll::Ready(Some(chunk)) => Poll::Ready(Some(Ok(chunk))),
+            Poll::Ready(None) => Poll::Ready(None),
+            Poll::Pending => Poll::Pending,
+        }
+    }
+}
+
 pub async fn chat_completions(
     State(state): State<AppState>,
     Extension(cancel): Extension<CancelWatch>,
@@ -221,6 +264,7 @@ async fn run_pipeline(
         // migration. See `docs/upstream-migration-report.md` for
         // the plan.
         upstream_client: UpstreamClient::new(),
+        oauth_provider_registry: Some(state.oauth_provider_registry()),
     };
     let pipeline = Pipeline::with_recording_flag(
         state.db_pool().writer_arc(),
@@ -324,6 +368,7 @@ async fn run_pipeline(
         // helper is the single source of truth for what counts as
         // "sensitive" (see `openproxy_core::redact`).
         request_headers: redact_sensitive_headers(&headers),
+        race_cancelled: false,
     };
 
     if openai_req.stream {
@@ -333,7 +378,7 @@ async fn run_pipeline(
         // Errors are propagated through a separate channel so the
         // client receives a structured error event instead of a
         // silent disconnect.
-        let (error_tx, error_rx) = tokio::sync::mpsc::channel::<String>(1);
+        let (error_tx, error_rx) = tokio::sync::mpsc::channel::<bytes::Bytes>(1);
 
         tokio::spawn(async move {
             let result = pipeline.run(req).await;
@@ -346,29 +391,44 @@ async fn run_pipeline(
                         "code": err.http_status(),
                     }
                 });
-                let _ = error_tx
-                    .send(serde_json::to_string(&error_json).unwrap_or_default())
-                    .await;
+                let error_str = serde_json::to_string(&error_json).unwrap_or_default();
+                // Pre-format error as SSE frame so the response write
+                // path sees the same `data: {json}\n\n` shape as normal
+                // chunks — no special-casing needed.
+                let mut frame = bytes::BytesMut::with_capacity(error_str.len() + 16);
+                frame.extend_from_slice(b"data: ");
+                frame.extend_from_slice(error_str.as_bytes());
+                frame.extend_from_slice(b"\n\n");
+                let _ = error_tx.send(frame.freeze()).await;
             }
             // error_tx drops here → error channel closes
         });
 
-        // Merge the main chunk stream with the error stream. All
-        // normal chunks arrive before the pipeline finishes, so the
-        // error event naturally appears last.
+        // Merge both SSE channels into one stream with keepalive.
         let main_stream = ReceiverStream::new(rx);
         let error_stream = ReceiverStream::new(error_rx);
-        let merged = main_stream.merge(error_stream);
+        let mut merged = futures::stream::SelectAll::new();
+        merged.push(main_stream);
+        merged.push(error_stream);
 
-        let sse_stream = merged.map(|chunk| {
-            Ok::<_, Infallible>(axum::response::sse::Event::default().data(chunk))
-        });
+        let sse_stream = SseBytesStream {
+            inner: merged,
+            keepalive: tokio::time::interval(SSE_KEEPALIVE_INTERVAL),
+        };
 
-        return Ok(
-            axum::response::Sse::new(sse_stream)
-                .keep_alive(axum::response::sse::KeepAlive::default())
-                .into_response(),
-        );
+        // Use `Body::from_stream` to write the pre-formatted SSE
+        // frames directly to the HTTP response, bypassing axum's
+        // `Sse` wrapper (which would re-wrap our already-formatted
+        // `data: {...}\n\n` frames).
+        let body = axum::body::Body::from_stream(sse_stream);
+        return Ok((
+            [(
+                axum::http::header::CONTENT_TYPE,
+                "text/event-stream; charset=utf-8",
+            )],
+            body,
+        )
+            .into_response());
     }
 
     // Non-streaming path: run the pipeline synchronously.

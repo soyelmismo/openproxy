@@ -216,6 +216,10 @@ pub struct RuntimeConfigResponse {
     pub retries: RetriesConfig,
     pub circuit_breaker: CircuitBreakerConfig,
     pub racing: RacingConfig,
+    /// Lifetime in seconds for recorded request/response bodies and
+    /// headers. `0` means bodies are pruned immediately on the next
+    /// prune tick.
+    pub recording_ttl_secs: i64,
 }
 
 /// `GET /v1/admin/config` — return the currently-loaded runtime
@@ -241,6 +245,7 @@ pub async fn get_runtime_config(
             // `RacingConfig` is `Clone` but not `Copy` (the other
             // three are); `.clone()` is fine, it's three `u*` fields.
             racing: cfg.racing.clone(),
+            recording_ttl_secs: s.recording_ttl_secs(),
         }))
     }
     .await;
@@ -295,6 +300,67 @@ pub async fn put_runtime_timeouts(
             "idle_chunk_ms": body.idle_chunk_ms,
             "total_ms": body.total_ms,
             "applies_to": "next_requests",
+        })))
+    }
+    .await;
+    inner.into()
+}
+
+// =====================================================================
+// Recording TTL
+// =====================================================================
+
+/// `GET /v1/admin/config/recording-ttl` — read the current recording body
+/// TTL in seconds.
+pub async fn get_recording_ttl(
+    State(s): State<AppState>,
+    headers: HeaderMap,
+) -> ApiResult<Json<serde_json::Value>> {
+    if let Err(e) = authenticate_admin_ws(&s, &headers, None) {
+        return e.into();
+    }
+    let body: Result<Json<serde_json::Value>, ApiError> = async {
+        Ok(Json(serde_json::json!({
+            "recording_ttl_secs": s.recording_ttl_secs(),
+        })))
+    }
+    .await;
+    body.into()
+}
+
+/// `PUT /v1/admin/config/recording-ttl` — hot-reload the recording body
+/// TTL. Body: `{"recording_ttl_secs": N}` where `N` is the lifetime in
+/// seconds for recorded request/response bodies and headers.
+pub async fn put_recording_ttl(
+    State(s): State<AppState>,
+    headers: HeaderMap,
+    Json(body): Json<serde_json::Value>,
+) -> ApiResult<Json<serde_json::Value>> {
+    if let Err(e) = authenticate_admin_ws(&s, &headers, None) {
+        return e.into();
+    }
+    let inner: Result<Json<serde_json::Value>, ApiError> = async {
+        let ttl_secs = body
+            .get("recording_ttl_secs")
+            .and_then(|v| v.as_i64())
+            .ok_or_else(|| {
+                CoreError::Validation("missing 'recording_ttl_secs' integer".into())
+            })?;
+        if ttl_secs < 0 {
+            return Err(
+                CoreError::Validation("'recording_ttl_secs' must be non-negative".into())
+                    .into(),
+            );
+        }
+        {
+            let w = s.db_pool().writer();
+            let now = chrono::Utc::now().timestamp();
+            core_db::app_config::save_recording_ttl_to_db(&w, ttl_secs, now)?;
+        }
+        s.set_recording_ttl_secs(ttl_secs);
+        Ok(Json(serde_json::json!({
+            "recording_ttl_secs": ttl_secs,
+            "applies_to": "next_prune_tick",
         })))
     }
     .await;
@@ -957,6 +1023,20 @@ pub struct RefreshQuery {
 ///    `/models` endpoint and upserts the results.
 ///
 /// On success, returns the number of rows touched.
+/// `POST /v1/admin/models/sync-models-dev` — one-shot sync from models.dev.
+pub async fn sync_models_dev(
+    State(s): State<AppState>,
+) -> ApiResult<Json<serde_json::Value>> {
+    let upstream = s.upstream_client().clone();
+    let db_pool = s.db_pool().clone();
+    let result = openproxy_core::models_dev_sync::run_one_shot(db_pool, upstream).await;
+    let msg = match result {
+        Ok(m) => m,
+        Err(e) => return ApiResult::err(ApiError(e)),
+    };
+    ApiResult::ok(Json(serde_json::json!({ "message": msg })))
+}
+
 pub async fn refresh_models(
     State(s): State<AppState>,
     Path(id): Path<i64>,
@@ -2518,6 +2598,27 @@ pub async fn set_account_health(
     body.into()
 }
 
+/// `PUT /v1/admin/accounts/:id/api-key` — encrypt and store a new API
+/// key for an existing account (or clear it by passing `null`).
+///
+/// Body: `{"api_key": "sk-..."}` or `{"api_key": null}`.
+///
+/// The plaintext is encrypted with the server's master key and stored as
+/// a BLOB. Returns 404 when the account does not exist.
+pub async fn update_account_api_key(
+    State(s): State<AppState>,
+    Path(id): Path<i64>,
+    Json(body): Json<admin::UpdateAccountApiKeyInput>,
+) -> ApiResult<Json<serde_json::Value>> {
+    let body: Result<Json<serde_json::Value>, ApiError> = async {
+        let w = s.db_pool().writer();
+        admin::update_account_api_key(&w, s.master_key().as_ref(), AccountId::new(id), body)?;
+        Ok(Json(serde_json::json!({ "id": id })))
+    }
+    .await;
+    body.into()
+}
+
 // =====================================================================
 // Admin model listing (internal shape, includes row_id + active)
 // =====================================================================
@@ -2641,26 +2742,12 @@ pub async fn refresh_account_quota(
                     .flatten()
             };
             if let Some(refresh_token) = refresh_result {
-                // Find the matching OAuth provider implementation.
-                let provider_impl: Option<Box<dyn openproxy_core::oauth::OAuthProvider + Send + Sync>> =
-                    match provider_id_str.as_str() {
-                        "antigravity" | "antigravity-cli" | "agy" => Some(Box::new(
-                            openproxy_core::oauth_antigravity::AntigravityOAuthProvider::new(),
-                        )),
-                        "kiro" => Some(Box::new(
-                            openproxy_core::oauth_kiro::KiroOAuthProvider::new(),
-                        )),
-                        _ => {
-                            tracing::warn!(
-                                provider = %provider_id_str,
-                                "no OAuth provider impl for on-demand refresh"
-                            );
-                            None
-                        }
-                    };
-                if let Some(provider_impl) = provider_impl {
+                // Find the matching OAuth provider from the registry.
+                let registry = s_clone.oauth_provider_registry();
+                let provider = registry.get(&provider_id_str);
+                if let Some(provider) = provider {
                     let upstream_client = s_clone.upstream_client();
-                    match provider_impl
+                    match provider
                         .refresh_token(&refresh_token, upstream_client)
                         .await
                     {
@@ -2794,18 +2881,6 @@ pub async fn refresh_provider_models(
     run_provider_refresh(s, provider_id, q).await
 }
 
-fn oauth_provider_for(
-    provider_id: &ProviderId,
-) -> Option<Box<dyn openproxy_core::oauth::OAuthProvider + Send + Sync>> {
-    match provider_id.as_str() {
-        "antigravity" | "antigravity-cli" => Some(Box::new(
-            openproxy_core::oauth_antigravity::AntigravityOAuthProvider::new(),
-        )),
-        "kiro" => Some(Box::new(openproxy_core::oauth_kiro::KiroOAuthProvider::new())),
-        _ => None,
-    }
-}
-
 async fn refresh_oauth_if_needed(
     s: &AppState,
     account: accounts::Account,
@@ -2853,7 +2928,8 @@ async fn refresh_oauth_if_needed(
         }
     };
 
-    let Some(provider) = oauth_provider_for(provider_id) else {
+    let registry = s.oauth_provider_registry();
+    let Some(provider) = registry.get(provider_id.as_str()) else {
         tracing::warn!(
             account = account.id.0,
             provider = %provider_id,
@@ -3351,26 +3427,24 @@ pub async fn api_key_usage(
 /// `Origin` header (or `X-Forwarded-Host` / `Host` fallback) so the
 /// OAuth flow works from any dashboard URL.
 pub async fn oauth_authorize(
-    State(_s): State<AppState>,
+    State(s): State<AppState>,
     Path(provider): Path<String>,
 ) -> ApiResult<Json<serde_json::Value>> {
     let body: Result<Json<serde_json::Value>, ApiError> = async {
-        let provider_impl = match provider.as_str() {
-            "antigravity" | "antigravity-cli" => {
-                Box::new(openproxy_core::oauth_antigravity::AntigravityOAuthProvider::new())
-                    as Box<dyn openproxy_core::oauth::OAuthProvider + Send + Sync>
-            }
-            _ => {
-                return Err(ApiError(CoreError::Validation(format!(
-                    "provider '{}' does not support OAuth authorize",
-                    provider
-                ))));
-            }
-        };
+        let registry = s.oauth_provider_registry();
+        let provider_impl = registry.get(&provider).ok_or_else(|| {
+            ApiError(CoreError::Validation(format!(
+                "provider '{}' does not support OAuth authorize",
+                provider
+            )))
+        })?;
 
-        if provider_impl.flow() != openproxy_core::oauth::OAuthFlow::AuthorizationCodePkce {
+        let flow = provider_impl.flow();
+        if flow != openproxy_core::oauth::OAuthFlow::AuthorizationCodePkce
+            && flow != openproxy_core::oauth::OAuthFlow::AuthorizationCode
+        {
             return Err(ApiError(CoreError::Validation(format!(
-                "provider '{}' does not use PKCE flow",
+                "provider '{}' does not support authorization code flow",
                 provider
             ))));
         }
@@ -3423,18 +3497,13 @@ pub async fn oauth_exchange(
             .and_then(|v| v.as_str())
             .ok_or_else(|| CoreError::Validation("missing 'redirect_uri'".into()))?;
 
-        let provider_impl = match provider.as_str() {
-            "antigravity" | "antigravity-cli" => {
-                Box::new(openproxy_core::oauth_antigravity::AntigravityOAuthProvider::new())
-                    as Box<dyn openproxy_core::oauth::OAuthProvider + Send + Sync>
-            }
-            _ => {
-                return Err(ApiError(CoreError::Validation(format!(
-                    "provider '{}' does not support OAuth exchange",
-                    provider
-                ))));
-            }
-        };
+        let registry = s.oauth_provider_registry();
+        let provider_impl = registry.get(&provider).ok_or_else(|| {
+            ApiError(CoreError::Validation(format!(
+                "provider '{}' does not support OAuth exchange",
+                provider
+            )))
+        })?;
 
         let upstream_client = s.upstream_client();
         let token = provider_impl
@@ -3516,18 +3585,13 @@ pub async fn oauth_device_code(
     Path(provider): Path<String>,
 ) -> ApiResult<Json<serde_json::Value>> {
     let body: Result<Json<serde_json::Value>, ApiError> = async {
-        let provider_impl = match provider.as_str() {
-            "kiro" => {
-                Box::new(openproxy_core::oauth_kiro::KiroOAuthProvider::new())
-                    as Box<dyn openproxy_core::oauth::OAuthProvider + Send + Sync>
-            }
-            _ => {
-                return Err(ApiError(CoreError::Validation(format!(
-                    "provider '{}' does not support device code flow",
-                    provider
-                ))));
-            }
-        };
+        let registry = s.oauth_provider_registry();
+        let provider_impl = registry.get(&provider).ok_or_else(|| {
+            ApiError(CoreError::Validation(format!(
+                "provider '{}' does not support device code flow",
+                provider
+            )))
+        })?;
 
         let upstream_client = s.upstream_client();
         let dar = provider_impl.request_device_code(upstream_client).await?;
@@ -3607,18 +3671,13 @@ pub async fn oauth_device_poll(
             }
         }
 
-        let provider_impl = match provider.as_str() {
-            "kiro" => {
-                Box::new(openproxy_core::oauth_kiro::KiroOAuthProvider::new())
-                    as Box<dyn openproxy_core::oauth::OAuthProvider + Send + Sync>
-            }
-            _ => {
-                return Err(ApiError(CoreError::Validation(format!(
-                    "provider '{}' does not support device code polling",
-                    provider
-                ))));
-            }
-        };
+        let registry = s.oauth_provider_registry();
+        let provider_impl = registry.get(&provider).ok_or_else(|| {
+            ApiError(CoreError::Validation(format!(
+                "provider '{}' does not support device code polling",
+                provider
+            )))
+        })?;
 
         let upstream_client = s.upstream_client();
         match provider_impl
@@ -3804,7 +3863,7 @@ mod tests {
     use axum::{
         body::Body,
         http::{Request, StatusCode},
-        routing::put,
+        routing::{get, put},
         Router,
     };
     use openproxy_core::config::TimeoutsConfig;
@@ -3870,6 +3929,21 @@ mod tests {
         )
         .await;
         (state, plaintext)
+    }
+
+    fn assert_recording_ttl_db_count(state: &AppState, expected: i64) {
+        let count: i64 = state.db_pool().with_conn(|c| {
+            c.query_row(
+                "SELECT COUNT(*) FROM app_config WHERE key = 'recording_ttl_secs'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap()
+        });
+        assert_eq!(
+            count, expected,
+            "app_config recording_ttl_secs row count mismatch"
+        );
     }
 
     #[tokio::test]
@@ -4348,4 +4422,222 @@ mod tests {
             "expected at least one target before the cancel arrived"
         );
     }
+
+    // ---- Recording TTL admin endpoints ----
+
+    #[tokio::test]
+    async fn get_recording_ttl_returns_default_value() {
+        let dir = tempdir();
+        let (state, plaintext) = make_state_with_key(&dir).await;
+
+        // Sanity: the slot starts at the default (300s).
+        assert_eq!(state.recording_ttl_secs(), 300);
+
+        let app = Router::new()
+            .route(
+                "/v1/admin/config/recording-ttl",
+                get(get_recording_ttl),
+            )
+            .with_state(state.clone());
+
+        let req = Request::builder()
+            .method("GET")
+            .uri("/v1/admin/config/recording-ttl")
+            .header("authorization", format!("Bearer {}", plaintext))
+            .body(Body::empty())
+            .expect("build req");
+
+        let resp = app.oneshot(req).await.expect("oneshot");
+        assert_eq!(resp.status(), StatusCode::OK, "GET should be 200");
+
+        let bytes = axum::body::to_bytes(resp.into_body(), 1024)
+            .await
+            .expect("body");
+        let parsed: serde_json::Value =
+            serde_json::from_slice(&bytes).expect("json body");
+        assert_eq!(
+            parsed["recording_ttl_secs"], 300,
+            "default recording TTL must be 300"
+        );
+    }
+
+    #[tokio::test]
+    async fn put_recording_ttl_persists_new_value() {
+        let dir = tempdir();
+        let (state, plaintext) = make_state_with_key(&dir).await;
+
+        let app = Router::new()
+            .route(
+                "/v1/admin/config/recording-ttl",
+                get(get_recording_ttl).put(put_recording_ttl),
+            )
+            .with_state(state.clone());
+
+        let body = serde_json::json!({ "recording_ttl_secs": 600_i64 });
+        let req = Request::builder()
+            .method("PUT")
+            .uri("/v1/admin/config/recording-ttl")
+            .header("authorization", format!("Bearer {}", plaintext))
+            .header("content-type", "application/json")
+            .body(Body::from(body.to_string()))
+            .expect("build req");
+
+        let resp = app.oneshot(req).await.expect("oneshot");
+        assert_eq!(resp.status(), StatusCode::OK, "PUT should be 200");
+
+        // Body shape: the value echoed back + applies_to.
+        let bytes = axum::body::to_bytes(resp.into_body(), 1024)
+            .await
+            .expect("body");
+        let parsed: serde_json::Value =
+            serde_json::from_slice(&bytes).expect("json body");
+        assert_eq!(parsed["recording_ttl_secs"], 600);
+        assert_eq!(parsed["applies_to"], "next_prune_tick");
+
+        // The in-memory slot was updated.
+        assert_eq!(state.recording_ttl_secs(), 600);
+
+        // The row landed in the DB.
+        let count: i64 = state.db_pool().with_conn(|c| {
+            c.query_row(
+                "SELECT COUNT(*) FROM app_config WHERE key = 'recording_ttl_secs'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap()
+        });
+        assert_eq!(
+            count, 1,
+            "PUT must have written a row to app_config"
+        );
+
+        // The persisted value matches what we sent.
+        let value: String = state.db_pool().with_conn(|c| {
+            c.query_row(
+                "SELECT value FROM app_config WHERE key = 'recording_ttl_secs'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap()
+        });
+        let persisted: i64 = serde_json::from_str(&value).expect("parse value");
+        assert_eq!(persisted, 600);
+    }
+
+    #[tokio::test]
+    async fn put_recording_ttl_rejects_negative_value() {
+        let dir = tempdir();
+        let (state, plaintext) = make_state_with_key(&dir).await;
+
+        let app = Router::new()
+            .route(
+                "/v1/admin/config/recording-ttl",
+                put(put_recording_ttl),
+            )
+            .with_state(state.clone());
+
+        let body = serde_json::json!({ "recording_ttl_secs": -1_i64 });
+        let req = Request::builder()
+            .method("PUT")
+            .uri("/v1/admin/config/recording-ttl")
+            .header("authorization", format!("Bearer {}", plaintext))
+            .header("content-type", "application/json")
+            .body(Body::from(body.to_string()))
+            .expect("build req");
+
+        let resp = app.oneshot(req).await.expect("oneshot");
+        let status = resp.status();
+        assert!(
+            status == StatusCode::BAD_REQUEST
+                || status == StatusCode::UNPROCESSABLE_ENTITY,
+            "expected 400 or 422 for negative TTL, got {:?}",
+            status
+        );
+
+        // In-memory slot must NOT have changed.
+        assert_eq!(
+            state.recording_ttl_secs(),
+            300,
+            "in-memory TTL must not change on rejected PUT"
+        );
+        assert_recording_ttl_db_count(&state, 0);
+    }
+
+    #[tokio::test]
+    async fn put_recording_ttl_rejects_missing_field() {
+        let dir = tempdir();
+        let (state, plaintext) = make_state_with_key(&dir).await;
+
+        let app = Router::new()
+            .route(
+                "/v1/admin/config/recording-ttl",
+                put(put_recording_ttl),
+            )
+            .with_state(state.clone());
+
+        // Send a valid JSON object but missing the required
+        // "recording_ttl_secs" field.
+        let req = Request::builder()
+            .method("PUT")
+            .uri("/v1/admin/config/recording-ttl")
+            .header("authorization", format!("Bearer {}", plaintext))
+            .header("content-type", "application/json")
+            .body(Body::from(r#"{"foo":"bar"}"#))
+            .expect("build req");
+
+        let resp = app.oneshot(req).await.expect("oneshot");
+        let status = resp.status();
+        assert!(
+            status == StatusCode::BAD_REQUEST
+                || status == StatusCode::UNPROCESSABLE_ENTITY,
+            "expected 400 or 422 for missing required field, got {:?}",
+            status
+        );
+
+        // In-memory slot must NOT have changed.
+        assert_eq!(
+            state.recording_ttl_secs(),
+            300,
+            "in-memory TTL must not change on rejected PUT"
+        );
+        assert_recording_ttl_db_count(&state, 0);
+    }
+
+    #[tokio::test]
+    async fn put_recording_ttl_rejects_invalid_json_syntax() {
+        let dir = tempdir();
+        let (state, plaintext) = make_state_with_key(&dir).await;
+
+        let app = Router::new()
+            .route(
+                "/v1/admin/config/recording-ttl",
+                put(put_recording_ttl),
+            )
+            .with_state(state.clone());
+
+        let req = Request::builder()
+            .method("PUT")
+            .uri("/v1/admin/config/recording-ttl")
+            .header("authorization", format!("Bearer {}", plaintext))
+            .header("content-type", "application/json")
+            .body(Body::from(r#"{invalid"#))
+            .expect("build req");
+
+        let resp = app.oneshot(req).await.expect("oneshot");
+        let status = resp.status();
+        assert!(
+            status == StatusCode::BAD_REQUEST
+                || status == StatusCode::UNPROCESSABLE_ENTITY,
+            "expected 400 or 422 for invalid JSON syntax, got {:?}",
+            status
+        );
+
+        assert_eq!(
+            state.recording_ttl_secs(),
+            300,
+            "in-memory TTL must not change on rejected PUT"
+        );
+        assert_recording_ttl_db_count(&state, 0);
+    }
+
 }

@@ -20,6 +20,7 @@ pub mod cost;
 pub mod analytics;
 pub mod translation;
 pub mod sse;
+pub mod sse_accumulator;
 pub mod pipeline;
 pub mod timeouts;
 pub mod retry;
@@ -30,6 +31,7 @@ pub mod pricing;
 pub mod secrets;
 pub mod oauth;
 pub mod oauth_antigravity;
+pub mod oauth_gemini;
 pub mod oauth_kiro;
 pub mod oauth_tickets;
 pub mod executor_kiro;
@@ -39,6 +41,7 @@ pub mod quota;
 pub mod seed;
 pub mod bootstrap;
 pub mod discovery_scheduler;
+pub mod models_dev_sync;
 pub mod redact;
 
 // Gate 0: hyper-based upstream client. See `upstream/mod.rs` for the

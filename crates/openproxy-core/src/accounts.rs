@@ -231,8 +231,9 @@ pub fn list(conn: &Connection, provider: Option<&ProviderId>) -> Result<Vec<Acco
 /// Decrypt the stored API key for `id`. Returns [`CoreError::AccountNotFound`]
 /// if the account is missing, and a decrypt error (via `MasterKey`) if the
 /// stored blob is corrupt or the key has changed.
+/// Returns [`CoreError::Validation`] if the account uses OAuth auth (no API key).
 pub fn decrypt_api_key(conn: &Connection, id: AccountId, master_key: &MasterKey) -> Result<String> {
-    let blob: Vec<u8> = conn
+    let blob: Option<Vec<u8>> = conn
         .query_row(
             "SELECT api_key_encrypted FROM accounts WHERE id = ?1",
             params![id.0],
@@ -244,6 +245,10 @@ pub fn decrypt_api_key(conn: &Connection, id: AccountId, master_key: &MasterKey)
             source: Some(Box::new(e)),
         })?
         .ok_or(CoreError::AccountNotFound(id.0))?;
+
+    let blob = blob.ok_or_else(|| {
+        CoreError::Validation("account has no API key (OAuth account?)".into())
+    })?;
     master_key.decrypt(&blob)
 }
 
@@ -330,6 +335,39 @@ pub fn set_quota(
         )
         .map_err(|e| CoreError::Database {
             message: format!("update quota for account {}: {}", id.0, e),
+            source: Some(Box::new(e)),
+        })?;
+    if affected == 0 {
+        return Err(CoreError::AccountNotFound(id.0));
+    }
+    Ok(())
+}
+
+/// Encrypt and store (or clear) the API key for an existing account.
+///
+/// When `api_key` is `Some`, the plaintext is encrypted with `master_key`
+/// and the resulting BLOB is written to the row. When `None`, the column
+/// is set to NULL (useful when converting an account to OAuth auth).
+///
+/// Returns [`CoreError::AccountNotFound`] if no row matches `id`.
+pub fn update_api_key(
+    conn: &Connection,
+    id: AccountId,
+    api_key: Option<&str>,
+    master_key: &MasterKey,
+) -> Result<()> {
+    let blob = if let Some(key) = api_key {
+        Some(master_key.encrypt(key)?)
+    } else {
+        None
+    };
+    let affected = conn
+        .execute(
+            "UPDATE accounts SET api_key_encrypted = ?1 WHERE id = ?2",
+            params![blob, id.0],
+        )
+        .map_err(|e| CoreError::Database {
+            message: format!("update api_key for account {}: {}", id.0, e),
             source: Some(Box::new(e)),
         })?;
     if affected == 0 {
@@ -929,6 +967,7 @@ mod tests {
             plan_name: Some("Coding Plan".into()),
             last_fetched_at: "1700000001".into(),
             fetch_error: None,
+            model_details: None,
         };
         set_quota(&conn, id, &q).expect("set_quota");
 
@@ -981,6 +1020,7 @@ mod tests {
             plan_name: None,
             last_fetched_at: "1700000099".into(),
             fetch_error: Some("minimax 401".into()),
+            model_details: None,
         };
         set_quota(&conn, id, &q).expect("set_quota");
 
@@ -1006,6 +1046,7 @@ mod tests {
             plan_name: None,
             last_fetched_at: "0".into(),
             fetch_error: None,
+            model_details: None,
         };
         let err = set_quota(&conn, AccountId(99999), &q).expect_err("missing");
         assert!(matches!(err, CoreError::AccountNotFound(99999)));
@@ -1408,5 +1449,55 @@ mod tests {
 
         let acc = get(&conn, id).expect("get").expect("present");
         assert_eq!(acc.expires_at.as_deref(), Some(explicit));
+    }
+
+    #[test]
+    fn decrypt_api_key_on_oauth_account_returns_validation_error() {
+        let (pool, _path) = fresh_pool();
+        let conn = pool.writer();
+        seed_provider(&conn, "openrouter");
+
+        // OAuth account: api_key = None → api_key_encrypted = NULL in DB.
+        let mk = MasterKey::generate();
+        let id = create(&conn, &ProviderId::new("openrouter"), None, &mk, None, 10, None)
+            .expect("create");
+
+        let err = decrypt_api_key(&conn, id, &mk).expect_err("OAuth account has no key");
+        assert!(
+            matches!(err, CoreError::Validation(ref msg) if msg.contains("no API key")),
+            "expected Validation error about missing API key, got: {:?}",
+            err
+        );
+    }
+
+    #[test]
+    fn update_api_key_roundtrip() {
+        let (pool, _path) = fresh_pool();
+        let conn = pool.writer();
+        seed_provider(&conn, "openrouter");
+
+        let mk = MasterKey::generate();
+        let id = create(&conn, &ProviderId::new("openrouter"), None, &mk, None, 10, None)
+            .expect("create");
+
+        // Initially no key (OAuth account).
+        let err = decrypt_api_key(&conn, id, &mk).expect_err("no key yet");
+        assert!(matches!(err, CoreError::Validation(_)));
+
+        // Set a key.
+        let key = "sk-updated-key-abc123";
+        update_api_key(&conn, id, Some(key), &mk).expect("set key");
+        let recovered = decrypt_api_key(&conn, id, &mk).expect("decrypt after set");
+        assert_eq!(recovered, key);
+
+        // Clear the key (back to OAuth).
+        update_api_key(&conn, id, None, &mk).expect("clear key");
+        let err = decrypt_api_key(&conn, id, &mk).expect_err("cleared");
+        assert!(matches!(err, CoreError::Validation(_)));
+
+        // Missing id → AccountNotFound.
+        let err = update_api_key(&conn, AccountId(99999), Some("x"), &mk)
+            .expect_err("missing account");
+        assert!(matches!(err, CoreError::AccountNotFound(99999)));
     }
 }

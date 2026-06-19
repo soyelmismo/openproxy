@@ -45,6 +45,11 @@ const SCOPES: &[&str] = &["codewhisperer:completions", "codewhisperer:analysis"]
 struct RegisterClientRequest {
     #[serde(rename = "clientName")]
     client_name: String,
+    #[serde(rename = "clientType")]
+    client_type: String,
+    scopes: Vec<String>,
+    #[serde(rename = "grantTypes")]
+    grant_types: Vec<String>,
 }
 
 /// Client registration response.
@@ -184,6 +189,12 @@ impl OAuthProvider for KiroOAuthProvider {
         // Step 1: Register a dynamic OIDC client.
         let register_body = serde_json::to_vec(&RegisterClientRequest {
             client_name: "openproxy-kiro".into(),
+            client_type: "public".into(),
+            scopes: SCOPES.iter().map(|s| s.to_string()).collect(),
+            grant_types: vec![
+                "urn:ietf:params:oauth:grant-type:device_code".into(),
+                "refresh_token".into(),
+            ],
         })
         .map_err(|e| CoreError::Parse(format!("kiro register serialize: {e}")))?;
         let register_req = UpstreamRequest::post_json(REGISTER_URL, bytes::Bytes::from(register_body));
@@ -230,17 +241,16 @@ impl OAuthProvider for KiroOAuthProvider {
             .map_err(|e| CoreError::Parse(format!("kiro register response parse: {e}")))?;
 
         // Step 2: Request device authorization.
-        let scope = SCOPES.join(" ");
-        let auth_body = urlencoded_body(&[
-            ("clientId", &client.client_id),
-            ("scope", &scope),
-        ]);
-        let mut device_auth_req =
-            UpstreamRequest::post_json(DEVICE_AUTH_URL, auth_body);
-        device_auth_req.headers.insert(
-            http::header::CONTENT_TYPE,
-            http::HeaderValue::from_static("application/x-www-form-urlencoded"),
-        );
+        // AWS SSO OIDC expects JSON with clientId, clientSecret, and startUrl.
+        let auth_body = serde_json::json!({
+            "clientId": client.client_id,
+            "clientSecret": client.client_secret,
+            "startUrl": "https://view.awsapps.com/start",
+        });
+        let auth_body_bytes = serde_json::to_vec(&auth_body)
+            .map_err(|e| CoreError::Parse(format!("kiro device auth serialize: {e}")))?;
+        let device_auth_req =
+            UpstreamRequest::post_json(DEVICE_AUTH_URL, bytes::Bytes::from(auth_body_bytes));
 
         let device_auth_response = upstream_client
             .call(device_auth_req, TimeoutProfile::OAuth, cancel)
@@ -306,15 +316,19 @@ impl OAuthProvider for KiroOAuthProvider {
         device_code: &str,
         upstream_client: &Arc<UpstreamClient>,
     ) -> Result<Option<TokenResponse>> {
-        let body = urlencoded_body(&[
-            ("grant_type", "urn:ietf:params:oauth:grant-type:device_code"),
-            ("device_code", device_code),
-        ]);
-        let mut req = UpstreamRequest::post_json(TOKEN_URL, body);
-        req.headers.insert(
-            http::header::CONTENT_TYPE,
-            http::HeaderValue::from_static("application/x-www-form-urlencoded"),
-        );
+        // Read OIDC client credentials from the thread-local cache
+        // (stashed by request_device_code). AWS SSO OIDC requires them.
+        let (cid, csec) = crate::oauth_kiro::take_last_client()
+            .unwrap_or_default();
+        let body = serde_json::json!({
+            "clientId": cid,
+            "clientSecret": csec,
+            "deviceCode": device_code,
+            "grantType": "urn:ietf:params:oauth:grant-type:device_code",
+        });
+        let body_bytes = serde_json::to_vec(&body)
+            .map_err(|e| CoreError::Parse(format!("kiro device poll serialize: {e}")))?;
+        let req = UpstreamRequest::post_json(TOKEN_URL, bytes::Bytes::from(body_bytes));
 
         let cancel = CancellationToken::new();
         let response = match upstream_client

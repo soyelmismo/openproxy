@@ -10,8 +10,8 @@ use super::error::{UpstreamError, UpstreamResult};
 use super::phases::UpstreamPhase;
 use bytes::Bytes;
 use http::{HeaderMap, StatusCode};
-use std::pin::Pin;
 use std::time::{Duration, Instant};
+use tokio::sync::watch;
 
 /// The response returned by `UpstreamClient::call`.
 #[derive(Debug)]
@@ -59,10 +59,9 @@ pub struct UpstreamBodyStream {
     #[cfg(feature = "upstream-hyper")]
     inner: Option<http_body_util::BodyStream<http_body_util::Limited<hyper::body::Incoming>>>,
     cancel: CancellationToken,
-    /// Wall-clock instant of the most recent chunk. `None` until the
-    /// first chunk arrives; before that we fall back to `start` for
-    /// the deadline computation so the implicit TTFT (== headers
-    /// deadline) still bounds the very first frame.
+    /// Cached watch receiver for async cancel notification.
+    /// Polled via `changed()` in the hot loop — no per-chunk allocation.
+    cancel_rx: watch::Receiver<bool>,
     last_chunk_at: Option<Instant>,
     start: Instant,
     body_chunk_ms: u64,
@@ -90,8 +89,10 @@ impl UpstreamBodyStream {
     ) -> Self {
         let limit_usize = usize::try_from(limit).unwrap_or(usize::MAX);
         let limited = http_body_util::Limited::new(body, limit_usize);
+        let cancel_rx = cancel.subscribe();
         Self {
             inner: Some(http_body_util::BodyStream::new(limited)),
+            cancel_rx,
             cancel,
             last_chunk_at: None,
             start,
@@ -104,9 +105,11 @@ impl UpstreamBodyStream {
     /// error on first poll. Used when the upstream call fails before
     /// we have a body in hand.
     pub fn empty(cancel: CancellationToken, start: Instant, body_chunk_ms: u64, total_deadline: Instant) -> Self {
+        let cancel_rx = cancel.subscribe();
         Self {
             #[cfg(feature = "upstream-hyper")]
             inner: None,
+            cancel_rx,
             cancel,
             last_chunk_at: None,
             start,
@@ -136,18 +139,10 @@ impl UpstreamBodyStream {
     /// `start` as the fallback for the very first chunk), and the
     /// `total_deadline`.
     pub async fn next_chunk(&mut self) -> UpstreamResult<Option<Bytes>> {
-        // Cancellation check at the top: if we were cancelled while the
-        // caller was doing other work, fail fast without consuming the
-        // underlying body.
         if self.cancel.is_cancelled() {
             return Err(UpstreamError::Cancel);
         }
 
-        // Per-chunk gap deadline: the maximum gap between this chunk
-        // and the previous one. Before the first chunk arrives we
-        // anchor the timer at `start` (the implicit TTFT ceiling),
-        // which preserves the previous behavior of the first chunk
-        // still being bounded by the request-start timeline.
         let chunk_gap_deadline = self
             .last_chunk_at
             .unwrap_or(self.start)
@@ -160,39 +155,21 @@ impl UpstreamBodyStream {
                 None => return Ok(None),
             };
 
-            // Race the next-frame future against a sleep until the
-            // chunk-gap deadline, a sleep until the total_deadline,
-            // and a fast cancel-poll.
-            let cancel = self.cancel.clone();
-            let next = async move {
-                // Wrap the poll-stream into a single-shot future by
-                // using a small `poll_fn` shim. We use `next()` from
-                // futures_util but cap each step with the deadline
-                // timer.
-                use futures_util::StreamExt;
-                stream.next().await
-            };
+            let min_deadline = std::cmp::min(chunk_gap_deadline, self.total_deadline);
 
-            // Three-way select: chunk / chunk-gap-deadline / total-deadline / cancel.
             tokio::select! {
                 biased;
-                _ = sleep_until_or_cancel(chunk_gap_deadline, &cancel) => {
+                // Poll the cached watch receiver — no allocation,
+                // just a version-counter check.
+                _ = self.cancel_rx.changed() => {
+                    Err(UpstreamError::Cancel)
+                }
+                _ = tokio::time::sleep_until(min_deadline.into()) => {
                     Err(UpstreamError::Timeout(UpstreamPhase::Body))
                 }
-                _ = sleep_until(self.total_deadline) => {
-                    Err(UpstreamError::Timeout(UpstreamPhase::Body))
-                }
-                res = next => {
+                res = futures_util::StreamExt::next(stream) => {
                     match res {
                         Some(Ok(frame)) => {
-                            // `Limited` yields `Frame::data(Bytes)` for body
-                            // bytes; ignore trailers (we don't surface them
-                            // in this Gate-0 surface).
-                            // Stash the wall-clock instant of this chunk so
-                            // the NEXT call computes its gap deadline from
-                            // here (this is the bug-2a fix: idle_chunk_ms is
-                            // now enforced as a gap, not as a deadline
-                            // relative to `start`).
                             self.last_chunk_at = Some(Instant::now());
                             Ok(Some(frame.into_data().unwrap_or_default()))
                         }
@@ -205,7 +182,6 @@ impl UpstreamBodyStream {
 
         #[cfg(not(feature = "upstream-hyper"))]
         {
-            // No body data when the feature is off.
             let _ = (chunk_gap_deadline, self.body_chunk_ms);
             Ok(None)
         }
@@ -217,59 +193,5 @@ impl std::fmt::Debug for UpstreamBodyStream {
         f.debug_struct("UpstreamBodyStream")
             .field("cancelled", &self.cancel.is_cancelled())
             .finish()
-    }
-}
-
-// -----------------------------------------------------------------------
-// Helpers
-// -----------------------------------------------------------------------
-
-/// Sleep until the absolute instant, but resolve early if the cancel
-/// token fires. Returns `()` either way; the caller maps the outcome.
-async fn sleep_until_or_cancel(deadline: Instant, cancel: &CancellationToken) {
-    let now = Instant::now();
-    if deadline <= now {
-        return;
-    }
-    let dur = deadline - now;
-    let sleep = tokio::time::sleep(dur);
-    tokio::select! {
-        _ = sleep => {}
-        _ = wait_cancel(cancel) => {}
-    }
-}
-
-async fn wait_cancel(cancel: &CancellationToken) {
-    // Cheap poll: yield once then peek. Using a tight loop with
-    // tokio::task::yield_now keeps the future cooperative without
-    // spinning.
-    loop {
-        if cancel.is_cancelled() {
-            return;
-        }
-        tokio::task::yield_now().await;
-    }
-}
-
-async fn sleep_until(deadline: Instant) {
-    let now = Instant::now();
-    if deadline <= now {
-        return;
-    }
-    tokio::time::sleep(deadline - now).await;
-}
-
-/// `UpstreamBodyStream` is fused via the `next_chunk` API; the spec
-/// asks for an async iterator. We don't implement `Stream` to keep
-/// the dependency surface minimal (no `futures-core::Stream` trait
-/// on the public API), but the method form is identical in usage.
-impl UpstreamBodyStream {
-    /// `Pin<Box<dyn Future>>` form of `next_chunk` for callers that
-    /// want to combine it manually with other futures.
-    pub fn next_chunk_boxed(
-        &mut self,
-    ) -> Pin<Box<dyn std::future::Future<Output = UpstreamResult<Option<Bytes>>> + Send + '_>>
-    {
-        Box::pin(self.next_chunk())
     }
 }

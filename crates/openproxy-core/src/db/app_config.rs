@@ -31,6 +31,12 @@ use rusqlite::{params, Connection};
 /// Key under which the [`TimeoutsConfig`] override is stored.
 pub const TIMEOUTS_KEY: &str = "timeouts";
 
+/// Key under which the recording TTL (seconds) is stored.
+pub const RECORDING_TTL_KEY: &str = "recording_ttl_secs";
+
+/// Default recording body TTL in seconds (5 minutes).
+pub const RECORDING_TTL_DEFAULT_SECS: i64 = 300;
+
 /// Read the persisted `timeouts` override, if any.
 ///
 /// Returns:
@@ -102,10 +108,84 @@ pub fn save_timeouts_to_db(
     conn.execute(
         "INSERT INTO app_config (key, value, updated_at) VALUES (?1, ?2, ?3)
          ON CONFLICT(key) DO UPDATE SET value = excluded.value,
-                                        updated_at = excluded.updated_at",
+                                         updated_at = excluded.updated_at",
         params![TIMEOUTS_KEY, json, now_unix_secs],
     ).map_err(|e| CoreError::Database {
         message: format!("upsert app_config.timeouts: {}", e),
+        source: Some(Box::new(e)),
+    })?;
+    Ok(())
+}
+
+/// Read the persisted recording TTL, if any.
+///
+/// Returns:
+/// - `Ok(Some(ttl_secs))` if a row exists and parses cleanly.
+/// - `Ok(None)` if no row exists, **or** the row exists but the JSON
+///   is corrupt (logged at `WARN` — see §10 R2 of the spec).
+/// - `Err(CoreError::Database { .. })` only for actual DB I/O errors.
+pub fn load_recording_ttl_from_db(
+    conn: &Connection,
+) -> Result<Option<i64>> {
+    let mut stmt = conn.prepare(
+        "SELECT value FROM app_config WHERE key = ?1"
+    ).map_err(|e| CoreError::Database {
+        message: format!("prepare load_recording_ttl: {}", e),
+        source: Some(Box::new(e)),
+    })?;
+    let mut rows = stmt.query(params![RECORDING_TTL_KEY]).map_err(|e|
+        CoreError::Database {
+            message: format!("query load_recording_ttl: {}", e),
+            source: Some(Box::new(e)),
+        }
+    )?;
+    match rows.next() {
+        Ok(Some(row)) => {
+            let raw: String = row.get(0).map_err(|e| CoreError::Database {
+                message: format!("read app_config.value: {}", e),
+                source: Some(Box::new(e)),
+            })?;
+            match serde_json::from_str::<i64>(&raw) {
+                Ok(ttl) => Ok(Some(ttl)),
+                Err(e) => {
+                    tracing::warn!(
+                        error = %e,
+                        key = RECORDING_TTL_KEY,
+                        "app_config row exists but JSON is corrupt; \
+                         ignoring and falling back to default recording TTL"
+                    );
+                    Ok(None)
+                }
+            }
+        }
+        Ok(None) => Ok(None),
+        Err(e) => Err(CoreError::Database {
+            message: format!("iterate load_recording_ttl: {}", e),
+            source: Some(Box::new(e)),
+        }),
+    }
+}
+
+/// UPSERT the `recording_ttl_secs` row.
+///
+/// `ttl_secs` is the TTL in seconds for recorded request/response bodies
+/// and headers in the `usage` table. A value of `0` disables body/header
+/// retention entirely.
+pub fn save_recording_ttl_to_db(
+    conn: &Connection,
+    ttl_secs: i64,
+    now_unix_secs: i64,
+) -> Result<()> {
+    let json = serde_json::to_string(&ttl_secs).map_err(|e|
+        CoreError::Parse(format!("serialize recording_ttl_secs: {}", e))
+    )?;
+    conn.execute(
+        "INSERT INTO app_config (key, value, updated_at) VALUES (?1, ?2, ?3)
+         ON CONFLICT(key) DO UPDATE SET value = excluded.value,
+                                         updated_at = excluded.updated_at",
+        params![RECORDING_TTL_KEY, json, now_unix_secs],
+    ).map_err(|e| CoreError::Database {
+        message: format!("upsert app_config.recording_ttl_secs: {}", e),
         source: Some(Box::new(e)),
     })?;
     Ok(())
@@ -153,6 +233,25 @@ mod tests {
             load_timeouts_override_from_db(&w).unwrap()
         };
         assert_eq!(read_back, Some(original));
+    }
+
+    #[test]
+    fn recording_ttl_roundtrip_through_db() {
+        let dir = tempdir();
+        let pool = DbPool::open(&dir.join("recording-ttl.db")).unwrap();
+        {
+            let mut w = pool.writer();
+            crate::db::migrations::run(&mut w).unwrap();
+        }
+        {
+            let w = pool.writer();
+            save_recording_ttl_to_db(&w, 123, 1_700_000_002).unwrap();
+        }
+        let got = {
+            let w = pool.writer();
+            load_recording_ttl_from_db(&w).unwrap()
+        };
+        assert_eq!(got, Some(123));
     }
 
     #[test]

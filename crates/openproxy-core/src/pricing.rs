@@ -5,6 +5,7 @@
 //! - OpenCode Zen: hardcoded small set; default NULL for unknown.
 
 use once_cell::sync::Lazy;
+use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -77,6 +78,75 @@ pub fn lookup(provider: &str, model: &str) -> Option<Price> {
         .iter()
         .find(|((p, m), _)| *p == provider && *m == model)
         .map(|(_, price)| *price)
+}
+
+/// Lookup pricing from the `model_capabilities_sync` table first, then
+/// fall back to the static hardcoded table. This is called from the
+/// usage recording path (`cost::record`) where a `&Connection` is
+/// available.
+///
+/// If exact match fails, tries suffix-agnostic fallbacks:
+///   - Strips `-free`, `:free`, `-free-trial` from the model name
+///   - Appends `-free` to the model name
+pub fn lookup_with_db(conn: &Connection, provider: &str, model: &str) -> Option<Price> {
+    // Try exact match first.
+    if let Some(p) = lookup_exact_in_db(conn, provider, model) {
+        return Some(p);
+    }
+
+    // Fallback 1: strip common "free" suffixes.
+    for stripped in strip_free_suffixes(model) {
+        if let Some(p) = lookup_exact_in_db(conn, provider, &stripped) {
+            return Some(p);
+        }
+    }
+
+    // Fallback 2: append -free (user's model might be the paid version
+    // but models.dev only has the -free variant, or vice versa).
+    let with_free = format!("{}-free", model);
+    if let Some(p) = lookup_exact_in_db(conn, provider, &with_free) {
+        return Some(p);
+    }
+    let with_colon = format!("{}:free", model);
+    if let Some(p) = lookup_exact_in_db(conn, provider, &with_colon) {
+        return Some(p);
+    }
+
+    // Fall back to static table.
+    lookup(provider, model)
+}
+
+/// Try exact match in the sync table.
+fn lookup_exact_in_db(conn: &Connection, provider: &str, model: &str) -> Option<Price> {
+    use rusqlite::OptionalExtension;
+    let result: Result<Option<(f64, f64)>, _> = conn.query_row(
+        "SELECT pricing_input_per_1m, pricing_output_per_1m \
+         FROM model_capabilities_sync \
+         WHERE provider_id = ?1 AND model_id = ?2 \
+           AND pricing_input_per_1m IS NOT NULL \
+           AND pricing_output_per_1m IS NOT NULL",
+        rusqlite::params![provider, model],
+        |row| Ok((row.get::<_, f64>(0)?, row.get::<_, f64>(1)?)),
+    ).optional();
+    result.ok().flatten().map(|(inp, out)| Price {
+        input_per_1m: inp,
+        output_per_1m: out,
+    })
+}
+
+/// Generate suffix-stripped variants of a model ID for fuzzy matching.
+/// Returns up to 3 variants, longest suffix first.
+fn strip_free_suffixes(model: &str) -> Vec<String> {
+    let suffixes = ["-free-trial", "-free", ":free"];
+    let mut out = Vec::new();
+    for suffix in &suffixes {
+        if let Some(stripped) = model.strip_suffix(suffix) {
+            if !stripped.is_empty() {
+                out.push(stripped.to_string());
+            }
+        }
+    }
+    out
 }
 
 /// Cost in USD for given token counts.

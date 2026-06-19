@@ -81,9 +81,12 @@ export function renderSidebar(): void {
     <div class="health">
       Health: <span id="health-status" class="${healthClass}">${healthText}</span>
     </div>
-    <button class="sidebar-toggle" type="button" data-action="toggleSidebar"
-            title="${collapsed ? "Expand sidebar" : "Collapse sidebar"}"
-            aria-label="${collapsed ? "Expand sidebar" : "Collapse sidebar"}">${toggleLabel}</button>
+    <div class="sidebar-footer">
+      <button class="sidebar-toggle" type="button" data-action="toggleSidebar"
+              title="${collapsed ? "Expand sidebar" : "Collapse sidebar"}"
+              aria-label="${collapsed ? "Expand sidebar" : "Collapse sidebar"}">${toggleLabel}</button>
+      <span id="theme-toggle-slot"></span>
+    </div>
   `;
   // The router also toggles .active on each nav link inside
   // navigate(), but a re-render of the sidebar (e.g. from the

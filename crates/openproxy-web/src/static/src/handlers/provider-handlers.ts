@@ -380,7 +380,8 @@ export async function refreshAccountQuota(accountId: number, e: Event | null): P
     btn.textContent = "...";
   }
   try {
-    const result = (await api("/accounts/" + accountId + "/refresh-quota", { method: "POST" })) as { supported?: boolean; error?: string } | null;
+    const result = (await api("/accounts/" + accountId + "/refresh-quota", { method: "POST" })) as
+      { supported?: boolean; error?: string; model_details?: Array<unknown> } | null;
     if (result && result.supported === false) {
       if (btn) flashButton(btn, "n/a", "#9399b2");
     } else if (result && result.error) {
@@ -389,6 +390,14 @@ export async function refreshAccountQuota(accountId: number, e: Event | null): P
       if (btn) flashButton(btn, "✓", "#a6e3a1");
     }
     state.accounts = await api("/accounts") as typeof state.accounts;
+    // Restore model_details (not persisted in DB) from the refresh
+    // response back into the account so the quota cell can render it.
+    if (result && "model_details" in result && result.model_details != null) {
+      const match = state.accounts.find((a: { id: number }) => a.id === accountId);
+      if (match) {
+        (match as unknown as Record<string, unknown>)["quota_model_details"] = result.model_details;
+      }
+    }
     rerenderCurrentView();
   } catch (err: unknown) {
     if (btn) flashButton(btn, "✗", "#f38ba8");

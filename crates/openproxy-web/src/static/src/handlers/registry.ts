@@ -22,7 +22,7 @@
 //   * For self-only closures (closeKeyForm, etc.) the listener
 //     passes the bound element (data-arg1="self") as the arg.
 
-import { showCreateAccount, createAccount, closeCreateAccount, deleteAccount, testAccount } from "./account-handlers.js";
+import { showCreateAccount, createAccount, closeCreateAccount, deleteAccount, testAccount, showUpdateAccountKey, updateAccountKey, closeUpdateAccountKey } from "./account-handlers.js";
 import { showCreateCombo, createCombo, closeCreateCombo, deleteCombo, updateRaceSize, testAllTargets } from "./combo-handlers.js";
 import {
   showAddTarget, closeAddTarget, onTargetKindChange, onTargetProviderChange,
@@ -57,7 +57,7 @@ import { showToast } from "../components/toast.js";
 import { navigate, rerenderCurrentView } from "../state/router.js";
 import { OAuthLogin } from "./oauth-handlers.js";
 import { logsPrevPage, logsNextPage, logsGoPage, logsSetFollow, toggleColumnsMenu, toggleColumn } from "../views/logs.js";
-import { configSaveTimeouts } from "../views/config.js";
+import { configSaveTimeouts, configSaveRecordingTtl } from "../views/config.js";
 import { closeLogDetailModal } from "../components/log-detail.js";
 
 // ---- Action registry ----
@@ -91,6 +91,9 @@ export const HANDLERS: Record<string, ActionHandler> = {
   closeCreateAccount,
   deleteAccount,
   testAccount,
+  showUpdateAccountKey,
+  updateAccountKey,     // signature: (id, e)          — submit handler
+  closeUpdateAccountKey,
 
   // Combos
   showCreateCombo,
@@ -166,6 +169,7 @@ export const HANDLERS: Record<string, ActionHandler> = {
 
   // Config
   configSaveTimeouts,
+  configSaveRecordingTtl,
   exportConfig,
 
   // Logs

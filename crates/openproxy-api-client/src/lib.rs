@@ -40,7 +40,7 @@
 //! el patrón de extracción de `{"id": ...}`.
 
 use openproxy_core::{
-    accounts, admin::{AddTargetInput, CreateAccountInput, CreateComboInput, CreateProviderInput},
+    accounts, admin::{AddTargetInput, CreateAccountInput, CreateComboInput, CreateProviderInput, UpdateAccountApiKeyInput},
     analytics::{LatencyPercentiles, RaceStats},
     combos, ids::{AccountId, ComboId, ModelRowId, ProviderId},
     providers, usage::{ByAccountRow, ByModelRow, ByStatusRow, ErrorRow, UsageFilter, UsageSummary},
@@ -178,6 +178,23 @@ impl Client {
     pub async fn delete_account(&self, id: AccountId) -> Result<(), ClientError> {
         let path = format!("/v1/admin/accounts/{}", id.0);
         let resp = self.http.delete(self.url(&path)).send().await?;
+        parse_unit(resp).await
+    }
+
+    /// `PUT /v1/admin/accounts/:id/api-key`. Encripta y guarda (o limpia)
+    /// la API key de una cuenta existente.
+    pub async fn update_account_api_key(
+        &self,
+        id: AccountId,
+        input: UpdateAccountApiKeyInput,
+    ) -> Result<(), ClientError> {
+        let path = format!("/v1/admin/accounts/{}/api-key", id.0);
+        let resp = self
+            .http
+            .put(self.url(&path))
+            .json(&input)
+            .send()
+            .await?;
         parse_unit(resp).await
     }
 

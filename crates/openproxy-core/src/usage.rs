@@ -1277,6 +1277,32 @@ impl std::fmt::Display for SimpleErr {
 impl std::error::Error for SimpleErr {}
 
 // ---------------------------------------------------------------------------
+// Recording TTL cleanup
+// ---------------------------------------------------------------------------
+
+/// Clear recorded request/response bodies and headers once they are older than
+/// the configured TTL. Metadata rows are preserved for analytics; only the
+/// heavyweight live-log detail fields are expired.
+pub fn prune_expired_recording_bodies(conn: &Connection, ttl_secs: i64) -> Result<usize> {
+    let ttl_secs = ttl_secs.max(0);
+    let n = conn
+        .execute(
+            "UPDATE usage \
+             SET request_body_json = NULL, \
+                 response_body_json = NULL, \
+                 request_headers = NULL, \
+                 response_headers = NULL \
+             WHERE datetime(created_at) <= datetime(?1, ?2)",
+            params![chrono::Utc::now().to_rfc3339(), format!("-{} seconds", ttl_secs)],
+        )
+        .map_err(|e| CoreError::Database {
+            message: format!("prune_expired_recording_bodies: {}", e),
+            source: Some(Box::new(e)),
+        })?;
+    Ok(n)
+}
+
+// ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
@@ -1867,5 +1893,84 @@ mod tests {
         assert!(!row.created_at.is_empty());
 
         assert!(detail_by_id(&conn, id + 1).expect("detail_by_id missing").is_none());
+    }
+
+    #[test]
+    fn prune_expired_recording_bodies_clears_old_rows() {
+        use rusqlite::params;
+        let (conn, _p) = fresh_conn();
+        // Insert a row with bodies and a very recent created_at.
+        conn.execute(
+            "INSERT INTO usage (request_id, trace_id, attempt, provider_id, \
+             upstream_model_id, prompt_tokens, completion_tokens, cost_usd, \
+             connect_ms, ttft_ms, total_ms, status_code, race_total, race_lost, \
+             created_at, request_body_json, response_body_json, request_headers, response_headers) \
+             VALUES (?, ?, 1, 'openrouter', 'openai/gpt-4o', 100, 50, 0.01, 50, 200, 1200, 200, 1, 0, \
+                     datetime('now'), '{\"q\":\"hello\"}', '{\"a\":\"world\"}', '{\"ct\":\"text/plain\"}', '{\"ct\":\"text/plain\"}')",
+            params!["req1", "trace1"],
+        )
+        .expect("insert recent row");
+        // Insert a row with bodies that is 10 minutes old.
+        conn.execute(
+            "INSERT INTO usage (request_id, trace_id, attempt, provider_id, \
+             upstream_model_id, prompt_tokens, completion_tokens, cost_usd, \
+             connect_ms, ttft_ms, total_ms, status_code, race_total, race_lost, \
+             created_at, request_body_json, response_body_json, request_headers, response_headers) \
+             VALUES (?, ?, 1, 'openrouter', 'openai/gpt-4o', 100, 50, 0.01, 50, 200, 1200, 200, 1, 0, \
+                     datetime('now', '-600 seconds'), '{\"q\":\"old\"}', '{\"a\":\"old\"}', '{\"ct\":\"old\"}', '{\"ct\":\"old\"}')",
+            params!["req2", "trace2"],
+        )
+        .expect("insert old row");
+        // TTL of 5 minutes: only the old row should be pruned.
+        let pruned = prune_expired_recording_bodies(&conn, 300).expect("prune");
+        assert_eq!(pruned, 1, "only the old row should be pruned");
+        // Verify: recent row still has bodies.
+        let recent_body: Option<String> = conn
+            .query_row(
+                "SELECT request_body_json FROM usage WHERE request_id = 'req1'",
+                [],
+                |r| r.get(0),
+            )
+            .expect("query recent");
+        assert!(recent_body.is_some(), "recent row should still have body");
+        // Verify: old row bodies are now NULL.
+        let old_body: Option<String> = conn
+            .query_row(
+                "SELECT request_body_json FROM usage WHERE request_id = 'req2'",
+                [],
+                |r| r.get(0),
+            )
+            .expect("query old");
+        assert!(old_body.is_none(), "old row body should be NULL");
+        // Verify: metadata (e.g. status_code) is preserved for both.
+        let count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM usage WHERE status_code = 200", [], |r| r.get(0))
+            .expect("count");
+        assert_eq!(count, 2, "metadata should be preserved for both rows");
+    }
+
+    #[test]
+    fn prune_expired_recording_bodies_zero_ttl_clears_all() {
+        let (conn, _p) = fresh_conn();
+        conn.execute(
+            "INSERT INTO usage (request_id, trace_id, attempt, provider_id, \
+             upstream_model_id, prompt_tokens, completion_tokens, cost_usd, \
+             connect_ms, ttft_ms, total_ms, status_code, race_total, race_lost, \
+             created_at, request_body_json, response_body_json) \
+             VALUES (?, ?, 1, 'openrouter', 'openai/gpt-4o', 100, 50, 0.01, 50, 200, 1200, 200, 1, 0, \
+                     datetime('now'), '{\"q\":\"hi\"}', '{\"a\":\"ok\"}')",
+            params!["req1", "trace1"],
+        )
+        .expect("insert");
+        let pruned = prune_expired_recording_bodies(&conn, 0).expect("prune");
+        assert_eq!(pruned, 1, "zero TTL should clear all bodies");
+        let body: Option<String> = conn
+            .query_row(
+                "SELECT request_body_json FROM usage WHERE request_id = 'req1'",
+                [],
+                |r| r.get(0),
+            )
+            .expect("query");
+        assert!(body.is_none(), "body should be NULL after zero-TTL prune");
     }
 }

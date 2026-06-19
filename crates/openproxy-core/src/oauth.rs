@@ -31,6 +31,10 @@ pub enum OAuthFlow {
     DeviceCode,
     /// Authorization Code with PKCE (Antigravity, Google, etc.).
     AuthorizationCodePkce,
+    /// Standard Authorization Code (no PKCE). Requires a client_secret
+    /// to exchange the code. Used by providers like Gemini CLI which
+    /// embed a secret in their binary (acceptable for server-side use).
+    AuthorizationCode,
 }
 
 impl OAuthFlow {
@@ -38,6 +42,7 @@ impl OAuthFlow {
         match self {
             OAuthFlow::DeviceCode => "device_code",
             OAuthFlow::AuthorizationCodePkce => "authorization_code_pkce",
+            OAuthFlow::AuthorizationCode => "authorization_code",
         }
     }
 }
@@ -59,12 +64,15 @@ pub struct TokenResponse {
 /// Device Authorization Response (RFC 8628 §3).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DeviceAuthorizationResponse {
+    #[serde(rename = "deviceCode")]
     pub device_code: String,
+    #[serde(rename = "userCode")]
     pub user_code: String,
+    #[serde(rename = "verificationUri")]
     pub verification_uri: String,
-    #[serde(default)]
+    #[serde(default, rename = "verificationUriComplete")]
     pub verification_uri_complete: Option<String>,
-    #[serde(default)]
+    #[serde(default, rename = "expiresIn")]
     pub expires_in: Option<u64>,
     #[serde(default)]
     pub interval: Option<u64>,
@@ -98,15 +106,17 @@ pub trait OAuthProvider: Send + Sync {
     /// The OAuth flow this provider uses.
     fn flow(&self) -> OAuthFlow;
 
-    /// Build the authorization URL for PKCE flow.
+    /// Build the authorization URL.
     ///
     /// `redirect_uri` is the OAuth callback URL (dynamic, based on how
     /// the user accessed the dashboard).
     ///
     /// Returns `(auth_url, code_verifier, code_challenge)` where:
     /// - `auth_url` is the URL to redirect the user to.
-    /// - `code_verifier` is the PKCE code verifier (must be stored for exchange).
-    /// - `code_challenge` is the S256 challenge to include in the auth URL.
+    /// - `code_verifier` is the PKCE code verifier (must be stored for
+    ///   exchange), or empty string for non-PKCE flows.
+    /// - `code_challenge` is the S256 challenge to include in the auth
+    ///   URL, or empty string for non-PKCE flows.
     ///
     /// Returns `Err` if the provider uses Device Code flow.
     async fn build_auth_url(
@@ -115,7 +125,7 @@ pub trait OAuthProvider: Send + Sync {
     ) -> Result<(String, String, String)> {
         let _ = redirect_uri;
         Err(CoreError::Validation(format!(
-            "provider '{}' does not support PKCE authorization URL",
+            "provider '{}' does not support authorization URL",
             self.name()
         )))
     }
@@ -177,6 +187,202 @@ pub trait OAuthProvider: Send + Sync {
 }
 
 // =====================================================================
+// OAuth provider registry — a generic HashMap-based registry that
+// makes it easy to add new OAuth providers without modifying match
+// statements. Used by the pipeline (for on-demand refresh during chat
+// requests), the background scheduler, and the admin handlers.
+// =====================================================================
+
+/// A generic, extensible registry of OAuth providers.
+///
+/// Providers are looked up by their `name()` string. Built-in providers
+/// are registered at startup; custom providers can be added at any time
+/// via `register()`. Internally stores `Arc` so cloning the registry
+/// is cheap and providers don't need to implement `Clone`.
+#[derive(Clone, Default)]
+pub struct OAuthProviderRegistry {
+    inner: std::sync::Arc<
+        std::sync::Mutex<
+            std::collections::HashMap<String, std::sync::Arc<dyn OAuthProvider + Send + Sync>>,
+        >,
+    >,
+}
+
+impl OAuthProviderRegistry {
+    /// Create an empty registry.
+    pub fn new() -> Self {
+        Self {
+            inner: std::sync::Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
+        }
+    }
+
+    /// Create a registry pre-populated with the built-in OAuth providers.
+    pub fn builtin() -> Self {
+        let reg = Self::new();
+        // Antigravity (Cloud Code) — registered under both `antigravity`
+        // and `antigravity-cli` since they share the same OAuth flow.
+        let antigravity = std::sync::Arc::new(
+            crate::oauth_antigravity::AntigravityOAuthProvider::new(),
+        );
+        reg.register_arc_with_name("antigravity", antigravity.clone());
+        reg.register_arc_with_name("antigravity-cli", antigravity);
+        reg.register_arc(std::sync::Arc::new(
+            crate::oauth_gemini::GeminiCliOAuthProvider::new(),
+        ));
+        reg.register_arc(std::sync::Arc::new(
+            crate::oauth_kiro::KiroOAuthProvider::new(),
+        ));
+        reg
+    }
+
+    /// Register a new OAuth provider by `Arc`, keyed on the
+    /// provider's own `name()`. If a provider with the same name
+    /// already exists, it is replaced. This allows custom providers
+    /// to override built-in ones at runtime.
+    pub fn register_arc(&self, provider: std::sync::Arc<dyn OAuthProvider + Send + Sync>) {
+        let name = provider.name().to_string();
+        let mut guard = self.inner.lock().unwrap();
+        guard.insert(name, provider);
+    }
+
+    /// Register an OAuth provider `Arc` under an explicit key
+    /// (useful for aliases like `antigravity-cli` → same impl as
+    /// `antigravity`). If a provider with the same key already
+    /// exists, it is replaced.
+    pub fn register_arc_with_name(
+        &self,
+        name: &str,
+        provider: std::sync::Arc<dyn OAuthProvider + Send + Sync>,
+    ) {
+        let mut guard = self.inner.lock().unwrap();
+        guard.insert(name.to_string(), provider);
+    }
+
+    /// Register a new OAuth provider by `Box`. Convenience wrapper
+    /// around `register_arc`.
+    pub fn register(&self, provider: Box<dyn OAuthProvider + Send + Sync>) {
+        self.register_arc(std::sync::Arc::from(provider));
+    }
+
+    /// Look up an OAuth provider by name. Returns `None` if no provider
+    /// is registered with that name.
+    pub fn get(&self, name: &str) -> Option<std::sync::Arc<dyn OAuthProvider + Send + Sync>> {
+        let guard = self.inner.lock().unwrap();
+        guard.get(name).cloned()
+    }
+}
+
+/// Resolve an OAuth access token for an account, refreshing it if
+/// it is expiring soon.
+///
+/// Steps:
+/// 1. Decrypt the current access token from the DB.
+/// 2. Check `oauth_expires_soon()` — if the token is still fresh,
+///    return it immediately.
+/// 3. If expiring: decrypt the refresh token, find the provider in
+///    the registry, call `refresh_token()` (async), store the new
+///    tokens, return the new access token.
+///
+/// The function manages its own database connections from `db_pool`
+/// to avoid holding a SQLite connection across `.await`.
+pub async fn resolve_oauth_token(
+    db_pool: &crate::db::DbPool,
+    account: &crate::accounts::Account,
+    provider_id: &str,
+    registry: &OAuthProviderRegistry,
+    upstream_client: &std::sync::Arc<crate::upstream::UpstreamClient>,
+    master_key: &MasterKey,
+) -> Result<String> {
+    use crate::accounts::{decrypt_access_token, decrypt_refresh_token, store_oauth_tokens};
+
+    // 1. Decrypt current access token.
+    let access_token = {
+        let conn = db_pool.writer();
+        decrypt_access_token(&conn, account.id, master_key)?
+    };
+
+    // 2. Check expiry — if still fresh, return as-is.
+    if !oauth_expires_soon(account, provider_id) {
+        return Ok(access_token);
+    }
+
+    // 3. Decrypt refresh token under a fresh connection.
+    let refresh_token = {
+        let conn = db_pool.writer();
+        decrypt_refresh_token(&conn, account.id, master_key)?
+            .ok_or_else(|| CoreError::Auth(format!(
+                "account {} has no refresh token, cannot refresh",
+                account.id.0
+            )))?
+    };
+
+    // 4. Find the provider implementation.
+    let provider = registry.get(provider_id).ok_or_else(|| {
+        CoreError::Auth(format!("no OAuth provider registered for '{provider_id}'"))
+    })?;
+
+    tracing::info!(
+        account = account.id.0,
+        provider = provider_id,
+        "oauth on-demand refresh: refreshing expiring token"
+    );
+
+    // 5. Refresh (async, no connection held).
+    let token = provider.refresh_token(&refresh_token, upstream_client).await?;
+
+    // 6. Compute new expiry.
+    let expires_at = token.expires_in.map(|secs| {
+        (chrono::Utc::now() + chrono::Duration::seconds(secs as i64))
+            .format("%Y-%m-%dT%H:%M:%SZ")
+            .to_string()
+    });
+
+    // 7. Store new tokens under a fresh connection.
+    {
+        let conn = db_pool.writer();
+        store_oauth_tokens(
+            &conn,
+            account.id,
+            &token.access_token,
+            token.refresh_token.as_deref(),
+            master_key,
+            &token.token_type,
+            expires_at.as_deref(),
+            token.scope.as_deref(),
+            account.oauth_provider_specific.as_deref(),
+            account.email.as_deref(),
+        )?;
+    }
+
+    tracing::info!(
+        account = account.id.0,
+        provider = provider_id,
+        "oauth on-demand refresh: token refreshed successfully"
+    );
+
+    Ok(token.access_token)
+}
+
+/// Check whether we need to call `resolve_oauth_token` in the
+/// pipeline's custom-provider path. This is a lighter-weight check
+/// that avoids the full refresh flow when the token is still fresh.
+pub fn pipeline_token_needs_refresh(
+    db_expires_at: Option<&str>,
+    provider_id: &str,
+) -> bool {
+    let Some(ts) = db_expires_at else {
+        return false; // no expiry set → don't know when it expires → assume fresh
+    };
+    let Ok(expires_at) = chrono::DateTime::parse_from_rfc3339(ts) else {
+        return false;
+    };
+    let expires_at = expires_at.with_timezone(&chrono::Utc);
+    let lead = refresh_lead_seconds(provider_id);
+    let threshold = chrono::Utc::now() + chrono::Duration::seconds(lead as i64);
+    expires_at <= threshold
+}
+
+// =====================================================================
 // Per-provider refresh lead times
 // =====================================================================
 
@@ -194,7 +400,7 @@ pub(crate) fn refresh_lead_seconds(provider_id: &str) -> u64 {
     match provider_id {
         // Rotating token providers (Auth0-backed) — refresh 5 min
         // before expiry to avoid cascade revocation.
-        "kiro" | "antigravity" | "antigravity-cli" => 300, // 5 minutes
+        "kiro" | "antigravity" | "antigravity-cli" | "gemini-cli" => 300, // 5 minutes
 
         // Non-rotating providers — refresh 15 min before expiry.
         _ => 900, // 15 minutes
@@ -254,7 +460,7 @@ pub async fn start_refresh_scheduler(
     db_pool: std::sync::Arc<crate::db::DbPool>,
     master_key: std::sync::Arc<MasterKey>,
     upstream_client: Arc<UpstreamClient>,
-    providers: std::sync::Arc<Vec<Box<dyn OAuthProvider + Send + Sync>>>,
+    registry: Arc<OAuthProviderRegistry>,
     check_interval_secs: u64,
     _refresh_before_secs: i64, // Deprecated: now per-provider
 ) {
@@ -319,7 +525,7 @@ pub async fn start_refresh_scheduler(
                 tokio::time::sleep(std::time::Duration::from_secs(STAGGER_DELAY_SECS)).await;
             }
 
-            let provider = match find_oauth_provider(&providers, account.provider_id.as_str()) {
+            let provider = match registry.get(account.provider_id.as_str()) {
                 Some(p) => p,
                 None => {
                     tracing::debug!(
@@ -474,14 +680,6 @@ fn backoff_seconds(failure_count: u32) -> u64 {
     std::cmp::min(raw, MAX_BACKOFF_SECS)
 }
 
-/// Find an OAuthProvider by name in the list.
-fn find_oauth_provider<'a>(
-    providers: &'a [Box<dyn OAuthProvider + Send + Sync>],
-    name: &str,
-) -> Option<&'a (dyn OAuthProvider + Send + Sync)> {
-    providers.iter().find(|p| p.name() == name).map(|p| p.as_ref())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -519,10 +717,10 @@ mod tests {
     #[test]
     fn device_auth_response_deserialize() {
         let json = r#"{
-            "device_code": "GmRhmhcxhwAzkoEqiMgzy",
-            "user_code": "DJQR-KCZS",
-            "verification_uri": "https://example.com/device",
-            "expires_in": 1800,
+            "deviceCode": "GmRhmhcxhwAzkoEqiMgzy",
+            "userCode": "DJQR-KCZS",
+            "verificationUri": "https://example.com/device",
+            "expiresIn": 1800,
             "interval": 5
         }"#;
         let dar: DeviceAuthorizationResponse = serde_json::from_str(json).unwrap();

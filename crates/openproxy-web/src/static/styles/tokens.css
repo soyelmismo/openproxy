@@ -6,10 +6,26 @@
    - Hard 1px borders, generous whitespace
    - Saturated accent tints (Dell red, yellow sticker,
      purple stripe) over a near-white canvas
-   - Typography: Arial Black / Helvetica / Times Roman
-     with system fallbacks (no webfonts)
+   - Typography: Ubuntu (local TTF) with system fallbacks
    - Two themes: light (default) and dark.
    ============================================ */
+
+/* Ubuntu is loaded from /fonts/Ubuntu-Regular.ttf and Ubuntu-Bold.ttf
+   (Ubuntu Font Licence 1.0 — see fonts/Ubuntu-LICENCE.txt). */
+@font-face {
+  font-family: "Ubuntu";
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url("/fonts/Ubuntu-Regular.ttf") format("truetype");
+}
+@font-face {
+  font-family: "Ubuntu";
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+  src: url("/fonts/Ubuntu-Bold.ttf") format("truetype");
+}
 
 :root {
   /* ----- Primitives: Dell brand palette (spec §4.1) ----- */
@@ -93,8 +109,8 @@
   --space-10: 2.5rem;
 
   /* ----- Typography (spec §4.4) ----- */
-  --font-display: "Arial Black", "Helvetica Black", Helvetica, sans-serif;
-  --font-sans:    Helvetica, "Arial Bold", Arial, sans-serif;
+  --font-display: "Ubuntu", "Arial Black", "Helvetica Black", Helvetica, sans-serif;
+  --font-sans:    "Ubuntu", Helvetica, "Arial Bold", Arial, sans-serif;
   --font-serif:   "Times New Roman", Times, serif;
   --font-mono:    "Courier New", "Lucida Console", "Courier", monospace;
 

@@ -52,6 +52,7 @@ dashmap = { workspace = true }
 regex = { workspace = true }
 sha2 = { workspace = true }
 urlencoding = { workspace = true }
+memchr = "2"
 
 # --- hyper-based upstream client (Gate 0) ---
 # Pinned to versions that are already present in the workspace lockfile

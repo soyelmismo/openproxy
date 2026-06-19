@@ -1240,6 +1240,7 @@ dependencies = [
  "http-body-util",
  "hyper",
  "hyper-util",
+ "memchr",
  "once_cell",
  "parking_lot",
  "rand 0.8.6",

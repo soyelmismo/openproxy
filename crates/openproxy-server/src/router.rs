@@ -8,7 +8,7 @@
 
 use axum::{
     middleware,
-    routing::{get, post},
+    routing::{get, post, put},
     Json, Router,
 };
 use serde_json::json;
@@ -90,6 +90,11 @@ pub fn build_router(state: AppState) -> Router {
             axum::routing::put(handlers::admin::put_runtime_timeouts),
         )
         .route(
+            "/v1/admin/config/recording-ttl",
+            get(handlers::admin::get_recording_ttl)
+                .put(handlers::admin::put_recording_ttl),
+        )
+        .route(
             "/v1/admin/providers",
             get(handlers::admin::list_providers).post(handlers::admin::create_provider),
         )
@@ -110,6 +115,10 @@ pub fn build_router(state: AppState) -> Router {
         .route(
             "/v1/admin/accounts/:id/health",
             post(handlers::admin::set_account_health),
+        )
+        .route(
+            "/v1/admin/accounts/:id/api-key",
+            put(handlers::admin::update_account_api_key),
         )
         .route(
             "/v1/admin/accounts/:id/refresh-quota",
@@ -271,6 +280,11 @@ pub fn build_router(state: AppState) -> Router {
             get(handlers::admin::api_key_usage),
         )
         // OAuth endpoints
+        // models.dev sync
+        .route(
+            "/v1/admin/models/sync-models-dev",
+            post(handlers::admin::sync_models_dev),
+        )
         .route(
             "/v1/admin/oauth/:provider/authorize",
             get(handlers::admin::oauth_authorize),

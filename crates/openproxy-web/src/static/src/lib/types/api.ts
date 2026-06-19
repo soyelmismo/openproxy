@@ -143,6 +143,9 @@ export interface Account {
   quota_plan_name: string | null;
   quota_last_fetched_at: string | null;
   quota_fetch_error: string | null;
+  /** Per-model quota details (Antigravity family). Not persisted in DB —
+   *  populated from the refresh-quota response. */
+  quota_model_details?: ModelQuotaDetail[] | null;
   /** "api_key" u "oauth" — texto libre, no enum. */
   auth_type: string;
   email: string | null;
@@ -174,6 +177,18 @@ export interface AccountQuota {
   /** Siempre presente (epoch secs as string). */
   last_fetched_at: string;
   fetch_error: string | null;
+  /** Per-model quota details (Antigravity family). */
+  model_details?: ModelQuotaDetail[] | null;
+}
+
+/** Per-model quota detail inside `AccountQuota.model_details`.
+ *  @see crates/openproxy-core/src/quota.rs:22 */
+export interface ModelQuotaDetail {
+  model_id: string;
+  session_used: number;
+  session_limit: number;
+  session_reset_at: string | null;
+  remaining_fraction: number;
 }
 
 // ----------------------------------------------------------------------------
@@ -295,7 +310,7 @@ export interface StageEvent {
   provider_id: string;
   upstream_model_id: string;
   /** "started" | "connecting" | "waiting_ttft" | "streaming"
-   *  | "completed" | "failed". */
+   *  | "completed" | "failed" | "cancelled". */
   stage: string;
   elapsed_ms: number;
   connect_ms: number | null;

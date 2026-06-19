@@ -179,6 +179,7 @@ function renderConnectionsSection(provider: Provider, accounts: Account[]): stri
           <td>${escapeHtml(a.created_at || "—")}</td>
           <td>
             ${hasQuota ? `<button class="small" data-action="refreshAccountQuota" data-arg1="${a.id}">↻ Quota</button>` : ""}
+            <button class="small" data-action="showUpdateAccountKey" data-arg1="${a.id}">🔑 Key</button>
             <button class="small danger" data-action="deleteAccount" data-arg1="${a.id}">Delete</button>
           </td>
         </tr>
@@ -253,7 +254,7 @@ function renderModelsSection(provider: Provider, providerModels: Model[], active
         <thead><tr>
           <th><input type="checkbox" id="model-select-all" data-action="toggleSelectAllModels"></th>
           ${SORTABLE_COLUMNS.map((c) => renderSortableTh(c, ui.sort, provider.id)).join("")}
-          <th>Capabilities</th><th>Status</th><th>Actions</th>
+          <th>Capabilities</th><th>Status</th><th>Last test</th><th>Actions</th>
         </tr></thead>
         <tbody id="models-tbody">
           ${sorted.length === 0

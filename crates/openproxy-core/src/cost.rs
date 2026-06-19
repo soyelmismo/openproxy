@@ -94,7 +94,7 @@ pub fn redact_error_msg(raw: &str) -> (String, String) {
 
 /// Insert a usage row. Returns the new UsageId.
 pub fn record(conn: &Connection, input: &UsageInput) -> Result<UsageId> {
-    let price = pricing::lookup(input.provider_id.as_str(), &input.upstream_model_id);
+    let price = pricing::lookup_with_db(conn, input.provider_id.as_str(), &input.upstream_model_id);
     let (cost_usd, tps) = compute(price, input);
     let (error_msg_for_db, error_msg_redacted_for_db) = match &input.error_msg {
         Some(msg) => {

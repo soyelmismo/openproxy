@@ -15,29 +15,72 @@ use tokio::sync::watch;
 /// Cheap to clone (one `Arc` clone). `cancel()` is idempotent. The
 /// associated counter (`cancel_count`) is incremented every time
 /// `cancel()` is called and is observable for metrics / tests.
-#[derive(Clone, Default)]
+#[derive(Clone)]
 pub struct CancellationToken {
     inner: Arc<Inner>,
 }
 
-#[derive(Default)]
 struct Inner {
     flag: AtomicBool,
     cancel_count: AtomicUsize,
     // For tests: how many observers saw the flag.
     observe_count: AtomicUsize,
+    // Async notification channel. Value transitions false → true once.
+    cancel_tx: watch::Sender<bool>,
+}
+
+impl Default for CancellationToken {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl CancellationToken {
     /// Create a fresh, un-cancelled token.
     pub fn new() -> Self {
-        Self::default()
+        let (cancel_tx, _rx) = watch::channel(false);
+        Self {
+            inner: Arc::new(Inner {
+                flag: AtomicBool::new(false),
+                cancel_count: AtomicUsize::new(0),
+                observe_count: AtomicUsize::new(0),
+                cancel_tx,
+            }),
+        }
     }
 
     /// Signal cancellation. Idempotent. Does NOT block.
     pub fn cancel(&self) {
         self.inner.flag.store(true, Ordering::SeqCst);
         self.inner.cancel_count.fetch_add(1, Ordering::SeqCst);
+        let _ = self.inner.cancel_tx.send(true);
+    }
+
+    /// Async wait for cancellation. Returns immediately if already
+    /// cancelled, otherwise suspends until `cancel()` is called.
+    /// Cheap: one `subscribe()` + one `Arc` clone.
+    pub async fn cancelled(&self) {
+        if self.is_cancelled() {
+            return;
+        }
+        let mut rx = self.inner.cancel_tx.subscribe();
+        if *rx.borrow_and_update() {
+            return;
+        }
+        // `changed()` returns Err when the sender is dropped.
+        // Treat that as cancellation (the token is being torn down).
+        while rx.changed().await.is_ok() {
+            if *rx.borrow() {
+                return;
+            }
+        }
+    }
+
+    /// Create a `watch::Receiver` that observes the internal cancel
+    /// notification channel. Use this to poll `changed()` in hot loops
+    /// without creating a new subscription per iteration.
+    pub fn subscribe(&self) -> watch::Receiver<bool> {
+        self.inner.cancel_tx.subscribe()
     }
 
     /// Non-blocking peek.
@@ -193,6 +236,49 @@ mod tests {
             tokio::task::yield_now().await;
         }
         assert!(token.is_cancelled());
+    }
+
+    #[tokio::test]
+    async fn cancelled_returns_immediately_if_already_cancelled() {
+        let t = CancellationToken::new();
+        t.cancel();
+        // Should return instantly, not hang.
+        t.cancelled().await;
+    }
+
+    #[tokio::test]
+    async fn cancelled_awaits_cancel() {
+        let t = CancellationToken::new();
+        let t2 = t.clone();
+
+        let handle = tokio::spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            t2.cancel();
+        });
+
+        // Should suspend until t2 cancels.
+        t.cancelled().await;
+        assert!(t.is_cancelled());
+        handle.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn cancelled_multiple_waiters_all_wake() {
+        let t = CancellationToken::new();
+        let mut handles = Vec::new();
+        for _ in 0..10 {
+            let t2 = t.clone();
+            handles.push(tokio::spawn(async move {
+                t2.cancelled().await;
+                assert!(t2.is_cancelled());
+            }));
+        }
+
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        t.cancel();
+        for h in handles {
+            h.await.unwrap();
+        }
     }
 
     #[tokio::test]

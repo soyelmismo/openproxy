@@ -378,6 +378,8 @@
 .log-row.streaming { animation: pulse 2s infinite; }
 .log-row.error { background: var(--color-error-soft); }
 .log-row.error:hover { background: var(--color-error-soft); }
+.log-row.processing { background: var(--color-warn-soft); }
+.log-row.processing:hover { background: var(--color-warn-soft); }
 .log-row.loser { opacity: 0.65; }
 
 /* `overflow: hidden` + ellipsis on `> span` keeps long values from
@@ -501,6 +503,7 @@
 .log-phase--streaming    { background: var(--color-success-soft); color: var(--color-success); border-color: var(--color-success); animation: phasePulse 2s ease-in-out infinite; }
 .log-phase--completed    { background: var(--color-success-soft); color: var(--color-success); border-color: var(--color-success); }
 .log-phase--failed       { background: var(--color-error-soft); color: var(--color-error); border-color: var(--color-error); }
+.log-phase--cancelled    { background: #e8d5f5; color: #7b2d8e; border-color: #7b2d8e; }
 
 /* ----- Columns toggle (logs view) ----- */
 /* The "Columns ▾" button lives in the logs header and opens a
@@ -642,4 +645,98 @@
 @keyframes phasePulse {
   0%, 100% { transform: scale(1); }
   50%      { transform: scale(1.04); }
+}
+
+/* log-detail modal: collapsible sections for Request and Response tabs */
+.log-detail-section { margin-bottom: var(--space-3); }
+.log-detail-collapsible {
+  border: var(--border-w) var(--border-style) var(--color-border);
+  background: var(--color-surface-2);
+  padding: var(--space-2) var(--space-3);
+  margin-bottom: var(--space-2);
+}
+.log-detail-collapsible > summary {
+  cursor: pointer;
+  font-weight: 600;
+  color: var(--color-text);
+  font-size: var(--fs-sm);
+  user-select: none;
+}
+.log-detail-collapsible[open] > summary {
+  color: var(--color-primary);
+  margin-bottom: var(--space-2);
+}
+.log-detail-collapsible-body {
+  margin: 0;
+  border: none;
+  background: var(--color-surface);
+  font-size: var(--fs-xs);
+}
+.log-detail-key { font-family: var(--font-mono); font-size: var(--fs-xs); }
+.log-detail-key-pinned { color: var(--color-primary); font-weight: 600; }
+.log-detail-key-meta {
+  margin-left: var(--space-2);
+  color: var(--color-text-muted);
+  font-weight: 400;
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+}
+.log-detail-tool-call {
+  border: var(--border-w) var(--border-style) var(--color-border);
+  background: var(--color-surface);
+  padding: var(--space-2) var(--space-3);
+  margin-bottom: var(--space-2);
+}
+.log-detail-tool-call:last-child { margin-bottom: 0; }
+.log-detail-tool-call-header {
+  display: flex;
+  gap: var(--space-2);
+  align-items: baseline;
+  font-size: var(--fs-sm);
+  margin-bottom: var(--space-2);
+}
+.log-detail-tool-call-name { font-weight: 600; color: var(--color-text); }
+.log-detail-tool-call-id {
+  color: var(--color-text-muted);
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+}
+.log-detail-tool-call-args { margin-top: var(--space-2); }
+.log-detail-messages { display: flex; flex-direction: column; gap: var(--space-1); }
+.log-detail-messages > .log-detail-collapsible { margin-bottom: var(--space-1); }
+.log-detail-role {
+  display: inline-block;
+  padding: 1px 6px;
+  border-radius: 3px;
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  margin-right: var(--space-1);
+}
+.log-detail-role-system  { background: #e8e0f0; color: #6b3fa0; }
+.log-detail-role-assistant { background: #d4e8f0; color: #2a6496; }
+.log-detail-role-user    { background: #d8e8d0; color: #3a7a2a; }
+.log-detail-role-tool    { background: #f0e8d0; color: #8a6a00; }
+.log-detail-msg-preview {
+  color: var(--color-text-muted);
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  font-weight: 400;
+}
+.log-detail-tool-calls { display: flex; flex-direction: column; gap: var(--space-1); }
+.log-detail-tool-calls > .log-detail-collapsible { margin-bottom: var(--space-1); }
+.log-detail-tool-call-name {
+  font-weight: 600;
+  color: var(--color-text);
+  font-family: var(--font-mono);
+}
+.log-detail-placeholder {
+  padding: var(--space-2) var(--space-3);
+  border-left: var(--border-w-2) solid var(--color-primary);
+  background: var(--color-surface-2);
+  color: var(--color-text-muted);
+  font-size: var(--fs-sm);
+  font-style: italic;
 }

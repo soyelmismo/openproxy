@@ -19,11 +19,21 @@ use crate::upstream::{CancellationToken, TimeoutProfile, UpstreamClient, Upstrea
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
+/// Per-model quota detail. Returned inside `AccountQuota::model_details`
+/// for providers that expose per-model quota (Antigravity family).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ModelQuotaDetail {
+    pub model_id: String,
+    pub session_used: i64,
+    pub session_limit: i64,
+    pub session_reset_at: Option<String>,
+    pub remaining_fraction: f64,
+}
+
 /// Quota snapshot for a single account.
 ///
 /// All numeric fields are `Option<i64>` because the upstream may omit
 /// them (e.g. an account with no rate limit). `last_fetched_at` is the
-/// only always-present field: it records when the snapshot was taken,
 /// so the UI can show "fetched 12 min ago" and so the operator can
 /// spot a stuck fetcher (a successful fetch updates the timestamp even
 /// when the body is empty).
@@ -44,6 +54,11 @@ pub struct AccountQuota {
     pub plan_name: Option<String>,
     pub last_fetched_at: String,
     pub fetch_error: Option<String>,
+    /// Per-model quota breakdown (Antigravity family providers).
+    /// When present, the UI renders a model-by-model list below the
+    /// aggregate progress bars.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model_details: Option<Vec<ModelQuotaDetail>>,
 }
 
 impl AccountQuota {
@@ -100,6 +115,7 @@ pub async fn fetch_minimax_quota(
         plan_name: None,
         last_fetched_at: now_unix_secs_str(),
         fetch_error: Some(last_err.unwrap_or_else(|| "unknown error".into())),
+            model_details: None,
     })
 }
 
@@ -283,6 +299,7 @@ fn parse_minimax_quota(body: &serde_json::Value, url: &str) -> Result<AccountQuo
         plan_name,
         last_fetched_at: now_unix_secs_str(),
         fetch_error: None,
+            model_details: None,
     })
 }
 
@@ -423,6 +440,10 @@ async fn fetch_antigravity_models_quota(
 }
 
 /// Parse `fetchAvailableModels` response into `AccountQuota`.
+///
+/// Collects per-model quota from ALL models into `model_details` and
+/// uses the model with the lowest remaining fraction as the aggregate
+/// (worst-case) indicator.
 fn parse_antigravity_models_response(body: &serde_json::Value) -> Result<AccountQuota> {
     const NORMALIZED_BASE: i64 = 1000;
 
@@ -431,44 +452,58 @@ fn parse_antigravity_models_response(body: &serde_json::Value) -> Result<Account
         .and_then(|m| m.as_object())
         .ok_or_else(|| CoreError::Internal("missing 'models' in response".into()))?;
 
+    let mut details: Vec<ModelQuotaDetail> = Vec::new();
+    let mut worst_remaining = f64::MAX;
+    let mut worst_model_id = String::new();
+
     for (model_id, model_data) in models {
-        if let Some(quota_info) = model_data.get("quotaInfo") {
-            let remaining_fraction = quota_info
-                .get("remainingFraction")
-                .and_then(|f| f.as_f64())
-                .unwrap_or(1.0);
+        let Some(quota_info) = model_data.get("quotaInfo") else { continue };
+        let remaining_fraction = quota_info
+            .get("remainingFraction")
+            .and_then(|f| f.as_f64())
+            .unwrap_or(1.0);
 
-            let reset_time = quota_info
-                .get("resetTime")
-                .and_then(|r| r.as_str())
-                .map(String::from);
+        let reset_time = quota_info
+            .get("resetTime")
+            .and_then(|r| r.as_str())
+            .map(String::from);
 
-            let is_unlimited = reset_time.is_none() && remaining_fraction >= 1.0;
+        let is_unlimited = reset_time.is_none() && remaining_fraction >= 1.0;
+        let remaining = (NORMALIZED_BASE as f64 * remaining_fraction) as i64;
+        let used = if is_unlimited { 0 } else { NORMALIZED_BASE.saturating_sub(remaining) };
 
-            let remaining = (NORMALIZED_BASE as f64 * remaining_fraction) as i64;
-            let used = if is_unlimited {
-                0
-            } else {
-                NORMALIZED_BASE.saturating_sub(remaining)
-            };
+        details.push(ModelQuotaDetail {
+            model_id: model_id.clone(),
+            session_used: used,
+            session_limit: NORMALIZED_BASE,
+            session_reset_at: reset_time,
+            remaining_fraction,
+        });
 
-            return Ok(AccountQuota {
-                plan_name: Some(format!("Antigravity ({})", model_id)),
-                session_used: Some(used),
-                session_limit: Some(NORMALIZED_BASE),
-                session_reset_at: reset_time,
-                weekly_used: None,
-                weekly_limit: None,
-                weekly_reset_at: None,
-                last_fetched_at: now_unix_secs_str(),
-                fetch_error: None,
-            });
+        if remaining_fraction < worst_remaining {
+            worst_remaining = remaining_fraction;
+            worst_model_id = model_id.clone();
         }
     }
 
-    Err(CoreError::Internal(
-        "no quota info found in response".into(),
-    ))
+    if details.is_empty() {
+        return Err(CoreError::Internal("no quota info found in response".into()));
+    }
+
+    let worst = details.iter().find(|d| d.model_id == worst_model_id).unwrap();
+
+    Ok(AccountQuota {
+        plan_name: Some(format!("Antigravity ({})", worst.model_id)),
+        session_used: Some(worst.session_used),
+        session_limit: Some(worst.session_limit),
+        session_reset_at: worst.session_reset_at.clone(),
+        weekly_used: None,
+        weekly_limit: None,
+        weekly_reset_at: None,
+        last_fetched_at: now_unix_secs_str(),
+        fetch_error: None,
+        model_details: Some(details),
+    })
 }
 
 /// Fetch quota from the `retrieveUserQuota` endpoint.
@@ -559,6 +594,7 @@ fn parse_antigravity_user_quota_response(body: &serde_json::Value) -> Result<Acc
                 weekly_reset_at: None,
                 last_fetched_at: now_unix_secs_str(),
                 fetch_error: None,
+            model_details: None,
             }
         })
         .next();
@@ -587,6 +623,7 @@ pub fn quota_capable_providers() -> &'static [&'static str] {
         "antigravity",
         "antigravity-cli",
         "agy",
+        "gemini-cli",
     ]
 }
 
@@ -638,6 +675,7 @@ pub async fn fetch_openrouter_quota(
                 plan_name: None,
                 last_fetched_at: now_unix_secs_str(),
                 fetch_error: Some(format!("network: {e}")),
+            model_details: None,
             });
         }
     };
@@ -665,6 +703,7 @@ pub async fn fetch_openrouter_quota(
             plan_name: None,
             last_fetched_at: now_unix_secs_str(),
             fetch_error: Some(format!("HTTP {}: {}", status, snippet)),
+            model_details: None,
         });
     }
 
@@ -681,6 +720,7 @@ pub async fn fetch_openrouter_quota(
                 plan_name: None,
                 last_fetched_at: now_unix_secs_str(),
                 fetch_error: Some(format!("collect: {e}")),
+            model_details: None,
             });
         }
     };
@@ -698,6 +738,7 @@ pub async fn fetch_openrouter_quota(
                 plan_name: None,
                 last_fetched_at: now_unix_secs_str(),
                 fetch_error: Some(format!("parse: {e}")),
+            model_details: None,
             });
         }
     };
@@ -814,6 +855,7 @@ fn parse_openrouter_quota(body: &serde_json::Value, last_fetched_at: String) -> 
         plan_name: Some(plan_name),
         last_fetched_at,
         fetch_error,
+        model_details: None,
     }
 }
 
@@ -865,6 +907,7 @@ mod tests {
             plan_name: None,
             last_fetched_at: "0".into(),
             fetch_error: None,
+            model_details: None,
         };
         assert!(q.is_empty());
 

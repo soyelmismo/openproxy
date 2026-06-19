@@ -279,6 +279,24 @@ pub fn delete_account(conn: &Connection, id: AccountId) -> Result<()> {
     accounts::delete(conn, id)
 }
 
+/// Input for [`update_account_api_key`].
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UpdateAccountApiKeyInput {
+    /// New API key. `null` clears the key (OAuth-only account).
+    pub api_key: Option<String>,
+}
+
+/// Encrypt and store (or clear) the API key for an existing account.
+/// Returns [`CoreError::AccountNotFound`] when `id` is missing.
+pub fn update_account_api_key(
+    conn: &Connection,
+    master_key: &MasterKey,
+    id: AccountId,
+    input: UpdateAccountApiKeyInput,
+) -> Result<()> {
+    accounts::update_api_key(conn, id, input.api_key.as_deref(), master_key)
+}
+
 // =====================================================================
 // Quota refresh
 // =====================================================================
@@ -358,6 +376,7 @@ pub async fn fetch_account_quota(
                 plan_name: None,
                 last_fetched_at: now_unix_secs_str(),
                 fetch_error: Some(e.to_string()),
+            model_details: None,
             },
         },
         "openrouter" => match quota::fetch_openrouter_quota(upstream, api_key).await {
@@ -378,9 +397,10 @@ pub async fn fetch_account_quota(
                 plan_name: None,
                 last_fetched_at: now_unix_secs_str(),
                 fetch_error: Some(e.to_string()),
+            model_details: None,
             },
         },
-        "antigravity" | "antigravity-cli" | "agy" => {
+        "antigravity" | "antigravity-cli" | "agy" | "gemini-cli" => {
             let token = match access_token {
                 Some(t) => t,
                 None => {
@@ -396,6 +416,7 @@ pub async fn fetch_account_quota(
                         fetch_error: Some(
                             "antigravity requires OAuth access token".into(),
                         ),
+                        model_details: None,
                     };
                 }
             };
@@ -411,6 +432,7 @@ pub async fn fetch_account_quota(
                     plan_name: None,
                     last_fetched_at: now_unix_secs_str(),
                     fetch_error: Some(e.to_string()),
+            model_details: None,
                 },
             }
         }
@@ -427,6 +449,7 @@ pub async fn fetch_account_quota(
                 "quota fetching not implemented for provider '{}'",
                 other
             )),
+            model_details: None,
         },
     }
 }

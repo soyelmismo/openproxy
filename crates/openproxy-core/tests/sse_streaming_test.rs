@@ -5,9 +5,19 @@
 //! from upstream and translates them for the client.
 
 use openproxy_core::sse::{
-    format_sse_line, parse_gemini_sse_line, parse_openai_sse_line, SSE_DONE,
+    format_sse_line, parse_gemini_sse_line, parse_openai_sse_line, UpstreamSseChunk, SSE_DONE,
 };
 use openproxy_core::translation::OpenAIUsage;
+
+/// Helper: get the payload as a `Value`, whether it came via `raw_payload`
+/// (OpenAI pass-through) or `payload` (translated formats).
+fn payload_value(chunk: &UpstreamSseChunk) -> serde_json::Value {
+    if let Some(ref raw) = chunk.raw_payload {
+        serde_json::from_str(raw).unwrap()
+    } else {
+        chunk.payload.clone()
+    }
+}
 
 // =====================================================================
 // OpenAI streaming simulation
@@ -39,7 +49,7 @@ fn openai_streaming_full_response_simulation() {
                     done = true;
                     break;
                 }
-                if let Some(content) = c.payload["choices"][0]["delta"]["content"].as_str() {
+                if let Some(content) = payload_value(&c)["choices"][0]["delta"]["content"].as_str() {
                     full_content.push_str(content);
                 }
                 if c.usage.is_some() {
@@ -83,7 +93,7 @@ fn openai_streaming_with_interleaved_empty_and_comments() {
                 if c.done {
                     break;
                 }
-                if let Some(text) = c.payload["choices"][0]["delta"]["content"].as_str() {
+                if let Some(text) = payload_value(&c)["choices"][0]["delta"]["content"].as_str() {
                     content.push_str(text);
                 }
             }
@@ -216,9 +226,10 @@ fn format_then_parse_roundtrip() {
     let chunk = parse_openai_sse_line(data_line).unwrap().unwrap();
 
     assert!(!chunk.done);
-    assert_eq!(chunk.payload["id"].as_str().unwrap(), "chatcmpl-test");
+    let pv = payload_value(&chunk);
+    assert_eq!(pv["id"].as_str().unwrap(), "chatcmpl-test");
     assert_eq!(
-        chunk.payload["choices"][0]["delta"]["content"].as_str().unwrap(),
+        pv["choices"][0]["delta"]["content"].as_str().unwrap(),
         "Hello"
     );
 }
@@ -259,7 +270,7 @@ fn openai_stream_immediate_done() {
             done = true;
             break;
         }
-        if let Some(text) = chunk.payload["choices"][0]["delta"]["content"].as_str() {
+        if let Some(text) = payload_value(&chunk)["choices"][0]["delta"]["content"].as_str() {
             content.push_str(text);
         }
     }
@@ -345,7 +356,7 @@ fn openai_stream_many_small_chunks() {
                 if c.done {
                     break;
                 }
-                if let Some(text) = c.payload["choices"][0]["delta"]["content"].as_str() {
+                if let Some(text) = payload_value(&c)["choices"][0]["delta"]["content"].as_str() {
                     content.push_str(text);
                 }
             }
@@ -367,8 +378,9 @@ fn openai_parse_idempotent() {
     for _ in 0..100 {
         let chunk = parse_openai_sse_line(line).unwrap().unwrap();
         assert!(!chunk.done);
+        let pv = payload_value(&chunk);
         assert_eq!(
-            chunk.payload["choices"][0]["delta"]["content"].as_str().unwrap(),
+            pv["choices"][0]["delta"]["content"].as_str().unwrap(),
             "test"
         );
     }

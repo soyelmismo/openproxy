@@ -97,3 +97,54 @@ export async function testAccount(id: number): Promise<void> {
     showToast(`Account test failed: ${msg}`, "error");
   }
 }
+
+export function showUpdateAccountKey(id: number): void {
+  const html = `
+    <div class="modal-bg" id="update-account-key-modal" data-action="closeUpdateAccountKey" data-arg1="self">
+      <div class="modal">
+        <div class="modal-header">
+          <h2>Update API key for account #${id}</h2>
+          <button type="button" class="close-btn" data-action="closeUpdateAccountKey" aria-label="Close">&times;</button>
+        </div>
+        <form data-action="updateAccountKey" data-arg1="${id}">
+          <div class="modal-body">
+            <div class="field">
+              <label for="account-key">New API key</label>
+              <input id="account-key" name="api_key" type="password" placeholder="paste the new API key here">
+            </div>
+            <p><small>Leave empty and submit to <strong>clear</strong> the key (OAuth-only account).</small></p>
+          </div>
+          <div class="modal-footer">
+            <button type="button" data-action="closeUpdateAccountKey">Cancel</button>
+            <button type="submit" class="primary">Save key</button>
+          </div>
+        </form>
+      </div>
+    </div>
+  `;
+  appendModal(html);
+}
+
+export function closeUpdateAccountKey(): void {
+  const m = document.getElementById("update-account-key-modal");
+  if (m) m.remove();
+}
+
+export async function updateAccountKey(id: number, e: Event): Promise<void> {
+  const target = e.target;
+  if (!(target instanceof HTMLFormElement)) return;
+  const f = new FormData(target);
+  const apiKey = f.get("api_key")?.toString().trim() || null;
+  try {
+    await api("/accounts/" + id + "/api-key", {
+      method: "PUT",
+      body: JSON.stringify({ api_key: apiKey }),
+    });
+    state.accounts = await api("/accounts") as typeof state.accounts;
+    closeUpdateAccountKey();
+    rerenderCurrentView();
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    alert("Error: " + msg);
+  }
+}

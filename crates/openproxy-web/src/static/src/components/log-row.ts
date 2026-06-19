@@ -78,12 +78,15 @@ export function renderLogRowHtml(
   visibleColumns: Set<string> | null,
   total_ms?: number | null,
 ): string {
+  const inflight: boolean = !!(row as any).__inflight;
   const streaming: boolean = !!row.is_streaming && !row.stream_complete;
   const hasError: boolean = !!(row.error_message && row.error_message.length > 0);
-  const statusErr: boolean = row.status_code >= 400 || row.status_code === 0 || hasError;
+  // Inflight rows have status_code === 0 by default — don't treat that
+  // as an error. Use a yellow "processing" style instead of red.
+  const statusErr: boolean = !inflight && (row.status_code >= 400 || row.status_code === 0 || hasError);
   const cls: string = [
     "log-row",
-    statusErr ? "error" : "ok",
+    inflight ? "processing" : (statusErr ? "error" : "ok"),
     row.race_lost ? "loser" : "",
     streaming ? "streaming" : "",
   ].filter(Boolean).join(" ");

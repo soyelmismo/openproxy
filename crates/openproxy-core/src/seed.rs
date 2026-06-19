@@ -114,6 +114,15 @@ const BUILTINS: &[Builtin<'static>] = &[
         auto_activate_keyword: None,
     },
     Builtin {
+        id: "gemini-cli",
+        name: "Gemini CLI (Google Cloud Code Assist)",
+        base_url: "https://cloudcode-pa.googleapis.com",
+        auth_type: "oauth",
+        format: "gemini",
+        extra_headers_json: None,
+        auto_activate_keyword: None,
+    },
+    Builtin {
         id: "antigravity",
         name: "Antigravity (Cloud Code)",
         base_url: "https://daily-cloudcode-pa.googleapis.com",
@@ -379,10 +388,10 @@ mod tests {
         let (pool, _path) = fresh_pool();
         let conn = pool.writer();
         let n = seed_builtin_providers(&conn).expect("seed");
-        assert_eq!(n, 11, "first call inserts all eleven");
+        assert_eq!(n, 12, "first call inserts all twelve");
 
-        // All eleven are present and reachable by id.
-        for id in ["openrouter", "minimax", "opencode-zen", "ollama-cloud", "nous-research", "nvidia-nim", "kilocode", "gemini", "antigravity", "antigravity-cli", "kiro"] {
+        // All twelve are present and reachable by id.
+        for id in ["openrouter", "minimax", "opencode-zen", "ollama-cloud", "nous-research", "nvidia-nim", "kilocode", "gemini", "gemini-cli", "antigravity", "antigravity-cli", "kiro"] {
             let p = providers::get(&conn, &ProviderId::new(id))
                 .expect("get")
                 .unwrap_or_else(|| panic!("{} not seeded", id));
@@ -395,14 +404,14 @@ mod tests {
         let (pool, _path) = fresh_pool();
         let conn = pool.writer();
         let first = seed_builtin_providers(&conn).expect("first");
-        assert_eq!(first, 11);
+        assert_eq!(first, 12);
 
         // Idempotent: running again must not insert more rows.
         let second = seed_builtin_providers(&conn).expect("second");
         assert_eq!(second, 0, "no new rows on second call");
 
         let count = providers::list(&conn).expect("list").len();
-        assert_eq!(count, 11, "still exactly eleven rows");
+        assert_eq!(count, 12, "still exactly twelve rows");
     }
 
     #[test]
@@ -425,7 +434,7 @@ mod tests {
         .expect("pre-seed");
 
         let n = seed_builtin_providers(&conn).expect("seed");
-        assert_eq!(n, 10, "only the ten missing ones");
+        assert_eq!(n, 11, "only the eleven missing ones");
 
         // The pre-seeded row's name was *not* overwritten.
         let p = providers::get(&conn, &ProviderId::new("openrouter"))

@@ -384,9 +384,6 @@ tr.selected { background: var(--color-primary-soft); }
 
 /* ----- Theme toggle ----- */
 .theme-toggle {
-  position: absolute;
-  bottom: var(--space-4);
-  left: var(--space-4);
   width: 36px;
   height: 36px;
   background: var(--color-surface);
@@ -406,6 +403,17 @@ tr.selected { background: var(--color-primary-soft); }
   background: var(--color-primary-soft);
   transform: rotate(15deg);
 }
+
+/* ----- Sidebar footer (collapse toggle + theme toggle) ----- */
+.sidebar-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  margin-top: auto;
+}
+.sidebar-toggle { flex: 1; }
+body.sidebar-collapsed .sidebar-toggle { text-align: center; }
 
 /* ----- Recording toggle ----- */
 .logs-recording-toggle {

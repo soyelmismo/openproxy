@@ -10,6 +10,7 @@ import { showToast } from "../components/toast.js";
 
 interface FieldOpts {
   editable?: boolean;
+  step?: number;
 }
 
 // Shape of the /v1/admin/config response. The server flattens the
@@ -40,6 +41,7 @@ interface ConfigPayload {
     max_race_size?: number | null;
     abort_grace_ms?: number | null;
   };
+  recording_ttl_secs?: number | null;
 }
 
 type TimeoutKey = "connect_ms" | "request_send_ms" | "ttft_ms" | "idle_chunk_ms" | "total_ms";
@@ -51,7 +53,7 @@ function renderField(label: string, name: string, value: number | null | undefin
       <span class="config-label">${escapeHtml(label)}</span>
       <input type="number" name="${escapeHtml(name)}"
              value="${escapeHtml(String(value ?? ""))}"
-             min="0" step="100"
+             min="0" step="${opts.step ?? 100}"
              ${opts.editable ? "" : "disabled"}
              aria-label="${escapeHtml(label)}${opts.editable ? "" : " (read-only)"}">
       <span class="config-help">${escapeHtml(help)}</span>
@@ -100,7 +102,26 @@ async function configSaveTimeouts(): Promise<void> {
   }
 }
 
-export { configSaveTimeouts };
+export { configSaveTimeouts, configSaveRecordingTtl };
+
+async function configSaveRecordingTtl(): Promise<void> {
+  const el = document.querySelector('input[name="recording_ttl_secs"]') as HTMLInputElement | null;
+  if (!el) { showToast("recording_ttl_secs input missing from DOM", "error"); return; }
+  const raw = (el.value || "").trim();
+  if (raw === "") { showToast("recording_ttl_secs is required", "error"); return; }
+  const n = Number(raw);
+  if (!Number.isFinite(n) || n < 0 || !Number.isInteger(n) || !/^\d+$/.test(raw)) {
+    showToast("recording_ttl_secs must be a non-negative integer", "error");
+    return;
+  }
+  try {
+    await api("/config/recording-ttl", { method: "PUT", body: JSON.stringify({ recording_ttl_secs: n }) });
+    showToast(`Recording TTL set to ${n}s — applies on next prune tick`, "success");
+  } catch (e: unknown) {
+    const err = e instanceof Error ? e : null;
+    showToast(extractApiErrorMessage(e) || (err ? err.message : String(e)), "error");
+  }
+}
 
 export async function mountConfig(): Promise<void> {
   const main = document.getElementById("main");
@@ -124,9 +145,9 @@ export async function mountConfig(): Promise<void> {
     <div id="config-banner" class="banner banner-info">
       <strong>Live values.</strong>
       The values below are the ones the server is currently using.
-      Timeouts are editable; the other sections reflect the loaded
-      <code>config.toml</code>. Changes to timeouts are persisted in
-      the database and apply to the next request.
+      Timeouts and Recording TTL are editable; the other sections reflect the loaded
+      <code>config.toml</code>. Changes are persisted in the database and apply to
+      the next request (timeouts) or the next prune tick (Recording TTL).
     </div>
     ${card("Timeouts <small>(ms)</small>", `
       <p class="muted">Precedence (highest wins): <code>model overrides</code> → <code>provider_timeouts</code> → <code>system default</code>. Editing these values takes effect on the next request; in-flight requests keep the previous value.</p>
@@ -136,6 +157,12 @@ export async function mountConfig(): Promise<void> {
         ${renderField("ttft_ms", "timeouts.ttft_ms", t.ttft_ms, "Time-to-first-token for streaming responses.", { editable: true })}
         ${renderField("idle_chunk_ms", "timeouts.idle_chunk_ms", t.idle_chunk_ms, "Max gap between SSE chunks.", { editable: true })}
         ${renderField("total_ms", "timeouts.total_ms", t.total_ms, "Hard ceiling for the whole request.", { editable: true })}
+      </div>
+    `)}
+    ${card("Recording TTL <small>(seconds)</small>", `
+      <p class="muted">How long recorded request/response bodies and headers stay in the live-log detail view before being cleared from the database. Metadata rows are kept for analytics.</p>
+      <div class="config-grid">
+        ${renderField("recording_ttl_secs", "recording_ttl_secs", cfg.recording_ttl_secs ?? 300, "TTL in seconds. Use 0 to clear bodies on the next prune tick.", { editable: true, step: 1 })}
       </div>
     `)}
     ${card("Retries", `<div class="config-grid">
@@ -154,8 +181,9 @@ export async function mountConfig(): Promise<void> {
         ${renderField("abort_grace_ms", "racing.abort_grace_ms", rc.abort_grace_ms, "Grace period before aborting losing branches.")}
     </div>`)}
     <div class="config-actions">
-      <button class="primary" type="button" data-action="configSaveTimeouts">Save</button>
-      <span class="muted">Saves the timeouts above. The other sections are read-only here; edit <code>config.toml</code> and restart to change them.</span>
+      <button class="primary" type="button" data-action="configSaveTimeouts">Save Timeouts</button>
+      <button class="primary" type="button" data-action="configSaveRecordingTtl">Save Recording TTL</button>
+      <span class="muted">Saves the editable values above. The other sections are read-only here; edit <code>config.toml</code> and restart to change them.</span>
     </div>
     <details class="config-details">
       <summary>What does the precedence chain look like?</summary>

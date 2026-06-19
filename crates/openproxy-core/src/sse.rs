@@ -9,8 +9,12 @@ use serde_json::Value;
 
 /// A single parsed SSE chunk from the upstream, ready to forward.
 pub struct UpstreamSseChunk {
-    /// The raw JSON payload (already in OpenAI format for OpenAI upstream,
-    /// or translated from Gemini format).
+    /// Raw JSON string for pass-through formats (OpenAI). When present,
+    /// the pipeline forwards this directly without re-serialization.
+    pub raw_payload: Option<String>,
+    /// The parsed JSON payload. Used for translated formats (Gemini,
+    /// Anthropic) that need AST manipulation. Ignored when `raw_payload`
+    /// is `Some`.
     pub payload: Value,
     /// Whether this is the final chunk ([DONE] sentinel).
     pub done: bool,
@@ -20,6 +24,40 @@ pub struct UpstreamSseChunk {
     /// for Anthropic; mapped finish_reason for OpenAI). Only set on the
     /// final chunk.
     pub stop_reason: Option<String>,
+    /// Extracted per-chunk reasoning delta. Populated by:
+    /// - Gemini `parts[].thought == true` items,
+    /// - Anthropic `content_block_delta` with `delta.type == "thinking_delta"`.
+    /// `None` when this chunk carries no reasoning.
+    pub delta_reasoning: Option<String>,
+    /// Extracted per-chunk tool_calls deltas. Populated by:
+    /// - Anthropic `content_block_start` (tool_use block) emits the
+    ///   `{index, id, type, function:{name, arguments:""}}` record,
+    /// - Anthropic `content_block_delta` with `delta.type == "input_json_delta"`
+    ///   emits the running `{index, function:{arguments:...}}` record.
+    /// Empty when this chunk carries no tool_calls.
+    pub delta_tool_calls: Vec<serde_json::Value>,
+}
+
+impl UpstreamSseChunk {
+    /// Get the forwardable JSON string. Returns the raw payload if
+    /// available (zero allocation), otherwise serializes the parsed payload.
+    pub fn into_json_string(self) -> String {
+        self.raw_payload.unwrap_or_else(|| {
+            serde_json::to_string(&self.payload).unwrap_or_default()
+        })
+    }
+
+    /// Get the SSE frame as pre-formatted `data: {json}\n\n` `Bytes`,
+    /// ready for direct socket write. Avoids the intermediate `String`
+    /// allocation when the frame is immediately written to the socket.
+    pub fn into_sse_bytes(self) -> bytes::Bytes {
+        let json = self.into_json_string();
+        let mut b = bytes::BytesMut::with_capacity(json.len() + 16);
+        b.extend_from_slice(b"data: ");
+        b.extend_from_slice(json.as_bytes());
+        b.extend_from_slice(b"\n\n");
+        b.freeze()
+    }
 }
 
 // =====================================================================
@@ -53,6 +91,40 @@ pub struct AnthropicToolUseAccumulator {
 // OpenAI SSE parsing
 // =====================================================================
 
+/// Lightweight struct for extracting only metadata from OpenAI SSE chunks.
+/// serde skips unknown fields (delta content, tool_calls, etc.) without
+/// allocating them, making this much faster than parsing into Value.
+#[derive(serde::Deserialize)]
+struct OpenAiSseProbe {
+    #[serde(default)]
+    usage: Option<OpenAiUsageProbe>,
+    #[serde(default)]
+    choices: Option<Vec<OpenAiChoiceProbe>>,
+}
+
+#[derive(serde::Deserialize)]
+struct OpenAiUsageProbe {
+    prompt_tokens: Option<u64>,
+    completion_tokens: Option<u64>,
+    total_tokens: Option<u64>,
+}
+
+#[derive(serde::Deserialize)]
+struct OpenAiChoiceProbe {
+    finish_reason: Option<String>,
+    #[serde(default)]
+    delta: Option<OpenAiDeltaProbe>,
+}
+
+#[derive(serde::Deserialize)]
+struct OpenAiDeltaProbe {
+    #[allow(dead_code)] // populated for shape parity with OpenAI's wire format; we only extract reasoning_content on the slow path
+    #[serde(default)]
+    content: Option<String>,
+    #[serde(default)]
+    reasoning_content: Option<String>,
+}
+
 /// Parse a single SSE line from an OpenAI-compatible upstream.
 ///
 /// Returns `Ok(None)` for empty lines, comments, and `[DONE]` sentinels.
@@ -68,33 +140,52 @@ pub fn parse_openai_sse_line(line: &str) -> Result<Option<UpstreamSseChunk>> {
     };
     if payload == "[DONE]" {
         return Ok(Some(UpstreamSseChunk {
+            raw_payload: None,
             payload: Value::Null,
             done: true,
             usage: None,
             stop_reason: None,
+            delta_reasoning: None,
+            delta_tool_calls: Vec::new(),
         }));
     }
-    let v: Value = serde_json::from_str(payload)
+    // Fast targeted parse: only extracts usage + finish_reason,
+    // skips all other fields (delta.content, tool_calls, etc.)
+    let probe: OpenAiSseProbe = serde_json::from_str(payload)
         .map_err(|e| CoreError::Parse(format!("openai sse json: {e}")))?;
-    let usage = v.get("usage").and_then(|u| {
-        Some(OpenAIUsage {
-            prompt_tokens: u.get("prompt_tokens")?.as_u64()? as u32,
-            completion_tokens: u.get("completion_tokens")?.as_u64()? as u32,
-            total_tokens: u.get("total_tokens")?.as_u64()? as u32,
-        })
+
+    let usage = probe.usage.map(|u| OpenAIUsage {
+        prompt_tokens: u.prompt_tokens.unwrap_or(0) as u32,
+        completion_tokens: u.completion_tokens.unwrap_or(0) as u32,
+        total_tokens: u.total_tokens.unwrap_or(0) as u32,
     });
-    // Extract finish_reason if present (OpenAI upstream).
-    let finish_reason = v.get("choices")
-        .and_then(|c| c.as_array())
-        .and_then(|arr| arr.first())
-        .and_then(|c| c.get("finish_reason"))
-        .and_then(|f| f.as_str())
-        .map(|s| s.to_string());
+    // o1-style reasoning models (o1, o3, deepseek-r1) emit
+    // `delta.reasoning_content` on chunks that also carry `usage`
+    // or a non-null `finish_reason` — i.e. the slow path. Surface
+    // it on `delta_reasoning` so the pipeline's accumulator
+    // (sse_accumulator.rs) can persist it as
+    // `choices[0].message.reasoning_content`. The probe does the
+    // parse work; we just extract one more field. Borrow via
+    // `as_ref()` so the subsequent `finish_reason` extraction
+    // (which consumes `probe.choices`) can still run.
+    let delta_reasoning = probe.choices
+        .as_ref()
+        .and_then(|c| c.first())
+        .and_then(|c| c.delta.as_ref())
+        .and_then(|d| d.reasoning_content.as_ref())
+        .cloned();
+    let finish_reason = probe.choices
+        .and_then(|mut c| c.pop())
+        .and_then(|c| c.finish_reason);
+
     Ok(Some(UpstreamSseChunk {
-        payload: v,
+        raw_payload: Some(payload.to_string()),
+        payload: Value::Null,
         done: false,
         usage,
         stop_reason: finish_reason,
+        delta_reasoning,
+        delta_tool_calls: Vec::new(),
     }))
 }
 
@@ -132,33 +223,72 @@ pub fn parse_gemini_sse_line(
     };
     if payload == "[DONE]" {
         return Ok(Some(UpstreamSseChunk {
+            raw_payload: None,
             payload: Value::Null,
             done: true,
             usage: None,
             stop_reason: None,
+            delta_reasoning: None,
+            delta_tool_calls: Vec::new(),
         }));
     }
     let v: Value = serde_json::from_str(payload)
         .map_err(|e| CoreError::Parse(format!("gemini sse json: {e}")))?;
 
-    // Extract text from candidates[0].content.parts[]
-    let text = v
-        .get("candidates")
-        .and_then(|c| c.as_array())
-        .and_then(|arr| arr.first())
-        .and_then(|c| c.get("content"))
-        .and_then(|c| c.get("parts"))
-        .and_then(|p| p.as_array())
-        .and_then(|parts| {
-            let mut s = String::new();
+    // Extract text from candidates[0].content.parts[].
+    //
+    // Each part may have a `thought: true` flag indicating it's a
+    // reasoning fragment (Gemini 2.0/2.5 thinking models). We split
+    // the parts into two accumulators so the accumulator downstream
+    // (sse_accumulator.rs::ResponseAccumulator) can build separate
+    // `content` and `reasoning` fields for the persisted JSON.
+    //
+    // A single part can carry BOTH `text` and `thought: true` — that
+    // is the thinking-then-answering interleaved case. We route the
+    // text based on the `thought` flag, never on the field ordering.
+    let (text, delta_reasoning) = {
+        let mut content_parts: Vec<String> = Vec::new();
+        let mut reasoning_parts: Vec<String> = Vec::new();
+        if let Some(parts) = v
+            .get("candidates")
+            .and_then(|c| c.as_array())
+            .and_then(|arr| arr.first())
+            .and_then(|c| c.get("content"))
+            .and_then(|c| c.get("parts"))
+            .and_then(|p| p.as_array())
+        {
             for part in parts {
                 if let Some(t) = part.get("text").and_then(|t| t.as_str()) {
-                    s.push_str(t);
+                    let is_thought = part
+                        .get("thought")
+                        .and_then(|b| b.as_bool())
+                        .unwrap_or(false);
+                    if is_thought {
+                        reasoning_parts.push(t.to_string());
+                    } else {
+                        content_parts.push(t.to_string());
+                    }
                 }
             }
-            if s.is_empty() { None } else { Some(s) }
-        })
-        .unwrap_or_default();
+        }
+        let joined = content_parts.concat();
+        let dr = if reasoning_parts.is_empty() {
+            None
+        } else {
+            Some(reasoning_parts.concat())
+        };
+        // The wire payload's `delta.content` carries ONLY the
+        // non-thought text (OpenAI streaming convention:
+        // reasoning goes in a separate field). The pipeline's
+        // `append_openai_raw` -> `finish()` flow extracts
+        // `delta.content` from each stored payload to rebuild the
+        // persisted message's `content` field, so this MUST NOT
+        // include thought text or thought text would leak into
+        // the user's `content`. The thought text is routed to
+        // `delta_reasoning` (which the pipeline separately feeds
+        // to `append_reasoning`).
+        (joined, dr)
+    };
 
     // Extract finish_reason
     let finish_reason = v
@@ -201,7 +331,15 @@ pub fn parse_gemini_sse_line(
         })
     });
 
-    Ok(Some(UpstreamSseChunk { payload: chunk, done: false, usage, stop_reason: finish_reason }))
+    Ok(Some(UpstreamSseChunk {
+        raw_payload: None,
+        payload: chunk,
+        done: false,
+        usage,
+        stop_reason: finish_reason,
+        delta_reasoning,
+        delta_tool_calls: Vec::new(),
+    }))
 }
 
 // =====================================================================
@@ -281,14 +419,65 @@ pub fn translate_anthropic_sse_payload(
                 }]
             });
             Ok(Some(UpstreamSseChunk {
+                raw_payload: None,
                 payload: chunk,
                 done: false,
                 usage: None,
                 stop_reason: None,
+                delta_reasoning: None,
+                delta_tool_calls: Vec::new(),
             }))
         }
         "content_block_delta" => {
-            // Extract text from delta
+            // Determine the delta subtype. Anthropic distinguishes
+            //   - text_delta        (regular text)
+            //   - thinking_delta    (extended thinking / Claude reasoning)
+            //   - input_json_delta  (tool_use argument fragments;
+            //                       handled by `translate_anthropic_sse_event`
+            //                       and the H5 accumulator, NOT here)
+            // Missing `type` defaults to text_delta (legacy clients).
+            let delta_type = data.get("delta")
+                .and_then(|d| d.get("type"))
+                .and_then(|t| t.as_str())
+                .unwrap_or("text_delta");
+
+            if delta_type == "thinking_delta" {
+                // Anthropic extended thinking. Extract `delta.thinking`
+                // and surface it as `delta_reasoning` on the chunk so
+                // the downstream accumulator (sse_accumulator.rs) can
+                // build the persisted `reasoning` field.
+                let thinking = data.get("delta")
+                    .and_then(|d| d.get("thinking"))
+                    .and_then(|t| t.as_str())
+                    .unwrap_or("");
+                if thinking.is_empty() {
+                    return Ok(None);
+                }
+                let chunk = serde_json::json!({
+                    "id": chunk_id,
+                    "object": "chat.completion.chunk",
+                    "created": created,
+                    "model": model,
+                    "choices": [{
+                        "index": 0,
+                        "delta": {"content": ""},
+                        "finish_reason": null
+                    }]
+                });
+                return Ok(Some(UpstreamSseChunk {
+                    raw_payload: None,
+                    payload: chunk,
+                    done: false,
+                    usage: None,
+                    stop_reason: None,
+                    delta_reasoning: Some(thinking.to_string()),
+                    delta_tool_calls: Vec::new(),
+                }));
+            }
+
+            // text_delta (or unknown subtype — fall back to text
+            // extraction to preserve existing behavior for any
+            // future subtype we don't recognize).
             let text = data.get("delta")
                 .and_then(|d| d.get("text"))
                 .and_then(|t| t.as_str())
@@ -310,10 +499,13 @@ pub fn translate_anthropic_sse_payload(
                 }]
             });
             Ok(Some(UpstreamSseChunk {
+                raw_payload: None,
                 payload: chunk,
                 done: false,
                 usage: None,
                 stop_reason: None,
+                delta_reasoning: None,
+                delta_tool_calls: Vec::new(),
             }))
         }
         "message_delta" => {
@@ -348,10 +540,13 @@ pub fn translate_anthropic_sse_payload(
                 }]
             });
             Ok(Some(UpstreamSseChunk {
+                raw_payload: None,
                 payload: chunk,
                 done: true,
                 usage,
                 stop_reason: stop_reason.map(|s| s.to_string()),
+                delta_reasoning: None,
+                delta_tool_calls: Vec::new(),
             }))
         }
         "message_stop" => {
@@ -459,11 +654,27 @@ pub fn translate_anthropic_sse_event(
                         "finish_reason": null
                     }]
                 });
+                // Mirror the wire-level tool_call record into
+                // `delta_tool_calls` so the downstream accumulator
+                // (sse_accumulator.rs) can build its tool_calls
+                // list without re-parsing the wire payload.
+                let tool_call_obj = serde_json::json!({
+                    "index": index,
+                    "id": id,
+                    "type": "function",
+                    "function": {
+                        "name": name,
+                        "arguments": ""
+                    }
+                });
                 return Ok(Some(UpstreamSseChunk {
+                    raw_payload: None,
                     payload: chunk,
                     done: false,
                     usage: None,
                     stop_reason: None,
+                    delta_reasoning: None,
+                    delta_tool_calls: vec![tool_call_obj],
                 }));
             }
             // Non-tool_use content_block_start (e.g. text block) — fall
@@ -485,12 +696,19 @@ pub fn translate_anthropic_sse_event(
                 // fragment rather than emit a chunk with a phantom
                 // tool call.
                 if let Some(acc) = tool_use_acc.as_mut() {
+                    // Capture the running length BEFORE appending so
+                    // the downstream accumulator (sse_accumulator.rs)
+                    // can append only the NEW fragment, not the
+                    // whole running total (which would double-encode
+                    // the arguments JSON across the wire chunks).
+                    let prev_len = acc.arguments.len();
                     if let Some(partial) = data.get("delta")
                         .and_then(|d| d.get("partial_json"))
                         .and_then(|v| v.as_str())
                     {
                         acc.arguments.push_str(partial);
                     }
+                    let new_fragment = &acc.arguments[prev_len..];
                     // Emit a chunk that carries the newly-appended
                     // fragment. OpenAI's spec lets us put the running
                     // total in `arguments`; the client will JSON.parse
@@ -513,15 +731,68 @@ pub fn translate_anthropic_sse_event(
                             "finish_reason": null
                         }]
                     });
+                    // Mirror ONLY the new fragment in
+                    // `delta_tool_calls` so the pipeline's accumulator
+                    // (`update_anthropic_tool_use(Delta { partial_json })`)
+                    // appends it once to its in-flight tool_call's
+                    // arguments — otherwise the running total gets
+                    // concatenated with itself across chunks and the
+                    // persisted arguments string is the running total
+                    // repeated per fragment (broken JSON).
+                    let tool_call_obj = serde_json::json!({
+                        "index": acc.index,
+                        "function": {
+                            "arguments": new_fragment,
+                        }
+                    });
                     return Ok(Some(UpstreamSseChunk {
+                        raw_payload: None,
                         payload: chunk,
                         done: false,
                         usage: None,
                         stop_reason: None,
+                        delta_reasoning: None,
+                        delta_tool_calls: vec![tool_call_obj],
                     }));
                 }
                 // No accumulator open — drop the fragment.
                 return Ok(None);
+            }
+            if delta_type == "thinking_delta" {
+                // Anthropic extended thinking. Extract `delta.thinking`
+                // and surface it as `delta_reasoning` on the chunk so
+                // the downstream accumulator (sse_accumulator.rs) can
+                // persist it as `choices[0].message.reasoning_content`.
+                // Mirrors the structure of the stateless
+                // `translate_anthropic_sse_payload` thinking_delta
+                // branch (sse.rs:412-444).
+                let thinking = data.get("delta")
+                    .and_then(|d| d.get("thinking"))
+                    .and_then(|t| t.as_str())
+                    .unwrap_or("");
+                if thinking.is_empty() {
+                    return Ok(None);
+                }
+                let chunk = serde_json::json!({
+                    "id": chunk_id,
+                    "object": "chat.completion.chunk",
+                    "created": created,
+                    "model": model,
+                    "choices": [{
+                        "index": 0,
+                        "delta": {"content": ""},
+                        "finish_reason": null
+                    }]
+                });
+                return Ok(Some(UpstreamSseChunk {
+                    raw_payload: None,
+                    payload: chunk,
+                    done: false,
+                    usage: None,
+                    stop_reason: None,
+                    delta_reasoning: Some(thinking.to_string()),
+                    delta_tool_calls: Vec::new(),
+                }));
             }
             // Not input_json_delta — fall back to the existing text
             // extraction. The stateless `translate_anthropic_sse_payload`
@@ -547,10 +818,13 @@ pub fn translate_anthropic_sse_event(
                 }]
             });
             Ok(Some(UpstreamSseChunk {
+                raw_payload: None,
                 payload: chunk,
                 done: false,
                 usage: None,
                 stop_reason: None,
+                delta_reasoning: None,
+                delta_tool_calls: Vec::new(),
             }))
         }
         "content_block_stop" => {
@@ -592,7 +866,9 @@ mod tests {
         let line = r#"data: {"id":"chatcmpl-1","object":"chat.completion.chunk","created":0,"model":"gpt-4","choices":[{"index":0,"delta":{"content":"Hi"},"finish_reason":null}]}"#;
         let chunk = parse_openai_sse_line(line).unwrap().unwrap();
         assert!(!chunk.done);
-        assert!(chunk.payload.get("id").is_some());
+        assert!(chunk.raw_payload.is_some());
+        let v: serde_json::Value = serde_json::from_str(chunk.raw_payload.as_ref().unwrap()).unwrap();
+        assert!(v.get("id").is_some());
     }
 
     #[test]
@@ -680,7 +956,8 @@ mod tests {
         let line = format!("data: {}", serde_json::to_string(&payload).unwrap());
         let chunk = parse_openai_sse_line(&line).unwrap().unwrap();
         assert!(!chunk.done);
-        assert_eq!(chunk.payload["content"].as_str().unwrap().len(), 10_000);
+        let v: serde_json::Value = serde_json::from_str(chunk.raw_payload.as_ref().unwrap()).unwrap();
+        assert_eq!(v["content"].as_str().unwrap().len(), 10_000);
     }
 
     #[test]
@@ -688,7 +965,8 @@ mod tests {
         let payload = serde_json::json!({"content": "こんにちは世界 🌍 ñ ü ö ä"});
         let line = format!("data: {}", serde_json::to_string(&payload).unwrap());
         let chunk = parse_openai_sse_line(&line).unwrap().unwrap();
-        assert_eq!(chunk.payload["content"].as_str().unwrap(), "こんにちは世界 🌍 ñ ü ö ä");
+        let v: serde_json::Value = serde_json::from_str(chunk.raw_payload.as_ref().unwrap()).unwrap();
+        assert_eq!(v["content"].as_str().unwrap(), "こんにちは世界 🌍 ñ ü ö ä");
     }
 
     #[test]
@@ -717,8 +995,11 @@ mod tests {
             if chunk.done {
                 break;
             }
-            if let Some(content) = chunk.payload["choices"][0]["delta"]["content"].as_str() {
-                contents.push(content.to_string());
+            if let Some(ref raw) = chunk.raw_payload {
+                let v: serde_json::Value = serde_json::from_str(raw).unwrap();
+                if let Some(content) = v["choices"][0]["delta"]["content"].as_str() {
+                    contents.push(content.to_string());
+                }
             }
         }
         assert_eq!(contents.join(""), "Hello world");
@@ -923,6 +1204,39 @@ mod tests {
         let line = r#"data: {"candidates":[{"content":{"parts":[{"thought":true},{"text":"real answer"}]}}]}"#;
         let chunk = parse_gemini_sse_line(line, "id", 0, "m").unwrap().unwrap();
         assert_eq!(chunk.payload["choices"][0]["delta"]["content"].as_str().unwrap(), "real answer");
+    }
+
+    /// G1 §5.4 (test 9): Gemini input `[{"text":"r","thought":true},{"text":"a"}]`
+    /// must route the thought:true part into `delta_reasoning`
+    /// and leave the non-thought text as the only content in the
+    /// translated payload's `delta.content`, so the downstream
+    /// accumulator can persist the user's `content` and the
+    /// model's reasoning into separate fields. Without the split,
+    /// the thought text leaks into the persisted `content` and
+    /// the response is corrupted.
+    #[test]
+    fn gemini_streaming_response_body_separates_thought_from_text() {
+        let line = r#"data: {"candidates":[{"content":{"parts":[{"text":"r","thought":true},{"text":"a"}]}}]}"#;
+        let chunk = parse_gemini_sse_line(line, "id", 0, "m").unwrap().unwrap();
+        // Thought text is routed to reasoning so the accumulator
+        // can persist it as `choices[0].message.reasoning_content`.
+        assert_eq!(
+            chunk.delta_reasoning.as_deref(),
+            Some("r"),
+            "delta_reasoning must contain the thought:true text"
+        );
+        // The OpenAI-translated payload's `delta.content` carries
+        // ONLY the non-thought text. This matches OpenAI streaming
+        // convention where reasoning is a separate field; the
+        // pipeline's `append_openai_raw` -> `finish()` flow extracts
+        // `delta.content` to rebuild the persisted message's
+        // `content`, so any thought text here would leak into the
+        // user's `content` and corrupt the response.
+        assert_eq!(
+            chunk.payload["choices"][0]["delta"]["content"].as_str().unwrap(),
+            "a",
+            "the translated payload's delta.content must carry ONLY non-thought text"
+        );
     }
 
     // ---- Anthropic SSE tests ----

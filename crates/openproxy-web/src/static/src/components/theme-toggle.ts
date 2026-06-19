@@ -6,9 +6,8 @@
 import { toggleTheme, getTheme } from "../state/theme.js";
 
 export function mountThemeToggle(): void {
-  const sb: HTMLElement | null = document.querySelector(".sidebar");
-  if (!sb) return;
-  // Remove any previous toggle to keep the sidebar idempotent.
+  const slot: HTMLElement | null = document.getElementById("theme-toggle-slot");
+  if (!slot) return;
   const existing: HTMLElement | null = document.getElementById("theme-toggle");
   if (existing) existing.remove();
   const btn: HTMLButtonElement = document.createElement("button");
@@ -22,6 +21,5 @@ export function mountThemeToggle(): void {
     const next: "light" | "dark" = toggleTheme();
     btn.textContent = next === "dark" ? "☀" : "🌙";
   });
-  // Theme transitions are owned by the CSS; we just append the node.
-  sb.appendChild(btn);
+  slot.appendChild(btn);
 }

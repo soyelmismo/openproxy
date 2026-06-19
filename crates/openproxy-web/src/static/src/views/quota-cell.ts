@@ -10,33 +10,41 @@
 // it without a 200-line function in views/provider-detail.ts.
 
 import { escapeHtml } from "../lib/escape.js";
-import type { Account } from "../lib/types/api.js";
+import type { Account, ModelQuotaDetail } from "../lib/types/api.js";
+
+function renderModelQuotaRows(details: ModelQuotaDetail[]): string {
+  const rows = details.map((d) => {
+    const pct = d.session_limit > 0
+      ? Math.round(d.session_used / d.session_limit * 100)
+      : 0;
+    const color = pct > 80 ? "danger" : pct > 50 ? "warn" : "ok";
+    return `<div class="quota-model-row ${color}">
+      <span class="quota-model-name">${escapeHtml(d.model_id)}</span>
+      <div class="quota-bar mini ${color}">
+        <div class="quota-bar-fill" style="width: ${Math.min(100, pct)}%"></div>
+      </div>
+      <span class="quota-model-text">${pct}% used${d.session_reset_at ? " · resets " + escapeHtml(d.session_reset_at) : ""}</span>
+    </div>`;
+  }).join("");
+  return `<details class="quota-model-details" open>
+    <summary>Models (${details.length})</summary>
+    ${rows}
+  </details>`;
+}
 
 export function renderQuotaCell(a: Account): string {
-  // Error path: a previous fetch failed. The message is bounded by
-  // the server (it puts the upstream error text in
-  // `quota_fetch_error`), but we still escape it before injecting
-  // into the DOM.
+  // Error path: a previous fetch failed.
   if (a.quota_fetch_error) {
     return `<div class="quota-cell error"><small>✗ ${escapeHtml(a.quota_fetch_error)}</small></div>`;
   }
-  // No usable data: distinguish "we tried, the upstream said
-  // nothing" from "we never tried". The former shows
-  // `quota_last_fetched_at`, the latter does not. We treat the
-  // quota as "absent" only when BOTH the session and the weekly
-  // USED values are missing — an OpenRouter key with no configured
-  // limit (limit=null) but a real usage of 0 still has a used
-  // counter, so it should fall through to the bar renderer with a
-  // "—" limit rather than being hidden behind "no quota data".
+  // No usable data.
   if (a.quota_session_used == null && a.quota_weekly_used == null) {
     if (a.quota_last_fetched_at) {
       return `<div class="quota-cell muted"><small>no quota data</small></div>`;
     }
     return `<div class="quota-cell muted"><small>quota: not fetched</small></div>`;
   }
-  // Render the two bars. We render even when only one of the two
-  // quotas is present (the server may know session but not weekly,
-  // or vice versa) — the missing side is dashed and shows "—".
+  // Aggregate bars.
   const sessionPct = (a.quota_session_limit && a.quota_session_limit > 0 && a.quota_session_used != null)
     ? Math.round(a.quota_session_used / a.quota_session_limit * 100)
     : null;
@@ -50,10 +58,6 @@ export function renderQuotaCell(a: Account): string {
     : weeklyPct > 80 ? "danger"
     : weeklyPct > 50 ? "warn" : "ok";
 
-  // When the limit is exactly 100 the parser is in percent-fallback
-  // mode (the upstream shipped only the remaining-percent field).
-  // The bar math is identical, but the label should make it clear
-  // we're showing an estimate rather than a raw "X / N" call count.
   const isPct = (used: number | null, limit: number | null): boolean => limit === 100 && used != null;
   const sessionText = a.quota_session_used == null ? "—"
     : isPct(a.quota_session_used, a.quota_session_limit)
@@ -63,6 +67,11 @@ export function renderQuotaCell(a: Account): string {
     : isPct(a.quota_weekly_used, a.quota_weekly_limit)
       ? `${a.quota_weekly_used}% used`
       : `${a.quota_weekly_used} / ${a.quota_weekly_limit ?? "—"}`;
+
+  // Per-model breakdown (Antigravity family).
+  const modelHtml = a.quota_model_details && a.quota_model_details.length > 0
+    ? renderModelQuotaRows(a.quota_model_details)
+    : "";
 
   return `
     <div class="quota-cell">
@@ -75,6 +84,7 @@ export function renderQuotaCell(a: Account): string {
         <div class="quota-bar-fill" style="width: ${weeklyPct == null ? 0 : Math.min(100, weeklyPct)}%"></div>
         <span>weekly: ${weeklyText}</span>
       </div>
+      ${modelHtml}
     </div>
   `;
 }

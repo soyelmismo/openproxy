@@ -194,7 +194,6 @@ export const SORTABLE_COLUMNS: readonly SortableColumn[] = [
   { key: "format",     label: "Format",     value: (m) => (m.target_format || "").toLowerCase() },
   { key: "context",    label: "Context",    value: (m) => m.context_length || 0 },
   { key: "out",        label: "Out",        value: (m) => m.max_output_tokens || 0 },
-  { key: "last_test",  label: "Last test",  value: (m) => m.last_test_at || "" },
 ];
 
 export interface ModelSort {

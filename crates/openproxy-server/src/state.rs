@@ -71,6 +71,12 @@ pub struct AppState {
     /// `PUT /v1/admin/config/timeouts` handler after the DB
     /// row has been updated. See spec §5 / §7.
     timeouts_cell: Arc<RwLock<openproxy_core::config::TimeoutsConfig>>,
+    /// Hot-swappable slot for the recording body TTL in seconds.
+    /// This controls how long request/response bodies and headers
+    /// remain in the `usage` table before being nullified.
+    /// Default: 300 (5 minutes). The background prune task reads
+    /// this on each tick.
+    recording_ttl_secs_cell: Arc<RwLock<i64>>,
     /// Background model-discovery scheduler (Gate A). Owns one
     /// `tokio::sync::Notify` shared by all per-provider tasks;
     /// dropping the `AppState` does NOT cancel the running tasks
@@ -85,6 +91,13 @@ pub struct AppState {
     /// without sprinkling `#[allow]` on every reference.
     #[allow(dead_code)]
     discovery_scheduler: Arc<DiscoveryScheduler>,
+    /// Registry of OAuth provider implementations. Used by the
+    /// pipeline (on-demand token refresh during chat requests),
+    /// the background refresh scheduler, and the admin handlers.
+    /// Built-in providers (antigravity, kiro) are registered at
+    /// startup; custom providers can be added via
+    /// `oauth_provider_registry().register()`.
+    oauth_provider_registry: Arc<openproxy_core::oauth::OAuthProviderRegistry>,
 }
 
 impl AppState {
@@ -109,6 +122,7 @@ impl AppState {
         }
         let db_pool = Arc::new(db::DbPool::open(&path)?);
         let mut config = config;
+        let mut recording_ttl_secs = db::app_config::RECORDING_TTL_DEFAULT_SECS;
         {
             let mut w = db_pool.writer();
             db::migrations::run(&mut w)?;
@@ -128,6 +142,14 @@ impl AppState {
                 );
                 config.timeouts = override_cfg;
             }
+            // 1c. Load the persisted recording TTL override.
+            if let Some(ttl) = db::app_config::load_recording_ttl_from_db(&w)? {
+                recording_ttl_secs = ttl;
+            }
+            tracing::info!(
+                recording_ttl_secs,
+                "loaded recording TTL from app_config (default 300s)"
+            );
             // Auto-seed the three built-in providers (OpenRouter, MiniMax
             // Coding, OpenCode Zen) so the dashboard shows them on first
             // run. The seed is idempotent: existing rows are skipped.
@@ -250,6 +272,35 @@ impl AppState {
             }
         });
 
+        // 6b. Background prune of expired recorded request/response
+        //     bodies and headers. The metadata rows stay intact for
+        //     analytics, but the heavy live-log detail fields are
+        //     nullified after the configured TTL.
+        let recording_ttl_secs_cell = Arc::new(RwLock::new(recording_ttl_secs));
+        let recording_ttl_pool = db_pool.clone();
+        let recording_ttl_cell = Arc::clone(&recording_ttl_secs_cell);
+        tokio::spawn(async move {
+            let mut tick = tokio::time::interval(std::time::Duration::from_secs(60));
+            tick.tick().await;
+            loop {
+                tick.tick().await;
+                let ttl = *recording_ttl_cell.read();
+                let pruned = {
+                    let w = recording_ttl_pool.writer();
+                    openproxy_core::usage::prune_expired_recording_bodies(&w, ttl)
+                };
+                match pruned {
+                    Ok(0) => {}
+                    Ok(n) => {
+                        tracing::info!(pruned = n, ttl_secs = ttl, "pruned expired recording bodies");
+                    }
+                    Err(e) => {
+                        tracing::warn!(error = %e, ttl_secs = ttl, "recording TTL prune tick failed");
+                    }
+                }
+            }
+        });
+
         // 7. Background OAuth refresh scheduler. Walks the
         //    `accounts` table every 60s looking for OAuth accounts
         //    whose access token expires within the next 15 minutes
@@ -271,29 +322,52 @@ impl AppState {
         let refresh_pool = db_pool.clone();
         let refresh_key = master_key.clone();
         let refresh_upstream = upstream_client.clone();
-        // The registry of OAuth providers. For now we register the
-        // built-in OAuth providers (Antigravity, Antigravity CLI,
-        // Kiro); custom OAuth providers would extend this list. The
-        // trait object is `Send + Sync` so the scheduler can
-        // `await` its `refresh_token` method directly. The Vec is
-        // moved into the spawned task; the only reference is the
-        // one the task owns.
-        let refresh_providers: Arc<Vec<Box<dyn oauth::OAuthProvider + Send + Sync>>> =
-            Arc::new(vec![
-                Box::new(openproxy_core::oauth_antigravity::AntigravityOAuthProvider::new()),
-                Box::new(openproxy_core::oauth_kiro::KiroOAuthProvider::new()),
-            ]);
+        // Build the OAuth provider registry — a single, shared
+        // registry used by the pipeline (for on-demand refresh
+        // during chat requests), the background scheduler, and
+        // the admin handlers. Built-in providers are registered
+        // here; custom providers can be added at runtime via
+        // `AppState::oauth_provider_registry().register()`.
+        let oauth_provider_registry: Arc<oauth::OAuthProviderRegistry> =
+            Arc::new(oauth::OAuthProviderRegistry::builtin());
+        let scheduler_registry = oauth_provider_registry.clone();
         tokio::spawn(async move {
             oauth::start_refresh_scheduler(
                 refresh_pool,
                 refresh_key,
                 refresh_upstream,
-                refresh_providers,
+                scheduler_registry,
                 60,    // check every 60s
                 900,   // refresh tokens that expire in the next 15min
             )
             .await;
         });
+
+        // 9. models.dev background sync (opt-in).
+        //    When `MODELS_DEV_SYNC_ENABLED=true`, spawns a background
+        //    task that periodically fetches model pricing, context
+        //    length, and capabilities from models.dev and enriches
+        //    the local `models` table + auto-creates cross-provider
+        //    combos. Default interval: 24h.
+        //
+        //    The sync is a no-op in `for_test` mode (no env var).
+        let sync_pool = db_pool.clone();
+        let sync_upstream = upstream_client.clone();
+        let models_dev_enabled = std::env::var("MODELS_DEV_SYNC_ENABLED")
+            .ok()
+            .map(|v| v == "1" || v == "true")
+            .unwrap_or(false);
+        if models_dev_enabled {
+            tokio::spawn(async move {
+                openproxy_core::models_dev_sync::start_sync_scheduler(
+                    sync_pool,
+                    sync_upstream,
+                    86_400, // check every 24h
+                )
+                .await;
+            });
+            tracing::info!("models.dev sync: enabled (24h interval)");
+        }
 
         // 8. Background model discovery scheduler (Gate A).
         //    Spawns one task per built-in provider that refreshes
@@ -329,7 +403,9 @@ impl AppState {
             stage_tx,
             record_bodies_and_headers: Arc::new(AtomicBool::new(false)),
             timeouts_cell: Arc::new(RwLock::new(timeouts_initial)),
+            recording_ttl_secs_cell: Arc::clone(&recording_ttl_secs_cell),
             discovery_scheduler,
+            oauth_provider_registry,
         })
     }
 
@@ -357,6 +433,7 @@ impl AppState {
         // task holds only `Arc<DbPool>` so the test's drop of the
         // AppState at the end of the test is enough to terminate
         // it cleanly.
+        let recording_ttl_secs_cell = Arc::new(RwLock::new(db::app_config::RECORDING_TTL_DEFAULT_SECS));
         let prune_pool = db_pool.clone();
         tokio::spawn(async move {
             let mut tick = tokio::time::interval(std::time::Duration::from_secs(60));
@@ -364,6 +441,22 @@ impl AppState {
             loop {
                 tick.tick().await;
                 let _ = openproxy_core::cooldown::prune_expired(&prune_pool.writer());
+            }
+        });
+
+        // Recording TTL prune for tests.
+        let recording_ttl_pool = db_pool.clone();
+        let recording_ttl_cell = Arc::clone(&recording_ttl_secs_cell);
+        tokio::spawn(async move {
+            let mut tick = tokio::time::interval(std::time::Duration::from_secs(60));
+            tick.tick().await;
+            loop {
+                tick.tick().await;
+                let ttl = *recording_ttl_cell.read();
+                let _ = openproxy_core::usage::prune_expired_recording_bodies(
+                    &recording_ttl_pool.writer(),
+                    ttl,
+                );
             }
         });
 
@@ -415,7 +508,9 @@ impl AppState {
             stage_tx: usage::init_stage_broadcast(),
             record_bodies_and_headers: Arc::new(AtomicBool::new(false)),
             timeouts_cell: Arc::new(RwLock::new(timeouts_initial)),
+            recording_ttl_secs_cell: Arc::clone(&recording_ttl_secs_cell),
             discovery_scheduler: Arc::new(discovery_scheduler),
+            oauth_provider_registry: Arc::new(oauth::OAuthProviderRegistry::builtin()),
         }
     }
 
@@ -477,6 +572,12 @@ impl AppState {
         &self.upstream_client
     }
 
+    /// Return a clone of the OAuth provider registry (cheap —
+    /// internally `Arc`-backed).
+    pub fn oauth_provider_registry(&self) -> Arc<oauth::OAuthProviderRegistry> {
+        self.oauth_provider_registry.clone()
+    }
+
     /// Borrow the usage broadcast sender.
     pub fn usage_tx(&self) -> tokio::sync::broadcast::Sender<usage::RecentUsageRow> {
         self.usage_tx.clone()
@@ -510,6 +611,16 @@ impl AppState {
     pub fn set_recording(&self, enabled: bool) {
         self.record_bodies_and_headers
             .store(enabled, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    /// Read the current recording body TTL in seconds.
+    pub fn recording_ttl_secs(&self) -> i64 {
+        *self.recording_ttl_secs_cell.read()
+    }
+
+    /// Update the recording body TTL in seconds.
+    pub fn set_recording_ttl_secs(&self, secs: i64) {
+        *self.recording_ttl_secs_cell.write() = secs;
     }
 
     /// Read the live [`TimeoutsConfig`]. Returns a `Copy` of the 5-u64

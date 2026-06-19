@@ -40,7 +40,7 @@ pub struct OpenAIRequest {
     pub tool_choice: Option<serde_json::Value>,
     #[serde(default)]
     pub top_k: Option<u32>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub user: Option<String>,
     #[serde(flatten)]
     pub extra: serde_json::Map<String, serde_json::Value>,

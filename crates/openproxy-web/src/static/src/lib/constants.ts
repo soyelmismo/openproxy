@@ -3,8 +3,8 @@
 
 // OAuth-capable provider ids. The provider-detail view uses these
 // to decide when to show the login section.
-const OAUTH_ALL = ["antigravity", "antigravity-cli", "kiro"] as const;
-const OAUTH_PKCE = ["antigravity", "antigravity-cli"] as const;
+const OAUTH_ALL = ["antigravity", "antigravity-cli", "gemini-cli", "kiro"] as const;
+const OAUTH_PKCE = ["antigravity", "antigravity-cli", "gemini-cli"] as const;
 const OAUTH_DEVICE = ["kiro"] as const;
 
 export const OAUTH_PROVIDER_IDS: readonly string[] = OAUTH_ALL;
@@ -21,6 +21,7 @@ export const STAGE_LABELS: Readonly<Record<string, string>> = {
   streaming: "recibiendo streaming",
   completed: "completado",
   failed: "falló",
+  cancelled: "cancelado",
 };
 
 // Live logs WS reconnect backoff in ms.
@@ -74,5 +75,5 @@ export const BUILTIN_PROVIDER_IDS: readonly string[] = ["openrouter", "minimax",
 // but we mirror the list client-side so the confirm dialog and the
 // "not supported by this provider" hint only appear when there is
 // actually something to refresh.
-export const QUOTA_CAPABLE_PROVIDERS: readonly string[] = ["minimax", "minimax-cn", "openrouter", "antigravity", "antigravity-cli", "agy"];
+export const QUOTA_CAPABLE_PROVIDERS: readonly string[] = ["minimax", "minimax-cn", "openrouter", "antigravity", "antigravity-cli", "agy", "gemini-cli"];
 export const providerHasQuota = (providerId: string): boolean => QUOTA_CAPABLE_PROVIDERS.includes(providerId);

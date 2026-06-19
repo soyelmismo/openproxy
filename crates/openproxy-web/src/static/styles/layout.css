@@ -121,16 +121,6 @@ body.sidebar-collapsed .sidebar .brand { text-align: center; }
 }
 body.sidebar-collapsed .sidebar-toggle { text-align: center; }
 
-/* When the sidebar is collapsed, the theme toggle (absolutely
-   positioned at bottom-left) would sit on top of the bottom
-   sidebar-toggle row. Lift it up by the height of the toggle so
-   the two no longer overlap and both remain clickable. The
-   expanded state is unchanged — the theme toggle keeps its
-   original bottom-left anchor over the health pill. */
-body.sidebar-collapsed .sidebar .theme-toggle {
-  bottom: calc(var(--space-4) + 38px);
-}
-
 
 
 main {

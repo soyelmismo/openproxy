@@ -152,6 +152,11 @@ const MIGRATIONS: &[Migration] = &[
         name: "000028_add_stop_reason",
         sql: include_str!("../../migrations/000028_add_stop_reason.sql"),
     },
+    Migration {
+        version: 29,
+        name: "000029_add_models_dev_sync",
+        sql: include_str!("../../migrations/000029_add_models_dev_sync.sql"),
+    },
 ];
 
 /// Apply pending migrations on `conn`. Idempotent: skips versions already in
@@ -374,7 +379,7 @@ mod tests {
                 c.query_row("SELECT COUNT(*) FROM schema_migrations", [], |r| r.get(0))
                     .expect("count")
             });
-        assert_eq!(count_first, 27, "twenty-seven migrations applied (versions 1-6, 8-28)");
+        assert_eq!(count_first, 28, "twenty-eight migrations applied (versions 1-6, 8-29)");
 
         {
             let mut writer = pool.writer();

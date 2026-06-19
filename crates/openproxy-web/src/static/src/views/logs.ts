@@ -412,6 +412,16 @@ function handleStageEvent(event: StageEvent): void {
       error_message: null,
       stop_reason: null,
     });
+  } else if (traceId && state.logs.inflightByTraceId.has(traceId)) {
+    // Update existing inflight placeholder with new stage event
+    // data (model, provider, streaming status). The `started`
+    // event arrives with an empty upstream_model_id; later
+    // `connecting` / `streaming` events carry the real model.
+    const existing = state.logs.inflightByTraceId.get(traceId)!;
+    if (event.upstream_model_id) existing.upstream_model_id = event.upstream_model_id;
+    if (event.provider_id) existing.provider_id = event.provider_id;
+    if (event.stage === "streaming") existing.is_streaming = true;
+    if (event.status_code > 0) existing.status_code = event.status_code;
   } else if (!traceId && !state.logs.inflightByRequestId.has(requestId)) {
     // Trace_id-less event: fall back to the request_id-keyed
     // inflight map (and the request_id-keyed stage map, handled
@@ -437,6 +447,12 @@ function handleStageEvent(event: StageEvent): void {
       error_message: null,
       stop_reason: null,
     });
+  } else if (!traceId && state.logs.inflightByRequestId.has(requestId)) {
+    const existing = state.logs.inflightByRequestId.get(requestId)!;
+    if (event.upstream_model_id) existing.upstream_model_id = event.upstream_model_id;
+    if (event.provider_id) existing.provider_id = event.provider_id;
+    if (event.stage === "streaming") existing.is_streaming = true;
+    if (event.status_code > 0) existing.status_code = event.status_code;
   }
   if (state.logs.followTail) state.logs.page = 1;
   renderLogsRows();
@@ -653,33 +669,34 @@ async function openLogDetail(id: string, requestId: string): Promise<void> {
     state.logs.rows = mergeLogsByDescId(state.logs.rows, [row]);
   }
   state.logs.selectedRow = row;
-  showLogDetail(row as unknown as LogDetailLog);
-  if (!hasCompleteLogDetail(row as unknown as LogDetailLog)) {
-    const detailEl = document.getElementById("log-detail-loading");
-    if (detailEl) detailEl.textContent = "Loading detail…";
+
+  // Fetch detail FIRST if the row is incomplete (broadcast rows have
+  // request_body_json / response_body_json redacted). Then render
+  // the modal with complete data — avoids the "flash of not recorded".
+  if (!hasCompleteLogDetail(row as unknown as LogDetailLog) && Number.isFinite(numericId) && numericId > 0) {
     try {
       const detail = await api(`/usage/detail?id=${encodeURIComponent(id)}`) as { row?: RecentUsageRow; detail?: RecentUsageRow } | RecentUsageRow | null;
       const fetched = (detail && typeof detail === "object" && ("row" in detail || "detail" in detail))
         ? (detail.row ?? detail.detail ?? null)
         : (detail as RecentUsageRow | null);
       if (fetched) {
-        row = { ...row, ...fetched };
+        const merged: Record<string, unknown> = { ...row } as unknown as Record<string, unknown>;
+        for (const [k, v] of Object.entries(fetched as unknown as Record<string, unknown>)) {
+          if (v != null) merged[k] = v;
+        }
+        row = merged as unknown as RecentUsageRow;
         state.logs.rowById.set(Number(row.id || id), row);
         state.logs.selectedRow = row;
-        // Re-render the open modal in place with the freshly fetched
-        // detail data. updateOpenLogDetail handles the DOM swap
-        // (it no-ops if the modal is closed, but in openLogDetail
-        // we know the modal is open because we called showLogDetail
-        // a few lines above).
-        updateOpenLogDetail(row as unknown as LogDetailLog);
       }
     } catch (e: unknown) {
-      const err = e instanceof Error ? e : null;
-      const msg = err ? err.message : String(e);
-      if (detailEl) detailEl.textContent = `Detail unavailable: ${msg}`;
-      showToast(`Request detail unavailable: ${msg}`, "error");
+      // Non-fatal: render with whatever we have — the modal will
+      // show "not recorded" for missing fields, which is truthful.
+      showToast(`Request detail unavailable: ${e instanceof Error ? e.message : String(e)}`, "error");
     }
   }
+  // Render the modal with the best data we have (possibly enriched
+  // by the detail call above).
+  showLogDetail(row as unknown as LogDetailLog);
 }
 if (typeof window !== "undefined") {
   const w = window as unknown as { openLogDetail?: typeof openLogDetail };
