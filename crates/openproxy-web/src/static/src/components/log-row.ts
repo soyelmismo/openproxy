@@ -79,7 +79,8 @@ export function renderLogRowHtml(
   total_ms?: number | null,
 ): string {
   const streaming: boolean = !!row.is_streaming && !row.stream_complete;
-  const statusErr: boolean = row.status_code >= 400 || row.status_code === 0;
+  const hasError: boolean = !!(row.error_message && row.error_message.length > 0);
+  const statusErr: boolean = row.status_code >= 400 || row.status_code === 0 || hasError;
   const cls: string = [
     "log-row",
     statusErr ? "error" : "ok",

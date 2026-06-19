@@ -1925,7 +1925,7 @@ impl Pipeline {
                     model: Some(model),
                     connect_ms: Some(connect_and_send_ms),
                     ttft_ms: Some(ttft_ms),
-                    status_code,
+                    status_code: err.http_status(),
 },
 );
             }
@@ -1943,7 +1943,7 @@ impl Pipeline {
                     model: Some(model),
                     connect_ms: Some(connect_and_send_ms),
                     ttft_ms: Some(ttft_ms),
-                    status_code,
+                    status_code: err.http_status(),
 },
 );
             }
@@ -2059,7 +2059,7 @@ impl Pipeline {
                     model: Some(model),
                     connect_ms: Some(connect_and_send_ms),
                     ttft_ms: Some(ttft_ms),
-                    status_code,
+                    status_code: err.http_status(),
 },
 );
             }
@@ -2088,7 +2088,7 @@ impl Pipeline {
                         model: Some(model),
                         connect_ms: Some(connect_and_send_ms),
                         ttft_ms: Some(ttft_ms),
-                        status_code,
+                        status_code: err.http_status(),
 },
 );
                 }
@@ -2111,7 +2111,7 @@ impl Pipeline {
                                 model: Some(model),
                                 connect_ms: Some(connect_and_send_ms),
                                 ttft_ms: Some(ttft_ms),
-                                status_code,
+                                status_code: err.http_status(),
 },
 );
                         }
@@ -2136,7 +2136,7 @@ impl Pipeline {
                                 model: Some(model),
                                 connect_ms: Some(connect_and_send_ms),
                                 ttft_ms: Some(ttft_ms),
-                                status_code,
+                                status_code: err.http_status(),
 },
 );
                         }
@@ -2567,7 +2567,7 @@ impl Pipeline {
                         model: Some(model),
                         connect_ms: Some(connect_and_send_ms),
                         ttft_ms,
-                        status_code,
+                        status_code: err.http_status(),
 },
 );
                 }

@@ -212,12 +212,13 @@ function renderLogsRows(): void {
           // "failed", causing the failed row to show "completado".
           let stage: StageEvent | undefined;
           if (r.status_code > 0) {
+            const hasError = !!(r.error_message && r.error_message.length > 0);
             stage = {
               request_id: r.request_id,
               trace_id: r.trace_id,
               provider_id: r.provider_id,
               upstream_model_id: r.upstream_model_id,
-              stage: r.status_code >= 400 ? "failed" : "completed",
+              stage: (r.status_code >= 400 || hasError) ? "failed" : "completed",
               elapsed_ms: r.total_ms || 0,
               connect_ms: r.connect_ms,
               ttft_ms: r.ttft_ms,
@@ -475,9 +476,14 @@ function synthesizeTerminalEvent(row: RecentUsageRow): void {
   const existingIsTerminal: boolean = !!existingStage &&
     (existingStage.stage === "completed" || existingStage.stage === "failed");
   if (existingIsTerminal) return;
+  // If error_message is set, the request actually failed regardless of
+  // status_code. This covers edge cases where the backend recorded a
+  // partial 2xx status (e.g. timeout after headers received) but the
+  // request didn't actually complete.
+  const hasError = !!(row.error_message && row.error_message.length > 0);
   const synth: StageEvent = {
     request_id: row.request_id,
-    stage: row.status_code >= 400 ? "failed" : "completed",
+    stage: (row.status_code >= 400 || hasError) ? "failed" : "completed",
     elapsed_ms: row.total_ms || 0,
     status_code: row.status_code,
     timestamp: row.created_at || new Date().toISOString(),
