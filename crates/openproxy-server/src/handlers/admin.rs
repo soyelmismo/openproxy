@@ -1304,10 +1304,28 @@ async fn stream_usage_rows(
     state: AppState,
 ) {
     if let Err(err) = async {
-        // 1. Initial history batch (most recent 100)
-        let rows = {
+        // 1. Initial history batch (most recent 100).
+        // A SQLite "disk I/O error" here (e.g. WAL contention
+        // under load) must NOT kill the WebSocket — the
+        // frontend handles an empty `rows` array gracefully,
+        // and the subscription loop below will start delivering
+        // live events as soon as the DB recovers. Without this
+        // guard the error propagated via `?`, broke out of the
+        // async block, sent an error envelope, closed the WS,
+        // and triggered an immediate reconnect loop.
+        let rows = match (|| -> openproxy_core::Result<_> {
             let w = state.db_pool().writer();
-            usage::recent_desc(&w, 100)?
+            usage::recent_desc(&w, 100)
+        })() {
+            Ok(r) => r,
+            Err(e) => {
+                tracing::error!(
+                    error = %e,
+                    "stream_usage_rows: initial history query failed, \
+                     sending empty history and continuing with live events"
+                );
+                Vec::new()
+            }
         };
         send_ws_json(
             &mut socket,

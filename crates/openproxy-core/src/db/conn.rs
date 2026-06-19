@@ -182,6 +182,22 @@ fn configure_connection(conn: &Connection) -> Result<()> {
         message: format!("pragma synchronous=NORMAL: {}", e),
         source: Some(Box::new(e)),
     })?;
+    // Add an autocheckpoint limit (1000 pages, or 4MB) so the WAL doesn't
+    // grow unbounded. The dashboard can issue heavy reads that trigger
+    // checkpoints, and without a bound the WAL file can grow large enough
+    // to cause SQLite disk I/O errors under contention.
+    conn.pragma_update(None, "wal_autocheckpoint", 1000)
+        .map_err(|e| CoreError::Database {
+            message: format!("pragma wal_autocheckpoint=1000: {}", e),
+            source: Some(Box::new(e)),
+        })?;
+    // Allow larger memory-mapped I/O (256MB) for better performance on
+    // systems that support it.
+    conn.pragma_update(None, "mmap_size", 268435456)
+        .map_err(|e| CoreError::Database {
+            message: format!("pragma mmap_size=268435456: {}", e),
+            source: Some(Box::new(e)),
+        })?;
     Ok(())
 }
 
