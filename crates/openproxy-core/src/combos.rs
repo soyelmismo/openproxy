@@ -495,10 +495,16 @@ pub fn add_target(conn: &Connection, input: AddTargetInput) -> Result<ComboTarge
 /// crash between the model INSERT and the UPDATE here.
 ///
 /// Matching is by `(provider_id, upstream_model_id)`. Only rows with
-/// `model_row_id IS NULL` (the orphan state Gate D's `ON DELETE
-/// SET NULL` cascade leaves behind) and `sub_combo_id IS NULL`
+/// `model_row_id IS NULL` (the orphan state that `ON DELETE SET NULL`
+/// used to leave behind) and `sub_combo_id IS NULL`
 /// (flat targets only — sub-combo targets are out of scope, per the
 /// spec) are candidates.
+///
+/// NOTE: Under the current schema (migration 000030, `ON DELETE CASCADE`),
+/// combo_targets rows are cascade-deleted when their referenced model
+/// is deleted, so orphan rows with `model_row_id IS NULL` no longer
+/// exist in practice. This function is retained as dead code for
+/// forward-compatibility in case the FK semantics change again.
 ///
 /// Returns the number of rows updated. A row whose
 /// `upstream_model_id` is `NULL` (because the orphan existed BEFORE
@@ -617,13 +623,13 @@ pub fn list_targets(conn: &Connection, combo_id: ComboId) -> Result<Vec<ComboTar
     // deactivate it, but the filter is the same uniform rule for
     // every target type.
     //
-    // Orphan targets — rows where the upstream model has been
-    // deleted by the scheduler, leaving
-    // `(model_row_id IS NULL, sub_combo_id IS NULL)` — are excluded;
-    // they remain in the table for audit and re-activation when the
-    // model reappears. Without this filter the row would be passed
-    // to `RoutingPlan::Combo` and then to `execute_single`, which
-    // surfaces a confusing `5xx Internal: ... sub-combo target`
+    // Orphan targets — rows where the upstream model was deleted,
+    // leaving `(model_row_id IS NULL, sub_combo_id IS NULL)` — are
+    // excluded. Under the current schema (ON DELETE CASCADE, migration
+    // 000030) these rows no longer exist, but the filter is retained
+    // as a safety net. Without this filter a surviving row would be
+    // passed to `RoutingPlan::Combo` and then to `execute_single`,
+    // which surfaces a confusing `5xx Internal: ... sub-combo target`
     // (Gate E3).
     let mut stmt = conn
         .prepare(
@@ -1803,13 +1809,10 @@ mod tests {
 
     #[test]
     fn list_targets_excludes_orphan_targets() {
-        // Gate E3: when a `models` row is deleted and the FK
-        // `combo_targets.model_row_id ... ON DELETE SET NULL`
-        // fires, the surviving `combo_targets` row has
-        // `(model_row_id IS NULL, sub_combo_id IS NULL)`. `list_targets`
-        // must drop that row from the routable result. The row is
-        // NOT deleted from the table — it stays for audit and
-        // re-activation when the model reappears.
+        // When a `models` row is deleted, the FK
+        // `combo_targets.model_row_id ... ON DELETE CASCADE`
+        // (migration 000030) fires and removes the `combo_targets`
+        // row entirely. `list_targets` never sees it.
         let (pool, _path) = fresh_pool();
         let conn = pool.writer();
         seed_provider(&conn, "prov-x");
@@ -1847,25 +1850,25 @@ mod tests {
         let before = list_targets(&conn, cid).expect("list before delete");
         assert_eq!(before.len(), 2);
 
-        // Trigger the orphan state by deleting the `models` row
+        // Trigger the cascade by deleting the `models` row
         // directly. We deliberately do NOT go through
         // `models::delete` here: we want to exercise the FK
-        // `combo_targets.model_row_id ... ON DELETE SET NULL` cascade
-        // (Gate D) and the Gate E3 filter on the resulting orphan row
-        // in isolation, independent of the admin delete path. The
-        // helper and the raw `DELETE` are now behaviorally equivalent
-        // w.r.t. combo_targets (the helper no longer pre-cleans them).
+        // `combo_targets.model_row_id ... ON DELETE CASCADE`
+        // (migration 000030) and verify the row is removed from
+        // `combo_targets` entirely, independent of the admin
+        // delete path. The helper and the raw `DELETE` are now
+        // behaviorally equivalent w.r.t. combo_targets.
         conn.execute("DELETE FROM models WHERE id = ?1", params![m_drop.0])
             .expect("raw delete model");
 
         // Routing-layer listing drops the orphan.
         let after = list_targets(&conn, cid).expect("list after delete");
-        assert_eq!(after.len(), 1, "the (NULL, NULL) orphan is filtered out");
+        assert_eq!(after.len(), 1, "only the surviving target remains");
         assert_eq!(after[0].id, t_keep, "the live target survives");
         assert!(!after.iter().any(|t| t.id == t_orphan), "orphan is gone from result");
 
-        // The orphan row is still in the table — the filter is
-        // read-time only, the row is the audit trail.
+        // The CASCADE deleted the combo_targets row entirely —
+        // it no longer exists in the table.
         let raw: i64 = conn
             .query_row(
                 "SELECT COUNT(*) FROM combo_targets WHERE id = ?1",
@@ -1873,29 +1876,17 @@ mod tests {
                 |r| r.get(0),
             )
             .expect("count raw");
-        assert_eq!(raw, 1, "orphan row is preserved in combo_targets");
-        // And its model_row_id really is NULL now.
-        let model_col: Option<i64> = conn
-            .query_row(
-                "SELECT model_row_id FROM combo_targets WHERE id = ?1",
-                params![t_orphan.0],
-                |r| r.get(0),
-            )
-            .expect("read model_row_id");
-        assert!(
-            model_col.is_none(),
-            "the cascade set model_row_id to NULL (the orphan state)"
-        );
+        assert_eq!(raw, 0, "CASCADE deleted the orphan row from combo_targets");
     }
 
     #[test]
     fn list_targets_returns_empty_for_fully_orphaned_combo() {
-        // Every target of this combo is an orphan. `list_targets`
-        // must return an empty vec — the routing layer then builds
+        // Every model backing this combo's targets gets deleted.
+        // With ON DELETE CASCADE (migration 000030), the
+        // `combo_targets` rows are removed too. `list_targets`
+        // returns an empty vec — the routing layer then builds
         // a `RoutingPlan::Combo` with `targets: vec![]`, which the
         // pipeline already handles by surfacing `NoHealthyTargets`.
-        // This protects against a future refactor that flips the
-        // orphan→error semantic back on at a different layer.
         let (pool, _path) = fresh_pool();
         let conn = pool.writer();
         seed_provider(&conn, "prov-1");
@@ -1934,8 +1925,8 @@ mod tests {
         assert_eq!(before.len(), 2);
 
         // We delete the underlying `models` rows directly so this test
-        // isolates the Gate E3 filter behaviour (orphan rows being
-        // filtered from `list_targets`) from the admin `models::delete`
+        // isolates the CASCADE behavior (combo_targets rows being
+        // deleted via ON DELETE CASCADE) from the admin `models::delete`
         // path, which is covered separately.
         conn.execute("DELETE FROM models WHERE id = ?1", params![m1.0])
             .expect("raw delete m1");
@@ -1949,7 +1940,8 @@ mod tests {
             "fully-orphaned combo surfaces zero routable targets"
         );
 
-        // The orphan rows are still in the table (audit trail).
+        // With ON DELETE CASCADE (migration 000030), the combo_targets
+        // rows were deleted when the models were deleted.
         let raw_count: i64 = conn
             .query_row(
                 "SELECT COUNT(*) FROM combo_targets WHERE combo_id = ?1",
@@ -1957,11 +1949,11 @@ mod tests {
                 |r| r.get(0),
             )
             .expect("count raw rows");
-        assert_eq!(raw_count, 2, "the orphan rows are still in the table");
+        assert_eq!(raw_count, 0, "CASCADE deleted all target rows from the table");
 
         // Belt-and-braces: the routing layer agrees, because
         // `list_targets` is the only place a routing read can pick
-        // up rows from `combo_targets`. With an empty target vec the
+        // up rows from `combo_targets`. With no target rows the
         // plan is a `Combo` with no usable members — the pipeline
         // will surface `NoHealthyTargets`, not a 5xx.
         use crate::routing;

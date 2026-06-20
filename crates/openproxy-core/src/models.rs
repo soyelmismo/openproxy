@@ -470,9 +470,7 @@ pub fn upsert_many(
     //
     // The `custom = 0` gate preserves operator-curated rows from
     // accidental purge. `combo_targets` rows that point at a deleted
-    // model become orphans; routing code already filters on
-    // `model_row_id IN (live models)` at request time, so they are
-    // harmless.
+    // model are cascade-deleted (ON DELETE CASCADE, migration 000030).
     {
         if discovered.is_empty() {
             tx.execute(
@@ -536,13 +534,16 @@ pub fn upsert_many(
     //
     // Why this is correct:
     // - A model that was NOT in `existing` cannot have a current
-    //   `models.id` already bound to combo_targets (its old id was
-    //   freed by a prior `upsert_many` call's DELETE block, and Gate
-    //   D's `ON DELETE SET NULL` cleared any target's FK to NULL).
+    //   `models.id` already bound to combo_targets. Under ON DELETE
+    //   CASCADE (migration 000030) the combo_targets row was
+    //   cascade-deleted with the model, so no orphan remains.
+    //   (Under the older SET NULL behavior, Gate D cleared the FK
+    //   to NULL; under CASCADE the row is simply gone.)
     // - Therefore writing the new id onto those orphans is a
     //   strictly additive operation — no other target is disturbed.
-    // - If no orphan exists for an upstream id, the UPDATE matches
-    //   zero rows and is a no-op; we still log it for observability.
+    // - If no orphan exists for an upstream id (the common case
+    //   under CASCADE), the UPDATE matches zero rows and is a
+    //   no-op; we still log it for observability.
     //
     // If a model's `upstream_model_id` on the orphan side is NULL
     // (pre-000026 row, or operator-created target with no record),
@@ -1016,11 +1017,9 @@ pub fn set_test_status(conn: &Connection, id: ModelRowId, status: i32) -> Result
 }
 
 /// Hard-delete a model row. The `combo_targets.model_row_id` FK is
-/// declared with `ON DELETE SET NULL` (see migration 000025), so the
-/// `DELETE FROM models` below automatically nulls the FK on any
-/// `combo_targets` row that referenced this model. Those orphaned
-/// target rows are filtered from routing by `combos::list_targets`
-/// (Gate E3).
+/// declared with `ON DELETE CASCADE` (see migration 000030), so the
+/// `DELETE FROM models` below automatically cascade-deletes any
+/// `combo_targets` row that referenced this model.
 ///
 /// A missing id is a silent no-op (0 rows affected), matching the
 /// idempotent style of the other admin deletions.
@@ -1032,10 +1031,9 @@ pub fn delete(conn: &Connection, id: ModelRowId) -> Result<u64> {
         source: Some(Box::new(e)),
     })?;
 
-    // combo_targets.model_row_id has ON DELETE SET NULL (migration 000025);
-    // the target row is preserved with `model_row_id = NULL` and is
-    // filtered from routing by `combos::list_targets`. No pre-emptive
-    // cleanup needed.
+    // combo_targets.model_row_id has ON DELETE CASCADE (migration 000030);
+    // the target row is cascade-deleted alongside the model.
+    // No pre-emptive cleanup needed.
     let removed = tx
         .execute("DELETE FROM models WHERE id = ?1", params![id.0])
         .map_err(|e| CoreError::Database {
@@ -2448,8 +2446,8 @@ mod tests {
 
         // Seed two models; the test will delete one and verify the
         // other survives plus the combo_target pointing at the deleted
-        // model has its `model_row_id` nulled by the FK's SET NULL
-        // (no FK violation either way).
+        // model is cascade-deleted by the FK's ON DELETE CASCADE
+        // (migration 000030).
         upsert_many(
             &conn,
             &provider,
@@ -2464,18 +2462,18 @@ mod tests {
         // Seed a combo + a target pointing at m1. The schema requires
         // a combos table; mirror the FK columns we depend on with a
         // tiny DDL rather than re-running the full migration set.
-        // We declare `model_row_id` as nullable with `ON DELETE SET
-        // NULL` to mirror the production schema (migration 000025).
+        // We declare `model_row_id` as nullable with `ON DELETE CASCADE`
+        // to mirror the production schema (migration 000030).
         // We also include `sub_combo_id` because the spec's T
         // assertion requires us to verify it stays NULL.
         conn.execute_batch(
             "CREATE TABLE combos (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, \
-                                  strategy TEXT NOT NULL, race_size INTEGER NOT NULL DEFAULT 1); \
+                                   strategy TEXT NOT NULL, race_size INTEGER NOT NULL DEFAULT 1); \
              CREATE TABLE combo_targets (id INTEGER PRIMARY KEY AUTOINCREMENT, \
-                                          combo_id INTEGER NOT NULL, provider_id TEXT NOT NULL, \
-                                          account_id INTEGER, sub_combo_id INTEGER, \
-                                          model_row_id INTEGER \
-                                          REFERENCES models(id) ON DELETE SET NULL);",
+                                           combo_id INTEGER NOT NULL, provider_id TEXT NOT NULL, \
+                                           account_id INTEGER, sub_combo_id INTEGER, \
+                                           model_row_id INTEGER \
+                                           REFERENCES models(id) ON DELETE CASCADE);",
         )
         .expect("combo tables");
         let combo_id: i64 = conn
@@ -2505,24 +2503,18 @@ mod tests {
         let removed = delete(&conn, m1_id).expect("delete m1");
         assert_eq!(removed, 1, "one row removed");
 
-        // m1 is gone, m2 survives, and the combo_target was *preserved*
-        // (not wiped) with `model_row_id` nulled by the SET NULL clause.
+        // m1 is gone, m2 survives, and the combo_target was
+        // cascade-deleted (ON DELETE CASCADE, migration 000030).
         assert!(get_by_row_id(&conn, m1_id).unwrap().is_none(), "m1 gone");
         assert!(get_by_row_id(&conn, m2_id).unwrap().is_some(), "m2 alive");
-        let (count_targets, count_with_null_fk): (i64, i64) = conn
+        let count_targets: i64 = conn
             .query_row(
-                "SELECT COUNT(*), \
-                        COALESCE(SUM(CASE WHEN model_row_id IS NULL THEN 1 ELSE 0 END), 0) \
-                 FROM combo_targets WHERE combo_id = ?1",
+                "SELECT COUNT(*) FROM combo_targets WHERE combo_id = ?1",
                 [combo_id],
-                |r| Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?)),
+                |r| r.get(0),
             )
-            .expect("count + null-fk count");
-        assert_eq!(count_targets, 1, "combo_target row preserved");
-        assert_eq!(
-            count_with_null_fk, 1,
-            "combo_target.model_row_id is NULL after delete"
-        );
+            .expect("count targets");
+        assert_eq!(count_targets, 0, "combo_target row cascade-deleted with model");
 
         // Idempotent: a second delete returns 0, not an error.
         let removed_again = delete(&conn, m1_id).expect("delete again");
@@ -2881,9 +2873,15 @@ mod tests {
     //      trips a CHECK, or by relying on the `UNIQUE` race we
     //      engineer here), the orphan MUST stay orphaned (AC3).
     //
+    // NOTE: These tests are all marked `#[ignore]` under migration
+    // 000030 (ON DELETE CASCADE) because the cascade removes
+    // combo_targets rows alongside their model, so the orphan-reconnect
+    // path they exercise never fires. The reconnect logic in
+    // upsert_many is retained for forward-compatibility.
+    //
     // Each test stands up an in-memory DB whose `combo_targets`
-    // table matches the post-migration-000026 shape: nullable
-    // `model_row_id` (Gate D's `ON DELETE SET NULL`) plus the new
+    // table matches the post-migration-000030 shape: nullable
+    // `model_row_id` (`ON DELETE CASCADE`) plus the new
     // `upstream_model_id` (Gate F1). The CHECK constraint from
     // `combo_targets_new` is preserved verbatim.
     //
@@ -2891,12 +2889,12 @@ mod tests {
     // -------------------------------------------------------------------
 
     /// Build a minimal `combo_targets` table in the test connection
-    /// that matches the post-000026 schema. The test models.rs test
+    /// that matches the post-000030 schema. The test models.rs test
     /// suite uses inline DDL rather than running the full migration
     /// set; the only columns that matter for the Gate F1 reconnect
     /// path are:
     ///
-    /// - `model_row_id` nullable with `ON DELETE SET NULL` (Gate D).
+    /// - `model_row_id` nullable with `ON DELETE CASCADE` (migration 000030).
     /// - `sub_combo_id` nullable (we don't use it here, but the
     ///   schema declares it).
     /// - `upstream_model_id` nullable (Gate F1 — the new column).
@@ -2923,7 +2921,7 @@ mod tests {
                  combo_id          INTEGER NOT NULL REFERENCES combos(id) ON DELETE CASCADE,
                  provider_id       TEXT NOT NULL REFERENCES providers(id),
                  account_id        INTEGER REFERENCES accounts(id),
-                 model_row_id      INTEGER REFERENCES models(id) ON DELETE SET NULL,
+                 model_row_id      INTEGER REFERENCES models(id) ON DELETE CASCADE,
                  sub_combo_id      INTEGER REFERENCES combos(id) ON DELETE CASCADE,
                  upstream_model_id TEXT,
                  priority_order    INTEGER NOT NULL,
@@ -2965,13 +2963,16 @@ mod tests {
     /// 2. Build a combo + target pointing at `m1` with
     ///    `upstream_model_id = "m1"` (the new bookkeeping).
     /// 3. Force the model to disappear: `upsert_many(&[m2])` —
-    ///    `m1` gets hard-deleted, FK `model_row_id` cascades to NULL.
-    /// 4. Bring `m1` back: `upsert_many(&[m1])` — the new `m1` row
-    ///    gets a fresh autoincrement id.
-    /// 5. Verify the target now has `model_row_id` pointing at the
-    ///    NEW `m1` row id (not the old one), `upstream_model_id` is
-    ///    still `"m1"`, and `combo_id` is unchanged.
+    ///    `m1` gets hard-deleted. (Under migration 000030 the FK
+    ///    is `ON DELETE CASCADE`, so the target row is removed too
+    ///    — there is nothing for the reconnect path to bind.)
+    /// 4. Bring `m1` back: `upsert_many(&[m1])`.
+    /// 5. Verify the target was cascade-deleted with `m1` and no
+    ///    reconnect happens.
     #[test]
+    #[ignore = "Gate F1 reconnect path is dead code under migration 000030 \
+                (ON DELETE CASCADE removes combo_targets rows with their model); \
+                the reconnect logic in upsert_many is retained for forward-compat"]
     fn upsert_many_reconnects_orphan_combo_targets() {
         let conn = fresh_db();
         let provider = ProviderId::new("provA");
@@ -3069,12 +3070,16 @@ mod tests {
 
     /// AC2 — negative case.
     ///
-    /// An orphan target bound to upstream id "m_a" must NOT be
-    /// re-bound to a different upstream id "m_b" that happens to
-    /// appear in the same `upsert_many` call. The reconnect path's
-    /// `WHERE upstream_model_id = ?` clause is the only thing
-    /// keeping us from mis-binding.
+    /// Under migration 000030 (ON DELETE CASCADE), the orphan
+    /// target is cascade-deleted with its model, so the
+    /// "wrong-model reconnect" case has no orphan to mis-bind to.
+    /// This test is intentionally disabled — the Gate F1 reconnect
+    /// path it pins (a non-NULL re-bind from `upsert_many`) no
+    /// longer runs against the production schema.
     #[test]
+    #[ignore = "Gate F1 reconnect path is dead code under migration 000030 \
+                (ON DELETE CASCADE removes combo_targets rows with their model); \
+                the reconnect logic in upsert_many is retained for forward-compat"]
     fn upsert_many_does_not_reconnect_wrong_model() {
         let conn = fresh_db();
         let provider = ProviderId::new("provA");
@@ -3146,26 +3151,15 @@ mod tests {
 
     /// AC3 — atomicity.
     ///
-    /// If the INSERT of the re-appearing model fails *inside* the
-    /// same transaction as the DELETE/INSERT, the orphan target
-    /// MUST stay orphaned. The reconnect UPDATE cannot run if the
-    /// model INSERT fails — both must commit together or roll back
-    /// together.
-    ///
-    /// We force a failure by introducing a pre-existing row with
-    /// the same `(provider_id, model_id)` key but a rowid we have
-    /// stashed, AND we drop the `models` row out from under it via
-    /// a concurrent DELETE in a separate transaction. The simpler
-    /// approach is the one below: we instrument the in-memory
-    /// connection to return `SQLITE_CONSTRAINT` from the next
-    /// `INSERT INTO models`, simulating any of the realistic
-    /// failures (FK violation, CHECK violation, etc.).
-    ///
-    /// The test is hermetic: we drop a marker table and install a
-    /// trigger that raises `SQLITE_CONSTRAINT` only when the
-    /// `INSERT INTO models` statement names model_id='m1'. The
-    /// marker is removed after the test.
+    /// Under migration 000030 (ON DELETE CASCADE), the orphan target
+    /// is cascade-deleted with its model, so the atomicity concern
+    /// (half-committed reconnect) does not arise. This test is
+    /// intentionally disabled — the Gate F1 reconnect path it pins
+    /// no longer runs against the production schema.
     #[test]
+    #[ignore = "Gate F1 reconnect path is dead code under migration 000030 \
+                (ON DELETE CASCADE removes combo_targets rows with their model); \
+                the reconnect logic in upsert_many is retained for forward-compat"]
     fn upsert_many_atomic_orphan_reconnection() {
         let conn = fresh_db();
         let provider = ProviderId::new("provA");
@@ -3289,13 +3283,11 @@ mod tests {
     //
     // Companion to `delete_model_nulls_combo_target_model_row_id` above.
     // The previous test pins the *single-target* invariant: deleting a
-    // model nulls `combo_targets.model_row_id` for the one row that
-    // pointed at it. This one pins the *isolation* invariant: deleting
-    // model M nulls the FK on the target T that pointed at M, while
-    // leaving the other target T2 (pointing at a different, surviving
-    // model M2) completely untouched. It also verifies the row is
-    // preserved (not hard-deleted) — same SET NULL semantic the
-    // production schema (migration 000025) installs.
+    // model cascade-deletes the combo_targets row that pointed at it
+    // (ON DELETE CASCADE, migration 000030). This one pins the
+    // *isolation* invariant: deleting model M cascade-deletes target T
+    // that pointed at M, while leaving the other target T2 (pointing
+    // at a different, surviving model M2) completely untouched.
     #[test]
     fn delete_model_sets_combo_target_model_row_id_to_null() {
         let conn = fresh_db();
@@ -3328,17 +3320,16 @@ mod tests {
             .row_id;
 
         // Mirror the production schema: combo_targets.model_row_id
-        // is nullable with `ON DELETE SET NULL` (migration 000025).
-        // `sub_combo_id` is also nullable, mirroring the real schema
-        // — the spec's step 4 asks us to assert it stays NULL.
+        // is nullable with `ON DELETE CASCADE` (migration 000030).
+        // `sub_combo_id` is also nullable, mirroring the real schema.
         conn.execute_batch(
             "CREATE TABLE combos (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, \
-                                  strategy TEXT NOT NULL, race_size INTEGER NOT NULL DEFAULT 1); \
+                                   strategy TEXT NOT NULL, race_size INTEGER NOT NULL DEFAULT 1); \
              CREATE TABLE combo_targets (id INTEGER PRIMARY KEY AUTOINCREMENT, \
-                                          combo_id INTEGER NOT NULL, provider_id TEXT NOT NULL, \
-                                          account_id INTEGER, sub_combo_id INTEGER, \
-                                          model_row_id INTEGER \
-                                          REFERENCES models(id) ON DELETE SET NULL);",
+                                           combo_id INTEGER NOT NULL, provider_id TEXT NOT NULL, \
+                                           account_id INTEGER, sub_combo_id INTEGER, \
+                                           model_row_id INTEGER \
+                                           REFERENCES models(id) ON DELETE CASCADE);",
         )
         .expect("combo tables");
         let combo_id: i64 = conn
@@ -3406,20 +3397,18 @@ mod tests {
             "M2 still present"
         );
 
-        // (4) T is preserved with model_row_id = NULL and
-        // sub_combo_id = NULL.
-        let t_state: (Option<i64>, Option<i64>) = conn
+        // (4) T was cascade-deleted (ON DELETE CASCADE) — it no
+        // longer exists in combo_targets.
+        let t_count: i64 = conn
             .query_row(
-                "SELECT model_row_id, sub_combo_id FROM combo_targets \
+                "SELECT COUNT(*) FROM combo_targets \
                  WHERE combo_id = ?1 AND provider_id = ?2 \
-                 ORDER BY id",
-                rusqlite::params![combo_id, "provA"],
-                |r| Ok((r.get::<_, Option<i64>>(0)?, r.get::<_, Option<i64>>(1)?)),
+                   AND model_row_id = ?3",
+                rusqlite::params![combo_id, "provA", m_id.0],
+                |r| r.get(0),
             )
-            .expect("query orphan state");
-        // The first row (lowest id) is T, the original one pointing at M.
-        assert_eq!(t_state.0, None, "T.model_row_id is NULL after delete");
-        assert_eq!(t_state.1, None, "T.sub_combo_id is NULL");
+            .expect("query T post-delete");
+        assert_eq!(t_count, 0, "T was cascade-deleted with model M");
 
         // (5) T2 is unchanged.
         let t2_post: Option<i64> = conn
@@ -3435,11 +3424,11 @@ mod tests {
             Some(m2_id.0),
             "T2 still points at M2 (not touched by M's delete)"
         );
-        // Both rows still present in combo_targets (no row was hard-deleted).
+        // Only T2 remains — T was cascade-deleted.
         assert_eq!(
             count_targets_for(&conn, combo_id),
-            2,
-            "both target rows preserved (T becomes orphan, T2 intact)"
+            1,
+            "only T2 remains (T was cascade-deleted with model M)"
         );
     }
 

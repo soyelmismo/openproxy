@@ -157,6 +157,11 @@ const MIGRATIONS: &[Migration] = &[
         name: "000029_add_models_dev_sync",
         sql: include_str!("../../migrations/000029_add_models_dev_sync.sql"),
     },
+    Migration {
+        version: 30,
+        name: "000030_combo_targets_cascade_on_model_delete",
+        sql: include_str!("../../migrations/000030_combo_targets_cascade_on_model_delete.sql"),
+    },
 ];
 
 /// Apply pending migrations on `conn`. Idempotent: skips versions already in
@@ -379,7 +384,7 @@ mod tests {
                 c.query_row("SELECT COUNT(*) FROM schema_migrations", [], |r| r.get(0))
                     .expect("count")
             });
-        assert_eq!(count_first, 28, "twenty-eight migrations applied (versions 1-6, 8-29)");
+        assert_eq!(count_first, 29, "twenty-nine migrations applied (versions 1-6, 8-30)");
 
         {
             let mut writer = pool.writer();
@@ -588,12 +593,11 @@ mod tests {
     // Migration 000025 specific tests
     // =====================================================================
 
-    /// Gate D: the rebuilt `combo_targets` FK must be
-    /// `model_row_id ... REFERENCES models(id) ON DELETE SET NULL`.
+    /// Gate D + 000030: the rebuilt `combo_targets` FK must be
+    /// `model_row_id ... REFERENCES models(id) ON DELETE CASCADE`.
     /// After the migration, deleting a `models` row that a
-    /// `combo_targets` row points at must not abort the
-    /// transaction; the target must survive with
-    /// `model_row_id = NULL`.
+    /// `combo_targets` row points at must cascade-delete the
+    /// `combo_targets` row entirely.
     #[test]
     fn migration_25_sets_model_fk_to_on_delete_set_null() {
         use crate::db::conn::DbPool;
@@ -648,38 +652,29 @@ mod tests {
             (model_id, combo_id)
         };
 
-        // 2. Delete the `models` row. With `ON DELETE SET NULL`
-        //    the DELETE must succeed; with the pre-migration
-        //    `RESTRICT` default it would have aborted.
+        // 2. Delete the `models` row. With `ON DELETE CASCADE`
+        //    (migration 000030 supersedes 000025's SET NULL) the
+        //    `combo_targets` row is removed alongside it.
         {
             let conn = pool.writer();
             conn.execute("DELETE FROM models WHERE id = ?1", rusqlite::params![model_row_id])
-                .expect("delete model must succeed under SET NULL");
+                .expect("delete model must succeed under CASCADE");
         }
 
-        // 3. Assert the `combo_targets` row still exists and its
-        //    `model_row_id` is now NULL.
+        // 3. Assert the `combo_targets` row was cascade-deleted
+        //    and no longer exists.
         {
             let conn = pool.writer();
-            let (count, model_row_after): (i64, Option<i64>) = conn
+            let count: i64 = conn
                 .query_row(
-                    "SELECT COUNT(*), \
-                            (SELECT model_row_id FROM combo_targets \
-                              WHERE combo_id = ?1 AND provider_id = 'p25') \
-                       FROM combo_targets WHERE combo_id = ?1",
+                    "SELECT COUNT(*) FROM combo_targets WHERE combo_id = ?1",
                     rusqlite::params![target_id],
-                    |r| Ok((r.get(0)?, r.get(1)?)),
+                    |r| r.get(0),
                 )
                 .expect("query surviving target");
             assert_eq!(
-                count, 1,
-                "the combo_target row must survive the delete"
-            );
-            assert!(
-                model_row_after.is_none(),
-                "model_row_id must be NULL after the referenced \
-                 models row was deleted; got {:?}",
-                model_row_after
+                count, 0,
+                "the combo_target row must be cascade-deleted with the model"
             );
         }
 
