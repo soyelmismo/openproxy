@@ -11,6 +11,7 @@ import { escapeHtml } from "../lib/escape.js";
 import { pageHeader } from "../components/page-header.js";
 import { card } from "../components/card.js";
 import { statusPillClass } from "../lib/constants.js";
+import { initDragAndDrop } from "../handlers/combo-target-handlers.js";
 import type { Combo, ComboTargetWithModel } from "../lib/types/api.js";
 
 // Shape of one row in the "Test all" results table. The endpoint
@@ -126,7 +127,7 @@ async function renderComboDetail(comboId: number): Promise<void> {
     body += `<p class="empty">No targets. Add a target to start routing.</p>`;
   } else {
     body += `<table>
-      <thead><tr><th><input type="checkbox" id="target-select-all" data-action="toggleSelectAllTargets"></th><th>#</th><th>Provider</th><th>Account</th><th>Model</th><th>Actions</th></tr></thead>
+      <thead><tr><th></th><th><input type="checkbox" id="target-select-all" data-action="toggleSelectAllTargets"></th><th>#</th><th>Provider</th><th>Account</th><th>Model</th><th>Actions</th></tr></thead>
       <tbody id="targets-tbody">`;
     for (const t of [...targets].sort((a, b) => a.priority_order - b.priority_order)) {
       const isSubCombo = t.sub_combo_id != null;
@@ -151,7 +152,8 @@ async function renderComboDetail(comboId: number): Promise<void> {
         : (t.account_id ? "#" + t.account_id : "<em>rotate</em>");
       const isSelected = state.selectedTargets.has(t.id);
       body += `
-        <tr class="${isSelected ? "selected" : ""}">
+        <tr draggable="true" data-drag-id="${t.id}" data-combo-id="${comboId}" class="${isSelected ? "selected" : ""}">
+          <td class="drag-handle" title="Drag to reorder">⠿</td>
           <td><input type="checkbox" ${isSelected ? "checked" : ""} data-target-id="${t.id}" data-action="toggleTargetSelection" data-arg1="${t.id}"></td>
           <td>${t.priority_order}</td>
           <td>${providerCell}</td>
@@ -172,6 +174,7 @@ async function renderComboDetail(comboId: number): Promise<void> {
   const el = document.getElementById("main");
   if (el) el.innerHTML = header + body;
   queueMicrotask(() => {
+    initDragAndDrop();
     const master = document.getElementById("target-select-all") as HTMLInputElement | null;
     if (!master) return;
     const visibleIds = targets.map((t) => t.id);

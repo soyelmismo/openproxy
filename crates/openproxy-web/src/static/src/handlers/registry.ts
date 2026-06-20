@@ -28,6 +28,9 @@ import {
   showAddTarget, closeAddTarget, onTargetKindChange, onTargetProviderChange,
   addTarget, deleteTarget, resetCooldown, changePriority,
   toggleTargetSelection, toggleSelectAllTargets, clearTargetSelection, bulkDeleteSelectedTargets,
+  onModelCheckboxChange,
+  selectAllModelsInModal,
+  deselectAllModelsInModal,
 } from "./combo-target-handlers.js";
 import { showCreateKey, showEditKey, closeKeyForm, toggleExpiryAmount, createKey, updateKey, regenerateKey, revokeKey, viewKeyUsage, deleteKey } from "./key-handlers.js";
 import {
@@ -108,6 +111,9 @@ export const HANDLERS: Record<string, ActionHandler> = {
   closeAddTarget,
   onTargetKindChange,
   onTargetProviderChange,
+  onModelCheckboxChange,
+  selectAllModelsInModal,
+  deselectAllModelsInModal,
   addTarget,            // signature: (comboId, e)     — submit handler
   deleteTarget,
   resetCooldown,

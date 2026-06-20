@@ -515,3 +515,101 @@ th.sortable .sort-indicator {
   color: var(--color-primary, inherit);
   min-width: 0.9em;
 }
+
+/* ============================================
+   DRAG & DROP — target row reorder
+   ============================================ */
+
+/* Cursor + visual affordance on the handle */
+.drag-handle {
+  cursor: grab;
+  text-align: center;
+  font-size: 1.1rem;
+  color: var(--color-text-muted);
+  user-select: none;
+  width: 1.8rem;
+}
+.drag-handle:hover {
+  color: var(--color-primary);
+  background: var(--color-primary-soft);
+}
+.drag-handle:active {
+  cursor: grabbing;
+}
+
+/* Row being dragged — faded out in place */
+tr.dnd-dragging {
+  opacity: 0.35;
+  background: var(--color-surface-2);
+}
+
+/* Placeholder row shown at the drop position */
+tr.dnd-placeholder td {
+  height: 3px;
+  padding: 0;
+  background: var(--color-primary);
+  border: none;
+}
+
+/* Drag ghost image override (browser default is opaque) */
+tr.dnd-dragging {
+  transition: none;
+}
+
+/* ============================================
+   MULTI-SELECT MODEL CHECKBOXES (add-target modal)
+   ============================================ */
+
+.model-checkbox-header {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin-bottom: var(--space-2);
+  font-size: var(--fs-sm);
+}
+.model-checkbox-count {
+  margin-left: auto;
+  font-size: var(--fs-xs);
+  color: var(--color-text-muted);
+  font-family: var(--font-mono);
+}
+
+.model-checkbox-list {
+  max-height: 240px;
+  overflow-y: auto;
+  border: var(--border-w) var(--border-style) var(--color-border);
+  background: var(--color-surface);
+}
+.model-checkbox-item {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: 0.35rem var(--space-3);
+  border-bottom: var(--border-w) var(--border-style) var(--color-border-soft);
+  cursor: pointer;
+  font-size: var(--fs-sm);
+}
+.model-checkbox-item:last-child {
+  border-bottom: none;
+}
+.model-checkbox-item:hover {
+  background: var(--color-surface-2);
+}
+.model-checkbox-item input[type="checkbox"] {
+  margin: 0;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+.model-checkbox-id {
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  word-break: break-all;
+}
+
+.model-checkbox-empty {
+  padding: var(--space-3);
+  color: var(--color-text-muted);
+  font-style: italic;
+  font-size: var(--fs-sm);
+  text-align: center;
+}
