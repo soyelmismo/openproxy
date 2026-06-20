@@ -1309,7 +1309,7 @@ impl Pipeline {
             status_code: 0,
             error: None,
             stop_reason: None,
-            timestamp: chrono::Utc::now().format("%Y-%m-%dT%H:%M:%S%.3fZ").to_string(),
+            timestamp: String::new(),
         });
 
         // 0. Check if this provider uses a custom executor.
@@ -1890,7 +1890,7 @@ impl Pipeline {
             status_code: 0,
             error: None,
             stop_reason: None,
-            timestamp: chrono::Utc::now().format("%Y-%m-%dT%H:%M:%S%.3fZ").to_string(),
+            timestamp: String::new(),
         });
 
         let result = self
@@ -2193,7 +2193,7 @@ impl Pipeline {
                 status_code: status,
                 error: err,
                 stop_reason: None,
-                timestamp: chrono::Utc::now().format("%Y-%m-%dT%H:%M:%S%.3fZ").to_string(),
+                timestamp: String::new(),
             });
         };
 
@@ -2389,9 +2389,7 @@ impl Pipeline {
             status_code,
             error: None,
             stop_reason: None,
-            timestamp: chrono::Utc::now()
-                .format("%Y-%m-%dT%H:%M:%S%.3fZ")
-                .to_string(),
+            timestamp: String::new(),
         });
 
         // 2xx: parse into the native wire format, then translate to
@@ -2997,7 +2995,7 @@ impl Pipeline {
                         status_code: 200,
                         error: None,
                         stop_reason: None,
-                        timestamp: chrono::Utc::now().format("%Y-%m-%dT%H:%M:%S%.3fZ").to_string(),
+                        timestamp: String::new(),
                     });
                 }
 
@@ -3786,9 +3784,7 @@ impl Pipeline {
                 status_code,
                 error: error_str,
                 stop_reason: stop_reason.clone(),
-                timestamp: chrono::Utc::now()
-                    .format("%Y-%m-%dT%H:%M:%S%.3fZ")
-                    .to_string(),
+                timestamp: String::new(),
             });
         }
         // H2: write the row. The row is written regardless of

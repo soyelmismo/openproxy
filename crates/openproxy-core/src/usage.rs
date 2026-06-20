@@ -189,8 +189,14 @@ pub fn stage_broadcast() -> broadcast::Sender<StageEvent> {
 
 /// Publish a stage event to all broadcast subscribers. Silently
 /// drops on send errors (no subscribers, lagged slow consumer).
-pub fn publish_stage_event(event: StageEvent) {
+/// Formats the timestamp lazily — only when there are subscribers,
+/// saving the chrono allocation in the common case where the live
+/// dashboard is not connected.
+pub fn publish_stage_event(mut event: StageEvent) {
     if let Some(tx) = STAGE_SENDER.get() {
+        event.timestamp = chrono::Utc::now()
+            .format("%Y-%m-%dT%H:%M:%S%.3fZ")
+            .to_string();
         let _ = tx.send(event);
     }
 }
