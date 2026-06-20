@@ -107,6 +107,9 @@ export interface LogsState {
   reconnectAttempt: number;
   reconnectTimer: ReturnType<typeof setTimeout> | null;
   latencyTickerHandle: ReturnType<typeof setInterval> | null;
+  /** Interval handle for the stale-inflight reaper (cleans up ghost
+   *  placeholders left by lost terminal events / dropped usage rows). */
+  staleReaperHandle: ReturnType<typeof setInterval> | null;
   recording: boolean;
   recordingLoading: boolean;
   /** Set of column keys (matching LOG_COLUMNS[].key) that the user
@@ -235,6 +238,7 @@ export const state: DashboardState = {
     reconnectAttempt: 0,
     reconnectTimer: null,
     latencyTickerHandle: null,
+    staleReaperHandle: null,
     recording: false,
     recordingLoading: false,
     visibleColumns: null,

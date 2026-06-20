@@ -32,7 +32,7 @@ export function renderLogPhaseHtml(
   // non-terminal (a slow consumer / lagged subscriber missed
   // the terminal event). We surface that explicitly so the
   // operator knows the row is not actually live anymore.
-  if (phase === "completed" || phase === "failed") {
+  if (phase === "completed" || phase === "failed" || phase === "cancelled") {
     sublabel = (total_ms != null && total_ms > 0)
       ? `total ${total_ms}ms`
       : `${elapsed}ms`;

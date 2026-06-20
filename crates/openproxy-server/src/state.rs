@@ -276,6 +276,9 @@ impl AppState {
         //     bodies and headers. The metadata rows stay intact for
         //     analytics, but the heavy live-log detail fields are
         //     nullified after the configured TTL.
+        // 6c. Same tick: DELETE entire usage rows older than the TTL
+        //     so the live-logs table does not grow indefinitely. Both
+        //     prunes share the same TTL value and 60s cadence.
         let recording_ttl_secs_cell = Arc::new(RwLock::new(recording_ttl_secs));
         let recording_ttl_pool = db_pool.clone();
         let recording_ttl_cell = Arc::clone(&recording_ttl_secs_cell);

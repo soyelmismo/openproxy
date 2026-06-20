@@ -155,7 +155,8 @@ function attachLogRowHandlers(): void {
       // we have to use bracket access.
       const id = el.dataset["id"] || "";
       const requestId = el.dataset["requestId"] || "";
-      openLogDetail(id, requestId);
+      const traceId = el.dataset["traceId"] || "";
+      openLogDetail(id, requestId, traceId);
     });
   });
 }
@@ -218,7 +219,7 @@ function renderLogsRows(): void {
               trace_id: r.trace_id,
               provider_id: r.provider_id,
               upstream_model_id: r.upstream_model_id,
-              stage: (r.status_code >= 400 || hasError) ? "failed" : "completed",
+              stage: r.race_lost ? "cancelled" : ((r.status_code >= 400 || hasError) ? "failed" : "completed"),
               elapsed_ms: r.total_ms || 0,
               connect_ms: r.connect_ms,
               ttft_ms: r.ttft_ms,
@@ -464,15 +465,16 @@ function handleStageEvent(event: StageEvent): void {
 // to update one of the two.
 function setStage(event: StageEvent, requestId: string): void {
   const traceId = event.trace_id || "";
-  // Terminal events ("completed" / "failed") are sticky — a late
-  // non-terminal event (e.g. a reordered "streaming" broadcast)
-  // must not clobber a terminal that's already in the map.
+  // Terminal events ("completed" / "failed" / "cancelled") are sticky — a late
+  // non-terminal event (e.g. a reordered "streaming" broadcast, or a "connecting"
+  // arriving after a synthesized "cancelled" from the reaper) must not clobber a
+  // terminal that's already in the map.
+  const isTerminal = (s: string): boolean =>
+    s === "completed" || s === "failed" || s === "cancelled";
   const map = traceId ? state.logs.stagesByTraceId : state.logs.stagesByRequestId;
   const key = traceId || requestId;
   const existing = map.get(key);
-  if (existing &&
-      (existing.stage === "completed" || existing.stage === "failed") &&
-      (event.stage !== "completed" && event.stage !== "failed")) {
+  if (existing && isTerminal(existing.stage) && !isTerminal(event.stage)) {
     return;
   }
   map.set(key, event);
@@ -512,6 +514,101 @@ function synthesizeTerminalEvent(row: RecentUsageRow): void {
     stop_reason: row.stop_reason ?? null,
   };
   setStage(synth, row.request_id);
+}
+
+// Race-aware fast reaping. When a race winner's row arrives, any
+// sibling inflight placeholders for the same `request_id` (but a
+// different `trace_id`) that are still in a non-terminal stage are
+// race losers whose terminal "cancelled" event was lost (broadcast
+// lag) or whose task was aborted before recording. Synthesize a
+// terminal "cancelled" so they don't linger as ghosts. Safe: once a
+// winner is found every sibling is a loser; a later real "cancelled"
+// event or `row` just updates / cleans up the placeholder.
+function reapRaceLosers(winnerRow: RecentUsageRow): void {
+  const rid = winnerRow.request_id;
+  if (!rid) return;
+  const isTerminal = (s: string | undefined): boolean =>
+    !!s && (s === "completed" || s === "failed" || s === "cancelled");
+  for (const [tid, placeholder] of state.logs.inflightByTraceId) {
+    if (tid === winnerRow.trace_id) continue;
+    if (placeholder.request_id !== rid) continue;
+    const stage = state.logs.stagesByTraceId.get(tid);
+    if (stage && isTerminal(stage.stage)) continue;
+    const synth: StageEvent = {
+      request_id: rid,
+      trace_id: tid,
+      provider_id: placeholder.provider_id,
+      upstream_model_id: placeholder.upstream_model_id,
+      stage: "cancelled",
+      elapsed_ms: 0,
+      connect_ms: null,
+      ttft_ms: null,
+      status_code: 499,
+      error: "race lost",
+      stop_reason: null,
+      timestamp: new Date().toISOString(),
+    };
+    setStage(synth, rid);
+  }
+}
+
+// Stale inflight reaper (fallback). Scans inflight placeholders whose
+// stage is still non-terminal and whose `created_at` is older than the
+// threshold (well beyond any upstream timeout / watchdog). These are
+// ghosts left by a lost terminal event AND a dropped/missing usage row
+// (e.g. broadcast lag where resync brought no row because the row was
+// never written). Synthesize a terminal "cancelled" so the entry stops
+// ticking and is visually resolved. Conservative threshold to avoid
+// reaping genuinely slow in-flight requests.
+const STALE_INFLIGHT_MS = 120_000;
+function reapStaleInflight(): void {
+  const now = Date.now();
+  const isTerminal = (s: string | undefined): boolean =>
+    !!s && (s === "completed" || s === "failed" || s === "cancelled");
+  let reaped = false;
+  const scan = (map: Map<string, RecentUsageRow>, byTrace: boolean): void => {
+    for (const [key, placeholder] of map) {
+      const stage = byTrace
+        ? state.logs.stagesByTraceId.get(key)
+        : state.logs.stagesByRequestId.get(key);
+      if (stage && isTerminal(stage.stage)) continue;
+      const t = Date.parse(placeholder.created_at || "");
+      if (!isFinite(t) || now - t < STALE_INFLIGHT_MS) continue;
+      const synth: StageEvent = {
+        request_id: placeholder.request_id,
+        trace_id: byTrace ? key : "",
+        provider_id: placeholder.provider_id,
+        upstream_model_id: placeholder.upstream_model_id,
+        stage: "cancelled",
+        elapsed_ms: 0,
+        connect_ms: null,
+        ttft_ms: null,
+        status_code: 499,
+        error: "cancelled (stale)",
+        stop_reason: null,
+        timestamp: new Date().toISOString(),
+      };
+      setStage(synth, placeholder.request_id);
+      reaped = true;
+    }
+  };
+  scan(state.logs.inflightByTraceId, true);
+  scan(state.logs.inflightByRequestId, false);
+  // Only re-render when something actually changed — avoids a full
+  // table re-render every tick while ordinary inflight entries exist.
+  if (reaped) renderLogsRows();
+}
+
+export function startStaleInflightReaper(): void {
+  if (state.logs.staleReaperHandle) return;
+  state.logs.staleReaperHandle = setInterval(reapStaleInflight, 5_000);
+}
+
+export function stopStaleInflightReaper(): void {
+  if (state.logs.staleReaperHandle) {
+    clearInterval(state.logs.staleReaperHandle);
+    state.logs.staleReaperHandle = null;
+  }
 }
 
 // H7 fix: when the server reports it lost us on a
@@ -616,6 +713,15 @@ function handleLogsMessage(raw: MessageEvent): void {
     // terminal event was missed (lagged subscriber, recording=OFF,
     // or streaming without [DONE]).
     synthesizeTerminalEvent(row);
+    // Race-aware fast reaping: when a race winner's row arrives,
+    // any sibling inflight placeholders for the same request_id
+    // (different trace_id) still in a non-terminal stage are race
+    // losers whose terminal "cancelled" event was lost. Synthesize
+    // "cancelled" so they don't linger as ghosts stuck at
+    // "connecting"/"started".
+    if (row.race_total && row.race_total > 1) {
+      reapRaceLosers(row);
+    }
     if (state.logs.followTail) state.logs.page = 1;
     renderLogsRows();
     updateOpenLogDetail(row as unknown as LogDetailLog);
@@ -649,26 +755,64 @@ function handleLogsMessage(raw: MessageEvent): void {
   }
 }
 
-async function openLogDetail(id: string, requestId: string): Promise<void> {
+async function openLogDetail(id: string, requestId: string, traceId?: string): Promise<void> {
   const numericId = Number(id);
+  // Prefer the inflight placeholder (by trace_id) when this is an
+  // in-flight / ghost entry — its real `id` is 0 and there is no DB
+  // row to fetch. Synthetic ids (Number.MAX_SAFE_INTEGER - ts) are
+  // huge; real DB ids are small auto-increments, so a large numericId
+  // also signals an inflight/ghost entry.
+  const inflight: RecentUsageRow | undefined =
+    (traceId ? state.logs.inflightByTraceId.get(traceId) : undefined) ||
+    (requestId ? state.logs.inflightByRequestId.get(requestId) : undefined);
+  const isSyntheticId: boolean =
+    Number.isFinite(numericId) && numericId > 1_000_000_000;
   let row: RecentUsageRow = (Number.isFinite(numericId) ? state.logs.rowById.get(numericId) : undefined)
     || state.logs.rows.find((r) => r.request_id === requestId)
+    || inflight
     || {
       id: numericId || 0, request_id: requestId, provider_id: "", upstream_model_id: "",
       created_at: new Date().toISOString(), status_code: 0, total_ms: 0,
       prompt_tokens: null, completion_tokens: null, cost_usd: 0,
       is_streaming: false, stream_complete: false, race_lost: false,
-      trace_id: "", connect_ms: null, ttft_ms: null,
+      trace_id: traceId || "", connect_ms: null, ttft_ms: null,
       request_body_json: null, response_body_json: null,
       request_headers: null, response_headers: null,
       race_total: null, race_attempts: null,
       error_message: null,
       stop_reason: null,
     };
-  if (!state.logs.rows.find((r) => r.id === row.id)) {
+  // In-flight / ghost entries have no DB row (id === 0 / synthetic id
+  // / status_code === 0). Skip the /usage/detail fetch — it would
+  // 404/500 with "not found in database" — and surface a clear reason
+  // in the modal instead. This covers race-loser ghosts whose terminal
+  // event arrived but whose usage row was dropped (DB lock timeout).
+  const isInflight: boolean = !!inflight || (isSyntheticId && row.status_code === 0);
+  // Do not merge inflight/ghost rows into `state.logs.rows` — they
+  // have id 0 / synthetic ids and would duplicate the inflight
+  // placeholder already rendered from the inflight maps.
+  if (!isInflight && !state.logs.rows.find((r) => r.id === row.id)) {
     state.logs.rows = mergeLogsByDescId(state.logs.rows, [row]);
   }
   state.logs.selectedRow = row;
+
+  if (isInflight) {
+    const stage: StageEvent | undefined =
+      (traceId ? state.logs.stagesByTraceId.get(traceId) : undefined) ||
+      (requestId ? state.logs.stagesByRequestId.get(requestId) : undefined);
+    const terminal: boolean =
+      !!stage &&
+      (stage.stage === "cancelled" || stage.stage === "failed" || stage.stage === "completed");
+    if (!row.error_message) {
+      row.error_message = terminal
+        ? (stage && stage.stage === "cancelled"
+            ? "Cancelled (race loser) — no recorded detail."
+            : "Request ended without a recorded detail row.")
+        : "Request still in progress — no detail available yet.";
+    }
+    showLogDetail(row as unknown as LogDetailLog);
+    return;
+  }
 
   // Fetch detail FIRST if the row is incomplete (broadcast rows have
   // request_body_json / response_body_json redacted). Then render
@@ -707,10 +851,19 @@ export async function mountLogs(): Promise<void> {
   const main = document.getElementById("main");
   const alreadyRendered = main && main.querySelector(".logs-header") && main.querySelector("#logs");
   if (alreadyRendered) {
+    // Clear stale inflight/stage state from previous sessions.
+    state.logs.inflightByTraceId = new Map();
+    state.logs.inflightByRequestId = new Map();
+    state.logs.stagesByTraceId = new Map();
+    state.logs.stagesByRequestId = new Map();
+    state.logs.rows = [];
+    state.logs.rowById = new Map();
+    state.logs.lastSeenId = 0;
     setMessageHandler(handleLogsMessage);
     connectLogsWebSocket();
     fetchRecordingState();
     startLogLatencyTicker();
+    startStaleInflightReaper();
     return;
   }
   // First-mount of this view: restore the user's column-visibility
@@ -727,6 +880,13 @@ export async function mountLogs(): Promise<void> {
   state.logs.reconnectAttempt = 0;
   state.logs.page = 1;
   state.logs.followTail = true;
+  // Clear stale inflight/stage state from previous sessions so
+  // old ghost entries (left by aborted race losers before the
+  // grace-period fix) don't survive across view navigations.
+  state.logs.inflightByTraceId = new Map();
+  state.logs.inflightByRequestId = new Map();
+  state.logs.stagesByTraceId = new Map();
+  state.logs.stagesByRequestId = new Map();
   if (!main) return;
   main.innerHTML = `
     <div class="logs-header">
@@ -775,4 +935,5 @@ export async function mountLogs(): Promise<void> {
   setMessageHandler(handleLogsMessage);
   connectLogsWebSocket();
   startLogLatencyTicker();
+  startStaleInflightReaper();
 }

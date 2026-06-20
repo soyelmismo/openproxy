@@ -668,7 +668,10 @@ impl Pipeline {
             let policy = RetryPolicy::from_config(&self.config.retries);
             let mut target_attempt: u8 = 1;
             let mut result = self
-                .execute_single(&req, &combo, target, target_attempt, race_size as u8)
+                .execute_single(
+                    &req, &combo, target, target_attempt, race_size as u8,
+                    &CancellationToken::new(),
+                )
                 .await;
             // The retry loop body: only enter when the previous
             // attempt errored *retryably* AND we still have
@@ -736,7 +739,10 @@ impl Pipeline {
                 // and turn the loop into an infinite retry.
                 target_attempt = target_attempt.saturating_add(1);
                 result = self
-                    .execute_single(&req, &combo, target, target_attempt, race_size as u8)
+                    .execute_single(
+                        &req, &combo, target, target_attempt, race_size as u8,
+                        &CancellationToken::new(),
+                    )
                     .await;
             }
             // 6a. Update the persistent cooldown registry. A
@@ -1010,7 +1016,7 @@ impl Pipeline {
             status_code: 502,
             error_msg: Some("no_healthy_targets".to_string()),
             race_total: 1,
-            race_lost: req.race_cancelled,
+            race_lost: false,
             api_key_id: req.api_key_id,
             request_body_json: None,
             response_body_json: None,
@@ -1091,8 +1097,7 @@ impl Pipeline {
         let winner: Arc<parking_lot::Mutex<Option<PipelineResult>>> =
             Arc::new(parking_lot::Mutex::new(None));
 
-        let mut handles: Vec<tokio::task::JoinHandle<()>> =
-            Vec::with_capacity(num_workers as usize);
+        let mut set: tokio::task::JoinSet<()> = tokio::task::JoinSet::new();
 
         for _ in 0..num_workers {
             let p = self.clone();
@@ -1105,7 +1110,7 @@ impl Pipeline {
             let all_done = all_done.clone();
             let race_cancel = race_cancel.clone();
 
-            handles.push(tokio::spawn(async move {
+            set.spawn(async move {
                 loop {
                     if race_cancel.is_cancelled() {
                         if running.fetch_sub(1, Ordering::AcqRel) == 1 {
@@ -1148,8 +1153,30 @@ impl Pipeline {
                     // disconnect — so it publishes "cancelled" phase.
                     req.race_cancelled = true;
 
+                    // Synchronous race_cancel check right before
+                    // execute_single, AFTER the combined watch setup.
+                    // This closes the window where another worker won
+                    // while we were setting up the combined watch.
+                    // The atomic load is nanoseconds — no async hop
+                    // needed. Without this check, the combined watch
+                    // mirror task (rc.cancelled → combined_tx.send)
+                    // must be scheduled by the runtime before the
+                    // cancellation signal reaches cancel_wait inside
+                    // call_inner — a multi-hop chain that can fail
+                    // under load and leave "started"/"connecting"
+                    // stage events orphaned (ghost entries).
+                    if race_cancel.is_cancelled() {
+                        if running.fetch_sub(1, Ordering::AcqRel) == 1 {
+                            all_done.notify_one();
+                        }
+                        return;
+                    }
+
                     let result = p
-                        .execute_single(&req, &combo, &target, 1, race_size)
+                        .execute_single(
+                            &req, &combo, &target, 1, race_size,
+                            &race_cancel,
+                        )
                         .await;
 
                     if result.error.is_none() {
@@ -1166,28 +1193,45 @@ impl Pipeline {
                         *last_err.lock() = Some(e.clone_for_result());
                     }
                 }
-            }));
+            });
         }
 
-        // Waiter task.
-        let all_done_clone = all_done.clone();
-        let running_clone = running.clone();
-        tokio::spawn(async move {
-            while running_clone.load(Ordering::Acquire) > 0 {
-                tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-            }
-            all_done_clone.notify_one();
-        });
-
-        // Poll for winner.
+        // Poll for winner. (A separate "waiter task" that notified
+        // `all_done` when `running` hit 0 was removed: nothing awaits
+        // `all_done` here — the loop polls `running` directly every
+        // 10 ms — and a hard-aborted loser never decrements `running`,
+        // which would leave the waiter polling forever. The worker
+        // `notify_one` calls are harmless no-ops on an unlistened
+        // `Notify`.)
         loop {
             {
                 let mut w = winner.lock();
                 if let Some(result) = w.take() {
                     race_cancel.cancel();
-                    for h in &handles {
-                        h.abort();
-                    }
+                    // Give losers a bounded grace window to detect the
+                    // cancellation, return through `dispatch_upstream`
+                    // → `record_and_fail`, publish their terminal
+                    // "cancelled" stage event, and write their usage
+                    // row. The terminal stage event is published
+                    // synchronously (before the DB lock attempt in
+                    // `record_attempt_raw_with_tokens`), so even a
+                    // loser aborted mid-write still reaches the
+                    // dashboard. This runs detached so the client
+                    // gets the winner's response with no added
+                    // latency; the worker tasks' `Arc<Pipeline>`
+                    // clones keep the DB connection alive until
+                    // cleanup finishes. After the grace period, any
+                    // stragglers are hard-aborted.
+                    let grace = std::time::Duration::from_millis(
+                        self.config.racing.abort_grace_ms.max(50),
+                    );
+                    tokio::spawn(async move {
+                        let _ = tokio::time::timeout(grace, async {
+                            while set.join_next().await.is_some() {}
+                        })
+                        .await;
+                        set.abort_all();
+                    });
                     return result;
                 }
             }
@@ -1214,6 +1258,7 @@ impl Pipeline {
         target: &ComboTarget,
         attempt: u8,
         race_size: u8,
+        race_cancel: &CancellationToken,
     ) -> PipelineResult {
         let started = Instant::now();
         // H3 fix: this used to be a fresh `TraceId::new()`,
@@ -1228,6 +1273,24 @@ impl Pipeline {
         // dashboard can correlate multiple rows from the same
         // logical request.
         let trace_id = req.trace_id;
+
+        // Synchronous race_cancel check before publishing any stage
+        // events. The atomic load (SeqCst) is nanoseconds — no
+        // async hop needed. Without this check, the cancellation
+        // signal must propagate through a multi-hop chain
+        // (race_cancel → Mirror → combined watch → from_watch →
+        // cancel_wait) before the worker detects it and publishes
+        // "cancelled". If any hop is delayed, the grace period
+        // expires and the task is aborted, leaving a ghost inflight
+        // entry stuck at "started" or "connecting" forever.
+        if race_cancel.is_cancelled() {
+            return PipelineResult {
+                status_code: 499,
+                error: Some(CoreError::RaceLost),
+                final_response: None,
+                attempts: attempt,
+            };
+        }
 
         // Live-log stage event: request accepted by the pipeline.
         // Stage events are always emitted (not gated on recording)
@@ -1780,6 +1843,34 @@ impl Pipeline {
         // 7. Build the HTTP request and dispatch it.
         let url = adapter.build_chat_url(target_format, &model.model_id);
         let headers = adapter.build_headers(&api_key, target_format, &model.model_id);
+
+        // Synchronous race_cancel check before publishing
+        // "connecting". The race could have been decided while
+        // we were doing model resolution, account lookup, and
+        // adapter setup (the ~500 lines between "started" and
+        // here). Record the race-lost attempt (terminal
+        // "cancelled" stage event + usage row) so the dashboard
+        // placeholder created by the earlier "started" event is
+        // resolved instead of becoming a ghost stuck at
+        // "procesando payload".
+        if race_cancel.is_cancelled() {
+            return self.record_and_fail_with_trace_id(
+                req,
+                combo,
+                target,
+                FailureContext {
+                    attempt,
+                    race_size,
+                    err: &CoreError::RaceLost,
+                    started,
+                    model: Some(&model),
+                    connect_ms: None,
+                    ttft_ms: None,
+                    status_code: CoreError::RaceLost.http_status(),
+                },
+                trace_id,
+            );
+        }
 
         // Live-log stage event: about to open the upstream socket.
         // We treat anything between `started` and the actual byte
@@ -3650,7 +3741,10 @@ impl Pipeline {
             status_code,
             error_msg: err.map(|e| format!("{}", e)),
             race_total: race_size,
-            race_lost: false,
+            // race_lost solo es true cuando el worker perdió el race
+            // (tiene error) Y race_cancelled está activo. El ganador
+            // tiene err.is_none() → race_lost = false.
+            race_lost: err.is_some() && req.race_cancelled,
             api_key_id: req.api_key_id,
             request_body_json: if recording { request_body_json } else { None },
             response_body_json: if recording { response_body_json } else { None },

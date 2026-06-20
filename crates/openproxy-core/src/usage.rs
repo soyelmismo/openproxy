@@ -1302,6 +1302,27 @@ pub fn prune_expired_recording_bodies(conn: &Connection, ttl_secs: i64) -> Resul
     Ok(n)
 }
 
+/// Delete usage rows (live logs) older than the configured TTL. Unlike
+/// `prune_expired_recording_bodies` which only nullifies heavy columns,
+/// this function removes the entire row — metadata and all — so the
+/// live-logs table does not grow indefinitely. Called on a 60s
+/// background loop AND once at startup so a service restart combined
+/// with the configured TTL gives the operator a clean slate.
+pub fn prune_expired_usage_rows(conn: &Connection, ttl_secs: i64) -> Result<usize> {
+    let ttl_secs = ttl_secs.max(0);
+    let n = conn
+        .execute(
+            "DELETE FROM usage \
+             WHERE datetime(created_at) <= datetime(?1, ?2)",
+            params![chrono::Utc::now().to_rfc3339(), format!("-{} seconds", ttl_secs)],
+        )
+        .map_err(|e| CoreError::Database {
+            message: format!("prune_expired_usage_rows: {}", e),
+            source: Some(Box::new(e)),
+        })?;
+    Ok(n)
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------

@@ -53,7 +53,7 @@ function tickLogLatency(): void {
       if (requestId) stage = stagesByRequestId.get(requestId);
     }
     if (!stage) continue;
-    if (stage.stage === "completed" || stage.stage === "failed") continue;
+    if (stage.stage === "completed" || stage.stage === "failed" || stage.stage === "cancelled") continue;
     // Row-finalized freeze (R3 defense-in-depth). If the
     // request is already represented by a finalized row in
     // `state.logs.rows`, the backend has recorded the
@@ -71,14 +71,16 @@ function tickLogLatency(): void {
     else live = stage.elapsed_ms || 0;
     if (finalizedRow && finalizedRow.total_ms > 0) {
       live = finalizedRow.total_ms;
-    } else if (stage.stage === "streaming") {
-      // Stale-`streaming` cap (R3). Once a `streaming` event
-      // is older than 2 s without a follow-up event, freeze
-      // the counter to a stable value (event timestamp + 2 s).
-      // This prevents the wall-clock growth that made the
-      // counter climb indefinitely on stuck requests.
-      if (isFinite(t) && (now - t) > 2_000) {
-        live = 2_000;
+    } else if (isFinite(t)) {
+      // Stale cap for any non-terminal stage. `streaming` caps at
+      // 2 s (a stream that hasn't progressed is stuck); other phases
+      // (started / connecting / waiting_ttft) cap at a generous 60 s
+      // — well beyond upstream timeouts — so a ghost whose terminal
+      // event was lost doesn't climb the counter indefinitely before
+      // the stale-inflight reaper resolves it.
+      const cap = stage.stage === "streaming" ? 2_000 : 60_000;
+      if ((now - t) > cap) {
+        live = cap;
       }
     }
     const sub: Element | null = rowEl.querySelector(".log-phase-sub");
@@ -101,7 +103,9 @@ function tickLogLatency(): void {
         // Don't add the "ticking" class to a row whose stage
         // is frozen. The class is reserved for rows that are
         // actually still climbing.
-        if (!(finalizedRow && finalizedRow.total_ms > 0) && stage.stage === "streaming" && isFinite(t) && (now - t) > 2_000) {
+        const staleCap = stage.stage === "streaming" ? 2_000 : 60_000;
+        const isStale = isFinite(t) && (now - t) > staleCap;
+        if (!(finalizedRow && finalizedRow.total_ms > 0) && isStale) {
           sub.classList.remove("log-phase-sub--ticking");
         } else {
           sub.classList.add("log-phase-sub--ticking");
