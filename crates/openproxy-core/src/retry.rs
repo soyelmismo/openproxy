@@ -42,10 +42,20 @@ impl RetryPolicy {
 
     /// True if the error is retryable per spec §5.4:
     /// 5xx, 429, network/timeout errors. NOT 4xx (except 429).
+    ///
+    /// Mid-stream timeouts (idle_chunk, body, total) are NOT retryable:
+    /// bytes were already sent to the client, so retrying would write
+    /// a second stream on top of the first, corrupting the output.
+    /// Connect/TTFT timeouts happen before any bytes reach the client,
+    /// so they are safe to retry.
     pub fn is_retryable(err: &crate::error::CoreError) -> bool {
         use crate::error::CoreError::*;
         match err {
-            UpstreamTimeout { .. } | UpstreamConnection(_) | RateLimited { .. } => true,
+            UpstreamTimeout { phase, .. } => {
+                !matches!(phase.as_str(), "idle_chunk" | "body" | "total")
+            }
+            UpstreamConnection(_) => true,
+            RateLimited { .. } => true,
             UpstreamError { status, .. } => *status >= 500 || *status == 429,
             _ => false,
         }
@@ -134,5 +144,32 @@ mod tests {
     fn not_retryable_validation() {
         let err = CoreError::Validation("bad input".into());
         assert!(!RetryPolicy::is_retryable(&err));
+    }
+
+    #[test]
+    fn not_retryable_idle_chunk_timeout() {
+        let err = CoreError::UpstreamTimeout {
+            phase: "idle_chunk".into(),
+            ms: 120_000,
+        };
+        assert!(!RetryPolicy::is_retryable(&err));
+    }
+
+    #[test]
+    fn not_retryable_total_timeout() {
+        let err = CoreError::UpstreamTimeout {
+            phase: "total".into(),
+            ms: 300_000,
+        };
+        assert!(!RetryPolicy::is_retryable(&err));
+    }
+
+    #[test]
+    fn retryable_connect_timeout() {
+        let err = CoreError::UpstreamTimeout {
+            phase: "connect".into(),
+            ms: 5000,
+        };
+        assert!(RetryPolicy::is_retryable(&err));
     }
 }
