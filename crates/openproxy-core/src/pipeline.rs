@@ -30,7 +30,6 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Instant;
-use tokio::sync::mpsc;
 use tokio::sync::watch;
 use tracing;
 
@@ -128,11 +127,19 @@ pub struct PipelineRequest {
     /// The channel carries pre-formatted `data: {payload}\n\n` `Bytes`
     /// frames ready for direct socket write, avoiding the per-chunk
     /// `String` allocation and the axum `Event` wrapping overhead.
-    pub stream_sink: Option<mpsc::Sender<bytes::Bytes>>,
+    pub stream_sink: Option<crate::race_sink::StreamSink>,
     /// The authenticated API key, if any. Propagated into the
     /// `usage.api_key_id` column so per-key analytics work
     /// downstream. `None` = anonymous (backward-compatible dev mode).
     pub api_key_id: Option<ApiKeyId>,
+    /// Race cancellation token. When `Some`, the request is part of a
+    /// multi-target race (race_size > 1). The token fires
+    /// (is_cancelled() == true) when another target wins the race.
+    /// Workers MUST check this before every `sink.send()` call — a
+    /// loser that writes to the shared sink after the winner has
+    /// started streaming will interleave its chunks with the winner's,
+    /// causing corrupted output (duplicated/fragmented thinking text).
+    pub race_cancel: Option<crate::upstream::CancellationToken>,
     /// In-memory combo override. When `Some`, the pipeline uses this
     /// combo definition directly instead of loading `combo_id` from
     /// the DB. Used by the routing layer to dispatch a direct-model
@@ -1091,7 +1098,6 @@ impl Pipeline {
             Arc::new(parking_lot::Mutex::new(None));
         let running = Arc::new(AtomicUsize::new(num_workers as usize));
         let all_done = Arc::new(Notify::new());
-        let race_cancel = CancellationToken::new();
 
         // Winner slot.
         let winner: Arc<parking_lot::Mutex<Option<PipelineResult>>> =
@@ -1099,20 +1105,65 @@ impl Pipeline {
 
         let mut set: tokio::task::JoinSet<()> = tokio::task::JoinSet::new();
 
-        for _ in 0..num_workers {
+        // ── RaceSink: first-token-wins arbiter ──────────────────────
+        // Extract the original client-facing mpsc::Sender from the
+        // incoming stream_sink.  In race mode the caller always
+        // passes a `Direct` variant (the chat handler builds it);
+        // `run_race` then creates a `RaceSink` around the raw
+        // sender, gives each worker a `RaceSinkHandle`, and stores
+        // per-worker `CancellationToken`s so that the first token
+        // sent cancels all losers' upstream HTTP requests at the
+        // transport level — no token waste, no chunk interleaving.
+        let original_tx = match req.stream_sink.as_ref() {
+            Some(crate::race_sink::StreamSink::Direct(tx)) => tx.clone(),
+            _ => {
+                // Shouldn't happen: run_race is only called from
+                // pipeline.run which always starts with Direct.
+                tracing::error!("run_race: expected StreamSink::Direct for original sink");
+                return PipelineResult {
+                    status_code: 502,
+                    error: Some(CoreError::Internal(
+                        "run_race: missing direct stream sink".into(),
+                    )),
+                    final_response: None,
+                    attempts: 0,
+                };
+            }
+        };
+
+        let (race_sink, worker_tokens) =
+            crate::race_sink::RaceSink::new(original_tx, num_workers as usize);
+
+        #[allow(clippy::needless_range_loop)]
+        for worker_idx in 0..num_workers as usize {
             let p = self.clone();
             let mut req = req.clone();
+
+            // Give each worker its own RaceSinkHandle and per-worker
+            // CancellationToken.  The handle is used for the shared
+            // first-token-wins arbiter; the token is passed to the
+            // upstream call via `from_watch_and_token` so that losing
+            // the race cancels the HTTP connection immediately.
+            let handle = race_sink.handle(worker_idx);
+            req.stream_sink = Some(crate::race_sink::StreamSink::Race(handle));
+            req.race_cancel = Some(worker_tokens[worker_idx].clone());
+
             let combo = combo.clone();
             let queue = queue.clone();
             let winner = winner.clone();
             let last_err = last_err.clone();
             let running = running.clone();
             let all_done = all_done.clone();
-            let race_cancel = race_cancel.clone();
 
             set.spawn(async move {
                 loop {
-                    if race_cancel.is_cancelled() {
+                    // Per-worker token check: the RaceSink cancels
+                    // this token the instant another worker sends the
+                    // first chunk.  The atomic load is nanoseconds —
+                    // no async hop needed.
+                    let worker_token = req.race_cancel.as_ref()
+                        .expect("run_race: worker must have race_cancel");
+                    if worker_token.is_cancelled() {
                         if running.fetch_sub(1, Ordering::AcqRel) == 1 {
                             all_done.notify_one();
                         }
@@ -1129,43 +1180,18 @@ impl Pipeline {
 
                     req.trace_id = TraceId::new();
 
-                    // Build a combined cancellation watch.
-                    let (combined_tx, combined_rx) = watch::channel(false);
-                    let mut cd = req.client_disconnected.clone();
-                    let tx_cd = combined_tx.clone();
-                    tokio::spawn(async move {
-                        while cd.changed().await.is_ok() {
-                            if *cd.borrow() {
-                                let _ = tx_cd.send(true);
-                                return;
-                            }
-                        }
-                    });
-                    let rc = race_cancel.clone();
-                    tokio::spawn(async move {
-                        rc.cancelled().await;
-                        let _ = combined_tx.send(true);
-                    });
-                    req.client_disconnected = combined_rx;
-
                     // Signal to record_attempt_raw_with_tokens that a
                     // "cancelled" error means race loss, not client
                     // disconnect — so it publishes "cancelled" phase.
                     req.race_cancelled = true;
 
-                    // Synchronous race_cancel check right before
-                    // execute_single, AFTER the combined watch setup.
-                    // This closes the window where another worker won
-                    // while we were setting up the combined watch.
-                    // The atomic load is nanoseconds — no async hop
-                    // needed. Without this check, the combined watch
-                    // mirror task (rc.cancelled → combined_tx.send)
-                    // must be scheduled by the runtime before the
-                    // cancellation signal reaches cancel_wait inside
-                    // call_inner — a multi-hop chain that can fail
-                    // under load and leave "started"/"connecting"
-                    // stage events orphaned (ghost entries).
-                    if race_cancel.is_cancelled() {
+                    // Synchronous per-worker token check AFTER the
+                    // combined watch setup (there's no combined watch
+                    // anymore — `from_watch_and_token` in
+                    // dispatch_upstream_streaming handles it — but
+                    // we still want to close the window where another
+                    // worker won while we were doing setup).
+                    if worker_token.is_cancelled() {
                         if running.fetch_sub(1, Ordering::AcqRel) == 1 {
                             all_done.notify_one();
                         }
@@ -1175,7 +1201,7 @@ impl Pipeline {
                     let result = p
                         .execute_single(
                             &req, &combo, &target, 1, race_size,
-                            &race_cancel,
+                            worker_token,
                         )
                         .await;
 
@@ -1196,32 +1222,32 @@ impl Pipeline {
             });
         }
 
-        // Poll for winner. (A separate "waiter task" that notified
-        // `all_done` when `running` hit 0 was removed: nothing awaits
-        // `all_done` here — the loop polls `running` directly every
-        // 10 ms — and a hard-aborted loser never decrements `running`,
-        // which would leave the waiter polling forever. The worker
-        // `notify_one` calls are harmless no-ops on an unlistened
-        // `Notify`.)
+        // Poll for winner.
+        //
+        // The RaceSink already cancelled all losers' per-worker tokens
+        // the instant the winner sent its first chunk.  We still poll
+        // `winner` here because the winner's execute_single must
+        // complete before we can return the PipelineResult.  The
+        // winner slot is set by the worker task that finishes with
+        // `error: None`.
         loop {
             {
                 let mut w = winner.lock();
                 if let Some(result) = w.take() {
-                    race_cancel.cancel();
+                    // Cancel any remaining worker tokens that the
+                    // RaceSink might not have cancelled (e.g. a
+                    // worker that exited on empty queue before
+                    // sending a chunk).  Harmless if already
+                    // cancelled.
+                    for token in &worker_tokens {
+                        token.cancel();
+                    }
                     // Give losers a bounded grace window to detect the
                     // cancellation, return through `dispatch_upstream`
                     // → `record_and_fail`, publish their terminal
                     // "cancelled" stage event, and write their usage
-                    // row. The terminal stage event is published
-                    // synchronously (before the DB lock attempt in
-                    // `record_attempt_raw_with_tokens`), so even a
-                    // loser aborted mid-write still reaches the
-                    // dashboard. This runs detached so the client
-                    // gets the winner's response with no added
-                    // latency; the worker tasks' `Arc<Pipeline>`
-                    // clones keep the DB connection alive until
-                    // cleanup finishes. After the grace period, any
-                    // stragglers are hard-aborted.
+                    // row. This runs detached so the client gets the
+                    // winner's response with no added latency.
                     let grace = std::time::Duration::from_millis(
                         self.config.racing.abort_grace_ms.max(50),
                     );
@@ -1236,6 +1262,11 @@ impl Pipeline {
                 }
             }
             if running.load(Ordering::Acquire) == 0 {
+                // All workers exited without a winner.  Cancel
+                // remaining tokens for hygiene.
+                for token in &worker_tokens {
+                    token.cancel();
+                }
                 let err = last_err.lock().take()
                     .unwrap_or(CoreError::NoHealthyTargets(combo.id.0));
                 return PipelineResult {
@@ -1245,7 +1276,9 @@ impl Pipeline {
                     attempts: race_size,
                 };
             }
-            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            // Wait for a worker to signal progress instead of
+            // polling with a fixed sleep interval.
+            all_done.notified().await;
         }
     }
 
@@ -2550,7 +2583,7 @@ impl Pipeline {
         req: &PipelineRequest,
         model: &Model,
         target_format: crate::models::TargetFormat,
-        sink: &mpsc::Sender<bytes::Bytes>,
+        sink: &crate::race_sink::StreamSink,
         resolved_timeouts: &Timeouts,
         started: Instant,
         attempt: u8,
@@ -2603,7 +2636,14 @@ impl Pipeline {
 },
 );
         }
-        let cancel_token = CancellationToken::from_watch(req.client_disconnected.clone());
+        let cancel_token = if let Some(rc) = req.race_cancel.as_ref() {
+            CancellationToken::from_watch_and_token(
+                req.client_disconnected.clone(),
+                rc.clone(),
+            )
+        } else {
+            CancellationToken::from_watch(req.client_disconnected.clone())
+        };
         let result = self
             .config
             .upstream_client
@@ -2833,7 +2873,34 @@ impl Pipeline {
             None
         };
 
-        loop {
+        'stream_loop: loop {
+            // Fast race-cancellation gate: check the atomic
+            // CancellationToken directly BEFORE reading the next
+            // upstream chunk. This is an instant atomic load
+            // (SeqCst) — zero task-scheduling delay. When another
+            // target won the race, we drop the stream immediately
+            // to close the HTTP connection and stop token
+            // generation at the upstream (avoiding token waste).
+            // The `from_watch`-based token inside `next_chunk()`
+            // is too slow: it requires 3 hops (race_cancel →
+            // mirror task → combined watch → from_watch task)
+            // before the SSE loop detects cancellation.
+            if req.race_cancel.as_ref().is_some_and(|rc| rc.is_cancelled()) {
+                // Drop the upstream response body — closes the TCP
+                // connection / sends RST_STREAM to stop token billing.
+                drop(stream);
+                return self.record_and_fail_with_trace_id(
+                    req, combo, target,
+                    FailureContext {
+                        attempt, race_size,
+                        err: &CoreError::ClientDisconnected,
+                        started, model: Some(model),
+                        connect_ms: Some(connect_and_send_ms),
+                        ttft_ms, status_code: 499,
+                    }, trace_id,
+                );
+            }
+
             // The cancel token is derived from `client_disconnected`
             // via `from_watch`, so `next_chunk()` already returns
             // `Err(Cancel)` when the client disconnects — no need
@@ -2999,6 +3066,25 @@ impl Pipeline {
                     });
                 }
 
+                // Race cancellation guard: if another target already
+                // won the race, discard this chunk and exit instantly.
+                // Checking here (once per line) covers all the
+                // `sink.send()` calls in the OpenAI, Gemini, and
+                // Anthropic branches below — a single atomic load
+                // vs. repeating the same check at every send site.
+                if req.race_cancel.as_ref().is_some_and(|rc| rc.is_cancelled()) {
+                    return self.record_and_fail_with_trace_id(
+                        req, combo, target,
+                        FailureContext {
+                            attempt, race_size,
+                            err: &CoreError::ClientDisconnected,
+                            started, model: Some(model),
+                            connect_ms: Some(connect_and_send_ms),
+                            ttft_ms, status_code: 499,
+                        }, trace_id,
+                    );
+                }
+
                 // Parse based on upstream format.
                 // OpenAI fast path: skip JSON parsing for chunks that
                 // don't carry metadata (usage / non-null finish_reason).
@@ -3011,7 +3097,32 @@ impl Pipeline {
                         None => continue,
                     };
                     if json_payload == "[DONE]" {
-                        let _ = sink.send(SSE_DONE_BYTES.clone()).await;
+                        // Race cancellation guard: if another target
+                        // already won, discard this chunk instantly.
+                        if req.race_cancel.as_ref().is_some_and(|rc| rc.is_cancelled()) {
+                            return self.record_and_fail_with_trace_id(
+                                req, combo, target,
+                                FailureContext {
+                                    attempt, race_size,
+                                    err: &CoreError::ClientDisconnected,
+                                    started, model: Some(model),
+                                    connect_ms: Some(connect_and_send_ms),
+                                    ttft_ms, status_code: 499,
+                                }, trace_id,
+                            );
+                        }
+                        if let Err(crate::race_sink::StreamSinkError::Lost) = sink.send(SSE_DONE_BYTES.clone()).await {
+                            return self.record_and_fail_with_trace_id(
+                                req, combo, target,
+                                FailureContext {
+                                    attempt, race_size,
+                                    err: &CoreError::RaceLost,
+                                    started, model: Some(model),
+                                    connect_ms: Some(connect_and_send_ms),
+                                    ttft_ms, status_code: 499,
+                                }, trace_id,
+                            );
+                        }
                         done_sent = true;
                         break;
                     }
@@ -3068,7 +3179,10 @@ impl Pipeline {
                                     }
                                 }
                                 let sse_bytes = chunk.into_sse_bytes();
-                                if sink.send(sse_bytes).await.is_err() {
+                                // Race cancellation guard: if another
+                                // target won the race, discard this
+                                // chunk to prevent interleaving.
+                                if req.race_cancel.as_ref().is_some_and(|rc| rc.is_cancelled()) {
                                     return self.record_and_fail_with_trace_id(
                                         req, combo, target,
                                         FailureContext {
@@ -3080,6 +3194,22 @@ impl Pipeline {
                                         }, trace_id,
                                     );
                                 }
+                                if let Err(e) = sink.send(sse_bytes).await {
+                                    let err = match e {
+                                        crate::race_sink::StreamSinkError::Lost => CoreError::RaceLost,
+                                        crate::race_sink::StreamSinkError::Closed => CoreError::ClientDisconnected,
+                                    };
+                                    return self.record_and_fail_with_trace_id(
+                                        req, combo, target,
+                                        FailureContext {
+                                            attempt, race_size,
+                                            err: &err,
+                                            started, model: Some(model),
+                                            connect_ms: Some(connect_and_send_ms),
+                                            ttft_ms, status_code: err.http_status(),
+                                        }, trace_id,
+                                    );
+                                }
                             }
                             Ok(None) => {}
                             Err(e) => {
@@ -3088,21 +3218,33 @@ impl Pipeline {
                             }
                         }
                     } else {
-                        // G1 fix: feed the accumulator on the fast path too
-                        // (no parse happened — we just have the raw
-                        // payload). `finish()` parses each stored payload
-                        // to extract `delta.content`, so the H6 fast path
-                        // CPU win is preserved.
+                        // G1 fix: feed the accumulator on the fast path too.
+                        // Normalize non-standard reasoning fields so clients
+                        // (OpenCode, continue.dev, etc.) receive the standard
+                        // `reasoning_content` format instead of the provider's
+                        // ad-hoc `reasoning` / `reasoning_details`.
+                        let normalized = crate::sse_accumulator::normalize_nonstandard_reasoning_fields(json_payload);
+                        let payload = normalized.as_deref().unwrap_or(json_payload);
                         if let Some(a) = acc.as_mut() {
-                            a.append_openai_raw(json_payload);
+                            a.append_openai_raw(payload);
+                            // Also capture reasoning_content on the fast path
+                            // (the slow path above does this via
+                            // `parse_openai_sse_line` + `a.append_reasoning`).
+                            if let Some(rc) = crate::sse_accumulator::extract_reasoning_content(payload) {
+                                if !rc.is_empty() {
+                                    a.append_reasoning(rc);
+                                }
+                            }
                         }
-                        // No metadata — forward raw JSON directly.
+                        // No metadata — forward (possibly normalized) JSON directly.
                         // Pre-format as SSE frame to avoid per-chunk String alloc.
-                        let mut sse_frame = bytes::BytesMut::with_capacity(json_payload.len() + 16);
+                        let mut sse_frame = bytes::BytesMut::with_capacity(payload.len() + 16);
                         sse_frame.extend_from_slice(b"data: ");
-                        sse_frame.extend_from_slice(json_payload.as_bytes());
+                        sse_frame.extend_from_slice(payload.as_bytes());
                         sse_frame.extend_from_slice(b"\n\n");
-                        if sink.send(sse_frame.freeze()).await.is_err() {
+                        // Race cancellation guard: check before
+                        // writing to the shared sink.
+                        if req.race_cancel.as_ref().is_some_and(|rc| rc.is_cancelled()) {
                             return self.record_and_fail_with_trace_id(
                                 req, combo, target,
                                 FailureContext {
@@ -3111,6 +3253,22 @@ impl Pipeline {
                                     started, model: Some(model),
                                     connect_ms: Some(connect_and_send_ms),
                                     ttft_ms, status_code: 499,
+                                }, trace_id,
+                            );
+                        }
+                        if let Err(e) = sink.send(sse_frame.freeze()).await {
+                            let err = match e {
+                                crate::race_sink::StreamSinkError::Lost => CoreError::RaceLost,
+                                crate::race_sink::StreamSinkError::Closed => CoreError::ClientDisconnected,
+                            };
+                            return self.record_and_fail_with_trace_id(
+                                req, combo, target,
+                                FailureContext {
+                                    attempt, race_size,
+                                    err: &err,
+                                    started, model: Some(model),
+                                    connect_ms: Some(connect_and_send_ms),
+                                    ttft_ms, status_code: err.http_status(),
                                 }, trace_id,
                             );
                         }
@@ -3171,8 +3329,39 @@ impl Pipeline {
                             // H4 fix: record the fact that we sent
                             // the upstream's [DONE] so the post-loop
                             // sentinel below does not double-emit.
-                            let _ = sink.send(SSE_DONE_BYTES.clone()).await;
+                            if req.race_cancel.as_ref().is_some_and(|rc| rc.is_cancelled()) {
+                                return self.record_and_fail_with_trace_id(
+                                    req, combo, target,
+                                    FailureContext {
+                                        attempt, race_size,
+                                        err: &CoreError::ClientDisconnected,
+                                        started, model: Some(model),
+                                        connect_ms: Some(connect_and_send_ms),
+                                        ttft_ms, status_code: 499,
+                                    }, trace_id,
+                                );
+                            }
+                            if let Err(crate::race_sink::StreamSinkError::Lost) = sink.send(SSE_DONE_BYTES.clone()).await {
+                                return self.record_and_fail_with_trace_id(
+                                    req, combo, target,
+                                    FailureContext {
+                                        attempt, race_size,
+                                        err: &CoreError::RaceLost,
+                                        started, model: Some(model),
+                                        connect_ms: Some(connect_and_send_ms),
+                                        ttft_ms, status_code: 499,
+                                    }, trace_id,
+                                );
+                            }
                             done_sent = true;
+                            // CRITICAL FIX: break from the outer
+                            // loop after sending [DONE], matching
+                            // the OpenAI path above. Without this
+                            // break the loop continues processing
+                            // the buffer and can forward data
+                            // after [DONE] to the client, causing
+                            // chunk overlapping and output corruption.
+                            break 'stream_loop;
                         } else {
                             // Extract metadata before consuming chunk.
                             if chunk.usage.is_some() {
@@ -3264,7 +3453,11 @@ impl Pipeline {
                             sse_frame.extend_from_slice(b"data: ");
                             sse_frame.extend_from_slice(json_str.as_bytes());
                             sse_frame.extend_from_slice(b"\n\n");
-                            if sink.send(sse_frame.freeze()).await.is_err() {
+                            if let Err(e) = sink.send(sse_frame.freeze()).await {
+                                let err = match e {
+                                    crate::race_sink::StreamSinkError::Lost => CoreError::RaceLost,
+                                    crate::race_sink::StreamSinkError::Closed => CoreError::ClientDisconnected,
+                                };
                                 // C4 fix: a real client disconnect
                                 // mid-stream previously returned
                                 // `PipelineResult { error: None }`
@@ -3289,12 +3482,12 @@ impl Pipeline {
                                     FailureContext {
                                     attempt,
                                     race_size,
-                                    err: &CoreError::ClientDisconnected,
+                                    err: &err,
                                     started,
                                     model: Some(model),
                                     connect_ms: Some(connect_and_send_ms),
                                     ttft_ms,
-                                    status_code: 499,
+                                    status_code: err.http_status(),
 },
                                     // client closed request
                                     trace_id,
@@ -3316,7 +3509,26 @@ impl Pipeline {
         } // end of SSE chunk loop
 
         // Process any remaining data in the buffer.
-        if !buffer.is_empty() {
+        // GUARD: skip when `[DONE]` was already sent — any data
+        // that arrived after the end-of-stream marker is either
+        // the trailing `\n` from `\n\n` or stray upstream data
+        // that would corrupt the client's view if forwarded.
+        if !done_sent && !buffer.is_empty() {
+            // Also guard against race cancellation — if another
+            // target already won, discard residual buffer data
+            // to prevent chunk interleaving.
+            if req.race_cancel.as_ref().is_some_and(|rc| rc.is_cancelled()) {
+                return self.record_and_fail_with_trace_id(
+                    req, combo, target,
+                    FailureContext {
+                        attempt, race_size,
+                        err: &CoreError::ClientDisconnected,
+                        started, model: Some(model),
+                        connect_ms: Some(connect_and_send_ms),
+                        ttft_ms, status_code: 499,
+                    }, trace_id,
+                );
+            }
             if let Ok(line) = std::str::from_utf8(&buffer) {
                 let line = line.trim();
                 if !line.is_empty() && !line.starts_with(':') {
@@ -3349,7 +3561,18 @@ impl Pipeline {
                         }
                         if !chunk.done {
                             let sse_bytes = chunk.into_sse_bytes();
-                            let _ = sink.send(sse_bytes).await;
+                            if let Err(crate::race_sink::StreamSinkError::Lost) = sink.send(sse_bytes).await {
+                                return self.record_and_fail_with_trace_id(
+                                    req, combo, target,
+                                    FailureContext {
+                                        attempt, race_size,
+                                        err: &CoreError::RaceLost,
+                                        started, model: Some(model),
+                                        connect_ms: Some(connect_and_send_ms),
+                                        ttft_ms, status_code: 499,
+                                    }, trace_id,
+                                );
+                            }
                         }
                     }
                 }
@@ -3404,7 +3627,32 @@ impl Pipeline {
         // see three, since both `message_delta` AND `message_stop`
         // emit `done: true`; see sse.rs:309 / sse.rs:316).
         if !done_sent {
-            let _ = sink.send(SSE_DONE_BYTES.clone()).await;
+            // Guard against race cancellation — a loser should not
+            // send [DONE] to the shared sink.
+            if req.race_cancel.as_ref().is_some_and(|rc| rc.is_cancelled()) {
+                return self.record_and_fail_with_trace_id(
+                    req, combo, target,
+                    FailureContext {
+                        attempt, race_size,
+                        err: &CoreError::ClientDisconnected,
+                        started, model: Some(model),
+                        connect_ms: Some(connect_and_send_ms),
+                        ttft_ms, status_code: 499,
+                    }, trace_id,
+                );
+            }
+            if let Err(crate::race_sink::StreamSinkError::Lost) = sink.send(SSE_DONE_BYTES.clone()).await {
+                return self.record_and_fail_with_trace_id(
+                    req, combo, target,
+                    FailureContext {
+                        attempt, race_size,
+                        err: &CoreError::RaceLost,
+                        started, model: Some(model),
+                        connect_ms: Some(connect_and_send_ms),
+                        ttft_ms, status_code: 499,
+                    }, trace_id,
+                );
+            }
         }
 
         let total_ms = started.elapsed().as_millis() as u64;
@@ -4132,12 +4380,13 @@ mod tests {
                 extra: serde_json::Map::new(),
             },
             client_disconnected: dis_rx,
-            stream_sink: Some(_sink_tx),
+            stream_sink: Some(crate::race_sink::StreamSink::Direct(_sink_tx)),
             api_key_id: None,
             combo_override: None,
             targets_override: None,
             request_headers: std::collections::BTreeMap::new(),
             race_cancelled: false,
+            race_cancel: None,
         };
         (req, _dis_tx)
     }
@@ -7598,7 +7847,7 @@ mod tests {
         let (mut req, _cancel_tx) = make_request(combo_id);
         req.openai_request.stream = true;
         let (sink_tx, mut sink_rx) = mpsc::channel::<bytes::Bytes>(32);
-        req.stream_sink = Some(sink_tx);
+        req.stream_sink = Some(crate::race_sink::StreamSink::Direct(sink_tx));
 
         // ----- 5. Run the pipeline. We capture the result so we
         //         can report it in the panic message; the
@@ -8400,7 +8649,7 @@ mod tests {
         let mut sink_rx_for_streaming = None;
         if streaming {
             let (sink_tx, sink_rx) = mpsc::channel::<bytes::Bytes>(32);
-            req.stream_sink = Some(sink_tx);
+            req.stream_sink = Some(crate::race_sink::StreamSink::Direct(sink_tx));
             sink_rx_for_streaming = Some(sink_rx);
         }
         let request_id = req.request_id;
@@ -8986,7 +9235,7 @@ data: [DONE]\n\n";
         let (mut req, _cancel_tx) = make_request(combo_id);
         req.openai_request.stream = true;
         let (sink_tx, mut sink_rx) = mpsc::channel::<bytes::Bytes>(32);
-        req.stream_sink = Some(sink_tx);
+        req.stream_sink = Some(crate::race_sink::StreamSink::Direct(sink_tx));
 
         let result = tokio::time::timeout(Duration::from_secs(15), p.run(req))
             .await

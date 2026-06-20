@@ -28,6 +28,11 @@ use std::sync::Arc;
 const MODELS_DEV_URL: &str = "https://models.dev/api.json";
 
 /// Provider mapping: models.dev provider id → our internal IDs.
+///
+/// When a model's own provider is not listed here (e.g. `nous-research`,
+/// `ollama-cloud`, `kilocode`, `antigravity`), the cross-provider fallback
+/// in `enrich_models_from_sync()` and `pricing::lookup_with_db()` will
+/// still find pricing/context by matching on model_id alone.
 const PROVIDER_MAP: &[(&str, &[&str])] = &[
     ("openai", &["openrouter"]),
     ("anthropic", &["openrouter"]),
@@ -42,6 +47,12 @@ const PROVIDER_MAP: &[(&str, &[&str])] = &[
     ("cohere", &["openrouter"]),
     ("opencode", &["opencode-zen"]),
     ("opencode-go", &["opencode-zen"]),
+    ("perplexity", &["openrouter"]),
+    ("groq", &["openrouter"]),
+    ("together", &["openrouter"]),
+    ("fireworks", &["openrouter"]),
+    ("deepinfra", &["openrouter"]),
+    ("xai", &["openrouter"]),
 ];
 
 // ── API Response shapes ─────────────────────────────────────────────
@@ -221,10 +232,16 @@ async fn fetch_models_dev(upstream: &Arc<UpstreamClient>) -> Result<bytes::Bytes
 /// After a sync, update `models.context_length` from the capabilities
 /// table for rows where `context_length IS NULL`. Also update
 /// `capabilities_json` with synced capabilities.
+///
+/// Matching is done in two passes:
+/// 1. Exact `(provider_id, model_id)` match.
+/// 2. Cross-provider model_id match (stripping any `provider/` prefix)
+///    for models whose own provider API doesn't return these values.
+///
 /// Returns the number of `models` rows updated.
 pub fn enrich_models_from_sync(conn: &Connection) -> Result<usize> {
-    // Update context_length where NULL.
-    let ctx_updated = conn.execute(
+    // ── Pass 1: exact (provider_id, model_id) match ─────────────────
+    let ctx_exact = conn.execute(
         "UPDATE models SET context_length = (
             SELECT context_length FROM model_capabilities_sync s
             WHERE s.provider_id = models.provider_id
@@ -243,8 +260,7 @@ pub fn enrich_models_from_sync(conn: &Connection) -> Result<usize> {
         source: Some(Box::new(e)),
     })?;
 
-    // Update max_output_tokens where NULL.
-    let tok_updated = conn.execute(
+    let tok_exact = conn.execute(
         "UPDATE models SET max_output_tokens = (
             SELECT max_output_tokens FROM model_capabilities_sync s
             WHERE s.provider_id = models.provider_id
@@ -263,9 +279,155 @@ pub fn enrich_models_from_sync(conn: &Connection) -> Result<usize> {
         source: Some(Box::new(e)),
     })?;
 
-    // Update capabilities_json with synced data (merge).
-    // Uses JSON object with only the booleans we have.
-    let cap_updated = conn.execute(
+    // ── Pass 2: cross-provider model_id match (provider prefix stripped) ──
+    //
+    // For models whose model_id looks like "provider/name", strip the
+    // prefix and match on the base name. Also try matching the raw
+    // model_id directly (handles models without a provider prefix).
+    //
+    // This catches models from providers that aren't in PROVIDER_MAP
+    // or whose model IDs don't match exactly (e.g. OpenRouter returns
+    // "openai/gpt-4o" but models.dev stores "gpt-4o").
+    let ctx_fallback = conn.execute(
+        "UPDATE models SET context_length = (
+            SELECT s.context_length FROM model_capabilities_sync s
+            WHERE s.model_id = (
+                CASE WHEN instr(models.model_id, '/') > 0
+                     THEN substr(models.model_id, instr(models.model_id, '/') + 1)
+                     ELSE models.model_id
+                END
+            )
+              AND s.context_length IS NOT NULL
+            LIMIT 1
+        ) WHERE context_length IS NULL
+          AND EXISTS (
+            SELECT 1 FROM model_capabilities_sync s
+            WHERE s.model_id = (
+                CASE WHEN instr(models.model_id, '/') > 0
+                     THEN substr(models.model_id, instr(models.model_id, '/') + 1)
+                     ELSE models.model_id
+                END
+            )
+              AND s.context_length IS NOT NULL
+        )",
+        [],
+    ).map_err(|e| CoreError::Database {
+        message: format!("enrich context_length (cross-provider): {e}"),
+        source: Some(Box::new(e)),
+    })?;
+
+    let tok_fallback = conn.execute(
+        "UPDATE models SET max_output_tokens = (
+            SELECT s.max_output_tokens FROM model_capabilities_sync s
+            WHERE s.model_id = (
+                CASE WHEN instr(models.model_id, '/') > 0
+                     THEN substr(models.model_id, instr(models.model_id, '/') + 1)
+                     ELSE models.model_id
+                END
+            )
+              AND s.max_output_tokens IS NOT NULL
+            LIMIT 1
+        ) WHERE max_output_tokens IS NULL
+          AND EXISTS (
+            SELECT 1 FROM model_capabilities_sync s
+            WHERE s.model_id = (
+                CASE WHEN instr(models.model_id, '/') > 0
+                     THEN substr(models.model_id, instr(models.model_id, '/') + 1)
+                     ELSE models.model_id
+                END
+            )
+              AND s.max_output_tokens IS NOT NULL
+        )",
+        [],
+    ).map_err(|e| CoreError::Database {
+        message: format!("enrich max_output_tokens (cross-provider): {e}"),
+        source: Some(Box::new(e)),
+    })?;
+
+    // ── Pass 3: cross-provider, prefix stripped + free suffix stripped ──
+    //
+    // Many models have "-free", ":free", or "-free-trial" suffixes
+    // (e.g. "openai/gpt-4o:free"). After Pass 2 strips the provider
+    // prefix we get "gpt-4o:free" which still won't match the sync
+    // table's "gpt-4o".  This pass strips those suffixes too.
+    //
+    // Uses SQLite replace() which is safe here because ":free" is
+    // distinctive, "-free-trial" is specific, and "-free" in practice
+    // only appears as a suffix on model IDs.
+
+    /// Normalize a model_id by stripping provider prefix and free suffixes.
+    /// Shared by the three Pass 3 queries below.
+    macro_rules! normalized_id {
+        () => {
+            "replace(replace(replace( \
+                CASE WHEN instr(models.model_id, '/') > 0 \
+                     THEN substr(models.model_id, instr(models.model_id, '/') + 1) \
+                     ELSE models.model_id \
+                END, \
+            ':free', ''), '-free-trial', ''), '-free', '')"
+        };
+    }
+
+    let ctx_free = conn.execute(
+        &format!(
+            "UPDATE models SET context_length = (
+                SELECT s.context_length FROM model_capabilities_sync s
+                WHERE s.model_id = {}
+                  AND s.context_length IS NOT NULL
+                LIMIT 1
+            ) WHERE context_length IS NULL
+              AND {} != (
+                CASE WHEN instr(models.model_id, '/') > 0
+                     THEN substr(models.model_id, instr(models.model_id, '/') + 1)
+                     ELSE models.model_id
+                END
+              )
+              AND EXISTS (
+                SELECT 1 FROM model_capabilities_sync s
+                WHERE s.model_id = {}
+                  AND s.context_length IS NOT NULL
+            )",
+            normalized_id!(),
+            normalized_id!(),
+            normalized_id!(),
+        ),
+        [],
+    ).map_err(|e| CoreError::Database {
+        message: format!("enrich context_length (free-suffix): {e}"),
+        source: Some(Box::new(e)),
+    })?;
+
+    let tok_free = conn.execute(
+        &format!(
+            "UPDATE models SET max_output_tokens = (
+                SELECT s.max_output_tokens FROM model_capabilities_sync s
+                WHERE s.model_id = {}
+                  AND s.max_output_tokens IS NOT NULL
+                LIMIT 1
+            ) WHERE max_output_tokens IS NULL
+              AND {} != (
+                CASE WHEN instr(models.model_id, '/') > 0
+                     THEN substr(models.model_id, instr(models.model_id, '/') + 1)
+                     ELSE models.model_id
+                END
+              )
+              AND EXISTS (
+                SELECT 1 FROM model_capabilities_sync s
+                WHERE s.model_id = {}
+                  AND s.max_output_tokens IS NOT NULL
+            )",
+            normalized_id!(),
+            normalized_id!(),
+            normalized_id!(),
+        ),
+        [],
+    ).map_err(|e| CoreError::Database {
+        message: format!("enrich max_output_tokens (free-suffix): {e}"),
+        source: Some(Box::new(e)),
+    })?;
+
+    // ── Capabilities: exact match, then cross-provider, then free-suffix ──
+    let cap_exact = conn.execute(
         "UPDATE models SET capabilities_json = (
             SELECT json_patch(
                 coalesce(models.capabilities_json, '{}'),
@@ -294,7 +456,98 @@ pub fn enrich_models_from_sync(conn: &Connection) -> Result<usize> {
         source: Some(Box::new(e)),
     })?;
 
-    Ok(ctx_updated + tok_updated + cap_updated)
+    // Capabilities: cross-provider fallback (prefix stripped).
+    let cap_fallback = conn.execute(
+        "UPDATE models SET capabilities_json = (
+            SELECT json_patch(
+                coalesce(models.capabilities_json, '{}'),
+                json_object(
+                    'vision',              s.vision,
+                    'tool_calling',        s.tool_call,
+                    'reasoning',           s.reasoning,
+                    'structured_output',   s.structured_output
+                )
+            )
+            FROM model_capabilities_sync s
+            WHERE s.model_id = (
+                CASE WHEN instr(models.model_id, '/') > 0
+                     THEN substr(models.model_id, instr(models.model_id, '/') + 1)
+                     ELSE models.model_id
+                END
+            )
+              AND (s.vision IS NOT NULL OR s.tool_call IS NOT NULL
+                   OR s.reasoning IS NOT NULL OR s.structured_output IS NOT NULL)
+            LIMIT 1
+        ) WHERE NOT EXISTS (
+            SELECT 1 FROM model_capabilities_sync s
+            WHERE s.provider_id = models.provider_id
+              AND s.model_id   = models.model_id
+        )
+          AND EXISTS (
+            SELECT 1 FROM model_capabilities_sync s
+            WHERE s.model_id = (
+                CASE WHEN instr(models.model_id, '/') > 0
+                     THEN substr(models.model_id, instr(models.model_id, '/') + 1)
+                     ELSE models.model_id
+                END
+            )
+              AND (s.vision IS NOT NULL OR s.tool_call IS NOT NULL
+                   OR s.reasoning IS NOT NULL OR s.structured_output IS NOT NULL)
+        )",
+        [],
+    ).map_err(|e| CoreError::Database {
+        message: format!("enrich capabilities (cross-provider): {e}"),
+        source: Some(Box::new(e)),
+    })?;
+
+    // Capabilities: free-suffix fallback (prefix + free suffix stripped).
+    let cap_free = conn.execute(
+        &format!(
+            "UPDATE models SET capabilities_json = (
+                SELECT json_patch(
+                    coalesce(models.capabilities_json, '{{}}'),
+                    json_object(
+                        'vision',              s.vision,
+                        'tool_calling',        s.tool_call,
+                        'reasoning',           s.reasoning,
+                        'structured_output',   s.structured_output
+                    )
+                )
+                FROM model_capabilities_sync s
+                WHERE s.model_id = {}
+                  AND (s.vision IS NOT NULL OR s.tool_call IS NOT NULL
+                       OR s.reasoning IS NOT NULL OR s.structured_output IS NOT NULL)
+                LIMIT 1
+            ) WHERE NOT EXISTS (
+                SELECT 1 FROM model_capabilities_sync s
+                WHERE s.provider_id = models.provider_id
+                  AND s.model_id   = models.model_id
+            )
+              AND {} != (
+                CASE WHEN instr(models.model_id, '/') > 0
+                     THEN substr(models.model_id, instr(models.model_id, '/') + 1)
+                     ELSE models.model_id
+                END
+              )
+              AND EXISTS (
+                SELECT 1 FROM model_capabilities_sync s
+                WHERE s.model_id = {}
+                  AND (s.vision IS NOT NULL OR s.tool_call IS NOT NULL
+                       OR s.reasoning IS NOT NULL OR s.structured_output IS NOT NULL)
+            )",
+            normalized_id!(),
+            normalized_id!(),
+            normalized_id!(),
+        ),
+        [],
+    ).map_err(|e| CoreError::Database {
+        message: format!("enrich capabilities (free-suffix): {e}"),
+        source: Some(Box::new(e)),
+    })?;
+
+    Ok(ctx_exact + tok_exact + ctx_fallback + tok_fallback
+        + ctx_free + tok_free
+        + cap_exact + cap_fallback + cap_free)
 }
 
 /// Auto-create combos for models that are active in ≥2 providers.

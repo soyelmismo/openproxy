@@ -220,8 +220,21 @@ impl AppState {
             ))
             .build()?;
 
-        // 4. Adapters.
-        let adapters = Arc::new(adapters::builtin_adapters());
+        // 4. Adapters — built-in + any custom providers stored in DB.
+        let mut all_adapters: Vec<Arc<dyn adapters::ProviderAdapter>> =
+            adapters::builtin_adapters();
+        {
+            let w = db_pool.writer();
+            if let Ok(all_providers) = openproxy_core::providers::list(&w) {
+                for p in &all_providers {
+                    if !openproxy_core::seed::is_builtin(p.id.as_str()) {
+                        all_adapters
+                            .push(Arc::new(adapters::CustomAdapter::from_provider_row(p)));
+                    }
+                }
+            }
+        }
+        let adapters = Arc::new(all_adapters);
 
         // 5. Usage broadcast sender for admin live-log WebSockets.
         let usage_tx = usage::init_usage_broadcast();

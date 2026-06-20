@@ -236,6 +236,9 @@ pub fn update_provider(
 pub struct CreateAccountInput {
     pub provider_id: String,
     /// API key for api_key accounts. `None` for OAuth accounts.
+    /// Accepts both `api_key` and `secret` as JSON field names for
+    /// compatibility with the web UI (which sends `secret`).
+    #[serde(alias = "secret")]
     pub api_key: Option<String>,
     pub label: Option<String>,
     pub priority: Option<i32>,

@@ -54,6 +54,118 @@ fn extract_delta_content(payload: &str) -> Option<&str> {
     None
 }
 
+/// Extract `delta.reasoning_content` from an OpenAI streaming chunk JSON
+/// payload. Uses the same lightweight string scan as `extract_delta_content`.
+/// Returns `None` when no `reasoning_content` field is present.
+pub fn extract_reasoning_content(payload: &str) -> Option<&str> {
+    let marker = b"\"reasoning_content\":\"";
+    let bytes = payload.as_bytes();
+    let pos = memchr::memmem::find(bytes, marker)?;
+    let value_start = pos + marker.len();
+
+    let mut i = value_start;
+    while i < bytes.len() {
+        if bytes[i] == b'\\' {
+            i += 2;
+            continue;
+        }
+        if bytes[i] == b'"' {
+            return Some(&payload[value_start..i]);
+        }
+        i += 1;
+    }
+    None
+}
+
+/// Normalize non-standard reasoning fields in an OpenAI streaming chunk.
+///
+/// Some providers (e.g. nex-agi via OpenRouter) send reasoning using
+/// non-standard field names:
+/// - `delta.reasoning` (string) instead of `delta.reasoning_content`
+/// - `delta.reasoning_details[]` (array of `{type, text, index}`) instead
+///
+/// This function translates these to the standard `delta.reasoning_content`
+/// format and strips the non-standard fields, so clients that expect the
+/// OpenAI SDK shape (OpenCode, continue.dev, etc.) don't get confused.
+///
+/// Returns `Some(normalized_json)` when the payload contains non-standard
+/// reasoning fields. Returns `None` when the payload is already clean
+/// (no change needed), avoiding an allocation on the fast path.
+pub fn normalize_nonstandard_reasoning_fields(payload: &str) -> Option<String> {
+    // Fast check: bail out immediately if no non-standard reasoning fields.
+    let has_reasoning = payload.contains("\"reasoning\":")
+        && !payload.contains("\"reasoning_content\":");
+    let has_details = payload.contains("\"reasoning_details\":");
+    if !has_reasoning && !has_details {
+        return None;
+    }
+
+    // Parse, modify, re-serialize.
+    // This is the slow path but only hits chunks that carry non-standard
+    // reasoning — typically a small fraction of total streaming chunks.
+    let mut v: serde_json::Value = serde_json::from_str(payload).ok()?;
+    if let Some(choices) = v.get_mut("choices").and_then(|c| c.as_array_mut()) {
+        if let Some(choice) = choices.first_mut() {
+            if let Some(delta) = choice.get_mut("delta") {
+                if let Some(obj) = delta.as_object_mut() {
+                    // Handle `reasoning` → `reasoning_content`.
+                    //
+                    // Priority: `reasoning` (string) wins over
+                    // `reasoning_details[]` when both are present,
+                    // because some providers (e.g. NVIDIA) send the
+                    // SAME text in both fields and merging them
+                    // would duplicate the content.
+                    let reasoning_was_present = if let Some(reasoning) = obj.remove("reasoning") {
+                        if let Some(text) = reasoning.as_str() {
+                            if !text.is_empty() && !obj.contains_key("reasoning_content") {
+                                obj.insert(
+                                    "reasoning_content".to_string(),
+                                    serde_json::Value::String(text.to_string()),
+                                );
+                            }
+                        }
+                        true
+                    } else {
+                        false
+                    };
+
+                    // Always strip `reasoning_details` (non-standard
+                    // array format). Only merge into `reasoning_content`
+                    // when `reasoning` was absent — when both fields
+                    // carry the same text, merging duplicates it.
+                    if let Some(details) = obj.remove("reasoning_details") {
+                        if !reasoning_was_present {
+                            if let Some(arr) = details.as_array() {
+                                let combined: String = arr
+                                    .iter()
+                                    .filter_map(|d| {
+                                        d.get("text")
+                                            .and_then(|t| t.as_str())
+                                    })
+                                    .collect();
+                                if !combined.is_empty() {
+                                    if let Some(existing) = obj.get_mut("reasoning_content") {
+                                        if let Some(s) = existing.as_str() {
+                                            let new = format!("{}{}", s, combined);
+                                            *existing = serde_json::Value::String(new);
+                                        }
+                                    } else {
+                                        obj.insert(
+                                            "reasoning_content".to_string(),
+                                            serde_json::Value::String(combined),
+                                        );
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    serde_json::to_string(&v).ok()
+}
+
 /// Maximum number of bytes the accumulator's text fields may collectively
 /// hold. After this is reached, additional chunks are dropped and the
 /// `truncated` flag is set. The upstream `http_body_util::Limited` cap
@@ -427,5 +539,83 @@ mod tests {
         assert_eq!(v["usage"]["completion_tokens"], 20);
         assert_eq!(v["usage"]["total_tokens"], 30);
         assert_eq!(v["choices"][0]["finish_reason"], "stop");
+    }
+
+    // ---- Non-standard reasoning normalization ----
+
+    #[test]
+    fn normalize_reasoning_field_to_reasoning_content() {
+        let payload = r#"{"id":"x","object":"chat.completion.chunk","created":0,"model":"m","choices":[{"index":0,"delta":{"content":"","role":"assistant","reasoning":" Need"},"finish_reason":null}]}"#;
+        let result = normalize_nonstandard_reasoning_fields(payload);
+        assert!(result.is_some(), "should normalize reasoning field");
+        let normalized = result.unwrap();
+        // Should contain reasoning_content instead of reasoning
+        assert!(normalized.contains("\"reasoning_content\""), "should have reasoning_content: {normalized}");
+        assert!(!normalized.contains("\"reasoning\":"), "should NOT have raw reasoning field: {normalized}");
+        // Content should still be present
+        assert!(normalized.contains("\"content\":\"\""), "should preserve content: {normalized}");
+        // Parse and verify
+        let v: serde_json::Value = serde_json::from_str(&normalized).unwrap();
+        let rc = v["choices"][0]["delta"]["reasoning_content"].as_str().unwrap();
+        assert_eq!(rc, " Need");
+    }
+
+    #[test]
+    fn normalize_reasoning_details_array() {
+        let payload = r#"{"id":"x","object":"chat.completion.chunk","created":0,"model":"m","choices":[{"index":0,"delta":{"content":"","role":"assistant","reasoning_details":[{"type":"reasoning.text","text":"Need","format":"unknown","index":0},{"type":"reasoning.text","text":" to","format":"unknown","index":1}]},"finish_reason":null}]}"#;
+        let result = normalize_nonstandard_reasoning_fields(payload);
+        assert!(result.is_some(), "should normalize reasoning_details");
+        let normalized = result.unwrap();
+        let v: serde_json::Value = serde_json::from_str(&normalized).unwrap();
+        let rc = v["choices"][0]["delta"]["reasoning_content"].as_str().unwrap();
+        assert_eq!(rc, "Need to", "should merge reasoning_details texts");
+        assert!(v["choices"][0]["delta"].get("reasoning_details").is_none(), "should remove reasoning_details");
+    }
+
+    #[test]
+    fn normalize_standard_reasoning_content_unchanged() {
+        let payload = r#"{"id":"x","object":"chat.completion.chunk","created":0,"model":"m","choices":[{"index":0,"delta":{"content":"","reasoning_content":"hello"},"finish_reason":null}]}"#;
+        let result = normalize_nonstandard_reasoning_fields(payload);
+        assert!(result.is_none(), "standard reasoning_content should not trigger normalization");
+    }
+
+    #[test]
+    fn normalize_no_reasoning_fields_unchanged() {
+        let payload = r#"{"id":"x","object":"chat.completion.chunk","created":0,"model":"m","choices":[{"index":0,"delta":{"content":"hello"},"finish_reason":null}]}"#;
+        let result = normalize_nonstandard_reasoning_fields(payload);
+        assert!(result.is_none(), "no reasoning fields should not trigger normalization");
+    }
+
+    #[test]
+    fn extract_reasoning_content_from_normalized() {
+        let payload = r#"{"choices":[{"delta":{"content":"","reasoning_content":" step by step"}}]}"#;
+        let rc = extract_reasoning_content(payload);
+        assert_eq!(rc, Some(" step by step"));
+    }
+
+    #[test]
+    fn extract_reasoning_content_absent() {
+        let payload = r#"{"choices":[{"delta":{"content":"hello"}}]}"#;
+        let rc = extract_reasoning_content(payload);
+        assert!(rc.is_none());
+    }
+
+    #[test]
+    fn normalize_both_reasoning_and_details() {
+        let payload = r#"{"id":"x","object":"chat.completion.chunk","created":0,"model":"m","choices":[{"index":0,"delta":{"content":"","role":"assistant","reasoning":"think","reasoning_details":[{"type":"reasoning.text","text":" more","format":"unknown","index":0}]},"finish_reason":null}]}"#;
+        let result = normalize_nonstandard_reasoning_fields(payload);
+        assert!(result.is_some());
+        let v: serde_json::Value = serde_json::from_str(&result.unwrap()).unwrap();
+        let rc = v["choices"][0]["delta"]["reasoning_content"].as_str().unwrap();
+        // `reasoning` wins over `reasoning_details` — only "think",
+        // not "think more" (which would be the merge). Providers
+        // like NVIDIA send the same text in both fields; merging
+        // would duplicate the content.
+        assert_eq!(rc, "think");
+        assert!(v["choices"][0]["delta"].get("reasoning").is_none());
+        // reasoning_details must also be stripped when reasoning
+        // was present — it's non-standard and duplicates the text.
+        assert!(v["choices"][0]["delta"].get("reasoning_details").is_none(),
+            "reasoning_details should be stripped even when reasoning is present");
     }
 }

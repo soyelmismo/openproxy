@@ -62,7 +62,7 @@ export async function createAccount(providerId: string, e: Event): Promise<void>
   const body = {
     provider_id: providerId,
     label: f.get("label"),
-    secret: f.get("secret") || null,
+    api_key: f.get("secret") || null,
     scopes,
   };
   try {

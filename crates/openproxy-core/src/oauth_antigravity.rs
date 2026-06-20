@@ -219,11 +219,21 @@ impl OAuthProvider for AntigravityOAuthProvider {
         refresh_token: &str,
         upstream_client: &Arc<UpstreamClient>,
     ) -> Result<TokenResponse> {
-        let params = [
+        // Google's token endpoint requires client_secret for the
+        // refresh_token grant on confidential clients — without it
+        // the refresh is rejected with a 401/400, and the account
+        // stays stuck with an expired access_token.
+        let client_secret = std::env::var("OPENPROXY_ANTIGRAVITY_CLIENT_SECRET")
+            .unwrap_or_else(|_| DEFAULT_CLIENT_SECRET.to_string());
+
+        let mut params = vec![
             ("grant_type", "refresh_token"),
             ("client_id", CLIENT_ID),
             ("refresh_token", refresh_token),
         ];
+        if !client_secret.is_empty() {
+            params.push(("client_secret", &client_secret));
+        }
 
         let body = urlencoded_body(&params);
         let mut req = UpstreamRequest::post_json(TOKEN_URL, body);

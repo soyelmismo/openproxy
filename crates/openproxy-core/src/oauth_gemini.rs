@@ -253,10 +253,17 @@ impl OAuthProvider for GeminiCliOAuthProvider {
                 "Gemini CLI OAuth requires OPENPROXY_GEMINI_CLI_OAUTH_CLIENT_ID".into(),
             ));
         }
+        let cs = client_secret();
+        if cs.is_empty() {
+            return Err(CoreError::Validation(
+                "Gemini CLI OAuth requires OPENPROXY_GEMINI_CLI_OAUTH_CLIENT_SECRET".into(),
+            ));
+        }
 
         let params = [
             ("grant_type", "refresh_token"),
             ("client_id", &cid),
+            ("client_secret", &cs),
             ("refresh_token", refresh_token),
         ];
 

@@ -41,6 +41,22 @@ impl CancellationToken {
     pub fn child(&self) -> Self {
         Self
     }
+    pub fn cancelled(&self) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + '_>> {
+        Box::pin(std::future::pending())
+    }
+    pub fn subscribe(&self) -> tokio::sync::watch::Receiver<bool> {
+        let (_, rx) = tokio::sync::watch::channel(false);
+        rx
+    }
+    pub fn from_watch(_rx: tokio::sync::watch::Receiver<bool>) -> Self {
+        Self
+    }
+    pub fn from_watch_and_token(
+        _rx: tokio::sync::watch::Receiver<bool>,
+        _race_token: CancellationToken,
+    ) -> Self {
+        Self
+    }
 }
 
 #[derive(Debug, Clone, Default)]

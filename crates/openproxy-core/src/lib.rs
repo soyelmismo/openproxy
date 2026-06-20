@@ -27,6 +27,7 @@ pub mod retry;
 pub mod circuit_breaker;
 pub mod cooldown;
 pub mod race;
+pub mod race_sink;
 pub mod pricing;
 pub mod secrets;
 pub mod oauth;

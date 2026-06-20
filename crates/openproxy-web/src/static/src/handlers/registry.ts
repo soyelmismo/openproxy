@@ -261,7 +261,8 @@ export const HANDLERS: Record<string, ActionHandler> = {
 // Collect positional data-arg-N attrs from an element. Skips the
 // "action" key. Returns an array aligned to arg1..argN order. Numbers
 // that parse as finite integers are returned as Numbers so handlers
-// don't have to parseInt every time.
+// don't have to parseInt every time. Booleans "true"/"false" are
+// also auto-coerced.
 export function collectArgs(el: HTMLElement): unknown[] {
   const args: unknown[] = [];
   for (const key in el.dataset) {
@@ -270,11 +271,20 @@ export function collectArgs(el: HTMLElement): unknown[] {
     if (!m) continue;
     const n = parseInt(m[1] || "0", 10) - 1;
     const v = el.dataset[key];
-    // Only auto-coerce when the entire value is a JSON number;
-    // strings with non-numeric chars (labels with spaces) stay as
-    // strings so handlers can decide.
-    if (v !== undefined && /^-?\d+(\.\d+)?$/.test(v)) args[n] = Number(v);
-    else args[n] = v;
+    // Auto-coerce numbers (only when the entire value is a JSON number).
+    if (v !== undefined && /^-?\d+(\.\d+)?$/.test(v)) {
+      args[n] = Number(v);
+    }
+    // Auto-coerce booleans "true"/"false".
+    else if (v === "true") {
+      args[n] = true;
+    } else if (v === "false") {
+      args[n] = false;
+    }
+    // Everything else stays as string.
+    else {
+      args[n] = v;
+    }
   }
   return args;
 }

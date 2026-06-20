@@ -49,6 +49,7 @@ use axum::{
 use futures::StreamExt;
 use openproxy_core::{
     accounts,
+    adapters,
     admin,
     analytics,
     api_keys as core_api_keys,
@@ -66,11 +67,38 @@ use openproxy_core::{
 };
 use serde::{Deserialize, Serialize};
 use serde_json::json;
+use std::sync::Arc;
 
 use crate::{
     error::{ApiError, ApiResult},
     state::AppState,
 };
+
+/// Resolve the adapter for a given provider.
+///
+/// First checks the built-in adapter registry. If no built-in adapter
+/// matches, falls back to loading the provider row from the DB and
+/// constructing a [`adapters::CustomAdapter`]. Returns `Err` only when
+/// the provider doesn't exist in the DB at all.
+fn resolve_adapter(
+    s: &AppState,
+    provider_id: &ProviderId,
+    builtin: &[Arc<dyn adapters::ProviderAdapter>],
+) -> Result<Arc<dyn adapters::ProviderAdapter>, CoreError> {
+    // 1. Built-in adapter?
+    if let Some(a) = builtin.iter().find(|a| a.id() == provider_id) {
+        return Ok(Arc::clone(a));
+    }
+    // 2. Custom provider in DB → build adapter on-the-fly.
+    let w = s.db_pool().writer();
+    let provider_row = providers::get(&w, provider_id)
+        .map_err(|e| CoreError::ProviderNotFound(format!("{}: {}", provider_id, e)))?;
+    drop(w);
+    match provider_row {
+        Some(row) => Ok(Arc::new(adapters::CustomAdapter::from_provider_row(&row))),
+        None => Err(CoreError::ProviderNotFound(provider_id.to_string())),
+    }
+}
 
 /// Optional filters shared by all `GET /v1/admin/usage/*` endpoints.
 ///
@@ -1074,19 +1102,12 @@ async fn run_refresh(
         }
     };
 
-    // 2. Find the adapter for that provider.
-    let adapter = match s
-        .adapters()
-        .iter()
-        .find(|a| a.id() == &provider_id)
-        .cloned()
-    {
-        Some(a) => a,
-        None => {
-            return ApiResult::err(ApiError(CoreError::ProviderNotFound(
-                provider_id.to_string(),
-            )));
-        }
+    // 2. Find the adapter for that provider. Check built-in adapters
+    //    first, then fall back to constructing a CustomAdapter from the
+    //    DB row.
+    let adapter = match resolve_adapter(&s, &provider_id, s.adapters()) {
+        Ok(a) => Arc::clone(&a),
+        Err(e) => return ApiResult::err(ApiError(e)),
     };
 
     // 3. Resolve an account and decrypt/refresh its credential.
@@ -2122,16 +2143,12 @@ async fn run_test_for_model(
         return TestResult::skipped(model_row_id, "model is inactive");
     }
 
-    // 2. Find the adapter for that provider.
-    let adapter = match s
-        .adapters()
-        .iter()
-        .find(|a| a.id() == &model.provider_id)
-        .cloned()
-    {
-        Some(a) => a,
-        None => {
-            let err = CoreError::ProviderNotFound(model.provider_id.to_string());
+    // 2. Find the adapter for that provider. Check built-in adapters
+    //    first, then fall back to constructing a CustomAdapter from the
+    //    DB row.
+    let adapter = match resolve_adapter(s, &model.provider_id, s.adapters()) {
+        Ok(a) => Arc::clone(&a),
+        Err(err) => {
             return TestResult {
                 row_id: model_row_id,
                 status: err.http_status(),
@@ -3074,21 +3091,11 @@ async fn run_provider_refresh(
     let provider = ProviderId::new(provider_id_str.clone());
     let ttl_seconds = q.ttl_seconds.unwrap_or(PROVIDER_REFRESH_DEFAULT_TTL_SECS);
 
-    // 1. Find the adapter. Adapter clones are cheap (the heavy state
-    //    is `reqwest::Client` and the config strings, all `Arc`-backed
-    //    or `Clone`).
-    let adapter = match s
-        .adapters()
-        .iter()
-        .find(|a| a.id() == &provider)
-        .cloned()
-    {
-        Some(a) => a,
-        None => {
-            return ApiResult::err(ApiError(CoreError::ProviderNotFound(
-                provider_id_str,
-            )));
-        }
+    // 1. Find the adapter. Check built-in adapters first, then
+    //    fall back to constructing a CustomAdapter from the DB row.
+    let adapter = match resolve_adapter(&s, &provider, s.adapters()) {
+        Ok(a) => Arc::clone(&a),
+        Err(e) => return ApiResult::err(ApiError(e)),
     };
 
     // 2. Provider has no /models endpoint and no custom fetch_models

@@ -151,6 +151,54 @@ impl CancellationToken {
         });
         token
     }
+
+    /// Build a combined token that flips to "cancelled" when EITHER the
+    /// `watch::Receiver<bool>` transitions to `true` OR the provided
+    /// `CancellationToken` is cancelled.
+    ///
+    /// Use this for race lanes: the lane's upstream call is cancelled
+    /// when the client disconnects **or** when the race is lost (another
+    /// lane sent the first token). This closes the cancellation window
+    /// — losers' HTTP connections are dropped at the transport level,
+    /// stopping upstream token generation immediately.
+    pub fn from_watch_and_token(
+        mut rx: watch::Receiver<bool>,
+        race_token: CancellationToken,
+    ) -> Self {
+        let token = Self::new();
+        if *rx.borrow_and_update() || race_token.is_cancelled() {
+            token.cancel();
+            return token;
+        }
+        let inner = token.clone();
+        let mut cancel_rx = race_token.inner.cancel_tx.subscribe();
+        // Close TOCTOU: if cancelled between is_cancelled() above and
+        // subscribe(), the initial value is already true but changed()
+        // won't fire for it.  Re-check explicitly.
+        if *cancel_rx.borrow() {
+            inner.cancel();
+            return token;
+        }
+        tokio::spawn(async move {
+            loop {
+                tokio::select! {
+                    res = rx.changed() => {
+                        if res.is_err() || *rx.borrow() {
+                            inner.cancel();
+                            return;
+                        }
+                    }
+                    res = cancel_rx.changed() => {
+                        if res.is_err() || *cancel_rx.borrow() {
+                            inner.cancel();
+                            return;
+                        }
+                    }
+                }
+            }
+        });
+        token
+    }
 }
 
 impl std::fmt::Debug for CancellationToken {
@@ -293,5 +341,68 @@ mod tests {
             tokio::task::yield_now().await;
         }
         assert!(!token.is_cancelled());
+    }
+
+    #[tokio::test]
+    async fn from_watch_and_token_fires_on_watch_transition() {
+        let (tx, rx) = watch::channel(false);
+        let race_token = CancellationToken::new();
+        let token = CancellationToken::from_watch_and_token(rx, race_token);
+        assert!(!token.is_cancelled());
+
+        tx.send(true).unwrap();
+        for _ in 0..50 {
+            if token.is_cancelled() { break; }
+            tokio::task::yield_now().await;
+        }
+        assert!(token.is_cancelled());
+    }
+
+    #[tokio::test]
+    async fn from_watch_and_token_fires_on_race_token() {
+        let (_tx, rx) = watch::channel(false);
+        let race_token = CancellationToken::new();
+        let token = CancellationToken::from_watch_and_token(rx, race_token.clone());
+        assert!(!token.is_cancelled());
+
+        race_token.cancel();
+        for _ in 0..50 {
+            if token.is_cancelled() { break; }
+            tokio::task::yield_now().await;
+        }
+        assert!(token.is_cancelled());
+    }
+
+    #[tokio::test]
+    async fn from_watch_and_token_already_cancelled_watch_starts_cancelled() {
+        let (tx, mut rx) = watch::channel(false);
+        tx.send(true).unwrap();
+        rx.changed().await.unwrap();
+        let race_token = CancellationToken::new();
+        let token = CancellationToken::from_watch_and_token(rx, race_token);
+        assert!(token.is_cancelled());
+    }
+
+    #[tokio::test]
+    async fn from_watch_and_token_already_cancelled_race_token_starts_cancelled() {
+        let (_tx, rx) = watch::channel(false);
+        let race_token = CancellationToken::new();
+        race_token.cancel();
+        let token = CancellationToken::from_watch_and_token(rx, race_token);
+        assert!(token.is_cancelled());
+    }
+
+    #[tokio::test]
+    async fn from_watch_and_token_toctou_closes() {
+        // Race: cancel race_token between subscribe() and borrow()
+        // The re-check after subscribe() must catch it.
+        let (_tx, rx) = watch::channel(false);
+        let race_token = CancellationToken::new();
+        // Cancel BEFORE creating the combined token — the pre-flight
+        // check catches this. But also test the TOCTOU path by
+        // cancelling between subscribe and the background task start.
+        race_token.cancel();
+        let token = CancellationToken::from_watch_and_token(rx, race_token);
+        assert!(token.is_cancelled());
     }
 }

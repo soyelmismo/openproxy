@@ -356,7 +356,7 @@ async fn run_pipeline(
         combo_id,
         openai_request: openai_req.clone(),
         client_disconnected: cancel_rx,
-        stream_sink: Some(tx),
+        stream_sink: Some(openproxy_core::race_sink::StreamSink::Direct(tx)),
         api_key_id,
         combo_override,
         targets_override,
@@ -369,6 +369,7 @@ async fn run_pipeline(
         // "sensitive" (see `openproxy_core::redact`).
         request_headers: redact_sensitive_headers(&headers),
         race_cancelled: false,
+        race_cancel: None,
     };
 
     if openai_req.stream {

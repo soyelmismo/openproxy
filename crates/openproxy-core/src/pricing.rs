@@ -112,6 +112,34 @@ pub fn lookup_with_db(conn: &Connection, provider: &str, model: &str) -> Option<
         return Some(p);
     }
 
+    // Fallback 3: strip provider prefix and try cross-provider match.
+    // Handles OpenRouter-style "provider/model" IDs where the sync
+    // table stores the bare model name (e.g. "openai/gpt-4o" → "gpt-4o").
+    // Also handles free suffixes (e.g. "openai/gpt-4o:free" → "gpt-4o").
+    if let Some((_, base)) = model.split_once('/') {
+        // Try bare base first (no suffix).
+        if let Some(p) = lookup_by_model_id_only(conn, base) {
+            return Some(p);
+        }
+        // Try with free suffixes stripped.
+        for stripped in strip_free_suffixes(base) {
+            if let Some(p) = lookup_by_model_id_only(conn, &stripped) {
+                return Some(p);
+            }
+        }
+    }
+
+    // Fallback 4: try matching by model_id only across all providers.
+    // Catches models from providers not in the PROVIDER_MAP.
+    if let Some(p) = lookup_by_model_id_only(conn, model) {
+        return Some(p);
+    }
+    for stripped in strip_free_suffixes(model) {
+        if let Some(p) = lookup_by_model_id_only(conn, &stripped) {
+            return Some(p);
+        }
+    }
+
     // Fall back to static table.
     lookup(provider, model)
 }
@@ -126,6 +154,30 @@ fn lookup_exact_in_db(conn: &Connection, provider: &str, model: &str) -> Option<
            AND pricing_input_per_1m IS NOT NULL \
            AND pricing_output_per_1m IS NOT NULL",
         rusqlite::params![provider, model],
+        |row| Ok((row.get::<_, f64>(0)?, row.get::<_, f64>(1)?)),
+    ).optional();
+    result.ok().flatten().map(|(inp, out)| Price {
+        input_per_1m: inp,
+        output_per_1m: out,
+    })
+}
+
+/// Lookup pricing by model_id only (ignoring provider). Used as a
+/// cross-provider fallback when the provider-specific lookup fails.
+///
+/// This lets models from providers not in the PROVIDER_MAP (or whose
+/// model IDs don't match exactly) still find their pricing from the
+/// models.dev data.
+fn lookup_by_model_id_only(conn: &Connection, model: &str) -> Option<Price> {
+    use rusqlite::OptionalExtension;
+    let result: Result<Option<(f64, f64)>, _> = conn.query_row(
+        "SELECT pricing_input_per_1m, pricing_output_per_1m \
+         FROM model_capabilities_sync \
+         WHERE model_id = ?1 \
+           AND pricing_input_per_1m IS NOT NULL \
+           AND pricing_output_per_1m IS NOT NULL \
+         LIMIT 1",
+        rusqlite::params![model],
         |row| Ok((row.get::<_, f64>(0)?, row.get::<_, f64>(1)?)),
     ).optional();
     result.ok().flatten().map(|(inp, out)| Price {
