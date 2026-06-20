@@ -189,10 +189,14 @@ impl StreamingDigest {
 pub fn latency_percentiles(conn: &Connection, f: &UsageFilter) -> Result<LatencyPercentiles> {
     let w = BuiltWhere::from_filter(f);
 
-    // The base `w.sql` is "WHERE ..." or empty. We always add `race_lost = 0`
-    // and the per-metric null guards via `IS NOT NULL` on each selected
-    // column (SQLite evaluates `NULL IS NOT NULL` as false at the row level
-    // and simply yields no rows for that column — exactly what we want).
+    // The base `w.sql` is "WHERE ..." or empty. We always add predicates
+    // that restrict to successful, non-race-lost rows:
+    //   - `race_lost = 0`: exclude race losers (workers that errored
+    //     because another worker won the race).
+    //   - `status_code < 400`: exclude error and timeout rows. Timeouts
+    //     (502), client disconnects (499), rate limits (429), and any
+    //     other non-2xx response have latency numbers that would skew
+    //     the percentiles. Only successful responses should count.
     //
     // We start from the filter clauses (if any), strip the leading "WHERE "
     // and rebuild a fully-qualified WHERE that ANDs the filter with our
@@ -203,6 +207,7 @@ pub fn latency_percentiles(conn: &Connection, f: &UsageFilter) -> Result<Latency
         clauses.push(format!("({})", bare));
     }
     clauses.push("race_lost = 0".to_string());
+    clauses.push("status_code < 400".to_string());
 
     let where_clause = format!("WHERE {}", clauses.join(" AND "));
 
@@ -262,7 +267,8 @@ pub fn latency_percentiles(conn: &Connection, f: &UsageFilter) -> Result<Latency
     // distinct `usage.id` rows, not the deduped count of timing samples). It
     // tells the caller "this many winner rows were scanned"; the per-metric
     // p50/p95 may be derived from a smaller sample set when nulls are
-    // present.
+    // present. The WHERE clause restricts to race_lost=0 AND status_code<400
+    // so only successful non-race-lost rows are counted.
     Ok(LatencyPercentiles {
         samples: rows_seen,
         p50_connect_ms: connect.quantile(0.50),
@@ -446,7 +452,7 @@ mod tests {
     }
 
     /// Insert a usage row with explicit race-related fields so each test can
-    /// shape its own distribution.
+    /// shape its own distribution. Uses status_code=200 by default.
     fn insert(
         conn: &Connection,
         request_id: &str,
@@ -487,6 +493,40 @@ mod tests {
             ],
         )
         .expect("insert");
+    }
+
+    /// Like `insert` but with an explicit `status_code` — used to test
+    /// error-row exclusion in latency percentiles.
+    fn insert_with_status(
+        conn: &Connection,
+        request_id: &str,
+        trace_id: &str,
+        provider: &str,
+        model: &str,
+        connect_ms: Option<i64>,
+        ttft_ms: Option<i64>,
+        total_ms: i64,
+        race_lost: bool,
+        status_code: i64,
+    ) {
+        conn.execute(
+            "INSERT INTO usage (\
+                request_id, trace_id, attempt, provider_id, account_id, \
+                upstream_model_id, combo_target_id, prompt_tokens, \
+                completion_tokens, cost_usd, connect_ms, ttft_ms, total_ms, \
+                tokens_per_sec, status_code, error_msg, error_msg_redacted, \
+                race_total, race_lost, created_at\
+             ) VALUES (\
+                ?1, ?2, 1, ?3, NULL, ?4, NULL, 0, 0, 0.0, ?5, ?6, ?7, \
+                NULL, ?8, NULL, NULL, 1, ?9, datetime('now')\
+             )",
+            params![
+                request_id, trace_id, provider, model,
+                connect_ms, ttft_ms, total_ms,
+                status_code, race_lost as i64,
+            ],
+        )
+        .expect("insert_with_status");
     }
 
     // -----------------------------------------------------------------------
@@ -660,6 +700,65 @@ mod tests {
         // tokens_per_sec has 5 samples (all 10.0).
         let p50_tps = r.p50_tokens_per_sec.expect("p50 tps present");
         assert!((p50_tps - 10.0).abs() < 0.5, "p50 tps ≈ 10, got {}", p50_tps);
+    }
+
+    // -----------------------------------------------------------------------
+    // 3b. latency_percentiles_excludes_errors
+    // -----------------------------------------------------------------------
+    #[test]
+    fn latency_percentiles_excludes_errors() {
+        // Regression test for the "row #null" / timeout-in-percentiles bug.
+        // Before the fix, timeout rows (status_code=502, connect_ms=10000)
+        // were counted as "winners" (race_lost=0) and polluted p50/p95.
+        let (conn, _p) = fresh_conn();
+
+        // 10 successful rows: connect_ms = 100..110
+        for i in 0..10i64 {
+            insert_with_status(
+                &conn, &format!("ok-{}", i), &format!("t-{}", i),
+                "openrouter", "openai/gpt-4o",
+                Some(100 + i), Some(200 + i), 500 + i,
+                false, 200,
+            );
+        }
+        // 5 error rows (timeouts): connect_ms = 10000 — these must NOT
+        // influence the percentiles even though race_lost=0.
+        for i in 0..5i64 {
+            insert_with_status(
+                &conn, &format!("err-{}", i), &format!("et-{}", i),
+                "openrouter", "openai/gpt-4o",
+                Some(10000), None, 10000,
+                false, 502,
+            );
+        }
+        // 3 error rows (client disconnects): status_code=499
+        for i in 0..3i64 {
+            insert_with_status(
+                &conn, &format!("disc-{}", i), &format!("dt-{}", i),
+                "openrouter", "openai/gpt-4o",
+                Some(5000), None, 5000,
+                false, 499,
+            );
+        }
+
+        let r = latency_percentiles(&conn, &UsageFilter::default()).expect("latency");
+        // Only the 10 successful rows (status_code=200) should be counted.
+        assert_eq!(r.samples, 10, "error rows (502, 499) excluded from count");
+
+        // connect_ms: 100..110 → p50 ≈ 104.5, p95 ≈ 109.05
+        let p50 = r.p50_connect_ms.expect("p50 connect present");
+        let p95 = r.p95_connect_ms.expect("p95 connect present");
+        assert!(
+            (p50 - 104.5).abs() < 5.0,
+            "p50 should reflect only successes (~104.5), got {}",
+            p50
+        );
+        assert!(
+            (p95 - 109.05).abs() < 5.0,
+            "p95 should reflect only successes (~109.05), got {}",
+            p95
+        );
+        // If errors leaked through, p95 would be ~10000 — far outside tolerance.
     }
 
     // -----------------------------------------------------------------------
