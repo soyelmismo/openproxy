@@ -16,7 +16,6 @@
 //! clients. The sender is stored in a `once_cell::sync::OnceCell` so it is
 //! initialized exactly once and accessible from any crate.
 
-use crate::cost::UsageInput;
 use crate::error::{CoreError, Result};
 use crate::ids::{AccountId, ApiKeyId, ComboId, ComboTargetId, ModelRowId, ProviderId, UsageId};
 use once_cell::sync::OnceCell;
@@ -49,7 +48,7 @@ static USAGE_SENDER: OnceCell<broadcast::Sender<RecentUsageRow>> = OnceCell::new
 /// `UsageId`. `STAGE_SENDER` carries transient `StageEvent`s keyed
 /// only by `request_id` and have no DB id — the dashboard uses
 /// `request_id` to update the row that the matching `recent` row
-/// (or its synthetic `emit_started_event` placeholder) lives under.
+/// lives under.
 ///
 /// Channel capacity: stages fire in bursts. A typical request emits
 /// `started → connecting → waiting_ttft → streaming → completed`
@@ -197,12 +196,17 @@ pub fn stage_broadcast() -> broadcast::Sender<StageEvent> {
 /// saving the chrono allocation in the common case where the live
 /// dashboard is not connected.
 pub fn publish_stage_event(mut event: StageEvent) {
-    if let Some(tx) = STAGE_SENDER.get() {
-        event.timestamp = chrono::Utc::now()
-            .format("%Y-%m-%dT%H:%M:%S%.3fZ")
-            .to_string();
-        let _ = tx.send(event);
+    let Some(tx) = STAGE_SENDER.get() else { return };
+    // Skip the timestamp formatting when no dashboard is connected.
+    // The doc comment always claimed this was optimized away; this
+    // implements the optimization.
+    if tx.receiver_count() == 0 {
+        return;
     }
+    event.timestamp = chrono::Utc::now()
+        .format("%Y-%m-%dT%H:%M:%S%.3fZ")
+        .to_string();
+    let _ = tx.send(event);
 }
 
 /// Initialize BOTH broadcast senders in the canonical order.
@@ -211,54 +215,6 @@ pub fn publish_stage_event(mut event: StageEvent) {
 pub fn init_all_broadcasts() -> broadcast::Sender<RecentUsageRow> {
     init_stage_broadcast();
     init_usage_broadcast()
-}
-
-/// Broadcast a usage input to all subscribers (used for in-flight requests).
-/// This does not insert into the database; it only sends via the broadcast
-/// channel for live updates.
-pub fn broadcast_usage_input(input: &UsageInput) {
-    let (cost_usd, _tps) = crate::cost::compute(
-        crate::pricing::lookup(input.provider_id.as_str(), &input.upstream_model_id),
-        input,
-    );
-    let (error_msg_for_db, _error_msg_redacted_for_db) = match &input.error_msg {
-        Some(msg) => {
-            let (sanitized, _redacted) = crate::cost::redact_error_msg(msg);
-            (Some(sanitized.clone()), Some(sanitized))
-        }
-        None => (None, None),
-    };
-
-    let row = RecentUsageRow {
-        id: UsageId(0), // Placeholder ID for in-flight rows
-        request_id: input.request_id.to_string(),
-        trace_id: input.trace_id.to_string(),
-        provider_id: input.provider_id.clone(),
-        upstream_model_id: input.upstream_model_id.clone(),
-        status_code: input.status_code,
-        total_ms: input.total_ms,
-        prompt_tokens: input.prompt_tokens,
-        completion_tokens: input.completion_tokens,
-        cost_usd: Some(cost_usd),
-        connect_ms: input.connect_ms,
-        ttft_ms: input.ttft_ms,
-        request_body_json: input.request_body_json.clone(),
-        response_body_json: input.response_body_json.clone(),
-        request_headers: input.request_headers.clone(),
-        response_headers: input.response_headers.clone(),
-        error_message: error_msg_for_db.clone(),
-        race_total: Some(input.race_total),
-        race_attempts: Some(input.race_attempts),
-        is_streaming: input.is_streaming,
-        stream_complete: input.stream_complete,
-        race_lost: input.race_lost,
-        stop_reason: input.stop_reason.clone(),
-        compression_savings_pct: input.compression_savings_pct,
-        compression_techniques: input.compression_techniques.clone(),
-        created_at: chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string(),
-    };
-    // Ignore send errors - no subscribers is harmless
-    publish_usage_row(row);
 }
 
 /// All optional filters shared by the read-side analytics queries.
@@ -1029,7 +985,9 @@ pub fn recent_desc(conn: &Connection, limit: u32) -> Result<Vec<RecentUsageRow>>
                         MAX(race_attempts) AS agg_race_attempts, \
                         MAX(is_streaming)  AS agg_is_streaming, \
                         MAX(stream_complete) AS agg_stream_complete, \
-                        MAX(race_lost) AS agg_race_lost \
+                        MAX(race_lost) AS agg_race_lost, \
+                        MAX(compression_savings_pct) AS agg_compression_savings_pct, \
+                        MAX(compression_techniques) AS agg_compression_techniques \
                  FROM usage \
                  GROUP BY request_id \
              ) \
@@ -1038,7 +996,8 @@ pub fn recent_desc(conn: &Connection, limit: u32) -> Result<Vec<RecentUsageRow>>
                     g.agg_cost_usd, g.agg_connect_ms, g.agg_ttft_ms, u.request_body_json, u.response_body_json, \
                     u.request_headers, u.response_headers, u.error_msg_redacted, u.error_msg, \
                     g.agg_race_total, g.agg_race_attempts, g.agg_is_streaming, g.agg_stream_complete, \
-                    g.agg_race_lost, g.agg_created_at, u.stop_reason \
+                    g.agg_race_lost, g.agg_created_at, u.stop_reason, \
+                    g.agg_compression_savings_pct, g.agg_compression_techniques \
              FROM grouped g \
              JOIN usage u ON u.id = g.agg_id \
              ORDER BY g.agg_id DESC \
@@ -1076,7 +1035,9 @@ pub fn recent_desc(conn: &Connection, limit: u32) -> Result<Vec<RecentUsageRow>>
             let stream_complete: i64 = row.get(col_idx)?; col_idx += 1;
             let race_lost: i64 = row.get(col_idx)?; col_idx += 1;
             let created_at: String = row.get(col_idx)?; col_idx += 1;
-            let stop_reason: Option<String> = row.get(col_idx)?;
+            let stop_reason: Option<String> = row.get(col_idx)?; col_idx += 1;
+            let compression_savings_pct: Option<f64> = row.get(col_idx)?; col_idx += 1;
+            let compression_techniques: Option<String> = row.get(col_idx)?;
 
             if !(0..=u16::MAX as i64).contains(&status_code) {
                 return Err(rusqlite::Error::FromSqlConversionFailure(
@@ -1128,8 +1089,8 @@ pub fn recent_desc(conn: &Connection, limit: u32) -> Result<Vec<RecentUsageRow>>
                 stream_complete: stream_complete_bool,
                 race_lost: race_lost != 0,
                 stop_reason,
-                compression_savings_pct: None,
-                compression_techniques: None,
+                compression_savings_pct,
+                compression_techniques,
                 created_at,
             })
         })
@@ -1889,6 +1850,48 @@ mod tests {
         assert_eq!(rows[0].request_id, shared_req);
         assert_eq!(rows[0].prompt_tokens, Some(110));
         assert_eq!(rows[0].completion_tokens, Some(50));
+    }
+
+    /// Compression regression: `recent_desc` (used by the WS
+    /// initial history batch) must include the compression stats
+    /// columns `compression_savings_pct` and
+    /// `compression_techniques`. Before the migration-00031
+    /// backfill the row mapping hardcoded both to `None`, so the
+    /// dashboard's compression column showed `—` for every
+    /// historical row even when compression was applied. Mirrors
+    /// the same coverage `recent` already had.
+    #[test]
+    fn recent_desc_includes_compression_columns() {
+        let (conn, _p) = fresh_conn();
+        let req = RequestId::new().to_string();
+        let trace = TraceId::new().to_string();
+        conn.execute(
+            "INSERT INTO usage (\
+                request_id, trace_id, attempt, provider_id, account_id, \
+                upstream_model_id, prompt_tokens, completion_tokens, cost_usd, \
+                connect_ms, ttft_ms, total_ms, status_code, error_msg, \
+                error_msg_redacted, race_total, race_lost, created_at, \
+                compression_savings_pct, compression_techniques\
+             ) VALUES (\
+                ?1, ?2, 1, 'openrouter', 1, 'openai/gpt-4o', 100, 50, 0.01, \
+                50, 200, 1200, 200, NULL, NULL, 1, 0, datetime('now'), \
+                42.0, 'lite::collapse_whitespace'\
+             )",
+            params![req, trace],
+        )
+        .expect("insert with compression stats");
+        let row_id = conn.last_insert_rowid();
+
+        let rows = recent_desc(&conn, 10).expect("recent_desc");
+        let row = rows
+            .iter()
+            .find(|r| r.id.0 == row_id)
+            .expect("inserted row should be in recent_desc results");
+        assert_eq!(row.compression_savings_pct, Some(42.0));
+        assert_eq!(
+            row.compression_techniques.as_deref(),
+            Some("lite::collapse_whitespace")
+        );
     }
 
     #[test]

@@ -1534,7 +1534,21 @@ async fn stream_usage_rows(
     state: AppState,
 ) {
     if let Err(err) = async {
-        // 1. Initial history batch (most recent 100).
+        // 1. Subscribe to broadcast channels FIRST, before any DB
+        //    query. This eliminates the TOCTOU window where stage
+        //    events published during the history fetch would be
+        //    silently dropped (broadcast::send returns SendError
+        //    when there are no receivers). Events that arrive during
+        //    the history fetch are queued in the broadcast buffer
+        //    (capacity 1024 for stages, 256 for rows) and delivered
+        //    after the history batch is sent. The frontend's
+        //    mergeLogsByDescId dedupes by id, so a row appearing in
+        //    both history and the broadcast backlog is handled
+        //    correctly.
+        let mut usage_rx = state.usage_tx().subscribe();
+        let mut stage_rx = state.stage_tx().subscribe();
+
+        // 2. Initial history batch (most recent 100).
         // A SQLite "disk I/O error" here (e.g. WAL contention
         // under load) must NOT kill the WebSocket — the
         // frontend handles an empty `rows` array gracefully,
@@ -1574,9 +1588,8 @@ async fn stream_usage_rows(
         // finding RACE-F-5.
         let mut last_known_id: i64 = rows.iter().map(|r| r.id.0).max().unwrap_or(0);
 
-        // 2. Subscribe to broadcast tx (rows + stages)
-        let mut usage_rx = state.usage_tx().subscribe();
-        let mut stage_rx = state.stage_tx().subscribe();
+        // 3. Event loop — usage_rx and stage_rx are already
+        //    subscribed above, before the history query.
         loop {
             tokio::select! {
                 incoming = socket.next() => {
