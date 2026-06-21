@@ -4480,6 +4480,7 @@ mod tests {
     use std::sync::atomic::AtomicU64;
     use std::time::Duration;
     use tokio::sync::{mpsc, watch};
+    use crate::adapters::{AdapterAuthType, ProviderAdapterConfig};
 
     // NEW-2 fix unit tests: parse_retry_after_ms handles integer-seconds
     // and HTTP-date forms, applies the 5-minute cap to malicious values,
@@ -4665,6 +4666,67 @@ mod tests {
             race_cancel: None,
         };
         (req, _dis_tx)
+    }
+
+    /// Minimal `ProviderAdapter` impl for tests that just need URL/header
+    /// plumbing without any per-format normalization. Tests that need to
+    /// override `normalize_request_body` should define their own adapter
+    /// struct (see `normalize_request_body_hook_called_in_chat_pipeline`).
+    pub(super) struct MockAdapter {
+        pub config: ProviderAdapterConfig,
+    }
+    impl MockAdapter {
+        pub fn new(id: &str, base_url: String, format: AdapterFormat) -> Self {
+            Self {
+                config: ProviderAdapterConfig {
+                    id: ProviderId::new(id),
+                    base_url,
+                    auth_type: AdapterAuthType::Bearer,
+                    format,
+                    extra_headers: Vec::new(),
+                },
+            }
+        }
+    }
+    #[async_trait::async_trait]
+    impl ProviderAdapter for MockAdapter {
+        fn id(&self) -> &ProviderId {
+            &self.config.id
+        }
+        fn config(&self) -> &ProviderAdapterConfig {
+            &self.config
+        }
+        fn build_chat_url(
+            &self,
+            _target_format: TargetFormat,
+            _model: &crate::ids::ModelId,
+        ) -> String {
+            self.config.base_url.clone()
+        }
+        fn build_auth_header(&self, api_key: &str) -> (String, String) {
+            ("Authorization".into(), format!("Bearer {api_key}"))
+        }
+        fn build_headers(
+            &self,
+            api_key: &str,
+            _target_format: TargetFormat,
+            _model: &crate::ids::ModelId,
+        ) -> Vec<(String, String)> {
+            vec![
+                self.build_auth_header(api_key),
+                ("Content-Type".into(), "application/json".into()),
+            ]
+        }
+        fn models_url(&self) -> Option<String> {
+            None
+        }
+        async fn fetch_models(
+            &self,
+            _upstream_client: &std::sync::Arc<crate::upstream::UpstreamClient>,
+            _api_key: &str,
+        ) -> Result<Vec<crate::models::DiscoveredModel>> {
+            Ok(Vec::new())
+        }
     }
 
     #[test]
@@ -5502,50 +5564,6 @@ mod tests {
         use tokio::net::TcpListener;
 
         // ----- 1. Mock adapter that points at our localhost listener -----
-        struct MockAdapter {
-            config: ProviderAdapterConfig,
-        }
-        #[async_trait::async_trait]
-        impl ProviderAdapter for MockAdapter {
-            fn id(&self) -> &ProviderId {
-                &self.config.id
-            }
-            fn config(&self) -> &ProviderAdapterConfig {
-                &self.config
-            }
-            fn build_chat_url(
-                &self,
-                _target_format: TargetFormat,
-                _model: &crate::ids::ModelId,
-            ) -> String {
-                self.config.base_url.clone()
-            }
-            fn build_auth_header(&self, api_key: &str) -> (String, String) {
-                ("Authorization".into(), format!("Bearer {api_key}"))
-            }
-            fn build_headers(
-                &self,
-                api_key: &str,
-                _target_format: TargetFormat,
-                _model: &crate::ids::ModelId,
-            ) -> Vec<(String, String)> {
-                vec![
-                    self.build_auth_header(api_key),
-                    ("Content-Type".into(), "application/json".into()),
-                ]
-            }
-            fn models_url(&self) -> Option<String> {
-                None
-            }
-            async fn fetch_models(
-                &self,
-                _upstream_client: &std::sync::Arc<crate::upstream::UpstreamClient>,
-                _api_key: &str,
-            ) -> Result<Vec<crate::models::DiscoveredModel>> {
-                Ok(Vec::new())
-            }
-        }
-
         // ----- 2. Bind the listener; spawn a server that:
         //         - 1st request → 500 (retryable, advances to next target),
         //         - 2nd request → 200 with the "from model 2" body,
@@ -5706,15 +5724,7 @@ mod tests {
 
         // ----- 4. Wire the mock adapter + run the pipeline -----
         let defaults = Timeouts::from_config(&TimeoutsConfig::default());
-        let mock = MockAdapter {
-            config: ProviderAdapterConfig {
-                id: ProviderId::new("prio-mock"),
-                base_url: upstream_url.clone(),
-                auth_type: AdapterAuthType::Bearer,
-                format: AdapterFormat::Openai,
-                extra_headers: Vec::new(),
-            },
-        };
+        let mock = MockAdapter::new("prio-mock", upstream_url.clone(), AdapterFormat::Openai);
         let cfg = PipelineConfig {
             defaults,
             racing: RacingConfig::default(),
@@ -5842,50 +5852,6 @@ mod tests {
         use crate::adapters::{
             AdapterAuthType, AdapterFormat, ProviderAdapter, ProviderAdapterConfig,
         };
-        struct MockAdapter {
-            config: ProviderAdapterConfig,
-        }
-        #[async_trait::async_trait]
-        impl ProviderAdapter for MockAdapter {
-            fn id(&self) -> &ProviderId {
-                &self.config.id
-            }
-            fn config(&self) -> &ProviderAdapterConfig {
-                &self.config
-            }
-            fn build_chat_url(
-                &self,
-                _target_format: TargetFormat,
-                _model: &crate::ids::ModelId,
-            ) -> String {
-                self.config.base_url.clone()
-            }
-            fn build_auth_header(&self, api_key: &str) -> (String, String) {
-                ("Authorization".into(), format!("Bearer {api_key}"))
-            }
-            fn build_headers(
-                &self,
-                api_key: &str,
-                _target_format: TargetFormat,
-                _model: &crate::ids::ModelId,
-            ) -> Vec<(String, String)> {
-                vec![
-                    self.build_auth_header(api_key),
-                    ("Content-Type".into(), "application/json".into()),
-                ]
-            }
-            fn models_url(&self) -> Option<String> {
-                None
-            }
-            async fn fetch_models(
-                &self,
-                _upstream_client: &std::sync::Arc<crate::upstream::UpstreamClient>,
-                _api_key: &str,
-            ) -> Result<Vec<crate::models::DiscoveredModel>> {
-                Ok(Vec::new())
-            }
-        }
-
         // 2. Spin a 500-only listener.
         let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
         let local_addr = listener.local_addr().expect("local_addr");
@@ -5982,15 +5948,7 @@ mod tests {
 
         // 4. Wire the mock + run.
         let defaults = Timeouts::from_config(&TimeoutsConfig::default());
-        let mock = MockAdapter {
-            config: ProviderAdapterConfig {
-                id: ProviderId::new("adv-mock"),
-                base_url: upstream_url.clone(),
-                auth_type: AdapterAuthType::Bearer,
-                format: AdapterFormat::Openai,
-                extra_headers: Vec::new(),
-            },
-        };
+        let mock = MockAdapter::new("adv-mock", upstream_url.clone(), AdapterFormat::Openai);
         let cfg = PipelineConfig {
             defaults,
             racing: RacingConfig::default(),
@@ -6087,50 +6045,6 @@ mod tests {
         use crate::adapters::{
             AdapterAuthType, AdapterFormat, ProviderAdapter, ProviderAdapterConfig,
         };
-        struct MockAdapter {
-            config: ProviderAdapterConfig,
-        }
-        #[async_trait::async_trait]
-        impl ProviderAdapter for MockAdapter {
-            fn id(&self) -> &ProviderId {
-                &self.config.id
-            }
-            fn config(&self) -> &ProviderAdapterConfig {
-                &self.config
-            }
-            fn build_chat_url(
-                &self,
-                _target_format: TargetFormat,
-                _model: &crate::ids::ModelId,
-            ) -> String {
-                self.config.base_url.clone()
-            }
-            fn build_auth_header(&self, api_key: &str) -> (String, String) {
-                ("Authorization".into(), format!("Bearer {api_key}"))
-            }
-            fn build_headers(
-                &self,
-                api_key: &str,
-                _target_format: TargetFormat,
-                _model: &crate::ids::ModelId,
-            ) -> Vec<(String, String)> {
-                vec![
-                    self.build_auth_header(api_key),
-                    ("Content-Type".into(), "application/json".into()),
-                ]
-            }
-            fn models_url(&self) -> Option<String> {
-                None
-            }
-            async fn fetch_models(
-                &self,
-                _upstream_client: &std::sync::Arc<crate::upstream::UpstreamClient>,
-                _api_key: &str,
-            ) -> Result<Vec<crate::models::DiscoveredModel>> {
-                Ok(Vec::new())
-            }
-        }
-
         // 1. Listener: 1st → 400, 2nd → 503, 3rd → 200.
         let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
         let local_addr = listener.local_addr().expect("local_addr");
@@ -6228,15 +6142,7 @@ mod tests {
 
         // 3. Wire the mock + run.
         let defaults = Timeouts::from_config(&TimeoutsConfig::default());
-        let mock = MockAdapter {
-            config: ProviderAdapterConfig {
-                id: ProviderId::new("adv-mock"),
-                base_url: upstream_url.clone(),
-                auth_type: AdapterAuthType::Bearer,
-                format: AdapterFormat::Openai,
-                extra_headers: Vec::new(),
-            },
-        };
+        let mock = MockAdapter::new("adv-mock", upstream_url.clone(), AdapterFormat::Openai);
         let cfg = PipelineConfig {
             defaults,
             racing: RacingConfig::default(),
@@ -6315,50 +6221,6 @@ mod tests {
         use crate::adapters::{
             AdapterAuthType, AdapterFormat, ProviderAdapter, ProviderAdapterConfig,
         };
-        struct MockAdapter {
-            config: ProviderAdapterConfig,
-        }
-        #[async_trait::async_trait]
-        impl ProviderAdapter for MockAdapter {
-            fn id(&self) -> &ProviderId {
-                &self.config.id
-            }
-            fn config(&self) -> &ProviderAdapterConfig {
-                &self.config
-            }
-            fn build_chat_url(
-                &self,
-                _target_format: TargetFormat,
-                _model: &crate::ids::ModelId,
-            ) -> String {
-                self.config.base_url.clone()
-            }
-            fn build_auth_header(&self, api_key: &str) -> (String, String) {
-                ("Authorization".into(), format!("Bearer {api_key}"))
-            }
-            fn build_headers(
-                &self,
-                api_key: &str,
-                _target_format: TargetFormat,
-                _model: &crate::ids::ModelId,
-            ) -> Vec<(String, String)> {
-                vec![
-                    self.build_auth_header(api_key),
-                    ("Content-Type".into(), "application/json".into()),
-                ]
-            }
-            fn models_url(&self) -> Option<String> {
-                None
-            }
-            async fn fetch_models(
-                &self,
-                _upstream_client: &std::sync::Arc<crate::upstream::UpstreamClient>,
-                _api_key: &str,
-            ) -> Result<Vec<crate::models::DiscoveredModel>> {
-                Ok(Vec::new())
-            }
-        }
-
         // 1. Listener: 1st → 400 (non-retryable), 2nd → 200.
         // The walk must advance past the 400 and reach target #2.
         let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
@@ -6455,15 +6317,7 @@ mod tests {
 
         // 3. Wire the mock + run.
         let defaults = Timeouts::from_config(&TimeoutsConfig::default());
-        let mock = MockAdapter {
-            config: ProviderAdapterConfig {
-                id: ProviderId::new("rr-mock"),
-                base_url: upstream_url.clone(),
-                auth_type: AdapterAuthType::Bearer,
-                format: AdapterFormat::Openai,
-                extra_headers: Vec::new(),
-            },
-        };
+        let mock = MockAdapter::new("rr-mock", upstream_url.clone(), AdapterFormat::Openai);
         let cfg = PipelineConfig {
             defaults,
             racing: RacingConfig::default(),
@@ -6524,50 +6378,6 @@ mod tests {
         use crate::adapters::{
             AdapterAuthType, AdapterFormat, ProviderAdapter, ProviderAdapterConfig,
         };
-        struct MockAdapter {
-            config: ProviderAdapterConfig,
-        }
-        #[async_trait::async_trait]
-        impl ProviderAdapter for MockAdapter {
-            fn id(&self) -> &ProviderId {
-                &self.config.id
-            }
-            fn config(&self) -> &ProviderAdapterConfig {
-                &self.config
-            }
-            fn build_chat_url(
-                &self,
-                _target_format: TargetFormat,
-                _model: &crate::ids::ModelId,
-            ) -> String {
-                self.config.base_url.clone()
-            }
-            fn build_auth_header(&self, api_key: &str) -> (String, String) {
-                ("Authorization".into(), format!("Bearer {api_key}"))
-            }
-            fn build_headers(
-                &self,
-                api_key: &str,
-                _target_format: TargetFormat,
-                _model: &crate::ids::ModelId,
-            ) -> Vec<(String, String)> {
-                vec![
-                    self.build_auth_header(api_key),
-                    ("Content-Type".into(), "application/json".into()),
-                ]
-            }
-            fn models_url(&self) -> Option<String> {
-                None
-            }
-            async fn fetch_models(
-                &self,
-                _upstream_client: &std::sync::Arc<crate::upstream::UpstreamClient>,
-                _api_key: &str,
-            ) -> Result<Vec<crate::models::DiscoveredModel>> {
-                Ok(Vec::new())
-            }
-        }
-
         // Listener: calls 1-2 → 400 (sub-combo's X and Y), call 3 → 200 (Z).
         let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
         let local_addr = listener.local_addr().expect("local_addr");
@@ -6705,15 +6515,7 @@ mod tests {
         };
 
         let defaults = Timeouts::from_config(&TimeoutsConfig::default());
-        let mock = MockAdapter {
-            config: ProviderAdapterConfig {
-                id: ProviderId::new("nested-mock"),
-                base_url: upstream_url.clone(),
-                auth_type: AdapterAuthType::Bearer,
-                format: AdapterFormat::Openai,
-                extra_headers: Vec::new(),
-            },
-        };
+        let mock = MockAdapter::new("nested-mock", upstream_url.clone(), AdapterFormat::Openai);
         let cfg = PipelineConfig {
             defaults,
             racing: RacingConfig::default(),
@@ -7107,50 +6909,6 @@ mod tests {
         use crate::adapters::{
             AdapterAuthType, AdapterFormat, ProviderAdapter, ProviderAdapterConfig,
         };
-        struct MockAdapter {
-            config: ProviderAdapterConfig,
-        }
-        #[async_trait::async_trait]
-        impl ProviderAdapter for MockAdapter {
-            fn id(&self) -> &ProviderId {
-                &self.config.id
-            }
-            fn config(&self) -> &ProviderAdapterConfig {
-                &self.config
-            }
-            fn build_chat_url(
-                &self,
-                _target_format: TargetFormat,
-                _model: &crate::ids::ModelId,
-            ) -> String {
-                self.config.base_url.clone()
-            }
-            fn build_auth_header(&self, api_key: &str) -> (String, String) {
-                ("Authorization".into(), format!("Bearer {api_key}"))
-            }
-            fn build_headers(
-                &self,
-                api_key: &str,
-                _target_format: TargetFormat,
-                _model: &crate::ids::ModelId,
-            ) -> Vec<(String, String)> {
-                vec![
-                    self.build_auth_header(api_key),
-                    ("Content-Type".into(), "application/json".into()),
-                ]
-            }
-            fn models_url(&self) -> Option<String> {
-                None
-            }
-            async fn fetch_models(
-                &self,
-                _upstream_client: &std::sync::Arc<crate::upstream::UpstreamClient>,
-                _api_key: &str,
-            ) -> Result<Vec<crate::models::DiscoveredModel>> {
-                Ok(Vec::new())
-            }
-        }
-
         // Listener: always 503.
         let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
         let local_addr = listener.local_addr().expect("local_addr");
@@ -7236,15 +6994,7 @@ mod tests {
         };
 
         let defaults = Timeouts::from_config(&TimeoutsConfig::default());
-        let mock = MockAdapter {
-            config: ProviderAdapterConfig {
-                id: ProviderId::new("adv-mock"),
-                base_url: upstream_url.clone(),
-                auth_type: AdapterAuthType::Bearer,
-                format: AdapterFormat::Openai,
-                extra_headers: Vec::new(),
-            },
-        };
+        let mock = MockAdapter::new("adv-mock", upstream_url.clone(), AdapterFormat::Openai);
         let cfg = PipelineConfig {
             defaults,
             racing: RacingConfig::default(),
@@ -7320,50 +7070,6 @@ mod tests {
         use crate::adapters::{
             AdapterAuthType, AdapterFormat, ProviderAdapter, ProviderAdapterConfig,
         };
-        struct MockAdapter {
-            config: ProviderAdapterConfig,
-        }
-        #[async_trait::async_trait]
-        impl ProviderAdapter for MockAdapter {
-            fn id(&self) -> &ProviderId {
-                &self.config.id
-            }
-            fn config(&self) -> &ProviderAdapterConfig {
-                &self.config
-            }
-            fn build_chat_url(
-                &self,
-                _target_format: TargetFormat,
-                _model: &crate::ids::ModelId,
-            ) -> String {
-                self.config.base_url.clone()
-            }
-            fn build_auth_header(&self, api_key: &str) -> (String, String) {
-                ("Authorization".into(), format!("Bearer {api_key}"))
-            }
-            fn build_headers(
-                &self,
-                api_key: &str,
-                _target_format: TargetFormat,
-                _model: &crate::ids::ModelId,
-            ) -> Vec<(String, String)> {
-                vec![
-                    self.build_auth_header(api_key),
-                    ("Content-Type".into(), "application/json".into()),
-                ]
-            }
-            fn models_url(&self) -> Option<String> {
-                None
-            }
-            async fn fetch_models(
-                &self,
-                _upstream_client: &std::sync::Arc<crate::upstream::UpstreamClient>,
-                _api_key: &str,
-            ) -> Result<Vec<crate::models::DiscoveredModel>> {
-                Ok(Vec::new())
-            }
-        }
-
         // Listener: per-call counter, returns 503 for the first
         // `bug4_max_attempts_for_target1` calls and 200 for the
         // rest. This lets us assert both the per-target retry
@@ -7478,15 +7184,7 @@ mod tests {
         };
 
         let defaults = Timeouts::from_config(&TimeoutsConfig::default());
-        let mock = MockAdapter {
-            config: ProviderAdapterConfig {
-                id: ProviderId::new("adv-mock"),
-                base_url: upstream_url.clone(),
-                auth_type: AdapterAuthType::Bearer,
-                format: AdapterFormat::Openai,
-                extra_headers: Vec::new(),
-            },
-        };
+        let mock = MockAdapter::new("adv-mock", upstream_url.clone(), AdapterFormat::Openai);
         let cfg = PipelineConfig {
             defaults,
             racing: RacingConfig::default(),
@@ -8233,50 +7931,6 @@ mod tests {
 
         // ----- 1. A mock ProviderAdapter that points at our
         //         localhost listener -----
-        struct MockAdapter {
-            config: ProviderAdapterConfig,
-        }
-        #[async_trait::async_trait]
-        impl ProviderAdapter for MockAdapter {
-            fn id(&self) -> &ProviderId {
-                &self.config.id
-            }
-            fn config(&self) -> &ProviderAdapterConfig {
-                &self.config
-            }
-            fn build_chat_url(
-                &self,
-                _target_format: TargetFormat,
-                _model: &crate::ids::ModelId,
-            ) -> String {
-                self.config.base_url.clone()
-            }
-            fn build_auth_header(&self, api_key: &str) -> (String, String) {
-                ("Authorization".into(), format!("Bearer {api_key}"))
-            }
-            fn build_headers(
-                &self,
-                api_key: &str,
-                _target_format: TargetFormat,
-                _model: &crate::ids::ModelId,
-            ) -> Vec<(String, String)> {
-                vec![
-                    self.build_auth_header(api_key),
-                    ("Content-Type".into(), "application/json".into()),
-                ]
-            }
-            fn models_url(&self) -> Option<String> {
-                None
-            }
-            async fn fetch_models(
-                &self,
-                _upstream_client: &std::sync::Arc<crate::upstream::UpstreamClient>,
-                _api_key: &str,
-            ) -> Result<Vec<crate::models::DiscoveredModel>> {
-                Ok(Vec::new())
-            }
-        }
-
         // ----- 2. Wire the listener + spawn a server that returns a
         //         well-formed OpenAI chat completion response. The
         //         server parses Content-Length from the request
@@ -8364,15 +8018,7 @@ mod tests {
         );
 
         let defaults = Timeouts::from_config(&TimeoutsConfig::default());
-        let mock = MockAdapter {
-            config: ProviderAdapterConfig {
-                id: ProviderId::new("non-streaming-test"),
-                base_url: upstream_url.clone(),
-                auth_type: AdapterAuthType::Bearer,
-                format: AdapterFormat::Openai,
-                extra_headers: Vec::new(),
-            },
-        };
+        let mock = MockAdapter::new("non-streaming-test", upstream_url.clone(), AdapterFormat::Openai);
         let cfg = PipelineConfig {
             defaults,
             racing: RacingConfig::default(),
@@ -8437,50 +8083,6 @@ mod tests {
         use std::sync::Arc;
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
         use tokio::net::TcpListener;
-
-        struct MockAdapter {
-            config: ProviderAdapterConfig,
-        }
-        #[async_trait::async_trait]
-        impl ProviderAdapter for MockAdapter {
-            fn id(&self) -> &ProviderId {
-                &self.config.id
-            }
-            fn config(&self) -> &ProviderAdapterConfig {
-                &self.config
-            }
-            fn build_chat_url(
-                &self,
-                _target_format: TargetFormat,
-                _model: &crate::ids::ModelId,
-            ) -> String {
-                self.config.base_url.clone()
-            }
-            fn build_auth_header(&self, api_key: &str) -> (String, String) {
-                ("Authorization".into(), format!("Bearer {api_key}"))
-            }
-            fn build_headers(
-                &self,
-                api_key: &str,
-                _target_format: TargetFormat,
-                _model: &crate::ids::ModelId,
-            ) -> Vec<(String, String)> {
-                vec![
-                    self.build_auth_header(api_key),
-                    ("Content-Type".into(), "application/json".into()),
-                ]
-            }
-            fn models_url(&self) -> Option<String> {
-                None
-            }
-            async fn fetch_models(
-                &self,
-                _upstream_client: &std::sync::Arc<crate::upstream::UpstreamClient>,
-                _api_key: &str,
-            ) -> Result<Vec<crate::models::DiscoveredModel>> {
-                Ok(Vec::new())
-            }
-        }
 
         let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
         let local_addr = listener.local_addr().expect("local_addr");
@@ -8573,15 +8175,7 @@ mod tests {
         );
 
         let defaults = Timeouts::from_config(&TimeoutsConfig::default());
-        let mock = MockAdapter {
-            config: ProviderAdapterConfig {
-                id: ProviderId::new("body-bug-test"),
-                base_url: upstream_url.clone(),
-                auth_type: AdapterAuthType::Bearer,
-                format: AdapterFormat::Openai,
-                extra_headers: Vec::new(),
-            },
-        };
+        let mock = MockAdapter::new("body-bug-test", upstream_url.clone(), AdapterFormat::Openai);
         let cfg = PipelineConfig {
             defaults,
             racing: RacingConfig::default(),
@@ -9488,50 +9082,6 @@ mod tests {
         use tokio::net::TcpListener;
 
         // 1. Mock adapter.
-        struct MockAdapter {
-            config: ProviderAdapterConfig,
-        }
-        #[async_trait::async_trait]
-        impl ProviderAdapter for MockAdapter {
-            fn id(&self) -> &ProviderId {
-                &self.config.id
-            }
-            fn config(&self) -> &ProviderAdapterConfig {
-                &self.config
-            }
-            fn build_chat_url(
-                &self,
-                _target_format: TargetFormat,
-                _model: &crate::ids::ModelId,
-            ) -> String {
-                self.config.base_url.clone()
-            }
-            fn build_auth_header(&self, api_key: &str) -> (String, String) {
-                ("Authorization".into(), format!("Bearer {api_key}"))
-            }
-            fn build_headers(
-                &self,
-                api_key: &str,
-                _target_format: TargetFormat,
-                _model: &crate::ids::ModelId,
-            ) -> Vec<(String, String)> {
-                vec![
-                    self.build_auth_header(api_key),
-                    ("Content-Type".into(), "application/json".into()),
-                ]
-            }
-            fn models_url(&self) -> Option<String> {
-                None
-            }
-            async fn fetch_models(
-                &self,
-                _upstream_client: &std::sync::Arc<crate::upstream::UpstreamClient>,
-                _api_key: &str,
-            ) -> Result<Vec<crate::models::DiscoveredModel>> {
-                Ok(Vec::new())
-            }
-        }
-
         // 2. Bind a listener and serve one request.
         let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
         let local_addr = listener.local_addr().expect("local_addr");
@@ -9611,15 +9161,7 @@ mod tests {
         );
 
         let defaults = Timeouts::from_config(&TimeoutsConfig::default());
-        let mock = MockAdapter {
-            config: ProviderAdapterConfig {
-                id: ProviderId::new(provider_id),
-                base_url: upstream_url.clone(),
-                auth_type: AdapterAuthType::Bearer,
-                format: AdapterFormat::Openai,
-                extra_headers: Vec::new(),
-            },
-        };
+        let mock = MockAdapter::new(provider_id, upstream_url.clone(), AdapterFormat::Openai);
         let recording_flag = Arc::new(std::sync::atomic::AtomicBool::new(true));
         let cfg = PipelineConfig {
             defaults,
@@ -10024,50 +9566,6 @@ data: [DONE]\n\n";
         use tokio::net::TcpListener;
 
         // Mock adapter — same shape as in run_with_fake_upstream_and_capture_stages.
-        struct MockAdapter {
-            config: ProviderAdapterConfig,
-        }
-        #[async_trait::async_trait]
-        impl ProviderAdapter for MockAdapter {
-            fn id(&self) -> &ProviderId {
-                &self.config.id
-            }
-            fn config(&self) -> &ProviderAdapterConfig {
-                &self.config
-            }
-            fn build_chat_url(
-                &self,
-                _target_format: TargetFormat,
-                _model: &crate::ids::ModelId,
-            ) -> String {
-                self.config.base_url.clone()
-            }
-            fn build_auth_header(&self, api_key: &str) -> (String, String) {
-                ("Authorization".into(), format!("Bearer {api_key}"))
-            }
-            fn build_headers(
-                &self,
-                api_key: &str,
-                _target_format: TargetFormat,
-                _model: &crate::ids::ModelId,
-            ) -> Vec<(String, String)> {
-                vec![
-                    self.build_auth_header(api_key),
-                    ("Content-Type".into(), "application/json".into()),
-                ]
-            }
-            fn models_url(&self) -> Option<String> {
-                None
-            }
-            async fn fetch_models(
-                &self,
-                _upstream_client: &std::sync::Arc<crate::upstream::UpstreamClient>,
-                _api_key: &str,
-            ) -> Result<Vec<crate::models::DiscoveredModel>> {
-                Ok(Vec::new())
-            }
-        }
-
         // Bind a localhost listener. The server sends `chunks` back as
         // the response body (no Content-Length — the upstream client
         // reads until EOF, which matches `streaming_dispatch_uses_upstream_client_end_to_end`).
@@ -10214,17 +9712,9 @@ data: [DONE]\n\n";
         .expect("add target");
 
         let defaults = Timeouts::from_config(&TimeoutsConfig::default());
-        let mock = MockAdapter {
-            config: ProviderAdapterConfig {
-                id: ProviderId::new(provider_id),
-                base_url: upstream_url.clone(),
-                auth_type: AdapterAuthType::Bearer,
-                // Mixed so the pipeline consults model.target_format
-                // (pipeline.rs:1355) to pick the SSE parser branch.
-                format: AdapterFormat::Mixed,
-                extra_headers: Vec::new(),
-            },
-        };
+        // Mixed so the pipeline consults model.target_format (pipeline.rs:1355)
+        // to pick the SSE parser branch.
+        let mock = MockAdapter::new(provider_id, upstream_url.clone(), AdapterFormat::Mixed);
         let recording_flag = Arc::new(std::sync::atomic::AtomicBool::new(recording));
         let cfg = PipelineConfig {
             defaults,
