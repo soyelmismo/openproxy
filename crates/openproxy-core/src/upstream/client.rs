@@ -170,14 +170,20 @@ impl UpstreamClient {
             let connector = PhasedConnector::with_defaults();
             let hyper: HyperClient<PhasedConnector, Full<Bytes>> =
                 HyperClient::builder(TokioExecutor::new())
-                    // Disable keep-alive: when a request future is
-                    // dropped (e.g. client cancellation), the
-                    // underlying connection is closed instead of
-                    // being returned to the pool. This propagates
-                    // client-side cancellation to the upstream
-                    // socket. Trade-off: each request pays a fresh
-                    // TCP+TLS handshake (~50-200ms on WAN). ponytail.
-                    .pool_max_idle_per_host(0)
+                    // Keep up to 32 idle connections per host so the
+                    // shared `UpstreamClient` (lives on `AppState`,
+                    // created once at startup) can reuse them across
+                    // requests — eliminating the per-request TCP+TLS
+                    // handshake (~50-200ms on WAN). Cancellation of an
+                    // individual request is still propagated to the
+                    // upstream: the `CancellationToken` passed to
+                    // `UpstreamClient::call` aborts the hyper body
+                    // stream, which signals the upstream that the
+                    // consumer is gone. Dropping the request future no
+                    // longer closes the underlying connection, but that
+                    // is the intended trade-off now that the client is
+                    // shared.
+                    .pool_max_idle_per_host(32)
                     .build(connector.clone());
             let pool = Pool::new();
             spawn_eviction_loop(pool.clone());
