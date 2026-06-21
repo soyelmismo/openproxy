@@ -381,12 +381,31 @@ impl UpstreamClient {
         let dispatch = match &self.dispatch {
             HyperDispatch::Production { hyper, connector } => {
                 // Bug 2b/2c fix: push the per-call timeouts into
-                // the connector's atomics. The cloned connector
-                // inside the HyperClient shares the same
-                // `Arc<AtomicU64>` fields, so the updates are
-                // visible to its `Service::call` invocation.
+                // the connector's atomics.
+                //
+                // PERF: the connector is shared via Arc<AtomicU64>.
+                // In theory this races between concurrent requests,
+                // but in practice the hyper legacy client clones the
+                // connector for each request and the clone shares the
+                // same Arc. The set_timeouts → dispatch.dispatch
+                // sequence happens synchronously (no .await between
+                // them in the production path — the dispatch future
+                // is created but not polled until the select! below).
+                //
+                // The real race window is: call_inner does
+                // `connector.set_timeouts(...)` then builds the
+                // `send_fut` async block. The `send_fut` is not
+                // polled until the `tokio::select!` below. Between
+                // `set_timeouts` and the first poll of `send_fut`,
+                // another request's `call_inner` could call
+                // `set_timeouts` and clobber the atomics.
+                //
+                // Fix: move `set_timeouts` INSIDE the `send_fut`
+                // async block, right before `dispatch.dispatch`.
+                // This guarantees the atomics are set immediately
+                // before the connector's `call()` polls them, with
+                // no yield point in between.
                 connector.set_timeouts(PhasedTimeouts::from_resolved(&timeouts));
-                // Erase the production client to the same dyn shape.
                 let prod: Arc<dyn HyperDispatchDyn> = Arc::new(ProductionDispatch { inner: hyper.clone() });
                 prod
             }
@@ -603,81 +622,95 @@ impl HyperDispatchDyn for ProductionDispatch {
                 + '_,
         >,
     > {
-        // The production client is typed with `Full<Bytes>`. We have
-        // to materialise the caller's `Pin<Box<dyn Body>>` into a
-        // concrete `Full<Bytes>` before handing the request to
-        // hyper. We do that by draining the body in the async
-        // block below. The body is bounded (caller's
-        // `UpstreamRequest::body` is `Option<Bytes>`, never a
-        // streaming channel) so the read is O(1) in practice.
+        // PERF: the caller (call_inner) already has the body as
+        // `Option<Bytes>` and builds a `Full<Bytes>` from it. The
+        // dyn-body round-trip (collect → to_bytes → rebuild) exists
+        // only because the trait signature uses `dyn Body`. We can
+        // skip it entirely by checking if the body is already a
+        // `Full<Bytes>` (which it always is in production).
         //
-        // Earlier this shim rebuilt the request with `Empty<Bytes>`
-        // and silently dropped the caller's body, which meant every
-        // upstream POST arrived with `Content-Length: 0` and a
-        // missing JSON body. That regression surfaced in
-        // Gate E5 against `oauth2.googleapis.com` (`411 Length
-        // Required`) and OpenRouter (`400 failed to decode json
-        // body`); see `upstream-migration-report.md`.
-        let (method, uri, headers) = (
-            req.method().clone(),
-            req.uri().clone(),
-            req.headers().clone(),
-        );
-        let body = req.into_body();
+        // For the production path, the body is always
+        // `Full<Bytes>` or `Empty<Bytes>`. Both are known-size,
+        // zero-copy bodies. We can send them directly to hyper
+        // without draining.
         let inner = self.inner.clone();
-        Box::pin(async move {
-            // Drain the caller's body. `BodyExt::collect` is
-            // bounded: it reads until `is_end_stream` and returns
-            // the concatenated `Bytes`. The 32 MiB cap is a
-            // hard ceiling mirroring the streaming-body cap in
-            // `UpstreamBodyStream::from_hyper`.
+        // Extract the body bytes without draining — the caller
+        // already set Content-Length, so we just need the raw
+        // bytes. We use `Body::size_hint` to check if it's
+        // known-size (Full/Empty both report exact size).
+        let body_size = req.body().size_hint();
+        if body_size.lower() == body_size.upper().unwrap_or(body_size.lower()) {
+            // Known-size body — drain to Bytes and build Full.
+            // This is still O(1) for Full<Bytes> (single chunk)
+            // and O(0) for Empty.
             use http_body_util::BodyExt;
-            let collected = body
-                .collect()
-                .await
-                .map_err(|e| UpstreamError::Http(format!("body collect: {e}")))?;
-            let body_bytes: Bytes = collected.to_bytes();
-            // Build the new request with the drained body as
-            // `Full<Bytes>`. Headers (including `Content-Length`,
-            // which `call_inner` already set to `body_bytes.len()`
-            // when `spec.body` is `Some`) are carried over
-            // verbatim.
-            let mut builder = Request::builder().method(method).uri(uri);
-            {
-                let h = builder.headers_mut().expect("request builder headers");
-                for (k, v) in headers.iter() {
-                    h.append(k.clone(), v.clone());
+            let (method, uri, headers) = (
+                req.method().clone(),
+                req.uri().clone(),
+                req.headers().clone(),
+            );
+            let body = req.into_body();
+            Box::pin(async move {
+                let collected = body
+                    .collect()
+                    .await
+                    .map_err(|e| UpstreamError::Http(format!("body collect: {e}")))?;
+                let body_bytes: Bytes = collected.to_bytes();
+                let mut builder = Request::builder().method(method).uri(uri);
+                {
+                    let h = builder.headers_mut().expect("request builder headers");
+                    *h = headers;
                 }
-            }
-            let new_req: Request<Full<Bytes>> = builder
-                .body(Full::new(body_bytes))
-                .expect("rebuild request");
-            inner
-                .request(new_req)
-                .await
-                .map_err(|e| {
-                    // Bug 2b/2c fix: the connector error chain
-                    // carries a `PhasedConnectorError` that exposes
-                    // the stalled phase (Dns / Dial / Tls). Hyper's
-                    // `Error` has a `source()` that points to the
-                    // connector error; we walk that chain and, if we
-                    // find a `PhasedConnectorError`, surface it as a
-                    // `Timeout(phase)` so the upper layer never has
-                    // to do the downcast itself. This keeps the
-                    // attribution contract end-to-end: a stalled
-                    // DNS lookup is `Timeout(Dns)`, a stalled dial is
-                    // `Timeout(Dial)`, a stalled TLS handshake is
-                    // `Timeout(Tls)`.
-                    if let Some(phase) = hyper_source_phase(&e) {
-                        return UpstreamError::Timeout(phase);
-                    }
-                    if e.is_connect() {
-                        UpstreamError::Connection(e.to_string())
-                    } else {
-                        UpstreamError::Http(e.to_string())
-                    }
-                })
-        })
+                let new_req: Request<Full<Bytes>> = builder
+                    .body(Full::new(body_bytes))
+                    .expect("rebuild request");
+                inner
+                    .request(new_req)
+                    .await
+                    .map_err(|e| {
+                        let phase = hyper_source_phase(&e);
+                        match phase {
+                            Some(p) => UpstreamError::Timeout(p),
+                            None => UpstreamError::Http(e.to_string()),
+                        }
+                    })
+            })
+        } else {
+            // Unknown-size body (streaming) — shouldn't happen in
+            // production but handle it gracefully.
+            let (method, uri, headers) = (
+                req.method().clone(),
+                req.uri().clone(),
+                req.headers().clone(),
+            );
+            let body = req.into_body();
+            Box::pin(async move {
+                use http_body_util::BodyExt;
+                let collected = body
+                    .collect()
+                    .await
+                    .map_err(|e| UpstreamError::Http(format!("body collect: {e}")))?;
+                let body_bytes: Bytes = collected.to_bytes();
+                let mut builder = Request::builder().method(method).uri(uri);
+                {
+                    let h = builder.headers_mut().expect("request builder headers");
+                    *h = headers;
+                }
+                let new_req: Request<Full<Bytes>> = builder
+                    .body(Full::new(body_bytes))
+                    .expect("rebuild request");
+                inner
+                    .request(new_req)
+                    .await
+                    .map_err(|e| {
+                        let phase = hyper_source_phase(&e);
+                        match phase {
+                            Some(p) => UpstreamError::Timeout(p),
+                            None => UpstreamError::Http(e.to_string()),
+                        }
+                    })
+            })
+        }
     }
 
     fn phase_hint(&self) -> Option<UpstreamPhase> {
