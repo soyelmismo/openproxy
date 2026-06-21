@@ -90,10 +90,12 @@ fn resolve_adapter(
         return Ok(Arc::clone(a));
     }
     // 2. Custom provider in DB → build adapter on-the-fly.
-    let w = s.db_pool().writer();
-    let provider_row = providers::get(&w, provider_id)
+    // `providers::get` is a SELECT — use the READER so this lookup
+    // doesn't serialize through the writer mutex (chat hot path).
+    let r = s.db_pool().reader();
+    let provider_row = providers::get(&r, provider_id)
         .map_err(|e| CoreError::ProviderNotFound(format!("{}: {}", provider_id, e)))?;
-    drop(w);
+    drop(r);
     match provider_row {
         Some(row) => Ok(Arc::new(adapters::CustomAdapter::from_provider_row(&row))),
         None => Err(CoreError::ProviderNotFound(provider_id.to_string())),
@@ -609,8 +611,10 @@ pub async fn list_providers(
     State(s): State<AppState>,
 ) -> ApiResult<Json<Vec<providers::Provider>>> {
     let body: Result<Json<Vec<providers::Provider>>, ApiError> = async {
-        let w = s.db_pool().writer();
-        let list = admin::list_providers(&w)?;
+        // Read-only SELECT — use the READER so the dashboard's catalog
+        // polling doesn't serialize through the writer mutex.
+        let r = s.db_pool().reader();
+        let list = admin::list_providers(&r)?;
         Ok(Json(list))
     }
     .await;
@@ -664,9 +668,10 @@ pub async fn get_provider(
     Path(id): Path<String>,
 ) -> ApiResult<Json<providers::Provider>> {
     let body: Result<Json<providers::Provider>, ApiError> = async {
-        let w = s.db_pool().writer();
+        // Read-only SELECT — use the READER.
+        let r = s.db_pool().reader();
         let id = ProviderId::new(id);
-        let provider = providers::get(&w, &id)?
+        let provider = providers::get(&r, &id)?
             .ok_or_else(|| CoreError::ProviderNotFound(id.to_string()))?;
         Ok(Json(provider))
     }
@@ -791,9 +796,10 @@ pub async fn list_accounts(
     Query(q): Query<AccountListQuery>,
 ) -> ApiResult<Json<Vec<accounts::Account>>> {
     let body: Result<Json<Vec<accounts::Account>>, ApiError> = async {
-        let w = s.db_pool().writer();
+        // Read-only SELECT — use the READER.
+        let r = s.db_pool().reader();
         let provider = q.provider_id.map(ProviderId::new);
-        let list = admin::list_accounts(&w, provider.as_ref())?;
+        let list = admin::list_accounts(&r, provider.as_ref())?;
         Ok(Json(list))
     }
     .await;
@@ -839,8 +845,9 @@ pub async fn list_combos(
     State(s): State<AppState>,
 ) -> ApiResult<Json<Vec<combos::Combo>>> {
     let body: Result<Json<Vec<combos::Combo>>, ApiError> = async {
-        let w = s.db_pool().writer();
-        let list = admin::list_combos(&w)?;
+        // Read-only SELECT — use the READER.
+        let r = s.db_pool().reader();
+        let list = admin::list_combos(&r)?;
         Ok(Json(list))
     }
     .await;
@@ -867,9 +874,10 @@ pub async fn get_combo(
     Path(id): Path<i64>,
 ) -> ApiResult<Json<combos::Combo>> {
     let body: Result<Json<combos::Combo>, ApiError> = async {
-        let w = s.db_pool().writer();
+        // Read-only SELECT — use the READER.
+        let r = s.db_pool().reader();
         let id = ComboId(id);
-        let combo = combos::get_combo(&w, id)?
+        let combo = combos::get_combo(&r, id)?
             .ok_or_else(|| CoreError::ComboNotFound(id.0))?;
         Ok(Json(combo))
     }
@@ -1120,9 +1128,10 @@ pub async fn list_combo_targets(
     Path(id): Path<i64>,
 ) -> ApiResult<Json<Vec<combos::ComboTargetWithModel>>> {
     let body: Result<Json<Vec<combos::ComboTargetWithModel>>, ApiError> = async {
-        let w = s.db_pool().writer();
+        // Read-only SELECT — use the READER.
+        let r = s.db_pool().reader();
         let id = ComboId(id);
-        let targets = admin::list_combo_targets_with_model(&w, id)?;
+        let targets = admin::list_combo_targets_with_model(&r, id)?;
         Ok(Json(targets))
     }
     .await;
@@ -1154,9 +1163,10 @@ pub async fn list_valid_sub_combos(
     Path(id): Path<i64>,
 ) -> ApiResult<Json<Vec<admin::ComboSummary>>> {
     let body: Result<Json<Vec<admin::ComboSummary>>, ApiError> = async {
-        let w = s.db_pool().writer();
+        // Read-only SELECT — use the READER.
+        let r = s.db_pool().reader();
         let id = ComboId(id);
-        let list = admin::list_valid_sub_combos(&w, id)?;
+        let list = admin::list_valid_sub_combos(&r, id)?;
         Ok(Json(list))
     }
     .await;
@@ -1669,12 +1679,15 @@ pub async fn usage_recent(
             .limit
             .unwrap_or(USAGE_RECENT_DEFAULT_LIMIT)
             .clamp(1, USAGE_RECENT_MAX_LIMIT);
-        let w = s.db_pool().writer();
+        // Read-only SELECT — use the READER. The dashboard polls this
+        // endpoint frequently; going through the writer would
+        // serialize every poll against `cost::record` writes.
+        let r = s.db_pool().reader();
         // SEC-MEDIUM-C fix: drop the heavy request/response payloads
         // from the WS/REST surface — they can be multi-MB and would
         // fan out PII to every dashboard subscriber. The detail
         // endpoint reads them straight from the database on demand.
-        let rows = usage::recent(&w, since_id, limit)?
+        let rows = usage::recent(&r, since_id, limit)?
             .into_iter()
             .map(usage::redact_for_broadcast)
             .collect();
@@ -1750,8 +1763,12 @@ fn authenticate_admin_ws(state: &AppState, headers: &HeaderMap, query_token: Opt
     }
 
     let key_hash = core_api_keys::hash_key(t);
-    let w = state.db_pool().writer();
-    let key = match core_api_keys::get_by_hash(&w, &key_hash).map_err(ApiError)? {
+    // Auth is a SELECT by hash — use the READER so admin requests don't
+    // serialize through the writer mutex. The reader has its own
+    // `Mutex<Connection>` (see `db::conn::DbPool`), so auth no longer
+    // contends with `cost::record` writes or admin mutations.
+    let r = state.db_pool().reader();
+    let key = match core_api_keys::get_by_hash(&r, &key_hash).map_err(ApiError)? {
         Some(k) => k,
         None => {
             return Err(ApiError(CoreError::Auth(
@@ -1787,7 +1804,18 @@ fn authenticate_admin_ws(state: &AppState, headers: &HeaderMap, query_token: Opt
         )));
     }
 
-    let _ = core_api_keys::touch_last_used(&w, key.id).map_err(ApiError);
+    // Fire-and-forget the `last_used_at` UPDATE on a blocking thread.
+    // The auth path no longer blocks on acquiring the writer mutex,
+    // and `touch_last_used` already throttles itself to 5-minute
+    // writes (see `LAST_USED_THROTTLE_SECS` in `api_keys.rs`), so the
+    // extra writer acquisition here only happens once per key per
+    // five minutes under steady load.
+    let pool = Arc::clone(state.db_pool());
+    let key_id = key.id;
+    tokio::task::spawn_blocking(move || {
+        let w = pool.writer();
+        let _ = core_api_keys::touch_last_used(&w, key_id);
+    });
 
     Ok(())
 }
@@ -1850,8 +1878,11 @@ async fn stream_usage_rows(
         // async block, sent an error envelope, closed the WS,
         // and triggered an immediate reconnect loop.
         let rows = match (|| -> openproxy_core::Result<_> {
-            let w = state.db_pool().writer();
-            usage::recent_desc(&w, 100)
+            // Read-only SELECT — use the READER. The dashboard's WS
+            // reconnects would otherwise serialize every history
+            // fetch through the writer mutex.
+            let r = state.db_pool().reader();
+            usage::recent_desc(&r, 100)
         })() {
             Ok(r) => r,
             Err(e) => {
@@ -1902,17 +1933,18 @@ async fn stream_usage_rows(
                                         .unwrap_or(0)
                                         .clamp(0, USAGE_RECENT_MAX_SINCE_ID);
                                     let rows: Vec<usage::RecentUsageRow> = {
-                                        let w = state.db_pool().writer();
+                                        // Read-only SELECT — use the READER.
+                                        let r = state.db_pool().reader();
                                         // SEC-MEDIUM-C fix: strip the heavy request/response
                                         // fields from the initial history batch — the
                                         // publisher already redacts the per-event broadcast,
                                         // but `recent()` still returns the full rows so
                                         // this initial replay matched the publisher.
-                                        let rows = usage::recent(&w, since_id, 100)?
+                                        let rows = usage::recent(&r, since_id, 100)?
                                             .into_iter()
                                             .map(usage::redact_for_broadcast)
                                             .collect();
-                                        drop(w);
+                                        drop(r);
                                         rows
                                     };
                                     if let Some(mx) = rows.iter().map(|r| r.id.0).max() {
@@ -2110,8 +2142,9 @@ pub async fn usage_detail(
         return e.into();
     }
     let body: Result<Json<UsageDetailResponse>, ApiError> = async {
-        let w = s.db_pool().writer();
-        let row = usage::detail_by_id(&w, q.id)?;
+        // Read-only SELECT — use the READER.
+        let r = s.db_pool().reader();
+        let row = usage::detail_by_id(&r, q.id)?;
         match row {
             Some(r) => Ok(Json(UsageDetailResponse { row: r })),
             None => Err(ApiError(CoreError::Internal(
@@ -3167,8 +3200,9 @@ pub async fn list_models_admin(
     State(s): State<AppState>,
 ) -> ApiResult<Json<Vec<models::Model>>> {
     let body: Result<Json<Vec<models::Model>>, ApiError> = async {
-        let w = s.db_pool().writer();
-        let list = models::list_all(&w)?;
+        // Read-only SELECT — use the READER.
+        let r = s.db_pool().reader();
+        let list = models::list_all(&r)?;
         Ok(Json(list))
     }
     .await;
@@ -3739,8 +3773,9 @@ pub async fn list_api_keys(
     State(s): State<AppState>,
 ) -> ApiResult<Json<Vec<core_api_keys::ApiKey>>> {
     let body: Result<Json<Vec<core_api_keys::ApiKey>>, ApiError> = async {
-        let w = s.db_pool().writer();
-        let list = core_api_keys::list(&w)?;
+        // Read-only SELECT — use the READER.
+        let r = s.db_pool().reader();
+        let list = core_api_keys::list(&r)?;
         Ok(Json(list))
     }
     .await;
@@ -3779,8 +3814,9 @@ pub async fn get_api_key(
     Path(id): Path<i64>,
 ) -> ApiResult<Json<core_api_keys::ApiKey>> {
     let body: Result<Json<core_api_keys::ApiKey>, ApiError> = async {
-        let w = s.db_pool().writer();
-        let key = core_api_keys::get_by_id(&w, ApiKeyId(id))?
+        // Read-only SELECT — use the READER.
+        let r = s.db_pool().reader();
+        let key = core_api_keys::get_by_id(&r, ApiKeyId(id))?
             .ok_or_else(|| CoreError::Internal(format!("api_key {id} not found")))?;
         Ok(Json(key))
     }
@@ -3920,17 +3956,19 @@ pub async fn api_key_usage(
     Path(id): Path<i64>,
 ) -> ApiResult<Json<serde_json::Value>> {
     let body: Result<Json<serde_json::Value>, ApiError> = async {
-        let w = s.db_pool().writer();
+        // Read-only SELECTs (get_by_id, usage_summary, usage::summary) —
+        // use the READER.
+        let r = s.db_pool().reader();
 
         // Confirm the key exists first so a 404 surfaces here
         // (cleaner) instead of an empty summary that could be
         // confused with "key has no traffic".
-        let _ = core_api_keys::get_by_id(&w, ApiKeyId(id))?
+        let _ = core_api_keys::get_by_id(&r, ApiKeyId(id))?
             .ok_or_else(|| CoreError::Internal(format!("api_key {id} not found")))?;
 
-        let head = core_api_keys::usage_summary(&w, ApiKeyId(id))?;
+        let head = core_api_keys::usage_summary(&r, ApiKeyId(id))?;
         let detailed = usage::summary(
-            &w,
+            &r,
             &UsageFilter {
                 api_key_id: Some(ApiKeyId(id)),
                 ..Default::default()
