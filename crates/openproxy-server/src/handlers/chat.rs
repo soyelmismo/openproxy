@@ -41,7 +41,6 @@ use openproxy_core::{
     redact::redact_sensitive_headers,
     routing::{self, build_synthetic_combo, RoutingPlan, SYNTHETIC_COMBO_ID},
     translation::OpenAIRequest,
-    upstream::UpstreamClient,
     CoreError,
 };
 use serde_json::json;
@@ -292,15 +291,14 @@ async fn run_pipeline(
         // Default 60s when neither is set; the loader fills in
         // `CooldownConfig::default()` for the TOML case.
         cooldown_secs: state.config().cooldown.cooldown_secs,
-        // Gate 1: non-streaming chat uses the hyper-based upstream
-        // client. A follow-up gate will move this onto `AppState` so
-        // the per-host connection pool is shared across all in-flight
-        // requests — for now, a per-request `UpstreamClient` is
-        // functionally equivalent (the legacy reqwest client is also
-        // rebuilt on every `set_timeouts` call) and unblocks the
-        // migration. See `docs/upstream-migration-report.md` for
-        // the plan.
-        upstream_client: UpstreamClient::new(),
+        // Use the shared `UpstreamClient` from `AppState` (created once
+        // at startup). Sharing it means the underlying hyper client's
+        // per-host connection pool is reused across all in-flight
+        // requests, eliminating the per-request TCP+TLS handshake
+        // (~50-200ms on WAN) that a fresh `UpstreamClient::new()` would
+        // pay. `state.upstream_client()` returns `&Arc<UpstreamClient>`;
+        // the cheap `Arc` clone here is all that's needed.
+        upstream_client: state.upstream_client().clone(),
         oauth_provider_registry: Some(state.oauth_provider_registry()),
         compression_mode: state.compression_mode(),
         idle_chunk_retryable: state.idle_chunk_retryable(),
