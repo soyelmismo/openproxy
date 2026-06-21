@@ -553,7 +553,11 @@ fn authenticate(
             // As soon as the operator creates the first key, the
             // chat endpoint requires that key. The transition is
             // automatic — no config knob needed.
-            let active = core_api_keys::count_active(&state.db_pool().writer())
+            //
+            // `count_active` is a SELECT COUNT(*) — use the READER so
+            // the anonymous-fallback check doesn't serialize through
+            // the writer mutex (see `db::conn::DbPool::reader`).
+            let active = core_api_keys::count_active(&state.db_pool().reader())
                 .map_err(ApiError)?;
             if active == 0 {
                 tracing::debug!(
@@ -568,7 +572,7 @@ fn authenticate(
     if token.is_empty() {
         // Same gate: a bare `Authorization: Bearer ` (empty
         // token) is treated as "no header".
-        let active = core_api_keys::count_active(&state.db_pool().writer())
+        let active = core_api_keys::count_active(&state.db_pool().reader())
             .map_err(ApiError)?;
         if active == 0 {
             return Ok(None);
@@ -577,8 +581,10 @@ fn authenticate(
     }
 
     let key_hash = core_api_keys::hash_key(token);
-    let w = state.db_pool().writer();
-    let key = match core_api_keys::get_by_hash(&w, &key_hash).map_err(ApiError)? {
+    // Auth is a SELECT by hash — use the READER so chat requests don't
+    // serialize through the writer mutex (same fix as the admin path).
+    let r = state.db_pool().reader();
+    let key = match core_api_keys::get_by_hash(&r, &key_hash).map_err(ApiError)? {
         Some(k) => k,
         None => {
             return Err(ApiError(CoreError::Auth("invalid api key".into())));
@@ -616,7 +622,17 @@ fn authenticate(
         }
     }
 
-    let _ = core_api_keys::touch_last_used(&w, key.id).map_err(ApiError);
+    // Fire-and-forget the `last_used_at` UPDATE on a blocking thread.
+    // The chat hot path no longer blocks on acquiring the writer mutex.
+    // `touch_last_used` already throttles itself to 5-minute writes
+    // (see `LAST_USED_THROTTLE_SECS` in `api_keys.rs`), so the extra
+    // writer acquisition only happens once per key per five minutes.
+    let pool = Arc::clone(state.db_pool());
+    let key_id = key.id;
+    tokio::task::spawn_blocking(move || {
+        let w = pool.writer();
+        let _ = core_api_keys::touch_last_used(&w, key_id);
+    });
 
     Ok(Some(AuthResult {
         key_id: key.id,
