@@ -95,6 +95,14 @@ pub fn build_router(state: AppState) -> Router {
                 .put(handlers::admin::put_recording_ttl),
         )
         .route(
+            "/v1/admin/config/compression",
+            axum::routing::put(handlers::admin::put_runtime_compression),
+        )
+        .route(
+            "/v1/admin/config/idle-chunk-retryable",
+            axum::routing::put(handlers::admin::put_idle_chunk_retryable),
+        )
+        .route(
             "/v1/admin/providers",
             get(handlers::admin::list_providers).post(handlers::admin::create_provider),
         )

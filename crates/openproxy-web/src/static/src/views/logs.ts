@@ -226,6 +226,8 @@ function renderLogsRows(): void {
               status_code: r.status_code,
               error: r.error_message ?? null,
               stop_reason: r.stop_reason ?? null,
+              compression_savings_pct: r.compression_savings_pct ?? null,
+              compression_techniques: r.compression_techniques ?? null,
               timestamp: r.created_at || new Date().toISOString(),
             };
           } else {
@@ -412,6 +414,8 @@ function handleStageEvent(event: StageEvent): void {
       race_attempts: null,
       error_message: null,
       stop_reason: null,
+      compression_savings_pct: null,
+      compression_techniques: null,
     });
   } else if (traceId && state.logs.inflightByTraceId.has(traceId)) {
     // Update existing inflight placeholder with new stage event
@@ -447,6 +451,8 @@ function handleStageEvent(event: StageEvent): void {
       race_attempts: null,
       error_message: null,
       stop_reason: null,
+      compression_savings_pct: null,
+      compression_techniques: null,
     });
   } else if (!traceId && state.logs.inflightByRequestId.has(requestId)) {
     const existing = state.logs.inflightByRequestId.get(requestId)!;
@@ -512,6 +518,8 @@ function synthesizeTerminalEvent(row: RecentUsageRow): void {
     ttft_ms: row.ttft_ms,
     error: row.error_message ?? null,
     stop_reason: row.stop_reason ?? null,
+    compression_savings_pct: row.compression_savings_pct ?? null,
+    compression_techniques: row.compression_techniques ?? null,
   };
   setStage(synth, row.request_id);
 }
@@ -546,6 +554,8 @@ function reapRaceLosers(winnerRow: RecentUsageRow): void {
       status_code: 499,
       error: "race lost",
       stop_reason: null,
+      compression_savings_pct: null,
+      compression_techniques: null,
       timestamp: new Date().toISOString(),
     };
     setStage(synth, rid);
@@ -586,6 +596,8 @@ function reapStaleInflight(): void {
         status_code: 499,
         error: "cancelled (stale)",
         stop_reason: null,
+        compression_savings_pct: null,
+        compression_techniques: null,
         timestamp: new Date().toISOString(),
       };
       setStage(synth, placeholder.request_id);
@@ -781,6 +793,8 @@ async function openLogDetail(id: string, requestId: string, traceId?: string): P
       race_total: null, race_attempts: null,
       error_message: null,
       stop_reason: null,
+      compression_savings_pct: null,
+      compression_techniques: null,
     };
   // In-flight / ghost entries have no DB row (id === 0 / synthetic id
   // / status_code === 0). Skip the /usage/detail fetch — it would

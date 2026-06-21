@@ -46,6 +46,10 @@ pub struct UsageInput {
     /// Upstream stop reason (e.g. "end_turn", "max_tokens",
     /// "stop_sequence" for Anthropic; "stop", "length" for OpenAI).
     pub stop_reason: Option<String>,
+    /// Compression savings (0.0–100.0) or None if off/no savings.
+    pub compression_savings_pct: Option<f64>,
+    /// Compression techniques applied (CSV), None if off.
+    pub compression_techniques: Option<String>,
 }
 
 /// Computes (cost_usd, tokens_per_sec) from pricing + tokens + timing.
@@ -116,11 +120,11 @@ pub fn record(conn: &Connection, input: &UsageInput) -> Result<UsageId> {
             race_total, race_attempts, race_lost, api_key_id, created_at, \
             request_body_json, response_body_json, request_headers, \
             response_headers, error_message, is_streaming, stream_complete, \
-            stop_reason\
+            stop_reason, compression_savings_pct, compression_techniques\
          ) VALUES (\
             ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, \
             ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, \
-            ?21, ?22, ?23, datetime('now'), ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31\
+            ?21, ?22, ?23, datetime('now'), ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31, ?32, ?33\
          )",
         params![
             request_id,
@@ -176,6 +180,8 @@ pub fn record(conn: &Connection, input: &UsageInput) -> Result<UsageId> {
             input.is_streaming as i64,
             input.stream_complete as i64,
             input.stop_reason,
+            input.compression_savings_pct,
+            input.compression_techniques,
         ],
     )
 
@@ -211,6 +217,8 @@ pub fn record(conn: &Connection, input: &UsageInput) -> Result<UsageId> {
             is_streaming: input.is_streaming,
             stream_complete: input.stream_complete,
             stop_reason: input.stop_reason.clone(),
+            compression_savings_pct: input.compression_savings_pct,
+            compression_techniques: input.compression_techniques.clone(),
         };
     crate::usage::publish_usage_row(row);
 
@@ -251,6 +259,8 @@ mod tests {
             is_streaming: false,
             stream_complete: false,
             stop_reason: None,
+            compression_savings_pct: None,
+            compression_techniques: None,
         }
     }
 

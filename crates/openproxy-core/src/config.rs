@@ -2,6 +2,7 @@
 //!
 //! Mirrors §10 of mvp-spec.md.
 
+use crate::compression::CompressionMode;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use crate::error::{CoreError, Result};
@@ -77,17 +78,46 @@ impl Default for TimeoutsConfig {
     }
 }
 
+/// Default for `idle_chunk_retryable`: false = idle_chunk timeouts
+/// return an error and abort the target walk (current behavior).
+/// true = idle_chunk timeouts are treated as retryable and the
+/// pipeline falls through to the next target.
+pub const IDLE_CHUNK_RETRYABLE_DEFAULT: bool = false;
+
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub struct RetriesConfig {
     pub max_attempts: u8,
     pub backoff_base_ms: u64,
     pub backoff_factor: u8,
     pub backoff_jitter_pct: u8,
+    #[serde(default = "default_idle_chunk_retryable")]
+    pub idle_chunk_retryable: bool,
+    /// How many times to retry the entire combo walk if all targets
+    /// fail. 1 = no combo-level retry (current behavior). Each retry
+    /// re-resolves targets (cooldowns/CB may have changed) and walks
+    /// them fresh.
+    #[serde(default = "default_combo_max_attempts")]
+    pub combo_max_attempts: u8,
+}
+
+fn default_idle_chunk_retryable() -> bool {
+    IDLE_CHUNK_RETRYABLE_DEFAULT
+}
+
+fn default_combo_max_attempts() -> u8 {
+    1
 }
 
 impl Default for RetriesConfig {
     fn default() -> Self {
-        Self { max_attempts: 3, backoff_base_ms: 200, backoff_factor: 2, backoff_jitter_pct: 50 }
+        Self {
+            max_attempts: 3,
+            backoff_base_ms: 200,
+            backoff_factor: 2,
+            backoff_jitter_pct: 50,
+            idle_chunk_retryable: IDLE_CHUNK_RETRYABLE_DEFAULT,
+            combo_max_attempts: 1,
+        }
     }
 }
 
@@ -146,6 +176,21 @@ impl Default for LoggingConfig {
 #[serde(rename_all = "lowercase")]
 pub enum LogFormat { Json, Text }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+pub struct CompressionConfig {
+    /// Modo de compresión: "off" | "lite" | "rtk"
+    #[serde(default)]
+    pub mode: CompressionMode,
+}
+
+impl Default for CompressionConfig {
+    fn default() -> Self {
+        Self {
+            mode: CompressionMode::Off,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct AppConfig {
     #[serde(default)]
@@ -164,6 +209,8 @@ pub struct AppConfig {
     pub cooldown: CooldownConfig,
     #[serde(default)]
     pub logging: LoggingConfig,
+    #[serde(default)]
+    pub compression: CompressionConfig,
 }
 
 impl AppConfig {

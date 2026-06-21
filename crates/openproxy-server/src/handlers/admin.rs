@@ -248,6 +248,10 @@ pub struct RuntimeConfigResponse {
     /// headers. `0` means bodies are pruned immediately on the next
     /// prune tick.
     pub recording_ttl_secs: i64,
+    pub compression: openproxy_core::compression::CompressionMode,
+    /// When true, idle_chunk timeouts are treated as retryable
+    /// (pipeline falls through to the next target).
+    pub idle_chunk_retryable: bool,
 }
 
 /// `GET /v1/admin/config` — return the currently-loaded runtime
@@ -267,13 +271,15 @@ pub async fn get_runtime_config(
     let body: Result<Json<RuntimeConfigResponse>, ApiError> = async {
         let cfg = s.config();
         Ok(Json(RuntimeConfigResponse {
-            timeouts: cfg.timeouts,
+            timeouts: s.timeouts(),
             retries: cfg.retries,
             circuit_breaker: cfg.circuit_breaker,
             // `RacingConfig` is `Clone` but not `Copy` (the other
             // three are); `.clone()` is fine, it's three `u*` fields.
             racing: cfg.racing.clone(),
             recording_ttl_secs: s.recording_ttl_secs(),
+            compression: s.compression_mode(),
+            idle_chunk_retryable: s.idle_chunk_retryable(),
         }))
     }
     .await;
@@ -327,6 +333,77 @@ pub async fn put_runtime_timeouts(
             "ttft_ms": body.ttft_ms,
             "idle_chunk_ms": body.idle_chunk_ms,
             "total_ms": body.total_ms,
+            "applies_to": "next_requests",
+        })))
+    }
+    .await;
+    inner.into()
+}
+
+/// `PUT /v1/admin/config/compression` — hot-reload the compression
+/// mode. Body: `{"mode": "off" | "lite" | "rtk"}`.
+pub async fn put_runtime_compression(
+    State(s): State<AppState>,
+    headers: HeaderMap,
+    Json(body): Json<openproxy_core::compression::CompressionMode>,
+) -> ApiResult<Json<serde_json::Value>> {
+    if let Err(e) = authenticate_admin_ws(&s, &headers, None) {
+        return e.into();
+    }
+    let inner: Result<Json<serde_json::Value>, ApiError> = async {
+        {
+            let w = s.db_pool().writer();
+            let now = chrono::Utc::now().timestamp();
+            core_db::app_config::save_compression_to_db(&w, &body, now)?;
+        }
+        s.set_compression_mode(body);
+        Ok(Json(serde_json::json!({
+            "mode": body,
+            "applies_to": "next_requests",
+        })))
+    }
+    .await;
+    inner.into()
+}
+
+// =====================================================================
+// Idle chunk retryable
+// =====================================================================
+
+/// `PUT /v1/admin/config/idle-chunk-retryable` — hot-reload the
+/// `idle_chunk_retryable` flag. Body: `{"idle_chunk_retryable": true}`
+/// or `{"idle_chunk_retryable": false}`.
+///
+/// When true, idle_chunk timeouts are treated as retryable: the
+/// pipeline falls through to the next target instead of aborting.
+/// When false (default), idle_chunk timeouts return an error
+/// immediately and the walk is aborted.
+pub async fn put_idle_chunk_retryable(
+    State(s): State<AppState>,
+    headers: HeaderMap,
+    Json(body): Json<serde_json::Value>,
+) -> ApiResult<Json<serde_json::Value>> {
+    if let Err(e) = authenticate_admin_ws(&s, &headers, None) {
+        return e.into();
+    }
+    let inner: Result<Json<serde_json::Value>, ApiError> = async {
+        let val = body.get("idle_chunk_retryable")
+            .and_then(|v| v.as_bool())
+            .ok_or_else(|| ApiError(CoreError::Validation(
+                "idle_chunk_retryable must be a boolean".into(),
+            )))?;
+        {
+            let w = s.db_pool().writer();
+            let now = chrono::Utc::now().timestamp();
+            core_db::app_config::save_idle_chunk_retryable_to_db(&w, val, now)?;
+        }
+        s.set_idle_chunk_retryable(val);
+        tracing::info!(
+            idle_chunk_retryable = val,
+            "updated idle_chunk_retryable via admin API"
+        );
+        Ok(Json(serde_json::json!({
+            "idle_chunk_retryable": val,
             "applies_to": "next_requests",
         })))
     }
@@ -420,6 +497,27 @@ pub async fn create_provider(
     let body: Result<Json<serde_json::Value>, ApiError> = async {
         let w = s.db_pool().writer();
         let id = admin::create_provider(&w, input)?;
+        // Hot-reload the in-memory adapter registry so the chat
+        // pipeline can dispatch to the new provider without a
+        // process restart. A failure here is logged but does NOT
+        // roll back the DB write — the operator's intent to add
+        // the provider has already been recorded; the next admin
+        // action (or the next chat request, which already has
+        // DB-fallback via `resolve_adapter`) will pick up the new
+        // adapter on the next `rebuild_adapters`.
+        if let Err(e) = s.rebuild_adapters() {
+            tracing::warn!(
+                provider_id = id.as_str(),
+                error = %e,
+                "failed to reload adapter registry after create_provider; \
+                 chat pipeline may still fall through to DB lookup"
+            );
+        } else {
+            tracing::info!(
+                provider_id = id.as_str(),
+                "reloaded adapter registry after creating provider"
+            );
+        }
         Ok(Json(serde_json::json!({ "id": id.as_str() })))
     }
     .await;
@@ -481,6 +579,25 @@ pub async fn delete_provider(
         let w = s.db_pool().writer();
         let id = ProviderId::new(id);
         admin::delete_provider(&w, &id)?;
+        // Hot-reload so the chat pipeline drops the
+        // `CustomAdapter` for this provider. For built-in ids we
+        // never get here (the fast-fail above rejects them), so
+        // this branch only fires for custom providers. A failure
+        // here is logged-and-continued: the DB delete has already
+        // committed, and the next admin action or DB-fallback
+        // lookup will pick up the new state.
+        if let Err(e) = s.rebuild_adapters() {
+            tracing::warn!(
+                provider_id = id.as_str(),
+                error = %e,
+                "failed to reload adapter registry after delete_provider"
+            );
+        } else {
+            tracing::info!(
+                provider_id = id.as_str(),
+                "reloaded adapter registry after deleting provider"
+            );
+        }
         Ok(Json(serde_json::json!({ "deleted": id.as_str() })))
     }
     .await;
@@ -1105,7 +1222,7 @@ async fn run_refresh(
     // 2. Find the adapter for that provider. Check built-in adapters
     //    first, then fall back to constructing a CustomAdapter from the
     //    DB row.
-    let adapter = match resolve_adapter(&s, &provider_id, s.adapters()) {
+    let adapter = match resolve_adapter(&s, &provider_id, s.adapters().as_slice()) {
         Ok(a) => Arc::clone(&a),
         Err(e) => return ApiResult::err(ApiError(e)),
     };
@@ -1162,6 +1279,17 @@ async fn run_refresh(
         None => String::new(),
     };
 
+    // Resolve account label for CloudFlare / label-based providers.
+    let account_label = match selected_account_id {
+        Some(account_id) => {
+            let w = s.db_pool().writer();
+            match accounts::get(&w, account_id) {
+                Ok(Some(a)) => a.label.unwrap_or_default(),
+                _ => String::new(),
+            }
+        }
+        None => String::new(),
+    };
     // 4. Run the refresh. `admin::refresh_models` takes the connection
     //    by value (not by reference) so the future is `Send`-able
     //    end to end: `rusqlite::Connection: !Sync` (it has internal
@@ -1180,6 +1308,7 @@ async fn run_refresh(
         adapter.as_ref(),
         s.upstream_client(),
         ttl_seconds,
+        &account_label,
     )
     .await
     {
@@ -1980,6 +2109,23 @@ pub async fn update_provider(
         let w = s.db_pool().writer();
         let provider_id = ProviderId::new(id.clone());
         admin::update_provider(&w, &provider_id, body)?;
+        // Hot-reload so the chat pipeline sees the updated
+        // `base_url`/`auth_type`/`extra_headers` on the
+        // `CustomAdapter` for this provider. See the comment on
+        // `create_provider` for why we log-and-continue rather
+        // than roll back.
+        if let Err(e) = s.rebuild_adapters() {
+            tracing::warn!(
+                provider_id = id,
+                error = %e,
+                "failed to reload adapter registry after update_provider"
+            );
+        } else {
+            tracing::info!(
+                provider_id = id,
+                "reloaded adapter registry after updating provider"
+            );
+        }
         Ok(Json(serde_json::json!({ "id": id })))
     }
     .await;
@@ -2146,7 +2292,7 @@ async fn run_test_for_model(
     // 2. Find the adapter for that provider. Check built-in adapters
     //    first, then fall back to constructing a CustomAdapter from the
     //    DB row.
-    let adapter = match resolve_adapter(s, &model.provider_id, s.adapters()) {
+    let adapter = match resolve_adapter(s, &model.provider_id, s.adapters().as_slice()) {
         Ok(a) => Arc::clone(&a),
         Err(err) => {
             return TestResult {
@@ -2177,19 +2323,29 @@ async fn run_test_for_model(
         (anon, accs)
     };
 
-    let (_account_id, api_key) = if is_anonymous {
-        (None, String::new()) // Anonymous: no account, empty key
+    // Capture the optional account_id AND its label. The label is
+    // needed by providers whose URL embeds account-level metadata
+    // (e.g. CloudFlare Workers AI uses the label as its account ID).
+    let (account_id_opt, _account_label, api_key) = if is_anonymous {
+        (None, String::new(), String::new()) // Anonymous: no account, empty key
     } else {
-        let account_id = match account_id {
-            Some(id) => Some(id),
-            None => match accounts_list
+        let selected = match account_id {
+            Some(id) => {
+                // Per-model path: look up the already-pinned account.
+                let w = s.db_pool().writer();
+                accounts::get(&w, id).ok().flatten()
+            }
+            None => accounts_list
                 .into_iter()
-                .find(|a| a.health_status == accounts::HealthStatus::Healthy)
-            {
-                Some(a) => Some(a.id),
-                None => None,
-            },
+                .find(|a| a.health_status == accounts::HealthStatus::Healthy),
         };
+
+        let account_id = selected.as_ref().map(|a| a.id);
+        let account_label = selected
+            .as_ref()
+            .and_then(|a| a.label.as_deref())
+            .unwrap_or("")
+            .to_string();
 
         // 4. Decrypt the API key. Drop the writer guard immediately.
         //    OAuth accounts store the token in access_token_encrypted,
@@ -2220,7 +2376,7 @@ async fn run_test_for_model(
             None => String::new(),
         };
 
-        (account_id, api_key)
+        (account_id, account_label, api_key)
     };
 
     // 5. Build the minimal test request. The exact prompts and limits
@@ -2293,7 +2449,7 @@ async fn run_test_for_model(
 
         // Resolve the account for this test. The combo path already
         // pinned one; the per-row path picks the first healthy one.
-        let test_account_id = _account_id.unwrap_or_else(|| {
+        let test_account_id = account_id_opt.unwrap_or_else(|| {
             // Re-pick from the accounts list that was already loaded.
             // The list was consumed by `into_iter()` above, so we
             // re-query. This only happens for the per-row path when
@@ -2428,13 +2584,14 @@ async fn run_test_for_model(
     //    (OpenAI-compatible, Anthropic, Gemini).
     //    `serde_json::to_value` cannot fail for these struct shapes in
     //    practice, but we still want a typed error if it ever does.
-    let (url, body_value): (String, serde_json::Value) = if model.target_format
+    let (url, mut body_value): (String, serde_json::Value) = if model.target_format
         == openproxy_core::models::TargetFormat::Anthropic
     {
         let anthropic_req = openai_to_anthropic(&openai_req);
-        let url = adapter.build_chat_url(
+        let url = adapter.build_chat_url_for_account(
             openproxy_core::models::TargetFormat::Anthropic,
             &model.model_id,
+            &_account_label,
         );
         match serde_json::to_value(&anthropic_req) {
             Ok(v) => (url, v),
@@ -2454,9 +2611,10 @@ async fn run_test_for_model(
         == openproxy_core::models::TargetFormat::Gemini
     {
         let gemini_req = openai_to_gemini(&openai_req);
-        let url = adapter.build_chat_url(
+        let url = adapter.build_chat_url_for_account(
             openproxy_core::models::TargetFormat::Gemini,
             &model.model_id,
+            &_account_label,
         );
         match serde_json::to_value(&gemini_req) {
             Ok(v) => (url, v),
@@ -2473,9 +2631,10 @@ async fn run_test_for_model(
             }
         }
     } else {
-        let url = adapter.build_chat_url(
+        let url = adapter.build_chat_url_for_account(
             openproxy_core::models::TargetFormat::Openai,
             &model.model_id,
+            &_account_label,
         );
         match serde_json::to_value(&openai_req) {
             Ok(v) => (url, v),
@@ -2492,6 +2651,12 @@ async fn run_test_for_model(
             }
         }
     };
+
+    // 7b. Let the adapter normalize the request body (e.g. CloudFlare
+    //     strips `temperature`, flattens content arrays to strings).
+    //     The pipeline does this in dispatch_upstream_request; the
+    //     test path must do it explicitly.
+    adapter.normalize_request_body(&mut body_value);
 
     // 8. Build the HTTP request. The 15s timeout caps the test wall-
     //    clock cost — a hung upstream shouldn't pin a dashboard
@@ -3093,7 +3258,7 @@ async fn run_provider_refresh(
 
     // 1. Find the adapter. Check built-in adapters first, then
     //    fall back to constructing a CustomAdapter from the DB row.
-    let adapter = match resolve_adapter(&s, &provider, s.adapters()) {
+    let adapter = match resolve_adapter(&s, &provider, s.adapters().as_slice()) {
         Ok(a) => Arc::clone(&a),
         Err(e) => return ApiResult::err(ApiError(e)),
     };
@@ -3140,6 +3305,18 @@ async fn run_provider_refresh(
         None => String::new(),
     };
 
+    // Resolve account label for CloudFlare / label-based providers.
+    let account_label = match selected_account_id {
+        Some(account_id) => {
+            let w = s.db_pool().writer();
+            match accounts::get(&w, account_id) {
+                Ok(Some(a)) => a.label.unwrap_or_default(),
+                _ => String::new(),
+            }
+        }
+        None => String::new(),
+    };
+
     // 5. Open a fresh connection for the upsert. See the doc on
     //    `admin::refresh_models` for the `Send` rationale: an owned
     //    `Connection` is the only way to keep the outer future
@@ -3158,6 +3335,7 @@ async fn run_provider_refresh(
         adapter.as_ref(),
         s.upstream_client(),
         ttl_seconds,
+        &account_label,
     )
     .await
     {
@@ -3927,7 +4105,7 @@ mod tests {
         // MasterKey for tests: any 32 bytes is fine. Use the
         // built-in generator rather than baking a private constructor.
         let mk = MasterKey::generate();
-        let adapters = std::sync::Arc::new(adapters::builtin_adapters());
+        let adapters = std::sync::Arc::new(parking_lot::RwLock::new(adapters::builtin_adapters()));
         let state = AppState::for_test(
             openproxy_core::AppConfig::default(),
             pool,

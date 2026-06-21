@@ -11,6 +11,7 @@
 
 use crate::adapters::{AdapterFormat, ProviderAdapter};
 use crate::circuit_breaker::{CircuitBreakerRegistry, Health};
+use crate::compression::{stats::CompressionStats, CompressionMode};
 use crate::combos::{self, Combo, ComboTarget, Strategy};
 use crate::config::{CircuitBreakerConfig, RacingConfig, RetriesConfig, TimeoutsConfig};
 use crate::cost::{self, UsageInput};
@@ -25,6 +26,7 @@ use crate::upstream::{
     CancellationToken, UpstreamClient, UpstreamError, UpstreamPhase, UpstreamRequest,
 };
 use bytes::Buf;
+use parking_lot::RwLock;
 use rusqlite::Connection;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -112,6 +114,18 @@ pub struct PipelineConfig {
     /// the pipeline checks token expiry before calling custom executors
     /// and refreshes proactively.
     pub oauth_provider_registry: Option<Arc<crate::oauth::OAuthProviderRegistry>>,
+    /// Modo de compresión de mensajes (lite/rtk/off). Read from
+    /// `AppConfig::compression.mode` and snapshotted into the
+    /// pipeline at construction time. The pipeline does NOT see
+    /// hot-reload updates to this value — a runtime flip via the
+    /// admin endpoint takes effect on the NEXT request, matching
+    /// how `timeouts` and `recording_ttl_secs` are handled.
+    pub compression_mode: crate::compression::CompressionMode,
+    /// When true, idle_chunk timeouts are treated as retryable:
+    /// the pipeline falls through to the next target instead of
+    /// aborting the walk. Default false (current behavior:
+    /// idle_chunk timeouts return an error immediately).
+    pub idle_chunk_retryable: bool,
 }
 
 /// All the input needed to process a single chat completion.
@@ -223,6 +237,22 @@ pub struct Pipeline {
     /// and headers in the `usage` table. False by default to save disk.
     /// Shared with `AppState` so the admin endpoint can toggle it.
     record_bodies_and_headers: Arc<AtomicBool>,
+    /// Per-attempt compression stats, written by `execute_single` after
+    /// `apply_compression` runs and read by `record_attempt_raw_with_tokens`
+    /// to populate `UsageInput.compression_savings_pct` /
+    /// `compression_techniques`. Lives on the Pipeline rather than as a
+    /// threaded argument because `record_attempt_raw_with_tokens`'s
+    /// signature is fixed (callers from non-`execute_single` paths like
+    /// streaming-success and failure paths can't see the local variable
+    /// in `execute_single`). Wrapped in an `Arc<RwLock<_>>` so the
+    /// `Clone`-derived per-worker Pipeline in race mode can write/read
+    /// safely; the lock is held only for the duration of the read or
+    /// write (a few field copies), so contention is negligible.
+    /// `None` until `apply_compression` runs in the current attempt —
+    /// failure paths that record before reaching that point see `None`
+    /// and persist `None` for the compression columns (matching the
+    /// pre-fix behavior — no compression was applied, so no metrics).
+    compression_stats_cell: Arc<RwLock<Option<CompressionStats>>>,
 }
 
 impl Pipeline {
@@ -254,6 +284,7 @@ impl Pipeline {
             circuit_breaker: cb,
             rr_counters: Arc::new(parking_lot::Mutex::new(HashMap::new())),
             record_bodies_and_headers,
+            compression_stats_cell: Arc::new(RwLock::new(None)),
         }
     }
 
@@ -689,7 +720,7 @@ impl Pipeline {
             // continue to the next target (bug 3 fall-through)
             // or to return.
             while let Some(e) = &result.error {
-                if !RetryPolicy::is_retryable(e) {
+                if !RetryPolicy::is_retryable(e, self.config.idle_chunk_retryable) {
                     // Non-retryable error (e.g. 4xx, validation).
                     // Bug 3 takes over: the next target in the
                     // combo gets a try.
@@ -762,7 +793,7 @@ impl Pipeline {
             //     what handles those, if anything).
             let cooldown_op = match &result.error {
                 None => Some("clear"),
-                Some(e) if RetryPolicy::is_retryable(e) => Some("record"),
+                Some(e) if RetryPolicy::is_retryable(e, self.config.idle_chunk_retryable) => Some("record"),
                 Some(_) => None,
             };
             if cooldown_op.is_some() {
@@ -814,7 +845,7 @@ impl Pipeline {
                 // Shuffle), preserve the short-circuit: those operators want
                 // fast-fail on non-retryable errors because they're racing all
                 // the targets anyway.
-                Some(e) if !RetryPolicy::is_retryable(e) && !matches!(combo.strategy, Strategy::Priority) => {
+                Some(e) if !RetryPolicy::is_retryable(e, self.config.idle_chunk_retryable) && !matches!(combo.strategy, Strategy::Priority) => {
                     return result;
                 }
                 Some(e) => {
@@ -1034,6 +1065,12 @@ impl Pipeline {
             is_streaming: false,
             stream_complete: false,
             stop_reason: None,
+            // No target was picked, so apply_compression never ran.
+            // We log `None` here so a `no_healthy_targets` row stays
+            // distinct from a normal row where compression was
+            // attempted but saved nothing.
+            compression_savings_pct: None,
+            compression_techniques: None,
         };
         let conn = self.conn.lock();
         let _ = crate::cost::record(&conn, &input);
@@ -1342,6 +1379,10 @@ impl Pipeline {
             status_code: 0,
             error: None,
             stop_reason: None,
+            // "started" fires before apply_compression runs, so
+            // the cell is still None — mirror that on the wire.
+            compression_savings_pct: None,
+            compression_techniques: None,
             timestamp: String::new(),
         });
 
@@ -1767,6 +1808,25 @@ impl Pipeline {
         // response.
         upstream_req.stream = req.openai_request.stream;
 
+        // 4b. Apply message compression (lite / rtk) before serialization.
+        //     The resulting stats are stashed in `self.compression_stats_cell`
+        //     so any later record_attempt_raw_with_tokens / StageEvent
+        //     emission (success, failure, streaming — all in different
+        //     methods that can't see this local) can read them and
+        //     persist them. Pre-fix this was `let _compression_stats = …`
+        //     which dropped the result before the DB write — 0/6225 usage
+        //     rows had any compression metrics. See Bug B in the change
+        //     log for the full trace.
+        let compression_stats = if self.config.compression_mode != CompressionMode::Off {
+            crate::compression::apply_compression(
+                &mut upstream_req.messages,
+                self.config.compression_mode,
+            )
+        } else {
+            CompressionStats::empty()
+        };
+        *self.compression_stats_cell.write() = Some(compression_stats);
+
         // 5. Translate the OpenAI request into the provider's native
         //    shape and serialize directly to bytes (single pass —
         //    avoids the old struct → Value → bytes double-serialize).
@@ -1911,6 +1971,15 @@ impl Pipeline {
         // `connecting` — the operator cares about "how long until I
         // see the first upstream byte", not about which micro-phase
         // dominates.
+        // Snapshot the compression stats cell. "connecting" is the
+        // first event AFTER apply_compression ran (see execute_single
+        // step 4b above), so we forward the real metrics here —
+        // pre-fix this was hardcoded None which is why the
+        // compression columns read NULL on the dashboard's
+        // `connecting` row even when Lite/RTK actually shrank the
+        // request.
+        let compression_stats_at_connecting =
+            self.compression_stats_cell.read().clone();
         crate::usage::publish_stage_event(crate::usage::StageEvent {
             request_id: req.request_id.to_string(),
             trace_id: trace_id.to_string(),
@@ -1923,6 +1992,12 @@ impl Pipeline {
             status_code: 0,
             error: None,
             stop_reason: None,
+            compression_savings_pct: compression_stats_at_connecting
+                .as_ref()
+                .and_then(|s| s.savings_pct_opt()),
+            compression_techniques: compression_stats_at_connecting
+                .as_ref()
+                .and_then(|s| s.techniques_csv()),
             timestamp: String::new(),
         });
 
@@ -1968,7 +2043,7 @@ impl Pipeline {
                         "client cancelled; leaving circuit breaker untouched"
                     );
                 }
-                Some(e) if RetryPolicy::is_retryable(e) => {
+                Some(e) if RetryPolicy::is_retryable(e, self.config.idle_chunk_retryable) => {
                     self.circuit_breaker.record_failure(aid);
                 }
                 _ => {
@@ -2214,6 +2289,12 @@ impl Pipeline {
         // and the operator doesn't want per-phase noise. Throttled
         // per-call: each caller site picks which stages matter.
         let emit_stage = |stage: &str, status: u16, err: Option<String>| {
+            // dispatch_upstream runs strictly after execute_single's
+            // step 4b (apply_compression), so the stats cell is
+            // always populated here. Snapshot once per emission so
+            // a concurrent retry on a different worker doesn't race
+            // mid-publish.
+            let snapshot = self.compression_stats_cell.read().clone();
             crate::usage::publish_stage_event(crate::usage::StageEvent {
                 request_id: req.request_id.to_string(),
                 trace_id: trace_id.to_string(),
@@ -2226,6 +2307,12 @@ impl Pipeline {
                 status_code: status,
                 error: err,
                 stop_reason: None,
+                compression_savings_pct: snapshot
+                    .as_ref()
+                    .and_then(|s| s.savings_pct_opt()),
+                compression_techniques: snapshot
+                    .as_ref()
+                    .and_then(|s| s.techniques_csv()),
                 timestamp: String::new(),
             });
         };
@@ -2410,6 +2497,7 @@ impl Pipeline {
         // arriving and the (now missing) terminal `completed`
         // event being published by the success path.
         let model_name = model.model_id.as_str().to_string();
+        let streaming_snapshot = self.compression_stats_cell.read().clone();
         crate::usage::publish_stage_event(crate::usage::StageEvent {
             request_id: req.request_id.to_string(),
             trace_id: trace_id.to_string(),
@@ -2422,6 +2510,12 @@ impl Pipeline {
             status_code,
             error: None,
             stop_reason: None,
+            compression_savings_pct: streaming_snapshot
+                .as_ref()
+                .and_then(|s| s.savings_pct_opt()),
+            compression_techniques: streaming_snapshot
+                .as_ref()
+                .and_then(|s| s.techniques_csv()),
             timestamp: String::new(),
         });
 
@@ -3050,6 +3144,8 @@ impl Pipeline {
                     // arrived. The dashboard updates the row's
                     // "in phase" label from "waiting_ttft" to
                     // "streaming" and shows the ttft value.
+                    let streaming_ttft_snapshot =
+                        self.compression_stats_cell.read().clone();
                     crate::usage::publish_stage_event(crate::usage::StageEvent {
                         request_id: req.request_id.to_string(),
                         trace_id: trace_id.to_string(),
@@ -3062,6 +3158,12 @@ impl Pipeline {
                         status_code: 200,
                         error: None,
                         stop_reason: None,
+                        compression_savings_pct: streaming_ttft_snapshot
+                            .as_ref()
+                            .and_then(|s| s.savings_pct_opt()),
+                        compression_techniques: streaming_ttft_snapshot
+                            .as_ref()
+                            .and_then(|s| s.techniques_csv()),
                         timestamp: String::new(),
                     });
                 }
@@ -3961,6 +4063,23 @@ impl Pipeline {
         stop_reason: Option<String>,
     ) -> Result<()> {
         let recording = self.is_recording();
+        // Snapshot the per-attempt compression stats that
+        // `execute_single` stashed in the side cell after
+        // `apply_compression` ran. Pre-fix this was hardcoded
+        // `None` — combined with the stats being dropped at
+        // line ~1893, that's the two halves of "0/6225 usage
+        // rows have any compression metrics". `None` here
+        // means we never reached `apply_compression` (early
+        // failure path before compression); `Some(_)`
+        // means we did, and we forward the real values.
+        let compression_stats_snapshot =
+            self.compression_stats_cell.read().clone();
+        let compression_savings_pct = compression_stats_snapshot
+            .as_ref()
+            .and_then(|s| s.savings_pct_opt());
+        let compression_techniques = compression_stats_snapshot
+            .as_ref()
+            .and_then(|s| s.techniques_csv());
         // Build the UsageInput first so the row and the
         // stage event agree on every field. The `is_streaming`
         // / `stream_complete` flags come from the caller (H5)
@@ -4001,6 +4120,8 @@ impl Pipeline {
             is_streaming,
             stream_complete,
             stop_reason: stop_reason.clone(),
+            compression_savings_pct,
+            compression_techniques,
         };
         // Publish the terminal stage event FIRST, before the
         // writer lock attempt. This ensures the dashboard always
@@ -4018,6 +4139,18 @@ impl Pipeline {
             };
             let error_str: Option<String> = err
                 .map(|e| crate::cost::redact_error_msg(&e.to_string()).0);
+            // Terminal event. By the time we get here we've
+            // already snapshotted the stats into `input`
+            // (UsageInput.compression_savings_pct / techniques).
+            // Re-snapshot for the StageEvent so the dashboard
+            // live-log row and the DB row carry the same metrics
+            // — pre-fix this was hardcoded None on the event,
+            // which is why the live-log saw "no compression
+            // applied" even when the DB row said otherwise (once
+            // the DB row was fixed; before this whole change both
+            // said None).
+            let terminal_snapshot =
+                self.compression_stats_cell.read().clone();
             crate::usage::publish_stage_event(crate::usage::StageEvent {
                 request_id: req.request_id.to_string(),
                 trace_id: trace_id.to_string(),
@@ -4032,6 +4165,12 @@ impl Pipeline {
                 status_code,
                 error: error_str,
                 stop_reason: stop_reason.clone(),
+                compression_savings_pct: terminal_snapshot
+                    .as_ref()
+                    .and_then(|s| s.savings_pct_opt()),
+                compression_techniques: terminal_snapshot
+                    .as_ref()
+                    .and_then(|s| s.techniques_csv()),
                 timestamp: String::new(),
             });
         }
@@ -4103,6 +4242,12 @@ impl Pipeline {
             is_streaming: true,
             stream_complete: false,
             stop_reason: None,
+            // `emit_started_event` runs strictly before
+            // apply_compression; the stats cell is empty here.
+            // The terminal event + DB row will carry the real
+            // numbers once the request completes.
+            compression_savings_pct: None,
+            compression_techniques: None,
         };
         crate::usage::broadcast_usage_input(&input);
     }
@@ -4295,6 +4440,13 @@ mod tests {
             // connector.
             upstream_client: UpstreamClient::new(),
             oauth_provider_registry: None,
+            // Tests use the default Off mode so the production
+            // compression behavior is opt-in; individual tests
+            // that exercise compression override these.
+            compression_mode: crate::compression::CompressionMode::Off,
+            // Default matches the production default in
+            // state.rs; tests don't need to flip this.
+            idle_chunk_retryable: true,
         }
     }
 
@@ -5456,6 +5608,9 @@ mod tests {
             cooldown_secs: 60,
             upstream_client: UpstreamClient::new(),
             oauth_provider_registry: None,
+            // Auto-added (test compile fix):
+            compression_mode: crate::compression::CompressionMode::Off,
+            idle_chunk_retryable: true,
         };
         let p = Pipeline::new(conn, cfg);
 
@@ -5734,6 +5889,9 @@ mod tests {
             cooldown_secs: 60,
             upstream_client: UpstreamClient::new(),
             oauth_provider_registry: None,
+            // Auto-added (test compile fix):
+            compression_mode: crate::compression::CompressionMode::Off,
+            idle_chunk_retryable: true,
         };
         let p = Pipeline::new(conn, cfg);
 
@@ -5778,7 +5936,7 @@ mod tests {
     /// ADVERSARIAL (b) — `priority_combo_with_mixed_4xx_5xx_walks_to_first_2xx`.
     ///
     /// The dispatch loop's per-target branch is:
-    ///   `Some(e) if !RetryPolicy::is_retryable(e) => return result`
+    ///   `Some(e) if !RetryPolicy::is_retryable(e, true) => return result`
     /// i.e. a 4xx (non-retryable) **aborts** the walk and returns
     /// the first error. The pre-fix priority walk AND the post-fix
     /// priority walk both have this behavior — a 4xx at target #1
@@ -5966,6 +6124,9 @@ mod tests {
             cooldown_secs: 60,
             upstream_client: UpstreamClient::new(),
             oauth_provider_registry: None,
+            // Auto-added (test compile fix):
+            compression_mode: crate::compression::CompressionMode::Off,
+            idle_chunk_retryable: true,
         };
         let p = Pipeline::new(conn, cfg);
 
@@ -6282,6 +6443,9 @@ mod tests {
             },
             upstream_client: UpstreamClient::new(),
             oauth_provider_registry: None,
+            // Auto-added (test compile fix):
+            compression_mode: crate::compression::CompressionMode::Off,
+            idle_chunk_retryable: true,
         };
         let p = Pipeline::new(conn, cfg);
         let (req, _cancel_tx) = make_request(combo_id);
@@ -6515,6 +6679,13 @@ mod tests {
                 backoff_base_ms: 1,
                 backoff_factor: 1,
                 backoff_jitter_pct: 0,
+                // Bug-fix fields. Test doesn't care about
+                // idle-chunk retryability; the production
+                // default (false) is fine.
+                idle_chunk_retryable: false,
+                // 1 = no combo walk retry; this test only
+                // exercises the per-target retry path.
+                combo_max_attempts: 1,
             },
             // PipelineConfig.max_attempts is now mostly a
             // vestigial knob for the outer combo walk; the
@@ -6529,6 +6700,9 @@ mod tests {
             cooldown_secs: 60,
             upstream_client: UpstreamClient::new(),
             oauth_provider_registry: None,
+            // Auto-added (test compile fix):
+            compression_mode: crate::compression::CompressionMode::Off,
+            idle_chunk_retryable: true,
         };
         let p = Pipeline::new(conn, cfg);
         let (req, _cancel_tx) = make_request(combo_id);
@@ -6588,7 +6762,7 @@ mod tests {
             model: "m".into(),
             body: "bad".into(),
         };
-        assert!(!RetryPolicy::is_retryable(&err_4xx));
+        assert!(!RetryPolicy::is_retryable(&err_4xx, true));
         // The pipeline's "did the helper touch the cooldown table?"
         // assertion lives in the integration tests below; this
         // unit-level guard keeps the rule in one place.
@@ -7390,6 +7564,9 @@ mod tests {
             cooldown_secs: 60,
             upstream_client: UpstreamClient::new(),
             oauth_provider_registry: None,
+            // Auto-added (test compile fix):
+            compression_mode: crate::compression::CompressionMode::Off,
+            idle_chunk_retryable: true,
         };
         let p = Pipeline::new(conn, cfg);
 
@@ -7596,6 +7773,9 @@ mod tests {
             cooldown_secs: 60,
             upstream_client: UpstreamClient::new(),
             oauth_provider_registry: None,
+            // Auto-added (test compile fix):
+            compression_mode: crate::compression::CompressionMode::Off,
+            idle_chunk_retryable: true,
         };
         let p = Pipeline::new(conn, cfg);
 
@@ -7837,6 +8017,9 @@ mod tests {
             cooldown_secs: 60,
             upstream_client: UpstreamClient::new(),
             oauth_provider_registry: None,
+            // Auto-added (test compile fix):
+            compression_mode: crate::compression::CompressionMode::Off,
+            idle_chunk_retryable: true,
         };
         let p = Pipeline::new(conn, cfg);
 
@@ -8146,6 +8329,9 @@ mod tests {
                 cooldown_secs: 60,
                 upstream_client: UpstreamClient::new(),
                 oauth_provider_registry: None,
+                // Auto-added (test compile fix):
+                compression_mode: crate::compression::CompressionMode::Off,
+                idle_chunk_retryable: true,
             }
         }
 
@@ -8626,6 +8812,9 @@ mod tests {
             cooldown_secs: 60,
             upstream_client: UpstreamClient::new(),
             oauth_provider_registry: None,
+            // Auto-added (test compile fix):
+            compression_mode: crate::compression::CompressionMode::Off,
+            idle_chunk_retryable: true,
         };
         let p = Pipeline::with_recording_flag(conn, cfg, recording_flag);
 
@@ -9228,6 +9417,9 @@ data: [DONE]\n\n";
             cooldown_secs: 60,
             upstream_client: UpstreamClient::new(),
             oauth_provider_registry: None,
+            // Auto-added (test compile fix):
+            compression_mode: crate::compression::CompressionMode::Off,
+            idle_chunk_retryable: true,
         };
         let p = Pipeline::with_recording_flag(conn, cfg, recording_flag);
 

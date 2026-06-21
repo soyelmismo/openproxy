@@ -31,6 +31,7 @@ interface ConfigPayload {
     backoff_base_ms?: number | null;
     backoff_factor?: number | null;
     backoff_jitter_pct?: number | null;
+    combo_max_attempts?: number | null;
   };
   circuit_breaker?: {
     failure_threshold?: number | null;
@@ -42,6 +43,10 @@ interface ConfigPayload {
     abort_grace_ms?: number | null;
   };
   recording_ttl_secs?: number | null;
+  /** "off" | "lite" | "rtk" | "lite_rtk" */
+  compression?: string | null;
+  /** When true, idle_chunk timeouts are treated as retryable. */
+  idle_chunk_retryable?: boolean | null;
 }
 
 type TimeoutKey = "connect_ms" | "request_send_ms" | "ttft_ms" | "idle_chunk_ms" | "total_ms";
@@ -102,7 +107,7 @@ async function configSaveTimeouts(): Promise<void> {
   }
 }
 
-export { configSaveTimeouts, configSaveRecordingTtl };
+export { configSaveTimeouts, configSaveRecordingTtl, configSaveCompression, configSaveIdleChunkRetryable };
 
 async function configSaveRecordingTtl(): Promise<void> {
   const el = document.querySelector('input[name="recording_ttl_secs"]') as HTMLInputElement | null;
@@ -123,6 +128,34 @@ async function configSaveRecordingTtl(): Promise<void> {
   }
 }
 
+async function configSaveCompression(): Promise<void> {
+  const el = document.querySelector('select[name="compression_mode"]') as HTMLSelectElement | null;
+  if (!el) { showToast("compression_mode select missing from DOM", "error"); return; }
+  const mode = el.value;
+  if (mode !== "off" && mode !== "lite" && mode !== "rtk" && mode !== "lite_rtk") {
+    showToast(`Invalid compression mode: ${mode}`, "error");
+    return;
+  }
+  try {
+    await api("/config/compression", { method: "PUT", body: JSON.stringify(mode) });
+    showToast(`Compression mode set to ${mode} — applies to next requests`, "success");
+  } catch (e: unknown) {
+    showToast(extractApiErrorMessage(e) || String(e), "error");
+  }
+}
+
+async function configSaveIdleChunkRetryable(): Promise<void> {
+  const el = document.querySelector('input[name="idle_chunk_retryable"]') as HTMLInputElement | null;
+  if (!el) { showToast("idle_chunk_retryable toggle missing from DOM", "error"); return; }
+  const val = el.checked;
+  try {
+    await api("/config/idle-chunk-retryable", { method: "PUT", body: JSON.stringify({ idle_chunk_retryable: val }) });
+    showToast(`Idle chunk retryable set to ${val} — applies to next requests`, "success");
+  } catch (e: unknown) {
+    showToast(extractApiErrorMessage(e) || String(e), "error");
+  }
+}
+
 export async function mountConfig(): Promise<void> {
   const main = document.getElementById("main");
   if (!main) return;
@@ -140,6 +173,8 @@ export async function mountConfig(): Promise<void> {
   const r = cfg.retries || {};
   const cb = cfg.circuit_breaker || {};
   const rc = cfg.racing || {};
+  const compression = cfg.compression ?? "off";
+  const idleChunkRetryable = cfg.idle_chunk_retryable ?? false;
   main.innerHTML = `
     ${pageHeader({ title: "Config" })}
     <div id="config-banner" class="banner banner-info">
@@ -165,11 +200,42 @@ export async function mountConfig(): Promise<void> {
         ${renderField("recording_ttl_secs", "recording_ttl_secs", cfg.recording_ttl_secs ?? 300, "TTL in seconds. Use 0 to clear bodies on the next prune tick.", { editable: true, step: 1 })}
       </div>
     `)}
+    ${card("Compression", `
+      <p class="muted">Reduce upstream token usage by compressing messages before sending them. <code>Lite</code> applies safe text normalization (zero semantic change); <code>Rtk</code> adds CLI-aware output filtering (git, cargo, etc.). See <a href="https://github.com/rtk-ai/rtk" target="_blank">rtk.ai</a> for details.</p>
+      <div class="config-grid">
+        <label class="config-field">
+          <span class="config-label">mode</span>
+          <select name="compression_mode" aria-label="Compression mode">
+            <option value="off"  ${compression === "off"  ? "selected" : ""}>Off</option>
+            <option value="lite" ${compression === "lite" ? "selected" : ""}>Lite</option>
+            <option value="rtk"  ${compression === "rtk"  ? "selected" : ""}>Rtk</option>
+            <option value="lite_rtk"  ${compression === "lite_rtk" ? "selected" : ""}>Lite + Rtk</option>
+          </select>
+          <span class="config-help">Which compression strategy to apply on every request. Changes apply to the <strong>next</strong> request.</span>
+        </label>
+      </div>
+    `)}
+    ${card("Idle Chunk Retryable", `
+      <p class="muted">When enabled, idle chunk timeouts (max gap between SSE chunks) are treated as retryable: the pipeline falls through to the next target instead of aborting. When disabled (default), idle chunk timeouts return an error immediately.</p>
+      <div class="config-grid">
+        <label class="config-field">
+          <span class="config-label">idle_chunk_retryable</span>
+          <button type="button" role="switch" aria-checked="${idleChunkRetryable}"
+                  data-action="toggleIdleChunkRetryable"
+                  class="toggle-btn ${idleChunkRetryable ? "on" : "off"}">
+            <span class="toggle-thumb"></span>
+          </button>
+          <input type="checkbox" name="idle_chunk_retryable" ${idleChunkRetryable ? "checked" : ""} class="sr-only">
+          <span class="config-help">${idleChunkRetryable ? "ON — idle chunk timeouts allow retry via next target" : "OFF — idle chunk timeouts return error immediately (default)"}</span>
+        </label>
+      </div>
+    `)}
     ${card("Retries", `<div class="config-grid">
         ${renderField("max_attempts", "retries.max_attempts", r.max_attempts, "Including the first try.")}
         ${renderField("backoff_base_ms", "retries.backoff_base_ms", r.backoff_base_ms, "Initial backoff.")}
         ${renderField("backoff_factor", "retries.backoff_factor", r.backoff_factor, "Exponential factor.")}
         ${renderField("backoff_jitter_pct", "retries.backoff_jitter_pct", r.backoff_jitter_pct, "Random jitter % to avoid thundering herds.")}
+        ${renderField("combo_max_attempts", "retries.combo_max_attempts", r.combo_max_attempts, "Combo-level retries when all targets fail. 1 = no combo retry.")}
     </div>`)}
     ${card("Circuit Breaker", `<div class="config-grid">
         ${renderField("failure_threshold", "circuit_breaker.failure_threshold", cb.failure_threshold, "Consecutive failures before a target is parked.")}
@@ -183,6 +249,8 @@ export async function mountConfig(): Promise<void> {
     <div class="config-actions">
       <button class="primary" type="button" data-action="configSaveTimeouts">Save Timeouts</button>
       <button class="primary" type="button" data-action="configSaveRecordingTtl">Save Recording TTL</button>
+      <button class="primary" type="button" data-action="configSaveCompression">Save Compression</button>
+      <button class="primary" type="button" data-action="configSaveIdleChunkRetryable">Save Idle Chunk Retryable</button>
       <span class="muted">Saves the editable values above. The other sections are read-only here; edit <code>config.toml</code> and restart to change them.</span>
     </div>
     <details class="config-details">

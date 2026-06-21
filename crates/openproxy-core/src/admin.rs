@@ -836,6 +836,7 @@ pub async fn refresh_models(
     adapter: &dyn crate::adapters::ProviderAdapter,
     upstream_client: &std::sync::Arc<crate::upstream::UpstreamClient>,
     ttl_seconds: i64,
+    account_label: &str,
 ) -> Result<models::UpsertResult> {
     // Sanity: the provider must exist; otherwise we'd silently create rows
     // referencing a non-existent parent (the FK would actually reject them
@@ -844,7 +845,9 @@ pub async fn refresh_models(
         return Err(CoreError::ProviderNotFound(provider.to_string()));
     }
 
-    let discovered = adapter.fetch_models(upstream_client, api_key).await?;
+    let discovered = adapter
+        .fetch_models_for_account(upstream_client, api_key, account_label)
+        .await?;
     let ttl = Duration::from_secs(ttl_seconds.max(0) as u64);
     models::upsert_many(&conn, provider, &discovered, ttl)
 }
@@ -1262,6 +1265,7 @@ mod tests {
             &adapter,
             &upstream,
             3600,
+            "",
         ));
         match res {
             Err(CoreError::ProviderNotFound(id)) => assert_eq!(id, "does-not-exist"),

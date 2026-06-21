@@ -44,6 +44,7 @@ pub mod bootstrap;
 pub mod discovery_scheduler;
 pub mod models_dev_sync;
 pub mod redact;
+pub mod compression;
 
 // Gate 0: hyper-based upstream client. See `upstream/mod.rs` for the
 // architecture and the `upstream-hyper` feature flag in `Cargo.toml`.

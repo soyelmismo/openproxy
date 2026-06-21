@@ -24,6 +24,7 @@
 //! rather than dying. A subsequent `PUT` will overwrite the corrupt
 //! row with a valid value.
 
+use crate::compression::CompressionMode;
 use crate::config::TimeoutsConfig;
 use crate::error::{CoreError, Result};
 use rusqlite::{params, Connection};
@@ -36,6 +37,146 @@ pub const RECORDING_TTL_KEY: &str = "recording_ttl_secs";
 
 /// Default recording body TTL in seconds (5 minutes).
 pub const RECORDING_TTL_DEFAULT_SECS: i64 = 300;
+
+/// Key under which the compression mode override is stored.
+pub const COMPRESSION_KEY: &str = "compression";
+
+/// Key under which the `idle_chunk_retryable` flag is stored.
+pub const IDLE_CHUNK_RETRYABLE_KEY: &str = "idle_chunk_retryable";
+
+/// Default value for `idle_chunk_retryable` (false = current behavior).
+pub const IDLE_CHUNK_RETRYABLE_DEFAULT: bool = crate::config::IDLE_CHUNK_RETRYABLE_DEFAULT;
+
+/// Read the persisted `compression` override, if any.
+pub fn load_compression_override_from_db(
+    conn: &Connection,
+) -> Result<Option<CompressionMode>> {
+    let mut stmt = conn.prepare(
+        "SELECT value FROM app_config WHERE key = ?1"
+    ).map_err(|e| CoreError::Database {
+        message: format!("prepare load_compression_override: {}", e),
+        source: Some(Box::new(e)),
+    })?;
+    let mut rows = stmt.query(params![COMPRESSION_KEY]).map_err(|e|
+        CoreError::Database {
+            message: format!("query load_compression_override: {}", e),
+            source: Some(Box::new(e)),
+        }
+    )?;
+    match rows.next() {
+        Ok(Some(row)) => {
+            let raw: String = row.get(0).map_err(|e| CoreError::Database {
+                message: format!("read app_config.value: {}", e),
+                source: Some(Box::new(e)),
+            })?;
+            match serde_json::from_str::<CompressionMode>(&raw) {
+                Ok(cfg) => Ok(Some(cfg)),
+                Err(e) => {
+                    tracing::warn!(
+                        error = %e,
+                        key = COMPRESSION_KEY,
+                        "app_config row exists but JSON is corrupt; \
+                         ignoring and falling back to config default"
+                    );
+                    Ok(None)
+                }
+            }
+        }
+        Ok(None) => Ok(None),
+        Err(e) => Err(CoreError::Database {
+            message: format!("iterate load_compression_override: {}", e),
+            source: Some(Box::new(e)),
+        }),
+    }
+}
+
+/// UPSERT the `compression` row.
+pub fn save_compression_to_db(
+    conn: &Connection,
+    mode: &CompressionMode,
+    now_unix_secs: i64,
+) -> Result<()> {
+    let json = serde_json::to_string(mode).map_err(|e|
+        CoreError::Parse(format!("serialize compression mode: {}", e))
+    )?;
+    conn.execute(
+        "INSERT INTO app_config (key, value, updated_at) VALUES (?1, ?2, ?3)
+         ON CONFLICT(key) DO UPDATE SET value = excluded.value,
+                                         updated_at = excluded.updated_at",
+        params![COMPRESSION_KEY, json, now_unix_secs],
+    ).map_err(|e| CoreError::Database {
+        message: format!("upsert app_config.compression: {}", e),
+        source: Some(Box::new(e)),
+    })?;
+    Ok(())
+}
+
+/// Read the persisted `idle_chunk_retryable` flag, if any.
+///
+/// Returns `Ok(Some(bool))` if a row exists and parses cleanly,
+/// `Ok(None)` if no row or corrupt JSON (falls back to default).
+pub fn load_idle_chunk_retryable_from_db(
+    conn: &Connection,
+) -> Result<Option<bool>> {
+    let mut stmt = conn.prepare(
+        "SELECT value FROM app_config WHERE key = ?1"
+    ).map_err(|e| CoreError::Database {
+        message: format!("prepare load_idle_chunk_retryable: {}", e),
+        source: Some(Box::new(e)),
+    })?;
+    let mut rows = stmt.query(params![IDLE_CHUNK_RETRYABLE_KEY]).map_err(|e|
+        CoreError::Database {
+            message: format!("query load_idle_chunk_retryable: {}", e),
+            source: Some(Box::new(e)),
+        }
+    )?;
+    match rows.next() {
+        Ok(Some(row)) => {
+            let raw: String = row.get(0).map_err(|e| CoreError::Database {
+                message: format!("read app_config.value: {}", e),
+                source: Some(Box::new(e)),
+            })?;
+            match serde_json::from_str::<bool>(&raw) {
+                Ok(val) => Ok(Some(val)),
+                Err(e) => {
+                    tracing::warn!(
+                        error = %e,
+                        key = IDLE_CHUNK_RETRYABLE_KEY,
+                        "app_config row exists but JSON is corrupt; \
+                         ignoring and falling back to default"
+                    );
+                    Ok(None)
+                }
+            }
+        }
+        Ok(None) => Ok(None),
+        Err(e) => Err(CoreError::Database {
+            message: format!("iterate load_idle_chunk_retryable: {}", e),
+            source: Some(Box::new(e)),
+        }),
+    }
+}
+
+/// UPSERT the `idle_chunk_retryable` row.
+pub fn save_idle_chunk_retryable_to_db(
+    conn: &Connection,
+    val: bool,
+    now_unix_secs: i64,
+) -> Result<()> {
+    let json = serde_json::to_string(&val).map_err(|e|
+        CoreError::Parse(format!("serialize idle_chunk_retryable: {}", e))
+    )?;
+    conn.execute(
+        "INSERT INTO app_config (key, value, updated_at) VALUES (?1, ?2, ?3)
+         ON CONFLICT(key) DO UPDATE SET value = excluded.value,
+                                         updated_at = excluded.updated_at",
+        params![IDLE_CHUNK_RETRYABLE_KEY, json, now_unix_secs],
+    ).map_err(|e| CoreError::Database {
+        message: format!("upsert app_config.idle_chunk_retryable: {}", e),
+        source: Some(Box::new(e)),
+    })?;
+    Ok(())
+}
 
 /// Read the persisted `timeouts` override, if any.
 ///

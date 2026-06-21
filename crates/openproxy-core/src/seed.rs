@@ -149,6 +149,15 @@ const BUILTINS: &[Builtin<'static>] = &[
         extra_headers_json: None,
         auto_activate_keyword: None,
     },
+    Builtin {
+        id: "cloudflare-workers-ai",
+        name: "CloudFlare Workers AI",
+        base_url: "https://api.cloudflare.com/client/v4/accounts/${account_label}/ai/v1",
+        auth_type: "bearer",
+        format: "openai",
+        extra_headers_json: None,
+        auto_activate_keyword: None,
+    },
 ];
 
 /// Returns the IDs of the built-in providers.
@@ -169,7 +178,7 @@ const BUILTINS: &[Builtin<'static>] = &[
 /// Custom (operator-created) providers are not in this list and can
 /// be deleted normally.
 pub fn builtin_provider_ids() -> &'static [&'static str] {
-    &["openrouter", "minimax", "opencode-zen", "ollama-cloud", "nous-research", "nvidia-nim", "kilocode", "gemini", "antigravity", "antigravity-cli", "kiro"]
+    &["openrouter", "minimax", "opencode-zen", "ollama-cloud", "nous-research", "nvidia-nim", "kilocode", "gemini", "antigravity", "antigravity-cli", "kiro", "cloudflare-workers-ai"]
 }
 
 /// The id of the synthetic "combo" provider row used as a placeholder
@@ -388,10 +397,10 @@ mod tests {
         let (pool, _path) = fresh_pool();
         let conn = pool.writer();
         let n = seed_builtin_providers(&conn).expect("seed");
-        assert_eq!(n, 12, "first call inserts all twelve");
+        assert_eq!(n, 13, "first call inserts all thirteen");
 
-        // All twelve are present and reachable by id.
-        for id in ["openrouter", "minimax", "opencode-zen", "ollama-cloud", "nous-research", "nvidia-nim", "kilocode", "gemini", "gemini-cli", "antigravity", "antigravity-cli", "kiro"] {
+        // All thirteen are present and reachable by id.
+        for id in ["openrouter", "minimax", "opencode-zen", "ollama-cloud", "nous-research", "nvidia-nim", "kilocode", "gemini", "gemini-cli", "antigravity", "antigravity-cli", "kiro", "cloudflare-workers-ai"] {
             let p = providers::get(&conn, &ProviderId::new(id))
                 .expect("get")
                 .unwrap_or_else(|| panic!("{} not seeded", id));
@@ -404,14 +413,14 @@ mod tests {
         let (pool, _path) = fresh_pool();
         let conn = pool.writer();
         let first = seed_builtin_providers(&conn).expect("first");
-        assert_eq!(first, 12);
+        assert_eq!(first, 13);
 
         // Idempotent: running again must not insert more rows.
         let second = seed_builtin_providers(&conn).expect("second");
         assert_eq!(second, 0, "no new rows on second call");
 
         let count = providers::list(&conn).expect("list").len();
-        assert_eq!(count, 12, "still exactly twelve rows");
+        assert_eq!(count, 13, "still exactly thirteen rows");
     }
 
     #[test]
@@ -434,7 +443,7 @@ mod tests {
         .expect("pre-seed");
 
         let n = seed_builtin_providers(&conn).expect("seed");
-        assert_eq!(n, 11, "only the eleven missing ones");
+        assert_eq!(n, 12, "only the twelve missing ones");
 
         // The pre-seeded row's name was *not* overwritten.
         let p = providers::get(&conn, &ProviderId::new("openrouter"))
@@ -502,13 +511,13 @@ mod tests {
     }
 
     #[test]
-    fn builtin_provider_ids_lists_eleven() {
+    fn builtin_provider_ids_lists_twelve() {
         // The list is the source of truth for "is this provider
         // protected from delete?" — guard it with a test so a future
         // addition to `BUILTINS` (e.g. a new seeded provider) gets
         // remembered here.
         let ids = builtin_provider_ids();
-        assert_eq!(ids.len(), 11);
+        assert_eq!(ids.len(), 12);
         assert!(ids.contains(&"openrouter"));
         assert!(ids.contains(&"minimax"));
         assert!(ids.contains(&"opencode-zen"));
@@ -520,6 +529,7 @@ mod tests {
         assert!(ids.contains(&"antigravity"));
         assert!(ids.contains(&"antigravity-cli"));
         assert!(ids.contains(&"kiro"));
+        assert!(ids.contains(&"cloudflare-workers-ai"));
     }
 
     #[test]

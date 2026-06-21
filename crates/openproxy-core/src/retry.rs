@@ -10,6 +10,7 @@ pub struct RetryPolicy {
     pub backoff_base: Duration,
     pub backoff_factor: u8,
     pub backoff_jitter_pct: u8,
+    pub idle_chunk_retryable: bool,
 }
 
 impl RetryPolicy {
@@ -19,6 +20,7 @@ impl RetryPolicy {
             backoff_base: Duration::from_millis(c.backoff_base_ms),
             backoff_factor: c.backoff_factor,
             backoff_jitter_pct: c.backoff_jitter_pct,
+            idle_chunk_retryable: c.idle_chunk_retryable,
         }
     }
 
@@ -43,17 +45,25 @@ impl RetryPolicy {
     /// True if the error is retryable per spec §5.4:
     /// 5xx, 429, network/timeout errors. NOT 4xx (except 429).
     ///
-    /// Mid-stream timeouts (idle_chunk, body, total) are NOT retryable:
+    /// Mid-stream timeouts (`body`, `total`) are NOT retryable:
     /// bytes were already sent to the client, so retrying would write
     /// a second stream on top of the first, corrupting the output.
+    /// When `idle_chunk_retryable` is true, `idle_chunk` timeouts are
+    /// treated as retryable (the pipeline can fall through to the
+    /// next target). When false (default), they abort the walk.
     /// Connect/TTFT timeouts happen before any bytes reach the client,
     /// so they are safe to retry.
-    pub fn is_retryable(err: &crate::error::CoreError) -> bool {
+    pub fn is_retryable(
+        err: &crate::error::CoreError,
+        idle_chunk_retryable: bool,
+    ) -> bool {
         use crate::error::CoreError::*;
         match err {
-            UpstreamTimeout { phase, .. } => {
-                !matches!(phase.as_str(), "idle_chunk" | "body" | "total")
-            }
+            UpstreamTimeout { phase, .. } => match phase.as_str() {
+                "body" | "total" => false,
+                "idle_chunk" => idle_chunk_retryable,
+                _ => true,
+            },
             UpstreamConnection(_) => true,
             RateLimited { .. } => true,
             UpstreamError { status, .. } => *status >= 500 || *status == 429,
@@ -73,6 +83,7 @@ mod tests {
             backoff_base: Duration::from_millis(base_ms),
             backoff_factor: factor,
             backoff_jitter_pct: jitter,
+            idle_chunk_retryable: false,
         }
     }
 
@@ -117,7 +128,7 @@ mod tests {
             model: "m".into(),
             body: "b".into(),
         };
-        assert!(RetryPolicy::is_retryable(&err));
+        assert!(RetryPolicy::is_retryable(&err, false));
     }
 
     #[test]
@@ -126,7 +137,7 @@ mod tests {
             provider: "p".into(),
             retry_after_ms: 1000,
         };
-        assert!(RetryPolicy::is_retryable(&err));
+        assert!(RetryPolicy::is_retryable(&err, false));
     }
 
     #[test]
@@ -137,13 +148,13 @@ mod tests {
             model: "m".into(),
             body: "b".into(),
         };
-        assert!(!RetryPolicy::is_retryable(&err));
+        assert!(!RetryPolicy::is_retryable(&err, false));
     }
 
     #[test]
     fn not_retryable_validation() {
         let err = CoreError::Validation("bad input".into());
-        assert!(!RetryPolicy::is_retryable(&err));
+        assert!(!RetryPolicy::is_retryable(&err, false));
     }
 
     #[test]
@@ -152,7 +163,16 @@ mod tests {
             phase: "idle_chunk".into(),
             ms: 120_000,
         };
-        assert!(!RetryPolicy::is_retryable(&err));
+        assert!(!RetryPolicy::is_retryable(&err, false));
+    }
+
+    #[test]
+    fn retryable_idle_chunk_when_configured() {
+        let err = CoreError::UpstreamTimeout {
+            phase: "idle_chunk".into(),
+            ms: 120_000,
+        };
+        assert!(RetryPolicy::is_retryable(&err, true));
     }
 
     #[test]
@@ -161,7 +181,7 @@ mod tests {
             phase: "total".into(),
             ms: 300_000,
         };
-        assert!(!RetryPolicy::is_retryable(&err));
+        assert!(!RetryPolicy::is_retryable(&err, false));
     }
 
     #[test]
@@ -170,6 +190,6 @@ mod tests {
             phase: "connect".into(),
             ms: 5000,
         };
-        assert!(RetryPolicy::is_retryable(&err));
+        assert!(RetryPolicy::is_retryable(&err, false));
     }
 }

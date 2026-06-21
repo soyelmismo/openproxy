@@ -30,6 +30,7 @@ use bytes::Bytes;
 use futures::stream::Stream;
 use std::convert::Infallible;
 use std::pin::Pin;
+use std::sync::Arc;
 use std::task::{Context, Poll};
 use std::time::Duration;
 use tokio_stream::wrappers::ReceiverStream;
@@ -249,7 +250,7 @@ async fn run_pipeline(
         retries: state.config().retries,
         max_attempts: state.config().retries.max_attempts,
         master_key: state.master_key().clone(),
-        adapters: state.adapters().clone(),
+        adapters: Arc::new(state.adapters()),
         http_client: state.http_client().clone(),
         // Read from `[cooldown].cooldown_secs` / `OPENPROXY_COOLDOWN_SECS`.
         // Default 60s when neither is set; the loader fills in
@@ -265,6 +266,8 @@ async fn run_pipeline(
         // the plan.
         upstream_client: UpstreamClient::new(),
         oauth_provider_registry: Some(state.oauth_provider_registry()),
+        compression_mode: state.compression_mode(),
+        idle_chunk_retryable: state.idle_chunk_retryable(),
     };
     let pipeline = Pipeline::with_recording_flag(
         state.db_pool().writer_arc(),
@@ -632,6 +635,8 @@ fn record_model_not_found_usage_row(
         is_streaming: false,
         stream_complete: false,
         stop_reason: None,
+        compression_savings_pct: None,
+        compression_techniques: None,
     };
     // A write failure is logged but never propagates: the request
     // has already failed with a 404, and a missing usage row is

@@ -436,6 +436,7 @@ async fn run_one_tick(
         adapter.as_ref(),
         upstream_client,
         DISCOVERY_TTL_SECONDS,
+        "",
     )
     .await;
 

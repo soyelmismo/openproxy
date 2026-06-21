@@ -69,6 +69,18 @@ function buildLogRowCells(
   if (has("tokens"))   cells.push(`<span class="log-tokens">${formatContext(row.prompt_tokens)}↓ ${formatContext(row.completion_tokens)}↑</span>`);
   if (has("latency"))  cells.push(`<span class="log-latency">${row.total_ms || 0}ms</span>`);
   if (has("cost"))     cells.push(`<span class="log-cost">$${(row.cost_usd || 0).toFixed(4)}</span>`);
+  // Compression cell — always rendered when the column is visible,
+  // so the column slot stays reserved and the header/body line up.
+  if (has("compression")) {
+    const savings = row.compression_savings_pct ?? stage?.compression_savings_pct ?? null;
+    if (savings != null && savings > 0) {
+      const pct = Math.round(savings);
+      const tech = row.compression_techniques ?? stage?.compression_techniques ?? "";
+      cells.push(`<span class="log-compression" title="${escapeAttr(`Compressed: ${pct}% saved — ${tech}`)}">-${pct}%</span>`);
+    } else {
+      cells.push(`<span class="log-compression log-compression--none" title="No compression applied (or mode is Off)">—</span>`);
+    }
+  }
   return cells.join("");
 }
 

@@ -34,7 +34,7 @@ pub struct AppState {
     config: AppConfig,
     db_pool: Arc<db::DbPool>,
     master_key: Arc<MasterKey>,
-    adapters: Arc<Vec<Arc<dyn adapters::ProviderAdapter>>>,
+    adapters: Arc<RwLock<Vec<Arc<dyn adapters::ProviderAdapter>>>>,
     /// Shared HTTP client used for upstream calls, hot-swappable so
     /// the `timeouts.connect_ms` admin update can rebuild it with a
     /// new `connect_timeout` without restarting the process. The
@@ -71,6 +71,8 @@ pub struct AppState {
     /// `PUT /v1/admin/config/timeouts` handler after the DB
     /// row has been updated. See spec §5 / §7.
     timeouts_cell: Arc<RwLock<openproxy_core::config::TimeoutsConfig>>,
+    /// Hot-swappable slot for [`openproxy_core::compression::CompressionMode`].
+    compression_mode_cell: Arc<RwLock<openproxy_core::compression::CompressionMode>>,
     /// Hot-swappable slot for the recording body TTL in seconds.
     /// This controls how long request/response bodies and headers
     /// remain in the `usage` table before being nullified.
@@ -98,6 +100,10 @@ pub struct AppState {
     /// startup; custom providers can be added via
     /// `oauth_provider_registry().register()`.
     oauth_provider_registry: Arc<openproxy_core::oauth::OAuthProviderRegistry>,
+    /// Hot-swappable flag: when true, idle_chunk timeouts are
+    /// treated as retryable (pipeline falls through to the next
+    /// target). Default false. Persisted in `app_config` table.
+    idle_chunk_retryable_cell: Arc<AtomicBool>,
 }
 
 impl AppState {
@@ -123,6 +129,8 @@ impl AppState {
         let db_pool = Arc::new(db::DbPool::open(&path)?);
         let mut config = config;
         let mut recording_ttl_secs = db::app_config::RECORDING_TTL_DEFAULT_SECS;
+        let mut idle_chunk_retryable = db::app_config::IDLE_CHUNK_RETRYABLE_DEFAULT;
+        let mut compression_mode = openproxy_core::compression::CompressionMode::Off;
         {
             let mut w = db_pool.writer();
             db::migrations::run(&mut w)?;
@@ -150,6 +158,43 @@ impl AppState {
                 recording_ttl_secs,
                 "loaded recording TTL from app_config (default 300s)"
             );
+            // 1d. Load the persisted idle_chunk_retryable override.
+            if let Some(val) = db::app_config::load_idle_chunk_retryable_from_db(&w)? {
+                idle_chunk_retryable = val;
+            }
+            tracing::info!(
+                idle_chunk_retryable,
+                "loaded idle_chunk_retryable from app_config (default false)"
+            );
+            // 1e. Load the persisted compression override. The
+            //     admin PUT endpoint for compression persists the
+            //     chosen mode here at runtime; if we don't load it
+            //     back at boot, the in-memory `compression_mode_cell`
+            //     silently defaults to `Off` and every subsequent
+            //     request runs uncompressed even though the operator
+            //     clearly enabled it via the dashboard. This was
+            //     the half of the compression bug that made the
+            //     feature invisible in the `usage` table on a
+            //     server restart (the other half — dropping the
+            //     stats before writing the row — lives in
+            //     `pipeline.rs`). Mirrors the timeouts /
+            //     recording_ttl / idle_chunk_retryable pattern
+            //     immediately above.
+            if let Some(mode) =
+                db::app_config::load_compression_override_from_db(&w)?
+            {
+                tracing::info!(
+                    ?mode,
+                    "loaded persisted compression override from app_config"
+                );
+                compression_mode = mode;
+            } else {
+                tracing::info!(
+                    ?compression_mode,
+                    "no persisted compression override; \
+                     using config default"
+                );
+            }
             // Auto-seed the three built-in providers (OpenRouter, MiniMax
             // Coding, OpenCode Zen) so the dashboard shows them on first
             // run. The seed is idempotent: existing rows are skipped.
@@ -221,20 +266,12 @@ impl AppState {
             .build()?;
 
         // 4. Adapters — built-in + any custom providers stored in DB.
-        let mut all_adapters: Vec<Arc<dyn adapters::ProviderAdapter>> =
-            adapters::builtin_adapters();
-        {
-            let w = db_pool.writer();
-            if let Ok(all_providers) = openproxy_core::providers::list(&w) {
-                for p in &all_providers {
-                    if !openproxy_core::seed::is_builtin(p.id.as_str()) {
-                        all_adapters
-                            .push(Arc::new(adapters::CustomAdapter::from_provider_row(p)));
-                    }
-                }
-            }
-        }
-        let adapters = Arc::new(all_adapters);
+        //    The in-memory registry is wrapped in a `RwLock` so the
+        //    admin handlers can hot-reload it (via `rebuild_adapters`)
+        //    after create / update / delete of a custom provider.
+        //    At startup we call `rebuild_adapters` once; subsequent
+        //    reloads happen in the admin handler path.
+        let adapters = Arc::new(RwLock::new(adapters::builtin_adapters()));
 
         // 5. Usage broadcast sender for admin live-log WebSockets.
         let usage_tx = usage::init_usage_broadcast();
@@ -400,7 +437,7 @@ impl AppState {
         let discovery_scheduler = discovery_scheduler::start(
             db_pool.clone(),
             master_key.clone(),
-            adapters.clone(),
+            Arc::new(adapters.read().clone()),
             upstream_client.clone(),
             discovery_scheduler::DiscoverySchedulerConfig::default(),
         )
@@ -408,7 +445,7 @@ impl AppState {
         let discovery_scheduler = Arc::new(discovery_scheduler);
 
         let timeouts_initial = config.timeouts; // Copy, take it before moving config.
-        Ok(Self {
+        let state = Self {
             config,
             db_pool,
             master_key,
@@ -419,10 +456,16 @@ impl AppState {
             stage_tx,
             record_bodies_and_headers: Arc::new(AtomicBool::new(false)),
             timeouts_cell: Arc::new(RwLock::new(timeouts_initial)),
+            compression_mode_cell: Arc::new(RwLock::new(compression_mode)),
             recording_ttl_secs_cell: Arc::clone(&recording_ttl_secs_cell),
             discovery_scheduler,
             oauth_provider_registry,
-        })
+            idle_chunk_retryable_cell: Arc::new(AtomicBool::new(idle_chunk_retryable)),
+        };
+        // Hot-reload custom adapters from DB so the registry is
+        // complete before the first request arrives.
+        state.rebuild_adapters()?;
+        Ok(state)
     }
 
     /// Build a minimal `AppState` suitable for tests.
@@ -443,7 +486,7 @@ impl AppState {
         config: AppConfig,
         db_pool: Arc<db::DbPool>,
         master_key: Arc<MasterKey>,
-        adapters: Arc<Vec<Arc<dyn adapters::ProviderAdapter>>>,
+    adapters: Arc<RwLock<Vec<Arc<dyn adapters::ProviderAdapter>>>>,
     ) -> Self {
         // 60-second prune cadence matches production; the spawned
         // task holds only `Arc<DbPool>` so the test's drop of the
@@ -486,7 +529,7 @@ impl AppState {
         let discovery_scheduler = discovery_scheduler::start(
             db_pool.clone(),
             master_key.clone(),
-            adapters.clone(),
+            Arc::new(adapters.read().clone()),
             upstream_client.clone(),
             discovery_scheduler::DiscoverySchedulerConfig {
                 // 1h cadence + 0 stagger = first tick is
@@ -524,9 +567,13 @@ impl AppState {
             stage_tx: usage::init_stage_broadcast(),
             record_bodies_and_headers: Arc::new(AtomicBool::new(false)),
             timeouts_cell: Arc::new(RwLock::new(timeouts_initial)),
+            compression_mode_cell: Arc::new(RwLock::new(openproxy_core::compression::CompressionMode::Off)),
             recording_ttl_secs_cell: Arc::clone(&recording_ttl_secs_cell),
             discovery_scheduler: Arc::new(discovery_scheduler),
             oauth_provider_registry: Arc::new(oauth::OAuthProviderRegistry::builtin()),
+            idle_chunk_retryable_cell: Arc::new(AtomicBool::new(
+                db::app_config::IDLE_CHUNK_RETRYABLE_DEFAULT,
+            )),
         }
     }
 
@@ -545,9 +592,61 @@ impl AppState {
         &self.master_key
     }
 
-    /// Borrow the registry of built-in provider adapters.
-    pub fn adapters(&self) -> &Arc<Vec<Arc<dyn adapters::ProviderAdapter>>> {
-        &self.adapters
+    /// Snapshot the registry of provider adapters.
+    ///
+    /// Returns a freshly-cloned `Vec<Arc<dyn ProviderAdapter>>` so
+    /// callers (the chat pipeline, the admin handlers) see a
+    /// self-consistent view of the registry at the moment they take
+    /// the snapshot, even if another thread is hot-reloading the
+    /// registry via [`Self::rebuild_adapters`] concurrently. The
+    /// `Arc::clone` inside the `Vec` is the only allocation —
+    /// pipelines already pay this when constructing
+    /// `PipelineConfig`.
+    pub fn adapters(&self) -> Vec<Arc<dyn adapters::ProviderAdapter>> {
+        self.adapters.read().clone()
+    }
+
+    /// Rebuild the in-memory adapter registry from scratch.
+    ///
+    /// Walks the `providers` table, adds a `CustomAdapter` for every
+    /// non-builtin row, and swaps the result into the
+    /// `Arc<RwLock<Vec<...>>>` slot atomically. Built-in adapters
+    /// are always re-added at the front of the list (matching
+    /// startup ordering).
+    ///
+    /// Called once at startup from `AppState::new`, and from the
+    /// admin handlers after a successful create / update / delete
+    /// on a custom provider so the chat pipeline can dispatch to
+    /// newly-registered providers without a process restart.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Err(CoreError::Internal)` if reading the provider
+    /// list from the DB fails. Admin callers log and continue
+    /// (the DB write has already committed; a future admin action
+    /// will retry the reload) rather than failing the request.
+    pub fn rebuild_adapters(&self) -> Result<(), openproxy_core::CoreError> {
+        // 1. Start with the static built-in adapter set.
+        let mut new_adapters: Vec<Arc<dyn adapters::ProviderAdapter>> =
+            adapters::builtin_adapters();
+        // 2. Layer in any custom providers the DB has.
+        let all_providers = {
+            let w = self.db_pool().writer();
+            openproxy_core::providers::list(&w).map_err(|e| {
+                openproxy_core::CoreError::Internal(format!(
+                    "rebuild_adapters: list providers: {e}"
+                ))
+            })
+        }?;
+        for p in &all_providers {
+            if !openproxy_core::seed::is_builtin(p.id.as_str()) {
+                new_adapters
+                    .push(Arc::new(adapters::CustomAdapter::from_provider_row(p)));
+            }
+        }
+        // 3. Atomic swap into the shared slot.
+        *self.adapters.write() = new_adapters;
+        Ok(())
     }
 
     /// Borrow the shared HTTP client used for upstream calls.
@@ -652,6 +751,17 @@ impl AppState {
         *self.timeouts_cell.read()
     }
 
+    /// Return the current compression mode (hot-swappable).
+    pub fn compression_mode(&self) -> openproxy_core::compression::CompressionMode {
+        *self.compression_mode_cell.read()
+    }
+
+    /// Replace the live compression mode. Called by
+    /// `PUT /v1/admin/config/compression` after the DB UPSERT.
+    pub fn set_compression_mode(&self, mode: openproxy_core::compression::CompressionMode) {
+        *self.compression_mode_cell.write() = mode;
+    }
+
     /// Replace the live [`TimeoutsConfig`]. Called by the
     /// `PUT /v1/admin/config/timeouts` handler *after* the DB UPSERT
     /// has succeeded. Takes the write lock briefly; readers see the
@@ -684,5 +794,229 @@ impl AppState {
                 "rebuilt upstream reqwest::Client with new connect_timeout",
             );
         }
+    }
+
+    /// Read the current `idle_chunk_retryable` flag (hot-swappable).
+    pub fn idle_chunk_retryable(&self) -> bool {
+        self.idle_chunk_retryable_cell.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    /// Replace the live `idle_chunk_retryable` flag. Called by the
+    /// admin PUT endpoint after the DB UPSERT.
+    pub fn set_idle_chunk_retryable(&self, val: bool) {
+        self.idle_chunk_retryable_cell.store(val, std::sync::atomic::Ordering::Relaxed);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    //! Tests for the in-memory adapter registry hot-reload path.
+    //!
+    //! The regression test exercises the bug fixed by
+    //! `rebuild_adapters`: prior to the fix, the registry was built
+    //! once at startup and never refreshed, so a `POST
+    //! /v1/admin/providers` made AFTER the server was already
+    //! running inserted the row but left the in-memory adapter list
+    //! stale, causing `CoreError::ProviderNotFound(<id>)` on the
+    //! first chat attempt against the new provider. The fix wraps
+    //! the registry in an `Arc<RwLock<Vec<...>>>` and exposes
+    //! `rebuild_adapters()` so the admin handlers can refresh it.
+
+    use super::*;
+    use crate::state::AppState;
+    use openproxy_core::{
+        adapters,
+        db as core_db,
+        ids::ProviderId,
+        providers,
+        secrets::MasterKey,
+        AppConfig,
+    };
+    use std::path::PathBuf;
+    use std::sync::Arc;
+
+    /// Build an in-process pool: temp dir on disk, migrations applied.
+    fn fresh_pool() -> (core_db::DbPool, PathBuf) {
+        static SEQ: std::sync::atomic::AtomicU64 =
+            std::sync::atomic::AtomicU64::new(0);
+        let n = SEQ.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        let pid = std::process::id();
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let dir = std::env::temp_dir()
+            .join(format!("openproxy-state-test-{}-{}-{}", pid, nanos, n));
+        std::fs::create_dir_all(&dir).expect("mkdir tempdir");
+        let path = dir.join("state.db");
+        let pool = core_db::DbPool::open(&path).expect("open pool");
+        {
+            let mut w = pool.writer();
+            core_db::migrations::run(&mut w).expect("migrations");
+        }
+        (pool, path)
+    }
+
+    /// Build a minimal `AppState` mirroring the test helper in
+    /// `crates/openproxy-server/src/handlers/admin.rs::tests::make_state_with_key`.
+    async fn make_state() -> AppState {
+        let (pool, _path) = fresh_pool();
+        let db_pool = Arc::new(pool);
+        // MasterKey::generate() returns a fresh 32-byte key — safe
+        // for tests that don't decrypt any real secrets.
+        let master_key = Arc::new(MasterKey::generate());
+        // Start with an empty adapter registry; `rebuild_adapters`
+        // is responsible for filling in both the built-ins and any
+        // custom rows.
+        let adapters = Arc::new(RwLock::new(Vec::<Arc<dyn adapters::ProviderAdapter>>::new()));
+        let state = AppState::for_test(
+            AppConfig::default(),
+            db_pool,
+            master_key,
+            adapters,
+        )
+        .await;
+        state
+    }
+
+    /// Regression test for the frozen-registry bug.
+    ///
+    /// 1. Build an `AppState` with an empty custom-provider table.
+    ///    After the initial `rebuild_adapters` the registry must
+    ///    contain only built-ins.
+    /// 2. Insert a custom provider via `providers::create`.
+    /// 3. Call `rebuild_adapters` again — the registry must now
+    ///    contain a `CustomAdapter` whose `id()` matches the new
+    ///    provider id, so a chat request targeting it will dispatch
+    ///    without a process restart.
+    #[tokio::test]
+    async fn rebuild_adapters_registers_custom_provider() {
+        let state = make_state().await;
+
+        // 1. Empty DB → registry should contain only built-ins.
+        state.rebuild_adapters().expect("first rebuild");
+        let initial_ids: Vec<String> = state
+            .adapters()
+            .iter()
+            .map(|a| a.id().as_str().to_string())
+            .collect();
+        assert!(
+            initial_ids.iter().any(|id| id == "openrouter"),
+            "openrouter built-in must be present after first rebuild: {:?}",
+            initial_ids
+        );
+
+        // 2. Insert a custom provider via the same helper the admin
+        //    handler uses.
+        let custom_id = ProviderId::new("hot-reload-test");
+        {
+            let w = state.db_pool().writer();
+            providers::create(
+                &w,
+                providers::NewProvider {
+                    id: &custom_id,
+                    name: "Hot Reload Test",
+                    base_url: "https://example.test/v1",
+                    auth_type: providers::AuthType::Bearer,
+                    format: providers::ProviderFormat::Openai,
+                    extra_headers_json: None,
+                    auto_activate_keyword: None,
+                },
+            )
+            .expect("create custom provider");
+        }
+
+        // 3. The registry must NOT know about it yet — without the
+        //    fix this is exactly the bug: the row is in the DB but
+        //    the in-memory list is frozen.
+        let pre_reload_ids: Vec<String> = state
+            .adapters()
+            .iter()
+            .map(|a| a.id().as_str().to_string())
+            .collect();
+        assert!(
+            !pre_reload_ids.iter().any(|id| id == "hot-reload-test"),
+            "registry must NOT contain the new provider before rebuild: {:?}",
+            pre_reload_ids
+        );
+
+        // 4. Hot-reload. After this the registry must contain the
+        //    custom adapter.
+        state.rebuild_adapters().expect("second rebuild");
+        let post_reload_ids: Vec<String> = state
+            .adapters()
+            .iter()
+            .map(|a| a.id().as_str().to_string())
+            .collect();
+        assert!(
+            post_reload_ids.iter().any(|id| id == "hot-reload-test"),
+            "registry MUST contain the new provider after rebuild: {:?}",
+            post_reload_ids
+        );
+        // Built-ins must still be there.
+        assert!(
+            post_reload_ids.iter().any(|id| id == "openrouter"),
+            "openrouter built-in must remain after rebuild: {:?}",
+            post_reload_ids
+        );
+    }
+
+    /// Companion test: deleting a custom provider removes its
+    /// `CustomAdapter` from the registry on the next rebuild.
+    #[tokio::test]
+    async fn rebuild_adapters_unregisters_deleted_custom_provider() {
+        let state = make_state().await;
+
+        // Seed a custom provider and rebuild.
+        let custom_id = ProviderId::new("will-be-deleted");
+        {
+            let w = state.db_pool().writer();
+            providers::create(
+                &w,
+                providers::NewProvider {
+                    id: &custom_id,
+                    name: "Will Be Deleted",
+                    base_url: "https://example.test/v1",
+                    auth_type: providers::AuthType::Bearer,
+                    format: providers::ProviderFormat::Openai,
+                    extra_headers_json: None,
+                    auto_activate_keyword: None,
+                },
+            )
+            .expect("create custom provider");
+        }
+        state.rebuild_adapters().expect("rebuild after create");
+        let ids_after_create: Vec<String> = state
+            .adapters()
+            .iter()
+            .map(|a| a.id().as_str().to_string())
+            .collect();
+        assert!(
+            ids_after_create.iter().any(|id| id == "will-be-deleted"),
+            "sanity: id present after create+rebuild"
+        );
+
+        // Delete the row (admin::delete_provider rejects built-ins;
+        // a custom id skips that guard), then rebuild again.
+        {
+            let w = state.db_pool().writer();
+            providers::delete(&w, &custom_id).expect("delete custom provider");
+        }
+        state.rebuild_adapters().expect("rebuild after delete");
+        let ids_after_delete: Vec<String> = state
+            .adapters()
+            .iter()
+            .map(|a| a.id().as_str().to_string())
+            .collect();
+        assert!(
+            !ids_after_delete.iter().any(|id| id == "will-be-deleted"),
+            "deleted provider must be gone from registry after rebuild: {:?}",
+            ids_after_delete
+        );
+        // Built-ins untouched.
+        assert!(
+            ids_after_delete.iter().any(|id| id == "openrouter"),
+            "built-ins must survive a rebuild that removed a custom adapter"
+        );
     }
 }

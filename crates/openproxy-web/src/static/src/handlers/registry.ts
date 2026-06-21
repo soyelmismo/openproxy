@@ -60,7 +60,7 @@ import { showToast } from "../components/toast.js";
 import { navigate, rerenderCurrentView } from "../state/router.js";
 import { OAuthLogin } from "./oauth-handlers.js";
 import { logsPrevPage, logsNextPage, logsGoPage, logsSetFollow, toggleColumnsMenu, toggleColumn } from "../views/logs.js";
-import { configSaveTimeouts, configSaveRecordingTtl } from "../views/config.js";
+import { configSaveTimeouts, configSaveRecordingTtl, configSaveIdleChunkRetryable, configSaveCompression } from "../views/config.js";
 import { closeLogDetailModal } from "../components/log-detail.js";
 
 // ---- Action registry ----
@@ -176,6 +176,25 @@ export const HANDLERS: Record<string, ActionHandler> = {
   // Config
   configSaveTimeouts,
   configSaveRecordingTtl,
+  configSaveIdleChunkRetryable,
+  configSaveCompression,
+  toggleIdleChunkRetryable(e: Event | null): void {
+    if (!e || !e.target) return;
+    const btn = (e.target as Element).closest('button[data-action="toggleIdleChunkRetryable"]') as HTMLButtonElement | null;
+    if (!btn) return;
+    const input = btn.parentElement?.querySelector('input[name="idle_chunk_retryable"]') as HTMLInputElement | null;
+    if (!input) return;
+    input.checked = !input.checked;
+    btn.classList.toggle("on", input.checked);
+    btn.classList.toggle("off", !input.checked);
+    btn.setAttribute("aria-checked", String(input.checked));
+    const help = btn.parentElement?.querySelector(".config-help");
+    if (help) {
+      help.textContent = input.checked
+        ? "ON — idle chunk timeouts allow retry via next target"
+        : "OFF — idle chunk timeouts return error immediately (default)";
+    }
+  },
   exportConfig,
 
   // Logs

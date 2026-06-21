@@ -16,13 +16,13 @@ pub struct OpenAIRequest {
     pub messages: Vec<OpenAIMessage>,
     #[serde(default)]
     pub stream: bool,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub temperature: Option<f32>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_tokens: Option<u32>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub top_p: Option<f32>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stop: Option<Vec<String>>,
     // H4 fix: function-calling fields. None of these are translated
     // by the openai_to_anthropic boundary yet, which means a caller
@@ -34,11 +34,11 @@ pub struct OpenAIRequest {
     // the translator to surface them; serde keeps the unknown-
     // key tolerance of `extra` for callers using newer/draft
     // field names that haven't been added here yet.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tools: Option<Vec<serde_json::Value>>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tool_choice: Option<serde_json::Value>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub top_k: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub user: Option<String>,

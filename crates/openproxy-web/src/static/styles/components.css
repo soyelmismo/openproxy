@@ -451,6 +451,60 @@ body.sidebar-collapsed .sidebar-toggle { text-align: center; }
 .logs-recording-toggle.off .logs-recording-dot { background: var(--color-text-muted); }
 .logs-recording-toggle strong { font-weight: 600; }
 
+/* ----- Generic toggle button (config view) ----- */
+.toggle-btn {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  width: 40px;
+  height: 22px;
+  border-radius: 11px;
+  border: 1px solid var(--color-border);
+  background: var(--color-surface);
+  cursor: pointer;
+  transition: background 0.2s, border-color 0.2s;
+  padding: 0;
+  flex-shrink: 0;
+}
+.toggle-btn.on {
+  background: var(--color-success, #22c55e);
+  border-color: var(--color-success, #22c55e);
+}
+.toggle-btn.off {
+  background: var(--color-surface);
+  border-color: var(--color-border);
+}
+.toggle-btn .toggle-thumb {
+  position: absolute;
+  top: 2px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.2);
+  transition: transform 0.2s;
+}
+.toggle-btn.on .toggle-thumb {
+  transform: translateX(19px);
+}
+.toggle-btn.off .toggle-thumb {
+  transform: translateX(2px);
+}
+.toggle-btn:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 2px;
+}
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0,0,0,0);
+  border: 0;
+}
+
 /* ----- Logs header ----- */
 .logs-header {
   display: flex;

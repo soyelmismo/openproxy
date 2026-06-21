@@ -26,6 +26,7 @@ max_attempts = 3
 backoff_base_ms = 200
 backoff_factor = 2
 backoff_jitter_pct = 50
+# combo_max_attempts = 1  # Retry the entire combo walk when all targets fail (1 = off)
 
 [circuit_breaker]
 failure_threshold = 5
@@ -34,3 +35,12 @@ unhealthy_duration_ms = 60000
 [logging]
 format = "json"  # json | text
 level = "info"
+
+[compression]
+# Modo de compresión: "off" | "lite" | "rtk"
+#   off   → sin compresión
+#   lite  → colapsa whitespace, dedup system prompts, trunca tool results,
+#            remueve contenido redundante, reemplaza imágenes (zero semantic change, ~15% ahorro)
+#   rtk   → filtra output de comandos CLI (git, cargo, npm, docker, etc.),
+#            deduplica líneas repetidas, trunca inteligentemente (~60-90% en tool results)
+mode = "off"

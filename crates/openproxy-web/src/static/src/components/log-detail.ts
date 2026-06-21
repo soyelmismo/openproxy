@@ -33,6 +33,9 @@ interface LogDetailLog {
   cost_usd?: number | null;
   is_streaming?: boolean;
   stream_complete?: boolean;
+  /** Compression savings (0.0–100.0) or null when off. */
+  compression_savings_pct?: number | null;
+  compression_techniques?: string | null;
   race_lost?: boolean;
   request_body_json?: unknown;
   response_body_json?: unknown;
@@ -731,6 +734,7 @@ export function renderLogDetailModal(log: LogDetailLog): string {
             <div><strong>Model:</strong> ${escapeHtml(String(model))}</div>
             <div><strong>Latency:</strong> ${escapeHtml(latency)}</div>
             <div><strong>Cost:</strong> ${costRaw != null ? escapeHtml(String(costRaw)) : "—"}</div>
+            ${renderCompressionSummary(log)}
             <div><strong>Created:</strong> ${escapeHtml(String(createdAt))}</div>
             ${apiKeyId != null ? `<div><strong>API key:</strong> #${escapeHtml(String(apiKeyId))}</div>` : ""}
             ${userAgent ? `<div><strong>User-Agent:</strong> ${escapeHtml(String(userAgent))}</div>` : ""}
@@ -851,6 +855,25 @@ export function closeLogDetailModal(e: Event | null): void {
   // Case 3: click was inside .modal on something else (tabs, content,
   // summary, etc.) with a different data-action — do nothing; the
   // other handler (e.g. logDetailTab) already handled the click.
+}
+
+/// Render the compression savings line for the log detail summary.
+///
+/// Header-only: shows the percentage prominently. Long technique
+/// lists can overflow narrow modals, so the techniques string is
+/// moved into the `title` attribute (hover tooltip) instead of
+/// being rendered as visible text. The Raw tab keeps the
+/// techniques visible because they're useful there.
+function renderCompressionSummary(log: LogDetailLog): string {
+  const pct = log.compression_savings_pct ?? null;
+  if (pct == null || pct <= 0) return "";
+  const tech = log.compression_techniques ?? "";
+  const pctRounded = Math.round(pct);
+  const pctText = `-${escapeHtml(String(pctRounded))}%`;
+  if (tech.length > 0) {
+    return `<div><strong>Compression:</strong> <span title="${escapeHtml(tech)}">${pctText}</span></div>`;
+  }
+  return `<div><strong>Compression:</strong> ${pctText}</div>`;
 }
 
 // Update the open log-detail modal with a new row (called from the

@@ -324,6 +324,10 @@ export interface StageEvent {
   stop_reason: string | null;
   /** RFC-3339 del momento de emisión. */
   timestamp: string;
+  /** Compression savings (0.0–100.0) or null when off. */
+  compression_savings_pct: number | null;
+  /** Compression techniques applied (CSV) or null when off. */
+  compression_techniques: string | null;
 }
 
 /** Fila de la agregación `by_model`.
@@ -396,6 +400,10 @@ export interface RecentUsageRow {
   /** Upstream stop reason (e.g. "end_turn", "max_tokens", "stop_sequence"
    *  for Anthropic; "stop", "length" for OpenAI). */
   stop_reason: string | null;
+  /** Compression savings (0.0–100.0) or null when off. */
+  compression_savings_pct: number | null;
+  /** Compression techniques applied (CSV) or null when off. */
+  compression_techniques: string | null;
   created_at: string;
 }
 

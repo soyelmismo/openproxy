@@ -162,6 +162,11 @@ const MIGRATIONS: &[Migration] = &[
         name: "000030_combo_targets_cascade_on_model_delete",
         sql: include_str!("../../migrations/000030_combo_targets_cascade_on_model_delete.sql"),
     },
+    Migration {
+        version: 31,
+        name: "000031_add_compression",
+        sql: include_str!("../../migrations/000031_add_compression.sql"),
+    },
 ];
 
 /// Apply pending migrations on `conn`. Idempotent: skips versions already in
@@ -384,7 +389,7 @@ mod tests {
                 c.query_row("SELECT COUNT(*) FROM schema_migrations", [], |r| r.get(0))
                     .expect("count")
             });
-        assert_eq!(count_first, 29, "twenty-nine migrations applied (versions 1-6, 8-30)");
+        assert_eq!(count_first, 30, "thirty migrations applied (versions 1-6, 8-31)");
 
         {
             let mut writer = pool.writer();

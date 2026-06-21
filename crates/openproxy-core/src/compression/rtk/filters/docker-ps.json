@@ -1,0 +1,15 @@
+{
+  "id": "docker-ps",
+  "label": "Docker PS",
+  "description": "Compact container list.",
+  "commandTypes": ["docker-ps"],
+  "stripAnsi": true,
+  "keepPatterns": ["^CONTAINER ID", "^[0-9a-f]{12}"],
+  "onEmpty": "(no containers)",
+  "truncate": {
+    "maxLines": 50,
+    "headLines": 10,
+    "tailLines": 5,
+    "priorityPatterns": []
+  }
+}

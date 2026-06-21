@@ -1,0 +1,22 @@
+{
+  "id": "git-diff",
+  "label": "Git Diff",
+  "description": "Condensed diff output.",
+  "commandTypes": ["git-diff"],
+  "stripAnsi": true,
+  "stripPatterns": ["^\\s*$"],
+  "keepPatterns": [
+    "^diff --git ",
+    "^index ",
+    "^--- ",
+    "^\\+\\+\\+ ",
+    "^@@ ",
+    "^[+-]"
+  ],
+  "truncate": {
+    "maxLines": 100,
+    "headLines": 25,
+    "tailLines": 25,
+    "priorityPatterns": ["^@@ "]
+  }
+}

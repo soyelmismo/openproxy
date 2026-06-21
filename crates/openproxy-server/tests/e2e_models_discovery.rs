@@ -328,12 +328,13 @@ async fn make_test_state(
         .expect("create_account (test account)");
     }
 
-    // Build a Vec<Arc<dyn ProviderAdapter>> containing only the
-    // test adapter. We deliberately do NOT include the built-in
-    // adapters — the spec says "do NOT modify the seed list", and
-    // the test is gated on its own provider id, so a built-in
-    // refresh racing the test's call can't affect this DB.
-    let adapters: Arc<Vec<Arc<dyn ProviderAdapter>>> = Arc::new(vec![adapter]);
+    // Build a registry of adapters containing only the test adapter.
+    // We deliberately do NOT include the built-in adapters — the spec
+    // says "do NOT modify the seed list", and the test is gated on
+    // its own provider id, so a built-in refresh racing the test's
+    // call can't affect this DB.
+    let adapters: Arc<parking_lot::RwLock<Vec<Arc<dyn ProviderAdapter>>>> =
+        Arc::new(parking_lot::RwLock::new(vec![adapter]));
 
     AppState::for_test(AppConfig::default(), pool, mk, adapters).await
 }
@@ -402,6 +403,7 @@ async fn call_refresh(
         adapter.as_ref(),
         state.upstream_client(),
         3_600,
+        "",
     )
     .await
     .ok()

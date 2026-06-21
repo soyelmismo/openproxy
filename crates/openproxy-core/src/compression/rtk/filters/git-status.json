@@ -1,0 +1,23 @@
+{
+  "id": "git-status",
+  "label": "Git Status",
+  "description": "Keep branch, staged/unstaged headings, and changed file lines.",
+  "commandTypes": ["git-status"],
+  "stripAnsi": true,
+  "stripPatterns": ["^\\s*(\\(use .*\\))$", "^\\s*$"],
+  "keepPatterns": [
+    "^On branch ",
+    "^Your branch ",
+    "^Changes ",
+    "^Untracked files:",
+    "^\\s*(modified|new file|deleted|renamed):",
+    "^\\s*[MADRCU?!]{1,2}\\s+",
+    "nothing (added|committed)"
+  ],
+  "truncate": {
+    "maxLines": 60,
+    "headLines": 15,
+    "tailLines": 15,
+    "priorityPatterns": ["(modified|deleted|Untracked)"]
+  }
+}

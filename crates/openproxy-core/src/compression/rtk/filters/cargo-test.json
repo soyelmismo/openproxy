@@ -1,0 +1,29 @@
+{
+  "id": "cargo-test",
+  "label": "Cargo Test",
+  "description": "Compact test output — failures only.",
+  "commandTypes": ["cargo-test"],
+  "stripAnsi": true,
+  "matchOutput": [
+    {
+      "pattern": "test result:.*ok\\b",
+      "message": "✓ all tests passed",
+      "unless": "FAILED"
+    }
+  ],
+  "stripPatterns": ["^\\s*$", "^\\s*(Compiling|Finished|warning:)", "^\\s*(running \\d+ tests?)"],
+  "keepPatterns": [
+    "^test .* FAILED",
+    "^test result:",
+    "^failures:",
+    "^\\s+-->",
+    "^error\\["
+  ],
+  "onEmpty": "✓ all tests passed",
+  "truncate": {
+    "maxLines": 60,
+    "headLines": 5,
+    "tailLines": 10,
+    "priorityPatterns": ["(FAILED|error|panic)"]
+  }
+}

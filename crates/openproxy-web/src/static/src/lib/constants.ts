@@ -53,6 +53,7 @@ export const LOG_COLUMNS: readonly LogColumn[] = [
   { key: "tokens",   label: "Tokens"   },
   { key: "latency",  label: "Latency"  },
   { key: "cost",     label: "Cost"     },
+  { key: "compression", label: "Compress" },
 ];
 
 // Localised status -> CSS class for the status-pill component.

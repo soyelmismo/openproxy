@@ -1,0 +1,23 @@
+{
+  "id": "error-stacktrace",
+  "label": "Error Stacktrace",
+  "description": "Keep error context, collapse frames.",
+  "commandTypes": ["error-stacktrace"],
+  "stripAnsi": true,
+  "keepPatterns": [
+    "^(thread|panicked|Error|error)",
+    "^\\s+at ",
+    "^\\s+\\d+:",
+    "^\\s+\\[",
+    "^Caused by:",
+    "^  .*: "
+  ],
+  "collapsePatterns": ["^\\s+at "],
+  "truncateLineAt": 200,
+  "truncate": {
+    "maxLines": 50,
+    "headLines": 5,
+    "tailLines": 5,
+    "priorityPatterns": ["(panicked|fatal|Error)"]
+  }
+}

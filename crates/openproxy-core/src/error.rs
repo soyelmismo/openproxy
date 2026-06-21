@@ -166,8 +166,8 @@ impl CoreError {
                 | CoreError::NotFound { .. } => 404,
             CoreError::RateLimited { .. } => 429,
             CoreError::UpstreamError { status, .. } => *status,
-            CoreError::UpstreamTimeout { .. } | CoreError::UpstreamConnection(_) 
-                | CoreError::NoHealthyTargets(_) => 502,
+            CoreError::UpstreamTimeout { .. } => 529,
+            CoreError::UpstreamConnection(_) | CoreError::NoHealthyTargets(_) => 502,
             CoreError::ClientDisconnected => 499,
             CoreError::RaceLost => 499,
             CoreError::Parse(_) | CoreError::Database { .. } | CoreError::Migration { .. }
@@ -218,7 +218,7 @@ mod tests {
         assert_eq!(CoreError::Validation("x".into()).http_status(), 400);
         assert_eq!(CoreError::RateLimited { provider: "p".into(), retry_after_ms: 1000 }.http_status(), 429);
         assert_eq!(CoreError::ClientDisconnected.http_status(), 499);
-        assert_eq!(CoreError::UpstreamTimeout { phase: "ttft".into(), ms: 100 }.http_status(), 502);
+        assert_eq!(CoreError::UpstreamTimeout { phase: "ttft".into(), ms: 100 }.http_status(), 529);
     }
 
     #[test]

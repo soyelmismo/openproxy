@@ -164,6 +164,10 @@ pub struct StageEvent {
     /// "stop_sequence" for Anthropic; "stop", "length" for OpenAI).
     /// Only set on terminal events (`completed`/`failed`).
     pub stop_reason: Option<String>,
+    /// Compression savings percentage (0.0–100.0). None when off.
+    pub compression_savings_pct: Option<f64>,
+    /// Compression techniques applied (CSV). None when off.
+    pub compression_techniques: Option<String>,
     /// Wall-clock millis at the time the event was emitted
     /// (RFC-3339). Used by the dashboard to keep the stage label
     /// timeline accurate even if the WS delivery is slightly late.
@@ -249,6 +253,8 @@ pub fn broadcast_usage_input(input: &UsageInput) {
         stream_complete: input.stream_complete,
         race_lost: input.race_lost,
         stop_reason: input.stop_reason.clone(),
+        compression_savings_pct: input.compression_savings_pct,
+        compression_techniques: input.compression_techniques.clone(),
         created_at: chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string(),
     };
     // Ignore send errors - no subscribers is harmless
@@ -780,6 +786,10 @@ pub struct RecentUsageRow {
     /// Upstream stop reason (e.g. "end_turn", "max_tokens",
     /// "stop_sequence" for Anthropic; "stop", "length" for OpenAI).
     pub stop_reason: Option<String>,
+    /// Compression savings percentage.
+    pub compression_savings_pct: Option<f64>,
+    /// Compression techniques (CSV).
+    pub compression_techniques: Option<String>,
     pub created_at: String,
 }
 
@@ -868,7 +878,9 @@ pub fn recent(conn: &Connection, since_id: i64, limit: u32) -> Result<Vec<Recent
                         MAX(race_attempts) AS agg_race_attempts, \
                         MAX(is_streaming)  AS agg_is_streaming, \
                         MAX(stream_complete) AS agg_stream_complete, \
-                        MAX(race_lost) AS agg_race_lost \
+                        MAX(race_lost) AS agg_race_lost, \
+                        MAX(compression_savings_pct) AS agg_compression_savings_pct, \
+                        MAX(compression_techniques) AS agg_compression_techniques \
                  FROM usage \
                  WHERE id > ?1 \
                  GROUP BY request_id \
@@ -878,7 +890,8 @@ pub fn recent(conn: &Connection, since_id: i64, limit: u32) -> Result<Vec<Recent
                     g.agg_cost_usd, g.agg_connect_ms, g.agg_ttft_ms, u.request_body_json, u.response_body_json, \
                     u.request_headers, u.response_headers, u.error_msg_redacted, u.error_msg, \
                     g.agg_race_total, g.agg_race_attempts, g.agg_is_streaming, g.agg_stream_complete, \
-                    g.agg_race_lost, g.agg_created_at, u.stop_reason \
+                    g.agg_race_lost, g.agg_created_at, u.stop_reason, \
+                    g.agg_compression_savings_pct, g.agg_compression_techniques \
              FROM grouped g \
              JOIN usage u ON u.id = g.agg_id \
              ORDER BY g.agg_id ASC \
@@ -916,7 +929,9 @@ pub fn recent(conn: &Connection, since_id: i64, limit: u32) -> Result<Vec<Recent
             let stream_complete: i64 = row.get(col_idx)?; col_idx += 1;
             let race_lost: i64 = row.get(col_idx)?; col_idx += 1;
             let created_at: String = row.get(col_idx)?; col_idx += 1;
-            let stop_reason: Option<String> = row.get(col_idx)?;
+            let stop_reason: Option<String> = row.get(col_idx)?; col_idx += 1;
+            let compression_savings_pct: Option<f64> = row.get(col_idx)?; col_idx += 1;
+            let compression_techniques: Option<String> = row.get(col_idx)?;
 
             if !(0..=u16::MAX as i64).contains(&status_code) {
                 return Err(rusqlite::Error::FromSqlConversionFailure(
@@ -967,6 +982,8 @@ pub fn recent(conn: &Connection, since_id: i64, limit: u32) -> Result<Vec<Recent
                 stream_complete: stream_complete_bool,
                 race_lost: race_lost != 0,
                 stop_reason,
+                compression_savings_pct,
+                compression_techniques,
                 created_at,
             })
         })
@@ -1111,6 +1128,8 @@ pub fn recent_desc(conn: &Connection, limit: u32) -> Result<Vec<RecentUsageRow>>
                 stream_complete: stream_complete_bool,
                 race_lost: race_lost != 0,
                 stop_reason,
+                compression_savings_pct: None,
+                compression_techniques: None,
                 created_at,
             })
         })

@@ -406,6 +406,8 @@
 .log-row .log-tokens   { flex: 0 0 auto; min-width: 100px; }
 .log-row .log-latency  { flex: 0 0 auto; min-width: 80px;  color: var(--color-text-muted); }
 .log-row .log-cost     { flex: 0 0 auto; min-width: 70px;  color: var(--color-primary); }
+.log-row .log-compression { flex: 0 0 auto; min-width: 60px; color: var(--color-success, #22c55e); font-size: 0.85em; }
+.log-row .log-compression--none { color: var(--color-text-muted); font-weight: 400; }
 
 /* Sticky header row inside #logs */
 #logs > .log-row[style*="sticky"],
