@@ -66,6 +66,9 @@ pub struct UpstreamBodyStream {
     start: Instant,
     body_chunk_ms: u64,
     total_deadline: Instant,
+    /// PERF: reusable Sleep stored in a Box<Pin<Sleep>> to allow
+    /// in-place reset without timer-wheel register/deregister per chunk.
+    sleep: std::pin::Pin<Box<tokio::time::Sleep>>,
 }
 
 impl UpstreamBodyStream {
@@ -90,6 +93,10 @@ impl UpstreamBodyStream {
         let limit_usize = usize::try_from(limit).unwrap_or(usize::MAX);
         let limited = http_body_util::Limited::new(body, limit_usize);
         let cancel_rx = cancel.subscribe();
+        let initial_deadline = std::cmp::min(
+            start + Duration::from_millis(body_chunk_ms),
+            total_deadline,
+        );
         Self {
             inner: Some(http_body_util::BodyStream::new(limited)),
             cancel_rx,
@@ -98,6 +105,7 @@ impl UpstreamBodyStream {
             start,
             body_chunk_ms,
             total_deadline,
+            sleep: Box::pin(tokio::time::sleep_until(initial_deadline.into())),
         }
     }
 
@@ -106,6 +114,10 @@ impl UpstreamBodyStream {
     /// we have a body in hand.
     pub fn empty(cancel: CancellationToken, start: Instant, body_chunk_ms: u64, total_deadline: Instant) -> Self {
         let cancel_rx = cancel.subscribe();
+        let initial_deadline = std::cmp::min(
+            start + Duration::from_millis(body_chunk_ms),
+            total_deadline,
+        );
         Self {
             #[cfg(feature = "upstream-hyper")]
             inner: None,
@@ -115,6 +127,7 @@ impl UpstreamBodyStream {
             start,
             body_chunk_ms,
             total_deadline,
+            sleep: Box::pin(tokio::time::sleep_until(initial_deadline.into())),
         }
     }
 
@@ -157,14 +170,17 @@ impl UpstreamBodyStream {
 
             let min_deadline = std::cmp::min(chunk_gap_deadline, self.total_deadline);
 
+            // PERF: reset the reusable Sleep instead of creating a fresh
+            // sleep_until future. `reset()` updates the timer-wheel entry
+            // in place — no heap allocation, no register/deregister cycle.
+            self.sleep.as_mut().reset(min_deadline.into());
+
             tokio::select! {
                 biased;
-                // Poll the cached watch receiver — no allocation,
-                // just a version-counter check.
                 _ = self.cancel_rx.changed() => {
                     Err(UpstreamError::Cancel)
                 }
-                _ = tokio::time::sleep_until(min_deadline.into()) => {
+                _ = &mut self.sleep => {
                     Err(UpstreamError::Timeout(UpstreamPhase::Body))
                 }
                 res = futures_util::StreamExt::next(stream) => {
