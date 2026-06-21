@@ -4,7 +4,6 @@
 /// filtros declarativos para eliminar ruido, deduplicar y truncar.
 
 pub mod command_detector;
-pub mod deduplicator;
 pub mod line_filter;
 pub mod smart_truncate;
 
