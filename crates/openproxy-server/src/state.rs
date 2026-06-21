@@ -225,6 +225,19 @@ impl AppState {
                     "backfilled model metadata from heuristics on first start"
                 );
             }
+            // Backfill `model_id_normalized` for existing model rows.
+            // Migration 000033 added the column but left it NULL for
+            // pre-existing rows. The models.dev sync enrichment and the
+            // pricing lookup both depend on this column being populated.
+            // Running it at boot (unconditionally, even if sync is
+            // disabled) ensures the column is ready when the sync fires.
+            let normalized = openproxy_core::models_dev_sync::backfill_model_id_normalized(&w)?;
+            if normalized > 0 {
+                tracing::info!(
+                    normalized,
+                    "backfilled model_id_normalized for existing model rows on boot"
+                );
+            }
             // First-run bootstrap: if the api_keys table is empty,
             // create a single `["manage", "chat"]` key and print the
             // plaintext to the logs + stderr. The operator copies it

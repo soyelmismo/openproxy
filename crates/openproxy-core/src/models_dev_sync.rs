@@ -300,6 +300,182 @@ async fn fetch_models_dev_once(upstream: &Arc<UpstreamClient>) -> Result<bytes::
 
 // ── Enrichment helpers ──────────────────────────────────────────────
 
+/// Backfill `model_id_normalized` for existing rows in both `models` and
+/// `model_capabilities_sync` that have NULL.
+///
+/// Migration 000033 added the `model_id_normalized` column to both tables
+/// but left it NULL for all pre-existing rows. The enrichment queries in
+/// [`enrich_models_from_sync`] match on `models.model_id_normalized` and
+/// gate on `WHERE ... IS NOT NULL`, so without this backfill, existing
+/// models (everything discovered before the migration deployed) would
+/// never get context windows or pricing from models.dev.
+///
+/// This function loads every row where `model_id_normalized IS NULL`,
+/// computes the normalized id in Rust via [`normalize_model_id`], and
+/// UPDATEs the row. It is idempotent: rows that already have a non-NULL
+/// value are skipped.
+///
+/// Returns the total number of rows backfilled across both tables.
+pub fn backfill_model_id_normalized(conn: &Connection) -> Result<usize> {
+    let mut total = 0usize;
+
+    // ── Backfill `models` table ──────────────────────────────────────
+    let model_rows: Vec<(String, String)> = {
+        let mut stmt = conn
+            .prepare("SELECT provider_id, model_id FROM models WHERE model_id_normalized IS NULL")
+            .map_err(|e| CoreError::Database {
+                message: format!("backfill select models: {e}"),
+                source: Some(Box::new(e)),
+            })?;
+        let rows = stmt
+            .query_map([], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })
+            .map_err(|e| CoreError::Database {
+                message: format!("backfill query models: {e}"),
+                source: Some(Box::new(e)),
+            })?;
+        rows.filter_map(|r| r.ok()).collect()
+    };
+    for (provider_id, model_id) in &model_rows {
+        let normalized = crate::model_normalize::normalize_model_id(model_id);
+        conn.execute(
+            "UPDATE models SET model_id_normalized = ?1 \
+             WHERE provider_id = ?2 AND model_id = ?3",
+            rusqlite::params![&normalized, provider_id, model_id],
+        )
+        .map_err(|e| CoreError::Database {
+            message: format!("backfill update models: {e}"),
+            source: Some(Box::new(e)),
+        })?;
+        total += 1;
+    }
+
+    // ── Backfill `model_capabilities_sync` table ─────────────────────
+    // The sync table's rows are inserted by `upsert_models_dev` which
+    // already computes `model_id_normalized`. But rows inserted before
+    // migration 000033 deployed (or rows from a failed partial sync)
+    // would have NULL. Backfill them the same way.
+    let sync_rows: Vec<(String, String)> = {
+        let mut stmt = conn
+            .prepare(
+                "SELECT provider_id, model_id FROM model_capabilities_sync \
+                 WHERE model_id_normalized IS NULL",
+            )
+            .map_err(|e| CoreError::Database {
+                message: format!("backfill select sync: {e}"),
+                source: Some(Box::new(e)),
+            })?;
+        let rows = stmt
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                ))
+            })
+            .map_err(|e| CoreError::Database {
+                message: format!("backfill query sync: {e}"),
+                source: Some(Box::new(e)),
+            })?;
+        rows.filter_map(|r| r.ok()).collect()
+    };
+    for (provider_id, model_id) in &sync_rows {
+        let normalized = crate::model_normalize::normalize_model_id(model_id);
+        conn.execute(
+            "UPDATE model_capabilities_sync SET model_id_normalized = ?1 \
+             WHERE provider_id = ?2 AND model_id = ?3",
+            rusqlite::params![&normalized, provider_id, model_id],
+        )
+        .map_err(|e| CoreError::Database {
+            message: format!("backfill update sync: {e}"),
+            source: Some(Box::new(e)),
+        })?;
+        total += 1;
+    }
+
+    if total > 0 {
+        tracing::info!(
+            total,
+            models_backfilled = model_rows.len(),
+            sync_backfilled = sync_rows.len(),
+            "backfilled model_id_normalized for existing rows"
+        );
+    }
+
+    Ok(total)
+}
+
+/// Recompute `cost_usd` for usage rows that have `cost_usd = 0` AND
+/// `prompt_tokens > 0` (i.e. they consumed tokens but had no pricing
+/// at record time). After a models.dev sync populates pricing, this
+/// function re-applies [`pricing::lookup_with_db`] to those rows and
+/// updates their `cost_usd`.
+///
+/// Returns the number of rows re-priced.
+pub fn recompute_costs(conn: &Connection) -> Result<usize> {
+    // Load rows that need re-pricing.
+    let rows: Vec<(i64, String, String, Option<u32>, Option<u32>)> = {
+        let mut stmt = conn
+            .prepare(
+                "SELECT id, provider_id, upstream_model_id, prompt_tokens, completion_tokens \
+                 FROM usage \
+                 WHERE cost_usd = 0.0 \
+                   AND (prompt_tokens > 0 OR completion_tokens > 0)",
+            )
+            .map_err(|e| CoreError::Database {
+                message: format!("recompute select: {e}"),
+                source: Some(Box::new(e)),
+            })?;
+        let result = stmt
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, Option<u32>>(3)?,
+                    row.get::<_, Option<u32>>(4)?,
+                ))
+            })
+            .map_err(|e| CoreError::Database {
+                message: format!("recompute query: {e}"),
+                source: Some(Box::new(e)),
+            })?;
+        result.filter_map(|r| r.ok()).collect()
+    };
+
+    let mut updated = 0usize;
+    for (id, provider_id, model_id, prompt_tokens, completion_tokens) in &rows {
+        let price = crate::pricing::lookup_with_db(conn, provider_id, model_id);
+        if let Some(p) = price {
+            let prompt = prompt_tokens.unwrap_or(0) as f64;
+            let completion = completion_tokens.unwrap_or(0) as f64;
+            let cost = p.input_per_1m * prompt / 1_000_000.0
+                + p.output_per_1m * completion / 1_000_000.0;
+            if cost > 0.0 {
+                conn.execute(
+                    "UPDATE usage SET cost_usd = ?1 WHERE id = ?2",
+                    rusqlite::params![cost, id],
+                )
+                .map_err(|e| CoreError::Database {
+                    message: format!("recompute update: {e}"),
+                    source: Some(Box::new(e)),
+                })?;
+                updated += 1;
+            }
+        }
+    }
+
+    if updated > 0 {
+        tracing::info!(
+            updated,
+            total_candidates = rows.len(),
+            "recomputed cost_usd for previously-unpriced usage rows"
+        );
+    }
+
+    Ok(updated)
+}
+
 /// After a sync, refresh `models.context_length`, `max_output_tokens`,
 /// and `capabilities_json` from the `model_capabilities_sync` table.
 ///
@@ -325,6 +501,13 @@ async fn fetch_models_dev_once(upstream: &Arc<UpstreamClient>) -> Result<bytes::
 /// Returns the number of `models` rows touched across all three
 /// enriched columns.
 pub fn enrich_models_from_sync(conn: &Connection) -> Result<usize> {
+    // ── Backfill model_id_normalized for existing rows ───────────────
+    // Migration 000033 added the column but left it NULL for pre-existing
+    // rows. Without this backfill, the enrichment queries below (which
+    // gate on `WHERE models.model_id_normalized IS NOT NULL`) would skip
+    // every model discovered before the migration deployed.
+    backfill_model_id_normalized(conn)?;
+
     // ── context_length: refresh from sync on normalized match ───────
     let ctx = conn.execute(
         "UPDATE models SET context_length = COALESCE(
@@ -626,9 +809,19 @@ pub async fn run_one_shot(
         auto_create_combos(&conn)?
     };
 
+    // Re-price historical usage rows that had no pricing at record time.
+    // After the sync populates pricing in model_capabilities_sync, this
+    // walks every usage row with cost_usd = 0 AND tokens > 0 and
+    // re-applies pricing::lookup_with_db. This fixes the "3147 rows had
+    // no pricing data" warning after the operator runs a sync.
+    let repriced = {
+        let conn = db_pool.writer();
+        recompute_costs(&conn)?
+    };
+
     Ok(format!(
-        "Synced {} models, enriched {} model rows, created {} auto-combos",
-        count, enriched, combos
+        "Synced {} models, enriched {} model rows, created {} auto-combos, re-priced {} usage rows",
+        count, enriched, combos, repriced
     ))
 }
 
