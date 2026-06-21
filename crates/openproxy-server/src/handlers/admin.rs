@@ -1713,6 +1713,8 @@ fn authenticate_admin_ws(state: &AppState, headers: &HeaderMap, query_token: Opt
         if bypass == "1" {
             tracing::warn!(
                 target: "openproxy::security",
+                path = ?headers.get("x-original-uri").and_then(|v| v.to_str().ok()),
+                method = ?headers.get("x-original-method").and_then(|v| v.to_str().ok()),
                 "admin auth bypassed via OPENPROXY_DASHBOARD_AUTH_BYPASS=1 — \
                  every admin endpoint is open. Remove this env var to restore auth."
             );
@@ -4326,37 +4328,6 @@ pub async fn oauth_callback(
         "error": error,
         "message": "Copy the code above and paste it into the Exchange endpoint.",
     }))
-}
-
-/// Determine the base URL from request headers.
-///
-/// Uses (in order):
-/// 1. `Origin` header (browser same-origin/cross-origin requests).
-/// 2. `X-Forwarded-Host` + `X-Forwarded-Proto` (reverse proxy).
-/// 3. `Host` header fallback.
-/// 4. `localhost` if nothing else is available.
-#[allow(dead_code)]
-fn determine_base_url(headers: &HeaderMap) -> String {
-    // Check Origin header first — browsers send this with fetch/XHR.
-    if let Some(origin) = headers.get("origin") {
-        if let Ok(origin_str) = origin.to_str() {
-            return origin_str.to_string();
-        }
-    }
-
-    // Check X-Forwarded-Host + X-Forwarded-Proto (set by reverse proxy).
-    let host = headers
-        .get("x-forwarded-host")
-        .and_then(|h| h.to_str().ok())
-        .or_else(|| headers.get("host").and_then(|h| h.to_str().ok()))
-        .unwrap_or("localhost");
-
-    let proto = headers
-        .get("x-forwarded-proto")
-        .and_then(|p| p.to_str().ok())
-        .unwrap_or("http");
-
-    format!("{}://{}", proto, host)
 }
 
 // =====================================================================

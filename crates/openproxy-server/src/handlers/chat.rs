@@ -151,7 +151,8 @@ async fn run_pipeline(
     // /v1/models). We strip the prefix further down before talking
     // to the upstream; the allowlist match stays prefix-aware so
     // a client that only knows the full id is still gated correctly.
-    let api_key_id: Option<ApiKeyId> = authenticate(&state, &headers, &openai_req.model)?;
+    let auth_result = authenticate(&state, &headers, &openai_req.model)?;
+    let api_key_id: Option<ApiKeyId> = auth_result.as_ref().map(|r| r.key_id);
 
     // 3. Resolve the routing plan.
     //
@@ -199,6 +200,24 @@ async fn run_pipeline(
     // 4. Translate the plan into a `PipelineRequest`. The `Direct`
     //    branch builds a synthetic in-memory combo so the rest of
     //    the pipeline is reused unchanged.
+    //
+    //    MEDIUM-1 fix: enforce `allowed_combos` here. The field was
+    //    stored on the API key but never checked — a key with
+    //    `allowed_combos=[5]` could still hit any combo via the
+    //    `x-openproxy-combo` header or the `combo:<name>` model alias.
+    //    Now we check after routing resolves the combo_id.
+    if let RoutingPlan::Combo { combo_id, .. } = &plan {
+        if let Some(auth) = &auth_result {
+            if let Some(allowed) = &auth.allowed_combos {
+                if !allowed.is_empty() && !allowed.iter().any(|c| *c == combo_id.0) {
+                    return Err(ApiError(CoreError::Auth(format!(
+                        "combo not allowed for this key"
+                    ))));
+                }
+            }
+        }
+    }
+
     let (combo_id, combo_override, targets_override) = match &plan {
         RoutingPlan::Direct {
             provider_id,
@@ -497,7 +516,7 @@ fn authenticate(
     state: &AppState,
     headers: &HeaderMap,
     requested_model: &str,
-) -> Result<Option<ApiKeyId>, ApiError> {
+) -> Result<Option<AuthResult>, ApiError> {
     let token = match headers
         .get("authorization")
         .and_then(|v| v.to_str().ok())
@@ -582,7 +601,17 @@ fn authenticate(
 
     let _ = core_api_keys::touch_last_used(&w, key.id).map_err(ApiError);
 
-    Ok(Some(key.id))
+    Ok(Some(AuthResult {
+        key_id: key.id,
+        allowed_combos: key.allowed_combos.clone(),
+    }))
+}
+
+/// Result of a successful chat authentication — the key id plus any
+/// per-key restrictions that need to be enforced after routing.
+struct AuthResult {
+    key_id: ApiKeyId,
+    allowed_combos: Option<Vec<i64>>,
 }
 
 /// Record a single `usage` row for the `RoutingPlan::NotFound` path.
@@ -604,7 +633,6 @@ fn record_model_not_found_usage_row(
         cost::{self, UsageInput},
         ids::{ProviderId, TraceId},
     };
-    let w = state.db_pool().writer();
     let input = UsageInput {
         request_id,
         trace_id: TraceId::new(),
@@ -637,9 +665,17 @@ fn record_model_not_found_usage_row(
         compression_savings_pct: None,
         compression_techniques: None,
     };
-    // A write failure is logged but never propagates: the request
-    // has already failed with a 404, and a missing usage row is
-    // preferable to a 5xx.
+    // MEDIUM-5 fix: use try_writer_for with the hot-path timeout so
+    // this write doesn't block indefinitely under admin lock contention.
+    // If the lock can't be acquired in 100ms, log and drop the row —
+    // a missing usage row is preferable to a 5xx on the 404 path.
+    let w = match state.db_pool().try_writer_for(std::time::Duration::from_millis(100)) {
+        Some(w) => w,
+        None => {
+            tracing::warn!("hot-path writer lock timeout on model_not_found usage row; dropping");
+            return Ok(());
+        }
+    };
     let _ = cost::record(&w, &input).map_err(ApiError);
     Ok(())
 }
