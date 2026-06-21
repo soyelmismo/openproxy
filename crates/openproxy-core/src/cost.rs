@@ -99,6 +99,21 @@ pub fn redact_error_msg(raw: &str) -> (String, String) {
 /// Insert a usage row. Returns the new UsageId.
 pub fn record(conn: &Connection, input: &UsageInput) -> Result<UsageId> {
     let price = pricing::lookup_with_db(conn, input.provider_id.as_str(), &input.upstream_model_id);
+    // If pricing is missing AND the request consumed tokens, surface a
+    // WARN so operators know rows are being recorded with `cost_usd = 0`
+    // and can fix the gap (run models.dev sync, or set pricing manually).
+    // Without this log, missing pricing was completely silent — rows
+    // silently got `cost_usd = 0` with no signal to the operator.
+    if price.is_none()
+        && (input.prompt_tokens.unwrap_or(0) > 0
+            || input.completion_tokens.unwrap_or(0) > 0)
+    {
+        tracing::warn!(
+            provider_id = %input.provider_id,
+            upstream_model_id = %input.upstream_model_id,
+            "no pricing data found; recording cost_usd = 0 (run models.dev sync or set pricing manually)"
+        );
+    }
     let (cost_usd, tps) = compute(price, input);
     let (error_msg_for_db, error_msg_redacted_for_db) = match &input.error_msg {
         Some(msg) => {
