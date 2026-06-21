@@ -3526,9 +3526,22 @@ impl Pipeline {
                                 // Also capture reasoning_content on the fast
                                 // path (the slow path above does this via
                                 // `parse_openai_sse_line` + `a.append_reasoning`).
-                                if let Some(rc) = crate::sse_accumulator::extract_reasoning_content(payload) {
-                                    if !rc.is_empty() {
-                                        a.append_reasoning(rc);
+                                //
+                                // PERF (single-scan guard): gate the
+                                // `extract_reasoning_content` call (which does
+                                // a full `memchr::memmem::find` scan for
+                                // `"reasoning_content":"`) behind a cheaper
+                                // `contains("\"reasoning_content\"")` check.
+                                // Most streaming chunks (content deltas,
+                                // role-only, finish, etc.) do NOT carry this
+                                // field, so this saves one full-payload scan
+                                // per chunk on the recording path. The guard
+                                // itself short-circuits on first non-match.
+                                if payload.contains("\"reasoning_content\"") {
+                                    if let Some(rc) = crate::sse_accumulator::extract_reasoning_content(payload) {
+                                        if !rc.is_empty() {
+                                            a.append_reasoning(rc);
+                                        }
                                     }
                                 }
                             }
