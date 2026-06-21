@@ -446,6 +446,23 @@ pub fn recompute_costs(conn: &Connection) -> Result<usize> {
     let mut updated = 0usize;
     for (id, provider_id, model_id, prompt_tokens, completion_tokens) in &rows {
         let price = crate::pricing::lookup_with_db(conn, provider_id, model_id);
+        // If the model is a "free" variant (suffix `:free`, `-free`,
+        // `-free-trial`) and the sync table returned a $0 price (the
+        // free tier), try to find the PAID model's price instead. This
+        // makes the analytics show the "cost saved" — what the request
+        // WOULD have cost if the operator weren't using the free tier.
+        // The operator can still see it's a free model by the model_id
+        // in the row.
+        let price = match price {
+            Some(p) if p.input_per_1m == 0.0 && p.output_per_1m == 0.0 => {
+                // Free-tier price found; try the paid variant.
+                let base_model = crate::model_normalize::normalize_model_id(model_id);
+                let paid = crate::pricing::lookup_by_normalized(conn, &base_model)
+                    .filter(|p| p.input_per_1m > 0.0 || p.output_per_1m > 0.0);
+                paid.or(Some(p))
+            }
+            other => other,
+        };
         if let Some(p) = price {
             let prompt = prompt_tokens.unwrap_or(0) as f64;
             let completion = completion_tokens.unwrap_or(0) as f64;

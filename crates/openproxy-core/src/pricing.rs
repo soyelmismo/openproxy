@@ -28,6 +28,10 @@ static PRICING_TABLE: Lazy<HashMap<(&'static str, &'static str), Price>> = Lazy:
         Price { input_per_1m: 3.0, output_per_1m: 15.0 },
     );
     table.insert(
+        ("openrouter", "anthropic/claude-3-haiku"),
+        Price { input_per_1m: 0.25, output_per_1m: 1.25 },
+    );
+    table.insert(
         ("openrouter", "openai/gpt-4o"),
         Price { input_per_1m: 2.5, output_per_1m: 10.0 },
     );
@@ -38,6 +42,10 @@ static PRICING_TABLE: Lazy<HashMap<(&'static str, &'static str), Price>> = Lazy:
     table.insert(
         ("openrouter", "openai/gpt-4.1"),
         Price { input_per_1m: 2.0, output_per_1m: 8.0 },
+    );
+    table.insert(
+        ("openrouter", "openai/gpt-4.1-mini"),
+        Price { input_per_1m: 0.4, output_per_1m: 1.6 },
     );
     table.insert(
         ("openrouter", "google/gemini-2.5-pro"),
@@ -55,8 +63,24 @@ static PRICING_TABLE: Lazy<HashMap<(&'static str, &'static str), Price>> = Lazy:
         ("openrouter", "deepseek/deepseek-chat"),
         Price { input_per_1m: 0.14, output_per_1m: 0.28 },
     );
+    table.insert(
+        ("openrouter", "deepseek/deepseek-r1"),
+        Price { input_per_1m: 0.55, output_per_1m: 2.19 },
+    );
+    table.insert(
+        ("openrouter", "qwen/qwen-2.5-72b-instruct"),
+        Price { input_per_1m: 0.23, output_per_1m: 0.40 },
+    );
+    table.insert(
+        ("openrouter", "mistralai/mistral-large"),
+        Price { input_per_1m: 2.0, output_per_1m: 6.0 },
+    );
+    table.insert(
+        ("openrouter", "x-ai/grok-2"),
+        Price { input_per_1m: 2.0, output_per_1m: 10.0 },
+    );
 
-    // MiniMax
+    // MiniMax — M3 is the latest paid model (~$1.0/1M tokens).
     table.insert(
         ("minimax", "minimax-m2.1"),
         Price { input_per_1m: 0.2, output_per_1m: 0.2 },
@@ -65,19 +89,98 @@ static PRICING_TABLE: Lazy<HashMap<(&'static str, &'static str), Price>> = Lazy:
         ("minimax", "MiniMax-M2"),
         Price { input_per_1m: 0.2, output_per_1m: 0.2 },
     );
+    table.insert(
+        ("minimax", "MiniMax-M3"),
+        Price { input_per_1m: 1.0, output_per_1m: 1.0 },
+    );
+    // MiniMax-M3 also appears under other provider ids (nvidia-nim,
+    // tokenrouter) — register it under those too so the exact-match
+    // tier finds it without needing the cross-provider fallback.
+    table.insert(
+        ("nvidia-nim", "minimaxai/minimax-m3"),
+        Price { input_per_1m: 1.0, output_per_1m: 1.0 },
+    );
+    table.insert(
+        ("tokenrouter", "MiniMax-M3"),
+        Price { input_per_1m: 1.0, output_per_1m: 1.0 },
+    );
 
-    // OpenCode Zen — empty in MVP, default NULL for unknown.
+    // NVIDIA NIM — common models hosted on build.nvidia.com.
+    // Pricing as of 2025; verify against NVIDIA's pricing page.
+    table.insert(
+        ("nvidia-nim", "meta/llama-3.3-70b-instruct"),
+        Price { input_per_1m: 0.77, output_per_1m: 0.77 },
+    );
+    table.insert(
+        ("nvidia-nim", "meta/llama-3.1-8b-instruct"),
+        Price { input_per_1m: 0.18, output_per_1m: 0.18 },
+    );
+    table.insert(
+        ("nvidia-nim", "nvidia/nemotron-3-ultra-550b-a55b"),
+        Price { input_per_1m: 0.77, output_per_1m: 0.77 },
+    );
+    table.insert(
+        ("nvidia-nim", "moonshotai/kimi-k2.6"),
+        Price { input_per_1m: 0.60, output_per_1m: 2.50 },
+    );
+    table.insert(
+        ("nvidia-nim", "z-ai/glm-5.1"),
+        Price { input_per_1m: 0.14, output_per_1m: 0.28 },
+    );
+    table.insert(
+        ("nvidia-nim", "z-ai/glm-4.6"),
+        Price { input_per_1m: 0.14, output_per_1m: 0.28 },
+    );
+
+    // z.ai GLM models (common across providers)
+    table.insert(
+        ("zenmux", "z-ai/glm-5.2"),
+        Price { input_per_1m: 0.14, output_per_1m: 0.28 },
+    );
 
     table
 });
 
 /// Returns Some(Price) if the (provider, model) is in the static table.
 /// Returns None if unknown — the caller decides whether to log WARN and treat as free.
+///
+/// If the exact (provider, model) pair is not found, falls back to
+/// searching by model_id alone across all providers. This catches
+/// cases like `tokenrouter/MiniMax-M3` (not in the table under
+/// `tokenrouter`) matching the `minimax/MiniMax-M3` entry.
 pub fn lookup(provider: &str, model: &str) -> Option<Price> {
-    PRICING_TABLE
+    // 1. Exact (provider, model) match.
+    if let Some((_, price)) = PRICING_TABLE
         .iter()
         .find(|((p, m), _)| *p == provider && *m == model)
-        .map(|(_, price)| *price)
+    {
+        return Some(*price);
+    }
+    // 2. Cross-provider fallback: match by model_id only. This lets a
+    //    model registered under one provider (e.g. "minimax") be found
+    //    when the request came through a different provider id (e.g.
+    //    "tokenrouter", "nvidia-nim"). We try the exact model string
+    //    first, then the normalized form (strips provider prefix,
+    //    free suffixes, date suffixes).
+    if let Some((_, price)) = PRICING_TABLE
+        .iter()
+        .find(|((_, m), _)| *m == model)
+    {
+        return Some(*price);
+    }
+    // 3. Normalized cross-provider fallback: strip the provider prefix
+    //    from the incoming model id, then match against the table's
+    //    model ids (also stripped). E.g. "nvidia-nim/minimaxai/minimax-m3"
+    //    → "minimaxai/minimax-m3" → matches "minimaxai/minimax-m3" if
+    //    it were in the table, or falls back to the normalized form.
+    let normalized = crate::model_normalize::normalize_model_id(model);
+    if let Some((_, price)) = PRICING_TABLE
+        .iter()
+        .find(|((_, m), _)| crate::model_normalize::normalize_model_id(m) == normalized)
+    {
+        return Some(*price);
+    }
+    None
 }
 
 /// Lookup pricing from the `model_capabilities_sync` table first, then
@@ -166,7 +269,7 @@ fn lookup_exact_in_db(conn: &Connection, provider: &str, model: &str) -> Option<
 /// (e.g. `anthropic/claude-3-5-sonnet-20241022` → matches the sync
 /// table's `claude-3-5-sonnet` row), still find their pricing from the
 /// models.dev data.
-fn lookup_by_normalized(conn: &Connection, normalized: &str) -> Option<Price> {
+pub(crate) fn lookup_by_normalized(conn: &Connection, normalized: &str) -> Option<Price> {
     use rusqlite::OptionalExtension;
     let result: Result<Option<(f64, f64)>, _> = conn.query_row(
         "SELECT pricing_input_per_1m, pricing_output_per_1m \
@@ -231,12 +334,6 @@ mod tests {
     }
 
     #[test]
-    fn unknown_model_returns_none() {
-        assert!(lookup("openrouter", "no/such-model").is_none());
-        assert!(lookup("unknown-provider", "whatever").is_none());
-    }
-
-    #[test]
     fn compute_cost_basic() {
         let price = Some(Price { input_per_1m: 1.0, output_per_1m: 2.0 });
         // 1.0 * 1000 / 1e6 + 2.0 * 500 / 1e6 = 0.001 + 0.001 = 0.002
@@ -262,7 +359,28 @@ mod tests {
         let b = lookup("openrouter", "anthropic/claude-sonnet-4").unwrap();
         assert_eq!(a.input_per_1m, b.input_per_1m);
         assert_eq!(a.output_per_1m, b.output_per_1m);
-        // Also: provider mismatch doesn't accidentally return the OpenRouter price.
-        assert!(lookup("minimax", "anthropic/claude-sonnet-4").is_none());
+        // Cross-provider fallback: a model registered under "openrouter"
+        // can be found via a different provider id. This is intentional —
+        // it lets `tokenrouter/MiniMax-M3` match the `minimax/MiniMax-M3`
+        // entry, and `nvidia-nim/minimaxai/minimax-m3` match too.
+        let cross = lookup("minimax", "anthropic/claude-sonnet-4").unwrap();
+        assert_eq!(cross.input_per_1m, a.input_per_1m);
+    }
+
+    #[test]
+    fn pricing_lookup_cross_provider_matches_minimax_m3() {
+        // MiniMax-M3 is registered under ("minimax", "MiniMax-M3").
+        // A request from "tokenrouter" with model "MiniMax-M3" should
+        // still find the price via the cross-provider fallback.
+        let price = lookup("tokenrouter", "MiniMax-M3").unwrap();
+        assert_eq!(price.input_per_1m, 1.0);
+        assert_eq!(price.output_per_1m, 1.0);
+    }
+
+    #[test]
+    fn pricing_lookup_truly_unknown_returns_none() {
+        // A model that doesn't exist in ANY provider's entry.
+        assert!(lookup("openrouter", "no/such-model-xyz").is_none());
+        assert!(lookup("unknown-provider", "whatever").is_none());
     }
 }
