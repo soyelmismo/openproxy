@@ -41,7 +41,6 @@ use openproxy_core::{
     redact::redact_sensitive_headers,
     routing::{self, build_synthetic_combo, RoutingPlan, SYNTHETIC_COMBO_ID},
     translation::OpenAIRequest,
-    upstream::UpstreamClient,
     CoreError,
 };
 use serde_json::json;
@@ -292,15 +291,14 @@ async fn run_pipeline(
         // Default 60s when neither is set; the loader fills in
         // `CooldownConfig::default()` for the TOML case.
         cooldown_secs: state.config().cooldown.cooldown_secs,
-        // Gate 1: non-streaming chat uses the hyper-based upstream
-        // client. A follow-up gate will move this onto `AppState` so
-        // the per-host connection pool is shared across all in-flight
-        // requests — for now, a per-request `UpstreamClient` is
-        // functionally equivalent (the legacy reqwest client is also
-        // rebuilt on every `set_timeouts` call) and unblocks the
-        // migration. See `docs/upstream-migration-report.md` for
-        // the plan.
-        upstream_client: UpstreamClient::new(),
+        // Use the shared `UpstreamClient` from `AppState` (created once
+        // at startup). Sharing it means the underlying hyper client's
+        // per-host connection pool is reused across all in-flight
+        // requests, eliminating the per-request TCP+TLS handshake
+        // (~50-200ms on WAN) that a fresh `UpstreamClient::new()` would
+        // pay. `state.upstream_client()` returns `&Arc<UpstreamClient>`;
+        // the cheap `Arc` clone here is all that's needed.
+        upstream_client: state.upstream_client().clone(),
         oauth_provider_registry: Some(state.oauth_provider_registry()),
         compression_mode: state.compression_mode(),
         idle_chunk_retryable: state.idle_chunk_retryable(),
@@ -553,7 +551,11 @@ fn authenticate(
             // As soon as the operator creates the first key, the
             // chat endpoint requires that key. The transition is
             // automatic — no config knob needed.
-            let active = core_api_keys::count_active(&state.db_pool().writer())
+            //
+            // `count_active` is a SELECT COUNT(*) — use the READER so
+            // the anonymous-fallback check doesn't serialize through
+            // the writer mutex (see `db::conn::DbPool::reader`).
+            let active = core_api_keys::count_active(&state.db_pool().reader())
                 .map_err(ApiError)?;
             if active == 0 {
                 tracing::debug!(
@@ -568,7 +570,7 @@ fn authenticate(
     if token.is_empty() {
         // Same gate: a bare `Authorization: Bearer ` (empty
         // token) is treated as "no header".
-        let active = core_api_keys::count_active(&state.db_pool().writer())
+        let active = core_api_keys::count_active(&state.db_pool().reader())
             .map_err(ApiError)?;
         if active == 0 {
             return Ok(None);
@@ -577,8 +579,10 @@ fn authenticate(
     }
 
     let key_hash = core_api_keys::hash_key(token);
-    let w = state.db_pool().writer();
-    let key = match core_api_keys::get_by_hash(&w, &key_hash).map_err(ApiError)? {
+    // Auth is a SELECT by hash — use the READER so chat requests don't
+    // serialize through the writer mutex (same fix as the admin path).
+    let r = state.db_pool().reader();
+    let key = match core_api_keys::get_by_hash(&r, &key_hash).map_err(ApiError)? {
         Some(k) => k,
         None => {
             return Err(ApiError(CoreError::Auth("invalid api key".into())));
@@ -616,7 +620,17 @@ fn authenticate(
         }
     }
 
-    let _ = core_api_keys::touch_last_used(&w, key.id).map_err(ApiError);
+    // Fire-and-forget the `last_used_at` UPDATE on a blocking thread.
+    // The chat hot path no longer blocks on acquiring the writer mutex.
+    // `touch_last_used` already throttles itself to 5-minute writes
+    // (see `LAST_USED_THROTTLE_SECS` in `api_keys.rs`), so the extra
+    // writer acquisition only happens once per key per five minutes.
+    let pool = Arc::clone(state.db_pool());
+    let key_id = key.id;
+    tokio::task::spawn_blocking(move || {
+        let w = pool.writer();
+        let _ = core_api_keys::touch_last_used(&w, key_id);
+    });
 
     Ok(Some(AuthResult {
         key_id: key.id,

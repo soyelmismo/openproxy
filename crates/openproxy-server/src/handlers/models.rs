@@ -110,8 +110,10 @@ fn authenticate_chat_or_anonymous(
 
     let Some(token) = token else {
         // No Authorization header — allow only if zero active keys.
-        let w = state.db_pool().writer();
-        let active = api_keys::count_active(&w).map_err(ApiError)?;
+        // `count_active` is a SELECT COUNT(*) — use the READER so this
+        // fallback check doesn't serialize through the writer mutex.
+        let r = state.db_pool().reader();
+        let active = api_keys::count_active(&r).map_err(ApiError)?;
         if active == 0 {
             return Ok(None); // anonymous
         }
@@ -127,8 +129,11 @@ fn authenticate_chat_or_anonymous(
     }
 
     let key_hash = api_keys::hash_key(token);
-    let w = state.db_pool().writer();
-    let key = api_keys::get_by_hash(&w, &key_hash).map_err(ApiError)?;
+    // Auth is a SELECT by hash — use the READER so the /v1/models path
+    // doesn't serialize through the writer mutex (same fix as the
+    // admin and chat auth paths).
+    let r = state.db_pool().reader();
+    let key = api_keys::get_by_hash(&r, &key_hash).map_err(ApiError)?;
     let key = key.ok_or_else(|| {
         ApiError(openproxy_core::CoreError::Auth("invalid api key".into()))
     })?;
@@ -155,7 +160,16 @@ fn authenticate_chat_or_anonymous(
         )));
     }
 
-    let _ = api_keys::touch_last_used(&w, key.id).map_err(ApiError);
+    // Fire-and-forget the `last_used_at` UPDATE on a blocking thread.
+    // The /v1/models path no longer blocks on acquiring the writer
+    // mutex; `touch_last_used` already throttles itself to 5-minute
+    // writes (see `LAST_USED_THROTTLE_SECS` in `api_keys.rs`).
+    let pool = std::sync::Arc::clone(state.db_pool());
+    let key_id = key.id;
+    tokio::task::spawn_blocking(move || {
+        let w = pool.writer();
+        let _ = api_keys::touch_last_used(&w, key_id);
+    });
     Ok(Some(key.id))
 }
 
