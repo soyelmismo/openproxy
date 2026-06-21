@@ -1,23 +1,52 @@
-// views/analytics.ts — analytics dashboards: summary, latency
-// percentiles, race stats, by-model breakdown, by-provider totals,
-// and a providers × months cost matrix. All six endpoints are
-// queried with a `?preset=` time-range so the dashboard reflects
-// the selected window (default: `this_month`). The preset lives in
-// the URL hash (`#/analytics?range=this_month`) so it survives a
-// refresh; the router regex was widened to tolerate the trailing
-// `?...` suffix.
+// views/analytics.ts — analytics dashboards: filter bar, time-range
+// preset selector, summary, latency percentiles, race stats, daily
+// usage chart, status distribution donut, by-model breakdown,
+// by-provider totals, providers × months cost matrix, and a recent
+// errors table. Every `/usage/*` endpoint is queried with a combined
+// `?preset=X&provider_id=Y&api_key_id=Z` query built from the URL
+// hash so the dashboard reflects the selected window + scope. The
+// hash looks like `#/analytics?range=this_month&provider_id=openrouter&api_key_id=12`;
+// the router regex tolerates the trailing `?...` suffix and the
+// `hashchange` event re-mounts the view so every fetch picks up the
+// new query string. No manual re-render is needed.
 
+import { state } from "../state/index.js";
 import { api } from "../state/api.js";
 import { escapeHtml, escapeAttr } from "../lib/escape.js";
 import { pageHeader } from "../components/page-header.js";
 import { card } from "../components/card.js";
+import {
+  dailyUsageChart,
+  statusDonut,
+  type StatusSlice,
+} from "../components/charts.js";
+import {
+  analyticsFilters,
+  wireAnalyticsFilters,
+} from "../components/filter-bar.js";
 import type {
+  ByDayRow,
   ByModelRow,
   ByProviderRow,
+  ByStatusRow,
+  ErrorRow,
   MonthlyByProviderRow,
+  Provider,
   UsagePreset,
   UsageSummary,
 } from "../lib/types/api.js";
+
+// The `/v1/admin/api-keys` payload shape. Defined locally (not in
+// lib/types/api.ts) because G3 only exported the core structs the
+// rest of the dashboard already uses — the api-key row lives in a
+// separate file on the Rust side. Mirrors the local interface in
+// `views/keys.ts`. We only need the three columns the filter
+// dropdown reads.
+interface ApiKeyFilterRow {
+  id: number;
+  label: string | null;
+  key_prefix: string | null;
+}
 
 // The latency / races endpoints don't have a dedicated type in
 // lib/types/api.ts (the by-model / by-provider / monthly rows do).
@@ -72,34 +101,78 @@ function fmtCost(v: number): string {
   return `$${v.toFixed(2)}`;
 }
 
-// Read the active preset from the URL hash. Stored as a `?range=`
-// query suffix on the route (`#/analytics?range=this_month`) so the
-// router still recognises the route. Falls back to `this_month`
-// when the param is missing or holds an unknown value — that way a
-// hand-typed typo doesn't 400 the whole view.
-function presetFromHash(): UsagePreset {
-  const m = location.hash.match(/[?&]range=([^&]+)/);
-  if (m) {
-    const v = decodeURIComponent(m[1] ?? "");
-    if ((PRESETS as readonly string[]).includes(v)) {
-      return v as UsagePreset;
-    }
-  }
-  return "this_month";
+// ── URL hash parsing ────────────────────────────────────────────────
+// The hash carries three params: `range` (preset), `provider_id`,
+// and `api_key_id`. All three are optional; the preset defaults to
+// `this_month` and the filters default to empty (= "all"). Setting
+// any of them via `setHashParams` updates the hash, which fires
+// `hashchange` and re-mounts the view — so every fetch picks up the
+// new query string. No manual re-render needed.
+
+interface AnalyticsHashParams {
+  preset: UsagePreset;
+  providerId: string;
+  apiKeyId: string;
 }
 
-// Swap the `range` param in the hash, preserving the route path and
-// any other query params. Setting `location.hash` fires `hashchange`,
-// which re-mounts the view via the router — that re-fetches every
-// endpoint with the new preset. No manual re-render needed.
-function setPresetInHash(p: UsagePreset): void {
+function parseHashParams(): AnalyticsHashParams {
+  const hash = location.hash || "#/analytics";
+  const qIdx = hash.indexOf("?");
+  const query = qIdx >= 0 ? hash.slice(qIdx + 1) : "";
+  const params = new URLSearchParams(query);
+  const rangeRaw = params.get("range") || "this_month";
+  const preset: UsagePreset = (PRESETS as readonly string[]).includes(rangeRaw)
+    ? rangeRaw as UsagePreset
+    : "this_month";
+  return {
+    preset,
+    providerId: params.get("provider_id") || "",
+    apiKeyId: params.get("api_key_id") || "",
+  };
+}
+
+// Swap any subset of the hash params. Setting a filter to `""`
+// deletes it from the URL so a cleared filter doesn't linger as
+// `?provider_id=`. The path component of the hash is preserved.
+function setHashParams(updates: Partial<AnalyticsHashParams>): void {
   const hash = location.hash || "#/analytics";
   const qIdx = hash.indexOf("?");
   const path = qIdx >= 0 ? hash.slice(0, qIdx) : hash;
   const query = qIdx >= 0 ? hash.slice(qIdx + 1) : "";
   const params = new URLSearchParams(query);
-  params.set("range", p);
-  location.hash = `${path}?${params.toString()}`;
+  if (updates.preset !== undefined) params.set("range", updates.preset);
+  if (updates.providerId !== undefined) {
+    if (updates.providerId) params.set("provider_id", updates.providerId);
+    else params.delete("provider_id");
+  }
+  if (updates.apiKeyId !== undefined) {
+    if (updates.apiKeyId) params.set("api_key_id", updates.apiKeyId);
+    else params.delete("api_key_id");
+  }
+  const qs = params.toString();
+  location.hash = qs ? `${path}?${qs}` : path;
+}
+
+// Build the combined query string used by every `/usage/*` fetch.
+// Returns "" when there's nothing to filter on (preset=custom + no
+// provider + no key) — the server then returns the full history.
+// `extra` lets a caller append further params (e.g. `limit=10` for
+// the errors endpoint).
+function buildUsageQuery(
+  preset: UsagePreset,
+  providerId: string,
+  apiKeyId: string,
+  extra: Record<string, string> = {},
+): string {
+  const params = new URLSearchParams();
+  if (preset !== "custom") params.set("preset", preset);
+  if (providerId) params.set("provider_id", providerId);
+  if (apiKeyId) params.set("api_key_id", apiKeyId);
+  for (const [k, v] of Object.entries(extra)) {
+    if (v) params.set(k, v);
+  }
+  const qs = params.toString();
+  return qs ? `?${qs}` : "";
 }
 
 /** Shape returned by `pivotMonthlyByProvider` — a providers × months
@@ -241,7 +314,92 @@ function wirePresetSelector(): void {
   main.querySelectorAll<HTMLButtonElement>("button.preset-btn[data-preset]").forEach((btn) => {
     btn.addEventListener("click", () => {
       const p = btn.dataset["preset"] as UsagePreset | undefined;
-      if (p) setPresetInHash(p);
+      if (p) setHashParams({ preset: p });
+    });
+  });
+}
+
+// ── Chart-card wrapper ──────────────────────────────────────────────
+// `card()` produces `.section-header` markup; the `.card.chart-card`
+// CSS variant expects `.card-title` + `.card-body` children instead
+// (and zero-padding so an SVG can stretch edge-to-edge). Small local
+// helper so the daily chart gets the full-width styling the design
+// calls for.
+function chartCard(title: string, body: string): string {
+  return `<section class="card chart-card">
+    <div class="card-title">${escapeHtml(title)}</div>
+    <div class="card-body">${body}</div>
+  </section>`;
+}
+
+// ── Status grouping for the donut ───────────────────────────────────
+// The by-status endpoint returns one row per HTTP status code. The
+// donut cares about four buckets: 2xx (success), 4xx (client error),
+// 5xx (server error), Other (everything else — redirects, 0-status
+// connection failures, etc.). Colors come from the theme tokens so
+// the donut adapts to light/dark.
+function groupByStatus(rows: ByStatusRow[]): StatusSlice[] {
+  let s2 = 0, s4 = 0, s5 = 0, other = 0;
+  for (const r of rows) {
+    if (r.status_code >= 200 && r.status_code < 300) s2 += r.count;
+    else if (r.status_code >= 400 && r.status_code < 500) s4 += r.count;
+    else if (r.status_code >= 500 && r.status_code < 600) s5 += r.count;
+    else other += r.count;
+  }
+  return [
+    { label: "2xx", count: s2, color: "var(--color-success)" },
+    { label: "4xx", count: s4, color: "var(--color-warn)" },
+    { label: "5xx", count: s5, color: "var(--color-error)" },
+    { label: "Other", count: other, color: "var(--color-text-muted)" },
+  ];
+}
+
+// ── Recent errors table ─────────────────────────────────────────────
+// The errors endpoint returns the latest N rows whose status was 4xx
+// or 5xx. The table is rendered as a normal card; rows are clickable
+// → `#/logs?request_id=…` so the operator can jump straight to the
+// live-logs view filtered to that request. The trace_id is shown in
+// a `<code>` snippet under the message so it's copyable even if the
+// router doesn't (yet) honour the `?request_id=` query suffix.
+function renderRecentErrors(errors: ErrorRow[]): string {
+  if (errors.length === 0) {
+    return card("Recent errors", `<p class="empty">No errors in this range.</p>`);
+  }
+  const rows = errors.map((e) => {
+    const time = escapeHtml(e.created_at || "");
+    const prov = escapeHtml(e.provider_id || "");
+    const model = escapeHtml(e.upstream_model_id || "");
+    const status = e.status_code || "—";
+    const msg = escapeHtml(e.error_msg_redacted || "(no message)");
+    const trace = escapeHtml(e.trace_id || "");
+    const href = escapeAttr(`#/logs?request_id=${e.request_id || ""}`);
+    return `<tr class="clickable" data-href="${href}">
+      <td>${time}</td>
+      <td>${prov}</td>
+      <td>${model}</td>
+      <td><span class="status-pill err">${status}</span></td>
+      <td>${msg}<br><small class="muted"><code>${trace}</code></small></td>
+    </tr>`;
+  }).join("");
+  return card("Recent errors", `
+    <table>
+      <thead><tr><th>Time</th><th>Provider</th><th>Model</th><th>Status</th><th>Error message</th></tr></thead>
+      <tbody>${rows}</tbody>
+    </table>
+  `);
+}
+
+// Wire up the `.clickable` rows in the recent-errors table (and any
+// other clickable row that carries a `data-href`). Reads the URL
+// from `data-href` and assigns `location.hash` so the router picks
+// it up — same path the preset buttons take.
+function wireClickableRows(): void {
+  const main = document.getElementById("main");
+  if (!main) return;
+  main.querySelectorAll<HTMLElement>(".clickable[data-href]").forEach((el) => {
+    el.addEventListener("click", () => {
+      const href = el.dataset["href"];
+      if (href) location.hash = href;
     });
   });
 }
@@ -284,35 +442,84 @@ function renderMonthlyMatrix(pivot: MonthlyMatrix): string {
   `);
 }
 
-// Paint the page shell (header + preset selector + body) and wire
-// the preset buttons. Centralised so the loading, success, and
-// error paths all get a working selector.
-function paint(preset: UsagePreset, body: string): void {
+// Paint the page shell (header + filter bar + preset selector + body)
+// and wire the preset buttons, the filter dropdowns, and any
+// clickable rows. Centralised so the loading, success, and error
+// paths all get a working selector + filter bar.
+function paint(
+  preset: UsagePreset,
+  providerId: string,
+  apiKeyId: string,
+  providers: Provider[],
+  apiKeys: ApiKeyFilterRow[],
+  body: string,
+): void {
   const main = document.getElementById("main");
   if (!main) return;
-  main.innerHTML = pageHeader({ title: "Analytics" }) +
-    renderPresetSelector(preset) + body;
+  const providerOptions = providers.map((p) => ({ value: p.id, label: p.name }));
+  const keyOptions = apiKeys.map((k) => ({
+    value: String(k.id),
+    label: `${k.key_prefix || "—"} (${k.label || "—"})`,
+  }));
+  main.innerHTML =
+    pageHeader({ title: "Analytics" }) +
+    analyticsFilters({
+      providers: providerOptions,
+      apiKeys: keyOptions,
+      selectedProvider: providerId,
+      selectedKeyId: apiKeyId,
+    }) +
+    renderPresetSelector(preset) +
+    body;
   wirePresetSelector();
+  wireAnalyticsFilters(
+    main,
+    (id: string) => setHashParams({ providerId: id }),
+    (id: string) => setHashParams({ apiKeyId: id }),
+    () => setHashParams({ providerId: "", apiKeyId: "" }),
+  );
+  wireClickableRows();
 }
 
 export async function mountAnalytics(): Promise<void> {
   const main = document.getElementById("main");
   if (!main) return;
-  const preset = presetFromHash();
-  paint(preset, `<div class="loading">Loading...</div>`);
+  const { preset, providerId, apiKeyId } = parseHashParams();
+  paint(preset, providerId, apiKeyId, [], [], `<div class="loading">Loading...</div>`);
   try {
-    // `custom` = no preset param → server returns the full history
-    // (or the explicit from/to if we ever wire a date picker). Every
-    // other preset maps to a (from, to) window server-side.
-    const q = preset !== "custom" ? `?preset=${encodeURIComponent(preset)}` : "";
-    const [summary, byModel, byProvider, monthlyByProvider, latency, races] = await Promise.all([
-      api(`/usage/summary${q}`) as Promise<UsageSummary>,
-      api(`/usage/by-model${q}`) as Promise<ByModelRow[]>,
-      api(`/usage/by-provider${q}`) as Promise<ByProviderRow[]>,
-      api(`/usage/monthly-by-provider${q}`) as Promise<MonthlyByProviderRow[]>,
-      api(`/usage/latency${q}`) as Promise<LatencyPayload>,
-      api(`/usage/races${q}`) as Promise<RaceStatsPayload>,
+    // Combined query string for every `/usage/*` fetch. The errors
+    // endpoint additionally carries `limit=10` so we cap the table
+    // at 10 rows (the server's default is 100).
+    const usageQ = buildUsageQuery(preset, providerId, apiKeyId);
+    const errorsQ = buildUsageQuery(preset, providerId, apiKeyId, { limit: "10" });
+    const [
+      summary, byModel, byProvider, monthlyByProvider, latency, races,
+      byDay, byStatus, errors, providers, apiKeys,
+    ] = await Promise.all([
+      api(`/usage/summary${usageQ}`) as Promise<UsageSummary>,
+      api(`/usage/by-model${usageQ}`) as Promise<ByModelRow[]>,
+      api(`/usage/by-provider${usageQ}`) as Promise<ByProviderRow[]>,
+      api(`/usage/monthly-by-provider${usageQ}`) as Promise<MonthlyByProviderRow[]>,
+      api(`/usage/latency${usageQ}`) as Promise<LatencyPayload>,
+      api(`/usage/races${usageQ}`) as Promise<RaceStatsPayload>,
+      api(`/usage/by-day${usageQ}`) as Promise<ByDayRow[]>,
+      api(`/usage/by-status${usageQ}`) as Promise<ByStatusRow[]>,
+      api(`/usage/errors${errorsQ}`) as Promise<ErrorRow[]>,
+      // Filter dropdown options — use the state cache when the
+      // bg-poll has already populated it (the common case); fall
+      // back to a direct fetch on a cold paint. Backfill the cache
+      // after the fetch so the next navigation is instant.
+      (state.providers && state.providers.length)
+        ? Promise.resolve(state.providers)
+        : api("/providers") as Promise<Provider[]>,
+      (state.apiKeys && state.apiKeys.length)
+        ? Promise.resolve(state.apiKeys as ApiKeyFilterRow[])
+        : api("/keys") as Promise<ApiKeyFilterRow[]>,
     ]);
+
+    if (providers) state.providers = providers;
+    if (apiKeys) state.apiKeys = apiKeys;
+    const apiKeyRows: ApiKeyFilterRow[] = (apiKeys || []) as ApiKeyFilterRow[];
 
     // Null-pricing warning: rows that consumed tokens but recorded
     // $0 cost (pricing was missing at record time). Surfaces
@@ -321,6 +528,9 @@ export async function mountAnalytics(): Promise<void> {
     const nullPricingBanner = nullPricingCount > 0
       ? `<div class="banner banner-warning">⚠ ${nullPricingCount} rows had no pricing data (cost = $0). Run models.dev sync or manually set pricing to fix cost reporting.</div>`
       : "";
+
+    // Daily usage chart — full-width, edge-to-edge via .chart-card.
+    const dailyChartBlock = chartCard("Daily usage", dailyUsageChart(byDay));
 
     const summaryBlock = card("Summary", `
       <div class="metrics">
@@ -335,6 +545,13 @@ export async function mountAnalytics(): Promise<void> {
         <div><label>Avg TTFT ms</label><div class="value">${summary.avg_ttft_ms ? summary.avg_ttft_ms.toFixed(1) : "—"}</div></div>
       </div>
     `);
+    // Status distribution donut — half-width card alongside the
+    // summary. Wrapped in `.home-row` so the two cards share a
+    // responsive 2-column grid (collapses to 1 column on narrow
+    // viewports).
+    const donutBlock = card("Status distribution", statusDonut(groupByStatus(byStatus)));
+    const summaryDonutRow = `<div class="home-row">${summaryBlock}${donutBlock}</div>`;
+
     const latencyBlock = card("Latency percentiles (winners only)", `
       <div class="metrics">
         <div><label>Samples</label><div class="value">${latency.samples ?? "—"}</div></div>
@@ -381,13 +598,24 @@ export async function mountAnalytics(): Promise<void> {
     `);
     const monthlyBlock = renderMonthlyMatrix(pivotMonthlyByProvider(monthlyByProvider));
 
+    // Recent errors — bottom of the page, capped at 10 rows
+    // client-side (the server's default limit is 100, our query
+    // sends `limit=10` for forward-compat).
+    const errorsBlock = renderRecentErrors((errors || []).slice(0, 10));
+
     paint(
-      preset,
-      nullPricingBanner + summaryBlock + latencyBlock + raceBlock +
-        byModelBlock + byProviderBlock + monthlyBlock,
+      preset, providerId, apiKeyId, providers, apiKeyRows,
+      nullPricingBanner + dailyChartBlock + summaryDonutRow +
+        latencyBlock + raceBlock +
+        byModelBlock + byProviderBlock + monthlyBlock +
+        errorsBlock,
     );
   } catch (e: unknown) {
     const msg = e instanceof Error ? e.message : String(e);
-    paint(preset, `<div class="banner banner-error">${escapeHtml(msg)}</div>`);
+    paint(
+      preset, providerId, apiKeyId,
+      state.providers || [], (state.apiKeys || []) as ApiKeyFilterRow[],
+      `<div class="banner banner-error">${escapeHtml(msg)}</div>`,
+    );
   }
 }

@@ -20,3 +20,65 @@ export function filterBar(props: FilterBarProps): string {
     </div>
   `;
 }
+
+// ── Analytics filter bar with dropdowns ─────────────────────────────
+
+export interface DropdownOption {
+  value: string;
+  label: string;
+}
+
+export interface AnalyticsFiltersProps {
+  providers: DropdownOption[];
+  apiKeys: DropdownOption[];
+  selectedProvider?: string;
+  selectedKeyId?: string;
+  onProviderChange?: (id: string) => void;
+  onKeyChange?: (id: string) => void;
+  onClear?: () => void;
+}
+
+/** Render the analytics filter bar with provider + API key dropdowns. */
+export function analyticsFilters(props: AnalyticsFiltersProps): string {
+  const providerOpts = [
+    `<option value="">All providers</option>`,
+    ...props.providers.map(p =>
+      `<option value="${escapeHtml(p.value)}" ${p.value === props.selectedProvider ? "selected" : ""}>${escapeHtml(p.label)}</option>`
+    ),
+  ].join("");
+
+  const keyOpts = [
+    `<option value="">All API keys</option>`,
+    ...props.apiKeys.map(k =>
+      `<option value="${escapeHtml(k.value)}" ${k.value === props.selectedKeyId ? "selected" : ""}>${escapeHtml(k.label)}</option>`
+    ),
+  ].join("");
+
+  return `
+    <div class="analytics-filters">
+      <select class="filter-dropdown" id="analytics-provider-filter">
+        ${providerOpts}
+      </select>
+      <select class="filter-dropdown" id="analytics-key-filter">
+        ${keyOpts}
+      </select>
+      <button class="btn-link" id="analytics-clear-filters">Clear filters</button>
+    </div>
+  `;
+}
+
+/** Wire up the analytics filter dropdowns. Call after innerHTML. */
+export function wireAnalyticsFilters(
+  container: HTMLElement,
+  onProviderChange: (id: string) => void,
+  onKeyChange: (id: string) => void,
+  onClear: () => void,
+): void {
+  const provSel = container.querySelector<HTMLSelectElement>("#analytics-provider-filter");
+  const keySel = container.querySelector<HTMLSelectElement>("#analytics-key-filter");
+  const clearBtn = container.querySelector<HTMLButtonElement>("#analytics-clear-filters");
+
+  provSel?.addEventListener("change", () => onProviderChange(provSel.value));
+  keySel?.addEventListener("change", () => onKeyChange(keySel.value));
+  clearBtn?.addEventListener("click", () => onClear());
+}
