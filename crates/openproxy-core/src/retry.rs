@@ -36,7 +36,7 @@ impl RetryPolicy {
         let base = (self.backoff_base.as_millis() as u64).saturating_mul(exp);
         // jitter ±N%
         let jitter_amp = base.saturating_mul(self.backoff_jitter_pct as u64) / 100;
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
         let jitter: i64 = rand::Rng::gen_range(&mut rng, -(jitter_amp as i64)..=(jitter_amp as i64));
         let total = (base as i64).saturating_add(jitter).max(0) as u64;
         Some(Duration::from_millis(total))

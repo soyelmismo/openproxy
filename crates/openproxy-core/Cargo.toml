@@ -71,16 +71,16 @@ futures-util = { version = "0.3", default-features = false, features = ["std"], 
 # TCP keepalive support for the upstream connector. Used to set
 # SO_KEEPALIVE on upstream sockets so stale connections are detected
 # at the kernel level before hyper's pool hands them out.
-socket2 = { version = "0.5", features = ["all"], optional = true }
+socket2 = { version = "0.6", features = ["all"], optional = true }
 # TLS for the upstream/ connector. Only the production HTTPS path
 # uses these (HTTP uses a plain `tokio::net::TcpStream`). The
 # versions track the `tokio-rustls 0.26 / rustls 0.23` pair that
 # reqwest already pulls in transitively; pinning them as direct
 # deps here keeps the feature flag self-contained.
 tokio-rustls = { version = "0.26", optional = true }
-rustls = { version = "0.23", default-features = false, features = ["logging", "std", "tls12"], optional = true }
+rustls = { version = "0.23", default-features = false, features = ["logging", "std", "tls12", "ring"], optional = true }
 rustls-pki-types = { version = "1", optional = true }
-webpki-roots = { version = "0.26", optional = true }
+webpki-roots = { version = "1", optional = true }
 
 [dev-dependencies]
 # Re-enable `tokio`'s `test-util` feature ONLY for the test
@@ -94,7 +94,7 @@ webpki-roots = { version = "0.26", optional = true }
 tokio = { workspace = true, features = ["test-util"] }
 # Benchmark harness for the SSE chunk-forwarding hot path.
 # Used by `cargo bench -p openproxy-core --bench sse_fast_path`.
-criterion = { version = "0.5", default-features = false, features = ["cargo_bench_support"] }
+criterion = { version = "0.8", default-features = false, features = ["cargo_bench_support"] }
 
 [[bench]]
 name = "sse_fast_path"

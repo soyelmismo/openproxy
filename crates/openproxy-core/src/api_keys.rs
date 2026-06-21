@@ -83,7 +83,7 @@ const LAST_USED_THROTTLE_SECS: i64 = 300;
 pub fn generate_plaintext() -> String {
     use rand::Rng;
     const CHARS: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
-    let mut rng = rand::thread_rng();
+    let mut rng = rand::rng();
     let suffix: String = (0..32)
         .map(|_| CHARS[rng.gen_range(0..CHARS.len())] as char)
         .collect();

@@ -107,7 +107,7 @@ pub fn build_router(state: AppState) -> Router {
             get(handlers::admin::list_providers).post(handlers::admin::create_provider),
         )
         .route(
-            "/admin/providers/:id",
+            "/admin/providers/{id}",
             get(handlers::admin::get_provider)
                 .delete(handlers::admin::delete_provider)
                 .patch(handlers::admin::update_provider),
@@ -117,19 +117,19 @@ pub fn build_router(state: AppState) -> Router {
             get(handlers::admin::list_accounts).post(handlers::admin::create_account),
         )
         .route(
-            "/admin/accounts/:id",
+            "/admin/accounts/{id}",
             axum::routing::delete(handlers::admin::delete_account),
         )
         .route(
-            "/admin/accounts/:id/health",
+            "/admin/accounts/{id}/health",
             post(handlers::admin::set_account_health),
         )
         .route(
-            "/admin/accounts/:id/api-key",
+            "/admin/accounts/{id}/api-key",
             put(handlers::admin::update_account_api_key),
         )
         .route(
-            "/admin/accounts/:id/refresh-quota",
+            "/admin/accounts/{id}/refresh-quota",
             post(handlers::admin::refresh_account_quota),
         )
         .route(
@@ -137,51 +137,51 @@ pub fn build_router(state: AppState) -> Router {
             get(handlers::admin::list_combos).post(handlers::admin::create_combo),
         )
         .route(
-            "/admin/combos/:id",
+            "/admin/combos/{id}",
             get(handlers::admin::get_combo)
                 .delete(handlers::admin::delete_combo)
                 .patch(handlers::admin::update_combo),
         )
         .route(
-            "/admin/combos/:id/test-all",
+            "/admin/combos/{id}/test-all",
             post(handlers::admin::test_combo_targets),
         )
         .route(
-            "/admin/combos/:id/targets",
+            "/admin/combos/{id}/targets",
             get(handlers::admin::list_combo_targets).post(handlers::admin::add_target),
         )
         // IMPORTANT: this literal-segment route MUST be registered
-        // before `/admin/combos/:id/targets/:target_id`. axum 0.7
+        // before `/admin/combos/{id}/targets/:target_id`. axum 0.7
         // matches routes in registration order; if `:target_id` is
         // registered first it would happily swallow `valid-sub-combos`
         // and 405 the GET (because the :target_id route only allows
         // PATCH and DELETE).
         .route(
-            "/admin/combos/:id/targets/valid-sub-combos",
+            "/admin/combos/{id}/targets/valid-sub-combos",
             get(handlers::admin::list_valid_sub_combos),
         )
         // IMPORTANT: this literal-segment route MUST be registered
-        // before `/admin/combos/:id/targets/:target_id`. axum 0.7
+        // before `/admin/combos/{id}/targets/:target_id`. axum 0.7
         // matches routes in registration order; if `:target_id` is
         // registered first it would happily swallow `reorder` and
         // 405 every POST (because the :target_id route only allows
         // PATCH and DELETE).
         .route(
-            "/admin/combos/:id/targets/reorder",
+            "/admin/combos/{id}/targets/reorder",
             axum::routing::post(handlers::admin::reorder_combo_targets),
         )
         // IMPORTANT: this literal-segment route MUST be registered
-        // before `/admin/combos/:id/targets/:target_id`. axum 0.7
+        // before `/admin/combos/{id}/targets/:target_id`. axum 0.7
         // matches routes in registration order; if `:target_id` is
         // registered first it would happily swallow `clear-cooldown`
         // and 405 every POST (because the :target_id route only allows
         // PATCH and DELETE).
         .route(
-            "/admin/combos/:id/targets/:target_id/clear-cooldown",
+            "/admin/combos/{id}/targets/{target_id}/clear-cooldown",
             axum::routing::post(handlers::admin::clear_combo_target_cooldown),
         )
         .route(
-            "/admin/combos/:id/targets/:target_id",
+            "/admin/combos/{id}/targets/{target_id}",
             axum::routing::patch(handlers::admin::update_combo_target)
                 .delete(handlers::admin::delete_combo_target),
         )
@@ -242,11 +242,11 @@ pub fn build_router(state: AppState) -> Router {
             get(handlers::admin::get_recording).post(handlers::admin::set_recording),
         )
         .route(
-            "/admin/models/:id/refresh",
+            "/admin/models/{id}/refresh",
             post(handlers::admin::refresh_models),
         )
         .route(
-            "/admin/models/:id/toggle",
+            "/admin/models/{id}/toggle",
             post(handlers::admin::toggle_model),
         )
         .route(
@@ -254,7 +254,7 @@ pub fn build_router(state: AppState) -> Router {
             post(handlers::admin::bulk_toggle_models),
         )
         .route(
-            "/admin/models/:id",
+            "/admin/models/{id}",
             axum::routing::delete(handlers::admin::delete_model),
         )
         .route(
@@ -266,15 +266,15 @@ pub fn build_router(state: AppState) -> Router {
             post(handlers::admin::create_custom_model),
         )
         .route(
-            "/admin/models/:id/test",
+            "/admin/models/{id}/test",
             post(handlers::admin::test_model),
         )
         .route(
-            "/admin/providers/:id/refresh",
+            "/admin/providers/{id}/refresh",
             post(handlers::admin::refresh_provider_models),
         )
         .route(
-            "/admin/providers/:id/active",
+            "/admin/providers/{id}/active",
             post(handlers::admin::set_provider_active),
         )
         .route(
@@ -282,21 +282,21 @@ pub fn build_router(state: AppState) -> Router {
             get(handlers::admin::list_api_keys).post(handlers::admin::create_api_key),
         )
         .route(
-            "/admin/keys/:id",
+            "/admin/keys/{id}",
             get(handlers::admin::get_api_key)
                 .patch(handlers::admin::update_api_key)
                 .delete(handlers::admin::delete_api_key),
         )
         .route(
-            "/admin/keys/:id/revoke",
+            "/admin/keys/{id}/revoke",
             post(handlers::admin::revoke_api_key),
         )
         .route(
-            "/admin/keys/:id/regenerate",
+            "/admin/keys/{id}/regenerate",
             post(handlers::admin::regenerate_api_key),
         )
         .route(
-            "/admin/keys/:id/usage",
+            "/admin/keys/{id}/usage",
             get(handlers::admin::api_key_usage),
         )
         // OAuth endpoints
@@ -311,19 +311,19 @@ pub fn build_router(state: AppState) -> Router {
             post(handlers::admin::recompute_usage_costs),
         )
         .route(
-            "/admin/oauth/:provider/authorize",
+            "/admin/oauth/{provider}/authorize",
             get(handlers::admin::oauth_authorize),
         )
         .route(
-            "/admin/oauth/:provider/exchange",
+            "/admin/oauth/{provider}/exchange",
             post(handlers::admin::oauth_exchange),
         )
         .route(
-            "/admin/oauth/:provider/device-code",
+            "/admin/oauth/{provider}/device-code",
             post(handlers::admin::oauth_device_code),
         )
         .route(
-            "/admin/oauth/:provider/device-poll",
+            "/admin/oauth/{provider}/device-poll",
             post(handlers::admin::oauth_device_poll),
         )
         // NOTE: `/admin/oauth/callback` is intentionally NOT
@@ -353,7 +353,7 @@ pub fn build_router(state: AppState) -> Router {
         // 2 MiB, which is too small for a single legitimate prompt (some
         // long-context requests attach tens of KiB of system prompt +
         // tool definitions) and has no project-wide ceiling for the
-        // admin JSON extractors (POST /admin/combos/:id/targets,
+        // admin JSON extractors (POST /admin/combos/{id}/targets,
         // bulk_toggle_models, reorder_combo_targets, etc.). Raising to
         // 32 MiB allows long-context chat while keeping a sane DoS
         // ceiling. Streaming requests (SSE) are not affected — the

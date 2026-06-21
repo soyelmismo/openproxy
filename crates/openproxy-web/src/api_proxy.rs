@@ -231,7 +231,7 @@ async fn connect_async_with_headers(
 
 fn to_tungstenite_msg(msg: axum::extract::ws::Message) -> Option<tokio_tungstenite::tungstenite::Message> {
     match msg {
-        axum::extract::ws::Message::Text(s) => Some(tokio_tungstenite::tungstenite::Message::Text(s)),
+        axum::extract::ws::Message::Text(s) => Some(tokio_tungstenite::tungstenite::Message::Text(s.to_string().into())),
         axum::extract::ws::Message::Binary(v) => Some(tokio_tungstenite::tungstenite::Message::Binary(v)),
         axum::extract::ws::Message::Ping(v) => Some(tokio_tungstenite::tungstenite::Message::Ping(v)),
         axum::extract::ws::Message::Pong(v) => Some(tokio_tungstenite::tungstenite::Message::Pong(v)),
@@ -239,7 +239,7 @@ fn to_tungstenite_msg(msg: axum::extract::ws::Message) -> Option<tokio_tungsteni
             Some(tokio_tungstenite::tungstenite::Message::Close(frame.map(|f| {
                 tokio_tungstenite::tungstenite::protocol::CloseFrame {
                     code: f.code.into(),
-                    reason: f.reason,
+                    reason: f.reason.to_string().into(),
                 }
             })))
         }
@@ -248,7 +248,7 @@ fn to_tungstenite_msg(msg: axum::extract::ws::Message) -> Option<tokio_tungsteni
 
 fn to_axum_msg(msg: tokio_tungstenite::tungstenite::Message) -> Option<axum::extract::ws::Message> {
     match msg {
-        tokio_tungstenite::tungstenite::Message::Text(s) => Some(axum::extract::ws::Message::Text(s)),
+        tokio_tungstenite::tungstenite::Message::Text(s) => Some(axum::extract::ws::Message::Text(s.to_string().into())),
         tokio_tungstenite::tungstenite::Message::Binary(v) => Some(axum::extract::ws::Message::Binary(v)),
         tokio_tungstenite::tungstenite::Message::Ping(v) => Some(axum::extract::ws::Message::Ping(v)),
         tokio_tungstenite::tungstenite::Message::Pong(v) => Some(axum::extract::ws::Message::Pong(v)),
@@ -256,7 +256,7 @@ fn to_axum_msg(msg: tokio_tungstenite::tungstenite::Message) -> Option<axum::ext
             Some(axum::extract::ws::Message::Close(frame.map(|f| {
                 axum::extract::ws::CloseFrame {
                     code: f.code.into(),
-                    reason: f.reason,
+                    reason: f.reason.to_string().into(),
                 }
             })))
         }
