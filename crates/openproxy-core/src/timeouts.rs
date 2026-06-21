@@ -135,18 +135,22 @@ pub fn load_provider_timeouts(
 
     match rows.next() {
         Ok(Some(row)) => {
-            let connect_ms: u64 = row.get(0).map_err(|e| CoreError::Database {
+            // rusqlite 0.40 removed `FromSql` for `u64` because SQLite
+            // INTEGER columns are i64 on the wire. Read as i64 and
+            // cast to u64 (these columns store millisecond durations
+            // that are always non-negative).
+            let connect_ms: u64 = row.get::<_, i64>(0).map_err(|e| CoreError::Database {
                 message: format!("read connect_ms: {}", e),
                 source: None,
-            })?;
-            let request_send_ms: u64 = row.get(1).map_err(|e| CoreError::Database {
+            })? as u64;
+            let request_send_ms: u64 = row.get::<_, i64>(1).map_err(|e| CoreError::Database {
                 message: format!("read request_send_ms: {}", e),
                 source: None,
-            })?;
-            let total_ms: u64 = row.get(2).map_err(|e| CoreError::Database {
+            })? as u64;
+            let total_ms: u64 = row.get::<_, i64>(2).map_err(|e| CoreError::Database {
                 message: format!("read total_ms: {}", e),
                 source: None,
-            })?;
+            })? as u64;
             Ok(Some(ProviderTimeouts::from_row(
                 connect_ms,
                 request_send_ms,

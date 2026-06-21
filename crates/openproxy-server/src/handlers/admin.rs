@@ -1716,7 +1716,7 @@ fn json_text(value: serde_json::Value) -> Result<String, ApiError> {
 async fn send_ws_json(socket: &mut WebSocket, value: serde_json::Value) -> Result<(), ApiError> {
     let text = json_text(value)?;
     socket
-        .send(Message::Text(text))
+        .send(Message::Text(text.into()))
         .await
         .map_err(|e| ApiError(CoreError::Internal(format!("send websocket message: {e}"))))
 }

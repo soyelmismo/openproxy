@@ -937,7 +937,7 @@ pub fn resolve_target_order(
         Strategy::Priority => Ok(targets),
         Strategy::Shuffle => {
             let mut shuffled = targets;
-            shuffled.shuffle(&mut rand::thread_rng());
+            shuffled.shuffle(&mut rand::rng());
             Ok(shuffled)
         }
         Strategy::RoundRobin => {
