@@ -40,7 +40,9 @@ pub fn apply_compression(
         CompressionMode::Off => CompressionStats::empty(),
         CompressionMode::Lite => {
             let original = count_content_chars(messages);
-            let techniques = lite::apply_lite(messages);
+            let lite_techniques = lite::apply_lite(messages);
+            let techniques: Vec<String> =
+                lite_techniques.iter().map(|s| (*s).to_string()).collect();
             let compressed = count_content_chars(messages);
             CompressionStats::new(original, compressed, techniques)
         }
@@ -52,7 +54,9 @@ pub fn apply_compression(
         }
         CompressionMode::LiteRtk => {
             let original = count_content_chars(messages);
-            let mut techniques = lite::apply_lite(messages);
+            let lite_techniques = lite::apply_lite(messages);
+            let mut techniques: Vec<String> =
+                lite_techniques.iter().map(|s| (*s).to_string()).collect();
             techniques.extend(rtk::apply_rtk(messages));
             let compressed = count_content_chars(messages);
             CompressionStats::new(original, compressed, techniques)

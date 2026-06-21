@@ -8,7 +8,7 @@ type Messages = Vec<OpenAIMessage>;
 
 // ─── Technique 1: Collapse whitespace ───────────────────────────────────────
 
-pub fn collapse_whitespace(msgs: &mut Messages) -> Vec<String> {
+pub fn collapse_whitespace(msgs: &mut Messages) -> Vec<&'static str> {
     let mut applied = Vec::new();
     for msg in msgs.iter_mut() {
         if let Some(ref mut content) = msg.content {
@@ -16,7 +16,7 @@ pub fn collapse_whitespace(msgs: &mut Messages) -> Vec<String> {
                 let normalized = normalize_message_whitespace(text);
                 if normalized != text {
                     *content = Value::String(normalized);
-                    applied.push("lite::collapse_whitespace".into());
+                    applied.push("lite::collapse_whitespace");
                 }
             } else if let Some(parts) = content.as_array_mut() {
                 for part in parts.iter_mut() {
@@ -25,7 +25,7 @@ pub fn collapse_whitespace(msgs: &mut Messages) -> Vec<String> {
                         if normalized != text {
                             part.as_object_mut()
                                 .and_then(|o| o.insert("text".into(), Value::String(normalized)));
-                            applied.push("lite::collapse_whitespace".into());
+                            applied.push("lite::collapse_whitespace");
                         }
                     }
                 }
@@ -129,7 +129,7 @@ fn trim_trailing_ws_in_place(out: &mut String, from: usize) {
 
 // ─── Technique 2: Dedup system prompts ──────────────────────────────────────
 
-pub fn dedup_system_prompt(msgs: &mut Messages) -> Vec<String> {
+pub fn dedup_system_prompt(msgs: &mut Messages) -> Vec<&'static str> {
     let mut applied = Vec::new();
     let mut seen_prefixes: Vec<String> = Vec::new();
     let mut i = 0;
@@ -147,7 +147,7 @@ pub fn dedup_system_prompt(msgs: &mut Messages) -> Vec<String> {
             .map(|s| s.chars().take(200).collect::<String>())
             .unwrap_or_default();
         if seen_prefixes.contains(&prefix) {
-            applied.push("lite::dedup_system_prompt".into());
+            applied.push("lite::dedup_system_prompt");
             msgs.remove(i);
             continue;
         }
@@ -161,7 +161,7 @@ pub fn dedup_system_prompt(msgs: &mut Messages) -> Vec<String> {
 
 const MAX_TOOL_CHARS: usize = 2000;
 
-pub fn compress_tool_results(msgs: &mut Messages) -> Vec<String> {
+pub fn compress_tool_results(msgs: &mut Messages) -> Vec<&'static str> {
     let mut applied = Vec::new();
     for msg in msgs.iter_mut() {
         if msg.role != "tool" {
@@ -183,7 +183,7 @@ pub fn compress_tool_results(msgs: &mut Messages) -> Vec<String> {
                         text.len() - cut
                     );
                     *content = Value::String(truncated);
-                    applied.push("lite::compress_tool_results".into());
+                    applied.push("lite::compress_tool_results");
                 }
             }
         }
@@ -193,7 +193,7 @@ pub fn compress_tool_results(msgs: &mut Messages) -> Vec<String> {
 
 // ─── Technique 4: Remove redundant consecutive messages ────────────────────
 
-pub fn remove_redundant_content(msgs: &mut Messages) -> Vec<String> {
+pub fn remove_redundant_content(msgs: &mut Messages) -> Vec<&'static str> {
     let mut applied = Vec::new();
     let mut i = 1;
     while i < msgs.len() {
@@ -202,7 +202,7 @@ pub fn remove_redundant_content(msgs: &mut Messages) -> Vec<String> {
         let prev_content = prev.content.as_ref().and_then(|c| c.as_str()).unwrap_or("");
         let curr_content = curr.content.as_ref().and_then(|c| c.as_str()).unwrap_or("");
         if prev.role == curr.role && !prev_content.is_empty() && prev_content == curr_content {
-            applied.push("lite::remove_redundant".into());
+            applied.push("lite::remove_redundant");
             msgs.remove(i);
             continue;
         }
@@ -213,7 +213,7 @@ pub fn remove_redundant_content(msgs: &mut Messages) -> Vec<String> {
 
 // ─── Technique 5: Replace image URLs with placeholders ─────────────────────
 
-pub fn replace_image_urls(msgs: &mut Messages) -> Vec<String> {
+pub fn replace_image_urls(msgs: &mut Messages) -> Vec<&'static str> {
     let mut applied = Vec::new();
     for msg in msgs.iter_mut() {
         if let Some(ref mut content) = msg.content {
@@ -246,7 +246,7 @@ pub fn replace_image_urls(msgs: &mut Messages) -> Vec<String> {
                         .as_object()
                         .cloned()
                         .unwrap_or_default();
-                        applied.push("lite::replace_image".into());
+                        applied.push("lite::replace_image");
                     }
                 }
             }
@@ -258,8 +258,8 @@ pub fn replace_image_urls(msgs: &mut Messages) -> Vec<String> {
 // ─── Apply all lite techniques ──────────────────────────────────────────────
 
 /// Aplica las 5 técnicas lite secuencialmente. Retorna las técnicas que aplicaron.
-pub fn apply_lite(msgs: &mut Messages) -> Vec<String> {
-    let mut all: Vec<String> = Vec::new();
+pub fn apply_lite(msgs: &mut Messages) -> Vec<&'static str> {
+    let mut all: Vec<&'static str> = Vec::new();
     all.extend(collapse_whitespace(msgs));
     all.extend(dedup_system_prompt(msgs));
     all.extend(compress_tool_results(msgs));
@@ -361,7 +361,7 @@ mod tests {
         assert!(
             applied
                 .iter()
-                .any(|s| s == "lite::compress_tool_results"),
+                .any(|s| *s == "lite::compress_tool_results"),
             "expected compress_tool_results to fire on >2000 byte content"
         );
         // Verify the content was truncated and contains the marker.
