@@ -623,6 +623,70 @@
   color: var(--color-error);
 }
 
+/* ----- Analytics: null-pricing warning banner ----- */
+/* Yellow/orange variant for the "N rows had no pricing data" alert
+   surfaced by the analytics view when summary.rows_with_null_pricing
+   > 0. Reuses the warn token pair so it matches the existing
+   banner-info palette without introducing a new color. */
+.banner-warning {
+  background: var(--color-warn-soft);
+  border-color: var(--color-warn);
+  color: var(--color-warn);
+}
+
+/* ----- Analytics: time-range preset selector ----- */
+.preset-selector {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+  margin: 0 0 var(--space-4);
+}
+.preset-btn {
+  padding: 0.3rem 0.7rem;
+  font-size: var(--fs-xs);
+  background: var(--color-surface);
+  border: var(--border-w) var(--border-style) var(--color-border);
+  color: var(--color-text-muted);
+  transition: background var(--t-fast), color var(--t-fast), border-color var(--t-fast);
+}
+.preset-btn:hover:not(.active) {
+  background: var(--color-surface-2);
+  color: var(--color-text);
+}
+.preset-btn.active {
+  background: var(--color-primary);
+  color: var(--color-primary-fg);
+  border-color: var(--color-primary);
+  font-weight: 600;
+}
+
+/* ----- Analytics: monthly providers × months cost matrix ----- */
+/* Compact table with monospace, right-aligned numeric cells so the
+   cost columns line up. The first column (provider id) stays left-
+   aligned; the Total column and totals row are bolded. */
+table.monthly-matrix {
+  font-size: var(--fs-xs);
+  table-layout: auto;
+}
+.monthly-matrix th,
+.monthly-matrix td {
+  padding: 0.3rem 0.5rem;
+  white-space: nowrap;
+}
+.monthly-matrix th.num,
+.monthly-matrix td.num {
+  text-align: right;
+  font-family: var(--font-mono);
+}
+.monthly-matrix td.total,
+.monthly-matrix tfoot th {
+  font-weight: 600;
+}
+.monthly-matrix tfoot th {
+  border-top: var(--border-w-2) var(--border-style) var(--color-border);
+}
+.monthly-matrix tbody tr:hover { background: var(--color-surface-2); }
+
 /* ============================================
    KEYFRAMES
    ============================================ */
