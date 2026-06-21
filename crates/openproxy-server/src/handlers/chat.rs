@@ -566,10 +566,9 @@ fn authenticate(
     }
 
     if !key.scopes.iter().any(|s| s == "chat") {
-        return Err(ApiError(CoreError::Auth(format!(
-            "api key lacks 'chat' scope (has {:?})",
-            key.scopes
-        ))));
+        return Err(ApiError(CoreError::Auth(
+            "api key lacks required scope".into(),
+        )));
     }
 
     if let Some(allowed) = &key.allowed_models {

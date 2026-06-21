@@ -49,8 +49,16 @@ impl IntoResponse for ApiError {
         // full string, so all the existing error variants are covered
         // (validation messages, database messages, upstream bodies)
         // without having to add a cap to each variant.
+        //
+        // MEDIUM-2 fix: also run the error message through
+        // `redact_error_msg` before truncating. This strips patterns
+        // like `sk-...`, `x-api-key: ...`, `Authorization: Bearer ...`
+        // that upstream proxies might echo in their error responses.
+        // The DB-persisted form has always been redacted (cost.rs);
+        // now the live HTTP response is too.
         let raw = self.0.to_string();
-        let message = truncate_error_message(&raw);
+        let redacted = openproxy_core::cost::redact_error_msg(&raw);
+        let message = truncate_error_message(&redacted.0);
         let body = json!({
             "error": {
                 "code": self.0.code(),
