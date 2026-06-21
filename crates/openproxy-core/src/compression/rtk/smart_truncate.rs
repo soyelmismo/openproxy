@@ -1,108 +1,115 @@
-use serde::Deserialize;
-
-#[derive(Debug, Clone, Deserialize)]
-pub struct TruncateConfig {
-    #[serde(default = "default_max_lines")]
+/// Pre-compiled truncation configuration.
+///
+/// Built ONCE at startup (alongside its owning `CompiledFilter`) and shared
+/// across all requests via `Arc<CompiledFilter>`. The `priority_patterns`
+/// are stored as compiled `regex::Regex` values, eliminating the per-call
+/// `Regex::new` loop that the old `TruncateConfig` performed.
+pub struct CompiledTruncateConfig {
     pub max_lines: usize,
-    #[serde(default = "default_head")]
     pub head_lines: usize,
-    #[serde(default = "default_tail")]
     pub tail_lines: usize,
-    #[serde(default)]
-    pub priority_patterns: Vec<String>,
-}
-
-fn default_max_lines() -> usize {
-    120
-}
-fn default_head() -> usize {
-    20
-}
-fn default_tail() -> usize {
-    20
-}
-
-impl Default for TruncateConfig {
-    fn default() -> Self {
-        Self {
-            max_lines: 120,
-            head_lines: 20,
-            tail_lines: 20,
-            priority_patterns: vec![
-                r"(?i)(error|failed|exception|traceback|FAIL|panic|✖|✗)".to_string(),
-            ],
-        }
-    }
+    pub priority_patterns: Vec<regex::Regex>,
 }
 
 /// Trunca texto manteniendo head + priority + tail, con marcador.
-pub fn smart_truncate(text: &str, config: &TruncateConfig) -> (String, bool, usize) {
-    let lines: Vec<&str> = text.split('\n').collect();
-    if lines.len() <= config.max_lines {
+///
+/// Receives a `&CompiledTruncateConfig` whose `priority_patterns` are
+/// already-compiled regexes — no per-call `Regex::new` is performed.
+///
+/// The function:
+///  - Counts newlines via `memchr::memchr_iter` (SIMD-accelerated) to take
+///    the early-return fast path without materializing a `Vec<&str>`.
+///  - Writes the result directly into a single `String` (no
+///    `Vec<String>` + `join`).
+///  - Preserves the exact `split('\n')` semantics of the original
+///    implementation (a trailing newline yields a trailing empty element).
+pub fn smart_truncate(text: &str, config: &CompiledTruncateConfig) -> (String, bool, usize) {
+    // split('\n') on `"a\nb\nc\n"` yields `["a", "b", "c", ""]` — i.e.
+    // (newline_count + 1) elements. Reproduce that count via memchr so we
+    // can take the early-return path without allocating a Vec<&str>.
+    let line_count = memchr::memchr_iter(b'\n', text.as_bytes()).count() + 1;
+    if line_count <= config.max_lines {
         return (text.to_string(), false, 0);
     }
 
-    let head = &lines[..config.head_lines.min(lines.len())];
+    // Slow path — materialize the lines so we can slice head/tail/middle.
+    let lines: Vec<&str> = text.split('\n').collect();
+    let head_end = config.head_lines.min(lines.len());
+    let head = &lines[..head_end];
     let tail_start = lines.len().saturating_sub(config.tail_lines);
     let tail = &lines[tail_start..];
 
-    // Priority lines from middle section
-    let middle = if config.head_lines < tail_start {
-        &lines[config.head_lines..tail_start]
-    } else {
-        &[]
-    };
+    // Middle = lines strictly between head and tail (may be empty if the
+    // head and tail slices overlap or touch).
+    let middle_start = head_end.min(tail_start);
+    let middle = &lines[middle_start..tail_start];
 
-    let priority_re: Vec<regex::Regex> = config
-        .priority_patterns
-        .iter()
-        .filter_map(|p| regex::Regex::new(p).ok())
-        .collect();
+    let dropped = lines.len() - head.len() - tail.len();
 
-    let priority_lines: Vec<&str> = middle
-        .iter()
-        .filter(|l| priority_re.iter().any(|r| r.is_match(l)))
-        .copied()
-        .collect();
-
-    let mut selected: Vec<String> = Vec::with_capacity(config.head_lines + priority_lines.len() + config.tail_lines);
+    // Build the result directly into one String. Pre-allocate roughly the
+    // size of the kept sections (head + tail) plus the marker and the
+    // expected priority lines (heuristic: middle is at most as large as
+    // head + tail in the common case).
+    let est_capacity = text.len() / 2;
+    let mut out = String::with_capacity(est_capacity);
 
     // Head
+    let mut first = true;
     for l in head {
-        selected.push(l.to_string());
+        if !first {
+            out.push('\n');
+        }
+        out.push_str(l);
+        first = false;
     }
 
-    // Marker
-    let dropped = lines.len() - head.len() - tail.len();
-    selected.push(format!("[rtk:truncated {} lines]", dropped));
+    // Marker (always present when truncating).
+    if !first {
+        out.push('\n');
+    }
+    out.push_str("[rtk:truncated ");
+    out.push_str(&dropped.to_string());
+    out.push_str(" lines]");
 
-    // Priority lines (non-duplicate of head/tail)
-    for l in &priority_lines {
-        let already =
-            head.iter().any(|h| *h == *l) || tail.iter().any(|t| *t == *l);
-        if !already {
-            selected.push(l.to_string());
+    // Priority lines from the middle (skip any that already appear in head
+    // or tail — preserves original dedup behavior).
+    for l in middle {
+        if config.priority_patterns.iter().any(|r| r.is_match(l)) {
+            let already = head.iter().any(|h| *h == *l) || tail.iter().any(|t| *t == *l);
+            if !already {
+                out.push('\n');
+                out.push_str(l);
+            }
         }
     }
 
     // Tail
     for l in tail {
-        selected.push(l.to_string());
+        out.push('\n');
+        out.push_str(l);
     }
 
-    (selected.join("\n"), true, dropped)
+    (out, true, dropped)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    /// Helper: compile a single priority pattern for tests (mirrors the
+    /// production default `TruncateConfig::default().priority_patterns`).
+    fn default_priority() -> Vec<regex::Regex> {
+        vec![regex::Regex::new(r"(?i)(error|failed|exception|traceback|FAIL|panic|✖|✗)").unwrap()]
+    }
+
     #[test]
     fn test_no_truncation_when_under_limit() {
         let text = "a\nb\nc\n";
-        let config = TruncateConfig {
+        let config = CompiledTruncateConfig {
             max_lines: 10,
-            ..Default::default()
+            head_lines: 20,
+            tail_lines: 20,
+            priority_patterns: default_priority(),
         };
         let (result, truncated, _) = smart_truncate(text, &config);
         assert!(!truncated);
@@ -113,11 +120,11 @@ mod tests {
     fn test_truncation_preserves_head_tail() {
         let text: Vec<String> = (0..100).map(|i| format!("line {}", i)).collect();
         let text = text.join("\n");
-        let config = TruncateConfig {
+        let config = CompiledTruncateConfig {
             max_lines: 20,
             head_lines: 5,
             tail_lines: 5,
-            ..Default::default()
+            priority_patterns: default_priority(),
         };
         let (result, truncated, dropped) = smart_truncate(&text, &config);
         assert!(truncated);
