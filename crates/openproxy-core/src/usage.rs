@@ -329,6 +329,20 @@ pub struct MonthlyByProviderRow {
     pub total_cost_usd: f64,
 }
 
+/// One row of the `by_day` aggregation — daily usage totals for
+/// charting. `date` is `"YYYY-MM-DD"` in UTC.
+#[derive(Debug, Clone, Serialize)]
+pub struct ByDayRow {
+    /// `"YYYY-MM-DD"` — the calendar day in UTC.
+    pub date: String,
+    pub unique_requests: u64,
+    pub total_rows: u64,
+    pub total_prompt_tokens: u64,
+    pub total_completion_tokens: u64,
+    pub total_cost_usd: f64,
+    pub errors: u64,
+}
+
 /// One row of the `by_account` aggregation.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ByAccountRow {
@@ -675,6 +689,61 @@ pub fn monthly_by_provider(conn: &Connection, f: &UsageFilter) -> Result<Vec<Mon
         })?;
 
     collect_rows(rows, "monthly_by_provider")
+}
+
+/// Per-day usage totals for charting. Groups by
+/// `strftime('%Y-%m-%d', created_at)` and returns rows ordered by
+/// date ASC. Each row includes request counts, token totals, cost,
+/// and error count (rows with `status_code >= 400`).
+pub fn by_day(conn: &Connection, f: &UsageFilter) -> Result<Vec<ByDayRow>> {
+    let w = BuiltWhere::from_filter(f);
+    let sql = format!(
+        "SELECT \
+             strftime('%Y-%m-%d', created_at)                     AS date, \
+             COUNT(DISTINCT request_id)                           AS unique_requests, \
+             COUNT(*)                                             AS total_rows, \
+             COALESCE(SUM(prompt_tokens), 0)                      AS total_prompt_tokens, \
+             COALESCE(SUM(completion_tokens), 0)                  AS total_completion_tokens, \
+             COALESCE(SUM(cost_usd), 0.0)                         AS total_cost_usd, \
+             SUM(CASE WHEN status_code >= 400 THEN 1 ELSE 0 END)  AS errors \
+         FROM usage {} \
+         GROUP BY date \
+         ORDER BY date ASC",
+        w.sql,
+    );
+
+    let mut stmt = conn.prepare(&sql).map_err(|e| CoreError::Database {
+        message: format!("prepare usage by_day: {}", e),
+        source: Some(Box::new(e)),
+    })?;
+
+    let params_slice = to_params(&w.params);
+    let rows = stmt
+        .query_map(params_from_iter(params_slice), |row| {
+            let date: String = row.get(0)?;
+            let unique_requests: i64 = row.get(1)?;
+            let total_rows: i64 = row.get(2)?;
+            let total_prompt_tokens: i64 = row.get(3)?;
+            let total_completion_tokens: i64 = row.get(4)?;
+            let total_cost_usd: f64 = row.get(5)?;
+            let errors: i64 = row.get(6)?;
+
+            Ok(ByDayRow {
+                date,
+                unique_requests: as_u64(unique_requests, "unique_requests")?,
+                total_rows: as_u64(total_rows, "total_rows")?,
+                total_prompt_tokens: as_u64(total_prompt_tokens, "total_prompt_tokens")?,
+                total_completion_tokens: as_u64(total_completion_tokens, "total_completion_tokens")?,
+                total_cost_usd,
+                errors: as_u64(errors, "errors")?,
+            })
+        })
+        .map_err(|e| CoreError::Database {
+            message: format!("query usage by_day: {}", e),
+            source: Some(Box::new(e)),
+        })?;
+
+    collect_rows(rows, "by_day")
 }
 
 /// Per-(account, provider) breakdown. Ordered by total cost descending.

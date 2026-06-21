@@ -806,3 +806,285 @@ table.monthly-matrix {
   font-size: var(--fs-sm);
   font-style: italic;
 }
+
+/* ============================================
+   CHARTS — SVG chart components, KPI tiles,
+   filter dropdowns, analytics layout
+   ============================================ */
+
+/* ----- Chart SVG ----- */
+.chart-svg {
+  display: block;
+  width: 100%;
+  font-family: var(--font-mono);
+}
+.chart-svg text {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  fill: var(--color-text-muted);
+}
+.chart-axis-label {
+  font-size: 10px;
+  fill: var(--color-text-muted);
+}
+.chart-empty {
+  padding: var(--space-8);
+  text-align: center;
+  font-size: var(--fs-sm);
+}
+
+/* ----- KPI tiles ----- */
+.kpi-tile {
+  padding: var(--space-3) var(--space-4);
+  background: var(--color-surface);
+  border: var(--border-w) var(--border-style) var(--color-border);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+.kpi-label {
+  font-size: var(--fs-xs);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--color-text-muted);
+  font-family: var(--font-display);
+}
+.kpi-value {
+  font-size: var(--fs-2xl);
+  font-weight: bold;
+  font-family: var(--font-mono);
+  line-height: var(--lh-tight);
+}
+.kpi-sub {
+  font-size: var(--fs-xs);
+  color: var(--color-text-muted);
+}
+.kpi-trend-up { color: var(--color-success); }
+.kpi-trend-down { color: var(--color-error); }
+
+/* KPI grid layout */
+.kpi-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: var(--space-3);
+  margin-bottom: var(--space-4);
+}
+
+/* ----- Analytics filters ----- */
+.analytics-filters {
+  display: flex;
+  gap: var(--space-2);
+  align-items: center;
+  flex-wrap: wrap;
+  padding: var(--space-2) var(--space-3);
+  background: var(--color-surface-2);
+  border: var(--border-w) var(--border-style) var(--color-border);
+  margin-bottom: var(--space-3);
+}
+.filter-dropdown {
+  padding: var(--space-1) var(--space-2);
+  border: var(--border-w) var(--border-style) var(--color-border);
+  background: var(--color-surface);
+  font-size: var(--fs-sm);
+  font-family: var(--font-sans);
+  cursor: pointer;
+  min-width: 140px;
+}
+.filter-dropdown:focus {
+  outline: 2px solid var(--color-primary);
+  outline-offset: -1px;
+}
+
+/* ----- Donut chart ----- */
+.donut-wrap {
+  display: flex;
+  gap: var(--space-4);
+  align-items: center;
+  flex-wrap: wrap;
+}
+.donut-legend {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  font-size: var(--fs-sm);
+}
+.donut-legend-item {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+.donut-dot {
+  width: 10px;
+  height: 10px;
+  display: inline-block;
+  border: 1px solid var(--color-border);
+}
+
+/* ----- Sparkline ----- */
+.sparkline {
+  opacity: 0.8;
+}
+
+/* ----- Config refactor: editable vs static regions ----- */
+.config-editable-region {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  gap: var(--space-4);
+  margin-bottom: var(--space-4);
+}
+.config-static-region {
+  margin-top: var(--space-4);
+}
+.config-static-region summary {
+  cursor: pointer;
+  font-weight: bold;
+  padding: var(--space-2);
+  background: var(--color-surface-2);
+  border: var(--border-w) var(--border-style) var(--color-border);
+}
+.config-static-region[open] summary {
+  margin-bottom: var(--space-3);
+}
+.config-static-display {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: var(--space-2);
+  padding: var(--space-2);
+}
+.config-static-display .field {
+  display: flex;
+  flex-direction: column;
+}
+.config-static-display .field .label {
+  font-size: var(--fs-xs);
+  text-transform: uppercase;
+  color: var(--color-text-muted);
+  font-family: var(--font-display);
+}
+.config-static-display .field .value {
+  font-family: var(--font-mono);
+  font-size: var(--fs-md);
+}
+.config-dirty-indicator {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--color-warn);
+  margin-left: var(--space-1);
+  vertical-align: middle;
+}
+.config-actions-bar {
+  position: sticky;
+  bottom: 0;
+  display: flex;
+  gap: var(--space-2);
+  align-items: center;
+  padding: var(--space-3);
+  background: var(--color-surface);
+  border: var(--border-w-2) var(--border-style) var(--color-border);
+  margin-top: var(--space-4);
+}
+.config-actions-bar .dirty-count {
+  font-size: var(--fs-sm);
+  color: var(--color-text-muted);
+  margin-left: auto;
+}
+
+/* ----- Sidebar improvements ----- */
+.sidebar-nav-group {
+  padding: var(--space-1) 0;
+}
+.sidebar-nav-group-label {
+  font-size: var(--fs-xs);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--color-text-muted);
+  padding: var(--space-1) var(--space-3);
+  font-family: var(--font-display);
+}
+.sidebar-collapsed .sidebar-nav-group-label {
+  display: none;
+}
+.nav-icon {
+  width: 16px;
+  height: 16px;
+  display: inline-block;
+  vertical-align: middle;
+  flex-shrink: 0;
+}
+.nav-icon svg {
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+.health-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  display: inline-block;
+  border: 1px solid var(--color-border);
+}
+.health-dot.ok { background: var(--color-success); }
+.health-dot.warn { background: var(--color-warn); }
+.health-dot.err { background: var(--color-error); }
+
+/* ----- Home dashboard ----- */
+.home-kpi-row {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: var(--space-3);
+  margin-bottom: var(--space-4);
+}
+.home-row {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  gap: var(--space-4);
+  margin-bottom: var(--space-4);
+}
+.quick-actions {
+  display: flex;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+  padding: var(--space-3);
+  background: var(--color-surface-2);
+  border: var(--border-w) var(--border-style) var(--color-border);
+}
+.quick-actions a {
+  padding: var(--space-2) var(--space-3);
+  border: var(--border-w) var(--border-style) var(--color-border);
+  background: var(--color-surface);
+  text-decoration: none;
+  color: var(--color-text);
+  font-size: var(--fs-sm);
+  font-family: var(--font-sans);
+  transition: background var(--t-fast);
+}
+.quick-actions a:hover {
+  background: var(--color-primary-soft);
+  border-color: var(--color-primary);
+}
+
+/* ----- Sticky table headers ----- */
+table.sticky-header thead th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--color-surface-2);
+}
+
+/* ----- Chart card variant ----- */
+.card.chart-card {
+  padding: 0;
+}
+.card.chart-card > .card-title {
+  padding: var(--space-2) var(--space-3);
+  border-bottom: var(--border-w) var(--border-style) var(--color-border);
+  font-family: var(--font-display);
+  font-size: var(--fs-sm);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+.card.chart-card > .card-body {
+  padding: var(--space-3);
+}

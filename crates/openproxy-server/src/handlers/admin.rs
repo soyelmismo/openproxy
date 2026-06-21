@@ -1260,6 +1260,28 @@ pub async fn usage_monthly_by_provider(
     body.into()
 }
 
+/// `GET /v1/admin/usage/by-day` — daily usage totals for charting.
+pub async fn usage_by_day(
+    State(s): State<AppState>,
+    Query(q): Query<UsageQuery>,
+) -> ApiResult<Json<Vec<usage::ByDayRow>>> {
+    let body: Result<Json<Vec<usage::ByDayRow>>, ApiError> = async {
+        let w = s
+            .db_pool()
+            .try_writer_for(ADMIN_LOCK_TIMEOUT)
+            .ok_or_else(|| {
+                ApiError(CoreError::ServiceUnavailable(
+                    "writer lock busy: another query is holding the database; retry in a few seconds"
+                        .into(),
+                ))
+            })?;
+        let f = q.into_filter()?;
+        Ok(Json(usage::by_day(&w, &f)?))
+    }
+    .await;
+    body.into()
+}
+
 /// `GET /v1/admin/usage/by-account` — per-account breakdown.
 pub async fn usage_by_account(
     State(s): State<AppState>,

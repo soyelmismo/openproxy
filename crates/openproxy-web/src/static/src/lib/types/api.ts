@@ -383,6 +383,39 @@ export interface MonthlyByProviderRow {
   total_cost_usd: number;
 }
 
+/** Fila de la agregación `by_day` — totales diarios para gráficas.
+ *  `date` es `strftime('%Y-%m-%d', created_at)` (e.g. `"2026-06-21"`).
+ *  @see crates/openproxy-core/src/usage.rs:334 */
+export interface ByDayRow {
+  /** `"YYYY-MM-DD"` — el día calendario en UTC. */
+  date: string;
+  unique_requests: number;
+  total_rows: number;
+  total_prompt_tokens: number;
+  total_completion_tokens: number;
+  total_cost_usd: number;
+  errors: number;
+}
+
+/** Fila de la agregación `by_status` — conteo por código HTTP.
+ *  @see crates/openproxy-core/src/usage.rs:592 */
+export interface ByStatusRow {
+  status_code: number;
+  count: number;
+}
+
+/** Fila de la agregación `errors` — últimos N errores.
+ *  @see crates/openproxy-core/src/usage.rs:637 */
+export interface ErrorRow {
+  request_id: string;
+  trace_id: string;
+  provider_id: string;
+  upstream_model_id: string;
+  status_code: number;
+  error_msg_redacted: string;
+  created_at: string;
+}
+
 /** Valores aceptados por el query param `?preset=` de los endpoints
  *  `/usage/*`. `custom` significa "sin preset" (el server usa los
  *  `from`/`to` explícitos o, si ambos faltan, devuelve todo el
