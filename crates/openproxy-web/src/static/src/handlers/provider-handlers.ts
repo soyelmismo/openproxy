@@ -181,8 +181,11 @@ export async function createProvider(e: Event): Promise<void> {
       method: "POST",
       body: JSON.stringify(Object.fromEntries(f)),
     });
-    state.providers = await api("/providers") as typeof state.providers;
+    // Close the modal FIRST — the POST succeeded, the provider is
+    // persisted. If the subsequent GET refresh fails (transient
+    // network blip), the next bg-poll will pick up the new row.
     closeCreateProvider();
+    state.providers = await api("/providers") as typeof state.providers;
     navigate();
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);

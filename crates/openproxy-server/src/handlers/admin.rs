@@ -623,8 +623,14 @@ pub async fn create_provider(
     Json(input): Json<admin::CreateProviderInput>,
 ) -> ApiResult<Json<serde_json::Value>> {
     let body: Result<Json<serde_json::Value>, ApiError> = async {
-        let w = s.db_pool().writer();
-        let id = admin::create_provider(&w, input)?;
+        // Scope the writer guard so it is dropped BEFORE
+        // rebuild_adapters re-acquires the same non-reentrant
+        // parking_lot::Mutex. Holding the guard across
+        // rebuild_adapters deadlocks the Tokio worker thread.
+        let id = {
+            let w = s.db_pool().writer();
+            admin::create_provider(&w, input)?
+        };
         // Hot-reload the in-memory adapter registry so the chat
         // pipeline can dispatch to the new provider without a
         // process restart. A failure here is logged but does NOT
@@ -704,9 +710,15 @@ pub async fn delete_provider(
                 id, id
             ))));
         }
-        let w = s.db_pool().writer();
-        let id = ProviderId::new(id);
-        admin::delete_provider(&w, &id)?;
+        // Scope the writer guard so it is dropped BEFORE
+        // rebuild_adapters re-acquires the same non-reentrant
+        // parking_lot::Mutex. Holding the guard across
+        // rebuild_adapters deadlocks the Tokio worker thread.
+        let pid = ProviderId::new(id.clone());
+        {
+            let w = s.db_pool().writer();
+            admin::delete_provider(&w, &pid)?;
+        }
         // Hot-reload so the chat pipeline drops the
         // `CustomAdapter` for this provider. For built-in ids we
         // never get here (the fast-fail above rejects them), so
@@ -716,17 +728,17 @@ pub async fn delete_provider(
         // lookup will pick up the new state.
         if let Err(e) = s.rebuild_adapters() {
             tracing::warn!(
-                provider_id = id.as_str(),
+                provider_id = pid.as_str(),
                 error = %e,
                 "failed to reload adapter registry after delete_provider"
             );
         } else {
             tracing::info!(
-                provider_id = id.as_str(),
+                provider_id = pid.as_str(),
                 "reloaded adapter registry after deleting provider"
             );
         }
-        Ok(Json(serde_json::json!({ "deleted": id.as_str() })))
+        Ok(Json(serde_json::json!({ "deleted": pid.as_str() })))
     }
     .await;
     body.into()
@@ -2437,9 +2449,15 @@ pub async fn update_provider(
     Json(body): Json<admin::UpdateProviderInput>,
 ) -> ApiResult<Json<serde_json::Value>> {
     let body: Result<Json<serde_json::Value>, ApiError> = async {
-        let w = s.db_pool().writer();
+        // Scope the writer guard so it is dropped BEFORE
+        // rebuild_adapters re-acquires the same non-reentrant
+        // parking_lot::Mutex. Holding the guard across
+        // rebuild_adapters deadlocks the Tokio worker thread.
         let provider_id = ProviderId::new(id.clone());
-        admin::update_provider(&w, &provider_id, body)?;
+        {
+            let w = s.db_pool().writer();
+            admin::update_provider(&w, &provider_id, body)?;
+        }
         // Hot-reload so the chat pipeline sees the updated
         // `base_url`/`auth_type`/`extra_headers` on the
         // `CustomAdapter` for this provider. See the comment on
