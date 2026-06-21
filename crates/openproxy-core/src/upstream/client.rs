@@ -466,16 +466,8 @@ impl UpstreamClient {
         let total_sleep = tokio::time::sleep_until(tokio::time::Instant::from_std(deadlines.total_deadline));
         let write_sleep = tokio::time::sleep_until(tokio::time::Instant::from_std(deadlines.write_deadline));
         let headers_sleep = tokio::time::sleep_until(tokio::time::Instant::from_std(deadlines.headers_deadline));
-        let cancel_wait = {
-            let c = cancel_for_send.clone();
-            async move {
-                loop {
-                    if c.is_cancelled() {
-                        return;
-                    }
-                    tokio::task::yield_now().await;
-                }
-            }
+        let cancel_wait = async move {
+            cancel_for_send.cancelled().await;
         };
         tokio::pin!(send_fut);
         tokio::pin!(total_sleep);

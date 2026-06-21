@@ -7,6 +7,7 @@ use crate::ids::{
     UsageId,
 };
 use crate::pricing;
+use once_cell::sync::Lazy;
 use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
 
@@ -76,21 +77,37 @@ pub fn compute(price: Option<pricing::Price>, input: &UsageInput) -> (f64, Optio
 ///
 /// Returns `(sanitized, redacted)`.
 pub fn redact_error_msg(raw: &str) -> (String, String) {
+    static RE_SK: Lazy<regex::Regex> =
+        Lazy::new(|| regex::Regex::new(r"sk-[A-Za-z0-9_\-]{10,}").unwrap());
+    static RE_XAPIKEY: Lazy<regex::Regex> =
+        Lazy::new(|| regex::Regex::new(r"(?i)x-api-key:\s*\S+").unwrap());
+    static RE_BEARER: Lazy<regex::Regex> =
+        Lazy::new(|| regex::Regex::new(r"(?i)Authorization:\s*Bearer\s+\S+").unwrap());
+
     let mut sanitized = raw.to_string();
-    let re_sk = regex::Regex::new(r"sk-[A-Za-z0-9_\-]{10,}").unwrap();
-    sanitized = re_sk
-        .replace_all(&sanitized, "sk-[REDACTED]")
-        .to_string();
-    let re_xapikey = regex::Regex::new(r"(?i)x-api-key:\s*\S+").unwrap();
-    sanitized = re_xapikey
-        .replace_all(&sanitized, "x-api-key: [REDACTED]")
-        .to_string();
-    let re_bearer = regex::Regex::new(r"(?i)Authorization:\s*Bearer\s+\S+").unwrap();
-    sanitized = re_bearer
-        .replace_all(&sanitized, "Authorization: Bearer [REDACTED]")
-        .to_string();
+    // Only run replace_all if the pattern is present — avoids the
+    // Cow→String allocation when no match exists.
+    if RE_SK.is_match(&sanitized) {
+        sanitized = RE_SK
+            .replace_all(&sanitized, "sk-[REDACTED]")
+            .into_owned();
+    }
+    if RE_XAPIKEY.is_match(&sanitized) {
+        sanitized = RE_XAPIKEY
+            .replace_all(&sanitized, "x-api-key: [REDACTED]")
+            .into_owned();
+    }
+    if RE_BEARER.is_match(&sanitized) {
+        sanitized = RE_BEARER
+            .replace_all(&sanitized, "Authorization: Bearer [REDACTED]")
+            .into_owned();
+    }
     if sanitized.len() > 2048 {
-        sanitized.truncate(2048);
+        let mut idx = 2048;
+        while idx > 0 && !sanitized.is_char_boundary(idx) {
+            idx -= 1;
+        }
+        sanitized.truncate(idx);
         sanitized.push_str("...[truncated]");
     }
     (sanitized.clone(), sanitized)
@@ -222,10 +239,14 @@ pub fn record(conn: &Connection, input: &UsageInput) -> Result<UsageId> {
             created_at: chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string(),
             connect_ms: input.connect_ms,
             ttft_ms: input.ttft_ms,
-            request_body_json: input.request_body_json.clone(),
-            response_body_json: input.response_body_json.clone(),
-            request_headers: input.request_headers.clone(),
-            response_headers: input.response_headers.clone(),
+            // PERF: set heavy fields to None for the broadcast row.
+            // The dashboard never receives these fields — they're
+            // fetched on demand via GET /admin/usage/:id. Cloning
+            // them here was pure waste (up to MB of JSON per request).
+            request_body_json: None,
+            response_body_json: None,
+            request_headers: None,
+            response_headers: None,
             error_message: error_msg_redacted_for_db.clone(),
             race_total: Some(input.race_total),
             race_attempts: Some(input.race_attempts),
