@@ -301,6 +301,11 @@ pub fn build_router(state: AppState) -> Router {
             "/v1/admin/models/sync-models-dev",
             post(handlers::admin::sync_models_dev),
         )
+        // Re-price historical usage rows after models.dev sync
+        .route(
+            "/v1/admin/usage/recompute-costs",
+            post(handlers::admin::recompute_usage_costs),
+        )
         .route(
             "/v1/admin/oauth/:provider/authorize",
             get(handlers::admin::oauth_authorize),

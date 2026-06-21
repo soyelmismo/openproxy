@@ -238,6 +238,23 @@ impl AppState {
                     "backfilled model_id_normalized for existing model rows on boot"
                 );
             }
+            // Re-price historical usage rows that had no pricing at
+            // record time (cost_usd = 0 AND tokens > 0). This runs at
+            // boot so the operator sees correct costs immediately after
+            // restart, without having to manually trigger a models.dev
+            // sync. Uses whatever pricing data is already in the sync
+            // table (from a previous sync) plus the static PRICING_TABLE
+            // fallback. If the sync hasn't run yet, only the static
+            // table entries (11 models) will be re-priced; the rest
+            // will be re-priced when the sync runs and the operator
+            // hits the manual recompute endpoint.
+            let repriced = openproxy_core::models_dev_sync::recompute_costs(&w)?;
+            if repriced > 0 {
+                tracing::info!(
+                    repriced,
+                    "re-priced historical usage rows with missing pricing on boot"
+                );
+            }
             // First-run bootstrap: if the api_keys table is empty,
             // create a single `["manage", "chat"]` key and print the
             // plaintext to the logs + stderr. The operator copies it
