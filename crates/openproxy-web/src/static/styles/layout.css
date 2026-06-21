@@ -7,7 +7,8 @@
 #app {
   display: grid;
   grid-template-columns: var(--layout-sidebar-w) 1fr;
-  min-height: 100vh;
+  height: 100vh;
+  overflow: hidden;
   border: var(--border-w) var(--border-style) var(--color-frame-ink);
   margin: 0;
   background: var(--color-bg);
@@ -29,6 +30,7 @@ body.sidebar-collapsed #app {
   display: flex;
   flex-direction: column;
   gap: var(--space-2);
+  overflow-y: auto;
 }
 
 .sidebar .brand {
@@ -126,6 +128,7 @@ body.sidebar-collapsed .sidebar-toggle { text-align: center; }
 main {
   padding: var(--space-6);
   overflow-x: auto;
+  overflow-y: auto;
   min-width: 0;
 }
 
