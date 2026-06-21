@@ -1,6 +1,6 @@
 // views/quota-cell.ts — render the per-account "Quota" cell. The
 // data lives on the Account struct (the server stamps it via
-// `POST /v1/admin/accounts/:id/refresh-quota`), so rendering is
+// `POST /admin/accounts/:id/refresh-quota`), so rendering is
 // just a read of `state.accounts[i].quota_*` — there's no per-cell
 // network call. The refresh button is the only place that triggers
 // a write back to the server.

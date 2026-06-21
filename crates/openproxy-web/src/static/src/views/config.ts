@@ -33,7 +33,7 @@ interface FieldOpts {
   step?: number;
 }
 
-// Shape of the /v1/admin/config response. The server flattens the
+// Shape of the /admin/config response. The server flattens the
 // four sections (timeouts, retries, circuit_breaker, racing) into
 // a single object; each section is optional so a partial payload
 // (e.g. on a transient error) doesn't crash the render. The JS

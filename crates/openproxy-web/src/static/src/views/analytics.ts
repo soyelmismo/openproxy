@@ -36,7 +36,7 @@ import type {
   UsageSummary,
 } from "../lib/types/api.js";
 
-// The `/v1/admin/api-keys` payload shape. Defined locally (not in
+// The `/admin/api-keys` payload shape. Defined locally (not in
 // lib/types/api.ts) because G3 only exported the core structs the
 // rest of the dashboard already uses — the api-key row lives in a
 // separate file on the Rust side. Mirrors the local interface in

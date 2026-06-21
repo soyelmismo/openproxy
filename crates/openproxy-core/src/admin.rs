@@ -98,7 +98,7 @@ pub fn delete_provider(conn: &Connection, id: &ProviderId) -> Result<()> {
     if crate::seed::is_builtin(id.as_str()) {
         return Err(CoreError::Validation(format!(
             "provider '{}' is a built-in and cannot be deleted. Use POST \
-             /v1/admin/providers/{}/active with {{\"active\": false}} to \
+             /admin/providers/{}/active with {{\"active\": false}} to \
              deactivate it instead.",
             id, id
         )));
@@ -624,7 +624,7 @@ pub fn list_combo_targets(conn: &Connection, combo_id: ComboId) -> Result<Vec<co
 
 /// List targets enriched with the model's display name. Used by the admin
 /// API so the dashboard can render the human-readable model id without
-/// doing a per-row roundtrip to `GET /v1/admin/models`. See
+/// doing a per-row roundtrip to `GET /admin/models`. See
 /// [`combos::list_targets_with_model`] for the SQL details.
 pub fn list_combo_targets_with_model(
     conn: &Connection,
@@ -642,7 +642,7 @@ pub fn delete_combo(conn: &Connection, id: ComboId) -> Result<()> {
 /// (the target id is unique on its own), but we validate that the
 /// target belongs to the requested combo as a defense-in-depth check
 /// against a malformed URL like
-/// `DELETE /v1/admin/combos/9999/targets/1` where the target exists
+/// `DELETE /admin/combos/9999/targets/1` where the target exists
 /// but in a different combo.
 ///
 /// Missing rows surface as [`CoreError::Validation`] because there is
@@ -1591,7 +1591,7 @@ mod tests {
     #[test]
     fn delete_combo_target_rejects_cross_combo_id() {
         // The defense-in-depth check: a URL like
-        // DELETE /v1/admin/combos/9999/targets/<t1_id> should fail
+        // DELETE /admin/combos/9999/targets/<t1_id> should fail
         // even though <t1_id> is a real target, because it belongs
         // to a different combo. Without the check, a dashboard bug
         // could silently delete a target from the wrong combo.

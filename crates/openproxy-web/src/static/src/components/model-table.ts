@@ -38,7 +38,7 @@ export function formatContext(tokens: number | null | undefined): string {
 }
 
 // Render the per-model capability badges (vision/tools/reasoning/…).
-// Accepts either a JSON string (the wire shape from /v1/admin/models)
+// Accepts either a JSON string (the wire shape from /admin/models)
 // or a plain object (in case a caller pre-parsed it). Bad input
 // renders as an em-dash rather than throwing — the admin list should
 // never blow up because of a single bad row.
@@ -64,7 +64,7 @@ export function renderCapabilityBadges(json: string | null | undefined): string 
 
 // Build a single <tr> for a model row. The caller passes the
 // already-filtered model object. The row id is the server-side
-// `row_id` (numeric primary key) — the /v1/admin/models/:id/...
+// `row_id` (numeric primary key) — the /admin/models/:id/...
 // endpoints key off that.
 export function renderModelRow(m: Model): string {
   const lastTest: string = m.last_test_status != null

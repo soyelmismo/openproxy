@@ -66,7 +66,7 @@ pub struct ComboTarget {
 /// admin API so the dashboard can render a human-readable model id
 /// (`model_id` = upstream id like `anthropic/claude-3.5-sonnet` and
 /// `model_display_name` = the row's `display_name`) without doing a
-/// per-row roundtrip to `GET /v1/admin/models`.
+/// per-row roundtrip to `GET /admin/models`.
 ///
 /// The pipeline's hot path still uses [`ComboTarget`] — `expand_account_rotation`
 /// and `resolve_target_order` work on the slim shape — so the enriched
@@ -667,7 +667,7 @@ pub fn list_targets(conn: &Connection, combo_id: ComboId) -> Result<Vec<ComboTar
 /// "inactive providers are hidden" filter, and the `priority_order`
 /// semantics are identical to [`list_targets`].
 ///
-/// Used by the admin `GET /v1/admin/combos/:id/targets` endpoint; the
+/// Used by the admin `GET /admin/combos/:id/targets` endpoint; the
 /// pipeline's hot path stays on the slim [`ComboTarget`] shape.
 pub fn list_targets_with_model(
     conn: &Connection,

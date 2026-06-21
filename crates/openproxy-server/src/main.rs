@@ -4,7 +4,7 @@
 //! - `POST /v1/chat/completions`
 //! - `GET  /v1/models`
 //! - `GET  /v1/health`
-//! - `*    /v1/admin/*`  (CRUD for providers, accounts, combos, models, usage)
+//! - `*    /admin/*`  (CRUD for providers, accounts, combos, models, usage)
 //!
 //! Startup sequence:
 //! 0. Install a process-wide rustls crypto provider (mandatory since

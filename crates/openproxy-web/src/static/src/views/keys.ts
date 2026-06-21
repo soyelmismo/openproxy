@@ -18,7 +18,7 @@ import type { Model } from "../lib/types/api.js";
 // file (`crates/openproxy-core/src/api_keys.rs`) and G3 only
 // exported the core ids/enums/structs that the rest of the
 // dashboard already uses. This interface mirrors the columns the
-// `/v1/admin/api-keys` endpoint serialises — `id`, `label`,
+// `/admin/api-keys` endpoint serialises — `id`, `label`,
 // `key_prefix`, `scopes` (array of strings), `allowed_models`
 // (null = all, [] = empty whitelist, [...]= explicit list),
 // `is_active`, `revoked_at`, `last_used_at`, `created_at`,

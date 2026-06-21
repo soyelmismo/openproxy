@@ -131,7 +131,7 @@ export interface DashboardState {
   models: Model[];
   combos: Combo[];
   /** Cached API key rows. The shape is provider-specific; the
-   *  dashboard views hydrate it from `/v1/admin/api-keys`. Kept
+   *  dashboard views hydrate it from `/admin/api-keys`. Kept
    *  loose here (out of G3 scope — G4 will narrow it). */
   apiKeys: unknown[];
   /** Health payload from /web/api/health. `null` until the first

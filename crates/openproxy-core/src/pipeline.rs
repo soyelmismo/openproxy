@@ -4784,7 +4784,7 @@ mod tests {
         let _ = p.run(req).await;
 
         // A usage row should now exist. The dashboard reads this via
-        // /v1/admin/usage/recent.
+        // /admin/usage/recent.
         let writer = pool.writer();
         let count: i64 = writer
             .query_row("SELECT COUNT(*) FROM usage", [], |r| r.get(0))

@@ -71,7 +71,7 @@ function buildModalHtml({ mode, key }: { mode: "create" | "edit"; key?: KeyRow }
                 </label>
                 <label class="scope-item">
                   <input type="checkbox" name="scopes" value="manage" ${scopes.includes("manage") ? "checked" : ""}>
-                  <div class="scope-info"><strong>manage</strong><small>Can use /v1/admin/* (CRUD providers, accounts, etc.)</small></div>
+                  <div class="scope-info"><strong>manage</strong><small>Can use /admin/* (CRUD providers, accounts, etc.)</small></div>
                 </label>
                 <label class="scope-item">
                   <input type="checkbox" name="scopes" value="read" ${scopes.includes("read") ? "checked" : ""}>

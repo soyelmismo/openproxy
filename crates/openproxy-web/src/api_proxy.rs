@@ -1,4 +1,4 @@
-//! Reverse proxy: /web/api/* → ${OPENPROXY_CORE_URL}/v1/admin/*
+//! Reverse proxy: /web/api/* → ${OPENPROXY_CORE_URL}/admin/*
 //!
 //! Evita problemas de CORS y simplifica el cliente (no necesita
 //! OPENPROXY_CORE_URL en el browser).
@@ -36,7 +36,7 @@ async fn websocket_handler(
     } else {
         state.core_url.clone()
     };
-    let mut upstream_url = format!("{}/v1/admin/usage/stream", upstream_base);
+    let mut upstream_url = format!("{}/admin/usage/stream", upstream_base);
     if let Some(token) = &state.admin_token {
         upstream_url = format!("{}?token={}", upstream_url, token);
     }
@@ -82,7 +82,7 @@ async fn websocket_handler(
 
 async fn http_handler(State(state): State<WebState>, req: Request) -> Response {
     let path = req.uri().path();
-    let upstream_path = format!("/v1/admin{}", path);
+    let upstream_path = format!("/admin{}", path);
     let query = req
         .uri()
         .query()
@@ -110,7 +110,7 @@ async fn http_handler(State(state): State<WebState>, req: Request) -> Response {
         upstream_req = upstream_req.header(k.as_str(), v.as_bytes());
     }
     // Inject admin token if the client didn't send one. Required for
-    // admin endpoints that require auth (e.g. /v1/admin/recording).
+    // admin endpoints that require auth (e.g. /admin/recording).
     if !headers.contains_key("authorization") {
         if let Some(token) = &state.admin_token {
             upstream_req = upstream_req.header("authorization", format!("Bearer {}", token));
