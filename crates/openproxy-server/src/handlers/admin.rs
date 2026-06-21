@@ -1415,6 +1415,30 @@ pub async fn sync_models_dev(
     ApiResult::ok(Json(serde_json::json!({ "message": msg })))
 }
 
+/// `POST /v1/admin/usage/recompute-costs` — re-price historical usage
+/// rows that have `cost_usd = 0` AND `prompt_tokens > 0`. This walks
+/// every unpriced row, re-applies `pricing::lookup_with_db` (which
+/// consults the sync table + static table), and updates `cost_usd`.
+///
+/// Use this after a models.dev sync populates new pricing data, or
+/// after manually setting pricing, to backfill costs for rows that
+/// were recorded before pricing was available.
+pub async fn recompute_usage_costs(
+    State(s): State<AppState>,
+) -> ApiResult<Json<serde_json::Value>> {
+    let updated = {
+        let w = s.db_pool().writer();
+        match openproxy_core::models_dev_sync::recompute_costs(&w) {
+            Ok(n) => n,
+            Err(e) => return ApiResult::err(ApiError(e)),
+        }
+    };
+    ApiResult::ok(Json(serde_json::json!({
+        "message": format!("re-priced {} usage rows", updated),
+        "updated": updated,
+    })))
+}
+
 pub async fn refresh_models(
     State(s): State<AppState>,
     Path(id): Path<i64>,
