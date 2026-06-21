@@ -4508,6 +4508,14 @@ mod tests {
     // ---- HIGH fix: OPENPROXY_DASHBOARD_AUTH_BYPASS is an exact-match
     // sentinel, not "any non-empty value". The old behaviour silently
     // granted full admin access for `=false`, `=yes`, `=0`, etc.
+    //
+    // Both auth_bypass tests below mutate the same process-global env var
+    // (`OPENPROXY_DASHBOARD_AUTH_BYPASS`). `#[tokio::test]` runs tests in
+    // parallel by default, so without serialization the two tests race:
+    // one sets the var to `"1"`, the other sets it to `"false"`, and
+    // whichever reads first wins. This mutex serializes them so the
+    // set-var → authenticate → restore-var sequence is atomic.
+    static AUTH_BYPASS_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
     #[tokio::test]
     async fn auth_bypass_sentinel_1_admits_admin_request_without_key() {
@@ -4515,6 +4523,7 @@ mod tests {
         // exists, the request must succeed. This is the legitimate
         // "dev convenience" path and the operator has explicitly opted
         // in.
+        let _guard = AUTH_BYPASS_TEST_LOCK.lock().unwrap();
         let tmp = tempfile::tempdir().expect("tempdir");
         let (state, _key) = make_state_with_key(tmp.path()).await;
         // Drop the API key the helper just created so the request
@@ -4524,12 +4533,10 @@ mod tests {
             w.execute("DELETE FROM api_keys", []).expect("delete keys");
         }
         let headers = HeaderMap::new();
-        // SAFETY: tests in this module are not run in parallel and
-        // each one restores the env var to its previous value (or
-        // removes it) before returning.
+        // SAFETY: the AUTH_BYPASS_TEST_LOCK mutex serializes all tests
+        // that touch this env var, so the set-var → read → restore-var
+        // sequence is atomic with respect to other tests in this module.
         let prev = std::env::var("OPENPROXY_DASHBOARD_AUTH_BYPASS").ok();
-        // SAFETY: set_var is unsafe in 2024 edition; the test runs
-        // single-threaded and restores the value on every exit path.
         unsafe { std::env::set_var("OPENPROXY_DASHBOARD_AUTH_BYPASS", "1") };
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             authenticate_admin_ws(&state, &headers, None)
@@ -4554,6 +4561,7 @@ mod tests {
         // fix restricts the bypass to the exact sentinel `1`; everything
         // else must fall through to normal auth, which fails here because
         // no API key is configured.
+        let _guard = AUTH_BYPASS_TEST_LOCK.lock().unwrap();
         let tmp = tempfile::tempdir().expect("tempdir");
         let (state, _key) = make_state_with_key(tmp.path()).await;
         {
@@ -4562,6 +4570,7 @@ mod tests {
         }
         for sentinel in ["false", "yes", "0", "true", "TRUE", "legacy-token", " "] {
             let headers = HeaderMap::new();
+            // SAFETY: serialized by AUTH_BYPASS_TEST_LOCK.
             let prev = std::env::var("OPENPROXY_DASHBOARD_AUTH_BYPASS").ok();
             unsafe { std::env::set_var("OPENPROXY_DASHBOARD_AUTH_BYPASS", sentinel) };
             let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
