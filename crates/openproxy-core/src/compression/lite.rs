@@ -101,10 +101,17 @@ pub fn compress_tool_results(msgs: &mut Messages) -> Vec<String> {
         if let Some(ref mut content) = msg.content {
             if let Some(text) = content.as_str() {
                 if text.len() > MAX_TOOL_CHARS {
+                    // Find the byte offset of the char at position MAX_TOOL_CHARS,
+                    // so we don't slice in the middle of a multi-byte UTF-8 sequence.
+                    let cut = text
+                        .char_indices()
+                        .nth(MAX_TOOL_CHARS)
+                        .map(|(i, _)| i)
+                        .unwrap_or(text.len());
                     let truncated = format!(
                         "{}…[truncated {} chars]",
-                        &text[..MAX_TOOL_CHARS],
-                        text.len() - MAX_TOOL_CHARS
+                        &text[..cut],
+                        text.len() - cut
                     );
                     *content = Value::String(truncated);
                     applied.push("lite::compress_tool_results".into());
@@ -249,6 +256,55 @@ mod tests {
         let result = msgs[0].content.as_ref().and_then(|c| c.as_str()).unwrap();
         assert!(result.len() < 2500);
         assert!(result.contains("[truncated"));
+    }
+
+    #[test]
+    fn compress_tool_results_handles_multibyte_utf8_at_boundary() {
+        // Regression test for a UTF-8 panic in compress_tool_results.
+        //
+        // Pre-fix the code did `&text[..MAX_TOOL_CHARS]` (i.e. `&text[..2000]`),
+        // which panics with "byte index 2000 is not a char boundary" when byte
+        // 2000 lands in the middle of a multi-byte UTF-8 sequence.
+        //
+        // Construction: 1 ASCII byte + 500 emojis (4 bytes each) = 2001 bytes.
+        // Emoji #500 occupies bytes 1997..=2000, so byte index 2000 is the LAST
+        // byte of that emoji — mid-char, NOT a boundary. Slicing at 2000 would
+        // panic. (Naively using 501 emojis does NOT trigger the bug because byte
+        // 2000 then lands on the start of emoji #501, which is a boundary.)
+        let emoji = "😀"; // U+1F600, 4 bytes in UTF-8
+        let mut content = String::new();
+        content.push('a');
+        for _ in 0..500 {
+            content.push_str(emoji);
+        }
+        content.push_str(" trailing text");
+        assert!(content.len() > MAX_TOOL_CHARS);
+
+        let mut msgs = vec![OpenAIMessage {
+            role: "tool".into(),
+            content: Some(Value::String(content)),
+            name: None,
+            tool_call_id: None,
+            tool_calls: None,
+            extra: Default::default(),
+        }];
+        let applied = compress_tool_results(&mut msgs);
+        assert!(
+            applied
+                .iter()
+                .any(|s| s == "lite::compress_tool_results"),
+            "expected compress_tool_results to fire on >2000 byte content"
+        );
+        // Verify the content was truncated and contains the marker.
+        if let Some(Value::String(s)) = &msgs[0].content {
+            assert!(
+                s.contains("…[truncated"),
+                "expected truncation marker, got: {}",
+                s
+            );
+        } else {
+            panic!("content should still be a string after truncation");
+        }
     }
 
     #[test]

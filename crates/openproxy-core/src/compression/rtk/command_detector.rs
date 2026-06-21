@@ -116,7 +116,7 @@ fn detect_git_diff(text: &str, cmd: Option<&str>) -> Option<(String, f64)> {
 fn detect_git_log(text: &str, cmd: Option<&str>) -> Option<(String, f64)> {
     let cmd_match = cmd.map_or(false, |c| c.starts_with("git log"));
     let content_match = text.contains('\n') && text.lines().any(|l| {
-        l.starts_with("commit ") && l.len() > 40 && l[7..].chars().all(|c| c.is_ascii_hexdigit())
+        l.starts_with("commit ") && l.len() > 40 && l[7..].bytes().all(|b| b.is_ascii_hexdigit())
     });
     if cmd_match && content_match {
         Some(("git-log".into(), 0.95))
@@ -256,7 +256,7 @@ fn detect_error_stacktrace(text: &str, _cmd: Option<&str>) -> Option<(String, f6
     if text.contains("Traceback (most recent call last)")
         || text.contains("panicked at")
         || text.contains("thread '") && text.contains("panicked at")
-        || (text.contains("at ") && text.contains(".rs:") && text.contains(':'))
+        || (text.contains("at ") && text.contains(".rs:"))
     {
         Some(("error-stacktrace".into(), 0.80))
     } else {
