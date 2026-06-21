@@ -172,6 +172,11 @@ const MIGRATIONS: &[Migration] = &[
         name: "000032_add_usage_analytics_indexes",
         sql: include_str!("../../migrations/000032_add_usage_analytics_indexes.sql"),
     },
+    Migration {
+        version: 33,
+        name: "000033_add_model_id_normalized",
+        sql: include_str!("../../migrations/000033_add_model_id_normalized.sql"),
+    },
 ];
 
 /// Apply pending migrations on `conn`. Idempotent: skips versions already in
@@ -394,7 +399,7 @@ mod tests {
                 c.query_row("SELECT COUNT(*) FROM schema_migrations", [], |r| r.get(0))
                     .expect("count")
             });
-        assert_eq!(count_first, 31, "thirty-one migrations applied (versions 1-6, 8-32)");
+        assert_eq!(count_first, 32, "thirty-two migrations applied (versions 1-6, 8-33)");
 
         {
             let mut writer = pool.writer();

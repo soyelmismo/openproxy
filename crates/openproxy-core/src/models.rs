@@ -395,10 +395,10 @@ pub fn upsert_many(
                     discovered_at, expires_at, \
                     context_length, max_output_tokens, \
                     input_modalities_json, output_modalities_json, \
-                    model_type, family, capabilities_json\
+                    model_type, family, capabilities_json, model_id_normalized\
                  ) VALUES (\
                     ?, ?, ?, ?, datetime('now'), datetime('now', '+' || ? || ' seconds'), \
-                    ?, ?, ?, ?, COALESCE(?, 'chat'), ?, ?\
+                    ?, ?, ?, ?, COALESCE(?, 'chat'), ?, ?, ?\
                  ) ON CONFLICT(provider_id, model_id) DO UPDATE SET \
                     display_name = excluded.display_name, \
                     target_format = excluded.target_format, \
@@ -408,7 +408,8 @@ pub fn upsert_many(
                     output_modalities_json = COALESCE(excluded.output_modalities_json, output_modalities_json), \
                     model_type = COALESCE(excluded.model_type, model_type), \
                     family = COALESCE(excluded.family, family), \
-                    capabilities_json = COALESCE(excluded.capabilities_json, capabilities_json)",
+                    capabilities_json = COALESCE(excluded.capabilities_json, capabilities_json), \
+                    model_id_normalized = COALESCE(excluded.model_id_normalized, model_id_normalized)",
             )
             .map_err(|e| CoreError::Database {
                 message: format!("prepare upsert_many: {}", e),
@@ -432,6 +433,8 @@ pub fn upsert_many(
                 inserted_model_ids.push(d.model_id.as_str().to_string());
             }
 
+            let normalized = crate::model_normalize::normalize_model_id(d.model_id.as_str());
+
             let changed = stmt
                 .execute(params![
                     provider.as_str(),            // 1. provider_id
@@ -446,6 +449,7 @@ pub fn upsert_many(
                     d.model_type,                 // 10. model_type
                     d.family,                     // 11. family
                     caps_json,                    // 12. capabilities_json
+                    &normalized,                  // 13. model_id_normalized
                 ])
                 .map_err(|e| CoreError::Database {
                     message: format!("execute upsert_many: {}", e),
@@ -1090,18 +1094,20 @@ pub fn create_custom(
     // The `RETURNING id` clause gives us the rowid regardless of
     // whether the row was inserted or updated, so the caller can
     // chain a `set_test_status` or future operation off of it.
+    let normalized = crate::model_normalize::normalize_model_id(model_id.as_str());
     let sql = format!(
         "INSERT INTO models \
             (provider_id, model_id, display_name, target_format, \
-             discovered_at, expires_at, active, custom) \
-         VALUES (?1, ?2, ?3, ?4, datetime('now'), {expires_expr}, 1, 1) \
+             discovered_at, expires_at, active, custom, model_id_normalized) \
+         VALUES (?1, ?2, ?3, ?4, datetime('now'), {expires_expr}, 1, 1, ?5) \
          ON CONFLICT(provider_id, model_id) DO UPDATE SET \
             display_name = excluded.display_name, \
             target_format = excluded.target_format, \
             discovered_at = datetime('now'), \
             expires_at = {expires_expr}, \
             active = 1, \
-            custom = 1 \
+            custom = 1, \
+            model_id_normalized = COALESCE(excluded.model_id_normalized, model_id_normalized) \
          RETURNING id",
     );
 
@@ -1113,6 +1119,7 @@ pub fn create_custom(
                 model_id.as_str(),
                 display_name,
                 target_format.as_str(),
+                &normalized,
             ],
             |r| r.get(0),
         )
@@ -1230,6 +1237,7 @@ mod tests {
                  model_type             TEXT NOT NULL DEFAULT 'chat',
                  input_modalities_json  TEXT,
                  output_modalities_json TEXT,
+                 model_id_normalized    TEXT,
                  UNIQUE(provider_id, model_id),
                  CHECK (target_format IN ('openai', 'anthropic', 'gemini'))
              );

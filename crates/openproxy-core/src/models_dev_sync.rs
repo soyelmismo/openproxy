@@ -111,13 +111,27 @@ pub fn upsert_models_dev(
     let mut total = 0usize;
 
     for (ext_id, provider_val) in &root {
-        // Map external provider id to our internal ids.
-        let Some(our_ids) = PROVIDER_MAP.iter()
-            .find(|(ext, _)| *ext == ext_id.as_str())
+        // We insert every models.dev provider — not just those in
+        // `PROVIDER_MAP`. The cross-provider matching in
+        // `enrich_models_from_sync` and `pricing::lookup_with_db`
+        // matches by `model_id_normalized` across all providers, so
+        // dropping the gate makes more data available (e.g. for
+        // `nous-research`, `cerebras`, `hyperbolic`, etc.).
+        //
+        // For each models.dev provider we still insert under BOTH the
+        // models.dev `ext_id` AND any mapped local provider ids. The
+        // latter keeps `auto_create_combos` working (it joins on
+        // `provider_id` and needs the local id).
+        let ext_id_str: &str = ext_id.as_str();
+        let mapped_ids: &[&str] = PROVIDER_MAP
+            .iter()
+            .find(|(ext, _)| *ext == ext_id_str)
             .map(|(_, ids)| *ids)
-        else {
-            continue;
-        };
+            .unwrap_or(&[]);
+
+        let mut all_ids: Vec<&str> = Vec::with_capacity(1 + mapped_ids.len());
+        all_ids.push(ext_id_str);
+        all_ids.extend_from_slice(mapped_ids);
 
         // Get models dict for this provider.
         let Some(models_obj) = provider_val.get("models").and_then(|v| v.as_object()) else {
@@ -144,14 +158,17 @@ pub fn upsert_models_dev(
                 .and_then(|m| m.output.as_ref())
                 .map(|v| serde_json::to_string(v).unwrap_or_default());
 
-            for our_id in our_ids {
+            let normalized = crate::model_normalize::normalize_model_id(&model.id);
+
+            for our_id in &all_ids {
                 conn.execute(
                     "INSERT INTO model_capabilities_sync \
                      (provider_id, model_id, context_length, max_output_tokens, \
                       pricing_input_per_1m, pricing_output_per_1m, pricing_cached_per_1m, \
                       tool_call, reasoning, vision, structured_output, \
-                      modalities_input, modalities_output, family, status) \
-                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15) \
+                      modalities_input, modalities_output, family, status, \
+                      model_id_normalized) \
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16) \
                      ON CONFLICT(provider_id, model_id) DO UPDATE SET \
                       context_length       = coalesce(excluded.context_length,       model_capabilities_sync.context_length),
                       max_output_tokens    = coalesce(excluded.max_output_tokens,    model_capabilities_sync.max_output_tokens),
@@ -166,6 +183,7 @@ pub fn upsert_models_dev(
                       modalities_output = coalesce(excluded.modalities_output, model_capabilities_sync.modalities_output),
                       family        = coalesce(excluded.family,        model_capabilities_sync.family),
                       status        = coalesce(excluded.status,        model_capabilities_sync.status),
+                      model_id_normalized = coalesce(excluded.model_id_normalized, model_capabilities_sync.model_id_normalized),
                       fetched_at    = strftime('%Y-%m-%dT%H:%M:%SZ','now')",
                     rusqlite::params![
                         our_id,
@@ -183,6 +201,7 @@ pub fn upsert_models_dev(
                         mod_out,
                         model.family.as_deref(),
                         model.status.as_deref(),
+                        &normalized,
                     ],
                 ).map_err(|e| CoreError::Database {
                     message: format!("models.dev upsert: {e}"),
@@ -229,325 +248,115 @@ async fn fetch_models_dev(upstream: &Arc<UpstreamClient>) -> Result<bytes::Bytes
 
 // ── Enrichment helpers ──────────────────────────────────────────────
 
-/// After a sync, update `models.context_length` from the capabilities
-/// table for rows where `context_length IS NULL`. Also update
-/// `capabilities_json` with synced capabilities.
+/// After a sync, refresh `models.context_length`, `max_output_tokens`,
+/// and `capabilities_json` from the `model_capabilities_sync` table.
 ///
-/// Matching is done in two passes:
-/// 1. Exact `(provider_id, model_id)` match.
-/// 2. Cross-provider model_id match (stripping any `provider/` prefix)
-///    for models whose own provider API doesn't return these values.
+/// Matching is done in a SINGLE pass on the `model_id_normalized`
+/// column — a precomputed, application-side normalization of the
+/// model id that strips provider prefixes, date suffixes (`-20241022`,
+/// `-2024-04-09`), version suffixes (`-v1`, `-2407`), free suffixes
+/// (`:free`, `-free-trial`, `-free`), and normalizes family naming
+/// (`gemini-2_5-pro` → `gemini-2.5-pro`). This lets
+/// `anthropic/claude-3-5-sonnet-20241022` match models.dev's
+/// `claude-3-5-sonnet`.
 ///
-/// Returns the number of `models` rows updated.
+/// ## Refresh behavior (no longer "sticky heuristic")
+///
+/// The previous implementation gated updates on `WHERE context_length
+/// IS NULL`, which meant a heuristic-set value at boot would never be
+/// replaced by models.dev's (more accurate) value. Now we **always
+/// refresh** non-custom rows: the `COALESCE(sync_value, models.<col>)`
+/// form prefers the sync value and falls back to the existing one,
+/// while `WHERE models.custom = 0` skips operator-curated rows so an
+/// admin's hand-set context window survives a sync.
+///
+/// Returns the number of `models` rows touched across all three
+/// enriched columns.
 pub fn enrich_models_from_sync(conn: &Connection) -> Result<usize> {
-    // ── Pass 1: exact (provider_id, model_id) match ─────────────────
-    let ctx_exact = conn.execute(
-        "UPDATE models SET context_length = (
-            SELECT context_length FROM model_capabilities_sync s
-            WHERE s.provider_id = models.provider_id
-              AND s.model_id   = models.model_id
-              AND s.context_length IS NOT NULL
-        ) WHERE context_length IS NULL
-          AND EXISTS (
-            SELECT 1 FROM model_capabilities_sync s
-            WHERE s.provider_id = models.provider_id
-              AND s.model_id   = models.model_id
-              AND s.context_length IS NOT NULL
-          )",
+    // ── context_length: refresh from sync on normalized match ───────
+    let ctx = conn.execute(
+        "UPDATE models SET context_length = COALESCE(
+            (SELECT s.context_length FROM model_capabilities_sync s
+             WHERE s.model_id_normalized = models.model_id_normalized
+               AND s.context_length IS NOT NULL
+             LIMIT 1),
+            models.context_length
+         )
+         WHERE models.custom = 0
+           AND models.model_id_normalized IS NOT NULL
+           AND EXISTS (
+             SELECT 1 FROM model_capabilities_sync s
+             WHERE s.model_id_normalized = models.model_id_normalized
+               AND s.context_length IS NOT NULL
+           )",
         [],
     ).map_err(|e| CoreError::Database {
-        message: format!("enrich context_length: {e}"),
+        message: format!("enrich context_length (normalized): {e}"),
         source: Some(Box::new(e)),
     })?;
 
-    let tok_exact = conn.execute(
-        "UPDATE models SET max_output_tokens = (
-            SELECT max_output_tokens FROM model_capabilities_sync s
-            WHERE s.provider_id = models.provider_id
-              AND s.model_id   = models.model_id
-              AND s.max_output_tokens IS NOT NULL
-        ) WHERE max_output_tokens IS NULL
-          AND EXISTS (
-            SELECT 1 FROM model_capabilities_sync s
-            WHERE s.provider_id = models.provider_id
-              AND s.model_id   = models.model_id
-              AND s.max_output_tokens IS NOT NULL
-          )",
+    // ── max_output_tokens: refresh from sync on normalized match ────
+    let tok = conn.execute(
+        "UPDATE models SET max_output_tokens = COALESCE(
+            (SELECT s.max_output_tokens FROM model_capabilities_sync s
+             WHERE s.model_id_normalized = models.model_id_normalized
+               AND s.max_output_tokens IS NOT NULL
+             LIMIT 1),
+            models.max_output_tokens
+         )
+         WHERE models.custom = 0
+           AND models.model_id_normalized IS NOT NULL
+           AND EXISTS (
+             SELECT 1 FROM model_capabilities_sync s
+             WHERE s.model_id_normalized = models.model_id_normalized
+               AND s.max_output_tokens IS NOT NULL
+           )",
         [],
     ).map_err(|e| CoreError::Database {
-        message: format!("enrich max_output_tokens: {e}"),
+        message: format!("enrich max_output_tokens (normalized): {e}"),
         source: Some(Box::new(e)),
     })?;
 
-    // ── Pass 2: cross-provider model_id match (provider prefix stripped) ──
+    // ── capabilities_json: refresh from sync on normalized match ────
     //
-    // For models whose model_id looks like "provider/name", strip the
-    // prefix and match on the base name. Also try matching the raw
-    // model_id directly (handles models without a provider prefix).
-    //
-    // This catches models from providers that aren't in PROVIDER_MAP
-    // or whose model IDs don't match exactly (e.g. OpenRouter returns
-    // "openai/gpt-4o" but models.dev stores "gpt-4o").
-    let ctx_fallback = conn.execute(
-        "UPDATE models SET context_length = (
-            SELECT s.context_length FROM model_capabilities_sync s
-            WHERE s.model_id = (
-                CASE WHEN instr(models.model_id, '/') > 0
-                     THEN substr(models.model_id, instr(models.model_id, '/') + 1)
-                     ELSE models.model_id
-                END
-            )
-              AND s.context_length IS NOT NULL
-            LIMIT 1
-        ) WHERE context_length IS NULL
-          AND EXISTS (
-            SELECT 1 FROM model_capabilities_sync s
-            WHERE s.model_id = (
-                CASE WHEN instr(models.model_id, '/') > 0
-                     THEN substr(models.model_id, instr(models.model_id, '/') + 1)
-                     ELSE models.model_id
-                END
-            )
-              AND s.context_length IS NOT NULL
-        )",
-        [],
-    ).map_err(|e| CoreError::Database {
-        message: format!("enrich context_length (cross-provider): {e}"),
-        source: Some(Box::new(e)),
-    })?;
-
-    let tok_fallback = conn.execute(
-        "UPDATE models SET max_output_tokens = (
-            SELECT s.max_output_tokens FROM model_capabilities_sync s
-            WHERE s.model_id = (
-                CASE WHEN instr(models.model_id, '/') > 0
-                     THEN substr(models.model_id, instr(models.model_id, '/') + 1)
-                     ELSE models.model_id
-                END
-            )
-              AND s.max_output_tokens IS NOT NULL
-            LIMIT 1
-        ) WHERE max_output_tokens IS NULL
-          AND EXISTS (
-            SELECT 1 FROM model_capabilities_sync s
-            WHERE s.model_id = (
-                CASE WHEN instr(models.model_id, '/') > 0
-                     THEN substr(models.model_id, instr(models.model_id, '/') + 1)
-                     ELSE models.model_id
-                END
-            )
-              AND s.max_output_tokens IS NOT NULL
-        )",
-        [],
-    ).map_err(|e| CoreError::Database {
-        message: format!("enrich max_output_tokens (cross-provider): {e}"),
-        source: Some(Box::new(e)),
-    })?;
-
-    // ── Pass 3: cross-provider, prefix stripped + free suffix stripped ──
-    //
-    // Many models have "-free", ":free", or "-free-trial" suffixes
-    // (e.g. "openai/gpt-4o:free"). After Pass 2 strips the provider
-    // prefix we get "gpt-4o:free" which still won't match the sync
-    // table's "gpt-4o".  This pass strips those suffixes too.
-    //
-    // Uses SQLite replace() which is safe here because ":free" is
-    // distinctive, "-free-trial" is specific, and "-free" in practice
-    // only appears as a suffix on model IDs.
-
-    /// Normalize a model_id by stripping provider prefix and free suffixes.
-    /// Shared by the three Pass 3 queries below.
-    macro_rules! normalized_id {
-        () => {
-            "replace(replace(replace( \
-                CASE WHEN instr(models.model_id, '/') > 0 \
-                     THEN substr(models.model_id, instr(models.model_id, '/') + 1) \
-                     ELSE models.model_id \
-                END, \
-            ':free', ''), '-free-trial', ''), '-free', '')"
-        };
-    }
-
-    let ctx_free = conn.execute(
-        &format!(
-            "UPDATE models SET context_length = (
-                SELECT s.context_length FROM model_capabilities_sync s
-                WHERE s.model_id = {}
-                  AND s.context_length IS NOT NULL
-                LIMIT 1
-            ) WHERE context_length IS NULL
-              AND {} != (
-                CASE WHEN instr(models.model_id, '/') > 0
-                     THEN substr(models.model_id, instr(models.model_id, '/') + 1)
-                     ELSE models.model_id
-                END
-              )
-              AND EXISTS (
-                SELECT 1 FROM model_capabilities_sync s
-                WHERE s.model_id = {}
-                  AND s.context_length IS NOT NULL
-            )",
-            normalized_id!(),
-            normalized_id!(),
-            normalized_id!(),
-        ),
-        [],
-    ).map_err(|e| CoreError::Database {
-        message: format!("enrich context_length (free-suffix): {e}"),
-        source: Some(Box::new(e)),
-    })?;
-
-    let tok_free = conn.execute(
-        &format!(
-            "UPDATE models SET max_output_tokens = (
-                SELECT s.max_output_tokens FROM model_capabilities_sync s
-                WHERE s.model_id = {}
-                  AND s.max_output_tokens IS NOT NULL
-                LIMIT 1
-            ) WHERE max_output_tokens IS NULL
-              AND {} != (
-                CASE WHEN instr(models.model_id, '/') > 0
-                     THEN substr(models.model_id, instr(models.model_id, '/') + 1)
-                     ELSE models.model_id
-                END
-              )
-              AND EXISTS (
-                SELECT 1 FROM model_capabilities_sync s
-                WHERE s.model_id = {}
-                  AND s.max_output_tokens IS NOT NULL
-            )",
-            normalized_id!(),
-            normalized_id!(),
-            normalized_id!(),
-        ),
-        [],
-    ).map_err(|e| CoreError::Database {
-        message: format!("enrich max_output_tokens (free-suffix): {e}"),
-        source: Some(Box::new(e)),
-    })?;
-
-    // ── Capabilities: exact match, then cross-provider, then free-suffix ──
-    let cap_exact = conn.execute(
+    // We use `json_patch` to merge the sync row's capability flags
+    // (vision, tool_calling, reasoning, structured_output) into the
+    // existing `capabilities_json` so any operator-set fields are
+    // preserved. The sync row is only applied when at least one flag
+    // is non-NULL — otherwise the SELECT would emit an all-null patch
+    // that wipes the existing JSON.
+    let cap = conn.execute(
         "UPDATE models SET capabilities_json = (
             SELECT json_patch(
                 coalesce(models.capabilities_json, '{}'),
                 json_object(
-                    'vision',              s.vision,
-                    'tool_calling',        s.tool_call,
-                    'reasoning',           s.reasoning,
-                    'structured_output',   s.structured_output
+                    'vision',            s.vision,
+                    'tool_calling',      s.tool_call,
+                    'reasoning',         s.reasoning,
+                    'structured_output', s.structured_output
                 )
             )
             FROM model_capabilities_sync s
-            WHERE s.provider_id = models.provider_id
-              AND s.model_id   = models.model_id
-              AND (s.vision IS NOT NULL OR s.tool_call IS NOT NULL
-                   OR s.reasoning IS NOT NULL OR s.structured_output IS NOT NULL)
-        ) WHERE EXISTS (
-            SELECT 1 FROM model_capabilities_sync s
-            WHERE s.provider_id = models.provider_id
-              AND s.model_id   = models.model_id
-              AND (s.vision IS NOT NULL OR s.tool_call IS NOT NULL
-                   OR s.reasoning IS NOT NULL OR s.structured_output IS NOT NULL)
-        )",
-        [],
-    ).map_err(|e| CoreError::Database {
-        message: format!("enrich capabilities: {e}"),
-        source: Some(Box::new(e)),
-    })?;
-
-    // Capabilities: cross-provider fallback (prefix stripped).
-    let cap_fallback = conn.execute(
-        "UPDATE models SET capabilities_json = (
-            SELECT json_patch(
-                coalesce(models.capabilities_json, '{}'),
-                json_object(
-                    'vision',              s.vision,
-                    'tool_calling',        s.tool_call,
-                    'reasoning',           s.reasoning,
-                    'structured_output',   s.structured_output
-                )
-            )
-            FROM model_capabilities_sync s
-            WHERE s.model_id = (
-                CASE WHEN instr(models.model_id, '/') > 0
-                     THEN substr(models.model_id, instr(models.model_id, '/') + 1)
-                     ELSE models.model_id
-                END
-            )
+            WHERE s.model_id_normalized = models.model_id_normalized
               AND (s.vision IS NOT NULL OR s.tool_call IS NOT NULL
                    OR s.reasoning IS NOT NULL OR s.structured_output IS NOT NULL)
             LIMIT 1
-        ) WHERE NOT EXISTS (
-            SELECT 1 FROM model_capabilities_sync s
-            WHERE s.provider_id = models.provider_id
-              AND s.model_id   = models.model_id
-        )
-          AND EXISTS (
-            SELECT 1 FROM model_capabilities_sync s
-            WHERE s.model_id = (
-                CASE WHEN instr(models.model_id, '/') > 0
-                     THEN substr(models.model_id, instr(models.model_id, '/') + 1)
-                     ELSE models.model_id
-                END
-            )
-              AND (s.vision IS NOT NULL OR s.tool_call IS NOT NULL
-                   OR s.reasoning IS NOT NULL OR s.structured_output IS NOT NULL)
-        )",
+         )
+         WHERE models.custom = 0
+           AND models.model_id_normalized IS NOT NULL
+           AND EXISTS (
+             SELECT 1 FROM model_capabilities_sync s
+             WHERE s.model_id_normalized = models.model_id_normalized
+               AND (s.vision IS NOT NULL OR s.tool_call IS NOT NULL
+                    OR s.reasoning IS NOT NULL OR s.structured_output IS NOT NULL)
+           )",
         [],
     ).map_err(|e| CoreError::Database {
-        message: format!("enrich capabilities (cross-provider): {e}"),
+        message: format!("enrich capabilities (normalized): {e}"),
         source: Some(Box::new(e)),
     })?;
 
-    // Capabilities: free-suffix fallback (prefix + free suffix stripped).
-    let cap_free = conn.execute(
-        &format!(
-            "UPDATE models SET capabilities_json = (
-                SELECT json_patch(
-                    coalesce(models.capabilities_json, '{{}}'),
-                    json_object(
-                        'vision',              s.vision,
-                        'tool_calling',        s.tool_call,
-                        'reasoning',           s.reasoning,
-                        'structured_output',   s.structured_output
-                    )
-                )
-                FROM model_capabilities_sync s
-                WHERE s.model_id = {}
-                  AND (s.vision IS NOT NULL OR s.tool_call IS NOT NULL
-                       OR s.reasoning IS NOT NULL OR s.structured_output IS NOT NULL)
-                LIMIT 1
-            ) WHERE NOT EXISTS (
-                SELECT 1 FROM model_capabilities_sync s
-                WHERE s.provider_id = models.provider_id
-                  AND s.model_id   = models.model_id
-            )
-              AND {} != (
-                CASE WHEN instr(models.model_id, '/') > 0
-                     THEN substr(models.model_id, instr(models.model_id, '/') + 1)
-                     ELSE models.model_id
-                END
-              )
-              AND EXISTS (
-                SELECT 1 FROM model_capabilities_sync s
-                WHERE s.model_id = {}
-                  AND (s.vision IS NOT NULL OR s.tool_call IS NOT NULL
-                       OR s.reasoning IS NOT NULL OR s.structured_output IS NOT NULL)
-            )",
-            normalized_id!(),
-            normalized_id!(),
-            normalized_id!(),
-        ),
-        [],
-    ).map_err(|e| CoreError::Database {
-        message: format!("enrich capabilities (free-suffix): {e}"),
-        source: Some(Box::new(e)),
-    })?;
-
-    Ok(ctx_exact + tok_exact + ctx_fallback + tok_fallback
-        + ctx_free + tok_free
-        + cap_exact + cap_fallback + cap_free)
+    Ok(ctx + tok + cap)
 }
 
 /// Auto-create combos for models that are active in ≥2 providers.
@@ -792,6 +601,7 @@ mod tests {
                 family            TEXT,
                 status            TEXT,
                 fetched_at        TEXT,
+                model_id_normalized TEXT,
                 PRIMARY KEY (provider_id, model_id)
             )",
         )
@@ -849,10 +659,16 @@ mod tests {
         create_sync_table(&conn);
 
         let count = upsert_models_dev(TEST_JSON.as_bytes(), &conn).unwrap();
-        // opencode → opencode-zen: 2 models × 1 internal id = 2 rows
-        // google → gemini + gemini-cli: 1 model × 2 internal ids = 2 rows
-        // total = 4
-        assert_eq!(count, 4, "should upsert 4 rows (2 for opencode-zen, 2 for gemini/gemini-cli)");
+        // opencode → mapped to opencode-zen locally + inserted under
+        //   its own ext_id "opencode": 2 models × 2 ids = 4 rows.
+        // google → mapped to gemini + gemini-cli locally + inserted
+        //   under its own ext_id "google": 1 model × 3 ids = 3 rows.
+        // total = 7
+        assert_eq!(
+            count,
+            7,
+            "should upsert 7 rows (4 opencode+opencode-zen, 3 google+gemini+gemini-cli)"
+        );
     }
 
     #[test]
@@ -913,5 +729,140 @@ mod tests {
         assert!(price.is_some(), "should fall back to static table");
         let p = price.unwrap();
         assert!((p.input_per_1m - 2.5).abs() < 1e-9);
+    }
+
+    /// End-to-end: a models.dev canonical entry (`claude-3-5-sonnet`)
+    /// should be matched by an OpenRouter-style model id that carries
+    /// a date suffix (`anthropic/claude-3-5-sonnet-20241022`). This
+    /// is the headline bug fixed by `model_id_normalized` — without
+    /// normalization, the date suffix means the sync table's exact
+    /// `model_id` doesn't match the request's model id.
+    #[test]
+    fn lookup_with_db_normalized_matches_date_suffix() {
+        let conn = Connection::open_in_memory().unwrap();
+        create_sync_table(&conn);
+
+        // Seed the sync table with a canonical models.dev entry —
+        // note no date suffix, no provider prefix.
+        let json = r#"{
+            "anthropic": {
+                "id": "anthropic",
+                "models": {
+                    "claude-3-5-sonnet": {
+                        "id": "claude-3-5-sonnet",
+                        "tool_call": true,
+                        "reasoning": false,
+                        "structured_output": true,
+                        "limit": { "context": 200000, "output": 8192 },
+                        "cost": { "input": 3.0, "output": 15.0, "cache_read": 0.3 },
+                        "family": "claude-3.5",
+                        "status": "active"
+                    }
+                }
+            }
+        }"#;
+        upsert_models_dev(json.as_bytes(), &conn).unwrap();
+
+        // Request a model id with the OpenRouter-style prefix and a
+        // date suffix. The exact match fails; the normalized lookup
+        // strips the prefix and the date and finds `claude-3-5-sonnet`.
+        let price = crate::pricing::lookup_with_db(
+            &conn,
+            "openrouter",
+            "anthropic/claude-3-5-sonnet-20241022",
+        );
+        assert!(
+            price.is_some(),
+            "normalized lookup should match the date-suffixed model"
+        );
+        let p = price.unwrap();
+        assert!(
+            (p.input_per_1m - 3.0).abs() < 1e-9,
+            "expected $3.0/1M from claude-3-5-sonnet, got {}",
+            p.input_per_1m
+        );
+        assert!((p.output_per_1m - 15.0).abs() < 1e-9);
+    }
+
+    /// End-to-end: the enrichment path should refresh a non-custom
+    /// model's `context_length` from models.dev via the normalized
+    /// match, even when the request model id has a date suffix that
+    /// the sync table's `model_id` doesn't carry.
+    #[test]
+    fn enrich_via_normalized_matches_date_suffix() {
+        let conn = Connection::open_in_memory().unwrap();
+        // Need a minimal `models` table for `enrich_models_from_sync`
+        // to UPDATE. The production schema lives in migration 000014,
+        // but for the test we only need the columns the enrichment
+        // touches: `model_id`, `provider_id`, `context_length`,
+        // `max_output_tokens`, `custom`, and `model_id_normalized`.
+        conn.execute_batch(
+            "CREATE TABLE models (
+                 provider_id         TEXT NOT NULL,
+                 model_id            TEXT NOT NULL,
+                 context_length      INTEGER,
+                 max_output_tokens   INTEGER,
+                 capabilities_json   TEXT,
+                 custom              INTEGER NOT NULL DEFAULT 0,
+                 model_id_normalized TEXT,
+                 UNIQUE(provider_id, model_id)
+             );",
+        )
+        .unwrap();
+        create_sync_table(&conn);
+
+        // Seed the sync table with a canonical entry.
+        let json = r#"{
+            "anthropic": {
+                "id": "anthropic",
+                "models": {
+                    "claude-3-5-sonnet": {
+                        "id": "claude-3-5-sonnet",
+                        "tool_call": true,
+                        "reasoning": false,
+                        "structured_output": true,
+                        "limit": { "context": 200000, "output": 8192 },
+                        "cost": { "input": 3.0, "output": 15.0, "cache_read": 0.3 },
+                        "family": "claude-3.5",
+                        "status": "active"
+                    }
+                }
+            }
+        }"#;
+        upsert_models_dev(json.as_bytes(), &conn).unwrap();
+
+        // Pre-populate the models table with a row whose model_id
+        // carries a date suffix and whose normalized form should
+        // match the sync table. The heuristic context_length is set
+        // to a deliberately wrong value so we can prove the
+        // enrichment overwrites it (refresh behavior).
+        let normalized =
+            crate::model_normalize::normalize_model_id("anthropic/claude-3-5-sonnet-20241022");
+        conn.execute(
+            "INSERT INTO models (provider_id, model_id, context_length, custom, model_id_normalized) \
+             VALUES ('openrouter', 'anthropic/claude-3-5-sonnet-20241022', 128000, 0, ?1)",
+            rusqlite::params![&normalized],
+        )
+        .unwrap();
+
+        // Run the enrichment.
+        let touched = enrich_models_from_sync(&conn).unwrap();
+        assert!(touched >= 1, "enrichment should touch at least one row");
+
+        // The refresh should have overwritten 128000 with 200000.
+        let ctx: i64 = conn
+            .query_row(
+                "SELECT context_length FROM models \
+                 WHERE provider_id = 'openrouter' \
+                   AND model_id = 'anthropic/claude-3-5-sonnet-20241022'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            ctx, 200000,
+            "context_length should be refreshed to models.dev's 200000, got {}",
+            ctx
+        );
     }
 }

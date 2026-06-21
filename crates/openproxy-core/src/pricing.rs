@@ -85,9 +85,21 @@ pub fn lookup(provider: &str, model: &str) -> Option<Price> {
 /// usage recording path (`cost::record`) where a `&Connection` is
 /// available.
 ///
-/// If exact match fails, tries suffix-agnostic fallbacks:
-///   - Strips `-free`, `:free`, `-free-trial` from the model name
-///   - Appends `-free` to the model name
+/// Tiers (in order, first hit wins):
+///   1. Exact `(provider, model)` match in the sync table.
+///   2. Exact match after stripping common "free" suffixes
+///      (`-free`, `:free`, `-free-trial`).
+///   3. Exact match after appending `-free` / `:free` (user's model
+///      might be the paid version but models.dev only has the -free
+///      variant, or vice versa).
+///   4. **Normalized match** — calls `normalize_model_id` on the
+///      request's model id and matches against the sync table's
+///      precomputed `model_id_normalized` column. This catches date
+///      suffixes (`-20241022`), version suffixes (`-v1`, `-2407`),
+///      provider prefixes (`openai/gpt-4o` → `gpt-4o`), free suffixes
+///      (redundant with tier 2 but harmless), and family naming
+///      variations (`gemini-2_5-pro` → `gemini-2.5-pro`).
+///   5. Static hardcoded `PRICING_TABLE`.
 pub fn lookup_with_db(conn: &Connection, provider: &str, model: &str) -> Option<Price> {
     // Try exact match first.
     if let Some(p) = lookup_exact_in_db(conn, provider, model) {
@@ -112,32 +124,15 @@ pub fn lookup_with_db(conn: &Connection, provider: &str, model: &str) -> Option<
         return Some(p);
     }
 
-    // Fallback 3: strip provider prefix and try cross-provider match.
-    // Handles OpenRouter-style "provider/model" IDs where the sync
-    // table stores the bare model name (e.g. "openai/gpt-4o" → "gpt-4o").
-    // Also handles free suffixes (e.g. "openai/gpt-4o:free" → "gpt-4o").
-    if let Some((_, base)) = model.split_once('/') {
-        // Try bare base first (no suffix).
-        if let Some(p) = lookup_by_model_id_only(conn, base) {
-            return Some(p);
-        }
-        // Try with free suffixes stripped.
-        for stripped in strip_free_suffixes(base) {
-            if let Some(p) = lookup_by_model_id_only(conn, &stripped) {
-                return Some(p);
-            }
-        }
-    }
-
-    // Fallback 4: try matching by model_id only across all providers.
-    // Catches models from providers not in the PROVIDER_MAP.
-    if let Some(p) = lookup_by_model_id_only(conn, model) {
+    // Fallback 3: normalized match against the sync table's
+    // `model_id_normalized` column. `normalize_model_id` strips
+    // provider prefixes, date/version suffixes, free suffixes, and
+    // normalizes family naming, so e.g.
+    //   "anthropic/claude-3-5-sonnet-20241022"
+    // → "claude-3-5-sonnet" which matches the models.dev canonical id.
+    let normalized = crate::model_normalize::normalize_model_id(model);
+    if let Some(p) = lookup_by_normalized(conn, &normalized) {
         return Some(p);
-    }
-    for stripped in strip_free_suffixes(model) {
-        if let Some(p) = lookup_by_model_id_only(conn, &stripped) {
-            return Some(p);
-        }
     }
 
     // Fall back to static table.
@@ -162,22 +157,25 @@ fn lookup_exact_in_db(conn: &Connection, provider: &str, model: &str) -> Option<
     })
 }
 
-/// Lookup pricing by model_id only (ignoring provider). Used as a
-/// cross-provider fallback when the provider-specific lookup fails.
+/// Lookup pricing by `model_id_normalized` (ignoring provider). Used as
+/// the cross-provider normalized fallback when the provider-specific
+/// exact match fails.
 ///
-/// This lets models from providers not in the PROVIDER_MAP (or whose
-/// model IDs don't match exactly) still find their pricing from the
+/// This lets models from providers not in the PROVIDER_MAP, or whose
+/// model IDs include date/version suffixes the sync table doesn't have
+/// (e.g. `anthropic/claude-3-5-sonnet-20241022` → matches the sync
+/// table's `claude-3-5-sonnet` row), still find their pricing from the
 /// models.dev data.
-fn lookup_by_model_id_only(conn: &Connection, model: &str) -> Option<Price> {
+fn lookup_by_normalized(conn: &Connection, normalized: &str) -> Option<Price> {
     use rusqlite::OptionalExtension;
     let result: Result<Option<(f64, f64)>, _> = conn.query_row(
         "SELECT pricing_input_per_1m, pricing_output_per_1m \
          FROM model_capabilities_sync \
-         WHERE model_id = ?1 \
+         WHERE model_id_normalized = ?1 \
            AND pricing_input_per_1m IS NOT NULL \
            AND pricing_output_per_1m IS NOT NULL \
          LIMIT 1",
-        rusqlite::params![model],
+        rusqlite::params![normalized],
         |row| Ok((row.get::<_, f64>(0)?, row.get::<_, f64>(1)?)),
     ).optional();
     result.ok().flatten().map(|(inp, out)| Price {
