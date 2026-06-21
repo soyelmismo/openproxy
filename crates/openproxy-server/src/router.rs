@@ -194,6 +194,14 @@ pub fn build_router(state: AppState) -> Router {
             get(handlers::admin::usage_by_model),
         )
         .route(
+            "/v1/admin/usage/by-provider",
+            get(handlers::admin::usage_by_provider),
+        )
+        .route(
+            "/v1/admin/usage/monthly-by-provider",
+            get(handlers::admin::usage_monthly_by_provider),
+        )
+        .route(
             "/v1/admin/usage/by-account",
             get(handlers::admin::usage_by_account),
         )
