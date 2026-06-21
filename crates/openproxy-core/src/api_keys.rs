@@ -26,6 +26,9 @@ use std::fmt;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ApiKey {
     pub id: ApiKeyId,
+    /// Full SHA-256 hash. Only serialized when the caller opts in via
+    /// `?include_hash=true` — see `ApiKeySafe` for the default shape.
+    #[serde(skip_serializing)]
     pub key_hash: String,
     /// First 12 characters of the plaintext, e.g. `"op_live_abc"`.
     /// Useful for the dashboard's "show me the last 4 chars of my key"

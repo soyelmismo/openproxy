@@ -35,6 +35,9 @@ pub struct AppState {
     db_pool: Arc<db::DbPool>,
     master_key: Arc<MasterKey>,
     adapters: Arc<RwLock<Vec<Arc<dyn adapters::ProviderAdapter>>>>,
+    /// Per-key rate limiter for /v1/chat/completions. Prevents a
+    /// single API key from driving unlimited paid upstream traffic.
+    rate_limiter: Arc<crate::rate_limit::RateLimiter>,
     /// Shared HTTP client used for upstream calls, hot-swappable so
     /// the `timeouts.connect_ms` admin update can rebuild it with a
     /// new `connect_timeout` without restarting the process. The
@@ -484,6 +487,9 @@ impl AppState {
             db_pool,
             master_key,
             adapters,
+            rate_limiter: Arc::new(crate::rate_limit::RateLimiter::new(
+                crate::rate_limit::RateLimitConfig::default(),
+            )),
             http_client: Arc::new(RwLock::new(http_client)),
             upstream_client,
             usage_tx,
@@ -582,6 +588,9 @@ impl AppState {
             db_pool,
             master_key,
             adapters,
+            rate_limiter: Arc::new(crate::rate_limit::RateLimiter::new(
+                crate::rate_limit::RateLimitConfig::default(),
+            )),
             // Test path: still wire `connect_timeout` so unit tests
             // that exercise the HTTP path (e.g. SSE drainers) see
             // the same contract as production. We pull
@@ -619,6 +628,11 @@ impl AppState {
     /// Borrow the SQLite connection pool.
     pub fn db_pool(&self) -> &Arc<db::DbPool> {
         &self.db_pool
+    }
+
+    /// Borrow the per-key rate limiter.
+    pub fn rate_limiter(&self) -> &crate::rate_limit::RateLimiter {
+        &self.rate_limiter
     }
 
     /// Borrow the master encryption key.

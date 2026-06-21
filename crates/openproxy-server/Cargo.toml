@@ -27,6 +27,7 @@ reqwest = { workspace = true }
 uuid = { workspace = true }
 futures = { workspace = true }
 chrono = { workspace = true }
+dashmap = { workspace = true }
 tokio-stream = { workspace = true }
 http-body = "1.0"
 http-body-util = "0.1"
