@@ -4329,46 +4329,6 @@ impl Pipeline {
         cost::record(&conn, &input)?;
         Ok(())
     }
-
-    pub fn emit_started_event(&self, req: &PipelineRequest, target: &ComboTarget, combo: &Combo) {
-        let input = UsageInput {
-            request_id: req.request_id,
-            trace_id: req.trace_id,
-            attempt: 1,
-            provider_id: target.provider_id.clone(),
-            account_id: target.account_id,
-            combo_id: Some(combo.id),
-            combo_target_id: Some(target.id),
-            model_row_id: None,
-            upstream_model_id: String::new(),
-            prompt_tokens: Some(0),
-            completion_tokens: Some(0),
-            connect_ms: Some(0),
-            ttft_ms: Some(0),
-            total_ms: 0,
-            status_code: 0,
-            error_msg: None,
-            race_total: combo.race_size,
-            race_lost: false,
-            api_key_id: req.api_key_id,
-            request_body_json: None,
-            response_body_json: None,
-            request_headers: None,
-            response_headers: None,
-            error_message: None,
-            race_attempts: combo.race_size,
-            is_streaming: true,
-            stream_complete: false,
-            stop_reason: None,
-            // `emit_started_event` runs strictly before
-            // apply_compression; the stats cell is empty here.
-            // The terminal event + DB row will carry the real
-            // numbers once the request completes.
-            compression_savings_pct: None,
-            compression_techniques: None,
-        };
-        crate::usage::broadcast_usage_input(&input);
-    }
 }
 
 /// Phase label for tracing/debug. Currently unused in production code
