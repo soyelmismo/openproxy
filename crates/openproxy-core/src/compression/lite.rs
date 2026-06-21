@@ -35,27 +35,96 @@ pub fn collapse_whitespace(msgs: &mut Messages) -> Vec<String> {
     applied
 }
 
+/// Collapse 3+ consecutive newlines to 2, and trim trailing whitespace
+/// (spaces, tabs) from each line. Single-pass, single allocation.
+///
+/// If the input is already normalized, returns a clone (the caller's
+/// `collapse_whitespace` wrapper checks for equality and skips the
+/// write-back, so the clone is cheap insurance against a false-positive
+/// "changed" detection).
 fn normalize_message_whitespace(s: &str) -> String {
+    // Fast path: if the string has no 3+ newline runs AND no trailing
+    // whitespace before newlines, it's already normalized — clone and
+    // return. This is the common case for well-formed prompts.
+    if !needs_normalization(s) {
+        return s.to_string();
+    }
+
     let mut out = String::with_capacity(s.len());
     let mut newline_run: usize = 0;
+    // Index in `out` where the current line starts (for trailing-ws trim).
+    let mut line_start: usize = 0;
+
     for ch in s.chars() {
         if ch == '\n' {
             newline_run += 1;
             if newline_run <= 2 {
-                out.push(ch);
+                // Trim trailing whitespace of the line we just finished.
+                trim_trailing_ws_in_place(&mut out, line_start);
+                out.push('\n');
+                line_start = out.len();
             }
+            // If newline_run > 2, we suppress the newline (collapse).
             continue;
         }
-        newline_run = 0;
+        if newline_run > 0 {
+            // We were in a (suppressed or not) newline run; the next
+            // non-newline char starts a fresh line.
+            newline_run = 0;
+            line_start = out.len();
+        }
         out.push(ch);
     }
-    // Trim trailing whitespace per line
-    let lines: Vec<&str> = out.split('\n').collect();
-    let trimmed: Vec<&str> = lines
-        .iter()
-        .map(|l| l.trim_end_matches(|c: char| c == ' ' || c == '\t'))
-        .collect();
-    trimmed.join("\n")
+    // Trim trailing whitespace of the last line (no trailing newline).
+    trim_trailing_ws_in_place(&mut out, line_start);
+    out
+}
+
+/// Quick check: does `s` need normalization? Returns true if there's a
+/// 3+ newline run OR any line with trailing whitespace (space/tab before
+/// a newline or end-of-string). Single pass, no allocation.
+fn needs_normalization(s: &str) -> bool {
+    let bytes = s.as_bytes();
+    let mut i = 0;
+    let mut newline_run = 0;
+    let mut line_has_trailing_ws = false;
+    while i < bytes.len() {
+        let b = bytes[i];
+        if b == b'\n' {
+            if line_has_trailing_ws {
+                return true;
+            }
+            newline_run += 1;
+            if newline_run >= 3 {
+                return true;
+            }
+        } else {
+            if newline_run > 0 {
+                newline_run = 0;
+            }
+            // Re-evaluate trailing-ws state based on the current byte
+            // (always overwrites the previous value, so no need to clear
+            // it in the newline-run branch above).
+            line_has_trailing_ws = b == b' ' || b == b'\t';
+        }
+        i += 1;
+    }
+    // Check trailing whitespace on the last line (no newline at EOF).
+    line_has_trailing_ws
+}
+
+/// Trim trailing space/tab bytes from `out` starting at index `from`.
+fn trim_trailing_ws_in_place(out: &mut String, from: usize) {
+    let mut end = out.len();
+    while end > from {
+        let prev = out.as_bytes()[end - 1];
+        if prev == b' ' || prev == b'\t' {
+            end -= 1;
+        } else {
+            break;
+        }
+    }
+    out.truncate(end);
 }
 
 // ─── Technique 2: Dedup system prompts ──────────────────────────────────────
@@ -302,5 +371,54 @@ mod tests {
         assert!(!techniques.is_empty());
         // dedup_system: 1 removed
         assert_eq!(msgs.len(), 3);
+    }
+
+    #[test]
+    fn normalize_whitespace_collapses_3plus_newlines() {
+        let input = "line1\n\n\n\n\nline2";
+        let out = normalize_message_whitespace(input);
+        assert_eq!(out, "line1\n\nline2");
+    }
+
+    #[test]
+    fn normalize_whitespace_keeps_double_newlines() {
+        let input = "para1\n\npara2";
+        let out = normalize_message_whitespace(input);
+        assert_eq!(out, "para1\n\npara2");
+    }
+
+    #[test]
+    fn normalize_whitespace_trims_trailing_spaces() {
+        let input = "line1   \nline2\t\nline3";
+        let out = normalize_message_whitespace(input);
+        assert_eq!(out, "line1\nline2\nline3");
+    }
+
+    #[test]
+    fn normalize_whitespace_trims_trailing_ws_at_eof() {
+        let input = "line1\nline2   ";
+        let out = normalize_message_whitespace(input);
+        assert_eq!(out, "line1\nline2");
+    }
+
+    #[test]
+    fn normalize_whitespace_fast_path_already_normalized() {
+        let input = "line1\nline2\n\npara2";
+        let out = normalize_message_whitespace(input);
+        assert_eq!(out, input);
+    }
+
+    #[test]
+    fn normalize_whitespace_preserves_multibyte_utf8() {
+        let input = "hello 世界   \nnext line";
+        let out = normalize_message_whitespace(input);
+        assert_eq!(out, "hello 世界\nnext line");
+    }
+
+    #[test]
+    fn normalize_whitespace_preserves_emoji() {
+        let input = "😀😀😀\n\n\n😀😀";
+        let out = normalize_message_whitespace(input);
+        assert_eq!(out, "😀😀😀\n\n😀😀");
     }
 }
