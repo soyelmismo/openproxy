@@ -26,7 +26,11 @@
 //! model picker) can address a combo by its alias and the chat path
 //! resolves the alias to the combo's target list.
 
-use axum::{extract::State, Json};
+use axum::{
+    extract::State,
+    http::HeaderMap,
+    Json,
+};
 use openproxy_core::{capabilities, combos, models};
 
 use crate::{
@@ -43,14 +47,32 @@ const DEFAULT_CONTEXT_LENGTH: i64 = 128_000;
 /// has a value. 8 192 is the conservative Claude / GPT-4-class cap.
 const DEFAULT_MAX_OUTPUT_TOKENS: i64 = 8_192;
 
-pub async fn list_models(State(state): State<AppState>) -> ApiResult<Json<serde_json::Value>> {
-    // The inner async block returns the std `Result<T, ApiError>` so
-    // `?` works; the outer function lifts to `ApiResult<T>` via the
-    // blanket `From` impl (see `crate::error`). This pattern is
-    // shared by every handler in this crate — see the module
-    // docstring on `admin.rs` for the full rationale.
+pub async fn list_models(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> ApiResult<Json<serde_json::Value>> {
+    // MEDIUM-4 fix: require a chat-scope API key for /v1/models.
+    // This matches OpenAI's behaviour (their /v1/models requires auth)
+    // and prevents unauthenticated catalog enumeration.
+    //
+    // The anonymous fallback (when zero active keys exist) is preserved
+    // so first-boot before the bootstrap key is created still works.
+    let _api_key_id = match authenticate_chat_or_anonymous(&state, &headers) {
+        Ok(id) => id,
+        Err(e) => return ApiResult::err(e),
+    };
+
+    // Use try_writer_for to avoid blocking under admin lock contention.
+    // The model list is bounded (typically <1000 rows) so 5s is plenty.
     let body: Result<Json<serde_json::Value>, ApiError> = async {
-        let w = state.db_pool().writer();
+        let w = state
+            .db_pool()
+            .try_writer_for(std::time::Duration::from_secs(5))
+            .ok_or_else(|| {
+                ApiError(openproxy_core::CoreError::ServiceUnavailable(
+                    "database busy; retry in a few seconds".into(),
+                ))
+            })?;
         let rows = models::list_active_all(&w)?;
         let combo_rows = combos::list_combos(&w)?;
 
@@ -69,6 +91,72 @@ pub async fn list_models(State(state): State<AppState>) -> ApiResult<Json<serde_
     }
     .await;
     body.into()
+}
+
+/// Authenticate with a chat-scope key, OR allow anonymous when zero
+/// active keys exist (first-boot window). Returns the key id if
+/// authenticated, or None if anonymous.
+fn authenticate_chat_or_anonymous(
+    state: &AppState,
+    headers: &HeaderMap,
+) -> Result<Option<openproxy_core::ids::ApiKeyId>, ApiError> {
+    use openproxy_core::api_keys;
+
+    let token = headers
+        .get("authorization")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|s| s.strip_prefix("Bearer "))
+        .map(str::trim);
+
+    let Some(token) = token else {
+        // No Authorization header — allow only if zero active keys.
+        let w = state.db_pool().writer();
+        let active = api_keys::count_active(&w).map_err(ApiError)?;
+        if active == 0 {
+            return Ok(None); // anonymous
+        }
+        return Err(ApiError(openproxy_core::CoreError::Auth(
+            "missing api key".into(),
+        )));
+    };
+
+    if token.is_empty() {
+        return Err(ApiError(openproxy_core::CoreError::Auth(
+            "missing api key".into(),
+        )));
+    }
+
+    let key_hash = api_keys::hash_key(token);
+    let w = state.db_pool().writer();
+    let key = api_keys::get_by_hash(&w, &key_hash).map_err(ApiError)?;
+    let key = key.ok_or_else(|| {
+        ApiError(openproxy_core::CoreError::Auth("invalid api key".into()))
+    })?;
+
+    if !key.is_active {
+        return Err(ApiError(openproxy_core::CoreError::Auth(
+            "api key revoked or inactive".into(),
+        )));
+    }
+
+    if let Some(exp) = &key.expires_at {
+        if openproxy_core::api_keys::is_expired(Some(exp), chrono::Utc::now())
+            .map_err(|e| ApiError(openproxy_core::CoreError::Internal(format!("expires_at check: {e}"))))?
+        {
+            return Err(ApiError(openproxy_core::CoreError::Auth(
+                "api key expired".into(),
+            )));
+        }
+    }
+
+    if !key.scopes.iter().any(|s| s == "chat") {
+        return Err(ApiError(openproxy_core::CoreError::Auth(
+            "api key lacks required scope".into(),
+        )));
+    }
+
+    let _ = api_keys::touch_last_used(&w, key.id).map_err(ApiError);
+    Ok(Some(key.id))
 }
 
 /// Project a combo into a synthetic catalog entry. The shape mirrors

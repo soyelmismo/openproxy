@@ -154,6 +154,23 @@ async fn run_pipeline(
     let auth_result = authenticate(&state, &headers, &openai_req.model)?;
     let api_key_id: Option<ApiKeyId> = auth_result.as_ref().map(|r| r.key_id);
 
+    // HIGH-3 fix: per-key rate limiting. Default: 60 req/min per key.
+    // Anonymous requests (no key) are rate-limited by client IP.
+    let rl_key = if let Some(id) = api_key_id {
+        format!("key:{}", id.0)
+    } else {
+        // Use the connection's remote addr as the rate-limit key for
+        // anonymous requests. If unavailable, fall back to a shared
+        // "anon" bucket.
+        format!("ip:{}", headers.get("x-forwarded-for").and_then(|v| v.to_str().ok()).unwrap_or("anon"))
+    };
+    if !state.rate_limiter().check(&rl_key) {
+        return Err(ApiError(CoreError::RateLimited {
+            provider: "rate_limiter".into(),
+            retry_after_ms: 60_000,
+        }));
+    }
+
     // 3. Resolve the routing plan.
     //
     // Two paths:

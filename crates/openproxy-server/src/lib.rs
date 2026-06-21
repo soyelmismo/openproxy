@@ -11,3 +11,4 @@ pub mod middleware;
 pub mod router;
 pub mod handlers;
 pub mod disconnect;
+pub mod rate_limit;
