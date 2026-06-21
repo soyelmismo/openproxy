@@ -3325,25 +3325,78 @@ impl Pipeline {
                         // (OpenCode, continue.dev, etc.) receive the standard
                         // `reasoning_content` format instead of the provider's
                         // ad-hoc `reasoning` / `reasoning_details`.
+                        //
+                        // PERF (chunk-forwarding CPU reduction):
+                        // When `normalize_nonstandard_reasoning_fields`
+                        // returns `None` (the common case — most upstreams
+                        // send clean `reasoning_content` or no reasoning at
+                        // all), we can reuse the original `line_bytes`
+                        // BytesMut — which already contains `data: <payload>`
+                        // (without the trailing `\n` because `split_to(pos)`
+                        // excludes the `\n` and `advance(1)` skips it) — by
+                        // appending just `\n\n` in-place for the SSE
+                        // terminator and freezing. This eliminates, per chunk
+                        // on the common fast path:
+                        //   - one heap allocation (`BytesMut::with_capacity`)
+                        //   - one full-payload memcpy
+                        //     (`extend_from_slice(payload.as_bytes())`)
+                        //   - two small memcpys (`data: ` + `\n\n`)
+                        // The only cost is appending 2 bytes to `line_bytes`,
+                        // which usually does NOT reallocate: `split_to`
+                        // preserves the parent buffer's capacity, and the
+                        // parent is `BytesMut::with_capacity(8192)` reserved
+                        // up to 16 KiB above. Even on the rare case where it
+                        // does realloc, the cost is amortized across the
+                        // buffer's lifetime, not per chunk.
                         let normalized = crate::sse_accumulator::normalize_nonstandard_reasoning_fields(json_payload);
-                        let payload = normalized.as_deref().unwrap_or(json_payload);
-                        if let Some(a) = acc.as_mut() {
-                            a.append_openai_raw(payload);
-                            // Also capture reasoning_content on the fast path
-                            // (the slow path above does this via
-                            // `parse_openai_sse_line` + `a.append_reasoning`).
-                            if let Some(rc) = crate::sse_accumulator::extract_reasoning_content(payload) {
-                                if !rc.is_empty() {
-                                    a.append_reasoning(rc);
+
+                        // Accumulator work — scoped so the borrows on
+                        // `line_bytes` (via `line` -> `json_payload`) are
+                        // released before we move `line_bytes` for the
+                        // in-place reframe below. NLL releases the borrow at
+                        // the end of this block.
+                        {
+                            let payload = normalized.as_deref().unwrap_or(json_payload);
+                            if let Some(a) = acc.as_mut() {
+                                a.append_openai_raw(payload);
+                                // Also capture reasoning_content on the fast
+                                // path (the slow path above does this via
+                                // `parse_openai_sse_line` + `a.append_reasoning`).
+                                if let Some(rc) = crate::sse_accumulator::extract_reasoning_content(payload) {
+                                    if !rc.is_empty() {
+                                        a.append_reasoning(rc);
+                                    }
                                 }
                             }
                         }
-                        // No metadata — forward (possibly normalized) JSON directly.
-                        // Pre-format as SSE frame to avoid per-chunk String alloc.
-                        let mut sse_frame = bytes::BytesMut::with_capacity(payload.len() + 16);
-                        sse_frame.extend_from_slice(b"data: ");
-                        sse_frame.extend_from_slice(payload.as_bytes());
-                        sse_frame.extend_from_slice(b"\n\n");
+
+                        // Build the SSE frame.
+                        let sse_bytes = if let Some(norm) = normalized {
+                            // Slow path: normalized payload differs from the
+                            // original upstream line. Build a fresh frame with
+                            // the normalized JSON. Only hits chunks that
+                            // carry non-standard reasoning fields
+                            // (`reasoning` / `reasoning_details`) — a small
+                            // fraction of total chunks.
+                            let mut sse_frame = bytes::BytesMut::with_capacity(norm.len() + 16);
+                            sse_frame.extend_from_slice(b"data: ");
+                            sse_frame.extend_from_slice(norm.as_bytes());
+                            sse_frame.extend_from_slice(b"\n\n");
+                            sse_frame.freeze()
+                        } else {
+                            // Fast path: forward the original `data: <payload>`
+                            // line directly. `line_bytes` is the BytesMut
+                            // returned by `buffer.split_to(pos)` and contains
+                            // the upstream's `data: <payload>` bytes verbatim
+                            // (we did not modify it — only `line`/`json_payload`
+                            // were borrows for substring checks). Append `\n\n`
+                            // for the SSE event terminator and freeze.
+                            // Zero allocation, zero payload memcpy.
+                            let mut frame = line_bytes;
+                            frame.extend_from_slice(b"\n\n");
+                            frame.freeze()
+                        };
+
                         // Race cancellation guard: check before
                         // writing to the shared sink.
                         if req.race_cancel.as_ref().is_some_and(|rc| rc.is_cancelled()) {
@@ -3358,7 +3411,7 @@ impl Pipeline {
                                 }, trace_id,
                             );
                         }
-                        if let Err(e) = sink.send(sse_frame.freeze()).await {
+                        if let Err(e) = sink.send(sse_bytes).await {
                             let err = match e {
                                 crate::race_sink::StreamSinkError::Lost => CoreError::RaceLost,
                                 crate::race_sink::StreamSinkError::Closed => CoreError::ClientDisconnected,

@@ -88,3 +88,10 @@ webpki-roots = { version = "0.26", optional = true }
 # dep — `cargo build --release` of the production binary
 # does NOT pull this in.
 tokio = { workspace = true, features = ["test-util"] }
+# Benchmark harness for the SSE chunk-forwarding hot path.
+# Used by `cargo bench -p openproxy-core --bench sse_fast_path`.
+criterion = { version = "0.5", default-features = false, features = ["cargo_bench_support"] }
+
+[[bench]]
+name = "sse_fast_path"
+harness = false
