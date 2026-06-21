@@ -3061,15 +3061,9 @@ impl Pipeline {
                 // Drop the upstream response body — closes the TCP
                 // connection / sends RST_STREAM to stop token billing.
                 drop(stream);
-                return self.record_and_fail_with_trace_id(
-                    req, combo, target,
-                    FailureContext {
-                        attempt, race_size,
-                        err: &CoreError::ClientDisconnected,
-                        started, model: Some(model),
-                        connect_ms: Some(connect_and_send_ms),
-                        ttft_ms, status_code: 499,
-                    }, trace_id,
+                return self.fail_stream_client_disconnected(
+                    req, combo, target, attempt, race_size, started, model,
+                    connect_and_send_ms, ttft_ms, trace_id,
                 );
             }
 
@@ -3253,15 +3247,9 @@ impl Pipeline {
                 // Anthropic branches below — a single atomic load
                 // vs. repeating the same check at every send site.
                 if req.race_cancel.as_ref().is_some_and(|rc| rc.is_cancelled()) {
-                    return self.record_and_fail_with_trace_id(
-                        req, combo, target,
-                        FailureContext {
-                            attempt, race_size,
-                            err: &CoreError::ClientDisconnected,
-                            started, model: Some(model),
-                            connect_ms: Some(connect_and_send_ms),
-                            ttft_ms, status_code: 499,
-                        }, trace_id,
+                    return self.fail_stream_client_disconnected(
+                        req, combo, target, attempt, race_size, started, model,
+                        connect_and_send_ms, ttft_ms, trace_id,
                     );
                 }
 
@@ -3280,27 +3268,15 @@ impl Pipeline {
                         // Race cancellation guard: if another target
                         // already won, discard this chunk instantly.
                         if req.race_cancel.as_ref().is_some_and(|rc| rc.is_cancelled()) {
-                            return self.record_and_fail_with_trace_id(
-                                req, combo, target,
-                                FailureContext {
-                                    attempt, race_size,
-                                    err: &CoreError::ClientDisconnected,
-                                    started, model: Some(model),
-                                    connect_ms: Some(connect_and_send_ms),
-                                    ttft_ms, status_code: 499,
-                                }, trace_id,
+                            return self.fail_stream_client_disconnected(
+                                req, combo, target, attempt, race_size, started, model,
+                                connect_and_send_ms, ttft_ms, trace_id,
                             );
                         }
                         if let Err(crate::race_sink::StreamSinkError::Lost) = sink.send(SSE_DONE_BYTES.clone()).await {
-                            return self.record_and_fail_with_trace_id(
-                                req, combo, target,
-                                FailureContext {
-                                    attempt, race_size,
-                                    err: &CoreError::RaceLost,
-                                    started, model: Some(model),
-                                    connect_ms: Some(connect_and_send_ms),
-                                    ttft_ms, status_code: 499,
-                                }, trace_id,
+                            return self.fail_stream_race_lost(
+                                req, combo, target, attempt, race_size, started, model,
+                                connect_and_send_ms, ttft_ms, trace_id,
                             );
                         }
                         done_sent = true;
@@ -3363,31 +3339,15 @@ impl Pipeline {
                                 // target won the race, discard this
                                 // chunk to prevent interleaving.
                                 if req.race_cancel.as_ref().is_some_and(|rc| rc.is_cancelled()) {
-                                    return self.record_and_fail_with_trace_id(
-                                        req, combo, target,
-                                        FailureContext {
-                                            attempt, race_size,
-                                            err: &CoreError::ClientDisconnected,
-                                            started, model: Some(model),
-                                            connect_ms: Some(connect_and_send_ms),
-                                            ttft_ms, status_code: 499,
-                                        }, trace_id,
+                                    return self.fail_stream_client_disconnected(
+                                        req, combo, target, attempt, race_size, started, model,
+                                        connect_and_send_ms, ttft_ms, trace_id,
                                     );
                                 }
                                 if let Err(e) = sink.send(sse_bytes).await {
-                                    let err = match e {
-                                        crate::race_sink::StreamSinkError::Lost => CoreError::RaceLost,
-                                        crate::race_sink::StreamSinkError::Closed => CoreError::ClientDisconnected,
-                                    };
-                                    return self.record_and_fail_with_trace_id(
-                                        req, combo, target,
-                                        FailureContext {
-                                            attempt, race_size,
-                                            err: &err,
-                                            started, model: Some(model),
-                                            connect_ms: Some(connect_and_send_ms),
-                                            ttft_ms, status_code: err.http_status(),
-                                        }, trace_id,
+                                    return self.fail_on_sink_send_error(
+                                        e, req, combo, target, attempt, race_size, started, model,
+                                        connect_and_send_ms, ttft_ms, trace_id,
                                     );
                                 }
                             }
@@ -3474,31 +3434,15 @@ impl Pipeline {
                         // Race cancellation guard: check before
                         // writing to the shared sink.
                         if req.race_cancel.as_ref().is_some_and(|rc| rc.is_cancelled()) {
-                            return self.record_and_fail_with_trace_id(
-                                req, combo, target,
-                                FailureContext {
-                                    attempt, race_size,
-                                    err: &CoreError::ClientDisconnected,
-                                    started, model: Some(model),
-                                    connect_ms: Some(connect_and_send_ms),
-                                    ttft_ms, status_code: 499,
-                                }, trace_id,
+                            return self.fail_stream_client_disconnected(
+                                req, combo, target, attempt, race_size, started, model,
+                                connect_and_send_ms, ttft_ms, trace_id,
                             );
                         }
                         if let Err(e) = sink.send(sse_bytes).await {
-                            let err = match e {
-                                crate::race_sink::StreamSinkError::Lost => CoreError::RaceLost,
-                                crate::race_sink::StreamSinkError::Closed => CoreError::ClientDisconnected,
-                            };
-                            return self.record_and_fail_with_trace_id(
-                                req, combo, target,
-                                FailureContext {
-                                    attempt, race_size,
-                                    err: &err,
-                                    started, model: Some(model),
-                                    connect_ms: Some(connect_and_send_ms),
-                                    ttft_ms, status_code: err.http_status(),
-                                }, trace_id,
+                            return self.fail_on_sink_send_error(
+                                e, req, combo, target, attempt, race_size, started, model,
+                                connect_and_send_ms, ttft_ms, trace_id,
                             );
                         }
                     }
@@ -3559,27 +3503,15 @@ impl Pipeline {
                             // the upstream's [DONE] so the post-loop
                             // sentinel below does not double-emit.
                             if req.race_cancel.as_ref().is_some_and(|rc| rc.is_cancelled()) {
-                                return self.record_and_fail_with_trace_id(
-                                    req, combo, target,
-                                    FailureContext {
-                                        attempt, race_size,
-                                        err: &CoreError::ClientDisconnected,
-                                        started, model: Some(model),
-                                        connect_ms: Some(connect_and_send_ms),
-                                        ttft_ms, status_code: 499,
-                                    }, trace_id,
+                                return self.fail_stream_client_disconnected(
+                                    req, combo, target, attempt, race_size, started, model,
+                                    connect_and_send_ms, ttft_ms, trace_id,
                                 );
                             }
                             if let Err(crate::race_sink::StreamSinkError::Lost) = sink.send(SSE_DONE_BYTES.clone()).await {
-                                return self.record_and_fail_with_trace_id(
-                                    req, combo, target,
-                                    FailureContext {
-                                        attempt, race_size,
-                                        err: &CoreError::RaceLost,
-                                        started, model: Some(model),
-                                        connect_ms: Some(connect_and_send_ms),
-                                        ttft_ms, status_code: 499,
-                                    }, trace_id,
+                                return self.fail_stream_race_lost(
+                                    req, combo, target, attempt, race_size, started, model,
+                                    connect_and_send_ms, ttft_ms, trace_id,
                                 );
                             }
                             done_sent = true;
@@ -3680,10 +3612,6 @@ impl Pipeline {
                             // Pre-format as SSE frame to avoid per-chunk String alloc + axum Event overhead.
                             let sse_frame = crate::sse::build_sse_frame(&json_str);
                             if let Err(e) = sink.send(sse_frame).await {
-                                let err = match e {
-                                    crate::race_sink::StreamSinkError::Lost => CoreError::RaceLost,
-                                    crate::race_sink::StreamSinkError::Closed => CoreError::ClientDisconnected,
-                                };
                                 // C4 fix: a real client disconnect
                                 // mid-stream previously returned
                                 // `PipelineResult { error: None }`
@@ -3701,23 +3629,10 @@ impl Pipeline {
                                 // still goes into the row because
                                 // `record_attempt_raw_with_tokens`
                                 // accepts an `Option<u32>` pair.
-                                return self.record_and_fail_with_trace_id(
-                                    req,
-                                    combo,
-                                    target,
-                                    FailureContext {
-                                    attempt,
-                                    race_size,
-                                    err: &err,
-                                    started,
-                                    model: Some(model),
-                                    connect_ms: Some(connect_and_send_ms),
-                                    ttft_ms,
-                                    status_code: err.http_status(),
-},
-                                    // client closed request
-                                    trace_id,
-);
+                                return self.fail_on_sink_send_error(
+                                    e, req, combo, target, attempt, race_size, started, model,
+                                    connect_and_send_ms, ttft_ms, trace_id,
+                                );
                             }
                         }
                     }
@@ -3744,15 +3659,9 @@ impl Pipeline {
             // target already won, discard residual buffer data
             // to prevent chunk interleaving.
             if req.race_cancel.as_ref().is_some_and(|rc| rc.is_cancelled()) {
-                return self.record_and_fail_with_trace_id(
-                    req, combo, target,
-                    FailureContext {
-                        attempt, race_size,
-                        err: &CoreError::ClientDisconnected,
-                        started, model: Some(model),
-                        connect_ms: Some(connect_and_send_ms),
-                        ttft_ms, status_code: 499,
-                    }, trace_id,
+                return self.fail_stream_client_disconnected(
+                    req, combo, target, attempt, race_size, started, model,
+                    connect_and_send_ms, ttft_ms, trace_id,
                 );
             }
             if let Ok(line) = std::str::from_utf8(&buffer) {
@@ -3788,15 +3697,9 @@ impl Pipeline {
                         if !chunk.done {
                             let sse_bytes = chunk.into_sse_bytes();
                             if let Err(crate::race_sink::StreamSinkError::Lost) = sink.send(sse_bytes).await {
-                                return self.record_and_fail_with_trace_id(
-                                    req, combo, target,
-                                    FailureContext {
-                                        attempt, race_size,
-                                        err: &CoreError::RaceLost,
-                                        started, model: Some(model),
-                                        connect_ms: Some(connect_and_send_ms),
-                                        ttft_ms, status_code: 499,
-                                    }, trace_id,
+                                return self.fail_stream_race_lost(
+                                    req, combo, target, attempt, race_size, started, model,
+                                    connect_and_send_ms, ttft_ms, trace_id,
                                 );
                             }
                         }
@@ -3856,27 +3759,15 @@ impl Pipeline {
             // Guard against race cancellation — a loser should not
             // send [DONE] to the shared sink.
             if req.race_cancel.as_ref().is_some_and(|rc| rc.is_cancelled()) {
-                return self.record_and_fail_with_trace_id(
-                    req, combo, target,
-                    FailureContext {
-                        attempt, race_size,
-                        err: &CoreError::ClientDisconnected,
-                        started, model: Some(model),
-                        connect_ms: Some(connect_and_send_ms),
-                        ttft_ms, status_code: 499,
-                    }, trace_id,
+                return self.fail_stream_client_disconnected(
+                    req, combo, target, attempt, race_size, started, model,
+                    connect_and_send_ms, ttft_ms, trace_id,
                 );
             }
             if let Err(crate::race_sink::StreamSinkError::Lost) = sink.send(SSE_DONE_BYTES.clone()).await {
-                return self.record_and_fail_with_trace_id(
-                    req, combo, target,
-                    FailureContext {
-                        attempt, race_size,
-                        err: &CoreError::RaceLost,
-                        started, model: Some(model),
-                        connect_ms: Some(connect_and_send_ms),
-                        ttft_ms, status_code: 499,
-                    }, trace_id,
+                return self.fail_stream_race_lost(
+                    req, combo, target, attempt, race_size, started, model,
+                    connect_and_send_ms, ttft_ms, trace_id,
                 );
             }
         }
@@ -4128,6 +4019,109 @@ impl Pipeline {
             final_response: None,
             attempts: attempt,
         }
+    }
+
+    /// Race-cancel mid-stream: another target won the race, or the
+    /// client disconnected. Used by the per-line / per-chunk
+    /// `race_cancel.is_cancelled()` guards in
+    /// [`Self::dispatch_upstream_streaming`]. Records a failure row
+    /// with `err = CoreError::ClientDisconnected` (HTTP 499),
+    /// `connect_ms = connect_and_send_ms`, and the streaming loop's
+    /// accumulated `ttft_ms`. The `trace_id` argument is the
+    /// streaming function's local `trace_id` (NOT `req.trace_id`)
+    /// so the row's `trace_id` matches the StageEvent's.
+    fn fail_stream_client_disconnected(
+        &self,
+        req: &PipelineRequest,
+        combo: &Combo,
+        target: &ComboTarget,
+        attempt: u8,
+        race_size: u8,
+        started: Instant,
+        model: &Model,
+        connect_ms: u64,
+        ttft_ms: Option<u64>,
+        trace_id: TraceId,
+    ) -> PipelineResult {
+        self.record_and_fail_with_trace_id(
+            req, combo, target,
+            FailureContext {
+                attempt, race_size,
+                err: &CoreError::ClientDisconnected,
+                started, model: Some(model),
+                connect_ms: Some(connect_ms), ttft_ms,
+                status_code: 499,
+            }, trace_id,
+        )
+    }
+
+    /// Sink-send returned `StreamSinkError::Lost` — another target
+    /// already won the race, so this target's bytes would interleave
+    /// with the winner's. Records a failure row with
+    /// `err = CoreError::RaceLost` (HTTP 499),
+    /// `connect_ms = connect_and_send_ms`, and the streaming loop's
+    /// accumulated `ttft_ms`.
+    fn fail_stream_race_lost(
+        &self,
+        req: &PipelineRequest,
+        combo: &Combo,
+        target: &ComboTarget,
+        attempt: u8,
+        race_size: u8,
+        started: Instant,
+        model: &Model,
+        connect_ms: u64,
+        ttft_ms: Option<u64>,
+        trace_id: TraceId,
+    ) -> PipelineResult {
+        self.record_and_fail_with_trace_id(
+            req, combo, target,
+            FailureContext {
+                attempt, race_size,
+                err: &CoreError::RaceLost,
+                started, model: Some(model),
+                connect_ms: Some(connect_ms), ttft_ms,
+                status_code: 499,
+            }, trace_id,
+        )
+    }
+
+    /// Sink-send returned `Lost` or `Closed`. Maps the
+    /// `StreamSinkError` to the matching `CoreError` variant
+    /// (`Lost → RaceLost`, `Closed → ClientDisconnected`) and records
+    /// a failure row carrying that variant's `http_status()`
+    /// (499 in both cases today, but derived from the variant so a
+    /// future re-mapping flows through automatically). Same
+    /// `connect_ms` / `ttft_ms` / `trace_id` plumbing as the other
+    /// two streaming-failure helpers.
+    fn fail_on_sink_send_error(
+        &self,
+        e: crate::race_sink::StreamSinkError,
+        req: &PipelineRequest,
+        combo: &Combo,
+        target: &ComboTarget,
+        attempt: u8,
+        race_size: u8,
+        started: Instant,
+        model: &Model,
+        connect_ms: u64,
+        ttft_ms: Option<u64>,
+        trace_id: TraceId,
+    ) -> PipelineResult {
+        let err = match e {
+            crate::race_sink::StreamSinkError::Lost => CoreError::RaceLost,
+            crate::race_sink::StreamSinkError::Closed => CoreError::ClientDisconnected,
+        };
+        self.record_and_fail_with_trace_id(
+            req, combo, target,
+            FailureContext {
+                attempt, race_size,
+                err: &err,
+                started, model: Some(model),
+                connect_ms: Some(connect_ms), ttft_ms,
+                status_code: err.http_status(),
+            }, trace_id,
+        )
     }
 
     /// Build a [`UsageInput`] and call [`crate::cost::record`]. A
