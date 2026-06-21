@@ -11,6 +11,7 @@ pub mod routing;
 pub mod db;
 pub mod models;
 pub mod adapters;
+pub mod model_normalize;
 pub mod providers;
 pub mod accounts;
 pub mod api_keys;
