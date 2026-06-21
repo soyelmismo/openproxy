@@ -203,6 +203,22 @@ impl UpstreamClient {
                     // is the intended trade-off now that the client is
                     // shared.
                     .pool_max_idle_per_host(32)
+                    // Bug fix (SendRequest at 6-9ms): the default
+                    // `pool_idle_timeout` is 90s. Many upstreams
+                    // (Sambanova, ollama-cloud, etc.) close idle
+                    // connections after 30-60s without sending a
+                    // visible FIN/RST to the client. When hyper
+                    // reuses such a stale connection, the request
+                    // fails immediately with `SendRequest` (the
+                    // body was partially written before the kernel
+                    // noticed the broken socket). Setting
+                    // `pool_idle_timeout(20s)` makes hyper close
+                    // idle connections BEFORE the upstream does,
+                    // forcing a fresh dial on the next request. The
+                    // fresh dial costs ~50-200ms but is 100%
+                    // reliable, vs the 6-9ms `SendRequest` failure
+                    // which produces a 502 for the user.
+                    .pool_idle_timeout(std::time::Duration::from_secs(20))
                     .build(connector);
             let pool = Pool::new();
             spawn_eviction_loop(pool.clone());
@@ -646,9 +662,17 @@ impl HyperDispatchDyn for ProductionDispatch {
                 .await
                 .map_err(|e| {
                     let phase = hyper_source_phase(&e);
+                    // Bug fix: include the `source()` chain in the
+                    // error message so the operator can see WHY the
+                    // request failed (e.g. "connection closed before
+                    // message completed", "broken pipe", etc.). The
+                    // previous `e.to_string()` only gave
+                    // "client error (SendRequest)" which is useless
+                    // for debugging.
+                    let msg = format_hyper_error(&e);
                     match phase {
                         Some(p) => UpstreamError::Timeout(p),
-                        None => UpstreamError::Http(e.to_string()),
+                        None => UpstreamError::Http(msg),
                     }
                 })
         })
@@ -657,6 +681,27 @@ impl HyperDispatchDyn for ProductionDispatch {
     fn phase_hint(&self) -> Option<UpstreamPhase> {
         None
     }
+}
+
+/// Format a hyper-util legacy `Error` with its full `source()` chain
+/// so the operator can see the root cause (e.g. "connection closed
+/// before message completed", "broken pipe", "tls handshake eof").
+/// The default `Display` only gives "client error (SendRequest)"
+/// which is useless for debugging.
+#[cfg(feature = "upstream-hyper")]
+fn format_hyper_error(e: &hyper_util::client::legacy::Error) -> String {
+    use std::error::Error as _;
+    let mut parts: Vec<String> = vec![e.to_string()];
+    let mut current: Option<&(dyn std::error::Error + 'static)> = e.source();
+    while let Some(c) = current {
+        let s = c.to_string();
+        // Skip empty/duplicate source strings.
+        if !s.is_empty() && !parts.contains(&s) {
+            parts.push(s);
+        }
+        current = c.source();
+    }
+    parts.join(": ")
 }
 
 /// Walk the `source()` chain of a hyper `Error` looking for a

@@ -266,12 +266,23 @@ function renderToolCallArgsBlock(args: unknown): string {
  *  calling parseOpenAiChatResponse.
  *  @param streamingHint - set to true when the request is streaming
  *        but the response body is null (e.g. interrupted mid-stream). */
-function renderResponseTab(response: unknown, streamingHint?: boolean): string {
+function renderResponseTab(response: unknown, streamingHint?: boolean, createdAt?: string): string {
   // Empty state.
   if (response == null) {
-    const placeholder = streamingHint
+    let placeholder = streamingHint
       ? "Response body not captured (streaming request may have been interrupted)."
       : NO_RESPONSE_PLACEHOLDER_TEXT;
+    // Bug fix: same expiry hint as the request tab — if the row is
+    // older than the recording TTL, the response body was pruned.
+    if (createdAt != null && createdAt !== "—") {
+      const created = new Date(createdAt).getTime();
+      if (!Number.isNaN(created)) {
+        const ageSec = (Date.now() - created) / 1000;
+        if (ageSec > 300) {
+          placeholder += ` This log is ${Math.round(ageSec / 60)} min old — response bodies are pruned after the recording TTL (5 min default).`;
+        }
+      }
+    }
     return `<section class="log-detail-section" data-log-tab="response">
       <h4>Response</h4>
       <p class="muted log-detail-placeholder">${escapeHtml(placeholder)}</p>
@@ -452,8 +463,15 @@ function renderResponseTab(response: unknown, streamingHint?: boolean): string {
 
 /** Render the Request tab. Returns the full
  *  `<section data-log-tab="request">…</section>` HTML. Handles the
- *  empty / object / non-object fallback shapes per the spec. */
-function renderRequestTab(requestBody: unknown): string {
+ *  empty / object / non-object fallback shapes per the spec.
+ *
+ *  `createdAt` is the row's `created_at` timestamp (ISO string). When
+ *  the request body is null, we use it to compute the row's age and
+ *  show a more helpful message: if the row is older than the
+ *  recording TTL (5 min default), the body was likely pruned by
+ *  `prune_expired_recording_bodies`; otherwise recording was OFF
+ *  when the request was made. */
+function renderRequestTab(requestBody: unknown, createdAt?: string): string {
   // Empty state: same predicate as the previous inline logic.
   const hasRequestBody: boolean = requestBody != null
     && !(typeof requestBody === "string" && requestBody.trim() === "")
@@ -461,9 +479,24 @@ function renderRequestTab(requestBody: unknown): string {
          && !Array.isArray(requestBody) && Object.keys(requestBody as object).length === 0
          && JSON.stringify(requestBody) === "{}");
   if (!hasRequestBody) {
+    // Bug fix: distinguish "never recorded" from "expired by TTL".
+    // The recording TTL default is 300s (5 min). If the row is
+    // older than that, the body was pruned by the background
+    // sweep; the operator should know this so they don't think
+    // the dashboard is broken.
+    let expiryHint = "";
+    if (createdAt != null && createdAt !== "—") {
+      const created = new Date(createdAt).getTime();
+      if (!Number.isNaN(created)) {
+        const ageSec = (Date.now() - created) / 1000;
+        if (ageSec > 300) {
+          expiryHint = ` This log is ${Math.round(ageSec / 60)} min old — request/response bodies are pruned after the recording TTL (5 min default) to bound DB growth. Re-run the request with recording ON to capture a fresh copy.`;
+        }
+      }
+    }
     return `<section class="log-detail-section" data-log-tab="request">
       <h4>Request</h4>
-      <p class="muted">No request body recorded.</p>
+      <p class="muted">No request body recorded.${expiryHint}</p>
     </section>`;
   }
 
@@ -746,8 +779,8 @@ export function renderLogDetailModal(log: LogDetailLog): string {
             <button class="detail-tab" data-action="logDetailTab" data-arg1="raw">Raw</button>
           </div>
           <div class="log-detail-content" id="log-detail-content">
-            ${renderRequestTab(requestBody)}
-            ${renderResponseTab(response, isStreaming)}
+            ${renderRequestTab(requestBody, createdAt)}
+            ${renderResponseTab(response, isStreaming, createdAt)}
             ${errors != null
               ? jsonSection("Errors", errors, "errors")
               : `<section class="log-detail-section" data-log-tab="errors">
