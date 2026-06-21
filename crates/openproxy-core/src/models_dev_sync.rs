@@ -216,7 +216,59 @@ pub fn upsert_models_dev(
 }
 
 /// Fetch raw JSON bytes from models.dev.
+///
+/// Wraps a single HTTP attempt in a retry loop: up to `MAX_RETRIES`
+/// attempts with exponential backoff (2s, 4s, 8s). A single transient
+/// network failure no longer means a 24h wait for the next scheduler
+/// tick — we retry in place before bubbling the error up to the
+/// scheduler, which would otherwise skip this tick and wait for the
+/// next one.
 async fn fetch_models_dev(upstream: &Arc<UpstreamClient>) -> Result<bytes::Bytes> {
+    const MAX_RETRIES: u32 = 3;
+    const INITIAL_BACKOFF: std::time::Duration = std::time::Duration::from_secs(2);
+
+    let mut backoff = INITIAL_BACKOFF;
+    for attempt in 1..=MAX_RETRIES {
+        match fetch_models_dev_once(upstream).await {
+            Ok(bytes) => {
+                if attempt > 1 {
+                    tracing::info!(attempt, "models.dev fetch succeeded after retry");
+                }
+                return Ok(bytes);
+            }
+            Err(e) => {
+                if attempt == MAX_RETRIES {
+                    tracing::warn!(
+                        attempt,
+                        error = %e,
+                        "models.dev fetch failed after all retries"
+                    );
+                    return Err(e);
+                }
+                tracing::warn!(
+                    attempt,
+                    next_backoff_ms = backoff.as_millis() as u64,
+                    error = %e,
+                    "models.dev fetch failed; retrying"
+                );
+                tokio::time::sleep(backoff).await;
+                backoff *= 2;
+            }
+        }
+    }
+    // Unreachable: the loop body returns on every iteration — `Ok`
+    // immediately, `Err` either after sleeping (mid-loop) or after
+    // logging + returning on the final attempt. Kept to satisfy the
+    // function's return type without `unreachable!` panicking in
+    // release builds if the const is ever changed to 0.
+    Err(CoreError::UpstreamConnection(
+        "models.dev fetch: retry loop exhausted".into(),
+    ))
+}
+
+/// Single attempt to fetch raw JSON bytes from models.dev. Used by
+/// `fetch_models_dev`'s retry loop.
+async fn fetch_models_dev_once(upstream: &Arc<UpstreamClient>) -> Result<bytes::Bytes> {
     let req = UpstreamRequest::get(MODELS_DEV_URL);
     let cancel = CancellationToken::new();
     let response = upstream
@@ -486,8 +538,13 @@ pub async fn start_sync_scheduler(
     upstream_client: Arc<UpstreamClient>,
     check_interval_secs: u64,
 ) {
+    // `tokio::time::interval` fires immediately on the first call to
+    // `tick()`, so the first sync runs at boot instead of waiting
+    // `check_interval_secs`. The previous code skipped the first
+    // immediate tick (`tick.tick().await` before the loop), which meant
+    // a fresh boot with `MODELS_DEV_SYNC_ENABLED=true` didn't sync
+    // until `check_interval_secs` (24h by default) after startup.
     let mut tick = tokio::time::interval(std::time::Duration::from_secs(check_interval_secs));
-    tick.tick().await; // Skip first immediate tick.
 
     loop {
         tick.tick().await;

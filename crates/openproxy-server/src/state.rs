@@ -411,15 +411,19 @@ impl AppState {
             .map(|v| v == "1" || v == "true")
             .unwrap_or(false);
         if models_dev_enabled {
+            let interval_secs: u64 = std::env::var("MODELS_DEV_SYNC_INTERVAL_SECS")
+                .ok()
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(86_400);
+            tracing::info!(interval_secs, "starting models.dev sync scheduler");
             tokio::spawn(async move {
                 openproxy_core::models_dev_sync::start_sync_scheduler(
                     sync_pool,
                     sync_upstream,
-                    86_400, // check every 24h
+                    interval_secs,
                 )
                 .await;
             });
-            tracing::info!("models.dev sync: enabled (24h interval)");
         }
 
         // 8. Background model discovery scheduler (Gate A).
