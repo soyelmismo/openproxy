@@ -17,25 +17,26 @@ type DetectorFn = fn(&str, Option<&str>) -> Option<(String, f64)>;
 
 /// Lista de detectores registrados. Cada detector recibe el texto completo
 /// y el comando detectado (si se pudo extraer), y retorna `(id, confidence)` si matchea.
-fn detectors() -> Vec<DetectorFn> {
-    vec![
-        detect_git_status,
-        detect_git_diff,
-        detect_git_log,
-        detect_git_branch,
-        detect_cargo_test,
-        detect_cargo_build,
-        detect_npm_test,
-        detect_npm_install,
-        detect_docker_ps,
-        detect_docker_logs,
-        detect_kubernetes,
-        detect_shell_ls,
-        detect_shell_grep,
-        detect_error_stacktrace,
-        detect_generic_error,
-    ]
-}
+///
+/// `const` slice — zero allocation per `detect()` call. (Previously this
+/// was a `Vec<DetectorFn>` rebuilt on every call.)
+const DETECTORS: &[DetectorFn] = &[
+    detect_git_status,
+    detect_git_diff,
+    detect_git_log,
+    detect_git_branch,
+    detect_cargo_test,
+    detect_cargo_build,
+    detect_npm_test,
+    detect_npm_install,
+    detect_docker_ps,
+    detect_docker_logs,
+    detect_kubernetes,
+    detect_shell_ls,
+    detect_shell_grep,
+    detect_error_stacktrace,
+    detect_generic_error,
+];
 
 /// Extrae el comando de las primeras líneas del texto.
 pub fn extract_command(text: &str) -> Option<String> {
@@ -63,7 +64,7 @@ pub fn detect(text: &str) -> Detection {
     let cmd_ref = command.as_deref();
 
     let mut best: Option<(String, f64)> = None;
-    for detector in detectors() {
+    for detector in DETECTORS {
         if let Some(result) = detector(text, cmd_ref) {
             let (_id, conf) = &result;
             if best.as_ref().map_or(true, |b: &(String, f64)| *conf > b.1) {
