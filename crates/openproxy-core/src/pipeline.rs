@@ -49,6 +49,18 @@ const MAX_SSE_LINE_BYTES: usize = 1_048_576;
 /// `Bytes::clone()` is atomic ref-count increment — no heap alloc.
 pub const SSE_DONE_BYTES: bytes::Bytes = bytes::Bytes::from_static(b"data: [DONE]\n\n");
 
+/// PERF: skip leading spaces in a byte slice. Equivalent to
+/// `str::trim_start()` but works on raw bytes and avoids the
+/// UTF-8 scan that `trim_start` does (even though we know it's
+/// ASCII spaces).
+fn skip_leading_spaces(bytes: &[u8]) -> &[u8] {
+    let mut i = 0;
+    while i < bytes.len() && bytes[i] == b' ' {
+        i += 1;
+    }
+    &bytes[i..]
+}
+
 /// PERF: single-pass check for whether an OpenAI SSE payload needs
 /// full JSON parsing. Replaces 2-3 separate `contains()` calls (each
 /// a full memchr scan) with a single byte-level scan that checks for
@@ -3222,7 +3234,7 @@ impl Pipeline {
             // the executor poll other tasks (other streaming requests,
             // the broadcast channel, etc.) before continuing.
             chunk_count = chunk_count.wrapping_add(1);
-            if chunk_count % 64 == 0 {
+            if chunk_count & 63 == 0 {
                 tokio::task::yield_now().await;
             }
 
@@ -3356,11 +3368,21 @@ impl Pipeline {
                 // deltas with no parsing needed — just forward the raw
                 // JSON payload from the SSE line.
                 if target_format == crate::models::TargetFormat::Openai {
-                    let json_payload = match line.strip_prefix("data:") {
-                        Some(rest) => rest.trim_start(),
-                        None => continue,
+                    // PERF: use byte-level operations to avoid str
+                    // allocations. SSE lines are `data: <payload>` —
+                    // we match the 5-byte prefix directly on raw bytes.
+                    if line_bytes.len() < 5 || &line_bytes[..5] != b"data:" {
+                        continue;
+                    }
+                    let payload_bytes = &line_bytes[5..]; // skip "data:"
+                    let json_payload_bytes = skip_leading_spaces(payload_bytes);
+                    // Use unchecked — we already know it's UTF-8
+                    // (from_utf8_unchecked was called on line_bytes above).
+                    let json_payload = unsafe {
+                        std::str::from_utf8_unchecked(json_payload_bytes)
                     };
-                    if json_payload == "[DONE]" {
+                    // Fast [DONE] check: compare first 6 bytes.
+                    if json_payload.len() == 6 && json_payload.as_bytes() == b"[DONE]" {
                         // Race cancellation guard: if another target
                         // already won, discard this chunk instantly.
                         if req.race_cancel.as_ref().is_some_and(|rc| rc.is_cancelled()) {
@@ -3391,6 +3413,8 @@ impl Pipeline {
                     // saves ~50µs of pure scanning CPU.
                     let needs_parse = sse_payload_needs_parse(json_payload);
                     if needs_parse {
+                        // Pass the full SSE line (with "data:" prefix)
+                        // because parse_openai_sse_line expects it.
                         match crate::sse::parse_openai_sse_line(line) {
                             Ok(Some(mut chunk)) => {
                                 if chunk.usage.is_some() {
