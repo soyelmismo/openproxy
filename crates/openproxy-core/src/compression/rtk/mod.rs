@@ -4,7 +4,6 @@
 /// filtros declarativos para eliminar ruido, deduplicar y truncar.
 
 pub mod command_detector;
-pub mod deduplicator;
 pub mod line_filter;
 pub mod smart_truncate;
 
@@ -12,6 +11,13 @@ use crate::translation::OpenAIMessage;
 use line_filter::{apply_line_filter, get_builtin_filter, get_generic_filter};
 
 /// Aplica compresión RTK a los mensajes. Retorna las técnicas aplicadas.
+///
+/// Each builtin filter and the generic filter are looked up from
+/// `once_cell::sync::Lazy` statics (built once at first use, then shared
+/// via `Arc<CompiledFilter>`). `apply_line_filter` returns
+/// `Vec<&'static str>` rule names — converted to `Vec<String>` at this
+/// boundary to preserve the `Vec<String>` API expected by
+/// `compression::apply_compression`.
 pub fn apply_rtk(msgs: &mut Vec<OpenAIMessage>) -> Vec<String> {
     let mut all_techniques: Vec<String> = Vec::new();
 
@@ -39,7 +45,7 @@ pub fn apply_rtk(msgs: &mut Vec<OpenAIMessage>) -> Vec<String> {
                 let (filtered, rules) = apply_line_filter(&content_str, &filter);
                 if filtered != content_str {
                     msg.content = Some(serde_json::Value::String(filtered));
-                    all_techniques.extend(rules);
+                    all_techniques.extend(rules.into_iter().map(String::from));
                     continue; // ya aplicamos filtro específico, no aplicar el genérico
                 }
             }
@@ -50,7 +56,7 @@ pub fn apply_rtk(msgs: &mut Vec<OpenAIMessage>) -> Vec<String> {
         let (filtered, rules) = apply_line_filter(&content_str, &generic);
         if filtered != content_str {
             msg.content = Some(serde_json::Value::String(filtered));
-            all_techniques.extend(rules);
+            all_techniques.extend(rules.into_iter().map(String::from));
         }
     }
 
