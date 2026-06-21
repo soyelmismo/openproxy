@@ -58,11 +58,17 @@ pub fn ensure_bootstrap_key(conn: &Connection, label: &str) -> Result<Option<Boo
     // WARN, not INFO, because the operator must take action
     // (copy the key). A regular INFO would scroll past too easily
     // in a default `RUST_LOG=info` deployment.
+    //
+    // SECURITY: do NOT include `plaintext` as a structured field —
+    // log aggregators (Datadog, CloudWatch, Loki) index structured
+    // fields and store them indefinitely, making exfiltration trivial.
+    // The plaintext is only sent to stderr (eprintln!) below, which
+    // goes to the console/journalctl but not to the structured log
+    // pipeline.
     tracing::warn!(
-        plaintext = %plaintext,
         key_id = key.id.0,
         prefix = ?key.key_prefix,
-        "Bootstrap API key created. Save the plaintext now — it will not be shown again.",
+        "Bootstrap API key created. Check stderr (journalctl) for the plaintext — it is not stored in plaintext anywhere.",
     );
     // Also surface on stderr: containerized deployments often have
     // log collection that swallows WARN from the application layer,
