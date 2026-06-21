@@ -49,7 +49,13 @@ const ROUTES: readonly Route[] = [
   { name: "combo-detail", pattern: /^#?\/combos\/(\d+)$/, mount: ((ctx: string) => mountCombos({ detailId: parseInt(ctx, 10) })) as ViewMount },
   { name: "keys", pattern: /^#?\/keys$/, mount: mountKeys as ViewMount },
   { name: "key-usage", pattern: /^#?\/keys\/(\d+)\/usage$/, mount: ((ctx: string) => mountKeyUsage(parseInt(ctx, 10))) as ViewMount },
-  { name: "analytics", pattern: /^#?\/analytics$/, mount: mountAnalytics as ViewMount },
+  // The analytics view carries a `?range=<preset>` query suffix in
+  // the hash (e.g. `#/analytics?range=this_month`) so the selected
+  // time-range survives a refresh. The pattern tolerates an optional
+  // trailing `?...` without capturing it — `mountAnalytics` reads
+  // the preset directly off `location.hash`. Other routes are
+  // unaffected.
+  { name: "analytics", pattern: /^#?\/analytics(?:\?.*)?$/, mount: mountAnalytics as ViewMount },
   { name: "logs", pattern: /^#?\/logs$/, mount: mountLogs as ViewMount },
   { name: "config", pattern: /^#?\/config$/, mount: mountConfig as ViewMount },
 ];

@@ -354,6 +354,46 @@ export interface ByAccountRow {
   total_cost_usd: number;
 }
 
+/** Fila de la agregación `by_provider` — como `ByModelRow` pero
+ *  agrupada solo por `provider_id`. El dashboard la usa para la
+ *  tabla de totales por provider en el rango seleccionado.
+ *  @see crates/openproxy-core/src/usage.rs:305 */
+export interface ByProviderRow {
+  provider_id: string;
+  unique_requests: number;
+  total_rows: number;
+  winners: number;
+  total_prompt_tokens: number;
+  total_completion_tokens: number;
+  total_cost_usd: number;
+}
+
+/** Fila de la agregación `monthly_by_provider` — `provider_id` × mes.
+ *  `month` es `strftime('%Y-%m', created_at)` (e.g. `"2026-06"`). El
+ *  frontend pivota estas filas en una matriz providers × months.
+ *  @see crates/openproxy-core/src/usage.rs:321 */
+export interface MonthlyByProviderRow {
+  provider_id: string;
+  /** `"YYYY-MM"` — el mes calendario en UTC. */
+  month: string;
+  unique_requests: number;
+  total_rows: number;
+  total_prompt_tokens: number;
+  total_completion_tokens: number;
+  total_cost_usd: number;
+}
+
+/** Valores aceptados por el query param `?preset=` de los endpoints
+ *  `/usage/*`. `custom` significa "sin preset" (el server usa los
+ *  `from`/`to` explícitos o, si ambos faltan, devuelve todo el
+ *  histórico). El resto se resuelve a una ventana `(from, to)` en
+ *  `crates/openproxy-server/src/handlers/admin.rs:resolve_preset`.
+ *  @see crates/openproxy-server/src/handlers/admin.rs:168 */
+export type UsagePreset =
+  | "today" | "7d" | "30d"
+  | "this_month" | "last_month" | "last_6_months"
+  | "ytd" | "custom";
+
 /** Roll-up agregado sobre un set filtrado de usage rows.
  *  @see crates/openproxy-core/src/usage.rs:264 */
 export interface UsageSummary {
@@ -369,6 +409,12 @@ export interface UsageSummary {
   /** `null` cuando ningún row del filtro tiene `ttft_ms`. */
   avg_ttft_ms: number | null;
   avg_total_ms: number;
+  /** Rows where `cost_usd = 0.0 AND prompt_tokens > 0` — consumieron
+   *  tokens (el pricing debería haber aplicado) pero cost quedó en 0,
+   *  indicando pricing faltante al grabar. El dashboard lo surfacea
+   *  como un banner amarillo.
+   *  @see crates/openproxy-core/src/usage.rs:283 */
+  rows_with_null_pricing: number;
 }
 
 /** Fila devuelta por el long-polling feed del dashboard.
