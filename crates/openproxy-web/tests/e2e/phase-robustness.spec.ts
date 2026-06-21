@@ -186,6 +186,9 @@ test('Live Logs: stale streaming stage freezes the latency ticker', async ({ pag
     timestamp: fiveSecondsAgo,
     provider_id: 'openrouter',
     upstream_model_id: 'gpt-4o-mini',
+    stop_reason: null,
+    compression_savings_pct: null,
+    compression_techniques: null,
   };
 
   // Inject the streaming event and a matching row, then trigger
@@ -268,6 +271,9 @@ test('Live Logs: stale streaming stage freezes the latency ticker', async ({ pag
         race_total: null,
         race_attempts: null,
         error_message: null,
+        stop_reason: null,
+        compression_savings_pct: null,
+        compression_techniques: null,
       });
       logs.stagesByTraceId?.set(args.traceId, args.event);
 
@@ -323,6 +329,9 @@ test('Live Logs: finalized row freezes ticker at the row total_ms', async ({ pag
     timestamp: sixSecondsAgo,
     provider_id: 'openrouter',
     upstream_model_id: 'gpt-4o-mini',
+    stop_reason: null,
+    compression_savings_pct: null,
+    compression_techniques: null,
   };
   // Finalized row: total_ms is set, status_code is 200, and the
   // row is NOT in-flight (is_streaming=false, stream_complete=true).
@@ -350,6 +359,9 @@ test('Live Logs: finalized row freezes ticker at the row total_ms', async ({ pag
     race_total: null,
     race_attempts: null,
     error_message: null,
+    stop_reason: null,
+    compression_savings_pct: null,
+    compression_techniques: null,
   };
 
   await page.evaluate(
