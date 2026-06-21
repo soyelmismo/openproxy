@@ -761,7 +761,7 @@ pub fn list_active_all(conn: &Connection) -> Result<Vec<Model>> {
     Ok(out)
 }
 
-/// List every row in `models`. Used by the `/v1/admin/models` admin
+/// List every row in `models`. Used by the `/admin/models` admin
 /// endpoint which surfaces both live and recently-expired entries (the
 /// `active` field tells the UI which ones are currently routable).
 pub fn list_all(conn: &Connection) -> Result<Vec<Model>> {
@@ -1000,7 +1000,7 @@ pub fn find_active_by_provider_and_name(
 }
 
 /// Stamp the test-status columns on a model row. `status` is the raw
-/// HTTP status code from the most recent `POST /v1/admin/models/:id/test`
+/// HTTP status code from the most recent `POST /admin/models/:id/test`
 /// call; pass `0` to mean "request never reached the upstream"
 /// (DNS / connect / TLS errors are folded into this single value).
 ///

@@ -273,7 +273,7 @@ export interface ComboTarget {
 
 /** `ComboTarget` enriquecido con metadata del model (display name, etc.)
  *  y datos de cooldown. Lo devuelve el endpoint admin para que el
- *  dashboard no haga un roundtrip extra a `/v1/admin/models`.
+ *  dashboard no haga un roundtrip extra a `/admin/models`.
  *  @see crates/openproxy-core/src/combos.rs:81 */
 export interface ComboTargetWithModel extends ComboTarget {
   /** Nombre del sub-combo upstream; `null` para flat targets. */
@@ -490,7 +490,7 @@ export interface RecentUsageRow {
 // Inputs — cuerpos que el dashboard POSTea al server.
 // ----------------------------------------------------------------------------
 
-/** POST `/v1/admin/providers`. `auth_type` y `format` viajan como
+/** POST `/admin/providers`. `auth_type` y `format` viajan como
  *  strings (no enums) y el server los parsea a los enums tipados.
  *  @see crates/openproxy-core/src/admin.rs:45 */
 export interface CreateProviderInput {
@@ -502,7 +502,7 @@ export interface CreateProviderInput {
   extra_headers_json: string | null;
 }
 
-/** PATCH `/v1/admin/providers/:id`. Partial-update; todos los campos
+/** PATCH `/admin/providers/:id`. Partial-update; todos los campos
  *  opcionales. `auto_activate_keyword` usa la convención de tres
  *  estados para distinguir "no tocar" de "set a null":
  *    - `undefined` (omitir el campo): no se toca la columna.
@@ -519,7 +519,7 @@ export interface UpdateProviderInput {
   auto_activate_keyword?: string | null;
 }
 
-/** POST `/v1/admin/accounts`. `api_key` se encripta antes de guardarse.
+/** POST `/admin/accounts`. `api_key` se encripta antes de guardarse.
  *  `priority` default 100 (lower = higher).
  *  @see crates/openproxy-core/src/admin.rs:234 */
 export interface CreateAccountInput {
@@ -531,7 +531,7 @@ export interface CreateAccountInput {
   extra_config_json: string | null;
 }
 
-/** POST `/v1/admin/combos`.
+/** POST `/admin/combos`.
  *  @see crates/openproxy-core/src/admin.rs:451 */
 export interface CreateComboInput {
   name: string;
@@ -541,7 +541,7 @@ export interface CreateComboInput {
   race_size: number | null;
 }
 
-/** POST `/v1/admin/combos/:id/targets`. XOR entre `model_row_id` y
+/** POST `/admin/combos/:id/targets`. XOR entre `model_row_id` y
  *  `sub_combo_id`: exactamente uno de los dos.
  *  @see crates/openproxy-core/src/admin.rs:470 */
 export interface AddTargetInput {
@@ -552,7 +552,7 @@ export interface AddTargetInput {
   priority_order: number;
 }
 
-/** POST `/v1/admin/models/custom` (creación a mano, no-discovery).
+/** POST `/admin/models/custom` (creación a mano, no-discovery).
  *  @see crates/openproxy-core/src/admin.rs:745 */
 export interface CreateCustomModelInput {
   provider_id: string;
@@ -564,7 +564,7 @@ export interface CreateCustomModelInput {
   ttl_seconds: number;
 }
 
-/** POST `/v1/admin/models/bulk-toggle`.
+/** POST `/admin/models/bulk-toggle`.
  *  @see crates/openproxy-core/src/admin.rs:828 */
 export interface BulkToggleInput {
   provider_id: string;

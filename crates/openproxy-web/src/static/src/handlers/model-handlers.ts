@@ -490,7 +490,7 @@ export async function updateAutoActivate(providerId: string, e: Event | null): P
 
 export { showCustomModelForm, closeCustomModelForm } from "../components/model-custom-form.js";
 
-// POST /v1/admin/models/custom — hand-create a model row. The
+// POST /admin/models/custom — hand-create a model row. The
 // server stamps the row with `custom = 1` and `active = 1` so
 // it's routable as soon as the modal closes. We do the close-
 // modal-then-refetch dance to avoid the re-render of the parent

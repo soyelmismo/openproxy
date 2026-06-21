@@ -185,7 +185,7 @@ pub fn record(conn: &Connection, input: &UsageInput) -> Result<UsageId> {
             // written verbatim from `pipeline.rs` (raw, unredacted), while
             // the parallel `error_msg` / `error_msg_redacted` columns
             // carry the redacted form. `log-detail.js` and
-            // `GET /v1/admin/usage/:id` prefer `error_message` over
+            // `GET /admin/usage/:id` prefer `error_message` over
             // `error_msg_redacted`, so the redaction was being bypassed.
             // Mirror the redacted form into `error_message` so the two
             // columns stay in sync and neither leaks the raw upstream

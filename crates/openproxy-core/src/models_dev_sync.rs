@@ -15,7 +15,7 @@
 //!
 //! Set `MODELS_DEV_SYNC_ENABLED=true` in the environment to enable
 //! the periodic background sync (default: off). The sync can also be
-//! triggered manually via `POST /v1/admin/models/sync-models-dev`.
+//! triggered manually via `POST /admin/models/sync-models-dev`.
 
 use crate::error::{CoreError, Result};
 use crate::upstream::{CancellationToken, TimeoutProfile, UpstreamClient, UpstreamRequest};

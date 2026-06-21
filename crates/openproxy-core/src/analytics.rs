@@ -1,7 +1,7 @@
 //! Analytics: latency percentiles (t-digest) and race statistics.
 //!
 //! See docs/mvp-spec.md §7 (Analytics Queries). This module backs the
-//! `/v1/admin/usage/latency` and `/v1/admin/usage/races` admin endpoints.
+//! `/admin/usage/latency` and `/admin/usage/races` admin endpoints.
 //!
 //! Two queries live here:
 //!

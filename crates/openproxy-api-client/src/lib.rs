@@ -1,6 +1,6 @@
 //! openproxy-api-client: cliente HTTP para la admin API de openproxy.
 //!
-//! Consume los endpoints `/v1/admin/*` de un openproxy-server corriendo.
+//! Consume los endpoints `/admin/*` de un openproxy-server corriendo.
 //! Se usa desde openproxy-web y desde scripts externos.
 //!
 //! ## Forma de uso
@@ -71,8 +71,8 @@ impl Client {
     /// reutilizar un pool de conexiones a nivel de aplicación.
     pub fn with_client(base_url: impl Into<String>, http: reqwest::Client) -> Self {
         let base = base_url.into();
-        // Trim del slash final para que `url("/v1/admin/...")` siempre
-        // concatene con un único separador, evitando `//v1/admin/...`.
+        // Trim del slash final para que `url("/admin/...")` siempre
+        // concatene con un único separador, evitando `//admin/...`.
         let base_url = base.trim_end_matches('/').to_string();
         Self { base_url, http }
     }
@@ -85,9 +85,9 @@ impl Client {
     // Health
     // -----------------------------------------------------------------
 
-    /// `GET /v1/admin/health` — liveness con tag de versión.
+    /// `GET /admin/health` — liveness con tag de versión.
     pub async fn health(&self) -> Result<serde_json::Value, ClientError> {
-        let resp = self.http.get(self.url("/v1/admin/health")).send().await?;
+        let resp = self.http.get(self.url("/admin/health")).send().await?;
         parse_json(resp).await
     }
 
@@ -95,20 +95,20 @@ impl Client {
     // Providers
     // -----------------------------------------------------------------
 
-    /// `GET /v1/admin/providers`.
+    /// `GET /admin/providers`.
     pub async fn list_providers(&self) -> Result<Vec<providers::Provider>, ClientError> {
-        let resp = self.http.get(self.url("/v1/admin/providers")).send().await?;
+        let resp = self.http.get(self.url("/admin/providers")).send().await?;
         parse_json(resp).await
     }
 
-    /// `POST /v1/admin/providers`. Devuelve el `ProviderId` recién creado.
+    /// `POST /admin/providers`. Devuelve el `ProviderId` recién creado.
     pub async fn create_provider(
         &self,
         input: CreateProviderInput,
     ) -> Result<ProviderId, ClientError> {
         let resp = self
             .http
-            .post(self.url("/v1/admin/providers"))
+            .post(self.url("/admin/providers"))
             .json(&input)
             .send()
             .await?;
@@ -125,9 +125,9 @@ impl Client {
         Ok(ProviderId::new(id.to_string()))
     }
 
-    /// `DELETE /v1/admin/providers/:id`. Idempotente.
+    /// `DELETE /admin/providers/:id`. Idempotente.
     pub async fn delete_provider(&self, id: &ProviderId) -> Result<(), ClientError> {
-        let path = format!("/v1/admin/providers/{}", urlencoded(id.as_str()));
+        let path = format!("/admin/providers/{}", urlencoded(id.as_str()));
         let resp = self.http.delete(self.url(&path)).send().await?;
         parse_unit(resp).await
     }
@@ -136,12 +136,12 @@ impl Client {
     // Accounts
     // -----------------------------------------------------------------
 
-    /// `GET /v1/admin/accounts[?provider_id=...]`.
+    /// `GET /admin/accounts[?provider_id=...]`.
     pub async fn list_accounts(
         &self,
         provider: Option<&ProviderId>,
     ) -> Result<Vec<accounts::Account>, ClientError> {
-        let mut url = self.url("/v1/admin/accounts").to_string();
+        let mut url = self.url("/admin/accounts").to_string();
         if let Some(p) = provider {
             let qs = build_query(&[("provider_id", Some(p.as_str()))]);
             write!(&mut url, "?{}", qs).expect("writing to String never fails");
@@ -150,14 +150,14 @@ impl Client {
         parse_json(resp).await
     }
 
-    /// `POST /v1/admin/accounts`. Devuelve el `AccountId` recién creado.
+    /// `POST /admin/accounts`. Devuelve el `AccountId` recién creado.
     pub async fn create_account(
         &self,
         input: CreateAccountInput,
     ) -> Result<AccountId, ClientError> {
         let resp = self
             .http
-            .post(self.url("/v1/admin/accounts"))
+            .post(self.url("/admin/accounts"))
             .json(&input)
             .send()
             .await?;
@@ -174,21 +174,21 @@ impl Client {
         Ok(AccountId::new(id))
     }
 
-    /// `DELETE /v1/admin/accounts/:id`. Idempotente.
+    /// `DELETE /admin/accounts/:id`. Idempotente.
     pub async fn delete_account(&self, id: AccountId) -> Result<(), ClientError> {
-        let path = format!("/v1/admin/accounts/{}", id.0);
+        let path = format!("/admin/accounts/{}", id.0);
         let resp = self.http.delete(self.url(&path)).send().await?;
         parse_unit(resp).await
     }
 
-    /// `PUT /v1/admin/accounts/:id/api-key`. Encripta y guarda (o limpia)
+    /// `PUT /admin/accounts/:id/api-key`. Encripta y guarda (o limpia)
     /// la API key de una cuenta existente.
     pub async fn update_account_api_key(
         &self,
         id: AccountId,
         input: UpdateAccountApiKeyInput,
     ) -> Result<(), ClientError> {
-        let path = format!("/v1/admin/accounts/{}/api-key", id.0);
+        let path = format!("/admin/accounts/{}/api-key", id.0);
         let resp = self
             .http
             .put(self.url(&path))
@@ -202,20 +202,20 @@ impl Client {
     // Combos
     // -----------------------------------------------------------------
 
-    /// `GET /v1/admin/combos`.
+    /// `GET /admin/combos`.
     pub async fn list_combos(&self) -> Result<Vec<combos::Combo>, ClientError> {
-        let resp = self.http.get(self.url("/v1/admin/combos")).send().await?;
+        let resp = self.http.get(self.url("/admin/combos")).send().await?;
         parse_json(resp).await
     }
 
-    /// `POST /v1/admin/combos`. Devuelve el `ComboId` recién creado.
+    /// `POST /admin/combos`. Devuelve el `ComboId` recién creado.
     pub async fn create_combo(
         &self,
         input: CreateComboInput,
     ) -> Result<ComboId, ClientError> {
         let resp = self
             .http
-            .post(self.url("/v1/admin/combos"))
+            .post(self.url("/admin/combos"))
             .json(&input)
             .send()
             .await?;
@@ -232,24 +232,24 @@ impl Client {
         Ok(ComboId(id))
     }
 
-    /// `DELETE /v1/admin/combos/:id`. Idempotente.
+    /// `DELETE /admin/combos/:id`. Idempotente.
     pub async fn delete_combo(&self, id: ComboId) -> Result<(), ClientError> {
-        let path = format!("/v1/admin/combos/{}", id.0);
+        let path = format!("/admin/combos/{}", id.0);
         let resp = self.http.delete(self.url(&path)).send().await?;
         parse_unit(resp).await
     }
 
-    /// `GET /v1/admin/combos/:id/targets`.
+    /// `GET /admin/combos/:id/targets`.
     pub async fn list_combo_targets(
         &self,
         combo_id: ComboId,
     ) -> Result<Vec<combos::ComboTarget>, ClientError> {
-        let path = format!("/v1/admin/combos/{}/targets", combo_id.0);
+        let path = format!("/admin/combos/{}/targets", combo_id.0);
         let resp = self.http.get(self.url(&path)).send().await?;
         parse_json(resp).await
     }
 
-    /// `POST /v1/admin/combos/:id/targets`. Devuelve el `combo_target.id`
+    /// `POST /admin/combos/:id/targets`. Devuelve el `combo_target.id`
     /// (un `i64` plano — el crate no expone un `ComboTargetId` en la API
     /// pública de este cliente, así que lo devolvemos crudo).
     pub async fn add_target(
@@ -257,7 +257,7 @@ impl Client {
         combo_id: ComboId,
         input: AddTargetInput,
     ) -> Result<i64, ClientError> {
-        let path = format!("/v1/admin/combos/{}/targets", combo_id.0);
+        let path = format!("/admin/combos/{}/targets", combo_id.0);
         let resp = self.http.post(self.url(&path)).json(&input).send().await?;
         let body: serde_json::Value = parse_json(resp).await?;
         let id = body
@@ -276,7 +276,7 @@ impl Client {
     // Models
     // -----------------------------------------------------------------
 
-    /// `GET /v1/models` (endpoint público, no `/v1/admin/...`).
+    /// `GET /v1/models` (endpoint público, no `/admin/...`).
     ///
     /// El server devuelve la lista de modelos en formato OpenAI
     /// (`{"object": "list", "data": [...]}`). Mantenemos el tipo laxo
@@ -288,7 +288,7 @@ impl Client {
         parse_json(resp).await
     }
 
-    /// `POST /v1/admin/models/:id/refresh`.
+    /// `POST /admin/models/:id/refresh`.
     ///
     /// El parámetro es un `ModelRowId` (no un `ProviderId`) porque la ruta
     /// del server indexa por fila de la tabla `models`. El nombre de
@@ -299,7 +299,7 @@ impl Client {
     /// Devuelve el número de filas tocadas (inserts + updates) en la tabla
     /// `models`, según reporta el server.
     pub async fn refresh_models(&self, model_row_id: ModelRowId) -> Result<usize, ClientError> {
-        let path = format!("/v1/admin/models/{}/refresh", model_row_id.0);
+        let path = format!("/admin/models/{}/refresh", model_row_id.0);
         let resp = self.http.post(self.url(&path)).send().await?;
         let body: serde_json::Value = parse_json(resp).await?;
         let touched = body
@@ -323,53 +323,53 @@ impl Client {
     // Usage analytics
     // -----------------------------------------------------------------
 
-    /// `GET /v1/admin/usage/summary?from=...&to=...&provider_id=...&...`.
+    /// `GET /admin/usage/summary?from=...&to=...&provider_id=...&...`.
     pub async fn usage_summary(&self, f: &UsageFilter) -> Result<UsageSummary, ClientError> {
-        let url = format!("{}?{}", self.url("/v1/admin/usage/summary"), usage_filter_query(f));
+        let url = format!("{}?{}", self.url("/admin/usage/summary"), usage_filter_query(f));
         let resp = self.http.get(url).send().await?;
         parse_json(resp).await
     }
 
-    /// `GET /v1/admin/usage/by-model?from=...&...`.
+    /// `GET /admin/usage/by-model?from=...&...`.
     pub async fn usage_by_model(&self, f: &UsageFilter) -> Result<Vec<ByModelRow>, ClientError> {
         let url = format!(
             "{}?{}",
-            self.url("/v1/admin/usage/by-model"),
+            self.url("/admin/usage/by-model"),
             usage_filter_query(f)
         );
         let resp = self.http.get(url).send().await?;
         parse_json(resp).await
     }
 
-    /// `GET /v1/admin/usage/by-account?from=...&...`.
+    /// `GET /admin/usage/by-account?from=...&...`.
     pub async fn usage_by_account(
         &self,
         f: &UsageFilter,
     ) -> Result<Vec<ByAccountRow>, ClientError> {
         let url = format!(
             "{}?{}",
-            self.url("/v1/admin/usage/by-account"),
+            self.url("/admin/usage/by-account"),
             usage_filter_query(f)
         );
         let resp = self.http.get(url).send().await?;
         parse_json(resp).await
     }
 
-    /// `GET /v1/admin/usage/by-status?from=...&...`.
+    /// `GET /admin/usage/by-status?from=...&...`.
     pub async fn usage_by_status(
         &self,
         f: &UsageFilter,
     ) -> Result<Vec<ByStatusRow>, ClientError> {
         let url = format!(
             "{}?{}",
-            self.url("/v1/admin/usage/by-status"),
+            self.url("/admin/usage/by-status"),
             usage_filter_query(f)
         );
         let resp = self.http.get(url).send().await?;
         parse_json(resp).await
     }
 
-    /// `GET /v1/admin/usage/errors?from=...&...&limit=N`.
+    /// `GET /admin/usage/errors?from=...&...&limit=N`.
     pub async fn usage_errors(
         &self,
         f: &UsageFilter,
@@ -381,30 +381,30 @@ impl Client {
         } else {
             write!(&mut qs, "limit={}", limit).expect("writing to String never fails");
         }
-        let url = format!("{}?{}", self.url("/v1/admin/usage/errors"), qs);
+        let url = format!("{}?{}", self.url("/admin/usage/errors"), qs);
         let resp = self.http.get(url).send().await?;
         parse_json(resp).await
     }
 
-    /// `GET /v1/admin/usage/latency?from=...&...`.
+    /// `GET /admin/usage/latency?from=...&...`.
     pub async fn usage_latency(
         &self,
         f: &UsageFilter,
     ) -> Result<LatencyPercentiles, ClientError> {
         let url = format!(
             "{}?{}",
-            self.url("/v1/admin/usage/latency"),
+            self.url("/admin/usage/latency"),
             usage_filter_query(f)
         );
         let resp = self.http.get(url).send().await?;
         parse_json(resp).await
     }
 
-    /// `GET /v1/admin/usage/races?from=...&...`.
+    /// `GET /admin/usage/races?from=...&...`.
     pub async fn usage_races(&self, f: &UsageFilter) -> Result<RaceStats, ClientError> {
         let url = format!(
             "{}?{}",
-            self.url("/v1/admin/usage/races"),
+            self.url("/admin/usage/races"),
             usage_filter_query(f)
         );
         let resp = self.http.get(url).send().await?;
@@ -592,7 +592,7 @@ fn build_query(pairs: &[(&str, Option<&str>)]) -> String {
 }
 
 /// Serializa un [`UsageFilter`] al query string esperado por
-/// `GET /v1/admin/usage/*`. Coincide 1:1 con los campos de
+/// `GET /admin/usage/*`. Coincide 1:1 con los campos de
 /// `handlers::admin::UsageQuery` en el server.
 fn usage_filter_query(f: &UsageFilter) -> String {
     let pairs: [(&str, Option<String>); 6] = [
@@ -660,7 +660,7 @@ mod tests {
     #[test]
     fn trims_trailing_slash() {
         let c = Client::new("http://example.com/");
-        assert_eq!(c.url("/v1/admin/health"), "http://example.com/v1/admin/health");
+        assert_eq!(c.url("/admin/health"), "http://example.com/admin/health");
     }
 
     #[test]

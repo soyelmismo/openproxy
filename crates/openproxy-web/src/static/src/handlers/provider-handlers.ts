@@ -36,7 +36,7 @@ function flashButton(btn: HTMLButtonElement | null, text: string, color: string)
   setTimeout(() => { btn.style.background = ""; }, 1500);
 }
 
-// POST /v1/admin/providers/:id/refresh — re-discover the model
+// POST /admin/providers/:id/refresh — re-discover the model
 // list for one provider. The button is disabled and relabeled
 // "Refreshing..." while in flight. The optional `e` parameter
 // lets the data-action shim pass the triggering element so the
@@ -278,7 +278,7 @@ export async function toggleProviderActive(providerId: string, newActive: boolea
 
 // The `name` field is a *display* label — the `id` is the slug
 // used in URLs and FKs, so the rename only touches `name`. PATCH
-// `/v1/admin/providers/:id` already exists in the backend, this
+// `/admin/providers/:id` already exists in the backend, this
 // is just the UX.
 export async function renameProviderPrompt(providerId: string, currentName: string): Promise<void> {
   const newName = prompt(`Rename provider "${providerId}":`, currentName);
@@ -345,7 +345,7 @@ export async function bulkToggleModels(providerId: string, active: boolean): Pro
 
 // ===== Account health / quota =====
 
-// POST /v1/admin/accounts/:id/health — force-set the health
+// POST /admin/accounts/:id/health — force-set the health
 // flag. The select's value is read off the change event, not from
 // data-arg, so the shim passes the event and we read `e.target.value`.
 export async function setHealth(id: number, e: Event | null): Promise<void> {
@@ -368,7 +368,7 @@ export async function setHealth(id: number, e: Event | null): Promise<void> {
   }
 }
 
-// POST /v1/admin/accounts/:id/refresh-quota — fetch a fresh
+// POST /admin/accounts/:id/refresh-quota — fetch a fresh
 // quota. The button gets a coloured flash so the click feels
 // acknowledged even when the request takes a few seconds.
 export async function refreshAccountQuota(accountId: number, e: Event | null): Promise<void> {

@@ -2,18 +2,18 @@
 //!
 //! Spec §2.3 enumerates the admin surface:
 //!
-//! - `GET    /v1/admin/health`                          — process liveness.
-//! - `*      /v1/admin/providers[...]`                  — provider CRUD.
-//! - `*      /v1/admin/accounts[...]`                   — account CRUD
+//! - `GET    /admin/health`                          — process liveness.
+//! - `*      /admin/providers[...]`                  — provider CRUD.
+//! - `*      /admin/accounts[...]`                   — account CRUD
 //!   (including `POST .../health` to force-set the health flag).
-//! - `*      /v1/admin/combos[...]`                     — combo CRUD
+//! - `*      /admin/combos[...]`                     — combo CRUD
 //!   (including `PATCH /:id` for `race_size` and
 //!   `PATCH /:id/targets/:target_id` for `priority_order`).
-//! - `*      /v1/admin/usage/*`                         — usage analytics,
+//! - `*      /admin/usage/*`                         — usage analytics,
 //!   plus `GET /usage/recent?since_id=N` for the dashboard's
 //!   long-polling live tail.
-//! - `POST   /v1/admin/models/:id/refresh`              — model discovery refresh.
-//! - `POST   /v1/admin/models/:id/toggle`               — soft-disable a model.
+//! - `POST   /admin/models/:id/refresh`              — model discovery refresh.
+//! - `POST   /admin/models/:id/toggle`               — soft-disable a model.
 //!
 //! Each handler is a thin axum wrapper over the [`openproxy_core::admin`]
 //! service layer; the service layer is the one that owns the SQL, and
@@ -100,7 +100,7 @@ fn resolve_adapter(
     }
 }
 
-/// Optional filters shared by all `GET /v1/admin/usage/*` endpoints.
+/// Optional filters shared by all `GET /admin/usage/*` endpoints.
 ///
 /// All fields are `Option<_>` so a request with no query string is
 /// valid and means "no filter". Strings are forwarded verbatim into
@@ -115,7 +115,7 @@ pub struct UsageQuery {
     pub account_id: Option<i64>,
     pub combo_id: Option<i64>,
     /// Restrict the roll-up to a single API key. The per-key
-    /// `GET /v1/admin/keys/:id/usage` endpoint sets this; the
+    /// `GET /admin/keys/:id/usage` endpoint sets this; the
     /// public analytics endpoints leave it absent.
     pub api_key_id: Option<i64>,
     /// Named time-window preset. One of: `today`, `7d`, `30d`,
@@ -338,7 +338,7 @@ impl UsageQuery {
 // Health
 // =====================================================================
 
-/// `GET /v1/admin/health` — process liveness with a version tag.
+/// `GET /admin/health` — process liveness with a version tag.
 pub async fn admin_health() -> Json<serde_json::Value> {
     Json(serde_json::json!({
         "status": "ok",
@@ -382,7 +382,7 @@ pub struct RuntimeConfigResponse {
     pub idle_chunk_retryable: bool,
 }
 
-/// `GET /v1/admin/config` — return the currently-loaded runtime
+/// `GET /admin/config` — return the currently-loaded runtime
 /// configuration (timeouts, retries, circuit-breaker, racing).
 ///
 /// This is a thin, side-effect-free snapshot of `AppState::config()`:
@@ -414,7 +414,7 @@ pub async fn get_runtime_config(
     body.into()
 }
 
-/// `PUT /v1/admin/config/timeouts` — hot-reload the system default
+/// `PUT /admin/config/timeouts` — hot-reload the system default
 /// timeouts. Body is a full [`TimeoutsConfig`] (5 `u64` fields, all
 /// required). On success the value is persisted in the `app_config`
 /// table and the in-memory `timeouts_cell` slot is updated. Future
@@ -468,7 +468,7 @@ pub async fn put_runtime_timeouts(
     inner.into()
 }
 
-/// `PUT /v1/admin/config/compression` — hot-reload the compression
+/// `PUT /admin/config/compression` — hot-reload the compression
 /// mode. Body: `{"mode": "off" | "lite" | "rtk"}`.
 pub async fn put_runtime_compression(
     State(s): State<AppState>,
@@ -498,7 +498,7 @@ pub async fn put_runtime_compression(
 // Idle chunk retryable
 // =====================================================================
 
-/// `PUT /v1/admin/config/idle-chunk-retryable` — hot-reload the
+/// `PUT /admin/config/idle-chunk-retryable` — hot-reload the
 /// `idle_chunk_retryable` flag. Body: `{"idle_chunk_retryable": true}`
 /// or `{"idle_chunk_retryable": false}`.
 ///
@@ -543,7 +543,7 @@ pub async fn put_idle_chunk_retryable(
 // Recording TTL
 // =====================================================================
 
-/// `GET /v1/admin/config/recording-ttl` — read the current recording body
+/// `GET /admin/config/recording-ttl` — read the current recording body
 /// TTL in seconds.
 pub async fn get_recording_ttl(
     State(s): State<AppState>,
@@ -561,7 +561,7 @@ pub async fn get_recording_ttl(
     body.into()
 }
 
-/// `PUT /v1/admin/config/recording-ttl` — hot-reload the recording body
+/// `PUT /admin/config/recording-ttl` — hot-reload the recording body
 /// TTL. Body: `{"recording_ttl_secs": N}` where `N` is the lifetime in
 /// seconds for recorded request/response bodies and headers.
 pub async fn put_recording_ttl(
@@ -604,7 +604,7 @@ pub async fn put_recording_ttl(
 // Providers
 // =====================================================================
 
-/// `GET /v1/admin/providers` — list all providers.
+/// `GET /admin/providers` — list all providers.
 pub async fn list_providers(
     State(s): State<AppState>,
 ) -> ApiResult<Json<Vec<providers::Provider>>> {
@@ -617,7 +617,7 @@ pub async fn list_providers(
     body.into()
 }
 
-/// `POST /v1/admin/providers` — create a provider.
+/// `POST /admin/providers` — create a provider.
 pub async fn create_provider(
     State(s): State<AppState>,
     Json(input): Json<admin::CreateProviderInput>,
@@ -652,7 +652,7 @@ pub async fn create_provider(
     body.into()
 }
 
-/// `GET /v1/admin/providers/:id` — fetch a single provider.
+/// `GET /admin/providers/:id` — fetch a single provider.
 pub async fn get_provider(
     State(s): State<AppState>,
     Path(id): Path<String>,
@@ -668,13 +668,13 @@ pub async fn get_provider(
     body.into()
 }
 
-/// `DELETE /v1/admin/providers/:id` — delete a provider. Idempotent
+/// `DELETE /admin/providers/:id` — delete a provider. Idempotent
 /// for custom providers.
 ///
 /// Built-in providers (the ones seeded on first run — see
 /// [`openproxy_core::seed::builtin_provider_ids`]) are rejected
 /// with a 400 (Validation) instructing the operator to use
-/// `POST /v1/admin/providers/:id/active` to deactivate the
+/// `POST /admin/providers/:id/active` to deactivate the
 /// provider instead. Built-ins are protected because removing
 /// the row would leave dangling references in the adapter
 /// registry, and the operator can get the "stop using this
@@ -699,7 +699,7 @@ pub async fn delete_provider(
         if seed::is_builtin(&id) {
             return Err(ApiError(CoreError::Validation(format!(
                 "provider '{}' is a built-in and cannot be deleted. Use POST \
-                 /v1/admin/providers/{}/active with {{\"active\": false}} to \
+                 /admin/providers/{}/active with {{\"active\": false}} to \
                  deactivate it instead.",
                 id, id
             ))));
@@ -732,7 +732,7 @@ pub async fn delete_provider(
     body.into()
 }
 
-/// `POST /v1/admin/providers/:id/active` — flip the soft-disable flag
+/// `POST /admin/providers/:id/active` — flip the soft-disable flag
 /// on a provider. Body: `{"active": true|false}`. Returns the new state.
 ///
 /// This is the dashboard's "Deactivate" / "Activate" button path. A
@@ -767,13 +767,13 @@ pub async fn set_provider_active(
 // Accounts
 // =====================================================================
 
-/// Query string for `GET /v1/admin/accounts` — supports `?provider_id=...`.
+/// Query string for `GET /admin/accounts` — supports `?provider_id=...`.
 #[derive(Debug, Default, Deserialize)]
 pub struct AccountListQuery {
     pub provider_id: Option<String>,
 }
 
-/// `GET /v1/admin/accounts` — list accounts, optionally filtered by provider.
+/// `GET /admin/accounts` — list accounts, optionally filtered by provider.
 pub async fn list_accounts(
     State(s): State<AppState>,
     Query(q): Query<AccountListQuery>,
@@ -788,7 +788,7 @@ pub async fn list_accounts(
     body.into()
 }
 
-/// `POST /v1/admin/accounts` — create an account. `api_key` is encrypted
+/// `POST /admin/accounts` — create an account. `api_key` is encrypted
 /// before insertion; the response only echoes the new id.
 pub async fn create_account(
     State(s): State<AppState>,
@@ -803,7 +803,7 @@ pub async fn create_account(
     body.into()
 }
 
-/// `DELETE /v1/admin/accounts/:id` — delete an account by numeric id. Idempotent.
+/// `DELETE /admin/accounts/:id` — delete an account by numeric id. Idempotent.
 pub async fn delete_account(
     State(s): State<AppState>,
     Path(id): Path<i64>,
@@ -822,7 +822,7 @@ pub async fn delete_account(
 // Combos
 // =====================================================================
 
-/// `GET /v1/admin/combos` — list all combos.
+/// `GET /admin/combos` — list all combos.
 pub async fn list_combos(
     State(s): State<AppState>,
 ) -> ApiResult<Json<Vec<combos::Combo>>> {
@@ -835,7 +835,7 @@ pub async fn list_combos(
     body.into()
 }
 
-/// `POST /v1/admin/combos` — create a combo. `race_size` defaults to 1.
+/// `POST /admin/combos` — create a combo. `race_size` defaults to 1.
 pub async fn create_combo(
     State(s): State<AppState>,
     Json(input): Json<admin::CreateComboInput>,
@@ -849,7 +849,7 @@ pub async fn create_combo(
     body.into()
 }
 
-/// `GET /v1/admin/combos/:id` — fetch a single combo.
+/// `GET /admin/combos/:id` — fetch a single combo.
 pub async fn get_combo(
     State(s): State<AppState>,
     Path(id): Path<i64>,
@@ -865,7 +865,7 @@ pub async fn get_combo(
     body.into()
 }
 
-/// `POST /v1/admin/combos/:id/test-all` — fan-out a test request to
+/// `POST /admin/combos/:id/test-all` — fan-out a test request to
 /// every target of a combo and return a list of per-target results.
 ///
 /// The handler:
@@ -1078,7 +1078,7 @@ pub async fn test_combo_targets(
     body.into()
 }
 
-/// `DELETE /v1/admin/combos/:id` — delete a combo. Idempotent; cascade
+/// `DELETE /admin/combos/:id` — delete a combo. Idempotent; cascade
 /// removes its targets.
 pub async fn delete_combo(
     State(s): State<AppState>,
@@ -1094,7 +1094,7 @@ pub async fn delete_combo(
     body.into()
 }
 
-/// `GET /v1/admin/combos/:id/targets` — list a combo's targets in
+/// `GET /admin/combos/:id/targets` — list a combo's targets in
 /// `(priority_order ASC, id ASC)` order, enriched with the model's
 /// upstream id and human-readable display name so the dashboard
 /// doesn't have to do a per-row roundtrip.
@@ -1117,7 +1117,7 @@ pub async fn list_combo_targets(
     body.into()
 }
 
-/// `POST /v1/admin/combos/:id/targets` — add a target to a combo.
+/// `POST /admin/combos/:id/targets` — add a target to a combo.
 pub async fn add_target(
     State(s): State<AppState>,
     Path(id): Path<i64>,
@@ -1133,7 +1133,7 @@ pub async fn add_target(
     body.into()
 }
 
-/// `GET /v1/admin/combos/:id/valid-sub-combos` — list combos that
+/// `GET /admin/combos/:id/valid-sub-combos` — list combos that
 /// can be added as a sub-combo target of `:id` (i.e. excluding the
 /// combo itself and any combo whose addition would close a cycle).
 /// Drives the "Add sub-combo target" picker in the dashboard.
@@ -1155,7 +1155,7 @@ pub async fn list_valid_sub_combos(
 // Usage analytics
 // =====================================================================
 
-/// `GET /v1/admin/usage/summary` — top-line roll-up.
+/// `GET /admin/usage/summary` — top-line roll-up.
 pub async fn usage_summary(
     State(s): State<AppState>,
     Query(q): Query<UsageQuery>,
@@ -1181,7 +1181,7 @@ pub async fn usage_summary(
     body.into()
 }
 
-/// `GET /v1/admin/usage/by-model` — per-(provider, model) breakdown.
+/// `GET /admin/usage/by-model` — per-(provider, model) breakdown.
 pub async fn usage_by_model(
     State(s): State<AppState>,
     Query(q): Query<UsageQuery>,
@@ -1206,7 +1206,7 @@ pub async fn usage_by_model(
     body.into()
 }
 
-/// `GET /v1/admin/usage/by-provider` — per-provider breakdown.
+/// `GET /admin/usage/by-provider` — per-provider breakdown.
 ///
 /// Mirrors `usage_by_model` but groups by `provider_id` only. The
 /// frontend's "monthly usage by provider" report uses this for the
@@ -1233,7 +1233,7 @@ pub async fn usage_by_provider(
     body.into()
 }
 
-/// `GET /v1/admin/usage/monthly-by-provider` — per-(provider, month)
+/// `GET /admin/usage/monthly-by-provider` — per-(provider, month)
 /// breakdown.
 ///
 /// `month` is `strftime('%Y-%m', created_at)`. Ordered by
@@ -1260,7 +1260,7 @@ pub async fn usage_monthly_by_provider(
     body.into()
 }
 
-/// `GET /v1/admin/usage/by-day` — daily usage totals for charting.
+/// `GET /admin/usage/by-day` — daily usage totals for charting.
 pub async fn usage_by_day(
     State(s): State<AppState>,
     Query(q): Query<UsageQuery>,
@@ -1282,7 +1282,7 @@ pub async fn usage_by_day(
     body.into()
 }
 
-/// `GET /v1/admin/usage/by-account` — per-account breakdown.
+/// `GET /admin/usage/by-account` — per-account breakdown.
 pub async fn usage_by_account(
     State(s): State<AppState>,
     Query(q): Query<UsageQuery>,
@@ -1304,7 +1304,7 @@ pub async fn usage_by_account(
     body.into()
 }
 
-/// `GET /v1/admin/usage/by-status` — counts grouped by HTTP status code.
+/// `GET /admin/usage/by-status` — counts grouped by HTTP status code.
 pub async fn usage_by_status(
     State(s): State<AppState>,
     Query(q): Query<UsageQuery>,
@@ -1329,7 +1329,7 @@ pub async fn usage_by_status(
 /// Cap on inline error rows. Spec §7.2 says "the most recent 100".
 const ERRORS_DEFAULT_LIMIT: u32 = 100;
 
-/// `GET /v1/admin/usage/errors` — recent error rows, newest first.
+/// `GET /admin/usage/errors` — recent error rows, newest first.
 pub async fn usage_errors(
     State(s): State<AppState>,
     Query(q): Query<UsageQuery>,
@@ -1351,7 +1351,7 @@ pub async fn usage_errors(
     body.into()
 }
 
-/// `GET /v1/admin/usage/latency` — p50/p95 across connect/ttft/total/tokens_per_sec.
+/// `GET /admin/usage/latency` — p50/p95 across connect/ttft/total/tokens_per_sec.
 pub async fn usage_latency(
     State(s): State<AppState>,
     Query(q): Query<UsageQuery>,
@@ -1373,7 +1373,7 @@ pub async fn usage_latency(
     body.into()
 }
 
-/// `GET /v1/admin/usage/races` — race outcome statistics.
+/// `GET /admin/usage/races` — race outcome statistics.
 pub async fn usage_races(
     State(s): State<AppState>,
     Query(q): Query<UsageQuery>,
@@ -1399,7 +1399,7 @@ pub async fn usage_races(
 // Model refresh
 // =====================================================================
 
-/// Query string for `POST /v1/admin/models/:id/refresh` — lets the caller
+/// Query string for `POST /admin/models/:id/refresh` — lets the caller
 /// override the refresh TTL in seconds and pin a specific account.
 #[derive(Debug, Default, Deserialize)]
 pub struct RefreshQuery {
@@ -1411,7 +1411,7 @@ pub struct RefreshQuery {
     pub account_id: Option<i64>,
 }
 
-/// `POST /v1/admin/models/:id/refresh` — re-discover models for the
+/// `POST /admin/models/:id/refresh` — re-discover models for the
 /// provider that owns the given `model_row_id`.
 ///
 /// The handler:
@@ -1423,7 +1423,7 @@ pub struct RefreshQuery {
 ///    `/models` endpoint and upserts the results.
 ///
 /// On success, returns the number of rows touched.
-/// `POST /v1/admin/models/sync-models-dev` — one-shot sync from models.dev.
+/// `POST /admin/models/sync-models-dev` — one-shot sync from models.dev.
 pub async fn sync_models_dev(
     State(s): State<AppState>,
 ) -> ApiResult<Json<serde_json::Value>> {
@@ -1437,7 +1437,7 @@ pub async fn sync_models_dev(
     ApiResult::ok(Json(serde_json::json!({ "message": msg })))
 }
 
-/// `POST /v1/admin/usage/recompute-costs` — re-price historical usage
+/// `POST /admin/usage/recompute-costs` — re-price historical usage
 /// rows that have `cost_usd = 0` AND `prompt_tokens > 0`. This walks
 /// every unpriced row, re-applies `pricing::lookup_with_db` (which
 /// consults the sync table + static table), and updates `cost_usd`.
@@ -1606,7 +1606,7 @@ async fn run_refresh(
 // Live-tail usage (long-polling)
 // =====================================================================
 
-/// Default cap for `GET /v1/admin/usage/recent` when the client omits
+/// Default cap for `GET /admin/usage/recent` when the client omits
 /// `?limit=`. Mirrors the spec's "up to 50 rows per poll" guidance.
 const USAGE_RECENT_DEFAULT_LIMIT: u32 = 50;
 
@@ -1623,7 +1623,7 @@ const USAGE_RECENT_MAX_LIMIT: u32 = 500;
 // rather than scanning garbage.
 const USAGE_RECENT_MAX_SINCE_ID: i64 = i64::MAX / 2;
 
-/// Query string for `GET /v1/admin/usage/recent`.
+/// Query string for `GET /admin/usage/recent`.
 ///
 /// `since_id` is the largest `usage.id` the caller has already seen; the
 /// handler returns every row whose `id` is strictly greater. `limit`
@@ -1635,7 +1635,7 @@ pub struct RecentQuery {
     pub limit: Option<u32>,
 }
 
-/// `GET /v1/admin/usage/recent?since_id=N&limit=K` — long-polling tail of
+/// `GET /admin/usage/recent?since_id=N&limit=K` — long-polling tail of
 /// the `usage` table.
 ///
 /// The dashboard polls this endpoint on a short timer, passing back the
@@ -2027,13 +2027,13 @@ async fn stream_usage_rows(
     }
 }
 
-/// Query for WebSocket token in `/v1/admin/usage/stream`
+/// Query for WebSocket token in `/admin/usage/stream`
 #[derive(Debug, Default, Deserialize)]
 pub struct UsageStreamQuery {
     pub token: Option<String>,
 }
 
-/// `GET /v1/admin/usage/stream` — upgraded WebSocket handler.
+/// `GET /admin/usage/stream` — upgraded WebSocket handler.
 pub async fn usage_stream(
     State(s): State<AppState>,
     Query(q): Query<UsageStreamQuery>,
@@ -2049,7 +2049,7 @@ pub async fn usage_stream(
     }
 }
 
-/// `GET /v1/admin/usage/detail?id=<usage_id>` — full detail for a single usage row.
+/// `GET /admin/usage/detail?id=<usage_id>` — full detail for a single usage row.
 pub async fn usage_detail(
     State(s): State<AppState>,
     headers: HeaderMap,
@@ -2072,7 +2072,7 @@ pub async fn usage_detail(
     body.into()
 }
 
-/// Query for `GET /v1/admin/usage/detail`.
+/// Query for `GET /admin/usage/detail`.
 #[derive(Debug, Default, Deserialize)]
 pub struct DetailQuery {
     pub id: i64,
@@ -2087,7 +2087,7 @@ pub struct UsageDetailResponse {
 // Recording toggle (Live Logs detail modal)
 // =====================================================================
 
-/// `GET /v1/admin/recording` — read the current recording state.
+/// `GET /admin/recording` — read the current recording state.
 ///
 /// Returns `{"recording": true|false}`. Used by the dashboard's Live
 /// Logs section to render the "Record" toggle on initial load.
@@ -2105,7 +2105,7 @@ pub async fn get_recording(
     body.into()
 }
 
-/// `POST /v1/admin/recording` — flip the process-wide recording state.
+/// `POST /admin/recording` — flip the process-wide recording state.
 ///
 /// Body: `{"enabled": true|false}`. When enabled, every new chat
 /// request will record the full request/response bodies and headers
@@ -2134,7 +2134,7 @@ pub async fn set_recording(
 // Model toggling
 // =====================================================================
 
-/// `POST /v1/admin/models/:id/toggle` — flip the soft-disable bit on a
+/// `POST /admin/models/:id/toggle` — flip the soft-disable bit on a
 /// model row. Body: `{"active": true|false}`. Returns the new state.
 ///
 /// An unknown id is a silent no-op (`set_active` doesn't error); the
@@ -2157,7 +2157,7 @@ pub async fn toggle_model(
     body.into()
 }
 
-/// `POST /v1/admin/models/bulk-toggle` — flip the soft-disable bit on
+/// `POST /admin/models/bulk-toggle` — flip the soft-disable bit on
 /// every non-custom model of a provider in a single SQL UPDATE.
 ///
 /// Body: `{"provider_id": "...", "active": true|false}`.
@@ -2188,7 +2188,7 @@ pub async fn bulk_toggle_models(
     body.into()
 }
 
-/// `DELETE /v1/admin/models/:id` — hard-delete a model row.
+/// `DELETE /admin/models/:id` — hard-delete a model row.
 ///
 /// Companion to [`toggle_model`]: that endpoint hides a row from
 /// routing while preserving the audit trail; this one removes the row
@@ -2217,7 +2217,7 @@ pub async fn delete_model(
 // Combo mutations
 // =====================================================================
 
-/// `PATCH /v1/admin/combos/:id` — currently the only mutable field is
+/// `PATCH /admin/combos/:id` — currently the only mutable field is
 /// `race_size`. Body: `{"race_size": 1..=8}`. Missing `race_size` is a
 /// no-op; out-of-range is a 400.
 pub async fn update_combo(
@@ -2238,7 +2238,7 @@ pub async fn update_combo(
     body.into()
 }
 
-/// `PATCH /v1/admin/combos/:id/targets/:target_id` — move a target to a
+/// `PATCH /admin/combos/:id/targets/:target_id` — move a target to a
 /// new `priority_order`. Body: `{"priority_order": <i32>}`. The handler
 /// does not re-number siblings; the caller picks a sane value.
 pub async fn update_combo_target(
@@ -2271,7 +2271,7 @@ pub async fn update_combo_target(
     body.into()
 }
 
-/// `DELETE /v1/admin/combos/:id/targets/:target_id` — remove a single
+/// `DELETE /admin/combos/:id/targets/:target_id` — remove a single
 /// target from a combo. The handler validates that the target actually
 /// belongs to the requested combo (defense in depth: a mismatched URL
 /// surfaces as a 400 instead of silently deleting from another combo).
@@ -2292,7 +2292,7 @@ pub async fn delete_combo_target(
     body.into()
 }
 
-/// `POST /v1/admin/combos/:id/targets/:target_id/clear-cooldown`
+/// `POST /admin/combos/:id/targets/:target_id/clear-cooldown`
 /// — force-clear the persistent cooldown row for a single target.
 /// See [`openproxy_core::admin::clear_combo_target_cooldown`].
 ///
@@ -2304,7 +2304,7 @@ pub async fn delete_combo_target(
 /// not on the model itself).
 ///
 /// IMPORTANT: this literal-segment route MUST be registered
-/// before `/v1/admin/combos/:id/targets/:target_id` in
+/// before `/admin/combos/:id/targets/:target_id` in
 /// `router.rs`, otherwise axum's :target_id segment will happily
 /// swallow `clear-cooldown` and 405 the POST.
 pub async fn clear_combo_target_cooldown(
@@ -2330,7 +2330,7 @@ pub async fn clear_combo_target_cooldown(
 // Combo target reorder
 // =====================================================================
 
-/// Body for `POST /v1/admin/combos/:id/targets/reorder`. The frontend's
+/// Body for `POST /admin/combos/:id/targets/reorder`. The frontend's
 /// ↑/↓ buttons compute the new order client-side (swap the moved
 /// target with its neighbor) and post the full ordered list back; the
 /// backend renumbers everything in a single transaction.
@@ -2339,7 +2339,7 @@ pub struct ReorderComboTargetsInput {
     pub target_ids: Vec<i64>,
 }
 
-/// `POST /v1/admin/combos/:id/targets/reorder` — atomically reassign
+/// `POST /admin/combos/:id/targets/reorder` — atomically reassign
 /// `priority_order` for every target of a combo so the new order
 /// matches `body.target_ids`.
 ///
@@ -2385,7 +2385,7 @@ pub async fn reorder_combo_targets(
 // Provider update
 // =====================================================================
 
-/// `PATCH /v1/admin/providers/:id` — partial update of a provider row.
+/// `PATCH /admin/providers/:id` — partial update of a provider row.
 ///
 /// Body: any subset of `name`, `base_url`, `extra_headers_json`,
 /// `auto_activate_keyword`. The keyword uses a three-state encoding:
@@ -2428,7 +2428,7 @@ pub async fn update_provider(
 // Custom model creation
 // =====================================================================
 
-/// `POST /v1/admin/models/custom` — hand-create a model row. The row is
+/// `POST /admin/models/custom` — hand-create a model row. The row is
 /// stamped with `custom = 1` and `active = 1` so it is routable as soon
 /// as the call returns. Use this when a model is missing from the
 /// provider's `/models` endpoint but the operator knows the upstream
@@ -3019,7 +3019,7 @@ async fn run_test_for_model(
     }
 }
 
-/// `POST /v1/admin/models/:id/test` — send a tiny "ping" request to the
+/// `POST /admin/models/:id/test` — send a tiny "ping" request to the
 /// model and stamp the result onto its row.
 ///
 /// Thin wrapper over [`run_test_for_model`]. The helper is the
@@ -3044,7 +3044,7 @@ pub async fn test_model(
 // Account health
 // =====================================================================
 
-/// `POST /v1/admin/accounts/:id/health` — force-set an account's
+/// `POST /admin/accounts/:id/health` — force-set an account's
 /// health flag. Body: `{"health": "healthy"|"degraded"|"unhealthy"}`.
 ///
 /// Bypasses the runtime's automatic health tracking so an operator can
@@ -3072,7 +3072,7 @@ pub async fn set_account_health(
     body.into()
 }
 
-/// `PUT /v1/admin/accounts/:id/api-key` — encrypt and store a new API
+/// `PUT /admin/accounts/:id/api-key` — encrypt and store a new API
 /// key for an existing account (or clear it by passing `null`).
 ///
 /// Body: `{"api_key": "sk-..."}` or `{"api_key": null}`.
@@ -3097,7 +3097,7 @@ pub async fn update_account_api_key(
 // Admin model listing (internal shape, includes row_id + active)
 // =====================================================================
 
-/// `GET /v1/admin/models` — every row in the `models` table, in the
+/// `GET /admin/models` — every row in the `models` table, in the
 /// internal `Model` shape.
 ///
 /// The public `GET /v1/models` projects each row down to an OpenAI-shaped
@@ -3122,7 +3122,7 @@ pub async fn list_models_admin(
 // Account quota refresh
 // =====================================================================
 
-/// `POST /v1/admin/accounts/:id/refresh-quota` — fetch a fresh quota
+/// `POST /admin/accounts/:id/refresh-quota` — fetch a fresh quota
 /// snapshot for a single account and persist it.
 ///
 /// Flow:
@@ -3307,13 +3307,13 @@ pub async fn refresh_account_quota(
 // Provider model refresh
 // =====================================================================
 
-/// Default TTL for the `POST /v1/admin/providers/:id/refresh` handler when
+/// Default TTL for the `POST /admin/providers/:id/refresh` handler when
 /// the caller doesn't pin one in the query string. Matches the value
-/// used by the row-level `POST /v1/admin/models/:id/refresh` handler so
+/// used by the row-level `POST /admin/models/:id/refresh` handler so
 /// the two endpoints behave consistently.
 const PROVIDER_REFRESH_DEFAULT_TTL_SECS: i64 = 3_600;
 
-/// Query string for `POST /v1/admin/providers/:id/refresh`. Mirrors
+/// Query string for `POST /admin/providers/:id/refresh`. Mirrors
 /// [`RefreshQuery`] but lives in a separate type because the path
 /// parameter is a string id, not a numeric row id, so a single shared
 /// type would be misleading.
@@ -3327,7 +3327,7 @@ pub struct ProviderRefreshQuery {
     pub account_id: Option<i64>,
 }
 
-/// `POST /v1/admin/providers/:id/refresh` — re-discover the model list
+/// `POST /admin/providers/:id/refresh` — re-discover the model list
 /// for a whole provider in one shot.
 ///
 /// The handler is the provider-level counterpart to
@@ -3677,7 +3677,7 @@ async fn run_provider_refresh(
 // for highlighting this fact to the operator ("Save this key now,
 // you will not see it again").
 
-/// `GET /v1/admin/keys` — list every key, newest first.
+/// `GET /admin/keys` — list every key, newest first.
 pub async fn list_api_keys(
     State(s): State<AppState>,
 ) -> ApiResult<Json<Vec<core_api_keys::ApiKey>>> {
@@ -3690,7 +3690,7 @@ pub async fn list_api_keys(
     body.into()
 }
 
-/// `POST /v1/admin/keys` — create a new key.
+/// `POST /admin/keys` — create a new key.
 ///
 /// Response shape:
 ///
@@ -3716,7 +3716,7 @@ pub async fn create_api_key(
     body.into()
 }
 
-/// `GET /v1/admin/keys/:id` — fetch a single key by id. 404 if absent.
+/// `GET /admin/keys/:id` — fetch a single key by id. 404 if absent.
 pub async fn get_api_key(
     State(s): State<AppState>,
     Path(id): Path<i64>,
@@ -3731,7 +3731,7 @@ pub async fn get_api_key(
     body.into()
 }
 
-/// `PATCH /v1/admin/keys/:id` — partial update.
+/// `PATCH /admin/keys/:id` — partial update.
 ///
 /// Body fields are all optional. The `Option<Option<T>>` shape on
 /// `allowed_models` / `allowed_combos` / `expires_at` lets the caller
@@ -3805,7 +3805,7 @@ pub async fn update_api_key(
     body.into()
 }
 
-/// `POST /v1/admin/keys/:id/revoke` — soft-disable. Idempotent (a
+/// `POST /admin/keys/:id/revoke` — soft-disable. Idempotent (a
 /// second call preserves the original `revoked_at` stamp).
 pub async fn revoke_api_key(
     State(s): State<AppState>,
@@ -3820,7 +3820,7 @@ pub async fn revoke_api_key(
     body.into()
 }
 
-/// `DELETE /v1/admin/keys/:id` — hard delete. Idempotent (a missing
+/// `DELETE /admin/keys/:id` — hard delete. Idempotent (a missing
 /// id is a silent no-op, matching the `accounts::delete` policy).
 pub async fn delete_api_key(
     State(s): State<AppState>,
@@ -3835,7 +3835,7 @@ pub async fn delete_api_key(
     body.into()
 }
 
-/// `POST /v1/admin/keys/:id/regenerate` — issue a new plaintext and
+/// `POST /admin/keys/:id/regenerate` — issue a new plaintext and
 /// re-hash the row. The previous plaintext is invalidated
 /// immediately. Response shape matches `create_api_key` so the
 /// dashboard's "Save this key now" modal can be reused.
@@ -3855,7 +3855,7 @@ pub async fn regenerate_api_key(
     body.into()
 }
 
-/// `GET /v1/admin/keys/:id/usage` — headline metrics for one key.
+/// `GET /admin/keys/:id/usage` — headline metrics for one key.
 /// Returns a flat `UsageSummary` (no grouping) plus the standard
 /// usage roll-up so the dashboard can show a one-screen recap.
 pub async fn api_key_usage(
@@ -3892,7 +3892,7 @@ pub async fn api_key_usage(
 // OAuth endpoints
 // =====================================================================
 
-/// `GET /v1/admin/oauth/:provider/authorize` — start a PKCE flow.
+/// `GET /admin/oauth/:provider/authorize` — start a PKCE flow.
 ///
 /// Returns `{ "authorization_url": "...", "code_verifier": "...",
 /// "redirect_uri": "..." }`. The caller opens `authorization_url`
@@ -3945,7 +3945,7 @@ pub async fn oauth_authorize(
     body.into()
 }
 
-/// `POST /v1/admin/oauth/:provider/exchange` — exchange authorization code
+/// `POST /admin/oauth/:provider/exchange` — exchange authorization code
 /// for tokens (PKCE flow).
 ///
 /// Body: `{ "code": "...", "code_verifier": "...", "redirect_uri": "http://...",
@@ -4053,7 +4053,7 @@ pub async fn oauth_exchange(
     body.into()
 }
 
-/// `POST /v1/admin/oauth/:provider/device-code` — request a device code
+/// `POST /admin/oauth/:provider/device-code` — request a device code
 /// (Device Code flow).
 ///
 /// Returns `{ "device_code", "user_code", "verification_uri", ... }`.
@@ -4098,7 +4098,7 @@ pub async fn oauth_device_code(
     body.into()
 }
 
-/// `POST /v1/admin/oauth/:provider/device-poll` — poll for a device code token.
+/// `POST /admin/oauth/:provider/device-poll` — poll for a device code token.
 ///
 /// Body: `{ "device_code": "...", "account_id": 123 }`.
 /// If `account_id` is omitted, a new account is created for this provider.
@@ -4273,7 +4273,7 @@ pub async fn oauth_device_poll(
     body.into()
 }
 
-/// `GET /v1/admin/oauth/callback` — OAuth callback handler (MVP).
+/// `GET /admin/oauth/callback` — OAuth callback handler (MVP).
 ///
 /// Displays the authorization code extracted from the callback query
 /// parameters. In production this would be a redirect page or popup
@@ -4434,7 +4434,7 @@ mod tests {
 
         let app = Router::new()
             .route(
-                "/v1/admin/config/timeouts",
+                "/admin/config/timeouts",
                 put(put_runtime_timeouts),
             )
             .with_state(state.clone());
@@ -4448,7 +4448,7 @@ mod tests {
         });
         let req = Request::builder()
             .method("PUT")
-            .uri("/v1/admin/config/timeouts")
+            .uri("/admin/config/timeouts")
             .header("authorization", format!("Bearer {}", plaintext))
             .header("content-type", "application/json")
             .body(Body::from(body.to_string()))
@@ -4499,7 +4499,7 @@ mod tests {
         let (state, _plaintext) = make_state_with_key(&dir).await;
         let app = Router::new()
             .route(
-                "/v1/admin/config/timeouts",
+                "/admin/config/timeouts",
                 put(put_runtime_timeouts),
             )
             .with_state(state);
@@ -4509,7 +4509,7 @@ mod tests {
         });
         let req = Request::builder()
             .method("PUT")
-            .uri("/v1/admin/config/timeouts")
+            .uri("/admin/config/timeouts")
             .header("content-type", "application/json")
             .body(Body::from(body.to_string()))
             .expect("build req");
@@ -4525,13 +4525,13 @@ mod tests {
         let (state, plaintext) = make_state_with_key(&dir).await;
         let app = Router::new()
             .route(
-                "/v1/admin/config/timeouts",
+                "/admin/config/timeouts",
                 put(put_runtime_timeouts),
             )
             .with_state(state);
         let req = Request::builder()
             .method("PUT")
-            .uri("/v1/admin/config/timeouts")
+            .uri("/admin/config/timeouts")
             .header("authorization", format!("Bearer {}", plaintext))
             .header("content-type", "application/json")
             // Missing `total_ms` — serde will reject.
@@ -4918,7 +4918,7 @@ mod tests {
         let (state, key) = make_state_with_key(tmp.path()).await;
         let app = crate::router::build_router(state);
         let req = Request::builder()
-            .uri("/v1/admin/usage/recent?since_id=9223372036854775807&limit=1")
+            .uri("/admin/usage/recent?since_id=9223372036854775807&limit=1")
             .header("authorization", format!("Bearer {key}"))
             .body(axum::body::Body::empty())
             .expect("build req");
@@ -4941,7 +4941,7 @@ mod tests {
         let (state, key) = make_state_with_key(tmp.path()).await;
         let app = crate::router::build_router(state);
         let req = Request::builder()
-            .uri("/v1/admin/usage/recent?since_id=-42&limit=1")
+            .uri("/admin/usage/recent?since_id=-42&limit=1")
             .header("authorization", format!("Bearer {key}"))
             .body(axum::body::Body::empty())
             .expect("build req");
@@ -5017,14 +5017,14 @@ mod tests {
 
         let app = Router::new()
             .route(
-                "/v1/admin/config/recording-ttl",
+                "/admin/config/recording-ttl",
                 get(get_recording_ttl),
             )
             .with_state(state.clone());
 
         let req = Request::builder()
             .method("GET")
-            .uri("/v1/admin/config/recording-ttl")
+            .uri("/admin/config/recording-ttl")
             .header("authorization", format!("Bearer {}", plaintext))
             .body(Body::empty())
             .expect("build req");
@@ -5050,7 +5050,7 @@ mod tests {
 
         let app = Router::new()
             .route(
-                "/v1/admin/config/recording-ttl",
+                "/admin/config/recording-ttl",
                 get(get_recording_ttl).put(put_recording_ttl),
             )
             .with_state(state.clone());
@@ -5058,7 +5058,7 @@ mod tests {
         let body = serde_json::json!({ "recording_ttl_secs": 600_i64 });
         let req = Request::builder()
             .method("PUT")
-            .uri("/v1/admin/config/recording-ttl")
+            .uri("/admin/config/recording-ttl")
             .header("authorization", format!("Bearer {}", plaintext))
             .header("content-type", "application/json")
             .body(Body::from(body.to_string()))
@@ -5113,7 +5113,7 @@ mod tests {
 
         let app = Router::new()
             .route(
-                "/v1/admin/config/recording-ttl",
+                "/admin/config/recording-ttl",
                 put(put_recording_ttl),
             )
             .with_state(state.clone());
@@ -5121,7 +5121,7 @@ mod tests {
         let body = serde_json::json!({ "recording_ttl_secs": -1_i64 });
         let req = Request::builder()
             .method("PUT")
-            .uri("/v1/admin/config/recording-ttl")
+            .uri("/admin/config/recording-ttl")
             .header("authorization", format!("Bearer {}", plaintext))
             .header("content-type", "application/json")
             .body(Body::from(body.to_string()))
@@ -5152,7 +5152,7 @@ mod tests {
 
         let app = Router::new()
             .route(
-                "/v1/admin/config/recording-ttl",
+                "/admin/config/recording-ttl",
                 put(put_recording_ttl),
             )
             .with_state(state.clone());
@@ -5161,7 +5161,7 @@ mod tests {
         // "recording_ttl_secs" field.
         let req = Request::builder()
             .method("PUT")
-            .uri("/v1/admin/config/recording-ttl")
+            .uri("/admin/config/recording-ttl")
             .header("authorization", format!("Bearer {}", plaintext))
             .header("content-type", "application/json")
             .body(Body::from(r#"{"foo":"bar"}"#))
@@ -5192,14 +5192,14 @@ mod tests {
 
         let app = Router::new()
             .route(
-                "/v1/admin/config/recording-ttl",
+                "/admin/config/recording-ttl",
                 put(put_recording_ttl),
             )
             .with_state(state.clone());
 
         let req = Request::builder()
             .method("PUT")
-            .uri("/v1/admin/config/recording-ttl")
+            .uri("/admin/config/recording-ttl")
             .header("authorization", format!("Bearer {}", plaintext))
             .header("content-type", "application/json")
             .body(Body::from(r#"{invalid"#))

@@ -87,7 +87,7 @@ pub fn usage_broadcast() -> broadcast::Sender<RecentUsageRow> {
 /// whose combined size can be multi-MB. The dashboard's WS broadcast
 /// was fan-outing the full row to every subscriber (PII + bandwidth
 /// amplifier). Strip the heavy fields before sending — the detail view
-/// at `GET /v1/admin/usage/detail?id=...` reads them straight from
+/// at `GET /admin/usage/detail?id=...` reads them straight from
 /// the database so on-demand access is preserved.
 pub fn publish_usage_row(row: RecentUsageRow) {
     if let Some(tx) = USAGE_SENDER.get() {
@@ -99,7 +99,7 @@ pub fn publish_usage_row(row: RecentUsageRow) {
 
 /// Strip the heavyweight fields from a row before it leaves the
 /// process. The dashboard subscribes to recent rows via WS and
-/// `GET /v1/admin/usage/recent`; both routes return this redacted shape.
+/// `GET /admin/usage/recent`; both routes return this redacted shape.
 /// The full fields remain available on demand via the detail endpoint.
 pub fn redact_for_broadcast(mut row: RecentUsageRow) -> RecentUsageRow {
     row.request_body_json = None;

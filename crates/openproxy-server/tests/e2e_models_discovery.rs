@@ -377,7 +377,7 @@ fn select_models(
 
 /// Drive `admin::refresh_models` against the live pool, mimicking
 /// exactly what the production scheduler does (and what the
-/// `POST /v1/admin/models/:id/refresh` handler does): open a fresh
+/// `POST /admin/models/:id/refresh` handler does): open a fresh
 /// owned `Connection`, hand it to `refresh_models`, await the
 /// future, drop the connection. We do NOT use `pool.writer()` here
 /// because `refresh_models` takes the `Connection` by value to keep

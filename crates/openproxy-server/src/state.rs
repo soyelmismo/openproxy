@@ -68,7 +68,7 @@ pub struct AppState {
     /// Hot-swappable slot for [`openproxy_core::config::TimeoutsConfig`].
     /// Reads in `chat.rs` go through [`AppState::timeouts`] which
     /// copies the 5-u64 struct atomically. Writes are done by the
-    /// `PUT /v1/admin/config/timeouts` handler after the DB
+    /// `PUT /admin/config/timeouts` handler after the DB
     /// row has been updated. See spec §5 / §7.
     timeouts_cell: Arc<RwLock<openproxy_core::config::TimeoutsConfig>>,
     /// Hot-swappable slot for [`openproxy_core::compression::CompressionMode`].
@@ -779,7 +779,7 @@ impl AppState {
     ///
     /// This is the value used by the chat pipeline and the watchdog
     /// (see `chat.rs`). It may differ from `config().timeouts` after a
-    /// `PUT /v1/admin/config/timeouts` — `config()` is the startup
+    /// `PUT /admin/config/timeouts` — `config()` is the startup
     /// snapshot, this one is the live one.
     pub fn timeouts(&self) -> openproxy_core::config::TimeoutsConfig {
         *self.timeouts_cell.read()
@@ -791,13 +791,13 @@ impl AppState {
     }
 
     /// Replace the live compression mode. Called by
-    /// `PUT /v1/admin/config/compression` after the DB UPSERT.
+    /// `PUT /admin/config/compression` after the DB UPSERT.
     pub fn set_compression_mode(&self, mode: openproxy_core::compression::CompressionMode) {
         *self.compression_mode_cell.write() = mode;
     }
 
     /// Replace the live [`TimeoutsConfig`]. Called by the
-    /// `PUT /v1/admin/config/timeouts` handler *after* the DB UPSERT
+    /// `PUT /admin/config/timeouts` handler *after* the DB UPSERT
     /// has succeeded. Takes the write lock briefly; readers see the
     /// new value as soon as this returns.
     ///
@@ -849,7 +849,7 @@ mod tests {
     //! The regression test exercises the bug fixed by
     //! `rebuild_adapters`: prior to the fix, the registry was built
     //! once at startup and never refreshed, so a `POST
-    //! /v1/admin/providers` made AFTER the server was already
+    //! /admin/providers` made AFTER the server was already
     //! running inserted the row but left the in-memory adapter list
     //! stale, causing `CoreError::ProviderNotFound(<id>)` on the
     //! first chat attempt against the new provider. The fix wraps

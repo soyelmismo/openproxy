@@ -43,10 +43,10 @@ test.describe('Combo with targetless account_id (Bug 2) — user-visible contrac
     // here is the user-visible contract. Un-skip and wire admin
     // API calls once the fixture helper exists.
     //
-    // 1. POST /v1/admin/providers (auth_type=bearer, 0 accounts)
-    // 2. POST /v1/admin/models (a single model row)
-    // 3. POST /v1/admin/combos (priority, 1 target)
-    // 4. POST /v1/admin/combo_targets (account_id=null)
+    // 1. POST /admin/providers (auth_type=bearer, 0 accounts)
+    // 2. POST /admin/models (a single model row)
+    // 3. POST /admin/combos (priority, 1 target)
+    // 4. POST /admin/combo_targets (account_id=null)
     // 5. POST /v1/chat/completions through the combo
     // 6. Assert: status_code !== 0; body carries either a 2xx
     //    response OR a clean 502 NoHealthyTargets error.
