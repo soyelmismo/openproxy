@@ -23,21 +23,15 @@ use serde_json::{json, Map, Value};
 
 use crate::translation::OpenAIUsage;
 
-/// Extract `delta.content` from an OpenAI streaming chunk JSON payload
-/// WITHOUT full JSON parsing. Finds `"content":"` and extracts the string
-/// value by scanning for the closing `"`, correctly handling JSON escape
-/// sequences. This is ~50-100x faster than `serde_json::from_str::<Value>`
-/// because it avoids allocating the full AST.
-///
-/// Returns `None` when the payload has no `delta.content` (empty deltas,
-/// tool-call-only chunks, role-only chunks, etc.).
-fn extract_delta_content(payload: &str) -> Option<&str> {
-    let marker = b"\"content\":\"";
+/// Scan `payload` for `marker` (a JSON `"field":"` literal) and return the
+/// raw substring between the opening and closing quotes, honouring `\` escapes.
+/// Zero allocation; `marker` must be a static byte slice for the hot path.
+fn extract_json_string_field<'a>(payload: &'a str, marker: &[u8]) -> Option<&'a str> {
     let bytes = payload.as_bytes();
     let pos = memchr::memmem::find(bytes, marker)?;
     let value_start = pos + marker.len();
 
-    // Scan forward for the closing quote, handling JSON escape sequences
+    // Scan forward for the closing quote, handling JSON escape sequences.
     let mut i = value_start;
     while i < bytes.len() {
         if bytes[i] == b'\\' {
@@ -54,27 +48,23 @@ fn extract_delta_content(payload: &str) -> Option<&str> {
     None
 }
 
+/// Extract `delta.content` from an OpenAI streaming chunk JSON payload
+/// WITHOUT full JSON parsing. Finds `"content":"` and extracts the string
+/// value by scanning for the closing `"`, correctly handling JSON escape
+/// sequences. This is ~50-100x faster than `serde_json::from_str::<Value>`
+/// because it avoids allocating the full AST.
+///
+/// Returns `None` when the payload has no `delta.content` (empty deltas,
+/// tool-call-only chunks, role-only chunks, etc.).
+fn extract_delta_content(payload: &str) -> Option<&str> {
+    extract_json_string_field(payload, b"\"content\":\"")
+}
+
 /// Extract `delta.reasoning_content` from an OpenAI streaming chunk JSON
 /// payload. Uses the same lightweight string scan as `extract_delta_content`.
 /// Returns `None` when no `reasoning_content` field is present.
 pub fn extract_reasoning_content(payload: &str) -> Option<&str> {
-    let marker = b"\"reasoning_content\":\"";
-    let bytes = payload.as_bytes();
-    let pos = memchr::memmem::find(bytes, marker)?;
-    let value_start = pos + marker.len();
-
-    let mut i = value_start;
-    while i < bytes.len() {
-        if bytes[i] == b'\\' {
-            i += 2;
-            continue;
-        }
-        if bytes[i] == b'"' {
-            return Some(&payload[value_start..i]);
-        }
-        i += 1;
-    }
-    None
+    extract_json_string_field(payload, b"\"reasoning_content\":\"")
 }
 
 /// Normalize non-standard reasoning fields in an OpenAI streaming chunk.
