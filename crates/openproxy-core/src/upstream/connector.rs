@@ -509,9 +509,24 @@ async fn run_phased_connect(
         }
     };
 
-    // Best-effort nodelay. Failure here is not fatal (a slow consumer
-    // is hyper's problem, not ours).
+    // Best-effort nodelay + TCP keepalive. Failure here is not fatal
+    // (a slow consumer is hyper's problem, not ours).
+    //
+    // Bug fix (SendRequest at 6-9ms): TCP keepalive probes detect
+    // stale connections at the kernel level. Without keepalive, a
+    // connection that the server closed silently (no FIN/RST
+    // received) looks healthy to the client until the next write
+    // fails. With keepalive, the kernel probes every 30s (idle) and
+    // drops the socket after 3 failed probes (~90s), so hyper's pool
+    // never hands out a stale connection.
     let _ = stream.set_nodelay(true);
+    {
+        let sock = socket2::SockRef::from(&stream);
+        let keepalive = socket2::TcpKeepalive::new()
+            .with_time(std::time::Duration::from_secs(30))
+            .with_interval(std::time::Duration::from_secs(10));
+        let _ = sock.set_tcp_keepalive(&keepalive);
+    }
 
     // ---- Phase 3: TLS ---------------------------------------------------
     // Real `tokio-rustls` handshake. The connector is process-wide
