@@ -10,7 +10,7 @@ use std::time::Instant;
 
 use bytes::Bytes;
 use http::{HeaderMap, Method, Request, Uri};
-use http_body_util::{BodyExt, Empty, Full};
+use http_body_util::Full;
 
 use super::cancel::CancellationToken;
 use super::conn_pool::{HostKey, Scheme, UpstreamConnectionPool as Pool};
@@ -20,7 +20,7 @@ use super::profile::TimeoutProfile;
 use super::response::{UpstreamBodyStream, UpstreamResponse};
 
 #[cfg(feature = "upstream-hyper")]
-use super::connector::{phased_phase, PhasedConnector, PhasedTimeouts};
+use super::connector::{phased_phase, CALL_TIMEOUTS, PhasedConnector, PhasedTimeouts};
 #[cfg(feature = "upstream-hyper")]
 use hyper_util::client::legacy::connect::Connection as HyperConnection;
 #[cfg(feature = "upstream-hyper")]
@@ -97,12 +97,15 @@ pub struct UpstreamClient {
 /// `Service<Uri>` shape required by hyper-util.
 #[cfg(feature = "upstream-hyper")]
 enum HyperDispatch {
-    /// Production: real `HyperClient` with the `PhasedConnector`. The
-    /// `connector` clone is kept here so we can call `set_timeouts`
-    /// per request before the dispatch is issued.
+    /// Production: real `HyperClient` with the `PhasedConnector`.
+    /// The connector is owned by the `HyperClient` internally (it
+    /// was cloned into the builder at construction time). We no
+    /// longer keep a separate connector clone here because HIGH-5
+    /// replaced the `set_timeouts` shared-atomics pattern with a
+    /// task-local — there is no per-call state to push into the
+    /// connector anymore.
     Production {
         hyper: HyperClient<PhasedConnector, Full<Bytes>>,
-        connector: PhasedConnector,
     },
     /// Test: any `C` that satisfies the hyper-util connect shape.
     /// Wrapped in `Arc<dyn HyperDispatchDyn>` so the `HyperDispatch`
@@ -124,14 +127,23 @@ impl std::fmt::Debug for HyperDispatch {
     }
 }
 
-/// Trait object that can dispatch a hyper `Request` and return a
-/// `Response`. This is the test-time equivalent of the production
-/// hyper client.
+/// Trait object that can dispatch a hyper `Request<Full<Bytes>>` and
+/// return a `Response`. This is the test-time equivalent of the
+/// production hyper client.
+///
+/// HIGH-6 fix: the signature takes `Request<Full<Bytes>>` directly
+/// (NOT `Request<Pin<Box<dyn Body>>>`). The caller (`call_inner`)
+/// already has the body as `Option<Bytes>` and builds a `Full<Bytes>`
+/// from it — wrapping that in a `dyn Body` only to drain it back to
+/// `Bytes` via `body.collect().await` inside the dispatch was pure
+/// waste (one `HeaderMap::clone()` + one `Bytes` round-trip per
+/// request). With `Full<Bytes>` in the signature, the production
+/// dispatch hands the request straight to hyper with zero copying.
 #[cfg(feature = "upstream-hyper")]
 trait HyperDispatchDyn: Send + Sync + 'static {
     fn dispatch(
         &self,
-        req: Request<Pin<Box<dyn http_body::Body<Data = Bytes, Error = Box<dyn std::error::Error + Send + Sync>> + Send + Unpin>>>,
+        req: Request<Full<Bytes>>,
     ) -> Pin<
         Box<
             dyn std::future::Future<
@@ -167,6 +179,13 @@ impl UpstreamClient {
             // The clone shares the same `Arc<AtomicU64>` fields, so
             // the updates are visible to the cloned connector held
             // inside the HyperClient.
+            //
+            // HIGH-5 fix: the above comment is now HISTORICAL. We no
+            // longer call `set_timeouts` — the per-call timeouts are
+            // passed via the `CALL_TIMEOUTS` task-local. The
+            // connector clone is still passed to `HyperClient::builder`
+            // (hyper-util clones it internally per request), but we
+            // don't keep a separate reference in `HyperDispatch::Production`.
             let connector = PhasedConnector::with_defaults();
             let hyper: HyperClient<PhasedConnector, Full<Bytes>> =
                 HyperClient::builder(TokioExecutor::new())
@@ -184,12 +203,12 @@ impl UpstreamClient {
                     // is the intended trade-off now that the client is
                     // shared.
                     .pool_max_idle_per_host(32)
-                    .build(connector.clone());
+                    .build(connector);
             let pool = Pool::new();
             spawn_eviction_loop(pool.clone());
             Arc::new(Self {
                 pool,
-                dispatch: HyperDispatch::Production { hyper, connector },
+                dispatch: HyperDispatch::Production { hyper },
             })
         }
         #[cfg(not(feature = "upstream-hyper"))]
@@ -296,13 +315,18 @@ impl UpstreamClient {
             .unwrap_or(if matches!(scheme, Scheme::Https) { 443 } else { 80 });
         let host_key = HostKey::new(scheme, host.clone(), port);
 
-        // Build the hyper::Request<B> for the legacy client.
+        // Build the hyper::Request<Full<Bytes>> for the legacy client.
+        //
+        // HIGH-6 fix: we build `Full<Bytes>` directly instead of going
+        // through `Pin<Box<dyn Body>>`. The production dispatch takes
+        // `Request<Full<Bytes>>` and hands it straight to hyper —
+        // eliminating the `body.collect().await` + `HeaderMap::clone()`
+        // round-trip that the dyn-Body trait forced on us.
         let body_bytes = spec.body.clone();
-        let body: Pin<Box<dyn http_body::Body<Data = Bytes, Error = Box<dyn std::error::Error + Send + Sync>> + Send + Unpin>> =
-            match body_bytes.clone() {
-                Some(bytes) => Box::pin(Full::<Bytes>::new(bytes).map_err(|never| -> Box<dyn std::error::Error + Send + Sync> { match never {} })),
-                None => Box::pin(Empty::<Bytes>::new().map_err(|never| -> Box<dyn std::error::Error + Send + Sync> { match never {} })),
-            };
+        let body: Full<Bytes> = match &body_bytes {
+            Some(bytes) => Full::new(bytes.clone()),
+            None => Full::new(Bytes::new()),
+        };
         let mut builder = Request::builder()
             .method(spec.method.clone())
             .uri(&spec.url);
@@ -341,7 +365,7 @@ impl UpstreamClient {
                 }
             }
         }
-        let request: Request<Pin<Box<dyn http_body::Body<Data = Bytes, Error = Box<dyn std::error::Error + Send + Sync>> + Send + Unpin>>> =
+        let request: Request<Full<Bytes>> =
             builder.body(body).map_err(|e| UpstreamError::Invalid(e.to_string()))?;
 
         // Bug 2b/2c fix: hyper's legacy client performs dial + TLS +
@@ -379,14 +403,15 @@ impl UpstreamClient {
         let host_key_for_send = host_key.clone();
         let host_for_log = host.clone();
         let dispatch = match &self.dispatch {
-            HyperDispatch::Production { hyper, connector } => {
-                // Bug 2b/2c fix: push the per-call timeouts into
-                // the connector's atomics. The cloned connector
-                // inside the HyperClient shares the same
-                // `Arc<AtomicU64>` fields, so the updates are
-                // visible to its `Service::call` invocation.
-                connector.set_timeouts(PhasedTimeouts::from_resolved(&timeouts));
-                // Erase the production client to the same dyn shape.
+            HyperDispatch::Production { hyper } => {
+                // HIGH-5 fix: the per-call timeouts are now passed via
+                // the `CALL_TIMEOUTS` task-local (see `connector.rs`).
+                // The old `connector.set_timeouts(...)` call is GONE —
+                // it was a race between concurrent requests sharing the
+                // same `Arc<AtomicU64>` fields. The task-local is set
+                // below by wrapping `send_fut` in `CALL_TIMEOUTS.scope(...)`,
+                // which guarantees the connector reads the correct
+                // per-call timeouts when its `call()` is polled.
                 let prod: Arc<dyn HyperDispatchDyn> = Arc::new(ProductionDispatch { inner: hyper.clone() });
                 prod
             }
@@ -402,6 +427,14 @@ impl UpstreamClient {
         // the `phase_hint_sleep` future never resolves, so the
         // per-phase race below is unchanged.
         let phase_hint = dispatch.phase_hint();
+        // HIGH-5 fix: wrap the send_fut in `CALL_TIMEOUTS.scope(...)`
+        // so the `PhasedConnector::call` (polled deep inside hyper's
+        // legacy client) reads the per-call timeouts from the task-local
+        // instead of from shared `Arc<AtomicU64>` fields. This eliminates
+        // the race where another request's `call_inner` could clobber
+        // the atomics between `set_timeouts` and the first poll of
+        // `send_fut`.
+        let connector_timeouts = PhasedTimeouts::from_resolved(&timeouts);
         let send_fut = async move {
             let res = dispatch.dispatch(request).await;
             // Bump the pool counter. We treat the very first request
@@ -419,6 +452,7 @@ impl UpstreamClient {
             }
             res
         };
+        let send_fut = CALL_TIMEOUTS.scope(connector_timeouts, send_fut);
 
         // ---- Real per-phase race --------------------------------------
         // Three nested ceilings (outer -> inner):
@@ -560,10 +594,16 @@ fn spawn_eviction_loop(pool: Pool) {
     }
     tokio::spawn(async move {
         loop {
+            // MEDIUM-3 fix: the sweep interval is 30s and the
+            // eviction age is 60s (wall-clock `Duration`, not ticks).
+            // The previous design bumped a tick on every
+            // `record_dial`/`record_reuse` and evicted entries older
+            // than 2 ticks — under low traffic the tick barely
+            // advanced and idle entries were NEVER evicted. The new
+            // design uses `Instant` (monotonic) so eviction is
+            // independent of request volume.
             tokio::time::sleep(std::time::Duration::from_secs(30)).await;
-            // 60s window = 2 ticks (we sleep 30s). Drop entries whose
-            // last_used_tick is more than 2 ticks old.
-            let evicted = pool.evict_older_than(2);
+            let evicted = pool.evict_older_than(std::time::Duration::from_secs(60));
             if evicted > 0 {
                 tracing::debug!(evicted, "upstream pool eviction sweep");
             }
@@ -585,17 +625,7 @@ struct ProductionDispatch {
 impl HyperDispatchDyn for ProductionDispatch {
     fn dispatch(
         &self,
-        req: Request<
-            Pin<
-                Box<
-                    dyn http_body::Body<
-                            Data = Bytes,
-                            Error = Box<dyn std::error::Error + Send + Sync>,
-                        > + Send
-                        + Unpin,
-                >,
-            >,
-        >,
+        req: Request<Full<Bytes>>,
     ) -> Pin<
         Box<
             dyn std::future::Future<Output = Result<http::Response<hyper::body::Incoming>, UpstreamError>>
@@ -603,78 +633,22 @@ impl HyperDispatchDyn for ProductionDispatch {
                 + '_,
         >,
     > {
-        // The production client is typed with `Full<Bytes>`. We have
-        // to materialise the caller's `Pin<Box<dyn Body>>` into a
-        // concrete `Full<Bytes>` before handing the request to
-        // hyper. We do that by draining the body in the async
-        // block below. The body is bounded (caller's
-        // `UpstreamRequest::body` is `Option<Bytes>`, never a
-        // streaming channel) so the read is O(1) in practice.
-        //
-        // Earlier this shim rebuilt the request with `Empty<Bytes>`
-        // and silently dropped the caller's body, which meant every
-        // upstream POST arrived with `Content-Length: 0` and a
-        // missing JSON body. That regression surfaced in
-        // Gate E5 against `oauth2.googleapis.com` (`411 Length
-        // Required`) and OpenRouter (`400 failed to decode json
-        // body`); see `upstream-migration-report.md`.
-        let (method, uri, headers) = (
-            req.method().clone(),
-            req.uri().clone(),
-            req.headers().clone(),
-        );
-        let body = req.into_body();
+        // HIGH-6 fix: NO body drain, NO HeaderMap clone. The caller
+        // (`call_inner`) builds `Request<Full<Bytes>>` directly from
+        // the `Option<Bytes>` body; we hand it straight to hyper's
+        // legacy client. The previous dyn-Body trait forced a
+        // `body.collect().await` + `HeaderMap::clone()` round-trip
+        // here — pure waste on every request.
         let inner = self.inner.clone();
         Box::pin(async move {
-            // Drain the caller's body. `BodyExt::collect` is
-            // bounded: it reads until `is_end_stream` and returns
-            // the concatenated `Bytes`. The 32 MiB cap is a
-            // hard ceiling mirroring the streaming-body cap in
-            // `UpstreamBodyStream::from_hyper`.
-            use http_body_util::BodyExt;
-            let collected = body
-                .collect()
-                .await
-                .map_err(|e| UpstreamError::Http(format!("body collect: {e}")))?;
-            let body_bytes: Bytes = collected.to_bytes();
-            // Build the new request with the drained body as
-            // `Full<Bytes>`. Headers (including `Content-Length`,
-            // which `call_inner` already set to `body_bytes.len()`
-            // when `spec.body` is `Some`) are carried over
-            // verbatim.
-            let mut builder = Request::builder().method(method).uri(uri);
-            {
-                let h = builder.headers_mut().expect("request builder headers");
-                for (k, v) in headers.iter() {
-                    h.append(k.clone(), v.clone());
-                }
-            }
-            let new_req: Request<Full<Bytes>> = builder
-                .body(Full::new(body_bytes))
-                .expect("rebuild request");
             inner
-                .request(new_req)
+                .request(req)
                 .await
                 .map_err(|e| {
-                    // Bug 2b/2c fix: the connector error chain
-                    // carries a `PhasedConnectorError` that exposes
-                    // the stalled phase (Dns / Dial / Tls). Hyper's
-                    // `Error` has a `source()` that points to the
-                    // connector error; we walk that chain and, if we
-                    // find a `PhasedConnectorError`, surface it as a
-                    // `Timeout(phase)` so the upper layer never has
-                    // to do the downcast itself. This keeps the
-                    // attribution contract end-to-end: a stalled
-                    // DNS lookup is `Timeout(Dns)`, a stalled dial is
-                    // `Timeout(Dial)`, a stalled TLS handshake is
-                    // `Timeout(Tls)`.
-                    if let Some(phase) = hyper_source_phase(&e) {
-                        return UpstreamError::Timeout(phase);
-                    }
-                    if e.is_connect() {
-                        UpstreamError::Connection(e.to_string())
-                    } else {
-                        UpstreamError::Http(e.to_string())
+                    let phase = hyper_source_phase(&e);
+                    match phase {
+                        Some(p) => UpstreamError::Timeout(p),
+                        None => UpstreamError::Http(e.to_string()),
                     }
                 })
         })
@@ -771,17 +745,7 @@ where
 {
     fn dispatch(
         &self,
-        req: Request<
-            Pin<
-                Box<
-                    dyn http_body::Body<
-                            Data = Bytes,
-                            Error = Box<dyn std::error::Error + Send + Sync>,
-                        > + Send
-                        + Unpin,
-                >,
-            >,
-        >,
+        req: Request<Full<Bytes>>,
     ) -> Pin<
         Box<
             dyn std::future::Future<Output = Result<http::Response<hyper::body::Incoming>, UpstreamError>>
@@ -789,36 +753,12 @@ where
                 + '_,
         >,
     > {
-        // Mirror the production dispatch: drain the caller's body
-        // into `Full<Bytes>` so tests that exercise the
-        // end-to-end pipeline observe the real request bytes
-        // arriving at the mock upstream.
-        let (method, uri, headers) = (
-            req.method().clone(),
-            req.uri().clone(),
-            req.headers().clone(),
-        );
-        let body = req.into_body();
+        // HIGH-6 fix: same as production — no body drain, no
+        // HeaderMap clone. The request is handed straight to hyper.
         let inner = self.hyper.clone();
         Box::pin(async move {
-            use http_body_util::BodyExt;
-            let collected = body
-                .collect()
-                .await
-                .map_err(|e| UpstreamError::Http(format!("body collect: {e}")))?;
-            let body_bytes: Bytes = collected.to_bytes();
-            let mut builder = Request::builder().method(method).uri(uri);
-            {
-                let h = builder.headers_mut().expect("request builder headers");
-                for (k, v) in headers.iter() {
-                    h.append(k.clone(), v.clone());
-                }
-            }
-            let new_req: Request<Full<Bytes>> = builder
-                .body(Full::new(body_bytes))
-                .expect("rebuild request");
             inner
-                .request(new_req)
+                .request(req)
                 .await
                 .map_err(|e| {
                     // Bug 2b/2c fix: same downcast as the production
