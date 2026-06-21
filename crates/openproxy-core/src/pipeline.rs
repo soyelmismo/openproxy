@@ -1353,6 +1353,69 @@ impl Pipeline {
 
     // ---------------------------------------------------------------------
 
+    /// Serialize `value` through the adapter's `normalize_request_body` hook
+    /// to `Bytes`, mapping both serde errors to a `Parse` `CoreError` with
+    /// the given `label` (e.g. "openai request"). On error, records the failure
+    /// via `record_and_fail` and returns `Err(PipelineResult)` so the caller
+    /// can early-return with `?`.
+    fn normalize_and_serialize(
+        &self,
+        value: &impl serde::Serialize,
+        adapter: &dyn crate::adapters::ProviderAdapter,
+        label: &str,
+        req: &PipelineRequest,
+        combo: &Combo,
+        target: &ComboTarget,
+        attempt: u8,
+        race_size: u8,
+        started: Instant,
+        model: &Model,
+    ) -> std::result::Result<bytes::Bytes, PipelineResult> {
+        let mut body_value = match serde_json::to_value(value) {
+            Ok(v) => v,
+            Err(e) => {
+                let err = CoreError::Parse(format!("serialize {label} to value: {e}"));
+                return Err(self.record_and_fail(
+                    req,
+                    combo,
+                    target,
+                    FailureContext {
+                        attempt,
+                        race_size,
+                        err: &err,
+                        started,
+                        model: Some(model),
+                        connect_ms: None,
+                        ttft_ms: None,
+                        status_code: 0,
+                    },
+                ));
+            }
+        };
+        adapter.normalize_request_body(&mut body_value);
+        match serde_json::to_vec(&body_value) {
+            Ok(v) => Ok(bytes::Bytes::from(v)),
+            Err(e) => {
+                let err = CoreError::Parse(format!("serialize {label}: {e}"));
+                Err(self.record_and_fail(
+                    req,
+                    combo,
+                    target,
+                    FailureContext {
+                        attempt,
+                        race_size,
+                        err: &err,
+                        started,
+                        model: Some(model),
+                        connect_ms: None,
+                        ttft_ms: None,
+                        status_code: 0,
+                    },
+                ))
+            }
+        }
+    }
+
     async fn execute_single(
         &self,
         req: &PipelineRequest,
@@ -1881,143 +1944,38 @@ impl Pipeline {
         //    chat request body).
         let body_bytes: bytes::Bytes = match target_format {
             crate::models::TargetFormat::Openai => {
-                match serde_json::to_value(&upstream_req) {
-                    Ok(mut body_value) => {
-                        adapter.normalize_request_body(&mut body_value);
-                        match serde_json::to_vec(&body_value) {
-                            Ok(v) => bytes::Bytes::from(v),
-                            Err(e) => {
-                                let err = CoreError::Parse(format!("serialize openai request: {e}"));
-                                return self.record_and_fail(
-                                    req,
-                                    combo,
-                                    target,
-                                    FailureContext {
-                                    attempt,
-                                    race_size,
-                                    err: &err,
-                                    started,
-                                    model: Some(&model),
-                                    connect_ms: None,
-                                    ttft_ms: None,
-                                    status_code: 0,
-                                    },
-                                );
-                            }
-                        }
-                    }
-                    Err(e) => {
-                        let err = CoreError::Parse(format!("serialize openai request to value: {e}"));
-                        return self.record_and_fail(
-                            req,
-                            combo,
-                            target,
-                            FailureContext {
-                            attempt,
-                            race_size,
-                            err: &err,
-                            started,
-                            model: Some(&model),
-                            connect_ms: None,
-                            ttft_ms: None,
-                            status_code: 0,
-                            },
-                        );
-                    }
+                match self.normalize_and_serialize(
+                    &upstream_req,
+                    adapter.as_ref(),
+                    "openai request",
+                    req, combo, target, attempt, race_size, started, &model,
+                ) {
+                    Ok(b) => b,
+                    Err(r) => return r,
                 }
             }
             crate::models::TargetFormat::Anthropic => {
                 let anthro = crate::translation::openai_to_anthropic(&upstream_req);
-                match serde_json::to_value(&anthro) {
-                    Ok(mut body_value) => {
-                        adapter.normalize_request_body(&mut body_value);
-                        match serde_json::to_vec(&body_value) {
-                            Ok(v) => bytes::Bytes::from(v),
-                            Err(e) => {
-                                let err = CoreError::Parse(format!("serialize anthropic request: {e}"));
-                                return self.record_and_fail(
-                                    req,
-                                    combo,
-                                    target,
-                                    FailureContext {
-                                    attempt,
-                                    race_size,
-                                    err: &err,
-                                    started,
-                                    model: Some(&model),
-                                    connect_ms: None,
-                                    ttft_ms: None,
-                                    status_code: 0,
-                                    },
-                                );
-                            }
-                        }
-                    }
-                    Err(e) => {
-                        let err = CoreError::Parse(format!("serialize anthropic request to value: {e}"));
-                        return self.record_and_fail(
-                            req,
-                            combo,
-                            target,
-                            FailureContext {
-                            attempt,
-                            race_size,
-                            err: &err,
-                            started,
-                            model: Some(&model),
-                            connect_ms: None,
-                            ttft_ms: None,
-                            status_code: 0,
-                            },
-                        );
-                    }
+                match self.normalize_and_serialize(
+                    &anthro,
+                    adapter.as_ref(),
+                    "anthropic request",
+                    req, combo, target, attempt, race_size, started, &model,
+                ) {
+                    Ok(b) => b,
+                    Err(r) => return r,
                 }
             }
             crate::models::TargetFormat::Gemini => {
                 let gemini = crate::translation::openai_to_gemini(&upstream_req);
-                match serde_json::to_value(&gemini) {
-                    Ok(mut body_value) => {
-                        adapter.normalize_request_body(&mut body_value);
-                        match serde_json::to_vec(&body_value) {
-                            Ok(v) => bytes::Bytes::from(v),
-                            Err(e) => {
-                                let err = CoreError::Parse(format!("serialize gemini request: {e}"));
-                                return self.record_and_fail(
-                                    req,
-                                    combo,
-                                    target,
-                                    FailureContext {
-                                    attempt,
-                                    race_size,
-                                    err: &err,
-                                    started,
-                                    model: Some(&model),
-                                    connect_ms: None,
-                                    ttft_ms: None,
-                                    status_code: 0,
-                                    },
-                                );
-                            }
-                        }
-                    }
-                    Err(e) => {
-                        let err = CoreError::Parse(format!("serialize gemini request to value: {e}"));
-                        return self.record_and_fail(
-                            req,
-                            combo,
-                            target,
-                            FailureContext {
-                            attempt,
-                            race_size,
-                            err: &err,
-                            started,
-                            model: Some(&model),
-                            connect_ms: None,
-                                    ttft_ms: None,
-                                    status_code: 0,
-                            },
-                        );
-                    }
+                match self.normalize_and_serialize(
+                    &gemini,
+                    adapter.as_ref(),
+                    "gemini request",
+                    req, combo, target, attempt, race_size, started, &model,
+                ) {
+                    Ok(b) => b,
+                    Err(r) => return r,
                 }
             }
         };
@@ -3498,11 +3456,7 @@ impl Pipeline {
                             // carry non-standard reasoning fields
                             // (`reasoning` / `reasoning_details`) — a small
                             // fraction of total chunks.
-                            let mut sse_frame = bytes::BytesMut::with_capacity(norm.len() + 16);
-                            sse_frame.extend_from_slice(b"data: ");
-                            sse_frame.extend_from_slice(norm.as_bytes());
-                            sse_frame.extend_from_slice(b"\n\n");
-                            sse_frame.freeze()
+                            crate::sse::build_sse_frame(&norm)
                         } else {
                             // Fast path: forward the original `data: <payload>`
                             // line directly. `line_bytes` is the BytesMut
@@ -3724,11 +3678,8 @@ impl Pipeline {
                                 a.append_openai_raw(&json_str);
                             }
                             // Pre-format as SSE frame to avoid per-chunk String alloc + axum Event overhead.
-                            let mut sse_frame = bytes::BytesMut::with_capacity(json_str.len() + 16);
-                            sse_frame.extend_from_slice(b"data: ");
-                            sse_frame.extend_from_slice(json_str.as_bytes());
-                            sse_frame.extend_from_slice(b"\n\n");
-                            if let Err(e) = sink.send(sse_frame.freeze()).await {
+                            let sse_frame = crate::sse::build_sse_frame(&json_str);
+                            if let Err(e) = sink.send(sse_frame).await {
                                 let err = match e {
                                     crate::race_sink::StreamSinkError::Lost => CoreError::RaceLost,
                                     crate::race_sink::StreamSinkError::Closed => CoreError::ClientDisconnected,
