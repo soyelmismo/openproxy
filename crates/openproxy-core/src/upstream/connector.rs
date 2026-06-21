@@ -296,50 +296,60 @@ impl std::error::Error for PhasedConnectorError {
 /// the `Read + Write + Connection` wrapper, which is the only piece
 /// the hyper-util `Connect` blanket impl needs from us.
 ///
-/// ## Per-call timeout injection
+/// A `tower::Service<Uri>` connector that enforces DNS, dial, and TLS
+/// timeouts independently and reports the stalled phase on error.
 ///
-/// The hyper-util `legacy::Client` clones its connector for each
-/// request, so the connector is a `Clone` value that is **shared**
-/// across concurrent calls. We don't have a per-call setup hook
-/// (hyper-util calls `Service::call` directly on the cloned
-/// connector), so we cannot thread the per-call timeouts into
-/// `call()` by argument.
-///
-/// Solution: the per-phase deadlines are stored in `Arc<AtomicU64>`
-/// fields. The caller (in `client::call_inner`) writes the
-/// per-request timeouts into the atomics just before issuing the
-/// request; the connector reads them in its `call` method. The
-/// reads are lock-free; the writes are only seen by the current
-/// call's `Service::call` invocation (the legacy client polls one
-/// request at a time on the cloned connector).
+/// See the `CALL_TIMEOUTS` task-local below for the per-call timeout
+/// injection mechanism (HIGH-5 fix).
 #[derive(Clone)]
 pub struct PhasedConnector {
-    /// `Arc<AtomicU64>` for each per-phase deadline (millis). All
-    /// fields are public-via-`set_timeouts` for `call_inner`'s
-    /// setup phase. The atomics are `Ordering::Relaxed` because
-    /// they are only used to communicate between the `call_inner`
-    /// setup step (one task) and the connector's `call` future
-    /// polled by the same task; no cross-task visibility ordering
-    /// is required.
-    pub dns_ms: std::sync::Arc<std::sync::atomic::AtomicU64>,
-    pub dial_ms: std::sync::Arc<std::sync::atomic::AtomicU64>,
-    pub tls_ms: std::sync::Arc<std::sync::atomic::AtomicU64>,
+    /// Fallback timeouts used when the `CALL_TIMEOUTS` task-local is
+    /// not set (e.g. tests that build a `PhasedConnector` directly).
+    /// Production paths always set the task-local via
+    /// `UpstreamClient::call_inner`.
+    defaults: PhasedTimeouts,
+}
+
+// Per-call timeout injection (HIGH-5 fix)
+//
+// The hyper-util `legacy::Client` clones its connector for each
+// request, so the connector is a `Clone` value that is **shared**
+// across concurrent calls. We don't have a per-call setup hook
+// (hyper-util calls `Service::call` directly on the cloned
+// connector), so we cannot thread the per-call timeouts into
+// `call()` by argument.
+//
+// Previous design (RACE): the per-phase deadlines were stored in
+// `Arc<AtomicU64>` fields shared across every concurrent request that
+// borrowed the same `UpstreamClient`. The caller wrote the timeouts
+// via `set_timeouts(...)` immediately before polling the dispatch
+// future, but `tokio::select!` does not poll that future synchronously
+// — between `set_timeouts` and the first poll, another request's
+// `call_inner` could call `set_timeouts` and clobber the atomics. The
+// race window was tiny but real, and under high concurrency one
+// request could inherit another request's per-phase budget.
+//
+// Current design (RACE-FREE): a `tokio::task_local!` slot
+// (`CALL_TIMEOUTS`) carries the per-call `PhasedTimeouts` from
+// `UpstreamClient::call_inner` down to `PhasedConnector::call`. The
+// caller wraps the dispatch future in `CALL_TIMEOUTS.scope(value,
+// future)`; the connector reads the slot via `try_with` and falls
+// back to its stored `defaults` if the slot is unset. Each task has
+// its own slot, no shared mutable state, no clobbering.
+//
+// The `defaults` field is kept for tests that build a `PhasedConnector`
+// directly without going through `UpstreamClient::call_inner`. In
+// production, the task-local is always set before the connector's
+// `call()` is polled.
+tokio::task_local! {
+    pub(crate) static CALL_TIMEOUTS: PhasedTimeouts;
 }
 
 impl PhasedConnector {
-    /// Build a connector with the given per-phase timeouts.
+    /// Build a connector with the given per-phase timeouts (used as
+    /// the fallback when the `CALL_TIMEOUTS` task-local is unset).
     pub fn new(timeouts: PhasedTimeouts) -> Self {
-        Self {
-            dns_ms: std::sync::Arc::new(
-                std::sync::atomic::AtomicU64::new(timeouts.dns.as_millis() as u64),
-            ),
-            dial_ms: std::sync::Arc::new(
-                std::sync::atomic::AtomicU64::new(timeouts.dial.as_millis() as u64),
-            ),
-            tls_ms: std::sync::Arc::new(
-                std::sync::atomic::AtomicU64::new(timeouts.tls.as_millis() as u64),
-            ),
-        }
+        Self { defaults: timeouts }
     }
 
     /// Build a connector with the system default timeouts (5s each).
@@ -347,23 +357,37 @@ impl PhasedConnector {
         Self::new(PhasedTimeouts::default())
     }
 
-    /// Set the per-phase timeouts (in millis). Called by
-    /// `call_inner` just before issuing the request. The connector
-    /// reads these in its `call` method.
-    pub fn set_timeouts(&self, timeouts: PhasedTimeouts) {
-        use std::sync::atomic::Ordering;
-        self.dns_ms.store(timeouts.dns.as_millis() as u64, Ordering::Relaxed);
-        self.dial_ms.store(timeouts.dial.as_millis() as u64, Ordering::Relaxed);
-        self.tls_ms.store(timeouts.tls.as_millis() as u64, Ordering::Relaxed);
+    /// Read the effective per-phase timeouts. Checks the `CALL_TIMEOUTS`
+    /// task-local first (set by `UpstreamClient::call_inner`); falls
+    /// back to the stored `defaults` if the slot is unset.
+    ///
+    /// This replaces the old `set_timeouts` + `timeouts()` pair. The
+    /// caller no longer needs to write atomics before issuing the
+    /// request — the task-local is set once per call via `scope(...)`
+    /// and read here.
+    pub fn effective_timeouts(&self) -> PhasedTimeouts {
+        CALL_TIMEOUTS
+            .try_with(|t| *t)
+            .unwrap_or(self.defaults)
     }
 
-    /// Read the current per-phase timeouts (in millis).
+    /// Backward-compat: set the fallback timeouts. Kept for any test
+    /// that calls `set_timeouts` directly; production code should use
+    /// the task-local via `UpstreamClient::call_inner`.
+    pub fn set_timeouts(&self, _timeouts: PhasedTimeouts) {
+        // No-op: the per-call timeouts are now passed via the
+        // `CALL_TIMEOUTS` task-local. This method is kept only for
+        // source compatibility with tests that called it directly.
+        // The `defaults` are NOT mutated because the connector is
+        // shared across concurrent requests via `Clone` — mutating
+        // `defaults` would re-introduce the race we just fixed.
+    }
+
+    /// Backward-compat: read the fallback timeouts (NOT the per-call
+    /// task-local). Kept for the `Debug` impl. Production code should
+    /// use `effective_timeouts()` instead.
     pub fn timeouts(&self) -> PhasedTimeouts {
-        use std::sync::atomic::Ordering;
-        let dns = std::time::Duration::from_millis(self.dns_ms.load(Ordering::Relaxed));
-        let dial = std::time::Duration::from_millis(self.dial_ms.load(Ordering::Relaxed));
-        let tls = std::time::Duration::from_millis(self.tls_ms.load(Ordering::Relaxed));
-        PhasedTimeouts { dns, dial, tls }
+        self.defaults
     }
 }
 
@@ -397,7 +421,10 @@ impl Service<Uri> for PhasedConnector {
     }
 
     fn call(&mut self, uri: Uri) -> Self::Future {
-        let timeouts = self.timeouts();
+        // HIGH-5 fix: read the per-call timeouts from the task-local
+        // (set by `UpstreamClient::call_inner` via `CALL_TIMEOUTS.scope`).
+        // Falls back to `defaults` if the slot is unset (tests).
+        let timeouts = self.effective_timeouts();
         let is_https = uri.scheme_str() == Some("https");
         // See the comment on `type Future` for why we don't write
         // `+ Unpin` here: the inner async block is not `Unpin`

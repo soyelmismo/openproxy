@@ -187,7 +187,7 @@ impl UpstreamConnectionPool {
     }
     pub fn record_dial(&self, _key: HostKey) {}
     pub fn record_reuse(&self, _key: HostKey) {}
-    pub fn evict_older_than(&self, _max: usize) -> usize {
+    pub fn evict_older_than(&self, _max_age: std::time::Duration) -> usize {
         0
     }
 }

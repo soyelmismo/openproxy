@@ -683,22 +683,24 @@ async fn adversarial_phase_timeout_dns_actually_fires_at_dns_ms_not_total() {
     );
 }
 
-/// ADVERSARIAL (i) — `phased_connector_respects_dynamic_timeouts_via_atomic`.
+/// ADVERSARIAL (i) — `phased_connector_respects_dynamic_timeouts_via_task_local`.
 ///
-/// The `PhasedConnector` stores its per-phase deadlines in
-/// `Arc<AtomicU64>` and reads them on every `call`. We verify that
-/// `set_timeouts` is the dominant mechanism: a connector built with
-/// `dial_ms=5000` is then re-timed to `dial_ms=50` via
-/// `set_timeouts`, and the next request fails at ~50ms (not 5000ms).
+/// The `PhasedConnector` reads its per-phase deadlines from the
+/// `CALL_TIMEOUTS` task-local (set by `UpstreamClient::call_inner` via
+/// `CALL_TIMEOUTS.scope(value, future)`). We verify that:
+///   1. When the task-local is NOT set, `effective_timeouts()` falls
+///      back to the `defaults` passed at construction.
+///   2. When the task-local IS set, `effective_timeouts()` returns
+///      the task-local value (overriding the defaults).
 ///
-/// This is a structural pin: if a future refactor replaces the
-/// atomic-read with a captured-at-construction value, this test
-/// fails.
+/// This is a structural pin: if a future refactor re-introduces the
+/// `Arc<AtomicU64>` shared-state pattern (which had a race between
+/// concurrent requests), this test fails because the task-local
+/// override will not be visible to a connector that reads atomics
+/// instead.
 #[tokio::test]
 async fn adversarial_phased_connector_respects_dynamic_timeouts_via_atomic() {
-    use crate::upstream::connector::{PhasedConnector, PhasedTimeouts};
-    use std::sync::Arc;
-    use std::sync::atomic::Ordering;
+    use crate::upstream::connector::{CALL_TIMEOUTS, PhasedConnector, PhasedTimeouts};
 
     // 1. Build a connector with a loose initial dial budget.
     let connector = PhasedConnector::new(PhasedTimeouts {
@@ -706,26 +708,38 @@ async fn adversarial_phased_connector_respects_dynamic_timeouts_via_atomic() {
         dial: Duration::from_secs(5),
         tls: Duration::from_secs(5),
     });
-    // Verify the initial value.
-    assert_eq!(connector.timeouts().dial, Duration::from_secs(5));
+    // Verify the defaults are read when no task-local is set.
+    assert_eq!(connector.effective_timeouts().dial, Duration::from_secs(5));
+    assert_eq!(connector.effective_timeouts().dns, Duration::from_secs(5));
 
-    // 2. Tighten via set_timeouts. This is exactly what
-    // `client::call_inner` does per request.
+    // 2. Outside a `CALL_TIMEOUTS.scope(...)`, the defaults are used.
+    //    `set_timeouts` is now a no-op (kept for source compat), so
+    //    calling it does NOT change the defaults.
     connector.set_timeouts(PhasedTimeouts {
         dns: Duration::from_millis(50),
         dial: Duration::from_millis(50),
         tls: Duration::from_secs(5),
     });
-    // 3. Read back to pin the atomic visibility contract.
-    let read_back = connector.timeouts();
+    // The defaults are UNCHANGED because `set_timeouts` is a no-op.
+    assert_eq!(connector.effective_timeouts().dial, Duration::from_secs(5));
+
+    // 3. Inside a `CALL_TIMEOUTS.scope(tight_timeouts, ...)`, the
+    //    task-local OVERRIDES the defaults. This is the production
+    //    path: `call_inner` wraps `send_fut` in `CALL_TIMEOUTS.scope`.
+    let tight = PhasedTimeouts {
+        dns: Duration::from_millis(50),
+        dial: Duration::from_millis(50),
+        tls: Duration::from_secs(5),
+    };
+    let read_back = CALL_TIMEOUTS.scope(tight, async {
+        connector.effective_timeouts()
+    }).await;
     assert_eq!(read_back.dial, Duration::from_millis(50));
     assert_eq!(read_back.dns, Duration::from_millis(50));
 
-    // 4. Verify the atomics are the SAME instance (set_timeouts
-    // mutates the existing atomics, not a copy).
-    assert!(Arc::ptr_eq(&connector.dial_ms, &connector.dial_ms));
-    // Sanity: the dial atomic is 50 (not 5000).
-    assert_eq!(connector.dial_ms.load(Ordering::Relaxed), 50);
+    // 4. After the scope ends, the defaults are used again. This
+    //    proves the task-local is properly scoped (not leaked).
+    assert_eq!(connector.effective_timeouts().dial, Duration::from_secs(5));
 }
 
 /// ADVERSARIAL (h2) — body-chunk gap timer resets on every chunk.

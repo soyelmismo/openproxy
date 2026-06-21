@@ -20,8 +20,9 @@
 //! and is what the `conn_pool_reuse` test asserts on.
 
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 /// `scheme://host:port` tuple that keys a pooled connection.
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
@@ -52,13 +53,31 @@ impl HostKey {
     }
 }
 
+/// Process-wide `Instant` captured at first use. We store `Instant`
+/// as a `Duration` since this epoch in an `AtomicU64` (millis), which
+/// gives us a monotonic, lock-free "last used" timestamp per pool
+/// entry. `Instant` itself is not `Copy` into an atomic, so we
+/// convert to `u64` millis at store time and back to `Instant` at
+/// load time. Monotonicity is guaranteed by `Instant` (NTP-immune).
+static PROCESS_START: std::sync::OnceLock<Instant> = std::sync::OnceLock::new();
+
+fn process_start() -> Instant {
+    *PROCESS_START.get_or_init(Instant::now)
+}
+
+/// Current monotonic millis since `process_start()`. Used as the
+/// "last used" timestamp stored in `PoolEntry::last_used_ms`.
+fn now_ms() -> u64 {
+    Instant::now().duration_since(process_start()).as_millis() as u64
+}
+
 /// Per-host, lazily-initialized pool entry.
 ///
 /// In the current implementation the actual connection reuse is done
 /// by `hyper_util::client::legacy::Client`'s internal pool. This struct
 /// is the user-facing wrapper: it tracks the per-key "is the connection
 /// warm?" hint and the observability counter.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 struct PoolEntry {
     /// Number of times a request to this host reused an already-open
     /// connection (i.e. the second and later requests in a burst).
@@ -66,17 +85,19 @@ struct PoolEntry {
     reuses: AtomicUsize,
     /// Total requests to this host. Useful as a denominator.
     total: AtomicUsize,
-    /// Last successful use as a unix-ish counter (monotonic). Used by
-    /// the eviction sweep.
-    last_used_tick: AtomicUsize,
+    /// Last successful use as monotonic millis since `process_start()`.
+    /// Used by the time-based eviction sweep (MEDIUM-3 fix: replaced
+    /// the old tick-count field with wall-clock time so that idle
+    /// hosts are evicted even when no requests are bumping the tick).
+    last_used_ms: AtomicU64,
 }
 
 impl PoolEntry {
-    fn new(tick: usize) -> Self {
+    fn new() -> Self {
         Self {
             reuses: AtomicUsize::new(0),
             total: AtomicUsize::new(0),
-            last_used_tick: AtomicUsize::new(tick),
+            last_used_ms: AtomicU64::new(now_ms()),
         }
     }
 }
@@ -85,20 +106,23 @@ impl PoolEntry {
 ///
 /// Cloning is cheap (one `Arc` clone). The actual pooled connections
 /// live in `hyper_util::client::legacy::Client`; this struct holds
-/// the observability counters and the idle-eviction tick generator.
+/// the observability counters and the idle-eviction sweep.
 ///
-/// Idle eviction: every clone shares a single `Mutex<HashMap<HostKey,
-/// PoolEntry>>`. A background sweep (started by `UpstreamClient::new`)
-/// wakes up every 30s and drops any entry whose `last_used_tick` is
-/// more than 60s old in tick-space. Because the underlying
+/// Idle eviction (MEDIUM-3 fix): every clone shares a single
+/// `Mutex<HashMap<HostKey, PoolEntry>>`. A background sweep (started
+/// by `UpstreamClient::new`) wakes up every 30s and drops any entry
+/// whose `last_used_ms` is more than 60s old. The previous design
+/// used a tick-count that was only bumped by `record_dial` /
+/// `record_reuse` — under low traffic, the tick barely advanced and
+/// idle entries were NEVER evicted. The new design uses wall-clock
+/// `Instant` (monotonic, NTP-immune) so eviction is independent of
+/// request volume. Because the underlying
 /// `hyper_util::client::legacy::Client` owns the real sockets, the
 /// sweep only affects the observability map; the legacy client will
 /// re-dial on the next request to that host.
 #[derive(Clone, Default)]
 pub struct UpstreamConnectionPool {
     inner: Arc<Mutex<HashMap<HostKey, PoolEntry>>>,
-    /// Monotonically increasing tick. Bumped by the background sweep.
-    tick: Arc<AtomicUsize>,
 }
 
 impl UpstreamConnectionPool {
@@ -138,30 +162,35 @@ impl UpstreamConnectionPool {
     /// connection (i.e. it was the first request in a burst).
     pub fn record_dial(&self, key: HostKey) {
         let mut g = self.inner.lock().expect("pool mutex poisoned");
-        let tick = self.tick.fetch_add(1, Ordering::SeqCst);
-        let entry = g.entry(key).or_insert_with(|| PoolEntry::new(tick));
+        let entry = g.entry(key).or_insert_with(PoolEntry::new);
         entry.total.fetch_add(1, Ordering::SeqCst);
-        entry.last_used_tick.store(tick, Ordering::SeqCst);
+        entry.last_used_ms.store(now_ms(), Ordering::SeqCst);
     }
 
     /// Record that a request to `key` just reused a pooled connection.
     pub fn record_reuse(&self, key: HostKey) {
         let mut g = self.inner.lock().expect("pool mutex poisoned");
-        let tick = self.tick.fetch_add(1, Ordering::SeqCst);
-        let entry = g.entry(key).or_insert_with(|| PoolEntry::new(tick));
+        let entry = g.entry(key).or_insert_with(PoolEntry::new);
         entry.total.fetch_add(1, Ordering::SeqCst);
         entry.reuses.fetch_add(1, Ordering::SeqCst);
-        entry.last_used_tick.store(tick, Ordering::SeqCst);
+        entry.last_used_ms.store(now_ms(), Ordering::SeqCst);
     }
 
-    /// Drop entries older than `max_tick_age` ticks. Called by the
+    /// Drop entries whose `last_used_ms` is older than `max_age`
+    /// (a wall-clock `Duration`, not a tick count). Called by the
     /// background sweep. Returns the number of entries evicted.
-    pub fn evict_older_than(&self, max_tick_age: usize) -> usize {
+    ///
+    /// MEDIUM-3 fix: the old `evict_older_than(max_tick_age: usize)`
+    /// used a tick count that was only bumped by `record_dial` /
+    /// `record_reuse`. Under low traffic, the tick barely advanced
+    /// and idle entries were NEVER evicted. The new design uses
+    /// `Instant` (monotonic, NTP-immune) so eviction is independent
+    /// of request volume.
+    pub fn evict_older_than(&self, max_age: Duration) -> usize {
         let mut g = self.inner.lock().expect("pool mutex poisoned");
-        let current = self.tick.load(Ordering::SeqCst);
-        let cutoff = current.saturating_sub(max_tick_age);
+        let cutoff = now_ms().saturating_sub(max_age.as_millis() as u64);
         let before = g.len();
-        g.retain(|_, e| e.last_used_tick.load(Ordering::SeqCst) >= cutoff);
+        g.retain(|_, e| e.last_used_ms.load(Ordering::SeqCst) >= cutoff);
         before - g.len()
     }
 }
