@@ -135,7 +135,16 @@ pub struct AnthropicRequest {
 pub struct AnthropicMessage {
     /// "user" | "assistant"
     pub role: String,
-    pub content: String,
+    /// Anthropic accepts `content` as either a plain string
+    /// (`"content": "text"`) or an array of typed content blocks
+    /// (`"content": [{"type":"text","text":"..."},
+    /// {"type":"tool_use","id":"...","name":"...","input":{...}},
+    /// {"type":"tool_result","tool_use_id":"...","content":"..."}]`).
+    /// We use `serde_json::Value` so the translator can emit either
+    /// form depending on whether the source OpenAI message carried
+    /// only text or also carried `tool_calls` / was a `tool`-role
+    /// message.
+    pub content: serde_json::Value,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -249,8 +258,13 @@ fn message_content_to_text(content: &Option<serde_json::Value>) -> String {
             .filter(|s| !s.is_empty())
             .collect::<Vec<_>>()
             .join(""),
+        // `null` content (common when an assistant message carries only
+        // `tool_calls` and no text) must be treated as empty, NOT as the
+        // string "null" — otherwise the translator would emit a spurious
+        // `{"type":"text","text":"null"}` block before the tool_use
+        // blocks, which confuses Anthropic-compatible upstreams.
+        Some(Value::Null) | None => String::new(),
         Some(value) => value.to_string(),
-        None => String::new(),
     }
 }
 
@@ -291,9 +305,23 @@ fn message_content_to_gemini_parts(content: &Option<serde_json::Value>) -> Vec<G
 /// - Extracts system messages (role=system) and joins them with "\n\n" into
 ///   `AnthropicRequest.system`.
 /// - Remaining messages with role=user|assistant go into `AnthropicRequest.messages`.
-/// - Messages with other roles are dropped (validation concern is upstream).
-/// - If no system messages, system is None.
+/// - Assistant messages with `tool_calls` are translated to Anthropic
+///   `tool_use` content blocks (the text content, if any, becomes a `text`
+///   block preceding the `tool_use` blocks).
+/// - `tool`-role messages (OpenAI's tool-result format) are translated to
+///   Anthropic `tool_result` content blocks under a `user`-role message
+///   (Anthropic has no `tool` role; tool results are sent as user messages
+///   with `tool_result` blocks).
+/// - `function`-role messages are dropped (legacy OpenAI format, no
+///   Anthropic equivalent without a function name).
 /// - `max_tokens` is required by Anthropic; defaults to [`DEFAULT_MAX_TOKENS`] when absent.
+/// - `tools` (OpenAI shape: `[{type:"function",function:{name,description,parameters}}]`)
+///   are translated to Anthropic shape (`[{name,description,input_schema}]`).
+///   Tools with empty `name` are filtered out (MiniMax rejects with `(2013)`
+///   "function name or parameters is empty").
+/// - `tool_choice` (OpenAI shape: `"auto"/"none"/"required"` or
+///   `{type:"function",function:{name}}`) is translated to Anthropic shape
+///   (`{type:"auto"/"none"/"any"/"tool",name?}`).
 pub fn openai_to_anthropic(req: &OpenAIRequest) -> AnthropicRequest {
     let mut system_parts: Vec<String> = Vec::new();
     let mut conversation: Vec<AnthropicMessage> = Vec::with_capacity(req.messages.len());
@@ -301,11 +329,100 @@ pub fn openai_to_anthropic(req: &OpenAIRequest) -> AnthropicRequest {
     for m in &req.messages {
         match m.role.as_str() {
             "system" => system_parts.push(message_content_to_text(&m.content)),
-            "user" | "assistant" => conversation.push(AnthropicMessage {
-                role: m.role.clone(),
-                content: message_content_to_text(&m.content),
-            }),
-            // Unknown roles are ignored at the translation boundary.
+            "assistant" => {
+                // If the assistant message has `tool_calls`, emit a
+                // content-blocks array with optional text + tool_use
+                // blocks. Anthropic requires tool_use blocks to carry
+                // both `id` and `name` and a valid JSON `input` —
+                // MiniMax rejects with `(2013)` otherwise.
+                if let Some(tool_calls) = m.tool_calls.as_ref() {
+                    let mut blocks: Vec<serde_json::Value> = Vec::new();
+                    let text = message_content_to_text(&m.content);
+                    if !text.is_empty() {
+                        blocks.push(json!({"type": "text", "text": text}));
+                    }
+                    for tc in tool_calls {
+                        let id = tc.get("id").and_then(|v| v.as_str()).unwrap_or("");
+                        let function = tc.get("function");
+                        let name = function
+                            .and_then(|f| f.get("name"))
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("");
+                        let arguments_str = function
+                            .and_then(|f| f.get("arguments"))
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("");
+                        // Parse arguments string to a JSON object for
+                        // Anthropic's `input` field. Empty or invalid
+                        // arguments become an empty object (Anthropic
+                        // requires `input` to be present, even if empty).
+                        let input: serde_json::Value = if arguments_str.is_empty() {
+                            json!({})
+                        } else {
+                            serde_json::from_str(arguments_str).unwrap_or(json!({}))
+                        };
+                        // Skip tool_calls with empty name — they would
+                        // trigger MiniMax's `(2013)` rejection.
+                        if name.is_empty() {
+                            continue;
+                        }
+                        blocks.push(json!({
+                            "type": "tool_use",
+                            "id": id,
+                            "name": name,
+                            "input": input,
+                        }));
+                    }
+                    // If we ended up with no blocks (e.g. all tool_calls
+                    // had empty names), fall back to a single text block
+                    // so the message is non-empty (Anthropic rejects
+                    // empty content arrays).
+                    if blocks.is_empty() {
+                        blocks.push(json!({"type": "text", "text": ""}));
+                    }
+                    conversation.push(AnthropicMessage {
+                        role: "assistant".to_string(),
+                        content: serde_json::Value::Array(blocks),
+                    });
+                } else {
+                    // Plain text assistant message — use the string
+                    // form of `content` (cheaper than a single-element
+                    // array, and matches Anthropic's canonical shape
+                    // for text-only messages).
+                    let text = message_content_to_text(&m.content);
+                    conversation.push(AnthropicMessage {
+                        role: "assistant".to_string(),
+                        content: serde_json::Value::String(text),
+                    });
+                }
+            }
+            "user" => {
+                // Plain user message — string form.
+                let text = message_content_to_text(&m.content);
+                conversation.push(AnthropicMessage {
+                    role: "user".to_string(),
+                    content: serde_json::Value::String(text),
+                });
+            }
+            "tool" => {
+                // OpenAI `tool`-role message: a tool result. Translate
+                // to Anthropic's `tool_result` content block under a
+                // `user`-role message (Anthropic has no `tool` role).
+                // The `tool_call_id` field carries the id of the
+                // assistant's tool_use block this result responds to.
+                let tool_use_id = m.tool_call_id.as_deref().unwrap_or("");
+                let content_text = message_content_to_text(&m.content);
+                conversation.push(AnthropicMessage {
+                    role: "user".to_string(),
+                    content: json!([{
+                        "type": "tool_result",
+                        "tool_use_id": tool_use_id,
+                        "content": content_text,
+                    }]),
+                });
+            }
+            // Unknown roles (function, developer, etc.) are ignored
+            // at the translation boundary.
             _ => {}
         }
     }
@@ -325,15 +442,22 @@ pub fn openai_to_anthropic(req: &OpenAIRequest) -> AnthropicRequest {
         top_p: req.top_p,
         top_k: req.top_k,
         stop_sequences: req.stop.clone(),
-        // H4 fix: tools, tool_choice, and user are now passed
-        // through to the Anthropic upstream. Without this, a
-        // request to /v1/chat/completions with a `tools` array
-        // silently gets re-routed to the upstream without tool
-        // declarations; the model then has no way to know which
-        // tools exist, and any tool_use response is rejected
-        // because the upstream never received the definitions.
-        tools: req.tools.clone(),
-        tool_choice: req.tool_choice.clone(),
+        // Translate OpenAI-shaped `tools` to Anthropic shape. MiniMax
+        // (which exposes an Anthropic-compatible API) and real Anthropic
+        // both expect `{name, description, input_schema}` — forwarding
+        // the OpenAI shape `{type:"function", function:{name, parameters}}`
+        // verbatim causes `(2013) function name or parameters is empty`
+        // because the upstream looks for `name`/`input_schema` at the
+        // top level and finds them missing.
+        tools: req.tools.as_ref().map(|tools| {
+            tools
+                .iter()
+                .filter_map(|t| translate_openai_tool_to_anthropic(t))
+                .collect::<Vec<_>>()
+                .into()
+        }).filter(|t: &Vec<serde_json::Value>| !t.is_empty()),
+        // Translate OpenAI `tool_choice` to Anthropic shape.
+        tool_choice: req.tool_choice.as_ref().and_then(translate_openai_tool_choice_to_anthropic),
         // OpenAI's `user` field maps to Anthropic's `metadata.user_id`
         // (Anthropic reserves metadata for traceability, not for
         // function-calling). When the caller didn't set `user`, we
@@ -342,6 +466,78 @@ pub fn openai_to_anthropic(req: &OpenAIRequest) -> AnthropicRequest {
             serde_json::json!({ "user_id": u })
         }),
         stream: req.stream,
+    }
+}
+
+/// Translate a single OpenAI-shaped tool definition to Anthropic shape.
+///
+/// OpenAI: `{"type":"function","function":{"name":"X","description":"Y","parameters":{...}}}`
+/// Anthropic: `{"name":"X","description":"Y","input_schema":{...}}`
+///
+/// Returns `None` when the tool has no `name` or no `function` block —
+/// MiniMax rejects tools with empty names with `(2013)`.
+fn translate_openai_tool_to_anthropic(tool: &serde_json::Value) -> Option<serde_json::Value> {
+    let function = tool.get("function")?;
+    let name = function.get("name").and_then(|v| v.as_str())?;
+    if name.is_empty() {
+        return None;
+    }
+    let description = function.get("description").and_then(|v| v.as_str());
+    // `parameters` (OpenAI) → `input_schema` (Anthropic). Default to
+    // an empty object when absent — Anthropic requires `input_schema`
+    // to be present and a valid JSON schema object.
+    let input_schema = function.get("parameters").cloned().unwrap_or(json!({}));
+    Some(json!({
+        "name": name,
+        "description": description,
+        "input_schema": input_schema,
+    }))
+}
+
+/// Translate OpenAI `tool_choice` to Anthropic `tool_choice`.
+///
+/// OpenAI shapes:
+///   - `"auto"` / `"none"` / `"required"` (string)
+///   - `{"type":"function","function":{"name":"X"}}` (object)
+///   - `{"type":"auto"}` / `{"type":"none"}` (object form of the strings)
+///
+/// Anthropic shapes:
+///   - `{"type":"auto"}` (let model decide)
+///   - `{"type":"none"}` (don't use tools)
+///   - `{"type":"any"}` (force a tool call — OpenAI's "required")
+///   - `{"type":"tool","name":"X"}` (force a specific tool)
+///
+/// Returns `None` for unrecognized shapes (which means the field is
+/// omitted from the Anthropic request, defaulting to `auto` upstream).
+fn translate_openai_tool_choice_to_anthropic(tc: &serde_json::Value) -> Option<serde_json::Value> {
+    match tc {
+        serde_json::Value::String(s) => match s.as_str() {
+            "auto" => Some(json!({"type": "auto"})),
+            "none" => Some(json!({"type": "none"})),
+            "required" => Some(json!({"type": "any"})),
+            _ => None,
+        },
+        serde_json::Value::Object(obj) => {
+            let ty = obj.get("type").and_then(|v| v.as_str()).unwrap_or("");
+            match ty {
+                "auto" => Some(json!({"type": "auto"})),
+                "none" => Some(json!({"type": "none"})),
+                "required" => Some(json!({"type": "any"})),
+                "function" => {
+                    // OpenAI object form: {"type":"function","function":{"name":"X"}}
+                    // → Anthropic: {"type":"tool","name":"X"}
+                    let name = obj.get("function")
+                        .and_then(|f| f.get("name"))
+                        .and_then(|v| v.as_str())?;
+                    if name.is_empty() {
+                        return None;
+                    }
+                    Some(json!({"type": "tool", "name": name}))
+                }
+                _ => None,
+            }
+        }
+        _ => None,
     }
 }
 
@@ -1101,13 +1297,18 @@ mod tests {
         assert_eq!(arr[1]["type"], "image_url");
     }
 
-    // ---- H4 fix: function-calling fields pass-through ----
+    // ---- H4 fix: function-calling fields TRANSLATED to Anthropic shape ----
+    //
+    // The original H4 fix passed `tools` and `tool_choice` through verbatim
+    // in OpenAI shape. That was wrong: Anthropic (and MiniMax's Anthropic-
+    // compatible API) expect a different shape, and reject OpenAI-shaped
+    // tools with `(2013) function name or parameters is empty`. These
+    // tests now assert the translation.
 
     #[test]
-    fn h4_tools_array_passes_through_to_anthropic() {
-        // Without this fix the openai_to_anthropic boundary drops
-        // the `tools` field, so the Anthropic upstream never sees the
-        // tool definitions and any tool_use response is rejected.
+    fn h4_tools_array_translated_to_anthropic_shape() {
+        // OpenAI shape: {type:"function", function:{name, description, parameters}}
+        // Anthropic shape: {name, description, input_schema}
         let mut req = openai_req_with(vec![("user", "What is the weather in SF?")]);
         req.tools = Some(vec![json!({
             "type": "function",
@@ -1124,29 +1325,329 @@ mod tests {
             }
         })]);
         let out = openai_to_anthropic(&req);
-        let tools = out.tools.as_ref().expect("tools should pass through");
+        let tools = out.tools.as_ref().expect("tools should be translated");
         assert_eq!(tools.len(), 1);
-        assert_eq!(tools[0]["function"]["name"], "get_weather");
+        // Top-level keys are Anthropic shape, NOT OpenAI shape.
+        assert_eq!(tools[0]["name"], "get_weather");
+        assert_eq!(tools[0]["description"], "Look up weather");
+        assert_eq!(tools[0]["input_schema"]["type"], "object");
+        assert_eq!(tools[0]["input_schema"]["required"][0], "location");
+        // The OpenAI `function` wrapper must NOT be present.
+        assert!(tools[0].get("function").is_none());
+        assert!(tools[0].get("type").is_none());
     }
 
     #[test]
-    fn h4_tool_choice_passes_through_to_anthropic() {
+    fn h4_tool_choice_translated_to_anthropic_shape() {
         let mut req = openai_req_with(vec![("user", "go")]);
+
+        // String "auto" → {"type":"auto"}
         req.tool_choice = Some(json!("auto"));
         let out = openai_to_anthropic(&req);
-        assert_eq!(out.tool_choice.as_ref().unwrap(), &json!("auto"));
+        assert_eq!(out.tool_choice.as_ref().unwrap(), &json!({"type": "auto"}));
 
-        // Object form (`{"type": "function", "function": {"name": "..."}}`)
-        // must also pass through untouched — Anthropic supports both
-        // the string and object forms.
+        // String "none" → {"type":"none"}
+        req.tool_choice = Some(json!("none"));
+        let out = openai_to_anthropic(&req);
+        assert_eq!(out.tool_choice.as_ref().unwrap(), &json!({"type": "none"}));
+
+        // String "required" → {"type":"any"} (Anthropic's name for "force a tool call")
+        req.tool_choice = Some(json!("required"));
+        let out = openai_to_anthropic(&req);
+        assert_eq!(out.tool_choice.as_ref().unwrap(), &json!({"type": "any"}));
+
+        // Object form {type:"function", function:{name:"X"}}
+        // → Anthropic {type:"tool", name:"X"}
         req.tool_choice = Some(json!({
             "type": "function",
             "function": {"name": "search"}
         }));
         let out = openai_to_anthropic(&req);
         let tc = out.tool_choice.as_ref().unwrap();
-        assert_eq!(tc["type"], "function");
-        assert_eq!(tc["function"]["name"], "search");
+        assert_eq!(tc["type"], "tool");
+        assert_eq!(tc["name"], "search");
+        // The OpenAI `function` wrapper must NOT be present.
+        assert!(tc.get("function").is_none());
+    }
+
+    #[test]
+    fn minimax_tools_with_empty_name_are_filtered_out() {
+        // MiniMax rejects tools with empty `name` with `(2013)`.
+        // The translator must filter them out before sending.
+        let mut req = openai_req_with(vec![("user", "go")]);
+        req.tools = Some(vec![
+            json!({
+                "type": "function",
+                "function": {
+                    "name": "valid_tool",
+                    "description": "This one is fine",
+                    "parameters": {"type": "object"}
+                }
+            }),
+            json!({
+                "type": "function",
+                "function": {
+                    "name": "",
+                    "description": "This one has an empty name",
+                    "parameters": {"type": "object"}
+                }
+            }),
+            json!({
+                "type": "function",
+                "function": {
+                    "description": "This one has no name at all",
+                    "parameters": {"type": "object"}
+                }
+            }),
+        ]);
+        let out = openai_to_anthropic(&req);
+        let tools = out.tools.as_ref().expect("tools should be present");
+        assert_eq!(tools.len(), 1, "only the tool with a non-empty name should survive");
+        assert_eq!(tools[0]["name"], "valid_tool");
+    }
+
+    #[test]
+    fn minimax_assistant_tool_calls_translated_to_tool_use_blocks() {
+        // OpenAI assistant message with `tool_calls` must be translated
+        // to Anthropic `tool_use` content blocks. The `arguments` string
+        // must be parsed to a JSON object for Anthropic's `input` field.
+        let mut req = openai_req_with(vec![]);
+        req.messages = vec![
+            OpenAIMessage {
+                role: "user".to_string(),
+                content: Some(json!("What's the weather in Paris?")),
+                name: None,
+                tool_call_id: None,
+                tool_calls: None,
+                extra: serde_json::Map::new(),
+            },
+            OpenAIMessage {
+                role: "assistant".to_string(),
+                content: Some(serde_json::Value::Null),
+                name: None,
+                tool_call_id: None,
+                tool_calls: Some(vec![json!({
+                    "id": "call_abc123",
+                    "type": "function",
+                    "function": {
+                        "name": "get_weather",
+                        "arguments": "{\"city\": \"Paris\"}"
+                    }
+                })]),
+                extra: serde_json::Map::new(),
+            },
+        ];
+        let out = openai_to_anthropic(&req);
+        assert_eq!(out.messages.len(), 2);
+        // The assistant message should have an array content with a tool_use block.
+        let assistant_msg = &out.messages[1];
+        assert_eq!(assistant_msg.role, "assistant");
+        let blocks = assistant_msg.content.as_array().expect("content should be an array");
+        assert_eq!(blocks.len(), 1);
+        assert_eq!(blocks[0]["type"], "tool_use");
+        assert_eq!(blocks[0]["id"], "call_abc123");
+        assert_eq!(blocks[0]["name"], "get_weather");
+        // `arguments` string was parsed to a JSON object for `input`.
+        assert_eq!(blocks[0]["input"]["city"], "Paris");
+    }
+
+    #[test]
+    fn minimax_tool_role_message_translated_to_tool_result_block() {
+        // OpenAI `tool`-role message must be translated to Anthropic
+        // `tool_result` content block under a `user`-role message.
+        let mut req = openai_req_with(vec![]);
+        req.messages = vec![
+            OpenAIMessage {
+                role: "user".to_string(),
+                content: Some(json!("What's the weather?")),
+                name: None,
+                tool_call_id: None,
+                tool_calls: None,
+                extra: serde_json::Map::new(),
+            },
+            OpenAIMessage {
+                role: "assistant".to_string(),
+                content: Some(serde_json::Value::Null),
+                name: None,
+                tool_call_id: None,
+                tool_calls: Some(vec![json!({
+                    "id": "call_xyz",
+                    "type": "function",
+                    "function": {"name": "get_weather", "arguments": "{\"city\":\"Paris\"}"}
+                })]),
+                extra: serde_json::Map::new(),
+            },
+            OpenAIMessage {
+                role: "tool".to_string(),
+                content: Some(json!("{\"temp\": 18}")),
+                name: None,
+                tool_call_id: Some("call_xyz".to_string()),
+                tool_calls: None,
+                extra: serde_json::Map::new(),
+            },
+        ];
+        let out = openai_to_anthropic(&req);
+        assert_eq!(out.messages.len(), 3);
+        // The third message (OpenAI `tool`-role) should become a
+        // `user`-role message with a `tool_result` content block.
+        let tool_result_msg = &out.messages[2];
+        assert_eq!(tool_result_msg.role, "user");
+        let blocks = tool_result_msg.content.as_array().expect("content should be an array");
+        assert_eq!(blocks.len(), 1);
+        assert_eq!(blocks[0]["type"], "tool_result");
+        assert_eq!(blocks[0]["tool_use_id"], "call_xyz");
+        assert_eq!(blocks[0]["content"], "{\"temp\": 18}");
+    }
+
+    #[test]
+    fn minimax_assistant_tool_calls_with_empty_name_are_skipped() {
+        // A tool_call with an empty `name` would trigger MiniMax's
+        // `(2013)` rejection. The translator must skip it.
+        let mut req = openai_req_with(vec![]);
+        req.messages = vec![
+            OpenAIMessage {
+                role: "user".to_string(),
+                content: Some(json!("go")),
+                name: None,
+                tool_call_id: None,
+                tool_calls: None,
+                extra: serde_json::Map::new(),
+            },
+            OpenAIMessage {
+                role: "assistant".to_string(),
+                content: Some(json!("Thinking...")),
+                name: None,
+                tool_call_id: None,
+                tool_calls: Some(vec![
+                    json!({
+                        "id": "call_1",
+                        "type": "function",
+                        "function": {"name": "", "arguments": "{}"}
+                    }),
+                    json!({
+                        "id": "call_2",
+                        "type": "function",
+                        "function": {"name": "valid_tool", "arguments": "{\"x\":1}"}
+                    }),
+                ]),
+                extra: serde_json::Map::new(),
+            },
+        ];
+        let out = openai_to_anthropic(&req);
+        let assistant_msg = &out.messages[1];
+        let blocks = assistant_msg.content.as_array().expect("content should be an array");
+        // text block + 1 valid tool_use block (the empty-name one is skipped)
+        assert_eq!(blocks.len(), 2);
+        assert_eq!(blocks[0]["type"], "text");
+        assert_eq!(blocks[0]["text"], "Thinking...");
+        assert_eq!(blocks[1]["type"], "tool_use");
+        assert_eq!(blocks[1]["name"], "valid_tool");
+    }
+
+    #[test]
+    fn minimax_tool_calls_with_empty_arguments_become_empty_object() {
+        // Anthropic requires `input` to be present (even if empty).
+        // Empty `arguments` string → `input: {}`.
+        let mut req = openai_req_with(vec![]);
+        req.messages = vec![OpenAIMessage {
+            role: "assistant".to_string(),
+            content: Some(serde_json::Value::Null),
+            name: None,
+            tool_call_id: None,
+            tool_calls: Some(vec![json!({
+                "id": "call_1",
+                "type": "function",
+                "function": {"name": "no_args_tool", "arguments": ""}
+            })]),
+            extra: serde_json::Map::new(),
+        }];
+        let out = openai_to_anthropic(&req);
+        let assistant_msg = &out.messages[0];
+        let blocks = assistant_msg.content.as_array().expect("content should be an array");
+        assert_eq!(blocks[0]["type"], "tool_use");
+        assert_eq!(blocks[0]["input"], json!({}));
+    }
+
+    #[test]
+    fn minimax_full_tool_round_trip_request_shape() {
+        // End-to-end: a complete OpenAI tool-calling conversation
+        // translated to the Anthropic shape MiniMax expects. This is
+        // the exact scenario that was failing with `(2013)`.
+        let mut req = openai_req_with(vec![]);
+        req.model = "MiniMax-M3".to_string();
+        req.tools = Some(vec![json!({
+            "type": "function",
+            "function": {
+                "name": "get_weather",
+                "description": "Get weather for a city",
+                "parameters": {
+                    "type": "object",
+                    "properties": {"city": {"type": "string"}},
+                    "required": ["city"]
+                }
+            }
+        })]);
+        req.tool_choice = Some(json!("auto"));
+        req.messages = vec![
+            OpenAIMessage {
+                role: "user".to_string(),
+                content: Some(json!("What's the weather in Paris?")),
+                name: None, tool_call_id: None, tool_calls: None,
+                extra: serde_json::Map::new(),
+            },
+            OpenAIMessage {
+                role: "assistant".to_string(),
+                content: Some(serde_json::Value::Null),
+                name: None, tool_call_id: None,
+                tool_calls: Some(vec![json!({
+                    "id": "call_1",
+                    "type": "function",
+                    "function": {"name": "get_weather", "arguments": "{\"city\":\"Paris\"}"}
+                })]),
+                extra: serde_json::Map::new(),
+            },
+            OpenAIMessage {
+                role: "tool".to_string(),
+                content: Some(json!("{\"temp\":18,\"unit\":\"c\"}")),
+                name: None,
+                tool_call_id: Some("call_1".to_string()),
+                tool_calls: None,
+                extra: serde_json::Map::new(),
+            },
+        ];
+        let out = openai_to_anthropic(&req);
+
+        // Tools: Anthropic shape with name/description/input_schema.
+        let tools = out.tools.as_ref().expect("tools present");
+        assert_eq!(tools[0]["name"], "get_weather");
+        assert_eq!(tools[0]["input_schema"]["properties"]["city"]["type"], "string");
+
+        // tool_choice: {"type":"auto"}
+        assert_eq!(out.tool_choice.as_ref().unwrap(), &json!({"type": "auto"}));
+
+        // Messages: 3 entries (user, assistant with tool_use, user with tool_result)
+        assert_eq!(out.messages.len(), 3);
+        assert_eq!(out.messages[0].role, "user");
+        assert_eq!(out.messages[0].content, json!("What's the weather in Paris?"));
+
+        let asst_blocks = out.messages[1].content.as_array().unwrap();
+        assert_eq!(asst_blocks[0]["type"], "tool_use");
+        assert_eq!(asst_blocks[0]["name"], "get_weather");
+        assert_eq!(asst_blocks[0]["input"]["city"], "Paris");
+
+        let tool_blocks = out.messages[2].content.as_array().unwrap();
+        assert_eq!(tool_blocks[0]["type"], "tool_result");
+        assert_eq!(tool_blocks[0]["tool_use_id"], "call_1");
+        assert_eq!(tool_blocks[0]["content"], "{\"temp\":18,\"unit\":\"c\"}");
+
+        // Serialize and verify the JSON shape matches what MiniMax expects.
+        let serialized = serde_json::to_value(&out).unwrap();
+        // No `function` wrapper anywhere in tools.
+        assert!(serialized["tools"][0].get("function").is_none());
+        // No `type:"function"` in tools.
+        assert!(serialized["tools"][0].get("type").is_none());
+        // tool_choice is the Anthropic object form.
+        assert_eq!(serialized["tool_choice"]["type"], "auto");
     }
 
     #[test]

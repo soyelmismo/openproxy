@@ -499,14 +499,30 @@ impl Pipeline {
                 .min(eligible.len())
                 .min(self.config.racing.max_race_size as usize),
         };
-        // The cooldown-fallback path below reassigns this via
-        // shadowing (see the 5b comment), so the binding itself
-        // doesn't need `mut`.
-        let to_run: Vec<ComboTarget> = if matches!(combo.strategy, Strategy::Priority) {
-            eligible
-        } else {
-            eligible.into_iter().take(race_size).collect()
-        };
+        // Build the final `to_run` list for the dispatch loop.
+        //
+        // PERF/BUGFIX (Bug #2): previously, non-Priority strategies
+        // (RoundRobin, Shuffle) were limited to `take(race_size)`
+        // targets. With `race_size=1` (the common sequential case),
+        // this meant only ONE target was ever tried — if it failed,
+        // the walk ended immediately without trying the other
+        // siblings. This broke the user's mental model of "combo =
+        // try each in order until one works", especially for nested
+        // combos (a sub-combo's children are flattened into siblings,
+        // so limiting `to_run` to 1 meant only the first child of the
+        // first sub-combo was ever tried).
+        //
+        // The `race_size` parameter controls how many targets run in
+        // PARALLEL (via `run_race` when `race_size > 1`), NOT how
+        // many targets are in the candidate pool. `run_race` already
+        // takes `min(race_size, to_run.len(), max_race_size)` workers
+        // from the full `to_run` queue, so limiting `to_run` here is
+        // both wrong and redundant.
+        //
+        // For `race_size == 1` (sequential walk), ALL eligible targets
+        // must be in `to_run` so the walk can fall through to the next
+        // sibling on failure (Bug #2 fix at the match arm below).
+        let to_run: Vec<ComboTarget> = eligible;
 
         // Snapshot of the post-circuit-breaker, pre-cooldown target
         // list. Kept around so that, if the cooldown filter below
@@ -836,24 +852,40 @@ impl Pipeline {
             }
             match &result.error {
                 None => return result,
-                // For `Strategy::Priority` combos, walk the ENTIRE row regardless
-                // of error type — operator's intent is "try these in order, give
-                // each one a chance". A 4xx from model A doesn't mean model B
-                // will also 4xx (different model, different validation). Short-
-                // circuiting on 4xx here was a regression of the original
-                // walk-the-row contract. For non-Priority strategies (RoundRobin,
-                // Shuffle), preserve the short-circuit: those operators want
-                // fast-fail on non-retryable errors because they're racing all
-                // the targets anyway.
-                Some(e) if !RetryPolicy::is_retryable(e, self.config.idle_chunk_retryable) && !matches!(combo.strategy, Strategy::Priority) => {
-                    return result;
-                }
+                // Fall through to the next target on ANY error
+                // (retryable OR non-retryable). The previous behavior
+                // short-circuited the walk on non-retryable errors
+                // (e.g. 4xx) for `Strategy::RoundRobin` and
+                // `Strategy::Shuffle`, which broke the contract users
+                // expect from a combo: "if this target fails, try the
+                // next one." That is especially important for nested
+                // combos — a sub-combo's children are flattened into
+                // siblings, so a 400 from the first child (e.g. a
+                // provider-specific validation error on model X)
+                // must NOT abort the whole request before model Z
+                // (a sibling in the parent combo) gets a chance to
+                // run.
+                //
+                // The only error that should abort the walk is
+                // `ClientDisconnected`, and that is already handled
+                // by the per-target disconnect check at the top of
+                // the loop. Every other error — including 4xx, 5xx,
+                // timeouts, and rate limits — falls through to the
+                // next sibling. If this was the LAST target, the
+                // loop ends naturally and the post-loop code returns
+                // `last_result` (the most recent failure).
+                //
+                // The `Strategy` enum only controls the ORDER in
+                // which targets are visited (Priority = listed
+                // order, RoundRobin = rotated, Shuffle = randomized).
+                // It does NOT change failure semantics.
                 Some(e) => {
                     tracing::debug!(
                         combo_id = combo.id.0,
                         target_id = target.id.0,
                         provider = %target.provider_id,
                         strategy = ?combo.strategy,
+                        retryable = RetryPolicy::is_retryable(e, self.config.idle_chunk_retryable),
                         error = %e,
                         "target failed; trying next target"
                     );
@@ -6208,6 +6240,473 @@ mod tests {
         assert!(
             result.error.is_none(),
             "expected success from target 3, got error: {:?}",
+            result.error
+        );
+
+        drop(server_handle);
+    }
+
+    /// REGRESSION (Bug #2): `round_robin_combo_walks_past_non_retryable_400`.
+    ///
+    /// A `Strategy::RoundRobin` combo with `race_size=1` and 3 targets
+    /// where target #1 returns 400 (non-retryable). The walk MUST
+    /// advance to target #2 and #3, NOT short-circuit on the 400.
+    ///
+    /// Pre-fix: `pipeline.rs` short-circuited the walk on any
+    /// non-retryable error for non-Priority strategies
+    /// (`Strategy::RoundRobin`, `Strategy::Shuffle`), so a 400 from
+    /// the first target aborted the whole request — sibling targets
+    /// were never tried. This broke the user's mental model of
+    /// "combo = try each in order until one works", especially for
+    /// nested combos (a sub-combo's children are flattened into
+    /// siblings, so a 400 from the first child aborted the whole
+    /// request before the parent's next sibling got a chance).
+    ///
+    /// Post-fix: the strategy guard is removed; the walk falls
+    /// through to the next sibling on ANY error (retryable OR not).
+    /// Only `ClientDisconnected` aborts early (handled at the top of
+    /// the loop).
+    #[tokio::test]
+    async fn round_robin_combo_walks_past_non_retryable_400() {
+        use crate::combos::AddTargetInput;
+        use std::sync::atomic::{AtomicU32, Ordering as AtomicOrdering};
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        use tokio::net::TcpListener;
+
+        use crate::adapters::{
+            AdapterAuthType, AdapterFormat, ProviderAdapter, ProviderAdapterConfig,
+        };
+        struct MockAdapter {
+            config: ProviderAdapterConfig,
+        }
+        #[async_trait::async_trait]
+        impl ProviderAdapter for MockAdapter {
+            fn id(&self) -> &ProviderId {
+                &self.config.id
+            }
+            fn config(&self) -> &ProviderAdapterConfig {
+                &self.config
+            }
+            fn build_chat_url(
+                &self,
+                _target_format: TargetFormat,
+                _model: &crate::ids::ModelId,
+            ) -> String {
+                self.config.base_url.clone()
+            }
+            fn build_auth_header(&self, api_key: &str) -> (String, String) {
+                ("Authorization".into(), format!("Bearer {api_key}"))
+            }
+            fn build_headers(
+                &self,
+                api_key: &str,
+                _target_format: TargetFormat,
+                _model: &crate::ids::ModelId,
+            ) -> Vec<(String, String)> {
+                vec![
+                    self.build_auth_header(api_key),
+                    ("Content-Type".into(), "application/json".into()),
+                ]
+            }
+            fn models_url(&self) -> Option<String> {
+                None
+            }
+            async fn fetch_models(
+                &self,
+                _upstream_client: &std::sync::Arc<crate::upstream::UpstreamClient>,
+                _api_key: &str,
+            ) -> Result<Vec<crate::models::DiscoveredModel>> {
+                Ok(Vec::new())
+            }
+        }
+
+        // 1. Listener: 1st → 400 (non-retryable), 2nd → 200.
+        // The walk must advance past the 400 and reach target #2.
+        let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
+        let local_addr = listener.local_addr().expect("local_addr");
+        let upstream_url = format!("http://{local_addr}");
+        let call_count = Arc::new(AtomicU32::new(0));
+        let server_call_count = call_count.clone();
+        let server_handle = tokio::spawn(async move {
+            loop {
+                let (mut sock, _peer) = match listener.accept().await {
+                    Ok(p) => p,
+                    Err(_) => break,
+                };
+                let my_call = server_call_count.fetch_add(1, AtomicOrdering::SeqCst) + 1;
+                let mut buf = vec![0u8; 64 * 1024];
+                let mut total = 0usize;
+                loop {
+                    if let Ok(Ok(n)) =
+                        tokio::time::timeout(Duration::from_millis(500), sock.read(&mut buf[total..])).await
+                    {
+                        if n == 0 { break; }
+                        total += n;
+                        if buf[..total].windows(4).any(|w| w == b"\r\n\r\n") { break; }
+                    } else {
+                        break;
+                    }
+                }
+                let (status_line, body) = match my_call {
+                    1 => ("HTTP/1.1 400 Bad Request",
+                          r#"{"error":{"message":"invalid params, function name or parameters is empty (2013)","type":"invalid_request_error"}}"#.to_string()),
+                    _ => ("HTTP/1.1 200 OK",
+                          r#"{"id":"chatcmpl-2","object":"chat.completion","created":1,"model":"m","choices":[{"index":0,"message":{"role":"assistant","content":"from model 2"},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}"#.to_string()),
+                };
+                let response = format!(
+                    "{}\r\n\
+                     Content-Type: application/json\r\n\
+                     Content-Length: {}\r\n\
+                     Connection: close\r\n\
+                     \r\n{}",
+                    status_line,
+                    body.len(),
+                    body,
+                );
+                let _ = sock.write_all(response.as_bytes()).await;
+                let _ = sock.flush().await;
+            }
+        });
+
+        // 2. Seed a 2-target RoundRobin combo (race_size=1).
+        let (pool, conn, _path) = fresh_pool();
+        let mk = Arc::new(MasterKey::generate());
+        let combo_id = {
+            let w = pool.writer();
+            seed_provider(&w, "rr-mock", AuthType::Bearer);
+            w.execute(
+                "INSERT INTO models(provider_id, model_id, target_format) \
+                 VALUES ('rr-mock', 'm', 'openai')",
+                [],
+            )
+            .expect("seed model");
+            let model_rowid: i64 = w
+                .query_row("SELECT last_insert_rowid()", [], |r| r.get(0))
+                .expect("last_insert_rowid");
+            let model_id = crate::ids::ModelRowId(model_rowid);
+            let combo_id = combos::create_combo(&w, "rr-walk-past-400", Strategy::RoundRobin, 1)
+                .expect("create combo");
+            for i in 0..2 {
+                let account_label = format!("rr{}", i);
+                let account_id = crate::accounts::create(
+                    &w,
+                    &ProviderId::new("rr-mock"),
+                    Some("sk-test"),
+                    mk.as_ref(),
+                    Some(&account_label),
+                    (i as i32 + 1) * 10,
+                    None,
+                )
+                .expect("seed account");
+                combos::add_target(
+                    &w,
+                    AddTargetInput {
+                        combo_id,
+                        provider_id: ProviderId::new("rr-mock"),
+                        account_id: Some(account_id),
+                        model_row_id: Some(model_id),
+                        sub_combo_id: None,
+                        priority_order: (i as i32 + 1) * 10,
+                    },
+                )
+                .expect("add target");
+            }
+            combo_id
+        };
+
+        // 3. Wire the mock + run.
+        let defaults = Timeouts::from_config(&TimeoutsConfig::default());
+        let mock = MockAdapter {
+            config: ProviderAdapterConfig {
+                id: ProviderId::new("rr-mock"),
+                base_url: upstream_url.clone(),
+                auth_type: AdapterAuthType::Bearer,
+                format: AdapterFormat::Openai,
+                extra_headers: Vec::new(),
+            },
+        };
+        let cfg = PipelineConfig {
+            defaults,
+            racing: RacingConfig::default(),
+            retries: RetriesConfig::default(),
+            max_attempts: 1,
+            master_key: mk,
+            adapters: Arc::new(vec![Arc::new(mock) as Arc<dyn ProviderAdapter>]),
+            http_client: reqwest::Client::new(),
+            cooldown_secs: 60,
+            upstream_client: UpstreamClient::new(),
+            oauth_provider_registry: None,
+            compression_mode: crate::compression::CompressionMode::Off,
+            idle_chunk_retryable: true,
+        };
+        let p = Pipeline::new(conn, cfg);
+
+        let (req, _cancel_tx) = make_request(combo_id);
+        let result = tokio::time::timeout(Duration::from_secs(15), p.run(req))
+            .await
+            .expect("pipeline.run timed out");
+
+        // 4. Asserts.
+        let calls = call_count.load(AtomicOrdering::SeqCst);
+        assert_eq!(
+            calls, 2,
+            "expected 2 upstream calls (walk past 400 → 200), got {} — \
+             the RoundRobin walk must NOT short-circuit on non-retryable errors",
+            calls
+        );
+        assert!(
+            result.error.is_none(),
+            "expected success from target 2, got error: {:?}",
+            result.error
+        );
+
+        drop(server_handle);
+    }
+
+    /// REGRESSION (Bug #2 — nested combo): `nested_combo_falls_through_to_parent_sibling_on_subcombo_failure`.
+    ///
+    /// A parent combo `A` with `[sub-combo B, model Z]`, where sub-combo
+    /// `B` contains `[model X, model Y]`. Both X and Y return 400
+    /// (non-retryable). Z returns 200.
+    ///
+    /// Pre-fix: the walk short-circuited on X's 400 (non-retryable, non-Priority
+    /// strategy) and never reached Y or Z. The user perceived this as
+    /// "nested combo failure doesn't fall back to parent siblings".
+    ///
+    /// Post-fix: the walk advances through X (400) → Y (400) → Z (200)
+    /// and returns Z's 200.
+    #[tokio::test]
+    async fn nested_combo_falls_through_to_parent_sibling_on_subcombo_failure() {
+        use crate::combos::AddTargetInput;
+        use std::sync::atomic::{AtomicU32, Ordering as AtomicOrdering};
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        use tokio::net::TcpListener;
+
+        use crate::adapters::{
+            AdapterAuthType, AdapterFormat, ProviderAdapter, ProviderAdapterConfig,
+        };
+        struct MockAdapter {
+            config: ProviderAdapterConfig,
+        }
+        #[async_trait::async_trait]
+        impl ProviderAdapter for MockAdapter {
+            fn id(&self) -> &ProviderId {
+                &self.config.id
+            }
+            fn config(&self) -> &ProviderAdapterConfig {
+                &self.config
+            }
+            fn build_chat_url(
+                &self,
+                _target_format: TargetFormat,
+                _model: &crate::ids::ModelId,
+            ) -> String {
+                self.config.base_url.clone()
+            }
+            fn build_auth_header(&self, api_key: &str) -> (String, String) {
+                ("Authorization".into(), format!("Bearer {api_key}"))
+            }
+            fn build_headers(
+                &self,
+                api_key: &str,
+                _target_format: TargetFormat,
+                _model: &crate::ids::ModelId,
+            ) -> Vec<(String, String)> {
+                vec![
+                    self.build_auth_header(api_key),
+                    ("Content-Type".into(), "application/json".into()),
+                ]
+            }
+            fn models_url(&self) -> Option<String> {
+                None
+            }
+            async fn fetch_models(
+                &self,
+                _upstream_client: &std::sync::Arc<crate::upstream::UpstreamClient>,
+                _api_key: &str,
+            ) -> Result<Vec<crate::models::DiscoveredModel>> {
+                Ok(Vec::new())
+            }
+        }
+
+        // Listener: calls 1-2 → 400 (sub-combo's X and Y), call 3 → 200 (Z).
+        let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
+        let local_addr = listener.local_addr().expect("local_addr");
+        let upstream_url = format!("http://{local_addr}");
+        let call_count = Arc::new(AtomicU32::new(0));
+        let server_call_count = call_count.clone();
+        let server_handle = tokio::spawn(async move {
+            loop {
+                let (mut sock, _peer) = match listener.accept().await {
+                    Ok(p) => p,
+                    Err(_) => break,
+                };
+                let my_call = server_call_count.fetch_add(1, AtomicOrdering::SeqCst) + 1;
+                let mut buf = vec![0u8; 64 * 1024];
+                let mut total = 0usize;
+                loop {
+                    if let Ok(Ok(n)) =
+                        tokio::time::timeout(Duration::from_millis(500), sock.read(&mut buf[total..])).await
+                    {
+                        if n == 0 { break; }
+                        total += n;
+                        if buf[..total].windows(4).any(|w| w == b"\r\n\r\n") { break; }
+                    } else {
+                        break;
+                    }
+                }
+                let (status_line, body) = match my_call {
+                    1 | 2 => ("HTTP/1.1 400 Bad Request",
+                          r#"{"error":{"message":"invalid params (2013)","type":"invalid_request_error"}}"#.to_string()),
+                    _ => ("HTTP/1.1 200 OK",
+                          r#"{"id":"chatcmpl-3","object":"chat.completion","created":1,"model":"z","choices":[{"index":0,"message":{"role":"assistant","content":"from model Z"},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}"#.to_string()),
+                };
+                let response = format!(
+                    "{}\r\n\
+                     Content-Type: application/json\r\n\
+                     Content-Length: {}\r\n\
+                     Connection: close\r\n\
+                     \r\n{}",
+                    status_line,
+                    body.len(),
+                    body,
+                );
+                let _ = sock.write_all(response.as_bytes()).await;
+                let _ = sock.flush().await;
+            }
+        });
+
+        // Seed: parent combo A (RoundRobin, race_size=1) with
+        // [sub-combo B, model Z]. Sub-combo B has [model X, model Y].
+        let (pool, conn, _path) = fresh_pool();
+        let mk = Arc::new(MasterKey::generate());
+        let parent_combo_id = {
+            let w = pool.writer();
+            seed_provider(&w, "nested-mock", AuthType::Bearer);
+            w.execute(
+                "INSERT INTO models(provider_id, model_id, target_format) \
+                 VALUES ('nested-mock', 'm', 'openai')",
+                [],
+            )
+            .expect("seed model");
+            let model_rowid: i64 = w
+                .query_row("SELECT last_insert_rowid()", [], |r| r.get(0))
+                .expect("last_insert_rowid");
+            let model_id = crate::ids::ModelRowId(model_rowid);
+
+            // Sub-combo B with X, Y.
+            let sub_combo_id = combos::create_combo(&w, "sub-B", Strategy::Priority, 1)
+                .expect("create sub-combo");
+            for i in 0..2 {
+                let account_label = format!("sub{}", i);
+                let account_id = crate::accounts::create(
+                    &w,
+                    &ProviderId::new("nested-mock"),
+                    Some("sk-test"),
+                    mk.as_ref(),
+                    Some(&account_label),
+                    (i as i32 + 1) * 10,
+                    None,
+                )
+                .expect("seed account");
+                combos::add_target(
+                    &w,
+                    AddTargetInput {
+                        combo_id: sub_combo_id,
+                        provider_id: ProviderId::new("nested-mock"),
+                        account_id: Some(account_id),
+                        model_row_id: Some(model_id),
+                        sub_combo_id: None,
+                        priority_order: (i as i32 + 1) * 10,
+                    },
+                )
+                .expect("add sub-combo target");
+            }
+
+            // Parent combo A with [sub-combo B, model Z].
+            let parent_combo_id = combos::create_combo(&w, "parent-A", Strategy::RoundRobin, 1)
+                .expect("create parent combo");
+            // Entry 1: sub-combo B.
+            combos::add_target(
+                &w,
+                AddTargetInput {
+                    combo_id: parent_combo_id,
+                    provider_id: ProviderId::new("nested-mock"),
+                    account_id: None,
+                    model_row_id: None,
+                    sub_combo_id: Some(sub_combo_id),
+                    priority_order: 10,
+                },
+                )
+                .expect("add sub-combo entry to parent");
+            // Entry 2: model Z.
+            let z_account_id = crate::accounts::create(
+                &w,
+                &ProviderId::new("nested-mock"),
+                Some("sk-test"),
+                mk.as_ref(),
+                Some("z-acct"),
+                100,
+                None,
+            )
+            .expect("seed Z account");
+            combos::add_target(
+                &w,
+                AddTargetInput {
+                    combo_id: parent_combo_id,
+                    provider_id: ProviderId::new("nested-mock"),
+                    account_id: Some(z_account_id),
+                    model_row_id: Some(model_id),
+                    sub_combo_id: None,
+                    priority_order: 20,
+                },
+                )
+                .expect("add Z entry to parent");
+            parent_combo_id
+        };
+
+        let defaults = Timeouts::from_config(&TimeoutsConfig::default());
+        let mock = MockAdapter {
+            config: ProviderAdapterConfig {
+                id: ProviderId::new("nested-mock"),
+                base_url: upstream_url.clone(),
+                auth_type: AdapterAuthType::Bearer,
+                format: AdapterFormat::Openai,
+                extra_headers: Vec::new(),
+            },
+        };
+        let cfg = PipelineConfig {
+            defaults,
+            racing: RacingConfig::default(),
+            retries: RetriesConfig::default(),
+            max_attempts: 1,
+            master_key: mk,
+            adapters: Arc::new(vec![Arc::new(mock) as Arc<dyn ProviderAdapter>]),
+            http_client: reqwest::Client::new(),
+            cooldown_secs: 60,
+            upstream_client: UpstreamClient::new(),
+            oauth_provider_registry: None,
+            compression_mode: crate::compression::CompressionMode::Off,
+            idle_chunk_retryable: true,
+        };
+        let p = Pipeline::new(conn, cfg);
+
+        let (req, _cancel_tx) = make_request(parent_combo_id);
+        let result = tokio::time::timeout(Duration::from_secs(15), p.run(req))
+            .await
+            .expect("pipeline.run timed out");
+
+        // The walk must reach all 3 targets (X, Y, Z) and return Z's 200.
+        let calls = call_count.load(AtomicOrdering::SeqCst);
+        assert_eq!(
+            calls, 3,
+            "expected 3 upstream calls (X 400 → Y 400 → Z 200), got {} — \
+             nested combo must fall through to parent sibling when sub-combo fails",
+            calls
+        );
+        assert!(
+            result.error.is_none(),
+            "expected success from Z, got error: {:?}",
             result.error
         );
 
