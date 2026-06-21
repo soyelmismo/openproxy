@@ -276,6 +276,11 @@ pub struct UsageSummary {
     pub avg_ttft_ms: Option<f64>,
     /// `AVG(total_ms)` over all rows in the filter.
     pub avg_total_ms: f64,
+    /// Rows where `cost_usd = 0.0 AND prompt_tokens > 0` — i.e. the row
+    /// consumed tokens (so pricing should have applied) but the cost column
+    /// is zero, meaning pricing was missing at record time. Surfaces
+    /// under-reporting in the dashboard.
+    pub rows_with_null_pricing: u64,
 }
 
 /// One row of the `by_model` aggregation.
@@ -288,6 +293,39 @@ pub struct ByModelRow {
     pub winners: u64,
     pub total_prompt_tokens: i64,
     pub total_completion_tokens: i64,
+    pub total_cost_usd: f64,
+}
+
+/// One row of the `by_provider` aggregation.
+///
+/// Mirrors [`ByModelRow`] but groups by `provider_id` only — the frontend
+/// "monthly usage by provider" report uses this for the top-level roll-up,
+/// and [`monthly_by_provider`] for the time-bucketed breakdown.
+#[derive(Debug, Clone, Serialize)]
+pub struct ByProviderRow {
+    pub provider_id: String,
+    pub unique_requests: u64,
+    pub total_rows: u64,
+    pub winners: u64,
+    pub total_prompt_tokens: u64,
+    pub total_completion_tokens: u64,
+    pub total_cost_usd: f64,
+}
+
+/// One row of the `monthly_by_provider` aggregation.
+///
+/// `month` is `strftime('%Y-%m', created_at)` — e.g. `"2026-06"`. Ordered
+/// by `month ASC, total_cost_usd DESC` so the frontend can pivot into a
+/// providers × months matrix that walks time forward.
+#[derive(Debug, Clone, Serialize)]
+pub struct MonthlyByProviderRow {
+    pub provider_id: String,
+    /// `"YYYY-MM"` — the calendar month in UTC.
+    pub month: String,
+    pub unique_requests: u64,
+    pub total_rows: u64,
+    pub total_prompt_tokens: u64,
+    pub total_completion_tokens: u64,
     pub total_cost_usd: f64,
 }
 
@@ -413,7 +451,8 @@ pub fn summary(conn: &Connection, f: &UsageFilter) -> Result<UsageSummary> {
              COALESCE(SUM(completion_tokens), 0)                            AS total_completion_tokens, \
              COALESCE(SUM(cost_usd), 0.0)                                   AS total_cost_usd, \
              AVG(ttft_ms) FILTER (WHERE ttft_ms IS NOT NULL)               AS avg_ttft_ms, \
-             COALESCE(AVG(total_ms), 0.0)                                   AS avg_total_ms \
+             COALESCE(AVG(total_ms), 0.0)                                   AS avg_total_ms, \
+             SUM(CASE WHEN cost_usd = 0.0 AND prompt_tokens > 0 THEN 1 ELSE 0 END) AS rows_with_null_pricing \
          FROM usage {}",
         w.sql,
     );
@@ -441,6 +480,7 @@ pub fn summary(conn: &Connection, f: &UsageFilter) -> Result<UsageSummary> {
             let total_cost_usd: f64 = row.get(8)?;
             let avg_ttft_ms: Option<f64> = row.get(9)?;
             let avg_total_ms: f64 = row.get(10)?;
+            let rows_with_null_pricing: i64 = row.get::<_, Option<i64>>(11)?.unwrap_or(0);
 
             Ok(UsageSummary {
                 unique_requests: as_u64(unique_requests, "unique_requests")?,
@@ -454,6 +494,7 @@ pub fn summary(conn: &Connection, f: &UsageFilter) -> Result<UsageSummary> {
                 total_cost_usd,
                 avg_ttft_ms,
                 avg_total_ms,
+                rows_with_null_pricing: as_u64(rows_with_null_pricing, "rows_with_null_pricing")?,
             })
         })
         .map_err(|e| CoreError::Database {
@@ -517,6 +558,123 @@ pub fn by_model(conn: &Connection, f: &UsageFilter) -> Result<Vec<ByModelRow>> {
         })?;
 
     collect_rows(rows, "by_model")
+}
+
+/// Per-`provider_id` breakdown. Ordered by total cost descending so the
+/// biggest spend providers float to the top.
+///
+/// Mirrors [`by_model`] but groups by `provider_id` only (no
+/// `upstream_model_id`). The frontend's "monthly usage by provider" report
+/// uses this for the top-level roll-up and [`monthly_by_provider`] for the
+/// time-bucketed breakdown.
+pub fn by_provider(conn: &Connection, f: &UsageFilter) -> Result<Vec<ByProviderRow>> {
+    let w = BuiltWhere::from_filter(f);
+    let sql = format!(
+        "SELECT \
+             provider_id, \
+             COUNT(DISTINCT request_id)                       AS unique_requests, \
+             COUNT(*)                                         AS total_rows, \
+             SUM(CASE WHEN race_lost = 0 THEN 1 ELSE 0 END)   AS winners, \
+             COALESCE(SUM(prompt_tokens), 0)                  AS total_prompt_tokens, \
+             COALESCE(SUM(completion_tokens), 0)              AS total_completion_tokens, \
+             COALESCE(SUM(cost_usd), 0.0)                     AS total_cost_usd \
+         FROM usage {} \
+         GROUP BY provider_id \
+         ORDER BY total_cost_usd DESC, provider_id ASC",
+        w.sql,
+    );
+
+    let mut stmt = conn.prepare(&sql).map_err(|e| CoreError::Database {
+        message: format!("prepare usage by_provider: {}", e),
+        source: Some(Box::new(e)),
+    })?;
+
+    let params_slice = to_params(&w.params);
+    let rows = stmt
+        .query_map(params_from_iter(params_slice), |row| {
+            let provider_id: String = row.get(0)?;
+            let unique_requests: i64 = row.get(1)?;
+            let total_rows: i64 = row.get(2)?;
+            let winners: i64 = row.get(3)?;
+            let total_prompt_tokens: i64 = row.get(4)?;
+            let total_completion_tokens: i64 = row.get(5)?;
+            let total_cost_usd: f64 = row.get(6)?;
+
+            Ok(ByProviderRow {
+                provider_id,
+                unique_requests: as_u64(unique_requests, "unique_requests")?,
+                total_rows: as_u64(total_rows, "total_rows")?,
+                winners: as_u64(winners, "winners")?,
+                total_prompt_tokens: as_u64(total_prompt_tokens, "total_prompt_tokens")?,
+                total_completion_tokens: as_u64(total_completion_tokens, "total_completion_tokens")?,
+                total_cost_usd,
+            })
+        })
+        .map_err(|e| CoreError::Database {
+            message: format!("query usage by_provider: {}", e),
+            source: Some(Box::new(e)),
+        })?;
+
+    collect_rows(rows, "by_provider")
+}
+
+/// Per-`(provider_id, month)` breakdown, where `month = strftime('%Y-%m',
+/// created_at)`. Ordered by `month ASC, total_cost_usd DESC` so the
+/// frontend can pivot into a providers × months matrix that walks time
+/// forward and within each month shows the biggest spend provider first.
+///
+/// `winners` is intentionally omitted — the monthly view is for cost /
+/// token tracking, not race outcomes. Use [`by_provider`] if you need
+/// winner counts.
+pub fn monthly_by_provider(conn: &Connection, f: &UsageFilter) -> Result<Vec<MonthlyByProviderRow>> {
+    let w = BuiltWhere::from_filter(f);
+    let sql = format!(
+        "SELECT \
+             provider_id, \
+             strftime('%Y-%m', created_at)                     AS month, \
+             COUNT(DISTINCT request_id)                       AS unique_requests, \
+             COUNT(*)                                         AS total_rows, \
+             COALESCE(SUM(prompt_tokens), 0)                  AS total_prompt_tokens, \
+             COALESCE(SUM(completion_tokens), 0)              AS total_completion_tokens, \
+             COALESCE(SUM(cost_usd), 0.0)                     AS total_cost_usd \
+         FROM usage {} \
+         GROUP BY provider_id, month \
+         ORDER BY month ASC, total_cost_usd DESC, provider_id ASC",
+        w.sql,
+    );
+
+    let mut stmt = conn.prepare(&sql).map_err(|e| CoreError::Database {
+        message: format!("prepare usage monthly_by_provider: {}", e),
+        source: Some(Box::new(e)),
+    })?;
+
+    let params_slice = to_params(&w.params);
+    let rows = stmt
+        .query_map(params_from_iter(params_slice), |row| {
+            let provider_id: String = row.get(0)?;
+            let month: String = row.get(1)?;
+            let unique_requests: i64 = row.get(2)?;
+            let total_rows: i64 = row.get(3)?;
+            let total_prompt_tokens: i64 = row.get(4)?;
+            let total_completion_tokens: i64 = row.get(5)?;
+            let total_cost_usd: f64 = row.get(6)?;
+
+            Ok(MonthlyByProviderRow {
+                provider_id,
+                month,
+                unique_requests: as_u64(unique_requests, "unique_requests")?,
+                total_rows: as_u64(total_rows, "total_rows")?,
+                total_prompt_tokens: as_u64(total_prompt_tokens, "total_prompt_tokens")?,
+                total_completion_tokens: as_u64(total_completion_tokens, "total_completion_tokens")?,
+                total_cost_usd,
+            })
+        })
+        .map_err(|e| CoreError::Database {
+            message: format!("query usage monthly_by_provider: {}", e),
+            source: Some(Box::new(e)),
+        })?;
+
+    collect_rows(rows, "monthly_by_provider")
 }
 
 /// Per-(account, provider) breakdown. Ordered by total cost descending.
@@ -2021,5 +2179,181 @@ mod tests {
             )
             .expect("query");
         assert!(body.is_none(), "body should be NULL after zero-TTL prune");
+    }
+
+    // -----------------------------------------------------------------------
+    // by_provider: groups by provider_id, ordered by total_cost_usd DESC.
+    // -----------------------------------------------------------------------
+    #[test]
+    fn by_provider_groups_by_provider_id() {
+        let (conn, _p) = fresh_conn();
+        // openrouter: 2 rows, total cost 0.50, both winners.
+        // anthropic: 1 row, total cost 1.00, winner.
+        // openai: 1 row, total cost 0.10, loser (race_lost=1).
+        let r1 = RequestId::new().to_string();
+        let r2 = RequestId::new().to_string();
+        let r3 = RequestId::new().to_string();
+        let r4 = RequestId::new().to_string();
+        insert(&conn, &r1, &TraceId::new().to_string(), "openrouter", "openai/gpt-4o", Some(1), 200, 100, 50, 0.25, Some(200), 1200, false, None);
+        insert(&conn, &r2, &TraceId::new().to_string(), "openrouter", "openai/gpt-4o-mini", Some(1), 200, 100, 50, 0.25, Some(200), 600, false, None);
+        insert(&conn, &r3, &TraceId::new().to_string(), "anthropic", "claude-3.5-sonnet", Some(2), 200, 100, 50, 1.00, Some(200), 1500, false, None);
+        insert(&conn, &r4, &TraceId::new().to_string(), "openai", "gpt-4o", Some(3), 200, 100, 50, 0.10, Some(200), 800, true, None);
+
+        let rows = by_provider(&conn, &UsageFilter::default()).expect("by_provider");
+        assert_eq!(rows.len(), 3, "three distinct providers");
+
+        // Order: anthropic (1.00), openrouter (0.50), openai (0.10).
+        assert_eq!(rows[0].provider_id, "anthropic");
+        assert!((rows[0].total_cost_usd - 1.00).abs() < 1e-9);
+        assert_eq!(rows[0].total_rows, 1);
+        assert_eq!(rows[0].unique_requests, 1);
+        assert_eq!(rows[0].winners, 1);
+        assert_eq!(rows[0].total_prompt_tokens, 100);
+        assert_eq!(rows[0].total_completion_tokens, 50);
+
+        assert_eq!(rows[1].provider_id, "openrouter");
+        assert!((rows[1].total_cost_usd - 0.50).abs() < 1e-9);
+        assert_eq!(rows[1].total_rows, 2);
+        assert_eq!(rows[1].unique_requests, 2);
+        assert_eq!(rows[1].winners, 2);
+        assert_eq!(rows[1].total_prompt_tokens, 200);
+
+        assert_eq!(rows[2].provider_id, "openai");
+        assert!((rows[2].total_cost_usd - 0.10).abs() < 1e-9);
+        assert_eq!(rows[2].winners, 0, "race_lost=1 means 0 winners");
+
+        // Filter by a single provider — only that row comes back.
+        let f = UsageFilter {
+            provider_id: Some(ProviderId::new("openrouter")),
+            ..Default::default()
+        };
+        let filtered = by_provider(&conn, &f).expect("by_provider filtered");
+        assert_eq!(filtered.len(), 1);
+        assert_eq!(filtered[0].provider_id, "openrouter");
+        assert_eq!(filtered[0].total_rows, 2);
+    }
+
+    // -----------------------------------------------------------------------
+    // monthly_by_provider: groups by (provider_id, month).
+    // -----------------------------------------------------------------------
+    #[test]
+    fn monthly_by_provider_groups_by_month() {
+        let (conn, _p) = fresh_conn();
+        // Insert rows with explicit created_at values across two months
+        // and three providers. The `insert` helper uses datetime('now'),
+        // so we hand-roll the INSERTs to pin the timestamp.
+        let insert_at = |provider: &str, cost: f64, prompt: i64, created_at: &str| {
+            conn.execute(
+                "INSERT INTO usage (\
+                    request_id, trace_id, attempt, provider_id, account_id, \
+                    upstream_model_id, prompt_tokens, completion_tokens, cost_usd, \
+                    connect_ms, ttft_ms, total_ms, status_code, error_msg, \
+                    error_msg_redacted, race_total, race_lost, created_at\
+                 ) VALUES (\
+                    ?1, ?2, 1, ?3, 1, 'm', ?4, 0, ?5, 50, 200, 1200, 200, NULL, NULL, 1, 0, ?6\
+                 )",
+                params![
+                    RequestId::new().to_string(),
+                    TraceId::new().to_string(),
+                    provider,
+                    prompt,
+                    cost,
+                    created_at,
+                ],
+            )
+            .expect("insert");
+        };
+
+        // June 2026: openrouter $1.00 + $0.50; anthropic $0.25.
+        // RFC-3339 created_at so the lexical string comparison with
+        // the filter `from`/`to` (also RFC-3339) is well-defined.
+        insert_at("openrouter", 1.00, 100, "2026-06-01T12:00:00Z");
+        insert_at("openrouter", 0.50, 100, "2026-06-15T12:00:00Z");
+        insert_at("anthropic",  0.25,  50, "2026-06-20T12:00:00Z");
+        // July 2026: openrouter $0.10; openai $0.75.
+        insert_at("openrouter", 0.10,  10, "2026-07-01T12:00:00Z");
+        insert_at("openai",     0.75,  20, "2026-07-31T12:00:00Z");
+
+        let rows = monthly_by_provider(&conn, &UsageFilter::default())
+            .expect("monthly_by_provider");
+        assert_eq!(rows.len(), 4, "four (provider, month) buckets");
+
+        // Ordered by month ASC, then cost DESC.
+        // June (3 rows total):
+        //   - openrouter $1.50
+        //   - anthropic  $0.25
+        // July (2 rows):
+        //   - openai     $0.75
+        //   - openrouter $0.10
+        assert_eq!(rows[0].month, "2026-06");
+        assert_eq!(rows[0].provider_id, "openrouter");
+        assert!((rows[0].total_cost_usd - 1.50).abs() < 1e-9);
+        assert_eq!(rows[0].total_rows, 2);
+        assert_eq!(rows[0].unique_requests, 2);
+        assert_eq!(rows[0].total_prompt_tokens, 200);
+
+        assert_eq!(rows[1].month, "2026-06");
+        assert_eq!(rows[1].provider_id, "anthropic");
+        assert!((rows[1].total_cost_usd - 0.25).abs() < 1e-9);
+
+        assert_eq!(rows[2].month, "2026-07");
+        assert_eq!(rows[2].provider_id, "openai");
+        assert!((rows[2].total_cost_usd - 0.75).abs() < 1e-9);
+
+        assert_eq!(rows[3].month, "2026-07");
+        assert_eq!(rows[3].provider_id, "openrouter");
+        assert!((rows[3].total_cost_usd - 0.10).abs() < 1e-9);
+
+        // Date filter: only June.
+        let f = UsageFilter {
+            from: Some("2026-06-01T00:00:00Z".to_string()),
+            to: Some("2026-07-01T00:00:00Z".to_string()),
+            ..Default::default()
+        };
+        let june_only = monthly_by_provider(&conn, &f).expect("monthly_by_provider june");
+        assert_eq!(june_only.len(), 2);
+        assert!(june_only.iter().all(|r| r.month == "2026-06"));
+    }
+
+    // -----------------------------------------------------------------------
+    // summary.rows_with_null_pricing counts rows where cost_usd = 0 AND
+    // prompt_tokens > 0 (pricing was missing at record time).
+    // -----------------------------------------------------------------------
+    #[test]
+    fn summary_counts_rows_with_null_pricing() {
+        let (conn, _p) = fresh_conn();
+        // Row 1: normal — has prompt_tokens and a non-zero cost.
+        insert(&conn, &RequestId::new().to_string(), &TraceId::new().to_string(),
+            "openrouter", "openai/gpt-4o", Some(1), 200, 100, 50, 0.01, Some(100), 600, false, None);
+        // Row 2: NULL pricing — prompt_tokens > 0 but cost_usd = 0.
+        insert(&conn, &RequestId::new().to_string(), &TraceId::new().to_string(),
+            "openrouter", "openai/gpt-4o", Some(1), 200, 200, 50, 0.00, Some(100), 600, false, None);
+        // Row 3: NULL pricing — same shape, different provider.
+        insert(&conn, &RequestId::new().to_string(), &TraceId::new().to_string(),
+            "anthropic", "claude-3.5-sonnet", Some(2), 200, 300, 0, 0.00, Some(100), 600, false, None);
+        // Row 4: zero tokens AND zero cost — NOT null pricing (no tokens consumed).
+        insert(&conn, &RequestId::new().to_string(), &TraceId::new().to_string(),
+            "openrouter", "openai/gpt-4o", Some(1), 500, 0, 0, 0.00, Some(100), 600, false, Some("err"));
+
+        let s = summary(&conn, &UsageFilter::default()).expect("summary");
+        assert_eq!(s.total_rows, 4);
+        assert_eq!(
+            s.rows_with_null_pricing, 2,
+            "rows 2 and 3 had prompt_tokens > 0 but cost_usd = 0"
+        );
+
+        // Filter to just anthropic — only row 3 matches, so count drops to 1.
+        let f = UsageFilter {
+            provider_id: Some(ProviderId::new("anthropic")),
+            ..Default::default()
+        };
+        let s = summary(&conn, &f).expect("summary filtered");
+        assert_eq!(s.total_rows, 1);
+        assert_eq!(s.rows_with_null_pricing, 1);
+
+        // Empty DB: counter is 0.
+        let (conn2, _p2) = fresh_conn();
+        let s_empty = summary(&conn2, &UsageFilter::default()).expect("summary empty");
+        assert_eq!(s_empty.rows_with_null_pricing, 0);
     }
 }

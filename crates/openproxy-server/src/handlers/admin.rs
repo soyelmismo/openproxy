@@ -118,6 +118,13 @@ pub struct UsageQuery {
     /// `GET /v1/admin/keys/:id/usage` endpoint sets this; the
     /// public analytics endpoints leave it absent.
     pub api_key_id: Option<i64>,
+    /// Named time-window preset. One of: `today`, `7d`, `30d`,
+    /// `this_month`, `last_month`, `last_6_months`, `ytd`, `custom`.
+    ///
+    /// When set, the server computes `from`/`to` in UTC and ignores
+    /// any explicit `from`/`to` (with a warning). `custom` (or
+    /// `None`) falls through to the explicit `from`/`to` fields.
+    pub preset: Option<String>,
 }
 
 /// Parse a `from` or `to` timestamp from the dashboard into the
@@ -140,6 +147,106 @@ fn parse_usage_timestamp(s: &str, field: &str) -> Result<String, ApiError> {
         field, s
     ))
     .into())
+}
+
+/// Format a UTC `DateTime` as the canonical ISO-8601 string the SQL
+/// builder expects (e.g. `2026-06-18T07:00:00Z`).
+fn iso_z(dt: chrono::DateTime<chrono::Utc>) -> String {
+    dt.to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
+}
+
+/// Resolve a `preset` query parameter into `(from, to)` UTC timestamps.
+///
+/// Returns `None` when `preset` is `None`, `Some(None)` when the preset
+/// is recognized but explicitly opts out of date filtering (none of the
+/// current presets do this, but the `custom` sentinel means "use the
+/// explicit `from`/`to` as-is").
+///
+/// Returns `Err` for unknown preset strings so the operator sees a 400
+/// instead of silently falling back to "no filter" (which would return
+/// the wrong data and confuse debugging).
+fn resolve_preset(preset: &str) -> Result<Option<(String, String)>, ApiError> {
+    use chrono::{Datelike, Duration, NaiveDate, TimeZone, Utc};
+
+    // Helper to format a (year, month, day) tuple at 00:00:00 UTC.
+    let midnight = |y: i32, m: u32, d: u32| -> String {
+        let naive = NaiveDate::from_ymd_opt(y, m, d)
+            .expect("valid ymd")
+            .and_hms_opt(0, 0, 0)
+            .expect("valid hms");
+        iso_z(Utc.from_utc_datetime(&naive))
+    };
+
+    let now = Utc::now();
+    let today = now.date_naive();
+    let y = now.year();
+    let m = now.month();
+
+    match preset {
+        "today" => {
+            let from = midnight(y, m, today.day());
+            // Tomorrow rolls over month/year boundaries via chrono's
+            // NaiveDate arithmetic; using `today.day() + 1` directly
+            // would overflow on the last day of the month.
+            let tomorrow = today + Duration::days(1);
+            let to = midnight(tomorrow.year(), tomorrow.month(), tomorrow.day());
+            Ok(Some((from, to)))
+        }
+        "7d" => {
+            let from = now - Duration::days(7);
+            Ok(Some((iso_z(from), iso_z(now))))
+        }
+        "30d" => {
+            let from = now - Duration::days(30);
+            Ok(Some((iso_z(from), iso_z(now))))
+        }
+        "this_month" => {
+            let from = midnight(y, m, 1);
+            // First day of next month (may roll into next year).
+            let (ny, nm) = if m == 12 { (y + 1, 1) } else { (y, m + 1) };
+            let to = midnight(ny, nm, 1);
+            Ok(Some((from, to)))
+        }
+        "last_month" => {
+            let (ly, lm) = if m == 1 { (y - 1, 12) } else { (y, m - 1) };
+            let from = midnight(ly, lm, 1);
+            let to = midnight(y, m, 1);
+            Ok(Some((from, to)))
+        }
+        "last_6_months" => {
+            // Walk back 6 months from the first day of the current
+            // month. We compute the start of each month by subtracting
+            // months one at a time to avoid the "month - 6" underflow.
+            let mut ly = y;
+            let mut lm = m;
+            for _ in 0..6 {
+                if lm == 1 {
+                    lm = 12;
+                    ly -= 1;
+                } else {
+                    lm -= 1;
+                }
+            }
+            let from = midnight(ly, lm, 1);
+            let to = midnight(y, m, 1);
+            Ok(Some((from, to)))
+        }
+        "ytd" => {
+            let from = midnight(y, 1, 1);
+            let to = midnight(y + 1, 1, 1);
+            Ok(Some((from, to)))
+        }
+        // `custom` (or any other unrecognised string the operator
+        // might type) means "use the explicit from/to as-is". We
+        // surface unknown presets as a 400 so the dashboard doesn't
+        // silently miss a window due to a typo.
+        "custom" => Ok(None),
+        other => Err(CoreError::Validation(format!(
+            "preset must be one of today|7d|30d|this_month|last_month|last_6_months|ytd|custom; got `{}`",
+            other
+        ))
+        .into()),
+    }
 }
 
 impl UsageQuery {
@@ -172,14 +279,35 @@ impl UsageQuery {
         // Both round-trip through `chrono::DateTime<Utc>` and we
         // re-emit the canonical RFC-3339 form so the SQL comparison
         // is consistent.
-        let from = self
+        let mut from = self
             .from
             .map(|s| parse_usage_timestamp(&s, "from"))
             .transpose()?;
-        let to = self
+        let mut to = self
             .to
             .map(|s| parse_usage_timestamp(&s, "to"))
             .transpose()?;
+
+        // Preset handling: if `preset` is set, it takes precedence
+        // over explicit `from`/`to`. We log a warning when both are
+        // provided so the operator can spot the dashboard sending
+        // redundant data.
+        if let Some(preset) = &self.preset {
+            if from.is_some() || to.is_some() {
+                tracing::warn!(
+                    preset = %preset,
+                    from = ?from,
+                    to = ?to,
+                    "UsageQuery: preset is set and will override explicit from/to"
+                );
+            }
+            if let Some((pf, pt)) = resolve_preset(preset)? {
+                from = Some(pf);
+                to = Some(pt);
+            }
+            // `custom` (or None) falls through with the explicit values.
+        }
+
         // If both are present, from must not be after to. (Both
         // are inclusive at the lower bound in the SQL.)
         if let (Some(f), Some(t)) = (&from, &to) {
@@ -1059,9 +1187,74 @@ pub async fn usage_by_model(
     Query(q): Query<UsageQuery>,
 ) -> ApiResult<Json<Vec<usage::ByModelRow>>> {
     let body: Result<Json<Vec<usage::ByModelRow>>, ApiError> = async {
-        let w = s.db_pool().writer();
+        // Analytics must not block forever on the writer lock — see
+        // `usage_summary` for the rationale. We wait up to
+        // `ADMIN_LOCK_TIMEOUT` and surface 503 if we lose the race.
+        let w = s
+            .db_pool()
+            .try_writer_for(ADMIN_LOCK_TIMEOUT)
+            .ok_or_else(|| {
+                ApiError(CoreError::ServiceUnavailable(
+                    "writer lock busy: another query is holding the database; retry in a few seconds"
+                        .into(),
+                ))
+            })?;
         let f = q.into_filter()?;
         Ok(Json(usage::by_model(&w, &f)?))
+    }
+    .await;
+    body.into()
+}
+
+/// `GET /v1/admin/usage/by-provider` — per-provider breakdown.
+///
+/// Mirrors `usage_by_model` but groups by `provider_id` only. The
+/// frontend's "monthly usage by provider" report uses this for the
+/// top-level roll-up and `usage_monthly_by_provider` for the
+/// time-bucketed breakdown.
+pub async fn usage_by_provider(
+    State(s): State<AppState>,
+    Query(q): Query<UsageQuery>,
+) -> ApiResult<Json<Vec<usage::ByProviderRow>>> {
+    let body: Result<Json<Vec<usage::ByProviderRow>>, ApiError> = async {
+        let w = s
+            .db_pool()
+            .try_writer_for(ADMIN_LOCK_TIMEOUT)
+            .ok_or_else(|| {
+                ApiError(CoreError::ServiceUnavailable(
+                    "writer lock busy: another query is holding the database; retry in a few seconds"
+                        .into(),
+                ))
+            })?;
+        let f = q.into_filter()?;
+        Ok(Json(usage::by_provider(&w, &f)?))
+    }
+    .await;
+    body.into()
+}
+
+/// `GET /v1/admin/usage/monthly-by-provider` — per-(provider, month)
+/// breakdown.
+///
+/// `month` is `strftime('%Y-%m', created_at)`. Ordered by
+/// `month ASC, total_cost_usd DESC` so the frontend can pivot into a
+/// providers × months matrix that walks time forward.
+pub async fn usage_monthly_by_provider(
+    State(s): State<AppState>,
+    Query(q): Query<UsageQuery>,
+) -> ApiResult<Json<Vec<usage::MonthlyByProviderRow>>> {
+    let body: Result<Json<Vec<usage::MonthlyByProviderRow>>, ApiError> = async {
+        let w = s
+            .db_pool()
+            .try_writer_for(ADMIN_LOCK_TIMEOUT)
+            .ok_or_else(|| {
+                ApiError(CoreError::ServiceUnavailable(
+                    "writer lock busy: another query is holding the database; retry in a few seconds"
+                        .into(),
+                ))
+            })?;
+        let f = q.into_filter()?;
+        Ok(Json(usage::monthly_by_provider(&w, &f)?))
     }
     .await;
     body.into()
@@ -1073,7 +1266,15 @@ pub async fn usage_by_account(
     Query(q): Query<UsageQuery>,
 ) -> ApiResult<Json<Vec<usage::ByAccountRow>>> {
     let body: Result<Json<Vec<usage::ByAccountRow>>, ApiError> = async {
-        let w = s.db_pool().writer();
+        let w = s
+            .db_pool()
+            .try_writer_for(ADMIN_LOCK_TIMEOUT)
+            .ok_or_else(|| {
+                ApiError(CoreError::ServiceUnavailable(
+                    "writer lock busy: another query is holding the database; retry in a few seconds"
+                        .into(),
+                ))
+            })?;
         let f = q.into_filter()?;
         Ok(Json(usage::by_account(&w, &f)?))
     }
@@ -1087,7 +1288,15 @@ pub async fn usage_by_status(
     Query(q): Query<UsageQuery>,
 ) -> ApiResult<Json<Vec<usage::ByStatusRow>>> {
     let body: Result<Json<Vec<usage::ByStatusRow>>, ApiError> = async {
-        let w = s.db_pool().writer();
+        let w = s
+            .db_pool()
+            .try_writer_for(ADMIN_LOCK_TIMEOUT)
+            .ok_or_else(|| {
+                ApiError(CoreError::ServiceUnavailable(
+                    "writer lock busy: another query is holding the database; retry in a few seconds"
+                        .into(),
+                ))
+            })?;
         let f = q.into_filter()?;
         Ok(Json(usage::by_status(&w, &f)?))
     }
@@ -1104,7 +1313,15 @@ pub async fn usage_errors(
     Query(q): Query<UsageQuery>,
 ) -> ApiResult<Json<Vec<usage::ErrorRow>>> {
     let body: Result<Json<Vec<usage::ErrorRow>>, ApiError> = async {
-        let w = s.db_pool().writer();
+        let w = s
+            .db_pool()
+            .try_writer_for(ADMIN_LOCK_TIMEOUT)
+            .ok_or_else(|| {
+                ApiError(CoreError::ServiceUnavailable(
+                    "writer lock busy: another query is holding the database; retry in a few seconds"
+                        .into(),
+                ))
+            })?;
         let f = q.into_filter()?;
         Ok(Json(usage::errors(&w, &f, ERRORS_DEFAULT_LIMIT)?))
     }
@@ -1118,7 +1335,15 @@ pub async fn usage_latency(
     Query(q): Query<UsageQuery>,
 ) -> ApiResult<Json<analytics::LatencyPercentiles>> {
     let body: Result<Json<analytics::LatencyPercentiles>, ApiError> = async {
-        let w = s.db_pool().writer();
+        let w = s
+            .db_pool()
+            .try_writer_for(ADMIN_LOCK_TIMEOUT)
+            .ok_or_else(|| {
+                ApiError(CoreError::ServiceUnavailable(
+                    "writer lock busy: another query is holding the database; retry in a few seconds"
+                        .into(),
+                ))
+            })?;
         let f = q.into_filter()?;
         Ok(Json(analytics::latency_percentiles(&w, &f)?))
     }
@@ -1132,7 +1357,15 @@ pub async fn usage_races(
     Query(q): Query<UsageQuery>,
 ) -> ApiResult<Json<analytics::RaceStats>> {
     let body: Result<Json<analytics::RaceStats>, ApiError> = async {
-        let w = s.db_pool().writer();
+        let w = s
+            .db_pool()
+            .try_writer_for(ADMIN_LOCK_TIMEOUT)
+            .ok_or_else(|| {
+                ApiError(CoreError::ServiceUnavailable(
+                    "writer lock busy: another query is holding the database; retry in a few seconds"
+                        .into(),
+                ))
+            })?;
         let f = q.into_filter()?;
         Ok(Json(analytics::race_stats(&w, &f)?))
     }
@@ -4363,6 +4596,7 @@ mod tests {
             account_id: None,
             combo_id: None,
             api_key_id: None,
+            preset: None,
         };
         let result = q.into_filter();
         let err = result.expect_err("garbage timestamp must be rejected");
@@ -4384,6 +4618,7 @@ mod tests {
             account_id: None,
             combo_id: None,
             api_key_id: None,
+            preset: None,
         };
         let f = q.into_filter().expect("RFC-3339 with offset is valid");
         let from = f.from.expect("from present");
@@ -4404,6 +4639,7 @@ mod tests {
             account_id: None,
             combo_id: None,
             api_key_id: None,
+            preset: None,
         };
         let f = q.into_filter().expect("SQLite-style timestamp is valid");
         let to = f.to.expect("to present");
@@ -4422,6 +4658,7 @@ mod tests {
             account_id: None,
             combo_id: None,
             api_key_id: None,
+            preset: None,
         };
         let err = q.into_filter().expect_err("reversed range must be rejected");
         let msg = format!("{:?}", err);
@@ -4441,10 +4678,102 @@ mod tests {
             account_id: None,
             combo_id: None,
             api_key_id: None,
+            preset: None,
         };
         let f = q.into_filter().expect("absent timestamps are valid");
         assert!(f.from.is_none());
         assert!(f.to.is_none());
+    }
+
+    // ---- preset handling ----
+
+    #[test]
+    fn usage_filter_preset_this_month_resolves_to_month_bounds() {
+        // `this_month` must produce [first-of-this-month 00:00 UTC,
+        // first-of-next-month 00:00 UTC). We assert the day-of-month
+        // rather than the full timestamp so the test is stable across
+        // whatever month it runs in.
+        let q = UsageQuery {
+            from: None,
+            to: None,
+            provider_id: None,
+            model_id: None,
+            account_id: None,
+            combo_id: None,
+            api_key_id: None,
+            preset: Some("this_month".to_string()),
+        };
+        let f = q.into_filter().expect("this_month preset is valid");
+        let from = f.from.expect("from is computed from preset");
+        let to = f.to.expect("to is computed from preset");
+        assert!(from.ends_with("T00:00:00Z"), "from is midnight UTC: {}", from);
+        assert!(to.ends_with("T00:00:00Z"), "to is midnight UTC: {}", to);
+        assert!(from.ends_with("-01T00:00:00Z"), "from is the 1st of the month: {}", from);
+        assert!(to.ends_with("-01T00:00:00Z"), "to is the 1st of the month: {}", to);
+        assert!(from < to, "from must be before to");
+    }
+
+    #[test]
+    fn usage_filter_preset_overrides_explicit_from_to() {
+        // When both `preset` and explicit `from`/`to` are set, the
+        // preset wins. We pick a `7d` preset and an explicit `from`
+        // far in the past; the resolved `from` should be ~7 days ago,
+        // not the explicit value.
+        let q = UsageQuery {
+            from: Some("2000-01-01T00:00:00Z".to_string()),
+            to: Some("2000-01-02T00:00:00Z".to_string()),
+            provider_id: None,
+            model_id: None,
+            account_id: None,
+            combo_id: None,
+            api_key_id: None,
+            preset: Some("7d".to_string()),
+        };
+        let f = q.into_filter().expect("preset + explicit range is valid");
+        let from = f.from.expect("from is computed from preset");
+        // The explicit `2000-01-01` would have been used if preset
+        // did not take precedence — assert it is not 2000.
+        assert!(!from.starts_with("2000-"), "preset must override explicit from: {}", from);
+        assert!(from.starts_with("20"), "from is a recent-ish year: {}", from);
+    }
+
+    #[test]
+    fn usage_filter_preset_custom_falls_through_to_explicit_values() {
+        // `custom` is the explicit opt-out sentinel: explicit
+        // `from`/`to` must survive untouched.
+        let q = UsageQuery {
+            from: Some("2026-06-18T07:00:00Z".to_string()),
+            to: Some("2026-06-19T07:00:00Z".to_string()),
+            provider_id: None,
+            model_id: None,
+            account_id: None,
+            combo_id: None,
+            api_key_id: None,
+            preset: Some("custom".to_string()),
+        };
+        let f = q.into_filter().expect("custom preset is valid");
+        assert_eq!(f.from.as_deref(), Some("2026-06-18T07:00:00Z"));
+        assert_eq!(f.to.as_deref(), Some("2026-06-19T07:00:00Z"));
+    }
+
+    #[test]
+    fn usage_filter_preset_unknown_string_returns_400() {
+        // Unknown preset strings must surface as 400 so a typo in the
+        // dashboard doesn't silently miss a window.
+        let q = UsageQuery {
+            from: None,
+            to: None,
+            provider_id: None,
+            model_id: None,
+            account_id: None,
+            combo_id: None,
+            api_key_id: None,
+            preset: Some("last_week".to_string()),
+        };
+        let err = q.into_filter().expect_err("unknown preset must be rejected");
+        let msg = format!("{:?}", err);
+        assert!(msg.contains("preset"), "error must mention preset, got: {}", msg);
+        assert!(msg.contains("last_week"), "error must include the bad value, got: {}", msg);
     }
 
     // ---- MEDIUM fix: DefaultBodyLimit is raised to 32 MiB ----
