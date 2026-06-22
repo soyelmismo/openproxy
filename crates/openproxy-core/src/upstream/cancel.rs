@@ -126,23 +126,13 @@ impl CancellationToken {
     /// watch is one-shot from the token's point of view).
     ///
     /// The returned token owns a background task that drives the flip.
-    ///
-    /// MEDIUM-2 fix: the task holds a `Weak<Inner>` instead of a strong
-    /// `Arc<Inner>`. When the user drops every clone of the returned
-    /// token, the `Weak::upgrade()` call returns `None` and the task
-    /// exits immediately — no leak. The previous design held a strong
-    /// reference, keeping the `Arc<Inner>` (and its `watch::Sender`)
-    /// alive until the watched sender was dropped, even if the user
-    /// had long since lost interest in the token.
     pub fn from_watch(mut rx: watch::Receiver<bool>) -> Self {
         let token = Self::new();
         if *rx.borrow_and_update() {
             token.cancel();
             return token;
         }
-        // MEDIUM-2: weak reference — the task exits as soon as the
-        // user drops all strong clones of the token.
-        let weak = Arc::downgrade(&token.inner);
+        let inner = token.clone();
         tokio::spawn(async move {
             // `changed()` returns Err when the sender is dropped; treat
             // that as a no-op (the upstream call will finish or hit its
@@ -150,14 +140,7 @@ impl CancellationToken {
             // `true` value.
             while rx.changed().await.is_ok() {
                 if *rx.borrow() {
-                    if let Some(inner) = weak.upgrade() {
-                        cancel_inner(&inner);
-                    }
-                    return;
-                }
-                // No `true` yet — check if the user dropped the token.
-                // If so, exit; otherwise keep waiting.
-                if weak.strong_count() == 0 {
+                    inner.cancel();
                     return;
                 }
             }
@@ -174,9 +157,6 @@ impl CancellationToken {
     /// lane sent the first token). This closes the cancellation window
     /// — losers' HTTP connections are dropped at the transport level,
     /// stopping upstream token generation immediately.
-    ///
-    /// MEDIUM-2 fix: same as `from_watch` — the task holds a `Weak<Inner>`
-    /// so it exits when the user drops every clone of the returned token.
     pub fn from_watch_and_token(
         mut rx: watch::Receiver<bool>,
         race_token: CancellationToken,
@@ -186,39 +166,27 @@ impl CancellationToken {
             token.cancel();
             return token;
         }
-        let weak = Arc::downgrade(&token.inner);
+        let inner = token.clone();
         let mut cancel_rx = race_token.inner.cancel_tx.subscribe();
         // Close TOCTOU: if cancelled between is_cancelled() above and
         // subscribe(), the initial value is already true but changed()
         // won't fire for it.  Re-check explicitly.
         if *cancel_rx.borrow() {
-            if let Some(inner) = weak.upgrade() {
-                cancel_inner(&inner);
-            }
+            inner.cancel();
             return token;
         }
         tokio::spawn(async move {
             loop {
-                // MEDIUM-2: if the user dropped every clone of the
-                // token, exit immediately — no need to keep the task
-                // alive.
-                if weak.strong_count() == 0 {
-                    return;
-                }
                 tokio::select! {
                     res = rx.changed() => {
                         if res.is_err() || *rx.borrow() {
-                            if let Some(inner) = weak.upgrade() {
-                                cancel_inner(&inner);
-                            }
+                            inner.cancel();
                             return;
                         }
                     }
                     res = cancel_rx.changed() => {
                         if res.is_err() || *cancel_rx.borrow() {
-                            if let Some(inner) = weak.upgrade() {
-                                cancel_inner(&inner);
-                            }
+                            inner.cancel();
                             return;
                         }
                     }
@@ -227,15 +195,6 @@ impl CancellationToken {
         });
         token
     }
-}
-
-/// Internal helper: cancel via a `&Inner` reference (no `Arc` clone
-/// needed). Used by the `from_watch` / `from_watch_and_token` background
-/// tasks after a successful `Weak::upgrade()`.
-fn cancel_inner(inner: &Inner) {
-    inner.flag.store(true, Ordering::SeqCst);
-    inner.cancel_count.fetch_add(1, Ordering::SeqCst);
-    let _ = inner.cancel_tx.send(true);
 }
 
 impl std::fmt::Debug for CancellationToken {

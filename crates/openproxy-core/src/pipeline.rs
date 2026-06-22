@@ -2987,13 +2987,16 @@ impl Pipeline {
 );
             }
             Err(UpstreamError::Timeout(phase)) => {
+                // Bug fix (PR #33): attribute the timeout to the
+                // CORRECT phase instead of collapsing all into
+                // "connect". Mirrors the non-streaming path's fix.
                 let phase_label = match phase {
-                    crate::upstream::UpstreamPhase::Dns
-                    | crate::upstream::UpstreamPhase::Dial
-                    | crate::upstream::UpstreamPhase::Tls
-                    | crate::upstream::UpstreamPhase::Write
-                    | crate::upstream::UpstreamPhase::Headers => "connect",
-                    crate::upstream::UpstreamPhase::Body => "total",
+                    crate::upstream::UpstreamPhase::Dns => "dns",
+                    crate::upstream::UpstreamPhase::Dial => "dial",
+                    crate::upstream::UpstreamPhase::Tls => "tls",
+                    crate::upstream::UpstreamPhase::Write => "write",
+                    crate::upstream::UpstreamPhase::Headers => "headers",
+                    crate::upstream::UpstreamPhase::Body => "body",
                 };
                 tracing::warn!(
                     combo_id = combo.id.0,
