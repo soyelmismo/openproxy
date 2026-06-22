@@ -407,12 +407,24 @@ impl BuiltWhere {
         let mut clauses: Vec<&'static str> = Vec::new();
         let mut params: Vec<Box<dyn ToSql>> = Vec::new();
 
+        // IMPORTANT: wrap both `created_at` and the bound in `datetime(...)`.
+        // `created_at` is written by SQLite's `datetime('now')` and stored as
+        // `"YYYY-MM-DD HH:MM:SS"` (space separator), but the filter bounds come
+        // in as RFC-3339 `"YYYY-MM-DDTHH:MM:SSZ"` (T separator, Z suffix).
+        // SQLite TEXT comparison is byte-wise: `' '` (0x20) sorts before `'T'`
+        // (0x54), so a raw `created_at >= ?` against an RFC-3339 bound would
+        // be FALSE for every row and the query would return 0 rows (which is
+        // exactly the dashboard "all zeros" bug). Wrapping both sides in
+        // `datetime(...)` makes SQLite parse them as real datetimes before
+        // comparing, regardless of the textual format. The prune functions
+        // below already do the same thing — this just brings the read-side
+        // analytics queries in line with them.
         if let Some(from) = &f.from {
-            clauses.push("created_at >= ?");
+            clauses.push("datetime(created_at) >= datetime(?)");
             params.push(Box::new(from.clone()));
         }
         if let Some(to) = &f.to {
-            clauses.push("created_at < ?");
+            clauses.push("datetime(created_at) < datetime(?)");
             params.push(Box::new(to.clone()));
         }
         if let Some(pid) = &f.provider_id {
@@ -2433,5 +2445,59 @@ mod tests {
         let (conn2, _p2) = fresh_conn();
         let s_empty = summary(&conn2, &UsageFilter::default()).expect("summary empty");
         assert_eq!(s_empty.rows_with_null_pricing, 0);
+    }
+
+    // -----------------------------------------------------------------------
+    // Regression: `created_at` is stored as `"YYYY-MM-DD HH:MM:SS"` (space
+    // separator, via SQLite's `datetime('now')`), but `UsageFilter` bounds
+    // arrive as RFC-3339 `"YYYY-MM-DDTHH:MM:SSZ"` (T separator, Z suffix).
+    // A naive byte-wise `created_at >= ?` comparison would put `' '` (0x20)
+    // before `'T'` (0x54) and reject every row, making the dashboard show
+    // all zeros. The fix wraps both sides in `datetime(...)` so SQLite
+    // parses them as real datetimes before comparing.
+    // -----------------------------------------------------------------------
+    #[test]
+    fn date_filter_matches_space_separated_created_at() {
+        let (conn, _p) = fresh_conn();
+        // Pin a row to 2026-06-15 12:00 UTC. `datetime('now')` writes the
+        // space-separated form, so we hand-roll the INSERT.
+        conn.execute(
+            "INSERT INTO usage (\
+                request_id, trace_id, attempt, provider_id, account_id, \
+                upstream_model_id, prompt_tokens, completion_tokens, cost_usd, \
+                connect_ms, ttft_ms, total_ms, status_code, error_msg, \
+                error_msg_redacted, race_total, race_lost, created_at\
+             ) VALUES (\
+                ?1, ?2, 1, 'openrouter', 1, 'm', 100, 50, 0.10, \
+                50, 200, 1200, 200, NULL, NULL, 1, 0, '2026-06-15 12:00:00'\
+             )",
+            params![RequestId::new().to_string(), TraceId::new().to_string()],
+        )
+        .expect("insert");
+
+        // Filter bounds in RFC-3339 (T separator + Z suffix), matching the
+        // shape that `resolve_preset` produces for `preset=today`.
+        let f = UsageFilter {
+            from: Some("2026-06-15T00:00:00Z".to_string()),
+            to: Some("2026-06-16T00:00:00Z".to_string()),
+            ..Default::default()
+        };
+        let s = summary(&conn, &f).expect("summary");
+        assert_eq!(
+            s.total_rows, 1,
+            "row at 2026-06-15 12:00:00 must match a filter spanning 2026-06-15T00:00:00Z..2026-06-16T00:00:00Z; \
+             if this fails, the date-format mismatch bug is back"
+        );
+        assert_eq!(s.unique_requests, 1);
+        assert!((s.total_cost_usd - 0.10).abs() < 1e-9);
+
+        // Same row should NOT match a filter on a different day.
+        let f_other = UsageFilter {
+            from: Some("2026-06-16T00:00:00Z".to_string()),
+            to: Some("2026-06-17T00:00:00Z".to_string()),
+            ..Default::default()
+        };
+        let s_other = summary(&conn, &f_other).expect("summary other day");
+        assert_eq!(s_other.total_rows, 0);
     }
 }
