@@ -293,10 +293,10 @@ fn strip_free_suffixes(model: &str) -> Vec<String> {
     let suffixes = ["-free-trial", "-free", ":free"];
     let mut out = Vec::new();
     for suffix in &suffixes {
-        if let Some(stripped) = model.strip_suffix(suffix) {
-            if !stripped.is_empty() {
-                out.push(stripped.to_string());
-            }
+        if let Some(stripped) = model.strip_suffix(suffix)
+            && !stripped.is_empty()
+        {
+            out.push(stripped.to_string());
         }
     }
     out

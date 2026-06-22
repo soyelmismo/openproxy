@@ -27,6 +27,7 @@ pub struct UpstreamSseChunk {
     /// Extracted per-chunk reasoning delta. Populated by:
     /// - Gemini `parts[].thought == true` items,
     /// - Anthropic `content_block_delta` with `delta.type == "thinking_delta"`.
+    ///
     /// `None` when this chunk carries no reasoning.
     pub delta_reasoning: Option<String>,
     /// Extracted per-chunk tool_calls deltas. Populated by:
@@ -34,6 +35,7 @@ pub struct UpstreamSseChunk {
     ///   `{index, id, type, function:{name, arguments:""}}` record,
     /// - Anthropic `content_block_delta` with `delta.type == "input_json_delta"`
     ///   emits the running `{index, function:{arguments:...}}` record.
+    ///
     /// Empty when this chunk carries no tool_calls.
     pub delta_tool_calls: Vec<serde_json::Value>,
 }
@@ -312,16 +314,16 @@ pub fn parse_gemini_sse_line(
     let (text, delta_reasoning) = {
         let mut content_parts: Vec<String> = Vec::new();
         let mut reasoning_parts: Vec<String> = Vec::new();
-        if let Some(candidate) = probe.candidates.first() {
-            if let Some(content) = &candidate.content {
-                for part in &content.parts {
-                    if let Some(t) = part.text.as_deref() {
-                        let is_thought = part.thought.unwrap_or(false);
-                        if is_thought {
-                            reasoning_parts.push(t.to_string());
-                        } else {
-                            content_parts.push(t.to_string());
-                        }
+        if let Some(candidate) = probe.candidates.first()
+            && let Some(content) = &candidate.content
+        {
+            for part in &content.parts {
+                if let Some(t) = part.text.as_deref() {
+                    let is_thought = part.thought.unwrap_or(false);
+                    if is_thought {
+                        reasoning_parts.push(t.to_string());
+                    } else {
+                        content_parts.push(t.to_string());
                     }
                 }
             }
@@ -1742,12 +1744,8 @@ mod tests {
                     "content_block_start\n{{\"content_block\":{{\"type\":\"tool_use\",\"id\":\"{}\",\"name\":\"{}\",\"input\":{{}}}}}}",
                     id, name
                 );
-                let delta_payload = format!(
-                    "content_block_delta\n{{\"delta\":{{\"type\":\"input_json_delta\",\"partial_json\":\"{{}}\"}}}}"
-                );
-                let stop_payload = format!(
-                    "message_delta\n{{\"delta\":{{\"stop_reason\":\"tool_use\"}}}}"
-                );
+                let delta_payload = "content_block_delta\n{\"delta\":{\"type\":\"input_json_delta\",\"partial_json\":\"{}\"}}".to_string();
+                let stop_payload = "message_delta\n{\"delta\":{\"stop_reason\":\"tool_use\"}}".to_string();
 
                 let mut outs = Vec::new();
                 for payload in [&start_payload, &delta_payload, &stop_payload] {

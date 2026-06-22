@@ -1577,10 +1577,10 @@ mod tests {
     #[test]
     fn delete_combo_target_removes_row() {
         let (pool, _path) = fresh_pool();
-        let mut conn = pool.writer();
+        let conn = pool.writer();
         let fx = seed_combo_with_two_targets(&conn);
 
-        delete_combo_target(&mut conn, fx.combo_id, fx.t1).expect("delete t1");
+        delete_combo_target(&conn, fx.combo_id, fx.t1).expect("delete t1");
 
         // Only t2 survives.
         let remaining = list_combo_targets(&conn, fx.combo_id).expect("list");
@@ -1596,11 +1596,11 @@ mod tests {
         // to a different combo. Without the check, a dashboard bug
         // could silently delete a target from the wrong combo.
         let (pool, _path) = fresh_pool();
-        let mut conn = pool.writer();
+        let conn = pool.writer();
         let fx = seed_combo_with_two_targets(&conn);
 
         let other_combo = ComboId(99999);
-        let err = delete_combo_target(&mut conn, other_combo, fx.t1)
+        let err = delete_combo_target(&conn, other_combo, fx.t1)
             .expect_err("cross-combo delete must fail");
         match &err {
             CoreError::Validation(msg) => {

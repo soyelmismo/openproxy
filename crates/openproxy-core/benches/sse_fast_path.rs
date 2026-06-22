@@ -17,7 +17,8 @@
 //!   cargo test -p openproxy-core --bench sse_fast_path --release -- --nocapture
 
 use bytes::{Bytes, BytesMut};
-use criterion::{black_box, criterion_group, criterion_main, Criterion};
+use std::hint::black_box;
+use criterion::{criterion_group, criterion_main, Criterion};
 
 /// A realistic OpenAI streaming chunk: small content delta, no usage,
 /// no finish_reason. This is the shape that hits the fast path >99%

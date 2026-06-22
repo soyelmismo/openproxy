@@ -1668,57 +1668,56 @@ impl Pipeline {
                 }; // conn lock dropped here
 
                 // Proactive refresh (no connection held, safe to await).
-                if let Some(refresh_token) = maybe_refresh {
-                    if let Some(ref registry) = self.config.oauth_provider_registry.as_ref() {
-                        let provider_id_str = target.provider_id.as_str();
-                        if let Some(provider) = registry.get(provider_id_str) {
-                            tracing::info!(
+                if let Some(refresh_token) = maybe_refresh
+                    && let Some(registry) = self.config.oauth_provider_registry.as_ref()
+                    && let Some(provider) = registry.get(target.provider_id.as_str())
+                {
+                    let provider_id_str = target.provider_id.as_str();
+                    tracing::info!(
+                        account = account_id.0,
+                        provider = provider_id_str,
+                        "pipeline: proactive OAuth token refresh"
+                    );
+                    match provider
+                        .refresh_token(&refresh_token, &self.config.upstream_client)
+                        .await
+                    {
+                        Ok(token) => {
+                            let expires_at = token.expires_in.map(|secs| {
+                                (chrono::Utc::now()
+                                    + chrono::Duration::seconds(secs as i64))
+                                .format("%Y-%m-%dT%H:%M:%SZ")
+                                .to_string()
+                            });
+                            // Store under lock.
+                            {
+                                let conn = self.conn.lock();
+                                let _ = crate::accounts::store_oauth_tokens(
+                                    &conn,
+                                    account_id,
+                                    &token.access_token,
+                                    token.refresh_token.as_deref(),
+                                    &self.config.master_key,
+                                    &token.token_type,
+                                    expires_at.as_deref(),
+                                    token.scope.as_deref(),
+                                    None, // oauth_provider_specific — unchanged
+                                    None, // email — unchanged
+                                );
+                            }
+                            access_token = token.access_token;
+                        }
+                        Err(e) => {
+                            tracing::warn!(
                                 account = account_id.0,
                                 provider = provider_id_str,
-                                "pipeline: proactive OAuth token refresh"
+                                error = %e,
+                                "pipeline: proactive OAuth refresh failed, \
+                                 continuing with existing token"
                             );
-                            match provider
-                                .refresh_token(&refresh_token, &self.config.upstream_client)
-                                .await
-                            {
-                                Ok(token) => {
-                                    let expires_at = token.expires_in.map(|secs| {
-                                        (chrono::Utc::now()
-                                            + chrono::Duration::seconds(secs as i64))
-                                        .format("%Y-%m-%dT%H:%M:%SZ")
-                                        .to_string()
-                                    });
-                                    // Store under lock.
-                                    {
-                                        let conn = self.conn.lock();
-                                        let _ = crate::accounts::store_oauth_tokens(
-                                            &conn,
-                                            account_id,
-                                            &token.access_token,
-                                            token.refresh_token.as_deref(),
-                                            &self.config.master_key,
-                                            &token.token_type,
-                                            expires_at.as_deref(),
-                                            token.scope.as_deref(),
-                                            None, // oauth_provider_specific — unchanged
-                                            None, // email — unchanged
-                                        );
-                                    }
-                                    access_token = token.access_token;
-                                }
-                                Err(e) => {
-                                    tracing::warn!(
-                                        account = account_id.0,
-                                        provider = provider_id_str,
-                                        error = %e,
-                                        "pipeline: proactive OAuth refresh failed, \
-                                         continuing with existing token"
-                                    );
-                                    // Continue with the existing (possibly expired) token.
-                                    // If the upstream rejects it, the executor will fail
-                                    // naturally and the error will be recorded.
-                                }
-                            }
+                            // Continue with the existing (possibly expired) token.
+                            // If the upstream rejects it, the executor will fail
+                            // naturally and the error will be recorded.
                         }
                     }
                 }
@@ -3436,10 +3435,10 @@ impl Pipeline {
                                         a.set_stop_reason(sr.clone());
                                     }
                                     a.append_openai_raw(json_payload);
-                                    if let Some(dr) = chunk.delta_reasoning.take() {
-                                        if !dr.is_empty() {
-                                            a.append_reasoning(&dr);
-                                        }
+                                    if let Some(dr) = chunk.delta_reasoning.take()
+                                        && !dr.is_empty()
+                                    {
+                                        a.append_reasoning(&dr);
                                     }
                                     for tc in chunk.delta_tool_calls.drain(..) {
                                         let name = tc.get("function")
@@ -3537,12 +3536,11 @@ impl Pipeline {
                                 // field, so this saves one full-payload scan
                                 // per chunk on the recording path. The guard
                                 // itself short-circuits on first non-match.
-                                if payload.contains("\"reasoning_content\"") {
-                                    if let Some(rc) = crate::sse_accumulator::extract_reasoning_content(payload) {
-                                        if !rc.is_empty() {
-                                            a.append_reasoning(rc);
-                                        }
-                                    }
+                                if payload.contains("\"reasoning_content\"")
+                                    && let Some(rc) = crate::sse_accumulator::extract_reasoning_content(payload)
+                                    && !rc.is_empty()
+                                {
+                                    a.append_reasoning(rc);
                                 }
                             }
                         }
@@ -3694,10 +3692,10 @@ impl Pipeline {
                                 if let Some(sr) = &stop_reason {
                                     a.set_stop_reason(sr.clone());
                                 }
-                                if let Some(dr) = &delta_reasoning {
-                                    if !dr.is_empty() {
-                                        a.append_reasoning(dr);
-                                    }
+                                if let Some(dr) = &delta_reasoning
+                                    && !dr.is_empty()
+                                {
+                                    a.append_reasoning(dr);
                                 }
                                 // Anthropic tool_use threading. The
                                 // Open-shape events carry `id` and
@@ -4835,8 +4833,7 @@ mod tests {
         let (pool, conn, _path) = fresh_pool();
         let combo_id = {
             let writer = pool.writer();
-            let id = combos::create_combo(&writer, "empty", Strategy::Priority, 1).expect("create");
-            id
+            combos::create_combo(&writer, "empty", Strategy::Priority, 1).expect("create")
         };
 
         let cfg = test_config(Arc::new(MasterKey::generate()));
@@ -5003,11 +5000,8 @@ mod tests {
         // would normally dispatch to a real adapter; with an empty
         // adapter registry it falls through to a 500-ish failure
         // (no adapter). The key invariant is: NOT NoHealthyTargets.
-        match &result.error {
-            Some(CoreError::NoHealthyTargets(_)) => {
-                panic!("auto-populate should have prevented NoHealthyTargets");
-            }
-            _ => {}
+        if let Some(CoreError::NoHealthyTargets(_)) = &result.error {
+            panic!("auto-populate should have prevented NoHealthyTargets");
         }
 
         // And the combo now has 2 targets in the DB.
@@ -5326,7 +5320,7 @@ mod tests {
         let stripped = strip_provider_prefix(&req, &provider);
         assert_eq!(stripped.messages.len(), 1);
         assert_eq!(stripped.messages[0].content.as_ref().and_then(serde_json::Value::as_str), Some("hi"));
-        assert_eq!(stripped.stream, false);
+        assert!(!stripped.stream);
         assert_eq!(stripped.model, "foo/bar");
     }
 
@@ -5648,9 +5642,7 @@ mod tests {
     ///     (`choices[0].message.content == "from model 2"`).
     #[tokio::test]
     async fn priority_combo_walks_row_after_first_5xx() {
-        use crate::adapters::{
-            AdapterAuthType, AdapterFormat, ProviderAdapter, ProviderAdapterConfig,
-        };
+        use crate::adapters::{AdapterFormat, ProviderAdapter};
         use crate::combos::{self, AddTargetInput, Strategy};
         use std::sync::atomic::{AtomicU32, Ordering as AtomicOrdering};
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -5917,10 +5909,10 @@ mod tests {
     //     still fire?).
     // -------------------------------------------------------------------
 
-    /// Build a Priority combo + N targets, all pointing at the same
-    /// mock listener. Returns (combo_id, target_ids, server handle,
-    /// shared call counter). Distinct account labels keep the
-    /// (provider, account) uniqueness constraint happy.
+    // Build a Priority combo + N targets, all pointing at the same
+    // mock listener. Returns (combo_id, target_ids, server handle,
+    // shared call counter). Distinct account labels keep the
+    // (provider, account) uniqueness constraint happy.
 
     /// ADVERSARIAL (a) — `priority_combo_with_5_targets_walks_to_5th_when_all_fail`.
     ///
@@ -5942,9 +5934,7 @@ mod tests {
         use tokio::net::TcpListener;
 
         // 1. Mock adapter that always responds 500 with an openai-shaped body.
-        use crate::adapters::{
-            AdapterAuthType, AdapterFormat, ProviderAdapter, ProviderAdapterConfig,
-        };
+        use crate::adapters::{AdapterFormat, ProviderAdapter};
         // 2. Spin a 500-only listener.
         let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
         let local_addr = listener.local_addr().expect("local_addr");
@@ -6018,7 +6008,7 @@ mod tests {
                     Some("sk-test"),
                     mk.as_ref(),
                     Some(&account_label),
-                    (i as i32 + 1) * 10,
+                    (i + 1) * 10,
                     None,
                 )
                 .expect("seed account");
@@ -6030,7 +6020,7 @@ mod tests {
                         account_id: Some(account_id),
                         model_row_id: Some(model_id),
                         sub_combo_id: None,
-                        priority_order: (i as i32 + 1) * 10,
+                        priority_order: (i + 1) * 10,
                     },
                 )
                 .expect("add target");
@@ -6135,9 +6125,7 @@ mod tests {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
         use tokio::net::TcpListener;
 
-        use crate::adapters::{
-            AdapterAuthType, AdapterFormat, ProviderAdapter, ProviderAdapterConfig,
-        };
+        use crate::adapters::{AdapterFormat, ProviderAdapter};
         // 1. Listener: 1st → 400, 2nd → 503, 3rd → 200.
         let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
         let local_addr = listener.local_addr().expect("local_addr");
@@ -6153,16 +6141,12 @@ mod tests {
                 let my_call = server_call_count.fetch_add(1, AtomicOrdering::SeqCst) + 1;
                 let mut buf = vec![0u8; 64 * 1024];
                 let mut total = 0usize;
-                loop {
-                    if let Ok(Ok(n)) =
-                        tokio::time::timeout(Duration::from_millis(500), sock.read(&mut buf[total..])).await
-                    {
-                        if n == 0 { break; }
-                        total += n;
-                        if buf[..total].windows(4).any(|w| w == b"\r\n\r\n") { break; }
-                    } else {
-                        break;
-                    }
+                while let Ok(Ok(n)) =
+                    tokio::time::timeout(Duration::from_millis(500), sock.read(&mut buf[total..])).await
+                {
+                    if n == 0 { break; }
+                    total += n;
+                    if buf[..total].windows(4).any(|w| w == b"\r\n\r\n") { break; }
                 }
                 let (status_line, body) = match my_call {
                     1 => ("HTTP/1.1 400 Bad Request",
@@ -6213,7 +6197,7 @@ mod tests {
                     Some("sk-test"),
                     mk.as_ref(),
                     Some(&account_label),
-                    (i as i32 + 1) * 10,
+                    (i + 1) * 10,
                     None,
                 )
                 .expect("seed account");
@@ -6225,7 +6209,7 @@ mod tests {
                         account_id: Some(account_id),
                         model_row_id: Some(model_id),
                         sub_combo_id: None,
-                        priority_order: (i as i32 + 1) * 10,
+                        priority_order: (i + 1) * 10,
                     },
                 )
                 .expect("add target");
@@ -6311,9 +6295,7 @@ mod tests {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
         use tokio::net::TcpListener;
 
-        use crate::adapters::{
-            AdapterAuthType, AdapterFormat, ProviderAdapter, ProviderAdapterConfig,
-        };
+        use crate::adapters::{AdapterFormat, ProviderAdapter};
         // 1. Listener: 1st → 400 (non-retryable), 2nd → 200.
         // The walk must advance past the 400 and reach target #2.
         let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
@@ -6330,16 +6312,12 @@ mod tests {
                 let my_call = server_call_count.fetch_add(1, AtomicOrdering::SeqCst) + 1;
                 let mut buf = vec![0u8; 64 * 1024];
                 let mut total = 0usize;
-                loop {
-                    if let Ok(Ok(n)) =
-                        tokio::time::timeout(Duration::from_millis(500), sock.read(&mut buf[total..])).await
-                    {
-                        if n == 0 { break; }
-                        total += n;
-                        if buf[..total].windows(4).any(|w| w == b"\r\n\r\n") { break; }
-                    } else {
-                        break;
-                    }
+                while let Ok(Ok(n)) =
+                    tokio::time::timeout(Duration::from_millis(500), sock.read(&mut buf[total..])).await
+                {
+                    if n == 0 { break; }
+                    total += n;
+                    if buf[..total].windows(4).any(|w| w == b"\r\n\r\n") { break; }
                 }
                 let (status_line, body) = match my_call {
                     1 => ("HTTP/1.1 400 Bad Request",
@@ -6388,7 +6366,7 @@ mod tests {
                     Some("sk-test"),
                     mk.as_ref(),
                     Some(&account_label),
-                    (i as i32 + 1) * 10,
+                    (i + 1) * 10,
                     None,
                 )
                 .expect("seed account");
@@ -6400,7 +6378,7 @@ mod tests {
                         account_id: Some(account_id),
                         model_row_id: Some(model_id),
                         sub_combo_id: None,
-                        priority_order: (i as i32 + 1) * 10,
+                        priority_order: (i + 1) * 10,
                     },
                 )
                 .expect("add target");
@@ -6468,9 +6446,7 @@ mod tests {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
         use tokio::net::TcpListener;
 
-        use crate::adapters::{
-            AdapterAuthType, AdapterFormat, ProviderAdapter, ProviderAdapterConfig,
-        };
+        use crate::adapters::{AdapterFormat, ProviderAdapter};
         // Listener: calls 1-2 → 400 (sub-combo's X and Y), call 3 → 200 (Z).
         let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
         let local_addr = listener.local_addr().expect("local_addr");
@@ -6486,16 +6462,12 @@ mod tests {
                 let my_call = server_call_count.fetch_add(1, AtomicOrdering::SeqCst) + 1;
                 let mut buf = vec![0u8; 64 * 1024];
                 let mut total = 0usize;
-                loop {
-                    if let Ok(Ok(n)) =
-                        tokio::time::timeout(Duration::from_millis(500), sock.read(&mut buf[total..])).await
-                    {
-                        if n == 0 { break; }
-                        total += n;
-                        if buf[..total].windows(4).any(|w| w == b"\r\n\r\n") { break; }
-                    } else {
-                        break;
-                    }
+                while let Ok(Ok(n)) =
+                    tokio::time::timeout(Duration::from_millis(500), sock.read(&mut buf[total..])).await
+                {
+                    if n == 0 { break; }
+                    total += n;
+                    if buf[..total].windows(4).any(|w| w == b"\r\n\r\n") { break; }
                 }
                 let (status_line, body) = match my_call {
                     1 | 2 => ("HTTP/1.1 400 Bad Request",
@@ -6547,7 +6519,7 @@ mod tests {
                     Some("sk-test"),
                     mk.as_ref(),
                     Some(&account_label),
-                    (i as i32 + 1) * 10,
+                    (i + 1) * 10,
                     None,
                 )
                 .expect("seed account");
@@ -6559,7 +6531,7 @@ mod tests {
                         account_id: Some(account_id),
                         model_row_id: Some(model_id),
                         sub_combo_id: None,
-                        priority_order: (i as i32 + 1) * 10,
+                        priority_order: (i + 1) * 10,
                     },
                 )
                 .expect("add sub-combo target");
@@ -6741,16 +6713,12 @@ mod tests {
             let (mut sock, _peer) = listener.accept().await.expect("accept");
             let mut buf = vec![0u8; 64 * 1024];
             let mut total = 0usize;
-            loop {
-                if let Ok(Ok(n)) =
-                    tokio::time::timeout(Duration::from_millis(500), sock.read(&mut buf[total..])).await
-                {
-                    if n == 0 { break; }
-                    total += n;
-                    if buf[..total].windows(4).any(|w| w == b"\r\n\r\n") { break; }
-                } else {
-                    break;
-                }
+            while let Ok(Ok(n)) =
+                tokio::time::timeout(Duration::from_millis(500), sock.read(&mut buf[total..])).await
+            {
+                if n == 0 { break; }
+                total += n;
+                if buf[..total].windows(4).any(|w| w == b"\r\n\r\n") { break; }
             }
             // Capture everything after the header block.
             let header_end = buf[..total]
@@ -6914,7 +6882,7 @@ mod tests {
                     Some("sk-test"),
                     mk.as_ref(),
                     Some(&account_label),
-                    (i + 1) as i32 * 10,
+                    (i + 1) * 10,
                     None,
                 )
                 .expect("seed account");
@@ -6926,7 +6894,7 @@ mod tests {
                         account_id: Some(account_id),
                         model_row_id: Some(crate::ids::ModelRowId(model_rowid)),
                         sub_combo_id: None,
-                        priority_order: (i + 1) as i32 * 10,
+                        priority_order: (i + 1) * 10,
                     },
                 )
                 .expect("add target");
@@ -6999,9 +6967,7 @@ mod tests {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
         use tokio::net::TcpListener;
 
-        use crate::adapters::{
-            AdapterAuthType, AdapterFormat, ProviderAdapter, ProviderAdapterConfig,
-        };
+        use crate::adapters::{AdapterFormat, ProviderAdapter};
         // Listener: always 503.
         let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
         let local_addr = listener.local_addr().expect("local_addr");
@@ -7017,16 +6983,12 @@ mod tests {
                 let _ = server_call_count.fetch_add(1, AtomicOrdering::SeqCst);
                 let mut buf = vec![0u8; 64 * 1024];
                 let mut total = 0usize;
-                loop {
-                    if let Ok(Ok(n)) =
-                        tokio::time::timeout(Duration::from_millis(500), sock.read(&mut buf[total..])).await
-                    {
-                        if n == 0 { break; }
-                        total += n;
-                        if buf[..total].windows(4).any(|w| w == b"\r\n\r\n") { break; }
-                    } else {
-                        break;
-                    }
+                while let Ok(Ok(n)) =
+                    tokio::time::timeout(Duration::from_millis(500), sock.read(&mut buf[total..])).await
+                {
+                    if n == 0 { break; }
+                    total += n;
+                    if buf[..total].windows(4).any(|w| w == b"\r\n\r\n") { break; }
                 }
                 let body = r#"{"error":{"message":"flaky","type":"server_error"}}"#.to_string();
                 let response = format!(
@@ -7160,9 +7122,7 @@ mod tests {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
         use tokio::net::TcpListener;
 
-        use crate::adapters::{
-            AdapterAuthType, AdapterFormat, ProviderAdapter, ProviderAdapterConfig,
-        };
+        use crate::adapters::{AdapterFormat, ProviderAdapter};
         // Listener: per-call counter, returns 503 for the first
         // `bug4_max_attempts_for_target1` calls and 200 for the
         // rest. This lets us assert both the per-target retry
@@ -7182,21 +7142,17 @@ mod tests {
                 let n = server_call_count.fetch_add(1, AtomicOrdering::SeqCst);
                 let mut buf = vec![0u8; 64 * 1024];
                 let mut total = 0usize;
-                loop {
-                    if let Ok(Ok(rd)) = tokio::time::timeout(
-                        Duration::from_millis(500),
-                        sock.read(&mut buf[total..]),
-                    )
-                    .await
-                    {
-                        if rd == 0 {
-                            break;
-                        }
-                        total += rd;
-                        if buf[..total].windows(4).any(|w| w == b"\r\n\r\n") {
-                            break;
-                        }
-                    } else {
+                while let Ok(Ok(rd)) = tokio::time::timeout(
+                    Duration::from_millis(500),
+                    sock.read(&mut buf[total..]),
+                )
+                .await
+                {
+                    if rd == 0 {
+                        break;
+                    }
+                    total += rd;
+                    if buf[..total].windows(4).any(|w| w == b"\r\n\r\n") {
                         break;
                     }
                 }
@@ -7526,7 +7482,7 @@ mod tests {
                         // priority_order is the per-target ordering
                         // inside the combo; we just need them to
                         // alternate so the walk visits every account.
-                        (prov_idx * 3 + acct_idx + 1) as i32,
+                        prov_idx * 3 + acct_idx + 1,
                         None,
                     )
                     .expect("seed account");
@@ -7538,7 +7494,7 @@ mod tests {
                             account_id: Some(account_id),
                             model_row_id: Some(model_id),
                             sub_combo_id: None,
-                            priority_order: (prov_idx * 3 + acct_idx + 1) as i32 * 10,
+                            priority_order: (prov_idx * 3 + acct_idx + 1) * 10,
                         },
                     )
                     .expect("add target");
@@ -8015,9 +7971,7 @@ mod tests {
     /// reqwest-based path used).
     #[tokio::test]
     async fn non_streaming_dispatch_uses_upstream_client_end_to_end() {
-        use crate::adapters::{
-            AdapterAuthType, AdapterFormat, ProviderAdapter, ProviderAdapterConfig,
-        };
+        use crate::adapters::{AdapterFormat, ProviderAdapter};
         use std::sync::Arc;
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
         use tokio::net::TcpListener;
@@ -8169,9 +8123,7 @@ mod tests {
     /// body — not an empty `Content-Length: 0`.
     #[tokio::test]
     async fn bug_a_body_reaches_upstream() {
-        use crate::adapters::{
-            AdapterAuthType, AdapterFormat, ProviderAdapter, ProviderAdapterConfig,
-        };
+        use crate::adapters::{AdapterFormat, ProviderAdapter};
         use std::sync::atomic::{AtomicUsize, Ordering};
         use std::sync::Arc;
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -9166,9 +9118,7 @@ mod tests {
         content_type: &'static str,
         streaming: bool,
     ) -> (Vec<crate::usage::StageEvent>, PipelineResult, RequestId) {
-        use crate::adapters::{
-            AdapterAuthType, AdapterFormat, ProviderAdapter, ProviderAdapterConfig,
-        };
+        use crate::adapters::{AdapterFormat, ProviderAdapter};
         use crate::usage;
         use std::sync::Arc;
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -9651,9 +9601,7 @@ data: [DONE]\n\n";
         recording: bool,
         target_format: TargetFormat,
     ) -> (Option<serde_json::Value>, crate::pipeline::PipelineResult) {
-        use crate::adapters::{
-            AdapterAuthType, AdapterFormat, ProviderAdapter, ProviderAdapterConfig,
-        };
+        use crate::adapters::{AdapterFormat, ProviderAdapter};
         use std::sync::Arc;
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
         use tokio::net::TcpListener;
@@ -10240,14 +10188,11 @@ data: [DONE]\n\n";
         // the fast path produces a well-formed persisted body
         // for a multi-chunk stream.
         const N: usize = 20;
-        let mut chunks: Vec<&'static [u8]> = Vec::with_capacity(N + 2);
-        for _ in 0..N {
-            chunks.push(
-                br#"data: {"id":"x","object":"chat.completion.chunk","created":1,"model":"m","choices":[{"index":0,"delta":{"content":"a"},"finish_reason":null}]}
+        let chunk: &'static [u8] = br#"data: {"id":"x","object":"chat.completion.chunk","created":1,"model":"m","choices":[{"index":0,"delta":{"content":"a"},"finish_reason":null}]}
 
-"#,
-            );
-        }
+"#;
+        let mut chunks: Vec<&'static [u8]> = Vec::with_capacity(N + 2);
+        chunks.extend(std::iter::repeat_n(chunk, N));
         // Final chunk carries usage + finish_reason.
         chunks.push(
             br#"data: {"id":"x","object":"chat.completion.chunk","created":1,"model":"m","choices":[{"index":0,"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":N,"total_tokens":N+1}}

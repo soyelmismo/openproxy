@@ -75,7 +75,7 @@ pub fn smart_truncate(text: &str, config: &CompiledTruncateConfig) -> (String, b
     // or tail — preserves original dedup behavior).
     for l in middle {
         if config.priority_patterns.iter().any(|r| r.is_match(l)) {
-            let already = head.iter().any(|h| *h == *l) || tail.iter().any(|t| *t == *l);
+            let already = head.contains(l) || tail.contains(l);
             if !already {
                 out.push('\n');
                 out.push_str(l);

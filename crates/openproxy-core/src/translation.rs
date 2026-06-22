@@ -452,9 +452,8 @@ pub fn openai_to_anthropic(req: &OpenAIRequest) -> AnthropicRequest {
         tools: req.tools.as_ref().map(|tools| {
             tools
                 .iter()
-                .filter_map(|t| translate_openai_tool_to_anthropic(t))
+                .filter_map(translate_openai_tool_to_anthropic)
                 .collect::<Vec<_>>()
-                .into()
         }).filter(|t: &Vec<serde_json::Value>| !t.is_empty()),
         // Translate OpenAI `tool_choice` to Anthropic shape.
         tool_choice: req.tool_choice.as_ref().and_then(translate_openai_tool_choice_to_anthropic),

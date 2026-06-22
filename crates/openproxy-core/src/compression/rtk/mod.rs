@@ -1,7 +1,7 @@
-/// RTK (Reduced Token Kit) — Command-aware compression engine.
-///
-/// Detecta el tipo de comando CLI en el contenido del mensaje y aplica
-/// filtros declarativos para eliminar ruido, deduplicar y truncar.
+//! RTK (Reduced Token Kit) — Command-aware compression engine.
+//!
+//! Detecta el tipo de comando CLI en el contenido del mensaje y aplica
+//! filtros declarativos para eliminar ruido, deduplicar y truncar.
 
 pub mod command_detector;
 pub mod line_filter;
@@ -18,7 +18,7 @@ use line_filter::{apply_line_filter, get_builtin_filter, get_generic_filter};
 /// `Vec<&'static str>` rule names — converted to `Vec<String>` at this
 /// boundary to preserve the `Vec<String>` API expected by
 /// `compression::apply_compression`.
-pub fn apply_rtk(msgs: &mut Vec<OpenAIMessage>) -> Vec<String> {
+pub fn apply_rtk(msgs: &mut [OpenAIMessage]) -> Vec<String> {
     let mut all_techniques: Vec<String> = Vec::new();
 
     for msg in msgs.iter_mut() {

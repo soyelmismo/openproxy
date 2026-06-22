@@ -52,23 +52,6 @@ use crate::{
     state::AppState,
 };
 
-/// `POST /v1/chat/completions`.
-///
-/// The full body is parsed as an `OpenAIRequest`; on parse failure we
-/// return 400 with the standard error envelope. On success we hand
-/// the request to the pipeline, which returns a [`PipelineResult`]
-/// we translate into a `(status, body)` response.
-///
-/// The `CancelWatch` extension is injected by the
-/// [`crate::disconnect::client_disconnect_middleware`]; it carries a
-/// `watch::Receiver<bool>` that flips to `true` the moment the client
-/// closes the TCP connection (request-body read error OR
-/// response-body write error). We thread it into the pipeline as
-/// `PipelineRequest::client_disconnected` so the dispatch loop, the
-/// `reqwest::send()` `tokio::select!`, and the SSE `stream.next()`
-/// `tokio::select!` all observe the real cancel — no time-based
-/// watchdog needed.
-
 /// SSE keepalive interval. Sends `: keep-alive\n\n` (an SSE comment)
 /// every 15 seconds so proxies and load balancers don't close the
 /// connection while the upstream is still generating tokens.
@@ -107,6 +90,22 @@ impl Stream for SseBytesStream {
     }
 }
 
+/// `POST /v1/chat/completions`.
+///
+/// The full body is parsed as an `OpenAIRequest`; on parse failure we
+/// return 400 with the standard error envelope. On success we hand
+/// the request to the pipeline, which returns a [`PipelineResult`]
+/// we translate into a `(status, body)` response.
+///
+/// The `CancelWatch` extension is injected by the
+/// [`crate::disconnect::client_disconnect_middleware`]; it carries a
+/// `watch::Receiver<bool>` that flips to `true` the moment the client
+/// closes the TCP connection (request-body read error OR
+/// response-body write error). We thread it into the pipeline as
+/// `PipelineRequest::client_disconnected` so the dispatch loop, the
+/// `reqwest::send()` `tokio::select!`, and the SSE `stream.next()`
+/// `tokio::select!` all observe the real cancel — no time-based
+/// watchdog needed.
 pub async fn chat_completions(
     State(state): State<AppState>,
     Extension(cancel): Extension<CancelWatch>,
@@ -222,16 +221,15 @@ async fn run_pipeline(
     //    `allowed_combos=[5]` could still hit any combo via the
     //    `x-openproxy-combo` header or the `combo:<name>` model alias.
     //    Now we check after routing resolves the combo_id.
-    if let RoutingPlan::Combo { combo_id, .. } = &plan {
-        if let Some(auth) = &auth_result {
-            if let Some(allowed) = &auth.allowed_combos {
-                if !allowed.is_empty() && !allowed.iter().any(|c| *c == combo_id.0) {
-                    return Err(ApiError(CoreError::Auth(format!(
-                        "combo not allowed for this key"
-                    ))));
-                }
-            }
-        }
+    if let RoutingPlan::Combo { combo_id, .. } = &plan
+        && let Some(auth) = &auth_result
+        && let Some(allowed) = &auth.allowed_combos
+        && !allowed.is_empty()
+        && !allowed.contains(&combo_id.0)
+    {
+        return Err(ApiError(CoreError::Auth(
+            "combo not allowed for this key".to_string()
+        )));
     }
 
     let (combo_id, combo_override, targets_override) = match &plan {
@@ -611,13 +609,14 @@ fn authenticate(
         )));
     }
 
-    if let Some(allowed) = &key.allowed_models {
-        if !allowed.is_empty() && !allowed.iter().any(|m| m == requested_model) {
-            return Err(ApiError(CoreError::Auth(format!(
-                "model '{}' not allowed for this key",
-                requested_model
-            ))));
-        }
+    if let Some(allowed) = &key.allowed_models
+        && !allowed.is_empty()
+        && !allowed.iter().any(|m| m == requested_model)
+    {
+        return Err(ApiError(CoreError::Auth(format!(
+            "model '{}' not allowed for this key",
+            requested_model
+        ))));
     }
 
     // Fire-and-forget the `last_used_at` UPDATE on a blocking thread.

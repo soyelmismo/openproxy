@@ -124,10 +124,10 @@ impl AppState {
     pub async fn new(config: AppConfig) -> anyhow::Result<Self> {
         // 1. Open DB and run migrations.
         let path = config.expanded_database_path();
-        if let Some(parent) = path.parent() {
-            if !parent.as_os_str().is_empty() {
-                std::fs::create_dir_all(parent)?;
-            }
+        if let Some(parent) = path.parent()
+            && !parent.as_os_str().is_empty()
+        {
+            std::fs::create_dir_all(parent)?;
         }
         let db_pool = Arc::new(db::DbPool::open(&path)?);
         let mut config = config;
@@ -917,14 +917,13 @@ mod tests {
         // is responsible for filling in both the built-ins and any
         // custom rows.
         let adapters = Arc::new(RwLock::new(Vec::<Arc<dyn adapters::ProviderAdapter>>::new()));
-        let state = AppState::for_test(
+        AppState::for_test(
             AppConfig::default(),
             db_pool,
             master_key,
             adapters,
         )
-        .await;
-        state
+        .await
     }
 
     /// Regression test for the frozen-registry bug.

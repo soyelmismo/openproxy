@@ -8,7 +8,8 @@
 //! Or for a quick numeric readout:
 //!   cargo test -p openproxy-core --bench compression --release -- --nocapture
 
-use criterion::{black_box, criterion_group, criterion_main, Criterion};
+use criterion::{criterion_group, criterion_main, Criterion};
+use std::hint::black_box;
 use openproxy_core::compression::{apply_compression, CompressionMode};
 use openproxy_core::translation::OpenAIRequest;
 use serde_json::{json, Value};
@@ -103,12 +104,12 @@ fn build_fixture() -> Vec<openproxy_core::translation::OpenAIMessage> {
     let mut cargo_test = String::with_capacity(5120);
     cargo_test.push_str("\x1b[1m\x1b[32m    Finished test [unoptimized + debuginfo] target(s) in 0.52s\x1b[0m\n");
     cargo_test.push_str("     Running unittests src/lib.rs\n");
-    cargo_test.push_str("\n");
+    cargo_test.push('\n');
     cargo_test.push_str("running 25 tests\n");
     for i in 0..25 {
         cargo_test.push_str(&format!("test tests::test_{} ... ok\n", i));
     }
-    cargo_test.push_str("\n");
+    cargo_test.push('\n');
     cargo_test.push_str("test result: ok. 25 passed; 0 failed; 0 ignored; 0 measured; 100% filtered out\n");
     // Add some trailing whitespace (what normalize_message_whitespace should trim).
     for i in 0..30 {
@@ -149,7 +150,7 @@ fn bench_compression(c: &mut Criterion) {
     // apply_compression mutates the messages in place.
     group.bench_function("lite", |b| {
         b.iter_with_setup(
-            || build_fixture(),
+            build_fixture,
             |mut msgs| {
                 let stats = apply_compression(&mut msgs, CompressionMode::Lite);
                 black_box((stats, msgs));
@@ -159,7 +160,7 @@ fn bench_compression(c: &mut Criterion) {
 
     group.bench_function("rtk", |b| {
         b.iter_with_setup(
-            || build_fixture(),
+            build_fixture,
             |mut msgs| {
                 let stats = apply_compression(&mut msgs, CompressionMode::Rtk);
                 black_box((stats, msgs));
@@ -169,7 +170,7 @@ fn bench_compression(c: &mut Criterion) {
 
     group.bench_function("lite_rtk", |b| {
         b.iter_with_setup(
-            || build_fixture(),
+            build_fixture,
             |mut msgs| {
                 let stats = apply_compression(&mut msgs, CompressionMode::LiteRtk);
                 black_box((stats, msgs));

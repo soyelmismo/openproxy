@@ -167,25 +167,24 @@ pub fn compress_tool_results(msgs: &mut Messages) -> Vec<&'static str> {
         if msg.role != "tool" {
             continue;
         }
-        if let Some(ref mut content) = msg.content {
-            if let Some(text) = content.as_str() {
-                if text.len() > MAX_TOOL_CHARS {
-                    // Find the byte offset of the char at position MAX_TOOL_CHARS,
-                    // so we don't slice in the middle of a multi-byte UTF-8 sequence.
-                    let cut = text
-                        .char_indices()
-                        .nth(MAX_TOOL_CHARS)
-                        .map(|(i, _)| i)
-                        .unwrap_or(text.len());
-                    let truncated = format!(
-                        "{}…[truncated {} chars]",
-                        &text[..cut],
-                        text.len() - cut
-                    );
-                    *content = Value::String(truncated);
-                    applied.push("lite::compress_tool_results");
-                }
-            }
+        if let Some(ref mut content) = msg.content
+            && let Some(text) = content.as_str()
+            && text.len() > MAX_TOOL_CHARS
+        {
+            // Find the byte offset of the char at position MAX_TOOL_CHARS,
+            // so we don't slice in the middle of a multi-byte UTF-8 sequence.
+            let cut = text
+                .char_indices()
+                .nth(MAX_TOOL_CHARS)
+                .map(|(i, _)| i)
+                .unwrap_or(text.len());
+            let truncated = format!(
+                "{}…[truncated {} chars]",
+                &text[..cut],
+                text.len() - cut
+            );
+            *content = Value::String(truncated);
+            applied.push("lite::compress_tool_results");
         }
     }
     applied
@@ -216,38 +215,38 @@ pub fn remove_redundant_content(msgs: &mut Messages) -> Vec<&'static str> {
 pub fn replace_image_urls(msgs: &mut Messages) -> Vec<&'static str> {
     let mut applied = Vec::new();
     for msg in msgs.iter_mut() {
-        if let Some(ref mut content) = msg.content {
-            if let Some(parts) = content.as_array_mut() {
-                for part in parts.iter_mut() {
-                    let is_data_image = part
-                        .get("image_url")
-                        .and_then(|v| v.get("url"))
-                        .and_then(|v| v.as_str())
-                        .map(|url| url.starts_with("data:image/"))
-                        .unwrap_or(false);
-                    if !is_data_image {
-                        continue;
-                    }
-                    let fmt = part
-                        .get("image_url")
-                        .and_then(|v| v.get("url"))
-                        .and_then(|v| v.as_str())
-                        .and_then(|url| {
-                            let semi = url.find(';').unwrap_or(url.len());
-                            let fmt = &url["data:image/".len()..semi];
-                            Some(if fmt.is_empty() { "unknown".to_string() } else { fmt.to_string() })
-                        })
-                        .unwrap_or_else(|| "unknown".to_string());
-                    if let Some(obj) = part.as_object_mut() {
-                        *obj = serde_json::json!({
-                            "type": "text",
-                            "text": format!("[image: {}]", fmt)
-                        })
-                        .as_object()
-                        .cloned()
-                        .unwrap_or_default();
-                        applied.push("lite::replace_image");
-                    }
+        if let Some(ref mut content) = msg.content
+            && let Some(parts) = content.as_array_mut()
+        {
+            for part in parts.iter_mut() {
+                let is_data_image = part
+                    .get("image_url")
+                    .and_then(|v| v.get("url"))
+                    .and_then(|v| v.as_str())
+                    .map(|url| url.starts_with("data:image/"))
+                    .unwrap_or(false);
+                if !is_data_image {
+                    continue;
+                }
+                let fmt = part
+                    .get("image_url")
+                    .and_then(|v| v.get("url"))
+                    .and_then(|v| v.as_str())
+                    .map(|url| {
+                        let semi = url.find(';').unwrap_or(url.len());
+                        let fmt = &url["data:image/".len()..semi];
+                        if fmt.is_empty() { "unknown".to_string() } else { fmt.to_string() }
+                    })
+                    .unwrap_or_else(|| "unknown".to_string());
+                if let Some(obj) = part.as_object_mut() {
+                    *obj = serde_json::json!({
+                        "type": "text",
+                        "text": format!("[image: {}]", fmt)
+                    })
+                    .as_object()
+                    .cloned()
+                    .unwrap_or_default();
+                    applied.push("lite::replace_image");
                 }
             }
         }
@@ -359,9 +358,7 @@ mod tests {
         }];
         let applied = compress_tool_results(&mut msgs);
         assert!(
-            applied
-                .iter()
-                .any(|s| *s == "lite::compress_tool_results"),
+            applied.contains(&"lite::compress_tool_results"),
             "expected compress_tool_results to fire on >2000 byte content"
         );
         // Verify the content was truncated and contains the marker.

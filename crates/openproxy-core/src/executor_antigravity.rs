@@ -207,7 +207,7 @@ fn build_antigravity_request(
             openai
                 .model
                 .split('/')
-                .last()
+                .next_back()
                 .unwrap_or(&openai.model)
                 .to_string(),
         ),
@@ -263,15 +263,14 @@ fn parse_antigravity_line(
         ChunkKind::Gemini { response } => {
             if let Some(candidates) = response.candidates {
                 for candidate in candidates {
-                    if let Some(content) = candidate.content {
-                        if let Some(parts) = content.parts {
-                            for part in parts {
-                                if let Some(text) = part.text {
-                                    // Skip "thinking" parts
-                                    if part.thought != Some(true) {
-                                        accumulated_text.push_str(&text);
-                                    }
-                                }
+                    if let Some(content) = candidate.content
+                        && let Some(parts) = content.parts
+                    {
+                        for part in parts {
+                            if let Some(text) = part.text
+                                && part.thought != Some(true)
+                            {
+                                accumulated_text.push_str(&text);
                             }
                         }
                     }

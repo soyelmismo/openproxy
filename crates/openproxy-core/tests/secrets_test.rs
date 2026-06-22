@@ -43,10 +43,10 @@ fn decrypt_with_wrong_key_fails() {
 #[test]
 fn from_env_missing_returns_config_error() {
     let prev = std::env::var("OPENPROXY_MASTER_KEY").ok();
-    std::env::remove_var("OPENPROXY_MASTER_KEY");
+    unsafe { std::env::remove_var("OPENPROXY_MASTER_KEY") };
     let res = MasterKey::from_env();
     if let Some(v) = prev {
-        std::env::set_var("OPENPROXY_MASTER_KEY", v);
+        unsafe { std::env::set_var("OPENPROXY_MASTER_KEY", v) };
     }
     assert!(
         matches!(res, Err(CoreError::Config(_))),
@@ -59,11 +59,11 @@ fn from_env_wrong_length_returns_config_error() {
     // 16-byte key (must be 32) — wrong length.
     let bad = BASE64.encode([0u8; 16]);
     let prev = std::env::var("OPENPROXY_MASTER_KEY").ok();
-    std::env::set_var("OPENPROXY_MASTER_KEY", &bad);
+    unsafe { std::env::set_var("OPENPROXY_MASTER_KEY", &bad) };
     let res = MasterKey::from_env();
-    std::env::remove_var("OPENPROXY_MASTER_KEY");
+    unsafe { std::env::remove_var("OPENPROXY_MASTER_KEY") };
     if let Some(v) = prev {
-        std::env::set_var("OPENPROXY_MASTER_KEY", v);
+        unsafe { std::env::set_var("OPENPROXY_MASTER_KEY", v) };
     }
     assert!(
         matches!(res, Err(CoreError::Config(_))),
@@ -75,11 +75,11 @@ fn from_env_wrong_length_returns_config_error() {
 fn from_env_invalid_base64_returns_config_error() {
     // Bonus: not base64 at all.
     let prev = std::env::var("OPENPROXY_MASTER_KEY").ok();
-    std::env::set_var("OPENPROXY_MASTER_KEY", "not-valid-base64!!!");
+    unsafe { std::env::set_var("OPENPROXY_MASTER_KEY", "not-valid-base64!!!") };
     let res = MasterKey::from_env();
-    std::env::remove_var("OPENPROXY_MASTER_KEY");
+    unsafe { std::env::remove_var("OPENPROXY_MASTER_KEY") };
     if let Some(v) = prev {
-        std::env::set_var("OPENPROXY_MASTER_KEY", v);
+        unsafe { std::env::set_var("OPENPROXY_MASTER_KEY", v) };
     }
     assert!(matches!(res, Err(CoreError::Config(_))));
 }
