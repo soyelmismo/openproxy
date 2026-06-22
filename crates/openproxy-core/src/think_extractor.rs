@@ -185,11 +185,14 @@ pub fn extract_think_from_content(content: &str) -> ExtractedThink {
         remaining = rest;
     }
 
+    // Strip orphaned close tags (</think>, </thinking>, etc.) that
+    // appear in the content without a matching open tag. Some
+    // providers emit duplicate or stray close tags like:
+    //   <think>reasoning</think>\n\n</think>
+    result.content = strip_orphaned_close_tags(&result.content);
+
     // Trim leading whitespace from the final content that was between
     // the closing </think> tag and the start of the actual answer.
-    // Providers typically format as:
-    //   <think>reasoning</think>\nThe answer
-    // so the content starts with a stray newline after extraction.
     result.content = result.content.trim_start_matches('\n').to_string();
 
     result
@@ -202,6 +205,41 @@ fn find_earliest_tag<'a>(s: &str, tags: &[&'a str]) -> Option<(usize, &'a str)> 
     tags.iter()
         .filter_map(|tag| lower.find(tag.to_ascii_lowercase().as_str()).map(|pos| (pos, *tag)))
         .min_by_key(|(pos, _)| *pos)
+}
+
+/// Remove orphaned close tags (</think>, </thinking>, etc.) from a
+/// string. An orphaned close tag is one that appears without a
+/// matching open tag before it. Some providers emit duplicate or
+/// stray close tags like:
+///   <think>reasoning</think>\n\n</think>
+/// After the first </think> is matched by the extractor, the second
+/// </think> remains as orphaned content. This function removes it.
+fn strip_orphaned_close_tags(content: &str) -> String {
+    let mut result = content.to_string();
+    for close_tag in THINK_CLOSE_TAGS {
+        let close_lower = close_tag.to_ascii_lowercase();
+        loop {
+            let lower = result.to_ascii_lowercase();
+            let pos = match lower.find(&close_lower) {
+                Some(p) => p,
+                None => break,
+            };
+            // Check that there's no matching open tag before this
+            // close tag in the content.
+            let open_tag = format!("<{}>", &close_tag[2..close_tag.len() - 1]);
+            let open_lower = open_tag.to_ascii_lowercase();
+            if lower[..pos].contains(&open_lower) {
+                break;
+            }
+            // Remove the orphaned close tag.
+            result = format!(
+                "{}{}",
+                &result[..pos],
+                &result[pos + close_tag.len()..]
+            );
+        }
+    }
+    result
 }
 
 /// Stateful extractor for streaming responses.
@@ -297,7 +335,10 @@ impl ThinkStreamExtractor {
                 let safe_len = find_safe_split_point(input);
                 let content = input[..safe_len].to_string();
                 self.tag_buffer = input[safe_len..].to_string();
-                return (content, String::new());
+                // Strip orphaned close tags from the content (e.g.
+                // stray </think> without a matching <think>).
+                let cleaned = strip_orphaned_close_tags(&content);
+                return (cleaned, String::new());
             }
         };
 
@@ -503,6 +544,29 @@ mod tests {
         let r = extract_think_from_content("<think>all reasoning, no answer</think>");
         assert_eq!(r.content, "");
         assert_eq!(r.reasoning, "all reasoning, no answer");
+    }
+
+    #[test]
+    fn orphaned_close_tag() {
+        // Bug: some providers emit a stray </think> after the first
+        // close tag:
+        //   <think>reasoning</think>\n\n</think>
+        // The first </think> is matched, the second is orphaned.
+        let r = extract_think_from_content(
+            "<think>\nNow I have a comprehensive understanding.\n</think>\n\n</think>"
+        );
+        assert_eq!(r.content, "");
+        assert_eq!(r.reasoning, "Now I have a comprehensive understanding.");
+    }
+
+    #[test]
+    fn orphaned_close_tag_with_content_after() {
+        // Same bug but with actual content after the orphaned tag.
+        let r = extract_think_from_content(
+            "<think>reasoning</think>\n\n</think>\nThe answer."
+        );
+        assert_eq!(r.content, "The answer.");
+        assert_eq!(r.reasoning, "reasoning");
     }
 
     // -----------------------------------------------------------------

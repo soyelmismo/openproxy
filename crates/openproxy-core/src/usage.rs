@@ -51,9 +51,11 @@ static USAGE_SENDER: OnceCell<broadcast::Sender<RecentUsageRow>> = OnceCell::new
 /// lives under.
 ///
 /// Channel capacity: stages fire in bursts. A typical request emits
-/// `started → connecting → waiting_ttft → streaming → completed`
-/// (~5 events). 1024 is plenty headroom for 100+ concurrent requests.
-const STAGE_BROADCAST_CAPACITY: usize = 1024;
+/// ~5 stage events (started, connecting, waiting_ttft, streaming,
+/// completed). 256 is enough for ~50 concurrent requests without
+/// lagging, while bounding memory to ~256 × sizeof(StageEvent) ≈
+/// ~20 KB (was 1024 = ~80 KB).
+const STAGE_BROADCAST_CAPACITY: usize = 256;
 static STAGE_SENDER: OnceCell<broadcast::Sender<StageEvent>> = OnceCell::new();
 
 /// Initialize the global usage broadcast sender. Must be called exactly

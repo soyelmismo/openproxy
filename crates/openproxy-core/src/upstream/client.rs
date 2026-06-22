@@ -189,20 +189,17 @@ impl UpstreamClient {
             let connector = PhasedConnector::with_defaults();
             let hyper: HyperClient<PhasedConnector, Full<Bytes>> =
                 HyperClient::builder(TokioExecutor::new())
-                    // Keep up to 32 idle connections per host so the
-                    // shared `UpstreamClient` (lives on `AppState`,
-                    // created once at startup) can reuse them across
-                    // requests — eliminating the per-request TCP+TLS
-                    // handshake (~50-200ms on WAN). Cancellation of an
-                    // individual request is still propagated to the
-                    // upstream: the `CancellationToken` passed to
-                    // `UpstreamClient::call` aborts the hyper body
-                    // stream, which signals the upstream that the
-                    // consumer is gone. Dropping the request future no
-                    // longer closes the underlying connection, but that
-                    // is the intended trade-off now that the client is
-                    // shared.
-                    .pool_max_idle_per_host(32)
+                    // RAM optimization: keep up to 8 idle connections
+                    // per host (was 32). Each idle connection holds
+                    // ~50-100 KB of TLS state + kernel buffers; with
+                    // 10+ providers × 32 = 320 potential idle
+                    // connections = ~32 MB just for the pool.
+                    // 8 per host × 10 providers = 80 connections =
+                    // ~8 MB, a 4x reduction with negligible latency
+                    // impact (connections are re-established in
+                    // ~50-200ms, and most providers only have 1-2
+                    // active accounts).
+                    .pool_max_idle_per_host(8)
                     // Bug fix (SendRequest at 6-9ms): the default
                     // `pool_idle_timeout` is 90s. Many upstreams
                     // (Sambanova, ollama-cloud, etc.) close idle
@@ -582,9 +579,10 @@ impl UpstreamClient {
             deadlines.start,
             timeouts.body_chunk_ms,
             deadlines.total_deadline,
-            // 32 MiB hard cap per body. A real config knob is a
-            // follow-up.
-            32 * 1024 * 1024,
+            // 8 MiB hard cap per body (was 32 MiB). LLM responses
+            // are rarely >1 MiB; 8 MiB is a generous ceiling that
+            // bounds worst-case memory per concurrent request.
+            8 * 1024 * 1024,
         );
 
         Ok(UpstreamResponse {

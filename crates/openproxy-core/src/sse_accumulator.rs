@@ -172,10 +172,12 @@ pub fn normalize_nonstandard_reasoning_fields(payload: &str) -> Option<String> {
 /// Maximum number of bytes the accumulator's text fields may collectively
 /// hold. After this is reached, additional chunks are dropped and the
 /// `truncated` flag is set. The upstream `http_body_util::Limited` cap
-/// (32 MiB in `upstream/client.rs:541`) is the authoritative bound; this
-/// 16 MiB secondary cap exists to bound the per-stream heap footprint of
-/// the accumulator itself under high concurrency.
-pub const MAX_ACCUMULATED_BYTES: usize = 16 * 1024 * 1024;
+/// (8 MiB in `upstream/client.rs:585`) is the authoritative bound; this
+/// 4 MiB secondary cap exists to bound the per-stream heap footprint of
+/// the accumulator itself under high concurrency. (Was 16 MiB — reduced
+/// for RAM optimization: 50 concurrent streams × 16 MiB = 800 MiB worst
+/// case; 4 MiB × 50 = 200 MiB, a 4x reduction.)
+pub const MAX_ACCUMULATED_BYTES: usize = 4 * 1024 * 1024;
 
 /// Per-provider marker for tool_use events. Anthropic streams a tool call
 /// across multiple SSE events; this enum lets the loop dispatch without
