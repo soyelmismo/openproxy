@@ -197,12 +197,19 @@ pub fn stage_broadcast() -> broadcast::Sender<StageEvent> {
 /// dashboard is not connected.
 pub fn publish_stage_event(mut event: StageEvent) {
     let Some(tx) = STAGE_SENDER.get() else { return };
-    // Skip the timestamp formatting when no dashboard is connected.
-    // The doc comment always claimed this was optimized away; this
-    // implements the optimization.
-    if tx.receiver_count() == 0 {
-        return;
-    }
+    // Bug fix: do NOT skip when receiver_count == 0. The previous
+    // optimization returned early when no dashboard was connected,
+    // but that meant if the dashboard disconnected briefly (e.g.
+    // WebSocket reconnect after an error), all stage events for
+    // in-flight requests were silently dropped. The dashboard then
+    // only saw the final usage row (published by publish_usage_row,
+    // which does NOT have this check) — so rows appeared "stuck" in
+    // their last known stage until they completed.
+    //
+    // The broadcast channel has capacity 1024; sending with no
+    // receivers is a no-op (send returns Err, which we ignore).
+    // The only cost of always sending is the timestamp formatting
+    // below, which is cheap.
     event.timestamp = chrono::Utc::now()
         .format("%Y-%m-%dT%H:%M:%S%.3fZ")
         .to_string();

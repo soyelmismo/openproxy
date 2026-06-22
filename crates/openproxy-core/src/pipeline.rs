@@ -2361,22 +2361,21 @@ impl Pipeline {
 );
             }
             Err(UpstreamError::Timeout(phase)) => {
-                // The upstream client reports a single stalled phase.
-                // We map DNS / Dial / Tls / Write / Headers to the
-                // pre-migration `phase: "connect"` label (the
-                // production connector cannot separate them; the
-                // `headers` boundary is the closest match for the
-                // dial+TLS+wait-for-headers wall-clock budget the
-                // old `tokio::time::timeout(connect, …)` covered).
-                // `Body` maps to the total-budget timeout the
-                // pre-migration code reported as `phase: "total"`.
+                // Bug fix: attribute the timeout to the CORRECT phase
+                // instead of collapsing DNS/Dial/TLS/Write/Headers all
+                // into "connect". The user configures per-phase budgets
+                // (connect_ms, request_send_ms, ttft_ms) and the error
+                // message must reflect which budget actually fired so
+                // they can tune the right knob. The old mapping (all
+                // → "connect") was a leftover from the pre-migration
+                // reqwest path that couldn't separate phases.
                 let phase_label = match phase {
-                    crate::upstream::UpstreamPhase::Dns
-                    | crate::upstream::UpstreamPhase::Dial
-                    | crate::upstream::UpstreamPhase::Tls
-                    | crate::upstream::UpstreamPhase::Write
-                    | crate::upstream::UpstreamPhase::Headers => "connect",
-                    crate::upstream::UpstreamPhase::Body => "total",
+                    crate::upstream::UpstreamPhase::Dns => "dns",
+                    crate::upstream::UpstreamPhase::Dial => "dial",
+                    crate::upstream::UpstreamPhase::Tls => "tls",
+                    crate::upstream::UpstreamPhase::Write => "write",
+                    crate::upstream::UpstreamPhase::Headers => "headers",
+                    crate::upstream::UpstreamPhase::Body => "body",
                 };
                 tracing::warn!(
                     combo_id = combo.id.0,
@@ -2503,9 +2502,32 @@ impl Pipeline {
         // to `UpstreamConnection` with a `read upstream body: …`
         // prefix, matching the pre-migration `record_and_fail` call
         // shape.
-        let body_bytes = match response.collect().await {
-            Ok(b) => b,
-            Err(UpstreamError::Cancel) => {
+        //
+        // Bug fix: wrap the body read in a `tokio::time::timeout`
+        // bounded by `ttft_ms` (== headers_ms). For non-streaming,
+        // `ttft_ms` is the user's "time to first byte" budget, but
+        // in practice it means "time to full response" because there
+        // is no streaming — the client waits for the entire body.
+        // The `UpstreamBodyStream` inside `response` already honors
+        // `body_chunk_ms` (gap) and `total_deadline`, but those are
+        // loose bounds: `body_chunk_ms` defaults to 120s and
+        // `total_ms` to 300s. Without this tighter `ttft_ms` cap,
+        // a non-streaming request whose headers arrive quickly but
+        // whose body stalls can hang for 2-5 minutes before the
+        // body-chunk gap fires. The user configured `ttft_ms: 10000`
+        // expecting the whole non-streaming response to land within
+        // 10s — this honors that expectation.
+        let non_streaming_body_deadline = started
+            + std::time::Duration::from_millis(resolved_timeouts.ttft.as_millis() as u64);
+        let remaining = non_streaming_body_deadline
+            .checked_duration_since(Instant::now())
+            .unwrap_or(std::time::Duration::ZERO);
+        let body_bytes = match tokio::time::timeout(
+            remaining,
+            response.collect(),
+        ).await {
+            Ok(Ok(b)) => b,
+            Ok(Err(UpstreamError::Cancel)) => {
                 tracing::warn!(
                     combo_id = combo.id.0,
                     target_id = target.id.0,
@@ -2529,7 +2551,7 @@ impl Pipeline {
 },
 );
             }
-            Err(UpstreamError::Timeout(phase)) => {
+            Ok(Err(UpstreamError::Timeout(phase))) => {
                 let err = CoreError::UpstreamTimeout {
                     phase: phase.as_str().to_string(),
                     ms: started.elapsed().as_millis() as u64,
@@ -2550,8 +2572,41 @@ impl Pipeline {
 },
 );
             }
-            Err(e) => {
+            Ok(Err(e)) => {
                 let err = CoreError::UpstreamConnection(format!("read upstream body: {e}"));
+                return self.record_and_fail(
+                    req,
+                    combo,
+                    target,
+                    FailureContext {
+                    attempt,
+                    race_size,
+                    err: &err,
+                    started,
+                    model: Some(model),
+                    connect_ms: Some(connect_and_send_ms),
+                    ttft_ms: Some(ttft_ms),
+                    status_code: err.http_status(),
+},
+);
+            }
+            // Bug fix: the `tokio::time::timeout` Elapsed arm — the
+            // non-streaming body read exceeded `ttft_ms`. Attribute
+            // to the "headers" phase (closest existing label for
+            // "waiting for the server to finish responding").
+            Err(_elapsed) => {
+                let elapsed = started.elapsed().as_millis() as u64;
+                let err = CoreError::UpstreamTimeout {
+                    phase: "headers".to_string(),
+                    ms: elapsed,
+                };
+                tracing::warn!(
+                    combo_id = combo.id.0,
+                    target_id = target.id.0,
+                    provider = %target.provider_id,
+                    elapsed_ms = elapsed,
+                    "non-streaming body read exceeded ttft_ms; aborting attempt"
+                );
                 return self.record_and_fail(
                     req,
                     combo,
