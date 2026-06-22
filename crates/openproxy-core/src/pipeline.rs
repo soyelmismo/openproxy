@@ -3132,7 +3132,11 @@ impl Pipeline {
         // result keeps the existing post-loop accounting
         // (usage row, [DONE] sentinel) running.
         let mut stream = response.body;
-        let mut buffer = bytes::BytesMut::with_capacity(8192);
+        // RAM optimization: 4096 bytes (was 8192). SSE lines are
+        // typically <2 KB; 4 KB is enough for most chunks and halves
+        // the per-stream buffer reservation. The buffer grows
+        // dynamically via `reserve` below if a line exceeds it.
+        let mut buffer = bytes::BytesMut::with_capacity(4096);
         let mut usage: Option<crate::translation::OpenAIUsage> = None;
         let mut ttft_ms: Option<u64> = None;
         let mut stop_reason: Option<String> = None;
@@ -3315,7 +3319,7 @@ impl Pipeline {
             // A typical SSE chunk is 1-4 KiB; we keep 8 KiB of runway so
             // the next few `extend_from_slice` calls don't trigger a
             // grow-and-copy each time.
-            if buffer.capacity() - buffer.len() < 8192 {
+            if buffer.capacity() - buffer.len() < 4096 {
                 buffer.reserve(16384);
             }
 
