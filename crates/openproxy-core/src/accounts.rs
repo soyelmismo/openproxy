@@ -378,7 +378,29 @@ pub fn update_api_key(
 
 /// Delete an account by id. Idempotent: a missing id is a no-op (0 rows
 /// affected) and not an error, matching the providers module's delete policy.
+///
+/// FK cleanup: before deleting the account row, we NULL out any
+/// `combo_targets.account_id` references. The `combo_targets` table's
+/// FK on `account_id` does NOT have `ON DELETE SET NULL` (historical
+/// migrations 1/16/25/26/30 all recreate the table without the
+/// clause), so a raw `DELETE FROM accounts` fails with
+/// `FOREIGN KEY constraint failed` when any combo target still
+/// references the account. Setting the FK to NULL makes the combo
+/// target fall back to automatic account selection (the default
+/// behavior when `account_id` is NULL), which is the correct
+/// semantic: deleting an account should not force the operator to
+/// re-create or edit every combo that happened to pin it.
 pub fn delete(conn: &Connection, id: AccountId) -> Result<()> {
+    // Bug fix: NULL out combo_targets.account_id before deleting the
+    // account, otherwise the FK constraint blocks the delete.
+    conn.execute(
+        "UPDATE combo_targets SET account_id = NULL WHERE account_id = ?1",
+        params![id.0],
+    )
+    .map_err(|e| CoreError::Database {
+        message: format!("null combo_targets.account_id for account {}: {}", id.0, e),
+        source: Some(Box::new(e)),
+    })?;
     conn.execute("DELETE FROM accounts WHERE id = ?1", params![id.0])
         .map_err(|e| CoreError::Database {
             message: format!("delete account {}: {}", id.0, e),
@@ -1499,5 +1521,73 @@ mod tests {
         let err = update_api_key(&conn, AccountId(99999), Some("x"), &mk)
             .expect_err("missing account");
         assert!(matches!(err, CoreError::AccountNotFound(99999)));
+    }
+
+    #[test]
+    fn delete_account_nulls_combo_targets_fk() {
+        // Bug: deleting an account that is referenced by combo_targets
+        // failed with FOREIGN KEY constraint failed because the FK
+        // on combo_targets.account_id does NOT have ON DELETE SET NULL.
+        // Fix: accounts::delete now NULLs out combo_targets.account_id
+        // before deleting the account row.
+        let (pool, _path) = fresh_pool();
+        let conn = pool.writer();
+        seed_provider(&conn, "minimax");
+
+        let mk = MasterKey::generate();
+        let account_id = create(
+            &conn,
+            &ProviderId::new("minimax"),
+            Some("sk-test-minimax"),
+            &mk,
+            Some("primary"),
+            10,
+            None,
+        )
+        .expect("create account");
+
+        // Create a combo with a target that pins this account.
+        conn.execute(
+            "INSERT INTO combos (id, name, strategy, race_size) VALUES (1, 'test-combo', 'priority', 1)",
+            [],
+        )
+        .expect("insert combo");
+        conn.execute(
+            "INSERT INTO combo_targets (id, combo_id, provider_id, account_id, upstream_model_id, priority_order) \
+             VALUES (1, 1, 'minimax', ?1, 'model-1', 0)",
+            params![account_id.0],
+        )
+        .expect("insert combo_target with account_id");
+
+        // Verify the combo_target references the account.
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM combo_targets WHERE account_id = ?1",
+                params![account_id.0],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(count, 1, "combo_target should reference the account");
+
+        // Delete the account — must NOT fail with FK constraint error.
+        delete(&conn, account_id).expect("delete account with combo_target reference");
+
+        // The account is gone.
+        let gone = get(&conn, account_id).expect("get").is_none();
+        assert!(gone, "account should be deleted");
+
+        // The combo_target still exists, but account_id is now NULL
+        // (falls back to automatic account selection).
+        let target_account_id: Option<i64> = conn
+            .query_row(
+                "SELECT account_id FROM combo_targets WHERE id = 1",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert!(
+            target_account_id.is_none(),
+            "combo_target.account_id should be NULL after account delete"
+        );
     }
 }
