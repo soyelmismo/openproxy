@@ -957,3 +957,78 @@ async fn adversarial_phase_timeout_body_chunk_not_attributed_to_write() {
         "elapsed = {elapsed:?}: body_chunk_ms=200 was not honored"
     );
 }
+
+// -----------------------------------------------------------------------
+// Test: headers_timeout_fires_on_silent_http_server
+//
+// Reproduces the bug where a request to a server that accepts the TCP
+// connection but never sends an HTTP response hangs forever (the
+// "keep-alive" bug). The per-phase `headers_ms` timeout MUST fire and
+// surface as `Timeout(Headers)`.
+//
+// This test uses a plain HTTP server (no TLS) so it exercises the
+// full PhasedConnector path: DNS (IP literal, skipped) → Dial (succeeds)
+// → TLS (skipped, plain HTTP) → Write (succeeds, small body) → Headers
+// (STALLS — server never responds).
+//
+// The `headers_ms` deadline is `start + headers_ms`. With `headers_ms =
+// 200` and a 5s upper bound, the error MUST be `Timeout(Headers)` and
+// the elapsed MUST be ~200ms.
+// -----------------------------------------------------------------------
+
+/// A test HTTP server that accepts the TCP connection, reads the
+/// request, and then NEVER sends a response. Simulates "server hung
+/// after receiving the request".
+async fn spawn_silent_http_server() -> std::net::SocketAddr {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        if let Ok((mut tcp, _peer)) = listener.accept().await {
+            // Read the request so the kernel doesn't send RST.
+            let mut buf = vec![0u8; 4096];
+            use tokio::io::AsyncReadExt;
+            let _ = tcp.read(&mut buf).await;
+            // Hold the connection open without ever sending a
+            // response. The client's `headers_ms` timeout must fire.
+            tokio::time::sleep(Duration::from_secs(30)).await;
+        }
+    });
+    addr
+}
+
+#[tokio::test]
+async fn headers_timeout_fires_on_silent_http_server() {
+    let addr = spawn_silent_http_server().await;
+    let url = format!("http://127.0.0.1:{}/", addr.port());
+
+    let client = UpstreamClient::new();
+    let cancel = CancellationToken::new();
+    let profile = TimeoutProfile::Custom(ResolvedTimeouts {
+        dns_ms: 5_000,
+        dial_ms: 5_000,
+        tls_ms: 5_000,
+        write_ms: 5_000,
+        headers_ms: 200,
+        body_chunk_ms: 5_000,
+        total_ms: 30_000,
+    });
+
+    let t0 = std::time::Instant::now();
+    let res = client
+        .call(UpstreamRequest::post_json(url, bytes::Bytes::from("{}")), profile, cancel)
+        .await;
+    let elapsed = t0.elapsed();
+
+    assert!(res.is_err(), "expected error, got {res:?}");
+    match res.unwrap_err() {
+        UpstreamError::Timeout(UpstreamPhase::Headers) => {}
+        other => panic!("expected Timeout(Headers), got {other:?}"),
+    }
+    // The headers_ms=200 deadline must fire well before the 5s
+    // write_ms / 30s total_ms ceilings.
+    assert!(
+        elapsed < Duration::from_secs(2),
+        "elapsed = {elapsed:?}: headers_ms=200 was not honored — the \
+         request hung (the 'keep-alive' bug)"
+    );
+}
