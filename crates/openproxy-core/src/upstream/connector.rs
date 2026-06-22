@@ -87,7 +87,15 @@ use super::phases::UpstreamPhase;
 /// (`Read + Write + Connection + Unpin + Send + 'static`).
 pub enum PhasedConnection {
     Plain(TokioIo<TcpStream>),
-    Tls(Box<TokioIo<ClientTlsStream<TcpStream>>>),
+    /// The `bool` is `true` when ALPN negotiated `h2` (HTTP/2), `false`
+    /// when the server picked `http/1.1` (or ALPN was not offered).
+    /// `connected()` reads this flag to tell hyper-util whether to use
+    /// the HTTP/2 or HTTP/1.1 protocol parser — getting this wrong
+    /// produces `invalid HTTP version parsed` errors at 6ms.
+    Tls {
+        io: Box<TokioIo<ClientTlsStream<TcpStream>>>,
+        negotiated_h2: bool,
+    },
 }
 
 impl Read for PhasedConnection {
@@ -98,7 +106,7 @@ impl Read for PhasedConnection {
     ) -> Poll<Result<(), io::Error>> {
         match &mut *self {
             PhasedConnection::Plain(io) => Pin::new(io).poll_read(cx, buf),
-            PhasedConnection::Tls(io) => Pin::new(&mut **io).poll_read(cx, buf),
+            PhasedConnection::Tls { io, .. } => Pin::new(&mut **io).poll_read(cx, buf),
         }
     }
 }
@@ -111,14 +119,14 @@ impl Write for PhasedConnection {
     ) -> Poll<Result<usize, io::Error>> {
         match &mut *self {
             PhasedConnection::Plain(io) => Pin::new(io).poll_write(cx, buf),
-            PhasedConnection::Tls(io) => Pin::new(&mut **io).poll_write(cx, buf),
+            PhasedConnection::Tls { io, .. } => Pin::new(&mut **io).poll_write(cx, buf),
         }
     }
 
     fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), io::Error>> {
         match &mut *self {
             PhasedConnection::Plain(io) => Pin::new(io).poll_flush(cx),
-            PhasedConnection::Tls(io) => Pin::new(&mut **io).poll_flush(cx),
+            PhasedConnection::Tls { io, .. } => Pin::new(&mut **io).poll_flush(cx),
         }
     }
 
@@ -128,7 +136,7 @@ impl Write for PhasedConnection {
     ) -> Poll<Result<(), io::Error>> {
         match &mut *self {
             PhasedConnection::Plain(io) => Pin::new(io).poll_shutdown(cx),
-            PhasedConnection::Tls(io) => Pin::new(&mut **io).poll_shutdown(cx),
+            PhasedConnection::Tls { io, .. } => Pin::new(&mut **io).poll_shutdown(cx),
         }
     }
 }
@@ -138,28 +146,20 @@ impl Write for PhasedConnection {
 impl HyperConnection for PhasedConnection {
     fn connected(&self) -> hyper_util::client::legacy::connect::Connected {
         match self {
-            PhasedConnection::Tls(_tls_io) => {
-                // TokioIo wraps the TlsStream. We can access the
-                // inner TlsStream via the `Read` trait's `ReadBuf`
-                // — but for ALPN we need to inspect the rustls
-                // ClientConnection. The simplest approach: check
-                // if the TLS handshake succeeded with h2 ALPN by
-                // trying to get the protocol. TokioIo doesn't expose
-                // inner(), but we can use a downcast approach.
-                //
-                // For now, report HTTP/1.1 — the connection pool
-                // will still work, and HTTP/2 will be negotiated
-                // once we can access the ALPN result. The TLS
-                // session resumption + ALPN advertisement are
-                // already configured in tls_connector(); the
-                // missing piece is reading the negotiated protocol
-                // back from the TokioIo wrapper.
-                //
-                // TODO: once hyper-util exposes an accessor or we
-                // switch to hyper_rustls::HttpsConnector (which
-                // handles ALPN automatically), report negotiated_h2()
-                // here.
-                hyper_util::client::legacy::connect::Connected::new()
+            PhasedConnection::Tls { negotiated_h2, .. } => {
+                // Bug fix: report the ALPN-negotiated protocol to
+                // hyper-util. The TLS connector offers `h2` +
+                // `http/1.1` via ALPN; if the server picks `h2`, we
+                // MUST tell hyper-util via `negotiated_h2()` so it
+                // uses the HTTP/2 protocol parser. Without this,
+                // hyper-util assumes HTTP/1.1, tries to parse an
+                // HTTP/2 response as HTTP/1.1, and fails at ~6ms
+                // with `invalid HTTP version parsed`.
+                let mut connected = hyper_util::client::legacy::connect::Connected::new();
+                if *negotiated_h2 {
+                    connected = connected.negotiated_h2();
+                }
+                connected
             }
             PhasedConnection::Plain(_) => {
                 hyper_util::client::legacy::connect::Connected::new()
@@ -551,7 +551,23 @@ async fn run_phased_connect(
         .await
         {
             Ok(Ok(tls_stream)) => {
-                return Ok(PhasedConnection::Tls(Box::new(TokioIo::new(tls_stream))));
+                // Bug fix: read the ALPN-negotiated protocol from the
+                // rustls ClientConnection BEFORE wrapping the stream
+                // in TokioIo (which hides the inner type). If the
+                // server picked `h2`, we set `negotiated_h2 = true`
+                // so `connected()` can tell hyper-util to use the
+                // HTTP/2 parser. Without this, hyper-util defaults
+                // to HTTP/1.1 and fails with `invalid HTTP version
+                // parsed` when the server responds in HTTP/2.
+                let (_, client_conn) = tls_stream.get_ref();
+                let negotiated_h2 = client_conn
+                    .alpn_protocol()
+                    .map(|p| p == b"h2")
+                    .unwrap_or(false);
+                return Ok(PhasedConnection::Tls {
+                    io: Box::new(TokioIo::new(tls_stream)),
+                    negotiated_h2,
+                });
             }
             Ok(Err(e)) => {
                 return Err(Box::new(PhasedConnectorError {
