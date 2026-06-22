@@ -19,7 +19,20 @@ impl WebState {
         Self {
             core_client: Arc::new(Client::new(core_url.clone())),
             core_url,
-            http: reqwest::Client::new(),
+            // Bug fix: set a 30s timeout on the proxy client so a
+            // hung core-server request doesn't block the dashboard
+            // indefinitely. The previous `reqwest::Client::new()`
+            // had NO timeout — if the core server hung (e.g. a
+            // deadlock in the refresh handler), the proxy would wait
+            // forever and the dashboard would show "error sending
+            // request" only after the browser's own TCP timeout
+            // (typically 60-120s). With a 30s timeout, the proxy
+            // returns a 502 after 30s, which the dashboard can
+            // surface immediately.
+            http: reqwest::Client::builder()
+                .timeout(std::time::Duration::from_secs(30))
+                .build()
+                .expect("reqwest client builder"),
             admin_token,
         }
     }
