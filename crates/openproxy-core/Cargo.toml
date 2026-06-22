@@ -34,6 +34,13 @@ toml = { workspace = true }
 chrono = { workspace = true }
 uuid = { workspace = true }
 futures = { workspace = true }
+# `async_trait` is used by the `ProviderAdapter` and `OAuthProvider`
+# traits (and their impls) for dyn-safety — both traits are stored as
+# `Arc<dyn ...>` in long-lived registries (`PipelineState.adapters`,
+# `OAuthProviderRegistry`), so they cannot use native `async fn` (which
+# is not dyn-safe). See the doc comment on each trait for the full
+# rationale. Kept as a runtime dep (NOT `[dev-dependencies]`) because
+# `adapters.rs` and `oauth*.rs` use it in production code paths.
 async-trait = { workspace = true }
 # `tokio_util::sync::CancellationToken` lives behind the `rt` feature.
 # We promote the transitive dep (it already arrives via reqwest) to a

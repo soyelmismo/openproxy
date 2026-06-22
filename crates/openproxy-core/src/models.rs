@@ -492,8 +492,7 @@ pub fn upsert_many(
             // length of `discovered` (sqlite does not accept `IN (SELECT
             // ... FROM json_each(?))` on this codebase's pinned version
             // without a feature flag, and a literal list is simpler).
-            let placeholders = std::iter::repeat("?")
-                .take(discovered.len())
+            let placeholders = std::iter::repeat_n("?", discovered.len())
                 .collect::<Vec<_>>()
                 .join(", ");
             let sql = format!(
@@ -567,8 +566,7 @@ pub fn upsert_many(
         // upstream model_ids. The `WHERE model_id IN (?, ?, ...)`
         // shape mirrors the DELETE block above; bound strings are
         // owned so the borrowed slice lives long enough.
-        let placeholders = std::iter::repeat("?")
-            .take(inserted_model_ids.len())
+        let placeholders = std::iter::repeat_n("?", inserted_model_ids.len())
             .collect::<Vec<_>>()
             .join(", ");
         let sql = format!(

@@ -347,16 +347,14 @@ fn extract_kiro_content(v: &Value) -> Option<String> {
     {
         return Some(s.to_string());
     }
-    if let Some(arr) = v.get("choices").and_then(|c| c.as_array()) {
-        if let Some(first) = arr.first() {
-            if let Some(s) = first
-                .get("message")
-                .and_then(|m| m.get("content"))
-                .and_then(|x| x.as_str())
-            {
-                return Some(s.to_string());
-            }
-        }
+    if let Some(arr) = v.get("choices").and_then(|c| c.as_array())
+        && let Some(first) = arr.first()
+        && let Some(s) = first
+            .get("message")
+            .and_then(|m| m.get("content"))
+            .and_then(|x| x.as_str())
+    {
+        return Some(s.to_string());
     }
     if let Some(s) = v
         .get("output")

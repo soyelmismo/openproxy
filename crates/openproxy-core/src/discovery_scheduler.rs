@@ -591,7 +591,7 @@ mod tests {
             // the test; `MockAdapter` is short-lived.
             let cfg = Box::new(ProviderAdapterConfig {
                 id: self.id.clone(),
-                base_url: format!("https://mock-{}", self.id).into(),
+                base_url: format!("https://mock-{}", self.id),
                 auth_type: AdapterAuthType::Bearer,
                 format: AdapterFormat::Openai,
                 extra_headers: Vec::new(),
@@ -658,7 +658,7 @@ mod tests {
             },
         )
         .expect("seed provider");
-        let acc = accounts::create(
+        accounts::create(
             &conn,
             &provider_id,
             Some("sk-test"),
@@ -667,8 +667,7 @@ mod tests {
             100,
             None,
         )
-        .expect("seed account");
-        acc
+        .expect("seed account")
     }
 
     /// Three fixed model ids the mock returns on every
@@ -1353,7 +1352,7 @@ mod tests {
             fn config(&self) -> &ProviderAdapterConfig {
                 let cfg = Box::new(ProviderAdapterConfig {
                     id: self.id.clone(),
-                    base_url: format!("https://mock-{}", self.id).into(),
+                    base_url: format!("https://mock-{}", self.id),
                     auth_type: AdapterAuthType::Bearer,
                     format: AdapterFormat::Openai,
                     extra_headers: Vec::new(),

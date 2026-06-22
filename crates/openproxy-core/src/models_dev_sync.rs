@@ -780,19 +780,25 @@ pub async fn start_sync_scheduler(
         }
 
         // Enrich models table.
-        match { let conn = db_pool.writer(); enrich_models_from_sync(&conn) } {
-            Ok(n) => tracing::info!("models.dev sync: enriched {} model rows", n),
-            Err(e) => tracing::warn!(error = %e, "models.dev sync enrich failed"),
+        {
+            let conn = db_pool.writer();
+            match enrich_models_from_sync(&conn) {
+                Ok(n) => tracing::info!("models.dev sync: enriched {} model rows", n),
+                Err(e) => tracing::warn!(error = %e, "models.dev sync enrich failed"),
+            }
         }
 
         // Auto-create combos.
-        match { let conn = db_pool.writer(); auto_create_combos(&conn) } {
-            Ok(n) => {
-                if n > 0 {
-                    tracing::info!("models.dev sync: created {} auto-combos", n);
+        {
+            let conn = db_pool.writer();
+            match auto_create_combos(&conn) {
+                Ok(n) => {
+                    if n > 0 {
+                        tracing::info!("models.dev sync: created {} auto-combos", n);
+                    }
                 }
+                Err(e) => tracing::warn!(error = %e, "models.dev sync auto-combo failed"),
             }
-            Err(e) => tracing::warn!(error = %e, "models.dev sync auto-combo failed"),
         }
 
         tracing::info!("models.dev sync: complete");

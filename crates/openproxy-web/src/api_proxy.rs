@@ -111,15 +111,15 @@ async fn http_handler(State(state): State<WebState>, req: Request) -> Response {
     }
     // Inject admin token if the client didn't send one. Required for
     // admin endpoints that require auth (e.g. /admin/recording).
-    if !headers.contains_key("authorization") {
-        if let Some(token) = &state.admin_token {
-            upstream_req = upstream_req.header("authorization", format!("Bearer {}", token));
-        }
+    if !headers.contains_key("authorization")
+        && let Some(token) = &state.admin_token
+    {
+        upstream_req = upstream_req.header("authorization", format!("Bearer {}", token));
     }
-    if !headers.contains_key("x-forwarded-host") {
-        if let Some(host) = headers.get("host").and_then(|h| h.to_str().ok()) {
-            upstream_req = upstream_req.header("x-forwarded-host", host);
-        }
+    if !headers.contains_key("x-forwarded-host")
+        && let Some(host) = headers.get("host").and_then(|h| h.to_str().ok())
+    {
+        upstream_req = upstream_req.header("x-forwarded-host", host);
     }
     if !headers.contains_key("x-forwarded-proto") {
         upstream_req = upstream_req.header("x-forwarded-proto", "http");
@@ -166,11 +166,11 @@ async fn handle_websocket_proxy(
 
     let client_to_upstream = async {
         while let Some(Ok(msg)) = client_ws_rx.next().await {
-            if let Some(t_msg) = to_tungstenite_msg(msg) {
-                if let Err(e) = upstream_ws_tx.send(t_msg).await {
-                    tracing::error!(error = %e, "error sending to upstream websocket");
-                    break;
-                }
+            if let Some(t_msg) = to_tungstenite_msg(msg)
+                && let Err(e) = upstream_ws_tx.send(t_msg).await
+            {
+                tracing::error!(error = %e, "error sending to upstream websocket");
+                break;
             }
         }
         let _ = upstream_ws_tx.close().await;
@@ -178,11 +178,11 @@ async fn handle_websocket_proxy(
 
     let upstream_to_client = async {
         while let Some(Ok(msg)) = upstream_ws_rx.next().await {
-            if let Some(a_msg) = to_axum_msg(msg) {
-                if let Err(e) = client_ws_tx.send(a_msg).await {
-                    tracing::error!(error = %e, "error sending to client websocket");
-                    break;
-                }
+            if let Some(a_msg) = to_axum_msg(msg)
+                && let Err(e) = client_ws_tx.send(a_msg).await
+            {
+                tracing::error!(error = %e, "error sending to client websocket");
+                break;
             }
         }
         let _ = client_ws_tx.close().await;

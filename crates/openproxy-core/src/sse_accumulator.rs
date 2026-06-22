@@ -109,61 +109,59 @@ pub fn normalize_nonstandard_reasoning_fields(payload: &str) -> Option<String> {
     // This is the slow path but only hits chunks that carry non-standard
     // reasoning — typically a small fraction of total streaming chunks.
     let mut v: serde_json::Value = serde_json::from_str(payload).ok()?;
-    if let Some(choices) = v.get_mut("choices").and_then(|c| c.as_array_mut()) {
-        if let Some(choice) = choices.first_mut() {
-            if let Some(delta) = choice.get_mut("delta") {
-                if let Some(obj) = delta.as_object_mut() {
-                    // Handle `reasoning` → `reasoning_content`.
-                    //
-                    // Priority: `reasoning` (string) wins over
-                    // `reasoning_details[]` when both are present,
-                    // because some providers (e.g. NVIDIA) send the
-                    // SAME text in both fields and merging them
-                    // would duplicate the content.
-                    let reasoning_was_present = if let Some(reasoning) = obj.remove("reasoning") {
-                        if let Some(text) = reasoning.as_str() {
-                            if !text.is_empty() && !obj.contains_key("reasoning_content") {
-                                obj.insert(
-                                    "reasoning_content".to_string(),
-                                    serde_json::Value::String(text.to_string()),
-                                );
-                            }
-                        }
-                        true
-                    } else {
-                        false
-                    };
+    if let Some(choices) = v.get_mut("choices").and_then(|c| c.as_array_mut())
+        && let Some(choice) = choices.first_mut()
+        && let Some(delta) = choice.get_mut("delta")
+        && let Some(obj) = delta.as_object_mut()
+    {
+        // Handle `reasoning` → `reasoning_content`.
+        //
+        // Priority: `reasoning` (string) wins over
+        // `reasoning_details[]` when both are present,
+        // because some providers (e.g. NVIDIA) send the
+        // SAME text in both fields and merging them
+        // would duplicate the content.
+        let reasoning_was_present = if let Some(reasoning) = obj.remove("reasoning") {
+            if let Some(text) = reasoning.as_str()
+                && !text.is_empty()
+                && !obj.contains_key("reasoning_content")
+            {
+                obj.insert(
+                    "reasoning_content".to_string(),
+                    serde_json::Value::String(text.to_string()),
+                );
+            }
+            true
+        } else {
+            false
+        };
 
-                    // Always strip `reasoning_details` (non-standard
-                    // array format). Only merge into `reasoning_content`
-                    // when `reasoning` was absent — when both fields
-                    // carry the same text, merging duplicates it.
-                    if let Some(details) = obj.remove("reasoning_details") {
-                        if !reasoning_was_present {
-                            if let Some(arr) = details.as_array() {
-                                let combined: String = arr
-                                    .iter()
-                                    .filter_map(|d| {
-                                        d.get("text")
-                                            .and_then(|t| t.as_str())
-                                    })
-                                    .collect();
-                                if !combined.is_empty() {
-                                    if let Some(existing) = obj.get_mut("reasoning_content") {
-                                        if let Some(s) = existing.as_str() {
-                                            let new = format!("{}{}", s, combined);
-                                            *existing = serde_json::Value::String(new);
-                                        }
-                                    } else {
-                                        obj.insert(
-                                            "reasoning_content".to_string(),
-                                            serde_json::Value::String(combined),
-                                        );
-                                    }
-                                }
-                            }
-                        }
-                    }
+        // Always strip `reasoning_details` (non-standard
+        // array format). Only merge into `reasoning_content`
+        // when `reasoning` was absent — when both fields
+        // carry the same text, merging duplicates it.
+        if let Some(details) = obj.remove("reasoning_details")
+            && !reasoning_was_present
+            && let Some(arr) = details.as_array()
+        {
+            let combined: String = arr
+                .iter()
+                .filter_map(|d| {
+                    d.get("text")
+                        .and_then(|t| t.as_str())
+                })
+                .collect();
+            if !combined.is_empty() {
+                if let Some(existing) = obj.get_mut("reasoning_content")
+                    && let Some(s) = existing.as_str()
+                {
+                    let new = format!("{}{}", s, combined);
+                    *existing = serde_json::Value::String(new);
+                } else {
+                    obj.insert(
+                        "reasoning_content".to_string(),
+                        serde_json::Value::String(combined),
+                    );
                 }
             }
         }

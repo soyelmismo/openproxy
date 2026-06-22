@@ -581,7 +581,7 @@ async fn e2e_discovery_and_delete_on_disappear() {
             0,
         )
         .expect("create_custom z");
-        assert_eq!(z_id.0 > 0, true, "custom row must have a positive id");
+        assert!(z_id.0 > 0, "custom row must have a positive id");
     }
 
     // Third refresh: catalog is still [a, b]. The custom row `z`

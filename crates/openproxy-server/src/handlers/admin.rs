@@ -1877,21 +1877,21 @@ async fn stream_usage_rows(
         // guard the error propagated via `?`, broke out of the
         // async block, sent an error envelope, closed the WS,
         // and triggered an immediate reconnect loop.
-        let rows = match (|| -> openproxy_core::Result<_> {
-            // Read-only SELECT — use the READER. The dashboard's WS
-            // reconnects would otherwise serialize every history
-            // fetch through the writer mutex.
+        // Read-only SELECT — use the READER. The dashboard's WS
+        // reconnects would otherwise serialize every history
+        // fetch through the writer mutex.
+        let rows = {
             let r = state.db_pool().reader();
-            usage::recent_desc(&r, 100)
-        })() {
-            Ok(r) => r,
-            Err(e) => {
-                tracing::error!(
-                    error = %e,
-                    "stream_usage_rows: initial history query failed, \
-                     sending empty history and continuing with live events"
-                );
-                Vec::new()
+            match usage::recent_desc(&r, 100) {
+                Ok(r) => r,
+                Err(e) => {
+                    tracing::error!(
+                        error = %e,
+                        "stream_usage_rows: initial history query failed, \
+                         sending empty history and continuing with live events"
+                    );
+                    Vec::new()
+                }
             }
         };
         send_ws_json(

@@ -1,9 +1,9 @@
-/// Compression pipeline: Lite + RTK modes.
-///
-/// # Modes
-/// - `Off`: No compression, zero overhead.
-/// - `Lite`: 5 deterministic text-normalization techniques, zero semantic change.
-/// - `Rtk`: Command-aware filtering for CLI tool output (git, test, build, etc.).
+//! Compression pipeline: Lite + RTK modes.
+//!
+//! # Modes
+//! - `Off`: No compression, zero overhead.
+//! - `Lite`: 5 deterministic text-normalization techniques, zero semantic change.
+//! - `Rtk`: Command-aware filtering for CLI tool output (git, test, build, etc.).
 
 pub mod lite;
 pub mod rtk;
@@ -14,19 +14,14 @@ use serde::{Deserialize, Serialize};
 use stats::CompressionStats;
 
 /// Modo de compresión.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum CompressionMode {
+    #[default]
     Off,
     Lite,
     Rtk,
     LiteRtk,
-}
-
-impl Default for CompressionMode {
-    fn default() -> Self {
-        Self::Off
-    }
 }
 
 /// Aplica compresión a los mensajes del request según el modo.

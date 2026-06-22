@@ -371,14 +371,12 @@ impl UpstreamClient {
             // specific value). For `UpstreamRequest::post_json` the
             // caller sets `Content-Type` but not `Content-Length`,
             // so we always add it. For `get` we skip it (no body).
-            if let Some(ref bytes) = body_bytes {
-                if !headers.contains_key(http::header::CONTENT_LENGTH) {
-                    if let Ok(v) =
-                        http::HeaderValue::from_str(&bytes.len().to_string())
-                    {
-                        headers.insert(http::header::CONTENT_LENGTH, v);
-                    }
-                }
+            if let Some(ref bytes) = body_bytes
+                && !headers.contains_key(http::header::CONTENT_LENGTH)
+                && let Ok(v) =
+                    http::HeaderValue::from_str(&bytes.len().to_string())
+            {
+                headers.insert(http::header::CONTENT_LENGTH, v);
             }
         }
         let request: Request<Full<Bytes>> =
