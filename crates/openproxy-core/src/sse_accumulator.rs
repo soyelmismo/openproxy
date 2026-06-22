@@ -235,6 +235,13 @@ pub struct ResponseAccumulator {
     /// True if `MAX_ACCUMULATED_BYTES` was reached and further content
     /// was dropped. Surfaces in the final JSON's `extra` map.
     truncated: bool,
+    /// True when the stream was interrupted (client disconnect, race
+    /// lost, sink error, etc.) before reaching `[DONE]`. Set by the
+    /// pipeline's failure helpers before calling `finish()` so the
+    /// persisted JSON carries a `"partial": true` marker in its
+    /// `extra` map. The dashboard reads this to show a "Partial
+    /// response — stream was interrupted" banner in the Response tab.
+    partial: bool,
 }
 
 impl ResponseAccumulator {
@@ -247,7 +254,26 @@ impl ResponseAccumulator {
             stop_reason: None,
             total_bytes: 0,
             truncated: false,
+            partial: false,
         }
+    }
+
+    /// Mark this accumulator as representing a partial (interrupted)
+    /// stream. The pipeline's streaming failure helpers call this
+    /// before `finish()` so the persisted JSON carries
+    /// `"partial": true` in its `extra` map. The dashboard reads
+    /// that marker to show a "Partial response — stream was
+    /// interrupted" banner in the Response tab, so the operator
+    /// knows the response didn't complete normally even though
+    /// there IS a response body to inspect.
+    pub fn mark_partial(&mut self) {
+        self.partial = true;
+    }
+
+    /// True if this accumulator represents a partial (interrupted)
+    /// stream. Equivalent to checking the `partial` field directly.
+    pub fn is_partial(&self) -> bool {
+        self.partial
     }
 
     /// Append an OpenAI-format raw payload string (e.g. the JSON inside
@@ -409,6 +435,14 @@ impl ResponseAccumulator {
         }
         if self.truncated {
             extra.insert("truncated".to_string(), Value::Bool(true));
+        }
+        if self.partial {
+            // Marker so the dashboard can show a "Partial response —
+            // stream was interrupted" banner. The pipeline sets this
+            // via `mark_partial()` on the failure paths (client
+            // disconnect, race lost, sink error, etc.) before
+            // calling `finish()`.
+            extra.insert("partial".to_string(), Value::Bool(true));
         }
 
         let mut choice = Map::new();

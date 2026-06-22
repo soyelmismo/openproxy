@@ -806,6 +806,30 @@ table.monthly-matrix {
   font-size: var(--fs-sm);
   font-style: italic;
 }
+.log-detail-partial-banner {
+  padding: var(--space-2) var(--space-3);
+  margin-bottom: var(--space-2);
+  border-left: var(--border-w-2) solid var(--color-warning, #f59e0b);
+  background: color-mix(in srgb, var(--color-warning, #f59e0b) 12%, var(--color-surface-2));
+  color: var(--color-text);
+  font-size: var(--fs-sm);
+  font-weight: 500;
+  border-radius: var(--radius-sm);
+}
+.log-detail-copy-bundle-btn {
+  padding: var(--space-1) var(--space-2);
+  font-size: var(--fs-xs);
+  background: var(--color-surface-2);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  color: var(--color-text-muted);
+  cursor: pointer;
+  transition: background 0.12s ease, color 0.12s ease;
+}
+.log-detail-copy-bundle-btn:hover {
+  background: var(--color-surface-3, var(--color-surface-2));
+  color: var(--color-text);
+}
 
 /* ============================================
    CHARTS — SVG chart components, KPI tiles,

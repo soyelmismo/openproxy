@@ -41,6 +41,13 @@ interface LogDetailLog {
   response_body_json?: unknown;
   error_message?: string | null;
   created_at?: string;
+  // RecentUsageRow fields accessed by buildDebugBundle but not
+  // listed above. Added here so the typechecker accepts the
+  // dot-notation access (the interface has no index signature,
+  // so missing fields are a compile error under `noPropertyAccessFromIndexSignature`).
+  trace_id?: string;
+  request_headers?: Record<string, string> | null;
+  response_headers?: Record<string, string> | null;
   // UsageDetailRow (detail endpoint) extras
   detail?: Record<string, unknown> | null;
   meta?: Record<string, unknown> | null;
@@ -425,7 +432,18 @@ function renderRawResponseBlock(response: unknown): string {
  *
  *  @param streamingHint - set to true when the request is streaming
  *        but the response body is null (e.g. interrupted mid-stream). */
-function renderResponseTab(response: unknown, streamingHint?: boolean, createdAt?: string): string {
+function renderResponseTab(
+  response: unknown,
+  streamingHint?: boolean,
+  createdAt?: string,
+  /** When true, the response was interrupted mid-stream — show a
+   *  "Partial response" banner so the operator knows the response
+   *  didn't complete normally even though there IS a body to
+   *  inspect. Passed from the caller which reads
+   *  `is_streaming && !stream_complete` (and the `partial` marker
+   *  inside the JSON, when present). */
+  isPartial?: boolean,
+): string {
   // Empty state.
   if (response == null) {
     let placeholder = streamingHint
@@ -448,6 +466,29 @@ function renderResponseTab(response: unknown, streamingHint?: boolean, createdAt
     </section>`;
   }
 
+  // Detect the `partial` marker inside the JSON itself (set by the
+  // backend's `ResponseAccumulator::mark_partial()`). This is the
+  // authoritative signal — even if the caller didn't pass
+  // `isPartial`, we can detect it from the response body.
+  let partialFromJson = false;
+  if (typeof response === "object" && response !== null && !Array.isArray(response)) {
+    const choices = (response as Record<string, unknown>)["choices"];
+    if (Array.isArray(choices) && choices.length > 0) {
+      const c0 = choices[0] as Record<string, unknown> | undefined;
+      if (c0 && typeof c0 === "object") {
+        const msg = (c0["message"] ?? c0["delta"]) as Record<string, unknown> | undefined;
+        if (msg && typeof msg === "object") {
+          const p: unknown = msg["partial"];
+          if (p === true) partialFromJson = true;
+        }
+      }
+    }
+  }
+  const showPartialBanner = isPartial === true || partialFromJson;
+  const partialBannerHtml = showPartialBanner
+    ? `<div class="log-detail-partial-banner">⚠ Partial response — stream was interrupted before completion. The content below is what was received up to the point of failure.</div>`
+    : "";
+
   // String: try to parse as JSON; on success, recurse with parsed
   // value; on failure, show the raw string in a collapsible.
   if (typeof response === "string") {
@@ -456,10 +497,11 @@ function renderResponseTab(response: unknown, streamingHint?: boolean, createdAt
     try { parsed = JSON.parse(response); parsedOk = true; }
     catch (_e: unknown) { parsedOk = false; }
     if (parsedOk && parsed != null && typeof parsed === "object") {
-      return renderResponseTab(parsed);
+      return renderResponseTab(parsed, streamingHint, createdAt, isPartial);
     }
     return `<section class="log-detail-section" data-log-tab="response">
       <h4>Response</h4>
+      ${partialBannerHtml}
       ${renderRawResponseBlock(response)}
     </section>`;
   }
@@ -494,6 +536,7 @@ function renderResponseTab(response: unknown, streamingHint?: boolean, createdAt
     blocks.push(renderRawResponseBlock(response));
     return `<section class="log-detail-section" data-log-tab="response">
       <h4>Response</h4>
+      ${partialBannerHtml}
       ${blocks.join("\n      ")}
     </section>`;
   }
@@ -586,6 +629,7 @@ function renderResponseTab(response: unknown, streamingHint?: boolean, createdAt
   blocks.push(renderRawResponseBlock(response));
   return `<section class="log-detail-section" data-log-tab="response">
     <h4>Response</h4>
+    ${partialBannerHtml}
     ${blocks.join("\n      ")}
   </section>`;
 }
@@ -837,6 +881,11 @@ export function renderLogDetailModal(log: LogDetailLog): string {
   const meta: Record<string, unknown> = (log.meta as Record<string, unknown>) || detail["meta"] as Record<string, unknown> || (log as unknown as Record<string, unknown>);
   const response: unknown = log.response ?? detail["response"] ?? log.response_body_json ?? null;
   const isStreaming: boolean = !!((log as Record<string, unknown>)["is_streaming"]);
+  // A streaming request that didn't complete is "partial" — the
+  // backend persisted whatever was accumulated up to the point of
+  // failure. Pass this to renderResponseTab so it shows a banner.
+  const streamComplete: boolean = !!((log as Record<string, unknown>)["stream_complete"]);
+  const isPartial: boolean = isStreaming && !streamComplete;
   // Read from the most specific to the least specific. `log.error_message`
   // comes from the recent-rows endpoint (RecentUsageRow.error_message
   // in usage.rs); `log.error_msg` / `log.error_msg_redacted` come from
@@ -885,6 +934,7 @@ export function renderLogDetailModal(log: LogDetailLog): string {
       <div class="modal">
         <div class="modal-header">
           <h2>Log #${escapeHtml(String(requestId))}</h2>
+          <button type="button" class="log-detail-copy-bundle-btn" data-action="copyDebugBundle" title="Copy a Markdown-formatted debug bundle with all request/response/error context — ready to paste into a bug report.">📋 Copy debug bundle</button>
           <button type="button" class="close-btn" data-action="closeLogDetailModal" aria-label="Close">&times;</button>
         </div>
         <div class="modal-body">
@@ -909,7 +959,7 @@ export function renderLogDetailModal(log: LogDetailLog): string {
           </div>
           <div class="log-detail-content" id="log-detail-content">
             ${renderRequestTab(requestBody, createdAt)}
-            ${renderResponseTab(response, isStreaming, createdAt)}
+            ${renderResponseTab(response, isStreaming, createdAt, isPartial)}
             ${errors != null
               ? jsonSection("Errors", errors, "errors")
               : `<section class="log-detail-section" data-log-tab="errors">
@@ -1076,4 +1126,175 @@ export function hasCompleteLogDetail(row: LogDetailLog | null | undefined): bool
   if (detail && (detail["response"] != null || detail["request_body_json"] != null
         || (Array.isArray(detail["requests"]) && (detail["requests"] as unknown[]).length > 0))) return true;
   return false;
+}
+
+/** Build a Markdown-formatted "debug bundle" string for `log`,
+ *  containing every field an operator would need to file a bug
+ *  report: request_id, trace_id, timestamps, status, provider,
+ *  model, latency, cost, error message, request body, response
+ *  body (including partial responses), request headers, response
+ *  headers, and the full raw row.
+ *
+ *  The bundle is a single string with fenced ```json blocks so it
+ *  pastes cleanly into GitHub issues, Slack, or any other
+ *  Markdown-aware surface. Sensitive headers (Authorization,
+ *  x-api-key, etc.) are already redacted by the backend before
+ *  the row reaches the dashboard — we don't re-redact here, but
+ *  we DO truncate very large bodies (>10 KB) to keep the bundle
+ *  copy-pasteable. */
+export function buildDebugBundle(log: LogDetailLog): string {
+  const lines: string[] = [];
+  const detail: Record<string, unknown> = (log.detail as Record<string, unknown>) || {};
+
+  // Summary header.
+  lines.push("# OpenProxy Debug Bundle");
+  lines.push("");
+  lines.push(`Generated: ${new Date().toISOString()}`);
+  lines.push("");
+
+  // Identity fields.
+  lines.push("## Identity");
+  lines.push("");
+  lines.push(`- **Request ID:** ${String(log.request_id ?? "—")}`);
+  lines.push(`- **Trace ID:** ${String(log.trace_id ?? "—")}`);
+  lines.push(`- **Usage ID:** ${String(log.id ?? "—")}`);
+  lines.push(`- **Created:** ${String(log.created_at ?? "—")}`);
+  lines.push("");
+
+  // Request metadata.
+  lines.push("## Request Metadata");
+  lines.push("");
+  lines.push(`- **Provider:** ${String(log.provider_id ?? "—")}`);
+  lines.push(`- **Model:** ${String(log.upstream_model_id ?? "—")}`);
+  lines.push(`- **Status:** ${String(log.status_code ?? "—")}`);
+  lines.push(`- **Streaming:** ${String(log.is_streaming ?? false)}`);
+  lines.push(`- **Stream complete:** ${String(log.stream_complete ?? false)}`);
+  lines.push(`- **Total ms:** ${String(log.total_ms ?? "—")}`);
+  lines.push(`- **Cost USD:** ${String(log.cost_usd ?? "—")}`);
+  lines.push(`- **Prompt tokens:** ${String(log.prompt_tokens ?? "—")}`);
+  lines.push(`- **Completion tokens:** ${String(log.completion_tokens ?? "—")}`);
+  lines.push(`- **API key ID:** ${String(log.api_key_id ?? "—")}`);
+  lines.push(`- **Race lost:** ${String(log.race_lost ?? false)}`);
+  if (log.compression_savings_pct != null) {
+    lines.push(`- **Compression savings:** ${log.compression_savings_pct}%`);
+  }
+  if (log.compression_techniques) {
+    lines.push(`- **Compression techniques:** ${log.compression_techniques}`);
+  }
+  lines.push("");
+
+  // Error.
+  const errorMsg: string | null =
+    (typeof log.error_message === "string" && log.error_message.length > 0) ? log.error_message :
+    (typeof log.error_msg === "string" && log.error_msg.length > 0) ? log.error_msg :
+    (typeof log.error_msg_redacted === "string" && log.error_msg_redacted.length > 0) ? log.error_msg_redacted :
+    null;
+  if (errorMsg) {
+    lines.push("## Error");
+    lines.push("");
+    lines.push("```");
+    lines.push(errorMsg);
+    lines.push("```");
+    lines.push("");
+  }
+
+  // Request body.
+  const requestBody: unknown = log.request_body_json ?? detail["request_body_json"];
+  if (requestBody != null) {
+    lines.push("## Request Body");
+    lines.push("");
+    lines.push("```json");
+    lines.push(truncateForBundle(typeof requestBody === "string" ? requestBody : JSON.stringify(requestBody, null, 2)));
+    lines.push("```");
+    lines.push("");
+  }
+
+  // Response body (may be partial — the backend marks it).
+  const responseBody: unknown = log.response_body_json ?? detail["response"] ?? log.response;
+  if (responseBody != null) {
+    const isPartial = !!(log.is_streaming && !log.stream_complete);
+    lines.push(isPartial ? "## Response Body (PARTIAL — stream was interrupted)" : "## Response Body");
+    lines.push("");
+    lines.push("```json");
+    lines.push(truncateForBundle(typeof responseBody === "string" ? responseBody : JSON.stringify(responseBody, null, 2)));
+    lines.push("```");
+    lines.push("");
+  }
+
+  // Request headers (already redacted by the backend).
+  const requestHeaders: unknown = log.request_headers ?? detail["request_headers"];
+  if (requestHeaders != null) {
+    lines.push("## Request Headers (redacted)");
+    lines.push("");
+    lines.push("```json");
+    lines.push(truncateForBundle(typeof requestHeaders === "string" ? requestHeaders : JSON.stringify(requestHeaders, null, 2)));
+    lines.push("```");
+    lines.push("");
+  }
+
+  // Response headers.
+  const responseHeaders: unknown = log.response_headers ?? detail["response_headers"];
+  if (responseHeaders != null) {
+    lines.push("## Response Headers");
+    lines.push("");
+    lines.push("```json");
+    lines.push(truncateForBundle(typeof responseHeaders === "string" ? responseHeaders : JSON.stringify(responseHeaders, null, 2)));
+    lines.push("```");
+    lines.push("");
+  }
+
+  // Raw log row (everything we have).
+  lines.push("## Raw Log Row");
+  lines.push("");
+  lines.push("```json");
+  lines.push(truncateForBundle(JSON.stringify(log, null, 2)));
+  lines.push("```");
+  lines.push("");
+
+  return lines.join("\n");
+}
+
+/** Truncate a string to ~10 KB for the debug bundle. Larger bodies
+ *  make the bundle uncopy-pasteable. The truncation marker makes it
+ *  obvious that data was cut. */
+function truncateForBundle(s: string): string {
+  const MAX = 10 * 1024;
+  if (s.length <= MAX) return s;
+  return s.slice(0, MAX) + `\n\n… [truncated, ${s.length - MAX} more bytes omitted]`;
+}
+
+/** Handler for the "Copy debug bundle" button. Reads the currently-
+ *  selected log row from `state.logs.selectedRow`, builds the
+ *  bundle, and writes it to the clipboard. Shows a toast for
+ *  success / failure. */
+export async function copyDebugBundle(): Promise<void> {
+  const row = state.logs.selectedRow as unknown as LogDetailLog | null;
+  if (!row) {
+    showToastSafe("No log row selected.");
+    return;
+  }
+  try {
+    const bundle: string = buildDebugBundle(row);
+    await navigator.clipboard.writeText(bundle);
+    showToastSafe("Debug bundle copied to clipboard.");
+  } catch (err) {
+    showToastSafe(`Failed to copy: ${String(err)}`);
+  }
+}
+
+/** Lightweight toast that doesn't depend on the full toast module
+ *  being wired up — useful for the copy-debug-bundle action which
+ *  can fire from anywhere. Falls back to console.log if the toast
+ *  container doesn't exist. */
+function showToastSafe(message: string): void {
+  const container: HTMLElement | null = document.getElementById("toast-container");
+  if (!container) {
+    console.log("[openproxy]", message);
+    return;
+  }
+  const toast: HTMLDivElement = document.createElement("div");
+  toast.className = "toast toast-info";
+  toast.textContent = message;
+  container.appendChild(toast);
+  setTimeout(() => { toast.remove(); }, 3000);
 }
