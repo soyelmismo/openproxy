@@ -52,10 +52,14 @@ const THINK_CLOSE_TAGS: &[&str] = &["</think>", "</thinking>", "</reasoning>", "
 /// For each choice's assistant message:
 /// 1. If `content` is a string, extract `<think>` blocks from it.
 /// 2. If think blocks are found, set `content` to the cleaned text
-///    and set `reasoning_content` in the message's `extra` map.
-/// 3. If `reasoning_content` already exists (the provider sent it
-///    natively), the extracted think text is **prepended** to the
-///    existing value — we don't overwrite native reasoning.
+///    (without the `<think>` tags).
+/// 3. If `reasoning_content` does NOT already exist (the upstream did
+///    not send it natively), set `reasoning_content` to the extracted
+///    think text. If `reasoning_content` already exists, the upstream
+///    is already providing reasoning natively — we DON'T merge in the
+///    extracted text (it would be a duplicate of what the upstream
+///    sent, since some providers emit the same reasoning in BOTH a
+///    `reasoning_content` field AND `<think>` tags inside `content`).
 pub fn extract_think_from_response(
     mut resp: crate::translation::OpenAIResponse,
 ) -> crate::translation::OpenAIResponse {
@@ -68,27 +72,42 @@ pub fn extract_think_from_response(
             _ => continue,
         };
         let extracted = extract_think_from_content(&content_str);
-        if !extracted.has_reasoning() {
+        // Capture booleans before any partial moves out of `extracted`.
+        let has_reasoning = extracted.has_reasoning();
+        // Nothing to do if there were no `<think>` tags AND content is
+        // unchanged. (extract_think_from_content always returns the
+        // content with orphaned close tags stripped, so we need to
+        // check both conditions.)
+        let content_changed = extracted.content != content_str;
+        if !has_reasoning && !content_changed {
             continue;
         }
-        // Set cleaned content.
-        choice.message.content = Some(serde_json::Value::String(extracted.content));
-        // Set or merge reasoning_content in the extra map.
-        let existing_rc = choice
-            .message
-            .extra
-            .get("reasoning_content")
-            .and_then(|v| v.as_str())
-            .unwrap_or("");
-        let merged = if existing_rc.is_empty() {
-            extracted.reasoning
-        } else {
-            format!("{}\n{}", extracted.reasoning, existing_rc)
-        };
-        choice.message.extra.insert(
-            "reasoning_content".to_string(),
-            serde_json::Value::String(merged),
-        );
+        // Set cleaned content (stripped of `<think>` tags).
+        if content_changed {
+            choice.message.content = Some(serde_json::Value::String(extracted.content));
+        }
+        // Only set reasoning_content if the upstream didn't already
+        // provide it natively. If we merged in the extracted text when
+        // reasoning_content already existed, providers that emit the
+        // same reasoning in BOTH places (e.g. MiniMax-M3 via tokenrouter)
+        // would surface the reasoning twice to the client.
+        if has_reasoning {
+            let existing_rc = choice
+                .message
+                .extra
+                .get("reasoning_content")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            if existing_rc.is_empty() {
+                choice.message.extra.insert(
+                    "reasoning_content".to_string(),
+                    serde_json::Value::String(extracted.reasoning),
+                );
+            }
+            // else: upstream already provided reasoning_content — leave
+            // it as-is. The `<think>` tags were stripped from content
+            // (above), so there's no duplication.
+        }
     }
     resp
 }
@@ -656,5 +675,96 @@ mod tests {
         let (c, r) = ext.flush();
         assert_eq!(c, "<thi");
         assert_eq!(r, "");
+    }
+
+    // -----------------------------------------------------------------
+    // Regression: non-streaming response with BOTH `reasoning_content`
+    // (sent natively by the upstream) AND `<think>` tags inside
+    // `content` (also sent by the upstream, duplicating the same text).
+    // The proxy must strip `<think>` from content (so the visible
+    // response is clean) but MUST NOT merge the extracted text into
+    // `reasoning_content` (it's already there natively; merging would
+    // duplicate it). This is the MiniMax-M3-via-tokenrouter bug.
+    // -----------------------------------------------------------------
+    #[test]
+    fn non_streaming_no_duplicate_when_native_reasoning_present() {
+        use crate::translation::{OpenAIChoice, OpenAIMessage, OpenAIResponse};
+        let mut resp = OpenAIResponse {
+            id: "test".to_string(),
+            object: "chat.completion".to_string(),
+            created: 0,
+            model: "MiniMax-M3".to_string(),
+            choices: vec![OpenAIChoice {
+                index: 0,
+                message: OpenAIMessage {
+                    role: "assistant".to_string(),
+                    content: Some(serde_json::Value::String(
+                        "<think>Let me think about this.</think>The answer is 42.".to_string(),
+                    )),
+                    name: None,
+                    tool_call_id: None,
+                    tool_calls: None,
+                    extra: {
+                        let mut m = serde_json::Map::new();
+                        m.insert(
+                            "reasoning_content".to_string(),
+                            serde_json::Value::String("Let me think about this.".to_string()),
+                        );
+                        m
+                    },
+                },
+                finish_reason: Some("stop".to_string()),
+            }],
+            usage: None,
+        };
+        resp = extract_think_from_response(resp);
+        // Content should be cleaned (no <think> tags).
+        let content = resp.choices[0].message.content.as_ref()
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        assert_eq!(content, "The answer is 42.");
+        // reasoning_content should NOT be duplicated — the upstream's
+        // native value should be preserved as-is.
+        let rc = resp.choices[0].message.extra
+            .get("reasoning_content")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        assert_eq!(
+            rc, "Let me think about this.",
+            "reasoning_content must not be duplicated when the upstream sent it natively; got: {:?}",
+            rc
+        );
+    }
+
+    // -----------------------------------------------------------------
+    // Same scenario but streaming. Three chunks模拟 MiniMax-M3's
+    // behavior: each chunk carries BOTH `delta.reasoning` AND
+    // `delta.content` with the same text wrapped in `<think>` (opening
+    // on chunk 1, body on chunk 2, closing + answer on chunk 3).
+    // After normalization + think extraction, the client should see
+    // each chunk's content emptied (no `<think>` leakage) and the
+    // upstream's `reasoning_content` preserved (no duplication).
+    // -----------------------------------------------------------------
+    #[test]
+    fn streaming_no_duplicate_when_native_reasoning_present() {
+        // This test is at the pipeline level (apply_reasoning_normalizations),
+        // but we verify the underlying ThinkStreamExtractor behaves
+        // correctly: when content has `<think>` tags, it strips them
+        // and returns the extracted text. The pipeline-level dedup
+        // (don't add extracted text to reasoning_content when it
+        // already exists) is tested via the pipeline tests.
+        let mut ext = ThinkStreamExtractor::new();
+        // Chunk 1: opening <think> + first part of reasoning.
+        let (c1, r1) = ext.process("<think>\nLet me think");
+        assert_eq!(c1, "");
+        assert_eq!(r1, "\nLet me think");
+        // Chunk 2: more reasoning (still inside <think>).
+        let (c2, r2) = ext.process(" about this.");
+        assert_eq!(c2, "");
+        assert_eq!(r2, " about this.");
+        // Chunk 3: close </think> + answer.
+        let (c3, r3) = ext.process("</think>The answer is 42.");
+        assert_eq!(c3, "The answer is 42.");
+        assert_eq!(r3, "");
     }
 }

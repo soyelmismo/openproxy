@@ -78,14 +78,33 @@ fn sse_payload_needs_parse(payload: &str) -> bool {
 
     // Single pass looking for " (quote) as a fast anchor, then
     // checking the following bytes for our target patterns.
-    // Pattern lengths: "usage = 6 bytes, "finish_reason = 14 bytes.
+    // Pattern lengths: "usage":{ = 9 bytes, "finish_reason = 14 bytes.
     let mut i = 0;
     while i < bytes.len() {
         if bytes[i] == b'"' {
-            // Check for "usage (6 bytes)
+            // Check for "usage":{ (9 bytes) — this is the NON-NULL form.
+            //
+            // Many providers (MiniMax, OpenRouter passthroughs, etc.)
+            // include `"usage":null` on EVERY streaming chunk. The
+            // previous check matched just `"usage` (6 bytes) and so
+            // routed every one of those chunks through the slow path,
+            // which (a) wasted CPU on a full serde deserialize for
+            // chunks that carry no metadata, and (b) more importantly
+            // skipped the fast-path's normalize_nonstandard_reasoning_fields
+            // + think_extractor pass — leaking `<think>` tags in content
+            // and duplicate `reasoning` fields to the client. Checking
+            // for the opening brace of a usage OBJECT means we only
+            // route to the slow path when there are real usage numbers
+            // to extract (typically only the final chunk of a stream).
+            //
+            // We don't bother tolerating whitespace between `:` and `{`
+            // because serde_json (the only producer we forward to
+            // clients) serializes without a space, and upstream
+            // providers that emit `"usage": null` consistently use
+            // the same compact shape for `"usage": {...}`.
             if !has_usage
-                && i + 6 <= bytes.len()
-                && &bytes[i..i+6] == b"\"usage"
+                && i + 9 <= bytes.len()
+                && &bytes[i..i+9] == b"\"usage\":{"
             {
                 has_usage = true;
             }
@@ -117,6 +136,110 @@ fn sse_payload_needs_parse(payload: &str) -> bool {
     }
 
     has_usage || (has_finish_reason && !has_finish_reason_null)
+}
+
+/// Apply reasoning normalizations to a single OpenAI-format streaming
+/// chunk payload. This is the canonical transformation run on EVERY
+/// chunk that goes through the OpenAI fast AND slow paths, so both
+/// paths produce identical client-facing output.
+///
+/// Two transformations are applied, in order:
+///
+/// 1. **Normalize non-standard reasoning fields** via
+///    [`sse_accumulator::normalize_nonstandard_reasoning_fields`]:
+///    renames upstream `delta.reasoning` → `delta.reasoning_content`
+///    and flattens `delta.reasoning_details[]` into `reasoning_content`.
+///    Returns `None` when the payload is already clean.
+///
+/// 2. **Extract `<think>…</think>` blocks** from `delta.content` via
+///    the stateful [`ThinkStreamExtractor`]. Extracted text would
+///    normally be appended to `delta.reasoning_content`; the cleaned
+///    text (without `<think>` tags) replaces `delta.content`.
+///
+/// # Anti-duplication
+///
+/// Some providers (e.g. MiniMax-M3 via tokenrouter) emit the **same**
+/// reasoning text in TWO places: as a `delta.reasoning` field AND
+/// wrapped in `<think>…</think>` inside `delta.content`. Without
+/// special handling, the extractor would strip the `<think>` tags
+/// from content (good) but ALSO add the extracted text to
+/// `reasoning_content` (bad — it's already there from step 1's
+/// normalization of `reasoning`), and the client would display the
+/// reasoning twice.
+///
+/// To prevent this, when `reasoning_content` is already present in
+/// the (post-normalization) payload, we still strip `<think>` tags
+/// from content (so the visible response is clean), but we do NOT
+/// merge the extracted text into `reasoning_content`.
+///
+/// # Return
+///
+/// - `Some(new_payload)` when either transformation modified the payload.
+/// - `None` when the payload is unchanged (caller should forward the
+///   original).
+fn apply_reasoning_normalizations(
+    payload: &str,
+    think_extractor: &mut crate::think_extractor::ThinkStreamExtractor,
+) -> Option<String> {
+    // Step 1: normalize non-standard reasoning fields.
+    let normalized = crate::sse_accumulator::normalize_nonstandard_reasoning_fields(payload);
+    let p: &str = normalized.as_deref().unwrap_or(payload);
+
+    // Step 2: think extraction on content.
+    // Fast check: only process if there's a "content" field. Most
+    // chunks (role-only, tool_calls-only, finish, etc.) don't carry
+    // one, so we skip the JSON parse entirely.
+    if !p.contains("\"content\"") {
+        // Only normalization happened (or nothing). Return whatever
+        // normalize produced.
+        return normalized;
+    }
+
+    let mut v: serde_json::Value = serde_json::from_str(p).ok()?;
+    let choices = v.get_mut("choices").and_then(|c| c.as_array_mut())?;
+    let choice = choices.first_mut()?;
+    let delta = choice.get_mut("delta")?;
+    let obj = delta.as_object_mut()?;
+
+    let content = match obj.get("content").and_then(|c| c.as_str()) {
+        Some(s) => s.to_string(),
+        None => return normalized,
+    };
+
+    let (clean_content, extracted_reasoning) = think_extractor.process(&content);
+    let content_changed = clean_content != content;
+    let has_extracted_reasoning = !extracted_reasoning.is_empty();
+
+    // Check if the upstream already provides reasoning_content natively
+    // (either directly, or via normalize converting `reasoning` →
+    // `reasoning_content`). If so, we'll strip <think> tags from content
+    // but NOT add the extracted text to reasoning_content (would be a
+    // duplicate of what the upstream already sent).
+    let has_native_reasoning = obj.contains_key("reasoning_content");
+
+    if content_changed {
+        obj.insert("content".to_string(), serde_json::Value::String(clean_content));
+    }
+
+    if has_extracted_reasoning && !has_native_reasoning {
+        // No native reasoning_content — add the extracted text.
+        // (has_native_reasoning is false, so there's no existing
+        // reasoning_content to merge with — we're inserting fresh.)
+        obj.insert(
+            "reasoning_content".to_string(),
+            serde_json::Value::String(extracted_reasoning),
+        );
+    }
+
+    if !content_changed && (!has_extracted_reasoning || has_native_reasoning) {
+        // No content change, and either no extracted reasoning or we
+        // skipped adding it. Return whatever normalize produced.
+        return normalized;
+    }
+
+    // Re-serialize the modified payload. Fall back to `normalized` if
+    // serialization fails (shouldn't happen for valid JSON).
+    serde_json::to_string(&v).ok().or(normalized)
 }
 
 // ---------------------------------------------------------------------
@@ -3498,11 +3621,31 @@ impl Pipeline {
                                 if chunk.stop_reason.is_some() && stop_reason.is_none() {
                                     stop_reason = chunk.stop_reason.take();
                                 }
+                                // Apply reasoning normalizations on the
+                                // slow path too (normalize `reasoning` →
+                                // `reasoning_content`, strip `<think>` tags
+                                // from content). Previously this only ran
+                                // on the fast path, so chunks that carried
+                                // real `usage` (the final chunk of a stream)
+                                // or non-null `finish_reason` leaked raw
+                                // `<think>` tags in content AND the upstream's
+                                // non-standard `reasoning` field — clients
+                                // that parse `reasoning_content` would then
+                                // see the reasoning twice (once in the
+                                // reasoning panel via the `reasoning` field,
+                                // once in the visible response via the
+                                // `<think>` tags).
+                                let effective_payload = apply_reasoning_normalizations(
+                                    json_payload,
+                                    &mut think_extractor,
+                                );
+                                let payload_str = effective_payload.as_deref().unwrap_or(json_payload);
                                 // G1 fix: feed the accumulator so the
                                 // persisted `response_body_json` carries
                                 // the full assistant message. Slow path:
                                 // we have a parsed chunk in hand, so push
-                                // the per-chunk metadata + raw payload.
+                                // the per-chunk metadata + (normalized)
+                                // payload.
                                 if let Some(a) = acc.as_mut() {
                                     if let Some(u) = &usage {
                                         a.set_usage(u.clone());
@@ -3510,12 +3653,34 @@ impl Pipeline {
                                     if let Some(sr) = &stop_reason {
                                         a.set_stop_reason(sr.clone());
                                     }
-                                    a.append_openai_raw(json_payload);
-                                    if let Some(dr) = chunk.delta_reasoning.take()
-                                        && !dr.is_empty()
+                                    a.append_openai_raw(payload_str);
+                                    // Extract reasoning_content from the
+                                    // (possibly normalized) payload and
+                                    // feed it to the accumulator. We do
+                                    // this instead of using
+                                    // `chunk.delta_reasoning` because:
+                                    //   - `chunk.delta_reasoning` only
+                                    //     catches `reasoning_content`
+                                    //     from the raw upstream payload,
+                                    //     missing upstream `reasoning`
+                                    //     (which we just normalized) and
+                                    //     `<think>` tags (which we just
+                                    //     extracted to reasoning_content).
+                                    //   - `payload_str` is the source of
+                                    //     truth after normalization.
+                                    if payload_str.contains("\"reasoning_content\"")
+                                        && let Some(rc) = crate::sse_accumulator::extract_reasoning_content(payload_str)
+                                        && !rc.is_empty()
                                     {
-                                        a.append_reasoning(&dr);
+                                        a.append_reasoning(rc);
                                     }
+                                    // Drop `chunk.delta_reasoning` — we
+                                    // extracted reasoning from the
+                                    // normalized payload above. Using
+                                    // both would double-count when the
+                                    // upstream sent `reasoning_content`
+                                    // natively.
+                                    let _ = chunk.delta_reasoning.take();
                                     for tc in chunk.delta_tool_calls.drain(..) {
                                         let name = tc.get("function")
                                             .and_then(|f| f.get("name"))
@@ -3535,7 +3700,12 @@ impl Pipeline {
                                         }
                                     }
                                 }
-                                let sse_bytes = chunk.into_sse_bytes();
+                                // Build the SSE frame from the
+                                // (possibly normalized) payload rather
+                                // than `chunk.into_sse_bytes()` (which
+                                // forwards the raw upstream payload
+                                // verbatim, skipping normalization).
+                                let sse_bytes = crate::sse::build_sse_frame(payload_str);
                                 // Race cancellation guard: if another
                                 // target won the race, discard this
                                 // chunk to prevent interleaving.
@@ -3560,22 +3730,31 @@ impl Pipeline {
                         }
                     } else {
                         // G1 fix: feed the accumulator on the fast path too.
-                        // Normalize non-standard reasoning fields so clients
-                        // (OpenCode, continue.dev, etc.) receive the standard
-                        // `reasoning_content` format instead of the provider's
-                        // ad-hoc `reasoning` / `reasoning_details`.
+                        //
+                        // Apply the canonical reasoning-normalization
+                        // pipeline (normalize `reasoning` →
+                        // `reasoning_content`, strip `<think>` tags from
+                        // content) via the shared `apply_reasoning_normalizations`
+                        // helper. Both fast and slow paths now produce
+                        // identical client-facing output, and the
+                        // anti-duplication logic ensures that upstreams
+                        // which send reasoning in BOTH a `reasoning`
+                        // field AND `<think>` tags in content (e.g.
+                        // MiniMax-M3 via tokenrouter) don't surface the
+                        // reasoning twice to the client.
                         //
                         // PERF (chunk-forwarding CPU reduction):
-                        // When `normalize_nonstandard_reasoning_fields`
-                        // returns `None` (the common case — most upstreams
-                        // send clean `reasoning_content` or no reasoning at
-                        // all), we can reuse the original `line_bytes`
-                        // BytesMut — which already contains `data: <payload>`
+                        // When `apply_reasoning_normalizations` returns
+                        // `None` (the common case — most upstreams send
+                        // clean `reasoning_content` or no reasoning at
+                        // all, AND no `<think>` tags in content), we can
+                        // reuse the original `line_bytes` BytesMut —
+                        // which already contains `data: <payload>`
                         // (without the trailing `\n` because `split_to(pos)`
-                        // excludes the `\n` and `advance(1)` skips it) — by
-                        // appending just `\n\n` in-place for the SSE
-                        // terminator and freezing. This eliminates, per chunk
-                        // on the common fast path:
+                        // excludes the `\n` and `advance(1)` skips it) —
+                        // by appending just `\n\n` in-place for the SSE
+                        // terminator and freezing. This eliminates, per
+                        // chunk on the common fast path:
                         //   - one heap allocation (`BytesMut::with_capacity`)
                         //   - one full-payload memcpy
                         //     (`extend_from_slice(payload.as_bytes())`)
@@ -3587,21 +3766,35 @@ impl Pipeline {
                         // up to 16 KiB above. Even on the rare case where it
                         // does realloc, the cost is amortized across the
                         // buffer's lifetime, not per chunk.
-                        let normalized = crate::sse_accumulator::normalize_nonstandard_reasoning_fields(json_payload);
+                        let effective_payload = apply_reasoning_normalizations(
+                            json_payload,
+                            &mut think_extractor,
+                        );
 
                         // Accumulator work — scoped so the borrows on
                         // `line_bytes` (via `line` -> `json_payload`) are
                         // released before we move `line_bytes` for the
                         // in-place reframe below. NLL releases the borrow at
                         // the end of this block.
+                        //
+                        // IMPORTANT: feed the accumulator from
+                        // `effective_payload` (the post-normalization
+                        // payload), NOT from `json_payload` (the raw
+                        // upstream payload). Previously this block fed
+                        // `normalized` (which only applied the
+                        // `reasoning` → `reasoning_content` rename) and
+                        // then computed `effective_payload` (which also
+                        // applied `<think>` extraction) but only used
+                        // `effective_payload` for the outgoing SSE frame
+                        // — so the persisted `response_body_json` had
+                        // raw `<think>` tags in `content` while the
+                        // client saw the cleaned version. Using
+                        // `effective_payload` for both paths makes the
+                        // persisted body match the client-visible body.
                         {
-                            let payload = normalized.as_deref().unwrap_or(json_payload);
+                            let payload = effective_payload.as_deref().unwrap_or(json_payload);
                             if let Some(a) = acc.as_mut() {
                                 a.append_openai_raw(payload);
-                                // Also capture reasoning_content on the fast
-                                // path (the slow path above does this via
-                                // `parse_openai_sse_line` + `a.append_reasoning`).
-                                //
                                 // PERF (single-scan guard): gate the
                                 // `extract_reasoning_content` call (which does
                                 // a full `memchr::memmem::find` scan for
@@ -3621,76 +3814,12 @@ impl Pipeline {
                             }
                         }
 
-                        // Think-tag extraction for streaming: if the
-                        // content delta contains `<think>` tags, extract
-                        // them into reasoning_content. The ThinkStreamExtractor
-                        // handles tags that span multiple chunks.
-                        let effective_payload = {
-                            let p = normalized.as_deref().unwrap_or(json_payload);
-                            // Fast check: only process if there's a
-                            // "content" field (most chunks do).
-                            if p.contains("\"content\"") {
-                                // Parse, extract, modify.
-                                if let Ok(mut v) = serde_json::from_str::<serde_json::Value>(p) {
-                                    if let Some(choices) = v.get_mut("choices").and_then(|c| c.as_array_mut())
-                                        && let Some(choice) = choices.first_mut()
-                                        && let Some(delta) = choice.get_mut("delta")
-                                        && let Some(obj) = delta.as_object_mut()
-                                    {
-                                        if let Some(content) = obj.get("content").and_then(|c| c.as_str()).map(|s| s.to_string()) {
-                                            let (clean_content, reasoning) = think_extractor.process(&content);
-                                            let content_changed = clean_content != content;
-                                            let reasoning_changed = !reasoning.is_empty();
-                                            // Update content with cleaned version.
-                                            if content_changed {
-                                                obj.insert("content".to_string(), serde_json::Value::String(clean_content));
-                                            }
-                                            // If reasoning was extracted, add it to reasoning_content.
-                                            if reasoning_changed {
-                                                let existing = obj.get("reasoning_content").and_then(|r| r.as_str()).unwrap_or("").to_string();
-                                                let merged = if existing.is_empty() {
-                                                    reasoning
-                                                } else {
-                                                    format!("{}{}", existing, reasoning)
-                                                };
-                                                obj.insert("reasoning_content".to_string(), serde_json::Value::String(merged));
-                                            }
-                                            // Re-serialize if we made changes.
-                                            if content_changed || reasoning_changed {
-                                                if let Ok(new_json) = serde_json::to_string(&v) {
-                                                    Some(new_json)
-                                                } else {
-                                                    None
-                                                }
-                                            } else {
-                                                None
-                                            }
-                                        } else {
-                                            None
-                                        }
-                                    } else {
-                                        None
-                                    }
-                                } else {
-                                    None
-                                }
-                            } else {
-                                None
-                            }
-                        };
-
                         // Build the SSE frame.
                         let sse_bytes = if let Some(modified) = effective_payload {
-                            // Think extraction modified the payload.
+                            // Normalization or think extraction modified
+                            // the payload. Build a fresh frame with the
+                            // modified JSON.
                             crate::sse::build_sse_frame(&modified)
-                        } else if let Some(norm) = normalized {
-                            // Slow path: normalized payload differs from the
-                            // original upstream line. Build a fresh frame with
-                            // the normalized JSON. Only hits chunks that
-                            // carry non-standard reasoning fields
-                            // (`reasoning` / `reasoning_details`) — a small
-                            // fraction of total chunks.
-                            crate::sse::build_sse_frame(&norm)
                         } else {
                             // Fast path: forward the original `data: <payload>`
                             // line directly. `line_bytes` is the BytesMut
