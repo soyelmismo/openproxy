@@ -4498,7 +4498,105 @@ pub async fn oauth_callback(
 }
 
 // =====================================================================
-// Tests for the runtime-config endpoints
+// Debug logs — in-memory ring buffer of recent `tracing` events.
+// =====================================================================
+
+/// Query parameters for `GET /admin/debug/logs`.
+#[derive(Debug, Default, Deserialize)]
+pub struct DebugLogsQuery {
+    /// If set, only return entries with `seq > since`. Used by the
+    /// dashboard's polling loop to fetch only new entries.
+    pub since: Option<u64>,
+    /// Optional filter by `request_id`. When set, only entries whose
+    /// `request_id` field matches are returned.
+    pub request_id: Option<String>,
+    /// Optional filter by `trace_id`. When set, only entries whose
+    /// `trace_id` field matches are returned.
+    pub trace_id: Option<String>,
+    /// Optional filter by level (case-insensitive). When set, only
+    /// entries whose `level` matches are returned. Comma-separated
+    /// list supported (e.g. `WARN,ERROR`).
+    pub level: Option<String>,
+    /// Optional limit on the number of entries returned. Default
+    /// 100, max 1000. The ring buffer itself holds 1000 entries, so
+    /// `limit=1000` returns everything.
+    pub limit: Option<u32>,
+}
+
+/// Response envelope for `GET /admin/debug/logs`.
+#[derive(Debug, Serialize)]
+pub struct DebugLogsResponse {
+    /// The entries matching the query, oldest-first.
+    pub entries: Vec<crate::debug_log::DebugLogEntry>,
+    /// The highest `seq` in the returned set. The frontend passes
+    /// this as `since` on the next poll to fetch only new entries.
+    pub latest_seq: u64,
+    /// Total entries currently in the ring buffer (before filtering).
+    pub total_in_buffer: usize,
+}
+
+/// `GET /admin/debug/logs` — return recent `tracing` events from the
+/// in-memory ring buffer. Used by the dashboard's Debug Logs view to
+/// show detailed error context that doesn't fit in the `usage`
+/// table's `error_msg` column (discovery scheduler skips, OAuth
+/// refresh failures, race cancellation reasons, etc.).
+pub async fn debug_logs(
+    State(_s): State<AppState>,
+    Query(q): Query<DebugLogsQuery>,
+) -> ApiResult<Json<DebugLogsResponse>> {
+    let since = q.since.unwrap_or(0);
+    let limit = q.limit.unwrap_or(100).min(1000) as usize;
+
+    // Snapshot from the ring buffer.
+    let mut entries = if since > 0 {
+        crate::debug_log::snapshot_since(since)
+    } else {
+        crate::debug_log::snapshot()
+    };
+
+    // Apply filters.
+    if let Some(rid) = &q.request_id {
+        entries.retain(|e| e.request_id.as_deref() == Some(rid.as_str()));
+    }
+    if let Some(tid) = &q.trace_id {
+        entries.retain(|e| e.trace_id.as_deref() == Some(tid.as_str()));
+    }
+    if let Some(lvl) = &q.level {
+        let wanted: std::collections::HashSet<String> = lvl
+            .split(',')
+            .map(|s| s.trim().to_ascii_uppercase())
+            .collect();
+        entries.retain(|e| wanted.contains(&e.level.to_ascii_uppercase()));
+    }
+
+    let total_in_buffer = entries.len();
+    // Truncate to `limit` (keep the most recent — the buffer is
+    // oldest-first, so truncate from the front).
+    if entries.len() > limit {
+        let drop = entries.len() - limit;
+        entries.drain(0..drop);
+    }
+
+    let latest_seq = entries.last().map(|e| e.seq).unwrap_or(since);
+
+    ApiResult::ok(Json(DebugLogsResponse {
+        entries,
+        latest_seq,
+        total_in_buffer,
+    }))
+}
+
+/// `POST /admin/debug/clear` — wipe the in-memory debug log ring
+/// buffer. Used for "reproduce then capture" workflows: the operator
+/// clears the buffer, reproduces the bug, then reads the buffer to
+/// see only the events from the reproduction.
+pub async fn debug_logs_clear(
+    State(_s): State<AppState>,
+) -> ApiResult<Json<serde_json::Value>> {
+    crate::debug_log::clear();
+    ApiResult::ok(Json(serde_json::json!({ "cleared": true })))
+}
+
 // =====================================================================
 //
 // Spec §9 documents the smoke test as either a manual `curl` against

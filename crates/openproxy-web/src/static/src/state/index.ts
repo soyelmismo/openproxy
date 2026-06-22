@@ -36,6 +36,7 @@ export type RouteName =
   | "key-usage"
   | "analytics"
   | "logs"
+  | "debug-logs"
   | "config";
 
 /** Live-logs WebSocket connection status. Mirrors the `setLogsStatus`

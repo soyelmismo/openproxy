@@ -238,6 +238,14 @@ pub fn build_router(state: AppState) -> Router {
             get(handlers::admin::usage_detail),
         )
         .route(
+            "/admin/debug/logs",
+            get(handlers::admin::debug_logs),
+        )
+        .route(
+            "/admin/debug/clear",
+            post(handlers::admin::debug_logs_clear),
+        )
+        .route(
             "/admin/recording",
             get(handlers::admin::get_recording).post(handlers::admin::set_recording),
         )

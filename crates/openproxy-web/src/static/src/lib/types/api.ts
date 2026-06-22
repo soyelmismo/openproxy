@@ -595,3 +595,55 @@ export interface ApiErrorBody {
 export interface ApiErrorEnvelope {
   error: ApiErrorBody;
 }
+
+// ----------------------------------------------------------------------------
+// Debug logs — in-memory ring buffer of recent `tracing` events.
+// ----------------------------------------------------------------------------
+
+/** A single captured `tracing` event, serialized from the server's
+ *  in-memory ring buffer. `request_id`, `trace_id`, and `span_path`
+ *  are `Option<String>` on the Rust side, so they serialize as `null`
+ *  when the event had no span context (e.g. startup logs, background
+ *  scheduler events).
+ *  @see crates/openproxy-server/src/debug_log.rs:64 */
+export interface DebugLogEntry {
+  /** Monotonically increasing sequence number. The frontend polls
+   *  with `?since=N` to fetch only entries with `seq > N`. */
+  seq: number;
+  /** ISO-8601 timestamp with millisecond precision
+   *  (e.g. `"2026-06-23T12:34:56.789Z"`). */
+  timestamp: string;
+  /** `WARN`, `ERROR`, `INFO`, `DEBUG`, etc. Free-form string — the
+   *  dashboard color-codes by uppercasing and matching known levels. */
+  level: string;
+  /** The tracing target (usually the module path, e.g.
+   *  `openproxy_core::pipeline`). */
+  target: string;
+  /** The formatted message string (post-`tracing` field formatting).
+   *  Sensitive values are already redacted by the pipeline before
+   *  logging. */
+  message: string;
+  /** `request_id` extracted from the span context, when available. */
+  request_id: string | null;
+  /** `trace_id` extracted from the span context, when available. */
+  trace_id: string | null;
+  /** The span hierarchy as a slash-separated path (e.g.
+   *  `execute_single/dispatch_upstream_streaming`). `null` when the
+   *  event fired outside any span. */
+  span_path: string | null;
+}
+
+/** Response envelope for `GET /admin/debug/logs`.
+ *  @see crates/openproxy-server/src/handlers/admin.rs:4528 */
+export interface DebugLogsResponse {
+  /** The entries matching the query, oldest-first. */
+  entries: DebugLogEntry[];
+  /** The highest `seq` in the returned set. The frontend passes
+   *  this as `since` on the next poll to fetch only new entries. */
+  latest_seq: number;
+  /** Total entries currently in the ring buffer matching the filter
+   *  (before the `limit` truncation). The dashboard renders this as
+   *  "Buffer: X / 1000" so the operator can see how full the buffer
+   *  is at a glance. */
+  total_in_buffer: number;
+}

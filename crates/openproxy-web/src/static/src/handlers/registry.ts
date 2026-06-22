@@ -61,7 +61,7 @@ import { navigate, rerenderCurrentView } from "../state/router.js";
 import { OAuthLogin } from "./oauth-handlers.js";
 import { logsPrevPage, logsNextPage, logsGoPage, logsSetFollow, toggleColumnsMenu, toggleColumn } from "../views/logs.js";
 import { configSaveTimeouts, configSaveRecordingTtl, configSaveIdleChunkRetryable, configSaveCompression } from "../views/config.js";
-import { closeLogDetailModal } from "../components/log-detail.js";
+import { closeLogDetailModal, copyDebugBundle } from "../components/log-detail.js";
 
 // ---- Action registry ----
 // Keys are the data-action values. Each value is the function to
@@ -218,6 +218,9 @@ export const HANDLERS: Record<string, ActionHandler> = {
 
   // Log detail modal
   closeLogDetailModal,
+  // Copy a Markdown-formatted debug bundle for the currently-open
+  // log row to the clipboard. The button lives in the modal header.
+  copyDebugBundle,
 
   // Generic modal-bg closer: removes the closest .modal-bg of the
   // click target. Used by modals that don't have a stable ID.

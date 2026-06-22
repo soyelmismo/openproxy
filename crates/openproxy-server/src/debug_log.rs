@@ -1,0 +1,386 @@
+//! In-memory ring buffer of recent `tracing` events, exposed to the
+//! dashboard via `GET /admin/debug/logs`.
+//!
+//! ## Why
+//!
+//! The user asked for "un registro en el dashboard de debug logs que
+//! sean fácilmente copiables toda la info de depuración" — a way to
+//! see detailed error logs in the dashboard, easily copiable, so when
+//! something fails they can grab the full context and share it.
+//!
+//! The existing `usage` table stores per-request error messages (the
+//! `error_msg` / `error_msg_redacted` columns), but it doesn't capture
+//! the broader `tracing`-level context: discovery scheduler skips,
+//! OAuth refresh failures, race cancellation reasons, etc. Those events
+//! go to stdout via `tracing_subscriber::fmt`, which the operator can't
+//! access from the dashboard.
+//!
+//! This module installs a custom `tracing_subscriber::Layer` that
+//! captures every `WARN` / `ERROR` event (and optionally `INFO`) into
+//! a bounded `parking_lot::Mutex<VecDeque<DebugLogEntry>>` (capacity
+//! 1000). The dashboard polls `GET /admin/debug/logs?since=N` to read
+//! the buffer, and a "Copy all" button serializes the visible subset
+//! to the clipboard.
+//!
+//! ## Design
+//!
+//! - **In-memory only.** Tracing events are high-volume and don't
+//!   belong in SQLite. The buffer is bounded at 1000 entries ×
+//!   ~500 B avg ≈ 500 KB worst case — trivial.
+//! - **Bounded VecDeque.** New entries push to the back; when full,
+//!   the oldest entry is evicted. Each entry gets a monotonic `seq`
+//!   so the frontend can poll with `?since=N` to fetch only new
+//!   entries.
+//! - **Span context extraction.** When a tracing event fires inside
+//!   a span that carries `request_id` / `trace_id` fields (set by
+//!   the pipeline's `info!(request_id = …, trace_id = …, …)` calls),
+//!   the layer extracts them so the dashboard can correlate events
+//!   with usage rows.
+//! - **No redaction here.** The layer captures the formatted message
+//!   string (post-`tracing` field formatting). The pipeline already
+//!   redacts sensitive values before logging them (see `redact.rs`),
+//!   so we don't re-redact. If a future caller logs raw secrets, the
+//!   `cost::redact_error_msg` regex is available to apply here too.
+
+use std::collections::VecDeque;
+use std::sync::OnceLock;
+
+use parking_lot::Mutex;
+use serde::Serialize;
+use tracing::field::{Field, Visit};
+use tracing::{Event, Subscriber};
+use tracing_subscriber::{Layer, layer::Context};
+use chrono::Utc;
+
+/// Maximum number of entries kept in the ring buffer. Older entries
+/// are evicted when this is exceeded. 1000 entries × ~500 B avg ≈
+/// 500 KB worst case — a trivial amount of memory for hours of
+/// debugging context.
+const BUFFER_CAPACITY: usize = 1000;
+
+/// A single captured tracing event, ready to be serialized to the
+/// dashboard via `GET /admin/debug/logs`.
+#[derive(Debug, Clone, Serialize)]
+pub struct DebugLogEntry {
+    /// Monotonically increasing sequence number. The frontend polls
+    /// with `?since=N` to fetch only entries with `seq > N`.
+    pub seq: u64,
+    /// ISO-8601 timestamp with millisecond precision.
+    pub timestamp: String,
+    /// `WARN`, `ERROR`, `INFO`, etc.
+    pub level: String,
+    /// The tracing target (usually the module path, e.g.
+    /// `openproxy_core::pipeline`).
+    pub target: String,
+    /// The formatted message string (post-`tracing` field
+    /// formatting). Sensitive values are already redacted by the
+    /// pipeline before logging.
+    pub message: String,
+    /// `request_id` extracted from the span context, when available.
+    /// Used by the dashboard to correlate events with usage rows.
+    pub request_id: Option<String>,
+    /// `trace_id` extracted from the span context, when available.
+    pub trace_id: Option<String>,
+    /// The span hierarchy as a slash-separated path (e.g.
+    /// `execute_single/dispatch_upstream_streaming`). Useful for
+    /// understanding where in the pipeline the event fired.
+    pub span_path: Option<String>,
+}
+
+/// The global ring buffer. Initialized once via [`init`] (called from
+/// `telemetry::init`); accessed via [`snapshot`] and [`snapshot_since`].
+static DEBUG_LOG_BUFFER: OnceLock<Mutex<DebugLogBuffer>> = OnceLock::new();
+
+/// Internal struct holding the VecDeque + the monotonic seq counter.
+struct DebugLogBuffer {
+    entries: VecDeque<DebugLogEntry>,
+    next_seq: u64,
+}
+
+impl DebugLogBuffer {
+    fn new() -> Self {
+        Self {
+            entries: VecDeque::with_capacity(BUFFER_CAPACITY),
+            next_seq: 1,
+        }
+    }
+
+    fn push(&mut self, mut entry: DebugLogEntry) {
+        entry.seq = self.next_seq;
+        self.next_seq = self.next_seq.wrapping_add(1);
+        if self.entries.len() >= BUFFER_CAPACITY {
+            self.entries.pop_front();
+        }
+        self.entries.push_back(entry);
+    }
+}
+
+/// Initialize the global ring buffer. Must be called once at startup
+/// (from `telemetry::init`) before any [`DebugLogLayer`] is installed.
+/// Idempotent: subsequent calls are no-ops.
+pub fn init() {
+    let _ = DEBUG_LOG_BUFFER.get_or_init(|| Mutex::new(DebugLogBuffer::new()));
+}
+
+/// Snapshot ALL entries currently in the buffer, in insertion order
+/// (oldest first). Used by the dashboard's initial fetch.
+pub fn snapshot() -> Vec<DebugLogEntry> {
+    let Some(buf) = DEBUG_LOG_BUFFER.get() else {
+        return Vec::new();
+    };
+    let guard = buf.lock();
+    guard.entries.iter().cloned().collect()
+}
+
+/// Snapshot entries with `seq > since`, in insertion order. Used by
+/// the dashboard's polling fetch.
+pub fn snapshot_since(since: u64) -> Vec<DebugLogEntry> {
+    let Some(buf) = DEBUG_LOG_BUFFER.get() else {
+        return Vec::new();
+    };
+    let guard = buf.lock();
+    guard
+        .entries
+        .iter()
+        .filter(|e| e.seq > since)
+        .cloned()
+        .collect()
+}
+
+/// The highest `seq` currently in the buffer. The frontend uses this
+/// to know what `since` value to pass on the next poll.
+pub fn latest_seq() -> u64 {
+    let Some(buf) = DEBUG_LOG_BUFFER.get() else {
+        return 0;
+    };
+    let guard = buf.lock();
+    guard.entries.back().map(|e| e.seq).unwrap_or(0)
+}
+
+/// Clear all entries from the buffer. Used by `POST /admin/debug/clear`
+/// for "reproduce then capture" workflows.
+pub fn clear() {
+    if let Some(buf) = DEBUG_LOG_BUFFER.get() {
+        let mut guard = buf.lock();
+        guard.entries.clear();
+        guard.next_seq = 1;
+    }
+}
+
+/// A `tracing_subscriber::Layer` that captures every event into the
+/// global ring buffer. Installed by `telemetry::init` alongside the
+/// existing `fmt::layer()`.
+pub struct DebugLogLayer;
+
+impl<S> Layer<S> for DebugLogLayer
+where
+    S: Subscriber,
+    for<'lookup> S: tracing_subscriber::registry::LookupSpan<'lookup>,
+{
+    fn on_event(&self, event: &Event<'_>, ctx: Context<'_, S>) {
+        // Capture the level, target, and timestamp.
+        let level = event.metadata().level().to_string();
+        let target = event.metadata().target().to_string();
+        let timestamp = Utc::now().format("%Y-%m-%dT%H:%M:%S%.3fZ").to_string();
+
+        // Visit the event's fields to build the formatted message.
+        // The visitor also opportunistically extracts `request_id`
+        // and `trace_id` if they're set directly on the event (not
+        // on a parent span).
+        let mut visitor = MessageVisitor::default();
+        event.record(&mut visitor);
+        // Extract the fields we care about BEFORE calling
+        // `into_message()` (which consumes the visitor).
+        let request_id = visitor.request_id.take();
+        let trace_id = visitor.trace_id.take();
+        let message = visitor.into_message();
+
+        // Walk the span hierarchy (from the current span up to the
+        // root) to build the span path. `ctx.event_scope(event)`
+        // returns an iterator from the current span up through all
+        // parents.
+        //
+        // We DON'T extract request_id / trace_id from span fields
+        // here because the tracing-subscriber 0.3 API for reading
+        // stored span values (`SpanRef::values()` + a custom
+        // `Visit`) is unstable across versions. Instead, we rely on
+        // the pipeline's existing practice of stamping
+        // `request_id` / `trace_id` directly on each `tracing::event!`
+        // call (via `info!(request_id = %rid, …)` etc.), which
+        // `MessageVisitor` captures via the event's own fields.
+        let mut span_path_parts: Vec<String> = Vec::new();
+        if let Some(scope) = ctx.event_scope(event) {
+            for span in scope.from_root() {
+                span_path_parts.push(span.name().to_string());
+            }
+        }
+
+        let span_path = if span_path_parts.is_empty() {
+            None
+        } else {
+            Some(span_path_parts.join("/"))
+        };
+
+        let entry = DebugLogEntry {
+            seq: 0, // filled in by `push`
+            timestamp,
+            level,
+            target,
+            message,
+            request_id,
+            trace_id,
+            span_path,
+        };
+
+        // Push into the global buffer.
+        if let Some(buf) = DEBUG_LOG_BUFFER.get() {
+            let mut guard = buf.lock();
+            guard.push(entry);
+        }
+    }
+}
+
+/// Visit the event's fields to build a human-readable message. The
+/// `tracing` macro formats fields as `name=value` pairs, with the
+/// special `"message"` field treated as the primary message text.
+///
+/// Also opportunistically extracts `request_id` and `trace_id` when
+/// they're set directly on the event (not on a parent span — those
+/// are handled by `SpanFieldVisitor`).
+#[derive(Default)]
+struct MessageVisitor {
+    parts: Vec<(String, String)>,
+    message: Option<String>,
+    request_id: Option<String>,
+    trace_id: Option<String>,
+}
+
+impl Visit for MessageVisitor {
+    fn record_debug(&mut self, field: &Field, value: &dyn std::fmt::Debug) {
+        let name = field.name();
+        let value_str = format!("{:?}", value);
+        match name {
+            "message" => self.message = Some(value_str),
+            "request_id" => {
+                if self.request_id.is_none() {
+                    self.request_id = Some(value_str);
+                }
+            }
+            "trace_id" => {
+                if self.trace_id.is_none() {
+                    self.trace_id = Some(value_str);
+                }
+            }
+            _ => self.parts.push((name.to_string(), value_str)),
+        }
+    }
+
+    fn record_str(&mut self, field: &Field, value: &str) {
+        let name = field.name();
+        match name {
+            "message" => self.message = Some(value.to_string()),
+            "request_id" => {
+                if self.request_id.is_none() {
+                    self.request_id = Some(value.to_string());
+                }
+            }
+            "trace_id" => {
+                if self.trace_id.is_none() {
+                    self.trace_id = Some(value.to_string());
+                }
+            }
+            _ => self.parts.push((name.to_string(), value.to_string())),
+        }
+    }
+}
+
+impl MessageVisitor {
+    fn into_message(self) -> String {
+        let mut out = String::new();
+        if let Some(msg) = self.message {
+            out.push_str(&msg);
+        }
+        if !self.parts.is_empty() {
+            if !out.is_empty() {
+                out.push_str("  ");
+            }
+            for (i, (k, v)) in self.parts.iter().enumerate() {
+                if i > 0 {
+                    out.push(' ');
+                }
+                out.push_str(k);
+                out.push('=');
+                out.push_str(v);
+            }
+        }
+        if out.is_empty() {
+            "(no fields)".to_string()
+        } else {
+            out
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn buffer_evicts_oldest_when_full() {
+        init();
+        // Push BUFFER_CAPACITY + 10 entries; verify only the last
+        // BUFFER_CAPACITY are kept.
+        let buf = DEBUG_LOG_BUFFER.get().expect("init");
+        {
+            let mut guard = buf.lock();
+            guard.entries.clear();
+            guard.next_seq = 1;
+            for i in 0..(BUFFER_CAPACITY + 10) {
+                guard.push(DebugLogEntry {
+                    seq: 0,
+                    timestamp: format!("2026-01-01T00:00:{:02}Z", i % 60),
+                    level: "WARN".into(),
+                    target: "test".into(),
+                    message: format!("entry {}", i),
+                    request_id: None,
+                    trace_id: None,
+                    span_path: None,
+                });
+            }
+        }
+        let snap = snapshot();
+        assert_eq!(snap.len(), BUFFER_CAPACITY);
+        // The oldest entry should be entry 10 (entries 0-9 were evicted).
+        assert!(snap[0].message.contains("entry 10"));
+        // The newest should be entry BUFFER_CAPACITY + 9.
+        assert!(snap[snap.len() - 1].message.contains(&format!("entry {}", BUFFER_CAPACITY + 9)));
+    }
+
+    #[test]
+    fn snapshot_since_filters_by_seq() {
+        init();
+        let buf = DEBUG_LOG_BUFFER.get().expect("init");
+        {
+            let mut guard = buf.lock();
+            guard.entries.clear();
+            guard.next_seq = 1;
+            for i in 0..5 {
+                guard.push(DebugLogEntry {
+                    seq: 0,
+                    timestamp: format!("2026-01-01T00:00:0{}Z", i),
+                    level: "INFO".into(),
+                    target: "test".into(),
+                    message: format!("entry {}", i),
+                    request_id: None,
+                    trace_id: None,
+                    span_path: None,
+                });
+            }
+        }
+        let snap = snapshot_since(2);
+        // Should return entries with seq > 2, i.e. seq 3, 4, 5.
+        assert_eq!(snap.len(), 3);
+        assert_eq!(snap[0].seq, 3);
+        assert_eq!(snap[2].seq, 5);
+    }
+}

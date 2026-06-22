@@ -20,6 +20,7 @@ import { mountKeyUsage } from "../views/key-usage.js";
 import { mountAnalytics } from "../views/analytics.js";
 import { mountLogs } from "../views/logs.js";
 import { mountConfig } from "../views/config.js";
+import { mountDebugLogs } from "../views/debug-logs.js";
 
 export type RouteName =
   | "home"
@@ -31,6 +32,7 @@ export type RouteName =
   | "key-usage"
   | "analytics"
   | "logs"
+  | "debug-logs"
   | "config";
 
 export type ViewMount = (ctx: string) => unknown;
@@ -57,6 +59,22 @@ const ROUTES: readonly Route[] = [
   // unaffected.
   { name: "analytics", pattern: /^#?\/analytics(?:\?.*)?$/, mount: mountAnalytics as ViewMount },
   { name: "logs", pattern: /^#?\/logs$/, mount: mountLogs as ViewMount },
+  // Debug Logs polls `/admin/debug/logs` on a 2s chained-setTimeout
+  // loop. The view returns a cleanup function that cancels the
+  // pending poll timer; `navigate()` stores it in `currentCleanup`
+  // and invokes it before the next mount so the timer doesn't leak
+  // across navigations.
+  { name: "debug-logs", pattern: /^#?\/debug-logs$/, mount: (() => {
+    // The router calls ViewMount with the hash context; the
+    // debug-logs view doesn't use it (it has no sub-routes), so
+    // we accept and ignore it. The view mounts into #main and
+    // returns a cleanup function that cancels its poll timer;
+    // `navigate()` captures that and calls it before the next
+    // mount.
+    const main: HTMLElement | null = document.getElementById("main");
+    if (!main) return;
+    return mountDebugLogs(main);
+  }) as ViewMount },
   { name: "config", pattern: /^#?\/config$/, mount: mountConfig as ViewMount },
 ];
 
@@ -65,6 +83,13 @@ export interface ParsedHash {
   context: string;
   mount: ViewMount;
 }
+
+// The cleanup function returned by the currently-mounted view (if
+// any). `navigate()` invokes it before mounting the next view so
+// resources like setTimeout handles, WebSocket connections, etc.
+// don't leak across navigations. Views that return void/Promise<void>
+// leave this as null — no-op.
+let currentCleanup: (() => void) | null = null;
 
 export function parseHash(hash: string): ParsedHash | null {
   for (const r of ROUTES) {
@@ -89,8 +114,27 @@ export function navigate(): void {
   document.querySelectorAll(".sidebar nav a").forEach((a: Element) => {
     a.classList.toggle("active", "#" + (a.getAttribute("href") || "").replace(/^#/, "") === location.hash);
   });
+  // Call the previous view's cleanup before mounting the new one.
+  // The cleanup function is returned by views that own resources
+  // (e.g. `mountDebugLogs` returns a function that cancels its
+  // poll timer). Views that return void/Promise<void> leave
+  // `currentCleanup` as null — no-op.
+  if (currentCleanup !== null) {
+    try { currentCleanup(); } catch (e: unknown) {
+      console.warn("[router] previous view cleanup threw", e);
+    }
+    currentCleanup = null;
+  }
   // Mount the new view. Errors render into #main as a small banner.
-  Promise.resolve(r.mount(r.context)).catch((e: unknown) => {
+  // The mount may return a cleanup function (sync) or a Promise
+  // that resolves to one (async) — we capture either.
+  Promise.resolve(r.mount(r.context)).then((ret: unknown) => {
+    if (typeof ret === "function") {
+      currentCleanup = ret as () => void;
+    } else {
+      currentCleanup = null;
+    }
+  }).catch((e: unknown) => {
     const main: HTMLElement | null = document.getElementById("main");
     if (main) {
       const msg: string = (e instanceof Error) ? e.message : String(e);

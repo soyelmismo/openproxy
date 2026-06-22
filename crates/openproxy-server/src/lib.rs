@@ -12,3 +12,7 @@ pub mod router;
 pub mod handlers;
 pub mod disconnect;
 pub mod rate_limit;
+/// In-memory ring buffer of recent `tracing` events, exposed to the
+/// dashboard via `GET /admin/debug/logs`. See `debug_log.rs` for the
+/// full design rationale.
+pub mod debug_log;

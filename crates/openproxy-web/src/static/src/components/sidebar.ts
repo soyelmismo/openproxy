@@ -34,7 +34,7 @@ function mutableState(): MutableDashboard {
   return state as unknown as MutableDashboard;
 }
 
-type NavIconName = "home" | "providers" | "combos" | "keys" | "analytics" | "logs" | "config";
+type NavIconName = "home" | "providers" | "combos" | "keys" | "analytics" | "logs" | "debug-logs" | "config";
 
 interface SidebarLink {
   href: string;
@@ -64,6 +64,7 @@ const GROUPS: readonly SidebarGroup[] = [
     links: [
       { href: "#/analytics", icon: "analytics", label: "Analytics" },
       { href: "#/logs",      icon: "logs",      label: "Live Logs" },
+      { href: "#/debug-logs", icon: "debug-logs", label: "Debug Logs" },
     ],
   },
   {
@@ -97,6 +98,10 @@ function navIcon(name: NavIconName): string {
     case "logs":
       // Pulse / heartbeat line.
       return `<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round" stroke-linecap="round"><path d="M2 8 H5 L7 3 L9 13 L11 8 H14"/></svg>`;
+    case "debug-logs":
+      // Bug silhouette: oval body + head circle + three legs per
+      // side. Distinguishes Debug Logs from Live Logs at a glance.
+      return `<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round" stroke-linecap="round"><ellipse cx="8" cy="9" rx="3.5" ry="4"/><circle cx="8" cy="4" r="1.2"/><path d="M8 5 V5.5"/><path d="M4.5 7 L2 6 M4.5 9 L1.5 9 M4.5 11 L2.5 12.5"/><path d="M11.5 7 L14 6 M11.5 9 L14.5 9 M11.5 11 L13.5 12.5"/></svg>`;
     case "config":
       // Gear: inner circle + 8 teeth around it.
       return `<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2"><circle cx="8" cy="8" r="2.5"/><path d="M8 1 V3.5 M8 12.5 V15 M1 8 H3.5 M12.5 8 H15 M3 3 L4.8 4.8 M11.2 11.2 L13 13 M3 13 L4.8 11.2 M11.2 4.8 L13 3"/></svg>`;
