@@ -3236,6 +3236,7 @@ pub async fn refresh_account_quota(
     State(s): State<AppState>,
     Path(account_id): Path<i64>,
 ) -> ApiResult<Json<serde_json::Value>> {
+    tracing::info!(account_id = account_id, "refresh_account_quota: start");
     let s_clone = s.clone();
     let result: Result<Json<serde_json::Value>, ApiError> = async move {
         let account_id = AccountId::new(account_id);
@@ -3245,7 +3246,9 @@ pub async fn refresh_account_quota(
         // touch the master key for a provider whose quota we'll never
         // fetch.
         let (provider_id_str, api_key, access_token) = {
+            tracing::debug!(account_id = account_id.0, "refresh_account_quota: acquiring writer");
             let w = s_clone.db_pool().writer();
+            tracing::debug!(account_id = account_id.0, "refresh_account_quota: writer acquired");
             let acc = admin::account_for_quota_refresh(&w, account_id)?;
             if !admin::quota_capable_providers().contains(&acc.provider_id.as_str()) {
                 return Ok(Json(serde_json::json!({
@@ -3286,6 +3289,7 @@ pub async fn refresh_account_quota(
         //    even on failure (with `fetch_error` set), so we always
         //    have a row to persist.
         let upstream_client = s_clone.upstream_client();
+        tracing::info!(account_id = account_id.0, provider = %provider_id_str, "refresh_account_quota: calling upstream");
         let q = admin::fetch_account_quota(
             &provider_id_str,
             upstream_client,
@@ -3293,6 +3297,7 @@ pub async fn refresh_account_quota(
             access_token.as_deref(),
         )
         .await;
+        tracing::info!(account_id = account_id.0, provider = %provider_id_str, fetch_error = ?q.fetch_error, "refresh_account_quota: upstream done");
 
         // 4b: If the quota fetch failed with a 401 (expired token) and
         //     we're on an OAuth account, try an on-demand token refresh
@@ -4404,7 +4409,7 @@ mod tests {
     use axum::{
         body::Body,
         http::{Request, StatusCode},
-        routing::{get, put},
+        routing::{get, post, put},
         Router,
     };
     use openproxy_core::config::TimeoutsConfig;
@@ -5284,6 +5289,170 @@ mod tests {
             "in-memory TTL must not change on rejected PUT"
         );
         assert_recording_ttl_db_count(&state, 0);
+    }
+
+    // -----------------------------------------------------------------
+    // Regression tests for admin refresh endpoints.
+    //
+    // These tests exist because the endpoints `POST /admin/accounts/:id/refresh-quota`
+    // and `POST /admin/providers/:id/refresh` were hanging after the
+    // refactor to the hyper-based UpstreamClient. The dashboard
+    // reported "error sending request for url" because the server
+    // never responded. The tests call the handlers directly with a
+    // timeout to catch any hang regression.
+    // -----------------------------------------------------------------
+
+    /// Insert a test account for a given provider_id. Returns the
+    /// account id. The account has a dummy API key (not used for
+    /// upstream calls in the non-quota-capable path).
+    fn insert_test_account(state: &AppState, provider_id: &str) -> i64 {
+        let w = state.db_pool().writer();
+        // Ensure the provider exists (FK constraint).
+        let _ = openproxy_core::providers::create(
+            &w,
+            openproxy_core::providers::NewProvider {
+                id: &openproxy_core::ids::ProviderId::new(provider_id),
+                name: provider_id,
+                base_url: "https://example.com",
+                auth_type: openproxy_core::providers::AuthType::Bearer,
+                format: openproxy_core::providers::ProviderFormat::Openai,
+                extra_headers_json: None,
+                auto_activate_keyword: None,
+            },
+        );
+        // Now insert the account using the core helper.
+        let mk = state.master_key();
+        let aid = openproxy_core::accounts::create(
+            &w,
+            &openproxy_core::ids::ProviderId::new(provider_id),
+            Some("sk-test-dummy-key"),
+            mk.as_ref(),
+            Some("test"),
+            0,
+            None,
+        )
+        .expect("insert account");
+        aid.0
+    }
+
+    #[tokio::test]
+    async fn refresh_account_quota_non_capable_provider_responds_fast() {
+        // Regression: the endpoint must NOT hang when called for a
+        // provider that doesn't have a quota fetcher (e.g.
+        // 'openai'). The handler short-circuits with
+        // {"supported": false} — no upstream call, no deadlock.
+        let dir = tempdir();
+        let (state, plaintext) = make_state_with_key(&dir).await;
+        let account_id = insert_test_account(&state, "openai");
+
+        let app = Router::new()
+            .route(
+                "/admin/accounts/{id}/refresh-quota",
+                post(refresh_account_quota),
+            )
+            .with_state(state.clone());
+
+        let req = Request::builder()
+            .method("POST")
+            .uri(format!("/admin/accounts/{}/refresh-quota", account_id))
+            .header("authorization", format!("Bearer {}", plaintext))
+            .body(Body::empty())
+            .expect("build req");
+
+        // Wrap in a timeout — if the handler hangs, the test fails
+        // instead of blocking forever.
+        let resp = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            app.oneshot(req),
+        )
+        .await
+        .expect("refresh-quota handler hung for >5s (regression)")
+        .expect("oneshot");
+
+        assert_eq!(resp.status(), StatusCode::OK, "expected 200");
+        let body = axum::body::to_bytes(resp.into_body(), 1024)
+            .await
+            .expect("body");
+        let v: serde_json::Value = serde_json::from_slice(&body).expect("json");
+        assert_eq!(v["supported"], false, "expected supported=false for openai");
+    }
+
+    #[tokio::test]
+    async fn refresh_provider_models_unknown_provider_responds_fast() {
+        // Regression: the endpoint must NOT hang when called for a
+        // provider that doesn't exist. The handler returns an error
+        // (404 or 400) — no upstream call, no deadlock.
+        let dir = tempdir();
+        let (state, plaintext) = make_state_with_key(&dir).await;
+
+        let app = Router::new()
+            .route(
+                "/admin/providers/{id}/refresh",
+                post(refresh_provider_models),
+            )
+            .with_state(state.clone());
+
+        let req = Request::builder()
+            .method("POST")
+            .uri("/admin/providers/nonexistent-provider/refresh")
+            .header("authorization", format!("Bearer {}", plaintext))
+            .body(Body::empty())
+            .expect("build req");
+
+        let resp = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            app.oneshot(req),
+        )
+        .await
+        .expect("refresh-provider handler hung for >5s (regression)")
+        .expect("oneshot");
+
+        // The handler returns 200 with an error in the JSON body, or
+        // a 4xx/5xx. Either is acceptable as long as it doesn't hang.
+        assert!(
+            resp.status().is_client_error() || resp.status().is_server_error() || resp.status() == StatusCode::OK,
+            "expected error or 200, got {:?}",
+            resp.status()
+        );
+    }
+
+    #[tokio::test]
+    async fn refresh_account_quota_nonexistent_account_responds_fast() {
+        // Regression: the endpoint must NOT hang when called for an
+        // account that doesn't exist. The handler returns 404 — no
+        // upstream call, no deadlock.
+        let dir = tempdir();
+        let (state, plaintext) = make_state_with_key(&dir).await;
+
+        let app = Router::new()
+            .route(
+                "/admin/accounts/{id}/refresh-quota",
+                post(refresh_account_quota),
+            )
+            .with_state(state.clone());
+
+        let req = Request::builder()
+            .method("POST")
+            .uri("/admin/accounts/99999/refresh-quota")
+            .header("authorization", format!("Bearer {}", plaintext))
+            .body(Body::empty())
+            .expect("build req");
+
+        let resp = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            app.oneshot(req),
+        )
+        .await
+        .expect("refresh-quota handler hung for >5s on nonexistent account (regression)")
+        .expect("oneshot");
+
+        // Account not found -> 404 or 500. Either is fine as long as
+        // it doesn't hang.
+        assert!(
+            resp.status().is_client_error() || resp.status().is_server_error(),
+            "expected 4xx/5xx for nonexistent account, got {:?}",
+            resp.status()
+        );
     }
 
 }
