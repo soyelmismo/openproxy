@@ -50,11 +50,7 @@ log "git: $(git rev-parse --short HEAD) on $(git branch --show-current)"
 log "working tree: $(git status --porcelain | wc -l) cambios sucios"
 
 # --- Build ---------------------------------------------------------------
-# 1) Cargo check rápido: si falla, abortamos sin tocar nada.
-log "cargo check --workspace $FEATURES --release"
-cargo check --workspace $FEATURES --release
-
-# 1.5) Frontend TS bundle: openproxy-web embebe src/static/index.html vía
+# 1) Frontend TS bundle: openproxy-web embebe src/static/index.html vía
 #      include_str! y sirve el bundle TS desde static/dist/ (commit 19514e1
 #      flipeó /src/app.js a /dist/app.js). El dist/ está en .gitignore, hay
 #      que regenerarlo en cada build, ANTES de que cargo compila el binario.
