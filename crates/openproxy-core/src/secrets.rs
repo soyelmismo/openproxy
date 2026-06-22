@@ -163,10 +163,12 @@ mod tests {
     fn from_env_missing() {
         // Point at a definitely-unset var by temporarily unsetting it.
         let prev = std::env::var(ENV_VAR).ok();
-        std::env::remove_var(ENV_VAR);
+        // SAFETY: tests are single-threaded; no other thread reads this env var.
+        unsafe { std::env::remove_var(ENV_VAR); }
         let res = MasterKey::from_env();
         if let Some(v) = prev {
-            std::env::set_var(ENV_VAR, v);
+            // SAFETY: same single-threaded test context.
+            unsafe { std::env::set_var(ENV_VAR, v); }
         }
         assert!(matches!(res, Err(CoreError::Config(_))));
     }
@@ -176,11 +178,14 @@ mod tests {
         // 16 bytes (not 32) base64-encoded.
         let short = BASE64.encode([0u8; 16]);
         let prev = std::env::var(ENV_VAR).ok();
-        std::env::set_var(ENV_VAR, &short);
+        // SAFETY: tests are single-threaded; no other thread reads this env var.
+        unsafe { std::env::set_var(ENV_VAR, &short); }
         let res = MasterKey::from_env();
-        std::env::remove_var(ENV_VAR);
+        // SAFETY: same single-threaded test context.
+        unsafe { std::env::remove_var(ENV_VAR); }
         if let Some(v) = prev {
-            std::env::set_var(ENV_VAR, v);
+            // SAFETY: same single-threaded test context.
+            unsafe { std::env::set_var(ENV_VAR, v); }
         }
         assert!(matches!(res, Err(CoreError::Config(_))));
     }

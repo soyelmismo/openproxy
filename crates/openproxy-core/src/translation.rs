@@ -1177,15 +1177,15 @@ mod tests {
         let mut req = openai_req_with(vec![("user", "Hi")]);
         req.max_tokens = None;
         let out = openai_to_gemini(&req);
-        let gen = out.generation_config.as_ref().unwrap();
-        assert_eq!(gen.max_output_tokens, Some(DEFAULT_GEMINI_MAX_OUTPUT_TOKENS));
+        let gen_cfg = out.generation_config.as_ref().unwrap();
+        assert_eq!(gen_cfg.max_output_tokens, Some(DEFAULT_GEMINI_MAX_OUTPUT_TOKENS));
 
         // When the client does provide max_tokens, it's preserved.
         let mut req = openai_req_with(vec![("user", "Hi")]);
         req.max_tokens = Some(123);
         let out = openai_to_gemini(&req);
-        let gen = out.generation_config.as_ref().unwrap();
-        assert_eq!(gen.max_output_tokens, Some(123));
+        let gen_cfg = out.generation_config.as_ref().unwrap();
+        assert_eq!(gen_cfg.max_output_tokens, Some(123));
     }
 
     #[test]
@@ -1194,9 +1194,9 @@ mod tests {
         req.temperature = Some(0.7);
         req.top_p = Some(0.9);
         let out = openai_to_gemini(&req);
-        let gen = out.generation_config.as_ref().unwrap();
-        assert_eq!(gen.temperature, Some(0.7));
-        assert_eq!(gen.top_p, Some(0.9));
+        let gen_cfg = out.generation_config.as_ref().unwrap();
+        assert_eq!(gen_cfg.temperature, Some(0.7));
+        assert_eq!(gen_cfg.top_p, Some(0.9));
     }
 
     #[test]

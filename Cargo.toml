@@ -9,8 +9,8 @@ members = [
 
 [workspace.package]
 version = "0.1.0"
-edition = "2021"
-rust-version = "1.75"
+edition = "2024"
+rust-version = "1.85"
 license = "MIT OR Apache-2.0"
 authors = ["openproxy contributors"]
 
@@ -31,7 +31,7 @@ uuid = { version = "1", features = ["v4", "serde"] }
 futures = "0.3"
 async-trait = "0.1"
 parking_lot = { version = "0.12", features = ["send_guard"] }
-rand = "0.9"
+rand = "0.10"
 hex = "0.4"
 aes-gcm = "0.10"
 argon2 = "0.5"

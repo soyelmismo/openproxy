@@ -81,11 +81,11 @@ const LAST_USED_THROTTLE_SECS: i64 = 300;
 /// 62-symbol alphabet is roughly 190 bits of entropy, well above
 /// the threshold for safe offline-unguessable keys.
 pub fn generate_plaintext() -> String {
-    use rand::Rng;
+    use rand::RngExt;
     const CHARS: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
     let mut rng = rand::rng();
     let suffix: String = (0..32)
-        .map(|_| CHARS[rng.gen_range(0..CHARS.len())] as char)
+        .map(|_| CHARS[rng.random_range(0..CHARS.len())] as char)
         .collect();
     format!("op_live_{}", suffix)
 }
