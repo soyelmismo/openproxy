@@ -283,6 +283,7 @@ pub fn build_synthetic_combo(
         strategy: Strategy::Priority,
         race_size: 1,
         created_at: String::new(),
+        context_window: None,
     };
     (combo, vec![target])
 }

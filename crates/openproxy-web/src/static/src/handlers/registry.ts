@@ -23,7 +23,7 @@
 //     passes the bound element (data-arg1="self") as the arg.
 
 import { showCreateAccount, createAccount, closeCreateAccount, deleteAccount, testAccount, showUpdateAccountKey, updateAccountKey, closeUpdateAccountKey } from "./account-handlers.js";
-import { showCreateCombo, createCombo, closeCreateCombo, deleteCombo, updateRaceSize, testAllTargets } from "./combo-handlers.js";
+import { showCreateCombo, createCombo, closeCreateCombo, deleteCombo, updateRaceSize, updateContextWindow, testAllTargets } from "./combo-handlers.js";
 import {
   showAddTarget, closeAddTarget, onTargetKindChange, onTargetProviderChange,
   addTarget, deleteTarget, resetCooldown, changePriority,
@@ -104,6 +104,7 @@ export const HANDLERS: Record<string, ActionHandler> = {
   closeCreateCombo,
   deleteCombo,
   updateRaceSize,
+  updateContextWindow,  // signature: (comboId, e)     — input change
   testAllTargets,       // signature: (comboId, e)     — button click
 
   // Combo targets
