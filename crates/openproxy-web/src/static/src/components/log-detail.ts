@@ -123,8 +123,25 @@ interface ToolCall {
  *  the value is not a recognized chat-completion (so the caller can
  *  fall through to a "Raw response" block). Only ever called with
  *  a non-string value — the string normalization happens in
- *  renderResponseTab. */
-function parseOpenAiChatResponse(value: unknown): { message: string | null; reasoning: string | null; toolCalls: ToolCall[] } | null {
+ *  renderResponseTab.
+ *
+ *  The returned `otherProperties` field carries the response-level
+ *  metadata (id, model, object, created, usage, system_fingerprint,
+ *  service_tier, …) AND the choice-level metadata (index,
+ *  finish_reason, logprobs) so the caller can render them in a
+ *  separate collapsible "Other properties" block. This is important
+ *  for responses where `content` is null and `tool_calls` is empty
+ *  (e.g. a `finish_reason: "tool_calls"` response whose tool calls
+ *  were emitted in a prior chunk of a streamed turn) — without
+ *  surfacing `usage` and `finish_reason`, the Response tab would
+ *  show only "Raw response" and the operator would have to expand
+ *  it to see the request actually succeeded. */
+function parseOpenAiChatResponse(value: unknown): {
+  message: string | null;
+  reasoning: string | null;
+  toolCalls: ToolCall[];
+  otherProperties: Record<string, unknown> | null;
+} | null {
   if (value == null) return null;
   if (typeof value !== "object" || Array.isArray(value)) return null;
   const v = value as Record<string, unknown>;
@@ -165,6 +182,10 @@ function parseOpenAiChatResponse(value: unknown): { message: string | null; reas
     const t: unknown = choice["text"];
     if (typeof t === "string" && t.length > 0) message = t;
   }
+  // Only show non-empty messages — empty string content means "the
+  // model replied with no text", which is information we surface via
+  // finish_reason / tool_calls, not via an empty Message block.
+  if (message != null && message.length === 0) message = null;
 
   // Reasoning: try reasoning_content -> reasoning -> reasoning_text.
   let reasoning: string | null = null;
@@ -202,10 +223,49 @@ function parseOpenAiChatResponse(value: unknown): { message: string | null; reas
     }
   }
 
-  // If we got neither message, reasoning, nor tool calls, this is
-  // not a chat-completion we recognize — fall through.
-  if (message == null && reasoning == null && toolCalls.length === 0) return null;
-  return { message, reasoning, toolCalls };
+  // Collect "other properties" — everything in the response object
+  // EXCEPT the structured fields we already extracted. This includes:
+  //   - top-level: id, object, created, model, usage,
+  //     system_fingerprint, service_tier, …
+  //   - choice-level: index, finish_reason, logprobs, …
+  // We surface them in a collapsible "Other properties" block so the
+  // operator can see at a glance that the request completed (via
+  // finish_reason) and what it cost (via usage), even when content
+  // and tool_calls are both empty.
+  const otherProperties: Record<string, unknown> = {};
+  // Top-level keys except `choices` (which we render structurally).
+  for (const [k, val] of Object.entries(v)) {
+    if (k === "choices") continue;
+    if (val == null) continue;
+    // Skip empty objects / empty strings — they add noise without
+    // adding signal.
+    if (typeof val === "string" && val.length === 0) continue;
+    if (typeof val === "object" && val !== null && !Array.isArray(val)
+        && Object.keys(val as object).length === 0) continue;
+    otherProperties[k] = val;
+  }
+  // Choice-level keys except `message` / `delta` (rendered
+  // structurally) and `text` (folded into `message` above).
+  for (const [k, val] of Object.entries(choice)) {
+    if (k === "message" || k === "delta" || k === "text") continue;
+    if (val == null) continue;
+    if (typeof val === "string" && val.length === 0) continue;
+    if (typeof val === "object" && val !== null && !Array.isArray(val)
+        && Object.keys(val as object).length === 0) continue;
+    // Namespaced so they don't collide with top-level keys of the
+    // same name (e.g. `index`).
+    otherProperties[`choice.${k}`] = val;
+  }
+  const otherPropsNonNull = Object.keys(otherProperties).length > 0
+    ? otherProperties
+    : null;
+
+  // If we got neither message, reasoning, tool calls, NOR other
+  // properties, this is not a chat-completion we recognize — fall
+  // through.
+  if (message == null && reasoning == null
+      && toolCalls.length === 0 && otherPropsNonNull == null) return null;
+  return { message, reasoning, toolCalls, otherProperties: otherPropsNonNull };
 }
 
 /** Pretty-print a tool-call `arguments` field for display. The
@@ -260,10 +320,109 @@ function renderToolCallArgsBlock(args: unknown): string {
     : "";
 }
 
-/** Render the Response tab. Handles null, string, and object inputs,
- *  picking the empty / chat-completion / "Raw response" shape per
- *  the spec. Performs the string-to-JSON normalization before
- *  calling parseOpenAiChatResponse.
+/** Render a single "Message" (content) block. Returns "" when the
+ *  content is null/empty — the caller omits the block entirely in
+ *  that case, so a content-less response doesn't show an empty
+ *  Message section. */
+function renderMessageBlock(message: string): string {
+  return `<details class="log-detail-collapsible" open>
+    <summary>Message</summary>
+    <pre class="json-viewer log-detail-collapsible-body">${escapeHtml(message)}</pre>
+  </details>`;
+}
+
+/** Render a single "Reasoning" block. Same omit-when-empty contract
+ *  as `renderMessageBlock`. */
+function renderReasoningBlock(reasoning: string): string {
+  return `<details class="log-detail-collapsible" open>
+    <summary>Reasoning</summary>
+    <pre class="json-viewer log-detail-collapsible-body">${escapeHtml(reasoning)}</pre>
+  </details>`;
+}
+
+/** Render a single tool call as an independent collapsible block.
+ *  Each tool call gets its own `<details>` at the top level of the
+ *  Response tab — they are NOT nested under a parent "Tool calls"
+ *  collapsible. This makes it easy to expand/collapse each one
+ *  independently and keeps the visible height of the tab low when
+ *  there are many tool calls.
+ *
+ *  `index` is the 0-based position in the tool_calls array, used
+ *  only to label the summary ("Tool call #1", "Tool call #2", …)
+ *  so the operator can correlate with the upstream's index field. */
+function renderToolCallBlock(tc: ToolCall, index: number): string {
+  const idTag = tc.id != null ? ` <span class="log-detail-key-meta">${escapeHtml(tc.id)}</span>` : "";
+  const typeTag = tc.type != null && tc.type !== "function" ? ` <span class="log-detail-key-meta">${escapeHtml(tc.type)}</span>` : "";
+  const summaryParts = `<span class="log-detail-tool-call-name">Tool call #${index + 1}: ${escapeHtml(tc.function.name)}</span>${idTag}${typeTag}`;
+  const argsHtml = renderToolCallArgsBlock(tc.function.arguments);
+  if (argsHtml.length > 0) {
+    return `<details class="log-detail-collapsible">
+      <summary>${summaryParts}</summary>
+      ${argsHtml}
+    </details>`;
+  }
+  // No arguments to show — render a non-collapsible header so the
+  // tool call is still visible (its existence is information the
+  // operator needs).
+  return `<div class="log-detail-tool-call">
+    <div class="log-detail-tool-call-header">
+      ${summaryParts}
+    </div>
+  </div>`;
+}
+
+/** Render the "Other properties" block: every response-level and
+ *  choice-level field that isn't part of the structured content /
+ *  reasoning / tool_calls extraction (e.g. `id`, `model`, `object`,
+ *  `created`, `usage`, `system_fingerprint`, `service_tier`,
+ *  `choice.finish_reason`, `choice.index`, `choice.logprobs`).
+ *
+ *  Collapsed by default — these fields are useful for debugging
+ *  but not the primary thing the operator wants to see. */
+function renderOtherPropertiesBlock(props: Record<string, unknown>): string {
+  const parts: string[] = [];
+  for (const [k, v] of Object.entries(props)) {
+    parts.push(`<details class="log-detail-collapsible">
+      <summary><span class="log-detail-key">${escapeHtml(k)}</span></summary>
+      <pre class="json-viewer log-detail-collapsible-body">${formatJson(v)}</pre>
+    </details>`);
+  }
+  if (parts.length === 0) return "";
+  return `<details class="log-detail-collapsible">
+    <summary>Other properties (${parts.length})</summary>
+    <div class="log-detail-tool-calls">${parts.join("\n      ")}</div>
+  </details>`;
+}
+
+/** Render the "Raw response" block. ALWAYS collapsed by default —
+ *  it's the escape hatch for "the structured blocks above didn't
+ *  show me what I needed, let me see the raw JSON". */
+function renderRawResponseBlock(response: unknown): string {
+  return `<details class="log-detail-collapsible">
+    <summary>Raw response</summary>
+    <pre class="json-viewer log-detail-collapsible-body">${formatJson(response)}</pre>
+  </details>`;
+}
+
+/** Render the Response tab. Handles null, string, and object inputs.
+ *
+ *  Layout (top to bottom):
+ *    1. Message (content) — only if non-empty
+ *    2. Reasoning — only if non-empty
+ *    3. Each tool call as its own collapsible block (collapsed by
+ *       default), one per tool call
+ *    4. Other properties (id, model, usage, finish_reason, …) —
+ *       collapsed by default
+ *    5. Raw response — collapsed by default, ALWAYS present
+ *
+ *  Each section is independent: a response with content + tool_calls
+ *  shows all three; a response with only tool_calls shows just the
+ *  tool calls + other properties + raw; a response with empty
+ *  content and no tool_calls (e.g. a `finish_reason: "tool_calls"`
+ *  response whose tool_calls were emitted in a prior streamed chunk)
+ *  still shows other properties + raw so the operator can see the
+ *  request actually succeeded.
+ *
  *  @param streamingHint - set to true when the request is streaming
  *        but the response body is null (e.g. interrupted mid-stream). */
 function renderResponseTab(response: unknown, streamingHint?: boolean, createdAt?: string): string {
@@ -290,8 +449,7 @@ function renderResponseTab(response: unknown, streamingHint?: boolean, createdAt
   }
 
   // String: try to parse as JSON; on success, recurse with parsed
-  // value; on failure, format the raw string in a "Raw response"
-  // collapsible.
+  // value; on failure, show the raw string in a collapsible.
   if (typeof response === "string") {
     let parsed: unknown = null;
     let parsedOk = false;
@@ -302,76 +460,53 @@ function renderResponseTab(response: unknown, streamingHint?: boolean, createdAt
     }
     return `<section class="log-detail-section" data-log-tab="response">
       <h4>Response</h4>
-      <details class="log-detail-collapsible" open>
-        <summary>Raw response</summary>
-        <pre class="json-viewer log-detail-collapsible-body">${escapeHtml(response)}</pre>
-      </details>
+      ${renderRawResponseBlock(response)}
     </section>`;
   }
 
-  // Object/array: try to recognize an OpenAI chat-completion shape.
+  // Try to recognize an OpenAI chat-completion shape.
   const parsed = parseOpenAiChatResponse(response);
   if (parsed != null) {
     const blocks: string[] = [];
+    // Message (content) — only if non-empty.
     if (parsed.message != null) {
-      blocks.push(`<details class="log-detail-collapsible" open>
-        <summary>Message</summary>
-        <pre class="json-viewer log-detail-collapsible-body">${escapeHtml(parsed.message)}</pre>
-      </details>`);
+      blocks.push(renderMessageBlock(parsed.message));
     }
+    // Reasoning — only if non-empty.
     if (parsed.reasoning != null) {
-      blocks.push(`<details class="log-detail-collapsible" open>
-        <summary>Reasoning</summary>
-        <pre class="json-viewer log-detail-collapsible-body">${escapeHtml(parsed.reasoning)}</pre>
-      </details>`);
+      blocks.push(renderReasoningBlock(parsed.reasoning));
     }
-    if (parsed.toolCalls.length > 0) {
-      const callBlocks = parsed.toolCalls.map((tc, i) => {
-        const idTag = tc.id != null ? ` <span class="log-detail-key-meta">${escapeHtml(tc.id)}</span>` : "";
-        const typeTag = tc.type != null && tc.type !== "function" ? ` <span class="log-detail-key-meta">${escapeHtml(tc.type)}</span>` : "";
-        const summaryParts = `<span class="log-detail-tool-call-name">${escapeHtml(tc.function.name)}</span>${idTag}${typeTag}`;
-        const argsHtml = renderToolCallArgsBlock(tc.function.arguments);
-        if (argsHtml.length > 0) {
-          return `<details class="log-detail-collapsible"${i === 0 ? " open" : ""}>
-            <summary>${summaryParts}</summary>
-            ${argsHtml}
-          </details>`;
-        }
-        return `<div class="log-detail-tool-call">
-          <div class="log-detail-tool-call-header">
-            ${summaryParts}
-          </div>
-        </div>`;
-      }).join("");
-      blocks.push(`<details class="log-detail-collapsible" open>
-        <summary>Tool calls (${parsed.toolCalls.length})</summary>
-        <div class="log-detail-tool-calls">${callBlocks}</div>
-      </details>`);
+    // Each tool call as its own top-level collapsible (collapsed by
+    // default). Previously these were nested under a parent
+    // "Tool calls (N)" collapsible, which forced the operator to
+    // expand two levels to see any tool call's arguments.
+    for (let i = 0; i < parsed.toolCalls.length; i++) {
+      const tc = parsed.toolCalls[i];
+      if (tc != null) blocks.push(renderToolCallBlock(tc, i));
     }
-    if (blocks.length === 0) {
-      // Defensive: parseOpenAiChatResponse would have returned null
-      // in this case, but keep the fallback just in case.
-      return `<section class="log-detail-section" data-log-tab="response">
-        <h4>Response</h4>
-        <details class="log-detail-collapsible" open>
-          <summary>Raw response</summary>
-          <pre class="json-viewer log-detail-collapsible-body">${formatJson(response)}</pre>
-        </details>
-      </section>`;
+    // Other properties (id, model, usage, finish_reason, …).
+    if (parsed.otherProperties != null) {
+      blocks.push(renderOtherPropertiesBlock(parsed.otherProperties));
     }
+    // Raw response — always present, collapsed by default. The
+    // operator can expand it to see the original JSON when the
+    // structured extraction missed something.
+    blocks.push(renderRawResponseBlock(response));
     return `<section class="log-detail-section" data-log-tab="response">
       <h4>Response</h4>
       ${blocks.join("\n      ")}
     </section>`;
   }
 
-  // Fallback: not a recognized chat-completion. Try to extract
-  // whatever content we can from the raw object — message,
-  // reasoning, and tool calls — and only show the full "Raw
-  // response" block when there is nothing structured to display.
+  // Fallback: not a recognized chat-completion shape. Try to
+  // extract content / reasoning / tool_calls from the raw object
+  // via the same logic as parseOpenAiChatResponse but without the
+  // strict shape check, then always show the raw response at the
+  // end.
   let rawContent: string | null = null;
   let rawReasoning: string | null = null;
   let rawToolCalls: ToolCall[] = [];
+  let rawOtherProperties: Record<string, unknown> | null = null;
   if (typeof response === "object" && response !== null && !Array.isArray(response)) {
     const obj = response as Record<string, unknown>;
     // Try choices[0].message.content or delta.content at top level.
@@ -382,12 +517,12 @@ function renderResponseTab(response: unknown, streamingHint?: boolean, createdAt
         const msg = (c0["message"] ?? c0["delta"]) as Record<string, unknown> | undefined;
         if (msg && typeof msg === "object") {
           const content: unknown = msg["content"];
-          if (typeof content === "string") rawContent = content || null;
+          if (typeof content === "string" && content.length > 0) rawContent = content;
           const rc: unknown = msg["reasoning_content"];
-          if (typeof rc === "string") rawReasoning = rc;
+          if (typeof rc === "string" && rc.length > 0) rawReasoning = rc;
           else {
             const r: unknown = msg["reasoning"];
-            if (typeof r === "string") rawReasoning = r;
+            if (typeof r === "string" && r.length > 0) rawReasoning = r;
           }
           // Extract tool calls from the message/delta object.
           if (Array.isArray(msg["tool_calls"])) {
@@ -408,53 +543,47 @@ function renderResponseTab(response: unknown, streamingHint?: boolean, createdAt
             }
           }
         }
+        // Collect choice-level "other properties" (finish_reason, etc.)
+        const choiceProps: Record<string, unknown> = {};
+        for (const [k, val] of Object.entries(c0)) {
+          if (k === "message" || k === "delta" || k === "text") continue;
+          if (val == null) continue;
+          if (typeof val === "string" && val.length === 0) continue;
+          if (typeof val === "object" && val !== null && !Array.isArray(val)
+              && Object.keys(val as object).length === 0) continue;
+          choiceProps[`choice.${k}`] = val;
+        }
+        if (Object.keys(choiceProps).length > 0) {
+          rawOtherProperties = { ...(rawOtherProperties ?? {}), ...choiceProps };
+        }
       }
+    }
+    // Collect top-level "other properties" (id, model, usage, etc.)
+    const topLevelProps: Record<string, unknown> = {};
+    for (const [k, val] of Object.entries(obj)) {
+      if (k === "choices") continue;
+      if (val == null) continue;
+      if (typeof val === "string" && val.length === 0) continue;
+      if (typeof val === "object" && val !== null && !Array.isArray(val)
+          && Object.keys(val as object).length === 0) continue;
+      topLevelProps[k] = val;
+    }
+    if (Object.keys(topLevelProps).length > 0) {
+      rawOtherProperties = { ...(rawOtherProperties ?? {}), ...topLevelProps };
     }
   }
   const blocks: string[] = [];
-  if (rawContent != null) {
-    blocks.push(`<details class="log-detail-collapsible" open>
-      <summary>Message</summary>
-      <pre class="json-viewer log-detail-collapsible-body">${escapeHtml(rawContent)}</pre>
-    </details>`);
+  if (rawContent != null) blocks.push(renderMessageBlock(rawContent));
+  if (rawReasoning != null) blocks.push(renderReasoningBlock(rawReasoning));
+  for (let i = 0; i < rawToolCalls.length; i++) {
+    const tc = rawToolCalls[i];
+    if (tc != null) blocks.push(renderToolCallBlock(tc, i));
   }
-  if (rawReasoning != null) {
-    blocks.push(`<details class="log-detail-collapsible" open>
-      <summary>Reasoning</summary>
-      <pre class="json-viewer log-detail-collapsible-body">${escapeHtml(rawReasoning)}</pre>
-    </details>`);
+  if (rawOtherProperties != null && Object.keys(rawOtherProperties).length > 0) {
+    blocks.push(renderOtherPropertiesBlock(rawOtherProperties));
   }
-  if (rawToolCalls.length > 0) {
-    const callBlocks = rawToolCalls.map((tc, i) => {
-      const idTag = tc.id != null ? ` <span class="log-detail-key-meta">${escapeHtml(tc.id)}</span>` : "";
-      const typeTag = tc.type != null && tc.type !== "function" ? ` <span class="log-detail-key-meta">${escapeHtml(tc.type)}</span>` : "";
-      const summaryParts = `<span class="log-detail-tool-call-name">${escapeHtml(tc.function.name)}</span>${idTag}${typeTag}`;
-      const argsHtml = renderToolCallArgsBlock(tc.function.arguments);
-      if (argsHtml.length > 0) {
-        return `<details class="log-detail-collapsible"${i === 0 ? " open" : ""}>
-          <summary>${summaryParts}</summary>
-          ${argsHtml}
-        </details>`;
-      }
-      return `<div class="log-detail-tool-call">
-        <div class="log-detail-tool-call-header">
-          ${summaryParts}
-        </div>
-      </div>`;
-    }).join("");
-    blocks.push(`<details class="log-detail-collapsible" open>
-      <summary>Tool calls (${rawToolCalls.length})</summary>
-      <div class="log-detail-tool-calls">${callBlocks}</div>
-    </details>`);
-  }
-  // Only show the full "Raw response" when we couldn't extract
-  // any structured blocks above.
-  if (blocks.length === 0) {
-    blocks.push(`<details class="log-detail-collapsible" open>
-      <summary>Raw response</summary>
-      <pre class="json-viewer log-detail-collapsible-body">${formatJson(response)}</pre>
-    </details>`);
-  }
+  // Always show the raw response as the last block.
+  blocks.push(renderRawResponseBlock(response));
   return `<section class="log-detail-section" data-log-tab="response">
     <h4>Response</h4>
     ${blocks.join("\n      ")}
