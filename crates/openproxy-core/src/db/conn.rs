@@ -191,11 +191,27 @@ fn configure_connection(conn: &Connection) -> Result<()> {
             message: format!("pragma wal_autocheckpoint=1000: {}", e),
             source: Some(Box::new(e)),
         })?;
-    // Allow larger memory-mapped I/O (256MB) for better performance on
-    // systems that support it.
-    conn.pragma_update(None, "mmap_size", 268435456)
+    // Memory-mapped I/O cap. Previously this was 256 MiB, which made
+    // SQLite mmap the whole DB file into the process address space —
+    // accessed pages count against RSS, so a small proxy DB still
+    // showed up as ~tens of MiB resident on each connection (×2:
+    // writer + reader). The 256 MiB figure was a default from a
+    // different workload; for this proxy's small DB there is no
+    // meaningful performance gain above a few MiB, and the resident
+    // pages inflate idle RSS noticeably. 8 MiB per connection keeps
+    // hot pages mapped while bounding the RSS contribution.
+    conn.pragma_update(None, "mmap_size", 8 * 1024 * 1024)
         .map_err(|e| CoreError::Database {
-            message: format!("pragma mmap_size=268435456: {}", e),
+            message: format!("pragma mmap_size: {}", e),
+            source: Some(Box::new(e)),
+        })?;
+    // Bound SQLite's in-memory page cache explicitly. The default
+    // (-2000 = 2 MiB) is fine, but pinning it here prevents future
+    // schema bumps from silently changing it. Negative values are
+    // interpreted by SQLite as KiB.
+    conn.pragma_update(None, "cache_size", -2000)
+        .map_err(|e| CoreError::Database {
+            message: format!("pragma cache_size: {}", e),
             source: Some(Box::new(e)),
         })?;
     Ok(())

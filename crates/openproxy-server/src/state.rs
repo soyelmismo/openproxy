@@ -482,14 +482,32 @@ impl AppState {
         let discovery_scheduler = Arc::new(discovery_scheduler);
 
         let timeouts_initial = config.timeouts; // Copy, take it before moving config.
+        let rate_limiter = Arc::new(crate::rate_limit::RateLimiter::new(
+            crate::rate_limit::RateLimitConfig::default(),
+        ));
+        // Spawn a periodic cleanup of the rate-limiter's per-key map.
+        // Without this sweep, entries for API keys / IPs that were used
+        // once and never again would accumulate forever (the lazy
+        // cleanup on `check()` only resets expired counters — it never
+        // removes the key). 5 minutes is short enough to bound the
+        // map size under key-rotation, long enough to avoid thrash.
+        {
+            let rl = Arc::clone(&rate_limiter);
+            tokio::spawn(async move {
+                let mut tick = tokio::time::interval(std::time::Duration::from_secs(300));
+                tick.tick().await; // skip the immediate first tick
+                loop {
+                    tick.tick().await;
+                    rl.cleanup();
+                }
+            });
+        }
         let state = Self {
             config,
             db_pool,
             master_key,
             adapters,
-            rate_limiter: Arc::new(crate::rate_limit::RateLimiter::new(
-                crate::rate_limit::RateLimitConfig::default(),
-            )),
+            rate_limiter,
             http_client: Arc::new(RwLock::new(http_client)),
             upstream_client,
             usage_tx,

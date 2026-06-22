@@ -33,6 +33,14 @@ http-body = "1"
 http-body-util = "0.1"
 bytes = "1"
 parking_lot = { workspace = true }
+# mimalloc as the global allocator. glibc malloc retains freed arenas
+# aggressively, which inflates idle RSS for long-running services that
+# go through bursts of allocation (migrations, models.dev sync,
+# discovery refresh). mimalloc returns memory to the OS more eagerly
+# and typically cuts idle RSS 20-40% on Rust services like this one.
+# The `default-features = false` avoids pulling in the `libmimalloc-sys`
+# `extended` build flags we don't need.
+mimalloc = { version = "0.1", default-features = false }
 
 [dev-dependencies]
 tower = { version = "0.5", features = ["util"] }

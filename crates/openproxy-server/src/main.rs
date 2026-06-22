@@ -20,6 +20,16 @@
 use openproxy_core::AppConfig;
 use std::env;
 
+// mimalloc as the global allocator. glibc malloc retains freed arenas
+// aggressively, which inflates idle RSS for long-running services that
+// go through bursts of allocation (startup migrations, models.dev sync,
+// discovery refresh, large request bodies). mimalloc returns memory to
+// the OS more eagerly and typically cuts idle RSS 20-40% on Rust
+// services like this one. This must be declared at crate scope so it
+// lives for the entire program duration.
+#[global_allocator]
+static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     // 0. Install rustls crypto provider. `ring` is pure-Rust and

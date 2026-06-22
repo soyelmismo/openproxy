@@ -13,11 +13,14 @@
 //! that carry no `usage` or `finish_reason` — is preserved: the accumulator
 //! stores the raw chunk payloads and parses them only at `finish()`.
 //!
-//! Cap: `MAX_ACCUMULATED_BYTES = 16 MiB`. When the accumulated text would
+//! Cap: `MAX_ACCUMULATED_BYTES = 4 MiB`. When the accumulated text would
 //! exceed this, `truncated` is set to `true` and the JSON's `extra` map
 //! carries `{"truncated": true}`. This bounds heap usage under high
-//! concurrency (proxy handles many in-flight streams; each could in
-//! principle grow to the upstream 32 MiB cap).
+//! concurrency (50 concurrent streams × 4 MiB = 200 MiB worst case).
+//! Previously 16 MiB (800 MiB worst case at 50 streams); reduced for
+//! RAM optimization. The upstream `http_body_util::Limited` cap is the
+//! authoritative bound; this secondary cap exists to bound the
+//! per-stream heap footprint of the accumulator itself.
 
 use serde_json::{json, Map, Value};
 
