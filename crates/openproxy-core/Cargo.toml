@@ -67,7 +67,7 @@ memchr = "2"
 # so disabling the module also disables the direct dep; that keeps
 # `cargo build -p openproxy-core --no-default-features` working.
 hyper = { version = "1.10", default-features = false, features = ["client", "http1", "http2"], optional = true }
-hyper-util = { version = "0.1", default-features = false, features = ["client-legacy", "tokio"], optional = true }
+hyper-util = { version = "0.1", default-features = false, features = ["client-legacy", "tokio", "http1", "http2"], optional = true }
 http = { version = "1", optional = true }
 http-body = { version = "1", optional = true }
 http-body-util = { version = "0.1", default-features = false, features = ["channel"], optional = true }
