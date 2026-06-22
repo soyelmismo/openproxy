@@ -32,7 +32,18 @@ use tokio::sync::broadcast;
 
 /// Channel capacity for the usage broadcast. Rows older than this are
 /// dropped for slow receivers.
-const BROADCAST_CAPACITY: usize = 256;
+///
+/// 1024 (was 256). The 256 figure was tuned for "~50 concurrent
+/// requests", but in practice a single failing request produces a
+/// burst of two renders in the dashboard (stage `failed` + the
+/// terminal usage row), and a few failures in a row can easily
+/// push a busy proxy past 256 in-flight events before a slow
+/// browser tab drains its queue. 1024 × sizeof(RecentUsageRow) ≈
+/// ~150 KB — trivial — and it raises the ceiling far enough that
+/// the only way to lag is a genuinely stuck consumer, which the
+/// decoupled sender task (see `stream_usage_rows` in admin.rs)
+/// now handles.
+const BROADCAST_CAPACITY: usize = 1024;
 
 static USAGE_SENDER: OnceCell<broadcast::Sender<RecentUsageRow>> = OnceCell::new();
 
@@ -52,10 +63,14 @@ static USAGE_SENDER: OnceCell<broadcast::Sender<RecentUsageRow>> = OnceCell::new
 ///
 /// Channel capacity: stages fire in bursts. A typical request emits
 /// ~5 stage events (started, connecting, waiting_ttft, streaming,
-/// completed). 256 is enough for ~50 concurrent requests without
-/// lagging, while bounding memory to ~256 × sizeof(StageEvent) ≈
-/// ~20 KB (was 1024 = ~80 KB).
-const STAGE_BROADCAST_CAPACITY: usize = 256;
+/// completed). 1024 is enough for ~200 concurrent requests without
+/// lagging, while bounding memory to ~1024 × sizeof(StageEvent) ≈
+/// ~80 KB. Was 256 (~20 KB), which was too tight — a slow browser
+/// tab doing a full-DOM rebuild on every WS message could easily
+/// lag past 256 in-flight events during a failure burst, dropping
+/// the `started`/`connecting` events of subsequent requests and
+/// making them invisible until their terminal usage row landed.
+const STAGE_BROADCAST_CAPACITY: usize = 1024;
 static STAGE_SENDER: OnceCell<broadcast::Sender<StageEvent>> = OnceCell::new();
 
 /// Initialize the global usage broadcast sender. Must be called exactly

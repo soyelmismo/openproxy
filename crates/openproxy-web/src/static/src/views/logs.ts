@@ -162,6 +162,75 @@ function attachLogRowHandlers(): void {
 }
 
 function renderLogsRows(): void {
+  // CRITICAL PERFORMANCE FIX: coalesce multiple render requests into
+  // a single DOM rebuild per animation frame. Previously every WS
+  // message called renderLogsRows() directly, which does a full
+  // `logsEl.innerHTML = …` rebuild. With ~500 cached rows this can
+  // take 50-150ms per render, and a burst of WS messages (e.g. a
+  // failure produces 2 messages in quick succession: stage `failed`
+  // + the terminal usage row) would block the browser event loop
+  // for the combined duration. While blocked, the browser couldn't
+  // drain the WS receive buffer, TCP back-pressure propagated to
+  // the server, and the server's `socket.send().await` stalled —
+  // which was the root cause of the "second request doesn't appear
+  // in real-time after a failure" bug.
+  //
+  // With this throttle, multiple incoming WS messages within the
+  // same frame (16ms at 60Hz) merge into ONE render call. The state
+  // updates (`mergeLogsByDescId`, `inflightByRequestId.delete`, etc.)
+  // happen synchronously per-message — only the expensive DOM
+  // rebuild is coalesced. This cuts the render cost from O(messages)
+  // to O(frames) per second.
+  if (renderLogsRowsScheduled) return;
+  renderLogsRowsScheduled = true;
+  // Use requestAnimationFrame so the render happens at the next
+  // paint opportunity, NOT immediately. This lets multiple WS
+  // messages arriving in the same macrotask batch their state
+  // updates before the render runs.
+  if (typeof requestAnimationFrame === "function") {
+    requestAnimationFrame(() => {
+      renderLogsRowsScheduled = false;
+      renderLogsRowsNow();
+    });
+  } else {
+    // Fallback for non-browser environments (tests) — setTimeout(0)
+    // gives roughly the same coalescing behavior.
+    setTimeout(() => {
+      renderLogsRowsScheduled = false;
+      renderLogsRowsNow();
+    }, 0);
+  }
+}
+
+/** Flag tracking whether a renderLogsRows() call is already
+ *  scheduled for the next animation frame. Set to `true` by
+ *  renderLogsRows() when scheduling, cleared by renderLogsRowsNow()
+ *  when the actual render runs. */
+let renderLogsRowsScheduled: boolean = false;
+
+/** Synchronous render — bypasses the requestAnimationFrame
+ *  coalescing. Used by user-initiated actions (page navigation,
+ *  column toggle, follow-tail toggle) where the caller expects the
+ *  DOM to reflect the new state IMMEDIATELY after the call returns.
+ *  WS-message-driven renders go through `renderLogsRows()` (the
+ *  throttled version) because they're high-frequency and can
+ *  tolerate a 16ms delay. */
+function renderLogsRowsSync(): void {
+  // Cancel any pending throttled render so it doesn't double-render.
+  renderLogsRowsScheduled = false;
+  renderLogsRowsNow();
+}
+
+/** Force a render on the next frame, even if one is already
+ *  scheduled. Used by event handlers that need to ensure the next
+ *  paint reflects the latest state (e.g. after a column toggle).
+ *  Equivalent to calling renderLogsRows() — the flag check there
+ *  is what makes this safe to call repeatedly. */
+function renderLogsRowsNow(): void {
+  // Reset the flag FIRST so that any state update triggered during
+  // the render (e.g. a click handler dispatched by innerHTML) can
+  // schedule a follow-up render without being suppressed.
+  renderLogsRowsScheduled = false;
   const logsEl = document.getElementById("logs");
   if (!logsEl) return;
   const inflightRows: (RecentUsageRow & { __inflight: boolean })[] = [
@@ -263,21 +332,25 @@ export function logsPrevPage(): void {
   if (state.logs.page > 1) {
     state.logs.page--;
     if (state.logs.page === 1) state.logs.followTail = true;
-    renderLogsRows();
+    // User-initiated action — use the synchronous renderer so the
+    // DOM reflects the new page immediately (the throttled version
+    // would defer to the next animation frame, which makes the UI
+    // feel laggy for click-driven navigation).
+    renderLogsRowsSync();
   }
 }
 export function logsNextPage(): void {
   if (state.logs.page < totalPages()) {
     state.logs.page++;
     if (state.logs.page >= totalPages()) state.logs.followTail = false;
-    renderLogsRows();
+    renderLogsRowsSync();
   }
 }
 export function logsGoPage(p: number): void {
   const total = totalPages();
   state.logs.page = Math.max(1, Math.min(p, total));
   state.logs.followTail = (state.logs.page === 1);
-  renderLogsRows();
+  renderLogsRowsSync();
 }
 export function logsSetFollow(e: Event): void {
   const target = e.target;
@@ -286,7 +359,7 @@ export function logsSetFollow(e: Event): void {
     enabled = !!target.checked;
   }
   state.logs.followTail = enabled;
-  if (enabled) { state.logs.page = 1; renderLogsRows(); }
+  if (enabled) { state.logs.page = 1; renderLogsRowsSync(); }
 }
 
 // ---- Columns menu ------------------------------------------------------
@@ -348,7 +421,10 @@ export function toggleColumn(key: string): void {
   // `checked` attribute in place instead.
   const cb = document.querySelector(`.columns-menu input[data-arg1="${key}"]`) as HTMLInputElement | null;
   if (cb) cb.checked = set.has(key);
-  renderLogsRows();
+  // User-initiated action (column toggle) — use the synchronous
+  // renderer so the table reflects the new column visibility
+  // immediately.
+  renderLogsRowsSync();
 }
 
 function handleStageEvent(event: StageEvent): void {

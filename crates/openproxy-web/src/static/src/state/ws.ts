@@ -87,7 +87,30 @@ export function connectLogsWebSocket(): void {
   });
   ws.addEventListener("message", (event: MessageEvent) => {
     if (state.logs.ws !== ws) return;
-    if (typeof messageHandler === "function") messageHandler(event);
+    if (typeof messageHandler !== "function") return;
+    // CRITICAL: wrap the entire handler in try/catch. Without this,
+    // a single malformed WS message (e.g. an unexpected null field
+    // in a usage row) would throw out of `messageHandler`, leave
+    // `state.logs` in an inconsistent mid-update state, and any
+    // subsequent WS messages would be queued behind the broken
+    // listener invocation — manifesting as "second request doesn't
+    // appear in real-time after a failure". The DOM spec doesn't
+    // close the WS on an uncaught exception in an event listener,
+    // but it DOES skip any remaining work in that listener
+    // invocation, and the cascade of inconsistent state can break
+    // subsequent renders. Catching here keeps the listener alive
+    // and logs the failure for debugging.
+    try {
+      messageHandler(event);
+    } catch (err) {
+      // Log to console with a snippet of the message data for
+      // debugging, but don't rethrow — the next WS message must
+      // be allowed to process normally.
+      const snippet: string = typeof event.data === "string"
+        ? event.data.slice(0, 200)
+        : String(event.data).slice(0, 200);
+      console.error("[openproxy] live-logs WS message handler threw:", err, "message snippet:", snippet);
+    }
   });
   ws.addEventListener("close", () => {
     if (state.logs.ws !== ws) return;
