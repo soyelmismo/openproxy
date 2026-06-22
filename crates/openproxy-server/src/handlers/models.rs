@@ -81,7 +81,16 @@ pub async fn list_models(
             .map(|m| build_model_entry(&m))
             .collect();
         for c in &combo_rows {
-            data.push(build_combo_entry(c));
+            // Compute the effective context window: explicit override
+            // on the combo row, or auto-compute (min across all
+            // targets including sub-combos recursively).
+            let effective_cw = if c.context_window.is_some() {
+                c.context_window
+            } else {
+                combos::compute_effective_context_window(&w, c.id)
+                    .unwrap_or(None)
+            };
+            data.push(build_combo_entry(c, effective_cw));
         }
 
         Ok(Json(serde_json::json!({
@@ -179,7 +188,7 @@ fn authenticate_chat_or_anonymous(
 /// to be combos. Capability fields are `null` because a combo is an
 /// alias for an operator-chosen list of targets, not a real model;
 /// per-model metadata would be misleading.
-fn build_combo_entry(c: &openproxy_core::combos::Combo) -> serde_json::Value {
+fn build_combo_entry(c: &openproxy_core::combos::Combo, effective_context_window: Option<i64>) -> serde_json::Value {
     let id = format!("combo:{}", c.name);
     serde_json::json!({
         "id": id,
@@ -189,12 +198,12 @@ fn build_combo_entry(c: &openproxy_core::combos::Combo) -> serde_json::Value {
         "permission": [],
         "root": id,
         "parent": null,
-        // Combos do not carry per-model metadata; leave the
-        // capability fields as `null` so clients that just look
-        // for the presence of `context_length` see a clear "this is
-        // a virtual entry" signal.
-        "context_length": null,
-        "max_input_tokens": null,
+        // The effective context window: either the operator-set
+        // override, or the auto-computed minimum across all targets
+        // (including sub-combos recursively). `null` when no target
+        // has a known context_length.
+        "context_length": effective_context_window,
+        "max_input_tokens": effective_context_window,
         "max_output_tokens": null,
         "input_modalities": ["text"],
         "output_modalities": ["text"],

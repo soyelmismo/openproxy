@@ -41,6 +41,11 @@ pub struct Combo {
     pub strategy: Strategy,
     pub race_size: u8,
     pub created_at: String,
+    /// Operator-set context window override. `None` = auto-compute
+    /// (minimum across all targets, including sub-combos recursively).
+    /// `Some(n)` = use `n` as the reported context window in /v1/models.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context_window: Option<i64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -121,6 +126,16 @@ pub struct ComboTargetWithModel {
     /// parked.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cooldown_reason: Option<String>,
+    /// Model's context_length (from `models.context_length`). `None`
+    /// for sub-combo targets or if the model row has no metadata.
+    /// Surfaced so the dashboard can show the context window per
+    /// target in the combo editor.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context_length: Option<i64>,
+    /// Model's max output tokens (from `models.max_output_tokens`).
+    /// `None` for sub-combo targets.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_output_tokens: Option<i64>,
 }
 
 pub fn create_combo(
@@ -171,7 +186,7 @@ pub fn create_combo(
 pub fn get_combo(conn: &Connection, id: ComboId) -> Result<Option<Combo>> {
     let row = conn
         .query_row(
-            "SELECT id, name, strategy, race_size, created_at \
+            "SELECT id, name, strategy, race_size, created_at, context_window \
              FROM combos WHERE id = ?1",
             params![id.0],
             row_to_combo,
@@ -187,7 +202,7 @@ pub fn get_combo(conn: &Connection, id: ComboId) -> Result<Option<Combo>> {
 pub fn list_combos(conn: &Connection) -> Result<Vec<Combo>> {
     let mut stmt = conn
         .prepare(
-            "SELECT id, name, strategy, race_size, created_at \
+            "SELECT id, name, strategy, race_size, created_at, context_window \
              FROM combos ORDER BY id",
         )
         .map_err(|e| CoreError::Database {
@@ -220,7 +235,7 @@ pub fn list_combos(conn: &Connection) -> Result<Vec<Combo>> {
 pub fn get_combo_by_name(conn: &Connection, name: &str) -> Result<Option<Combo>> {
     let mut stmt = conn
         .prepare(
-            "SELECT id, name, strategy, race_size, created_at \
+            "SELECT id, name, strategy, race_size, created_at, context_window \
              FROM combos WHERE name = ?1",
         )
         .map_err(|e| CoreError::Database {
@@ -703,7 +718,9 @@ pub fn list_targets_with_model(
                     CASE WHEN tc.cooldown_until IS NOT NULL \
                               AND datetime(tc.cooldown_until) > datetime('now') \
                          THEN 1 ELSE 0 END as in_cooldown, \
-                    tc.reason \
+                    tc.reason, \
+                    m.context_length, \
+                    m.max_output_tokens \
              FROM combo_targets ct \
              INNER JOIN providers p ON p.id = ct.provider_id \
              LEFT JOIN models m ON m.id = ct.model_row_id \
@@ -916,6 +933,153 @@ pub fn clear_targets(conn: &Connection, combo_id: ComboId) -> Result<()> {
         source: Some(Box::new(e)),
     })?;
     Ok(())
+}
+
+/// Update the `context_window` override for a combo. `None` means
+/// "auto-compute from targets" (the default). `Some(n)` pins the
+/// reported context window to `n` tokens.
+pub fn update_context_window(
+    conn: &Connection,
+    id: ComboId,
+    context_window: Option<i64>,
+) -> Result<()> {
+    let affected = conn
+        .execute(
+            "UPDATE combos SET context_window = ?1 WHERE id = ?2",
+            params![context_window, id.0],
+        )
+        .map_err(|e| CoreError::Database {
+            message: format!("update context_window for combo {}: {}", id.0, e),
+            source: Some(Box::new(e)),
+        })?;
+    if affected == 0 {
+        return Err(CoreError::ComboNotFound(id.0));
+    }
+    Ok(())
+}
+
+/// Compute the effective context window for a combo. If the combo has
+/// an explicit `context_window` override, return that. Otherwise,
+/// recursively compute the minimum `context_length` across all targets
+/// (including sub-combo targets, resolved transitively).
+///
+/// Sub-combo targets are resolved recursively: if combo A contains
+/// sub-combo B, and B has an explicit override, that override is used;
+/// otherwise B's targets are recursed into. A cycle guard prevents
+/// infinite loops (returns `None` if a cycle is detected).
+///
+/// Returns `None` if:
+/// - The combo has no targets.
+/// - No target has a known `context_length`.
+/// - A cycle is detected among sub-combos.
+pub fn compute_effective_context_window(
+    conn: &Connection,
+    combo_id: ComboId,
+) -> Result<Option<i64>> {
+    let combo = match get_combo(conn, combo_id)? {
+        Some(c) => c,
+        None => return Ok(None),
+    };
+    // Explicit override wins.
+    if let Some(cw) = combo.context_window {
+        return Ok(Some(cw));
+    }
+    // Auto-compute: recursively find the min context_length across
+    // all targets.
+    let targets = list_targets(conn, combo_id)?;
+    if targets.is_empty() {
+        return Ok(None);
+    }
+    let mut min_cw: Option<i64> = None;
+    for t in &targets {
+        let target_cw = if let Some(sub_id) = t.sub_combo_id {
+            // Sub-combo: recurse with cycle guard.
+            compute_context_window_recursive(conn, sub_id, &mut Vec::new())?
+        } else if let Some(model_row_id) = t.model_row_id {
+            // Flat target: look up the model's context_length.
+            get_model_context_length(conn, model_row_id)?
+        } else {
+            None
+        };
+        if let Some(cw) = target_cw {
+            min_cw = Some(min_cw.map_or(cw, |m| m.min(cw)));
+        }
+    }
+    Ok(min_cw)
+}
+
+/// Recursive helper for `compute_effective_context_window`. The
+/// `visited` vector tracks the combo ids already seen in the current
+/// recursion chain to detect cycles.
+fn compute_context_window_recursive(
+    conn: &Connection,
+    combo_id: ComboId,
+    visited: &mut Vec<ComboId>,
+) -> Result<Option<i64>> {
+    // Cycle guard.
+    if visited.contains(&combo_id) {
+        tracing::warn!(
+            combo_id = combo_id.0,
+            "cycle detected in sub-combo context window computation; returning None"
+        );
+        return Ok(None);
+    }
+    visited.push(combo_id);
+
+    let combo = match get_combo(conn, combo_id)? {
+        Some(c) => c,
+        None => {
+            visited.pop();
+            return Ok(None);
+        }
+    };
+    // Explicit override wins.
+    if let Some(cw) = combo.context_window {
+        visited.pop();
+        return Ok(Some(cw));
+    }
+
+    let targets = list_targets(conn, combo_id)?;
+    if targets.is_empty() {
+        visited.pop();
+        return Ok(None);
+    }
+
+    let mut min_cw: Option<i64> = None;
+    for t in &targets {
+        let target_cw = if let Some(sub_id) = t.sub_combo_id {
+            compute_context_window_recursive(conn, sub_id, visited)?
+        } else if let Some(model_row_id) = t.model_row_id {
+            get_model_context_length(conn, model_row_id)?
+        } else {
+            None
+        };
+        if let Some(cw) = target_cw {
+            min_cw = Some(min_cw.map_or(cw, |m| m.min(cw)));
+        }
+    }
+    visited.pop();
+    Ok(min_cw)
+}
+
+/// Look up a model's `context_length` by its `model_row_id`.
+fn get_model_context_length(
+    conn: &Connection,
+    model_row_id: ModelRowId,
+) -> Result<Option<i64>> {
+    let cw: Option<i64> = conn
+        .query_row(
+            "SELECT context_length FROM models WHERE id = ?1",
+            params![model_row_id.0],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(|e| CoreError::Database {
+            message: format!("get_model_context_length {}: {}", model_row_id.0, e),
+            source: Some(Box::new(e)),
+        })?
+        .flatten();
+    Ok(cw)
 }
 
 /// Resolve the targets to actually use for a request, in execution order.
@@ -1230,6 +1394,10 @@ fn row_to_combo(row: &Row<'_>) -> rusqlite::Result<Combo> {
     let strategy_str: String = row.get(2)?;
     let race_size: i64 = row.get(3)?;
     let created_at: String = row.get(4)?;
+    // Column 5 is `context_window` (added by migration 000034). Older
+    // rows / older databases that haven't run the migration yet get
+    // NULL → `None` → auto-compute.
+    let context_window: Option<i64> = row.get(5).ok().flatten();
 
     let strategy = Strategy::parse(&strategy_str).map_err(|e| {
         rusqlite::Error::FromSqlConversionFailure(
@@ -1256,6 +1424,7 @@ fn row_to_combo(row: &Row<'_>) -> rusqlite::Result<Combo> {
         strategy,
         race_size: race_size as u8,
         created_at,
+        context_window,
     })
 }
 
@@ -1300,6 +1469,11 @@ fn row_to_target_with_model(row: &Row<'_>) -> rusqlite::Result<ComboTargetWithMo
     let cooldown_until: Option<String> = row.get(10)?;
     let in_cooldown: i64 = row.get(11)?;
     let cooldown_reason: Option<String> = row.get(12)?;
+    // Columns 13-14: model context_length + max_output_tokens from
+    // the `LEFT JOIN models m`. `None` for sub-combo targets or
+    // models without metadata.
+    let context_length: Option<i64> = row.get(13)?;
+    let max_output_tokens: Option<i64> = row.get(14)?;
 
     Ok(ComboTargetWithModel {
         id: ComboTargetId(id),
@@ -1315,6 +1489,8 @@ fn row_to_target_with_model(row: &Row<'_>) -> rusqlite::Result<ComboTargetWithMo
         in_cooldown: in_cooldown != 0,
         cooldown_until,
         cooldown_reason,
+        context_length,
+        max_output_tokens,
     })
 }
 

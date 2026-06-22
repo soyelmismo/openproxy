@@ -177,6 +177,11 @@ const MIGRATIONS: &[Migration] = &[
         name: "000033_add_model_id_normalized",
         sql: include_str!("../../migrations/000033_add_model_id_normalized.sql"),
     },
+    Migration {
+        version: 34,
+        name: "000034_combo_context_window",
+        sql: include_str!("../../migrations/000034_combo_context_window.sql"),
+    },
 ];
 
 /// Apply pending migrations on `conn`. Idempotent: skips versions already in
@@ -399,7 +404,7 @@ mod tests {
                 c.query_row("SELECT COUNT(*) FROM schema_migrations", [], |r| r.get(0))
                     .expect("count")
             });
-        assert_eq!(count_first, 32, "thirty-two migrations applied (versions 1-6, 8-33)");
+        assert_eq!(count_first, 33, "thirty-three migrations applied (versions 1-6, 8-34)");
 
         {
             let mut writer = pool.writer();

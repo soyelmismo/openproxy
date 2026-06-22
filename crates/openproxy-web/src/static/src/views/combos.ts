@@ -97,6 +97,19 @@ async function renderComboDetail(comboId: number): Promise<void> {
       <button class="link" data-action="clearTargetSelection">Clear selection</button>
     </div>
   ` : "";
+  // Compute the auto context window (min across targets with known
+  // context_length) so the operator can see what the auto-compute
+  // would produce, and compare it with the override.
+  const knownContexts = targets
+    .map((t) => t.context_length)
+    .filter((c): c is number => c != null && c > 0);
+  const autoCw = knownContexts.length > 0 ? Math.min(...knownContexts) : null;
+  const autoCwLabel = autoCw != null ? formatTokens(autoCw) : "—";
+  const overrideCw = combo.context_window ?? null;
+  const overrideCwLabel = overrideCw != null ? formatTokens(overrideCw) : "";
+  const effectiveCw = overrideCw ?? autoCw;
+  const effectiveCwLabel = effectiveCw != null ? formatTokens(effectiveCw) : "—";
+
   const headerActions = `
     <button data-action="testAllTargets" data-arg1="${comboId}">🧪 Test all</button>
     <button class="danger" data-action="deleteCombo" data-arg1="${comboId}">Delete</button>
@@ -110,6 +123,18 @@ async function renderComboDetail(comboId: number): Promise<void> {
         <label>Race size: <input type="number" min="1" max="8" value="${combo.race_size}" data-action="updateRaceSize" data-arg1="${comboId}" class="race-input"></label>
         ${headerActions}
       </div>
+    </div>
+    <div class="combo-context-window-bar">
+      <label>Context window:
+        <input type="number" min="1" placeholder="auto (${escapeHtml(autoCwLabel)})"
+               value="${overrideCwLabel}"
+               data-action="updateContextWindow" data-arg1="${comboId}"
+               class="cw-input" title="Override del context window (tokens). Vacío = auto-compute (min de targets).">
+      </label>
+      <span class="cw-hint">
+        Auto: <strong>${escapeHtml(autoCwLabel)}</strong> ·
+        Effective: <strong>${escapeHtml(effectiveCwLabel)}</strong>
+      </span>
     </div>
   `;
   let body = "";
@@ -127,7 +152,7 @@ async function renderComboDetail(comboId: number): Promise<void> {
     body += `<p class="empty">No targets. Add a target to start routing.</p>`;
   } else {
     body += `<table>
-      <thead><tr><th></th><th><input type="checkbox" id="target-select-all" data-action="toggleSelectAllTargets"></th><th>#</th><th>Provider</th><th>Account</th><th>Model</th><th>Actions</th></tr></thead>
+      <thead><tr><th></th><th><input type="checkbox" id="target-select-all" data-action="toggleSelectAllTargets"></th><th>#</th><th>Provider</th><th>Account</th><th>Model</th><th>Context</th><th>Actions</th></tr></thead>
       <tbody id="targets-tbody">`;
     for (const t of [...targets].sort((a, b) => a.priority_order - b.priority_order)) {
       const isSubCombo = t.sub_combo_id != null;
@@ -150,6 +175,9 @@ async function renderComboDetail(comboId: number): Promise<void> {
       const accountCell = isSubCombo
         ? "<em>n/a</em>"
         : (t.account_id ? "#" + t.account_id : "<em>rotate</em>");
+      const contextCell = isSubCombo
+        ? "<em>sub-combo</em>"
+        : (t.context_length != null ? `<span title="${escapeHtml(String(t.context_length))}">${escapeHtml(formatTokens(t.context_length))}</span>` : "—");
       const isSelected = state.selectedTargets.has(t.id);
       body += `
         <tr draggable="true" data-drag-id="${t.id}" data-combo-id="${comboId}" class="${isSelected ? "selected" : ""}">
@@ -159,6 +187,7 @@ async function renderComboDetail(comboId: number): Promise<void> {
           <td>${providerCell}</td>
           <td>${accountCell}</td>
           <td>${modelCell}</td>
+          <td>${contextCell}</td>
           <td>
             <button class="small" data-action="changePriority" data-arg1="${comboId}" data-arg2="${t.id}" data-arg3="-1">↑</button>
             <button class="small" data-action="changePriority" data-arg1="${comboId}" data-arg2="${t.id}" data-arg3="1">↓</button>
@@ -216,4 +245,11 @@ export async function mountCombos(opts: MountCombosOpts = {}): Promise<void> {
     return;
   }
   renderComboGrid();
+}
+
+/** Format a token count as a human-readable string (e.g. 128000 → "128k"). */
+function formatTokens(n: number): string {
+  if (n >= 1_000_000) return (n / 1_000_000).toFixed(1).replace(/\.0$/, "") + "M";
+  if (n >= 1_000) return (n / 1_000).toFixed(0) + "k";
+  return String(n);
 }

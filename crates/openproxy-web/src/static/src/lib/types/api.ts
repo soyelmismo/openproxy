@@ -256,6 +256,9 @@ export interface Combo {
   /** 1..=8 (CHECK constraint). */
   race_size: number;
   created_at: string;
+  /** Override del context window (tokens). `null` = auto-compute
+   *  (mínimo entre todos los targets, incluyendo sub-combos). */
+  context_window?: number | null;
 }
 
 /** @see crates/openproxy-core/src/combos.rs:47 */
@@ -288,6 +291,11 @@ export interface ComboTargetWithModel extends ComboTarget {
   cooldown_until: string | null;
   /** Motivo del cooldown; `null` cuando no está en cooldown. */
   cooldown_reason: string | null;
+  /** Context window del modelo (tokens). `null` para sub-combo targets
+   *  o modelos sin metadata. */
+  context_length: number | null;
+  /** Max output tokens del modelo. `null` para sub-combo targets. */
+  max_output_tokens: number | null;
 }
 
 /** Proyección liviana para el picker "add sub-combo target".

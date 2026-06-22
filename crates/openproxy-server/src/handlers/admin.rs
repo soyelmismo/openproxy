@@ -2310,12 +2310,27 @@ pub async fn update_combo(
     Json(body): Json<serde_json::Value>,
 ) -> ApiResult<Json<serde_json::Value>> {
     let body: Result<Json<serde_json::Value>, ApiError> = async {
-        let race_size = body
-            .get("race_size")
-            .and_then(|v| v.as_u64())
-            .map(|n| u8::try_from(n).unwrap_or(0));
         let w = s.db_pool().writer();
-        combos::update_combo(&w, ComboId(id), race_size)?;
+        // Optional race_size update.
+        if let Some(n) = body.get("race_size").and_then(|v| v.as_u64()) {
+            let rs = u8::try_from(n).unwrap_or(0);
+            combos::update_combo(&w, ComboId(id), Some(rs))?;
+        }
+        // Optional context_window update. `null` or missing means
+        // "auto-compute from targets". A positive integer pins the
+        // reported context window.
+        if let Some(cw_val) = body.get("context_window") {
+            let cw = if cw_val.is_null() {
+                None
+            } else {
+                Some(cw_val.as_i64().ok_or_else(|| {
+                    ApiError(CoreError::Validation(
+                        "context_window must be null or an integer".into(),
+                    ))
+                })?)
+            };
+            combos::update_context_window(&w, ComboId(id), cw)?;
+        }
         Ok(Json(serde_json::json!({ "id": id })))
     }
     .await;

@@ -85,6 +85,33 @@ export async function updateRaceSize(id: number, e: Event | null): Promise<void>
   }
 }
 
+export async function updateContextWindow(id: number, e: Event | null): Promise<void> {
+  // Only fire on "change" (blur/enter), not on every "input" keystroke.
+  // The generic data-action dispatcher fires for both "input" and
+  // "change"; without this guard, every keystroke in the number input
+  // would trigger a PATCH request.
+  if (e && e.type === "input") return;
+  const raw = e && e.target ? (e.target as HTMLInputElement).value.trim() : "";
+  // Empty = auto-compute (null). Non-empty = parse as integer.
+  const body = raw === "" ? { context_window: null } : { context_window: parseInt(raw, 10) };
+  if (raw !== "" && !Number.isFinite(body.context_window)) {
+    alert("Context window must be a number or empty");
+    rerenderCurrentView();
+    return;
+  }
+  try {
+    await api("/combos/" + id, { method: "PATCH", body: JSON.stringify(body) });
+    // Update the combo in state so the effective value refreshes.
+    const combo = (state.combos || []).find((c) => c.id === id);
+    if (combo) combo.context_window = body.context_window;
+    rerenderCurrentView();
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    alert("Error: " + msg);
+    rerenderCurrentView();
+  }
+}
+
 // testAllTargets: receives (comboId, e). The e.target is the button
 // that was clicked; we toggle a "Testing…" state on it. The
 // original code used `window.event` to find the button, which is
