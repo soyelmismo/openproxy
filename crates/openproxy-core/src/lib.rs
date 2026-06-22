@@ -22,6 +22,7 @@ pub mod analytics;
 pub mod translation;
 pub mod sse;
 pub mod sse_accumulator;
+pub mod think_extractor;
 pub mod pipeline;
 pub mod timeouts;
 pub mod retry;

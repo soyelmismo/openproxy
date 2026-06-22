@@ -1,0 +1,596 @@
+//! Extract `<think>...</think>` blocks from the `content` field and
+//! move them to `reasoning_content`.
+//!
+//! ## The problem
+//!
+//! Some LLM providers (DeepSeek, Qwen, Gemini via certain frontends,
+//! open-source models served via vLLM/Ollama) send the model's
+//! chain-of-thought reasoning **interleaved with the final answer**
+//! inside the `content` field, wrapped in `<think>...</think>` tags:
+//!
+//! ```json
+//! {"choices":[{"delta":{"content":"<think>\nLet me think...\n</think>\nThe answer is 42."}}]}
+//! ```
+//!
+//! Clients that parse `<think>` tags (Cursor, Cline, OpenCode) extract
+//! the reasoning into a separate panel — but if the proxy ALSO
+//! forwards the raw `content`, the reasoning appears **twice**: once
+//! in the reasoning panel and once in the visible response. Clients
+//! that DON'T parse `<think>` tags show the raw tags to the user,
+//! which is ugly.
+//!
+//! ## The solution
+//!
+//! This module provides two functions:
+//!
+//! 1. [`extract_think_from_content`] — for non-streaming responses.
+//!    Takes the full `content` string, extracts all `<think>` blocks,
+//!    and returns `(clean_content, reasoning_content)`.
+//!
+//! 2. [`ThinkStreamExtractor`] — for streaming responses. A stateful
+//!    parser that processes `content` deltas chunk-by-chunk and emits
+//!    `(content_delta, reasoning_delta)` pairs. The `<think>` tags may
+//!    span multiple chunks, so the extractor maintains a state machine
+//!    to track whether we're currently inside a think block.
+//!
+//! ## Supported tag formats
+//!
+//! - `<think>...</think>` (DeepSeek, Qwen)
+//! - `<thinking>...</thinking>` (Anthropic-style, some wrappers)
+//! - `<reasoning>...</reasoning>` (some providers)
+//!
+//! The extractor is case-insensitive for the tag name and handles
+//! whitespace after the opening tag.
+
+/// Tags that are recognized as reasoning blocks.
+const THINK_OPEN_TAGS: &[&str] = &["<think>", "<thinking>", "<reasoning>", "<thought>"];
+const THINK_CLOSE_TAGS: &[&str] = &["</think>", "</thinking>", "</reasoning>", "</thought>"];
+
+/// Extract `<think>` blocks from a non-streaming `OpenAIResponse`'s
+/// message content and move them to `reasoning_content`.
+///
+/// For each choice's assistant message:
+/// 1. If `content` is a string, extract `<think>` blocks from it.
+/// 2. If think blocks are found, set `content` to the cleaned text
+///    and set `reasoning_content` in the message's `extra` map.
+/// 3. If `reasoning_content` already exists (the provider sent it
+///    natively), the extracted think text is **prepended** to the
+///    existing value — we don't overwrite native reasoning.
+pub fn extract_think_from_response(
+    mut resp: crate::translation::OpenAIResponse,
+) -> crate::translation::OpenAIResponse {
+    for choice in resp.choices.iter_mut() {
+        if choice.message.role != "assistant" {
+            continue;
+        }
+        let content_str = match &choice.message.content {
+            Some(serde_json::Value::String(s)) => s.clone(),
+            _ => continue,
+        };
+        let extracted = extract_think_from_content(&content_str);
+        if !extracted.has_reasoning() {
+            continue;
+        }
+        // Set cleaned content.
+        choice.message.content = Some(serde_json::Value::String(extracted.content));
+        // Set or merge reasoning_content in the extra map.
+        let existing_rc = choice
+            .message
+            .extra
+            .get("reasoning_content")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        let merged = if existing_rc.is_empty() {
+            extracted.reasoning
+        } else {
+            format!("{}\n{}", extracted.reasoning, existing_rc)
+        };
+        choice.message.extra.insert(
+            "reasoning_content".to_string(),
+            serde_json::Value::String(merged),
+        );
+    }
+    resp
+}
+
+/// Result of extracting think blocks from a non-streaming response.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ExtractedThink {
+    /// The content with all `<think>` blocks removed. May be empty
+    /// if the entire response was reasoning.
+    pub content: String,
+    /// The concatenated reasoning from all `<think>` blocks.
+    /// Empty if no think blocks were found.
+    pub reasoning: String,
+}
+
+impl ExtractedThink {
+    /// True if any think blocks were found.
+    pub fn has_reasoning(&self) -> bool {
+        !self.reasoning.is_empty()
+    }
+}
+
+/// Extract all `<think>...</think>` blocks from a content string.
+///
+/// Handles interleaved reasoning: `<think>A</think>B<think>C</think>D`
+/// produces `content = "BD"` and `reasoning = "AC"`.
+///
+/// The tags are matched case-insensitively. Whitespace between the
+/// opening tag and the content is trimmed from the reasoning. If the
+/// closing tag is missing, everything after the opening tag is treated
+/// as reasoning (the model didn't finish the think block properly).
+pub fn extract_think_from_content(content: &str) -> ExtractedThink {
+    let mut result = ExtractedThink::default();
+    let mut remaining = content;
+
+    loop {
+        // Find the earliest opening tag.
+        let (tag_idx, _tag_name) = match find_earliest_tag(remaining, THINK_OPEN_TAGS) {
+            Some(v) => v,
+            None => {
+                result.content.push_str(remaining);
+                break;
+            }
+        };
+
+        // Push content before the tag.
+        result.content.push_str(&remaining[..tag_idx]);
+        let after_open = &remaining[tag_idx..];
+
+        // Determine the close tag we're looking for.
+        let open_tag_lower = after_open.to_ascii_lowercase();
+        let close_tag = THINK_CLOSE_TAGS
+            .iter()
+            .find(|ct| {
+                let open_prefix = &ct[..ct.len() - 1]; // "</think" from "</think>"
+                let open_eq = format!("<{}>", &open_prefix[2..]); // "<think>" from "</think>"
+                open_tag_lower.starts_with(&open_eq.to_ascii_lowercase())
+            })
+            .map(|ct| ct.to_ascii_lowercase());
+
+        let after_tag_content = &after_open[after_open
+            .find('>')
+            .map(|p| p + 1)
+            .unwrap_or(after_open.len())..];
+
+        let (think_text, rest) = match &close_tag {
+            Some(ct) => {
+                // Find the close tag (case-insensitive).
+                let ct_lower = ct.as_str();
+                let lower = after_tag_content.to_ascii_lowercase();
+                match lower.find(ct_lower) {
+                    Some(pos) => {
+                        let think = &after_tag_content[..pos];
+                        let rest = &after_tag_content[pos + ct_lower.len()..];
+                        (think, rest)
+                    }
+                    None => {
+                        // No closing tag — treat rest as reasoning.
+                        (after_tag_content, "")
+                    }
+                }
+            }
+            None => (after_tag_content, ""),
+        };
+
+        // Trim leading/trailing whitespace from the reasoning block.
+        let trimmed = think_text.trim();
+        if !trimmed.is_empty() {
+            if !result.reasoning.is_empty() {
+                result.reasoning.push('\n');
+            }
+            result.reasoning.push_str(trimmed);
+        }
+        remaining = rest;
+    }
+
+    // Trim leading whitespace from the final content that was between
+    // the closing </think> tag and the start of the actual answer.
+    // Providers typically format as:
+    //   <think>reasoning</think>\nThe answer
+    // so the content starts with a stray newline after extraction.
+    result.content = result.content.trim_start_matches('\n').to_string();
+
+    result
+}
+
+/// Find the earliest occurrence of any of the given tags in `s`.
+/// Returns `(byte_offset, tag_string)`.
+fn find_earliest_tag<'a>(s: &str, tags: &[&'a str]) -> Option<(usize, &'a str)> {
+    let lower = s.to_ascii_lowercase();
+    tags.iter()
+        .filter_map(|tag| lower.find(tag.to_ascii_lowercase().as_str()).map(|pos| (pos, *tag)))
+        .min_by_key(|(pos, _)| *pos)
+}
+
+/// Stateful extractor for streaming responses.
+///
+/// Processes `content` deltas one at a time and emits
+/// `(content_delta, reasoning_delta)` pairs. The `<think>` tags may
+/// span multiple chunks, so the extractor maintains a buffer to handle
+/// partial tags.
+///
+/// # Usage
+///
+/// ```ignore
+/// let mut extractor = ThinkStreamExtractor::new();
+/// for delta in streaming_deltas {
+///     let (content, reasoning) = extractor.process(&delta);
+///     if !reasoning.is_empty() {
+///         // emit a chunk with reasoning_content
+///     }
+///     if !content.is_empty() {
+///         // emit a chunk with content
+///     }
+/// }
+/// // After the stream ends, flush any remaining buffer:
+/// let (content, reasoning) = extractor.flush();
+/// ```
+#[derive(Debug, Clone)]
+pub struct ThinkStreamExtractor {
+    /// Current state: are we inside a `<think>` block?
+    inside_think: bool,
+    /// Buffer for content that might be part of a tag that spans
+    /// chunk boundaries. E.g. if we receive "<thin" we buffer it
+    /// until we can determine if it's "<think>" or just text.
+    tag_buffer: String,
+    /// Which close tag we're looking for (set when we enter a think block).
+    close_tag: Option<String>,
+}
+
+impl ThinkStreamExtractor {
+    pub fn new() -> Self {
+        Self {
+            inside_think: false,
+            tag_buffer: String::new(),
+            close_tag: None,
+        }
+    }
+
+    /// Process a content delta. Returns `(content_delta, reasoning_delta)`.
+    ///
+    /// The returned content_delta has `<think>` blocks removed. The
+    /// reasoning_delta contains text from inside `<think>` blocks.
+    /// Both may be empty.
+    pub fn process(&mut self, delta: &str) -> (String, String) {
+        if delta.is_empty() {
+            return (String::new(), String::new());
+        }
+
+        // Prepend any buffered tag-pending content.
+        let mut input = std::mem::take(&mut self.tag_buffer);
+        input.push_str(delta);
+
+        if self.inside_think {
+            self.process_inside_think(&input)
+        } else {
+            self.process_outside_think(&input)
+        }
+    }
+
+    /// Flush any remaining buffer. Call this when the stream ends.
+    pub fn flush(&mut self) -> (String, String) {
+        let buffered = std::mem::take(&mut self.tag_buffer);
+        if buffered.is_empty() {
+            return (String::new(), String::new());
+        }
+        if self.inside_think {
+            // Unterminated think block — treat remaining as reasoning.
+            (String::new(), buffered)
+        } else {
+            // Buffered text that wasn't a tag — emit as content.
+            (buffered, String::new())
+        }
+    }
+
+    fn process_outside_think(&mut self, input: &str) -> (String, String) {
+        let lower = input.to_ascii_lowercase();
+
+        // Look for any opening tag.
+        let (tag_pos, tag_str) = match find_earliest_tag(&lower, THINK_OPEN_TAGS) {
+            Some(v) => v,
+            None => {
+                // No opening tag found. But the end of the input might
+                // be the start of a tag (e.g. "<thi"). Check if the
+                // input ends with a partial tag prefix and buffer it.
+                let safe_len = find_safe_split_point(input);
+                let content = input[..safe_len].to_string();
+                self.tag_buffer = input[safe_len..].to_string();
+                return (content, String::new());
+            }
+        };
+
+        // Found an opening tag. Emit content before it.
+        let content_before = input[..tag_pos].to_string();
+        let after_tag = &input[tag_pos..];
+
+        // Determine the close tag we're looking for.
+        let close_tag = THINK_CLOSE_TAGS
+            .iter()
+            .find(|ct| {
+                let open_from_close = format!("<{}>", &ct[2..ct.len() - 1]);
+                tag_str.eq_ignore_ascii_case(&open_from_close)
+            })
+            .map(|s| s.to_string());
+
+        self.close_tag = close_tag.clone();
+        self.inside_think = true;
+
+        // Skip past the opening tag.
+        let after_tag_content = after_tag
+            .get(tag_str.len()..)
+            .unwrap_or("");
+
+        if after_tag_content.is_empty() {
+            // The tag was exactly at the end — nothing more to process.
+            return (content_before, String::new());
+        }
+
+        // Process the remaining content as inside-think.
+        let (more_content, reasoning) = self.process_inside_think(after_tag_content);
+        // content_before is the text before <think>, more_content should
+        // be empty (we're inside think now) but just in case.
+        let final_content = if more_content.is_empty() {
+            content_before
+        } else {
+            format!("{}{}", content_before, more_content)
+        };
+        (final_content, reasoning)
+    }
+
+    fn process_inside_think(&mut self, input: &str) -> (String, String) {
+        let close_tag = match &self.close_tag {
+            Some(ct) => ct.clone(),
+            None => {
+                // Shouldn't happen, but handle gracefully.
+                self.inside_think = false;
+                return (input.to_string(), String::new());
+            }
+        };
+
+        let lower = input.to_ascii_lowercase();
+        let close_lower = close_tag.to_ascii_lowercase();
+
+        match lower.find(&close_lower) {
+            Some(pos) => {
+                // Found closing tag. Everything before it is reasoning.
+                let reasoning = input[..pos].to_string();
+                let after_close = &input[pos + close_tag.len()..];
+                self.inside_think = false;
+                self.close_tag = None;
+
+                if after_close.is_empty() {
+                    return (String::new(), reasoning);
+                }
+
+                // Process remaining content as outside-think.
+                let (more_content, more_reasoning) = self.process_outside_think(after_close);
+                let final_reasoning = if more_reasoning.is_empty() {
+                    reasoning
+                } else {
+                    format!("{}{}", reasoning, more_reasoning)
+                };
+                (more_content, final_reasoning)
+            }
+            None => {
+                // No closing tag found. But the end of the input might
+                // be the start of the close tag. Buffer the potential
+                // partial close tag.
+                let safe_len = find_safe_split_point_close(input, &close_lower);
+                let reasoning = input[..safe_len].to_string();
+                self.tag_buffer = input[safe_len..].to_string();
+                (String::new(), reasoning)
+            }
+        }
+    }
+}
+
+impl Default for ThinkStreamExtractor {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// Find the latest position in `input` where we can safely split
+/// without cutting a potential opening tag. Everything after this
+/// position might be the start of a `<think>` tag.
+fn find_safe_split_point(input: &str) -> usize {
+    // Check if the input ends with a prefix of any opening tag.
+    let lower = input.to_ascii_lowercase();
+    let max_tag_len = THINK_OPEN_TAGS.iter().map(|t| t.len()).max().unwrap_or(0);
+
+    // The longest possible partial tag prefix is max_tag_len - 1.
+    // Check from the longest possible partial down to 1.
+    let check_len = std::cmp::min(max_tag_len - 1, input.len());
+    for partial_len in (1..=check_len).rev() {
+        let tail = &lower[input.len() - partial_len..];
+        // Check if this tail is a prefix of any opening tag.
+        if THINK_OPEN_TAGS.iter().any(|tag| {
+            let tag_lower = tag.to_ascii_lowercase();
+            tag_lower.starts_with(tail)
+        }) {
+            // The tail might be the start of a tag — split before it.
+            return input.len() - partial_len;
+        }
+    }
+    input.len()
+}
+
+/// Find the latest position in `input` where we can safely split
+/// without cutting the `close_tag`. Everything after this position
+/// might be the start of the close tag.
+fn find_safe_split_point_close(input: &str, close_tag_lower: &str) -> usize {
+    let lower = input.to_ascii_lowercase();
+    let check_len = std::cmp::min(close_tag_lower.len() - 1, input.len());
+    for partial_len in (1..=check_len).rev() {
+        let tail = &lower[input.len() - partial_len..];
+        if close_tag_lower.starts_with(tail) {
+            return input.len() - partial_len;
+        }
+    }
+    input.len()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // -----------------------------------------------------------------
+    // Non-streaming: extract_think_from_content
+    // -----------------------------------------------------------------
+
+    #[test]
+    fn no_think_tags() {
+        let r = extract_think_from_content("Hello, world!");
+        assert_eq!(r.content, "Hello, world!");
+        assert_eq!(r.reasoning, "");
+        assert!(!r.has_reasoning());
+    }
+
+    #[test]
+    fn simple_think_block() {
+        let r = extract_think_from_content("<think>\nLet me think...\n</think>\nThe answer is 42.");
+        assert_eq!(r.content, "The answer is 42.");
+        assert_eq!(r.reasoning, "Let me think...");
+        assert!(r.has_reasoning());
+    }
+
+    #[test]
+    fn interleaved_think_blocks() {
+        let r = extract_think_from_content("<think>A</think>B<think>C</think>D");
+        assert_eq!(r.content, "BD");
+        assert_eq!(r.reasoning, "A\nC");
+    }
+
+    #[test]
+    fn case_insensitive_tags() {
+        let r = extract_think_from_content("<THINK>reasoning</THINK>answer");
+        assert_eq!(r.content, "answer");
+        assert_eq!(r.reasoning, "reasoning");
+    }
+
+    #[test]
+    fn thinking_tag() {
+        let r = extract_think_from_content("<thinking>my thoughts</thinking>response");
+        assert_eq!(r.content, "response");
+        assert_eq!(r.reasoning, "my thoughts");
+    }
+
+    #[test]
+    fn reasoning_tag() {
+        let r = extract_think_from_content("<reasoning>logic</reasoning>output");
+        assert_eq!(r.content, "output");
+        assert_eq!(r.reasoning, "logic");
+    }
+
+    #[test]
+    fn unterminated_think_block() {
+        let r = extract_think_from_content("<think>incomplete reasoning");
+        assert_eq!(r.content, "");
+        assert_eq!(r.reasoning, "incomplete reasoning");
+    }
+
+    #[test]
+    fn empty_think_block() {
+        let r = extract_think_from_content("<think></think>answer");
+        assert_eq!(r.content, "answer");
+        assert_eq!(r.reasoning, "");
+    }
+
+    #[test]
+    fn only_think_block() {
+        let r = extract_think_from_content("<think>all reasoning, no answer</think>");
+        assert_eq!(r.content, "");
+        assert_eq!(r.reasoning, "all reasoning, no answer");
+    }
+
+    // -----------------------------------------------------------------
+    // Streaming: ThinkStreamExtractor
+    // -----------------------------------------------------------------
+
+    #[test]
+    fn stream_simple() {
+        let mut ext = ThinkStreamExtractor::new();
+        let (c1, r1) = ext.process("<think>");
+        assert_eq!(c1, "");
+        assert_eq!(r1, "");
+        let (c2, r2) = ext.process("reasoning here");
+        assert_eq!(c2, "");
+        assert_eq!(r2, "reasoning here");
+        let (c3, r3) = ext.process("</think>");
+        assert_eq!(c3, "");
+        assert_eq!(r3, "");
+        let (c4, r4) = ext.process("final answer");
+        assert_eq!(c4, "final answer");
+        assert_eq!(r4, "");
+        let (cf, rf) = ext.flush();
+        assert_eq!(cf, "");
+        assert_eq!(rf, "");
+    }
+
+    #[test]
+    fn stream_tag_split_across_chunks() {
+        let mut ext = ThinkStreamExtractor::new();
+        // "<thi" might be start of "<think>"
+        let (c1, _) = ext.process("Hello <thi");
+        assert_eq!(c1, "Hello ");
+        let (c2, r2) = ext.process("nk>reasoning</think> world");
+        assert_eq!(c2, " world");
+        assert_eq!(r2, "reasoning");
+    }
+
+    #[test]
+    fn stream_close_tag_split() {
+        let mut ext = ThinkStreamExtractor::new();
+        ext.process("<think>");
+        let (c1, r1) = ext.process("some reasoning here</thin");
+        assert_eq!(c1, "");
+        assert_eq!(r1, "some reasoning here");
+        let (c2, r2) = ext.process("k>answer");
+        assert_eq!(c2, "answer");
+        assert_eq!(r2, "");
+    }
+
+    #[test]
+    fn stream_no_tags() {
+        let mut ext = ThinkStreamExtractor::new();
+        let (c1, r1) = ext.process("just a normal ");
+        let (c2, r2) = ext.process("response");
+        assert_eq!(c1, "just a normal ");
+        assert_eq!(r1, "");
+        assert_eq!(c2, "response");
+        assert_eq!(r2, "");
+    }
+
+    #[test]
+    fn stream_interleaved() {
+        let mut ext = ThinkStreamExtractor::new();
+        let (c, r) = ext.process("<think>A</think>B<think>C</think>D");
+        assert_eq!(c, "BD");
+        assert_eq!(r, "AC");
+    }
+
+    #[test]
+    fn stream_flush_unterminated() {
+        let mut ext = ThinkStreamExtractor::new();
+        let (_, _) = ext.process("<think>");
+        let (c, r) = ext.process("incomplete");
+        // "incomplete" was already emitted as reasoning during process().
+        assert_eq!(c, "");
+        assert_eq!(r, "incomplete");
+        // Flush: nothing left in the buffer.
+        let (cf, rf) = ext.flush();
+        assert_eq!(cf, "");
+        assert_eq!(rf, "");
+    }
+
+    #[test]
+    fn stream_flush_partial_tag() {
+        let mut ext = ThinkStreamExtractor::new();
+        ext.process("hello <thi");
+        let (c, r) = ext.flush();
+        assert_eq!(c, "<thi");
+        assert_eq!(r, "");
+    }
+}

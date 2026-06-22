@@ -14,6 +14,7 @@ use crate::circuit_breaker::{CircuitBreakerRegistry, Health};
 use crate::compression::{stats::CompressionStats, CompressionMode};
 use crate::combos::{self, Combo, ComboTarget, Strategy};
 use crate::config::{CircuitBreakerConfig, RacingConfig, RetriesConfig, TimeoutsConfig};
+use crate::think_extractor::extract_think_from_response;
 use crate::cost::{self, UsageInput};
 use crate::error::{CoreError, ErrorContext, Result};
 use crate::ids::{ApiKeyId, ComboId, RequestId, TraceId};
@@ -2824,6 +2825,13 @@ impl Pipeline {
             }
         };
 
+        // Think-tag extraction: some providers (DeepSeek, Qwen, vLLM)
+        // send reasoning inside `<think>...</think>` blocks in the
+        // `content` field. Extract them into `reasoning_content` so
+        // clients that parse think tags don't duplicate the reasoning,
+        // and clients that don't parse tags don't show raw tags.
+        let openai_response = extract_think_from_response(openai_response);
+
         let prompt_tokens = openai_response.usage.as_ref().map(|u| u.prompt_tokens);
         let completion_tokens = openai_response.usage.as_ref().map(|u| u.completion_tokens);
 
@@ -3129,6 +3137,12 @@ impl Pipeline {
         let mut ttft_ms: Option<u64> = None;
         let mut stop_reason: Option<String> = None;
         let first_chunk_time = Instant::now();
+        // Think-tag stream extractor: stateful parser that extracts
+        // `<think>...</think>` blocks from content deltas across chunk
+        // boundaries. Some providers (DeepSeek, Qwen, vLLM) send
+        // reasoning inside the content field; without this extractor,
+        // clients that parse think tags duplicate the reasoning.
+        let mut think_extractor = crate::think_extractor::ThinkStreamExtractor::new();
         // H5 fix: Anthropic tool_use blocks stream across multiple
         // SSE events. content_block_start announces the block with
         // id+name, subsequent content_block_delta/input_json_delta
@@ -3603,8 +3617,69 @@ impl Pipeline {
                             }
                         }
 
+                        // Think-tag extraction for streaming: if the
+                        // content delta contains `<think>` tags, extract
+                        // them into reasoning_content. The ThinkStreamExtractor
+                        // handles tags that span multiple chunks.
+                        let effective_payload = {
+                            let p = normalized.as_deref().unwrap_or(json_payload);
+                            // Fast check: only process if there's a
+                            // "content" field (most chunks do).
+                            if p.contains("\"content\"") {
+                                // Parse, extract, modify.
+                                if let Ok(mut v) = serde_json::from_str::<serde_json::Value>(p) {
+                                    if let Some(choices) = v.get_mut("choices").and_then(|c| c.as_array_mut())
+                                        && let Some(choice) = choices.first_mut()
+                                        && let Some(delta) = choice.get_mut("delta")
+                                        && let Some(obj) = delta.as_object_mut()
+                                    {
+                                        if let Some(content) = obj.get("content").and_then(|c| c.as_str()).map(|s| s.to_string()) {
+                                            let (clean_content, reasoning) = think_extractor.process(&content);
+                                            let content_changed = clean_content != content;
+                                            let reasoning_changed = !reasoning.is_empty();
+                                            // Update content with cleaned version.
+                                            if content_changed {
+                                                obj.insert("content".to_string(), serde_json::Value::String(clean_content));
+                                            }
+                                            // If reasoning was extracted, add it to reasoning_content.
+                                            if reasoning_changed {
+                                                let existing = obj.get("reasoning_content").and_then(|r| r.as_str()).unwrap_or("").to_string();
+                                                let merged = if existing.is_empty() {
+                                                    reasoning
+                                                } else {
+                                                    format!("{}{}", existing, reasoning)
+                                                };
+                                                obj.insert("reasoning_content".to_string(), serde_json::Value::String(merged));
+                                            }
+                                            // Re-serialize if we made changes.
+                                            if content_changed || reasoning_changed {
+                                                if let Ok(new_json) = serde_json::to_string(&v) {
+                                                    Some(new_json)
+                                                } else {
+                                                    None
+                                                }
+                                            } else {
+                                                None
+                                            }
+                                        } else {
+                                            None
+                                        }
+                                    } else {
+                                        None
+                                    }
+                                } else {
+                                    None
+                                }
+                            } else {
+                                None
+                            }
+                        };
+
                         // Build the SSE frame.
-                        let sse_bytes = if let Some(norm) = normalized {
+                        let sse_bytes = if let Some(modified) = effective_payload {
+                            // Think extraction modified the payload.
+                            crate::sse::build_sse_frame(&modified)
+                        } else if let Some(norm) = normalized {
                             // Slow path: normalized payload differs from the
                             // original upstream line. Build a fresh frame with
                             // the normalized JSON. Only hits chunks that
