@@ -12,7 +12,7 @@
 
 use async_trait::async_trait;
 use base64::Engine;
-use rand::RngCore;
+use rand::Rng;
 use rusqlite::{Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};

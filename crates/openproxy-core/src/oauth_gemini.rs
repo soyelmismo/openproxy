@@ -494,7 +494,8 @@ mod tests {
     fn build_auth_url_uses_default_client_id() {
         // The default client_id is hardcoded, so the URL should be built
         // successfully even without the env var.
-        std::env::remove_var("OPENPROXY_GEMINI_CLI_OAUTH_CLIENT_ID");
+        // SAFETY: tests are single-threaded; no other thread reads this env var.
+        unsafe { std::env::remove_var("OPENPROXY_GEMINI_CLI_OAUTH_CLIENT_ID"); }
         let p = GeminiCliOAuthProvider::new();
         let rt = tokio::runtime::Runtime::new().unwrap();
         let result = rt.block_on(p.build_auth_url("http://localhost:8788/callback.html"));
