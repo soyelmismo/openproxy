@@ -2182,8 +2182,8 @@ impl Pipeline {
         // anonymous request first: providers such as NVIDIA NIM can return a
         // retryable 500 for anonymous calls, so the previous 401/403-only
         // fallback never retried with the stored key.
-        let api_key = match self.resolve_target_api_key(target) {
-            Ok(api_key) => api_key,
+        let (api_key, account_label) = match self.resolve_target_api_key_and_label(target) {
+            Ok(v) => v,
             Err(e) => {
                 return self.record_and_fail(
                     req,
@@ -2204,7 +2204,18 @@ impl Pipeline {
         };
 
         // 7. Build the HTTP request and dispatch it.
-        let url = adapter.build_chat_url(target_format, &model.model_id);
+        // Use `build_chat_url_for_account` (not the label-less
+        // `build_chat_url`) so providers like `cloudflare-workers-ai`
+        // that interpolate the account label into the URL get the
+        // right endpoint. The trait's default impl delegates to
+        // `build_chat_url` when the adapter doesn't override, so
+        // non-label-using providers are unaffected.
+        let account_label_str = account_label.as_deref().unwrap_or("");
+        let url = adapter.build_chat_url_for_account(
+            target_format,
+            &model.model_id,
+            account_label_str,
+        );
         let headers = adapter.build_headers(&api_key, target_format, &model.model_id);
 
         // Synchronous race_cancel check before publishing
@@ -3340,6 +3351,7 @@ impl Pipeline {
                 return self.fail_stream_client_disconnected(
                     req, combo, target, attempt, race_size, started, model,
                     connect_and_send_ms, ttft_ms, trace_id,
+                    acc.as_mut(), &chunk_id, created, &model_name,
                 );
             }
 
@@ -3556,6 +3568,7 @@ impl Pipeline {
                     return self.fail_stream_client_disconnected(
                         req, combo, target, attempt, race_size, started, model,
                         connect_and_send_ms, ttft_ms, trace_id,
+                        acc.as_mut(), &chunk_id, created, &model_name,
                     );
                 }
 
@@ -3587,12 +3600,14 @@ impl Pipeline {
                             return self.fail_stream_client_disconnected(
                                 req, combo, target, attempt, race_size, started, model,
                                 connect_and_send_ms, ttft_ms, trace_id,
+                                acc.as_mut(), &chunk_id, created, &model_name,
                             );
                         }
                         if let Err(crate::race_sink::StreamSinkError::Lost) = sink.send(SSE_DONE_BYTES.clone()).await {
                             return self.fail_stream_race_lost(
                                 req, combo, target, attempt, race_size, started, model,
                                 connect_and_send_ms, ttft_ms, trace_id,
+                                acc.as_mut(), &chunk_id, created, &model_name,
                             );
                         }
                         done_sent = true;
@@ -3713,12 +3728,14 @@ impl Pipeline {
                                     return self.fail_stream_client_disconnected(
                                         req, combo, target, attempt, race_size, started, model,
                                         connect_and_send_ms, ttft_ms, trace_id,
+                                        acc.as_mut(), &chunk_id, created, &model_name,
                                     );
                                 }
                                 if let Err(e) = sink.send(sse_bytes).await {
                                     return self.fail_on_sink_send_error(
                                         e, req, combo, target, attempt, race_size, started, model,
                                         connect_and_send_ms, ttft_ms, trace_id,
+                                        acc.as_mut(), &chunk_id, created, &model_name,
                                     );
                                 }
                             }
@@ -3840,12 +3857,14 @@ impl Pipeline {
                             return self.fail_stream_client_disconnected(
                                 req, combo, target, attempt, race_size, started, model,
                                 connect_and_send_ms, ttft_ms, trace_id,
+                                acc.as_mut(), &chunk_id, created, &model_name,
                             );
                         }
                         if let Err(e) = sink.send(sse_bytes).await {
                             return self.fail_on_sink_send_error(
                                 e, req, combo, target, attempt, race_size, started, model,
                                 connect_and_send_ms, ttft_ms, trace_id,
+                                acc.as_mut(), &chunk_id, created, &model_name,
                             );
                         }
                     }
@@ -3909,12 +3928,14 @@ impl Pipeline {
                                 return self.fail_stream_client_disconnected(
                                     req, combo, target, attempt, race_size, started, model,
                                     connect_and_send_ms, ttft_ms, trace_id,
+                                    acc.as_mut(), &chunk_id, created, &model_name,
                                 );
                             }
                             if let Err(crate::race_sink::StreamSinkError::Lost) = sink.send(SSE_DONE_BYTES.clone()).await {
                                 return self.fail_stream_race_lost(
                                     req, combo, target, attempt, race_size, started, model,
                                     connect_and_send_ms, ttft_ms, trace_id,
+                                    acc.as_mut(), &chunk_id, created, &model_name,
                                 );
                             }
                             done_sent = true;
@@ -4035,6 +4056,7 @@ impl Pipeline {
                                 return self.fail_on_sink_send_error(
                                     e, req, combo, target, attempt, race_size, started, model,
                                     connect_and_send_ms, ttft_ms, trace_id,
+                                    acc.as_mut(), &chunk_id, created, &model_name,
                                 );
                             }
                         }
@@ -4065,6 +4087,7 @@ impl Pipeline {
                 return self.fail_stream_client_disconnected(
                     req, combo, target, attempt, race_size, started, model,
                     connect_and_send_ms, ttft_ms, trace_id,
+                    acc.as_mut(), &chunk_id, created, &model_name,
                 );
             }
             if let Ok(line) = std::str::from_utf8(&buffer) {
@@ -4103,6 +4126,7 @@ impl Pipeline {
                                 return self.fail_stream_race_lost(
                                     req, combo, target, attempt, race_size, started, model,
                                     connect_and_send_ms, ttft_ms, trace_id,
+                                    acc.as_mut(), &chunk_id, created, &model_name,
                                 );
                             }
                         }
@@ -4165,12 +4189,14 @@ impl Pipeline {
                 return self.fail_stream_client_disconnected(
                     req, combo, target, attempt, race_size, started, model,
                     connect_and_send_ms, ttft_ms, trace_id,
+                    acc.as_mut(), &chunk_id, created, &model_name,
                 );
             }
             if let Err(crate::race_sink::StreamSinkError::Lost) = sink.send(SSE_DONE_BYTES.clone()).await {
                 return self.fail_stream_race_lost(
                     req, combo, target, attempt, race_size, started, model,
                     connect_and_send_ms, ttft_ms, trace_id,
+                    acc.as_mut(), &chunk_id, created, &model_name,
                 );
             }
         }
@@ -4242,6 +4268,7 @@ impl Pipeline {
         })
     }
 
+    #[allow(dead_code)]
     fn decrypt_account_key(&self, account_id: crate::ids::AccountId) -> Result<String> {
         let conn = self.conn.lock();
         crate::accounts::decrypt_api_key(&conn, account_id, &self.config.master_key)
@@ -4255,6 +4282,7 @@ impl Pipeline {
     /// - `account_id = None` and the provider requires auth (Bearer,
     ///   XApiKey, etc.): return `CoreError::Auth` — the target has no
     ///   credential and the upstream does not accept anonymous requests.
+    #[allow(dead_code)]
     fn resolve_target_api_key(&self, target: &ComboTarget) -> Result<String> {
         match target.account_id {
             Some(account_id) => self.decrypt_account_key(account_id),
@@ -4263,6 +4291,48 @@ impl Pipeline {
                 match crate::providers::get(&conn, &target.provider_id)? {
                     Some(p) if matches!(p.auth_type, crate::providers::AuthType::None) => {
                         Ok(String::new())
+                    }
+                    _ => Err(CoreError::Auth(format!(
+                        "combo_target {} has no account_id after expansion",
+                        target.id.0
+                    ))),
+                }
+            }
+        }
+    }
+
+    /// Resolve the API key AND the account label for `target` in one
+    /// call. Used by `execute_single` to pass the label to
+    /// `adapter.build_chat_url_for_account` so providers like
+    /// `cloudflare-workers-ai` (which interpolate the account label
+    /// into the URL) get the right endpoint.
+    ///
+    /// Returns `(api_key, account_label)` where `account_label` is
+    /// `None` when the account has no label set or when the target
+    /// has no `account_id` (anonymous / `auth_type = None`
+    /// providers). The `None` case is fine — the adapter's
+    /// `build_chat_url_for_account` will receive an empty string
+    /// and (for Cloudflare) produce a URL with `//ai/v1/...` which
+    /// will 404, surfacing the misconfiguration loudly instead of
+    /// silently sending traffic to the wrong account.
+    fn resolve_target_api_key_and_label(
+        &self,
+        target: &ComboTarget,
+    ) -> Result<(String, Option<String>)> {
+        match target.account_id {
+            Some(account_id) => {
+                let conn = self.conn.lock();
+                crate::accounts::decrypt_api_key_and_label(
+                    &conn,
+                    account_id,
+                    &self.config.master_key,
+                )
+            }
+            None => {
+                let conn = self.conn.lock();
+                match crate::providers::get(&conn, &target.provider_id)? {
+                    Some(p) if matches!(p.auth_type, crate::providers::AuthType::None) => {
+                        Ok((String::new(), None))
                     }
                     _ => Err(CoreError::Auth(format!(
                         "combo_target {} has no account_id after expansion",
@@ -4361,6 +4431,39 @@ impl Pipeline {
         ctx: FailureContext<'_>,
         trace_id: TraceId,
     ) -> PipelineResult {
+        self.record_and_fail_with_trace_id_and_partial(
+            req, combo, target, ctx, trace_id,
+            None, None, 0, "",
+        )
+    }
+
+    /// Same as `record_and_fail_with_trace_id` but also persists the
+    /// partial response accumulated by the streaming loop when the
+    /// stream was interrupted mid-flight (client disconnect, race
+    /// lost, sink error, etc.). The accumulator is fed via `acc`,
+    /// and `chunk_id` / `created` / `model_name` are the streaming
+    /// loop's locals needed to call `acc.finish()`.
+    ///
+    /// When `acc` is `Some` and non-empty, the partial response JSON
+    /// is saved into `response_body_json` (so the dashboard's
+    /// Response tab can show what the model emitted before the
+    /// interruption) AND `is_streaming=true` + `stream_complete=false`
+    /// are set so the row is correctly labeled as a streaming
+    /// request that didn't finish. When `acc` is `None` or empty,
+    /// behavior is identical to `record_and_fail_with_trace_id`.
+    fn record_and_fail_with_trace_id_and_partial(
+        &self,
+        req: &PipelineRequest,
+        combo: &Combo,
+        target: &ComboTarget,
+        ctx: FailureContext<'_>,
+        trace_id: TraceId,
+        // For partial-response capture (streaming failures):
+        acc: Option<&crate::sse_accumulator::ResponseAccumulator>,
+        chunk_id: Option<&str>,
+        created: u64,
+        model_name: &str,
+    ) -> PipelineResult {
         let FailureContext {
             attempt,
             race_size,
@@ -4393,6 +4496,28 @@ impl Pipeline {
         let request_headers = crate::redact::redact_btreemap_sensitive(
             req.request_headers.clone(),
         );
+        // Partial response capture: when the streaming loop was
+        // interrupted mid-flight and we have a non-empty
+        // accumulator, persist the partial JSON so the operator
+        // can see in the dashboard exactly where the stream broke.
+        // The accumulator's `mark_partial()` was already called by
+        // the streaming failure helpers, so `finish()` will include
+        // `"partial": true` in the JSON's `extra` map.
+        let response_body_json: Option<serde_json::Value> = acc
+            .filter(|a| !a.is_empty())
+            .map(|a| {
+                let chunk_id_str = chunk_id.unwrap_or("partial");
+                a.finish(chunk_id_str, created, model_name)
+            });
+        // When we have a partial response, this is by definition a
+        // streaming request that didn't finish. When we don't (acc
+        // is None or empty), preserve the legacy behavior: the
+        // non-streaming failure path keeps `is_streaming=false`.
+        let (is_streaming, stream_complete) = if response_body_json.is_some() {
+            (true, false)
+        } else {
+            (false, false)
+        };
         let _ = self.record_attempt_raw_with_tokens(
             req,
             combo,
@@ -4409,11 +4534,11 @@ impl Pipeline {
             None,
             None,
             request_body_json,
-            None,
+            response_body_json,
             Some(request_headers),
             None,
-            false, // is_streaming (H5): failure path, can't be sure
-            false, // stream_complete (H5): failure path
+            is_streaming,
+            stream_complete,
             None,  // stop_reason: failures don't have a stop_reason
         );
         PipelineResult {
@@ -4433,6 +4558,13 @@ impl Pipeline {
     /// accumulated `ttft_ms`. The `trace_id` argument is the
     /// streaming function's local `trace_id` (NOT `req.trace_id`)
     /// so the row's `trace_id` matches the StageEvent's.
+    ///
+    /// The `acc` / `chunk_id` / `created` / `model_name` arguments
+    /// thread the streaming loop's `ResponseAccumulator` through so
+    /// the partial response accumulated so far is persisted into
+    /// `response_body_json`. The accumulator is marked as `partial`
+    /// before being saved so the dashboard shows a "Partial
+    /// response — stream was interrupted" banner.
     fn fail_stream_client_disconnected(
         &self,
         req: &PipelineRequest,
@@ -4445,8 +4577,23 @@ impl Pipeline {
         connect_ms: u64,
         ttft_ms: Option<u64>,
         trace_id: TraceId,
+        acc: Option<&mut crate::sse_accumulator::ResponseAccumulator>,
+        chunk_id: &str,
+        created: u64,
+        model_name: &str,
     ) -> PipelineResult {
-        self.record_and_fail_with_trace_id(
+        // Mark the accumulator as partial BEFORE passing it down so
+        // `finish()` includes `"partial": true`. We take a reference
+        // to the inner value first so we can still pass it to the
+        // downstream function without moving the Option.
+        let acc_ref: Option<&crate::sse_accumulator::ResponseAccumulator> = match acc {
+            Some(a) => {
+                a.mark_partial();
+                Some(&*a)
+            }
+            None => None,
+        };
+        self.record_and_fail_with_trace_id_and_partial(
             req, combo, target,
             FailureContext {
                 attempt, race_size,
@@ -4455,6 +4602,7 @@ impl Pipeline {
                 connect_ms: Some(connect_ms), ttft_ms,
                 status_code: 499,
             }, trace_id,
+            acc_ref, Some(chunk_id), created, model_name,
         )
     }
 
@@ -4464,6 +4612,8 @@ impl Pipeline {
     /// `err = CoreError::RaceLost` (HTTP 499),
     /// `connect_ms = connect_and_send_ms`, and the streaming loop's
     /// accumulated `ttft_ms`.
+    ///
+    /// Same partial-response capture as `fail_stream_client_disconnected`.
     fn fail_stream_race_lost(
         &self,
         req: &PipelineRequest,
@@ -4476,8 +4626,19 @@ impl Pipeline {
         connect_ms: u64,
         ttft_ms: Option<u64>,
         trace_id: TraceId,
+        acc: Option<&mut crate::sse_accumulator::ResponseAccumulator>,
+        chunk_id: &str,
+        created: u64,
+        model_name: &str,
     ) -> PipelineResult {
-        self.record_and_fail_with_trace_id(
+        let acc_ref: Option<&crate::sse_accumulator::ResponseAccumulator> = match acc {
+            Some(a) => {
+                a.mark_partial();
+                Some(&*a)
+            }
+            None => None,
+        };
+        self.record_and_fail_with_trace_id_and_partial(
             req, combo, target,
             FailureContext {
                 attempt, race_size,
@@ -4486,6 +4647,7 @@ impl Pipeline {
                 connect_ms: Some(connect_ms), ttft_ms,
                 status_code: 499,
             }, trace_id,
+            acc_ref, Some(chunk_id), created, model_name,
         )
     }
 
@@ -4497,6 +4659,8 @@ impl Pipeline {
     /// future re-mapping flows through automatically). Same
     /// `connect_ms` / `ttft_ms` / `trace_id` plumbing as the other
     /// two streaming-failure helpers.
+    ///
+    /// Same partial-response capture as `fail_stream_client_disconnected`.
     fn fail_on_sink_send_error(
         &self,
         e: crate::race_sink::StreamSinkError,
@@ -4510,12 +4674,23 @@ impl Pipeline {
         connect_ms: u64,
         ttft_ms: Option<u64>,
         trace_id: TraceId,
+        acc: Option<&mut crate::sse_accumulator::ResponseAccumulator>,
+        chunk_id: &str,
+        created: u64,
+        model_name: &str,
     ) -> PipelineResult {
         let err = match e {
             crate::race_sink::StreamSinkError::Lost => CoreError::RaceLost,
             crate::race_sink::StreamSinkError::Closed => CoreError::ClientDisconnected,
         };
-        self.record_and_fail_with_trace_id(
+        let acc_ref: Option<&crate::sse_accumulator::ResponseAccumulator> = match acc {
+            Some(a) => {
+                a.mark_partial();
+                Some(&*a)
+            }
+            None => None,
+        };
+        self.record_and_fail_with_trace_id_and_partial(
             req, combo, target,
             FailureContext {
                 attempt, race_size,
@@ -4524,6 +4699,7 @@ impl Pipeline {
                 connect_ms: Some(connect_ms), ttft_ms,
                 status_code: err.http_status(),
             }, trace_id,
+            acc_ref, Some(chunk_id), created, model_name,
         )
     }
 

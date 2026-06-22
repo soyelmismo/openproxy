@@ -252,6 +252,48 @@ pub fn decrypt_api_key(conn: &Connection, id: AccountId, master_key: &MasterKey)
     master_key.decrypt(&blob)
 }
 
+/// Decrypt the API key for `id` AND fetch the account's `label` in
+/// a single DB round-trip. The label is needed by URL builders for
+/// providers like `cloudflare-workers-ai` that interpolate the
+/// account label into the endpoint URL
+/// (`/client/v4/accounts/{label}/ai/v1/chat/completions`).
+///
+/// Returns `(api_key, label)` where `label` is `None` when the
+/// account has no label set or when `account_id` is `None`
+/// (anonymous / `auth_type = None` providers).
+///
+/// This was added to fix the bug where Cloudflare chat requests
+/// fell through the label-less `build_chat_url` path and hit
+/// `__missing_account_label__` in the URL, producing upstream 404s.
+/// See the companion change in `Pipeline::execute_single` that
+/// calls `build_chat_url_for_account` with the label returned here.
+pub fn decrypt_api_key_and_label(
+    conn: &Connection,
+    id: AccountId,
+    master_key: &MasterKey,
+) -> Result<(String, Option<String>)> {
+    let row: Option<(Option<Vec<u8>>, Option<String>)> = conn
+        .query_row(
+            "SELECT api_key_encrypted, label FROM accounts WHERE id = ?1",
+            params![id.0],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .optional()
+        .map_err(|e| CoreError::Database {
+            message: format!("select api_key+label for account {}: {}", id.0, e),
+            source: Some(Box::new(e)),
+        })?;
+    let (blob, label) = match row {
+        Some(r) => r,
+        None => return Err(CoreError::AccountNotFound(id.0)),
+    };
+    let blob = blob.ok_or_else(|| {
+        CoreError::Validation("account has no API key (OAuth account?)".into())
+    })?;
+    let key = master_key.decrypt(&blob)?;
+    Ok((key, label))
+}
+
 /// Update the `health_status` column. Returns `AccountNotFound` if no row was
 /// affected.
 pub fn set_health(conn: &Connection, id: AccountId, health: HealthStatus) -> Result<()> {
