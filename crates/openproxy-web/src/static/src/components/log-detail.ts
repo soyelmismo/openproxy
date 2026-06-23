@@ -1234,13 +1234,17 @@ export function buildDebugBundle(log: LogDetailLog): string {
     lines.push("");
   }
 
-  // Request body.
+  // Request body — truncate only the `messages` array (which can be
+  // huge), keeping all other fields (model, stream, temperature,
+  // tools, max_tokens, etc.) intact. The user needs to see the full
+  // request structure to debug, but the message content is usually
+  // not the issue and can be very large.
   const requestBody: unknown = log.request_body_json ?? detail["request_body_json"];
   if (requestBody != null) {
     lines.push("## Request Body");
     lines.push("");
     lines.push("```json");
-    lines.push(truncateForBundle(typeof requestBody === "string" ? requestBody : JSON.stringify(requestBody, null, 2)));
+    lines.push(summarizeRequestBody(requestBody));
     lines.push("```");
     lines.push("");
   }
@@ -1297,6 +1301,94 @@ function truncateForBundle(s: string): string {
   const MAX = 10 * 1024;
   if (s.length <= MAX) return s;
   return s.slice(0, MAX) + `\n\n… [truncated, ${s.length - MAX} more bytes omitted]`;
+}
+
+/** Summarize a request body for the debug bundle. Truncates only the
+ *  `messages` array (which can be huge — full conversation history),
+ *  keeping all other fields (model, stream, temperature, tools,
+ *  max_tokens, etc.) intact. Each message is truncated to ~500 chars
+ *  with a marker if longer. This gives the operator enough context
+ *  to see what was sent without blowing up the bundle size.
+ *
+ *  If the body is a string (not parsed JSON), tries to parse it first;
+ *  if that fails, falls back to `truncateForBundle`. */
+function summarizeRequestBody(body: unknown): string {
+  // If it's a string, try to parse it as JSON first.
+  let parsed: unknown = body;
+  if (typeof body === "string") {
+    try { parsed = JSON.parse(body); }
+    catch (_e: unknown) {
+      // Not JSON — just truncate the raw string.
+      return truncateForBundle(body);
+    }
+  }
+  if (parsed == null || typeof parsed !== "object" || Array.isArray(parsed)) {
+    // Not an object — just truncate.
+    return truncateForBundle(typeof parsed === "string" ? parsed : JSON.stringify(parsed, null, 2));
+  }
+  // Clone the object so we can mutate the messages array.
+  const obj: Record<string, unknown> = JSON.parse(JSON.stringify(parsed)) as Record<string, unknown>;
+  const messages: unknown = obj["messages"];
+  if (Array.isArray(messages)) {
+    const MAX_MSG_LEN = 500;
+    const MAX_MESSAGES = 20;
+    const truncatedMessages: unknown[] = [];
+    const arr = messages as unknown[];
+    const showCount = Math.min(arr.length, MAX_MESSAGES);
+    for (let i = 0; i < showCount; i++) {
+      const msg = arr[i];
+      if (msg && typeof msg === "object" && !Array.isArray(msg)) {
+        const msgObj = { ...(msg as Record<string, unknown>) };
+        const content = msgObj["content"];
+        if (typeof content === "string" && content.length > MAX_MSG_LEN) {
+          msgObj["content"] = content.slice(0, MAX_MSG_LEN) + `… [truncated, ${content.length - MAX_MSG_LEN} more chars]`;
+        } else if (Array.isArray(content)) {
+          // Multimodal content — truncate each part.
+          msgObj["content"] = (content as unknown[]).map((part: unknown) => {
+            if (part && typeof part === "object" && !Array.isArray(part)) {
+              const partObj = { ...(part as Record<string, unknown>) };
+              const text = partObj["text"];
+              if (typeof text === "string" && text.length > MAX_MSG_LEN) {
+                partObj["text"] = text.slice(0, MAX_MSG_LEN) + `… [truncated, ${text.length - MAX_MSG_LEN} more chars]`;
+              }
+              return partObj;
+            }
+            return part;
+          });
+        }
+        truncatedMessages.push(msgObj);
+      } else {
+        truncatedMessages.push(msg);
+      }
+    }
+    if (arr.length > MAX_MESSAGES) {
+      truncatedMessages.push(`… [${arr.length - MAX_MESSAGES} more messages omitted]`);
+    }
+    obj["messages"] = truncatedMessages;
+  }
+  // Also truncate the `tools` array if present — can be large.
+  const tools: unknown = obj["tools"];
+  if (Array.isArray(tools)) {
+    const MAX_TOOLS = 5;
+    const MAX_TOOL_LEN = 500;
+    const arr = tools as unknown[];
+    const truncatedTools: unknown[] = [];
+    const showCount = Math.min(arr.length, MAX_TOOLS);
+    for (let i = 0; i < showCount; i++) {
+      const tool = arr[i];
+      const toolStr = JSON.stringify(tool, null, 2);
+      if (toolStr.length > MAX_TOOL_LEN) {
+        truncatedTools.push(JSON.parse(toolStr.slice(0, MAX_TOOL_LEN).replace(/[^{}[\],:"]*$/, "") + `"… [truncated, ${toolStr.length - MAX_TOOL_LEN} more chars]"`));
+      } else {
+        truncatedTools.push(tool);
+      }
+    }
+    if (arr.length > MAX_TOOLS) {
+      truncatedTools.push(`… [${arr.length - MAX_TOOLS} more tools omitted]`);
+    }
+    obj["tools"] = truncatedTools;
+  }
+  return JSON.stringify(obj, null, 2);
 }
 
 /** Handler for the "Copy debug bundle" button. Reads the currently-

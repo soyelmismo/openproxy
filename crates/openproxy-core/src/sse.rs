@@ -720,10 +720,16 @@ pub fn translate_anthropic_sse_event(
                     acc.arguments.push_str(partial);
                 }
                 let new_fragment = &acc.arguments[prev_len..];
-                // Emit a chunk that carries the newly-appended
-                // fragment. OpenAI's spec lets us put the running
-                // total in `arguments`; the client will JSON.parse
-                // the concatenation of every fragment.
+                // Emit a chunk that carries ONLY the newly-appended
+                // fragment in `arguments`. The OpenAI streaming
+                // tool_calls spec requires each chunk to carry a
+                // FRAGMENT of the arguments JSON; the client
+                // concatenates fragments by `index`. Sending the
+                // running total here would cause the client to
+                // concatenate f1 + (f1+f2) + (f1+f2+f3) + ...,
+                // duplicating early fragments N times — which is
+                // exactly the "tool call arguments duplicated"
+                // bug the user reported.
                 let chunk = serde_json::json!({
                     "id": chunk_id,
                     "object": "chat.completion.chunk",
@@ -735,7 +741,7 @@ pub fn translate_anthropic_sse_event(
                             "tool_calls": [{
                                 "index": acc.index,
                                 "function": {
-                                    "arguments": acc.arguments.clone()
+                                    "arguments": new_fragment
                                 }
                             }]
                         },
@@ -1436,6 +1442,14 @@ mod tests {
         // must be accumulated into a single running arguments
         // string and emitted as two OpenAI-shaped chunks.
         //
+        // CRITICAL: each chunk sent to the client must carry ONLY the
+        // NEW fragment (not the running total). The OpenAI streaming
+        // tool_calls spec requires the client to concatenate fragments
+        // by `index`. If we send the running total, the client
+        // concatenates f1 + (f1+f2) + (f1+f2+f3) + ..., duplicating
+        // early fragments N times. This is the "tool call arguments
+        // duplicated" bug that was fixed.
+        //
         // We build each wire payload programmatically with
         // serde_json::json! to avoid fragile double/triple-escaped
         // string literals — Anthropic's input_json_delta value is a
@@ -1477,14 +1491,14 @@ mod tests {
             &delta1, "chunk-2", 1000, "claude-3",
             &mut acc, &mut counter,
         ).unwrap().unwrap();
+        // Chunk 1 must carry ONLY the first fragment.
         assert_eq!(
             chunk1.payload["choices"][0]["delta"]["tool_calls"][0]["function"]["arguments"]
                 .as_str().unwrap(),
             "{\"q\":"
         );
         // Second delta — partial_json carries the rest of the JSON
-        // fragment, `"sf"}` (including the closing brace). After
-        // concatenation the chunk must carry the full input.
+        // fragment, `"sf"}` (including the closing brace).
         let delta2 = "content_block_delta\n".to_string()
             + &serde_json::json!({
                 "type": "content_block_delta",
@@ -1499,12 +1513,31 @@ mod tests {
             &delta2, "chunk-3", 1000, "claude-3",
             &mut acc, &mut counter,
         ).unwrap().unwrap();
+        // Chunk 2 must carry ONLY the second fragment — NOT the
+        // running total. This is the fix: previously it sent
+        // `{"q":"sf"}` (the full running total), causing the client
+        // to concatenate `{"q":` + `{"q":"sf"}` = `{"q":{"q":"sf"}`
+        // which is invalid JSON.
         assert_eq!(
             chunk2.payload["choices"][0]["delta"]["tool_calls"][0]["function"]["arguments"]
                 .as_str().unwrap(),
-            "{\"q\":\"sf\"}"
+            "\"sf\"}"
         );
+        // The accumulator must still hold the full running total
+        // (for the persisted response body).
         assert_eq!(acc.as_ref().unwrap().arguments, "{\"q\":\"sf\"}");
+        // Regression: simulate what a real OpenAI client does —
+        // concatenate the `arguments` fragments from all chunks by
+        // `index`. The result must parse as valid JSON matching the
+        // assembled tool call.
+        let fragment1 = chunk1.payload["choices"][0]["delta"]["tool_calls"][0]["function"]["arguments"]
+            .as_str().unwrap();
+        let fragment2 = chunk2.payload["choices"][0]["delta"]["tool_calls"][0]["function"]["arguments"]
+            .as_str().unwrap();
+        let concatenated = format!("{}{}", fragment1, fragment2);
+        let parsed: serde_json::Value = serde_json::from_str(&concatenated)
+            .expect("concatenated fragments must parse as valid JSON");
+        assert_eq!(parsed["q"], "sf");
     }
 
     #[test]
