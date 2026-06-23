@@ -371,6 +371,19 @@ pub struct PipelineRequest {
     /// handler, so the failure path of the pipeline can still
     /// record what the client sent.
     pub request_headers: std::collections::BTreeMap<String, String>,
+    /// The raw request body as received by the HTTP layer, BEFORE
+    /// parsing into `OpenAIRequest`. Preserves unknown fields the
+    /// typed struct would drop (provider extensions, custom metadata,
+    /// etc.). When `None`, the recording path falls back to
+    /// re-serializing `openai_request` (which loses unknown fields).
+    ///
+    /// Bug fix: previously the recording path always re-serialized
+    /// `openai_request`, dropping any fields not modeled on the
+    /// typed struct. This made it impossible to debug issues where
+    /// the client sent an unexpected field that caused the upstream
+    /// to behave differently. Now the raw body is threaded through
+    /// and used preferentially.
+    pub request_body_json: Option<serde_json::Value>,
     /// Set to `true` when the pipeline is running a combo race and
     /// the upstream call's cancellation is due to race loss (not
     /// client disconnect). Affects the terminal stage label in
@@ -1641,13 +1654,29 @@ impl Pipeline {
         // "cancelled". If any hop is delayed, the grace period
         // expires and the task is aborted, leaving a ghost inflight
         // entry stuck at "started" or "connecting" forever.
+        //
+        // Bug fix: previously this returned a bare PipelineResult
+        // WITHOUT publishing a terminal "cancelled" stage event or
+        // recording a usage row. If a previous iteration of this
+        // same trace_id had already published "started", the
+        // dashboard would show a ghost placeholder stuck at
+        // "started" forever. Now we publish a terminal "cancelled"
+        // event AND record a failure row so the dashboard can reap
+        // the placeholder.
         if race_cancel.is_cancelled() {
-            return PipelineResult {
-                status_code: 499,
-                error: Some(CoreError::RaceLost),
-                final_response: None,
-                attempts: attempt,
-            };
+            return self.record_and_fail_with_trace_id(
+                req, combo, target,
+                FailureContext {
+                    attempt, race_size,
+                    err: &CoreError::RaceLost,
+                    started,
+                    model: None,
+                    connect_ms: None,
+                    ttft_ms: None,
+                    status_code: CoreError::RaceLost.http_status(),
+                },
+                trace_id,
+            );
         }
 
         // Live-log stage event: request accepted by the pipeline.
@@ -3603,9 +3632,16 @@ impl Pipeline {
                                 acc.as_mut(), &chunk_id, created, &model_name,
                             );
                         }
-                        if let Err(crate::race_sink::StreamSinkError::Lost) = sink.send(SSE_DONE_BYTES.clone()).await {
-                            return self.fail_stream_race_lost(
-                                req, combo, target, attempt, race_size, started, model,
+                        if let Err(e) = sink.send(SSE_DONE_BYTES.clone()).await {
+                            // Bug fix: handle BOTH `Lost` (race winner
+                            // already chosen) and `Closed` (client
+                            // disconnected) — previously only `Lost`
+                            // was matched, so a client disconnect
+                            // here fell through and recorded a
+                            // SUCCESS row instead of a
+                            // ClientDisconnected failure row.
+                            return self.fail_on_sink_send_error(
+                                e, req, combo, target, attempt, race_size, started, model,
                                 connect_and_send_ms, ttft_ms, trace_id,
                                 acc.as_mut(), &chunk_id, created, &model_name,
                             );
@@ -3931,9 +3967,12 @@ impl Pipeline {
                                     acc.as_mut(), &chunk_id, created, &model_name,
                                 );
                             }
-                            if let Err(crate::race_sink::StreamSinkError::Lost) = sink.send(SSE_DONE_BYTES.clone()).await {
-                                return self.fail_stream_race_lost(
-                                    req, combo, target, attempt, race_size, started, model,
+                            if let Err(e) = sink.send(SSE_DONE_BYTES.clone()).await {
+                                // Bug fix: handle BOTH `Lost` and `Closed`
+                                // — see the matching fix at the OpenAI
+                                // fast-path [DONE] send above.
+                                return self.fail_on_sink_send_error(
+                                    e, req, combo, target, attempt, race_size, started, model,
                                     connect_and_send_ms, ttft_ms, trace_id,
                                     acc.as_mut(), &chunk_id, created, &model_name,
                                 );
@@ -4122,9 +4161,10 @@ impl Pipeline {
                         }
                         if !chunk.done {
                             let sse_bytes = chunk.into_sse_bytes();
-                            if let Err(crate::race_sink::StreamSinkError::Lost) = sink.send(sse_bytes).await {
-                                return self.fail_stream_race_lost(
-                                    req, combo, target, attempt, race_size, started, model,
+                            if let Err(e) = sink.send(sse_bytes).await {
+                                // Bug fix: handle BOTH `Lost` and `Closed`.
+                                return self.fail_on_sink_send_error(
+                                    e, req, combo, target, attempt, race_size, started, model,
                                     connect_and_send_ms, ttft_ms, trace_id,
                                     acc.as_mut(), &chunk_id, created, &model_name,
                                 );
@@ -4192,9 +4232,10 @@ impl Pipeline {
                     acc.as_mut(), &chunk_id, created, &model_name,
                 );
             }
-            if let Err(crate::race_sink::StreamSinkError::Lost) = sink.send(SSE_DONE_BYTES.clone()).await {
-                return self.fail_stream_race_lost(
-                    req, combo, target, attempt, race_size, started, model,
+            if let Err(e) = sink.send(SSE_DONE_BYTES.clone()).await {
+                // Bug fix: handle BOTH `Lost` and `Closed`.
+                return self.fail_on_sink_send_error(
+                    e, req, combo, target, attempt, race_size, started, model,
                     connect_and_send_ms, ttft_ms, trace_id,
                     acc.as_mut(), &chunk_id, created, &model_name,
                 );
@@ -4225,7 +4266,13 @@ impl Pipeline {
         // Previously this was `None` ("out of scope per G1 spec") so
         // the detail modal always showed "No request body recorded"
         // for all streaming rows.
-        let request_body_json = serde_json::to_value(&req.openai_request).ok();
+        // Prefer the raw request body (preserves unknown fields the
+        // typed `OpenAIRequest` struct would drop). Fall back to
+        // re-serializing the typed struct when the raw body wasn't
+        // captured (e.g., requests constructed internally without
+        // going through the HTTP handler).
+        let request_body_json = req.request_body_json.clone()
+            .or_else(|| serde_json::to_value(&req.openai_request).ok());
         let _ = self.record_attempt_raw_with_tokens(
             req, combo, target, Some(model), None,
             Some(connect_and_send_ms), ttft_ms, total_ms,
@@ -4486,7 +4533,13 @@ impl Pipeline {
         // headers from the new `req.request_headers` slot. Response
         // side is None on this path — we never reached the upstream
         // call.
-        let request_body_json = serde_json::to_value(&req.openai_request).ok();
+        // Prefer the raw request body (preserves unknown fields the
+        // typed `OpenAIRequest` struct would drop). Fall back to
+        // re-serializing the typed struct when the raw body wasn't
+        // captured (e.g., requests constructed internally without
+        // going through the HTTP handler).
+        let request_body_json = req.request_body_json.clone()
+            .or_else(|| serde_json::to_value(&req.openai_request).ok());
         // C2 fix: also redact the request_headers at the
         // failure-recording point. `req.request_headers` is
         // built by `chat.rs` (already redacted there) or
@@ -4614,6 +4667,7 @@ impl Pipeline {
     /// accumulated `ttft_ms`.
     ///
     /// Same partial-response capture as `fail_stream_client_disconnected`.
+    #[allow(dead_code)]
     fn fail_stream_race_lost(
         &self,
         req: &PipelineRequest,
@@ -5195,6 +5249,7 @@ mod tests {
             combo_override: None,
             targets_override: None,
             request_headers: std::collections::BTreeMap::new(),
+            request_body_json: None,
             race_cancelled: false,
             race_cancel: None,
         };

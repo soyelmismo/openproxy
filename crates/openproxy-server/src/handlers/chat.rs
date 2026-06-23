@@ -132,7 +132,13 @@ async fn run_pipeline(
     headers: HeaderMap,
     body: serde_json::Value,
 ) -> Result<axum::response::Response, ApiError> {
-    // 1. Parse the OpenAI request.
+    // 1. Parse the OpenAI request. Clone `body` FIRST so we can
+    //    thread the raw JSON through to the recording path — the
+    //    typed `OpenAIRequest` struct drops unknown fields (provider
+    //    extensions, custom metadata), which makes debugging harder
+    //    when a client sends an unexpected field that causes the
+    //    upstream to behave differently.
+    let raw_request_body = body.clone();
     let openai_req: OpenAIRequest = serde_json::from_value(body)
         .map_err(|e| ApiError(CoreError::Parse(e.to_string())))?;
 
@@ -403,6 +409,12 @@ async fn run_pipeline(
         // helper is the single source of truth for what counts as
         // "sensitive" (see `openproxy_core::redact`).
         request_headers: redact_sensitive_headers(&headers),
+        // The raw request body, captured BEFORE parsing into
+        // `OpenAIRequest`. Preserves unknown fields (provider
+        // extensions, custom metadata) that the typed struct would
+        // drop. The recording path uses this preferentially to
+        // persist exactly what the client sent.
+        request_body_json: Some(raw_request_body),
         race_cancelled: false,
         race_cancel: None,
     };

@@ -230,6 +230,57 @@ pub fn publish_stage_event(mut event: StageEvent) {
     event.timestamp = chrono::Utc::now()
         .format("%Y-%m-%dT%H:%M:%S%.3fZ")
         .to_string();
+
+    // Also emit a tracing::info! so the DebugLogLayer (installed in
+    // openproxy-server::telemetry) captures the stage transition in
+    // the in-memory ring buffer exposed via GET /admin/debug/logs.
+    // Without this dual-publishing, the Debug Logs panel can't
+    // correlate events to a specific request_id — the stage events
+    // only flow through the broadcast channel (visible in the Live
+    // Logs panel) and never reach the tracing subscriber.
+    //
+    // The fields (request_id, trace_id, stage, status_code, etc.)
+    // are emitted as structured tracing fields so the
+    // MessageVisitor in debug_log.rs can extract them for
+    // correlation.
+    let stage = event.stage.as_str();
+    let rid = event.request_id.as_str();
+    let tid = event.trace_id.as_str();
+    let pid = event.provider_id.as_str();
+    let mid = event.upstream_model_id.as_str();
+    let elapsed = event.elapsed_ms;
+    let sc = event.status_code;
+    let connect = event.connect_ms;
+    let ttft = event.ttft_ms;
+    match stage {
+        "completed" => {
+            tracing::info!(
+                request_id = %rid, trace_id = %tid, provider_id = %pid,
+                upstream_model_id = %mid, stage = %stage, status_code = sc,
+                elapsed_ms = elapsed, connect_ms = ?connect, ttft_ms = ?ttft,
+                "request completed"
+            );
+        }
+        "failed" | "cancelled" => {
+            let err = event.error.as_deref().unwrap_or("");
+            tracing::warn!(
+                request_id = %rid, trace_id = %tid, provider_id = %pid,
+                upstream_model_id = %mid, stage = %stage, status_code = sc,
+                elapsed_ms = elapsed, connect_ms = ?connect, ttft_ms = ?ttft,
+                error = %err,
+                "request {}", stage
+            );
+        }
+        _ => {
+            tracing::info!(
+                request_id = %rid, trace_id = %tid, provider_id = %pid,
+                upstream_model_id = %mid, stage = %stage, status_code = sc,
+                elapsed_ms = elapsed, connect_ms = ?connect, ttft_ms = ?ttft,
+                "request stage: {}", stage
+            );
+        }
+    }
+
     let _ = tx.send(event);
 }
 

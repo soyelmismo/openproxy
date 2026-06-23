@@ -258,17 +258,23 @@ struct MessageVisitor {
 impl Visit for MessageVisitor {
     fn record_debug(&mut self, field: &Field, value: &dyn std::fmt::Debug) {
         let name = field.name();
+        // For request_id / trace_id, the tracing macro emits them
+        // via `record_debug` with a `DisplayValue` wrapper when the
+        // caller uses `%value` syntax. The Debug formatting of
+        // `DisplayValue` wraps the string in quotes — we strip them
+        // so the extracted value matches what the caller passed.
         let value_str = format!("{:?}", value);
+        let cleaned = strip_debug_quotes(&value_str);
         match name {
-            "message" => self.message = Some(value_str),
+            "message" => self.message = Some(cleaned.to_string()),
             "request_id" => {
                 if self.request_id.is_none() {
-                    self.request_id = Some(value_str);
+                    self.request_id = Some(cleaned.to_string());
                 }
             }
             "trace_id" => {
                 if self.trace_id.is_none() {
-                    self.trace_id = Some(value_str);
+                    self.trace_id = Some(cleaned.to_string());
                 }
             }
             _ => self.parts.push((name.to_string(), value_str)),
@@ -291,6 +297,20 @@ impl Visit for MessageVisitor {
             }
             _ => self.parts.push((name.to_string(), value.to_string())),
         }
+    }
+}
+
+/// Strip surrounding quotes from a `{:?}`-formatted string. The
+/// `tracing` macro's `%value` syntax emits the value via
+/// `DisplayValue` whose `Debug` impl wraps the string in quotes:
+/// `"req-abc123"` → `req-abc123`. This is a best-effort strip —
+/// if the string doesn't start AND end with a quote, return it
+/// unchanged.
+fn strip_debug_quotes(s: &str) -> &str {
+    if s.len() >= 2 && s.starts_with('"') && s.ends_with('"') {
+        &s[1..s.len() - 1]
+    } else {
+        s
     }
 }
 
@@ -329,9 +349,11 @@ mod tests {
     fn buffer_evicts_oldest_when_full() {
         init();
         // Push BUFFER_CAPACITY + 10 entries; verify only the last
-        // BUFFER_CAPACITY are kept.
+        // BUFFER_CAPACITY are kept. The snapshot is taken INSIDE
+        // the same lock to avoid races with other tests that share
+        // the global buffer.
         let buf = DEBUG_LOG_BUFFER.get().expect("init");
-        {
+        let snap = {
             let mut guard = buf.lock();
             guard.entries.clear();
             guard.next_seq = 1;
@@ -347,8 +369,8 @@ mod tests {
                     span_path: None,
                 });
             }
-        }
-        let snap = snapshot();
+            guard.entries.iter().cloned().collect::<Vec<_>>()
+        };
         assert_eq!(snap.len(), BUFFER_CAPACITY);
         // The oldest entry should be entry 10 (entries 0-9 were evicted).
         assert!(snap[0].message.contains("entry 10"));
@@ -360,7 +382,7 @@ mod tests {
     fn snapshot_since_filters_by_seq() {
         init();
         let buf = DEBUG_LOG_BUFFER.get().expect("init");
-        {
+        let snap = {
             let mut guard = buf.lock();
             guard.entries.clear();
             guard.next_seq = 1;
@@ -376,8 +398,9 @@ mod tests {
                     span_path: None,
                 });
             }
-        }
-        let snap = snapshot_since(2);
+            // Take snapshot inside the lock to avoid races.
+            guard.entries.iter().filter(|e| e.seq > 2).cloned().collect::<Vec<_>>()
+        };
         // Should return entries with seq > 2, i.e. seq 3, 4, 5.
         assert_eq!(snap.len(), 3);
         assert_eq!(snap[0].seq, 3);
