@@ -150,7 +150,32 @@ export function navigate(): void {
   startBgPoll();
 }
 
-export function rerenderCurrentView(): void { navigate(); }
+export function rerenderCurrentView(): void {
+  // CRITICAL UX FIX: if the user is currently interacting with a
+  // form element (input, select, textarea), a full DOM rebuild
+  // would close their dropdown, steal focus, and make the UI feel
+  // broken. This is the root cause of the "me cierra el dropdown"
+  // bug the user reported across the entire dashboard.
+  //
+  // When the focused element is a form control, we SKIP the
+  // re-render. The state has already been updated optimistically
+  // by the handler, so the data is correct — the DOM will catch
+  // up on the next natural re-render (page navigation, bg-poll
+  // tick, or when the user clicks elsewhere).
+  //
+  // This is a global fix that protects ALL dashboard views, not
+  // just combos.
+  const active: Element | null = document.activeElement;
+  if (active instanceof HTMLInputElement
+      || active instanceof HTMLSelectElement
+      || active instanceof HTMLTextAreaElement) {
+    // User is typing/selecting — don't blow away their UI.
+    // The state update already happened; the DOM will refresh
+    // naturally when they move focus away.
+    return;
+  }
+  navigate();
+}
 
 // Wire the hashchange event exactly once. Called from app.js boot.
 //

@@ -244,28 +244,22 @@ export async function updateRaceSize(id: number, e: Event | null): Promise<void>
 
 export async function updateContextWindow(id: number, e: Event | null): Promise<void> {
   // Only fire on "change" (blur/enter), not on every "input" keystroke.
-  // The generic data-action dispatcher fires for both "input" and
-  // "change"; without this guard, every keystroke in the number input
-  // would trigger a PATCH request.
   if (e && e.type === "input") return;
   const raw = e && e.target ? (e.target as HTMLInputElement).value.trim() : "";
-  // Empty = auto-compute (null). Non-empty = parse as integer.
   const body = raw === "" ? { context_window: null } : { context_window: parseInt(raw, 10) };
   if (raw !== "" && !Number.isFinite(body.context_window)) {
-    alert("Context window must be a number or empty");
-    rerenderCurrentView();
+    console.error("[openproxy] context_window must be a number or empty");
     return;
   }
   try {
     await api("/combos/" + id, { method: "PATCH", body: JSON.stringify(body) });
-    // Update the combo in state so the effective value refreshes.
+    // Update state WITHOUT re-rendering — see patchComboField for
+    // the rationale (avoid closing dropdowns / stealing focus).
     const combo = (state.combos || []).find((c) => c.id === id);
     if (combo) combo.context_window = body.context_window;
-    rerenderCurrentView();
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);
-    alert("Error: " + msg);
-    rerenderCurrentView();
+    console.error("[openproxy] context_window PATCH failed:", msg);
   }
 }
 
@@ -287,18 +281,35 @@ async function patchComboField(
       method: "PATCH",
       body: JSON.stringify({ [field]: value }),
     });
-    // Optimistically update the in-memory combo so the next paint
-    // (e.g. the bg-poll re-render) shows the new value before the
-    // detail view re-fetches.
+    // Optimistically update the in-memory combo so the value
+    // persists across any future re-render. We do NOT call
+    // rerenderCurrentView() here — a full DOM rebuild would
+    // close any open dropdowns and steal focus from inputs,
+    // making the UI feel broken (the exact "me cierra el
+    // dropdown" bug the user reported). The state update is
+    // enough; the next natural re-render (page nav, bg-poll)
+    // will pick up the new value.
     const combo = (state.combos || []).find((c) => c.id === id);
     if (combo) {
       (combo as unknown as Record<string, unknown>)[field] = value;
     }
-    rerenderCurrentView();
+    // For select elements, the DOM already reflects the user's
+    // choice. For number inputs, the value is already in the
+    // input. No re-render needed.
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);
-    alert("Error: " + msg);
-    rerenderCurrentView();
+    // Show error but DON'T re-render — the user might be in the
+    // middle of editing another field. A re-render would lose
+    // their focus and unsaved changes.
+    console.error("[openproxy] combo PATCH failed:", msg);
+    // Use a toast instead of alert() so the user can dismiss it
+    // without losing focus.
+    const toast = document.createElement("div");
+    toast.className = "toast toast-error";
+    toast.textContent = "Error: " + msg;
+    document.body.appendChild(toast);
+    setTimeout(() => toast.classList.add("show"), 10);
+    setTimeout(() => { toast.classList.remove("show"); setTimeout(() => toast.remove(), 300); }, 4000);
   }
 }
 

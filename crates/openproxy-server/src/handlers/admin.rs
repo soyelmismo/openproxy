@@ -2473,57 +2473,57 @@ pub async fn update_combo(
             };
             combos::update_priority_mode(&w, ComboId(id), mode)?;
         }
-        // Optional cooldown settings update. The three numeric
-        // fields are written together so the dashboard's "Cooldown"
-        // form can POST them atomically. We treat `cooldown_mode`
-        // as the trigger: if any of the four fields is present in
-        // the body, we issue a single UPDATE that writes all four
-        // (using the body value when present, otherwise `None` to
-        // clear the column).
-        let has_cd = body.get("cooldown_mode").is_some()
-            || body.get("cooldown_base_secs").is_some()
-            || body.get("cooldown_max_secs").is_some()
-            || body.get("cooldown_factor").is_some();
-        if has_cd {
-            let mode = match body.get("cooldown_mode") {
-                None => None,
-                Some(serde_json::Value::Null) => None,
-                Some(serde_json::Value::String(s)) => Some(s.as_str()),
-                Some(other) => {
+        // Optional cooldown settings update. Each field is updated
+        // INDEPENDENTLY — if only `cooldown_base_secs` is in the body,
+        // only that column is written, leaving `cooldown_mode` etc.
+        // untouched. This prevents the "changing base resets mode to
+        // flat" bug.
+        //
+        // The frontend sends one field at a time (e.g. `{cooldown_base_secs: 30}`)
+        // so we must NOT batch them into a single UPDATE that would
+        // NULL out the absent fields.
+        if let Some(v) = body.get("cooldown_mode") {
+            let mode = match v {
+                serde_json::Value::Null => None,
+                serde_json::Value::String(s) => Some(s.as_str()),
+                other => {
                     return Err(ApiError(CoreError::Validation(format!(
                         "cooldown_mode must be a string or null, got {}",
                         other
                     ))))
                 }
             };
-            let base = match body.get("cooldown_base_secs") {
-                None => None,
-                Some(serde_json::Value::Null) => None,
-                Some(v) => Some(v.as_u64().ok_or_else(|| {
+            combos::update_cooldown_mode(&w, ComboId(id), mode)?;
+        }
+        if let Some(v) = body.get("cooldown_base_secs") {
+            let base = if v.is_null() { None } else {
+                Some(v.as_u64().ok_or_else(|| {
                     ApiError(CoreError::Validation(
                         "cooldown_base_secs must be a non-negative integer or null".into(),
                     ))
-                })?),
+                })?)
             };
-            let max = match body.get("cooldown_max_secs") {
-                None => None,
-                Some(serde_json::Value::Null) => None,
-                Some(v) => Some(v.as_u64().ok_or_else(|| {
+            combos::update_cooldown_base(&w, ComboId(id), base)?;
+        }
+        if let Some(v) = body.get("cooldown_max_secs") {
+            let max = if v.is_null() { None } else {
+                Some(v.as_u64().ok_or_else(|| {
                     ApiError(CoreError::Validation(
                         "cooldown_max_secs must be a non-negative integer or null".into(),
                     ))
-                })?),
+                })?)
             };
-            let factor = match body.get("cooldown_factor") {
-                None => None,
-                Some(serde_json::Value::Null) => None,
-                Some(v) => Some(v.as_u64().ok_or_else(|| {
+            combos::update_cooldown_max(&w, ComboId(id), max)?;
+        }
+        if let Some(v) = body.get("cooldown_factor") {
+            let factor = if v.is_null() { None } else {
+                Some(v.as_u64().ok_or_else(|| {
                     ApiError(CoreError::Validation(
                         "cooldown_factor must be a non-negative integer or null".into(),
                     ))
-                })? as u32),
+                })? as u32)
             };
-            combos::update_cooldown_settings(&w, ComboId(id), mode, base, max, factor)?;
+            combos::update_cooldown_factor(&w, ComboId(id), factor)?;
         }
         // Optional LKGP exploration rate update.
         if let Some(v) = body.get("lkgp_exploration_rate") {

@@ -1266,6 +1266,83 @@ pub fn update_cooldown_settings(
     Ok(())
 }
 
+/// Update ONLY the cooldown_mode column, leaving base/max/factor
+/// untouched. This is the per-field update used by the dashboard's
+/// individual cooldown setting inputs.
+pub fn update_cooldown_mode(conn: &Connection, id: ComboId, mode: Option<&str>) -> Result<()> {
+    let mode_value: Option<String> = match mode {
+        None => None,
+        Some(s) => {
+            let parsed = CooldownMode::parse(s)?;
+            Some(parsed.as_str().to_string())
+        }
+    };
+    let affected = conn
+        .execute(
+            "UPDATE combos SET cooldown_mode = ?1 WHERE id = ?2",
+            params![mode_value, id.0],
+        )
+        .map_err(|e| CoreError::Database {
+            message: format!("update cooldown_mode for combo {}: {}", id.0, e),
+            source: Some(Box::new(e)),
+        })?;
+    if affected == 0 {
+        return Err(CoreError::ComboNotFound(id.0));
+    }
+    Ok(())
+}
+
+/// Update ONLY the cooldown_base_secs column.
+pub fn update_cooldown_base(conn: &Connection, id: ComboId, base: Option<u64>) -> Result<()> {
+    let affected = conn
+        .execute(
+            "UPDATE combos SET cooldown_base_secs = ?1 WHERE id = ?2",
+            params![base.map(|v| v as i64), id.0],
+        )
+        .map_err(|e| CoreError::Database {
+            message: format!("update cooldown_base_secs for combo {}: {}", id.0, e),
+            source: Some(Box::new(e)),
+        })?;
+    if affected == 0 {
+        return Err(CoreError::ComboNotFound(id.0));
+    }
+    Ok(())
+}
+
+/// Update ONLY the cooldown_max_secs column.
+pub fn update_cooldown_max(conn: &Connection, id: ComboId, max: Option<u64>) -> Result<()> {
+    let affected = conn
+        .execute(
+            "UPDATE combos SET cooldown_max_secs = ?1 WHERE id = ?2",
+            params![max.map(|v| v as i64), id.0],
+        )
+        .map_err(|e| CoreError::Database {
+            message: format!("update cooldown_max_secs for combo {}: {}", id.0, e),
+            source: Some(Box::new(e)),
+        })?;
+    if affected == 0 {
+        return Err(CoreError::ComboNotFound(id.0));
+    }
+    Ok(())
+}
+
+/// Update ONLY the cooldown_factor column.
+pub fn update_cooldown_factor(conn: &Connection, id: ComboId, factor: Option<u32>) -> Result<()> {
+    let affected = conn
+        .execute(
+            "UPDATE combos SET cooldown_factor = ?1 WHERE id = ?2",
+            params![factor.map(|v| v as i64), id.0],
+        )
+        .map_err(|e| CoreError::Database {
+            message: format!("update cooldown_factor for combo {}: {}", id.0, e),
+            source: Some(Box::new(e)),
+        })?;
+    if affected == 0 {
+        return Err(CoreError::ComboNotFound(id.0));
+    }
+    Ok(())
+}
+
 /// Update the LKGP exploration rate. `None` clears the column back
 /// to `NULL`, which the pipeline interprets as the default 0.1
 /// (10%). A non-`None` value must be in `[0.0, 1.0]`; outside that
