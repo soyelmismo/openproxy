@@ -72,7 +72,7 @@ export async function createAccount(providerId: string, e: Event): Promise<void>
     rerenderCurrentView();
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);
-    alert("Error: " + msg);
+    showToast("Error: " + msg, "error");
   }
 }
 
@@ -84,7 +84,7 @@ export async function deleteAccount(id: number): Promise<void> {
     rerenderCurrentView();
   } catch (e: unknown) {
     const msg = e instanceof Error ? e.message : String(e);
-    alert("Error: " + msg);
+    showToast("Error: " + msg, "error");
   }
 }
 
@@ -142,9 +142,14 @@ export async function updateAccountKey(id: number, e: Event): Promise<void> {
     });
     state.accounts = await api("/accounts") as typeof state.accounts;
     closeUpdateAccountKey();
-    rerenderCurrentView();
+    // We do NOT call rerenderCurrentView() here — the API key is
+    // not displayed in the underlying accounts table, so there's
+    // nothing visible to refresh. A full rebuild would close any
+    // open `<select>` (e.g. the per-account health dropdown on a
+    // sibling row) and steal focus from any input the user might
+    // still be editing. Mirrors patchComboField in combo-handlers.ts.
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);
-    alert("Error: " + msg);
+    showToast("Error: " + msg, "error");
   }
 }

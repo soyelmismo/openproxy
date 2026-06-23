@@ -136,6 +136,35 @@ export function updateFilterTabCounts(providerId: string, allProviderModels: rea
   if (inactiveBtn) inactiveBtn.textContent = `Inactive (${inactive})`;
 }
 
+// Patch a single model row's active-state UI in place — toggle the
+// row's `inactive` class, swap the status-pill text/class, and
+// relabel the Enable/Disable button — without a full re-render.
+// Used by `toggleModel` and `bulkSetSelected` (model-handlers.ts)
+// and `bulkToggleModels` (provider-handlers.ts) so the user sees
+// their click reflected immediately while any open `<select>` /
+// `<input>` elsewhere on the page keeps its focus. Mirrors the
+// patchComboField pattern in combo-handlers.ts.
+export function syncModelRowActive(rowId: number, active: boolean): void {
+  const row = document.getElementById(`model-row-${rowId}`);
+  if (!row) return;
+  row.classList.toggle("inactive", !active);
+  // The active-state status pill is in a regular <td>; the
+  // last-test pill is in <td class="last-test-cell">. Use
+  // :not(.last-test-cell) to disambiguate.
+  const pill = row.querySelector("td:not(.last-test-cell) > .status-pill");
+  if (pill) {
+    pill.className = `status-pill ${active ? "on" : "off"}`;
+    pill.textContent = active ? "active" : "inactive";
+  }
+  // The Enable/Disable button — update its text + data-arg2 so
+  // the next click sends the right desired state.
+  const toggleBtn = row.querySelector<HTMLButtonElement>('button[data-action="toggleModel"]');
+  if (toggleBtn) {
+    toggleBtn.textContent = active ? "Disable" : "Enable";
+    toggleBtn.setAttribute("data-arg2", String(!active));
+  }
+}
+
 // Sync the master "select all" checkbox state with the in-flight
 // selection: checked if all visible rows are selected,
 // indeterminate if some, unchecked if none. Used by both the

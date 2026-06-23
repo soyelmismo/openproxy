@@ -64,7 +64,7 @@ import {
 import { mountThemeToggle } from "../components/theme-toggle.js";
 import { toggleSidebar } from "../components/sidebar.js";
 import { showToast } from "../components/toast.js";
-import { navigate, rerenderCurrentView } from "../state/router.js";
+import { navigate, rerenderCurrentView, forceRerenderCurrentView } from "../state/router.js";
 import { OAuthLogin } from "./oauth-handlers.js";
 import { logsPrevPage, logsNextPage, logsGoPage, logsSetFollow, toggleColumnsMenu, toggleColumn } from "../views/logs.js";
 import { configSaveTimeouts, configSaveRecordingTtl, configSaveIdleChunkRetryable, configSaveCompression } from "../views/config.js";
@@ -292,6 +292,7 @@ export const HANDLERS: Record<string, ActionHandler> = {
   // internal callers (bg-poll, hand-written handlers).
   navigate,
   rerenderCurrentView,
+  forceRerenderCurrentView,
 
   // OAuth (the OAuthLogin object's methods are exposed under flat
   // names so the HTML stays simple: data-action="oauthStartPKCE").

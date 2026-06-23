@@ -10,7 +10,118 @@ import { api } from "../state/api.js";
 import { escapeHtml, escapeAttr } from "../lib/escape.js";
 import { appendModal } from "../lib/dom.js";
 import { rerenderCurrentView } from "../state/router.js";
+import { showToast } from "../components/toast.js";
 import type { Provider, Account, Model, ComboSummary } from "../lib/types/api.js";
+
+// ---- PATCH helper (no re-render) ----
+//
+// Mirrors `patchComboField` in combo-handlers.ts: send the PATCH,
+// swallow the success path (the DOM already reflects the user's
+// choice — see `updateTargetWeight` below), and surface errors via
+// a toast instead of `alert()` + `rerenderCurrentView()`. The
+// original `rerenderCurrentView()` was the root cause of the
+// "me cierra el dropdown" bug: a full DOM rebuild would close any
+// open `<select>` (priority mode, cooldown mode) and steal focus
+// from any `<input>` (weight, race size) the user was still editing.
+async function patchTargetField(
+  comboId: number,
+  targetId: number,
+  field: string,
+  value: unknown,
+): Promise<void> {
+  try {
+    await api(`/combos/${comboId}/targets/${targetId}`, {
+      method: "PATCH",
+      body: JSON.stringify({ [field]: value }),
+    });
+    // Combo targets are not stored in `state` (they're fetched on
+    // demand by the combo detail view), so the only "state" we
+    // can patch here is the input's value itself, which the user
+    // has already typed. The DOM is correct — no re-render needed.
+    // The next natural re-render (page nav, target add/delete)
+    // will pick up the server's authoritative value.
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    // Don't re-render — the user might be editing another field.
+    // A re-render would lose their focus and unsaved changes.
+    console.error("[openproxy] combo target PATCH failed:", msg);
+    showToast("Error: " + msg, "error");
+  }
+}
+
+// Targeted DOM patch for the multi-select checkbox UI on the
+// targets table. Toggles each row's `selected` class, refreshes
+// the master "select all" checkbox indeterminate state, and
+// re-paints the "N selected / Delete selected / Clear selection"
+// bulk-action bar — all without a full re-render. The bar's HTML
+// mirrors `views/combos.ts` so the look stays consistent.
+function syncTargetSelectionUI(comboId: number): void {
+  // 1. Toggle each visible row's `selected` class from the
+  //    current state of `state.selectedTargets`.
+  const checkboxes = Array.from(
+    document.querySelectorAll<HTMLInputElement>(
+      '#targets-tbody input[type="checkbox"][data-target-id]'
+    )
+  );
+  for (const cb of checkboxes) {
+    const id = parseInt(cb.getAttribute("data-target-id") || "", 10);
+    if (Number.isNaN(id)) continue;
+    const row = document.querySelector(`tr[data-drag-id="${id}"]`);
+    if (row) row.classList.toggle("selected", state.selectedTargets.has(id));
+  }
+
+  // 2. Sync the master "select all" checkbox (indeterminate state).
+  const master = document.getElementById("target-select-all") as HTMLInputElement | null;
+  if (master) {
+    const visibleIds = checkboxes
+      .map((cb) => parseInt(cb.getAttribute("data-target-id") || "", 10))
+      .filter((id) => !Number.isNaN(id));
+    if (visibleIds.length === 0) {
+      master.checked = false;
+      master.indeterminate = false;
+    } else {
+      const selectedVisible = visibleIds.filter((id) => state.selectedTargets.has(id)).length;
+      if (selectedVisible === 0) { master.checked = false; master.indeterminate = false; }
+      else if (selectedVisible === visibleIds.length) { master.checked = true; master.indeterminate = false; }
+      else { master.checked = false; master.indeterminate = true; }
+    }
+  }
+
+  // 3. Re-paint the bulk-action bar (show / hide / count).
+  const tbody = document.getElementById("targets-tbody");
+  const section = tbody ? tbody.closest("section") : null;
+  if (!section) return;
+  const count = state.selectedTargets.size;
+  let bar = section.querySelector(".bulk-actions-bar");
+  if (count === 0) {
+    if (bar) bar.remove();
+    return;
+  }
+  if (bar) {
+    const strong = bar.querySelector("strong");
+    if (strong) strong.textContent = String(count);
+  } else {
+    const html = `
+      <div class="bulk-actions-bar">
+        <span><strong>${count}</strong> selected</span>
+        <button class="danger" data-action="bulkDeleteSelectedTargets" data-arg1="${comboId}">Delete selected</button>
+        <button class="link" data-action="clearTargetSelection">Clear selection</button>
+      </div>`;
+    const table = section.querySelector("table");
+    if (table) table.insertAdjacentHTML("beforebegin", html);
+  }
+}
+
+// Read the comboId off any table row in the targets table. Used
+// by selection handlers that don't receive the comboId as an arg.
+function comboIdFromTargetsTable(): number | null {
+  const row = document.querySelector("tr[data-combo-id]");
+  if (!row) return null;
+  const raw = row.getAttribute("data-combo-id");
+  if (raw == null) return null;
+  const id = parseInt(raw, 10);
+  return Number.isNaN(id) ? null : id;
+}
 
 // Local helper type for the model shape that the add-target modal
 // deals with. The original code accepted `m.model_id || m.id` and
@@ -494,10 +605,24 @@ export async function deleteTarget(comboId: number, targetId: number): Promise<v
 export async function resetCooldown(comboId: number, targetId: number): Promise<void> {
   try {
     await api(`/combos/${comboId}/targets/${targetId}/clear-cooldown`, { method: "POST" });
-    rerenderCurrentView();
+    // Targeted DOM patch: hide the cooldown badge and the reset
+    // button on the affected row. We do NOT call
+    // rerenderCurrentView() — see `patchTargetField` above for
+    // the rationale (a full rebuild would close any open
+    // `<select>` on a sibling row, e.g. the weight input or the
+    // priority-mode dropdown). The next background poll / page
+    // nav will reconcile the "N of M in cooldown" banner above
+    // the table.
+    const row = document.querySelector(`tr[data-drag-id="${targetId}"]`);
+    if (row) {
+      const badge = row.querySelector(".badge-cooldown");
+      if (badge) badge.remove();
+      const resetBtn = row.querySelector<HTMLButtonElement>('button[data-action="resetCooldown"]');
+      if (resetBtn) resetBtn.remove();
+    }
   } catch (e: unknown) {
     const msg = e instanceof Error ? e.message : String(e);
-    alert("Could not clear cooldown: " + msg);
+    showToast("Could not clear cooldown: " + msg, "error");
   }
 }
 
@@ -527,23 +652,48 @@ export function toggleTargetSelection(targetId: number, e: Event | null): void {
   const checked = target instanceof HTMLInputElement ? target.checked : false;
   if (checked) state.selectedTargets.add(targetId);
   else state.selectedTargets.delete(targetId);
-  rerenderCurrentView();
+  // Targeted DOM patch — toggle the row's `selected` class and
+  // refresh the bulk-action bar + master checkbox without a full
+  // re-render (which would close any open `<select>` / steal focus
+  // from any `<input>` on a sibling row). The checkbox is already
+  // toggled by the browser.
+  const comboId = comboIdFromTargetsTable();
+  if (comboId != null) syncTargetSelectionUI(comboId);
 }
 
 export function toggleSelectAllTargets(e: Event | null): void {
   const target = e && e.target ? e.target : null;
   const checked = target instanceof HTMLInputElement ? target.checked : false;
-  const visible = Array.from(document.querySelectorAll('#targets-tbody input[type="checkbox"]'))
+  const visible = Array.from(document.querySelectorAll<HTMLInputElement>(
+    '#targets-tbody input[type="checkbox"][data-target-id]'
+  ))
     .map((cb) => parseInt(cb.getAttribute("data-target-id") || "", 10))
     .filter((id) => !Number.isNaN(id));
   if (checked) for (const id of visible) state.selectedTargets.add(id);
   else for (const id of visible) state.selectedTargets.delete(id);
-  rerenderCurrentView();
+  // Targeted DOM patch — the master checkbox is already toggled
+  // by the browser; we just sync the row classes + bulk bar.
+  const comboId = comboIdFromTargetsTable();
+  if (comboId != null) syncTargetSelectionUI(comboId);
 }
 
 export function clearTargetSelection(): void {
   state.selectedTargets.clear();
-  rerenderCurrentView();
+  // Targeted DOM patch: uncheck every visible checkbox, drop every
+  // row's `selected` class, and remove the bulk-action bar. The
+  // master "select all" checkbox is also reset. A full re-render
+  // would close any open `<select>` on the page; the targeted
+  // patch preserves the rest of the DOM.
+  document.querySelectorAll<HTMLInputElement>(
+    '#targets-tbody input[type="checkbox"][data-target-id]'
+  ).forEach((cb) => { cb.checked = false; });
+  document.querySelectorAll("tr[data-drag-id].selected").forEach((row) => {
+    row.classList.remove("selected");
+  });
+  const bar = document.querySelector(".bulk-actions-bar");
+  if (bar) bar.remove();
+  const master = document.getElementById("target-select-all") as HTMLInputElement | null;
+  if (master) { master.checked = false; master.indeterminate = false; }
 }
 
 export async function bulkDeleteSelectedTargets(comboId: number): Promise<void> {
@@ -566,25 +716,21 @@ export async function bulkDeleteSelectedTargets(comboId: number): Promise<void> 
  *  The generic data-action dispatcher fires for both "input" (per
  *  keystroke) and "change" (blur/enter); we filter on "input" so we
  *  don't PATCH on every keystroke. Empty input resets to the default
- *  weight of 1. The backend rejects weights `<= 0` with a 400. */
+ *  weight of 1. The backend rejects weights `<= 0` with a 400.
+ *
+ *  We delegate to `patchTargetField` so the success path does NOT
+ *  call `rerenderCurrentView()` (the input already shows the value
+ *  the user typed) and errors surface via a toast instead of
+ *  `alert()` + re-render. See `patchComboField` in combo-handlers.ts
+ *  for the full rationale. */
 export async function updateTargetWeight(comboId: number, targetId: number, e: Event | null): Promise<void> {
   if (e && e.type === "input") return;
   const raw = e && e.target ? (e.target as HTMLInputElement).value.trim() : "";
   const val: number = raw === "" ? 1 : parseInt(raw, 10);
   if (!Number.isFinite(val) || val <= 0) {
-    alert("Weight must be a positive integer");
-    rerenderCurrentView();
+    console.error("[openproxy] weight must be a positive integer");
+    showToast("Weight must be a positive integer", "error");
     return;
   }
-  try {
-    await api(`/combos/${comboId}/targets/${targetId}`, {
-      method: "PATCH",
-      body: JSON.stringify({ weight: val }),
-    });
-    rerenderCurrentView();
-  } catch (err: unknown) {
-    const msg = err instanceof Error ? err.message : String(err);
-    alert("Error: " + msg);
-    rerenderCurrentView();
-  }
+  await patchTargetField(comboId, targetId, "weight", val);
 }

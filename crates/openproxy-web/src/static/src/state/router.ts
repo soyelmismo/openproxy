@@ -150,6 +150,13 @@ export function navigate(): void {
   startBgPoll();
 }
 
+// Debounce timer for rerenderCurrentView. Multiple rapid calls
+// (e.g., a PATCH that triggers state updates) coalesce into a
+// single navigate() call on the next macrotask. This prevents
+// redundant DOM rebuilds when several handlers fire in quick
+// succession.
+let rerenderTimer: ReturnType<typeof setTimeout> | null = null;
+
 export function rerenderCurrentView(): void {
   // CRITICAL UX FIX: if the user is currently interacting with a
   // form element (input, select, textarea), a full DOM rebuild
@@ -158,21 +165,33 @@ export function rerenderCurrentView(): void {
   // bug the user reported across the entire dashboard.
   //
   // When the focused element is a form control, we SKIP the
-  // re-render. The state has already been updated optimistically
-  // by the handler, so the data is correct — the DOM will catch
-  // up on the next natural re-render (page navigation, bg-poll
-  // tick, or when the user clicks elsewhere).
-  //
-  // This is a global fix that protects ALL dashboard views, not
-  // just combos.
+  // re-render entirely. The state has already been updated
+  // optimistically by the handler, so the data is correct — the
+  // DOM will catch up on the next natural re-render (page
+  // navigation, bg-poll tick, or when the user clicks elsewhere).
   const active: Element | null = document.activeElement;
   if (active instanceof HTMLInputElement
       || active instanceof HTMLSelectElement
       || active instanceof HTMLTextAreaElement) {
-    // User is typing/selecting — don't blow away their UI.
-    // The state update already happened; the DOM will refresh
-    // naturally when they move focus away.
     return;
+  }
+  // Debounce: coalesce multiple rapid calls into one. If a timer
+  // is already pending, this call is a no-op — the pending timer
+  // will fire and render the latest state.
+  if (rerenderTimer !== null) return;
+  rerenderTimer = setTimeout(() => {
+    rerenderTimer = null;
+    navigate();
+  }, 0);
+}
+
+/** Force an immediate re-render, bypassing the focus guard and
+ *  debounce. Use for structural changes (create, delete, navigate)
+ *  where the DOM genuinely needs to rebuild. */
+export function forceRerenderCurrentView(): void {
+  if (rerenderTimer !== null) {
+    clearTimeout(rerenderTimer);
+    rerenderTimer = null;
   }
   navigate();
 }

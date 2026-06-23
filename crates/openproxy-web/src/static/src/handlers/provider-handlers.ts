@@ -20,6 +20,7 @@ import { appendModal } from "../lib/dom.js";
 import { showToast } from "../components/toast.js";
 import { rerenderCurrentView, navigate } from "../state/router.js";
 import { QUOTA_CAPABLE_PROVIDERS } from "../lib/constants.js";
+import { syncModelRowActive, updateFilterTabCounts } from "../components/model-table.js";
 
 interface RefreshResult {
   models_refreshed?: number;
@@ -339,7 +340,20 @@ export async function bulkToggleModels(providerId: string, active: boolean): Pro
       body: JSON.stringify({ provider_id: providerId, active }),
     });
     state.models = await api("/models") as typeof state.models;
-    rerenderCurrentView();
+    // Targeted DOM patch — for each non-custom model row of this
+    // provider, sync the row's active-state UI in place. We do
+    // NOT call rerenderCurrentView() because a full rebuild would
+    // close any open `<select>` / steal focus from the search
+    // input the user may still be editing. The patch touches only
+    // the rows whose state changed; everything else stays put.
+    // Mirrors the patchComboField pattern in combo-handlers.ts.
+    const allProviderModels = (state.models || []).filter((m) => m.provider_id === providerId);
+    for (const m of allProviderModels.filter((m) => !m.custom)) {
+      syncModelRowActive(m.row_id, m.active);
+    }
+    // Refresh the (All / Active / Inactive) counts on the filter
+    // tabs so the totals reflect the new state.
+    updateFilterTabCounts(providerId, allProviderModels);
   } catch (err: unknown) {
     const msg2 = err instanceof Error ? err.message : String(err);
     showToast("Error: " + msg2, "error");
@@ -367,7 +381,11 @@ export async function setHealth(id: number, e: Event | null): Promise<void> {
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);
     showToast("Error: " + msg, "error");
-    rerenderCurrentView();
+    // Don't re-render on error — see patchComboField in
+    // combo-handlers.ts for the rationale. The user's select
+    // already shows their choice; a re-render would close any
+    // other open dropdown on the page and steal focus from any
+    // input the user might still be editing.
   }
 }
 

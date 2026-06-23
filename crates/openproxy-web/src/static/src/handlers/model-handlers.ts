@@ -18,7 +18,7 @@ import { api } from "../state/api.js";
 import { escapeAttr } from "../lib/escape.js";
 import { appendModal } from "../lib/dom.js";
 import { rerenderCurrentView } from "../state/router.js";
-import { renderModelRows, getVisibleModelRowIds, updateFilterTabCounts, syncSelectAllCheckbox, applySort } from "../components/model-table.js";
+import { renderModelRows, getVisibleModelRowIds, updateFilterTabCounts, syncSelectAllCheckbox, applySort, syncModelRowActive } from "../components/model-table.js";
 import { renderBulkActionsBar } from "../components/model-bulk-actions.js";
 import { statusPillClass } from "../lib/constants.js";
 import { showToast } from "../components/toast.js";
@@ -116,7 +116,21 @@ export async function toggleModel(rowId: number, newActive: boolean | unknown, e
     });
     const m = (state.models || []).find((x) => x.row_id === rowId);
     if (m) m.active = desired;
-    rerenderCurrentView();
+    // Targeted DOM patch — sync the row's active-state UI in
+    // place (row class, status pill, Enable/Disable button). We
+    // do NOT call rerenderCurrentView() because a full rebuild
+    // would close any open `<select>` (filter tabs, provider
+    // dropdown) and steal focus from the search input the user
+    // may still be editing. Mirrors patchComboField in
+    // combo-handlers.ts.
+    syncModelRowActive(rowId, desired);
+    // Refresh the (All / Active / Inactive) counts on the filter
+    // tabs so the totals reflect the new state.
+    const ctx = state.currentView && state.currentView.context;
+    if (ctx) {
+      const allProviderModels = (state.models || []).filter((mm) => mm.provider_id === ctx);
+      updateFilterTabCounts(ctx, allProviderModels);
+    }
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);
     showToast("Error: " + msg, "error");
@@ -235,12 +249,36 @@ export function toggleSelectAllModels(e: Event | null): void {
   } else {
     for (const id of visible) state.selectedModels.delete(id);
   }
-  rerenderCurrentView();
+  // Targeted DOM patch — toggle each visible row's `selected`
+  // class and refresh the bulk-action bar. The master checkbox
+  // is already toggled by the browser. We do NOT call
+  // rerenderCurrentView() because a full rebuild would close any
+  // open `<select>` (filter tabs, provider dropdown) and steal
+  // focus from the search input the user may still be editing.
+  // Mirrors patchComboField in combo-handlers.ts.
+  for (const id of visible) {
+    const row = document.getElementById(`model-row-${id}`);
+    if (row) row.classList.toggle("selected", checked);
+  }
+  updateBulkBar();
 }
 
 export function clearModelSelection(): void {
   state.selectedModels.clear();
-  rerenderCurrentView();
+  // Targeted DOM patch: uncheck every visible checkbox, drop every
+  // row's `selected` class, hide the bulk-action bar, and reset
+  // the master "select all" checkbox. A full re-render would
+  // close any open `<select>` on the page and steal focus from
+  // the search input; the targeted patch preserves the rest of
+  // the DOM. Mirrors patchComboField in combo-handlers.ts.
+  document.querySelectorAll<HTMLInputElement>(
+    '#models-tbody input[type="checkbox"]'
+  ).forEach((cb) => { cb.checked = false; });
+  document.querySelectorAll("tr[id^='model-row-'].selected").forEach((row) => {
+    row.classList.remove("selected");
+  });
+  updateBulkBar();
+  syncSelectAllCheckbox([]);
 }
 
 // Re-render the bulk-action bar with the current count. Cheaper
@@ -300,8 +338,34 @@ async function bulkSetSelected(_providerId: string, active: boolean): Promise<vo
     }).catch((err: unknown) => console.error("Failed toggle", rowId, err))
   ));
   state.models = await api("/models") as Model[];
+  // Targeted DOM patch — for each toggled row, sync the
+  // active-state UI in place. Clear the selection (uncheck all,
+  // remove `selected` classes, hide the bulk bar, reset master
+  // checkbox). We do NOT call rerenderCurrentView() — a full
+  // rebuild would close any open `<select>` and steal focus from
+  // the search input. Mirrors patchComboField in combo-handlers.ts.
+  for (const rowId of ids) {
+    const rid = Number(rowId);
+    if (!Number.isFinite(rid)) continue;
+    const m = (state.models || []).find((x) => x.row_id === rid);
+    if (m) syncModelRowActive(rid, m.active);
+  }
   state.selectedModels.clear();
-  rerenderCurrentView();
+  document.querySelectorAll<HTMLInputElement>(
+    '#models-tbody input[type="checkbox"]'
+  ).forEach((cb) => { cb.checked = false; });
+  document.querySelectorAll("tr[id^='model-row-'].selected").forEach((row) => {
+    row.classList.remove("selected");
+  });
+  updateBulkBar();
+  syncSelectAllCheckbox([]);
+  // Refresh the (All / Active / Inactive) counts on the filter
+  // tabs so the totals reflect the new state.
+  const ctx = state.currentView && state.currentView.context;
+  if (ctx) {
+    const allProviderModels = (state.models || []).filter((mm) => mm.provider_id === ctx);
+    updateFilterTabCounts(ctx, allProviderModels);
+  }
 }
 
 export function bulkEnableSelected(_providerId: string): Promise<void> { return bulkSetSelected(_providerId, true); }
@@ -457,13 +521,17 @@ export function updateProviderFilter(providerId: string, key: string, valueFromA
   syncSelectAllCheckbox(sorted.map((m) => m.row_id));
 }
 
-// Persist the provider's auto-activate keyword. We don't
-// debounce: the user types and tabs out (or clicks away), and
-// `change` fires once. The endpoint takes a three-state `null`
-// / string — we send `null` for an empty input to clear the
-// column back to NULL so a future refresh re-enables *all*
-// non-custom models.
+// Persist the provider's auto-activate keyword. The user types
+// and tabs out (or clicks away); `change` fires once. The data-
+// action dispatcher also fires on every `input` keystroke, so we
+// filter on `e.type === "input"` to avoid PATCHing on every key.
+// The endpoint takes a three-state `null` / string — we send
+// `null` for an empty input to clear the column back to NULL so a
+// future refresh re-enables *all* non-custom models.
 export async function updateAutoActivate(providerId: string, e: Event | null): Promise<void> {
+  // Only fire on "change" (blur/enter), not on every "input"
+  // keystroke — same guard as `updateTargetWeight` etc.
+  if (e && e.type === "input") return;
   const target = e && e.target && e.target instanceof HTMLInputElement ? e.target : null;
   const value = target ? target.value : "";
   const body = { auto_activate_keyword: value && value.trim() ? value.trim() : null };
@@ -479,7 +547,10 @@ export async function updateAutoActivate(providerId: string, e: Event | null): P
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);
     showToast("Error: " + msg, "error");
-    rerenderCurrentView();
+    // Don't re-render on error — see patchComboField in
+    // combo-handlers.ts for the rationale. The user's input
+    // already shows their text; a re-render would close any
+    // other open input on the page and steal focus.
   }
 }
 
