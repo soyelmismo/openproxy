@@ -38,6 +38,7 @@ import {
   onModelCheckboxChange,
   selectAllModelsInModal,
   deselectAllModelsInModal,
+  onTargetModelSearch,
   updateTargetWeight,
 } from "./combo-target-handlers.js";
 import { showCreateKey, showEditKey, closeKeyForm, toggleExpiryAmount, createKey, updateKey, regenerateKey, revokeKey, viewKeyUsage, deleteKey } from "./key-handlers.js";
@@ -130,6 +131,7 @@ export const HANDLERS: Record<string, ActionHandler> = {
   onModelCheckboxChange,
   selectAllModelsInModal,
   deselectAllModelsInModal,
+  onTargetModelSearch,
   addTarget,            // signature: (comboId, e)     — submit handler
   deleteTarget,
   resetCooldown,

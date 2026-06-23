@@ -404,6 +404,10 @@ function addTargetTemplate(
               </div>
               <div class="field">
                 <label>Models <small>(select one or more)</small></label>
+                <div class="model-search-wrap">
+                  <input type="text" id="target-model-search" placeholder="Search all models across providers (e.g. gpt)…" @input=${onTargetModelSearch}>
+                  <small class="model-search-hint">Empty search shows only the selected provider's models.</small>
+                </div>
                 <div class="model-checkbox-header">
                   <button type="button" class="link" @click=${selectAllModelsInModal}>Select all</button>
                   <button type="button" class="link" @click=${deselectAllModelsInModal}>Deselect all</button>
@@ -494,6 +498,13 @@ function modelCheckboxListTemplate(models: ModelWithFallbacks[]): TemplateResult
 }
 
 export function onTargetProviderChange(): void {
+  // When the provider changes, clear the global search box so the
+  // per-provider list is what the user sees. Otherwise a stale
+  // search filter would keep showing global results even after the
+  // user picked a different provider.
+  const searchEl = document.getElementById("target-model-search") as HTMLInputElement | null;
+  if (searchEl && searchEl.value !== "") searchEl.value = "";
+
   const providerSel = document.getElementById("target-provider") as HTMLSelectElement | null;
   const modelList = document.getElementById("target-model-list");
   const countEl = document.getElementById("model-checkbox-count");
@@ -522,6 +533,91 @@ export function onTargetProviderChange(): void {
 
   if (countEl) countEl.textContent = "0 selected";
 
+  updateAddButtonLabel();
+}
+
+// ---- Global model search ----
+//
+// The user can type a query (e.g. "gpt") into the search box at the
+// top of the model list to filter ALL active models from ALL
+// providers, not just the selected one. Results are grouped by
+// provider so the user can see at a glance which provider each
+// match belongs to. Selecting models from multiple providers at
+// once is supported — `addTarget` looks up each model's
+// `provider_id` from `state.models` so the right provider is sent
+// to the backend even when the form's provider dropdown is set to
+// a different value.
+//
+// Empty query → defer to `onTargetProviderChange()` (per-provider
+// list, the existing fallback behaviour).
+
+function globalModelSearchTemplate(groups: Map<string, ModelWithFallbacks[]>): TemplateResult {
+  if (groups.size === 0) {
+    return html`<p class="model-checkbox-empty">No active models match your search.</p>`;
+  }
+  // Stable ordering: sort providers alphabetically so the user can
+  // scan the list predictably.
+  const providerIds = [...groups.keys()].sort();
+  return html`${providerIds.map((p) => {
+    const models = groups.get(p) ?? [];
+    return html`
+      <div class="model-checkbox-group">
+        <div class="model-checkbox-group-header">${p}</div>
+        ${modelCheckboxListTemplate(models)}
+      </div>
+    `;
+  })}`;
+}
+
+// Build the grouped-by-provider map of models matching the search
+// query. The query matches case-insensitively against `model_id`,
+// `display_name`, and `provider_id`. Inactive models are excluded
+// (they can't be selected as a combo target anyway).
+function buildGlobalSearchGroups(query: string): Map<string, ModelWithFallbacks[]> {
+  const q = query.trim().toLowerCase();
+  const groups = new Map<string, ModelWithFallbacks[]>();
+  if (!q) return groups;
+  for (const m of (state.models || [])) {
+    if (!m.active) continue;
+    const modelId = (m.model_id || "").toLowerCase();
+    const display = (m.display_name || "").toLowerCase();
+    const provider = (m.provider_id || "").toLowerCase();
+    if (!modelId.includes(q) && !display.includes(q) && !provider.includes(q)) continue;
+    const p: string = m.provider_id;
+    if (!groups.has(p)) groups.set(p, []);
+    groups.get(p)!.push(m as ModelWithFallbacks);
+  }
+  return groups;
+}
+
+export function onTargetModelSearch(): void {
+  const searchEl = document.getElementById("target-model-search") as HTMLInputElement | null;
+  const modelList = document.getElementById("target-model-list");
+  const countEl = document.getElementById("model-checkbox-count");
+  if (!searchEl || !modelList) return;
+
+  const query = searchEl.value;
+  // Empty query → restore the per-provider list (the existing
+  // fallback). We re-run `onTargetProviderChange()` after clearing
+  // the search box (it's already empty here) so the list reflects
+  // the currently-selected provider.
+  if (query.trim() === "") {
+    onTargetProviderChange();
+    return;
+  }
+
+  const groups = buildGlobalSearchGroups(query);
+  render(globalModelSearchTemplate(groups), modelList);
+  // The count display reflects the user's current selections, which
+  // persist across re-renders because the checkbox `value` is the
+  // stable `row_id`. We re-count the checked boxes so the count
+  // stays accurate even after a re-render.
+  if (countEl) {
+    const checked = document.querySelectorAll<HTMLInputElement>(
+      "#target-model-list input[name='model_row_ids']:checked"
+    );
+    countEl.textContent = `${checked.length} selected`;
+  }
   updateAddButtonLabel();
 }
 
@@ -611,7 +707,20 @@ export async function addTarget(comboId: number, e: Event, wrapper?: HTMLElement
 
   const accountId = f.get("account_id") ? parseInt(String(f.get("account_id"))) : null;
   const basePriority = parseInt(String(f.get("priority_order")));
-  const providerId = String(f.get("provider_id"));
+  const fallbackProviderId = String(f.get("provider_id"));
+
+  // Build a row_id → provider_id lookup from `state.models` so the
+  // global-search workflow (where the user can select models from
+  // multiple providers in a single batch) sends the correct
+  // `provider_id` for each target. Falls back to the form's
+  // `provider_id` (the selected dropdown value) when the model
+  // can't be found in `state.models` — e.g. the model was deleted
+  // between the modal open and the submit, or the dashboard's
+  // model cache is stale.
+  const rowIdToProvider = new Map<number, string>();
+  for (const m of (state.models || [])) {
+    if (m.row_id != null) rowIdToProvider.set(m.row_id, m.provider_id);
+  }
 
   let added = 0;
   const errors: string[] = [];
@@ -619,8 +728,9 @@ export async function addTarget(comboId: number, e: Event, wrapper?: HTMLElement
   // WARNING FIX W1: assign incrementing priorities: basePriority + index
   for (let i = 0; i < modelRowIds.length; i++) {
     const modelRowId = modelRowIds[i]!;
+    const providerForModel = rowIdToProvider.get(modelRowId) ?? fallbackProviderId;
     const body = {
-      provider_id: providerId,
+      provider_id: providerForModel,
       account_id: accountId,
       model_row_id: modelRowId,
       sub_combo_id: null,

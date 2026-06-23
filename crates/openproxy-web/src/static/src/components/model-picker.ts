@@ -81,14 +81,14 @@ export function getCurrentAllowedModels(): string[] | null {
 function allowedModelsChipsTemplate(): TemplateResult {
   const models: string[] | null = getCurrentAllowedModels();
   if (models === null) {
-    return html`<span class="muted">all models</span> <button type="button" class="link-btn" @click=${openModelPickerModal}>Edit</button>`;
+    return html`<span class="muted">all models</span> <button type="button" class="link-btn" @click=${openModelPickerModal}>Edit models</button>`;
   }
   if (models.length === 0) {
-    return html`<span class="muted">no models</span> <button type="button" class="link-btn" @click=${openModelPickerModal}>Edit</button>`;
+    return html`<span class="muted">no models</span> <button type="button" class="link-btn" @click=${openModelPickerModal}>Edit models</button>`;
   }
   return html`${models.map((m) => html`
     <span class="model-chip">${m} <button type="button" @click=${() => removeModelFromKey(m)}>&times;</button></span>
-  `)} <button type="button" class="link-btn" @click=${openModelPickerModal}>Edit</button>`;
+  `)} <button type="button" class="link-btn" @click=${openModelPickerModal}>Edit models</button>`;
 }
 
 export function renderAllowedModelsChips(): void {

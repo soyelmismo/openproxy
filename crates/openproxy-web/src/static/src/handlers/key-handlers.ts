@@ -17,7 +17,7 @@ import { state } from "../state/index.js";
 import { api } from "../state/api.js";
 import { html, render, type TemplateResult } from "lit-html";
 import { showPlaintextKey } from "../components/key-display.js";
-import { renderAllowedModelsChips, openModelPickerModal } from "../components/model-picker.js";
+import { renderAllowedModelsChips } from "../components/model-picker.js";
 import type { Model, ApiKeyId } from "../lib/types/api.js";
 import { requestUpdate } from "../state/reactive.js";
 import { showToast } from "../components/toast.js";
@@ -98,25 +98,27 @@ function keyFormTemplate({ mode, key, wrapper }: { mode: "create" | "edit"; key?
             <div class="field">
               <span class="field-label">Scopes</span>
               <div class="scopes-list">
-                <label class="scope-item">
+                <label class="scope-card">
                   <input type="checkbox" name="scopes" value="chat" .checked=${scopes.includes("chat")}>
-                  <div class="scope-info"><strong>chat</strong><small>Can use /v1/chat/completions</small></div>
+                  <span class="scope-name">chat</span>
+                  <span class="scope-desc">Can use /v1/chat/completions</span>
                 </label>
-                <label class="scope-item">
+                <label class="scope-card">
                   <input type="checkbox" name="scopes" value="manage" .checked=${scopes.includes("manage")}>
-                  <div class="scope-info"><strong>manage</strong><small>Can use /admin/* (CRUD providers, accounts, etc.)</small></div>
+                  <span class="scope-name">manage</span>
+                  <span class="scope-desc">Can use /admin/* (CRUD providers, accounts, etc.)</span>
                 </label>
-                <label class="scope-item">
+                <label class="scope-card">
                   <input type="checkbox" name="scopes" value="read" .checked=${scopes.includes("read")}>
-                  <div class="scope-info"><strong>read</strong><small>Can use analytics endpoints (GET only)</small></div>
+                  <span class="scope-name">read</span>
+                  <span class="scope-desc">Can use analytics endpoints (GET only)</span>
                 </label>
               </div>
             </div>
             <div class="field">
               <span class="field-label">Allowed models (empty = all)</span>
               <div class="model-picker-display" id="model-picker-display">
-                <span class="muted">all models</span>
-                <button type="button" class="link-btn" @click=${openModelPickerModal}>Edit</button>
+                <span class="muted">Loading...</span>
               </div>
               <input type="hidden" name="allowed_models" .value=${allowedModelsValue}>
             </div>
