@@ -1702,9 +1702,20 @@ pub fn resolve_target_order_with_mode(
 /// LKGP: prefer the target whose most recent success is the newest.
 /// Ties (and never-tried targets, which read back as `0`) are
 /// broken by `priority_order`. With probability
-/// `lkgp_exploration_rate` we pick a uniformly random target
-/// instead — the exploration keeps routing from getting permanently
-/// stuck on the first target that happened to succeed.
+/// `lkgp_exploration_rate` we pick a random target as the head.
+///
+/// **Priority-aware exploration**: the random pick is NOT uniform —
+/// it's weighted by `priority_order` so that targets the operator
+/// positioned first (lower `priority_order`) have a higher chance of
+/// being explored. This matches the user's intent: the first models
+/// in the combo are there because they're preferred for speed or
+/// intelligence, and the last ones are fallbacks that should get less
+/// traffic. A uniform random exploration would ignore this signal.
+///
+/// The weighting is inverse-linear: the target at position 0 gets
+/// weight `N`, position 1 gets `N-1`, ..., position N-1 gets `1`.
+/// This gives a smooth decay — the first target is N× more likely
+/// to be explored than the last, but the last still has a chance.
 fn resolve_lkgp(
     mut targets: Vec<ComboTarget>,
     combo: &Combo,
@@ -1718,14 +1729,31 @@ fn resolve_lkgp(
     let exploration_rate = exploration_rate.clamp(0.0, 1.0);
 
     // Exploration branch: with probability `exploration_rate`, pick
-    // a uniformly random target as the head. The rest stay in
-    // `priority_order` so the walk still has a sane fallback.
+    // a target weighted by its position (priority_order). Targets
+    // earlier in the list (lower priority_order) get higher weight.
     let mut rng = rand::rng();
     if exploration_rate > 0.0
         && rng.random::<f64>() < exploration_rate
         && !targets.is_empty()
     {
-        let idx = rng.random_range(0..targets.len());
+        // Sort by priority_order first so the position-based weights
+        // are assigned correctly regardless of the input order.
+        targets.sort_by_key(|t| t.priority_order);
+        let n = targets.len() as u64;
+        // Inverse-linear weights: position 0 → N, 1 → N-1, ..., N-1 → 1.
+        // Total weight = N + (N-1) + ... + 1 = N*(N+1)/2.
+        let total: u64 = n * (n + 1) / 2;
+        let mut pick = rng.random_range(0..total);
+        let mut idx = 0;
+        for i in 0..targets.len() {
+            // Weight for position i (0-indexed) = N - i.
+            let w = n - i as u64;
+            if pick < w {
+                idx = i;
+                break;
+            }
+            pick -= w;
+        }
         let picked = targets.remove(idx);
         let mut out = Vec::with_capacity(targets.len() + 1);
         out.push(picked);

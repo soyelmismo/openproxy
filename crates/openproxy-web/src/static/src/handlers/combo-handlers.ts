@@ -15,7 +15,7 @@ import type { Combo, CreateComboInput, PriorityMode, CooldownMode } from "../lib
 
 export const PRIORITY_MODE_TOOLTIPS: Record<PriorityMode, string> = {
   strict: "Walk targets in manual priority order. The first healthy target is always tried first.",
-  lkgp: "Least Known Good Provider — prefer the target with the most recent successful request. Falls back to priority order for never-tried targets. An exploration rate adds randomness to avoid getting stuck.",
+  lkgp: "Least Known Good Provider — prefer the target with the most recent successful request. Falls back to priority order for never-tried targets. An exploration rate adds priority-weighted randomness: earlier targets (which the operator positioned first for speed/intelligence) are more likely to be explored than later fallback targets.",
   weighted: "Weighted random selection — each target's probability is proportional to its weight. Set weights in the targets table below.",
   least_used: "Prefer the target with the fewest total requests in the selection window. Useful for distributing load evenly.",
   p2c: "Power of Two Choices — pick two random targets, choose the one with fewer recent failures. Good balance of simplicity and load distribution.",
@@ -27,7 +27,7 @@ export const COOLDOWN_MODE_TOOLTIPS: Record<CooldownMode, string> = {
 };
 
 export const PARAM_TOOLTIPS = {
-  exploration_rate: "Probability (0.0–1.0) of trying a random target instead of the best-known one. 0.1 = 10% exploration. Higher values discover alternatives faster but may pick suboptimal targets.",
+  exploration_rate: "Probability (0.0–1.0) of trying a different target instead of the best-known one. 0.1 = 10% exploration. The exploration is priority-weighted: targets positioned first in the combo (lower priority order) are more likely to be explored, respecting the operator's intent that earlier = preferred for speed/intelligence, later = fallback with less desired concurrency. Higher exploration rates discover alternatives faster but may pick suboptimal targets.",
   base_secs: "Initial cooldown duration in seconds. For exponential mode, this is multiplied by factor^(failures-1).",
   factor: "Multiplier applied to the cooldown after each failure. 2 = doubling. The cooldown grows as base × factor^(failures-1).",
   max_secs: "Maximum cooldown duration in seconds. The exponential growth is capped at this value to prevent permanently parking a target.",
