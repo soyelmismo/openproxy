@@ -4,11 +4,17 @@
 // combo-handlers.js so neither file crosses the 300-LOC cap.
 //
 // Per spec §3 + §13.8 we do not attach to `window.*`.
+//
+// Migrated to lit-html: the add-target modal, the model
+// checkbox list, the bulk-actions bar and the drag-drop
+// placeholder are all rendered via `render()`. All `data-action`
+// attributes have been replaced with direct `@click` / `@submit`
+// / `@change` handlers; lit-html auto-escapes ids / labels so we
+// no longer call `escapeHtml` / `escapeAttr`.
 
 import { state } from "../state/index.js";
 import { api } from "../state/api.js";
-import { escapeHtml, escapeAttr } from "../lib/escape.js";
-import { appendModal } from "../lib/dom.js";
+import { html, render, type TemplateResult } from "lit-html";
 import type { Provider, Account, Model, ComboSummary } from "../lib/types/api.js";
 import { requestUpdate } from "../state/reactive.js";
 import { showToast } from "../components/toast.js";
@@ -49,12 +55,23 @@ async function patchTargetField(
   }
 }
 
+function ensureModalRoot(): HTMLElement {
+  let root = document.getElementById("modal-root");
+  if (!root) {
+    root = document.createElement("div");
+    root.id = "modal-root";
+    root.style.cssText = "position:relative;z-index:1000;";
+    document.body.appendChild(root);
+  }
+  return root;
+}
+
 // Targeted DOM patch for the multi-select checkbox UI on the
 // targets table. Toggles each row's `selected` class, refreshes
 // the master "select all" checkbox indeterminate state, and
 // re-paints the "N selected / Delete selected / Clear selection"
-// bulk-action bar — all without a full re-render. The bar's HTML
-// mirrors `views/combos.ts` so the look stays consistent.
+// bulk-action bar — all without a full re-render. The bar's
+// template mirrors `views/combos.ts` so the look stays consistent.
 function syncTargetSelectionUI(comboId: number): void {
   // 1. Toggle each visible row's `selected` class from the
   //    current state of `state.selectedTargets`.
@@ -92,24 +109,33 @@ function syncTargetSelectionUI(comboId: number): void {
   const section = tbody ? tbody.closest("section") : null;
   if (!section) return;
   const count = state.selectedTargets.size;
-  let bar = section.querySelector(".bulk-actions-bar");
+  // The bar lives in the same <section> as the tbody, inserted
+  // just before the table. We re-render via lit-html so the
+  // buttons keep their `@click` handlers attached (a plain
+  // innerHTML rebuild would lose them).
+  let barWrapper = section.querySelector<HTMLDivElement>(".bulk-actions-bar-wrapper");
   if (count === 0) {
-    if (bar) bar.remove();
+    if (barWrapper) barWrapper.remove();
     return;
   }
-  if (bar) {
-    const strong = bar.querySelector("strong");
-    if (strong) strong.textContent = String(count);
-  } else {
-    const html = `
-      <div class="bulk-actions-bar">
-        <span><strong>${count}</strong> selected</span>
-        <button class="danger" data-action="bulkDeleteSelectedTargets" data-arg1="${comboId}">Delete selected</button>
-        <button class="link" data-action="clearTargetSelection">Clear selection</button>
-      </div>`;
+  if (!barWrapper) {
+    barWrapper = document.createElement("div");
+    barWrapper.className = "bulk-actions-bar-wrapper";
     const table = section.querySelector("table");
-    if (table) table.insertAdjacentHTML("beforebegin", html);
+    if (table) table.insertAdjacentElement("beforebegin", barWrapper);
+    else return;
   }
+  render(bulkActionsBarTemplate(comboId, count), barWrapper);
+}
+
+function bulkActionsBarTemplate(comboId: number, count: number): TemplateResult {
+  return html`
+    <div class="bulk-actions-bar">
+      <span><strong>${count}</strong> selected</span>
+      <button class="danger" @click=${() => { void bulkDeleteSelectedTargets(comboId); }}>Delete selected</button>
+      <button class="link" @click=${clearTargetSelection}>Clear selection</button>
+    </div>
+  `;
 }
 
 // Read the comboId off any table row in the targets table. Used
@@ -204,7 +230,7 @@ function onDragOver(e: DragEvent): void {
 
   dropPlaceholder = document.createElement("tr");
   dropPlaceholder.className = "dnd-placeholder";
-  dropPlaceholder.innerHTML = `<td colspan="${dropPlaceholderColspan}"></td>`;
+  render(html`<td colspan=${dropPlaceholderColspan}></td>`, dropPlaceholder);
 
   if (insertBefore) {
     tbody.insertBefore(dropPlaceholder, row);
@@ -318,56 +344,69 @@ export function initDragAndDrop(): void {
   tbody.addEventListener("dragend", onDragEnd);
 }
 
-export async function showAddTarget(comboId: number): Promise<void> {
-  if (!state.models || state.models.length === 0) state.models = await api("/models") as typeof state.models;
-  const pResp = await api("/providers") as Provider[];
-  const aResp = await api("/accounts") as Account[];
-  const sResp = await api(`/combos/${comboId}/targets/valid-sub-combos`).catch(() => [] as ComboSummary[]) as ComboSummary[];
-  const providers: Provider[] = pResp;
-  const accounts: Account[] = aResp;
-  const validSubCombos: ComboSummary[] = sResp;
-  const subComboOpts = (validSubCombos || []).map((c: ComboSummary) =>
-    `<option value="${c.id}">${escapeHtml(c.name)} (id ${c.id})</option>`
-  ).join("");
-  const subComboEmpty = subComboOpts
-    ? ""
-    : "<option disabled>No other combos exist (or every other combo would create a cycle).</option>";
-  const html = `
-    <div class="modal-bg" id="add-target-modal" data-action="closeAddTarget" data-arg1="self">
+function subComboOptionsTemplate(subCombos: ComboSummary[]): TemplateResult {
+  if (subCombos.length === 0) {
+    return html`<option disabled>No other combos exist (or every other combo would create a cycle).</option>`;
+  }
+  return html`${subCombos.map((c) => html`<option value=${c.id}>${c.name} (id ${c.id})</option>`)}`;
+}
+
+function providerOptionsTemplate(providers: Provider[]): TemplateResult {
+  return html`
+    <option value="">Select provider...</option>
+    ${providers.map((p) => html`<option value=${p.id}>${p.name || p.id}</option>`)}
+  `;
+}
+
+function accountOptionsTemplate(accounts: Account[]): TemplateResult {
+  return html`
+    <option value="">— rotate —</option>
+    ${accounts.map((a) => html`<option value=${String(a.id)}>${a.provider_id}/${a.label || String(a.id)}</option>`)}
+  `;
+}
+
+function addTargetTemplate(
+  comboId: number,
+  providers: Provider[],
+  accounts: Account[],
+  validSubCombos: ComboSummary[],
+  wrapper: HTMLElement,
+): TemplateResult {
+  return html`
+    <div class="modal-bg" id="add-target-modal"
+         @click=${(e: Event) => { if (e.target === e.currentTarget) wrapper.remove(); }}>
       <div class="modal">
         <div class="modal-header">
           <h2>Add target to combo ${comboId}</h2>
-          <button type="button" class="close-btn" data-action="closeAddTarget" aria-label="Close">&times;</button>
+          <button type="button" class="close-btn" @click=${() => wrapper.remove()} aria-label="Close">&times;</button>
         </div>
-        <form data-action="addTarget" data-arg1="${comboId}">
+        <form @submit=${(e: Event) => { e.preventDefault(); void addTarget(comboId, e, wrapper); }}>
           <div class="modal-body">
             <div class="field">
               <label>Target type</label>
               <div class="radio-group">
-                <label><input type="radio" name="target_kind" value="model" checked data-action="onTargetKindChange"> Model</label>
-                <label><input type="radio" name="target_kind" value="combo" data-action="onTargetKindChange"> Sub-combo</label>
+                <label><input type="radio" name="target_kind" value="model" checked @change=${() => onTargetKindChange()}> Model</label>
+                <label><input type="radio" name="target_kind" value="combo" @change=${() => onTargetKindChange()}> Sub-combo</label>
               </div>
             </div>
             <div id="model-fields">
               <div class="field">
                 <label for="target-provider">Provider</label>
-                <select id="target-provider" name="provider_id" data-action="onTargetProviderChange" required>
-                  <option value="">Select provider...</option>
-                  ${providers.map((p) => `<option value="${escapeAttr(p.id)}">${escapeHtml(p.name || p.id)}</option>`).join("")}
+                <select id="target-provider" name="provider_id" @change=${() => onTargetProviderChange()} required>
+                  ${providerOptionsTemplate(providers)}
                 </select>
               </div>
               <div class="field">
                 <label for="target-account">Account (optional, leave blank to rotate)</label>
                 <select id="target-account" name="account_id">
-                  <option value="">— rotate —</option>
-                  ${accounts.map((a) => `<option value="${a.id}">${escapeHtml(a.provider_id)}/${escapeHtml(a.label || String(a.id))}</option>`).join("")}
+                  ${accountOptionsTemplate(accounts)}
                 </select>
               </div>
               <div class="field">
                 <label>Models <small>(select one or more)</small></label>
                 <div class="model-checkbox-header">
-                  <button type="button" class="link" data-action="selectAllModelsInModal">Select all</button>
-                  <button type="button" class="link" data-action="deselectAllModelsInModal">Deselect all</button>
+                  <button type="button" class="link" @click=${selectAllModelsInModal}>Select all</button>
+                  <button type="button" class="link" @click=${deselectAllModelsInModal}>Deselect all</button>
                   <span class="model-checkbox-count" id="model-checkbox-count">0 selected</span>
                 </div>
                 <div class="model-checkbox-list" id="target-model-list">
@@ -378,7 +417,7 @@ export async function showAddTarget(comboId: number): Promise<void> {
               <div class="field">
                 <label for="target-sub-combo">Sub-combo</label>
                 <select id="target-sub-combo" name="sub_combo_id" disabled>
-                  ${subComboOpts || subComboEmpty}
+                  ${subComboOptionsTemplate(validSubCombos)}
                 </select>
                 <small>Only combos that won't close a cycle with combo ${comboId} are listed.</small>
               </div>
@@ -389,14 +428,26 @@ export async function showAddTarget(comboId: number): Promise<void> {
             </div>
           </div>
           <div class="modal-footer">
-            <button type="button" data-action="closeAddTarget">Cancel</button>
+            <button type="button" @click=${() => wrapper.remove()}>Cancel</button>
             <button type="submit" class="primary">Add</button>
           </div>
         </form>
       </div>
     </div>
   `;
-  appendModal(html);
+}
+
+export async function showAddTarget(comboId: number): Promise<void> {
+  if (!state.models || state.models.length === 0) state.models = await api("/models") as typeof state.models;
+  const pResp = await api("/providers") as Provider[];
+  const aResp = await api("/accounts") as Account[];
+  const sResp = await api(`/combos/${comboId}/targets/valid-sub-combos`).catch(() => [] as ComboSummary[]) as ComboSummary[];
+  const providers: Provider[] = pResp;
+  const accounts: Account[] = aResp;
+  const validSubCombos: ComboSummary[] = sResp;
+  const wrapper = document.createElement("div");
+  ensureModalRoot().appendChild(wrapper);
+  render(addTargetTemplate(comboId, providers, accounts, validSubCombos, wrapper), wrapper);
   onTargetProviderChange();
 }
 
@@ -416,7 +467,30 @@ export function onTargetKindChange(): void {
 
 export function closeAddTarget(): void {
   const m = document.getElementById("add-target-modal");
-  if (m) m.remove();
+  if (m) {
+    const wrapper = m.parentElement;
+    m.remove();
+    if (wrapper && wrapper.children.length === 0 && wrapper.parentElement?.id === "modal-root") {
+      wrapper.remove();
+    }
+  }
+}
+
+function modelCheckboxListTemplate(models: ModelWithFallbacks[]): TemplateResult {
+  if (models.length === 0) {
+    return html`<p class="model-checkbox-empty">No active models for this provider</p>`;
+  }
+  return html`${models.map((m) => {
+    const rowId = m.row_id;
+    const upstreamId = m.model_id || m.id;
+    if (rowId == null) return html``;
+    return html`
+      <label class="model-checkbox-item">
+        <input type="checkbox" name="model_row_ids" value=${String(rowId)} @change=${onModelCheckboxChange}>
+        <span class="model-checkbox-id">${m.display_name ? html`${upstreamId} — ${m.display_name}` : html`${String(upstreamId)}`}</span>
+      </label>
+    `;
+  })}`;
 }
 
 export function onTargetProviderChange(): void {
@@ -427,7 +501,7 @@ export function onTargetProviderChange(): void {
 
   const provider = providerSel.value;
   if (!provider) {
-    modelList.innerHTML = '<p class="model-checkbox-empty">Select a provider first</p>';
+    render(html`<p class="model-checkbox-empty">Select a provider first</p>`, modelList);
     if (countEl) countEl.textContent = "0 selected";
     updateAddButtonLabel();
     return;
@@ -438,31 +512,15 @@ export function onTargetProviderChange(): void {
   );
 
   if (filtered.length === 0) {
-    modelList.innerHTML = '<p class="model-checkbox-empty">No active models for this provider</p>';
+    render(html`<p class="model-checkbox-empty">No active models for this provider</p>`, modelList);
     if (countEl) countEl.textContent = "0 selected";
     updateAddButtonLabel();
     return;
   }
 
-  modelList.innerHTML = filtered.map((m: ModelWithFallbacks) => {
-    const rowId = m.row_id;
-    const upstreamId = m.model_id || m.id;
-    if (rowId == null) return "";
-    const label = m.display_name
-      ? `${escapeHtml(String(upstreamId))} — ${escapeHtml(m.display_name)}`
-      : escapeHtml(String(upstreamId));
-    return `<label class="model-checkbox-item">
-      <input type="checkbox" name="model_row_ids" value="${escapeAttr(String(rowId))}">
-      <span class="model-checkbox-id">${label}</span>
-    </label>`;
-  }).filter(Boolean).join("");
+  render(modelCheckboxListTemplate(filtered as ModelWithFallbacks[]), modelList);
 
   if (countEl) countEl.textContent = "0 selected";
-
-  // WARNING FIX W4: use change event listener instead of data-action to avoid double-fire
-  modelList.querySelectorAll("input[name='model_row_ids']").forEach((cb) => {
-    cb.addEventListener("change", onModelCheckboxChange);
-  });
 
   updateAddButtonLabel();
 }
@@ -510,7 +568,7 @@ function updateAddButtonLabel(): void {
   }
 }
 
-export async function addTarget(comboId: number, e: Event): Promise<void> {
+export async function addTarget(comboId: number, e: Event, wrapper?: HTMLElement): Promise<void> {
   const target = e.target;
   if (!(target instanceof HTMLFormElement)) return;
   const f = new FormData(target);
@@ -530,7 +588,7 @@ export async function addTarget(comboId: number, e: Event): Promise<void> {
     };
     try {
       await api(`/combos/${comboId}/targets`, { method: "POST", body: JSON.stringify(body) });
-      closeAddTarget();
+      if (wrapper) wrapper.remove(); else closeAddTarget();
       requestUpdate();
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -560,7 +618,7 @@ export async function addTarget(comboId: number, e: Event): Promise<void> {
 
   // WARNING FIX W1: assign incrementing priorities: basePriority + index
   for (let i = 0; i < modelRowIds.length; i++) {
-    const modelRowId = modelRowIds[i];
+    const modelRowId = modelRowIds[i]!;
     const body = {
       provider_id: providerId,
       account_id: accountId,
@@ -580,12 +638,12 @@ export async function addTarget(comboId: number, e: Event): Promise<void> {
   // WARNING FIX W2: show errors BEFORE closing modal, only close on success
   if (errors.length > 0 && added > 0) {
     alert(`Added ${added} target(s), but ${errors.length} failed:\n${errors.join("\n")}`);
-    closeAddTarget();
+    if (wrapper) wrapper.remove(); else closeAddTarget();
   } else if (errors.length > 0) {
     alert(`All ${errors.length} target(s) failed:\n${errors.join("\n")}`);
     // Don't close — let user retry
   } else {
-    closeAddTarget();
+    if (wrapper) wrapper.remove(); else closeAddTarget();
   }
 
   requestUpdate();
@@ -690,8 +748,8 @@ export function clearTargetSelection(): void {
   document.querySelectorAll("tr[data-drag-id].selected").forEach((row) => {
     row.classList.remove("selected");
   });
-  const bar = document.querySelector(".bulk-actions-bar");
-  if (bar) bar.remove();
+  const barWrapper = document.querySelector(".bulk-actions-bar-wrapper");
+  if (barWrapper) barWrapper.remove();
   const master = document.getElementById("target-select-all") as HTMLInputElement | null;
   if (master) { master.checked = false; master.indeterminate = false; }
 }

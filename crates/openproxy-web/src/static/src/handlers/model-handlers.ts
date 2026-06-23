@@ -15,6 +15,7 @@
 
 import { state } from "../state/index.js";
 import { api } from "../state/api.js";
+import { html, render } from "lit-html";
 import { escapeAttr } from "../lib/escape.js";
 import { appendModal } from "../lib/dom.js";
 import { renderModelRows, getVisibleModelRowIds, updateFilterTabCounts, syncSelectAllCheckbox, applySort, syncModelRowActive } from "../components/model-table.js";
@@ -301,10 +302,21 @@ function updateBulkBar(): void {
   // update its count in place if it exists, or insert it before
   // the table on the first paint. Always re-query the section
   // to avoid stale references between re-renders.
-  let bar = section.querySelector(".bulk-actions-bar");
+  let bar = section.querySelector(".bulk-actions-bar") as HTMLElement | null;
   const count = state.selectedModels.size;
   if (count === 0) {
-    if (bar) bar.remove();
+    if (bar) {
+      // Remove the bar (and its wrapper <div> if one was
+      // inserted by this function on a previous call). When
+      // the bar was rendered inline by the parent view, its
+      // parentElement is the <section> itself — we leave the
+      // section alone.
+      const wrapper = bar.parentElement;
+      bar.remove();
+      if (wrapper && wrapper !== section && wrapper.children.length === 0) {
+        wrapper.remove();
+      }
+    }
     return;
   }
   // Pull the provider id from the current view context.
@@ -314,9 +326,15 @@ function updateBulkBar(): void {
     const strong = bar.querySelector("strong");
     if (strong) strong.textContent = String(count);
   } else {
-    const html = renderBulkActionsBar(providerId);
+    // Render the bulk-actions bar TemplateResult into a fresh
+    // wrapper <div> inserted just before the table. lit-html
+    // replaces the wrapper's children with the bar markup.
     const table = section.querySelector("table");
-    if (table) table.insertAdjacentHTML("beforebegin", html);
+    if (table) {
+      const wrapper = document.createElement("div");
+      table.insertAdjacentElement("beforebegin", wrapper);
+      render(renderBulkActionsBar(providerId), wrapper);
+    }
   }
 }
 
@@ -498,12 +516,17 @@ export function updateProviderFilter(providerId: string, key: string, valueFromA
 
   // Re-paint the tbody (and its empty-state row) without touching
   // the surrounding page chrome. The search input lives outside
-  // the tbody, so its focus survives.
+  // the tbody, so its focus survives. lit-html diffs the new
+  // TemplateResult against the previous render so only the
+  // changed rows are patched.
   const tbody = document.getElementById("models-tbody");
   if (tbody) {
-    tbody.innerHTML = sorted.length === 0
-      ? `<tr><td colspan="10" class="empty-row">No models match the filter.</td></tr>`
-      : renderModelRows(sorted);
+    render(
+      sorted.length === 0
+        ? html`<tr><td colspan="10" class="empty-row">No models match the filter.</td></tr>`
+        : renderModelRows(sorted),
+      tbody
+    );
   }
 
   // Refresh the (All / Active / Inactive) counts on the filter

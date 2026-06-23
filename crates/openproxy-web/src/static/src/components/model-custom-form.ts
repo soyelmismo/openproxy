@@ -4,25 +4,47 @@
 // else) so the user only has to override it when the model speaks a
 // different protocol.
 //
-// The submit is handled by `createCustomModel` in
-// handlers/model-handlers.js via the central data-action shim.
+// The submit handler (`createCustomModel`) lives in
+// `handlers/model-handlers.ts` and is imported here directly —
+// no more `data-action` registry dispatch. The cycle
+// (model-handlers → model-custom-form → model-handlers) is safe
+// because the imported binding is only referenced inside an
+// `@submit` closure (runtime), not at module top-level.
+//
+// Migrated to lit-html: the modal is rendered into a fresh wrapper
+// `<div>` under `#modal-root` via `render()`. Closing the modal
+// removes the wrapper.
 
+import { html, render, type TemplateResult } from "lit-html";
 import { state } from "../state/index.js";
-import { escapeHtml, escapeAttr } from "../lib/escape.js";
-import { appendModal } from "../lib/dom.js";
+import { createCustomModel } from "../handlers/model-handlers.js";
 import type { Provider } from "../lib/types/api.js";
 
-export function showCustomModelForm(providerId: string): void {
+function ensureModalRoot(): HTMLElement {
+  let root = document.getElementById("modal-root");
+  if (!root) {
+    root = document.createElement("div");
+    root.id = "modal-root";
+    // z-index 1000 puts modals above the page chrome without
+    // needing !important hacks. The .modal-bg rule in CSS already
+    // uses position: fixed; this just ensures stacking order.
+    root.style.cssText = "position:relative;z-index:1000;";
+    document.body.appendChild(root);
+  }
+  return root;
+}
+
+function customModelFormTemplate(providerId: string): TemplateResult {
   const provider: Provider | undefined = state.providers.find((p) => p.id === providerId);
   const defaultFormat: "openai" | "anthropic" = provider && provider.format === "anthropic" ? "anthropic" : "openai";
-  const html: string = `
-    <div class="modal-bg" id="custom-model-modal" data-action="closeCustomModelForm" data-arg1="self">
+  return html`
+    <div class="modal-bg" id="custom-model-modal" @click=${(e: Event) => { if (e.target === e.currentTarget) closeCustomModelForm(); }}>
       <div class="modal">
         <div class="modal-header">
-          <h2>Custom model for ${escapeHtml(providerId)}</h2>
-          <button type="button" class="close-btn" data-action="closeCustomModelForm" aria-label="Close">&times;</button>
+          <h2>Custom model for ${providerId}</h2>
+          <button type="button" class="close-btn" @click=${closeCustomModelForm} aria-label="Close">&times;</button>
         </div>
-        <form data-action="createCustomModel" data-arg1="${escapeAttr(providerId)}">
+        <form @submit=${(e: Event) => { e.preventDefault(); createCustomModel(providerId, e); }}>
           <div class="modal-body">
             <div class="field">
               <label for="custom-model-id">Model ID</label>
@@ -35,8 +57,8 @@ export function showCustomModelForm(providerId: string): void {
             <div class="field">
               <label for="custom-model-format">Target format</label>
               <select id="custom-model-format" name="target_format">
-                <option value="openai" ${defaultFormat === "openai" ? "selected" : ""}>openai</option>
-                <option value="anthropic" ${defaultFormat === "anthropic" ? "selected" : ""}>anthropic</option>
+                <option value="openai" ?selected=${defaultFormat === "openai"}>openai</option>
+                <option value="anthropic" ?selected=${defaultFormat === "anthropic"}>anthropic</option>
               </select>
             </div>
             <div class="field">
@@ -45,17 +67,34 @@ export function showCustomModelForm(providerId: string): void {
             </div>
           </div>
           <div class="modal-footer">
-            <button type="button" data-action="closeCustomModelForm">Cancel</button>
+            <button type="button" @click=${closeCustomModelForm}>Cancel</button>
             <button type="submit" class="primary">Create</button>
           </div>
         </form>
       </div>
     </div>
   `;
-  appendModal(html);
+}
+
+export function showCustomModelForm(providerId: string): void {
+  const root = ensureModalRoot();
+  // Render into a fresh wrapper div so lit-html can diff efficiently
+  // if we ever re-render the same modal. The wrapper is removed by
+  // closeCustomModelForm via the closest .modal-bg lookup.
+  const wrapper = document.createElement("div");
+  root.appendChild(wrapper);
+  render(customModelFormTemplate(providerId), wrapper);
 }
 
 export function closeCustomModelForm(): void {
   const m: HTMLElement | null = document.getElementById("custom-model-modal");
-  if (m) m.remove();
+  if (!m) return;
+  // The modal lives inside a wrapper div we created in
+  // showCustomModelForm; remove the wrapper too so #modal-root
+  // stays clean.
+  const wrapper = m.parentElement;
+  m.remove();
+  if (wrapper && wrapper.children.length === 0 && wrapper.parentElement?.id === "modal-root") {
+    wrapper.remove();
+  }
 }

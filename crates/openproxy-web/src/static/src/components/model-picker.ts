@@ -5,34 +5,68 @@
 // Per spec §3 + §13.8 we do not attach to `window.*`. Each
 // function is exported and registered in handlers/registry.js
 // so the data-action shim can find it.
+//
+// Migrated to lit-html: the modal is rendered into a wrapper
+// `<div>` under `#modal-root` via `render()` (the wrapper sticks
+// around for the lifetime of the page — the modal is shown/hidden
+// by toggling `display` on its `.modal-bg`). The chips display
+// and the picker list are likewise rendered via `render()`. All
+// `data-action` attributes have been replaced with direct
+// `@click` / `@input` / `@change` handlers; lit-html auto-escapes
+// the model ids so we no longer call `escapeHtml` / `escapeAttr`.
 
+import { html, render, type TemplateResult } from "lit-html";
 import { state } from "../state/index.js";
-import { escapeHtml, escapeAttr } from "../lib/escape.js";
-import { appendModal } from "../lib/dom.js";
 
-function ensureModalNode(): void {
-  if (document.getElementById("model-picker-modal")) return;
-  const html: string = `
-    <div class="modal-bg modal-picker-bg" id="model-picker-modal" style="display:none;" data-action="closeModelPickerModal">
+// The wrapper that hosts the singleton modal. Lazily created on
+// first open and reused for the lifetime of the page.
+let modalWrapper: HTMLDivElement | null = null;
+
+function ensureModalRoot(): HTMLElement {
+  let root = document.getElementById("modal-root");
+  if (!root) {
+    root = document.createElement("div");
+    root.id = "modal-root";
+    // z-index 1000 puts modals above the page chrome without
+    // needing !important hacks. The .modal-bg rule in CSS already
+    // uses position: fixed; this just ensures stacking order.
+    root.style.cssText = "position:relative;z-index:1000;";
+    document.body.appendChild(root);
+  }
+  return root;
+}
+
+function modelPickerModalTemplate(): TemplateResult {
+  return html`
+    <div class="modal-bg modal-picker-bg" id="model-picker-modal" style="display:none;"
+         @click=${(e: Event) => { if (e.target === e.currentTarget) closeModelPickerModal(); }}>
       <div class="modal modal-picker">
         <div class="modal-header">
           <h2>Select models</h2>
-          <button type="button" class="close-btn" data-action="closeModelPickerModal" aria-label="Close">&times;</button>
+          <button type="button" class="close-btn" @click=${closeModelPickerModal} aria-label="Close">&times;</button>
         </div>
         <div class="picker-search">
-          <input type="text" id="model-picker-search" placeholder="Search models..." data-action="filterModelPicker">
+          <input type="text" id="model-picker-search" placeholder="Search models..." @input=${filterModelPicker}>
         </div>
         <div class="modal-body">
           <div class="model-picker-list" id="model-picker-list"></div>
         </div>
         <div class="modal-footer">
-          <button type="button" data-action="clearModelPicker">Clear all</button>
-          <button type="button" class="primary" data-action="closeModelPickerModal">Done</button>
+          <button type="button" @click=${clearModelPicker}>Clear all</button>
+          <button type="button" class="primary" @click=${closeModelPickerModal}>Done</button>
         </div>
       </div>
     </div>
   `;
-  appendModal(html);
+}
+
+function ensureModalNode(): void {
+  if (modalWrapper && document.getElementById("model-picker-modal")) return;
+  if (!modalWrapper) {
+    modalWrapper = document.createElement("div");
+    ensureModalRoot().appendChild(modalWrapper);
+  }
+  render(modelPickerModalTemplate(), modalWrapper);
 }
 
 export function getCurrentAllowedModels(): string[] | null {
@@ -44,43 +78,49 @@ export function getCurrentAllowedModels(): string[] | null {
   return v.split(",").map((s) => s.trim()).filter(Boolean);
 }
 
+function allowedModelsChipsTemplate(): TemplateResult {
+  const models: string[] | null = getCurrentAllowedModels();
+  if (models === null) {
+    return html`<span class="muted">all models</span> <button type="button" class="link-btn" @click=${openModelPickerModal}>Edit</button>`;
+  }
+  if (models.length === 0) {
+    return html`<span class="muted">no models</span> <button type="button" class="link-btn" @click=${openModelPickerModal}>Edit</button>`;
+  }
+  return html`${models.map((m) => html`
+    <span class="model-chip">${m} <button type="button" @click=${() => removeModelFromKey(m)}>&times;</button></span>
+  `)} <button type="button" class="link-btn" @click=${openModelPickerModal}>Edit</button>`;
+}
+
 export function renderAllowedModelsChips(): void {
   const display: HTMLElement | null = document.getElementById("model-picker-display");
   if (!display) return;
-  const models: string[] | null = getCurrentAllowedModels();
-  if (models === null) {
-    display.innerHTML = '<span class="muted">all models</span> <button type="button" class="link-btn" data-action="openModelPickerModal">Edit</button>';
-  } else if (models.length === 0) {
-    display.innerHTML = '<span class="muted">no models</span> <button type="button" class="link-btn" data-action="openModelPickerModal">Edit</button>';
-  } else {
-    const chips: string = models.map((m) =>
-      `<span class="model-chip">${escapeHtml(m)} <button type="button" data-action="removeModelFromKey" data-arg1="${escapeAttr(m)}">&times;</button></span>`
-    ).join("");
-    display.innerHTML = `${chips} <button type="button" class="link-btn" data-action="openModelPickerModal">Edit</button>`;
-  }
+  render(allowedModelsChipsTemplate(), display);
 }
 
-function renderModelPickerList(): void {
-  const list: HTMLElement | null = document.getElementById("model-picker-list");
-  if (!list) return;
+function modelPickerListTemplate(): TemplateResult {
   const allModels = state.models || [];
   const searchEl: HTMLInputElement | null = document.getElementById("model-picker-search") as HTMLInputElement | null;
   const search: string = ((searchEl && searchEl.value) || "").toLowerCase();
   const filtered = allModels.filter((m) => !search || m.model_id.toLowerCase().includes(search));
   if (filtered.length === 0) {
-    list.innerHTML = `<div class="model-picker-row"><span class="muted">No models match.</span></div>`;
-    return;
+    return html`<div class="model-picker-row"><span class="muted">No models match.</span></div>`;
   }
-  list.innerHTML = filtered.map((m) => {
+  return html`${filtered.map((m) => {
     const checked: boolean = state.modelPickerSelection.has(m.model_id);
-    return `
+    return html`
       <label class="model-picker-row">
-        <input type="checkbox" ${checked ? "checked" : ""} data-action="toggleModelPicker" data-arg1="${escapeAttr(m.model_id)}">
-        <span class="model-id">${escapeHtml(m.model_id)}</span>
-        <span class="model-provider">${escapeHtml(m.provider_id)}</span>
+        <input type="checkbox" ?checked=${checked} @change=${(e: Event) => toggleModelPicker(m.model_id, e)}>
+        <span class="model-id">${m.model_id}</span>
+        <span class="model-provider">${m.provider_id}</span>
       </label>
     `;
-  }).join("");
+  })}`;
+}
+
+function renderModelPickerList(): void {
+  const list: HTMLElement | null = document.getElementById("model-picker-list");
+  if (!list) return;
+  render(modelPickerListTemplate(), list);
 }
 
 export function openModelPickerModal(): void {

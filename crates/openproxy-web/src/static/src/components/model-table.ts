@@ -4,19 +4,42 @@
 // just the rows (the search input lives outside the tbody, so its
 // focus survives the partial re-paint).
 //
+// Migrated to lit-html: every render function now returns a
+// `TemplateResult` instead of an HTML string, and the per-row
+// `data-action` / `data-arg-N` attributes have been replaced with
+// direct `@click` / `@change` handlers wired to the handlers in
+// `handlers/model-handlers.ts`. The handlers module imports
+// `renderModelRows` from here, so importing them back creates a
+// module cycle; the cycle is safe because the imported bindings
+// are referenced only inside `@click` / `@change` closures
+// (runtime), never at module top-level. `syncModelRowActive` and
+// the other DOM-patch helpers keep their original signatures —
+// they mutate the table in place rather than re-rendering.
+//
 // All exports are pure functions of `(state, props)`. They mutate
-// only the DOM via the `innerHTML` setter on the tbody — never the
-// `state` singleton.
+// only the DOM via `render()` on the tbody — never the `state`
+// singleton.
 
+import { html, type TemplateResult } from "lit-html";
 import { state } from "../state/index.js";
-import { escapeHtml, escapeAttr } from "../lib/escape.js";
 import { statusPillClass } from "../lib/constants.js";
+import {
+  toggleModelSelection,
+  testModel,
+  toggleModel,
+  deleteModel,
+  cycleProviderSort,
+} from "../handlers/model-handlers.js";
 import type { Model } from "../lib/types/api.js";
 
 // Map an HTTP status code to a status-pill CSS class. The server
 // stamps `0` when the request never reached the upstream (DNS /
 // connect / TLS / timeout); treat it as the red "off" pill so it
 // reads as a network error at a glance.
+//
+// Returns a plain string (a CSS class name), NOT a TemplateResult —
+// this is a class-name helper used inside `class=${...}`
+// compositions, never a top-level render.
 export function modelStatusPillClass(status: number | null): string {
   if (status == null) return "off";
   if (status === 0) return "off";
@@ -27,14 +50,15 @@ export function modelStatusPillClass(status: number | null): string {
 }
 
 // Format a token count for compact display. null/undefined render
-// as an em-dash (with the muted class) so the column stays the
-// same width across rows. Anything above 1k uses `k`; above 1M
-// uses `M` with one decimal.
-export function formatContext(tokens: number | null | undefined): string {
-  if (tokens == null) return '<span class="muted">—</span>';
-  if (tokens >= 1000000) return (tokens / 1000000).toFixed(1) + "M";
-  if (tokens >= 1000) return Math.round(tokens / 1000) + "k";
-  return String(tokens);
+// as an em-dash inside a `.muted` span (so the column stays the
+// same width across rows). Anything above 1k uses `k`; above 1M
+// uses `M` with one decimal. Returns a TemplateResult so the
+// `.muted` em-dash renders as an element, not escaped text.
+export function formatContext(tokens: number | null | undefined): TemplateResult {
+  if (tokens == null) return html`<span class="muted">—</span>`;
+  if (tokens >= 1_000_000) return html`${(tokens / 1_000_000).toFixed(1)}M`;
+  if (tokens >= 1000) return html`${Math.round(tokens / 1000)}k`;
+  return html`${String(tokens)}`;
 }
 
 // Render the per-model capability badges (vision/tools/reasoning/…).
@@ -42,62 +66,61 @@ export function formatContext(tokens: number | null | undefined): string {
 // or a plain object (in case a caller pre-parsed it). Bad input
 // renders as an em-dash rather than throwing — the admin list should
 // never blow up because of a single bad row.
-export function renderCapabilityBadges(json: string | null | undefined): string {
-  if (json == null) return '<span class="muted">—</span>';
+export function renderCapabilityBadges(json: string | null | undefined): TemplateResult {
+  if (json == null) return html`<span class="muted">—</span>`;
   let caps: unknown;
   if (typeof json === "string") {
-    try { caps = JSON.parse(json) as unknown; } catch (_e: unknown) { return '<span class="muted">—</span>'; }
+    try { caps = JSON.parse(json) as unknown; } catch (_e: unknown) { return html`<span class="muted">—</span>`; }
   } else {
     caps = json;
   }
-  if (!caps || typeof caps !== "object") return '<span class="muted">—</span>';
+  if (!caps || typeof caps !== "object") return html`<span class="muted">—</span>`;
   const c: Record<string, unknown> = caps as Record<string, unknown>;
-  const badges: string[] = [];
-  if (c["vision"]) badges.push('<span class="cap-badge">vision</span>');
-  if (c["tool_calling"]) badges.push('<span class="cap-badge">tools</span>');
-  if (c["reasoning"]) badges.push('<span class="cap-badge">reasoning</span>');
-  if (c["thinking"]) badges.push('<span class="cap-badge">thinking</span>');
-  if (c["structured_output"]) badges.push('<span class="cap-badge">json</span>');
-  if (c["attachment"]) badges.push('<span class="cap-badge">attach</span>');
-  return badges.length > 0 ? badges.join(" ") : '<span class="muted">—</span>';
+  const badges: TemplateResult[] = [];
+  if (c["vision"]) badges.push(html`<span class="cap-badge">vision</span>`);
+  if (c["tool_calling"]) badges.push(html`<span class="cap-badge">tools</span>`);
+  if (c["reasoning"]) badges.push(html`<span class="cap-badge">reasoning</span>`);
+  if (c["thinking"]) badges.push(html`<span class="cap-badge">thinking</span>`);
+  if (c["structured_output"]) badges.push(html`<span class="cap-badge">json</span>`);
+  if (c["attachment"]) badges.push(html`<span class="cap-badge">attach</span>`);
+  return badges.length > 0 ? html`${badges}` : html`<span class="muted">—</span>`;
 }
 
 // Build a single <tr> for a model row. The caller passes the
 // already-filtered model object. The row id is the server-side
 // `row_id` (numeric primary key) — the /admin/models/:id/...
 // endpoints key off that.
-export function renderModelRow(m: Model): string {
-  const lastTest: string = m.last_test_status != null
-    ? `<span class="status-pill ${statusPillClass(m.last_test_status)}">${escapeHtml(String(m.last_test_status))}</span> <small>${escapeHtml(m.last_test_at || "")}</small>`
-    : '<span class="muted">never</span>';
+export function renderModelRow(m: Model): TemplateResult {
+  const lastTest: TemplateResult = m.last_test_status != null
+    ? html`<span class=${"status-pill " + statusPillClass(m.last_test_status)}>${String(m.last_test_status)}</span> <small>${m.last_test_at || ""}</small>`
+    : html`<span class="muted">never</span>`;
   const isSelected: boolean = (state.selectedModels as Set<number>).has(m.row_id);
-  return `
-    <tr id="model-row-${m.row_id}" class="${m.active ? "" : "inactive"} ${isSelected ? "selected" : ""}">
-      <td><input type="checkbox" ${isSelected ? "checked" : ""} data-action="toggleModelSelection" data-arg1="${m.row_id}"></td>
-      <td><code>${escapeHtml(m.model_id)}</code>${m.custom ? '<span class="badge custom">custom</span>' : ""}</td>
-      <td>${escapeHtml(m.display_name || "—")}</td>
-      <td>${escapeHtml(m.target_format || "—")}</td>
+  return html`
+    <tr id=${`model-row-${m.row_id}`} class=${(m.active ? "" : "inactive") + (isSelected ? " selected" : "")}>
+      <td><input type="checkbox" ?checked=${isSelected} @change=${(e: Event) => toggleModelSelection(m.row_id, e)}></td>
+      <td><code>${m.model_id}</code>${m.custom ? html`<span class="badge custom">custom</span>` : html``}</td>
+      <td>${m.display_name || "—"}</td>
+      <td>${m.target_format || "—"}</td>
       <td>${formatContext(m.context_length)}</td>
       <td>${formatContext(m.max_output_tokens)}</td>
-      <td>${renderCapabilityBadges(m.capabilities_json)}${m.family ? ` <small class="muted">${escapeHtml(m.family)}</small>` : ""}</td>
-      <td><span class="status-pill ${m.active ? "on" : "off"}">${m.active ? "active" : "inactive"}</span></td>
+      <td>${renderCapabilityBadges(m.capabilities_json)}${m.family ? html` <small class="muted">${m.family}</small>` : html``}</td>
+      <td><span class=${"status-pill " + (m.active ? "on" : "off")}>${m.active ? "active" : "inactive"}</span></td>
       <td class="last-test-cell">${lastTest}</td>
       <td>
-        <button class="small" id="test-btn-${m.row_id}" data-action="testModel" data-arg1="${m.row_id}" data-arg2="${escapeAttr(m.model_id)}">Test</button>
-        <button class="small" data-action="toggleModel" data-arg1="${m.row_id}" data-arg2="${!m.active}">${m.active ? "Disable" : "Enable"}</button>
-        <button class="small danger" data-action="deleteModel" data-arg1="${m.row_id}">×</button>
+        <button class="small" id=${`test-btn-${m.row_id}`} @click=${(e: Event) => testModel(m.row_id, m.model_id, e)}>Test</button>
+        <button class="small model-toggle-btn" @click=${() => toggleModel(m.row_id, !m.active, null)}>${m.active ? "Disable" : "Enable"}</button>
+        <button class="small danger" @click=${() => deleteModel(m.row_id)}>×</button>
       </td>
     </tr>
   `;
 }
 
-// Concatenate the row HTML for an array of model rows. Caller
-// supplies the pre-filtered list (e.g. search + active/inactive
-// filter already applied).
-export function renderModelRows(rows: readonly Model[]): string {
-  let html: string = "";
-  for (const m of rows) html += renderModelRow(m);
-  return html;
+// Concatenate the row TemplateResults for an array of model rows.
+// Caller supplies the pre-filtered list (e.g. search + active/
+// inactive filter already applied). Renders into a single
+// TemplateResult so the caller can `render()` it into the tbody.
+export function renderModelRows(rows: readonly Model[]): TemplateResult {
+  return html`${rows.map((m) => renderModelRow(m))}`;
 }
 
 // Apply the per-provider search+filter state to the global models
@@ -144,6 +167,14 @@ export function updateFilterTabCounts(providerId: string, allProviderModels: rea
 // their click reflected immediately while any open `<select>` /
 // `<input>` elsewhere on the page keeps its focus. Mirrors the
 // patchComboField pattern in combo-handlers.ts.
+//
+// NOTE: This is a direct DOM mutation, NOT a lit-html re-render —
+// the row was rendered by lit-html (either from renderModelRow in
+// views/providers.ts or from renderModelRows here), but the
+// per-row active-state patch is small and local enough that
+// hand-toggling classes + text is cheaper than diffing the whole
+// tbody. The next full `requestUpdate()` from the parent view
+// reconciles any drift.
 export function syncModelRowActive(rowId: number, active: boolean): void {
   const row = document.getElementById(`model-row-${rowId}`);
   if (!row) return;
@@ -156,12 +187,15 @@ export function syncModelRowActive(rowId: number, active: boolean): void {
     pill.className = `status-pill ${active ? "on" : "off"}`;
     pill.textContent = active ? "active" : "inactive";
   }
-  // The Enable/Disable button — update its text + data-arg2 so
-  // the next click sends the right desired state.
-  const toggleBtn = row.querySelector<HTMLButtonElement>('button[data-action="toggleModel"]');
+  // The Enable/Disable button — update its text. The button is
+  // rendered with the `model-toggle-btn` class so we can find it
+  // without the old `data-action` attribute. (The original
+  // `data-arg2` mutation is gone — the @click closure captures
+  // `!m.active` at click time, and `toggleModel` mutates `m.active`
+  // in place, so the next click already sees the new state.)
+  const toggleBtn = row.querySelector<HTMLButtonElement>(".model-toggle-btn");
   if (toggleBtn) {
     toggleBtn.textContent = active ? "Disable" : "Enable";
-    toggleBtn.setAttribute("data-arg2", String(!active));
   }
 }
 
@@ -251,11 +285,12 @@ export function applySort(rows: readonly Model[], sort: ModelSort | null): reado
   return out;
 }
 
-// Render the <th> for a sortable column with the right indicator
-// and data attributes the click handler reads. `sort` is the
-// per-provider sort state (or null for unsorted).
-export function renderSortableTh(col: SortableColumn, sort: ModelSort | null, providerId: string): string {
+// Render the <th> for a sortable column with the right indicator.
+// `sort` is the per-provider sort state (or null for unsorted).
+// Clicking the header cycles the sort via `cycleProviderSort` in
+// model-handlers.ts.
+export function renderSortableTh(col: SortableColumn, sort: ModelSort | null, providerId: string): TemplateResult {
   const isActive: boolean = !!(sort && sort.key === col.key);
   const indicator: string = isActive ? (sort && sort.dir === "desc" ? " ▼" : " ▲") : "";
-  return `<th class="sortable${isActive ? " sorted" : ""}" data-action="cycleProviderSort" data-arg1="${escapeAttr(providerId)}" data-arg2="${escapeAttr(col.key)}">${escapeHtml(col.label)}<span class="sort-indicator">${indicator}</span></th>`;
+  return html`<th class=${"sortable" + (isActive ? " sorted" : "")} @click=${() => cycleProviderSort(providerId, col.key, null)}>${col.label}<span class="sort-indicator">${indicator}</span></th>`;
 }

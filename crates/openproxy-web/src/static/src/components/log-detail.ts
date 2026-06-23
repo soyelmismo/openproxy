@@ -1,7 +1,7 @@
 // components/log-detail.ts — render the per-request log detail
-// modal. The modal HTML is built and inserted into the DOM; the
-// "Close" button uses data-action="closeLogDetailModal" and the
-// backdrop itself uses data-action="closeLogDetailModal".
+// modal. The modal is built as a lit-html `TemplateResult` and
+// rendered into a wrapper div under `#modal-root`. Closes happen
+// via `@click` handlers (lit-html) instead of `data-action`.
 //
 // Per spec §3 + §13.8 we do not use inline `onclick="window.X()"`
 // handlers.
@@ -10,9 +10,8 @@
 // their content as friendly, collapsible sections; Errors and Raw
 // keep using jsonSection.
 
+import { html, render, type TemplateResult } from "lit-html";
 import { state } from "../state/index.js";
-import { escapeHtml } from "../lib/escape.js";
-import { appendModal } from "../lib/dom.js";
 import { showToast } from "./toast.js";
 
 /** Loose shape for the `log` arg in renderLogDetailModal. The
@@ -81,17 +80,22 @@ function statusPillClass(s: string | null | undefined): string {
   return "warn";
 }
 
+/** Pretty-print a JSON value for display inside a `<pre>` tag.
+ *  lit-html auto-escapes the returned string when interpolated
+ *  via `${...}`, so we no longer escape here. Returns "(empty)"
+ *  for null/undefined so the viewer always has something to
+ *  render. */
 function formatJson(value: unknown): string {
   if (value == null) return "(empty)";
   let s: string;
   try { s = typeof value === "string" ? value : JSON.stringify(value, null, 2); }
   catch (_e: unknown) { s = String(value); }
-  return escapeHtml(s);
+  return s;
 }
 
-function jsonSection(title: string, value: unknown, tabKey: string): string {
-  return `<section class="log-detail-section" data-log-tab="${escapeHtml(tabKey)}">
-    <h4>${escapeHtml(title)}</h4>
+function jsonSection(title: string, value: unknown, tabKey: string): TemplateResult {
+  return html`<section class="log-detail-section" data-log-tab=${tabKey}>
+    <h4>${title}</h4>
     <pre class="json-viewer">${formatJson(value)}</pre>
   </section>`;
 }
@@ -277,8 +281,8 @@ function parseOpenAiChatResponse(value: unknown): {
 }
 
 /** Pretty-print a tool-call `arguments` field for display. The
- *  caller wraps the returned string in `escapeHtml` (or feeds it
- *  to `formatJson`, which already escapes). */
+ *  returned string is fed to a `<pre>` element — lit-html will
+ *  auto-escape it. */
 function parseToolCallArguments(args: unknown): { pretty: string } | null {
   if (args == null) return null;
   if (typeof args === "string") {
@@ -301,9 +305,11 @@ function parseToolCallArguments(args: unknown): { pretty: string } | null {
 }
 
 /** Render a single tool-call arguments block with structured
- *  collapsible sections when the arguments parse as an object. */
-function renderToolCallArgsBlock(args: unknown): string {
-  if (args == null) return "";
+ *  collapsible sections when the arguments parse as an object.
+ *  Returns null when there's nothing to render — the caller omits
+ *  the block entirely in that case. */
+function renderToolCallArgsBlock(args: unknown): TemplateResult | null {
+  if (args == null) return null;
   let parsed: Record<string, unknown> | null = null;
   if (typeof args === "string") {
     try { parsed = JSON.parse(args) as Record<string, unknown>; }
@@ -312,39 +318,36 @@ function renderToolCallArgsBlock(args: unknown): string {
     parsed = args as Record<string, unknown>;
   }
   if (parsed != null && Object.keys(parsed).length > 0) {
-    const parts: string[] = [];
-    for (const [k, v] of Object.entries(parsed)) {
-      parts.push(`<details class="log-detail-collapsible" open>
-        <summary><span class="log-detail-key">${escapeHtml(k)}</span></summary>
+    return html`${Object.entries(parsed).map(([k, v]) => html`
+      <details class="log-detail-collapsible" open>
+        <summary><span class="log-detail-key">${k}</span></summary>
         <pre class="json-viewer log-detail-collapsible-body">${formatJson(v)}</pre>
-      </details>`);
-    }
-    return parts.join("\n        ");
+      </details>`)}`;
   }
   // Fall back to raw pretty-print.
   const result = parseToolCallArguments(args);
   return result != null
-    ? `<pre class="json-viewer log-detail-collapsible-body">${escapeHtml(result.pretty)}</pre>`
-    : "";
+    ? html`<pre class="json-viewer log-detail-collapsible-body">${result.pretty}</pre>`
+    : null;
 }
 
-/** Render a single "Message" (content) block. Returns "" when the
+/** Render a single "Message" (content) block. Returns null when the
  *  content is null/empty — the caller omits the block entirely in
  *  that case, so a content-less response doesn't show an empty
  *  Message section. */
-function renderMessageBlock(message: string): string {
-  return `<details class="log-detail-collapsible" open>
+function renderMessageBlock(message: string): TemplateResult {
+  return html`<details class="log-detail-collapsible" open>
     <summary>Message</summary>
-    <pre class="json-viewer log-detail-collapsible-body">${escapeHtml(message)}</pre>
+    <pre class="json-viewer log-detail-collapsible-body">${message}</pre>
   </details>`;
 }
 
 /** Render a single "Reasoning" block. Same omit-when-empty contract
  *  as `renderMessageBlock`. */
-function renderReasoningBlock(reasoning: string): string {
-  return `<details class="log-detail-collapsible" open>
+function renderReasoningBlock(reasoning: string): TemplateResult {
+  return html`<details class="log-detail-collapsible" open>
     <summary>Reasoning</summary>
-    <pre class="json-viewer log-detail-collapsible-body">${escapeHtml(reasoning)}</pre>
+    <pre class="json-viewer log-detail-collapsible-body">${reasoning}</pre>
   </details>`;
 }
 
@@ -358,23 +361,26 @@ function renderReasoningBlock(reasoning: string): string {
  *  `index` is the 0-based position in the tool_calls array, used
  *  only to label the summary ("Tool call #1", "Tool call #2", …)
  *  so the operator can correlate with the upstream's index field. */
-function renderToolCallBlock(tc: ToolCall, index: number): string {
-  const idTag = tc.id != null ? ` <span class="log-detail-key-meta">${escapeHtml(tc.id)}</span>` : "";
-  const typeTag = tc.type != null && tc.type !== "function" ? ` <span class="log-detail-key-meta">${escapeHtml(tc.type)}</span>` : "";
-  const summaryParts = `<span class="log-detail-tool-call-name">Tool call #${index + 1}: ${escapeHtml(tc.function.name)}</span>${idTag}${typeTag}`;
+function renderToolCallBlock(tc: ToolCall, index: number): TemplateResult {
+  const idTag: TemplateResult | null = tc.id != null
+    ? html` <span class="log-detail-key-meta">${tc.id}</span>`
+    : null;
+  const typeTag: TemplateResult | null = (tc.type != null && tc.type !== "function")
+    ? html` <span class="log-detail-key-meta">${tc.type}</span>`
+    : null;
   const argsHtml = renderToolCallArgsBlock(tc.function.arguments);
-  if (argsHtml.length > 0) {
-    return `<details class="log-detail-collapsible">
-      <summary>${summaryParts}</summary>
+  if (argsHtml != null) {
+    return html`<details class="log-detail-collapsible">
+      <summary><span class="log-detail-tool-call-name">Tool call #${index + 1}: ${tc.function.name}</span>${idTag}${typeTag}</summary>
       ${argsHtml}
     </details>`;
   }
   // No arguments to show — render a non-collapsible header so the
   // tool call is still visible (its existence is information the
   // operator needs).
-  return `<div class="log-detail-tool-call">
+  return html`<div class="log-detail-tool-call">
     <div class="log-detail-tool-call-header">
-      ${summaryParts}
+      <span class="log-detail-tool-call-name">Tool call #${index + 1}: ${tc.function.name}</span>${idTag}${typeTag}
     </div>
   </div>`;
 }
@@ -386,27 +392,27 @@ function renderToolCallBlock(tc: ToolCall, index: number): string {
  *  `choice.finish_reason`, `choice.index`, `choice.logprobs`).
  *
  *  Collapsed by default — these fields are useful for debugging
- *  but not the primary thing the operator wants to see. */
-function renderOtherPropertiesBlock(props: Record<string, unknown>): string {
-  const parts: string[] = [];
-  for (const [k, v] of Object.entries(props)) {
-    parts.push(`<details class="log-detail-collapsible">
-      <summary><span class="log-detail-key">${escapeHtml(k)}</span></summary>
+ *  but not the primary thing the operator wants to see.
+ *  Returns null when `props` is empty. */
+function renderOtherPropertiesBlock(props: Record<string, unknown>): TemplateResult | null {
+  const entries = Object.entries(props);
+  if (entries.length === 0) return null;
+  const parts: TemplateResult[] = entries.map(([k, v]) => html`
+    <details class="log-detail-collapsible">
+      <summary><span class="log-detail-key">${k}</span></summary>
       <pre class="json-viewer log-detail-collapsible-body">${formatJson(v)}</pre>
     </details>`);
-  }
-  if (parts.length === 0) return "";
-  return `<details class="log-detail-collapsible">
-    <summary>Other properties (${parts.length})</summary>
-    <div class="log-detail-tool-calls">${parts.join("\n      ")}</div>
+  return html`<details class="log-detail-collapsible">
+    <summary>Other properties (${entries.length})</summary>
+    <div class="log-detail-tool-calls">${parts}</div>
   </details>`;
 }
 
 /** Render the "Raw response" block. ALWAYS collapsed by default —
  *  it's the escape hatch for "the structured blocks above didn't
  *  show me what I needed, let me see the raw JSON". */
-function renderRawResponseBlock(response: unknown): string {
-  return `<details class="log-detail-collapsible">
+function renderRawResponseBlock(response: unknown): TemplateResult {
+  return html`<details class="log-detail-collapsible">
     <summary>Raw response</summary>
     <pre class="json-viewer log-detail-collapsible-body">${formatJson(response)}</pre>
   </details>`;
@@ -432,19 +438,19 @@ function renderRawResponseBlock(response: unknown): string {
  *  request actually succeeded.
  *
  *  @param streamingHint - set to true when the request is streaming
- *        but the response body is null (e.g. interrupted mid-stream). */
+ *        but the response body is null (e.g. interrupted mid-stream).
+ *  @param isPartial - When true, the response was interrupted
+ *        mid-stream — show a "Partial response" banner so the
+ *        operator knows the response didn't complete normally even
+ *        though there IS a body to inspect. Passed from the caller
+ *        which reads `is_streaming && !stream_complete` (and the
+ *        `partial` marker inside the JSON, when present). */
 function renderResponseTab(
   response: unknown,
   streamingHint?: boolean,
   createdAt?: string,
-  /** When true, the response was interrupted mid-stream — show a
-   *  "Partial response" banner so the operator knows the response
-   *  didn't complete normally even though there IS a body to
-   *  inspect. Passed from the caller which reads
-   *  `is_streaming && !stream_complete` (and the `partial` marker
-   *  inside the JSON, when present). */
   isPartial?: boolean,
-): string {
+): TemplateResult {
   // Empty state.
   if (response == null) {
     let placeholder = streamingHint
@@ -461,9 +467,9 @@ function renderResponseTab(
         }
       }
     }
-    return `<section class="log-detail-section" data-log-tab="response">
+    return html`<section class="log-detail-section" data-log-tab="response">
       <h4>Response</h4>
-      <p class="muted log-detail-placeholder">${escapeHtml(placeholder)}</p>
+      <p class="muted log-detail-placeholder">${placeholder}</p>
     </section>`;
   }
 
@@ -486,9 +492,9 @@ function renderResponseTab(
     }
   }
   const showPartialBanner = isPartial === true || partialFromJson;
-  const partialBannerHtml = showPartialBanner
-    ? `<div class="log-detail-partial-banner">⚠ Partial response — stream was interrupted before completion. The content below is what was received up to the point of failure.</div>`
-    : "";
+  const partialBanner: TemplateResult | null = showPartialBanner
+    ? html`<div class="log-detail-partial-banner">⚠ Partial response — stream was interrupted before completion. The content below is what was received up to the point of failure.</div>`
+    : null;
 
   // String: try to parse as JSON; on success, recurse with parsed
   // value; on failure, show the raw string in a collapsible.
@@ -500,9 +506,9 @@ function renderResponseTab(
     if (parsedOk && parsed != null && typeof parsed === "object") {
       return renderResponseTab(parsed, streamingHint, createdAt, isPartial);
     }
-    return `<section class="log-detail-section" data-log-tab="response">
+    return html`<section class="log-detail-section" data-log-tab="response">
       <h4>Response</h4>
-      ${partialBannerHtml}
+      ${partialBanner}
       ${renderRawResponseBlock(response)}
     </section>`;
   }
@@ -510,7 +516,7 @@ function renderResponseTab(
   // Try to recognize an OpenAI chat-completion shape.
   const parsed = parseOpenAiChatResponse(response);
   if (parsed != null) {
-    const blocks: string[] = [];
+    const blocks: TemplateResult[] = [];
     // Message (content) — only if non-empty.
     if (parsed.message != null) {
       blocks.push(renderMessageBlock(parsed.message));
@@ -529,16 +535,17 @@ function renderResponseTab(
     }
     // Other properties (id, model, usage, finish_reason, …).
     if (parsed.otherProperties != null) {
-      blocks.push(renderOtherPropertiesBlock(parsed.otherProperties));
+      const otherBlock = renderOtherPropertiesBlock(parsed.otherProperties);
+      if (otherBlock != null) blocks.push(otherBlock);
     }
     // Raw response — always present, collapsed by default. The
     // operator can expand it to see the original JSON when the
     // structured extraction missed something.
     blocks.push(renderRawResponseBlock(response));
-    return `<section class="log-detail-section" data-log-tab="response">
+    return html`<section class="log-detail-section" data-log-tab="response">
       <h4>Response</h4>
-      ${partialBannerHtml}
-      ${blocks.join("\n      ")}
+      ${partialBanner}
+      ${blocks}
     </section>`;
   }
 
@@ -616,7 +623,7 @@ function renderResponseTab(
       rawOtherProperties = { ...(rawOtherProperties ?? {}), ...topLevelProps };
     }
   }
-  const blocks: string[] = [];
+  const blocks: TemplateResult[] = [];
   if (rawContent != null) blocks.push(renderMessageBlock(rawContent));
   if (rawReasoning != null) blocks.push(renderReasoningBlock(rawReasoning));
   for (let i = 0; i < rawToolCalls.length; i++) {
@@ -624,28 +631,30 @@ function renderResponseTab(
     if (tc != null) blocks.push(renderToolCallBlock(tc, i));
   }
   if (rawOtherProperties != null && Object.keys(rawOtherProperties).length > 0) {
-    blocks.push(renderOtherPropertiesBlock(rawOtherProperties));
+    const otherBlock = renderOtherPropertiesBlock(rawOtherProperties);
+    if (otherBlock != null) blocks.push(otherBlock);
   }
   // Always show the raw response as the last block.
   blocks.push(renderRawResponseBlock(response));
-  return `<section class="log-detail-section" data-log-tab="response">
+  return html`<section class="log-detail-section" data-log-tab="response">
     <h4>Response</h4>
-    ${partialBannerHtml}
-    ${blocks.join("\n      ")}
+    ${partialBanner}
+    ${blocks}
   </section>`;
 }
 
 /** Render the Request tab. Returns the full
- *  `<section data-log-tab="request">…</section>` HTML. Handles the
- *  empty / object / non-object fallback shapes per the spec.
+ *  `<section data-log-tab="request">…</section>` TemplateResult.
+ *  Handles the empty / object / non-object fallback shapes per
+ *  the spec.
  *
- *  `createdAt` is the row's `created_at` timestamp (ISO string). When
- *  the request body is null, we use it to compute the row's age and
- *  show a more helpful message: if the row is older than the
- *  recording TTL (5 min default), the body was likely pruned by
- *  `prune_expired_recording_bodies`; otherwise recording was OFF
- *  when the request was made. */
-function renderRequestTab(requestBody: unknown, createdAt?: string): string {
+ *  `createdAt` is the row's `created_at` timestamp (ISO string).
+ *  When the request body is null, we use it to compute the row's
+ *  age and show a more helpful message: if the row is older than
+ *  the recording TTL (5 min default), the body was likely pruned
+ *  by `prune_expired_recording_bodies`; otherwise recording was
+ *  OFF when the request was made. */
+function renderRequestTab(requestBody: unknown, createdAt?: string): TemplateResult {
   // Empty state: same predicate as the previous inline logic.
   const hasRequestBody: boolean = requestBody != null
     && !(typeof requestBody === "string" && requestBody.trim() === "")
@@ -668,7 +677,7 @@ function renderRequestTab(requestBody: unknown, createdAt?: string): string {
         }
       }
     }
-    return `<section class="log-detail-section" data-log-tab="request">
+    return html`<section class="log-detail-section" data-log-tab="request">
       <h4>Request</h4>
       <p class="muted">No request body recorded.${expiryHint}</p>
     </section>`;
@@ -688,7 +697,7 @@ function renderRequestTab(requestBody: unknown, createdAt?: string): string {
   if (body != null && typeof body === "object" && !Array.isArray(body)) {
     const obj = body as Record<string, unknown>;
     const rendered = new Set<string>();
-    const blocks: string[] = [];
+    const blocks: TemplateResult[] = [];
 
     const isEmptyValue = (v: unknown): boolean => {
       if (v == null) return true;
@@ -713,9 +722,9 @@ function renderRequestTab(requestBody: unknown, createdAt?: string): string {
     };
 
     /** Render a single tool definition (from `tools[]`) */
-    const renderToolBlock = (tool: unknown, index: number): string => {
+    const renderToolBlock = (tool: unknown, index: number): TemplateResult => {
       if (tool == null || typeof tool !== "object" || Array.isArray(tool)) {
-        return `<details class="log-detail-collapsible">
+        return html`<details class="log-detail-collapsible">
           <summary>Tool #${index + 1}</summary>
           <pre class="json-viewer log-detail-collapsible-body">${formatJson(tool)}</pre>
         </details>`;
@@ -727,21 +736,21 @@ function renderRequestTab(requestBody: unknown, createdAt?: string): string {
       const description: unknown = fn?.["description"];
       const parameters: unknown = fn?.["parameters"];
       const strict: unknown = fn?.["strict"];
-      const parts: string[] = [];
+      const parts: TemplateResult[] = [];
       if (description != null && !isEmptyValue(description)) {
-        parts.push(`<details class="log-detail-collapsible">
+        parts.push(html`<details class="log-detail-collapsible">
           <summary>Description</summary>
-          <pre class="json-viewer log-detail-collapsible-body">${escapeHtml(typeof description === "string" ? description : JSON.stringify(description, null, 2))}</pre>
+          <pre class="json-viewer log-detail-collapsible-body">${typeof description === "string" ? description : JSON.stringify(description, null, 2)}</pre>
         </details>`);
       }
       if (parameters != null && !isEmptyValue(parameters)) {
-        parts.push(`<details class="log-detail-collapsible">
+        parts.push(html`<details class="log-detail-collapsible">
           <summary>Parameters</summary>
           <pre class="json-viewer log-detail-collapsible-body">${formatJson(parameters)}</pre>
         </details>`);
       }
       if (strict != null && !isEmptyValue(strict)) {
-        parts.push(`<details class="log-detail-collapsible">
+        parts.push(html`<details class="log-detail-collapsible">
           <summary>Strict</summary>
           <pre class="json-viewer log-detail-collapsible-body">${formatJson(strict)}</pre>
         </details>`);
@@ -750,15 +759,15 @@ function renderRequestTab(requestBody: unknown, createdAt?: string): string {
       for (const ek of extraKeys) {
         const ev = t[ek];
         if (!isEmptyValue(ev)) {
-          parts.push(`<details class="log-detail-collapsible">
-            <summary>${escapeHtml(ek)}</summary>
+          parts.push(html`<details class="log-detail-collapsible">
+            <summary>${ek}</summary>
             <pre class="json-viewer log-detail-collapsible-body">${formatJson(ev)}</pre>
           </details>`);
         }
       }
-      return `<details class="log-detail-collapsible"${index === 0 ? " open" : ""}>
-        <summary><span class="log-detail-tool-call-name">${escapeHtml(toolType)}</span> <span class="log-detail-key-meta">${escapeHtml(name)}</span></summary>
-        ${parts.join("\n        ")}
+      return html`<details class="log-detail-collapsible" ?open=${index === 0}>
+        <summary><span class="log-detail-tool-call-name">${toolType}</span> <span class="log-detail-key-meta">${name}</span></summary>
+        ${parts}
       </details>`;
     };
 
@@ -772,8 +781,8 @@ function renderRequestTab(requestBody: unknown, createdAt?: string): string {
       // Special handling for "tools": render each tool definition as
       // its own collapsible with name, description, parameters.
       if (key === "tools" && Array.isArray(value) && value.length > 0) {
-        const toolBlocks = (value as unknown[]).map((t, i) => renderToolBlock(t, i)).join("");
-        blocks.push(`<details class="log-detail-collapsible" open>
+        const toolBlocks: TemplateResult[] = (value as unknown[]).map((t, i) => renderToolBlock(t, i));
+        blocks.push(html`<details class="log-detail-collapsible" open>
           <summary><span class="log-detail-key log-detail-key-pinned">tools</span> <span class="log-detail-key-meta">${value.length} tool(s)</span></summary>
           <div class="log-detail-messages">${toolBlocks}</div>
         </details>`);
@@ -784,9 +793,9 @@ function renderRequestTab(requestBody: unknown, createdAt?: string): string {
       // Special handling for "messages": render each message as an
       // individual collapsible with its role in the summary.
       if (key === "messages" && Array.isArray(value) && value.length > 0) {
-        const msgBlocks = (value as unknown[]).map((raw, i) => {
+        const msgBlocks: TemplateResult[] = (value as unknown[]).map((raw, i) => {
           if (raw == null || typeof raw !== "object" || Array.isArray(raw)) {
-            return `<details class="log-detail-collapsible">
+            return html`<details class="log-detail-collapsible">
               <summary>Message #${i + 1}</summary>
               <pre class="json-viewer log-detail-collapsible-body">${formatJson(raw)}</pre>
             </details>`;
@@ -807,7 +816,9 @@ function renderRequestTab(requestBody: unknown, createdAt?: string): string {
           if (typeof name === "string") extras.push(name);
           if (typeof toolCallId === "string") extras.push(`tool_call_id: ${toolCallId}`);
           if (Array.isArray(toolCalls) && toolCalls.length > 0) extras.push(`${toolCalls.length} tool call(s)`);
-          const extraStr = extras.length > 0 ? ` <span class="log-detail-key-meta">${escapeHtml(extras.join(" · "))}</span>` : "";
+          const extraStr: TemplateResult | null = extras.length > 0
+            ? html` <span class="log-detail-key-meta">${extras.join(" · ")}</span>`
+            : null;
           // Content preview: first 80 chars of the content string.
           let preview = "";
           if (typeof content === "string") {
@@ -816,13 +827,15 @@ function renderRequestTab(requestBody: unknown, createdAt?: string): string {
             const s = typeof content === "string" ? content : JSON.stringify(content);
             preview = s.length > 80 ? s.slice(0, 80) + "…" : s;
           }
-          const previewStr = preview.length > 0 ? ` <span class="log-detail-msg-preview">${escapeHtml(preview)}</span>` : "";
-          return `<details class="log-detail-collapsible">
-            <summary><span class="log-detail-role ${roleClass}">${escapeHtml(role)}</span>${extraStr}${previewStr}</summary>
+          const previewStr: TemplateResult | null = preview.length > 0
+            ? html` <span class="log-detail-msg-preview">${preview}</span>`
+            : null;
+          return html`<details class="log-detail-collapsible">
+            <summary><span class="log-detail-role ${roleClass}">${role}</span>${extraStr}${previewStr}</summary>
             <pre class="json-viewer log-detail-collapsible-body">${formatJson(msg)}</pre>
           </details>`;
-        }).join("");
-        blocks.push(`<details class="log-detail-collapsible" open>
+        });
+        blocks.push(html`<details class="log-detail-collapsible" open>
           <summary><span class="log-detail-key log-detail-key-pinned">messages</span> <span class="log-detail-key-meta">${value.length} message(s)</span></summary>
           <div class="log-detail-messages">${msgBlocks}</div>
         </details>`);
@@ -830,13 +843,13 @@ function renderRequestTab(requestBody: unknown, createdAt?: string): string {
         continue;
       }
 
-      const open = isPrimitive(value) ? " open" : "";
+      const open = isPrimitive(value);
       const meta = metaText(value);
-      const metaSpan = meta.length > 0
-        ? ` <span class="log-detail-key-meta">${escapeHtml(meta)}</span>`
-        : "";
-      blocks.push(`<details class="log-detail-collapsible"${open}>
-        <summary><span class="log-detail-key log-detail-key-pinned">${escapeHtml(key)}</span>${metaSpan}</summary>
+      const metaSpan: TemplateResult | null = meta.length > 0
+        ? html` <span class="log-detail-key-meta">${meta}</span>`
+        : null;
+      blocks.push(html`<details class="log-detail-collapsible" ?open=${open}>
+        <summary><span class="log-detail-key log-detail-key-pinned">${key}</span>${metaSpan}</summary>
         <pre class="json-viewer log-detail-collapsible-body">${formatJson(value)}</pre>
       </details>`);
       rendered.add(key);
@@ -848,20 +861,20 @@ function renderRequestTab(requestBody: unknown, createdAt?: string): string {
       if (rendered.has(key)) continue;
       const value = obj[key];
       if (isEmptyValue(value)) continue;
-      blocks.push(`<details class="log-detail-collapsible">
-        <summary><span class="log-detail-key">${escapeHtml(key)}</span></summary>
+      blocks.push(html`<details class="log-detail-collapsible">
+        <summary><span class="log-detail-key">${key}</span></summary>
         <pre class="json-viewer log-detail-collapsible-body">${formatJson(value)}</pre>
       </details>`);
     }
 
-    return `<section class="log-detail-section" data-log-tab="request">
+    return html`<section class="log-detail-section" data-log-tab="request">
       <h4>Request</h4>
-      ${blocks.join("\n      ")}
+      ${blocks}
     </section>`;
   }
 
   // Array or primitive fallback.
-  return `<section class="log-detail-section" data-log-tab="request">
+  return html`<section class="log-detail-section" data-log-tab="request">
     <h4>Request</h4>
     <details class="log-detail-collapsible" open>
       <summary>Raw request body</summary>
@@ -870,7 +883,7 @@ function renderRequestTab(requestBody: unknown, createdAt?: string): string {
   </section>`;
 }
 
-export function renderLogDetailModal(log: LogDetailLog): string {
+export function renderLogDetailModal(log: LogDetailLog): TemplateResult {
   // Normalize the row shape: the backend's /usage/detail returns
   // status_code, total_ms, upstream_model_id, etc., but the modal
   // originally assumed a richer payload (status, latency_ms, model,
@@ -930,40 +943,49 @@ export function renderLogDetailModal(log: LogDetailLog): string {
   const apiKeyId: string | number | null = apiKeyIdRaw != null && (typeof apiKeyIdRaw === "string" || typeof apiKeyIdRaw === "number") ? apiKeyIdRaw : null;
   const userAgent: string | null = log.user_agent || readString(meta, "user_agent");
 
-  return `
-    <div id="log-detail-modal" class="modal-bg log-detail-modal" data-action="closeLogDetailModal">
+  const apiKeyIdBlock: TemplateResult | null = apiKeyId != null
+    ? html`<div><strong>API key:</strong> #${String(apiKeyId)}</div>`
+    : null;
+  const userAgentBlock: TemplateResult | null = userAgent
+    ? html`<div><strong>User-Agent:</strong> ${String(userAgent)}</div>`
+    : null;
+  const comboText: string = combo != null ? String(combo) : "—";
+  const costText: string = costRaw != null ? String(costRaw) : "—";
+
+  return html`
+    <div id="log-detail-modal" class="modal-bg log-detail-modal" @click=${(e: Event) => closeLogDetailModal(e)}>
       <div class="modal">
         <div class="modal-header">
-          <h2>Log #${escapeHtml(String(requestId))}</h2>
-          <button type="button" class="log-detail-copy-bundle-btn" data-action="copyDebugBundle" title="Copy a Markdown-formatted debug bundle with all request/response/error context — ready to paste into a bug report.">📋 Copy debug bundle</button>
-          <button type="button" class="close-btn" data-action="closeLogDetailModal" aria-label="Close">&times;</button>
+          <h2>Log #${String(requestId)}</h2>
+          <button type="button" class="log-detail-copy-bundle-btn" @click=${() => { void copyDebugBundle(); }} title="Copy a Markdown-formatted debug bundle with all request/response/error context — ready to paste into a bug report.">📋 Copy debug bundle</button>
+          <button type="button" class="close-btn" @click=${(e: Event) => closeLogDetailModal(e)} aria-label="Close">&times;</button>
         </div>
         <div class="modal-body">
           <div class="log-detail-summary">
-            <div><strong>Status:</strong> <span class="status-pill ${statusClass}">${escapeHtml(String(status))}</span></div>
-            <div><strong>Provider:</strong> ${escapeHtml(String(provider))}</div>
-            <div><strong>Account:</strong> ${escapeHtml(String(account))}</div>
-            <div><strong>Combo:</strong> ${combo != null ? escapeHtml(String(combo)) : "—"}</div>
-            <div><strong>Model:</strong> ${escapeHtml(String(model))}</div>
-            <div><strong>Latency:</strong> ${escapeHtml(latency)}</div>
-            <div><strong>Cost:</strong> ${costRaw != null ? escapeHtml(String(costRaw)) : "—"}</div>
+            <div><strong>Status:</strong> <span class="status-pill ${statusClass}">${String(status)}</span></div>
+            <div><strong>Provider:</strong> ${String(provider)}</div>
+            <div><strong>Account:</strong> ${String(account)}</div>
+            <div><strong>Combo:</strong> ${comboText}</div>
+            <div><strong>Model:</strong> ${String(model)}</div>
+            <div><strong>Latency:</strong> ${latency}</div>
+            <div><strong>Cost:</strong> ${costText}</div>
             ${renderCompressionSummary(log)}
-            <div><strong>Created:</strong> ${escapeHtml(String(createdAt))}</div>
-            ${apiKeyId != null ? `<div><strong>API key:</strong> #${escapeHtml(String(apiKeyId))}</div>` : ""}
-            ${userAgent ? `<div><strong>User-Agent:</strong> ${escapeHtml(String(userAgent))}</div>` : ""}
+            <div><strong>Created:</strong> ${String(createdAt)}</div>
+            ${apiKeyIdBlock}
+            ${userAgentBlock}
           </div>
           <div class="log-detail-tabs">
-            <button class="detail-tab" data-action="logDetailTab" data-arg1="request">Request</button>
-            <button class="detail-tab" data-action="logDetailTab" data-arg1="response">Response</button>
-            <button class="detail-tab" data-action="logDetailTab" data-arg1="errors">Errors</button>
-            <button class="detail-tab" data-action="logDetailTab" data-arg1="raw">Raw</button>
+            <button class="detail-tab" data-arg1="request" @click=${(e: Event) => logDetailTabClick("request", e)}>Request</button>
+            <button class="detail-tab" data-arg1="response" @click=${(e: Event) => logDetailTabClick("response", e)}>Response</button>
+            <button class="detail-tab" data-arg1="errors" @click=${(e: Event) => logDetailTabClick("errors", e)}>Errors</button>
+            <button class="detail-tab" data-arg1="raw" @click=${(e: Event) => logDetailTabClick("raw", e)}>Raw</button>
           </div>
           <div class="log-detail-content" id="log-detail-content">
             ${renderRequestTab(requestBody, createdAt)}
             ${renderResponseTab(response, isStreaming, createdAt, isPartial)}
             ${errors != null
               ? jsonSection("Errors", errors, "errors")
-              : `<section class="log-detail-section" data-log-tab="errors">
+              : html`<section class="log-detail-section" data-log-tab="errors">
                    <h4>Errors</h4>
                    <p class="muted">No errors recorded.</p>
                  </section>`}
@@ -975,10 +997,35 @@ export function renderLogDetailModal(log: LogDetailLog): string {
   `;
 }
 
+/** Click handler for the `.detail-tab` buttons. Toggles which
+ *  `#log-detail-content [data-log-tab]` section is visible (mutually
+ *  exclusive) AND marks the clicked button as `.active`.
+ *
+ *  Lit-html's `@click` wiring means we no longer need a separate
+ *  document-level listener (`tabClickOnce` / `wireTabClickOnce` in
+ *  the pre-migration code). */
+function logDetailTabClick(which: string, e: Event): void {
+  // Update section visibility.
+  document.querySelectorAll("#log-detail-content [data-log-tab]").forEach((sec) => {
+    const el = sec as HTMLElement;
+    el.style.display = (sec.getAttribute("data-log-tab") === which) ? "" : "none";
+  });
+  // Update the active-tab indicator on the clicked button.
+  const btn = e.currentTarget;
+  if (btn instanceof Element) {
+    const tabsContainer = btn.closest(".log-detail-tabs");
+    if (tabsContainer != null) {
+      tabsContainer.querySelectorAll(".detail-tab").forEach((t) => {
+        t.classList.toggle("active", t === btn);
+      });
+    }
+  }
+}
+
 // Initialize the log-detail tab UI: show only the first [data-log-tab]
 // section, hide the remaining ones, and mark the first detail-tab as
 // active. Centralized here so it can be re-invoked after any in-place
-// re-render (e.g. updateOpenLogDetail replacing the modal HTML).
+// re-render (e.g. updateOpenLogDetail re-rendering the modal).
 function initializeLogDetailTabs(): void {
   const modal: HTMLElement | null = document.getElementById("log-detail-modal");
   if (!modal) return;
@@ -1001,16 +1048,33 @@ function initializeLogDetailTabs(): void {
   }
 }
 
-// `wired` flag a nivel módulo — el listener se registra UNA sola
-// vez por sesión (no por modal abierto). El handler tabClickOnce
-// tiene guard vía `closest()` que retorna early si no hay modal,
-// así que dejarlo siempre montado es seguro y elimina el leak.
-let wired: boolean = false;
+/** Get or create the `#modal-root` container that holds all
+ *  dashboard modals. Lives at `<body>` level so a re-render of
+ *  `#main` doesn't destroy the modal. */
+function ensureModalRoot(): HTMLElement {
+  let root = document.getElementById("modal-root");
+  if (!root) {
+    root = document.createElement("div");
+    root.id = "modal-root";
+    // z-index 1000 puts modals above the page chrome without
+    // needing !important hacks. The .modal-bg rule in CSS already
+    // uses position: fixed; this just ensures stacking order.
+    root.style.cssText = "position:relative;z-index:1000;";
+    document.body.appendChild(root);
+  }
+  return root;
+}
 
-function wireTabClickOnce(): void {
-  if (wired) return;
-  document.addEventListener("click", tabClickOnce);
-  wired = true;
+/** Remove a `.log-detail-modal` element AND its wrapper parent (the
+ *  empty `<div>` we created in `showLogDetail` to host the rendered
+ *  TemplateResult). Keeps `#modal-root` clean so the next modal
+ *  opens in a fresh wrapper. */
+function removeLogDetailModal(m: HTMLElement): void {
+  const wrapper = m.parentElement;
+  m.remove();
+  if (wrapper && wrapper.children.length === 0 && wrapper.parentElement?.id === "modal-root") {
+    wrapper.remove();
+  }
 }
 
 // Public API
@@ -1019,55 +1083,46 @@ export function showLogDetail(log: LogDetailLog): void {
   // intervening closeLogDetailModal, two .log-detail-modal elements
   // would stack on top of each other and confuse event delegation.
   // Remove any pre-existing modal before appending the new one.
-  document.querySelector(".log-detail-modal")?.remove();
-  const html: string = renderLogDetailModal(log);
-  appendModal(html);
-  wireTabClickOnce();
+  const existing = document.querySelector(".log-detail-modal");
+  if (existing instanceof HTMLElement) {
+    removeLogDetailModal(existing);
+  }
+  const root = ensureModalRoot();
+  // Render the modal into a fresh wrapper div so lit-html can
+  // diff efficiently on updateOpenLogDetail re-renders.
+  const wrapper = document.createElement("div");
+  root.appendChild(wrapper);
+  render(renderLogDetailModal(log), wrapper);
   initializeLogDetailTabs();
 }
 
-const tabClickOnce: (e: Event) => void = (e: Event) => {
-  const target: EventTarget | null = e.target;
-  if (!(target instanceof Element)) return;
-  const tab: HTMLElement | null = target.closest(".detail-tab[data-action='logDetailTab']");
-  if (!tab) return;
-  // The central data-action shim (app.js) will also dispatch a
-  // logDetailTab call. We let the shim do the work and return here
-  // to avoid running the body twice. To support that, we just
-  // update the active-tab indicator early and let the shim
-  // handler deal with content visibility.
-  document.querySelectorAll(".log-detail-tabs .detail-tab").forEach((t) => t.classList.toggle("active", t === tab));
-};
-
-// NOTE: ya no removemos el listener aquí. El listener vive toda
-// la sesión (registrado una vez por wireTabClickOnce); el handler
-// `tabClickOnce` retorna early vía `closest()` cuando no hay modal
-// abierto, así que no hay costo de CPU ni comportamiento fantasma.
 export function closeLogDetailModal(e: Event | null): void {
   // Close only if the click was on the backdrop itself or on the
-  // explicit X button. The shim in app.js dispatches data-action via
-  // `e.target.closest("[data-action]")`, so we re-derive the matched
-  // element here to know which case we're in.
+  // explicit X button. With lit-html's `@click` wiring, the handler
+  // is bound to BOTH the backdrop and the close button — we use
+  // `e.target === closest('.log-detail-modal')` (strict identity,
+  // so clicks on descendants like the <pre> text body or the JSON
+  // viewer don't bubble up and close the modal) and
+  // `closest('.close-btn')` to detect the two valid close origins.
   if (!e || !e.target) return;
   const target: EventTarget = e.target;
   if (!(target instanceof Element)) return;
   const m: HTMLElement | null = target.closest(".log-detail-modal");
   if (!m) return;
-  const matched: HTMLElement | null = target.closest("[data-action]");
   // Case 1: click was directly on the backdrop (the wrapper itself).
   // Use `target === m` (strict identity) so clicks on descendants
   // like the <pre> text body or the JSON viewer don't bubble up and
   // close the modal — only an actual click on the empty wrapper area
-  // should close it. `target.closest("[data-action]")` would always
-  // return the wrapper for descendants, so we cannot use it here.
-  if (target === m) { m.remove(); return; }
+  // should close it.
+  if (target === m) { removeLogDetailModal(m); return; }
   // Case 2: click was on the explicit X close button in the header.
-  if (matched && matched.classList && matched.classList.contains("close-btn")) {
-    m.remove(); return;
+  const closeBtn: HTMLElement | null = target.closest(".close-btn");
+  if (closeBtn && m.contains(closeBtn)) {
+    removeLogDetailModal(m); return;
   }
   // Case 3: click was inside .modal on something else (tabs, content,
-  // summary, etc.) with a different data-action — do nothing; the
-  // other handler (e.g. logDetailTab) already handled the click.
+  // summary, etc.) with a different click handler — do nothing; the
+  // other handler (e.g. logDetailTabClick) already handled the click.
 }
 
 /// Render the compression savings line for the log detail summary.
@@ -1077,16 +1132,18 @@ export function closeLogDetailModal(e: Event | null): void {
 /// moved into the `title` attribute (hover tooltip) instead of
 /// being rendered as visible text. The Raw tab keeps the
 /// techniques visible because they're useful there.
-function renderCompressionSummary(log: LogDetailLog): string {
+/// Returns null when compression is off (so the summary line is
+/// omitted entirely).
+function renderCompressionSummary(log: LogDetailLog): TemplateResult | null {
   const pct = log.compression_savings_pct ?? null;
-  if (pct == null || pct <= 0) return "";
+  if (pct == null || pct <= 0) return null;
   const tech = log.compression_techniques ?? "";
   const pctRounded = Math.round(pct);
-  const pctText = `-${escapeHtml(String(pctRounded))}%`;
+  const pctText = `-${pctRounded}%`;
   if (tech.length > 0) {
-    return `<div><strong>Compression:</strong> <span title="${escapeHtml(tech)}">${pctText}</span></div>`;
+    return html`<div><strong>Compression:</strong> <span title=${tech}>${pctText}</span></div>`;
   }
-  return `<div><strong>Compression:</strong> ${pctText}</div>`;
+  return html`<div><strong>Compression:</strong> ${pctText}</div>`;
 }
 
 // Update the open log-detail modal with a new row (called from the
@@ -1097,6 +1154,10 @@ export function updateOpenLogDetail(row: LogDetailLog | null | undefined): void 
   if (!row) return;
   const modal: HTMLElement | null = document.querySelector(".log-detail-modal");
   if (!modal) return;
+  // The modal lives inside a wrapper div we created in showLogDetail.
+  // Re-render into the wrapper to let lit-html diff efficiently.
+  const wrapper = modal.parentElement;
+  if (!wrapper) return;
   const sel = state.logs.selectedRow as unknown as (LogDetailLog & { request_id?: string }) | null;
   if (!sel || sel.request_id !== row.request_id) return;
   const merged: Record<string, unknown> = { ...sel } as Record<string, unknown>;
@@ -1104,9 +1165,7 @@ export function updateOpenLogDetail(row: LogDetailLog | null | undefined): void 
     if (v != null) merged[k] = v;
   }
   state.logs.selectedRow = merged as unknown as (typeof state.logs)["selectedRow"];
-  const html: string = renderLogDetailModal(state.logs.selectedRow as unknown as LogDetailLog);
-  modal.outerHTML = html;
-  wireTabClickOnce();
+  render(renderLogDetailModal(state.logs.selectedRow as unknown as LogDetailLog), wrapper);
   initializeLogDetailTabs();
 }
 
@@ -1142,7 +1201,11 @@ export function hasCompleteLogDetail(row: LogDetailLog | null | undefined): bool
  *  x-api-key, etc.) are already redacted by the backend before
  *  the row reaches the dashboard — we don't re-redact here, but
  *  we DO truncate very large bodies (>10 KB) to keep the bundle
- *  copy-pasteable. */
+ *  copy-pasteable.
+ *
+ *  NOTE: This function builds a Markdown STRING, not HTML — it's
+ *  copied to the clipboard, not rendered. Stay with string
+ *  concatenation; do NOT migrate to lit-html. */
 export function buildDebugBundle(log: LogDetailLog): string {
   const lines: string[] = [];
   const detail: Record<string, unknown> = (log.detail as Record<string, unknown>) || {};
@@ -1452,33 +1515,28 @@ export async function copyDebugBundle(): Promise<void> {
 /** Last-resort fallback: show the bundle in a modal window so the
  *  user can manually select and copy the text. Used when both
  *  `navigator.clipboard` and `document.execCommand("copy")` fail
- *  (e.g., very old browsers or strict permission policies). */
+ *  (e.g., very old browsers or strict permission policies).
+ *
+ *  Built with lit-html `render()` instead of `innerHTML` so the
+ *  bundle text is properly escaped (no XSS risk from a body that
+ *  happens to contain HTML characters). */
 function showBundleInModal(bundle: string, headerMessage: string): void {
   // Reuse the modal infrastructure. Build a simple modal with a
   // <pre> containing the bundle and a close button.
-  const modal: HTMLDivElement = document.createElement("div");
-  modal.className = "modal-bg";
-  modal.style.display = "flex";
-  modal.innerHTML = `
-    <div class="modal" style="max-width: 800px; max-height: 80vh; display: flex; flex-direction: column;">
-      <div class="modal-header">
-        <h2>Debug Bundle</h2>
-        <button type="button" class="close-btn" data-action="closeModalBg" aria-label="Close">&times;</button>
-      </div>
-      <div class="modal-body" style="overflow: auto; padding: var(--space-3);">
-        <p class="muted" style="margin-bottom: var(--space-2);">${escapeHtml(headerMessage)}</p>
-        <pre class="json-viewer" style="white-space: pre-wrap; word-break: break-word; user-select: text; cursor: text; padding: var(--space-2); background: var(--color-surface-2); border-radius: var(--radius-sm); font-size: var(--fs-xs);">${escapeHtml(bundle)}</pre>
+  const wrapper = document.createElement("div");
+  document.body.appendChild(wrapper);
+  render(html`
+    <div class="modal-bg" @click=${(e: Event) => { if (e.target === wrapper.firstElementChild) { wrapper.remove(); } }}>
+      <div class="modal" style="max-width: 800px; max-height: 80vh; display: flex; flex-direction: column;">
+        <div class="modal-header">
+          <h2>Debug Bundle</h2>
+          <button type="button" class="close-btn" @click=${() => wrapper.remove()} aria-label="Close">&times;</button>
+        </div>
+        <div class="modal-body" style="overflow: auto; padding: var(--space-3);">
+          <p class="muted" style="margin-bottom: var(--space-2);">${headerMessage}</p>
+          <pre class="json-viewer" style="white-space: pre-wrap; word-break: break-word; user-select: text; cursor: text; padding: var(--space-2); background: var(--color-surface-2); border-radius: var(--radius-sm); font-size: var(--fs-xs);">${bundle}</pre>
+        </div>
       </div>
     </div>
-  `;
-  // Click on backdrop closes the modal.
-  modal.addEventListener("click", (e: MouseEvent) => {
-    if (e.target === modal) modal.remove();
-  });
-  // Close button.
-  const closeBtn: HTMLButtonElement | null = modal.querySelector(".close-btn");
-  if (closeBtn) {
-    closeBtn.addEventListener("click", () => modal.remove());
-  }
-  document.body.appendChild(modal);
+  `, wrapper);
 }

@@ -4,18 +4,33 @@
 // state change (via the parent view's re-render), so it can be a
 // pure function of `state.selectedModels`.
 //
-// Each button is wired through the central data-action shim in
-// handlers/registry.js. No inline onclick, no global functions.
+// Migrated to lit-html: returns a `TemplateResult` and wires the
+// button click handlers directly via `@click` (no more
+// `data-action` / registry dispatch). The handlers live in
+// `handlers/model-handlers.ts`; importing them creates a module
+// cycle, but the cycle is safe because the imported bindings are
+// only referenced at click time (runtime), never at module
+// top-level. The "0 selected" count is patched in place by
+// `updateBulkBar` in model-handlers.ts (same as before).
 
-export function renderBulkActionsBar(providerId: string): string {
-  return `
+import { html, type TemplateResult } from "lit-html";
+import {
+  bulkEnableSelected,
+  bulkDisableSelected,
+  bulkTestSelected,
+  bulkDeleteSelected,
+  clearModelSelection,
+} from "../handlers/model-handlers.js";
+
+export function renderBulkActionsBar(providerId: string): TemplateResult {
+  return html`
     <div class="bulk-actions-bar">
       <span><strong>0</strong> selected</span>
-      <button data-action="bulkEnableSelected" data-arg1="${providerId}">Enable selected</button>
-      <button data-action="bulkDisableSelected" data-arg1="${providerId}">Disable selected</button>
-      <button data-action="bulkTestSelected" data-arg1="${providerId}">Test selected</button>
-      <button class="danger" data-action="bulkDeleteSelected" data-arg1="${providerId}">Delete selected</button>
-      <button class="link" data-action="clearModelSelection">Clear selection</button>
+      <button @click=${() => bulkEnableSelected(providerId)}>Enable selected</button>
+      <button @click=${() => bulkDisableSelected(providerId)}>Disable selected</button>
+      <button @click=${() => bulkTestSelected(providerId)}>Test selected</button>
+      <button class="danger" @click=${() => bulkDeleteSelected(providerId)}>Delete selected</button>
+      <button class="link" @click=${clearModelSelection}>Clear selection</button>
     </div>
   `;
 }

@@ -1,19 +1,23 @@
 // handlers/key-handlers.ts — API key CRUD: create, edit, regen,
 // revoke, delete, toggle expiry, build body. The create/edit
-// modal HTML is built here (kept small, ~70 lines). The form is
-// dispatched via the central data-action shim in app.ts; the form
-// is submitted through `data-action="createKey" data-arg1=...`
-// (or `updateKey` with the key id).
+// modal is rendered here with lit-html. The form is submitted via
+// a direct `@submit` handler (closure-captured `wrapper`).
 //
 // Per spec §3 + §13.8 we do not attach to `window.*`. Functions
 // are exported and registered in handlers/registry.ts.
+//
+// Migrated to lit-html: the create/edit modal is rendered into a
+// wrapper `<div>` under `#modal-root` via `render()`. All
+// `data-action` attributes have been replaced with direct
+// `@click` / `@submit` / `@change` handlers; lit-html auto-escapes
+// the model id / label / scopes so we no longer call `escapeHtml` /
+// `escapeAttr`.
 
 import { state } from "../state/index.js";
 import { api } from "../state/api.js";
-import { escapeHtml, escapeAttr } from "../lib/escape.js";
-import { appendModal } from "../lib/dom.js";
+import { html, render, type TemplateResult } from "lit-html";
 import { showPlaintextKey } from "../components/key-display.js";
-import { renderAllowedModelsChips } from "../components/model-picker.js";
+import { renderAllowedModelsChips, openModelPickerModal } from "../components/model-picker.js";
 import type { Model, ApiKeyId } from "../lib/types/api.js";
 import { requestUpdate } from "../state/reactive.js";
 import { showToast } from "../components/toast.js";
@@ -38,77 +42,15 @@ interface KeyPlaintextResponse {
   key: { label?: string | null; key_prefix?: string | null };
 }
 
-function buildModalHtml({ mode, key }: { mode: "create" | "edit"; key?: KeyRow }): string {
-  const isEdit = mode === "edit" && key;
-  const labelVal = isEdit ? (key.label || "") : "";
-  const scopes = isEdit ? (key.scopes || []) : ["chat"];
-  let allowedModelsValue = "";
-  if (isEdit && Array.isArray(key.allowed_models)) {
-    allowedModelsValue = key.allowed_models.length === 0 ? " " : key.allowed_models.join(",");
+function ensureModalRoot(): HTMLElement {
+  let root = document.getElementById("modal-root");
+  if (!root) {
+    root = document.createElement("div");
+    root.id = "modal-root";
+    root.style.cssText = "position:relative;z-index:1000;";
+    document.body.appendChild(root);
   }
-  const safeKey: KeyRow = key || { id: 0 };
-  const title = isEdit ? `Edit API key #${safeKey.id}` : "Create API key";
-  const formAction = isEdit ? "updateKey" : "createKey";
-  const formExtraArg = isEdit ? ` data-arg1="${escapeAttr(String(safeKey.id))}"` : "";
-  return `
-    <div class="modal-bg" data-action="closeKeyForm" data-arg1="self">
-      <div class="modal">
-        <div class="modal-header">
-          <h2>${escapeHtml(title)}</h2>
-          <button type="button" class="close-btn" data-action="closeKeyForm" data-arg1="self" aria-label="Close">&times;</button>
-        </div>
-        <form data-action="${formAction}"${formExtraArg}>
-          <div class="modal-body">
-            <div class="field">
-              <label for="key-label">Label</label>
-              <input id="key-label" name="label" type="text" placeholder="my-app" value="${escapeAttr(labelVal)}" required>
-            </div>
-            <div class="field">
-              <span class="field-label">Scopes</span>
-              <div class="scopes-list">
-                <label class="scope-item">
-                  <input type="checkbox" name="scopes" value="chat" ${scopes.includes("chat") ? "checked" : ""}>
-                  <div class="scope-info"><strong>chat</strong><small>Can use /v1/chat/completions</small></div>
-                </label>
-                <label class="scope-item">
-                  <input type="checkbox" name="scopes" value="manage" ${scopes.includes("manage") ? "checked" : ""}>
-                  <div class="scope-info"><strong>manage</strong><small>Can use /admin/* (CRUD providers, accounts, etc.)</small></div>
-                </label>
-                <label class="scope-item">
-                  <input type="checkbox" name="scopes" value="read" ${scopes.includes("read") ? "checked" : ""}>
-                  <div class="scope-info"><strong>read</strong><small>Can use analytics endpoints (GET only)</small></div>
-                </label>
-              </div>
-            </div>
-            <div class="field">
-              <span class="field-label">Allowed models (empty = all)</span>
-              <div class="model-picker-display" id="model-picker-display">
-                <span class="muted">all models</span>
-                <button type="button" class="link-btn" data-action="openModelPickerModal">Edit</button>
-              </div>
-              <input type="hidden" name="allowed_models" value="${escapeAttr(allowedModelsValue)}">
-            </div>
-            <div class="field">
-              <label for="key-expires-amount">Expires in</label>
-              <div class="expiry-row">
-                <input id="key-expires-amount" type="number" name="expires_amount" min="1" max="999" placeholder="30" ${isEdit && key.expires_at ? `value="${escapeAttr(String(formatExpiryAmount(key.expires_at)))}"` : ""}>
-                <select name="expires_unit" data-action="toggleExpiryAmount">
-                  <option value="days" ${isEdit && key.expires_at ? "selected" : ""}>days</option>
-                  <option value="months" ${!isEdit || !key.expires_at ? "selected" : ""}>months</option>
-                  <option value="years">years</option>
-                  <option value="never" ${!isEdit || !key.expires_at ? "selected" : ""}>never</option>
-                </select>
-              </div>
-            </div>
-          </div>
-          <div class="modal-footer">
-            <button type="button" data-action="closeKeyForm" data-arg1="self">Cancel</button>
-            <button type="submit" class="primary">${isEdit ? "Save" : "Create key"}</button>
-          </div>
-        </form>
-      </div>
-    </div>
-  `;
+  return root;
 }
 
 function formatExpiryAmount(iso: string): string {
@@ -121,9 +63,93 @@ function formatExpiryAmount(iso: string): string {
   return String(Math.max(1, days));
 }
 
+function keyFormTemplate({ mode, key, wrapper }: { mode: "create" | "edit"; key?: KeyRow; wrapper: HTMLElement }): TemplateResult {
+  const isEdit = mode === "edit" && key;
+  const labelVal = isEdit ? (key!.label || "") : "";
+  const scopes: string[] = isEdit ? (key!.scopes || []) : ["chat"];
+  let allowedModelsValue = "";
+  if (isEdit && Array.isArray(key!.allowed_models)) {
+    allowedModelsValue = key!.allowed_models.length === 0 ? " " : key!.allowed_models.join(",");
+  }
+  const safeKey: KeyRow = key || { id: 0 };
+  const title = isEdit ? `Edit API key #${safeKey.id}` : "Create API key";
+  const submitLabel = isEdit ? "Save" : "Create key";
+  const expiresAt = isEdit ? key!.expires_at : null;
+  const expiryAmountVal = (isEdit && expiresAt) ? formatExpiryAmount(expiresAt) : "";
+  const submitHandler = (e: Event): void => {
+    e.preventDefault();
+    if (isEdit) void updateKey(safeKey.id as number, e, wrapper);
+    else void createKey(e, wrapper);
+  };
+  return html`
+    <div class="modal-bg"
+         @click=${(e: Event) => { if (e.target === e.currentTarget) wrapper.remove(); }}>
+      <div class="modal">
+        <div class="modal-header">
+          <h2>${title}</h2>
+          <button type="button" class="close-btn" @click=${() => wrapper.remove()} aria-label="Close">&times;</button>
+        </div>
+        <form @submit=${submitHandler}>
+          <div class="modal-body">
+            <div class="field">
+              <label for="key-label">Label</label>
+              <input id="key-label" name="label" type="text" placeholder="my-app" .value=${labelVal} required>
+            </div>
+            <div class="field">
+              <span class="field-label">Scopes</span>
+              <div class="scopes-list">
+                <label class="scope-item">
+                  <input type="checkbox" name="scopes" value="chat" .checked=${scopes.includes("chat")}>
+                  <div class="scope-info"><strong>chat</strong><small>Can use /v1/chat/completions</small></div>
+                </label>
+                <label class="scope-item">
+                  <input type="checkbox" name="scopes" value="manage" .checked=${scopes.includes("manage")}>
+                  <div class="scope-info"><strong>manage</strong><small>Can use /admin/* (CRUD providers, accounts, etc.)</small></div>
+                </label>
+                <label class="scope-item">
+                  <input type="checkbox" name="scopes" value="read" .checked=${scopes.includes("read")}>
+                  <div class="scope-info"><strong>read</strong><small>Can use analytics endpoints (GET only)</small></div>
+                </label>
+              </div>
+            </div>
+            <div class="field">
+              <span class="field-label">Allowed models (empty = all)</span>
+              <div class="model-picker-display" id="model-picker-display">
+                <span class="muted">all models</span>
+                <button type="button" class="link-btn" @click=${openModelPickerModal}>Edit</button>
+              </div>
+              <input type="hidden" name="allowed_models" .value=${allowedModelsValue}>
+            </div>
+            <div class="field">
+              <label for="key-expires-amount">Expires in</label>
+              <div class="expiry-row">
+                <input id="key-expires-amount" type="number" name="expires_amount" min="1" max="999" placeholder="30"
+                       .value=${expiryAmountVal}
+                       ?disabled=${!isEdit || !expiresAt}>
+                <select name="expires_unit" @change=${toggleExpiryAmount}>
+                  <option value="days" ?selected=${!!(isEdit && expiresAt)}>days</option>
+                  <option value="months" ?selected=${!isEdit || !expiresAt}>months</option>
+                  <option value="years">years</option>
+                  <option value="never" ?selected=${!isEdit || !expiresAt}>never</option>
+                </select>
+              </div>
+            </div>
+          </div>
+          <div class="modal-footer">
+            <button type="button" @click=${() => wrapper.remove()}>Cancel</button>
+            <button type="submit" class="primary">${submitLabel}</button>
+          </div>
+        </form>
+      </div>
+    </div>
+  `;
+}
+
 export async function showCreateKey(): Promise<void> {
   if (!state.models || state.models.length === 0) state.models = await api("/models") as Model[];
-  appendModal(buildModalHtml({ mode: "create" }));
+  const wrapper = document.createElement("div");
+  ensureModalRoot().appendChild(wrapper);
+  render(keyFormTemplate({ mode: "create", wrapper }), wrapper);
   renderAllowedModelsChips();
 }
 
@@ -136,21 +162,27 @@ export async function showEditKey(id: number): Promise<void> {
     alert("Error: " + msg);
     return;
   }
-  appendModal(buildModalHtml({ mode: "edit", key }));
+  const wrapper = document.createElement("div");
+  ensureModalRoot().appendChild(wrapper);
+  render(keyFormTemplate({ mode: "edit", key, wrapper }), wrapper);
   renderAllowedModelsChips();
 }
 
-// Closes the key form modal. The first arg is a placeholder
-// (data-arg1="self") reserved for future "clicked-by-element"
-// telemetry; the handler finds the modal-bg from the event target.
-export function closeKeyForm(_selfPlaceholder: string, e: Event | null): void {
+// Closes the key form modal. The optional first arg is the legacy
+// `data-arg1="self"` placeholder; the second arg is the DOM event
+// from the central data-action shim. Both are now unused — we
+// remove any key-form modal-bg in the DOM.
+export function closeKeyForm(_selfPlaceholder?: string, e?: Event | null): void {
   const target = e && e.target ? e.target : null;
   const modalBg = target instanceof Element ? target.closest(".modal-bg") : null;
-  if (modalBg) modalBg.remove();
-  else {
+  if (modalBg) {
+    const wrapper = modalBg.parentElement;
+    modalBg.remove();
+    if (wrapper && wrapper.children.length === 0 && wrapper.parentElement?.id === "modal-root") wrapper.remove();
+  } else {
     // Fallback: remove all key-form modals (should only be one).
     document.querySelectorAll(".modal-bg").forEach((el) => {
-      if (el.querySelector('form[data-action="createKey"], form[data-action="updateKey"]')) el.remove();
+      if (el.querySelector("form")) el.remove();
     });
   }
   const picker = document.getElementById("model-picker-modal");
@@ -202,14 +234,15 @@ function buildKeyBodyFromForm(form: HTMLFormElement): KeyBody | null {
   return { label, scopes, allowed_models: allowedModels, expires_at: expiresAt };
 }
 
-export async function createKey(e: Event): Promise<void> {
+export async function createKey(e: Event, wrapper?: HTMLElement): Promise<void> {
   const target = e.target;
   if (!(target instanceof HTMLFormElement)) return;
   const body = buildKeyBodyFromForm(target);
   if (!body) return;
   try {
     const result = await api("/keys", { method: "POST", body: JSON.stringify(body) }) as KeyPlaintextResponse;
-    closeKeyForm("self", { target } as unknown as Event);
+    if (wrapper) wrapper.remove();
+    else closeKeyForm("self", { target } as unknown as Event);
     showPlaintextKey(result.plaintext, result.key);
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);
@@ -217,14 +250,15 @@ export async function createKey(e: Event): Promise<void> {
   }
 }
 
-export async function updateKey(id: number, e: Event): Promise<void> {
+export async function updateKey(id: number, e: Event, wrapper?: HTMLElement): Promise<void> {
   const target = e.target;
   if (!(target instanceof HTMLFormElement)) return;
   const body = buildKeyBodyFromForm(target);
   if (!body) return;
   try {
     await api("/keys/" + id, { method: "PATCH", body: JSON.stringify(body) });
-    closeKeyForm("self", { target } as unknown as Event);
+    if (wrapper) wrapper.remove();
+    else closeKeyForm("self", { target } as unknown as Event);
     state.apiKeys = await api("/keys") as typeof state.apiKeys;
     requestUpdate();
   } catch (err: unknown) {

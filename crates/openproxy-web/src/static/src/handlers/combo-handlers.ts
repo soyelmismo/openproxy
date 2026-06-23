@@ -3,10 +3,17 @@
 // actions live in combo-target-handlers.ts.
 //
 // Per spec §3 + §13.8 we do not attach to `window.*`.
+//
+// Migrated to lit-html: the create-combo modal is rendered into
+// a wrapper `<div>` under `#modal-root` via `render()`. All
+// `data-action` attributes have been replaced with direct
+// `@click` / `@submit` / `@change` handlers; lit-html auto-escapes
+// the combo id / labels so we no longer call `escapeHtml` /
+// `escapeAttr`.
 
 import { state } from "../state/index.js";
 import { api } from "../state/api.js";
-import { appendModal } from "../lib/dom.js";
+import { html, render, type TemplateResult } from "lit-html";
 import type { Combo, CreateComboInput, PriorityMode, CooldownMode } from "../lib/types/api.js";
 import { requestUpdate } from "../state/reactive.js";
 import { showToast } from "../components/toast.js";
@@ -50,30 +57,38 @@ const COOLDOWN_MODE_LABELS: Record<CooldownMode, string> = {
 };
 
 /** Render the priority-mode `<option>`s with the given value preselected. */
-export function priorityModeOptions(selected: PriorityMode): string {
+export function priorityModeOptions(selected: PriorityMode): TemplateResult {
   const modes: PriorityMode[] = ["strict", "lkgp", "weighted", "least_used", "p2c"];
-  return modes.map((m) =>
-    `<option value="${m}"${selected === m ? " selected" : ""}>${PRIORITY_MODE_LABELS[m]}</option>`
-  ).join("");
+  return html`${modes.map((m) => html`<option value=${m} ?selected=${m === selected}>${PRIORITY_MODE_LABELS[m]}</option>`)}`;
 }
 
 /** Render the cooldown-mode `<option>`s with the given value preselected. */
-export function cooldownModeOptions(selected: CooldownMode): string {
+export function cooldownModeOptions(selected: CooldownMode): TemplateResult {
   const modes: CooldownMode[] = ["flat", "exponential"];
-  return modes.map((m) =>
-    `<option value="${m}"${selected === m ? " selected" : ""}>${COOLDOWN_MODE_LABELS[m]}</option>`
-  ).join("");
+  return html`${modes.map((m) => html`<option value=${m} ?selected=${m === selected}>${COOLDOWN_MODE_LABELS[m]}</option>`)}`;
 }
 
-export function showCreateCombo(): void {
-  const html = `
-    <div class="modal-bg" id="create-combo-modal" data-action="closeCreateCombo" data-arg1="self">
+function ensureModalRoot(): HTMLElement {
+  let root = document.getElementById("modal-root");
+  if (!root) {
+    root = document.createElement("div");
+    root.id = "modal-root";
+    root.style.cssText = "position:relative;z-index:1000;";
+    document.body.appendChild(root);
+  }
+  return root;
+}
+
+function createComboTemplate(wrapper: HTMLElement): TemplateResult {
+  return html`
+    <div class="modal-bg" id="create-combo-modal"
+         @click=${(e: Event) => { if (e.target === e.currentTarget) wrapper.remove(); }}>
       <div class="modal">
         <div class="modal-header">
           <h2>New combo</h2>
-          <button type="button" class="close-btn" data-action="closeCreateCombo" aria-label="Close">&times;</button>
+          <button type="button" class="close-btn" @click=${() => wrapper.remove()} aria-label="Close">&times;</button>
         </div>
-        <form data-action="createCombo">
+        <form @submit=${(e: Event) => { e.preventDefault(); void createCombo(e, wrapper); }}>
           <div class="modal-body">
             <div class="field"><label for="combo-name">Name</label><input id="combo-name" name="name" type="text" required></div>
             <div class="field">
@@ -86,54 +101,65 @@ export function showCreateCombo(): void {
             </div>
             <div class="field"><label for="combo-race-size">Race size</label><input id="combo-race-size" name="race_size" type="number" min="1" max="8" value="1"></div>
             <div class="field">
-              <label for="combo-priority-mode"><abbr title="${PRIORITY_MODE_TOOLTIPS.strict}">Priority mode</abbr></label>
-              <select id="combo-priority-mode" name="priority_mode" data-action="onCreatePriorityModeChange">
+              <label for="combo-priority-mode"><abbr title=${PRIORITY_MODE_TOOLTIPS.strict}>Priority mode</abbr></label>
+              <select id="combo-priority-mode" name="priority_mode" @change=${() => onCreatePriorityModeChange()}>
                 ${priorityModeOptions("strict")}
               </select>
             </div>
             <div class="field" id="create-lkgp-fields" style="display: none;">
-              <label for="combo-lkgp-rate"><abbr title="${PARAM_TOOLTIPS.exploration_rate}">Exploration Rate (0.0–1.0)</abbr></label>
+              <label for="combo-lkgp-rate"><abbr title=${PARAM_TOOLTIPS.exploration_rate}>Exploration Rate (0.0–1.0)</abbr></label>
               <input id="combo-lkgp-rate" name="lkgp_exploration_rate" type="number" min="0" max="1" step="0.05" value="0.1">
             </div>
             <div class="field" id="create-window-fields" style="display: none;">
-              <label for="combo-window"><abbr title="${PARAM_TOOLTIPS.window_secs}">Window (s)</abbr></label>
+              <label for="combo-window"><abbr title=${PARAM_TOOLTIPS.window_secs}>Window (s)</abbr></label>
               <input id="combo-window" name="selection_window_secs" type="number" min="1" value="3600">
             </div>
             <div class="field">
-              <label for="combo-cooldown-mode"><abbr title="${COOLDOWN_MODE_TOOLTIPS.flat}">Cooldown mode</abbr></label>
-              <select id="combo-cooldown-mode" name="cooldown_mode" data-action="onCreateCooldownModeChange">
+              <label for="combo-cooldown-mode"><abbr title=${COOLDOWN_MODE_TOOLTIPS.flat}>Cooldown mode</abbr></label>
+              <select id="combo-cooldown-mode" name="cooldown_mode" @change=${() => onCreateCooldownModeChange()}>
                 ${cooldownModeOptions("flat")}
               </select>
             </div>
             <div id="create-cooldown-fields" style="display: none;">
               <div class="field">
-                <label for="combo-cd-base"><abbr title="${PARAM_TOOLTIPS.base_secs}">Base (s)</abbr></label>
+                <label for="combo-cd-base"><abbr title=${PARAM_TOOLTIPS.base_secs}>Base (s)</abbr></label>
                 <input id="combo-cd-base" name="cooldown_base_secs" type="number" min="1" value="60">
               </div>
               <div class="field">
-                <label for="combo-cd-factor"><abbr title="${PARAM_TOOLTIPS.factor}">Factor</abbr></label>
+                <label for="combo-cd-factor"><abbr title=${PARAM_TOOLTIPS.factor}>Factor</abbr></label>
                 <input id="combo-cd-factor" name="cooldown_factor" type="number" min="2" value="2">
               </div>
               <div class="field">
-                <label for="combo-cd-max"><abbr title="${PARAM_TOOLTIPS.max_secs}">Max (s)</abbr></label>
+                <label for="combo-cd-max"><abbr title=${PARAM_TOOLTIPS.max_secs}>Max (s)</abbr></label>
                 <input id="combo-cd-max" name="cooldown_max_secs" type="number" min="1" value="3600">
               </div>
             </div>
           </div>
           <div class="modal-footer">
-            <button type="button" data-action="closeCreateCombo">Cancel</button>
+            <button type="button" @click=${() => wrapper.remove()}>Cancel</button>
             <button type="submit" class="primary">Create</button>
           </div>
         </form>
       </div>
     </div>
   `;
-  appendModal(html);
+}
+
+export function showCreateCombo(): void {
+  const wrapper = document.createElement("div");
+  ensureModalRoot().appendChild(wrapper);
+  render(createComboTemplate(wrapper), wrapper);
 }
 
 export function closeCreateCombo(): void {
   const m = document.getElementById("create-combo-modal");
-  if (m) m.remove();
+  if (m) {
+    const wrapper = m.parentElement;
+    m.remove();
+    if (wrapper && wrapper.children.length === 0 && wrapper.parentElement?.id === "modal-root") {
+      wrapper.remove();
+    }
+  }
 }
 
 /** Show/hide the conditional priority-mode parameter fields in the
@@ -163,7 +189,7 @@ export function onCreateCooldownModeChange(): void {
   if (label) label.setAttribute("title", COOLDOWN_MODE_TOOLTIPS[mode]);
 }
 
-export async function createCombo(e: Event): Promise<void> {
+export async function createCombo(e: Event, wrapper?: HTMLElement): Promise<void> {
   const target = e.target;
   if (!(target instanceof HTMLFormElement)) return;
   const f = new FormData(target);
@@ -212,7 +238,7 @@ export async function createCombo(e: Event): Promise<void> {
   }
   try {
     await api("/combos", { method: "POST", body: JSON.stringify(body) });
-    closeCreateCombo();
+    if (wrapper) wrapper.remove(); else closeCreateCombo();
     requestUpdate();
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);

@@ -6,10 +6,15 @@
 // in handlers/registry.ts exposes each method under a flat name
 // (`oauthStartPKCE`, `oauthStartDeviceCode`,
 // `oauthSubmitManualCallback`).
+//
+// Migrated to lit-html: the device-code panel is rendered with
+// `render(html\`...\`, el)` instead of `el.innerHTML = ...`.
+// lit-html auto-escapes the provider / verification URI / user
+// code, so we no longer call `escapeHtml` / `escapeAttr`.
 
 import { state } from "../state/index.js";
 import { api } from "../state/api.js";
-import { escapeHtml, escapeAttr } from "../lib/escape.js";
+import { html, render } from "lit-html";
 import { requestUpdate } from "../state/reactive.js";
 import { showToast } from "../components/toast.js";
 
@@ -127,16 +132,18 @@ export const OAuthLogin: OAuthLoginShape = {
       if (resp.error) throw new Error(resp.error);
       const deviceInfo = document.getElementById("oauth-device-info");
       if (deviceInfo) {
-        deviceInfo.innerHTML = `
+        const verificationUri = resp.verification_uri || "";
+        const userCode = resp.user_code || "";
+        render(html`
           <div class="device-code-flow">
-            <p>To log in with ${escapeHtml(provider)}:</p>
+            <p>To log in with ${provider}:</p>
             <ol>
-              <li>Open <a href="${escapeAttr(resp.verification_uri || "")}" target="_blank" rel="noopener">${escapeHtml(resp.verification_uri || "")}</a></li>
-              <li>Enter code: <strong class="copy-text">${escapeHtml(resp.user_code || "")}</strong></li>
+              <li>Open <a href=${verificationUri} target="_blank" rel="noopener">${verificationUri}</a></li>
+              <li>Enter code: <strong class="copy-text">${userCode}</strong></li>
             </ol>
             <p class="polling-status">Waiting for authorization...</p>
           </div>
-        `;
+        `, deviceInfo);
         deviceInfo.style.display = "block";
       }
       const pollInterval = setInterval(async () => {

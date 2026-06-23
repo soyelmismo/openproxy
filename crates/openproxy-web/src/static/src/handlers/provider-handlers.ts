@@ -1,23 +1,21 @@
 // handlers/provider-handlers.ts — provider-level handlers.
-import { navigate } from "../state/router.js";
 //
 // Per spec §3 + §13.8 we do not attach to `window.*`. Every
 // function here is exported by name and registered in
 // handlers/registry.ts so the central data-action shim can find
 // it.
 //
-// Naming convention: functions that take an `e` event as a
-// trailing argument (submit handlers) receive the DOM event last
-// in the shim dispatch. Functions that take a single `id`-style
-// argument receive it as `arg1`. Functions that need a button
-// reference (e.g. refreshProvider) take the event element as a
-// trailing argument so they can disable + relabel the button
-// while in flight.
+// Migrated to lit-html: the create-provider modal is rendered
+// into a wrapper `<div>` under `#modal-root` via `render()`. All
+// `data-action` attributes have been replaced with direct
+// `@click` / `@submit` handlers; lit-html auto-escapes the
+// provider id so we no longer call `escapeHtml` / `escapeAttr`.
 
+import { navigate } from "../state/router.js";
 import { state } from "../state/index.js";
 import { api } from "../state/api.js";
+import { html, render, type TemplateResult } from "lit-html";
 import { extractApiErrorMessage } from "../lib/escape.js";
-import { appendModal } from "../lib/dom.js";
 import { QUOTA_CAPABLE_PROVIDERS } from "../lib/constants.js";
 import { syncModelRowActive, updateFilterTabCounts } from "../components/model-table.js";
 import { requestUpdate } from "../state/reactive.js";
@@ -26,6 +24,17 @@ import { showToast } from "../components/toast.js";
 interface RefreshResult {
   models_refreshed?: number;
   new_model_ids?: string[];
+}
+
+function ensureModalRoot(): HTMLElement {
+  let root = document.getElementById("modal-root");
+  if (!root) {
+    root = document.createElement("div");
+    root.id = "modal-root";
+    root.style.cssText = "position:relative;z-index:1000;";
+    document.body.appendChild(root);
+  }
+  return root;
 }
 
 // Briefly paint a button a colour to confirm a click landed.
@@ -116,15 +125,16 @@ export async function refreshAllProviders(): Promise<void> {
 
 // ===== Create provider =====
 
-export function showCreateProvider(): void {
-  const html = `
-    <div class="modal-bg" id="create-provider-modal" data-action="closeCreateProvider" data-arg1="self">
+function createProviderTemplate(wrapper: HTMLElement): TemplateResult {
+  return html`
+    <div class="modal-bg" id="create-provider-modal"
+         @click=${(e: Event) => { if (e.target === e.currentTarget) wrapper.remove(); }}>
       <div class="modal">
         <div class="modal-header">
           <h2>New provider</h2>
-          <button type="button" class="close-btn" data-action="closeCreateProvider" aria-label="Close">&times;</button>
+          <button type="button" class="close-btn" @click=${() => wrapper.remove()} aria-label="Close">&times;</button>
         </div>
-        <form data-action="createProvider">
+        <form @submit=${(e: Event) => { e.preventDefault(); void createProvider(e, wrapper); }}>
           <div class="modal-body">
             <div class="field">
               <label for="provider-id">ID</label>
@@ -155,26 +165,33 @@ export function showCreateProvider(): void {
             </div>
           </div>
           <div class="modal-footer">
-            <button type="button" data-action="closeCreateProvider">Cancel</button>
+            <button type="button" @click=${() => wrapper.remove()}>Cancel</button>
             <button type="submit" class="primary">Create</button>
           </div>
         </form>
       </div>
     </div>
   `;
-  // Mount on <body> via appendModal (not #main) so the 3s background
-  // poll doesn't destroy the form mid-edit. See lib/dom.ts appendModal.
-  appendModal(html);
+}
+
+export function showCreateProvider(): void {
+  const wrapper = document.createElement("div");
+  ensureModalRoot().appendChild(wrapper);
+  render(createProviderTemplate(wrapper), wrapper);
 }
 
 export function closeCreateProvider(): void {
   const m = document.getElementById("create-provider-modal");
-  if (m) m.remove();
+  if (m) {
+    const wrapper = m.parentElement;
+    m.remove();
+    if (wrapper && wrapper.children.length === 0 && wrapper.parentElement?.id === "modal-root") {
+      wrapper.remove();
+    }
+  }
 }
 
-export async function createProvider(e: Event): Promise<void> {
-  // The submit shim already called preventDefault(); we don't have
-  // to do it again. The form is `e.target`.
+export async function createProvider(e: Event, wrapper?: HTMLElement): Promise<void> {
   const target = e.target;
   if (!(target instanceof HTMLFormElement)) return;
   const f = new FormData(target);
@@ -186,7 +203,7 @@ export async function createProvider(e: Event): Promise<void> {
     // Close the modal FIRST — the POST succeeded, the provider is
     // persisted. If the subsequent GET refresh fails (transient
     // network blip), the next bg-poll will pick up the new row.
-    closeCreateProvider();
+    if (wrapper) wrapper.remove(); else closeCreateProvider();
     state.providers = await api("/providers") as typeof state.providers;
     navigate();
   } catch (err: unknown) {
