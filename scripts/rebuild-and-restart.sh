@@ -71,7 +71,19 @@ if [[ -d "$WEB_CRATE_DIR" && -f "$WEB_CRATE_DIR/package.json" ]]; then
     die "pnpm no está en PATH; instalá con 'npm i -g pnpm' o 'corepack enable' (o agregá /root/.hermes/node/bin a PATH) y reintentá"
   fi
   log "pnpm install --frozen-lockfile  (en $WEB_CRATE_DIR)"
-  (cd "$WEB_CRATE_DIR" && pnpm install --frozen-lockfile)
+  PNPM_ERR=$(mktemp)
+  if ! (cd "$WEB_CRATE_DIR" && pnpm install --frozen-lockfile) >"$PNPM_ERR" 2>&1; then
+    if grep -q "ERR_PNPM_OUTDATED_LOCKFILE" "$PNPM_ERR"; then
+      log "⚠️  lockfile desincronizado con package.json — actualizando con --no-frozen-lockfile"
+      log "    (committeá el pnpm-lock.yaml actualizado junto al package.json)"
+      (cd "$WEB_CRATE_DIR" && pnpm install --no-frozen-lockfile)
+    else
+      cat "$PNPM_ERR" >&2
+      rm -f "$PNPM_ERR"
+      die "pnpm install --frozen-lockfile falló"
+    fi
+  fi
+  rm -f "$PNPM_ERR"
   log "pnpm build  (tsc emite a $WEB_CRATE_DIR/src/static/dist/)"
   (cd "$WEB_CRATE_DIR" && pnpm build)
   # Sanity check: 3 archivos críticos que el HTML flipado va a pedir.
