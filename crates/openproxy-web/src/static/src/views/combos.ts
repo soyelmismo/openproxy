@@ -237,7 +237,30 @@ function renderTargetRow(t: ComboTargetWithModel, showWeight: boolean): Template
   const accountCell = isSub ? html`<em>n/a</em>` : (t.account_id ? html`#${t.account_id}` : html`<em>rotate</em>`);
   const contextCell = isSub ? html`<em>sub-combo</em>` : (t.context_length != null ? html`<span title=${String(t.context_length)}>${formatTokens(t.context_length)}</span>` : html`—`);
   const weightCell = showWeight ? (isSub ? html`<td><em>n/a</em></td>` : html`<td><input type="number" min="1" .value=${String(t.weight ?? 1)} @change=${(e: Event) => onUpdateTargetWeight(t.id, e)} @input=${(e: Event) => onUpdateTargetWeight(t.id, e)} class="cw-input weight-input" title=${PARAM_TOOLTIPS.weight}></td>`) : html``;
-  return html`<tr draggable="true" data-drag-id=${String(t.id)}>
+  return html`<tr draggable="true" data-drag-id=${String(t.id)}
+    @dragstart=${(e: DragEvent) => { e.dataTransfer?.setData("text/plain", String(t.id)); (e.target as HTMLElement).classList.add("dragging"); }}
+    @dragend=${(e: DragEvent) => { (e.target as HTMLElement).classList.remove("dragging"); }}
+    @dragover=${(e: DragEvent) => { e.preventDefault(); const tr = (e.currentTarget as HTMLElement); tr.classList.add("drag-over"); }}
+    @dragleave=${(e: DragEvent) => { (e.currentTarget as HTMLElement).classList.remove("drag-over"); }}
+    @drop=${async (e: DragEvent) => {
+      e.preventDefault();
+      (e.currentTarget as HTMLElement).classList.remove("drag-over");
+      const draggedId = parseInt(e.dataTransfer?.getData("text/plain") || "0", 10);
+      if (!draggedId || draggedId === t.id || !detailComboId) return;
+      // Reorder: move draggedId to the position of t.id
+      const ordered = [...detailTargets].sort((a, b) => a.priority_order - b.priority_order);
+      const fromIdx = ordered.findIndex((x) => x.id === draggedId);
+      const toIdx = ordered.findIndex((x) => x.id === t.id);
+      if (fromIdx < 0 || toIdx < 0) return;
+      const [moved] = ordered.splice(fromIdx, 1);
+      ordered.splice(toIdx, 0, moved!);
+      try {
+        await api(`/combos/${detailComboId}/targets/reorder`, { method: "POST", body: JSON.stringify({ target_ids: ordered.map((x) => x.id) }) });
+        detailTargets = await api(`/combos/${detailComboId}/targets`) as ComboTargetWithModel[];
+        requestUpdate();
+      } catch (err: unknown) { showToast("Reorder failed: " + (err instanceof Error ? err.message : String(err)), "error"); }
+    }}
+  >
     <td class="drag-handle" title="Drag to reorder">⠿</td><td>${t.priority_order}</td><td>${providerCell}</td><td>${accountCell}</td><td>${modelCell}</td><td>${contextCell}</td>${weightCell}
     <td>${!isSub ? html`<button class="small" title="Test this model" @click=${() => onTestTarget(t.id, t.model_row_id)}>🧪</button>` : html``}<button class="small" @click=${() => onChangePriority(t.id, -1)}>↑</button><button class="small" @click=${() => onChangePriority(t.id, 1)}>↓</button>${t.in_cooldown && !isSub ? html`<button class="small" title="Clear cooldown" @click=${() => onResetCooldown(t.id)}>🔄</button>` : html``}<button class="small danger" @click=${() => onDeleteTarget(t.id)}>×</button></td>
   </tr>`;

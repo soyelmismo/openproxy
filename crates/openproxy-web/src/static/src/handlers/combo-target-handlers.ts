@@ -741,7 +741,11 @@ export async function addTarget(comboId: number, e: Event, wrapper?: HTMLElement
   // WARNING FIX W1: assign incrementing priorities: basePriority + index
   for (let i = 0; i < modelRowIds.length; i++) {
     const modelRowId = modelRowIds[i]!;
-    const providerForModel = rowIdToProvider.get(modelRowId) ?? fallbackProviderId;
+    const providerForModel = rowIdToProvider.get(modelRowId) ?? fallbackProviderId ?? "";
+    if (!providerForModel) {
+      errors.push(`Model row #${modelRowId}: could not determine provider — select a provider in the dropdown or ensure the model exists in the models cache.`);
+      continue;
+    }
     const body = {
       provider_id: providerForModel,
       account_id: accountId,
@@ -760,26 +764,36 @@ export async function addTarget(comboId: number, e: Event, wrapper?: HTMLElement
 
   // WARNING FIX W2: show errors BEFORE closing modal, only close on success
   if (errors.length > 0 && added > 0) {
-    alert(`Added ${added} target(s), but ${errors.length} failed:\n${errors.join("\n")}`);
+    showToast(`Added ${added} target(s), but ${errors.length} failed: ${errors.join("; ")}`, "warning");
     if (wrapper) wrapper.remove(); else closeAddTarget();
   } else if (errors.length > 0) {
-    alert(`All ${errors.length} target(s) failed:\n${errors.join("\n")}`);
+    showToast(`All ${errors.length} target(s) failed: ${errors.join("; ")}`, "error");
     // Don't close — let user retry
   } else {
+    showToast(`Added ${added} target(s) successfully.`, "success");
     if (wrapper) wrapper.remove(); else closeAddTarget();
   }
 
-  requestUpdate();
+  // Re-fetch the combo's targets so the table reflects the new entries.
+  // The combo detail view reads from a local `detailTargets` array that
+  // is NOT in the global `state` — calling `requestUpdate()` alone won't
+  // refresh it. We need to navigate to re-mount the view, which re-fetches.
+  // The cleanest way: set the hash to the same combo detail URL, which
+  // triggers a re-mount via the router.
+  if (added > 0 && comboId) {
+    setTimeout(() => { location.hash = `#/combos/${comboId}`; }, 50);
+  }
 }
 
 export async function deleteTarget(comboId: number, targetId: number): Promise<void> {
   if (!confirm("Delete target " + targetId + "?")) return;
   try {
     await api(`/combos/${comboId}/targets/${targetId}`, { method: "DELETE" });
-    requestUpdate();
+    showToast("Target deleted.", "success");
+    // Re-mount the combo detail view to refresh the targets table.
+    setTimeout(() => { location.hash = `#/combos/${comboId}`; }, 50);
   } catch (e: unknown) {
-    const msg = e instanceof Error ? e.message : String(e);
-    alert("Error: " + msg);
+    showToast("Error: " + (e instanceof Error ? e.message : String(e)), "error");
   }
 }
 

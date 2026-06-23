@@ -1310,6 +1310,8 @@ table td { border-color: var(--color-border-soft) !important; }
 /* Drag handle */
 .drag-handle { cursor: grab; color: var(--color-text-muted); user-select: none; }
 .drag-handle:active { cursor: grabbing; }
+tr.dragging { opacity: 0.4; }
+tr.drag-over { border-top: 2px solid var(--color-primary); }
 
 /* abbr tooltips */
 abbr {
