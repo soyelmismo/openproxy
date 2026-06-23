@@ -464,14 +464,26 @@ fn find_safe_split_point(input: &str) -> usize {
     // Check from the longest possible partial down to 1.
     let check_len = std::cmp::min(max_tag_len - 1, input.len());
     for partial_len in (1..=check_len).rev() {
-        let tail = &lower[input.len() - partial_len..];
+        let split_byte = input.len() - partial_len;
+        // CRITICAL: `split_byte` must be a UTF-8 char boundary,
+        // otherwise `&lower[split_byte..]` panics with "byte index
+        // N is not a char boundary". This happens when the content
+        // contains multi-byte characters (é, ×, emojis, etc.) and
+        // `partial_len` falls in the middle of one. All tag
+        // prefixes are pure ASCII (`<`, `<t`, `<th`, etc.), so a
+        // non-char-boundary split can NEVER match a tag prefix —
+        // skip it and try the next shorter prefix.
+        if !lower.is_char_boundary(split_byte) {
+            continue;
+        }
+        let tail = &lower[split_byte..];
         // Check if this tail is a prefix of any opening tag.
         if THINK_OPEN_TAGS.iter().any(|tag| {
             let tag_lower = tag.to_ascii_lowercase();
             tag_lower.starts_with(tail)
         }) {
             // The tail might be the start of a tag — split before it.
-            return input.len() - partial_len;
+            return split_byte;
         }
     }
     input.len()
@@ -484,9 +496,16 @@ fn find_safe_split_point_close(input: &str, close_tag_lower: &str) -> usize {
     let lower = input.to_ascii_lowercase();
     let check_len = std::cmp::min(close_tag_lower.len() - 1, input.len());
     for partial_len in (1..=check_len).rev() {
-        let tail = &lower[input.len() - partial_len..];
+        let split_byte = input.len() - partial_len;
+        // CRITICAL: same UTF-8 char boundary check as
+        // `find_safe_split_point` — without this, multi-byte
+        // content causes a panic.
+        if !lower.is_char_boundary(split_byte) {
+            continue;
+        }
+        let tail = &lower[split_byte..];
         if close_tag_lower.starts_with(tail) {
-            return input.len() - partial_len;
+            return split_byte;
         }
     }
     input.len()
@@ -766,5 +785,68 @@ mod tests {
         let (c3, r3) = ext.process("</think>The answer is 42.");
         assert_eq!(c3, "The answer is 42.");
         assert_eq!(r3, "");
+    }
+
+    // -----------------------------------------------------------------
+    // Regression: multi-byte UTF-8 content (é, ×, emojis, CJK, etc.)
+    // must NOT panic the find_safe_split_point / find_safe_split_point_close
+    // functions. Previously, a chunk ending with a multi-byte char
+    // whose byte length didn't align with the tag prefix length would
+    // cause `&lower[input.len() - partial_len..]` to panic with
+    // "byte index N is not a char boundary" — killing the streaming
+    // task and leaving the dashboard with a ghost in-flight row that
+    // never resolved (no usage row, no terminal stage event).
+    // -----------------------------------------------------------------
+    #[test]
+    fn stream_multibyte_content_does_not_panic() {
+        let mut ext = ThinkStreamExtractor::new();
+        // Content with multi-byte chars: × (2 bytes), é (2 bytes),
+        // and a CJK char (3 bytes). The find_safe_split_point function
+        // scans partial tag prefixes from the end of the string; with
+        // multi-byte chars at the end, some partial_len values land
+        // inside a char and must be skipped, not sliced.
+        let (c, _r) = ext.process("35 × 63 = 2205");
+        assert!(!c.is_empty(), "content should pass through");
+    }
+
+    #[test]
+    fn stream_multibyte_inside_think_block_does_not_panic() {
+        let mut ext = ThinkStreamExtractor::new();
+        ext.process("<think>");
+        // Multi-byte chars inside a think block — the
+        // find_safe_split_point_close function scans for the close
+        // tag prefix and must skip non-char-boundary offsets.
+        let (_c, r) = ext.process("calculating 35 × 63");
+        assert!(r.contains("×"), "multi-byte char should be in reasoning");
+    }
+
+    #[test]
+    fn stream_emoji_at_end_does_not_panic() {
+        let mut ext = ThinkStreamExtractor::new();
+        // Emoji (4 bytes) at the end — the worst case for
+        // find_safe_split_point because partial_len values 1, 2, 3
+        // all land inside the emoji.
+        let (c, _r) = ext.process("The answer is 42 🎉");
+        assert!(c.contains("🎉"), "emoji should pass through");
+    }
+
+    #[test]
+    fn find_safe_split_point_with_multibyte_tail() {
+        // Direct test of the function that was panicking.
+        // "35 × 63" — the × is at bytes 3..5 (2 bytes).
+        // partial_len=1 → byte 6 (ok, '3'), partial_len=2 → byte 5
+        // (NOT a char boundary, inside ×), partial_len=3 → byte 4
+        // (ok, start of ×), etc. The function must skip byte 5.
+        let result = find_safe_split_point("35 × 63");
+        // No tag prefix matches, so it should return the full length.
+        assert_eq!(result, 8);
+    }
+
+    #[test]
+    fn find_safe_split_point_close_with_multibyte_tail() {
+        // Direct test of find_safe_split_point_close with multi-byte
+        // content at the end.
+        let result = find_safe_split_point_close("35 × 63", "</think>");
+        assert_eq!(result, 8);
     }
 }

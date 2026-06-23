@@ -3447,7 +3447,18 @@ impl Pipeline {
                             )
                         }
                     };
-                    return self.record_and_fail(
+                    // Mark the accumulator as partial (the stream was
+                    // interrupted by an error) and pass it down so the
+                    // partial response is persisted. We take a reference
+                    // to the accumulator's inner value after marking it.
+                    let acc_ref: Option<&crate::sse_accumulator::ResponseAccumulator> = match &mut acc {
+                        Some(a) => {
+                            a.mark_partial();
+                            Some(&*a)
+                        }
+                        None => None,
+                    };
+                    return self.record_and_fail_with_trace_id_and_partial(
                         req,
                         combo,
                         target,
@@ -3460,8 +3471,10 @@ impl Pipeline {
                         connect_ms: Some(connect_and_send_ms),
                         ttft_ms,
                         status_code: err.http_status(),
-},
-);
+                        },
+                        trace_id,
+                        acc_ref, Some(&chunk_id), created, &model_name,
+                    );
                 }
             };
 
