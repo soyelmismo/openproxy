@@ -15,8 +15,5 @@
     "@playwright/test": "^1.60.0",
     "@types/node": "^22.19.21",
     "typescript": "5.6.3"
-  },
-  "dependencies": {
-    "lit-html": "^3.3.3"
   }
 }

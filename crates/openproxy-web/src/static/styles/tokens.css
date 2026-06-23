@@ -137,7 +137,7 @@
   --border-w-2:   2px;
   --border-style: solid;
 
-  /* ----- Transitions — smooth, not instant ----- */
+  /* ----- Transitions — smooth ----- */
   --t-fast:  120ms ease;
   --t-base:  200ms ease;
 
