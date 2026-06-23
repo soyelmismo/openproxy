@@ -13,6 +13,8 @@ import { state } from "../state/index.js";
 import { api } from "../state/api.js";
 import { mountView, requestUpdate } from "../state/reactive.js";
 import { showToast } from "../components/toast.js";
+import { showCreateCombo } from "../handlers/combo-handlers.js";
+import { showAddTarget } from "../handlers/combo-target-handlers.js";
 import type {
   Combo,
   ComboTargetWithModel,
@@ -248,7 +250,7 @@ function renderComboDetail(): TemplateResult {
     ${renderPriorityModeBar(combo)}${renderCooldownBar(combo)}
     ${cds.length > 0 ? html`<div class="cooldown-banner">⏸ ${cds.length} of ${targets.length} target(s) in cooldown — engine will skip them.</div>` : html``}
     <section class="detail-section"><div class="section-header"><h3>Targets (${targets.length})</h3>
-      <button class="primary" @click=${() => { location.hash = "#/combos/" + combo.id + "/add-target"; }}>+ Add target</button></div>
+      <button class="primary" @click=${() => showAddTarget(combo.id)}>+ Add target</button></div>
       ${targets.length === 0 ? html`<p class="empty">No targets. Add a target to start routing.</p>` : html`<table>
         <thead><tr><th></th><th>#</th><th>Provider</th><th>Account</th><th>Model</th><th>Context</th>${weightTh}<th>Actions</th></tr></thead>
         <tbody>${targets.map((t) => renderTargetRow(t, showWeight))}</tbody></table>`}
@@ -257,7 +259,7 @@ function renderComboDetail(): TemplateResult {
 
 function renderComboGrid(): TemplateResult {
   const list = state.combos || [];
-  return html`<div class="page-header"><h2>Combos</h2><div class="actions"><button class="primary" @click=${() => { location.hash = "#/combos/new"; }}>+ Create combo</button></div></div>
+  return html`<div class="page-header"><h2>Combos</h2><div class="actions"><button class="primary" @click=${() => showCreateCombo()}>+ Create combo</button></div></div>
     ${list.length === 0 ? html`<p class="empty">No combos yet. Create one to start routing.</p>` : html`<div class="combo-grid">${list.map((c) => {
       const pm = priorityModeOf(c);
       const pmChip = pm === "strict" ? html`` : html` · <span class="chip">${PRIORITY_MODE_LABELS[pm]}</span>`;
