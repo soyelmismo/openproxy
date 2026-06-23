@@ -677,6 +677,14 @@ function reapStaleInflight(): void {
         timestamp: new Date().toISOString(),
       };
       setStage(synth, placeholder.request_id);
+      // Bug fix: also update the placeholder's status_code and
+      // error_message so the table and modal show consistent state.
+      // Previously the placeholder kept its old status_code (200 from
+      // the "streaming" stage) while the stage map said "cancelled /
+      // 499" — the table showed "FALLÓ" (from the stage) but the
+      // modal showed "200" (from the placeholder's status_code).
+      placeholder.status_code = 499;
+      placeholder.error_message = "Stream stalled — no response from upstream for 120s. The request was cancelled by the stale-inflight reaper.";
       reaped = true;
     }
   };
