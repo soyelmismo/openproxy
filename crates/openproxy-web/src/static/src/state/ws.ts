@@ -77,9 +77,45 @@ export function connectLogsWebSocket(): void {
   }
   setLogsStatus(state.logs.reconnectAttempt === 0 ? "connecting" : "reconnecting");
   const ws: WebSocket = new WebSocket(logsWsUrl());
+  // Heartbeat: send a ping every 15s. The server responds with a
+  // pong. If we don't receive a pong within 30s (2 intervals), we
+  // consider the connection dead and force-close it. This detects
+  // half-open TCP connections (common when the network changes,
+  // laptop sleeps/wakes, or a proxy silently drops the WS) that
+  // would otherwise leave the dashboard "connected" but receiving
+  // no events — the exact "deja de sincronizarse" symptom.
+  let lastPong: number = Date.now();
+  const heartbeatHandle: ReturnType<typeof setInterval> = setInterval(() => {
+    if (state.logs.ws !== ws) {
+      clearInterval(heartbeatHandle);
+      return;
+    }
+    if (ws.readyState !== WebSocket.OPEN) {
+      clearInterval(heartbeatHandle);
+      return;
+    }
+    // If we haven't received a pong in 30s, the connection is
+    // probably half-open. Force-close it; the close handler will
+    // trigger a reconnect.
+    if (Date.now() - lastPong > 30_000) {
+      console.warn("[openproxy] live-logs WS heartbeat timeout — no pong in 30s, forcing reconnect");
+      try { ws.close(); } catch (_e: unknown) { /* already closed */ }
+      clearInterval(heartbeatHandle);
+      return;
+    }
+    try {
+      ws.send(JSON.stringify({ type: "ping" }));
+    } catch (_e: unknown) {
+      // Send failed — connection is broken. The close handler
+      // will trigger a reconnect.
+      clearInterval(heartbeatHandle);
+    }
+  }, 15_000);
+
   ws.addEventListener("open", () => {
     if (state.logs.ws !== ws) return;
     state.logs.reconnectAttempt = 0;
+    lastPong = Date.now();
     setLogsStatus("connected");
     if (state.logs.lastSeenId > 0) {
       ws.send(JSON.stringify({ type: "subscribe", since_id: state.logs.lastSeenId }));
@@ -87,25 +123,19 @@ export function connectLogsWebSocket(): void {
   });
   ws.addEventListener("message", (event: MessageEvent) => {
     if (state.logs.ws !== ws) return;
+    // Track pong responses for the heartbeat. Any message from the
+    // server means the connection is alive — not just pongs.
+    lastPong = Date.now();
     if (typeof messageHandler !== "function") return;
     // CRITICAL: wrap the entire handler in try/catch. Without this,
     // a single malformed WS message (e.g. an unexpected null field
     // in a usage row) would throw out of `messageHandler`, leave
     // `state.logs` in an inconsistent mid-update state, and any
     // subsequent WS messages would be queued behind the broken
-    // listener invocation — manifesting as "second request doesn't
-    // appear in real-time after a failure". The DOM spec doesn't
-    // close the WS on an uncaught exception in an event listener,
-    // but it DOES skip any remaining work in that listener
-    // invocation, and the cascade of inconsistent state can break
-    // subsequent renders. Catching here keeps the listener alive
-    // and logs the failure for debugging.
+    // listener invocation.
     try {
       messageHandler(event);
     } catch (err) {
-      // Log to console with a snippet of the message data for
-      // debugging, but don't rethrow — the next WS message must
-      // be allowed to process normally.
       const snippet: string = typeof event.data === "string"
         ? event.data.slice(0, 200)
         : String(event.data).slice(0, 200);
@@ -114,18 +144,12 @@ export function connectLogsWebSocket(): void {
   });
   ws.addEventListener("close", () => {
     if (state.logs.ws !== ws) return;
+    clearInterval(heartbeatHandle);
     setLogsStatus("disconnected");
     scheduleLogsReconnect();
   });
   ws.addEventListener("error", () => {
     if (state.logs.ws !== ws) return;
-    // `__logMsgTrace` is an opt-in debug flag set by the host page
-    // for verbose logging. Not part of the Window type, so we read
-    // it through a narrow local cast.
-    const traceFlag: unknown = (window as unknown as Record<string, unknown>)["__logMsgTrace"];
-    if (typeof traceFlag !== "undefined") {
-      // The error is fine — the close event will follow.
-    }
     ws.close();
   });
   state.logs.ws = ws;

@@ -1863,9 +1863,14 @@ pub async fn admin_auth_middleware(
 /// being drained into the mpsc buffer (capacity below), which buys
 /// the browser time to catch up without dropping anything.
 ///
-/// 512 × ~256 B (avg WS message size) ≈ ~128 KB — a trivial amount
+/// 2048 × ~256 B (avg WS message size) ≈ ~512 KB — a trivial amount
 /// of memory that buys us minutes of browser-side stall tolerance.
-const WS_OUTBOX_CAPACITY: usize = 512;
+/// Was 512 (128 KB), which was too small for bursts of stage events
+/// during multi-target races or rapid-fire streaming. When the outbox
+/// filled, the receiver loop blocked on `send().await` (after the
+/// fix), which is correct — but a larger buffer means fewer blocking
+/// events and smoother real-time delivery.
+const WS_OUTBOX_CAPACITY: usize = 2048;
 
 async fn stream_usage_rows(
     socket: WebSocket,
@@ -1970,15 +1975,77 @@ async fn stream_usage_rows(
         // 4. Event loop — usage_rx and stage_rx are already
         //    subscribed above, before the history query. The
         //    outbox decouples this loop from the WS sender task.
+        //
+        // `biased` ensures the broadcast channels (stage + usage)
+        // are polled BEFORE the ws_receiver. The ws_receiver almost
+        // never has messages (only ping/subscribe from the client,
+        // which are rare), so polling it first wastes a branch on
+        // every iteration. More importantly, when the browser is
+        // slow and the outbox backs up, we want to prioritize
+        // draining the broadcast channels (which have a fixed
+        // capacity and will lag if not drained) over reading
+        // client messages (which can wait indefinitely).
         loop {
             tokio::select! {
+                biased;
+                // Stage events FIRST — these carry the "in progress"
+                // status the operator needs to see in real time. They
+                // are the most frequent and most time-sensitive.
+                stage = stage_rx.recv() => {
+                    match stage {
+                        Ok(event) => {
+                            outbox_send(&outbox_tx, json!({ "type": "stage", "data": event })).await;
+                        }
+                        Err(tokio::sync::broadcast::error::RecvError::Lagged(skipped)) => {
+                            outbox_try_send(&outbox_tx, json!({
+                                "type": "lag_warning",
+                                "skipped": skipped,
+                                "message": format!(
+                                    "stage broadcast channel lagged; {} event(s) skipped",
+                                    skipped
+                                ),
+                            })).await;
+                            outbox_send(&outbox_tx, json!({ "type": "resync", "since_id": last_known_id })).await;
+                        }
+                        Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                    }
+                }
+                // Usage rows SECOND — these are the terminal "row"
+                // events published when a request completes. Less
+                // frequent than stage events but still critical.
+                usage = usage_rx.recv() => {
+                    match usage {
+                        Ok(row) => {
+                            if row.id.0 > last_known_id {
+                                last_known_id = row.id.0;
+                            }
+                            outbox_send(&outbox_tx, json!({ "type": "row", "data": row })).await;
+                        }
+                        Err(tokio::sync::broadcast::error::RecvError::Lagged(skipped)) => {
+                            outbox_try_send(&outbox_tx, json!({
+                                "type": "lag_warning",
+                                "skipped": skipped,
+                                "message": format!(
+                                    "broadcast channel lagged; {} row(s) skipped",
+                                    skipped
+                                ),
+                            })).await;
+                            outbox_send(&outbox_tx, json!({ "type": "resync", "since_id": last_known_id })).await;
+                        }
+                        Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                    }
+                }
+                // WS receiver LAST — client messages (subscribe, ping)
+                // are rare and can tolerate delay. Prioritizing the
+                // broadcast channels ensures we never miss a stage
+                // event because we were busy reading a ping.
                 incoming = ws_receiver.next() => {
                     match incoming {
                         Some(Ok(Message::Text(text))) => {
                             let msg: ClientWsMessage = match serde_json::from_str(&text) {
                                 Ok(msg) => msg,
                                 Err(e) => {
-                                    outbox_send(&outbox_tx, json!({
+                                    outbox_try_send(&outbox_tx, json!({
                                         "type": "error",
                                         "message": format!("invalid client message: {e}"),
                                     })).await;
@@ -1993,13 +2060,7 @@ async fn stream_usage_rows(
                                         .unwrap_or(0)
                                         .clamp(0, USAGE_RECENT_MAX_SINCE_ID);
                                     let rows: Vec<usage::RecentUsageRow> = {
-                                        // Read-only SELECT — use the READER.
                                         let r = state.db_pool().reader();
-                                        // SEC-MEDIUM-C fix: strip the heavy request/response
-                                        // fields from the initial history batch — the
-                                        // publisher already redacts the per-event broadcast,
-                                        // but `recent()` still returns the full rows so
-                                        // this initial replay matched the publisher.
                                         let rows = match usage::recent(&r, since_id, 100) {
                                             Ok(v) => v,
                                             Err(e) => {
@@ -2019,10 +2080,10 @@ async fn stream_usage_rows(
                                 }
                                 "ping" => {
                                     let now_str = chrono::Utc::now().to_rfc3339();
-                                    outbox_send(&outbox_tx, json!({ "type": "pong", "server_time": now_str })).await;
+                                    outbox_try_send(&outbox_tx, json!({ "type": "pong", "server_time": now_str })).await;
                                 }
                                 _ => {
-                                    outbox_send(&outbox_tx, json!({
+                                    outbox_try_send(&outbox_tx, json!({
                                         "type": "error",
                                         "message": format!("unknown message type: {}", msg.msg_type),
                                     })).await;
@@ -2036,73 +2097,6 @@ async fn stream_usage_rows(
                             break;
                         }
                         None => break,
-                    }
-                }
-                // New row (final): published by `cost::record` after
-                // the request finishes and the usage row is committed.
-                usage = usage_rx.recv() => {
-                    match usage {
-                        Ok(row) => {
-                            if row.id.0 > last_known_id {
-                                last_known_id = row.id.0;
-                            }
-                            outbox_send(&outbox_tx, json!({ "type": "row", "data": row })).await;
-                        }
-                        // H7 fix: instead of a fatal `error`
-                        // envelope that the dashboard could only
-                        // show as a toast, emit a `resync`
-                        // envelope with the last id we have
-                        // already streamed. The frontend calls
-                        // `usage::recent(since_id=last_known_id, ...)`
-                        // to catch up. We also keep the
-                        // `lag_warning` envelope as a fallback so
-                        // an old client can still surface the
-                        // gap in the UI.
-                        Err(tokio::sync::broadcast::error::RecvError::Lagged(skipped)) => {
-                            outbox_send(&outbox_tx, json!({
-                                "type": "lag_warning",
-                                "skipped": skipped,
-                                "message": format!(
-                                    "broadcast channel lagged; {} row(s) skipped",
-                                    skipped
-                                ),
-                            })).await;
-                            outbox_send(&outbox_tx, json!({ "type": "resync", "since_id": last_known_id })).await;
-                        }
-                        Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
-                    }
-                }
-                // New stage (in-flight): published by the pipeline at
-                // every phase transition while recording is ON. The
-                // dashboard uses this to update the row's "in
-                // phase" label in real time. `bias = biased` is not
-                // needed here because both branches are independent
-                // and the operator cares about correctness, not
-                // strict ordering between a stage and a final row.
-                stage = stage_rx.recv() => {
-                    match stage {
-                        Ok(event) => {
-                            outbox_send(&outbox_tx, json!({ "type": "stage", "data": event })).await;
-                        }
-                        // H7 fix: same resync treatment as the
-                        // usage row channel. Stage events are
-                        // ephemeral (the terminal one is also
-                        // re-emitted after the row lands, so the
-                        // dashboard can reconstruct state) but a
-                        // slow consumer still benefits from a
-                        // `resync` hint.
-                        Err(tokio::sync::broadcast::error::RecvError::Lagged(skipped)) => {
-                            outbox_send(&outbox_tx, json!({
-                                "type": "lag_warning",
-                                "skipped": skipped,
-                                "message": format!(
-                                    "stage broadcast channel lagged; {} event(s) skipped",
-                                    skipped
-                                ),
-                            })).await;
-                            outbox_send(&outbox_tx, json!({ "type": "resync", "since_id": last_known_id })).await;
-                        }
-                        Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
                     }
                 }
             }
@@ -2125,14 +2119,22 @@ async fn stream_usage_rows(
 }
 
 /// Forward a JSON value into the bounded outbox mpsc. If the outbox
-/// is full (sender task is stalled on a slow browser), drop the
-/// message and emit a debug log — but DON'T block the receiver loop,
-/// because that would re-introduce the exact bug we just fixed
-/// (broadcast events piling up while the receiver waits).
+/// is full (sender task is stalled on a slow browser), we try to
+/// make room by waiting briefly — this is CRITICAL for stage events
+/// which carry the "in progress" status. Dropping them silently
+/// makes the dashboard miss real-time updates, which is the exact
+/// bug the user reported ("peticiones no llegan en tiempo real").
 ///
-/// The serialized text is what gets sent — we pre-serialize here
-/// so the sender task doesn't have to do JSON encoding on its
-/// critical path (it just does `ws_sender.send(text).await`).
+/// We use `send().await` (bounded) instead of `try_send()` (non-blocking)
+/// for STAGE events and ROW events, because these are the real-time
+/// updates the operator needs. If the outbox is genuinely stuck
+/// (browser dead for seconds), the broadcast channel will lag and
+/// trigger a resync — but for the common case of a 10-50ms render
+/// stall, waiting is far better than dropping.
+///
+/// For non-critical messages (pong, error, lag_warning), we still
+/// use `try_send` so the receiver loop never blocks on unimportant
+/// traffic.
 async fn outbox_send(tx: &tokio::sync::mpsc::Sender<String>, value: serde_json::Value) {
     let text: String = match json_text(value) {
         Ok(t) => t,
@@ -2141,25 +2143,39 @@ async fn outbox_send(tx: &tokio::sync::mpsc::Sender<String>, value: serde_json::
             return;
         }
     };
-    // Use try_send so we never block the receiver loop. The sender
-    // task drains the outbox; if it's slow, we drop the message
-    // rather than stalling the broadcast receiver.
-    match tx.try_send(text) {
+    // Use send().await for real-time messages — this blocks the
+    // receiver loop if the outbox is full, but that's BETTER than
+    // dropping the message. The broadcast channel has capacity 1024,
+    // so a brief stall won't cause lag. If the stall is prolonged
+    // (seconds), the broadcast channel will lag and trigger a resync.
+    match tx.send(text).await {
         Ok(()) => {}
-        Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => {
-            // Outbox is full — the sender task is stalled on a
-            // slow browser. Drop the message rather than blocking.
-            // The broadcast channel itself will eventually emit
-            // `Lagged` to us, which triggers a `resync` flow to
-            // the client — so the operator gets a recovery path,
-            // not just silent drops.
-            tracing::debug!("stream_usage_rows: outbox full, dropping WS message");
-        }
-        Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => {
+        Err(_e) => {
             // Sender task exited — the WS is closing. Just drop
             // the message; the receiver loop will exit momentarily
             // when `ws_receiver.next()` returns None.
         }
+    }
+}
+
+/// Same as `outbox_send` but uses `try_send` (non-blocking) for
+/// non-critical messages where dropping is acceptable (pong, error,
+/// lag_warning). This prevents the receiver loop from blocking on
+/// unimportant traffic when the browser is slow.
+async fn outbox_try_send(tx: &tokio::sync::mpsc::Sender<String>, value: serde_json::Value) {
+    let text: String = match json_text(value) {
+        Ok(t) => t,
+        Err(e) => {
+            tracing::warn!(error = %e, "stream_usage_rows: json_text failed in outbox_try_send");
+            return;
+        }
+    };
+    match tx.try_send(text) {
+        Ok(()) => {}
+        Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => {
+            tracing::debug!("stream_usage_rows: outbox full, dropping non-critical WS message");
+        }
+        Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => {}
     }
 }
 
