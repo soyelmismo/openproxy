@@ -4466,6 +4466,34 @@ impl Pipeline {
 
         let total_ms = started.elapsed().as_millis() as u64;
 
+        // Bug fix: detect "empty streaming response" — the stream
+        // completed (done_sent or EOF) but the accumulator has no
+        // content, no reasoning, no tool_calls. This happens with
+        // providers like nvidia-nim/minimax-m3 (Anthropic format)
+        // that return 200 + empty content + null finish_reason.
+        // Treat as error so the pipeline retries the next target.
+        let is_empty_stream = acc.as_ref().is_some_and(|a| a.is_empty());
+        if is_empty_stream {
+            let err = CoreError::UpstreamConnection(
+                "streaming response was empty (no content, no reasoning, no tool_calls) — treating as error for retry".to_string(),
+            );
+            let acc_ref: Option<&crate::sse_accumulator::ResponseAccumulator> = match &mut acc {
+                Some(a) => { a.mark_partial(); Some(&*a) }
+                None => None,
+            };
+            return self.record_and_fail_with_trace_id_and_partial(
+                req, combo, target,
+                FailureContext {
+                    attempt, race_size, err: &err, started,
+                    model: Some(model),
+                    connect_ms: Some(connect_and_send_ms), ttft_ms,
+                    status_code: 502,
+                },
+                trace_id,
+                acc_ref, Some(&chunk_id), created, &model_name,
+            );
+        }
+
         // Record usage.
         // H5: streaming-success semantics. `is_streaming` is
         // always true here (we came from the streaming
