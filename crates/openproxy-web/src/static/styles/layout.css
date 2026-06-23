@@ -75,15 +75,20 @@ body.sidebar-collapsed #app {
   overflow: hidden;
   text-overflow: ellipsis;
 }
-/* Collapsed sidebar: hide health text, show just the dot */
+/* Collapsed sidebar: hide health text, show just the colored dot */
 body.sidebar-collapsed .sidebar .health {
   font-size: 0;
   padding: var(--space-1);
   text-align: center;
 }
-body.sidebar-collapsed .sidebar .health::before {
-  content: "●";
+body.sidebar-collapsed .sidebar .health #health-status {
   font-size: var(--fs-sm);
+}
+body.sidebar-collapsed .sidebar .health #health-status .health-dot {
+  display: inline-block;
+}
+body.sidebar-collapsed .sidebar .health #health-status > *:not(.health-dot) {
+  display: none;
 }
 #health-status { font-family: var(--font-mono); }
 #health-status.ok      { color: var(--color-success); }
@@ -146,9 +151,8 @@ body.sidebar-collapsed .sidebar-toggle { text-align: center; }
 body.sidebar-collapsed .sidebar-footer { align-items: center; }
 body.sidebar-collapsed .sidebar-footer #theme-toggle-slot { display: flex; justify-content: center; }
 
-/* Arrow direction: « when expanded (collapse = go left), » when collapsed (expand = go right) */
-body.sidebar-collapsed .sidebar-toggle::after { content: " →"; }
-.sidebar-toggle:not(body.sidebar-collapsed .sidebar-toggle)::after { content: ""; }
+/* Arrow direction handled by JS (toggleLabel in sidebar.ts).
+   Do NOT add ::after content — it duplicates the arrow. */
 
 
 

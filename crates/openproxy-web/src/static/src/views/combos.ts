@@ -168,6 +168,24 @@ async function onResetCooldown(targetId: number): Promise<void> {
   } catch (err: unknown) { showToast("Error: " + (err instanceof Error ? err.message : String(err)), "error"); }
 }
 
+async function onTestAllTargets(): Promise<void> {
+  if (!detailComboId) return;
+  try {
+    const results = await api(`/combos/${detailComboId}/test-all`, { method: "POST" });
+    showToast(`Tested ${Array.isArray(results) ? results.length : 0} target(s)`, "info");
+    requestUpdate();
+  } catch (err: unknown) { showToast("Error: " + (err instanceof Error ? err.message : String(err)), "error"); }
+}
+
+async function onTestTarget(_targetId: number, modelRowId: number | null): Promise<void> {
+  if (!modelRowId) { showToast("No model to test for this target", "warning"); return; }
+  try {
+    const result = await api(`/models/${modelRowId}/test`, { method: "POST" }) as { status: number };
+    showToast(`Test: ${result.status} ${result.status >= 200 && result.status < 300 ? "✓" : "✗"}`,
+      result.status >= 200 && result.status < 300 ? "info" : "error");
+  } catch (err: unknown) { showToast("Test failed: " + (err instanceof Error ? err.message : String(err)), "error"); }
+}
+
 // ---- Templates ----
 
 function priorityModeOptions(selected: PriorityMode): TemplateResult {
@@ -221,7 +239,7 @@ function renderTargetRow(t: ComboTargetWithModel, showWeight: boolean): Template
   const weightCell = showWeight ? (isSub ? html`<td><em>n/a</em></td>` : html`<td><input type="number" min="1" .value=${String(t.weight ?? 1)} @change=${(e: Event) => onUpdateTargetWeight(t.id, e)} @input=${(e: Event) => onUpdateTargetWeight(t.id, e)} class="cw-input weight-input" title=${PARAM_TOOLTIPS.weight}></td>`) : html``;
   return html`<tr draggable="true" data-drag-id=${String(t.id)}>
     <td class="drag-handle" title="Drag to reorder">⠿</td><td>${t.priority_order}</td><td>${providerCell}</td><td>${accountCell}</td><td>${modelCell}</td><td>${contextCell}</td>${weightCell}
-    <td><button class="small" @click=${() => onChangePriority(t.id, -1)}>↑</button><button class="small" @click=${() => onChangePriority(t.id, 1)}>↓</button>${t.in_cooldown && !isSub ? html`<button class="small" title="Clear cooldown" @click=${() => onResetCooldown(t.id)}>🔄</button>` : html``}<button class="small danger" @click=${() => onDeleteTarget(t.id)}>×</button></td>
+    <td>${!isSub ? html`<button class="small" title="Test this model" @click=${() => onTestTarget(t.id, t.model_row_id)}>🧪</button>` : html``}<button class="small" @click=${() => onChangePriority(t.id, -1)}>↑</button><button class="small" @click=${() => onChangePriority(t.id, 1)}>↓</button>${t.in_cooldown && !isSub ? html`<button class="small" title="Clear cooldown" @click=${() => onResetCooldown(t.id)}>🔄</button>` : html``}<button class="small danger" @click=${() => onDeleteTarget(t.id)}>×</button></td>
   </tr>`;
 }
 
@@ -250,7 +268,7 @@ function renderComboDetail(): TemplateResult {
     ${renderPriorityModeBar(combo)}${renderCooldownBar(combo)}
     ${cds.length > 0 ? html`<div class="cooldown-banner">⏸ ${cds.length} of ${targets.length} target(s) in cooldown — engine will skip them.</div>` : html``}
     <section class="detail-section"><div class="section-header"><h3>Targets (${targets.length})</h3>
-      <button class="primary" @click=${() => showAddTarget(combo.id)}>+ Add target</button></div>
+      <div class="actions"><button @click=${onTestAllTargets}>🧪 Test all</button><button class="primary" @click=${() => showAddTarget(combo.id)}>+ Add target</button></div></div>
       ${targets.length === 0 ? html`<p class="empty">No targets. Add a target to start routing.</p>` : html`<table>
         <thead><tr><th></th><th>#</th><th>Provider</th><th>Account</th><th>Model</th><th>Context</th>${weightTh}<th>Actions</th></tr></thead>
         <tbody>${targets.map((t) => renderTargetRow(t, showWeight))}</tbody></table>`}

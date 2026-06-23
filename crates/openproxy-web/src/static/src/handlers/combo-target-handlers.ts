@@ -492,6 +492,19 @@ function modelCheckboxListTemplate(models: ModelWithFallbacks[]): TemplateResult
       <label class="model-checkbox-item">
         <input type="checkbox" name="model_row_ids" value=${String(rowId)} @change=${onModelCheckboxChange}>
         <span class="model-checkbox-id">${m.display_name ? html`${upstreamId} — ${m.display_name}` : html`${String(upstreamId)}`}</span>
+        <button type="button" class="small model-test-btn" title="Test this model" @click=${async (e: Event) => {
+          e.preventDefault();
+          e.stopPropagation();
+          const btn = e.target as HTMLButtonElement;
+          btn.disabled = true;
+          btn.textContent = "⏳";
+          try {
+            const result = await api(`/models/${rowId}/test`, { method: "POST" }) as { status: number; elapsed_ms?: number };
+            btn.textContent = result.status >= 200 && result.status < 300 ? "✓" : "✗";
+            btn.style.color = result.status >= 200 && result.status < 300 ? "var(--color-success)" : "var(--color-error)";
+          } catch { btn.textContent = "✗"; btn.style.color = "var(--color-error)"; }
+          setTimeout(() => { btn.disabled = false; btn.textContent = "🧪"; btn.style.color = ""; }, 3000);
+        }}>🧪</button>
       </label>
     `;
   })}`;
