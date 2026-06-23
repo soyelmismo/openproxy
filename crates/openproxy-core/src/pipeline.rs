@@ -138,60 +138,100 @@ fn sse_payload_needs_parse(payload: &str) -> bool {
     has_usage || (has_finish_reason && !has_finish_reason_null)
 }
 
-/// Apply reasoning normalizations to a single OpenAI-format streaming
-/// chunk payload. This is the canonical transformation run on EVERY
-/// chunk that goes through the OpenAI fast AND slow paths, so both
-/// paths produce identical client-facing output.
+/// Accumulator for OpenAI-format streaming tool_calls. Tracks the
+/// running total of `arguments` for each tool_call by `index`, so we
+/// can detect when an upstream sends the running total (instead of
+/// just the new fragment) and replace it with just the fragment.
 ///
-/// Two transformations are applied, in order:
+/// Some providers (e.g. MiniMax-M3 via tokenrouter) send the FULL
+/// accumulated `arguments` string in every chunk instead of just the
+/// new fragment. The OpenAI streaming spec requires fragments — the
+/// client concatenates them by `index`. When the upstream sends the
+/// running total, the client concatenates:
+///   f1 + (f1+f2) + (f1+f2+f3) + ... = N*f1 + (N-1)*f2 + ...
+/// which produces invalid JSON with duplicated prefixes.
+///
+/// This accumulator detects the running-total pattern: if the new
+/// `arguments` starts with the previously-seen arguments for that
+/// index, we know the upstream is sending the running total. We
+/// extract just the new suffix and send that to the client.
+#[derive(Default)]
+struct ToolCallAccumulator {
+    /// Map of tool_call index → running total of arguments seen so far.
+    args_by_index: std::collections::HashMap<u64, String>,
+}
+
+impl ToolCallAccumulator {
+    fn new() -> Self {
+        Self::default()
+    }
+
+    /// Process a tool_call delta. Returns the `arguments` value that
+    /// should be sent to the client (just the new fragment, not the
+    /// running total). If the upstream already sends fragments (the
+    /// correct behavior), this is a no-op — the fragment is returned
+    /// as-is and the running total is updated.
+    fn process(&mut self, index: u64, arguments: &str) -> String {
+        let prev = self.args_by_index.entry(index).or_default();
+        if prev.is_empty() {
+            // First chunk for this index — the arguments IS the
+            // fragment (there's nothing before it).
+            prev.push_str(arguments);
+            return arguments.to_string();
+        }
+        if arguments.starts_with(prev.as_str()) {
+            // Running-total pattern: the upstream sent prev + new.
+            // Extract just the new suffix.
+            let new_fragment = &arguments[prev.len()..];
+            prev.push_str(new_fragment);
+            new_fragment.to_string()
+        } else {
+            // Fragment pattern (correct OpenAI behavior): the
+            // upstream sent just the new fragment. Update the
+            // running total and pass it through.
+            prev.push_str(arguments);
+            arguments.to_string()
+        }
+    }
+}
+
+/// Apply reasoning + tool_call normalizations to a single OpenAI-format
+/// streaming chunk payload. This is the canonical transformation run
+/// on EVERY chunk that goes through the OpenAI fast AND slow paths, so
+/// both paths produce identical client-facing output.
+///
+/// Three transformations are applied, in order:
 ///
 /// 1. **Normalize non-standard reasoning fields** via
-///    [`sse_accumulator::normalize_nonstandard_reasoning_fields`]:
-///    renames upstream `delta.reasoning` → `delta.reasoning_content`
-///    and flattens `delta.reasoning_details[]` into `reasoning_content`.
-///    Returns `None` when the payload is already clean.
+///    [`sse_accumulator::normalize_nonstandard_reasoning_fields`].
 ///
-/// 2. **Extract `<think>…</think>` blocks** from `delta.content` via
-///    the stateful [`ThinkStreamExtractor`]. Extracted text would
-///    normally be appended to `delta.reasoning_content`; the cleaned
-///    text (without `<think>` tags) replaces `delta.content`.
+/// 2. **Extract `<think>…</think>` blocks** from `delta.content`.
 ///
-/// # Anti-duplication
-///
-/// Some providers (e.g. MiniMax-M3 via tokenrouter) emit the **same**
-/// reasoning text in TWO places: as a `delta.reasoning` field AND
-/// wrapped in `<think>…</think>` inside `delta.content`. Without
-/// special handling, the extractor would strip the `<think>` tags
-/// from content (good) but ALSO add the extracted text to
-/// `reasoning_content` (bad — it's already there from step 1's
-/// normalization of `reasoning`), and the client would display the
-/// reasoning twice.
-///
-/// To prevent this, when `reasoning_content` is already present in
-/// the (post-normalization) payload, we still strip `<think>` tags
-/// from content (so the visible response is clean), but we do NOT
-/// merge the extracted text into `reasoning_content`.
+/// 3. **Normalize tool_call arguments** via [`ToolCallAccumulator`]:
+///    detects when the upstream sends the running total instead of
+///    just the new fragment, and replaces it with just the fragment.
+///    This prevents the "tool call arguments duplicated" bug that
+///    occurs with providers like MiniMax-M3 that send running totals.
 ///
 /// # Return
 ///
-/// - `Some(new_payload)` when either transformation modified the payload.
+/// - `Some(new_payload)` when any transformation modified the payload.
 /// - `None` when the payload is unchanged (caller should forward the
 ///   original).
 fn apply_reasoning_normalizations(
     payload: &str,
     think_extractor: &mut crate::think_extractor::ThinkStreamExtractor,
+    tool_call_acc: &mut ToolCallAccumulator,
 ) -> Option<String> {
     // Step 1: normalize non-standard reasoning fields.
     let normalized = crate::sse_accumulator::normalize_nonstandard_reasoning_fields(payload);
     let p: &str = normalized.as_deref().unwrap_or(payload);
 
-    // Step 2: think extraction on content.
-    // Fast check: only process if there's a "content" field. Most
-    // chunks (role-only, tool_calls-only, finish, etc.) don't carry
-    // one, so we skip the JSON parse entirely.
-    if !p.contains("\"content\"") {
-        // Only normalization happened (or nothing). Return whatever
-        // normalize produced.
+    // Fast check: if there's no "content" AND no "tool_calls", skip
+    // the JSON parse entirely — the chunk is role-only, finish, etc.
+    let has_content = p.contains("\"content\"");
+    let has_tool_calls = p.contains("\"tool_calls\"");
+    if !has_content && !has_tool_calls {
         return normalized;
     }
 
@@ -201,44 +241,66 @@ fn apply_reasoning_normalizations(
     let delta = choice.get_mut("delta")?;
     let obj = delta.as_object_mut()?;
 
-    let content = match obj.get("content").and_then(|c| c.as_str()) {
-        Some(s) => s.to_string(),
-        None => return normalized,
-    };
+    let mut modified = false;
 
-    let (clean_content, extracted_reasoning) = think_extractor.process(&content);
-    let content_changed = clean_content != content;
-    let has_extracted_reasoning = !extracted_reasoning.is_empty();
+    // Step 2: think extraction on content (only if content is a string).
+    if has_content {
+        if let Some(content) = obj.get("content").and_then(|c| c.as_str()).map(|s| s.to_string()) {
+            let (clean_content, extracted_reasoning) = think_extractor.process(&content);
+            let content_changed = clean_content != content;
+            let has_native_reasoning = obj.contains_key("reasoning_content");
 
-    // Check if the upstream already provides reasoning_content natively
-    // (either directly, or via normalize converting `reasoning` →
-    // `reasoning_content`). If so, we'll strip <think> tags from content
-    // but NOT add the extracted text to reasoning_content (would be a
-    // duplicate of what the upstream already sent).
-    let has_native_reasoning = obj.contains_key("reasoning_content");
+            if content_changed {
+                obj.insert("content".to_string(), serde_json::Value::String(clean_content));
+                modified = true;
+            }
 
-    if content_changed {
-        obj.insert("content".to_string(), serde_json::Value::String(clean_content));
+            if !extracted_reasoning.is_empty() && !has_native_reasoning {
+                obj.insert(
+                    "reasoning_content".to_string(),
+                    serde_json::Value::String(extracted_reasoning),
+                );
+                modified = true;
+            }
+        }
     }
 
-    if has_extracted_reasoning && !has_native_reasoning {
-        // No native reasoning_content — add the extracted text.
-        // (has_native_reasoning is false, so there's no existing
-        // reasoning_content to merge with — we're inserting fresh.)
-        obj.insert(
-            "reasoning_content".to_string(),
-            serde_json::Value::String(extracted_reasoning),
-        );
+    // Step 3: normalize tool_call arguments — detect running-total
+    // pattern and replace with just the new fragment.
+    if has_tool_calls {
+        if let Some(tool_calls) = obj.get_mut("tool_calls").and_then(|t| t.as_array_mut()) {
+            for tc in tool_calls.iter_mut() {
+                let tc_obj = match tc.as_object_mut() {
+                    Some(o) => o,
+                    None => continue,
+                };
+                let index = tc_obj.get("index")
+                    .and_then(|i| i.as_u64())
+                    .unwrap_or(0);
+                let func = match tc_obj.get_mut("function").and_then(|f| f.as_object_mut()) {
+                    Some(f) => f,
+                    None => continue,
+                };
+                let arguments = match func.get("arguments").and_then(|a| a.as_str()) {
+                    Some(a) => a.to_string(),
+                    None => continue,
+                };
+                let new_fragment = tool_call_acc.process(index, &arguments);
+                if new_fragment != arguments {
+                    func.insert(
+                        "arguments".to_string(),
+                        serde_json::Value::String(new_fragment),
+                    );
+                    modified = true;
+                }
+            }
+        }
     }
 
-    if !content_changed && (!has_extracted_reasoning || has_native_reasoning) {
-        // No content change, and either no extracted reasoning or we
-        // skipped adding it. Return whatever normalize produced.
+    if !modified {
         return normalized;
     }
 
-    // Re-serialize the modified payload. Fall back to `normalized` if
-    // serialization fails (shouldn't happen for valid JSON).
     serde_json::to_string(&v).ok().or(normalized)
 }
 
@@ -3310,6 +3372,13 @@ impl Pipeline {
         // reasoning inside the content field; without this extractor,
         // clients that parse think tags duplicate the reasoning.
         let mut think_extractor = crate::think_extractor::ThinkStreamExtractor::new();
+        // Tool call accumulator: detects when the upstream sends the
+        // running total of tool_call arguments instead of just the
+        // new fragment, and replaces it with just the fragment. This
+        // prevents the "tool call arguments duplicated" bug that
+        // occurs with providers like MiniMax-M3 that send running
+        // totals in the OpenAI streaming format.
+        let mut tool_call_acc = ToolCallAccumulator::new();
         // H5 fix: Anthropic tool_use blocks stream across multiple
         // SSE events. content_block_start announces the block with
         // id+name, subsequent content_block_delta/input_json_delta
@@ -3702,6 +3771,7 @@ impl Pipeline {
                                 let effective_payload = apply_reasoning_normalizations(
                                     json_payload,
                                     &mut think_extractor,
+                                    &mut tool_call_acc,
                                 );
                                 let payload_str = effective_payload.as_deref().unwrap_or(json_payload);
                                 // G1 fix: feed the accumulator so the
@@ -3835,6 +3905,7 @@ impl Pipeline {
                         let effective_payload = apply_reasoning_normalizations(
                             json_payload,
                             &mut think_extractor,
+                            &mut tool_call_acc,
                         );
 
                         // Accumulator work — scoped so the borrows on
