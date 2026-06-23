@@ -12,18 +12,34 @@
 // reference (e.g. testModel) take the event element as a
 // trailing argument so they can disable + relabel the button
 // while in flight.
+//
+// Migrated to lit-html: the legacy "Edit model" modal is rendered
+// into a wrapper `<div>` under `#modal-root` via `render()`. All
+// `data-action` attributes have been replaced with direct
+// `@click` / `@submit` handlers; lit-html auto-escapes the model
+// id / display name so we no longer call `escapeAttr` /
+// `appendModal`.
 
 import { state } from "../state/index.js";
 import { api } from "../state/api.js";
 import { html, render } from "lit-html";
-import { escapeAttr } from "../lib/escape.js";
-import { appendModal } from "../lib/dom.js";
 import { renderModelRows, getVisibleModelRowIds, updateFilterTabCounts, syncSelectAllCheckbox, applySort, syncModelRowActive } from "../components/model-table.js";
 import { renderBulkActionsBar } from "../components/model-bulk-actions.js";
 import { statusPillClass } from "../lib/constants.js";
 import type { Model } from "../lib/types/api.js";
 import { requestUpdate } from "../state/reactive.js";
 import { showToast } from "../components/toast.js";
+
+function ensureModalRoot(): HTMLElement {
+  let root = document.getElementById("modal-root");
+  if (!root) {
+    root = document.createElement("div");
+    root.id = "modal-root";
+    root.style.cssText = "position:relative;z-index:1000;";
+    document.body.appendChild(root);
+  }
+  return root;
+}
 
 interface TestResult {
   status: number;
@@ -41,45 +57,48 @@ export async function showEditModel(rowId: number): Promise<void> {
   if (!state.models || state.models.length === 0) state.models = await api("/models") as Model[];
   const m = (state.models || []).find((x) => x.row_id === rowId);
   if (!m) { showToast("Model row not found", "error"); return; }
-  const html = `
-    <div class="modal-bg" id="edit-model-modal" data-action="closeModalBg" data-arg1="self">
+  const wrapper = document.createElement("div");
+  ensureModalRoot().appendChild(wrapper);
+  // Mount on <body> via #modal-root (not #main) so the 3s background
+  // poll doesn't destroy the form mid-edit. lit-html auto-escapes
+  // the model id / display name so we no longer call `escapeAttr`.
+  render(html`
+    <div class="modal-bg" id="edit-model-modal"
+         @click=${(e: Event) => { if (e.target === e.currentTarget) wrapper.remove(); }}>
       <div class="modal">
         <div class="modal-header">
           <h2>Edit model row #${rowId}</h2>
-          <button type="button" class="close-btn" data-action="closeModalBg" data-arg1="self" aria-label="Close">&times;</button>
+          <button type="button" class="close-btn" @click=${() => wrapper.remove()} aria-label="Close">&times;</button>
         </div>
-        <form data-action="updateModel" data-arg1="${rowId}">
+        <form @submit=${(e: Event) => { e.preventDefault(); void updateModel(rowId, e, wrapper); }}>
           <div class="modal-body">
             <div class="field">
               <label>Model id</label>
-              <input name="model_id" type="text" value="${escapeAttr(m.model_id || "")}" required>
+              <input name="model_id" type="text" .value=${m.model_id || ""} required>
             </div>
             <div class="field">
               <label>Display name</label>
-              <input name="display_name" type="text" value="${escapeAttr(m.display_name || "")}">
+              <input name="display_name" type="text" .value=${m.display_name || ""}>
             </div>
             <div class="field">
               <label>Active</label>
               <select name="active">
-                <option value="true" ${m.active ? "selected" : ""}>yes</option>
-                <option value="false" ${!m.active ? "selected" : ""}>no</option>
+                <option value="true" ?selected=${!!m.active}>yes</option>
+                <option value="false" ?selected=${!m.active}>no</option>
               </select>
             </div>
           </div>
           <div class="modal-footer">
-            <button type="button" data-action="closeModalBg" data-arg1="self">Cancel</button>
+            <button type="button" @click=${() => wrapper.remove()}>Cancel</button>
             <button type="submit" class="primary">Save</button>
           </div>
         </form>
       </div>
     </div>
-  `;
-  // Mount on <body> via appendModal (not #main) so the 3s background
-  // poll doesn't destroy the form mid-edit. See lib/dom.ts appendModal.
-  appendModal(html);
+  `, wrapper);
 }
 
-export async function updateModel(rowId: number, e: Event): Promise<void> {
+export async function updateModel(rowId: number, e: Event, wrapper?: HTMLElement): Promise<void> {
   const target = e.target;
   if (!(target instanceof HTMLFormElement)) return;
   const f = new FormData(target);
@@ -91,8 +110,11 @@ export async function updateModel(rowId: number, e: Event): Promise<void> {
   try {
     await api("/models/" + rowId, { method: "PATCH", body: JSON.stringify(body) });
     state.models = await api("/models") as Model[];
-    const modalBg = target.closest(".modal-bg");
-    if (modalBg) modalBg.remove();
+    if (wrapper) wrapper.remove();
+    else {
+      const modalBg = target.closest(".modal-bg");
+      if (modalBg) modalBg.remove();
+    }
     requestUpdate();
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);

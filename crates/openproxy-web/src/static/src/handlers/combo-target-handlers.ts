@@ -675,7 +675,11 @@ export async function resetCooldown(comboId: number, targetId: number): Promise<
     if (row) {
       const badge = row.querySelector(".badge-cooldown");
       if (badge) badge.remove();
-      const resetBtn = row.querySelector<HTMLButtonElement>('button[data-action="resetCooldown"]');
+      // The reset-cooldown button is rendered by views/combos.ts with
+      // `title="Clear cooldown"` and a `@click` handler — we look it
+      // up by title because the old `data-action="resetCooldown"`
+      // attribute no longer exists in the lit-html view template.
+      const resetBtn = row.querySelector<HTMLButtonElement>('button[title="Clear cooldown"]');
       if (resetBtn) resetBtn.remove();
     }
   } catch (e: unknown) {
