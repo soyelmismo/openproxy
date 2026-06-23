@@ -1,5 +1,6 @@
 // handlers/registry.ts — central map from `data-action` attribute
-// values to the real handler functions. app.ts reads this and
+import { showToast } from "../components/toast.js";
+import { navigate, rerenderCurrentView, forceRerenderCurrentView } from "../state/router.js";
 // installs a single document-level listener that dispatches clicks
 // / changes / submits based on data-action / data-arg-* attrs.
 //
@@ -63,8 +64,6 @@ import {
 } from "../components/model-picker.js";
 import { mountThemeToggle } from "../components/theme-toggle.js";
 import { toggleSidebar } from "../components/sidebar.js";
-import { showToast } from "../components/toast.js";
-import { navigate, rerenderCurrentView, forceRerenderCurrentView } from "../state/router.js";
 import { OAuthLogin } from "./oauth-handlers.js";
 import { logsPrevPage, logsNextPage, logsGoPage, logsSetFollow, toggleColumnsMenu, toggleColumn } from "../views/logs.js";
 import { configSaveTimeouts, configSaveRecordingTtl, configSaveIdleChunkRetryable, configSaveCompression } from "../views/config.js";

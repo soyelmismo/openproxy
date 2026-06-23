@@ -1,4 +1,5 @@
 // handlers/provider-handlers.ts — provider-level handlers.
+import { navigate } from "../state/router.js";
 //
 // Per spec §3 + §13.8 we do not attach to `window.*`. Every
 // function here is exported by name and registered in
@@ -17,10 +18,10 @@ import { state } from "../state/index.js";
 import { api } from "../state/api.js";
 import { extractApiErrorMessage } from "../lib/escape.js";
 import { appendModal } from "../lib/dom.js";
-import { showToast } from "../components/toast.js";
-import { rerenderCurrentView, navigate } from "../state/router.js";
 import { QUOTA_CAPABLE_PROVIDERS } from "../lib/constants.js";
 import { syncModelRowActive, updateFilterTabCounts } from "../components/model-table.js";
+import { requestUpdate } from "../state/reactive.js";
+import { showToast } from "../components/toast.js";
 
 interface RefreshResult {
   models_refreshed?: number;
@@ -79,7 +80,7 @@ export async function refreshProvider(providerId: string, e: Event | null): Prom
     // the user explicitly asked for fresh data.
     state.providers = await api("/providers") as typeof state.providers;
     state.models = await api("/models") as typeof state.models;
-    rerenderCurrentView();
+    requestUpdate();
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);
     showToast("Error: " + msg, "error");
@@ -106,7 +107,7 @@ export async function refreshAllProviders(): Promise<void> {
     }
     state.providers = await api("/providers") as typeof state.providers;
     state.models = await api("/models") as typeof state.models;
-    rerenderCurrentView();
+    requestUpdate();
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);
     showToast("Error: " + msg, "error");
@@ -289,7 +290,7 @@ export async function renameProviderPrompt(providerId: string, currentName: stri
   if (newName == null) return; // cancel
   const trimmed = newName.trim();
   if (trimmed === "") {
-    alert("Name cannot be empty");
+    showToast("Name cannot be empty", "error");
     return;
   }
   if (trimmed === currentName) return; // no-op
@@ -342,7 +343,7 @@ export async function bulkToggleModels(providerId: string, active: boolean): Pro
     state.models = await api("/models") as typeof state.models;
     // Targeted DOM patch — for each non-custom model row of this
     // provider, sync the row's active-state UI in place. We do
-    // NOT call rerenderCurrentView() because a full rebuild would
+    // NOT call requestUpdate() because a full rebuild would
     // close any open `<select>` / steal focus from the search
     // input the user may still be editing. The patch touches only
     // the rows whose state changed; everything else stays put.
@@ -419,7 +420,7 @@ export async function refreshAccountQuota(accountId: number, e: Event | null): P
         (match as unknown as Record<string, unknown>)["quota_model_details"] = result.model_details;
       }
     }
-    rerenderCurrentView();
+    requestUpdate();
   } catch (err: unknown) {
     if (btn) flashButton(btn, "✗", "#f38ba8");
     const msg = err instanceof Error ? err.message : String(err);
@@ -450,6 +451,6 @@ export async function refreshAllQuotas(providerId: string): Promise<void> {
     }
   }
   state.accounts = await api("/accounts") as typeof state.accounts;
-  rerenderCurrentView();
+  requestUpdate();
   showToast("Quotas refreshed.", "success");
 }

@@ -17,12 +17,12 @@ import { state } from "../state/index.js";
 import { api } from "../state/api.js";
 import { escapeAttr } from "../lib/escape.js";
 import { appendModal } from "../lib/dom.js";
-import { rerenderCurrentView } from "../state/router.js";
 import { renderModelRows, getVisibleModelRowIds, updateFilterTabCounts, syncSelectAllCheckbox, applySort, syncModelRowActive } from "../components/model-table.js";
 import { renderBulkActionsBar } from "../components/model-bulk-actions.js";
 import { statusPillClass } from "../lib/constants.js";
-import { showToast } from "../components/toast.js";
 import type { Model } from "../lib/types/api.js";
+import { requestUpdate } from "../state/reactive.js";
+import { showToast } from "../components/toast.js";
 
 interface TestResult {
   status: number;
@@ -39,7 +39,7 @@ interface TestResult {
 export async function showEditModel(rowId: number): Promise<void> {
   if (!state.models || state.models.length === 0) state.models = await api("/models") as Model[];
   const m = (state.models || []).find((x) => x.row_id === rowId);
-  if (!m) { alert("Model row not found"); return; }
+  if (!m) { showToast("Model row not found", "error"); return; }
   const html = `
     <div class="modal-bg" id="edit-model-modal" data-action="closeModalBg" data-arg1="self">
       <div class="modal">
@@ -92,7 +92,7 @@ export async function updateModel(rowId: number, e: Event): Promise<void> {
     state.models = await api("/models") as Model[];
     const modalBg = target.closest(".modal-bg");
     if (modalBg) modalBg.remove();
-    rerenderCurrentView();
+    requestUpdate();
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);
     showToast("Error: " + msg, "error");
@@ -118,7 +118,7 @@ export async function toggleModel(rowId: number, newActive: boolean | unknown, e
     if (m) m.active = desired;
     // Targeted DOM patch — sync the row's active-state UI in
     // place (row class, status pill, Enable/Disable button). We
-    // do NOT call rerenderCurrentView() because a full rebuild
+    // do NOT call requestUpdate() because a full rebuild
     // would close any open `<select>` (filter tabs, provider
     // dropdown) and steal focus from the search input the user
     // may still be editing. Mirrors patchComboField in
@@ -201,7 +201,7 @@ export async function deleteModel(rowId: number): Promise<void> {
   try {
     await api(`/models/${rowId}`, { method: "DELETE" });
     state.models = state.models.filter((m) => m.row_id !== rowId);
-    rerenderCurrentView();
+    requestUpdate();
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);
     showToast("Error: " + msg, "error");
@@ -252,7 +252,7 @@ export function toggleSelectAllModels(e: Event | null): void {
   // Targeted DOM patch — toggle each visible row's `selected`
   // class and refresh the bulk-action bar. The master checkbox
   // is already toggled by the browser. We do NOT call
-  // rerenderCurrentView() because a full rebuild would close any
+  // requestUpdate() because a full rebuild would close any
   // open `<select>` (filter tabs, provider dropdown) and steal
   // focus from the search input the user may still be editing.
   // Mirrors patchComboField in combo-handlers.ts.
@@ -341,7 +341,7 @@ async function bulkSetSelected(_providerId: string, active: boolean): Promise<vo
   // Targeted DOM patch — for each toggled row, sync the
   // active-state UI in place. Clear the selection (uncheck all,
   // remove `selected` classes, hide the bulk bar, reset master
-  // checkbox). We do NOT call rerenderCurrentView() — a full
+  // checkbox). We do NOT call requestUpdate() — a full
   // rebuild would close any open `<select>` and steal focus from
   // the search input. Mirrors patchComboField in combo-handlers.ts.
   for (const rowId of ids) {
@@ -423,7 +423,7 @@ export async function bulkDeleteSelected(_providerId: string): Promise<void> {
   ));
   state.models = await api("/models") as Model[];
   state.selectedModels.clear();
-  rerenderCurrentView();
+  requestUpdate();
 }
 
 // ===== Filter / search =====
@@ -582,7 +582,7 @@ export async function createCustomModel(providerId: string, e: Event): Promise<v
     const modalBg = target.closest(".modal-bg");
     if (modalBg) modalBg.remove();
     state.models = await api("/models") as Model[];
-    rerenderCurrentView();
+    requestUpdate();
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);
     showToast("Error: " + msg, "error");
@@ -615,5 +615,5 @@ export function cycleProviderSort(providerId: string, sortKey: string, _event: E
     next = null;
   }
   state.providerDetail[providerId]["sort"] = next;
-  rerenderCurrentView();
+  requestUpdate();
 }

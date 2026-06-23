@@ -14,8 +14,9 @@ import { escapeHtml, escapeAttr } from "../lib/escape.js";
 import { appendModal } from "../lib/dom.js";
 import { showPlaintextKey } from "../components/key-display.js";
 import { renderAllowedModelsChips } from "../components/model-picker.js";
-import { rerenderCurrentView } from "../state/router.js";
 import type { Model, ApiKeyId } from "../lib/types/api.js";
+import { requestUpdate } from "../state/reactive.js";
+import { showToast } from "../components/toast.js";
 
 interface KeyRow {
   id: ApiKeyId;
@@ -183,7 +184,7 @@ function calculateExpiry(amount: string, unit: string): string | null {
 function buildKeyBodyFromForm(form: HTMLFormElement): KeyBody | null {
   const scopes: string[] = Array.from(form.querySelectorAll<HTMLInputElement>('input[name="scopes"]:checked'))
     .map((input) => input.value);
-  if (scopes.length === 0) { alert("Pick at least one scope."); return null; }
+  if (scopes.length === 0) { showToast("Pick at least one scope.", "error"); return null; }
   const allowedModelsEl = form.querySelector<HTMLInputElement>('input[name="allowed_models"]');
   const allowedModelsStr = allowedModelsEl ? allowedModelsEl.value : "";
   let allowedModels: string[] | null;
@@ -225,7 +226,7 @@ export async function updateKey(id: number, e: Event): Promise<void> {
     await api("/keys/" + id, { method: "PATCH", body: JSON.stringify(body) });
     closeKeyForm("self", { target } as unknown as Event);
     state.apiKeys = await api("/keys") as typeof state.apiKeys;
-    rerenderCurrentView();
+    requestUpdate();
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);
     alert("Error: " + msg);
@@ -250,7 +251,7 @@ export async function revokeKey(id: number, label: string | null): Promise<void>
   try {
     await api(`/keys/${id}/revoke`, { method: "POST" });
     state.apiKeys = await api("/keys") as typeof state.apiKeys;
-    rerenderCurrentView();
+    requestUpdate();
   } catch (e: unknown) {
     const msg = e instanceof Error ? e.message : String(e);
     alert("Error: " + msg);
@@ -267,7 +268,7 @@ export async function deleteKey(id: number, label: string | null): Promise<void>
   try {
     await api(`/keys/${id}`, { method: "DELETE" });
     state.apiKeys = (state.apiKeys || []).filter((k) => (k as { id: number }).id !== id);
-    rerenderCurrentView();
+    requestUpdate();
   } catch (e: unknown) {
     const msg = e instanceof Error ? e.message : String(e);
     alert("Error: " + msg);

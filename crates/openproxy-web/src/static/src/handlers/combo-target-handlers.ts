@@ -9,17 +9,17 @@ import { state } from "../state/index.js";
 import { api } from "../state/api.js";
 import { escapeHtml, escapeAttr } from "../lib/escape.js";
 import { appendModal } from "../lib/dom.js";
-import { rerenderCurrentView } from "../state/router.js";
-import { showToast } from "../components/toast.js";
 import type { Provider, Account, Model, ComboSummary } from "../lib/types/api.js";
+import { requestUpdate } from "../state/reactive.js";
+import { showToast } from "../components/toast.js";
 
 // ---- PATCH helper (no re-render) ----
 //
 // Mirrors `patchComboField` in combo-handlers.ts: send the PATCH,
 // swallow the success path (the DOM already reflects the user's
 // choice — see `updateTargetWeight` below), and surface errors via
-// a toast instead of `alert()` + `rerenderCurrentView()`. The
-// original `rerenderCurrentView()` was the root cause of the
+// a toast instead of `alert()` + `requestUpdate()`. The
+// original `requestUpdate()` was the root cause of the
 // "me cierra el dropdown" bug: a full DOM rebuild would close any
 // open `<select>` (priority mode, cooldown mode) and steal focus
 // from any `<input>` (weight, race size) the user was still editing.
@@ -273,7 +273,7 @@ async function onDrop(e: DragEvent): Promise<void> {
       method: "POST",
       body: JSON.stringify({ target_ids: newOrder }),
     });
-    rerenderCurrentView();
+    requestUpdate();
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);
     alert("Error reordering: " + msg);
@@ -520,7 +520,7 @@ export async function addTarget(comboId: number, e: Event): Promise<void> {
   if (kind === "combo") {
     // Sub-combo: single-add (unchanged)
     const subComboId = parseInt(String(f.get("sub_combo_id")));
-    if (!subComboId) { alert("Select a sub-combo first."); return; }
+    if (!subComboId) { showToast("Select a sub-combo first.", "error"); return; }
     const body = {
       provider_id: "combo",
       account_id: null,
@@ -531,7 +531,7 @@ export async function addTarget(comboId: number, e: Event): Promise<void> {
     try {
       await api(`/combos/${comboId}/targets`, { method: "POST", body: JSON.stringify(body) });
       closeAddTarget();
-      rerenderCurrentView();
+      requestUpdate();
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
       alert("Error: " + msg);
@@ -547,7 +547,7 @@ export async function addTarget(comboId: number, e: Event): Promise<void> {
     .filter((id) => !Number.isNaN(id));
 
   if (modelRowIds.length === 0) {
-    alert("Select at least one model.");
+    showToast("Select at least one model.", "error");
     return;
   }
 
@@ -588,14 +588,14 @@ export async function addTarget(comboId: number, e: Event): Promise<void> {
     closeAddTarget();
   }
 
-  rerenderCurrentView();
+  requestUpdate();
 }
 
 export async function deleteTarget(comboId: number, targetId: number): Promise<void> {
   if (!confirm("Delete target " + targetId + "?")) return;
   try {
     await api(`/combos/${comboId}/targets/${targetId}`, { method: "DELETE" });
-    rerenderCurrentView();
+    requestUpdate();
   } catch (e: unknown) {
     const msg = e instanceof Error ? e.message : String(e);
     alert("Error: " + msg);
@@ -607,7 +607,7 @@ export async function resetCooldown(comboId: number, targetId: number): Promise<
     await api(`/combos/${comboId}/targets/${targetId}/clear-cooldown`, { method: "POST" });
     // Targeted DOM patch: hide the cooldown badge and the reset
     // button on the affected row. We do NOT call
-    // rerenderCurrentView() — see `patchTargetField` above for
+    // requestUpdate() — see `patchTargetField` above for
     // the rationale (a full rebuild would close any open
     // `<select>` on a sibling row, e.g. the weight input or the
     // priority-mode dropdown). The next background poll / page
@@ -640,7 +640,7 @@ export async function changePriority(comboId: number, targetId: number, delta: n
     sorted[idx] = b;
     sorted[swapIdx] = a;
     await api(`/combos/${comboId}/targets/reorder`, { method: "POST", body: JSON.stringify({ target_ids: sorted.map((t) => t.id) }) });
-    rerenderCurrentView();
+    requestUpdate();
   } catch (e: unknown) {
     const msg = e instanceof Error ? e.message : String(e);
     alert("Error reordering: " + msg);
@@ -705,7 +705,7 @@ export async function bulkDeleteSelectedTargets(comboId: number): Promise<void> 
       .catch((e: unknown) => console.error("Failed delete target", tid, e))
   ));
   state.selectedTargets.clear();
-  rerenderCurrentView();
+  requestUpdate();
 }
 
 /** `PATCH /admin/combos/:id/targets/:tid` — update a target's weight
@@ -719,7 +719,7 @@ export async function bulkDeleteSelectedTargets(comboId: number): Promise<void> 
  *  weight of 1. The backend rejects weights `<= 0` with a 400.
  *
  *  We delegate to `patchTargetField` so the success path does NOT
- *  call `rerenderCurrentView()` (the input already shows the value
+ *  call `requestUpdate()` (the input already shows the value
  *  the user typed) and errors surface via a toast instead of
  *  `alert()` + re-render. See `patchComboField` in combo-handlers.ts
  *  for the full rationale. */

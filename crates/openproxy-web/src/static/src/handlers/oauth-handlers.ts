@@ -10,8 +10,8 @@
 import { state } from "../state/index.js";
 import { api } from "../state/api.js";
 import { escapeHtml, escapeAttr } from "../lib/escape.js";
+import { requestUpdate } from "../state/reactive.js";
 import { showToast } from "../components/toast.js";
-import { rerenderCurrentView } from "../state/router.js";
 
 interface AuthData {
   authorization_url: string;
@@ -66,7 +66,7 @@ export const OAuthLogin: OAuthLoginShape = {
     if (exchangeResp.error) throw new Error(exchangeResp.error);
     showToast(`Logged in with ${provider}`, "success");
     state.accounts = await api("/accounts") as typeof state.accounts;
-    rerenderCurrentView();
+    requestUpdate();
   },
   showManualPasteForm(provider: string, authData: AuthData): void {
     const section = document.getElementById("oauth-manual-section");
@@ -114,7 +114,7 @@ export const OAuthLogin: OAuthLoginShape = {
     const section = document.getElementById("oauth-manual-section");
     if (section) section.style.display = "none";
     state.accounts = await api("/accounts") as typeof state.accounts;
-    rerenderCurrentView();
+    requestUpdate();
   },
   async startDeviceCode(provider: string): Promise<void> {
     try {
@@ -147,7 +147,7 @@ export const OAuthLogin: OAuthLoginShape = {
             if (deviceInfo) deviceInfo.style.display = "none";
             showToast(`Logged in with ${provider}`, "success");
             state.accounts = await api("/accounts") as typeof state.accounts;
-            rerenderCurrentView();
+            requestUpdate();
           } else if (pollResp.status === "expired") {
             clearInterval(pollInterval);
             if (deviceInfo) deviceInfo.style.display = "none";

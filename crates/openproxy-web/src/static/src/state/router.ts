@@ -5,6 +5,7 @@
 // and a rerenderCurrentView() helper (used by the bg-poll and
 // by handlers that need to repaint).
 
+import { html, render } from 'lit-html';
 import { state } from "./index.js";
 import { startBgPoll } from "./bg-poll.js";
 import { stopLogLatencyTicker } from "./ticker.js";
@@ -138,7 +139,7 @@ export function navigate(): void {
     const main: HTMLElement | null = document.getElementById("main");
     if (main) {
       const msg: string = (e instanceof Error) ? e.message : String(e);
-      main.innerHTML = `<div class="banner banner-error">Error: ${msg}</div>`;
+      render(html`<div class="banner banner-error">Error: ${msg}</div>`, main);
     }
   });
   // Stop the live-logs latency ticker if the user has navigated

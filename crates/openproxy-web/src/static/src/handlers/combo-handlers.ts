@@ -7,8 +7,9 @@
 import { state } from "../state/index.js";
 import { api } from "../state/api.js";
 import { appendModal } from "../lib/dom.js";
-import { rerenderCurrentView } from "../state/router.js";
 import type { Combo, CreateComboInput, PriorityMode, CooldownMode } from "../lib/types/api.js";
+import { requestUpdate } from "../state/reactive.js";
+import { showToast } from "../components/toast.js";
 
 // ---- Tooltips (English explanations, kept in one place so they
 // can be reused between the create form and the detail view). ----
@@ -212,7 +213,7 @@ export async function createCombo(e: Event): Promise<void> {
   try {
     await api("/combos", { method: "POST", body: JSON.stringify(body) });
     closeCreateCombo();
-    rerenderCurrentView();
+    requestUpdate();
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);
     alert("Error: " + msg);
@@ -223,7 +224,7 @@ export async function deleteCombo(id: number): Promise<void> {
   if (!confirm("Delete combo " + id + "?")) return;
   try {
     await api("/combos/" + id, { method: "DELETE" });
-    rerenderCurrentView();
+    requestUpdate();
   } catch (e: unknown) {
     const msg = e instanceof Error ? e.message : String(e);
     alert("Error: " + msg);
@@ -232,13 +233,13 @@ export async function deleteCombo(id: number): Promise<void> {
 
 export async function updateRaceSize(id: number, e: Event | null): Promise<void> {
   const val = e && e.target ? parseInt((e.target as HTMLInputElement).value, 10) : NaN;
-  if (!Number.isFinite(val) || val < 1 || val > 8) { alert("Must be 1-8"); rerenderCurrentView(); return; }
+  if (!Number.isFinite(val) || val < 1 || val > 8) { showToast("Must be 1-8", "error"); requestUpdate(); return; }
   try {
     await api("/combos/" + id, { method: "PATCH", body: JSON.stringify({ race_size: val }) });
   } catch (e: unknown) {
     const msg = e instanceof Error ? e.message : String(e);
     alert("Error: " + msg);
-    rerenderCurrentView();
+    requestUpdate();
   }
 }
 
@@ -283,7 +284,7 @@ async function patchComboField(
     });
     // Optimistically update the in-memory combo so the value
     // persists across any future re-render. We do NOT call
-    // rerenderCurrentView() here — a full DOM rebuild would
+    // requestUpdate() here — a full DOM rebuild would
     // close any open dropdowns and steal focus from inputs,
     // making the UI feel broken (the exact "me cierra el
     // dropdown" bug the user reported). The state update is
@@ -328,8 +329,8 @@ export async function updateCooldownBase(id: number, e: Event | null): Promise<v
   const raw = e && e.target ? (e.target as HTMLInputElement).value.trim() : "";
   const val: number | null = raw === "" ? null : parseInt(raw, 10);
   if (raw !== "" && !Number.isFinite(val)) {
-    alert("Base must be a number or empty");
-    rerenderCurrentView();
+    showToast("Base must be a number or empty", "error");
+    requestUpdate();
     return;
   }
   await patchComboField(id, "cooldown_base_secs", val);
@@ -340,8 +341,8 @@ export async function updateCooldownFactor(id: number, e: Event | null): Promise
   const raw = e && e.target ? (e.target as HTMLInputElement).value.trim() : "";
   const val: number | null = raw === "" ? null : parseInt(raw, 10);
   if (raw !== "" && !Number.isFinite(val)) {
-    alert("Factor must be a number or empty");
-    rerenderCurrentView();
+    showToast("Factor must be a number or empty", "error");
+    requestUpdate();
     return;
   }
   await patchComboField(id, "cooldown_factor", val);
@@ -352,8 +353,8 @@ export async function updateCooldownMax(id: number, e: Event | null): Promise<vo
   const raw = e && e.target ? (e.target as HTMLInputElement).value.trim() : "";
   const val: number | null = raw === "" ? null : parseInt(raw, 10);
   if (raw !== "" && !Number.isFinite(val)) {
-    alert("Max must be a number or empty");
-    rerenderCurrentView();
+    showToast("Max must be a number or empty", "error");
+    requestUpdate();
     return;
   }
   await patchComboField(id, "cooldown_max_secs", val);
@@ -364,13 +365,13 @@ export async function updateLkgpExplorationRate(id: number, e: Event | null): Pr
   const raw = e && e.target ? (e.target as HTMLInputElement).value.trim() : "";
   const val: number | null = raw === "" ? null : parseFloat(raw);
   if (raw !== "" && !Number.isFinite(val)) {
-    alert("Exploration rate must be a number 0.0–1.0 or empty");
-    rerenderCurrentView();
+    showToast("Exploration rate must be a number 0.0–1.0 or empty", "error");
+    requestUpdate();
     return;
   }
   if (val != null && (val < 0 || val > 1)) {
-    alert("Exploration rate must be between 0.0 and 1.0");
-    rerenderCurrentView();
+    showToast("Exploration rate must be between 0.0 and 1.0", "error");
+    requestUpdate();
     return;
   }
   await patchComboField(id, "lkgp_exploration_rate", val);
@@ -381,8 +382,8 @@ export async function updateSelectionWindow(id: number, e: Event | null): Promis
   const raw = e && e.target ? (e.target as HTMLInputElement).value.trim() : "";
   const val: number | null = raw === "" ? null : parseInt(raw, 10);
   if (raw !== "" && !Number.isFinite(val)) {
-    alert("Window must be a number or empty");
-    rerenderCurrentView();
+    showToast("Window must be a number or empty", "error");
+    requestUpdate();
     return;
   }
   await patchComboField(id, "selection_window_secs", val);
@@ -399,7 +400,7 @@ export async function testAllTargets(comboId: number, e: Event | null): Promise<
   try {
     const results = await api(`/combos/${comboId}/test-all`, { method: "POST" });
     state.comboTestResults[comboId] = Array.isArray(results) ? results : [];
-    rerenderCurrentView();
+    requestUpdate();
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);
     alert("Test all failed: " + msg);

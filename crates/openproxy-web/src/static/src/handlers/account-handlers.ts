@@ -9,8 +9,8 @@ import { state } from "../state/index.js";
 import { api } from "../state/api.js";
 import { escapeHtml, escapeAttr } from "../lib/escape.js";
 import { appendModal } from "../lib/dom.js";
+import { requestUpdate } from "../state/reactive.js";
 import { showToast } from "../components/toast.js";
-import { rerenderCurrentView } from "../state/router.js";
 
 export function showCreateAccount(providerId: string): void {
   const html = `
@@ -44,7 +44,7 @@ export function showCreateAccount(providerId: string): void {
     </div>
   `;
   // Mount on <body> (not #main) so the 3s background poll's
-  // rerenderCurrentView() — which replaces #main's innerHTML —
+  // requestUpdate() — which replaces #main's innerHTML —
   // does not destroy the modal mid-edit. See lib/dom.ts appendModal.
   appendModal(html);
 }
@@ -69,7 +69,7 @@ export async function createAccount(providerId: string, e: Event): Promise<void>
     await api("/accounts", { method: "POST", body: JSON.stringify(body) });
     state.accounts = await api("/accounts") as typeof state.accounts;
     closeCreateAccount();
-    rerenderCurrentView();
+    requestUpdate();
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);
     showToast("Error: " + msg, "error");
@@ -81,7 +81,7 @@ export async function deleteAccount(id: number): Promise<void> {
   try {
     await api("/accounts/" + id, { method: "DELETE" });
     state.accounts = await api("/accounts") as typeof state.accounts;
-    rerenderCurrentView();
+    requestUpdate();
   } catch (e: unknown) {
     const msg = e instanceof Error ? e.message : String(e);
     showToast("Error: " + msg, "error");
@@ -142,7 +142,7 @@ export async function updateAccountKey(id: number, e: Event): Promise<void> {
     });
     state.accounts = await api("/accounts") as typeof state.accounts;
     closeUpdateAccountKey();
-    // We do NOT call rerenderCurrentView() here — the API key is
+    // We do NOT call requestUpdate() here — the API key is
     // not displayed in the underlying accounts table, so there's
     // nothing visible to refresh. A full rebuild would close any
     // open `<select>` (e.g. the per-account health dropdown on a
