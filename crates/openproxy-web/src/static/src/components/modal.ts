@@ -9,8 +9,16 @@
 // handlers. There is no window.__closeModal anymore: the
 // generic closeModalBg action (in handlers/registry.js) removes
 // the closest .modal-bg from the click target.
+//
+// Migrated to lit-html: returns a `TemplateResult`. `body` and
+// `footer` are raw HTML strings from callers, so they are
+// embedded via `unsafeHTML`. The `id` and `title` go through
+// normal `${...}` interpolation. The `id` attribute is omitted
+// entirely when not provided (via lit-html's `nothing` sentinel)
+// so we don't emit `id=""` on the backdrop.
 
-import { escapeHtml, escapeAttr } from "../lib/escape.js";
+import { html, nothing, type TemplateResult } from "lit-html";
+import { unsafeHTML } from "lit-html/directives/unsafe-html.js";
 
 export interface ModalProps {
   id?: string;
@@ -20,24 +28,30 @@ export interface ModalProps {
   onClose?: "navigate" | string;
 }
 
-export function modal(props: ModalProps = { body: "" }): string {
+export function modal(props: ModalProps = { body: "" }): TemplateResult {
   const { id, title, body, footer, onClose } = props;
-  const safeId: string = id ? ` id="${escapeAttr(id)}"` : "";
   // The `onClose` callback used to be a string like "navigate()"
   // inlined into onclick. We keep the parameter for API compatibility
   // but translate it into a data-action="closeAndNavigate" hint on
   // the X button, falling back to closeModalBg. The data-action
   // for the backdrop is closeModalBg.
   const closeAction: string = onClose === "navigate" ? "closeAndNavigate" : "closeModalBg";
-  return `
-    <div class="modal-bg"${safeId} data-action="closeModalBg" data-arg1="self">
+  return html`
+    <div
+      class="modal-bg"
+      id=${id ? id : nothing}
+      data-action="closeModalBg"
+      data-arg1="self"
+    >
       <div class="modal">
         <div class="modal-header">
-          <h2>${escapeHtml(title || "")}</h2>
-          <button type="button" class="close-btn" data-action="${closeAction}" aria-label="Close">&times;</button>
+          <h2>${title || ""}</h2>
+          <button type="button" class="close-btn" data-action="${closeAction}" aria-label="Close">
+            &times;
+          </button>
         </div>
-        ${body}
-        ${footer ? `<div class="modal-footer">${footer}</div>` : ""}
+        ${unsafeHTML(body)}
+        ${footer ? html`<div class="modal-footer">${unsafeHTML(footer)}</div>` : null}
       </div>
     </div>
   `;

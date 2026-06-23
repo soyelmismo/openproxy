@@ -14,6 +14,8 @@
 // `state.selectedModels` and is cleared when the user navigates
 // to a different provider.
 
+import { render, html, type TemplateResult } from "lit-html";
+import { unsafeHTML } from "lit-html/directives/unsafe-html.js";
 import { state } from "../state/index.js";
 import { api } from "../state/api.js";
 import { escapeHtml, escapeAttr } from "../lib/escape.js";
@@ -39,6 +41,22 @@ import {
 } from "../lib/constants.js";
 import { renderQuotaCell } from "./quota-cell.js";
 import type { Account, Model, Provider } from "../lib/types/api.js";
+
+// `card()` and `pageHeader()` were migrated to lit-html and now
+// return `TemplateResult` instead of `string`. The rest of this
+// view still builds HTML by string concatenation and assigns the
+// final string to `#main` via `innerHTML`. To keep that pattern
+// working with minimal churn, we render the lit-html results into
+// a throwaway container and read back the serialized HTML.
+//
+// This is a transitional shim; the long-term plan is to migrate
+// the whole view to lit-html (see views/config.ts for the target
+// pattern).
+function renderTemplateToString(t: TemplateResult): string {
+  const div: HTMLDivElement = document.createElement("div");
+  render(t, div);
+  return div.innerHTML;
+}
 
 // Per-provider UI state stored on `state.providerDetail[providerId]`.
 // The state is open (`Record<string, unknown>`) on `DashboardState` so
@@ -192,7 +210,7 @@ function renderConnectionsSection(provider: Provider, accounts: Account[]): stri
       </table>
     `;
   }
-  return card(`Connections (${accounts.length})`, toolbar + body, { variant: "detail", actions: "" });
+  return renderTemplateToString(card(`Connections (${accounts.length})`, toolbar + body, { variant: "detail", actions: "" }));
 }
 
 // Render the Models section: header with bulk toggles, auto-
@@ -327,7 +345,14 @@ export async function renderProviderDetail(providerId: string): Promise<void> {
     renderModelsSection(provider, providerModels, activeModels, ui),
   ].join("");
   const el = document.getElementById("main");
-  if (el) el.innerHTML = header + body;
+  if (el) {
+    // `header` is a lit-html `TemplateResult`; `body` is a raw HTML
+    // string built by the render*Section helpers above. Render the
+    // header as a proper template and embed the body via
+    // `unsafeHTML` (the body is already trusted markup built with
+    // escapeHtml/escapeAttr by the helpers).
+    render(html`${header}${unsafeHTML(body)}`, el);
+  }
 
   // After the table is in the DOM, sync the master "select all"
   // checkbox state with reality. We can't rely on the static

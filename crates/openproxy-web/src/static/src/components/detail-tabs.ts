@@ -1,19 +1,35 @@
 // components/detail-tabs.ts — render the tab strip used by the
 // log detail modal. Returns the markup; the caller wires the
 // click handler.
+//
+// Migrated to lit-html: returns a `TemplateResult`. The tab id
+// is interpolated into a `data-tab` attribute (lit-html
+// auto-escapes attribute values), and `?class`-style active
+// state is replaced with a conditional class string. The
+// `attachDetailTabHandlers` helper still walks the rendered DOM
+// — it works the same whether the markup came from a string or
+// from a lit-html template.
 
-import { escapeHtml, escapeAttr } from "../lib/escape.js";
+import { html, type TemplateResult } from "lit-html";
 
 export interface DetailTab {
   id: string;
   label: string;
 }
 
-export function renderDetailTabs(tabs: readonly DetailTab[]): string {
-  const buttons: string = tabs.map((t, i) =>
-    `<button class="detail-tab ${i === 0 ? "active" : ""}" data-tab="${escapeAttr(t.id)}" role="tab">${escapeHtml(t.label)}</button>`
-  ).join("");
-  return `<div class="detail-tabs" role="tablist">${buttons}</div>`;
+export function renderDetailTabs(tabs: readonly DetailTab[]): TemplateResult {
+  return html`<div class="detail-tabs" role="tablist">
+    ${tabs.map(
+      (t, i) =>
+        html`<button
+          class="detail-tab ${i === 0 ? "active" : ""}"
+          data-tab="${t.id}"
+          role="tab"
+        >
+          ${t.label}
+        </button>`,
+    )}
+  </div>`;
 }
 
 export function attachDetailTabHandlers(root: HTMLElement): void {

@@ -6,6 +6,8 @@
 // interactive element is wired via data-action / data-arg-N and
 // dispatched through the central shim in app.js.
 
+import { render, html } from "lit-html";
+import { unsafeHTML } from "lit-html/directives/unsafe-html.js";
 import { state } from "../state/index.js";
 import { escapeHtml, escapeAttr } from "../lib/escape.js";
 import { pageHeader } from "../components/page-header.js";
@@ -121,5 +123,9 @@ export function renderProviderGrid(): void {
   });
   const main = document.getElementById("main");
   if (!main) return;
-  main.innerHTML = header + `<div class="provider-grid">${cardsHtml}</div>`;
+  // `header` is now a lit-html `TemplateResult`; the grid HTML is
+  // a raw string built above. Render the header as a template and
+  // embed the grid via `unsafeHTML` (the grid is trusted markup
+  // built with escapeHtml/escapeAttr by renderProviderCard).
+  render(html`${header}${unsafeHTML(`<div class="provider-grid">${cardsHtml}</div>`)}`, main);
 }

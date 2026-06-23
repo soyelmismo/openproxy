@@ -30,7 +30,7 @@
 // file focused on orchestration.
 
 import { html, type TemplateResult } from "lit-html";
-import { unsafeHTML } from "lit-html/directives/unsafe-html.js";
+// unsafeHTML import removed — log-row.ts now returns TemplateResult directly.
 import { state } from "../state/index.js";
 import { api } from "../state/api.js";
 import { renderLogRowHtml } from "../components/log-row.js";
@@ -248,7 +248,7 @@ function renderLogRow(
       (r.request_id && state.logs.stagesByRequestId.get(r.request_id)) ||
       undefined;
   }
-  return html`${unsafeHTML(renderLogRowHtml(r, stage, visibleColKeys, r.total_ms))}`;
+  return html`${renderLogRowHtml(r, stage, visibleColKeys, r.total_ms)}`;
 }
 
 function renderPagination(totalRows: number, totalP: number): TemplateResult {
