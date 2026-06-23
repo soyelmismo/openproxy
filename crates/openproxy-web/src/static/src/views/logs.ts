@@ -794,12 +794,6 @@ function handleLogsMessage(raw: MessageEvent): void {
     showToast("Live Logs received an invalid WebSocket message.", "error");
     return;
   }
-  if (typeof window !== "undefined") {
-    const w = window as unknown as { __logMsgTrace?: { t: number; type: string; hasData: boolean; hasRow: boolean; keys: string[] }[] };
-    w.__logMsgTrace = w.__logMsgTrace || [];
-    const keys = msg && typeof msg === "object" ? Object.keys(msg).slice(0, 10) : [];
-    w.__logMsgTrace.push({ t: Date.now(), type: String(msg?.type ?? ""), hasData: !!msg?.data, hasRow: !!msg?.row, keys });
-  }
   if (msg.type === "history") {
     const rawRows = Array.isArray(msg.rows) ? msg.rows : [];
     const rows: RecentUsageRow[] = rawRows.filter(isRecentUsageRowShape);

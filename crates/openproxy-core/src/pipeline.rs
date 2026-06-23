@@ -3163,6 +3163,38 @@ impl Pipeline {
         // and clients that don't parse tags don't show raw tags.
         let openai_response = extract_think_from_response(openai_response);
 
+        // Bug fix: detect "empty response" — upstream returned 200 but
+        // with content=null, finish_reason=null, no tool_calls, and no
+        // reasoning. This is a provider bug (the model generated nothing
+        // useful) and should be treated as an error so the pipeline
+        // retries the next target instead of silently returning an
+        // empty response to the client.
+        let is_empty_response = openai_response.choices.first().is_some_and(|c| {
+            let msg = &c.message;
+            let content_empty = msg.content.as_ref().map_or(true, |v| {
+                v.as_str().map_or(true, |s| s.is_empty())
+            });
+            let no_tool_calls = msg.tool_calls.as_ref().map_or(true, |t| t.is_empty());
+            let no_reasoning = !msg.extra.contains_key("reasoning_content");
+            let no_finish = c.finish_reason.as_ref().map_or(true, |f| f == "null" || f.is_empty());
+            content_empty && no_tool_calls && no_reasoning && no_finish
+        });
+        if is_empty_response {
+            let err = CoreError::UpstreamConnection(
+                "upstream returned 200 but response is empty (content=null, finish_reason=null, no tool_calls, no reasoning) — treating as error for retry".to_string(),
+            );
+            return self.record_and_fail(
+                req, combo, target,
+                FailureContext {
+                    attempt, race_size, err: &err, started,
+                    model: Some(model),
+                    connect_ms: Some(connect_and_send_ms),
+                    ttft_ms: Some(ttft_ms),
+                    status_code: 502,
+                },
+            );
+        }
+
         let prompt_tokens = openai_response.usage.as_ref().map(|u| u.prompt_tokens);
         let completion_tokens = openai_response.usage.as_ref().map(|u| u.completion_tokens);
 

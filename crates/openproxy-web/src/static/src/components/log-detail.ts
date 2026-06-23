@@ -1087,6 +1087,10 @@ export function showLogDetail(log: LogDetailLog): void {
   if (existing instanceof HTMLElement) {
     removeLogDetailModal(existing);
   }
+  // CRITICAL: set state.logs.selectedRow so copyDebugBundle() can
+  // read it. Without this, the copy button fails silently because
+  // it reads selectedRow which is null or stale from a previous modal.
+  state.logs.selectedRow = log as unknown as (typeof state.logs)["selectedRow"];
   const root = ensureModalRoot();
   // Render the modal into a fresh wrapper div so lit-html can
   // diff efficiently on updateOpenLogDetail re-renders.
