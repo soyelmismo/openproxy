@@ -894,11 +894,32 @@ async function openLogDetail(id: string, requestId: string, traceId?: string): P
       !!stage &&
       (stage.stage === "cancelled" || stage.stage === "failed" || stage.stage === "completed");
     if (!row.error_message) {
-      row.error_message = terminal
-        ? (stage && stage.stage === "cancelled"
-            ? "Cancelled (race loser) — no recorded detail."
-            : "Request ended without a recorded detail row.")
-        : "Request still in progress — no detail available yet.";
+      if (terminal) {
+        row.error_message = stage && stage.stage === "cancelled"
+          ? "Cancelled (race loser) — no recorded detail."
+          : "Request ended without a recorded detail row.";
+      } else {
+        // Improve the "still in progress" message: if the row is
+        // older than 30s with no new stage events, surface a more
+        // actionable message so the operator knows the stream is
+        // likely stalled (not just slow). The proxy will record a
+        // failure row after the idle-chunk timeout (default 120s).
+        const ageMs: number = row.created_at
+          ? Date.now() - new Date(row.created_at).getTime()
+          : 0;
+        const stageName: string = stage?.stage ?? "unknown";
+        const elapsedMs: number | undefined = stage?.elapsed_ms;
+        if (ageMs > 30_000) {
+          const ageSec: number = Math.round(ageMs / 1000);
+          row.error_message = `Stream appears stalled — last stage "${stageName}" ${ageSec}s ago. ` +
+            `The proxy will record a failure row after the idle-chunk timeout (default 120s). ` +
+            `Use "Copy debug bundle" to capture the current state for debugging.`;
+        } else {
+          row.error_message = `Request in progress — current stage: "${stageName}"` +
+            (elapsedMs != null ? ` (${elapsedMs}ms elapsed)` : "") +
+            `. Detail will be available when the stream completes.`;
+        }
+      }
     }
     showLogDetail(row as unknown as LogDetailLog);
     return;

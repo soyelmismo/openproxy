@@ -13,6 +13,7 @@
 import { state } from "../state/index.js";
 import { escapeHtml } from "../lib/escape.js";
 import { appendModal } from "../lib/dom.js";
+import { showToast } from "./toast.js";
 
 /** Loose shape for the `log` arg in renderLogDetailModal. The
  *  modal accepts the long-poll row shape (RecentUsageRow) and the
@@ -1152,6 +1153,41 @@ export function buildDebugBundle(log: LogDetailLog): string {
   lines.push(`Generated: ${new Date().toISOString()}`);
   lines.push("");
 
+  // If this is an in-flight placeholder (id=0), add a prominent
+  // banner so the operator knows the row hasn't been persisted to
+  // the DB yet — the null fields below are NOT a recording failure,
+  // they're a consequence of the row not existing yet.
+  const isInflight: boolean = log.id === 0 || log.id == null;
+  if (isInflight) {
+    lines.push("> ⚠ **This request is still in progress (or its usage row was never written).**");
+    lines.push("> Fields marked `—` below are not yet available because no database row");
+    lines.push("> exists for this request. The proxy will record a row when the stream");
+    lines.push("> completes, fails, or times out (default idle-chunk timeout: 120s).");
+    lines.push("");
+    // Include the latest stage event so the operator has something
+    // actionable — at least they can see which phase the request is
+    // stuck in.
+    const traceId: string | undefined = log.trace_id ?? undefined;
+    const stageEvent: unknown = traceId
+      ? (state.logs.stagesByTraceId as Map<string, unknown>).get(traceId)
+      : undefined;
+    if (stageEvent && typeof stageEvent === "object") {
+      const se = stageEvent as Record<string, unknown>;
+      lines.push("## Last Known Stage");
+      lines.push("");
+      lines.push(`- **Stage:** ${String(se["stage"] ?? "—")}`);
+      lines.push(`- **Elapsed ms:** ${String(se["elapsed_ms"] ?? "—")}`);
+      lines.push(`- **Connect ms:** ${String(se["connect_ms"] ?? "—")}`);
+      lines.push(`- **TTFT ms:** ${String(se["ttft_ms"] ?? "—")}`);
+      lines.push(`- **Status code:** ${String(se["status_code"] ?? "—")}`);
+      lines.push(`- **Timestamp:** ${String(se["timestamp"] ?? "—")}`);
+      if (se["error"]) {
+        lines.push(`- **Error:** ${String(se["error"])}`);
+      }
+      lines.push("");
+    }
+  }
+
   // Identity fields.
   lines.push("## Identity");
   lines.push("");
@@ -1266,35 +1302,91 @@ function truncateForBundle(s: string): string {
 /** Handler for the "Copy debug bundle" button. Reads the currently-
  *  selected log row from `state.logs.selectedRow`, builds the
  *  bundle, and writes it to the clipboard. Shows a toast for
- *  success / failure. */
+ *  success / failure.
+ *
+ *  Includes a fallback for non-secure contexts (HTTP, not localhost)
+ *  where `navigator.clipboard` is unavailable: creates a hidden
+ *  textarea, selects it, and calls `document.execCommand("copy")`. */
 export async function copyDebugBundle(): Promise<void> {
   const row = state.logs.selectedRow as unknown as LogDetailLog | null;
   if (!row) {
-    showToastSafe("No log row selected.");
+    showToast("No log row selected.", "warning");
     return;
   }
+  const bundle: string = buildDebugBundle(row);
   try {
-    const bundle: string = buildDebugBundle(row);
-    await navigator.clipboard.writeText(bundle);
-    showToastSafe("Debug bundle copied to clipboard.");
+    // Try the modern Clipboard API first. Requires a secure context
+    // (HTTPS or localhost). If unavailable or it throws, fall back
+    // to the deprecated execCommand approach.
+    if (navigator.clipboard && typeof navigator.clipboard.writeText === "function") {
+      await navigator.clipboard.writeText(bundle);
+      showToast("Debug bundle copied to clipboard.", "success");
+      return;
+    }
   } catch (err) {
-    showToastSafe(`Failed to copy: ${String(err)}`);
+    // Fall through to the execCommand fallback. Log the Clipboard
+    // API error for debugging but don't surface it to the user yet
+    // — the fallback might still work.
+    console.warn("[openproxy] navigator.clipboard.writeText failed, falling back to execCommand:", err);
+  }
+  // Fallback: hidden textarea + execCommand("copy"). Deprecated but
+  // works in non-secure contexts and older browsers.
+  try {
+    const textarea: HTMLTextAreaElement = document.createElement("textarea");
+    textarea.value = bundle;
+    textarea.style.position = "fixed";
+    textarea.style.left = "-9999px";
+    textarea.style.top = "0";
+    textarea.setAttribute("readonly", "");
+    document.body.appendChild(textarea);
+    textarea.select();
+    const ok: boolean = document.execCommand("copy");
+    document.body.removeChild(textarea);
+    if (ok) {
+      showToast("Debug bundle copied to clipboard.", "success");
+    } else {
+      // execCommand returned false — copy failed. Show the bundle in
+      // a modal so the user can manually select+copy.
+      showBundleInModal(bundle, "Copy failed — select the text below and press Ctrl+C");
+      showToast("Copy failed — bundle shown in a window for manual copy.", "warning");
+    }
+  } catch (err) {
+    console.error("[openproxy] execCommand copy also failed:", err);
+    showBundleInModal(bundle, `Copy failed: ${String(err)} — select the text below and press Ctrl+C`);
+    showToast(`Copy failed — bundle shown in a window for manual copy.`, "warning");
   }
 }
 
-/** Lightweight toast that doesn't depend on the full toast module
- *  being wired up — useful for the copy-debug-bundle action which
- *  can fire from anywhere. Falls back to console.log if the toast
- *  container doesn't exist. */
-function showToastSafe(message: string): void {
-  const container: HTMLElement | null = document.getElementById("toast-container");
-  if (!container) {
-    console.log("[openproxy]", message);
-    return;
+/** Last-resort fallback: show the bundle in a modal window so the
+ *  user can manually select and copy the text. Used when both
+ *  `navigator.clipboard` and `document.execCommand("copy")` fail
+ *  (e.g., very old browsers or strict permission policies). */
+function showBundleInModal(bundle: string, headerMessage: string): void {
+  // Reuse the modal infrastructure. Build a simple modal with a
+  // <pre> containing the bundle and a close button.
+  const modal: HTMLDivElement = document.createElement("div");
+  modal.className = "modal-bg";
+  modal.style.display = "flex";
+  modal.innerHTML = `
+    <div class="modal" style="max-width: 800px; max-height: 80vh; display: flex; flex-direction: column;">
+      <div class="modal-header">
+        <h2>Debug Bundle</h2>
+        <button type="button" class="close-btn" data-action="closeModalBg" aria-label="Close">&times;</button>
+      </div>
+      <div class="modal-body" style="overflow: auto; padding: var(--space-3);">
+        <p class="muted" style="margin-bottom: var(--space-2);">${escapeHtml(headerMessage)}</p>
+        <pre class="json-viewer" style="white-space: pre-wrap; word-break: break-word; user-select: text; cursor: text; padding: var(--space-2); background: var(--color-surface-2); border-radius: var(--radius-sm); font-size: var(--fs-xs);">${escapeHtml(bundle)}</pre>
+      </div>
+    </div>
+  `;
+  // Click on backdrop closes the modal.
+  modal.addEventListener("click", (e: MouseEvent) => {
+    if (e.target === modal) modal.remove();
+  });
+  // Close button.
+  const closeBtn: HTMLButtonElement | null = modal.querySelector(".close-btn");
+  if (closeBtn) {
+    closeBtn.addEventListener("click", () => modal.remove());
   }
-  const toast: HTMLDivElement = document.createElement("div");
-  toast.className = "toast toast-info";
-  toast.textContent = message;
-  container.appendChild(toast);
-  setTimeout(() => { toast.remove(); }, 3000);
+  document.body.appendChild(modal);
 }
