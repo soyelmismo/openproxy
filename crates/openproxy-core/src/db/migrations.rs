@@ -182,6 +182,11 @@ const MIGRATIONS: &[Migration] = &[
         name: "000034_combo_context_window",
         sql: include_str!("../../migrations/000034_combo_context_window.sql"),
     },
+    Migration {
+        version: 35,
+        name: "000035_combo_priority_modes",
+        sql: include_str!("../../migrations/000035_combo_priority_modes.sql"),
+    },
 ];
 
 /// Apply pending migrations on `conn`. Idempotent: skips versions already in

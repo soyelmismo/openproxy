@@ -12,7 +12,20 @@ import { pageHeader } from "../components/page-header.js";
 import { card } from "../components/card.js";
 import { statusPillClass } from "../lib/constants.js";
 import { initDragAndDrop } from "../handlers/combo-target-handlers.js";
-import type { Combo, ComboTargetWithModel } from "../lib/types/api.js";
+import {
+  PRIORITY_MODE_TOOLTIPS,
+  COOLDOWN_MODE_TOOLTIPS,
+  PARAM_TOOLTIPS,
+  priorityModeOptions,
+  cooldownModeOptions,
+  priorityModeOf,
+  cooldownModeOf,
+} from "../handlers/combo-handlers.js";
+import type {
+  Combo,
+  ComboTargetWithModel,
+  PriorityMode,
+} from "../lib/types/api.js";
 
 // Shape of one row in the "Test all" results table. The endpoint
 // hands back an array of these; the exact field set is admin-only
@@ -40,6 +53,14 @@ interface MountCombosOpts {
 }
 
 let main: HTMLElement | null = null;
+
+const PRIORITY_MODE_LABELS: Record<PriorityMode, string> = {
+  strict: "Strict",
+  lkgp: "LKGP",
+  weighted: "Weighted",
+  least_used: "Least Used",
+  p2c: "P2C",
+};
 
 function renderComboTestResults(results: ComboTestResult[]): string {
   if (!Array.isArray(results) || results.length === 0) {
@@ -71,6 +92,103 @@ function renderComboTestResults(results: ComboTestResult[]): string {
       <tbody>${rows}</tbody>
     </table>
   `, { variant: "detail" });
+}
+
+/** Render the priority mode bar (selector + collapsible parameter
+ *  section) for the combo detail view. The selector PATCHes on
+ *  change; the parameter inputs are visible only when the active
+ *  mode has any. Weighted mode has no inline parameters — its
+ *  per-target weights live in the targets table. */
+function renderPriorityModeBar(combo: Combo, comboId: number): string {
+  const pm = priorityModeOf(combo);
+  const tooltip = PRIORITY_MODE_TOOLTIPS[pm];
+  let params = "";
+  if (pm === "lkgp") {
+    const rateRaw = combo.lkgp_exploration_rate != null ? String(combo.lkgp_exploration_rate) : "";
+    params = `<details class="combo-mode-params" open>
+      <summary>Parameters</summary>
+      <div class="combo-mode-params-body">
+        <label><abbr title="${PARAM_TOOLTIPS.exploration_rate}">Exploration Rate (0.0–1.0)</abbr>
+          <input type="number" min="0" max="1" step="0.05" value="${escapeHtml(rateRaw)}"
+                 placeholder="0.1"
+                 data-action="updateLkgpExplorationRate" data-arg1="${comboId}"
+                 class="cw-input">
+        </label>
+      </div>
+    </details>`;
+  } else if (pm === "least_used" || pm === "p2c") {
+    const winRaw = combo.selection_window_secs != null ? String(combo.selection_window_secs) : "";
+    params = `<details class="combo-mode-params" open>
+      <summary>Parameters</summary>
+      <div class="combo-mode-params-body">
+        <label><abbr title="${PARAM_TOOLTIPS.window_secs}">Window (s)</abbr>
+          <input type="number" min="1" value="${escapeHtml(winRaw)}"
+                 placeholder="3600"
+                 data-action="updateSelectionWindow" data-arg1="${comboId}"
+                 class="cw-input">
+        </label>
+      </div>
+    </details>`;
+  } else if (pm === "weighted") {
+    params = `<details class="combo-mode-params" open>
+      <summary>Parameters</summary>
+      <div class="combo-mode-params-body">
+        <span class="muted">Set per-target weights in the targets table below.</span>
+      </div>
+    </details>`;
+  }
+  return `<div class="combo-settings-bar">
+    <label><abbr title="${escapeHtml(tooltip)}">Priority mode</abbr>
+      <select data-action="updatePriorityMode" data-arg1="${comboId}">
+        ${priorityModeOptions(pm)}
+      </select>
+    </label>
+    ${params}
+  </div>`;
+}
+
+/** Render the cooldown mode bar (selector + collapsible parameter
+ *  section) for the combo detail view. The three numeric inputs are
+ *  visible only when `cooldown_mode = exponential`. */
+function renderCooldownBar(combo: Combo, comboId: number): string {
+  const cm = cooldownModeOf(combo);
+  const tooltip = COOLDOWN_MODE_TOOLTIPS[cm];
+  const baseRaw = combo.cooldown_base_secs != null ? String(combo.cooldown_base_secs) : "";
+  const factorRaw = combo.cooldown_factor != null ? String(combo.cooldown_factor) : "";
+  const maxRaw = combo.cooldown_max_secs != null ? String(combo.cooldown_max_secs) : "";
+  const params = cm === "exponential"
+    ? `<details class="combo-mode-params" open>
+      <summary>Parameters</summary>
+      <div class="combo-mode-params-body">
+        <label><abbr title="${PARAM_TOOLTIPS.base_secs}">Base (s)</abbr>
+          <input type="number" min="1" value="${escapeHtml(baseRaw)}"
+                 placeholder="60"
+                 data-action="updateCooldownBase" data-arg1="${comboId}"
+                 class="cw-input">
+        </label>
+        <label><abbr title="${PARAM_TOOLTIPS.factor}">Factor</abbr>
+          <input type="number" min="2" value="${escapeHtml(factorRaw)}"
+                 placeholder="2"
+                 data-action="updateCooldownFactor" data-arg1="${comboId}"
+                 class="cw-input">
+        </label>
+        <label><abbr title="${PARAM_TOOLTIPS.max_secs}">Max (s)</abbr>
+          <input type="number" min="1" value="${escapeHtml(maxRaw)}"
+                 placeholder="3600"
+                 data-action="updateCooldownMax" data-arg1="${comboId}"
+                 class="cw-input">
+        </label>
+      </div>
+    </details>`
+    : "";
+  return `<div class="combo-settings-bar">
+    <label><abbr title="${escapeHtml(tooltip)}">Cooldown mode</abbr>
+      <select data-action="updateCooldownMode" data-arg1="${comboId}">
+        ${cooldownModeOptions(cm)}
+      </select>
+    </label>
+    ${params}
+  </div>`;
 }
 
 async function renderComboDetail(comboId: number): Promise<void> {
@@ -110,6 +228,10 @@ async function renderComboDetail(comboId: number): Promise<void> {
   const effectiveCw = overrideCw ?? autoCw;
   const effectiveCwLabel = effectiveCw != null ? formatTokens(effectiveCw) : "—";
 
+  // Weight column is only rendered when the combo is in weighted mode.
+  const pm = priorityModeOf(combo);
+  const showWeightColumn = pm === "weighted";
+
   const headerActions = `
     <button data-action="testAllTargets" data-arg1="${comboId}">🧪 Test all</button>
     <button class="danger" data-action="deleteCombo" data-arg1="${comboId}">Delete</button>
@@ -120,6 +242,7 @@ async function renderComboDetail(comboId: number): Promise<void> {
       <h2>${escapeHtml(combo.name)}</h2>
       <div class="actions">
         <span class="chip">${escapeHtml(combo.strategy)}</span>
+        <span class="chip">${escapeHtml(PRIORITY_MODE_LABELS[pm])}</span>
         <label>Race size: <input type="number" min="1" max="8" value="${combo.race_size}" data-action="updateRaceSize" data-arg1="${comboId}" class="race-input"></label>
         ${headerActions}
       </div>
@@ -136,6 +259,8 @@ async function renderComboDetail(comboId: number): Promise<void> {
         Effective: <strong>${escapeHtml(effectiveCwLabel)}</strong>
       </span>
     </div>
+    ${renderPriorityModeBar(combo, comboId)}
+    ${renderCooldownBar(combo, comboId)}
   `;
   let body = "";
   if (state.comboTestResults[comboId]) body += renderComboTestResults(state.comboTestResults[comboId] as ComboTestResult[]);
@@ -151,8 +276,9 @@ async function renderComboDetail(comboId: number): Promise<void> {
   if (targets.length === 0) {
     body += `<p class="empty">No targets. Add a target to start routing.</p>`;
   } else {
+    const weightTh = showWeightColumn ? `<th><abbr title="${PARAM_TOOLTIPS.weight}">Weight</abbr></th>` : "";
     body += `<table>
-      <thead><tr><th></th><th><input type="checkbox" id="target-select-all" data-action="toggleSelectAllTargets"></th><th>#</th><th>Provider</th><th>Account</th><th>Model</th><th>Context</th><th>Actions</th></tr></thead>
+      <thead><tr><th></th><th><input type="checkbox" id="target-select-all" data-action="toggleSelectAllTargets"></th><th>#</th><th>Provider</th><th>Account</th><th>Model</th><th>Context</th>${weightTh}<th>Actions</th></tr></thead>
       <tbody id="targets-tbody">`;
     for (const t of [...targets].sort((a, b) => a.priority_order - b.priority_order)) {
       const isSubCombo = t.sub_combo_id != null;
@@ -179,6 +305,14 @@ async function renderComboDetail(comboId: number): Promise<void> {
         ? "<em>sub-combo</em>"
         : (t.context_length != null ? `<span title="${escapeHtml(String(t.context_length))}">${escapeHtml(formatTokens(t.context_length))}</span>` : "—");
       const isSelected = state.selectedTargets.has(t.id);
+      // Weight column: read-only for sub-combo targets (they don't
+      // participate in weighted selection as a single unit), editable
+      // for flat targets.
+      const weightCell = showWeightColumn
+        ? (isSubCombo
+            ? `<td><em>n/a</em></td>`
+            : `<td><input type="number" min="1" value="${t.weight ?? 1}" data-action="updateTargetWeight" data-arg1="${comboId}" data-arg2="${t.id}" class="cw-input weight-input" title="${PARAM_TOOLTIPS.weight}"></td>`)
+        : "";
       body += `
         <tr draggable="true" data-drag-id="${t.id}" data-combo-id="${comboId}" class="${isSelected ? "selected" : ""}">
           <td class="drag-handle" title="Drag to reorder">⠿</td>
@@ -188,6 +322,7 @@ async function renderComboDetail(comboId: number): Promise<void> {
           <td>${accountCell}</td>
           <td>${modelCell}</td>
           <td>${contextCell}</td>
+          ${weightCell}
           <td>
             <button class="small" data-action="changePriority" data-arg1="${comboId}" data-arg2="${t.id}" data-arg3="-1">↑</button>
             <button class="small" data-action="changePriority" data-arg1="${comboId}" data-arg2="${t.id}" data-arg3="1">↓</button>
@@ -202,6 +337,9 @@ async function renderComboDetail(comboId: number): Promise<void> {
   body += `</section>`;
   const el = document.getElementById("main");
   if (el) el.innerHTML = header + body;
+  // The drag-and-drop placeholder's colspan is computed from the
+  // `<thead>` inside `initDragAndDrop`, so it tracks the current
+  // table layout (8 cols without the Weight column, 9 with).
   queueMicrotask(() => {
     initDragAndDrop();
     const master = document.getElementById("target-select-all") as HTMLInputElement | null;
@@ -217,11 +355,20 @@ async function renderComboDetail(comboId: number): Promise<void> {
 
 function renderComboGrid(): void {
   const list = state.combos || [];
-  const cards = list.map((c) =>
-    `<a class="combo-card" href="#/combos/${c.id}">
+  const cards = list.map((c) => {
+    const pm = priorityModeOf(c);
+    // Show the priority-mode chip alongside the strategy chip. Hide
+    // it for `strict` (the default / legacy) so legacy combos render
+    // identically to pre-migration-000035 — the operator can tell at
+    // a glance which combos have been migrated to a non-default mode.
+    const pmChip = pm === "strict"
+      ? ""
+      : ` · <span class="chip">${escapeHtml(PRIORITY_MODE_LABELS[pm])}</span>`;
+    return `<a class="combo-card" href="#/combos/${c.id}">
       <h3>${escapeHtml(c.name)}</h3>
-      <div class="provider-meta"><span class="chip">${escapeHtml(c.strategy)}</span> · race ${c.race_size}</div>
-    </a>`).join("");
+      <div class="provider-meta"><span class="chip">${escapeHtml(c.strategy)}</span>${pmChip} · race ${c.race_size}</div>
+    </a>`;
+  }).join("");
   const grid = cards || `<p class="empty">No combos yet. Create one to start routing.</p>`;
   if (main) main.innerHTML = pageHeader({
     title: "Combos",

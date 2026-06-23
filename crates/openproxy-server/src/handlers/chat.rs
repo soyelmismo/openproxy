@@ -294,7 +294,16 @@ async fn run_pipeline(
         // Read from `[cooldown].cooldown_secs` / `OPENPROXY_COOLDOWN_SECS`.
         // Default 60s when neither is set; the loader fills in
         // `CooldownConfig::default()` for the TOML case.
+        //
+        // `cooldown_max_secs` and `cooldown_factor` are the global
+        // fallbacks for combos whose per-combo overrides are NULL
+        // (migration 000035). They are read here once per request
+        // and threaded into `PipelineConfig`; the pipeline's
+        // `record_failure_with_mode` call site does the final
+        // "combo override or global default?" resolution.
         cooldown_secs: state.config().cooldown.cooldown_secs,
+        cooldown_max_secs: state.config().cooldown.max_secs,
+        cooldown_factor: state.config().cooldown.factor,
         // Use the shared `UpstreamClient` from `AppState` (created once
         // at startup). Sharing it means the underlying hyper client's
         // per-host connection pool is reused across all in-flight
@@ -307,10 +316,11 @@ async fn run_pipeline(
         compression_mode: state.compression_mode(),
         idle_chunk_retryable: state.idle_chunk_retryable(),
     };
-    let pipeline = Pipeline::with_recording_flag(
+    let pipeline = Pipeline::with_selection_registry(
         state.db_pool().writer_arc(),
         config,
         state.record_bodies_and_flags(),
+        state.selection_registry(),
     );
 
     // 6. Per-request IDs. The middleware already stamped a

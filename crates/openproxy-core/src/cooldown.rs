@@ -29,6 +29,7 @@
 //! parent only surfaces `NoHealthyTargets` when every child of every
 //! sub-combo is in cooldown.
 
+use crate::combos::CooldownMode;
 use crate::error::{CoreError, Result};
 use crate::ids::{ComboId, ComboTargetId};
 use chrono::{DateTime, Utc};
@@ -89,12 +90,119 @@ pub fn is_in_cooldown(conn: &Connection, target_id: ComboTargetId) -> Result<boo
 /// `failure_count`, but a flapping target that gets tested every
 /// `cooldown_secs` will keep getting parked because every probe
 /// re-fires the UPSERT.
+///
+/// Legacy entry point retained for callers that don't have a
+/// [`CooldownMode`] in hand. Delegates to [`record_failure_with_mode`]
+/// with `mode = Flat`, `max_secs = cooldown_secs`, `factor = 1` —
+/// i.e. the pre-migration-000035 behavior (always park for exactly
+/// `cooldown_secs`).
 pub fn record_failure(
     conn: &Connection,
     target_id: ComboTargetId,
     reason: &str,
     cooldown_secs: u64,
 ) -> Result<()> {
+    record_failure_with_mode(
+        conn,
+        target_id,
+        reason,
+        CooldownMode::Flat,
+        cooldown_secs,
+        // `max_secs = cooldown_secs` makes the cap a no-op for flat
+        // mode (the computed value is already `<= max_secs`).
+        cooldown_secs,
+        // `factor = 1` makes the exponential formula collapse to
+        // `base_secs * 1^n = base_secs`, so flat and exponential
+        // produce identical results when `factor = 1`.
+        1,
+    )
+}
+
+/// Park `target_id` in cooldown, choosing the duration based on the
+/// combo's [`CooldownMode`] and the per-combo overrides.
+///
+/// For [`CooldownMode::Flat`]: `cooldown_until = now + base_secs`.
+/// This is the legacy behavior — every retryable failure parks the
+/// target for the same flat window.
+///
+/// For [`CooldownMode::Exponential`]: read the *current*
+/// `failure_count` from the existing row (0 if there is no row
+/// yet), compute
+/// `cooldown_secs = min(base_secs * factor^failure_count, max_secs)`,
+/// then UPSERT with the computed `cooldown_until` and the
+/// incremented `failure_count`. The `failure_count - 1` exponent
+/// from the spec is realized as "read the count BEFORE the UPSERT
+/// so the first failure (count=0 → exponent=0) parks for
+/// `base_secs * factor^0 = base_secs`, the second failure
+/// (count=1 → exponent=1) parks for `base_secs * factor`, etc.
+///
+/// The `base_secs` / `max_secs` / `factor` parameters are the
+/// *resolved* values: the caller is responsible for picking the
+/// combo-level override or the global `[cooldown]` default before
+/// calling. Passing the resolved values in (instead of the combo
+/// struct) keeps this function's signature stable and lets the
+/// pipeline reuse it for the legacy flat path without a per-call
+/// DB lookup.
+///
+/// UPSERT semantics: a second call on the same target bumps
+/// `failure_count` and resets `cooldown_until` to the newly-
+/// computed value. The spec calls this "exponential-ish": the
+/// window grows with `failure_count`, but a target that comes
+/// back online and is then re-tried successfully is un-parked by
+/// [`clear`] on the success path.
+pub fn record_failure_with_mode(
+    conn: &Connection,
+    target_id: ComboTargetId,
+    reason: &str,
+    mode: CooldownMode,
+    base_secs: u64,
+    max_secs: u64,
+    factor: u32,
+) -> Result<()> {
+    // Compute the cooldown duration based on the mode. For Flat we
+    // always use `base_secs`; for Exponential we read the current
+    // `failure_count` BEFORE the UPSERT and grow the window by
+    // `factor^failure_count`, capped at `max_secs`.
+    let cooldown_secs: u64 = match mode {
+        CooldownMode::Flat => base_secs,
+        CooldownMode::Exponential => {
+            // Read the current `failure_count`. A missing row (no
+            // prior failure) reads back as 0, which collapses the
+            // formula to `base_secs * factor^0 = base_secs` — the
+            // same as the first flat cooldown. That's the spec's
+            // intent: "the first failure is `base_secs`, each
+            // subsequent failure multiplies by `factor`".
+            let current_count: u64 = conn
+                .query_row(
+                    "SELECT failure_count FROM target_cooldowns \
+                     WHERE combo_target_id = ?1",
+                    params![target_id.0],
+                    |r| r.get::<_, i64>(0),
+                )
+                .optional()
+                .map_err(|e| CoreError::Database {
+                    message: format!(
+                        "record_failure_with_mode: read failure_count({}): {}",
+                        target_id.0, e
+                    ),
+                    source: Some(Box::new(e)),
+                })?
+                .map(|v: i64| v.max(0) as u64)
+                .unwrap_or(0);
+
+            // `factor^current_count`, defended against overflow and
+            // a zero factor (which would collapse every cooldown
+            // after the first to 0). A zero factor is treated as 1
+            // so the exponential mode degrades gracefully to flat
+            // if the operator (or a hand-edited row) sets `factor
+            // = 0`.
+            let f = if factor == 0 { 1u32 } else { factor };
+            let multiplier = checked_pow_u64(f, current_count);
+            let grown = base_secs.saturating_mul(multiplier);
+            grown.min(max_secs)
+        }
+    };
+
     let until = Utc::now() + chrono::Duration::seconds(cooldown_secs as i64);
     conn.execute(
         "INSERT INTO target_cooldowns (combo_target_id, cooldown_until, reason, failure_count, created_at, updated_at)
@@ -107,10 +215,31 @@ pub fn record_failure(
         params![target_id.0, until.to_rfc3339(), reason],
     )
     .map_err(|e| CoreError::Database {
-        message: format!("record_failure({}): {}", target_id.0, e),
+        message: format!("record_failure_with_mode({}): {}", target_id.0, e),
         source: Some(Box::new(e)),
     })?;
     Ok(())
+}
+
+/// Compute `base^exp` for `u64` with saturating arithmetic. Used by
+/// [`record_failure_with_mode`] to grow the cooldown window with
+/// `failure_count`. Capped at `u64::MAX` so an out-of-control
+/// `failure_count` (e.g. a flapping target that's been parked for
+/// hours) doesn't overflow and panic.
+fn checked_pow_u64(base: u32, exp: u64) -> u64 {
+    let mut acc: u64 = 1;
+    let mut b = base as u64;
+    let mut e = exp;
+    while e > 0 {
+        if e & 1 == 1 {
+            acc = acc.saturating_mul(b);
+        }
+        e >>= 1;
+        if e > 0 {
+            b = b.saturating_mul(b);
+        }
+    }
+    acc
 }
 
 /// Remove any active cooldown for `target_id`. Called on the success

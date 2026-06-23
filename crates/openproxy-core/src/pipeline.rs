@@ -12,7 +12,7 @@
 use crate::adapters::{AdapterFormat, ProviderAdapter};
 use crate::circuit_breaker::{CircuitBreakerRegistry, Health};
 use crate::compression::{stats::CompressionStats, CompressionMode};
-use crate::combos::{self, Combo, ComboTarget, Strategy};
+use crate::combos::{self, Combo, ComboTarget, SelectionRegistry, Strategy};
 use crate::config::{CircuitBreakerConfig, RacingConfig, RetriesConfig, TimeoutsConfig};
 use crate::think_extractor::extract_think_from_response;
 use crate::cost::{self, UsageInput};
@@ -357,7 +357,23 @@ pub struct PipelineConfig {
     /// not grow this with `failure_count`; the spec calls for a flat
     /// window that resets on every retryable failure. See
     /// [`crate::cooldown`].
+    ///
+    /// For combos with `cooldown_mode = Exponential` (migration
+    /// 000035), this value is the `base_secs` of the
+    /// `base_secs * factor^(failure_count-1)` formula — the actual
+    /// duration is computed in
+    /// [`crate::cooldown::record_failure_with_mode`] using the
+    /// combo-level overrides (or these global defaults when the
+    /// combo's columns are `NULL`).
     pub cooldown_secs: u64,
+    /// Global default for the exponential cooldown cap. Read from
+    /// `[cooldown].max_secs` (default 3600). Used as the fallback
+    /// when a combo's `cooldown_max_secs` column is `NULL`.
+    pub cooldown_max_secs: u64,
+    /// Global default for the exponential growth factor. Read from
+    /// `[cooldown].factor` (default 2). Used as the fallback when a
+    /// combo's `cooldown_factor` column is `NULL`.
+    pub cooldown_factor: u32,
     /// Hyper-based upstream client used for the non-streaming chat
     /// dispatch (Gate 1). The streaming path and the Kiro/Antigravity
     /// executors still use `http_client` (the reqwest client); they
@@ -501,6 +517,20 @@ pub struct Pipeline {
     config: PipelineConfig,
     circuit_breaker: CircuitBreakerRegistry,
     rr_counters: Arc<parking_lot::Mutex<HashMap<ComboId, u64>>>,
+    /// In-memory registry for the LKGP / least_used / p2c priority
+    /// modes (migration 000035). Tracks per-target recent success
+    /// timestamps and request counts so the dispatcher can prefer
+    /// "known-good" or "less-loaded" targets. Single-instance, lost
+    /// on restart — same shape as `rr_counters`.
+    ///
+    /// The field is `Arc` so a `Pipeline` clone (which the race
+    /// path creates per worker) shares the same registry state.
+    /// Built in [`Pipeline::with_recording_flag`] from a default
+    /// empty registry; production code should use
+    /// [`Pipeline::with_selection_registry`] to share the
+    /// `AppState`-owned registry so LKGP state survives across
+    /// requests.
+    selection_registry: Arc<SelectionRegistry>,
     /// If `true`, the pipeline records the full request and response bodies
     /// and headers in the `usage` table. False by default to save disk.
     /// Shared with `AppState` so the admin endpoint can toggle it.
@@ -542,6 +572,29 @@ impl Pipeline {
         config: PipelineConfig,
         record_bodies_and_headers: Arc<AtomicBool>,
     ) -> Self {
+        Self::with_selection_registry(
+            conn,
+            config,
+            record_bodies_and_headers,
+            Arc::new(SelectionRegistry::new()),
+        )
+    }
+
+    /// Build a new `Pipeline` that shares both the recording flag
+    /// and the LKGP / least_used / p2c selection registry with the
+    /// caller. This is the production entry point: `AppState`
+    /// constructs the registry once at boot and passes a clone of
+    /// the `Arc` here so every per-request `Pipeline` sees the same
+    /// in-memory state. [`Pipeline::with_recording_flag`] delegates
+    /// here with a fresh, per-pipeline registry — fine for tests
+    /// but not for production (LKGP state would not survive across
+    /// requests).
+    pub fn with_selection_registry(
+        conn: Arc<parking_lot::Mutex<Connection>>,
+        config: PipelineConfig,
+        record_bodies_and_headers: Arc<AtomicBool>,
+        selection_registry: Arc<SelectionRegistry>,
+    ) -> Self {
         let cb = CircuitBreakerRegistry::new(&CircuitBreakerConfig {
             failure_threshold: 5,
             unhealthy_duration_ms: 60_000,
@@ -551,9 +604,18 @@ impl Pipeline {
             config,
             circuit_breaker: cb,
             rr_counters: Arc::new(parking_lot::Mutex::new(HashMap::new())),
+            selection_registry,
             record_bodies_and_headers,
             compression_stats_cell: Arc::new(RwLock::new(None)),
         }
+    }
+
+    /// Borrow the shared selection registry. Exposed so tests can
+    /// seed `last_success` / `request_count` state before invoking
+    /// the pipeline, and so a future admin endpoint can surface
+    /// the in-memory LKGP state in the dashboard.
+    pub fn selection_registry(&self) -> &Arc<SelectionRegistry> {
+        &self.selection_registry
     }
 
     /// Get the current recording state.
@@ -1080,6 +1142,23 @@ impl Pipeline {
                 Some(e) if RetryPolicy::is_retryable(e, self.config.idle_chunk_retryable) => Some("record"),
                 Some(_) => None,
             };
+            // 6a-2. Update the in-memory selection registry used by
+            //        the LKGP / least_used / p2c priority modes. A
+            //        successful attempt stamps `last_success_ms` and
+            //        bumps the request count; a failure just bumps
+            //        the request count. The registry is a no-op for
+            //        `Strict` / `Weighted` modes (they don't read
+            //        it), but recording unconditionally keeps the
+            //        state warm for a future mode switch without
+            //        adding a branch on `combo.priority_mode` here.
+            //        Cheap (one `parking_lot::Mutex` lock, two
+            //        integer writes).
+            {
+                self.selection_registry.record_request(target.id);
+                if result.error.is_none() {
+                    self.selection_registry.record_success(target.id);
+                }
+            }
             if cooldown_op.is_some() {
                 let cooldown_conn = self.conn.lock();
                 match cooldown_op {
@@ -1101,17 +1180,39 @@ impl Pipeline {
                             .as_ref()
                             .map(|e| e.to_string())
                             .unwrap_or_else(|| "retryable failure".to_string());
-                        if let Err(e) = crate::cooldown::record_failure(
+                        // Resolve the combo's cooldown settings,
+                        // falling back to the global `[cooldown]`
+                        // defaults when the per-combo column is
+                        // `NULL` (the legacy / pre-migration-000035
+                        // state). `Flat` mode + the global
+                        // `cooldown_secs` reproduces the pre-migration
+                        // behavior exactly; `Exponential` mode grows
+                        // the window with `failure_count` per the
+                        // spec.
+                        let mode = combo.cooldown_mode;
+                        let base_secs = combo
+                            .cooldown_base_secs
+                            .unwrap_or(self.config.cooldown_secs);
+                        let max_secs = combo
+                            .cooldown_max_secs
+                            .unwrap_or(self.config.cooldown_max_secs);
+                        let factor = combo
+                            .cooldown_factor
+                            .unwrap_or(self.config.cooldown_factor);
+                        if let Err(e) = crate::cooldown::record_failure_with_mode(
                             &cooldown_conn,
                             target.id,
                             &reason,
-                            self.config.cooldown_secs,
+                            mode,
+                            base_secs,
+                            max_secs,
+                            factor,
                         ) {
                             tracing::warn!(
                                 combo_id = combo.id.0,
                                 target_id = target.id.0,
                                 error = %e,
-                                "cooldown::record_failure failed; non-fatal"
+                                "cooldown::record_failure_with_mode failed; non-fatal"
                             );
                         }
                     }
@@ -1266,11 +1367,16 @@ impl Pipeline {
         // The first read just sanity-checks the combo exists. The order
         // resolution re-runs `list_targets` internally, so this is cheap.
         let _ = combos::list_targets(&conn, combo.id)?;
-        let ordered = combos::resolve_target_order(
+        // Use the new dispatcher so the combo's `priority_mode`
+        // (LKGP / weighted / least_used / p2c) is honored. The
+        // legacy `Strict` mode (the default for pre-migration-000035
+        // rows) produces the same `priority_order ASC` walk as
+        // before, so existing combos behave unchanged.
+        let ordered = combos::resolve_target_order_with_mode(
             &conn,
-            combo.id,
-            combo.strategy,
+            combo,
             &self.rr_counters,
+            &self.selection_registry,
         )?;
         combos::expand_account_rotation(&conn, ordered)
     }
@@ -5229,6 +5335,8 @@ mod tests {
             // exercise the cooldown path can pass a shorter value
             // through a local `PipelineConfig` override.
             cooldown_secs: 60,
+            cooldown_max_secs: 3600,
+            cooldown_factor: 2,
             // Hyper-based upstream client. The default production
             // connector (rustls HTTPS) is fine for tests that don't
             // exercise the HTTP path; tests that DO need a real
@@ -6406,6 +6514,8 @@ mod tests {
             adapters: Arc::new(vec![Arc::new(mock) as Arc<dyn ProviderAdapter>]),
             http_client: reqwest::Client::new(),
             cooldown_secs: 60,
+            cooldown_max_secs: 3600,
+            cooldown_factor: 2,
             upstream_client: UpstreamClient::new(),
             oauth_provider_registry: None,
             // Auto-added (test compile fix):
@@ -6633,6 +6743,8 @@ mod tests {
             adapters: Arc::new(vec![Arc::new(mock) as Arc<dyn ProviderAdapter>]),
             http_client: reqwest::Client::new(),
             cooldown_secs: 60,
+            cooldown_max_secs: 3600,
+            cooldown_factor: 2,
             upstream_client: UpstreamClient::new(),
             oauth_provider_registry: None,
             // Auto-added (test compile fix):
@@ -6810,6 +6922,8 @@ mod tests {
             adapters: Arc::new(vec![Arc::new(mock) as Arc<dyn ProviderAdapter>]),
             http_client: reqwest::Client::new(),
             cooldown_secs: 60,
+            cooldown_max_secs: 3600,
+            cooldown_factor: 2,
             upstream_client: UpstreamClient::new(),
             oauth_provider_registry: None,
             // Auto-added (test compile fix):
@@ -6979,6 +7093,8 @@ mod tests {
             adapters: Arc::new(vec![Arc::new(mock) as Arc<dyn ProviderAdapter>]),
             http_client: reqwest::Client::new(),
             cooldown_secs: 60,
+            cooldown_max_secs: 3600,
+            cooldown_factor: 2,
             upstream_client: UpstreamClient::new(),
             oauth_provider_registry: None,
             compression_mode: crate::compression::CompressionMode::Off,
@@ -7171,6 +7287,8 @@ mod tests {
             adapters: Arc::new(vec![Arc::new(mock) as Arc<dyn ProviderAdapter>]),
             http_client: reqwest::Client::new(),
             cooldown_secs: 60,
+            cooldown_max_secs: 3600,
+            cooldown_factor: 2,
             upstream_client: UpstreamClient::new(),
             oauth_provider_registry: None,
             compression_mode: crate::compression::CompressionMode::Off,
@@ -7386,6 +7504,8 @@ mod tests {
             adapters: Arc::new(vec![Arc::new(mock) as Arc<dyn ProviderAdapter>]),
             http_client: reqwest::Client::new(),
             cooldown_secs: 60,
+            cooldown_max_secs: 3600,
+            cooldown_factor: 2,
             upstream_client: UpstreamClient::new(),
             oauth_provider_registry: None,
             compression_mode: crate::compression::CompressionMode::Off,
@@ -7640,6 +7760,8 @@ mod tests {
             adapters: Arc::new(vec![Arc::new(mock) as Arc<dyn ProviderAdapter>]),
             http_client: reqwest::Client::new(),
             cooldown_secs: 60,
+            cooldown_max_secs: 3600,
+            cooldown_factor: 2,
             // Disable retry backoff so the test is fast.
             retries: RetriesConfig {
                 backoff_base_ms: 1,
@@ -7846,6 +7968,8 @@ mod tests {
             adapters: Arc::new(vec![Arc::new(mock) as Arc<dyn ProviderAdapter>]),
             http_client: reqwest::Client::new(),
             cooldown_secs: 60,
+            cooldown_max_secs: 3600,
+            cooldown_factor: 2,
             upstream_client: UpstreamClient::new(),
             oauth_provider_registry: None,
             // Auto-added (test compile fix):
@@ -8656,6 +8780,8 @@ mod tests {
             adapters: Arc::new(vec![Arc::new(mock) as Arc<dyn ProviderAdapter>]),
             http_client: reqwest::Client::new(),
             cooldown_secs: 60,
+            cooldown_max_secs: 3600,
+            cooldown_factor: 2,
             upstream_client: UpstreamClient::new(),
             oauth_provider_registry: None,
             // Auto-added (test compile fix):
@@ -8811,6 +8937,8 @@ mod tests {
             adapters: Arc::new(vec![Arc::new(mock) as Arc<dyn ProviderAdapter>]),
             http_client: reqwest::Client::new(),
             cooldown_secs: 60,
+            cooldown_max_secs: 3600,
+            cooldown_factor: 2,
             upstream_client: UpstreamClient::new(),
             oauth_provider_registry: None,
             // Auto-added (test compile fix):
@@ -9055,6 +9183,8 @@ mod tests {
             adapters: Arc::new(vec![Arc::new(mock) as Arc<dyn ProviderAdapter>]),
             http_client: reqwest::Client::new(),
             cooldown_secs: 60,
+            cooldown_max_secs: 3600,
+            cooldown_factor: 2,
             upstream_client: UpstreamClient::new(),
             oauth_provider_registry: None,
             // Auto-added (test compile fix):
@@ -9367,6 +9497,8 @@ mod tests {
                     as Arc<dyn ProviderAdapter>]),
                 http_client: reqwest::Client::new(),
                 cooldown_secs: 60,
+                cooldown_max_secs: 3600,
+                cooldown_factor: 2,
                 upstream_client: UpstreamClient::new(),
                 oauth_provider_registry: None,
                 // Auto-added (test compile fix):
@@ -9796,6 +9928,8 @@ mod tests {
             adapters: Arc::new(vec![Arc::new(mock) as Arc<dyn ProviderAdapter>]),
             http_client: reqwest::Client::new(),
             cooldown_secs: 60,
+            cooldown_max_secs: 3600,
+            cooldown_factor: 2,
             upstream_client: UpstreamClient::new(),
             oauth_provider_registry: None,
             // Auto-added (test compile fix):
@@ -10347,6 +10481,8 @@ data: [DONE]\n\n";
             adapters: Arc::new(vec![Arc::new(mock) as Arc<dyn ProviderAdapter>]),
             http_client: reqwest::Client::new(),
             cooldown_secs: 60,
+            cooldown_max_secs: 3600,
+            cooldown_factor: 2,
             upstream_client: UpstreamClient::new(),
             oauth_provider_registry: None,
             // Auto-added (test compile fix):

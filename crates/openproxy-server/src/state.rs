@@ -107,6 +107,16 @@ pub struct AppState {
     /// treated as retryable (pipeline falls through to the next
     /// target). Default false. Persisted in `app_config` table.
     idle_chunk_retryable_cell: Arc<AtomicBool>,
+    /// In-memory selection registry for the LKGP / least_used /
+    /// p2c priority modes (migration 000035). Tracks per-target
+    /// recent success timestamps and request counts so the
+    /// pipeline's dispatcher can prefer "known-good" or
+    /// "less-loaded" targets. Single-instance, lost on restart —
+    /// same shape as the per-pipeline `rr_counters`. Shared with
+    /// every per-request `Pipeline` via
+    /// [`Pipeline::with_selection_registry`] so LKGP state
+    /// survives across requests.
+    selection_registry: Arc<openproxy_core::combos::SelectionRegistry>,
 }
 
 impl AppState {
@@ -519,6 +529,7 @@ impl AppState {
             discovery_scheduler,
             oauth_provider_registry,
             idle_chunk_retryable_cell: Arc::new(AtomicBool::new(idle_chunk_retryable)),
+            selection_registry: Arc::new(openproxy_core::combos::SelectionRegistry::new()),
         };
         // Hot-reload custom adapters from DB so the registry is
         // complete before the first request arrives.
@@ -635,6 +646,7 @@ impl AppState {
             idle_chunk_retryable_cell: Arc::new(AtomicBool::new(
                 db::app_config::IDLE_CHUNK_RETRYABLE_DEFAULT,
             )),
+            selection_registry: Arc::new(openproxy_core::combos::SelectionRegistry::new()),
         }
     }
 
@@ -871,6 +883,15 @@ impl AppState {
     /// admin PUT endpoint after the DB UPSERT.
     pub fn set_idle_chunk_retryable(&self, val: bool) {
         self.idle_chunk_retryable_cell.store(val, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    /// Return a clone of the shared selection registry. The chat
+    /// handler passes this into every `Pipeline` it builds via
+    /// [`openproxy_core::pipeline::Pipeline::with_selection_registry`]
+    /// so the LKGP / least_used / p2c priority modes share state
+    /// across all in-flight requests.
+    pub fn selection_registry(&self) -> Arc<openproxy_core::combos::SelectionRegistry> {
+        Arc::clone(&self.selection_registry)
     }
 }
 

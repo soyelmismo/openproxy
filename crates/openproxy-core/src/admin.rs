@@ -475,11 +475,47 @@ fn now_unix_secs_str() -> String {
 // =====================================================================
 
 /// Inputs for [`create_combo`].
+///
+/// The `priority_mode` / `cooldown_mode` / per-combo cooldown
+/// overrides / `lkgp_exploration_rate` / `selection_window_secs`
+/// fields are all optional (migration 000035). `None` means "use
+/// the legacy default" — `Strict` priority mode, `Flat` cooldown
+/// mode, and the global `[cooldown]` config for the cooldown
+/// numbers. A non-`None` `priority_mode` / `cooldown_mode` is
+/// parsed and validated by [`combos::PriorityMode::parse`] /
+/// [`combos::CooldownMode::parse`]; an unknown value surfaces as
+/// [`CoreError::Validation`] (HTTP 400).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CreateComboInput {
     pub name: String,
     pub strategy: String,
     pub race_size: Option<u8>,
+    /// Priority mode for `Strategy::Priority`. `None` = `strict`
+    /// (the legacy walk). Ignored for `RoundRobin` / `Shuffle`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub priority_mode: Option<String>,
+    /// Cooldown growth mode. `None` = `flat` (the legacy behavior).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cooldown_mode: Option<String>,
+    /// Per-combo cooldown base (seconds). `None` = use the global
+    /// `[cooldown] cooldown_secs` / `[cooldown] base_secs`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cooldown_base_secs: Option<u64>,
+    /// Per-combo cooldown cap (seconds). `None` = use the global
+    /// `[cooldown] max_secs` (default 3600).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cooldown_max_secs: Option<u64>,
+    /// Per-combo exponential growth factor. `None` = use the global
+    /// `[cooldown] factor` (default 2).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cooldown_factor: Option<u32>,
+    /// LKGP exploration rate (0.0–1.0). `None` = default 0.1.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lkgp_exploration_rate: Option<f64>,
+    /// Selection window (seconds) for `least_used` / `p2c` modes.
+    /// `None` = default 3600.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub selection_window_secs: Option<u64>,
 }
 
 /// Add a target to a combo. The wire shape is the historical one for
@@ -526,6 +562,43 @@ pub fn create_combo(conn: &Connection, input: CreateComboInput) -> Result<ComboI
     // Best-effort auto-fill. Errors are non-fatal: the combo exists
     // already, and a later pipeline run can re-attempt the fill.
     let _ = combos::auto_populate_empty_combo(conn, combo_id);
+
+    // Apply the migration-000035 per-combo overrides. Each helper
+    // validates its inputs (e.g. `priority_mode` must be a known
+    // enum value, `lkgp_exploration_rate` must be in `[0.0, 1.0]`)
+    // and writes a single UPDATE. A validation failure here leaves
+    // the combo created (with `auto_populate` already run) and
+    // surfaces the error to the caller — the operator can fix the
+    // bad input and re-POST, or PATCH the combo after the fact.
+    //
+    // We call the helpers unconditionally: a `None` field clears
+    // the column back to `NULL` (the legacy default), which is the
+    // right thing for a fresh create where the operator omitted the
+    // field. The helpers are also no-ops on a missing combo id
+    // (which can't happen here — we just inserted it).
+    if input.priority_mode.is_some() {
+        combos::update_priority_mode(conn, combo_id, input.priority_mode.as_deref())?;
+    }
+    if input.cooldown_mode.is_some()
+        || input.cooldown_base_secs.is_some()
+        || input.cooldown_max_secs.is_some()
+        || input.cooldown_factor.is_some()
+    {
+        combos::update_cooldown_settings(
+            conn,
+            combo_id,
+            input.cooldown_mode.as_deref(),
+            input.cooldown_base_secs,
+            input.cooldown_max_secs,
+            input.cooldown_factor,
+        )?;
+    }
+    if input.lkgp_exploration_rate.is_some() {
+        combos::update_lkgp_settings(conn, combo_id, input.lkgp_exploration_rate)?;
+    }
+    if input.selection_window_secs.is_some() {
+        combos::update_selection_window(conn, combo_id, input.selection_window_secs)?;
+    }
     Ok(combo_id)
 }
 
@@ -1095,6 +1168,13 @@ mod tests {
                 name: "primary".into(),
                 strategy: "priority".into(),
                 race_size: None,
+                priority_mode: None,
+                cooldown_mode: None,
+                cooldown_base_secs: None,
+                cooldown_max_secs: None,
+                cooldown_factor: None,
+                lkgp_exploration_rate: None,
+                selection_window_secs: None,
             },
         )
         .expect("create combo");
@@ -1111,6 +1191,13 @@ mod tests {
                 name: "rr".into(),
                 strategy: "round_robin".into(),
                 race_size: Some(3),
+                priority_mode: None,
+                cooldown_mode: None,
+                cooldown_base_secs: None,
+                cooldown_max_secs: None,
+                cooldown_factor: None,
+                lkgp_exploration_rate: None,
+                selection_window_secs: None,
             },
         )
         .expect("create rr combo");
@@ -1164,6 +1251,13 @@ mod tests {
                 name: "bad".into(),
                 strategy: "fifo".into(),
                 race_size: None,
+                priority_mode: None,
+                cooldown_mode: None,
+                cooldown_base_secs: None,
+                cooldown_max_secs: None,
+                cooldown_factor: None,
+                lkgp_exploration_rate: None,
+                selection_window_secs: None,
             },
         )
         .expect_err("invalid strategy");
@@ -1541,6 +1635,13 @@ mod tests {
                 name: "two-target".into(),
                 strategy: "priority".into(),
                 race_size: None,
+                priority_mode: None,
+                cooldown_mode: None,
+                cooldown_base_secs: None,
+                cooldown_max_secs: None,
+                cooldown_factor: None,
+                lkgp_exploration_rate: None,
+                selection_window_secs: None,
             },
         )
         .expect("create combo");

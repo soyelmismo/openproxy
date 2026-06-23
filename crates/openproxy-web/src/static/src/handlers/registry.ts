@@ -23,7 +23,13 @@
 //     passes the bound element (data-arg1="self") as the arg.
 
 import { showCreateAccount, createAccount, closeCreateAccount, deleteAccount, testAccount, showUpdateAccountKey, updateAccountKey, closeUpdateAccountKey } from "./account-handlers.js";
-import { showCreateCombo, createCombo, closeCreateCombo, deleteCombo, updateRaceSize, updateContextWindow, testAllTargets } from "./combo-handlers.js";
+import {
+  showCreateCombo, createCombo, closeCreateCombo, deleteCombo, updateRaceSize, updateContextWindow, testAllTargets,
+  onCreatePriorityModeChange, onCreateCooldownModeChange,
+  updatePriorityMode, updateCooldownMode,
+  updateCooldownBase, updateCooldownFactor, updateCooldownMax,
+  updateLkgpExplorationRate, updateSelectionWindow,
+} from "./combo-handlers.js";
 import {
   showAddTarget, closeAddTarget, onTargetKindChange, onTargetProviderChange,
   addTarget, deleteTarget, resetCooldown, changePriority,
@@ -31,6 +37,7 @@ import {
   onModelCheckboxChange,
   selectAllModelsInModal,
   deselectAllModelsInModal,
+  updateTargetWeight,
 } from "./combo-target-handlers.js";
 import { showCreateKey, showEditKey, closeKeyForm, toggleExpiryAmount, createKey, updateKey, regenerateKey, revokeKey, viewKeyUsage, deleteKey } from "./key-handlers.js";
 import {
@@ -106,6 +113,15 @@ export const HANDLERS: Record<string, ActionHandler> = {
   updateRaceSize,
   updateContextWindow,  // signature: (comboId, e)     — input change
   testAllTargets,       // signature: (comboId, e)     — button click
+  onCreatePriorityModeChange,   // signature: ()        — select change (create modal)
+  onCreateCooldownModeChange,   // signature: ()        — select change (create modal)
+  updatePriorityMode,           // signature: (comboId, e) — select change
+  updateCooldownMode,           // signature: (comboId, e) — select change
+  updateCooldownBase,           // signature: (comboId, e) — input change (filtered)
+  updateCooldownFactor,         // signature: (comboId, e) — input change (filtered)
+  updateCooldownMax,            // signature: (comboId, e) — input change (filtered)
+  updateLkgpExplorationRate,    // signature: (comboId, e) — input change (filtered)
+  updateSelectionWindow,        // signature: (comboId, e) — input change (filtered)
 
   // Combo targets
   showAddTarget,
@@ -123,6 +139,7 @@ export const HANDLERS: Record<string, ActionHandler> = {
   toggleSelectAllTargets,
   clearTargetSelection,
   bulkDeleteSelectedTargets,
+  updateTargetWeight,   // signature: (comboId, targetId, e) — input change (filtered)
 
   // Keys
   showCreateKey,

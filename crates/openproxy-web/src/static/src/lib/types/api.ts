@@ -75,6 +75,20 @@ export type AuthType = "bearer" | "x-api-key" | "goog-api-key" | "oauth" | "none
  *  @see crates/openproxy-core/src/combos.rs:13 */
 export type Strategy = "priority" | "round_robin" | "shuffle";
 
+/** `#[serde(rename_all = "snake_case")]`.
+ *  Selection algorithm used to order targets at request time, layered
+ *  on top of `Strategy::Priority`. `null` / `"strict"` = legacy
+ *  `priority_order` walk (migration 000035).
+ *  @see crates/openproxy-core/src/combos.rs:57 */
+export type PriorityMode = "strict" | "lkgp" | "weighted" | "least_used" | "p2c";
+
+/** `#[serde(rename_all = "snake_case")]`.
+ *  Cooldown growth mode. `null` / `"flat"` = current behavior (always
+ *  `cooldown_base_secs`); `"exponential"` grows as
+ *  `base * factor^(failures-1)`, capped at `max` (migration 000035).
+ *  @see crates/openproxy-core/src/combos.rs:129 */
+export type CooldownMode = "flat" | "exponential";
+
 /** `#[serde(rename_all = "lowercase")]`.
  *  @see crates/openproxy-core/src/models.rs:22 */
 export type TargetFormat = "openai" | "anthropic" | "gemini";
@@ -259,6 +273,28 @@ export interface Combo {
   /** Override del context window (tokens). `null` = auto-compute
    *  (mínimo entre todos los targets, incluyendo sub-combos). */
   context_window?: number | null;
+  /** Selection algorithm for `Strategy::Priority`. `null` / `"strict"`
+   *  = legacy `priority_order` walk (migration 000035). Ignored for
+   *  `RoundRobin` / `Shuffle`. */
+  priority_mode?: PriorityMode | null;
+  /** Cooldown growth mode. `null` / `"flat"` = always `cooldown_base_secs`;
+   *  `"exponential"` = `base * factor^(failures-1)` capped at `max`. */
+  cooldown_mode?: CooldownMode | null;
+  /** Per-combo override for the cooldown base (seconds). `null` = use
+   *  the global `[cooldown] cooldown_secs`. */
+  cooldown_base_secs?: number | null;
+  /** Per-combo override for the cooldown cap (seconds). `null` = use
+   *  the global `[cooldown] max_secs` (default 3600). */
+  cooldown_max_secs?: number | null;
+  /** Per-combo override for the exponential growth factor. `null` =
+   *  use the global `[cooldown] factor` (default 2). */
+  cooldown_factor?: number | null;
+  /** LKGP exploration rate (0.0–1.0). `null` = default 0.1. Only
+   *  meaningful when `priority_mode = "lkgp"`. */
+  lkgp_exploration_rate?: number | null;
+  /** Selection window (seconds) for `least_used` / `p2c` modes. `null`
+   *  = default 3600 (1 hour). */
+  selection_window_secs?: number | null;
 }
 
 /** @see crates/openproxy-core/src/combos.rs:47 */
@@ -272,6 +308,12 @@ export interface ComboTarget {
   model_row_id: ModelRowId | null;
   sub_combo_id: ComboId | null;
   priority_order: number;
+  /** Per-target weight for the `weighted` priority mode (migration
+   *  000035). The DB column is `INTEGER NOT NULL DEFAULT 1`; existing
+   *  rows that pre-date the migration read back as `1`. The field is
+   *  optional in the TS type so older API responses that omit it
+   *  still parse — the dashboard treats `undefined` as `1`. */
+  weight?: number;
 }
 
 /** `ComboTarget` enriquecido con metadata del model (display name, etc.)
@@ -547,6 +589,21 @@ export interface CreateComboInput {
   strategy: string;
   /** 1..=8; default 1. */
   race_size: number | null;
+  /** "strict" | "lkgp" | "weighted" | "least_used" | "p2c" — el server
+   *  lo parsea. Omit / `undefined` = legacy `"strict"` default. */
+  priority_mode?: string;
+  /** "flat" | "exponential". Omit / `undefined` = legacy `"flat"` default. */
+  cooldown_mode?: string;
+  /** Per-combo cooldown base (seconds). Omit = use global default. */
+  cooldown_base_secs?: number;
+  /** Per-combo cooldown cap (seconds). Omit = use global default. */
+  cooldown_max_secs?: number;
+  /** Per-combo exponential growth factor. Omit = use global default. */
+  cooldown_factor?: number;
+  /** LKGP exploration rate (0.0–1.0). Omit = default 0.1. */
+  lkgp_exploration_rate?: number;
+  /** Selection window (seconds) for `least_used` / `p2c`. Omit = 3600. */
+  selection_window_secs?: number;
 }
 
 /** POST `/admin/combos/:id/targets`. XOR entre `model_row_id` y

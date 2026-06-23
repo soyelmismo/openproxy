@@ -276,6 +276,7 @@ pub fn build_synthetic_combo(
         model_row_id: Some(model_row_id),
         sub_combo_id: None,
         priority_order: 0,
+        weight: 1,
     };
     let combo = Combo {
         id: ComboId(SYNTHETIC_COMBO_ID),
@@ -284,6 +285,16 @@ pub fn build_synthetic_combo(
         race_size: 1,
         created_at: String::new(),
         context_window: None,
+        // Synthetic combos use the legacy defaults (strict priority,
+        // flat cooldown) so a direct-model dispatch behaves exactly
+        // like a single-target user combo.
+        priority_mode: crate::combos::PriorityMode::Strict,
+        cooldown_mode: crate::combos::CooldownMode::Flat,
+        cooldown_base_secs: None,
+        cooldown_max_secs: None,
+        cooldown_factor: None,
+        lkgp_exploration_rate: None,
+        selection_window_secs: None,
     };
     (combo, vec![target])
 }

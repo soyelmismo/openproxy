@@ -243,6 +243,63 @@
   font-size: var(--fs-sm);
 }
 
+/* ----- Combo settings bars (priority mode + cooldown) -----
+   Rendered below the page-header / context-window-bar in the
+   combo detail view. Each bar holds a `<select>` for the mode and
+   an optional `<details>` for the mode-specific parameters. */
+.combo-settings-bar {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-3);
+  padding: var(--space-2) 0;
+  border-bottom: var(--border-w) var(--border-style) var(--color-border-soft);
+  flex-wrap: wrap;
+}
+.combo-settings-bar > label {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  font-size: var(--fs-sm);
+}
+.combo-settings-bar select { min-width: 9rem; }
+.combo-settings-bar abbr {
+  border-bottom: 1px dashed var(--color-border);
+  cursor: help;
+  text-decoration: none;
+}
+.combo-mode-params {
+  border: var(--border-w) var(--border-style) var(--color-border-soft);
+  background: var(--color-surface-2);
+  padding: var(--space-1) var(--space-2);
+  font-size: var(--fs-sm);
+  flex: 1;
+  min-width: 240px;
+}
+.combo-mode-params > summary {
+  cursor: pointer;
+  font-weight: 600;
+  color: var(--color-text);
+  user-select: none;
+}
+.combo-mode-params[open] > summary {
+  margin-bottom: var(--space-1);
+}
+.combo-mode-params-body {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2) var(--space-3);
+}
+.combo-mode-params-body > label {
+  display: inline-flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  font-size: var(--fs-xs);
+  color: var(--color-text-muted);
+}
+.combo-mode-params-body input { width: 8rem; }
+.combo-mode-params-body .muted { color: var(--color-text-muted); font-style: italic; }
+.weight-input { width: 4rem !important; }
+
 /* ----- OAuth ----- */
 .oauth-login-section { margin-bottom: var(--space-4); }
 .oauth-login-section h3 { margin-bottom: var(--space-2); font-size: var(--fs-lg); }

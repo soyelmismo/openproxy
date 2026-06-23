@@ -2408,9 +2408,29 @@ pub async fn delete_model(
 // Combo mutations
 // =====================================================================
 
-/// `PATCH /admin/combos/:id` — currently the only mutable field is
-/// `race_size`. Body: `{"race_size": 1..=8}`. Missing `race_size` is a
-/// no-op; out-of-range is a 400.
+/// `PATCH /admin/combos/:id` — partial update of a combo row.
+///
+/// Recognized body fields (all optional — absent fields are left
+/// untouched):
+///
+/// - `race_size`: `1..=8`. Out-of-range is a 400.
+/// - `context_window`: `null` or an integer. `null` means
+///   "auto-compute from targets".
+/// - `priority_mode`: `"strict"` | `"lkgp"` | `"weighted"` |
+///   `"least_used"` | `"p2c"`. `null` clears the column back to
+///   the legacy `strict` default. Ignored for `RoundRobin` /
+///   `Shuffle` strategies (stored but not consulted).
+/// - `cooldown_mode`: `"flat"` | `"exponential"`. `null` clears
+///   the column back to the legacy `flat` default.
+/// - `cooldown_base_secs` / `cooldown_max_secs` / `cooldown_factor`:
+///   per-combo overrides for the cooldown formula. `null` clears
+///   each one back to "use the global `[cooldown]` default".
+///   These three fields are written in a single UPDATE so the
+///   dashboard's "Cooldown" form can POST them atomically.
+/// - `lkgp_exploration_rate`: float in `[0.0, 1.0]`. `null`
+///   clears the column back to the default 0.1.
+/// - `selection_window_secs`: positive integer. `null` clears the
+///   column back to the default 3600.
 pub async fn update_combo(
     State(s): State<AppState>,
     Path(id): Path<i64>,
@@ -2438,39 +2458,187 @@ pub async fn update_combo(
             };
             combos::update_context_window(&w, ComboId(id), cw)?;
         }
+        // Optional `priority_mode` update. `null` clears the column
+        // back to `strict` (the legacy default).
+        if let Some(v) = body.get("priority_mode") {
+            let mode = match v {
+                serde_json::Value::Null => None,
+                serde_json::Value::String(s) => Some(s.as_str()),
+                other => {
+                    return Err(ApiError(CoreError::Validation(format!(
+                        "priority_mode must be a string or null, got {}",
+                        other
+                    ))))
+                }
+            };
+            combos::update_priority_mode(&w, ComboId(id), mode)?;
+        }
+        // Optional cooldown settings update. The three numeric
+        // fields are written together so the dashboard's "Cooldown"
+        // form can POST them atomically. We treat `cooldown_mode`
+        // as the trigger: if any of the four fields is present in
+        // the body, we issue a single UPDATE that writes all four
+        // (using the body value when present, otherwise `None` to
+        // clear the column).
+        let has_cd = body.get("cooldown_mode").is_some()
+            || body.get("cooldown_base_secs").is_some()
+            || body.get("cooldown_max_secs").is_some()
+            || body.get("cooldown_factor").is_some();
+        if has_cd {
+            let mode = match body.get("cooldown_mode") {
+                None => None,
+                Some(serde_json::Value::Null) => None,
+                Some(serde_json::Value::String(s)) => Some(s.as_str()),
+                Some(other) => {
+                    return Err(ApiError(CoreError::Validation(format!(
+                        "cooldown_mode must be a string or null, got {}",
+                        other
+                    ))))
+                }
+            };
+            let base = match body.get("cooldown_base_secs") {
+                None => None,
+                Some(serde_json::Value::Null) => None,
+                Some(v) => Some(v.as_u64().ok_or_else(|| {
+                    ApiError(CoreError::Validation(
+                        "cooldown_base_secs must be a non-negative integer or null".into(),
+                    ))
+                })?),
+            };
+            let max = match body.get("cooldown_max_secs") {
+                None => None,
+                Some(serde_json::Value::Null) => None,
+                Some(v) => Some(v.as_u64().ok_or_else(|| {
+                    ApiError(CoreError::Validation(
+                        "cooldown_max_secs must be a non-negative integer or null".into(),
+                    ))
+                })?),
+            };
+            let factor = match body.get("cooldown_factor") {
+                None => None,
+                Some(serde_json::Value::Null) => None,
+                Some(v) => Some(v.as_u64().ok_or_else(|| {
+                    ApiError(CoreError::Validation(
+                        "cooldown_factor must be a non-negative integer or null".into(),
+                    ))
+                })? as u32),
+            };
+            combos::update_cooldown_settings(&w, ComboId(id), mode, base, max, factor)?;
+        }
+        // Optional LKGP exploration rate update.
+        if let Some(v) = body.get("lkgp_exploration_rate") {
+            let rate = if v.is_null() {
+                None
+            } else {
+                Some(v.as_f64().ok_or_else(|| {
+                    ApiError(CoreError::Validation(
+                        "lkgp_exploration_rate must be a number in [0.0, 1.0] or null".into(),
+                    ))
+                })?)
+            };
+            combos::update_lkgp_settings(&w, ComboId(id), rate)?;
+        }
+        // Optional selection window update.
+        if let Some(v) = body.get("selection_window_secs") {
+            let window = if v.is_null() {
+                None
+            } else {
+                Some(v.as_u64().ok_or_else(|| {
+                    ApiError(CoreError::Validation(
+                        "selection_window_secs must be a non-negative integer or null".into(),
+                    ))
+                })?)
+            };
+            combos::update_selection_window(&w, ComboId(id), window)?;
+        }
         Ok(Json(serde_json::json!({ "id": id })))
     }
     .await;
     body.into()
 }
 
-/// `PATCH /admin/combos/:id/targets/:target_id` — move a target to a
-/// new `priority_order`. Body: `{"priority_order": <i32>}`. The handler
-/// does not re-number siblings; the caller picks a sane value.
+/// `PATCH /admin/combos/:id/targets/:target_id` — update mutable
+/// fields of a single target. Recognized body fields (all optional —
+/// absent fields are left untouched):
+///
+/// - `priority_order`: `i32`. The caller picks a sane value relative
+///   to siblings; we don't re-number the rest of the rowset here.
+/// - `weight`: positive `i32`. Per-target weight for the `weighted`
+///   priority mode (migration 000035). Default 1; weights `<= 0`
+///   are rejected with a 400.
+///
+/// For backwards compatibility, the legacy single-field form
+/// `{"priority_order": <i32>}` is still accepted (and required when
+/// `weight` is absent). The dashboard's combo editor upgrades the
+/// call to include both fields when the operator is editing the
+/// weight column.
 pub async fn update_combo_target(
     State(s): State<AppState>,
     Path((combo_id, target_id)): Path<(i64, i64)>,
     Json(body): Json<serde_json::Value>,
 ) -> ApiResult<Json<serde_json::Value>> {
     let body: Result<Json<serde_json::Value>, ApiError> = async {
-        let priority_order = body
-            .get("priority_order")
-            .and_then(|v| v.as_i64())
-            .ok_or_else(|| ApiError(CoreError::Validation("missing 'priority_order'".into())))?;
-        // Cast: i32 is well under i64::MAX in practice; the SQL column is
-        // INTEGER (i64 in rusqlite) so a non-negative i32 is safe.
-        if priority_order < i32::MIN as i64 || priority_order > i32::MAX as i64 {
-            return Err(ApiError(CoreError::Validation(format!(
-                "priority_order out of i32 range: {}",
-                priority_order
-            ))));
+        // Optional `priority_order` — the historical primary field.
+        // Kept optional so a future dashboard that only wants to
+        // PATCH `weight` can do so without round-tripping the order.
+        let priority_order: Option<i64> = match body.get("priority_order") {
+            None => None,
+            Some(v) => Some(v.as_i64().ok_or_else(|| {
+                ApiError(CoreError::Validation(
+                    "priority_order must be an integer when present".into(),
+                ))
+            })?),
+        };
+        if let Some(priority_order) = priority_order {
+            // Cast: i32 is well under i64::MAX in practice; the SQL
+            // column is INTEGER (i64 in rusqlite) so a non-negative
+            // i32 is safe.
+            if priority_order < i32::MIN as i64 || priority_order > i32::MAX as i64 {
+                return Err(ApiError(CoreError::Validation(format!(
+                    "priority_order out of i32 range: {}",
+                    priority_order
+                ))));
+            }
+            let w = s.db_pool().writer();
+            combos::update_target_priority(
+                &w,
+                ComboTargetId(target_id),
+                priority_order as i32,
+            )?;
         }
-        let w = s.db_pool().writer();
-        combos::update_target_priority(&w, ComboTargetId(target_id), priority_order as i32)?;
+        // Optional `weight` (migration 000035).
+        if let Some(v) = body.get("weight") {
+            let weight_i64 = v.as_i64().ok_or_else(|| {
+                ApiError(CoreError::Validation(
+                    "weight must be an integer when present".into(),
+                ))
+            })?;
+            // Range-check before the i32 cast so an out-of-range
+            // value surfaces as a 400 instead of a silent wrap.
+            if weight_i64 < 1 || weight_i64 > i32::MAX as i64 {
+                return Err(ApiError(CoreError::Validation(format!(
+                    "weight must be a positive i32 (1..={}), got {}",
+                    i32::MAX,
+                    weight_i64
+                ))));
+            }
+            let w = s.db_pool().writer();
+            combos::update_target_weight(&w, ComboTargetId(target_id), weight_i64 as i32)?;
+        }
+        // Backwards-compat: if neither field was present, surface
+        // the historical "missing 'priority_order'" error so a
+        // legacy caller still gets a useful 400 instead of a silent
+        // 200 with no work done.
+        if priority_order.is_none() && body.get("weight").is_none() {
+            return Err(ApiError(CoreError::Validation(
+                "missing 'priority_order' or 'weight'".into(),
+            )));
+        }
         Ok(Json(serde_json::json!({
             "combo_id": combo_id,
             "id": target_id,
             "priority_order": priority_order,
+            "weight": body.get("weight").and_then(|v| v.as_i64()),
         })))
     }
     .await;

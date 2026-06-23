@@ -24,6 +24,12 @@ let dragComboId: number | null = null;
 let dropPlaceholder: HTMLTableRowElement | null = null;
 let dragFromHandle = false;
 
+// Number of columns in the targets table. Computed once on
+// `initDragAndDrop` from the `<thead>` so the drop placeholder's
+// `<td colspan>` matches the actual layout (which changes when the
+// weighted mode adds a Weight column).
+let dropPlaceholderColspan = 8;
+
 function removePlaceholder(): void {
   if (dropPlaceholder && dropPlaceholder.parentNode) {
     dropPlaceholder.parentNode.removeChild(dropPlaceholder);
@@ -87,7 +93,7 @@ function onDragOver(e: DragEvent): void {
 
   dropPlaceholder = document.createElement("tr");
   dropPlaceholder.className = "dnd-placeholder";
-  dropPlaceholder.innerHTML = `<td colspan="7"></td>`;
+  dropPlaceholder.innerHTML = `<td colspan="${dropPlaceholderColspan}"></td>`;
 
   if (insertBefore) {
     tbody.insertBefore(dropPlaceholder, row);
@@ -179,6 +185,14 @@ function onDragEnd(_e: DragEvent): void {
 export function initDragAndDrop(): void {
   const tbody = document.getElementById("targets-tbody");
   if (!tbody) return;
+
+  // Compute the column count from the table's `<thead>` so the drop
+  // placeholder's `<td colspan>` matches the actual layout. The
+  // weighted priority mode adds a Weight column (8 → 9). Falls back
+  // to 8 (the legacy column count) if the thead can't be read.
+  const table = tbody.closest("table");
+  const ths = table ? table.querySelectorAll("thead th") : null;
+  if (ths && ths.length > 0) dropPlaceholderColspan = ths.length;
 
   // CRITICAL FIX C1: track mousedown on .drag-handle for drag guard
   tbody.addEventListener("mousedown", (e) => {
@@ -542,4 +556,35 @@ export async function bulkDeleteSelectedTargets(comboId: number): Promise<void> 
   ));
   state.selectedTargets.clear();
   rerenderCurrentView();
+}
+
+/** `PATCH /admin/combos/:id/targets/:tid` — update a target's weight
+ *  for the `weighted` priority mode (migration 000035). The dashboard
+ *  fires this from the Weight column's `<input type="number">` in
+ *  `views/combos.ts`.
+ *
+ *  The generic data-action dispatcher fires for both "input" (per
+ *  keystroke) and "change" (blur/enter); we filter on "input" so we
+ *  don't PATCH on every keystroke. Empty input resets to the default
+ *  weight of 1. The backend rejects weights `<= 0` with a 400. */
+export async function updateTargetWeight(comboId: number, targetId: number, e: Event | null): Promise<void> {
+  if (e && e.type === "input") return;
+  const raw = e && e.target ? (e.target as HTMLInputElement).value.trim() : "";
+  const val: number = raw === "" ? 1 : parseInt(raw, 10);
+  if (!Number.isFinite(val) || val <= 0) {
+    alert("Weight must be a positive integer");
+    rerenderCurrentView();
+    return;
+  }
+  try {
+    await api(`/combos/${comboId}/targets/${targetId}`, {
+      method: "PATCH",
+      body: JSON.stringify({ weight: val }),
+    });
+    rerenderCurrentView();
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    alert("Error: " + msg);
+    rerenderCurrentView();
+  }
 }

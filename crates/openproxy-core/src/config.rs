@@ -149,14 +149,59 @@ impl Default for CircuitBreakerConfig {
 /// The env var is checked in [`AppConfig::load_or_default`] so a
 /// docker container can flip the cooldown without rewriting the
 /// baked-in config file.
+///
+/// ## Exponential cooldown (migration 000035)
+///
+/// Per-combo overrides (`cooldown_base_secs`, `cooldown_max_secs`,
+/// `cooldown_factor`) on the `combos` table take precedence over
+/// these defaults; the fields below are the fallback used when a
+/// combo's column is `NULL` (the legacy / pre-migration-000035
+/// state). The pipeline resolves "combo override or global
+/// default?" at request time, so flipping a value here takes
+/// effect on the next request without a restart.
+///
+/// - `cooldown_secs`: the flat-window duration AND the exponential
+///   `base_secs` (the two are intentionally the same field so a
+///   pre-migration config keeps working unchanged).
+/// - `max_secs`: the cap on the exponential growth. Default 3600
+///   (1 hour).
+/// - `factor`: the exponential growth factor. Default 2 (each
+///   failure doubles the cooldown window).
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub struct CooldownConfig {
+    /// Flat-window duration (seconds) for `cooldown_mode = Flat`,
+    /// AND the `base_secs` for `cooldown_mode = Exponential`. The
+    /// two cases share a field so a pre-migration config keeps
+    /// working unchanged — only the *interpretation* of the value
+    /// depends on the combo's `cooldown_mode`.
     pub cooldown_secs: u64,
+    /// Cap on the exponential cooldown (seconds). Default 3600.
+    /// Only meaningful when `cooldown_mode = Exponential`; ignored
+    /// for `Flat` (the flat window is always exactly `cooldown_secs`).
+    #[serde(default = "default_cooldown_max_secs")]
+    pub max_secs: u64,
+    /// Exponential growth factor. Default 2 (each failure doubles
+    /// the window). Only meaningful when
+    /// `cooldown_mode = Exponential`.
+    #[serde(default = "default_cooldown_factor")]
+    pub factor: u32,
+}
+
+fn default_cooldown_max_secs() -> u64 {
+    3600
+}
+
+fn default_cooldown_factor() -> u32 {
+    2
 }
 
 impl Default for CooldownConfig {
     fn default() -> Self {
-        Self { cooldown_secs: 60 }
+        Self {
+            cooldown_secs: 60,
+            max_secs: default_cooldown_max_secs(),
+            factor: default_cooldown_factor(),
+        }
     }
 }
 
