@@ -59,9 +59,9 @@
   --color-text-muted:   #5a5a5a;
   --color-text-inverse: var(--c-canvas);
   --color-link:         var(--c-link);
-  --color-border:       var(--c-frame-ink);
-  --color-border-soft:  #d4d4d4;
-  --color-frame-ink:    var(--c-frame-ink);
+  --color-border:       #e0e0e0;   /* softer than pure black */
+  --color-border-soft:  #eaeaea;
+  --color-frame-ink:    #1a1a1a;   /* not pure black for less harshness */
 
   --color-primary:      var(--c-dell-red);
   --color-primary-hover:#c91825;
@@ -125,20 +125,21 @@
   --lh-tight: 1.2;
   --lh-base:  1.45;
 
-  /* ----- Radius (only 0 or pill, spec §4.5) ----- */
+  /* ----- Radius — soft, premium feel ----- */
   --radius-0:    0;
   --radius-pill: 9999px;
-  --radius-md:   var(--radius-0);
-  --radius-sm:   var(--radius-0);
+  --radius-sm:   4px;
+  --radius-md:   6px;
+  --radius-lg:   10px;
 
-  /* ----- Borders (hard 1px, spec §4.5) ----- */
+  /* ----- Borders — subtle, not harsh ----- */
   --border-w:     1px;
   --border-w-2:   2px;
   --border-style: solid;
 
-  /* ----- Transitions ----- */
+  /* ----- Transitions — smooth, not instant ----- */
   --t-fast:  120ms ease;
-  --t-base:  180ms ease;
+  --t-base:  200ms ease;
 
   /* ----- Layout ----- */
   --layout-sidebar-w:          200px;
