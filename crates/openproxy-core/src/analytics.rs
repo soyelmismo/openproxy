@@ -310,16 +310,28 @@ pub fn race_stats(conn: &Connection, f: &UsageFilter) -> Result<RaceStats> {
     // sequential, non-race rows and are excluded).
     let mut clauses: Vec<String> = Vec::new();
     if !w.sql.is_empty() {
+        // Qualify all column references with `usage.` prefix to avoid
+        // "ambiguous column name" errors when JOINing with combo_targets
+        // (both tables have provider_id, combo_target_id, etc.).
         let bare = w.sql.trim_start_matches("WHERE ").to_string();
-        clauses.push(format!("({})", bare));
+        let qualified = bare
+            .replace("created_at", "usage.created_at")
+            .replace("provider_id", "usage.provider_id")
+            .replace("upstream_model_id", "usage.upstream_model_id")
+            .replace("account_id", "usage.account_id")
+            .replace("combo_id", "usage.combo_id")
+            .replace("api_key_id", "usage.api_key_id")
+            .replace("race_total", "usage.race_total")
+            .replace("race_lost", "usage.race_lost");
+        clauses.push(format!("({})", qualified));
     }
-    clauses.push("race_total > 1".to_string());
+    clauses.push("usage.race_total > 1".to_string());
     let where_clause = format!("WHERE {}", clauses.join(" AND "));
 
     let mut sql = String::new();
     write!(
         &mut sql,
-        "SELECT request_id, race_lost, combo_target_id, ct.priority_order \
+        "SELECT usage.request_id, usage.race_lost, usage.combo_target_id, ct.priority_order \
          FROM usage \
          LEFT JOIN combo_targets AS ct ON ct.id = usage.combo_target_id \
          {}",

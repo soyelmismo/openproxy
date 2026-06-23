@@ -344,13 +344,13 @@ function renderPresetSelector(active: UsagePreset): TemplateResult {
 
 function renderAnalyticsFilters(providerId: string, apiKeyId: string): TemplateResult {
   return html`<div class="analytics-filters">
-    <select class="filter-dropdown" @change=${(e: Event) => setHashParams({ providerId: (e.target as HTMLSelectElement).value })}>
-      <option value="" ?selected=${providerId === ""}>All providers</option>
-      ${providers.map((p) => html`<option value=${p.id} ?selected=${p.id === providerId}>${p.name}</option>`)}
+    <select class="filter-dropdown" .value=${providerId} @change=${(e: Event) => setHashParams({ providerId: (e.target as HTMLSelectElement).value })}>
+      <option value="">All providers</option>
+      ${providers.map((p) => html`<option value=${p.id}>${p.name}</option>`)}
     </select>
-    <select class="filter-dropdown" @change=${(e: Event) => setHashParams({ apiKeyId: (e.target as HTMLSelectElement).value })}>
-      <option value="" ?selected=${apiKeyId === ""}>All API keys</option>
-      ${apiKeys.map((k) => html`<option value=${String(k.id)} ?selected=${String(k.id) === apiKeyId}>${k.key_prefix || "—"} (${k.label || "—"})</option>`)}
+    <select class="filter-dropdown" .value=${apiKeyId} @change=${(e: Event) => setHashParams({ apiKeyId: (e.target as HTMLSelectElement).value })}>
+      <option value="">All API keys</option>
+      ${apiKeys.map((k) => html`<option value=${String(k.id)}>${k.key_prefix || "—"} (${k.label || "—"})</option>`)}
     </select>
     <button class="btn-link" @click=${() => setHashParams({ providerId: "", apiKeyId: "" })}>Clear filters</button>
   </div>`;

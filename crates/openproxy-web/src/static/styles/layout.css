@@ -71,6 +71,19 @@ body.sidebar-collapsed #app {
   border-top: var(--border-w) var(--border-style) var(--color-border-soft);
   font-size: var(--fs-xs);
   color: var(--color-text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+/* Collapsed sidebar: hide health text, show just the dot */
+body.sidebar-collapsed .sidebar .health {
+  font-size: 0;
+  padding: var(--space-1);
+  text-align: center;
+}
+body.sidebar-collapsed .sidebar .health::before {
+  content: "●";
+  font-size: var(--fs-sm);
 }
 #health-status { font-family: var(--font-mono); }
 #health-status.ok      { color: var(--color-success); }
@@ -122,6 +135,20 @@ body.sidebar-collapsed .sidebar .brand { text-align: center; }
   background: var(--color-primary-soft);
 }
 body.sidebar-collapsed .sidebar-toggle { text-align: center; }
+
+/* Sidebar footer: theme toggle above collapse toggle */
+.sidebar-footer {
+  display: flex;
+  flex-direction: column-reverse;
+  gap: var(--space-1);
+  align-items: stretch;
+}
+body.sidebar-collapsed .sidebar-footer { align-items: center; }
+body.sidebar-collapsed .sidebar-footer #theme-toggle-slot { display: flex; justify-content: center; }
+
+/* Arrow direction: « when expanded (collapse = go left), » when collapsed (expand = go right) */
+body.sidebar-collapsed .sidebar-toggle::after { content: " →"; }
+.sidebar-toggle:not(body.sidebar-collapsed .sidebar-toggle)::after { content: ""; }
 
 
 

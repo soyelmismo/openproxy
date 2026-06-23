@@ -1,7 +1,6 @@
 // components/recording-toggle.ts — toggle button for recording.
 // Migrated to lit-html: uses render() instead of innerHTML.
 
-import { html, render } from 'lit-html';
 import { state } from "../state/index.js";
 import { api } from "../state/api.js";
 import { showToast } from "./toast.js";
@@ -42,10 +41,16 @@ export function renderRecordingToggle(): void {
   if (!btn) return;
   const on: boolean = !!state.logs.recording;
   const loading: boolean = !!state.logs.recordingLoading;
-  render(html`<button id="logs-recording-toggle" class="logs-recording-toggle ${on ? "on" : "off"}${loading ? " loading" : ""}"
-    ?disabled=${loading} aria-pressed=${on ? "true" : "false"}
-    title=${on ? "Recording is ON — full bodies and headers are being saved. Click to stop." : "Recording is OFF — only metadata is being saved. Click to start recording full bodies and headers."}
-    @click=${toggleRecording}>
-    <span class="logs-recording-label">⏺ Record: <strong>${on ? "ON" : "OFF"}</strong></span>
-  </button>`, btn.parentElement ?? btn);
+  // Update the existing button in-place instead of rendering a new
+  // one into the parent (which caused the duplicate button bug).
+  btn.classList.toggle("on", on);
+  btn.classList.toggle("off", !on);
+  btn.classList.toggle("loading", loading);
+  btn.setAttribute("aria-pressed", on ? "true" : "false");
+  if (btn instanceof HTMLButtonElement) btn.disabled = loading;
+  btn.title = on
+    ? "Recording is ON — full bodies and headers are being saved. Click to stop."
+    : "Recording is OFF — only metadata is being saved. Click to start recording full bodies and headers.";
+  const label = btn.querySelector(".logs-recording-label");
+  if (label) label.innerHTML = `⏺ Record: <strong>${on ? "ON" : "OFF"}</strong>`;
 }

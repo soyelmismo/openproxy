@@ -78,7 +78,7 @@ export function renderSidebar(): void {
   const healthText = !health ? "—" : (health.status === "ok" || health.status === "healthy") ? "healthy" : (health.status || "down");
   const collapsed = !!mutableState().ui?.sidebarCollapsed;
   document.body.classList.toggle("sidebar-collapsed", collapsed);
-  const toggleLabel = collapsed ? "»" : "«";
+  const toggleLabel = collapsed ? "→" : "←";
 
   render(html`
     <div class="brand">
