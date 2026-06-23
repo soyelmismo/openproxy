@@ -18,7 +18,7 @@
 // the grid is rendered.
 
 import { html, type TemplateResult } from 'lit-html';
-import { unsafeHTML } from 'lit-html/directives/unsafe-html.js';
+// unsafeHTML import removed — all components now return TemplateResult.
 import { state } from "../state/index.js";
 import { api } from "../state/api.js";
 import { mountView, requestUpdate } from "../state/reactive.js";
@@ -780,7 +780,7 @@ function renderConnectionsSection(provider: Provider, accounts: Account[]): Temp
         <thead><tr><th>Label</th><th>Priority</th><th>Health</th><th>Quota</th><th>Created</th><th>Actions</th></tr></thead>
         <tbody>${accounts.map((a) => {
           const quotaCell: TemplateResult = hasQuota
-            ? html`<td>${unsafeHTML(renderQuotaCell(a))}</td>`
+            ? html`<td>${renderQuotaCell(a)}</td>`
             : html`<td><div class="quota-cell muted"><small>not supported by this provider</small></div></td>`;
           return html`<tr>
             <td>${a.label || "—"}</td>
