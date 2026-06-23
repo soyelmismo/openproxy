@@ -1,16 +1,20 @@
-// views/keys.ts — API keys list. The create / edit / regen /
-// revoke / delete handlers live in handlers/key-handlers.js; the
-// create/edit modal HTML is built there too (buildModalHtml). This
-// view is responsible for the table only.
+// views/keys.ts — API keys list.
 //
-// Per spec §3 + §13.8 we do not use inline `onclick="window.X()"`
-// handlers. Buttons carry `data-action="X" data-arg-N="..."` and
-// the document-level shim in app.js dispatches them.
+// MIGRATED to lit-html for atomic DOM updates. The create / edit /
+// regen / revoke / delete handlers are wired directly to @click
+// listeners; the create/edit modal HTML is still built by
+// `handlers/key-handlers.ts` (it lives at <body> level so it
+// survives re-renders). Regenerate / revoke / delete are written
+// locally so they can use `showToast()` for errors (no `alert()`)
+// and call `requestUpdate()` instead of `rerenderCurrentView()`.
 
+import { html, type TemplateResult } from 'lit-html';
 import { state } from "../state/index.js";
 import { api } from "../state/api.js";
-import { escapeHtml, escapeAttr } from "../lib/escape.js";
-import { pageHeader } from "../components/page-header.js";
+import { mountView, requestUpdate } from "../state/reactive.js";
+import { showToast } from "../components/toast.js";
+import { showCreateKey, showEditKey } from "../handlers/key-handlers.js";
+import { showPlaintextKey } from "../components/key-display.js";
 import type { Model } from "../lib/types/api.js";
 
 // The api_key row shape. Defined locally (not in lib/types/api.ts)
@@ -36,10 +40,127 @@ interface ApiKeyRow {
   created_by: string | null;
 }
 
-export async function mountKeys(): Promise<void> {
+// Shape of the POST /keys/:id/regenerate response.
+interface KeyPlaintextResponse {
+  plaintext: string;
+  key: { label?: string | null; key_prefix?: string | null } | null;
+}
+
+// ---- Module-local state ----
+let loadError: string | null = null;
+
+// ---- Handlers ----
+
+function onShowCreateKey(): void { void showCreateKey(); }
+function onShowEditKey(id: number): void { void showEditKey(id); }
+function onViewKeyUsage(id: number): void {
+  location.hash = `#/keys/${id}/usage`;
+}
+
+async function onRegenerateKey(id: number, label: string | null): Promise<void> {
+  const display = label || ("#" + id);
+  if (!confirm(`Regenerate key "${display}"?\n\nThe current key will be invalidated immediately. You'll get a new plaintext key.`)) return;
+  try {
+    const result = (await api(`/keys/${id}/regenerate`, { method: "POST" })) as KeyPlaintextResponse;
+    showPlaintextKey(result.plaintext, result.key);
+  } catch (e: unknown) {
+    const msg = e instanceof Error ? e.message : String(e);
+    showToast("Error: " + msg, "error");
+  }
+}
+
+async function onRevokeKey(id: number, label: string | null): Promise<void> {
+  const display = label || ("#" + id);
+  if (!confirm(`Revoke key "${display}"?\n\nThe key will be deactivated immediately. Any client using it will get 401 errors. You can re-enable it later by editing the row.`)) return;
+  try {
+    await api(`/keys/${id}/revoke`, { method: "POST" });
+    state.apiKeys = await api("/keys") as typeof state.apiKeys;
+    requestUpdate();
+  } catch (e: unknown) {
+    const msg = e instanceof Error ? e.message : String(e);
+    showToast("Error: " + msg, "error");
+  }
+}
+
+async function onDeleteKey(id: number, label: string | null): Promise<void> {
+  const display = label || ("#" + id);
+  if (!confirm(`Delete key "${display}"?\n\nThis is irreversible. Historical usage rows will keep the api_key_id but the key row itself will be gone.`)) return;
+  try {
+    await api(`/keys/${id}`, { method: "DELETE" });
+    state.apiKeys = (state.apiKeys || []).filter((k) => (k as { id: number }).id !== id);
+    requestUpdate();
+  } catch (e: unknown) {
+    const msg = e instanceof Error ? e.message : String(e);
+    showToast("Error: " + msg, "error");
+  }
+}
+
+// ---- Templates ----
+
+function renderKeyRow(k: ApiKeyRow): TemplateResult {
+  const scopes: string = (k.scopes || []).join(", ") || "—";
+  let allowedModels: string = "all";
+  if (k.allowed_models === null || k.allowed_models === undefined) allowedModels = "all";
+  else if (Array.isArray(k.allowed_models) && k.allowed_models.length === 0) allowedModels = "(empty)";
+  else if (Array.isArray(k.allowed_models)) allowedModels = k.allowed_models.length + " models";
+  const isActive: boolean = k.is_active && !k.revoked_at;
+  const statusClass: string = isActive ? "on" : "off";
+  const statusText: string = k.revoked_at ? "revoked" : (k.is_active ? "active" : "inactive");
+  const label: string = k.label || "—";
+  const createdBy: TemplateResult = k.created_by ? html` <small>(${k.created_by})</small>` : html``;
+  return html`
+    <tr>
+      <td>${label}${createdBy}</td>
+      <td><code>${k.key_prefix || "—"}</code></td>
+      <td>${scopes}</td>
+      <td>${allowedModels}</td>
+      <td><span class="status-pill ${statusClass}">${statusText}</span></td>
+      <td>${k.last_used_at || "never"}</td>
+      <td>${k.created_at || "—"}</td>
+      <td>
+        <button class="small" @click=${() => onShowEditKey(k.id)}>Edit</button>
+        <button class="small" @click=${() => onRegenerateKey(k.id, k.label)}>Regenerate</button>
+        <button class="small" @click=${() => onViewKeyUsage(k.id)}>Usage</button>
+        ${k.is_active && !k.revoked_at
+          ? html`<button class="small" @click=${() => onRevokeKey(k.id, k.label)}>Revoke</button>`
+          : html``}
+        <button class="small danger" @click=${() => onDeleteKey(k.id, k.label)}>Delete</button>
+      </td>
+    </tr>
+  `;
+}
+
+function renderKeys(): TemplateResult {
+  if (loadError) {
+    return html`
+      <div class="page-header"><h2>API Keys</h2>
+        <div class="actions"><button class="primary" @click=${onShowCreateKey}>+ Create key</button></div>
+      </div>
+      <div class="banner banner-error">${loadError}</div>
+    `;
+  }
+  const keys: ApiKeyRow[] = (state.apiKeys as ApiKeyRow[]) || [];
+  const body: TemplateResult = keys.length === 0
+    ? html`<p class="empty">No API keys yet. Create one to authenticate clients.</p>`
+    : html`<table>
+        <thead><tr><th>Label</th><th>Prefix</th><th>Scopes</th><th>Allowed models</th><th>Status</th><th>Last used</th><th>Created</th><th>Actions</th></tr></thead>
+        <tbody>${keys.map(renderKeyRow)}</tbody>
+      </table>`;
+  return html`
+    <div class="page-header"><h2>API Keys</h2>
+      <div class="actions"><button class="primary" @click=${onShowCreateKey}>+ Create key</button></div>
+    </div>
+    ${body}
+  `;
+}
+
+// ---- Mount ----
+
+export async function mountKeys(): Promise<(() => void) | void> {
   const main = document.getElementById("main");
   if (!main) return;
-  main.innerHTML = pageHeader({ title: "API Keys" }) + `<div class="loading">Loading...</div>`;
+  loadError = null;
+  const cleanup = mountView(main, renderKeys);
   try {
     const [keys, models] = await Promise.all([
       api("/keys") as Promise<ApiKeyRow[]>,
@@ -47,54 +168,10 @@ export async function mountKeys(): Promise<void> {
     ]);
     state.apiKeys = keys;
     state.models = models;
+    requestUpdate();
   } catch (e: unknown) {
-    const msg = e instanceof Error ? e.message : String(e);
-    main.innerHTML = pageHeader({ title: "API Keys" }) +
-      `<div class="banner banner-error">${escapeHtml(msg)}</div>`;
-    return;
+    loadError = e instanceof Error ? e.message : String(e);
+    requestUpdate();
   }
-  const keys = (state.apiKeys as ApiKeyRow[]) || [];
-  let body = "";
-  if (keys.length === 0) {
-    body = `<p class="empty">No API keys yet. Create one to authenticate clients.</p>`;
-  } else {
-    body = `<table>
-      <thead><tr><th>Label</th><th>Prefix</th><th>Scopes</th><th>Allowed models</th><th>Status</th><th>Last used</th><th>Created</th><th>Actions</th></tr></thead>
-      <tbody>`;
-    for (const k of keys) {
-      const scopes = (k.scopes || []).join(", ") || "—";
-      let allowedModels = "all";
-      if (k.allowed_models === null || k.allowed_models === undefined) allowedModels = "all";
-      else if (Array.isArray(k.allowed_models) && k.allowed_models.length === 0) allowedModels = "(empty)";
-      else if (Array.isArray(k.allowed_models)) allowedModels = k.allowed_models.length + " models";
-      const isActive = k.is_active && !k.revoked_at;
-      const statusClass = isActive ? "on" : "off";
-      const statusText = k.revoked_at ? "revoked" : (k.is_active ? "active" : "inactive");
-      const createdBy = k.created_by ? ` <small>(${escapeHtml(k.created_by)})</small>` : "";
-      const labelAttr = escapeAttr(k.label || "");
-      body += `
-        <tr>
-          <td>${escapeHtml(k.label || "—")}${createdBy}</td>
-          <td><code>${escapeHtml(k.key_prefix || "—")}</code></td>
-          <td>${escapeHtml(scopes)}</td>
-          <td>${escapeHtml(allowedModels)}</td>
-          <td><span class="status-pill ${statusClass}">${statusText}</span></td>
-          <td>${escapeHtml(k.last_used_at || "never")}</td>
-          <td>${escapeHtml(k.created_at || "—")}</td>
-          <td>
-            <button class="small" data-action="showEditKey" data-arg1="${k.id}">Edit</button>
-            <button class="small" data-action="regenerateKey" data-arg1="${k.id}" data-arg2="${labelAttr}">Regenerate</button>
-            <button class="small" data-action="viewKeyUsage" data-arg1="${k.id}">Usage</button>
-            ${k.is_active && !k.revoked_at ? `<button class="small" data-action="revokeKey" data-arg1="${k.id}" data-arg2="${labelAttr}">Revoke</button>` : ""}
-            <button class="small danger" data-action="deleteKey" data-arg1="${k.id}" data-arg2="${labelAttr}">Delete</button>
-          </td>
-        </tr>
-      `;
-    }
-    body += `</tbody></table>`;
-  }
-  main.innerHTML = pageHeader({
-    title: "API Keys",
-    actions: `<button class="primary" data-action="showCreateKey">+ Create key</button>`,
-  }) + body;
+  return cleanup;
 }

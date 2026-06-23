@@ -8,22 +8,22 @@
 // hash looks like `#/analytics?range=this_month&provider_id=openrouter&api_key_id=12`;
 // the router regex tolerates the trailing `?...` suffix and the
 // `hashchange` event re-mounts the view so every fetch picks up the
-// new query string. No manual re-render is needed.
+// new query string. After each fetch resolves we call
+// `requestUpdate()` so lit-html re-renders with the fresh data.
+//
+// MIGRATED to lit-html for atomic DOM updates — see views/combos.ts
+// for the reference pattern.
 
+import { html, type TemplateResult } from "lit-html";
+import { unsafeHTML } from "lit-html/directives/unsafe-html.js";
 import { state } from "../state/index.js";
 import { api } from "../state/api.js";
-import { escapeHtml, escapeAttr } from "../lib/escape.js";
-import { pageHeader } from "../components/page-header.js";
-import { card } from "../components/card.js";
+import { mountView, requestUpdate } from "../state/reactive.js";
 import {
   dailyUsageChart,
   statusDonut,
   type StatusSlice,
 } from "../components/charts.js";
-import {
-  analyticsFilters,
-  wireAnalyticsFilters,
-} from "../components/filter-bar.js";
 import type {
   ByDayRow,
   ByModelRow,
@@ -296,42 +296,6 @@ function pivotMonthlyByProvider(
   };
 }
 
-// Render the time-range selector as a row of buttons. The active
-// preset gets `.active` so the CSS can highlight it. Buttons carry
-// `data-preset` rather than `data-action` — the view wires them
-// directly via addEventListener (see `wirePresetSelector`), so they
-// don't need a registry entry.
-function renderPresetSelector(active: UsagePreset): string {
-  const buttons = PRESETS.map((p) =>
-    `<button class="preset-btn${p === active ? " active" : ""}" data-preset="${escapeHtml(p)}" type="button">${escapeHtml(PRESET_LABELS[p])}</button>`,
-  ).join("");
-  return `<div class="preset-selector" role="group" aria-label="Time range">${buttons}</div>`;
-}
-
-function wirePresetSelector(): void {
-  const main = document.getElementById("main");
-  if (!main) return;
-  main.querySelectorAll<HTMLButtonElement>("button.preset-btn[data-preset]").forEach((btn) => {
-    btn.addEventListener("click", () => {
-      const p = btn.dataset["preset"] as UsagePreset | undefined;
-      if (p) setHashParams({ preset: p });
-    });
-  });
-}
-
-// ── Chart-card wrapper ──────────────────────────────────────────────
-// `card()` produces `.section-header` markup; the `.card.chart-card`
-// CSS variant expects `.card-title` + `.card-body` children instead
-// (and zero-padding so an SVG can stretch edge-to-edge). Small local
-// helper so the daily chart gets the full-width styling the design
-// calls for.
-function chartCard(title: string, body: string): string {
-  return `<section class="card chart-card">
-    <div class="card-title">${escapeHtml(title)}</div>
-    <div class="card-body">${body}</div>
-  </section>`;
-}
-
 // ── Status grouping for the donut ───────────────────────────────────
 // The by-status endpoint returns one row per HTTP status code. The
 // donut cares about four buckets: 2xx (success), 4xx (client error),
@@ -354,54 +318,118 @@ function groupByStatus(rows: ByStatusRow[]): StatusSlice[] {
   ];
 }
 
-// ── Recent errors table ─────────────────────────────────────────────
-// The errors endpoint returns the latest N rows whose status was 4xx
-// or 5xx. The table is rendered as a normal card; rows are clickable
-// → `#/logs?request_id=…` so the operator can jump straight to the
-// live-logs view filtered to that request. The trace_id is shown in
-// a `<code>` snippet under the message so it's copyable even if the
-// router doesn't (yet) honour the `?request_id=` query suffix.
-function renderRecentErrors(errors: ErrorRow[]): string {
-  if (errors.length === 0) {
-    return card("Recent errors", `<p class="empty">No errors in this range.</p>`);
-  }
-  const rows = errors.map((e) => {
-    const time = escapeHtml(e.created_at || "");
-    const prov = escapeHtml(e.provider_id || "");
-    const model = escapeHtml(e.upstream_model_id || "");
-    const status = e.status_code || "—";
-    const msg = escapeHtml(e.error_msg_redacted || "(no message)");
-    const trace = escapeHtml(e.trace_id || "");
-    const href = escapeAttr(`#/logs?request_id=${e.request_id || ""}`);
-    return `<tr class="clickable" data-href="${href}">
-      <td>${time}</td>
-      <td>${prov}</td>
-      <td>${model}</td>
-      <td><span class="status-pill err">${status}</span></td>
-      <td>${msg}<br><small class="muted"><code>${trace}</code></small></td>
-    </tr>`;
-  }).join("");
-  return card("Recent errors", `
-    <table>
-      <thead><tr><th>Time</th><th>Provider</th><th>Model</th><th>Status</th><th>Error message</th></tr></thead>
-      <tbody>${rows}</tbody>
-    </table>
-  `);
+// ---- View state ----
+
+let loading = true;
+let errorMsg: string | null = null;
+let summary: UsageSummary | null = null;
+let byDay: ByDayRow[] = [];
+let byModel: ByModelRow[] = [];
+let byProvider: ByProviderRow[] = [];
+let byStatus: ByStatusRow[] = [];
+let monthlyByProvider: MonthlyByProviderRow[] = [];
+let latency: LatencyPayload | null = null;
+let races: RaceStatsPayload | null = null;
+let errors: ErrorRow[] = [];
+let providers: Provider[] = [];
+let apiKeys: ApiKeyFilterRow[] = [];
+
+// ---- Templates ----
+
+function renderPresetSelector(active: UsagePreset): TemplateResult {
+  return html`<div class="preset-selector" role="group" aria-label="Time range">
+    ${PRESETS.map((p) => html`<button class="preset-btn${p === active ? " active" : ""}" type="button" @click=${() => setHashParams({ preset: p })}>${PRESET_LABELS[p]}</button>`)}
+  </div>`;
 }
 
-// Wire up the `.clickable` rows in the recent-errors table (and any
-// other clickable row that carries a `data-href`). Reads the URL
-// from `data-href` and assigns `location.hash` so the router picks
-// it up — same path the preset buttons take.
-function wireClickableRows(): void {
-  const main = document.getElementById("main");
-  if (!main) return;
-  main.querySelectorAll<HTMLElement>(".clickable[data-href]").forEach((el) => {
-    el.addEventListener("click", () => {
-      const href = el.dataset["href"];
-      if (href) location.hash = href;
-    });
-  });
+function renderAnalyticsFilters(providerId: string, apiKeyId: string): TemplateResult {
+  return html`<div class="analytics-filters">
+    <select class="filter-dropdown" @change=${(e: Event) => setHashParams({ providerId: (e.target as HTMLSelectElement).value })}>
+      <option value="" ?selected=${providerId === ""}>All providers</option>
+      ${providers.map((p) => html`<option value=${p.id} ?selected=${p.id === providerId}>${p.name}</option>`)}
+    </select>
+    <select class="filter-dropdown" @change=${(e: Event) => setHashParams({ apiKeyId: (e.target as HTMLSelectElement).value })}>
+      <option value="" ?selected=${apiKeyId === ""}>All API keys</option>
+      ${apiKeys.map((k) => html`<option value=${String(k.id)} ?selected=${String(k.id) === apiKeyId}>${k.key_prefix || "—"} (${k.label || "—"})</option>`)}
+    </select>
+    <button class="btn-link" @click=${() => setHashParams({ providerId: "", apiKeyId: "" })}>Clear filters</button>
+  </div>`;
+}
+
+function card(title: string, body: TemplateResult): TemplateResult {
+  return html`<section class="card"><div class="section-header"><h3>${title}</h3></div>${body}</section>`;
+}
+
+function chartCard(title: string, bodyHtml: string): TemplateResult {
+  return html`<section class="card chart-card">
+    <div class="card-title">${title}</div>
+    <div class="card-body">${unsafeHTML(bodyHtml)}</div>
+  </section>`;
+}
+
+function renderSummaryBlock(): TemplateResult {
+  if (!summary) return html``;
+  return card("Summary", html`<div class="metrics">
+    <div><label>Unique requests</label><div class="value">${summary.unique_requests}</div></div>
+    <div><label>Total rows</label><div class="value">${summary.total_rows}</div></div>
+    <div><label>Winners</label><div class="value">${summary.winners}</div></div>
+    <div><label>Losers</label><div class="value">${summary.losers}</div></div>
+    <div><label>Errors</label><div class="value">${summary.errors}</div></div>
+    <div><label>Prompt tokens</label><div class="value">${summary.total_prompt_tokens}</div></div>
+    <div><label>Completion tokens</label><div class="value">${summary.total_completion_tokens}</div></div>
+    <div><label>Total cost USD</label><div class="value">$${summary.total_cost_usd.toFixed(4)}</div></div>
+    <div><label>Avg TTFT ms</label><div class="value">${summary.avg_ttft_ms ? summary.avg_ttft_ms.toFixed(1) : "—"}</div></div>
+  </div>`);
+}
+
+function renderLatencyBlock(): TemplateResult {
+  if (!latency) return html``;
+  return card("Latency percentiles (winners only)", html`<div class="metrics">
+    <div><label>Samples</label><div class="value">${latency.samples ?? "—"}</div></div>
+    <div><label>p50 connect ms</label><div class="value">${fmtMs(latency.p50_connect_ms)}</div></div>
+    <div><label>p95 connect ms</label><div class="value">${fmtMs(latency.p95_connect_ms)}</div></div>
+    <div><label>p50 TTFT ms</label><div class="value">${fmtMs(latency.p50_ttft_ms)}</div></div>
+    <div><label>p95 TTFT ms</label><div class="value">${fmtMs(latency.p95_ttft_ms)}</div></div>
+    <div><label>p50 total ms</label><div class="value">${fmtMs(latency.p50_total_ms)}</div></div>
+    <div><label>p95 total ms</label><div class="value">${fmtMs(latency.p95_total_ms)}</div></div>
+  </div>`);
+}
+
+function renderRaceBlock(): TemplateResult {
+  if (!races) return html``;
+  return card("Race stats", html`<div class="metrics">
+    <div><label>Total races</label><div class="value">${races.total_races ?? "—"}</div></div>
+    <div><label>Winners</label><div class="value">${races.winners ?? "—"}</div></div>
+    <div><label>Losers</label><div class="value">${races.losers ?? "—"}</div></div>
+  </div>`);
+}
+
+function renderByModelBlock(): TemplateResult {
+  const body = byModel.length
+    ? html`<table>
+        <thead><tr><th>Provider</th><th>Model</th><th>Unique</th><th>Total</th><th>Cost USD</th></tr></thead>
+        <tbody>${byModel.map((r) => html`<tr><td>${r.provider_id}</td><td>${r.upstream_model_id}</td><td>${r.unique_requests}</td><td>${r.total_rows}</td><td>${fmtCost(r.total_cost_usd)}</td></tr>`)}</tbody>
+      </table>`
+    : html`<p class="empty">No usage in this range.</p>`;
+  return card("By model", body);
+}
+
+function renderByProviderBlock(): TemplateResult {
+  const body = byProvider.length
+    ? html`<table>
+        <thead><tr><th>Provider</th><th class="num">Unique</th><th class="num">Total</th><th class="num">Winners</th><th class="num">Prompt tok</th><th class="num">Completion tok</th><th class="num">Cost USD</th></tr></thead>
+        <tbody>${byProvider.map((r) => html`<tr>
+          <td>${r.provider_id}</td>
+          <td class="num">${r.unique_requests}</td>
+          <td class="num">${r.total_rows}</td>
+          <td class="num">${r.winners}</td>
+          <td class="num">${r.total_prompt_tokens}</td>
+          <td class="num">${r.total_completion_tokens}</td>
+          <td class="num">${fmtCost(r.total_cost_usd)}</td>
+        </tr>`)}</tbody>
+      </table>`
+    : html`<p class="empty">No usage in this range.</p>`;
+  return card("Usage by provider", body);
 }
 
 // Render the providers × months cost matrix. Cells show cost (USD,
@@ -409,83 +437,114 @@ function wireClickableRows(): void {
 // an em-dash. A totals column sits on the right and a totals row at
 // the bottom. When the pivot is empty (no usage in the range), the
 // card shows an empty-state message instead of an empty table.
-function renderMonthlyMatrix(pivot: MonthlyMatrix): string {
+function renderMonthlyMatrix(): TemplateResult {
+  const pivot = pivotMonthlyByProvider(monthlyByProvider);
   if (pivot.providers.length === 0 || pivot.months.length === 0) {
-    return card("Monthly usage by provider", `<p class="empty">No usage in this range.</p>`);
+    return card("Monthly usage by provider", html`<p class="empty">No usage in this range.</p>`);
   }
-  const headMonths = pivot.months.map((m) => `<th>${escapeHtml(m)}</th>`).join("");
   const bodyRows = pivot.providers.map((p) => {
     const pCells = pivot.cells.get(p);
     const tds = pivot.months.map((m) => {
       const r = pCells?.get(m);
-      if (!r) return `<td class="num">—</td>`;
+      if (!r) return html`<td class="num">—</td>`;
       const title = `${r.unique_requests} unique / ${r.total_rows} rows · ${r.total_prompt_tokens} prompt tok · ${r.total_completion_tokens} completion tok`;
-      return `<td class="num" title="${escapeAttr(title)}">${fmtCost(r.total_cost_usd)}</td>`;
-    }).join("");
+      return html`<td class="num" title=${title}>${fmtCost(r.total_cost_usd)}</td>`;
+    });
     const total = pivot.totalsByProvider.get(p) ?? 0;
-    return `<tr><td>${escapeHtml(p)}</td>${tds}<td class="num total">${fmtCost(total)}</td></tr>`;
-  }).join("");
+    return html`<tr><td>${p}</td>${tds}<td class="num total">${fmtCost(total)}</td></tr>`;
+  });
   const footMonths = pivot.months.map((m) => {
     const t = pivot.totalsByMonth.get(m) ?? 0;
-    return `<th class="num">${fmtCost(t)}</th>`;
-  }).join("");
-  return card("Monthly usage by provider", `
-    <table class="monthly-matrix">
-      <thead>
-        <tr><th>Provider</th>${headMonths}<th class="num">Total</th></tr>
-      </thead>
-      <tbody>${bodyRows}</tbody>
-      <tfoot>
-        <tr><th>Total</th>${footMonths}<th class="num">${fmtCost(pivot.grandTotal)}</th></tr>
-      </tfoot>
-    </table>
-  `);
+    return html`<th class="num">${fmtCost(t)}</th>`;
+  });
+  return card("Monthly usage by provider", html`<table class="monthly-matrix">
+    <thead>
+      <tr><th>Provider</th>${pivot.months.map((m) => html`<th>${m}</th>`)}<th class="num">Total</th></tr>
+    </thead>
+    <tbody>${bodyRows}</tbody>
+    <tfoot>
+      <tr><th>Total</th>${footMonths}<th class="num">${fmtCost(pivot.grandTotal)}</th></tr>
+    </tfoot>
+  </table>`);
 }
 
-// Paint the page shell (header + filter bar + preset selector + body)
-// and wire the preset buttons, the filter dropdowns, and any
-// clickable rows. Centralised so the loading, success, and error
-// paths all get a working selector + filter bar.
-function paint(
-  preset: UsagePreset,
-  providerId: string,
-  apiKeyId: string,
-  providers: Provider[],
-  apiKeys: ApiKeyFilterRow[],
-  body: string,
-): void {
-  const main = document.getElementById("main");
-  if (!main) return;
-  const providerOptions = providers.map((p) => ({ value: p.id, label: p.name }));
-  const keyOptions = apiKeys.map((k) => ({
-    value: String(k.id),
-    label: `${k.key_prefix || "—"} (${k.label || "—"})`,
-  }));
-  main.innerHTML =
-    pageHeader({ title: "Analytics" }) +
-    analyticsFilters({
-      providers: providerOptions,
-      apiKeys: keyOptions,
-      selectedProvider: providerId,
-      selectedKeyId: apiKeyId,
-    }) +
-    renderPresetSelector(preset) +
-    body;
-  wirePresetSelector();
-  wireAnalyticsFilters(
-    main,
-    (id: string) => setHashParams({ providerId: id }),
-    (id: string) => setHashParams({ apiKeyId: id }),
-    () => setHashParams({ providerId: "", apiKeyId: "" }),
-  );
-  wireClickableRows();
+// ── Recent errors table ─────────────────────────────────────────────
+// The errors endpoint returns the latest N rows whose status was 4xx
+// or 5xx. The table is rendered as a normal card; rows are clickable
+// → `#/logs?request_id=…` so the operator can jump straight to the
+// live-logs view filtered to that request. The trace_id is shown in
+// a `<code>` snippet under the message so it's copyable even if the
+// router doesn't (yet) honour the `?request_id=` query suffix.
+function renderRecentErrors(): TemplateResult {
+  const slice = (errors || []).slice(0, 10);
+  if (slice.length === 0) {
+    return card("Recent errors", html`<p class="empty">No errors in this range.</p>`);
+  }
+  const body = html`<table>
+    <thead><tr><th>Time</th><th>Provider</th><th>Model</th><th>Status</th><th>Error message</th></tr></thead>
+    <tbody>${slice.map((e) => {
+      const href = `#/logs?request_id=${e.request_id || ""}`;
+      return html`<tr class="clickable" @click=${() => { location.hash = href; }}>
+        <td>${e.created_at || ""}</td>
+        <td>${e.provider_id || ""}</td>
+        <td>${e.upstream_model_id || ""}</td>
+        <td><span class="status-pill err">${e.status_code || "—"}</span></td>
+        <td>${e.error_msg_redacted || "(no message)"}<br><small class="muted"><code>${e.trace_id || ""}</code></small></td>
+      </tr>`;
+    })}</tbody>
+  </table>`;
+  return card("Recent errors", body);
 }
 
-export async function mountAnalytics(): Promise<void> {
-  const main = document.getElementById("main");
-  if (!main) return;
+function renderBody(): TemplateResult {
+  if (loading) return html`<div class="loading">Loading...</div>`;
+  if (errorMsg) return html`<div class="banner banner-error">${errorMsg}</div>`;
+  if (!summary) return html`<div class="loading">Loading...</div>`;
+
+  // Null-pricing warning: rows that consumed tokens but recorded
+  // $0 cost (pricing was missing at record time). Surfaces
+  // under-reporting so the operator knows to run models.dev sync.
+  const nullPricingCount = summary.rows_with_null_pricing ?? 0;
+  const nullPricingBanner = nullPricingCount > 0
+    ? html`<div class="banner banner-warning">⚠ ${nullPricingCount} rows had no pricing data (cost = $0). Run models.dev sync or manually set pricing to fix cost reporting.</div>`
+    : html``;
+
+  const dailyChartBlock = chartCard("Daily usage", dailyUsageChart(byDay));
+  const donutBlock = card("Status distribution", html`${unsafeHTML(statusDonut(groupByStatus(byStatus)))}`);
+  const summaryDonutRow = html`<div class="home-row">${renderSummaryBlock()}${donutBlock}</div>`;
+
+  return html`
+    ${nullPricingBanner}
+    ${dailyChartBlock}
+    ${summaryDonutRow}
+    ${renderLatencyBlock()}
+    ${renderRaceBlock()}
+    ${renderByModelBlock()}
+    ${renderByProviderBlock()}
+    ${renderMonthlyMatrix()}
+    ${renderRecentErrors()}`;
+}
+
+function renderAnalytics(): TemplateResult {
   const { preset, providerId, apiKeyId } = parseHashParams();
-  paint(preset, providerId, apiKeyId, [], [], `<div class="loading">Loading...</div>`);
+  return html`
+    <div class="page-header"><h2>Analytics</h2></div>
+    ${renderAnalyticsFilters(providerId, apiKeyId)}
+    ${renderPresetSelector(preset)}
+    ${renderBody()}`;
+}
+
+// ---- Mount ----
+
+export async function mountAnalytics(): Promise<(() => void) | void> {
+  const el = document.getElementById("main");
+  if (!el) return;
+
+  loading = true;
+  errorMsg = null;
+  const cleanup = mountView(el, renderAnalytics);
+
+  const { preset, providerId, apiKeyId } = parseHashParams();
   try {
     // Combined query string for every `/usage/*` fetch. The errors
     // endpoint additionally carries `limit=10` so we cap the table
@@ -493,8 +552,8 @@ export async function mountAnalytics(): Promise<void> {
     const usageQ = buildUsageQuery(preset, providerId, apiKeyId);
     const errorsQ = buildUsageQuery(preset, providerId, apiKeyId, { limit: "10" });
     const [
-      summary, byModel, byProvider, monthlyByProvider, latency, races,
-      byDay, byStatus, errors, providers, apiKeys,
+      summaryResp, byModelResp, byProviderResp, monthlyByProviderResp, latencyResp, racesResp,
+      byDayResp, byStatusResp, errorsResp, providersResp, apiKeysResp,
     ] = await Promise.all([
       api(`/usage/summary${usageQ}`) as Promise<UsageSummary>,
       api(`/usage/by-model${usageQ}`) as Promise<ByModelRow[]>,
@@ -517,105 +576,29 @@ export async function mountAnalytics(): Promise<void> {
         : api("/keys") as Promise<ApiKeyFilterRow[]>,
     ]);
 
+    summary = summaryResp;
+    byModel = byModelResp;
+    byProvider = byProviderResp;
+    monthlyByProvider = monthlyByProviderResp;
+    latency = latencyResp;
+    races = racesResp;
+    byDay = byDayResp;
+    byStatus = byStatusResp;
+    errors = errorsResp;
+    providers = providersResp;
+    apiKeys = apiKeysResp;
+
     if (providers) state.providers = providers;
     if (apiKeys) state.apiKeys = apiKeys;
-    const apiKeyRows: ApiKeyFilterRow[] = (apiKeys || []) as ApiKeyFilterRow[];
 
-    // Null-pricing warning: rows that consumed tokens but recorded
-    // $0 cost (pricing was missing at record time). Surfaces
-    // under-reporting so the operator knows to run models.dev sync.
-    const nullPricingCount = summary.rows_with_null_pricing ?? 0;
-    const nullPricingBanner = nullPricingCount > 0
-      ? `<div class="banner banner-warning">⚠ ${nullPricingCount} rows had no pricing data (cost = $0). Run models.dev sync or manually set pricing to fix cost reporting.</div>`
-      : "";
-
-    // Daily usage chart — full-width, edge-to-edge via .chart-card.
-    const dailyChartBlock = chartCard("Daily usage", dailyUsageChart(byDay));
-
-    const summaryBlock = card("Summary", `
-      <div class="metrics">
-        <div><label>Unique requests</label><div class="value">${summary.unique_requests}</div></div>
-        <div><label>Total rows</label><div class="value">${summary.total_rows}</div></div>
-        <div><label>Winners</label><div class="value">${summary.winners}</div></div>
-        <div><label>Losers</label><div class="value">${summary.losers}</div></div>
-        <div><label>Errors</label><div class="value">${summary.errors}</div></div>
-        <div><label>Prompt tokens</label><div class="value">${summary.total_prompt_tokens}</div></div>
-        <div><label>Completion tokens</label><div class="value">${summary.total_completion_tokens}</div></div>
-        <div><label>Total cost USD</label><div class="value">$${summary.total_cost_usd.toFixed(4)}</div></div>
-        <div><label>Avg TTFT ms</label><div class="value">${summary.avg_ttft_ms ? summary.avg_ttft_ms.toFixed(1) : "—"}</div></div>
-      </div>
-    `);
-    // Status distribution donut — half-width card alongside the
-    // summary. Wrapped in `.home-row` so the two cards share a
-    // responsive 2-column grid (collapses to 1 column on narrow
-    // viewports).
-    const donutBlock = card("Status distribution", statusDonut(groupByStatus(byStatus)));
-    const summaryDonutRow = `<div class="home-row">${summaryBlock}${donutBlock}</div>`;
-
-    const latencyBlock = card("Latency percentiles (winners only)", `
-      <div class="metrics">
-        <div><label>Samples</label><div class="value">${latency.samples ?? "—"}</div></div>
-        <div><label>p50 connect ms</label><div class="value">${fmtMs(latency.p50_connect_ms)}</div></div>
-        <div><label>p95 connect ms</label><div class="value">${fmtMs(latency.p95_connect_ms)}</div></div>
-        <div><label>p50 TTFT ms</label><div class="value">${fmtMs(latency.p50_ttft_ms)}</div></div>
-        <div><label>p95 TTFT ms</label><div class="value">${fmtMs(latency.p95_ttft_ms)}</div></div>
-        <div><label>p50 total ms</label><div class="value">${fmtMs(latency.p50_total_ms)}</div></div>
-        <div><label>p95 total ms</label><div class="value">${fmtMs(latency.p95_total_ms)}</div></div>
-      </div>
-    `);
-    const raceBlock = card("Race stats", `
-      <div class="metrics">
-        <div><label>Total races</label><div class="value">${races.total_races ?? "—"}</div></div>
-        <div><label>Winners</label><div class="value">${races.winners ?? "—"}</div></div>
-        <div><label>Losers</label><div class="value">${races.losers ?? "—"}</div></div>
-      </div>
-    `);
-    const byModelRows = byModel.map((r) =>
-      `<tr><td>${escapeHtml(r.provider_id)}</td><td>${escapeHtml(r.upstream_model_id)}</td><td>${r.unique_requests}</td><td>${r.total_rows}</td><td>${fmtCost(r.total_cost_usd)}</td></tr>`,
-    ).join("");
-    const byModelBlock = card("By model", `
-      ${byModel.length ? `<table>
-        <thead><tr><th>Provider</th><th>Model</th><th>Unique</th><th>Total</th><th>Cost USD</th></tr></thead>
-        <tbody>${byModelRows}</tbody>
-      </table>` : `<p class="empty">No usage in this range.</p>`}
-    `);
-    const byProviderRows = byProvider.map((r) =>
-      `<tr>
-        <td>${escapeHtml(r.provider_id)}</td>
-        <td class="num">${r.unique_requests}</td>
-        <td class="num">${r.total_rows}</td>
-        <td class="num">${r.winners}</td>
-        <td class="num">${r.total_prompt_tokens}</td>
-        <td class="num">${r.total_completion_tokens}</td>
-        <td class="num">${fmtCost(r.total_cost_usd)}</td>
-      </tr>`,
-    ).join("");
-    const byProviderBlock = card("Usage by provider", `
-      ${byProvider.length ? `<table>
-        <thead><tr><th>Provider</th><th class="num">Unique</th><th class="num">Total</th><th class="num">Winners</th><th class="num">Prompt tok</th><th class="num">Completion tok</th><th class="num">Cost USD</th></tr></thead>
-        <tbody>${byProviderRows}</tbody>
-      </table>` : `<p class="empty">No usage in this range.</p>`}
-    `);
-    const monthlyBlock = renderMonthlyMatrix(pivotMonthlyByProvider(monthlyByProvider));
-
-    // Recent errors — bottom of the page, capped at 10 rows
-    // client-side (the server's default limit is 100, our query
-    // sends `limit=10` for forward-compat).
-    const errorsBlock = renderRecentErrors((errors || []).slice(0, 10));
-
-    paint(
-      preset, providerId, apiKeyId, providers, apiKeyRows,
-      nullPricingBanner + dailyChartBlock + summaryDonutRow +
-        latencyBlock + raceBlock +
-        byModelBlock + byProviderBlock + monthlyBlock +
-        errorsBlock,
-    );
+    loading = false;
+    requestUpdate();
   } catch (e: unknown) {
-    const msg = e instanceof Error ? e.message : String(e);
-    paint(
-      preset, providerId, apiKeyId,
-      state.providers || [], (state.apiKeys || []) as ApiKeyFilterRow[],
-      `<div class="banner banner-error">${escapeHtml(msg)}</div>`,
-    );
+    errorMsg = e instanceof Error ? e.message : String(e);
+    providers = state.providers || [];
+    apiKeys = (state.apiKeys || []) as ApiKeyFilterRow[];
+    loading = false;
+    requestUpdate();
   }
+  return cleanup;
 }

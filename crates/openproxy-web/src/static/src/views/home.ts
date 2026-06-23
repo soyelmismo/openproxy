@@ -3,18 +3,21 @@
 // four-tile KPI row (requests / cost / error-rate / avg-TTFT for
 // "today"), a two-column row (health + recent usage), a 7-day daily
 // usage chart, a quick-actions bar, and a small footer line with the
-// inventory counts. The KPI + chart data come from the same
-// `/usage/*` endpoints the analytics view uses; the inventory
-// counts and health come from the existing state cache (backfilled
-// with a direct fetch on a cold paint, same pattern as before).
+// inventory counts.
+//
+// MIGRATED to lit-html for atomic DOM updates. lit-html diffs the
+// template against the previous render and only patches the DOM
+// nodes that actually changed — inputs keep focus, selects stay
+// open, scroll is preserved. See views/combos.ts for the reference
+// pattern.
 
+import { html, type TemplateResult } from "lit-html";
+import { unsafeHTML } from "lit-html/directives/unsafe-html.js";
 import { state } from "../state/index.js";
 import { api } from "../state/api.js";
-import { escapeHtml } from "../lib/escape.js";
+import { mountView, requestUpdate } from "../state/reactive.js";
 import { statusPillClass } from "../lib/constants.js";
-import { pageHeader } from "../components/page-header.js";
-import { card } from "../components/card.js";
-import { dailyUsageChart, kpiTile } from "../components/charts.js";
+import { dailyUsageChart } from "../components/charts.js";
 import type {
   Account,
   ByDayRow,
@@ -45,36 +48,120 @@ const NULL_SUMMARY: UsageSummary = {
   rows_with_null_pricing: 0,
 };
 
-// `card()` produces `.section-header` markup; the `.card.chart-card`
-// CSS variant expects `.card-title` + `.card-body` children instead
-// (with zero padding so the SVG stretches edge-to-edge). Mirrors the
-// helper in views/analytics.ts.
-function chartCard(title: string, body: string): string {
-  return `<section class="card chart-card">
-    <div class="card-title">${escapeHtml(title)}</div>
-    <div class="card-body">${body}</div>
+// ---- View state ----
+
+let loading = true;
+let summary: UsageSummary = NULL_SUMMARY;
+let recent: RecentUsageRow[] = [];
+let byDay: ByDayRow[] = [];
+let providers: Provider[] = [];
+let accounts: Account[] = [];
+let models: Model[] = [];
+let combos: Combo[] = [];
+let keys: unknown[] = [];
+
+// ---- Templates ----
+
+function renderKpiTile(label: string, value: string, valueClass = ""): TemplateResult {
+  return html`<div class="kpi-tile">
+    <div class="kpi-label">${label}</div>
+    <div class="kpi-value ${valueClass}">${value}</div>
+  </div>`;
+}
+
+function renderHealthCard(): TemplateResult {
+  return html`<section class="card">
+    <div class="section-header"><h3>Health</h3></div>
+    <p>Status: <strong>${state.health ? state.health.status : "—"}</strong></p>
+    ${state.health && state.health.message
+      ? html`<p class="muted">${state.health.message}</p>`
+      : html``}
   </section>`;
 }
 
-// Wire up any `.clickable[data-href]` rows so clicking jumps to the
-// URL in `data-href` (sets `location.hash`, the router does the
-// rest). Used by the recent-usage table to deep-link into `#/logs`.
-function wireClickableRows(): void {
-  const main = document.getElementById("main");
-  if (!main) return;
-  main.querySelectorAll<HTMLElement>(".clickable[data-href]").forEach((el) => {
-    el.addEventListener("click", () => {
-      const href = el.dataset["href"];
-      if (href) location.hash = href;
-    });
-  });
+function renderRecentCard(): TemplateResult {
+  // Recent usage rows are clickable → `#/logs?id=N` so the operator
+  // can jump straight to the live-logs view with that row selected.
+  const body: TemplateResult = recent.length
+    ? html`<table>
+        <thead><tr><th>Time</th><th>Provider</th><th>Model</th><th>Status</th><th>Latency</th><th>Cost</th></tr></thead>
+        <tbody>
+          ${recent.map((r) => {
+            const cls = statusPillClass(r.status_code);
+            const href = `#/logs?id=${r.id}`;
+            return html`<tr class="clickable" @click=${() => { location.hash = href; }}>
+              <td>${r.created_at || ""}</td>
+              <td>${r.provider_id || ""}</td>
+              <td>${r.upstream_model_id || ""}</td>
+              <td><span class="status-pill ${cls}">${r.status_code ?? "—"}</span></td>
+              <td>${r.total_ms || 0}ms</td>
+              <td>$${(r.cost_usd || 0).toFixed(4)}</td>
+            </tr>`;
+          })}
+        </tbody>
+      </table>`
+    : html`<p class="empty">No recent requests yet.</p>`;
+  return html`<section class="card">
+    <div class="section-header"><h3>Recent usage</h3></div>
+    ${body}
+    <p style="margin-top:0.5rem;"><a href="#/logs">Open live logs →</a></p>
+  </section>`;
 }
 
-export async function mountHome(): Promise<void> {
-  const main = document.getElementById("main");
-  if (!main) return;
-  main.innerHTML = pageHeader({ title: "Overview" }) +
-    `<div class="loading">Loading...</div>`;
+function renderHome(): TemplateResult {
+  if (loading) {
+    return html`<div class="page-header"><h2>Overview</h2></div>
+      <div class="loading">Loading...</div>`;
+  }
+
+  // Error rate is `errors / total_rows * 100` — guarded against
+  // divide-by-zero. Cost uses 4dp to surface the small per-request
+  // numbers typical of LLM pricing. Avg-TTFT shows "—" when the
+  // summary has no TTFT samples (all requests errored before TTFT).
+  const errorRatePct = summary.total_rows > 0
+    ? (summary.errors / summary.total_rows) * 100
+    : 0;
+
+  const kpiRow = html`<div class="home-kpi-row">
+    ${renderKpiTile("Requests today", String(summary.unique_requests))}
+    ${renderKpiTile("Cost today", `$${summary.total_cost_usd.toFixed(4)}`)}
+    ${renderKpiTile("Error rate", `${errorRatePct.toFixed(1)}%`, errorRatePct > 5 ? "kpi-trend-down" : "")}
+    ${renderKpiTile("Avg TTFT", summary.avg_ttft_ms != null ? `${summary.avg_ttft_ms.toFixed(0)}ms` : "—")}
+  </div>`;
+
+  const homeRow = html`<div class="home-row">${renderHealthCard()}${renderRecentCard()}</div>`;
+
+  // Daily usage chart — full-width, edge-to-edge via `.chart-card`.
+  // `dailyUsageChart` returns an SVG string; we inject it via
+  // `unsafeHTML` (the chart not yet migrated to lit-html). The SVG
+  // is built entirely from numeric server data — no user-controlled
+  // content — so unsafe injection is safe here.
+  const chartBlock = html`<section class="card chart-card">
+    <div class="card-title">Last 7 days</div>
+    <div class="card-body">${unsafeHTML(dailyUsageChart(byDay))}</div>
+  </section>`;
+
+  const quickActions = html`<div class="quick-actions">
+    <a href="#/providers">+ Provider</a>
+    <a href="#/combos">+ Combo</a>
+    <a href="#/keys">+ API Key</a>
+  </div>`;
+
+  const footerLine = html`<p class="muted" style="text-align:center;font-size:var(--fs-xs);margin-top:var(--space-4);">
+    ${providers.length} providers · ${accounts.length} accounts · ${models.length} models · ${combos.length} combos · ${keys.length} keys
+  </p>`;
+
+  return html`
+    <div class="page-header"><h2>Overview</h2></div>
+    ${kpiRow}${homeRow}${chartBlock}${quickActions}${footerLine}`;
+}
+
+// ---- Mount ----
+
+export async function mountHome(): Promise<(() => void) | void> {
+  const el = document.getElementById("main");
+  if (!el) return;
+
   // The home view used to read counts and health straight from
   // `state.*`, on the assumption that the 3s background poll had
   // already populated them. After the poll stopped re-rendering
@@ -86,11 +173,17 @@ export async function mountHome(): Promise<void> {
   // The state cache is still consulted first as a fast path for
   // the common "user just navigated here from another view that
   // already fetched" case.
+  loading = true;
+  const cleanup = mountView(el, renderHome);
+
   // The recent-usage + summary + by-day endpoints can return an
   // error (e.g. when the usage table is empty/missing). Each
   // `.catch` returns an empty/zero-valued fallback so the rest of
   // the render keeps working.
-  const [providers, accounts, models, combos, keys, recent, summary, byDay] = await Promise.all([
+  const [
+    providersResp, accountsResp, modelsResp, combosResp, keysResp,
+    recentResp, summaryResp, byDayResp,
+  ] = await Promise.all([
     (state.providers && state.providers.length) ? Promise.resolve(state.providers) : api("/providers") as Promise<Provider[]>,
     (state.accounts  && state.accounts.length)  ? Promise.resolve(state.accounts)  : api("/accounts") as Promise<Account[]>,
     (state.models    && state.models.length)    ? Promise.resolve(state.models)    : api("/models") as Promise<Model[]>,
@@ -100,6 +193,16 @@ export async function mountHome(): Promise<void> {
     api("/usage/summary?preset=today").catch((): UsageSummary => NULL_SUMMARY) as Promise<UsageSummary>,
     api("/usage/by-day?preset=7d").catch((): ByDayRow[] => []) as Promise<ByDayRow[]>,
   ]) as readonly [Provider[], Account[], Model[], Combo[], unknown[], RecentUsageRow[], UsageSummary, ByDayRow[]];
+
+  providers = providersResp;
+  accounts = accountsResp;
+  models = modelsResp;
+  combos = combosResp;
+  keys = keysResp;
+  recent = recentResp;
+  summary = summaryResp;
+  byDay = byDayResp;
+
   // Backfill the state caches so the next navigation to home (or
   // any view that reads these) gets the data without a re-fetch.
   // The bg-poll will overwrite these with fresher values on its
@@ -109,6 +212,7 @@ export async function mountHome(): Promise<void> {
   if (models)    state.models    = models;
   if (combos)    state.combos    = combos;
   if (keys)      state.apiKeys   = keys;
+
   // Pull the health from the state cache (the bg-poll's
   // healthTick populates this on a 1s tick). If the user landed
   // on home on a fresh page load, the health may be null until
@@ -119,76 +223,7 @@ export async function mountHome(): Promise<void> {
     try { state.health = await api("/health") as { status: string; message?: string }; } catch (_e) { /* keep null */ }
   }
 
-  // ── KPI row (4 tiles, "today" window) ──────────────────────────
-  // Error rate is `errors / total_rows * 100` — guarded against
-  // divide-by-zero. Cost uses 4dp to surface the small per-request
-  // numbers typical of LLM pricing. Avg-TTFT shows "—" when the
-  // summary has no TTFT samples (all requests errored before TTFT).
-  const errorRatePct = summary.total_rows > 0
-    ? (summary.errors / summary.total_rows) * 100
-    : 0;
-  const kpiHtml = [
-    kpiTile({ label: "Requests today", value: String(summary.unique_requests) }),
-    kpiTile({ label: "Cost today", value: `$${summary.total_cost_usd.toFixed(4)}` }),
-    kpiTile({
-      label: "Error rate",
-      value: `${errorRatePct.toFixed(1)}%`,
-      valueClass: errorRatePct > 5 ? "kpi-trend-down" : "",
-    }),
-    kpiTile({
-      label: "Avg TTFT",
-      value: summary.avg_ttft_ms != null ? `${summary.avg_ttft_ms.toFixed(0)}ms` : "—",
-    }),
-  ].join("");
-  const kpiRow = `<div class="home-kpi-row">${kpiHtml}</div>`;
-
-  // ── Two-column row: Health + Recent usage ──────────────────────
-  const healthCard = card("Health", `
-    <p>Status: <strong>${state.health ? escapeHtml(state.health.status) : "—"}</strong></p>
-    ${state.health && state.health.message ? `<p class="muted">${escapeHtml(state.health.message)}</p>` : ""}
-  `);
-  // Recent usage rows are clickable → `#/logs?id=N` so the operator
-  // can jump straight to the live-logs view with that row selected.
-  const recentRows = (recent || []).map((r) => {
-    const cls = statusPillClass(r.status_code);
-    const href = `#/logs?id=${r.id}`;
-    return `<tr class="clickable" data-href="${escapeHtml(href)}">
-      <td>${escapeHtml(r.created_at || "")}</td>
-      <td>${escapeHtml(r.provider_id || "")}</td>
-      <td>${escapeHtml(r.upstream_model_id || "")}</td>
-      <td><span class="status-pill ${cls}">${r.status_code ?? "—"}</span></td>
-      <td>${r.total_ms || 0}ms</td>
-      <td>$${(r.cost_usd || 0).toFixed(4)}</td>
-    </tr>`;
-  }).join("");
-  const recentCard = card("Recent usage", `
-    ${recent.length ? `<table>
-      <thead><tr><th>Time</th><th>Provider</th><th>Model</th><th>Status</th><th>Latency</th><th>Cost</th></tr></thead>
-      <tbody>${recentRows}</tbody>
-    </table>` : `<p class="empty">No recent requests yet.</p>`}
-    <p style="margin-top:0.5rem;"><a href="#/logs">Open live logs →</a></p>
-  `);
-  const homeRow = `<div class="home-row">${healthCard}${recentCard}</div>`;
-
-  // ── Daily usage chart (last 7 days) ────────────────────────────
-  // Reuses the analytics `dailyUsageChart` (dual-axis: requests line
-  // + cost bars). Renders full-width inside a `.chart-card`.
-  const chartBlock = chartCard("Last 7 days", dailyUsageChart(byDay));
-
-  // ── Quick actions ──────────────────────────────────────────────
-  const quickActions = `<div class="quick-actions">
-    <a href="#/providers">+ Provider</a>
-    <a href="#/combos">+ Combo</a>
-    <a href="#/keys">+ API Key</a>
-  </div>`;
-
-  // ── Footer inventory line ──────────────────────────────────────
-  // Replaces the old inventory card grid. One line, muted, centered.
-  const footerLine = `<p class="muted" style="text-align:center;font-size:var(--fs-xs);margin-top:var(--space-4);">
-    ${providers.length} providers · ${accounts.length} accounts · ${models.length} models · ${combos.length} combos · ${keys.length} keys
-  </p>`;
-
-  main.innerHTML = pageHeader({ title: "Overview" }) +
-    kpiRow + homeRow + chartBlock + quickActions + footerLine;
-  wireClickableRows();
+  loading = false;
+  requestUpdate();
+  return cleanup;
 }

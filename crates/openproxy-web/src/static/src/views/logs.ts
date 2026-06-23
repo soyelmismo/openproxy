@@ -1,18 +1,49 @@
-// views/logs.ts — live logs view. The biggest view by far;
-// historical rows + in-flight placeholders, paginated, with a
-// 100ms latency ticker and a recording toggle. The detail modal
-// lives in components/log-detail.ts to keep this file under the
-// 400-LOC cap.
+// views/logs.ts — live logs view (lit-html).
+//
+// MIGRATED to lit-html. The full table (header + body + pagination)
+// is now a single TemplateResult; `requestUpdate()` triggers a
+// microtask-coalesced re-render that diffs the new template against
+// the previous one and patches only the changed DOM nodes. This
+// replaces the old `logsEl.innerHTML = headerHtml + bodyHtml +
+// paginationHtml` rebuild and the `requestAnimationFrame` render
+// throttle (lit-html's microtask coalescing already does the same
+// job).
+//
+// The 100ms latency ticker (`state/ticker.ts`) continues to mutate
+// `.log-phase-sub` and `.log-latency` in place. Those elements are
+// created by lit-html on first render with a static initial value
+// (e.g. `0ms`); the ticker is the source of truth for the live
+// counter. lit-html leaves them untouched on subsequent renders
+// (their text content is a static part of the template, not a
+// `${...}` interpolation), so the ticker's mutations survive
+// `requestUpdate()` calls.
+//
+// Similarly, the connection-status badge (`#logs-connection-status`)
+// and the recording-toggle button (`#logs-recording-toggle`) are
+// rendered with STATIC class/text in the template; their dynamic
+// state is managed by direct DOM manipulation in `state/ws.ts`
+// (`setLogsStatus`) and `components/recording-toggle.ts`
+// (`renderRecordingToggle`). lit-html leaves them alone after the
+// first render, so the direct mutations survive.
+//
+// The detail modal lives in `components/log-detail.ts` to keep this
+// file focused on orchestration.
 
+import { html, type TemplateResult } from "lit-html";
+import { unsafeHTML } from "lit-html/directives/unsafe-html.js";
 import { state } from "../state/index.js";
 import { api } from "../state/api.js";
-import { escapeHtml } from "../lib/escape.js";
 import { renderLogRowHtml } from "../components/log-row.js";
 import { LOG_COLUMNS, LOGS_VISIBLE_COLUMNS_STORAGE_KEY } from "../lib/constants.js";
-import { connectLogsWebSocket, setMessageHandler } from "../state/ws.js";
-import { startLogLatencyTicker } from "../state/ticker.js";
+import {
+  connectLogsWebSocket,
+  setMessageHandler,
+  disconnectLogsWebSocket,
+} from "../state/ws.js";
+import { startLogLatencyTicker, stopLogLatencyTicker } from "../state/ticker.js";
 import { fetchRecordingState, toggleRecording } from "../components/recording-toggle.js";
 import { showToast } from "../components/toast.js";
+import { mountView, requestUpdate } from "../state/reactive.js";
 import {
   showLogDetail,
   updateOpenLogDetail,
@@ -60,6 +91,15 @@ interface WsEnvelope {
   skipped?: number;
   since_id?: number;
 }
+
+// ---- Module-local UI state ----------------------------------------------
+//
+// `columnsMenuOpen` tracks whether the columns popover menu is open.
+// Toggling it and calling `requestUpdate()` re-renders the menu with
+// the new `.open` class. The document-level outside-click handler
+// (installed once per session in `mountLogs`) reads this flag to
+// close the menu when the user clicks elsewhere.
+let columnsMenuOpen: boolean = false;
 
 function totalPages(): number {
   return Math.max(1, Math.ceil(state.logs.rows.length / state.logs.rowsPerPage));
@@ -146,93 +186,100 @@ function mergeLogsByDescId(existing: RecentUsageRow[], incoming: RecentUsageRow[
   return result;
 }
 
-function attachLogRowHandlers(): void {
-  document.querySelectorAll("#logs .log-row").forEach((row) => {
-    row.addEventListener("click", () => {
-      const el = row as HTMLElement;
-      // `dataset` is `{ [name: string]: string | undefined }`
-      // (an index signature), so under `noPropertyAccessFromIndexSignature`
-      // we have to use bracket access.
-      const id = el.dataset["id"] || "";
-      const requestId = el.dataset["requestId"] || "";
-      const traceId = el.dataset["traceId"] || "";
-      openLogDetail(id, requestId, traceId);
-    });
-  });
+// ---- Templates ---------------------------------------------------------
+
+function renderHeaderRow(visibleColKeys: Set<string>): TemplateResult {
+  // The header row uses the same `.log-row` class as the body rows
+  // (the CSS targets both). Inline styles preserve the original
+  // look (sticky, uppercase, muted) without needing a new CSS class.
+  return html`<div class="log-row" style="cursor:default;border-bottom:1px solid var(--color-border);font-weight:600;font-size:0.72rem;text-transform:uppercase;color:var(--color-text-muted);background:var(--color-log-header-bg);position:sticky;top:0;z-index:1;">${LOG_COLUMNS
+    .filter((c) => visibleColKeys.has(c.key))
+    .map((c) => html`<span class="log-${c.key}" data-col=${c.key}>${c.label}</span>`)}</div>`;
 }
 
-function renderLogsRows(): void {
-  // CRITICAL PERFORMANCE FIX: coalesce multiple render requests into
-  // a single DOM rebuild per animation frame. Previously every WS
-  // message called renderLogsRows() directly, which does a full
-  // `logsEl.innerHTML = …` rebuild. With ~500 cached rows this can
-  // take 50-150ms per render, and a burst of WS messages (e.g. a
-  // failure produces 2 messages in quick succession: stage `failed`
-  // + the terminal usage row) would block the browser event loop
-  // for the combined duration. While blocked, the browser couldn't
-  // drain the WS receive buffer, TCP back-pressure propagated to
-  // the server, and the server's `socket.send().await` stalled —
-  // which was the root cause of the "second request doesn't appear
-  // in real-time after a failure" bug.
+// Render a single log row. `renderLogRowHtml` (in components/log-row.ts)
+// returns an HTML string — that component is not yet migrated to
+// lit-html. We embed it via `unsafeHTML`. The string is built
+// entirely from server-controlled data with `escapeHtml`/`escapeAttr`
+// applied at every interpolation inside `log-row.ts`, so unsafe
+// injection is safe here. When `log-row.ts` is migrated to return a
+// `TemplateResult`, the `unsafeHTML` wrapper can be dropped.
+function renderLogRow(
+  r: RecentUsageRow & { __inflight?: boolean },
+  visibleColKeys: Set<string>,
+): TemplateResult {
+  // Resolve the live stage for this row. Primary key is
+  // `trace_id` so each attempt of a multi-attempt request
+  // (per-target retry, fallback to next combo target, race
+  // loser) has its own phase. The request_id fallback is
+  // only for the edge case where a row's `trace_id` is
+  // empty (synthetic events emitted from the frontend
+  // itself).
   //
-  // With this throttle, multiple incoming WS messages within the
-  // same frame (16ms at 60Hz) merge into ONE render call. The state
-  // updates (`mergeLogsByDescId`, `inflightByRequestId.delete`, etc.)
-  // happen synchronously per-message — only the expensive DOM
-  // rebuild is coalesced. This cuts the render cost from O(messages)
-  // to O(frames) per second.
-  if (renderLogsRowsScheduled) return;
-  renderLogsRowsScheduled = true;
-  // Use requestAnimationFrame so the render happens at the next
-  // paint opportunity, NOT immediately. This lets multiple WS
-  // messages arriving in the same macrotask batch their state
-  // updates before the render runs.
-  if (typeof requestAnimationFrame === "function") {
-    requestAnimationFrame(() => {
-      renderLogsRowsScheduled = false;
-      renderLogsRowsNow();
-    });
+  // CRITICAL: for finalized rows (status_code > 0), derive
+  // the stage from the row's own status_code instead of
+  // looking up the shared stage map. When a request is
+  // retried, trace_id is reused across attempts, so the
+  // stage map only holds one entry — the retry's
+  // "completed" would overwrite the failed attempt's
+  // "failed", causing the failed row to show "completado".
+  let stage: StageEvent | undefined;
+  if (r.status_code > 0) {
+    const hasError = !!(r.error_message && r.error_message.length > 0);
+    stage = {
+      request_id: r.request_id,
+      trace_id: r.trace_id,
+      provider_id: r.provider_id,
+      upstream_model_id: r.upstream_model_id,
+      stage: r.race_lost ? "cancelled" : ((r.status_code >= 400 || hasError) ? "failed" : "completed"),
+      elapsed_ms: r.total_ms || 0,
+      connect_ms: r.connect_ms,
+      ttft_ms: r.ttft_ms,
+      status_code: r.status_code,
+      error: r.error_message ?? null,
+      stop_reason: r.stop_reason ?? null,
+      compression_savings_pct: r.compression_savings_pct ?? null,
+      compression_techniques: r.compression_techniques ?? null,
+      timestamp: r.created_at || new Date().toISOString(),
+    };
   } else {
-    // Fallback for non-browser environments (tests) — setTimeout(0)
-    // gives roughly the same coalescing behavior.
-    setTimeout(() => {
-      renderLogsRowsScheduled = false;
-      renderLogsRowsNow();
-    }, 0);
+    stage =
+      (r.trace_id && state.logs.stagesByTraceId.get(r.trace_id)) ||
+      (r.request_id && state.logs.stagesByRequestId.get(r.request_id)) ||
+      undefined;
   }
+  return html`${unsafeHTML(renderLogRowHtml(r, stage, visibleColKeys, r.total_ms))}`;
 }
 
-/** Flag tracking whether a renderLogsRows() call is already
- *  scheduled for the next animation frame. Set to `true` by
- *  renderLogsRows() when scheduling, cleared by renderLogsRowsNow()
- *  when the actual render runs. */
-let renderLogsRowsScheduled: boolean = false;
-
-/** Synchronous render — bypasses the requestAnimationFrame
- *  coalescing. Used by user-initiated actions (page navigation,
- *  column toggle, follow-tail toggle) where the caller expects the
- *  DOM to reflect the new state IMMEDIATELY after the call returns.
- *  WS-message-driven renders go through `renderLogsRows()` (the
- *  throttled version) because they're high-frequency and can
- *  tolerate a 16ms delay. */
-function renderLogsRowsSync(): void {
-  // Cancel any pending throttled render so it doesn't double-render.
-  renderLogsRowsScheduled = false;
-  renderLogsRowsNow();
+function renderPagination(totalRows: number, totalP: number): TemplateResult {
+  if (totalRows === 0) return html``;
+  const isFirst = state.logs.page <= 1;
+  const isLast = state.logs.page >= totalP;
+  return html`<div class="logs-pagination">
+    <span class="rows-info">${totalRows} row${totalRows !== 1 ? "s" : ""}</span>
+    <button ?disabled=${isFirst} @click=${() => logsGoPage(1)}>⟨⟨</button>
+    <button ?disabled=${isFirst} @click=${logsPrevPage}>‹ Prev</button>
+    <span class="page-info">Page ${state.logs.page} of ${totalP}</span>
+    <button ?disabled=${isLast} @click=${logsNextPage}>Next ›</button>
+    <button ?disabled=${isLast} @click=${() => logsGoPage(totalP)}>⟩⟩</button>
+    <label class="logs-follow-toggle" title="When ON, new rows automatically scroll the view to the most recent page. When OFF, the view stays on the page you are reading.">
+      <input type="checkbox" id="logs-follow-input" ?checked=${state.logs.followTail} @change=${logsSetFollow}>
+      <span>Follow</span>
+    </label>
+  </div>`;
 }
 
-/** Force a render on the next frame, even if one is already
- *  scheduled. Used by event handlers that need to ensure the next
- *  paint reflects the latest state (e.g. after a column toggle).
- *  Equivalent to calling renderLogsRows() — the flag check there
- *  is what makes this safe to call repeatedly. */
-function renderLogsRowsNow(): void {
-  // Reset the flag FIRST so that any state update triggered during
-  // the render (e.g. a click handler dispatched by innerHTML) can
-  // schedule a follow-up render without being suppressed.
-  renderLogsRowsScheduled = false;
-  const logsEl = document.getElementById("logs");
-  if (!logsEl) return;
+function renderColumnsMenu(): TemplateResult {
+  const visible = state.logs.visibleColumns || new Set(LOG_COLUMNS.map((c) => c.key));
+  return html`<div class="columns-menu ${columnsMenuOpen ? "open" : ""}" role="menu">${LOG_COLUMNS.map((c) => html`<label class="columns-menu-item"><input type="checkbox" ?checked=${visible.has(c.key)} @change=${(e: Event) => onColumnToggle(c.key, e)}><span>${c.label}</span></label>`)}</div>`;
+}
+
+function renderLogsView(): TemplateResult {
+  // Build the merged row list: historical rows + in-flight
+  // placeholders. The inflight rows get a synthetic id
+  // (MAX_SAFE_INTEGER - created_at_ms) so they sort to the top of
+  // the descending-id list (newest first) without colliding with
+  // real DB ids.
   const inflightRows: (RecentUsageRow & { __inflight: boolean })[] = [
     ...Array.from(state.logs.inflightByTraceId.values()),
     ...Array.from(state.logs.inflightByRequestId.values()),
@@ -241,7 +288,9 @@ function renderLogsRowsNow(): void {
     const syntheticId = isFinite(t) ? (Number.MAX_SAFE_INTEGER - t) : Number.MAX_SAFE_INTEGER;
     return Object.assign({}, p, { id: syntheticId, __inflight: true });
   });
-  const rows = (state.logs.rows as (RecentUsageRow & { __inflight?: boolean })[]).concat(inflightRows).sort((a, b) => (b.id || 0) - (a.id || 0));
+  const rows = (state.logs.rows as (RecentUsageRow & { __inflight?: boolean })[])
+    .concat(inflightRows)
+    .sort((a, b) => (b.id || 0) - (a.id || 0));
   const totalRows = rows.length;
   const rpp = state.logs.rowsPerPage;
   const totalP = Math.max(1, Math.ceil(totalRows / rpp));
@@ -250,107 +299,111 @@ function renderLogsRowsNow(): void {
   const start = (state.logs.page - 1) * rpp;
   const end = Math.min(start + rpp, totalRows);
   const pageRows = rows.slice(start, end);
-  // Build the header row from LOG_COLUMNS so the set of columns
-  // and the header text are always in sync. Each <span> gets the
-  // .log-{key} class so styling matches the body cells.
   const visibleColKeys = state.logs.visibleColumns || new Set(LOG_COLUMNS.map((c) => c.key));
-  const headerCells = LOG_COLUMNS
-    .filter((c) => visibleColKeys.has(c.key))
-    .map((c) => `<span class="log-${c.key}" data-col="${c.key}">${escapeHtml(c.label)}</span>`)
-    .join("");
-  const headerHtml = `
-    <div class="log-row" style="cursor:default;border-bottom:1px solid var(--color-border);font-weight:600;font-size:0.72rem;text-transform:uppercase;color:var(--color-text-muted);background:var(--color-log-header-bg);position:sticky;top:0;z-index:1;">
-      ${headerCells}
-    </div>`;
-  const bodyHtml = pageRows.length
-    ? pageRows
-        .map((r) => {
-          // Resolve the live stage for this row. Primary key is
-          // `trace_id` so each attempt of a multi-attempt request
-          // (per-target retry, fallback to next combo target, race
-          // loser) has its own phase. The request_id fallback is
-          // only for the edge case where a row's `trace_id` is
-          // empty (synthetic events emitted from the frontend
-          // itself).
-          //
-          // CRITICAL: for finalized rows (status_code > 0), derive
-          // the stage from the row's own status_code instead of
-          // looking up the shared stage map. When a request is
-          // retried, trace_id is reused across attempts, so the
-          // stage map only holds one entry — the retry's
-          // "completed" would overwrite the failed attempt's
-          // "failed", causing the failed row to show "completado".
-          let stage: StageEvent | undefined;
-          if (r.status_code > 0) {
-            const hasError = !!(r.error_message && r.error_message.length > 0);
-            stage = {
-              request_id: r.request_id,
-              trace_id: r.trace_id,
-              provider_id: r.provider_id,
-              upstream_model_id: r.upstream_model_id,
-              stage: r.race_lost ? "cancelled" : ((r.status_code >= 400 || hasError) ? "failed" : "completed"),
-              elapsed_ms: r.total_ms || 0,
-              connect_ms: r.connect_ms,
-              ttft_ms: r.ttft_ms,
-              status_code: r.status_code,
-              error: r.error_message ?? null,
-              stop_reason: r.stop_reason ?? null,
-              compression_savings_pct: r.compression_savings_pct ?? null,
-              compression_techniques: r.compression_techniques ?? null,
-              timestamp: r.created_at || new Date().toISOString(),
-            };
-          } else {
-            stage =
-              (r.trace_id && state.logs.stagesByTraceId.get(r.trace_id)) ||
-              (r.request_id && state.logs.stagesByRequestId.get(r.request_id)) ||
-              undefined;
-          }
-          return renderLogRowHtml(r, stage, visibleColKeys, r.total_ms);
-        })
-        .join("")
-    : '<div class="empty" style="padding:2rem;">No recent requests yet. Use the API to see logs appear here in real time.</div>';
-  const isFirst = state.logs.page <= 1;
-  const isLast = state.logs.page >= totalP;
-  const paginationHtml = totalRows > 0 ? `
-    <div class="logs-pagination">
-      <span class="rows-info">${totalRows} row${totalRows !== 1 ? "s" : ""}</span>
-      <button data-action="logsGoPage" data-arg1="1" ${isFirst ? "disabled" : ""}>⟨⟨</button>
-      <button data-action="logsPrevPage" ${isFirst ? "disabled" : ""}>‹ Prev</button>
-      <span class="page-info">Page ${state.logs.page} of ${totalP}</span>
-      <button data-action="logsNextPage" ${isLast ? "disabled" : ""}>Next ›</button>
-      <button data-action="logsGoPage" data-arg1="${totalP}" ${isLast ? "disabled" : ""}>⟩⟩</button>
-      <label class="logs-follow-toggle" title="When ON, new rows automatically scroll the view to the most recent page. When OFF, the view stays on the page you are reading.">
-        <input type="checkbox" id="logs-follow-input" ${state.logs.followTail ? "checked" : ""} data-action="logsSetFollow">
-        <span>Follow</span>
-      </label>
-    </div>` : "";
-  logsEl.innerHTML = headerHtml + bodyHtml + paginationHtml;
-  attachLogRowHandlers();
+
+  // The connection-status badge and the recording-toggle button are
+  // rendered with STATIC class/text content. Their dynamic state is
+  // managed by direct DOM manipulation in `state/ws.ts`
+  // (`setLogsStatus`) and `components/recording-toggle.ts`
+  // (`renderRecordingToggle`). lit-html leaves static attributes and
+  // static text alone after the first render, so those direct
+  // mutations survive `requestUpdate()`. Do NOT add `${...}`
+  // interpolations to these elements without also routing the
+  // updates through `requestUpdate()`.
+  return html`
+    <div class="logs-header">
+      <h2>Live Logs</h2>
+      <div class="logs-header-actions">
+        <div class="columns-menu-wrapper">
+          <button id="logs-columns-toggle" type="button" class="logs-columns-toggle" aria-haspopup="true" aria-expanded=${columnsMenuOpen ? "true" : "false"} title="Choose which columns to show or hide. The selection is saved in this browser." @click=${onToggleColumnsMenu}>
+            <span>Columns</span>
+            <span class="logs-columns-caret" aria-hidden="true">▾</span>
+          </button>
+          ${renderColumnsMenu()}
+        </div>
+        <span id="logs-connection-status" class="logs-connection-badge disconnected">🔴 disconnected</span>
+        <button id="logs-recording-toggle" class="logs-recording-toggle" type="button" aria-pressed="false" title="When ON, the server saves full request/response bodies and headers for every request (disk). When OFF, only metadata is kept." @click=${onRecordingToggleClick}>
+          <span class="logs-recording-dot" aria-hidden="true"></span>
+          <span class="logs-recording-label">⏺ Record: <strong>OFF</strong></span>
+        </button>
+      </div>
+    </div>
+    <div class="logs" id="logs" @click=${onLogsClick}>
+      ${renderHeaderRow(visibleColKeys)}
+      ${pageRows.length === 0
+        ? html`<div class="empty" style="padding:2rem;">No recent requests yet. Use the API to see logs appear here in real time.</div>`
+        : pageRows.map((r) => renderLogRow(r, visibleColKeys))}
+      ${renderPagination(totalRows, totalP)}
+    </div>
+  `;
 }
+
+// ---- Click handlers (replaces data-action + attachLogRowHandlers) ------
+
+// Event delegation for log-row clicks. A single `@click` handler on
+// the `#logs` container reads the closest `.log-row[data-request-id]`
+// ancestor of the click target and opens the detail modal. This
+// replaces the per-row `addEventListener` in `attachLogRowHandlers`
+// (which had to be re-run after every `innerHTML` rebuild).
+function onLogsClick(e: Event): void {
+  const target = e.target;
+  if (!(target instanceof Element)) return;
+  // The header row also has class `.log-row` but no `data-request-id`;
+  // the attribute selector skips it.
+  const rowEl = target.closest(".log-row[data-request-id]");
+  if (!rowEl) return;
+  const el = rowEl as HTMLElement;
+  const id = el.dataset["id"] || "";
+  const requestId = el.dataset["requestId"] || "";
+  const traceId = el.dataset["traceId"] || "";
+  if (!id && !requestId) return;
+  void openLogDetail(id, requestId, traceId);
+}
+
+function onToggleColumnsMenu(): void {
+  columnsMenuOpen = !columnsMenuOpen;
+  requestUpdate();
+}
+
+function onColumnToggle(key: string, e: Event): void {
+  // Stop the click from bubbling to the document-level outside-click
+  // handler (which would close the menu before the @change could fire
+  // on the next render).
+  e.stopPropagation();
+  toggleColumn(key);
+}
+
+function onRecordingToggleClick(): void {
+  void toggleRecording();
+}
+
+// ---- Pagination handlers -----------------------------------------------
+//
+// Exported (and re-exported via the registry in handlers/registry.ts)
+// for back-compat with anything that still routes through
+// `data-action`. The lit-html template uses direct `@click` handlers
+// instead, so the registry entries are unused at runtime but kept
+// for type-safety.
 
 export function logsPrevPage(): void {
   if (state.logs.page > 1) {
     state.logs.page--;
     if (state.logs.page === 1) state.logs.followTail = true;
-    // User-initiated action — use the synchronous renderer so the
-    // DOM reflects the new page immediately (the throttled version
-    // would defer to the next animation frame, which makes the UI
-    // feel laggy for click-driven navigation).
-    renderLogsRowsSync();
+    requestUpdate();
   }
 }
 export function logsNextPage(): void {
   if (state.logs.page < totalPages()) {
     state.logs.page++;
     if (state.logs.page >= totalPages()) state.logs.followTail = false;
-    renderLogsRowsSync();
+    requestUpdate();
   }
 }
 export function logsGoPage(p: number): void {
   const total = totalPages();
   state.logs.page = Math.max(1, Math.min(p, total));
   state.logs.followTail = (state.logs.page === 1);
-  renderLogsRowsSync();
+  requestUpdate();
 }
 export function logsSetFollow(e: Event): void {
   const target = e.target;
@@ -359,34 +412,18 @@ export function logsSetFollow(e: Event): void {
     enabled = !!target.checked;
   }
   state.logs.followTail = enabled;
-  if (enabled) { state.logs.page = 1; renderLogsRowsSync(); }
+  if (enabled) { state.logs.page = 1; requestUpdate(); }
 }
 
 // ---- Columns menu ------------------------------------------------------
-// Render the popover menu body (one checkbox per column). Called
-// both at mount time and after each toggle so the checked state
-// stays in sync with state.logs.visibleColumns.
-function renderColumnsMenuBody(menuEl: HTMLElement | null): void {
-  if (!menuEl) return;
-  const visible = state.logs.visibleColumns || new Set(LOG_COLUMNS.map((c) => c.key));
-  menuEl.innerHTML = LOG_COLUMNS.map((c) => {
-    const checked = visible.has(c.key) ? "checked" : "";
-    // data-action="toggleColumn" data-arg1="<key>" — the global
-    // click shim in app.js dispatches this to HANDLERS.toggleColumn.
-    return `<label class="columns-menu-item"><input type="checkbox" data-action="toggleColumn" data-arg1="${c.key}" ${checked}><span>${escapeHtml(c.label)}</span></label>`;
-  }).join("");
-}
+//
+// `toggleColumnsMenu` and `toggleColumn` are exported for back-compat
+// with the registry. The lit-html template uses direct `@click` /
+// `@change` handlers (`onToggleColumnsMenu`, `onColumnToggle`).
 
 export function toggleColumnsMenu(): void {
-  const menu = document.querySelector(".columns-menu");
-  if (menu) {
-    const isOpen = menu.classList.toggle("open");
-    // Keep aria-expanded in sync so screen readers announce the
-    // menu's state, and so the close-on-outside-click handler can
-    // inspect it cheaply.
-    const btn = document.getElementById("logs-columns-toggle");
-    if (btn) btn.setAttribute("aria-expanded", isOpen ? "true" : "false");
-  }
+  columnsMenuOpen = !columnsMenuOpen;
+  requestUpdate();
 }
 
 export function toggleColumn(key: string): void {
@@ -397,13 +434,12 @@ export function toggleColumn(key: string): void {
   if (set.has(key)) {
     // Refuse to hide the last visible column — an empty table is
     // useless and the user has no "show all" affordance without
-    // toggling each one back on. We don't mutate the set, but
-    // the browser's default click has already flipped the
-    // checkbox to unchecked — we flip it back below to keep the
-    // DOM in sync with state.
+    // toggling each one back on. The browser's default click has
+    // already flipped the checkbox to unchecked; `requestUpdate()`
+    // re-renders and lit-html sets `?checked` back to true (because
+    // `set.has(key)` is still true).
     if (set.size === 1) {
-      const cb = document.querySelector(`.columns-menu input[data-arg1="${key}"]`) as HTMLInputElement | null;
-      if (cb) cb.checked = true;
+      requestUpdate();
       return;
     }
     set.delete(key);
@@ -411,21 +447,10 @@ export function toggleColumn(key: string): void {
     set.add(key);
   }
   saveVisibleColumns();
-  // Re-render the table so the header and body both reflect the
-  // new visibility. We do NOT re-render the menu's innerHTML
-  // here — the user is mid-click on a checkbox and that same
-  // click event is still bubbling up to the document-level
-  // close-on-outside-click handler. Replacing innerHTML detaches
-  // `event.target`, which would make the wrapper-contains check
-  // return false and close the menu. Update the checkbox's
-  // `checked` attribute in place instead.
-  const cb = document.querySelector(`.columns-menu input[data-arg1="${key}"]`) as HTMLInputElement | null;
-  if (cb) cb.checked = set.has(key);
-  // User-initiated action (column toggle) — use the synchronous
-  // renderer so the table reflects the new column visibility
-  // immediately.
-  renderLogsRowsSync();
+  requestUpdate();
 }
+
+// ---- Stage event handling ----------------------------------------------
 
 function handleStageEvent(event: StageEvent): void {
   if (!event || !event.request_id) return;
@@ -458,7 +483,7 @@ function handleStageEvent(event: StageEvent): void {
   if (exactRow) {
     if (exactRow.id != null) state.logs.rowById.set(exactRow.id, exactRow);
     if (state.logs.followTail) state.logs.page = 1;
-    renderLogsRows();
+    requestUpdate();
     updateOpenLogDetail(exactRow as unknown as LogDetailLog);
     return;
   }
@@ -538,7 +563,7 @@ function handleStageEvent(event: StageEvent): void {
     if (event.status_code > 0) existing.status_code = event.status_code;
   }
   if (state.logs.followTail) state.logs.page = 1;
-  renderLogsRows();
+  requestUpdate();
 }
 
 // Mirror the stage event into the two stage maps keyed by
@@ -692,7 +717,7 @@ function reapStaleInflight(): void {
   scan(state.logs.inflightByRequestId, false);
   // Only re-render when something actually changed — avoids a full
   // table re-render every tick while ordinary inflight entries exist.
-  if (reaped) renderLogsRows();
+  if (reaped) requestUpdate();
 }
 
 export function startStaleInflightReaper(): void {
@@ -736,7 +761,7 @@ async function resyncUsageRows(sinceId: number): Promise<void> {
         synthesizeTerminalEvent(r);
       }
       if (state.logs.followTail) state.logs.page = 1;
-      renderLogsRows();
+      requestUpdate();
     }
   } catch (e: unknown) {
     const err = e instanceof Error ? e : null;
@@ -785,7 +810,7 @@ function handleLogsMessage(raw: MessageEvent): void {
     for (const r of rows) {
       synthesizeTerminalEvent(r);
     }
-    state.logs.page = 1; state.logs.followTail = true; renderLogsRows();
+    state.logs.page = 1; state.logs.followTail = true; requestUpdate();
   } else if (msg.type === "row") {
     const candidate = msg.data ?? msg.row ?? msg;
     if (!isRecentUsageRowShape(candidate)) return;
@@ -819,7 +844,7 @@ function handleLogsMessage(raw: MessageEvent): void {
       reapRaceLosers(row);
     }
     if (state.logs.followTail) state.logs.page = 1;
-    renderLogsRows();
+    requestUpdate();
     updateOpenLogDetail(row as unknown as LogDetailLog);
   } else if (msg.type === "stage") {
     const candidate = msg.data ?? msg;
@@ -966,25 +991,17 @@ if (typeof window !== "undefined") {
   w.openLogDetail = openLogDetail;
 }
 
-export async function mountLogs(): Promise<void> {
+// ---- Mount -------------------------------------------------------------
+
+export async function mountLogs(): Promise<(() => void) | void> {
   const main = document.getElementById("main");
-  const alreadyRendered = main && main.querySelector(".logs-header") && main.querySelector("#logs");
-  if (alreadyRendered) {
-    // Clear stale inflight/stage state from previous sessions.
-    state.logs.inflightByTraceId = new Map();
-    state.logs.inflightByRequestId = new Map();
-    state.logs.stagesByTraceId = new Map();
-    state.logs.stagesByRequestId = new Map();
-    state.logs.rows = [];
-    state.logs.rowById = new Map();
-    state.logs.lastSeenId = 0;
-    setMessageHandler(handleLogsMessage);
-    connectLogsWebSocket();
-    fetchRecordingState();
-    startLogLatencyTicker();
-    startStaleInflightReaper();
-    return;
-  }
+  if (!main) return;
+
+  // Reset view-local UI state on every mount. The router calls the
+  // previous view's cleanup (which stops the WS, ticker, and reaper)
+  // before mounting this one, so we re-initialise everything here.
+  columnsMenuOpen = false;
+
   // First-mount of this view: restore the user's column-visibility
   // choice from localStorage, falling back to "all visible". Done
   // here (not at module load) so it only runs in the browser, and
@@ -1006,53 +1023,49 @@ export async function mountLogs(): Promise<void> {
   state.logs.inflightByRequestId = new Map();
   state.logs.stagesByTraceId = new Map();
   state.logs.stagesByRequestId = new Map();
-  if (!main) return;
-  main.innerHTML = `
-    <div class="logs-header">
-      <h2>Live Logs</h2>
-      <div class="logs-header-actions">
-        <div class="columns-menu-wrapper">
-          <button id="logs-columns-toggle" data-action="toggleColumnsMenu" type="button" class="logs-columns-toggle" aria-haspopup="true" aria-expanded="false" title="Choose which columns to show or hide. The selection is saved in this browser.">
-            <span>Columns</span>
-            <span class="logs-columns-caret" aria-hidden="true">▾</span>
-          </button>
-          <div class="columns-menu" role="menu"></div>
-        </div>
-        <span id="logs-connection-status" class="logs-connection-badge disconnected">🔴 disconnected</span>
-        <button id="logs-recording-toggle" class="logs-recording-toggle" type="button" aria-pressed="false" title="When ON, the server saves full request/response bodies and headers for every request (disk). When OFF, only metadata is kept.">
-          <span class="logs-recording-dot" aria-hidden="true"></span>
-          <span class="logs-recording-label">⏺ Record: <strong>OFF</strong></span>
-        </button>
-      </div>
-    </div>
-    <div class="logs" id="logs">
-      <div class="empty" style="padding:2rem;">No recent requests yet. Use the API to see logs appear here in real time.</div>
-    </div>
-  `;
-  // Populate the columns menu (one checkbox per column). The menu
-  // starts closed; clicking the button toggles `.open` via the
-  // toggleColumnsMenu handler.
-  renderColumnsMenuBody(document.querySelector(".columns-menu"));
-  // Close the menu when clicking anywhere outside the menu wrapper
-  // (button + popover). Bound once at mount; checks `event.target`
-  // and removes `.open` if the click landed outside.
-  const onDocClickForMenu = (ev: Event) => {
-    const menu = document.querySelector(".columns-menu");
-    if (!menu || !menu.classList.contains("open")) return;
-    const wrapper = menu.closest(".columns-menu-wrapper");
-    if (wrapper && wrapper.contains(ev.target as Node)) return;
-    menu.classList.remove("open");
+
+  // Mount the lit-html view. `mountView` registers the render
+  // function with the reactive system so `requestUpdate()` (called
+  // from the WS handler, pagination handlers, etc.) triggers a
+  // microtask-coalesced re-render.
+  const cleanupReactive = mountView(main, renderLogsView);
+
+  // Wire the document-level outside-click handler for the columns
+  // menu. Bound once per session; the handler reads `columnsMenuOpen`
+  // (module-local) so it stays in sync with the template. Clicks
+  // inside the `.columns-menu-wrapper` are left alone so the user
+  // can interact with the checkboxes without closing the menu.
+  const onDocClickForMenu = (ev: Event): void => {
+    if (!columnsMenuOpen) return;
+    const target = ev.target;
+    if (!(target instanceof Element)) return;
+    if (target.closest(".columns-menu-wrapper")) return;
+    columnsMenuOpen = false;
+    requestUpdate();
   };
   const w = window as unknown as { __logsColumnsDocClickBound?: boolean };
   if (!w.__logsColumnsDocClickBound) {
     document.addEventListener("click", onDocClickForMenu);
     w.__logsColumnsDocClickBound = true;
   }
-  const recBtn = document.getElementById("logs-recording-toggle");
-  if (recBtn) recBtn.addEventListener("click", () => toggleRecording());
+
+  // Start the WS, ticker, and reaper. All three are idempotent
+  // (they check their own handle before starting), but we always
+  // call them here so a fresh mount after cleanup gets a fresh
+  // connection / interval.
   fetchRecordingState();
   setMessageHandler(handleLogsMessage);
   connectLogsWebSocket();
   startLogLatencyTicker();
   startStaleInflightReaper();
+
+  // Cleanup: tear down all three (WS, ticker, reaper) and release
+  // the lit-html container so the next view's `mountView` doesn't
+  // race with our `requestUpdate()`.
+  return () => {
+    disconnectLogsWebSocket();
+    stopLogLatencyTicker();
+    stopStaleInflightReaper();
+    cleanupReactive();
+  };
 }
