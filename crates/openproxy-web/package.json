@@ -7,13 +7,17 @@
     "typecheck": "tsc --noEmit",
     "typecheck:tests": "tsc --noEmit -p tsconfig.test.json",
     "typecheck:all": "tsc --noEmit && tsc --noEmit -p tsconfig.test.json",
-    "build": "tsc",
-    "build:watch": "tsc --watch",
+    "build": "node build.mjs && tsc --emitDeclarationOnly",
+    "build:watch": "node build.mjs --watch",
     "test:e2e": "echo 'e2e tests live in tests/e2e/ — handled in a later gate' && exit 0"
   },
   "devDependencies": {
     "@playwright/test": "^1.60.0",
     "@types/node": "^22.19.21",
+    "esbuild": "^0.28.1",
     "typescript": "5.6.3"
+  },
+  "dependencies": {
+    "lit-html": "^3.3.3"
   }
 }
