@@ -75,19 +75,42 @@ openproxy with one base-URL change.
   `rtk` (command-aware filtering of CLI tool output: git, cargo, npm, docker,
   etc.) can be applied to the request payload before forwarding upstream.
   Modes compose (`lite_rtk`).
-- **Admin dashboard** — A separate `openproxy-web` binary serves a web UI for
-  managing providers, accounts, API keys, combos, viewing live logs and
-  cost analytics. See [Dashboard](#dashboard) for the current caveat.
+- **Single-binary admin dashboard** — The dashboard SPA (lit-html +
+  TypeScript) is built with pnpm/esbuild and embedded into the same
+  `openproxy` binary via `rust-embed`. Served at `/admin/*` of the same
+  HTTP server that serves the API. No second process, no second port.
+  Includes a real-time live dashboard with throughput, latency, status
+  code, and race-outcome charts (uPlot) streaming over WebSocket, plus a
+  notifications tray that surfaces new/removed/auto-activated models and
+  runtime errors with drag-and-drop-to-combo UX.
 - **SQLite storage with bundled migrations** — All state (providers, accounts,
-  combos, models, usage rows, OAuth tickets) lives in a single SQLite file.
-  The `rusqlite` `bundled` feature compiles SQLite from source, so there is
-  no external database or system dependency. 35 migrations are applied on
-  startup.
+  combos, models, usage rows, OAuth tickets, notifications) lives in a single
+  SQLite file. The `rusqlite` `bundled` feature compiles SQLite from source,
+  so there is no external database or system dependency. 36 migrations are
+  applied on startup.
 - **Secret encryption at rest** — Upstream account API keys and OAuth tokens
   are sealed with AES-256-GCM using a master key loaded from
   `OPENPROXY_MASTER_KEY` (with `OPENPROXY_MASTER_KEY_PREVIOUS` for rotation).
   openproxy's own API keys are hashed with SHA-256 (high-entropy tokens, not
   passwords — Argon2 would be theatre here).
+- **Notifications tray** — The dashboard surfaces real-time notifications for
+  model discovery events (`model_new`, `model_gone`, `model_auto_activated`
+  keyed off the per-provider `auto_activate_keyword`) and runtime errors
+  (`system`: discovery failures, OAuth expiry, circuit-breaker opens).
+  Drag a model notification onto a combo to add it as a target; click
+  "Dismiss" or any action to mark-as-read. Real-time push over WebSocket; REST
+  fallback for unread-count polling.
+- **Live dashboard** — Real-time KPIs (active requests, req/min, tokens/min,
+  cost/min) with sparklines, plus four uPlot time-series charts (throughput,
+  status codes, latency p50/p95/p99, race outcomes) and a live activity feed.
+  Data flows over WebSocket with reconnect + `lag_warning`/`resync` recovery;
+  bucketed aggregations are computed client-side in a ring buffer (5 min at
+  1-sec granularity, 30 min at 5-sec, 24h at 1-min).
+- **i18n-ready UI** — All user-facing dashboard strings live in
+  `crates/openproxy-web/src/static/src/i18n/en.json` and are served at
+  `/admin/i18n/{lang}.json`. English is the default; adding a language is a
+  single JSON file + a `Lang` union type extension. The `t(key, params)` API
+  supports `{{param}}` interpolation and `count`-based pluralization.
 
 ## Quick start
 
@@ -152,21 +175,25 @@ edit it, and run:
 
 ### Option C: Build from source
 
-You need Rust 1.85+ (edition 2024) and, only if you want the dashboard
-binary, Node 22 + pnpm 9.
+You need Rust 1.85+ (edition 2024), Node 22, and pnpm 9. The frontend
+is built with pnpm/esbuild and embedded into the Rust binary at compile
+time via `rust-embed`, so a Node toolchain is required at build time
+(but NOT at runtime — the released binary is self-contained).
 
 ```bash
 git clone https://github.com/soyelmismo/openproxy.git
 cd openproxy
 
-# Build the API server binary (no frontend toolchain needed)
+# 1. Build the dashboard frontend (emits crates/openproxy-web/src/static/dist/)
+cd crates/openproxy-web && pnpm install && pnpm build && cd ../..
+
+# 2. Build the server binary (embeds the frontend via rust-embed)
 cargo build --release -p openproxy-server
 # The binary is at target/release/openproxy
 ./target/release/openproxy --config config.toml
 
-# Optional: build the dashboard binary (needs pnpm + Node 22)
-(cd crates/openproxy-web && pnpm install && pnpm build)
-cargo build --release -p openproxy-web
+# 3. Open the dashboard in your browser
+#    http://127.0.0.1:8787/admin
 ```
 
 The release profile uses LTO, `opt-level = 3`, single codegen unit, and
@@ -232,37 +259,32 @@ retries, circuit breaker, logging, compression).
 
 ## Dashboard
 
-The `openproxy` binary serves **only** the OpenAI-compatible API and the
-admin CRUD surface. There is no UI in that binary.
+The `openproxy` binary serves the OpenAI-compatible API at `/v1/*`, the
+admin REST API at `/admin/api/*`, the WebSocket at `/admin/ws`, and the
+dashboard SPA at `/admin/*` — all from the same process on the same port.
+No second binary, no second port, no proxy hop.
 
-A separate optional binary, `openproxy-web`, provides a web UI for managing
-providers, accounts, API keys, combos, viewing live logs, and cost
-analytics. It is a thin proxy that forwards `/web/api/*` calls to a running
-`openproxy` server.
+The dashboard (built with lit-html + TypeScript + esbuild, embedded via
+`rust-embed`) includes:
 
-**Known limitation.** `openproxy-web` currently reads its static assets (JS,
-CSS, fonts) from the source tree at runtime via `CARGO_MANIFEST_DIR`, with
-only `index.html` and `callback.html` embedded at compile time. This means
-the dashboard binary works best when run from a built source checkout, not
-as a standalone downloaded binary. The CI release pipeline does **not**
-currently ship a standalone `openproxy-web` binary for this reason.
+- **Live dashboard** (`/admin/#/home`) — real-time KPIs, throughput / status
+  / latency / race-outcome charts (uPlot), activity feed. Streams over
+  WebSocket with reconnect + lag-resync recovery.
+- **Providers / Combos / Keys** — full CRUD for the catalog.
+- **Live logs** — in-flight request stage events + terminal rows in real
+  time.
+- **Analytics** — historical usage breakdowns by model, provider, account,
+  status, latency, race outcomes.
+- **Notifications tray** (`/admin/#/notifications`) — surfaces model
+  discovery events (`model_new`, `model_gone`, `model_auto_activated`) and
+  runtime errors (`system`). Drag a model notification onto a combo to add
+  it as a target.
+- **Config** — runtime-editable timeouts, recording TTL, compression mode,
+  idle-chunk retryable flag.
 
-To use the dashboard today:
-
-```bash
-# Terminal 1: run the API server
-./target/release/openproxy --config config.toml
-
-# Terminal 2: run the dashboard (needs a built frontend)
-(cd crates/openproxy-web && pnpm install && pnpm build)
-cargo run -p openproxy-web -- --core-url http://127.0.0.1:8787
-# Open http://127.0.0.1:8080 (or whatever port openproxy-web binds to)
-```
-
-**Future work.** Bundle the dashboard assets into `openproxy-web` properly
-(e.g. via `include_dir!` or a build-time `dist/` embedding step) so it ships
-as a single self-contained binary. Tracked informally — contributions
-welcome.
+Open the dashboard at `http://127.0.0.1:8787/admin` once the server is
+running. The SPA shell loads first, then fetches the i18n pack
+(`/admin/i18n/en.json`) before the first render.
 
 ## API usage
 
@@ -310,21 +332,25 @@ openproxy is a Rust workspace of four crates:
 openproxy/
 ├── crates/
 │   ├── openproxy-core/         # Headless engine: providers, combos, race,
-│   │                           # SSE, OAuth, secrets, DB, cost, quotas.
-│   │                           # No HTTP server, no UI.
+│   │                           # SSE, OAuth, secrets, DB, cost, quotas,
+│   │                           # notifications. No HTTP server, no UI.
 │   ├── openproxy-server/       # Binary `openproxy`. axum HTTP server that
-│   │                           # exposes /v1/* (chat, models, health) and
-│   │                           # /admin/* (CRUD + telemetry).
-│   ├── openproxy-api-client/   # Rust client library for the /admin/* API.
-│   │                           # Used by openproxy-web and external scripts.
-│   └── openproxy-web/          # Binary `openproxy-web`. Optional dashboard
-│                               # UI; proxies /web/api/* to a running
-│                               # openproxy server. Frontend is TypeScript
-│                               # built with pnpm + esbuild.
+│   │                           # exposes /v1/* (chat, models, health),
+│   │                           # /admin/api/* (CRUD + telemetry + notifications),
+│   │                           # /admin/ws (WebSocket), and /admin/*
+│   │                           # (dashboard SPA embedded via rust-embed).
+│   ├── openproxy-api-client/   # Rust client library for the /admin/api/* API.
+│   │                           # Used by external scripts and integrations.
+│   └── openproxy-web/          # Frontend source tree (lit-html + TypeScript).
+│                               # The Rust binary in this crate is deprecated
+│                               # and will be removed; the dashboard is now
+│                               # served by openproxy-server via rust-embed.
+│                               # `pnpm build` emits to src/static/dist/,
+│                               # which openproxy-server embeds at compile time.
 ├── docs/                       # architecture.md, mvp-spec.md, pending/
 ├── config.example.toml         # Annotated config starting point
-├── Dockerfile                  # Multi-stage build for the API server
-└── docker-compose.yml          # Single-service compose for the API server
+├── Dockerfile                  # Multi-stage build: frontend + server in one image
+└── docker-compose.yml          # Single-service compose
 ```
 
 ## Documentation
