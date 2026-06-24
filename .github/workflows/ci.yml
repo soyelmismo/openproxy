@@ -1,24 +1,50 @@
-# .github/workflows/ci.yml — openproxy CI: typecheck del frontend TS,
-# build de tsc, y cargo check + test del workspace Rust.
+# .github/workflows/ci.yml — unified openproxy CI/CD pipeline.
 #
-# NO incluye playwright test (requiere el server en :8788 con core en :8787,
-# fuera de scope). Los tests e2e se corren localmente.
+# This is the SINGLE workflow file for the project. It runs:
+#   1. frontend       — pnpm typecheck + build, uploads web-dist artifact
+#   2. rust-checks    — fmt + clippy + check + test (GATE)
+#   3. prepare-version — computes next semver from tags + commit log
+#   4. build          — 7-target release matrix, downloads web-dist first
+#   5. docker         — multi-arch (amd64+arm64) image push to ghcr.io
+#   6. release        — tags v<version>, creates GitHub Release with zips
+#
+# On PRs: frontend + rust-checks + build matrix run. No docker push, no
+# release. On master pushes: the full pipeline runs, including docker
+# push and a tagged GitHub Release.
+#
+# Concurrency: per-ref, cancel-in-progress=false so a master push mid-
+# release doesn't get cancelled by the next push (the release would
+# then race with itself on tag creation).
 
 name: CI
 
 on:
   push:
-    branches: [master, main, 'hermes/**']
+    branches: [master]
   pull_request:
-    branches: [master, main, 'hermes/**']
+    branches: [master]
+
+permissions:
+  contents: write   # tag + release creation
+  packages: write   # ghcr.io push
+  actions: read     # cross-job artifact download
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: false
 
 env:
   CARGO_TERM_COLOR: always
-  PNPM_VERSION: 9
+  PNPM_VERSION: '9'
+  RUST_BACKTRACE: 1
 
 jobs:
-  frontend-typecheck:
-    name: Frontend TypeScript typecheck + build
+  # -----------------------------------------------------------------------------
+  # 1. Frontend typecheck + build (runs once on Linux, reused by every other
+  #    job via the `web-dist` workflow artifact).
+  # -----------------------------------------------------------------------------
+  frontend:
+    name: Frontend typecheck + build
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -48,34 +74,424 @@ jobs:
         working-directory: crates/openproxy-web
         run: pnpm typecheck:tests
 
-      - name: Build tsc
+      - name: Build (esbuild + tsc --emitDeclarationOnly)
         working-directory: crates/openproxy-web
         run: pnpm build
 
       - name: Verify critical emit
         working-directory: crates/openproxy-web
         run: |
-          test -f src/static/dist/app.js || (echo "ERROR: app.js not emitted" && exit 1)
-          test -f src/static/dist/lib/escape.js || (echo "ERROR: escape.js not emitted" && exit 1)
-          test -f src/static/dist/handlers/registry.js || (echo "ERROR: registry.js not emitted" && exit 1)
+          set -e
+          test -f src/static/dist/app.js        || { echo "ERROR: app.js not emitted"; exit 1; }
+          test -f src/static/dist/lib/escape.js || { echo "ERROR: escape.js not emitted"; exit 1; }
+          test -f src/static/dist/handlers/registry.js || { echo "ERROR: registry.js not emitted"; exit 1; }
           echo "Critical emit OK"
 
-  rust-check:
-    name: Rust cargo check + test
+      - name: Upload web-dist artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: web-dist
+          path: crates/openproxy-web/src/static/dist/
+          retention-days: 1
+          if-no-files-found: error
+
+  # -----------------------------------------------------------------------------
+  # 2. Rust checks — fmt, clippy (-D warnings), check, test. GATE: nothing
+  #    downstream runs if this fails.
+  # -----------------------------------------------------------------------------
+  rust-checks:
+    name: Rust fmt + clippy + check + test
     runs-on: ubuntu-latest
+    needs: frontend
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install Rust toolchain
+      - name: Install Rust toolchain (stable + rustfmt + clippy)
         uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt,clippy
 
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
         with:
           workspaces: 'crates'
 
+      - name: Download web-dist artifact
+        # openproxy-web's lib.rs has no build.rs that requires dist/ at
+        # compile time, but `cargo check` will still try to build the
+        # openproxy-web crate — keeping the artifact in place mirrors
+        # the production build environment.
+        uses: actions/download-artifact@v4
+        with:
+          name: web-dist
+          path: crates/openproxy-web/src/static/dist/
+
+      - name: cargo fmt --check
+        run: cargo fmt --all -- --check
+
+      - name: cargo clippy
+        run: cargo clippy --all-targets --workspace -- -D warnings
+
       - name: cargo check
         run: cargo check --all-targets --workspace
 
       - name: cargo test
         run: cargo test --workspace
+
+  # -----------------------------------------------------------------------------
+  # 3. Compute next version. Always runs after rust-checks so we don't waste
+  #    cycles parsing tags for a PR that already failed checks.
+  # -----------------------------------------------------------------------------
+  prepare-version:
+    name: Compute next version
+    runs-on: ubuntu-latest
+    needs: rust-checks
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      prev_tag: ${{ steps.version.outputs.prev_tag }}
+      changelog: ${{ steps.changelog.outputs.changelog }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # need full history for `git tag` + `git log range`
+
+      - name: Compute next version
+        id: version
+        run: |
+          set -euo pipefail
+          # Latest v* tag, sorted by semantic version descending.
+          LATEST_TAG="$(git tag --list 'v*' --sort=-v:refname | head -n 1 || true)"
+          if [ -z "$LATEST_TAG" ]; then
+            # No prior release — bootstrap at v1.0.0.
+            VERSION="1.0.0"
+            PREV_TAG=""
+          else
+            PREV_TAG="$LATEST_TAG"
+            BASE="${LATEST_TAG#v}"
+            MAJOR="$(printf '%s' "$BASE" | cut -d. -f1)"
+            MINOR="$(printf '%s' "$BASE" | cut -d. -f2)"
+            PATCH="$(printf '%s' "$BASE" | cut -d. -f3)"
+            RANGE="${LATEST_TAG}..HEAD"
+            # Inspect every commit subject + body in the range.
+            # Conventional-commits semantics:
+            #   - `feat!:` or `feat(scope)!:` or `BREAKING CHANGE:` → major
+            #   - `feat:` or `feat(scope):` (no `!`) → minor
+            #   - everything else (`fix:`, `chore:`, `docs:`, ...) → patch
+            LOG="$(git log "$RANGE" --pretty=format:'%s%n%b%n' || true)"
+            if printf '%s' "$LOG" | grep -qiE 'feat(\([^)]+\))?!:|BREAKING[ -]CHANGE'; then
+              MAJOR=$((MAJOR+1)); MINOR=0; PATCH=0
+            elif printf '%s' "$LOG" | grep -qiE 'feat(\([^)]+\))?:'; then
+              MINOR=$((MINOR+1)); PATCH=0
+            else
+              PATCH=$((PATCH+1))
+            fi
+            VERSION="${MAJOR}.${MINOR}.${PATCH}"
+          fi
+          {
+            echo "version=${VERSION}"
+            echo "prev_tag=${PREV_TAG}"
+          } >> "$GITHUB_OUTPUT"
+          echo "Computed version: ${VERSION} (previous tag: '${PREV_TAG}')"
+
+      - name: Generate changelog
+        id: changelog
+        run: |
+          set -euo pipefail
+          PREV_TAG="${{ steps.version.outputs.prev_tag }}"
+          if [ -z "$PREV_TAG" ]; then
+            # No prior tag — emit the most recent 200 commits as the
+            # initial changelog. Truncate so the release body stays
+            # readable on GitHub's UI.
+            BODY="$(git log --pretty=format:'- %s (%h)' | head -n 200)"
+          else
+            BODY="$(git log "${PREV_TAG}..HEAD" --pretty=format:'- %s (%h)')"
+          fi
+          if [ -z "$BODY" ]; then
+            BODY="- No changes since ${PREV_TAG:-start}"
+          fi
+          # Heredoc delimiter so newlines survive the output transport.
+          {
+            echo "changelog<<CHANGELOG_EOF"
+            echo "$BODY"
+            echo "CHANGELOG_EOF"
+          } >> "$GITHUB_OUTPUT"
+
+  # -----------------------------------------------------------------------------
+  # 4. Build matrix — 7 targets. Each leg:
+  #      - downloads web-dist so the openproxy-web crate has its dist/ tree
+  #      - builds openproxy-server (produces the `openproxy` binary)
+  #      - zips binary + config.example.toml + dist/ + README
+  #
+  #    aarch64-pc-windows-msvc is marked continue-on-error because the
+  #    MSVC cross-linker on windows-latest is finicky. If it fails, the
+  #    release still proceeds with the other 6 targets.
+  # -----------------------------------------------------------------------------
+  build:
+    name: Build ${{ matrix.target }}
+    needs: [rust-checks, prepare-version]
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            runner: ubuntu-latest
+            os_family: linux
+          - target: aarch64-unknown-linux-gnu
+            runner: ubuntu-latest
+            os_family: linux
+            apt_cross: gcc-aarch64-linux-gnu
+            cross_cc: aarch64-linux-gnu-gcc
+          - target: armv7-unknown-linux-gnueabihf
+            runner: ubuntu-latest
+            os_family: linux
+            apt_cross: gcc-arm-linux-gnueabihf
+            cross_cc: arm-linux-gnueabihf-gcc
+          - target: x86_64-pc-windows-msvc
+            runner: windows-latest
+            os_family: windows
+          - target: aarch64-pc-windows-msvc
+            runner: windows-latest
+            os_family: windows
+            experimental: true
+          - target: x86_64-apple-darwin
+            runner: macos-13
+            os_family: macos
+          - target: aarch64-apple-darwin
+            runner: macos-14
+            os_family: macos
+    runs-on: ${{ matrix.runner }}
+    continue-on-error: ${{ matrix.experimental == true }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain + target
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: 'crates'
+          key: ${{ matrix.target }}
+
+      - name: Download web-dist artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: web-dist
+          path: crates/openproxy-web/src/static/dist/
+
+      - name: Install Linux cross-compiler
+        if: matrix.apt_cross != ''
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ${{ matrix.apt_cross }}
+
+      - name: Configure Linux cross-linker env
+        if: matrix.cross_cc != ''
+        run: |
+          # CARGO_TARGET_<TARGET_WITH_UNDERSCORES_UPPERCASE>_LINKER
+          TARGET_UPPER="$(printf '%s' '${{ matrix.target }}' | tr '[:lower:]-' '[:upper:]_')"
+          {
+            echo "CARGO_TARGET_${TARGET_UPPER}_LINKER=${{ matrix.cross_cc }}"
+            echo "CC_${{ matrix.target }}=${{ matrix.cross_cc }}"
+            echo "CXX_${{ matrix.target }}=${{ matrix.cross_cc }}"
+          } >> "$GITHUB_ENV"
+
+      - name: Build openproxy-server (release)
+        shell: bash
+        run: cargo build --release --target ${{ matrix.target }} -p openproxy-server
+
+      - name: Stage package (non-Windows)
+        if: matrix.os_family != 'windows'
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION="${{ needs.prepare-version.outputs.version }}"
+          TARGET="${{ matrix.target }}"
+          STAGE="openproxy-${VERSION}-${TARGET}"
+          mkdir -p "${STAGE}"
+          cp "target/${TARGET}/release/openproxy" "${STAGE}/openproxy"
+          cp config.example.toml "${STAGE}/"
+          cp -r crates/openproxy-web/src/static/dist "${STAGE}/dist"
+          cat > "${STAGE}/README" <<EOF
+          openproxy ${VERSION} (${TARGET})
+          ====================================
+
+          Contents:
+            openproxy              - the API server binary
+            config.example.toml    - sample config; copy to config.toml and edit
+            dist/                  - dashboard web assets (used by openproxy-web)
+
+          Quick start:
+            cp config.example.toml config.toml
+            # edit config.toml: set [server].bind = "0.0.0.0:8787" for non-loopback
+            ./openproxy --config config.toml
+
+          Health check:
+            curl http://127.0.0.1:8787/v1/health
+
+          Note: this zip contains the API server only. The dashboard UI is
+          served by a separate `openproxy-web` binary (see docs/architecture.md).
+          EOF
+          zip -r "openproxy-${VERSION}-${TARGET}.zip" "${STAGE}"
+
+      - name: Stage package (Windows)
+        if: matrix.os_family == 'windows'
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION="${{ needs.prepare-version.outputs.version }}"
+          TARGET="${{ matrix.target }}"
+          STAGE="openproxy-${VERSION}-${TARGET}"
+          mkdir -p "${STAGE}"
+          cp "target/${TARGET}/release/openproxy.exe" "${STAGE}/openproxy.exe"
+          cp config.example.toml "${STAGE}/"
+          cp -r crates/openproxy-web/src/static/dist "${STAGE}/dist"
+          cat > "${STAGE}/README" <<EOF
+          openproxy ${VERSION} (${TARGET})
+          ====================================
+
+          Contents:
+            openproxy.exe          - the API server binary
+            config.example.toml    - sample config; copy to config.toml and edit
+            dist/                  - dashboard web assets (used by openproxy-web)
+
+          Quick start (PowerShell):
+            Copy-Item config.example.toml config.toml
+            # edit config.toml: set [server].bind = "0.0.0.0:8787"
+            .\openproxy.exe --config config.toml
+
+          Health check:
+            curl http://127.0.0.1:8787/v1/health
+
+          Note: this zip contains the API server only. The dashboard UI is
+          served by a separate openproxy-web binary (see docs/architecture.md).
+          EOF
+          # 7z is preinstalled on windows-latest Git Bash.
+          7z a "openproxy-${VERSION}-${TARGET}.zip" "${STAGE}"
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-${{ matrix.target }}
+          path: openproxy-*.zip
+          retention-days: 7
+          if-no-files-found: error
+
+  # -----------------------------------------------------------------------------
+  # 5. Docker build & push. Multi-arch (amd64 + arm64). Push only on master.
+  # -----------------------------------------------------------------------------
+  docker:
+    name: Docker build & push
+    runs-on: ubuntu-latest
+    needs: [rust-checks, prepare-version]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up QEMU (multi-arch emulation)
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to ghcr.io
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Compute image tags
+        id: tags
+        run: |
+          set -euo pipefail
+          VERSION="${{ needs.prepare-version.outputs.version }}"
+          REPO="ghcr.io/soyelmismo/openproxy"
+          # On master: tag both :<version> and :latest. On PRs: skip push
+          # entirely (handled by the `push` flag below), but we still
+          # build for cache validation.
+          if [ "${GITHUB_REF}" = "refs/heads/master" ] && [ "${GITHUB_EVENT_NAME}" = "push" ]; then
+            echo "tags=${REPO}:${VERSION},${REPO}:latest" >> "$GITHUB_OUTPUT"
+            echo "push=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "tags=${REPO}:pr-${VERSION}" >> "$GITHUB_OUTPUT"
+            echo "push=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Build & push image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: ${{ steps.tags.outputs.push == 'true' }}
+          tags: ${{ steps.tags.outputs.tags }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          provenance: false
+
+  # -----------------------------------------------------------------------------
+  # 6. Release — only on master pushes. Creates the v<version> tag and a
+  #    GitHub Release with all build-*.zip artifacts attached.
+  # -----------------------------------------------------------------------------
+  release:
+    name: Tag & GitHub Release
+    runs-on: ubuntu-latest
+    needs: [rust-checks, prepare-version, build, docker]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/master'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Download all build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          # All artifacts whose name starts with `build-` — i.e. one per
+          # matrix leg. `merge-multiple: true` flattens them into a
+          # single directory so the `files:` glob below matches.
+          pattern: build-*
+          merge-multiple: true
+          path: release-assets
+
+      - name: List downloaded assets
+        run: |
+          ls -la release-assets/
+          echo "---"
+          ls -la release-assets/*.zip || echo "WARNING: no zips found"
+
+      - name: Create tag + GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ needs.prepare-version.outputs.version }}
+          name: v${{ needs.prepare-version.outputs.version }}
+          body: |
+            ## Changes
+
+            ${{ needs.prepare-version.outputs.changelog }}
+
+            ## Downloads
+
+            Each zip contains the `openproxy` binary, `config.example.toml`,
+            and the `dist/` web assets for that target. See the bundled
+            `README` for quick-start instructions.
+
+            | File | Target |
+            |------|--------|
+            | `openproxy-${{ needs.prepare-version.outputs.version }}-x86_64-unknown-linux-gnu.zip` | Linux x86_64 |
+            | `openproxy-${{ needs.prepare-version.outputs.version }}-aarch64-unknown-linux-gnu.zip` | Linux arm64 |
+            | `openproxy-${{ needs.prepare-version.outputs.version }}-armv7-unknown-linux-gnueabihf.zip` | Linux armv7 (arm32) |
+            | `openproxy-${{ needs.prepare-version.outputs.version }}-x86_64-pc-windows-msvc.zip` | Windows x86_64 |
+            | `openproxy-${{ needs.prepare-version.outputs.version }}-aarch64-pc-windows-msvc.zip` | Windows arm64 (experimental) |
+            | `openproxy-${{ needs.prepare-version.outputs.version }}-x86_64-apple-darwin.zip` | macOS Intel |
+            | `openproxy-${{ needs.prepare-version.outputs.version }}-aarch64-apple-darwin.zip` | macOS Apple Silicon |
+
+            Docker image: `ghcr.io/soyelmismo/openproxy:${{ needs.prepare-version.outputs.version }}`
+          files: release-assets/openproxy-*.zip
+          fail_on_unmatched_files: false
+          generate_release_notes: false
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
