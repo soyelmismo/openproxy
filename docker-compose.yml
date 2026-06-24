@@ -1,0 +1,44 @@
+# docker-compose.yml — openproxy single-container deployment.
+#
+# Pulls the multi-arch image from ghcr.io (built by .github/workflows/ci.yml).
+# To build locally instead, comment out `image:` and uncomment `build:`.
+#
+# Usage:
+#   1. Copy config.example.toml to ./config.toml and edit (at minimum set
+#      `server.bind = "0.0.0.0:8787"` so the port is reachable from the host).
+#   2. `docker compose up -d`
+#   3. Visit http://localhost:8787/v1/health to confirm the server is up.
+#
+# The dashboard UI served by the `openproxy-web` binary is NOT included
+# in this image (see Dockerfile). To run the UI, either:
+#   - Run `openproxy-web` in a sidecar container, or
+#   - Build a future image that bundles both binaries.
+# See docs/architecture.md for the openproxy vs openproxy-web split.
+
+services:
+  openproxy:
+    image: ghcr.io/soyelmismo/openproxy:latest
+    # build: .
+    container_name: openproxy
+    ports:
+      - "8787:8787"
+    volumes:
+      - ./config.toml:/etc/openproxy/config.toml:ro
+      - openproxy-data:/var/lib/openproxy
+    environment:
+      # Override the config path if you mount it somewhere else.
+      - OPENPROXY_CONFIG=/etc/openproxy/config.toml
+      # `RUST_LOG` overrides [logging].level if set.
+      - RUST_LOG=info
+    restart: unless-stopped
+    # The Dockerfile already declares a HEALTHCHECK; this is a Compose-level
+    # hint for `docker compose ps` to show health status.
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--spider", "--timeout=3", "--tries=1", "http://127.0.0.1:8787/v1/health"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+      start_period: 5s
+
+volumes:
+  openproxy-data:
