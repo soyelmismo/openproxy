@@ -424,9 +424,11 @@ pub fn build_router(state: AppState) -> Router {
     let admin_routes = Router::new()
         // `/admin` and `/admin/` both serve the SPA shell. axum 0.7+
         // treats trailing-slash and no-trailing-slash as different
-        // paths, so we register both.
+        // paths, so we register both. (Note: axum 0.8 rejects empty-string
+        // route paths, so we only register "/" here — the outer router's
+        // `.nest("/admin", admin_routes)` handles the no-trailing-slash case
+        // via the SPA fallback.)
         .route("/", get(admin_ui::index_html))
-        .route("", get(admin_ui::index_html))
         .route("/callback.html", get(admin_ui::callback_html))
         .route("/health", get(handlers::admin::admin_health))
         .route("/oauth/callback", get(handlers::admin::oauth_callback))
