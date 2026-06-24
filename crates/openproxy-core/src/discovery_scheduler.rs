@@ -405,6 +405,23 @@ async fn run_one_tick(
                             error = %e,
                             "discovery tick: failed to decrypt api key; skipping cycle",
                         );
+                        // Surface to the dashboard's notifications tray.
+                        // Open a fresh connection (the writer held for the
+                        // decrypt attempt is in an unknown state). Failure
+                        // to record the notification is swallowed — the
+                        // WARN log above is the source of truth, and the
+                        // dedup index collapses repeat identical codes
+                        // within 24h so a persistently bad key doesn't
+                        // flood the tray.
+                        if let Ok(notif_conn) = db_pool.open_connection() {
+                            let _ = crate::notifications::record_system(
+                                &notif_conn,
+                                "account_key_decrypt_failed",
+                                &format!("account_id={}: {}", acc.id.0, e),
+                                Some(provider.as_str()),
+                                None,
+                            );
+                        }
                         return;
                     }
                 }
@@ -501,6 +518,23 @@ async fn run_one_tick(
                 duration_ms,
                 "discovery tick: refresh failed",
             );
+            // Surface to the dashboard's notifications tray. The
+            // dedup key for system notifications is the `code`, so
+            // repeat identical `discovery_failed` codes within 24h
+            // collapse into one row — an upstream that's flapping
+            // won't flood the tray. We open a fresh connection
+            // because the one used for `refresh_models` may be in a
+            // half-finished state; `open_connection` is cheap and
+            // the writer mutex is unaffected.
+            if let Ok(notif_conn) = db_pool.open_connection() {
+                let _ = crate::notifications::record_system(
+                    &notif_conn,
+                    "discovery_failed",
+                    &e.to_string(),
+                    Some(provider.as_str()),
+                    None,
+                );
+            }
         }
     }
 }

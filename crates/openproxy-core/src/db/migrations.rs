@@ -187,6 +187,11 @@ const MIGRATIONS: &[Migration] = &[
         name: "000035_combo_priority_modes",
         sql: include_str!("../../migrations/000035_combo_priority_modes.sql"),
     },
+    Migration {
+        version: 36,
+        name: "000036_notifications",
+        sql: include_str!("../../migrations/000036_notifications.sql"),
+    },
 ];
 
 /// Apply pending migrations on `conn`. Idempotent: skips versions already in
@@ -409,7 +414,7 @@ mod tests {
                 c.query_row("SELECT COUNT(*) FROM schema_migrations", [], |r| r.get(0))
                     .expect("count")
             });
-        assert_eq!(count_first, 33, "thirty-three migrations applied (versions 1-6, 8-34)");
+        assert_eq!(count_first, 35, "thirty-five migrations applied (versions 1-6, 8-36)");
 
         {
             let mut writer = pool.writer();

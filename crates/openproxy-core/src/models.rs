@@ -343,23 +343,30 @@ pub fn upsert_many(
     // ids. All within the same `tx` for atomicity.
     //
     // The snapshot also drives the `existing` set below, so this is
-    // a single SELECT rather than two.
+    // a single SELECT rather than two. We also pull `display_name`
+    // in the same SELECT so we can attach it to `model_gone`
+    // notifications without a second lookup before the DELETE
+    // branch.
     //
     // We key on `(model_id, row_id)` so the per-model row id at the
     // moment of deletion is preserved (it's only useful for the
     // `new_model_ids` report below — the reconnect path uses
     // `model_id` only).
     // ----------------------------------------------------------------
-    let existing_rows: Vec<(String, i64)> = {
+    let existing_rows: Vec<(String, i64, Option<String>)> = {
         let mut stmt = tx
-            .prepare("SELECT model_id, id FROM models WHERE provider_id = ?")
+            .prepare("SELECT model_id, id, display_name FROM models WHERE provider_id = ?")
             .map_err(|e| CoreError::Database {
                 message: format!("prepare snapshot existing rows: {}", e),
                 source: Some(Box::new(e)),
             })?;
         let rows = stmt
             .query_map([provider.as_str()], |r| {
-                Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?))
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, i64>(1)?,
+                    r.get::<_, Option<String>>(2)?,
+                ))
             })
             .map_err(|e| CoreError::Database {
                 message: format!("query snapshot existing rows: {}", e),
@@ -375,7 +382,21 @@ pub fn upsert_many(
         out
     };
     let existing: std::collections::HashSet<String> =
-        existing_rows.iter().map(|(m, _)| m.clone()).collect();
+        existing_rows.iter().map(|(m, _, _)| m.clone()).collect();
+    // Models that are in `existing` but NOT in `discovered` are about
+    // to be hard-deleted by the DELETE branch below. We capture their
+    // display_name (from the snapshot) so the `model_gone`
+    // notification has something to render. Computed here, before the
+    // DELETE branch runs, because after the DELETE the row is gone
+    // and the display_name would have to be reconstructed from
+    // memory.
+    let discovered_set: std::collections::HashSet<&str> =
+        discovered.iter().map(|d| d.model_id.as_str()).collect();
+    let deleted_models: Vec<(String, Option<String>)> = existing_rows
+        .iter()
+        .filter(|(m, _, _)| !discovered_set.contains(m.as_str()))
+        .map(|(m, _, dn)| (m.clone(), dn.clone()))
+        .collect();
     // Tracks the upstream model_ids that were JUST INSERTED this
     // call (i.e. not present in `existing` before the INSERT). They
     // are the candidates for Gate F1 reconnection: any orphan
@@ -525,6 +546,74 @@ pub fn upsert_many(
     }
 
     // ----------------------------------------------------------------
+    // Notifications tray: insert `model_new` and `model_gone` rows so
+    // the dashboard can surface "X new models were discovered" and
+    // "model Y was removed from upstream" to the operator. Both inserts
+    // run INSIDE the same `tx` so the notification rows commit
+    // atomically with the model changes — if the tx rolls back, no
+    // notification is left dangling.
+    //
+    // Dedup: the `idx_notifications_dedup` unique index on
+    // `(kind, dedup_key, date(created_at))` collapses repeat inserts
+    // within 24h. `notifications::insert` uses `INSERT OR IGNORE`, so a
+    // discovery cycle that runs twice in the same day does not produce
+    // duplicate notifications for the same model.
+    //
+    // The return value `Option<i64>` is `Some(id)` when a new row was
+    // inserted (or the existing dedup row was located); we collect those
+    // ids and broadcast them AFTER the tx commits (broadcasting inside
+    // the tx would race other connections that can't see the uncommitted
+    // row).
+    //
+    // Failures here are swallowed with `.ok().flatten()` — a notification
+    // insert error must NOT fail the entire discovery refresh.
+    let mut new_to_broadcast: Vec<(i64, &'static str, serde_json::Value)> = Vec::new();
+    for d in discovered.iter().filter(|d| !existing.contains(d.model_id.as_str())) {
+        let payload = serde_json::json!({
+            "provider_id": provider.as_str(),
+            "model_id": d.model_id.as_str(),
+            "display_name": d.display_name,
+            "target_format": d.target_format.as_str(),
+            "context_length": d.context_length,
+        });
+        let dedup = format!("{}:{}", provider.as_str(), d.model_id.as_str());
+        if let Some(id) = crate::notifications::insert(
+            &tx,
+            crate::notifications::KIND_MODEL_NEW,
+            &payload,
+            Some(&dedup),
+            Some(provider.as_str()),
+        )
+        .ok()
+        .flatten()
+        {
+            new_to_broadcast.push((id, crate::notifications::KIND_MODEL_NEW, payload));
+        }
+    }
+
+    let mut gone_to_broadcast: Vec<(i64, &'static str, serde_json::Value)> = Vec::new();
+    for (model_id, display_name) in &deleted_models {
+        let payload = serde_json::json!({
+            "provider_id": provider.as_str(),
+            "model_id": model_id,
+            "display_name": display_name,
+        });
+        let dedup = format!("{}:{}", provider.as_str(), model_id);
+        if let Some(id) = crate::notifications::insert(
+            &tx,
+            crate::notifications::KIND_MODEL_GONE,
+            &payload,
+            Some(&dedup),
+            Some(provider.as_str()),
+        )
+        .ok()
+        .flatten()
+        {
+            gone_to_broadcast.push((id, crate::notifications::KIND_MODEL_GONE, payload));
+        }
+    }
+
+    // ----------------------------------------------------------------
     // Gate F1 reconnect phase.
     //
     // For every model that was just inserted (i.e. was NOT in the
@@ -653,6 +742,20 @@ pub fn upsert_many(
         message: format!("commit upsert_many: {}", e),
         source: Some(Box::new(e)),
     })?;
+
+    // After commit: broadcast each newly-inserted notification to any
+    // connected WS clients. The `broadcast_one` helper fetches
+    // `created_at` from the (now-visible) row and pushes a
+    // `NotificationEvent` onto the global channel. Failures here are
+    // swallowed — broadcast::send returns Err when there are zero
+    // subscribers, which is the normal case during cold-start and unit
+    // tests, and not a real error.
+    for (id, kind, payload) in &new_to_broadcast {
+        let _ = crate::notifications::broadcast_one(conn, *id, kind, payload);
+    }
+    for (id, kind, payload) in &gone_to_broadcast {
+        let _ = crate::notifications::broadcast_one(conn, *id, kind, payload);
+    }
 
     Ok(UpsertResult { touched: total, new_model_ids })
 }
@@ -1161,6 +1264,20 @@ pub fn apply_auto_activation(
     provider: &ProviderId,
     keyword: Option<&str>,
 ) -> Result<u64> {
+    // Wrap SELECT + UPDATE + (best-effort) notification insert in a tx
+    // so a failure in any step rolls back the auto-activation. Without
+    // the tx, a notification insert error mid-way would leave the
+    // `active` bit half-flipped for the rows we'd already UPDATEd.
+    let tx = conn.unchecked_transaction().map_err(|e| CoreError::Database {
+        message: format!("begin apply_auto_activation tx: {}", e),
+        source: Some(Box::new(e)),
+    })?;
+
+    // ----------------------------------------------------------------
+    // Step 1: identify rows that will be flipped from `active = 0` to
+    // `active = 1`. We need to SELECT them BEFORE the UPDATE because
+    // the UPDATE itself doesn't return which rows matched.
+    //
     // The 60-second window is the key bit. The refresh flow is:
     //   1. `upsert_many` inserts new rows with `discovered_at = now`
     //      and preserves `discovered_at` on already-present rows.
@@ -1169,8 +1286,81 @@ pub fn apply_auto_activation(
     // So any row whose `discovered_at` is within the last 60s was a
     // *new insert* by this refresh. Rows older than that were already
     // present before the refresh and must keep their `active` bit.
+    //
+    // We additionally require `active = 0` so we only capture rows
+    // that are actually about to be flipped to 1 — rows already at 1
+    // are no-ops and don't warrant a notification.
+    let newly_active: Vec<(String, Option<String>)> = match keyword {
+        Some(k) => {
+            let mut stmt = tx
+                .prepare(
+                    "SELECT model_id, display_name FROM models \
+                     WHERE provider_id = ?1 AND custom = 0 \
+                       AND discovered_at >= datetime('now', '-60 seconds') \
+                       AND active = 0 \
+                       AND model_id LIKE '%' || ?2 || '%'",
+                )
+                .map_err(|e| CoreError::Database {
+                    message: format!("apply_auto_activation prepare select-keyword: {}", e),
+                    source: Some(Box::new(e)),
+                })?;
+            let rows = stmt
+                .query_map(params![provider.as_str(), k], |r| {
+                    Ok((r.get::<_, String>(0)?, r.get::<_, Option<String>>(1)?))
+                })
+                .map_err(|e| CoreError::Database {
+                    message: format!("apply_auto_activation query select-keyword: {}", e),
+                    source: Some(Box::new(e)),
+                })?;
+            let mut out = Vec::new();
+            for r in rows {
+                out.push(r.map_err(|e| CoreError::Database {
+                    message: format!("apply_auto_activation row select-keyword: {}", e),
+                    source: Some(Box::new(e)),
+                })?);
+            }
+            out
+        }
+        None => {
+            let mut stmt = tx
+                .prepare(
+                    "SELECT model_id, display_name FROM models \
+                     WHERE provider_id = ?1 AND custom = 0 \
+                       AND discovered_at >= datetime('now', '-60 seconds') \
+                       AND active = 0",
+                )
+                .map_err(|e| CoreError::Database {
+                    message: format!("apply_auto_activation prepare select-all: {}", e),
+                    source: Some(Box::new(e)),
+                })?;
+            let rows = stmt
+                .query_map(params![provider.as_str()], |r| {
+                    Ok((r.get::<_, String>(0)?, r.get::<_, Option<String>>(1)?))
+                })
+                .map_err(|e| CoreError::Database {
+                    message: format!("apply_auto_activation query select-all: {}", e),
+                    source: Some(Box::new(e)),
+                })?;
+            let mut out = Vec::new();
+            for r in rows {
+                out.push(r.map_err(|e| CoreError::Database {
+                    message: format!("apply_auto_activation row select-all: {}", e),
+                    source: Some(Box::new(e)),
+                })?);
+            }
+            out
+        }
+    };
+
+    // ----------------------------------------------------------------
+    // Step 2: run the original UPDATE. The CASE/WHEN for the keyword
+    // path will also flip active=0 for non-matching newly-discovered
+    // rows, which is the intended semantic (a keyword match "claims"
+    // the model; everything else the upstream listed is de-activated
+    // so it doesn't appear in /v1/models until the operator
+    // explicitly enables it).
     let updated = match keyword {
-        Some(k) => conn.execute(
+        Some(k) => tx.execute(
             "UPDATE models \
              SET active = CASE WHEN model_id LIKE '%' || ?1 || '%' THEN 1 ELSE 0 END \
              WHERE provider_id = ?2 \
@@ -1178,7 +1368,7 @@ pub fn apply_auto_activation(
                AND discovered_at >= datetime('now', '-60 seconds')",
             params![k, provider.as_str()],
         ),
-        None => conn.execute(
+        None => tx.execute(
             "UPDATE models SET active = 1 \
              WHERE provider_id = ?1 \
                AND custom = 0 \
@@ -1190,6 +1380,54 @@ pub fn apply_auto_activation(
         message: format!("apply_auto_activation for {}: {}", provider, e),
         source: Some(Box::new(e)),
     })?;
+
+    // ----------------------------------------------------------------
+    // Step 3: insert `model_auto_activated` notifications for the rows
+    // identified in step 1. The dedup key includes `:auto` so it
+    // doesn't collide with the `model_new` dedup space (same model
+    // can produce both a `model_new` and a `model_auto_activated` in
+    // the same discovery cycle, and we want both rows in the tray).
+    //
+    // Failures here are swallowed with `.ok().flatten()` — a
+    // notification insert error must NOT roll back the
+    // auto-activation, which would leave the operator's keyword rule
+    // silently un-applied.
+    let mut to_broadcast: Vec<(i64, &'static str, serde_json::Value)> = Vec::new();
+    for (model_id, display_name) in &newly_active {
+        let payload = serde_json::json!({
+            "provider_id": provider.as_str(),
+            "model_id": model_id,
+            "display_name": display_name,
+            "matched_keyword": keyword,
+        });
+        let dedup = format!("{}:{}:auto", provider.as_str(), model_id);
+        if let Some(id) = crate::notifications::insert(
+            &tx,
+            crate::notifications::KIND_MODEL_AUTO_ACTIVATED,
+            &payload,
+            Some(&dedup),
+            Some(provider.as_str()),
+        )
+        .ok()
+        .flatten()
+        {
+            to_broadcast.push((id, crate::notifications::KIND_MODEL_AUTO_ACTIVATED, payload));
+        }
+    }
+
+    tx.commit().map_err(|e| CoreError::Database {
+        message: format!("commit apply_auto_activation: {}", e),
+        source: Some(Box::new(e)),
+    })?;
+
+    // After commit: broadcast each newly-inserted notification to any
+    // connected WS clients. Failures here are swallowed — broadcast
+    // has no subscribers during cold-start / unit tests, which is the
+    // normal case.
+    for (id, kind, payload) in &to_broadcast {
+        let _ = crate::notifications::broadcast_one(conn, *id, kind, payload);
+    }
+
     Ok(updated as u64)
 }
 

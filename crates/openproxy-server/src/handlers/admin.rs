@@ -4792,6 +4792,171 @@ pub async fn debug_logs_clear(
 }
 
 // =====================================================================
+// Notifications tray (F1)
+// =====================================================================
+//
+// The notifications tray surfaces discovery + system events to the
+// dashboard. The persistence layer + broadcast channel live in
+// `openproxy_core::notifications`; these handlers are thin HTTP
+// wrappers around the query / mutation functions there. Real-time
+// push is delivered via the WS handler in `stream_usage_rows` (F2
+// will subscribe it to the notification broadcast channel); these
+// REST endpoints are for the initial load + user-initiated mutations
+// (mark read, archive, delete).
+//
+// All handlers rely on the `admin_auth_middleware` that's layered on
+// the `admin_api_routes` router — no per-handler auth check needed.
+
+/// Query string for `GET /admin/api/notifications`.
+///
+/// - `unread` — if `"true"`, filter to unread rows only.
+/// - `limit`  — page size, default 50, clamped to `[1, 200]` by the
+///   core layer.
+/// - `before_id` — cursor for pagination: only return rows with
+///   `id < before_id`.
+#[derive(Debug, Default, Deserialize)]
+pub struct NotificationsQuery {
+    pub unread: Option<bool>,
+    pub limit: Option<i64>,
+    pub before_id: Option<i64>,
+}
+
+/// `GET /admin/api/notifications` — list notifications, most recent
+/// first. Archived rows are always excluded (audit-only).
+pub async fn list_notifications(
+    State(s): State<AppState>,
+    Query(q): Query<NotificationsQuery>,
+) -> ApiResult<Json<Vec<openproxy_core::notifications::NotificationRow>>> {
+    let body: Result<
+        Json<Vec<openproxy_core::notifications::NotificationRow>>,
+        ApiError,
+    > = async {
+        let unread_only = q.unread.unwrap_or(false);
+        let limit = q.limit.unwrap_or(50);
+        // Read-only SELECT — use the READER so the dashboard's poll
+        // doesn't serialize through the writer mutex.
+        let r = s.db_pool().reader();
+        let rows = openproxy_core::notifications::list(&r, unread_only, limit, q.before_id)
+            .map_err(|e| {
+                CoreError::Internal(format!("notifications::list: {}", e))
+            })?;
+        Ok(Json(rows))
+    }
+    .await;
+    body.into()
+}
+
+/// `GET /admin/api/notifications/unread-count` — count of unread,
+/// non-archived rows. Drives the sidebar badge.
+pub async fn notifications_unread_count(
+    State(s): State<AppState>,
+) -> ApiResult<Json<serde_json::Value>> {
+    let body: Result<Json<serde_json::Value>, ApiError> = async {
+        let r = s.db_pool().reader();
+        let count = openproxy_core::notifications::unread_count(&r)
+            .map_err(|e| {
+                CoreError::Internal(format!("notifications::unread_count: {}", e))
+            })?;
+        Ok(Json(serde_json::json!({ "count": count })))
+    }
+    .await;
+    body.into()
+}
+
+/// `POST /admin/api/notifications/{id}/read` — mark a single
+/// notification as read (sets `read_at = now`). Idempotent: re-marking
+/// a read row is a no-op.
+pub async fn mark_notification_read(
+    State(s): State<AppState>,
+    Path(id): Path<i64>,
+) -> ApiResult<Json<serde_json::Value>> {
+    let body: Result<Json<serde_json::Value>, ApiError> = async {
+        let w = s.db_pool().writer();
+        openproxy_core::notifications::mark_read(&w, id)
+            .map_err(|e| {
+                CoreError::Internal(format!("notifications::mark_read: {}", e))
+            })?;
+        Ok(Json(serde_json::json!({ "ok": true })))
+    }
+    .await;
+    body.into()
+}
+
+/// `POST /admin/api/notifications/read-all` — mark every unread,
+/// non-archived notification as read. Returns the number of rows
+/// updated.
+pub async fn mark_all_notifications_read(
+    State(s): State<AppState>,
+) -> ApiResult<Json<serde_json::Value>> {
+    let body: Result<Json<serde_json::Value>, ApiError> = async {
+        let w = s.db_pool().writer();
+        let updated = openproxy_core::notifications::mark_all_read(&w)
+            .map_err(|e| {
+                CoreError::Internal(format!("notifications::mark_all_read: {}", e))
+            })?;
+        Ok(Json(serde_json::json!({ "updated": updated })))
+    }
+    .await;
+    body.into()
+}
+
+/// `POST /admin/api/notifications/{id}/archive` — archive a single
+/// notification (sets `archived_at = now`). The row is preserved for
+/// audit but hidden from the tray. Idempotent.
+pub async fn archive_notification(
+    State(s): State<AppState>,
+    Path(id): Path<i64>,
+) -> ApiResult<Json<serde_json::Value>> {
+    let body: Result<Json<serde_json::Value>, ApiError> = async {
+        let w = s.db_pool().writer();
+        openproxy_core::notifications::archive(&w, id)
+            .map_err(|e| {
+                CoreError::Internal(format!("notifications::archive: {}", e))
+            })?;
+        Ok(Json(serde_json::json!({ "ok": true })))
+    }
+    .await;
+    body.into()
+}
+
+/// `DELETE /admin/api/notifications/{id}` — permanently delete a
+/// notification. The DB layer's WHERE clause gates the delete on
+/// `kind = 'system' OR created_at < datetime('now', '-30 days')` so
+/// `model_*` rows within their 30-day audit window cannot be deleted.
+///
+/// Returns `{"ok": true}` if a row was deleted, or HTTP 400 with
+/// an `"notification not deletable..."` message if the row was not
+/// eligible (either didn't exist, or was a `model_*` row younger than
+/// 30 days). We use 400 (`CoreError::Validation`) instead of 403 to
+/// avoid introducing a new `CoreError` variant for this one call site;
+/// the message text disambiguates "refused" from "not found" for the
+/// client.
+pub async fn delete_notification(
+    State(s): State<AppState>,
+    Path(id): Path<i64>,
+) -> ApiResult<Json<serde_json::Value>> {
+    let body: Result<Json<serde_json::Value>, ApiError> = async {
+        let w = s.db_pool().writer();
+        let deleted = openproxy_core::notifications::delete(&w, id)
+            .map_err(|e| {
+                CoreError::Internal(format!("notifications::delete: {}", e))
+            })?;
+        if deleted {
+            Ok(Json(serde_json::json!({ "ok": true })))
+        } else {
+            // Map "not eligible" to HTTP 400 (Validation) so the
+            // client can distinguish "delete refused" from "delete
+            // succeeded".
+            Err(ApiError(CoreError::Validation(
+                "notification not deletable (kind=model_* within 30-day audit window, or row does not exist)".into(),
+            )))
+        }
+    }
+    .await;
+    body.into()
+}
+
+// =====================================================================
 //
 // Spec §9 documents the smoke test as either a manual `curl` against
 // a running server OR a Rust test that calls the handler directly.

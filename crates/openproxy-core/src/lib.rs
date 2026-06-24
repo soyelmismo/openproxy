@@ -12,6 +12,7 @@ pub mod db;
 pub mod models;
 pub mod adapters;
 pub mod model_normalize;
+pub mod notifications;
 pub mod providers;
 pub mod accounts;
 pub mod api_keys;

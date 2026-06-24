@@ -337,6 +337,42 @@ pub fn build_router(state: AppState) -> Router {
             "/usage/recompute-costs",
             post(handlers::admin::recompute_usage_costs),
         )
+        // ----------------------------------------------------------------
+        // Notifications tray (F1). Surfaces discovery + system events
+        // to the dashboard. Real-time push is delivered via the WS
+        // handler in `stream_usage_rows` (F2 wires the broadcast
+        // subscription); these REST endpoints are for the initial
+        // load + user-initiated mutations.
+        //
+        // Route registration order: literal segments
+        // (`/notifications`, `/notifications/read-all`,
+        // `/notifications/unread-count`) MUST come before the
+        // `{id}`-param routes so axum 0.8's registration-order
+        // matcher doesn't let `{id}` swallow `read-all` / `unread-count`.
+        .route(
+            "/notifications",
+            get(handlers::admin::list_notifications),
+        )
+        .route(
+            "/notifications/read-all",
+            post(handlers::admin::mark_all_notifications_read),
+        )
+        .route(
+            "/notifications/unread-count",
+            get(handlers::admin::notifications_unread_count),
+        )
+        .route(
+            "/notifications/{id}/read",
+            post(handlers::admin::mark_notification_read),
+        )
+        .route(
+            "/notifications/{id}/archive",
+            post(handlers::admin::archive_notification),
+        )
+        .route(
+            "/notifications/{id}",
+            axum::routing::delete(handlers::admin::delete_notification),
+        )
         .route(
             "/oauth/{provider}/authorize",
             get(handlers::admin::oauth_authorize),

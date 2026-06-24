@@ -323,6 +323,17 @@ impl AppState {
         //     the dashboard can map stages to a row by `request_id`
         //     without re-deriving from a `RecentUsageRow`.
         let stage_tx = usage::init_stage_broadcast();
+        // 5c. Notifications broadcast sender for the dashboard's
+        //     notifications tray. Discovery events (model_new /
+        //     model_gone / model_auto_activated) and system events
+        //     (discovery_failed / account_key_decrypt_failed) are
+        //     pushed to this channel; the WS handler in handlers/admin.rs
+        //     subscribes and re-emits to connected dashboard clients.
+        //     The sender lives in a `OnceCell` inside
+        //     `openproxy_core::notifications`, so this call is
+        //     idempotent — repeat invocations (e.g. in tests that
+        //     also construct an AppState) are no-ops.
+        openproxy_core::notifications::init_broadcast();
 
         // 6. Background prune of expired cooldowns. The
         //    `target_cooldowns` table is append-mostly (failures
@@ -612,6 +623,11 @@ impl AppState {
         .await;
 
         let timeouts_initial = config.timeouts; // Copy, take it before moving config.
+        // Notifications broadcast is process-global (OnceCell);
+        // initialize it for test paths too so unit tests that
+        // exercise the notification broadcast don't silently get
+        // `try_get_tx() == None`. The call is idempotent.
+        openproxy_core::notifications::init_broadcast();
         Self {
             config,
             db_pool,
