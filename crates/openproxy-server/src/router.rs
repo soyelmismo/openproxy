@@ -433,6 +433,22 @@ pub fn build_router(state: AppState) -> Router {
         .route("/health", get(handlers::admin::admin_health))
         .route("/oauth/callback", get(handlers::admin::oauth_callback))
         .route("/ws", get(handlers::admin::usage_stream))
+        // F3: i18n string packs. Public (no auth) — the dashboard's
+        // `loadLang('en')` runs at boot BEFORE the SPA can attach the
+        // admin Bearer token, and i18n packs contain no secrets
+        // (only generic UI labels). Registered as a literal route here
+        // (not under `/api`) so it stays outside the auth middleware.
+        //
+        // NOTE on the route pattern: axum 0.8 rejects `/i18n/{lang}.json`
+        // ("Only one parameter is allowed per path segment") because
+        // mixing a path-param with a literal `.json` suffix in a single
+        // segment is no longer supported. We register `/i18n/{lang}`
+        // instead, which matches `/i18n/en.json` as a single segment
+        // (no slash in `en.json`) and captures `lang = "en.json"`.
+        // The handler then strips the optional `.json` extension and
+        // validates the lang code. See `admin_ui::serve_i18n` for the
+        // path-traversal guard + cache headers + extension parsing.
+        .route("/i18n/{lang}", get(admin_ui::serve_i18n))
         .nest("/api", admin_api_routes)
         .fallback(admin_ui::serve_asset);
 

@@ -25,6 +25,7 @@
 
 use axum::{
     body::Body,
+    extract::Path,
     http::{HeaderValue, StatusCode, Uri, header},
     response::{Html, IntoResponse, Response},
 };
@@ -46,6 +47,25 @@ use rust_embed::RustEmbed;
 #[derive(RustEmbed)]
 #[folder = "../openproxy-web/src/static/"]
 struct DashboardAssets;
+
+/// Embedded copy of `crates/openproxy-web/src/static/src/i18n/` — the
+/// per-language JSON string packs consumed by the frontend's
+/// `i18n/index.ts` `loadLang()` helper.
+///
+/// Served at `/admin/i18n/{lang}.json` by [`serve_i18n`]. The folder
+/// path is relative to this crate's `Cargo.toml` (same convention as
+/// [`DashboardAssets`]).
+///
+/// Only files present at compile time are exposed; if a future
+/// translation is added as `es.json`, it must land in
+/// `crates/openproxy-web/src/static/src/i18n/` before the server is
+/// rebuilt — `rust-embed` bakes the tree into the binary. We do NOT
+/// serve from disk at runtime, so operators can't drop new language
+/// packs into a running server; that's intentional (the dashboard
+/// string contract is part of the binary, not a runtime config).
+#[derive(RustEmbed)]
+#[folder = "../openproxy-web/src/static/src/i18n/"]
+struct I18nAssets;
 
 /// Serve the SPA shell. The HTML is `include_str!`-embedded so the
 /// handler returns `Html<&'static str>` with no allocation.
@@ -126,4 +146,96 @@ pub async fn serve_asset(uri: Uri) -> Response {
     // routes like `/admin/combos/42/edit`) get the SPA shell so the
     // hash-router can take over.
     index_html().await.into_response()
+}
+
+/// `GET /admin/i18n/{lang}` — serve a language pack.
+///
+/// The frontend's `i18n/index.ts::loadLang()` calls this at boot (before
+/// the first render) to pull the user's language strings, fetching the
+/// URL `/admin/i18n/en.json`. The route is registered as `/i18n/{lang}`
+/// (NOT `/i18n/{lang}.json` — axum 0.8 rejects literal-suffix path
+/// params, see `router.rs`), so the captured `lang` value can be either
+/// `en` or `en.json` depending on the caller. We strip the optional
+/// `.json` extension before lookup so both URLs work.
+///
+/// The response is the raw JSON file as embedded by [`I18nAssets`]; we
+/// set `Content-Type: application/json; charset=utf-8` and
+/// `Cache-Control: public, max-age=86400` (24h) because:
+///
+///   - The pack is content-addressed in the binary: a server upgrade
+///     ships a new binary, and the SPA's `app.js` is also re-fetched
+///     (no-cache, see [`serve_asset`]). The 24h ceiling is short
+///     enough that the next day the browser will pick up a refreshed
+///     pack after a server upgrade, and long enough to keep the boot
+///     path off the network on subsequent same-day reloads.
+///
+///   - `force-cache` on the fetch side (frontend) makes the browser
+///     cache hit immediate, so the second-boot path is one round-trip
+///     cheaper.
+///
+/// Returns `404 language not found` if `lang` doesn't have a matching
+/// `.json` in the embedded tree. The frontend's `loadLang` falls back
+/// to `en` in that case.
+///
+/// Path-traversal safety: axum's `Path<String>` extractor captures a
+/// single path segment for `{lang}` (no `/`), so `..` and `/` are not
+/// reachable here. We additionally validate `lang` against
+/// `[a-zA-Z0-9_-]+` after stripping `.json` — a future `pt-BR` code
+/// is the most exotic shape we'd ship, and this guard keeps the
+/// lookup table closed.
+pub async fn serve_i18n(lang: Path<String>) -> Response {
+    let mut lang = lang.0;
+    // Strip the optional `.json` suffix so the route also accepts
+    // `/admin/i18n/en` (without the extension) — both URLs hit the
+    // same asset.
+    if lang.ends_with(".json") {
+        lang.truncate(lang.len() - ".json".len());
+    }
+    // Allow letters, digits, hyphen, underscore — covers every ISO 639-1
+    // code plus regional variants (`pt-BR`, `zh-Hans`). Reject anything
+    // else so the embedded-tree lookup can never be probed with a
+    // crafted path.
+    if !lang
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+        || lang.is_empty()
+    {
+        return (
+            StatusCode::NOT_FOUND,
+            [(
+                header::CONTENT_TYPE,
+                HeaderValue::from_static("text/plain; charset=utf-8"),
+            )],
+            "language not found",
+        )
+            .into_response();
+    }
+    let filename = format!("{}.json", lang);
+    if let Some(file) = I18nAssets::get(&filename) {
+        let body = Body::from(file.data.into_owned());
+        return (
+            StatusCode::OK,
+            [
+                (
+                    header::CONTENT_TYPE,
+                    HeaderValue::from_static("application/json; charset=utf-8"),
+                ),
+                (
+                    header::CACHE_CONTROL,
+                    HeaderValue::from_static("public, max-age=86400"),
+                ),
+            ],
+            body,
+        )
+            .into_response();
+    }
+    (
+        StatusCode::NOT_FOUND,
+        [(
+            header::CONTENT_TYPE,
+            HeaderValue::from_static("text/plain; charset=utf-8"),
+        )],
+        "language not found",
+    )
+        .into_response()
 }

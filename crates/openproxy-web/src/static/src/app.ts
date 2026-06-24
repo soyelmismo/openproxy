@@ -16,6 +16,25 @@ import { installRouter, navigate } from "./state/router.js";
 import { HANDLERS, collectArgs } from "./handlers/registry.js";
 import { state } from "./state/index.js";
 import { logsGoPage } from "./views/logs.js";
+import { loadLang } from "./i18n/index.js";
+
+// Expose the global `state` for the e2e suite (and operator
+// debugging in the browser console). The dashboard is an internal
+// admin tool — no public auth boundary is crossed by exposing
+// the in-memory state object. The e2e tests at
+// `tests/e2e/live-logs-retry.spec.ts` rely on this hook to
+// inject synthetic `StageEvent`s and assert the per-attempt
+// stage isolation introduced in the
+// `fix(web): live-logs view — isolate per-attempt stage to its
+// own row` gate.
+declare global {
+  interface Window {
+    __openproxyState: typeof state;
+    __openproxyLogsGoPage: typeof logsGoPage;
+  }
+}
+window.__openproxyState = state;
+window.__openproxyLogsGoPage = logsGoPage;
 
 // Click / change / submit shim. Looks for the closest ancestor
 // carrying `data-action` and dispatches to HANDLERS[action]
@@ -89,30 +108,31 @@ document.addEventListener("submit", (e: Event) => {
   dispatchFromElement(el, e, true);
 });
 
-bootstrapTheme();
-// Hydrate the sidebar collapse flag from localStorage before the
-// shell mounts, so the first renderSidebar() call already reflects
-// the persisted user choice.
-loadSidebarCollapsedFromStorage();
-mountShell();
-installRouter();
-startBgPoll();
-navigate();
-
-// Expose the global `state` for the e2e suite (and operator
-// debugging in the browser console). The dashboard is an internal
-// admin tool — no public auth boundary is crossed by exposing
-// the in-memory state object. The e2e tests at
-// `tests/e2e/live-logs-retry.spec.ts` rely on this hook to
-// inject synthetic `StageEvent`s and assert the per-attempt
-// stage isolation introduced in the
-// `fix(web): live-logs view — isolate per-attempt stage to its
-// own row` gate.
-declare global {
-  interface Window {
-    __openproxyState: typeof state;
-    __openproxyLogsGoPage: typeof logsGoPage;
-  }
+// Boot sequence. `loadLang('en')` runs BEFORE the first render so
+// that any view calling `t('nav.dashboard')` etc. finds a populated
+// strings table. If the fetch fails (e.g. server is down, /admin/i18n
+// returns 5xx), `loadLang` swallows the error — `t()` then returns
+// the raw key (e.g. "nav.dashboard"), which is the fail-loud behavior
+// we want during development. The rest of the boot proceeds normally.
+//
+// We don't `await` loadLang in a way that blocks forever on a slow
+// network: the fetch has no explicit timeout, but the browser's
+// default network timeout applies, and a hung connection would still
+// let the rest of the boot proceed once it errors out. A future
+// hardening pass could add an `AbortController` + 2s timeout to
+// short-circuit the wait, but for an MVP this is fine — the i18n
+// pack is ~5 KB and is served from the same origin as the SPA shell.
+async function boot(): Promise<void> {
+  await loadLang("en");
+  bootstrapTheme();
+  // Hydrate the sidebar collapse flag from localStorage before the
+  // shell mounts, so the first renderSidebar() call already reflects
+  // the persisted user choice.
+  loadSidebarCollapsedFromStorage();
+  mountShell();
+  installRouter();
+  startBgPoll();
+  navigate();
 }
-window.__openproxyState = state;
-window.__openproxyLogsGoPage = logsGoPage;
+void boot();
+
