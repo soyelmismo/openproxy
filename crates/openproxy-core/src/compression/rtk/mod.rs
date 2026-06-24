@@ -91,7 +91,10 @@ mod tests {
 
     #[test]
     fn test_rtk_git_status_compression() {
-        let mut msgs = vec![msg("user", "On branch main\n  (use \"git add\" to update)\n\tmodified: foo.rs\nnothing added to commit\n")];
+        let mut msgs = vec![msg(
+            "user",
+            "On branch main\n  (use \"git add\" to update)\n\tmodified: foo.rs\nnothing added to commit\n",
+        )];
         let techniques = apply_rtk(&mut msgs);
         assert!(!techniques.is_empty());
         let result = msgs[0].content.as_ref().and_then(|c| c.as_str()).unwrap();
@@ -109,7 +112,10 @@ mod tests {
 
     #[test]
     fn test_rtk_skips_assistant_messages() {
-        let mut msgs = vec![msg("assistant", "some long text that would normally be filtered")];
+        let mut msgs = vec![msg(
+            "assistant",
+            "some long text that would normally be filtered",
+        )];
         let techniques = apply_rtk(&mut msgs);
         assert!(techniques.is_empty());
     }

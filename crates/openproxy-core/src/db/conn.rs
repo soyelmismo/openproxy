@@ -165,23 +165,27 @@ impl DbPool {
 
 /// Apply the standard pragmas required by spec §8/§9.
 fn configure_connection(conn: &Connection) -> Result<()> {
-    conn.pragma_update(None, "journal_mode", "WAL").map_err(|e| CoreError::Database {
-        message: format!("pragma journal_mode=WAL: {}", e),
-        source: Some(Box::new(e)),
-    })?;
-    conn.pragma_update(None, "foreign_keys", "ON").map_err(|e| CoreError::Database {
-        message: format!("pragma foreign_keys=ON: {}", e),
-        source: Some(Box::new(e)),
-    })?;
+    conn.pragma_update(None, "journal_mode", "WAL")
+        .map_err(|e| CoreError::Database {
+            message: format!("pragma journal_mode=WAL: {}", e),
+            source: Some(Box::new(e)),
+        })?;
+    conn.pragma_update(None, "foreign_keys", "ON")
+        .map_err(|e| CoreError::Database {
+            message: format!("pragma foreign_keys=ON: {}", e),
+            source: Some(Box::new(e)),
+        })?;
     // 5 second busy timeout: writer will retry on SQLITE_BUSY for this long.
-    conn.pragma_update(None, "busy_timeout", 5000).map_err(|e| CoreError::Database {
-        message: format!("pragma busy_timeout=5000: {}", e),
-        source: Some(Box::new(e)),
-    })?;
-    conn.pragma_update(None, "synchronous", "NORMAL").map_err(|e| CoreError::Database {
-        message: format!("pragma synchronous=NORMAL: {}", e),
-        source: Some(Box::new(e)),
-    })?;
+    conn.pragma_update(None, "busy_timeout", 5000)
+        .map_err(|e| CoreError::Database {
+            message: format!("pragma busy_timeout=5000: {}", e),
+            source: Some(Box::new(e)),
+        })?;
+    conn.pragma_update(None, "synchronous", "NORMAL")
+        .map_err(|e| CoreError::Database {
+            message: format!("pragma synchronous=NORMAL: {}", e),
+            source: Some(Box::new(e)),
+        })?;
     // Add an autocheckpoint limit (1000 pages, or 4MB) so the WAL doesn't
     // grow unbounded. The dashboard can issue heavy reads that trigger
     // checkpoints, and without a bound the WAL file can grow large enough

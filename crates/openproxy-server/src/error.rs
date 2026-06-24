@@ -5,9 +5,9 @@
 //! with the appropriate HTTP status code (per spec §2 and [`CoreError::http_status`]).
 
 use axum::{
+    Json,
     http::StatusCode,
     response::{IntoResponse, Response},
-    Json,
 };
 use openproxy_core::CoreError;
 use serde_json::json;
@@ -39,8 +39,8 @@ impl std::fmt::Debug for ApiError {
 
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
-        let status = StatusCode::from_u16(self.0.http_status())
-            .unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
+        let status =
+            StatusCode::from_u16(self.0.http_status()).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
         // LOW fix: cap the serialized error message so an upstream
         // returning a multi-MiB HTML error page, a Python traceback,
         // or any other verbose body does NOT get amplified into the

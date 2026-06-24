@@ -3,11 +3,11 @@
 //! These tests live in `tests/` so they exercise the crate's public API
 //! the way a downstream consumer would.
 
-use base64::engine::general_purpose::STANDARD as BASE64;
 use base64::Engine as _;
+use base64::engine::general_purpose::STANDARD as BASE64;
 
-use openproxy_core::secrets::MasterKey;
 use openproxy_core::CoreError;
+use openproxy_core::secrets::MasterKey;
 
 #[test]
 fn encrypt_then_decrypt_roundtrip() {
@@ -37,7 +37,10 @@ fn decrypt_with_wrong_key_fails() {
     assert!(res.is_err(), "wrong key must fail to decrypt");
     // The error should be a CoreError; we don't pin to a specific variant to
     // keep this resilient to internal error mapping changes.
-    assert!(matches!(res, Err(CoreError::Internal(_)) | Err(CoreError::Auth(_))));
+    assert!(matches!(
+        res,
+        Err(CoreError::Internal(_)) | Err(CoreError::Auth(_))
+    ));
 }
 
 #[test]

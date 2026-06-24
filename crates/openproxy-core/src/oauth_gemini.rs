@@ -19,7 +19,9 @@ use crate::error::{CoreError, Result};
 use crate::ids::AccountId;
 use crate::oauth::{OAuthFlow, OAuthProvider, TokenResponse};
 use crate::secrets::MasterKey;
-use crate::upstream::{CancellationToken, TimeoutProfile, UpstreamClient, UpstreamError, UpstreamRequest};
+use crate::upstream::{
+    CancellationToken, TimeoutProfile, UpstreamClient, UpstreamError, UpstreamRequest,
+};
 use std::sync::Arc;
 
 /// Google OAuth client_id for Gemini CLI. Shipped with the Gemini CLI
@@ -44,8 +46,7 @@ const TOKEN_URL: &str = "https://oauth2.googleapis.com/token";
 
 /// LoadCodeAssist endpoint for Gemini CLI. Uses a different subdomain
 /// (`cloudcode-pa.googleapis.com`) than Antigravity (`daily-cloudcode-pa`).
-const LOAD_CODE_ASSIST_URL: &str =
-    "https://cloudcode-pa.googleapis.com/v1internal:loadCodeAssist";
+const LOAD_CODE_ASSIST_URL: &str = "https://cloudcode-pa.googleapis.com/v1internal:loadCodeAssist";
 
 /// Provider metadata persisted in `accounts.oauth_provider_specific`.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -108,10 +109,7 @@ impl OAuthProvider for GeminiCliOAuthProvider {
         OAuthFlow::AuthorizationCode
     }
 
-    async fn build_auth_url(
-        &self,
-        redirect_uri: &str,
-    ) -> Result<(String, String, String)> {
+    async fn build_auth_url(&self, redirect_uri: &str) -> Result<(String, String, String)> {
         let cid = client_id();
         if cid.is_empty() {
             return Err(CoreError::Validation(
@@ -148,8 +146,7 @@ impl OAuthProvider for GeminiCliOAuthProvider {
         }
         if cs.is_empty() {
             return Err(CoreError::Validation(
-                "Gemini CLI OAuth requires OPENPROXY_GEMINI_CLI_OAUTH_CLIENT_SECRET "
-                    .to_string()
+                "Gemini CLI OAuth requires OPENPROXY_GEMINI_CLI_OAUTH_CLIENT_SECRET ".to_string()
                     + "— standard authorization_code (non-PKCE) flow requires client_secret. "
                     + "See https://console.cloud.google.com/apis/credentials",
             ));
@@ -189,9 +186,9 @@ impl OAuthProvider for GeminiCliOAuthProvider {
             Err(e) => {
                 return Err(match e {
                     UpstreamError::Cancel => CoreError::ClientDisconnected,
-                    other => CoreError::UpstreamConnection(format!(
-                        "gemini token exchange: {other}"
-                    )),
+                    other => {
+                        CoreError::UpstreamConnection(format!("gemini token exchange: {other}"))
+                    }
                 });
             }
         };
@@ -283,9 +280,9 @@ impl OAuthProvider for GeminiCliOAuthProvider {
             Err(e) => {
                 return Err(match e {
                     UpstreamError::Cancel => CoreError::ClientDisconnected,
-                    other => CoreError::UpstreamConnection(format!(
-                        "gemini token refresh: {other}"
-                    )),
+                    other => {
+                        CoreError::UpstreamConnection(format!("gemini token refresh: {other}"))
+                    }
                 });
             }
         };
@@ -344,11 +341,11 @@ impl OAuthProvider for GeminiCliOAuthProvider {
                 .send()
                 .await
             {
-                Ok(resp) if resp.status().is_success() => {
-                    resp.json::<serde_json::Value>().await
-                        .ok()
-                        .and_then(|v| v.get("email").and_then(|e| e.as_str()).map(String::from))
-                }
+                Ok(resp) if resp.status().is_success() => resp
+                    .json::<serde_json::Value>()
+                    .await
+                    .ok()
+                    .and_then(|v| v.get("email").and_then(|e| e.as_str()).map(String::from)),
                 _ => None,
             }
         };
@@ -362,9 +359,8 @@ impl OAuthProvider for GeminiCliOAuthProvider {
 
         // 4. Persist projectId on the account row.
         let meta = GeminiCliProviderMeta { project_id };
-        let meta_json = serde_json::to_string(&meta).map_err(|e| {
-            CoreError::Internal(format!("gemini meta serialize: {e}"))
-        })?;
+        let meta_json = serde_json::to_string(&meta)
+            .map_err(|e| CoreError::Internal(format!("gemini meta serialize: {e}")))?;
         {
             let conn = db_pool.writer();
             conn.execute(
@@ -407,9 +403,7 @@ async fn load_code_assist(
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(15))
         .build()
-        .map_err(|e| {
-            CoreError::UpstreamConnection(format!("gemini load client: {e}"))
-        })?;
+        .map_err(|e| CoreError::UpstreamConnection(format!("gemini load client: {e}")))?;
 
     let body = serde_json::json!({ "metadata": metadata });
 
@@ -420,9 +414,7 @@ async fn load_code_assist(
         .json(&body)
         .send()
         .await
-        .map_err(|e| {
-            CoreError::UpstreamConnection(format!("gemini loadCodeAssist: {e}"))
-        })?;
+        .map_err(|e| CoreError::UpstreamConnection(format!("gemini loadCodeAssist: {e}")))?;
 
     if !resp.status().is_success() {
         let status = resp.status().as_u16();
@@ -435,9 +427,10 @@ async fn load_code_assist(
         });
     }
 
-    let value: serde_json::Value = resp.json().await.map_err(|e| {
-        CoreError::Parse(format!("gemini loadCodeAssist parse: {e}"))
-    })?;
+    let value: serde_json::Value = resp
+        .json()
+        .await
+        .map_err(|e| CoreError::Parse(format!("gemini loadCodeAssist parse: {e}")))?;
 
     // `cloudaicompanionProject` may be a string or an object with `id`.
     let project_id = value
@@ -456,7 +449,10 @@ async fn load_code_assist(
 }
 
 /// Read the `projectId` stored on the account row by `post_exchange`.
-pub fn read_project_id(conn: &rusqlite::Connection, account_id: AccountId) -> Result<Option<String>> {
+pub fn read_project_id(
+    conn: &rusqlite::Connection,
+    account_id: AccountId,
+) -> Result<Option<String>> {
     let raw: Option<String> = conn
         .query_row(
             "SELECT oauth_provider_specific FROM accounts WHERE id = ?1",
@@ -473,9 +469,8 @@ pub fn read_project_id(conn: &rusqlite::Connection, account_id: AccountId) -> Re
         })?;
 
     let Some(raw) = raw else { return Ok(None) };
-    let meta: GeminiCliProviderMeta = serde_json::from_str(&raw).map_err(|e| {
-        CoreError::Parse(format!("gemini meta parse: {e}"))
-    })?;
+    let meta: GeminiCliProviderMeta = serde_json::from_str(&raw)
+        .map_err(|e| CoreError::Parse(format!("gemini meta parse: {e}")))?;
     Ok(meta.project_id)
 }
 
@@ -495,7 +490,9 @@ mod tests {
         // The default client_id is hardcoded, so the URL should be built
         // successfully even without the env var.
         // SAFETY: tests are single-threaded; no other thread reads this env var.
-        unsafe { std::env::remove_var("OPENPROXY_GEMINI_CLI_OAUTH_CLIENT_ID"); }
+        unsafe {
+            std::env::remove_var("OPENPROXY_GEMINI_CLI_OAUTH_CLIENT_ID");
+        }
         let p = GeminiCliOAuthProvider::new();
         let rt = tokio::runtime::Runtime::new().unwrap();
         let result = rt.block_on(p.build_auth_url("http://localhost:8788/callback.html"));

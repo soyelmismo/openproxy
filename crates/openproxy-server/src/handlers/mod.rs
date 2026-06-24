@@ -5,6 +5,6 @@
 //! error mapping and state extraction live in [`crate::error`] and
 //! [`crate::state`].
 
+pub mod admin;
 pub mod chat;
 pub mod models;
-pub mod admin;

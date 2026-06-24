@@ -3,9 +3,9 @@
 //! Mirrors §10 of mvp-spec.md.
 
 use crate::compression::CompressionMode;
+use crate::error::{CoreError, Result};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
-use crate::error::{CoreError, Result};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ServerConfig {
@@ -18,7 +18,10 @@ impl Default for ServerConfig {
         // NOTE: Default is 0.0.0.0 to make local dev / docker easy.
         // In production, override via config.toml or OPENPROXY_SERVER__BIND=127.0.0.1:8787
         // (use 127.0.0.1 in production to avoid exposing the admin API).
-        Self { bind: "0.0.0.0:8787".into(), request_max_body_bytes: 10 * 1024 * 1024 }
+        Self {
+            bind: "0.0.0.0:8787".into(),
+            request_max_body_bytes: 10 * 1024 * 1024,
+        }
     }
 }
 
@@ -53,7 +56,11 @@ pub struct RacingConfig {
 
 impl Default for RacingConfig {
     fn default() -> Self {
-        Self { default_race_size: 1, max_race_size: 8, abort_grace_ms: 500 }
+        Self {
+            default_race_size: 1,
+            max_race_size: 8,
+            abort_grace_ms: 500,
+        }
     }
 }
 
@@ -129,7 +136,10 @@ pub struct CircuitBreakerConfig {
 
 impl Default for CircuitBreakerConfig {
     fn default() -> Self {
-        Self { failure_threshold: 5, unhealthy_duration_ms: 60_000 }
+        Self {
+            failure_threshold: 5,
+            unhealthy_duration_ms: 60_000,
+        }
     }
 }
 
@@ -213,13 +223,19 @@ pub struct LoggingConfig {
 
 impl Default for LoggingConfig {
     fn default() -> Self {
-        Self { format: LogFormat::Json, level: "info".into() }
+        Self {
+            format: LogFormat::Json,
+            level: "info".into(),
+        }
     }
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
-pub enum LogFormat { Json, Text }
+pub enum LogFormat {
+    Json,
+    Text,
+}
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub struct CompressionConfig {
@@ -263,8 +279,8 @@ impl AppConfig {
     pub fn load(path: impl AsRef<std::path::Path>) -> Result<Self> {
         let contents = std::fs::read_to_string(path.as_ref())
             .map_err(|e| CoreError::Config(format!("read {}: {}", path.as_ref().display(), e)))?;
-        let cfg: AppConfig = toml::from_str(&contents)
-            .map_err(|e| CoreError::Config(format!("parse: {}", e)))?;
+        let cfg: AppConfig =
+            toml::from_str(&contents).map_err(|e| CoreError::Config(format!("parse: {}", e)))?;
         Ok(cfg)
     }
 
@@ -300,7 +316,11 @@ impl AppConfig {
     pub fn expanded_database_path(&self) -> PathBuf {
         if self.storage.database_path.starts_with("~/") {
             if let Some(home) = dirs_home() {
-                return PathBuf::from(self.storage.database_path.replacen("~/", &format!("{}/", home), 1));
+                return PathBuf::from(self.storage.database_path.replacen(
+                    "~/",
+                    &format!("{}/", home),
+                    1,
+                ));
             }
         }
         PathBuf::from(&self.storage.database_path)
@@ -308,7 +328,9 @@ impl AppConfig {
 }
 
 fn dirs_home() -> Option<String> {
-    std::env::var("HOME").ok().or_else(|| std::env::var("USERPROFILE").ok())
+    std::env::var("HOME")
+        .ok()
+        .or_else(|| std::env::var("USERPROFILE").ok())
 }
 
 #[cfg(test)]
@@ -325,7 +347,8 @@ mod tests {
 
     #[test]
     fn load_example_config() {
-        let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../config.example.toml");
+        let path =
+            std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../config.example.toml");
         let cfg = AppConfig::load(&path).expect("config.example.toml must load");
         assert_eq!(cfg.racing.default_race_size, 1);
         assert_eq!(cfg.timeouts.ttft_ms, 30_000);
@@ -337,7 +360,11 @@ mod tests {
         let p = cfg.expanded_database_path();
         if let Ok(home) = std::env::var("HOME") {
             if cfg.storage.database_path.starts_with("~/") {
-                assert!(p.starts_with(&home), "expected to start with home dir, got {:?}", p);
+                assert!(
+                    p.starts_with(&home),
+                    "expected to start with home dir, got {:?}",
+                    p
+                );
             }
         }
     }

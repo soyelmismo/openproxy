@@ -5,7 +5,7 @@
 //! from upstream and translates them for the client.
 
 use openproxy_core::sse::{
-    format_sse_line, parse_gemini_sse_line, parse_openai_sse_line, UpstreamSseChunk, SSE_DONE,
+    SSE_DONE, UpstreamSseChunk, format_sse_line, parse_gemini_sse_line, parse_openai_sse_line,
 };
 use openproxy_core::translation::OpenAIUsage;
 
@@ -49,7 +49,8 @@ fn openai_streaming_full_response_simulation() {
                     done = true;
                     break;
                 }
-                if let Some(content) = payload_value(&c)["choices"][0]["delta"]["content"].as_str() {
+                if let Some(content) = payload_value(&c)["choices"][0]["delta"]["content"].as_str()
+                {
                     full_content.push_str(content);
                 }
                 if c.usage.is_some() {
@@ -395,7 +396,9 @@ fn gemini_parse_idempotent() {
         let chunk = parse_gemini_sse_line(line, "id", 0, "m").unwrap().unwrap();
         assert!(!chunk.done);
         assert_eq!(
-            chunk.payload["choices"][0]["delta"]["content"].as_str().unwrap(),
+            chunk.payload["choices"][0]["delta"]["content"]
+                .as_str()
+                .unwrap(),
             "test"
         );
         assert!(chunk.usage.is_some());

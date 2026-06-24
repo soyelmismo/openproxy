@@ -44,9 +44,8 @@ impl UpstreamSseChunk {
     /// Get the forwardable JSON string. Returns the raw payload if
     /// available (zero allocation), otherwise serializes the parsed payload.
     pub fn into_json_string(self) -> String {
-        self.raw_payload.unwrap_or_else(|| {
-            serde_json::to_string(&self.payload).unwrap_or_default()
-        })
+        self.raw_payload
+            .unwrap_or_else(|| serde_json::to_string(&self.payload).unwrap_or_default())
     }
 
     /// Get the SSE frame as pre-formatted `data: {json}\n\n` `Bytes`,
@@ -126,7 +125,8 @@ struct OpenAiChoiceProbe {
 
 #[derive(serde::Deserialize)]
 struct OpenAiDeltaProbe {
-    #[allow(dead_code)] // populated for shape parity with OpenAI's wire format; we only extract reasoning_content on the slow path
+    #[allow(dead_code)]
+    // populated for shape parity with OpenAI's wire format; we only extract reasoning_content on the slow path
     #[serde(default)]
     content: Option<String>,
     #[serde(default)]
@@ -176,13 +176,15 @@ pub fn parse_openai_sse_line(line: &str) -> Result<Option<UpstreamSseChunk>> {
     // parse work; we just extract one more field. Borrow via
     // `as_ref()` so the subsequent `finish_reason` extraction
     // (which consumes `probe.choices`) can still run.
-    let delta_reasoning = probe.choices
+    let delta_reasoning = probe
+        .choices
         .as_ref()
         .and_then(|c| c.first())
         .and_then(|c| c.delta.as_ref())
         .and_then(|d| d.reasoning_content.as_ref())
         .cloned();
-    let finish_reason = probe.choices
+    let finish_reason = probe
+        .choices
         .and_then(|mut c| c.pop())
         .and_then(|c| c.finish_reason);
 
@@ -348,7 +350,9 @@ pub fn parse_gemini_sse_line(
     };
 
     // Extract finish_reason
-    let finish_reason = probe.candidates.first()
+    let finish_reason = probe
+        .candidates
+        .first()
         .and_then(|c| c.finish_reason.as_deref())
         .map(map_gemini_finish_reason);
 
@@ -491,7 +495,8 @@ pub fn translate_anthropic_sse_payload(
             //                       handled by `translate_anthropic_sse_event`
             //                       and the H5 accumulator, NOT here)
             // Missing `type` defaults to text_delta (legacy clients).
-            let delta_type = data.get("delta")
+            let delta_type = data
+                .get("delta")
                 .and_then(|d| d.get("type"))
                 .and_then(|t| t.as_str())
                 .unwrap_or("text_delta");
@@ -501,7 +506,8 @@ pub fn translate_anthropic_sse_payload(
                 // and surface it as `delta_reasoning` on the chunk so
                 // the downstream accumulator (sse_accumulator.rs) can
                 // build the persisted `reasoning` field.
-                let thinking = data.get("delta")
+                let thinking = data
+                    .get("delta")
                     .and_then(|d| d.get("thinking"))
                     .and_then(|t| t.as_str())
                     .unwrap_or("");
@@ -533,7 +539,8 @@ pub fn translate_anthropic_sse_payload(
             // text_delta (or unknown subtype — fall back to text
             // extraction to preserve existing behavior for any
             // future subtype we don't recognize).
-            let text = data.get("delta")
+            let text = data
+                .get("delta")
                 .and_then(|d| d.get("text"))
                 .and_then(|t| t.as_str())
                 .unwrap_or("");
@@ -565,7 +572,8 @@ pub fn translate_anthropic_sse_payload(
         }
         "message_delta" => {
             // Extract finish reason and usage
-            let stop_reason = data.get("delta")
+            let stop_reason = data
+                .get("delta")
                 .and_then(|d| d.get("stop_reason"))
                 .and_then(|r| r.as_str());
 
@@ -577,8 +585,10 @@ pub fn translate_anthropic_sse_payload(
 
             let usage = data.get("usage").map(|u| {
                 crate::translation::OpenAIUsage {
-                    prompt_tokens: u.get("input_tokens").and_then(|t| t.as_u64()).unwrap_or(0) as u32,
-                    completion_tokens: u.get("output_tokens").and_then(|t| t.as_u64()).unwrap_or(0) as u32,
+                    prompt_tokens: u.get("input_tokens").and_then(|t| t.as_u64()).unwrap_or(0)
+                        as u32,
+                    completion_tokens: u.get("output_tokens").and_then(|t| t.as_u64()).unwrap_or(0)
+                        as u32,
                     total_tokens: 0, // Will be computed
                 }
             });
@@ -843,15 +853,21 @@ pub fn translate_anthropic_sse_event(
     if event_type == "content_block_start" {
         let probe: AnthropicContentBlockStartProbe = serde_json::from_str(data_json)
             .map_err(|e| CoreError::Parse(format!("anthropic sse json: {e}")))?;
-        let block_type = probe.content_block.as_ref()
+        let block_type = probe
+            .content_block
+            .as_ref()
             .and_then(|b| b.block_type.as_deref())
             .unwrap_or("");
         if block_type == "tool_use" {
-            let id = probe.content_block.as_ref()
+            let id = probe
+                .content_block
+                .as_ref()
                 .and_then(|b| b.id.as_deref())
                 .unwrap_or("")
                 .to_string();
-            let name = probe.content_block.as_ref()
+            let name = probe
+                .content_block
+                .as_ref()
                 .and_then(|b| b.name.as_deref())
                 .unwrap_or("")
                 .to_string();
@@ -942,7 +958,10 @@ pub fn translate_anthropic_sse_event(
 
 /// Format a JSON value as an SSE `data:` line.
 pub fn format_sse_line(payload: &serde_json::Value) -> String {
-    format!("data: {}\n\n", serde_json::to_string(payload).unwrap_or_default())
+    format!(
+        "data: {}\n\n",
+        serde_json::to_string(payload).unwrap_or_default()
+    )
 }
 
 /// The [DONE] sentinel.
@@ -958,7 +977,8 @@ mod tests {
         let chunk = parse_openai_sse_line(line).unwrap().unwrap();
         assert!(!chunk.done);
         assert!(chunk.raw_payload.is_some());
-        let v: serde_json::Value = serde_json::from_str(chunk.raw_payload.as_ref().unwrap()).unwrap();
+        let v: serde_json::Value =
+            serde_json::from_str(chunk.raw_payload.as_ref().unwrap()).unwrap();
         assert!(v.get("id").is_some());
     }
 
@@ -975,13 +995,19 @@ mod tests {
 
     #[test]
     fn parse_openai_comment() {
-        assert!(parse_openai_sse_line(": this is a comment").unwrap().is_none());
+        assert!(
+            parse_openai_sse_line(": this is a comment")
+                .unwrap()
+                .is_none()
+        );
     }
 
     #[test]
     fn parse_gemini_data_line() {
         let line = r#"data: {"candidates":[{"content":{"parts":[{"text":"Hello"}]},"finishReason":"STOP"}],"usageMetadata":{"promptTokenCount":10,"candidatesTokenCount":5,"totalTokenCount":15}}"#;
-        let chunk = parse_gemini_sse_line(line, "test-id", 0, "gemini-pro").unwrap().unwrap();
+        let chunk = parse_gemini_sse_line(line, "test-id", 0, "gemini-pro")
+            .unwrap()
+            .unwrap();
         assert!(!chunk.done);
         let choice = chunk.payload["choices"][0].clone();
         assert_eq!(choice["delta"]["content"].as_str().unwrap(), "Hello");
@@ -994,7 +1020,9 @@ mod tests {
 
     #[test]
     fn parse_gemini_done() {
-        let chunk = parse_gemini_sse_line("data: [DONE]", "id", 0, "m").unwrap().unwrap();
+        let chunk = parse_gemini_sse_line("data: [DONE]", "id", 0, "m")
+            .unwrap()
+            .unwrap();
         assert!(chunk.done);
     }
 
@@ -1012,17 +1040,29 @@ mod tests {
     #[test]
     fn openai_line_without_data_prefix_returns_none() {
         // Lines that don't start with "data:" should be silently skipped.
-        assert!(parse_openai_sse_line("event: some_event").unwrap().is_none());
+        assert!(
+            parse_openai_sse_line("event: some_event")
+                .unwrap()
+                .is_none()
+        );
         assert!(parse_openai_sse_line("id: 12345").unwrap().is_none());
         assert!(parse_openai_sse_line("retry: 5000").unwrap().is_none());
-        assert!(parse_openai_sse_line("random text without prefix").unwrap().is_none());
+        assert!(
+            parse_openai_sse_line("random text without prefix")
+                .unwrap()
+                .is_none()
+        );
     }
 
     #[test]
     fn openai_line_with_event_prefix_ignored() {
         // Standard SSE event: lines should be ignored (not data: lines).
         assert!(parse_openai_sse_line("event: message").unwrap().is_none());
-        assert!(parse_openai_sse_line("event: completion").unwrap().is_none());
+        assert!(
+            parse_openai_sse_line("event: completion")
+                .unwrap()
+                .is_none()
+        );
     }
 
     #[test]
@@ -1047,7 +1087,8 @@ mod tests {
         let line = format!("data: {}", serde_json::to_string(&payload).unwrap());
         let chunk = parse_openai_sse_line(&line).unwrap().unwrap();
         assert!(!chunk.done);
-        let v: serde_json::Value = serde_json::from_str(chunk.raw_payload.as_ref().unwrap()).unwrap();
+        let v: serde_json::Value =
+            serde_json::from_str(chunk.raw_payload.as_ref().unwrap()).unwrap();
         assert_eq!(v["content"].as_str().unwrap().len(), 10_000);
     }
 
@@ -1056,7 +1097,8 @@ mod tests {
         let payload = serde_json::json!({"content": "こんにちは世界 🌍 ñ ü ö ä"});
         let line = format!("data: {}", serde_json::to_string(&payload).unwrap());
         let chunk = parse_openai_sse_line(&line).unwrap().unwrap();
-        let v: serde_json::Value = serde_json::from_str(chunk.raw_payload.as_ref().unwrap()).unwrap();
+        let v: serde_json::Value =
+            serde_json::from_str(chunk.raw_payload.as_ref().unwrap()).unwrap();
         assert_eq!(v["content"].as_str().unwrap(), "こんにちは世界 🌍 ñ ü ö ä");
     }
 
@@ -1119,21 +1161,38 @@ mod tests {
 
     #[test]
     fn gemini_line_without_data_prefix_returns_none() {
-        assert!(parse_gemini_sse_line("event: some_event", "id", 0, "m").unwrap().is_none());
-        assert!(parse_gemini_sse_line("id: 12345", "id", 0, "m").unwrap().is_none());
+        assert!(
+            parse_gemini_sse_line("event: some_event", "id", 0, "m")
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            parse_gemini_sse_line("id: 12345", "id", 0, "m")
+                .unwrap()
+                .is_none()
+        );
     }
 
     #[test]
     fn gemini_line_with_crlf_ending() {
         let line = "data: {\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"Hi\"}]}}]}\r\n";
-        let chunk = parse_gemini_sse_line(line, "test", 0, "gemini").unwrap().unwrap();
+        let chunk = parse_gemini_sse_line(line, "test", 0, "gemini")
+            .unwrap()
+            .unwrap();
         assert!(!chunk.done);
-        assert_eq!(chunk.payload["choices"][0]["delta"]["content"].as_str().unwrap(), "Hi");
+        assert_eq!(
+            chunk.payload["choices"][0]["delta"]["content"]
+                .as_str()
+                .unwrap(),
+            "Hi"
+        );
     }
 
     #[test]
     fn gemini_done_with_crlf() {
-        let chunk = parse_gemini_sse_line("data: [DONE]\r\n", "id", 0, "m").unwrap().unwrap();
+        let chunk = parse_gemini_sse_line("data: [DONE]\r\n", "id", 0, "m")
+            .unwrap()
+            .unwrap();
         assert!(chunk.done);
     }
 
@@ -1144,7 +1203,11 @@ mod tests {
 
     #[test]
     fn gemini_comment_line() {
-        assert!(parse_gemini_sse_line(": this is a comment", "id", 0, "m").unwrap().is_none());
+        assert!(
+            parse_gemini_sse_line(": this is a comment", "id", 0, "m")
+                .unwrap()
+                .is_none()
+        );
     }
 
     #[test]
@@ -1166,59 +1229,96 @@ mod tests {
         assert!(!chunk.done);
         // No text, no finish_reason → delta.content should be empty/null.
         let delta = &chunk.payload["choices"][0]["delta"];
-        assert!(delta.get("content").is_none() || delta["content"].as_str().unwrap_or("").is_empty());
+        assert!(
+            delta.get("content").is_none() || delta["content"].as_str().unwrap_or("").is_empty()
+        );
     }
 
     #[test]
     fn gemini_multiple_text_parts_concatenated() {
-        let line = r#"data: {"candidates":[{"content":{"parts":[{"text":"Hello "},{"text":"World"}]}}]}"#;
+        let line =
+            r#"data: {"candidates":[{"content":{"parts":[{"text":"Hello "},{"text":"World"}]}}]}"#;
         let chunk = parse_gemini_sse_line(line, "id", 0, "m").unwrap().unwrap();
-        assert_eq!(chunk.payload["choices"][0]["delta"]["content"].as_str().unwrap(), "Hello World");
+        assert_eq!(
+            chunk.payload["choices"][0]["delta"]["content"]
+                .as_str()
+                .unwrap(),
+            "Hello World"
+        );
     }
 
     #[test]
     fn gemini_finish_reason_max_tokens_maps_to_length() {
         let line = r#"data: {"candidates":[{"content":{"parts":[]},"finishReason":"MAX_TOKENS"}]}"#;
         let chunk = parse_gemini_sse_line(line, "id", 0, "m").unwrap().unwrap();
-        assert_eq!(chunk.payload["choices"][0]["finish_reason"].as_str().unwrap(), "length");
+        assert_eq!(
+            chunk.payload["choices"][0]["finish_reason"]
+                .as_str()
+                .unwrap(),
+            "length"
+        );
     }
 
     #[test]
     fn gemini_finish_reason_safety_maps_to_content_filter() {
         let line = r#"data: {"candidates":[{"content":{"parts":[]},"finishReason":"SAFETY"}]}"#;
         let chunk = parse_gemini_sse_line(line, "id", 0, "m").unwrap().unwrap();
-        assert_eq!(chunk.payload["choices"][0]["finish_reason"].as_str().unwrap(), "content_filter");
+        assert_eq!(
+            chunk.payload["choices"][0]["finish_reason"]
+                .as_str()
+                .unwrap(),
+            "content_filter"
+        );
     }
 
     #[test]
     fn gemini_long_line() {
         let long_text = "y".repeat(10_000);
-        let payload = serde_json::json!({"candidates":[{"content":{"parts":[{"text": long_text}]}}]});
+        let payload =
+            serde_json::json!({"candidates":[{"content":{"parts":[{"text": long_text}]}}]});
         let line = format!("data: {}", serde_json::to_string(&payload).unwrap());
-        let chunk = parse_gemini_sse_line(&line, "id", 0, "gemini").unwrap().unwrap();
+        let chunk = parse_gemini_sse_line(&line, "id", 0, "gemini")
+            .unwrap()
+            .unwrap();
         assert_eq!(
-            chunk.payload["choices"][0]["delta"]["content"].as_str().unwrap().len(),
+            chunk.payload["choices"][0]["delta"]["content"]
+                .as_str()
+                .unwrap()
+                .len(),
             10_000
         );
     }
 
     #[test]
     fn gemini_unicode_content() {
-        let payload = serde_json::json!({"candidates":[{"content":{"parts":[{"text":"日本語テスト 🎉"}]}}]});
+        let payload =
+            serde_json::json!({"candidates":[{"content":{"parts":[{"text":"日本語テスト 🎉"}]}}]});
         let line = format!("data: {}", serde_json::to_string(&payload).unwrap());
-        let chunk = parse_gemini_sse_line(&line, "id", 0, "gemini").unwrap().unwrap();
-        assert_eq!(chunk.payload["choices"][0]["delta"]["content"].as_str().unwrap(), "日本語テスト 🎉");
+        let chunk = parse_gemini_sse_line(&line, "id", 0, "gemini")
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            chunk.payload["choices"][0]["delta"]["content"]
+                .as_str()
+                .unwrap(),
+            "日本語テスト 🎉"
+        );
     }
 
     #[test]
     fn gemini_chunk_metadata_fields() {
         let payload = serde_json::json!({"candidates":[{"content":{"parts":[{"text":"hi"}]}}]});
         let line = format!("data: {}", serde_json::to_string(&payload).unwrap());
-        let chunk = parse_gemini_sse_line(&line, "chunk-42", 1234567890, "gemini-pro").unwrap().unwrap();
+        let chunk = parse_gemini_sse_line(&line, "chunk-42", 1234567890, "gemini-pro")
+            .unwrap()
+            .unwrap();
         assert_eq!(chunk.payload["id"].as_str().unwrap(), "chunk-42");
         assert_eq!(chunk.payload["created"].as_u64().unwrap(), 1234567890);
         assert_eq!(chunk.payload["model"].as_str().unwrap(), "gemini-pro");
-        assert_eq!(chunk.payload["object"].as_str().unwrap(), "chat.completion.chunk");
+        assert_eq!(
+            chunk.payload["object"].as_str().unwrap(),
+            "chat.completion.chunk"
+        );
     }
 
     #[test]
@@ -1266,12 +1366,21 @@ mod tests {
     fn gemini_data_prefix_with_extra_spaces() {
         let line = r#"data:  {"candidates":[{"content":{"parts":[{"text":"ok"}]}}]}"#;
         let chunk = parse_gemini_sse_line(line, "id", 0, "m").unwrap().unwrap();
-        assert_eq!(chunk.payload["choices"][0]["delta"]["content"].as_str().unwrap(), "ok");
+        assert_eq!(
+            chunk.payload["choices"][0]["delta"]["content"]
+                .as_str()
+                .unwrap(),
+            "ok"
+        );
     }
 
     #[test]
     fn gemini_only_whitespace_line() {
-        assert!(parse_gemini_sse_line("   \t  ", "id", 0, "m").unwrap().is_none());
+        assert!(
+            parse_gemini_sse_line("   \t  ", "id", 0, "m")
+                .unwrap()
+                .is_none()
+        );
     }
 
     #[test]
@@ -1285,7 +1394,9 @@ mod tests {
         let line = r#"data: {"candidates":[{"content":{"parts":[]}}]}"#;
         let chunk = parse_gemini_sse_line(line, "id", 0, "m").unwrap().unwrap();
         // text is empty → delta.content should be empty string or null.
-        let content = chunk.payload["choices"][0]["delta"]["content"].as_str().unwrap_or("");
+        let content = chunk.payload["choices"][0]["delta"]["content"]
+            .as_str()
+            .unwrap_or("");
         assert!(content.is_empty());
     }
 
@@ -1294,7 +1405,12 @@ mod tests {
         // Some parts may have "thought: true" or other keys — only "text" parts matter.
         let line = r#"data: {"candidates":[{"content":{"parts":[{"thought":true},{"text":"real answer"}]}}]}"#;
         let chunk = parse_gemini_sse_line(line, "id", 0, "m").unwrap().unwrap();
-        assert_eq!(chunk.payload["choices"][0]["delta"]["content"].as_str().unwrap(), "real answer");
+        assert_eq!(
+            chunk.payload["choices"][0]["delta"]["content"]
+                .as_str()
+                .unwrap(),
+            "real answer"
+        );
     }
 
     /// G1 §5.4 (test 9): Gemini input `[{"text":"r","thought":true},{"text":"a"}]`
@@ -1324,7 +1440,9 @@ mod tests {
         // `content`, so any thought text here would leak into the
         // user's `content` and corrupt the response.
         assert_eq!(
-            chunk.payload["choices"][0]["delta"]["content"].as_str().unwrap(),
+            chunk.payload["choices"][0]["delta"]["content"]
+                .as_str()
+                .unwrap(),
             "a",
             "the translated payload's delta.content must carry ONLY non-thought text"
         );
@@ -1335,7 +1453,8 @@ mod tests {
     #[test]
     fn anthropic_event_line_sets_current_event() {
         let mut current_event = None;
-        let result = parse_anthropic_sse_stream_line("event: message_start", &mut current_event).unwrap();
+        let result =
+            parse_anthropic_sse_stream_line("event: message_start", &mut current_event).unwrap();
         assert!(result.is_none());
         assert_eq!(current_event.as_deref(), Some("message_start"));
     }
@@ -1346,7 +1465,9 @@ mod tests {
         let result = parse_anthropic_sse_stream_line(
             r#"data: {"delta":{"text":"Hello"}}"#,
             &mut current_event,
-        ).unwrap().unwrap();
+        )
+        .unwrap()
+        .unwrap();
         assert!(result.starts_with("content_block_delta\n"));
     }
 
@@ -1361,18 +1482,37 @@ mod tests {
     #[test]
     fn anthropic_non_data_line_returns_none() {
         let mut current_event = None;
-        assert!(parse_anthropic_sse_stream_line("id: 123", &mut current_event).unwrap().is_none());
-        assert!(parse_anthropic_sse_stream_line("retry: 5000", &mut current_event).unwrap().is_none());
-        assert!(parse_anthropic_sse_stream_line(": comment", &mut current_event).unwrap().is_none());
+        assert!(
+            parse_anthropic_sse_stream_line("id: 123", &mut current_event)
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            parse_anthropic_sse_stream_line("retry: 5000", &mut current_event)
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            parse_anthropic_sse_stream_line(": comment", &mut current_event)
+                .unwrap()
+                .is_none()
+        );
     }
 
     #[test]
     fn anthropic_translate_message_start() {
         let payload = r#"message_start
 {"type":"message","role":"assistant","content":[],"model":"claude-3","stop_reason":null,"usage":{"input_tokens":10,"output_tokens":0}}"#;
-        let chunk = translate_anthropic_sse_payload(payload, "chunk-1", 1000, "claude-3").unwrap().unwrap();
+        let chunk = translate_anthropic_sse_payload(payload, "chunk-1", 1000, "claude-3")
+            .unwrap()
+            .unwrap();
         assert!(!chunk.done);
-        assert_eq!(chunk.payload["choices"][0]["delta"]["role"].as_str().unwrap(), "assistant");
+        assert_eq!(
+            chunk.payload["choices"][0]["delta"]["role"]
+                .as_str()
+                .unwrap(),
+            "assistant"
+        );
         assert_eq!(chunk.payload["id"].as_str().unwrap(), "chunk-1");
     }
 
@@ -1380,18 +1520,32 @@ mod tests {
     fn anthropic_translate_content_block_delta() {
         let payload = r#"content_block_delta
 {"delta":{"type":"content_block_delta","text":"Hello"}}"#;
-        let chunk = translate_anthropic_sse_payload(payload, "chunk-1", 1000, "claude-3").unwrap().unwrap();
+        let chunk = translate_anthropic_sse_payload(payload, "chunk-1", 1000, "claude-3")
+            .unwrap()
+            .unwrap();
         assert!(!chunk.done);
-        assert_eq!(chunk.payload["choices"][0]["delta"]["content"].as_str().unwrap(), "Hello");
+        assert_eq!(
+            chunk.payload["choices"][0]["delta"]["content"]
+                .as_str()
+                .unwrap(),
+            "Hello"
+        );
     }
 
     #[test]
     fn anthropic_translate_message_delta_with_stop() {
         let payload = r#"message_delta
 {"delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":50}}"#;
-        let chunk = translate_anthropic_sse_payload(payload, "chunk-1", 1000, "claude-3").unwrap().unwrap();
+        let chunk = translate_anthropic_sse_payload(payload, "chunk-1", 1000, "claude-3")
+            .unwrap()
+            .unwrap();
         assert!(chunk.done);
-        assert_eq!(chunk.payload["choices"][0]["finish_reason"].as_str().unwrap(), "stop");
+        assert_eq!(
+            chunk.payload["choices"][0]["finish_reason"]
+                .as_str()
+                .unwrap(),
+            "stop"
+        );
         assert!(chunk.usage.is_some());
     }
 
@@ -1399,9 +1553,16 @@ mod tests {
     fn anthropic_translate_message_delta_max_tokens() {
         let payload = r#"message_delta
 {"delta":{"stop_reason":"max_tokens"},"usage":{"output_tokens":100}}"#;
-        let chunk = translate_anthropic_sse_payload(payload, "chunk-1", 1000, "claude-3").unwrap().unwrap();
+        let chunk = translate_anthropic_sse_payload(payload, "chunk-1", 1000, "claude-3")
+            .unwrap()
+            .unwrap();
         assert!(chunk.done);
-        assert_eq!(chunk.payload["choices"][0]["finish_reason"].as_str().unwrap(), "length");
+        assert_eq!(
+            chunk.payload["choices"][0]["finish_reason"]
+                .as_str()
+                .unwrap(),
+            "length"
+        );
     }
 
     // ---- H5 fix: Anthropic tool_use accumulator ----
@@ -1418,15 +1579,24 @@ mod tests {
         let mut acc: Option<AnthropicToolUseAccumulator> = None;
         let mut counter: u32 = 0;
         let chunk = translate_anthropic_sse_event(
-            payload, "chunk-1", 1000, "claude-3",
-            &mut acc, &mut counter,
-        ).unwrap().unwrap();
+            payload,
+            "chunk-1",
+            1000,
+            "claude-3",
+            &mut acc,
+            &mut counter,
+        )
+        .unwrap()
+        .unwrap();
         assert!(!chunk.done);
         let tool_call = &chunk.payload["choices"][0]["delta"]["tool_calls"][0];
         assert_eq!(tool_call["index"].as_u64().unwrap(), 0);
         assert_eq!(tool_call["id"].as_str().unwrap(), "toolu_01ABC");
         assert_eq!(tool_call["type"].as_str().unwrap(), "function");
-        assert_eq!(tool_call["function"]["name"].as_str().unwrap(), "get_weather");
+        assert_eq!(
+            tool_call["function"]["name"].as_str().unwrap(),
+            "get_weather"
+        );
         assert_eq!(tool_call["function"]["arguments"].as_str().unwrap(), "");
         // The accumulator must be open after start.
         assert!(acc.is_some());
@@ -1473,9 +1643,15 @@ mod tests {
         let mut acc: Option<AnthropicToolUseAccumulator> = None;
         let mut counter: u32 = 0;
         let _ = translate_anthropic_sse_event(
-            &start, "chunk-1", 1000, "claude-3",
-            &mut acc, &mut counter,
-        ).unwrap().unwrap();
+            &start,
+            "chunk-1",
+            1000,
+            "claude-3",
+            &mut acc,
+            &mut counter,
+        )
+        .unwrap()
+        .unwrap();
         // First delta — partial_json carries the JSON fragment `{"q":`.
         let delta1 = "content_block_delta\n".to_string()
             + &serde_json::json!({
@@ -1488,13 +1664,20 @@ mod tests {
             })
             .to_string();
         let chunk1 = translate_anthropic_sse_event(
-            &delta1, "chunk-2", 1000, "claude-3",
-            &mut acc, &mut counter,
-        ).unwrap().unwrap();
+            &delta1,
+            "chunk-2",
+            1000,
+            "claude-3",
+            &mut acc,
+            &mut counter,
+        )
+        .unwrap()
+        .unwrap();
         // Chunk 1 must carry ONLY the first fragment.
         assert_eq!(
             chunk1.payload["choices"][0]["delta"]["tool_calls"][0]["function"]["arguments"]
-                .as_str().unwrap(),
+                .as_str()
+                .unwrap(),
             "{\"q\":"
         );
         // Second delta — partial_json carries the rest of the JSON
@@ -1510,9 +1693,15 @@ mod tests {
             })
             .to_string();
         let chunk2 = translate_anthropic_sse_event(
-            &delta2, "chunk-3", 1000, "claude-3",
-            &mut acc, &mut counter,
-        ).unwrap().unwrap();
+            &delta2,
+            "chunk-3",
+            1000,
+            "claude-3",
+            &mut acc,
+            &mut counter,
+        )
+        .unwrap()
+        .unwrap();
         // Chunk 2 must carry ONLY the second fragment — NOT the
         // running total. This is the fix: previously it sent
         // `{"q":"sf"}` (the full running total), causing the client
@@ -1520,7 +1709,8 @@ mod tests {
         // which is invalid JSON.
         assert_eq!(
             chunk2.payload["choices"][0]["delta"]["tool_calls"][0]["function"]["arguments"]
-                .as_str().unwrap(),
+                .as_str()
+                .unwrap(),
             "\"sf\"}"
         );
         // The accumulator must still hold the full running total
@@ -1530,10 +1720,14 @@ mod tests {
         // concatenate the `arguments` fragments from all chunks by
         // `index`. The result must parse as valid JSON matching the
         // assembled tool call.
-        let fragment1 = chunk1.payload["choices"][0]["delta"]["tool_calls"][0]["function"]["arguments"]
-            .as_str().unwrap();
-        let fragment2 = chunk2.payload["choices"][0]["delta"]["tool_calls"][0]["function"]["arguments"]
-            .as_str().unwrap();
+        let fragment1 =
+            chunk1.payload["choices"][0]["delta"]["tool_calls"][0]["function"]["arguments"]
+                .as_str()
+                .unwrap();
+        let fragment2 =
+            chunk2.payload["choices"][0]["delta"]["tool_calls"][0]["function"]["arguments"]
+                .as_str()
+                .unwrap();
         let concatenated = format!("{}{}", fragment1, fragment2);
         let parsed: serde_json::Value = serde_json::from_str(&concatenated)
             .expect("concatenated fragments must parse as valid JSON");
@@ -1549,18 +1743,28 @@ mod tests {
         let mut acc: Option<AnthropicToolUseAccumulator> = None;
         let mut counter: u32 = 0;
         let _ = translate_anthropic_sse_event(
-            start, "chunk-1", 1000, "claude-3",
-            &mut acc, &mut counter,
-        ).unwrap();
+            start,
+            "chunk-1",
+            1000,
+            "claude-3",
+            &mut acc,
+            &mut counter,
+        )
+        .unwrap();
         assert!(acc.is_some());
         // content_block_stop emits no chunk (clients can detect
         // the end of a tool_call by index reuse / a subsequent
         // message_delta) and clears the accumulator so the next
         // tool_use block in the same turn gets a fresh index.
         let chunk = translate_anthropic_sse_event(
-            stop, "chunk-2", 1000, "claude-3",
-            &mut acc, &mut counter,
-        ).unwrap();
+            stop,
+            "chunk-2",
+            1000,
+            "claude-3",
+            &mut acc,
+            &mut counter,
+        )
+        .unwrap();
         assert!(chunk.is_none());
         assert!(acc.is_none());
         // The next tool_use block must get index 1, not 0 — the
@@ -1569,12 +1773,19 @@ mod tests {
         let start2 = r#"content_block_start
 {"type":"content_block_start","index":2,"content_block":{"type":"tool_use","id":"toolu_Y","name":"g","input":{}}}"#;
         let chunk2 = translate_anthropic_sse_event(
-            start2, "chunk-3", 1000, "claude-3",
-            &mut acc, &mut counter,
-        ).unwrap().unwrap();
+            start2,
+            "chunk-3",
+            1000,
+            "claude-3",
+            &mut acc,
+            &mut counter,
+        )
+        .unwrap()
+        .unwrap();
         assert_eq!(
             chunk2.payload["choices"][0]["delta"]["tool_calls"][0]["index"]
-                .as_u64().unwrap(),
+                .as_u64()
+                .unwrap(),
             1
         );
     }
@@ -1593,18 +1804,30 @@ mod tests {
         let mut acc: Option<AnthropicToolUseAccumulator> = None;
         let mut counter: u32 = 0;
         let start_chunk = translate_anthropic_sse_event(
-            start, "chunk-1", 1000, "claude-3",
-            &mut acc, &mut counter,
-        ).unwrap();
+            start,
+            "chunk-1",
+            1000,
+            "claude-3",
+            &mut acc,
+            &mut counter,
+        )
+        .unwrap();
         assert!(start_chunk.is_none());
         assert!(acc.is_none());
         let delta_chunk = translate_anthropic_sse_event(
-            delta, "chunk-2", 1000, "claude-3",
-            &mut acc, &mut counter,
-        ).unwrap().unwrap();
+            delta,
+            "chunk-2",
+            1000,
+            "claude-3",
+            &mut acc,
+            &mut counter,
+        )
+        .unwrap()
+        .unwrap();
         assert_eq!(
             delta_chunk.payload["choices"][0]["delta"]["content"]
-                .as_str().unwrap(),
+                .as_str()
+                .unwrap(),
             "hello"
         );
     }
@@ -1620,9 +1843,14 @@ mod tests {
         let mut acc: Option<AnthropicToolUseAccumulator> = None;
         let mut counter: u32 = 0;
         let chunk = translate_anthropic_sse_event(
-            delta, "chunk-1", 1000, "claude-3",
-            &mut acc, &mut counter,
-        ).unwrap();
+            delta,
+            "chunk-1",
+            1000,
+            "claude-3",
+            &mut acc,
+            &mut counter,
+        )
+        .unwrap();
         assert!(chunk.is_none());
         // Counter untouched.
         assert_eq!(counter, 0);
@@ -1639,12 +1867,19 @@ mod tests {
         let mut acc: Option<AnthropicToolUseAccumulator> = None;
         let mut counter: u32 = 0;
         let chunk = translate_anthropic_sse_event(
-            start, "chunk-1", 1000, "claude-3",
-            &mut acc, &mut counter,
-        ).unwrap().unwrap();
+            start,
+            "chunk-1",
+            1000,
+            "claude-3",
+            &mut acc,
+            &mut counter,
+        )
+        .unwrap()
+        .unwrap();
         assert_eq!(
             chunk.payload["choices"][0]["delta"]["role"]
-                .as_str().unwrap(),
+                .as_str()
+                .unwrap(),
             "assistant"
         );
     }
@@ -1699,8 +1934,12 @@ mod tests {
         let mut chunks = Vec::new();
 
         for line in lines {
-            if let Some(payload) = parse_anthropic_sse_stream_line(line, &mut current_event).unwrap() {
-                if let Some(chunk) = translate_anthropic_sse_payload(&payload, "test", 0, "claude-3").unwrap() {
+            if let Some(payload) =
+                parse_anthropic_sse_stream_line(line, &mut current_event).unwrap()
+            {
+                if let Some(chunk) =
+                    translate_anthropic_sse_payload(&payload, "test", 0, "claude-3").unwrap()
+                {
                     chunks.push(chunk);
                 }
             }
@@ -1712,13 +1951,33 @@ mod tests {
         // second `done: true` chunk — see H4 / sse.rs:316).
         assert_eq!(chunks.len(), 4);
         // First chunk: role assignment
-        assert_eq!(chunks[0].payload["choices"][0]["delta"]["role"].as_str().unwrap(), "assistant");
+        assert_eq!(
+            chunks[0].payload["choices"][0]["delta"]["role"]
+                .as_str()
+                .unwrap(),
+            "assistant"
+        );
         // Second chunk: "Hi"
-        assert_eq!(chunks[1].payload["choices"][0]["delta"]["content"].as_str().unwrap(), "Hi");
+        assert_eq!(
+            chunks[1].payload["choices"][0]["delta"]["content"]
+                .as_str()
+                .unwrap(),
+            "Hi"
+        );
         // Third chunk: " there"
-        assert_eq!(chunks[2].payload["choices"][0]["delta"]["content"].as_str().unwrap(), " there");
+        assert_eq!(
+            chunks[2].payload["choices"][0]["delta"]["content"]
+                .as_str()
+                .unwrap(),
+            " there"
+        );
         // Fourth chunk: finish_reason
-        assert_eq!(chunks[3].payload["choices"][0]["finish_reason"].as_str().unwrap(), "stop");
+        assert_eq!(
+            chunks[3].payload["choices"][0]["finish_reason"]
+                .as_str()
+                .unwrap(),
+            "stop"
+        );
         // The single `done: true` chunk comes from `message_delta`
         // — exactly one downstream end-of-stream signal for the
         // full stream, which is the invariant H4 is enforcing.
@@ -1809,18 +2068,14 @@ mod tests {
 
             // First chunk must carry THIS task's tool id and name,
             // not any other task's.
-            let first_payload = outs[0]
-                .as_ref()
-                .expect("first chunk")
-                .payload
-                .clone();
+            let first_payload = outs[0].as_ref().expect("first chunk").payload.clone();
             let tool_id = first_payload["choices"][0]["delta"]["tool_calls"][0]["id"]
                 .as_str()
                 .expect("tool id");
-            let tool_name = first_payload["choices"][0]["delta"]["tool_calls"][0]
-                ["function"]["name"]
-                .as_str()
-                .expect("tool name");
+            let tool_name =
+                first_payload["choices"][0]["delta"]["tool_calls"][0]["function"]["name"]
+                    .as_str()
+                    .expect("tool name");
             assert_eq!(
                 tool_id,
                 format!("toolu_{:08x}", i),

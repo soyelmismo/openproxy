@@ -33,7 +33,9 @@ use crate::ids::AccountId;
 use crate::translation::{
     OpenAIChoice, OpenAIMessage, OpenAIRequest, OpenAIResponse, OpenAIUsage, openai_to_gemini,
 };
-use crate::upstream::{CancellationToken, TimeoutProfile, UpstreamClient, UpstreamError, UpstreamRequest};
+use crate::upstream::{
+    CancellationToken, TimeoutProfile, UpstreamClient, UpstreamError, UpstreamRequest,
+};
 use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
@@ -332,8 +334,7 @@ pub async fn execute_antigravity(
 
     // 2. Build the upstream request. POST to the streamGenerateContent
     //    endpoint with JSON body, bearer auth, and SSE accept.
-    let url =
-        "https://daily-cloudcode-pa.googleapis.com/v1internal:streamGenerateContent?alt=sse";
+    let url = "https://daily-cloudcode-pa.googleapis.com/v1internal:streamGenerateContent?alt=sse";
     let mut upstream_request =
         UpstreamRequest::post_json(url.to_string(), bytes::Bytes::from(body_bytes));
     if let Ok(value) = http::HeaderValue::from_str(&format!("Bearer {access_token}")) {
@@ -476,10 +477,7 @@ mod tests {
         let envelope = build_antigravity_request(&req, "proj-123").unwrap();
 
         assert_eq!(envelope.project, "proj-123");
-        assert_eq!(
-            envelope.model.as_deref(),
-            Some("gemini-2.5-pro")
-        );
+        assert_eq!(envelope.model.as_deref(), Some("gemini-2.5-pro"));
         assert_eq!(envelope.request_type, "agent");
         assert_eq!(envelope.user_agent, "antigravity");
         assert!(envelope.request.get("contents").is_some());
@@ -490,8 +488,7 @@ mod tests {
         let mut text = String::new();
         let mut usage: Option<OpenAIUsage> = None;
         let done =
-            parse_antigravity_line(r#"{"markdown":"Hello world"}"#, &mut text, &mut usage)
-                .unwrap();
+            parse_antigravity_line(r#"{"markdown":"Hello world"}"#, &mut text, &mut usage).unwrap();
         assert!(!done);
         assert_eq!(text, "Hello world");
     }
@@ -561,8 +558,7 @@ mod tests {
     fn test_parse_comment_line() {
         let mut text = String::new();
         let mut usage: Option<OpenAIUsage> = None;
-        let done =
-            parse_antigravity_line(": this is a comment", &mut text, &mut usage).unwrap();
+        let done = parse_antigravity_line(": this is a comment", &mut text, &mut usage).unwrap();
         assert!(!done);
     }
 

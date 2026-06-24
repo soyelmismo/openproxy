@@ -76,7 +76,7 @@ use hyper_util::client::legacy::connect::Connection as HyperConnection;
 use hyper_util::rt::TokioIo;
 use rustls::pki_types::ServerName;
 use tokio::net::TcpStream;
-use tokio_rustls::{client::TlsStream as ClientTlsStream, TlsConnector};
+use tokio_rustls::{TlsConnector, client::TlsStream as ClientTlsStream};
 use tower_service::Service;
 
 use super::phases::UpstreamPhase;
@@ -161,9 +161,7 @@ impl HyperConnection for PhasedConnection {
                 }
                 connected
             }
-            PhasedConnection::Plain(_) => {
-                hyper_util::client::legacy::connect::Connected::new()
-            }
+            PhasedConnection::Plain(_) => hyper_util::client::legacy::connect::Connected::new(),
         }
     }
 }
@@ -173,8 +171,7 @@ impl HyperConnection for PhasedConnection {
 /// shared across every HTTPS request. Loading webpki roots is a few
 /// KB and happens once at first use.
 fn tls_connector() -> TlsConnector {
-    static CONFIG: std::sync::OnceLock<Arc<rustls::ClientConfig>> =
-        std::sync::OnceLock::new();
+    static CONFIG: std::sync::OnceLock<Arc<rustls::ClientConfig>> = std::sync::OnceLock::new();
     let cfg = CONFIG.get_or_init(|| {
         let mut roots = rustls::RootCertStore::empty();
         roots.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
@@ -366,9 +363,7 @@ impl PhasedConnector {
     /// request — the task-local is set once per call via `scope(...)`
     /// and read here.
     pub fn effective_timeouts(&self) -> PhasedTimeouts {
-        CALL_TIMEOUTS
-            .try_with(|t| *t)
-            .unwrap_or(self.defaults)
+        CALL_TIMEOUTS.try_with(|t| *t).unwrap_or(self.defaults)
     }
 
     /// Backward-compat: set the fallback timeouts. Kept for any test
@@ -502,9 +497,9 @@ async fn run_phased_connect(
         None => {
             return Err(Box::new(PhasedConnectorError {
                 phase: UpstreamPhase::Dial,
-                kind: PhasedErrorKind::Io(last_err.unwrap_or_else(|| {
-                    io::Error::other("no addresses to dial")
-                })),
+                kind: PhasedErrorKind::Io(
+                    last_err.unwrap_or_else(|| io::Error::other("no addresses to dial")),
+                ),
             }));
         }
     };
@@ -544,12 +539,7 @@ async fn run_phased_connect(
             }
         };
         let connector = tls_connector();
-        match tokio::time::timeout(
-            timeouts.tls,
-            connector.connect(server_name, stream),
-        )
-        .await
-        {
+        match tokio::time::timeout(timeouts.tls, connector.connect(server_name, stream)).await {
             Ok(Ok(tls_stream)) => {
                 // Bug fix: read the ALPN-negotiated protocol from the
                 // rustls ClientConnection BEFORE wrapping the stream
@@ -597,12 +587,10 @@ fn parse_authority(uri: &Uri) -> Result<(String, u16), String> {
         .trim_start_matches('[')
         .trim_end_matches(']')
         .to_string();
-    let port = uri
-        .port_u16()
-        .unwrap_or(match uri.scheme_str() {
-            Some("https") => 443,
-            _ => 80,
-        });
+    let port = uri.port_u16().unwrap_or(match uri.scheme_str() {
+        Some("https") => 443,
+        _ => 80,
+    });
     Ok((host, port))
 }
 
@@ -627,8 +615,9 @@ async fn resolve_host(host: &str, port: u16) -> io::Result<Vec<SocketAddr>> {
     // The cache is a process-wide DashMap; entries are (addrs, expiry).
     // On cache hit, return the cached addrs if not expired.
     // On cache miss or expiry, fall through to tokio::net::lookup_host.
-    static DNS_CACHE: std::sync::OnceLock<dashmap::DashMap<String, (Vec<SocketAddr>, std::time::Instant)>> =
-        std::sync::OnceLock::new();
+    static DNS_CACHE: std::sync::OnceLock<
+        dashmap::DashMap<String, (Vec<SocketAddr>, std::time::Instant)>,
+    > = std::sync::OnceLock::new();
     let cache = DNS_CACHE.get_or_init(dashmap::DashMap::new);
     let cache_key = format!("{}:{}", host, port);
     let now = std::time::Instant::now();

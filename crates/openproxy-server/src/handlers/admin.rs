@@ -40,30 +40,21 @@
 //! to `ApiResult<T>` via `From` at the very end.
 
 use axum::{
-    extract::{Path, Query, State},
+    Json,
     extract::ws::{Message, WebSocket, WebSocketUpgrade},
+    extract::{Path, Query, State},
     http::HeaderMap,
     response::IntoResponse,
-    Json,
 };
 use futures::StreamExt;
 use openproxy_core::{
-    accounts,
-    adapters,
-    admin,
-    analytics,
-    api_keys as core_api_keys,
-    combos,
+    CoreError, accounts, adapters, admin, analytics, api_keys as core_api_keys, combos,
     config::{CircuitBreakerConfig, RacingConfig, RetriesConfig, TimeoutsConfig},
     db as core_db,
     db::conn::ADMIN_LOCK_TIMEOUT,
     ids::{AccountId, ApiKeyId, ComboId, ComboTargetId, ModelRowId, ProviderId},
-    models,
-    oauth,
-    providers,
-    seed,
+    models, oauth, providers, seed,
     usage::{self, UsageFilter},
-    CoreError,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -135,13 +126,17 @@ pub struct UsageQuery {
 fn parse_usage_timestamp(s: &str, field: &str) -> Result<String, ApiError> {
     // Try RFC-3339 first (the canonical form `created_at` is stored in).
     if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(s) {
-        return Ok(dt.with_timezone(&chrono::Utc).to_rfc3339_opts(chrono::SecondsFormat::Secs, true));
+        return Ok(dt
+            .with_timezone(&chrono::Utc)
+            .to_rfc3339_opts(chrono::SecondsFormat::Secs, true));
     }
     // Fall back to the SQLite "YYYY-MM-DD HH:MM:SS" form (the format
     // operators sometimes paste from a log line). We require the
     // space — a `T` here is the RFC-3339 form, already handled above.
     if let Ok(naive) = chrono::NaiveDateTime::parse_from_str(s, "%Y-%m-%d %H:%M:%S") {
-        return Ok(naive.and_utc().to_rfc3339_opts(chrono::SecondsFormat::Secs, true));
+        return Ok(naive
+            .and_utc()
+            .to_rfc3339_opts(chrono::SecondsFormat::Secs, true));
     }
     Err(CoreError::Validation(format!(
         "{} must be an RFC-3339 timestamp (e.g. 2026-06-18T07:00:00Z) or \
@@ -314,11 +309,9 @@ impl UsageQuery {
         // are inclusive at the lower bound in the SQL.)
         if let (Some(f), Some(t)) = (&from, &to) {
             if f > t {
-                return Err(CoreError::Validation(format!(
-                    "from ({}) must be <= to ({})",
-                    f, t
-                ))
-                .into());
+                return Err(
+                    CoreError::Validation(format!("from ({}) must be <= to ({})", f, t)).into(),
+                );
             }
         }
         let account_id = self.account_id.map(AccountId::new);
@@ -517,11 +510,14 @@ pub async fn put_idle_chunk_retryable(
         return e.into();
     }
     let inner: Result<Json<serde_json::Value>, ApiError> = async {
-        let val = body.get("idle_chunk_retryable")
+        let val = body
+            .get("idle_chunk_retryable")
             .and_then(|v| v.as_bool())
-            .ok_or_else(|| ApiError(CoreError::Validation(
-                "idle_chunk_retryable must be a boolean".into(),
-            )))?;
+            .ok_or_else(|| {
+                ApiError(CoreError::Validation(
+                    "idle_chunk_retryable must be a boolean".into(),
+                ))
+            })?;
         {
             let w = s.db_pool().writer();
             let now = chrono::Utc::now().timestamp();
@@ -578,13 +574,10 @@ pub async fn put_recording_ttl(
         let ttl_secs = body
             .get("recording_ttl_secs")
             .and_then(|v| v.as_i64())
-            .ok_or_else(|| {
-                CoreError::Validation("missing 'recording_ttl_secs' integer".into())
-            })?;
+            .ok_or_else(|| CoreError::Validation("missing 'recording_ttl_secs' integer".into()))?;
         if ttl_secs < 0 {
             return Err(
-                CoreError::Validation("'recording_ttl_secs' must be non-negative".into())
-                    .into(),
+                CoreError::Validation("'recording_ttl_secs' must be non-negative".into()).into(),
             );
         }
         {
@@ -671,8 +664,8 @@ pub async fn get_provider(
         // Read-only SELECT — use the READER.
         let r = s.db_pool().reader();
         let id = ProviderId::new(id);
-        let provider = providers::get(&r, &id)?
-            .ok_or_else(|| CoreError::ProviderNotFound(id.to_string()))?;
+        let provider =
+            providers::get(&r, &id)?.ok_or_else(|| CoreError::ProviderNotFound(id.to_string()))?;
         Ok(Json(provider))
     }
     .await;
@@ -841,9 +834,7 @@ pub async fn delete_account(
 // =====================================================================
 
 /// `GET /admin/combos` — list all combos.
-pub async fn list_combos(
-    State(s): State<AppState>,
-) -> ApiResult<Json<Vec<combos::Combo>>> {
+pub async fn list_combos(State(s): State<AppState>) -> ApiResult<Json<Vec<combos::Combo>>> {
     let body: Result<Json<Vec<combos::Combo>>, ApiError> = async {
         // Read-only SELECT — use the READER.
         let r = s.db_pool().reader();
@@ -877,8 +868,7 @@ pub async fn get_combo(
         // Read-only SELECT — use the READER.
         let r = s.db_pool().reader();
         let id = ComboId(id);
-        let combo = combos::get_combo(&r, id)?
-            .ok_or_else(|| CoreError::ComboNotFound(id.0))?;
+        let combo = combos::get_combo(&r, id)?.ok_or_else(|| CoreError::ComboNotFound(id.0))?;
         Ok(Json(combo))
     }
     .await;
@@ -1043,7 +1033,9 @@ pub async fn test_combo_targets(
                     &s,
                     t.model_row_id.unwrap_or(ModelRowId(0)).0,
                     t.account_id,
-                    TestOptions { in_combo_fanout: true },
+                    TestOptions {
+                        in_combo_fanout: true,
+                    },
                 )
                 .await;
                 // Use the per-target metadata from the snapshot
@@ -1065,18 +1057,15 @@ pub async fn test_combo_targets(
                     "row_id": r.row_id,
                 });
                 if r.skipped {
-                    obj["error_msg"] = json!(r.skip_reason.unwrap_or_else(|| "skipped".to_string()));
+                    obj["error_msg"] =
+                        json!(r.skip_reason.unwrap_or_else(|| "skipped".to_string()));
                 }
                 results.push(obj);
             }
             results
         };
 
-        let results = match tokio::time::timeout(
-            std::time::Duration::from_secs(180),
-            fan_out,
-        )
-        .await
+        let results = match tokio::time::timeout(std::time::Duration::from_secs(180), fan_out).await
         {
             Ok(rs) => rs,
             Err(_) => {
@@ -1446,9 +1435,7 @@ pub struct RefreshQuery {
 ///
 /// On success, returns the number of rows touched.
 /// `POST /admin/models/sync-models-dev` — one-shot sync from models.dev.
-pub async fn sync_models_dev(
-    State(s): State<AppState>,
-) -> ApiResult<Json<serde_json::Value>> {
+pub async fn sync_models_dev(State(s): State<AppState>) -> ApiResult<Json<serde_json::Value>> {
     let upstream = s.upstream_client().clone();
     let db_pool = s.db_pool().clone();
     let result = openproxy_core::models_dev_sync::run_one_shot(db_pool, upstream).await;
@@ -1494,11 +1481,7 @@ pub async fn refresh_models(
 /// The body of [`refresh_models`], factored out so the async state
 /// machine (which holds a `parking_lot::MutexGuard` across an await)
 /// doesn't entangle the handler's own future.
-async fn run_refresh(
-    s: AppState,
-    id: i64,
-    q: RefreshQuery,
-) -> ApiResult<Json<serde_json::Value>> {
+async fn run_refresh(s: AppState, id: i64, q: RefreshQuery) -> ApiResult<Json<serde_json::Value>> {
     let row_id = ModelRowId(id);
     let ttl_seconds = q.ttl_seconds.unwrap_or(3_600);
 
@@ -1563,7 +1546,9 @@ async fn run_refresh(
                 let w = s.db_pool().writer();
                 match accounts::get(&w, account_id) {
                     Ok(Some(a)) => a,
-                    Ok(None) => return ApiResult::err(ApiError(CoreError::AccountNotFound(account_id.0))),
+                    Ok(None) => {
+                        return ApiResult::err(ApiError(CoreError::AccountNotFound(account_id.0)));
+                    }
                     Err(e) => return ApiResult::err(ApiError(e)),
                 }
             };
@@ -1671,10 +1656,7 @@ pub async fn usage_recent(
     Query(q): Query<RecentQuery>,
 ) -> ApiResult<Json<Vec<usage::RecentUsageRow>>> {
     let body: Result<Json<Vec<usage::RecentUsageRow>>, ApiError> = async {
-        let since_id = q
-            .since_id
-            .unwrap_or(0)
-            .clamp(0, USAGE_RECENT_MAX_SINCE_ID);
+        let since_id = q.since_id.unwrap_or(0).clamp(0, USAGE_RECENT_MAX_SINCE_ID);
         let limit = q
             .limit
             .unwrap_or(USAGE_RECENT_DEFAULT_LIMIT)
@@ -1696,7 +1678,6 @@ pub async fn usage_recent(
     .await;
     body.into()
 }
-
 
 #[derive(Debug, Deserialize)]
 struct ClientWsMessage {
@@ -1726,7 +1707,11 @@ fn json_text(value: serde_json::Value) -> Result<String, ApiError> {
     })
 }
 
-fn authenticate_admin_ws(state: &AppState, headers: &HeaderMap, query_token: Option<&str>) -> Result<(), ApiError> {
+fn authenticate_admin_ws(
+    state: &AppState,
+    headers: &HeaderMap,
+    query_token: Option<&str>,
+) -> Result<(), ApiError> {
     // Dev convenience: when the operator explicitly opts in by setting
     // OPENPROXY_DASHBOARD_AUTH_BYPASS=1 in the server's environment, every
     // admin request is accepted without an Authorization header or query
@@ -1756,7 +1741,9 @@ fn authenticate_admin_ws(state: &AppState, headers: &HeaderMap, query_token: Opt
         .map(str::trim);
 
     let t = header_token.or(query_token).ok_or_else(|| {
-        ApiError(CoreError::Auth("missing authorization header or token query parameter".into()))
+        ApiError(CoreError::Auth(
+            "missing authorization header or token query parameter".into(),
+        ))
     })?;
 
     if t.is_empty() {
@@ -1772,9 +1759,7 @@ fn authenticate_admin_ws(state: &AppState, headers: &HeaderMap, query_token: Opt
     let key = match core_api_keys::get_by_hash(&r, &key_hash).map_err(ApiError)? {
         Some(k) => k,
         None => {
-            return Err(ApiError(CoreError::Auth(
-                "invalid api key".into(),
-            )));
+            return Err(ApiError(CoreError::Auth("invalid api key".into())));
         }
     };
 
@@ -1885,10 +1870,7 @@ pub async fn admin_auth_middleware(
 /// events and smoother real-time delivery.
 const WS_OUTBOX_CAPACITY: usize = 2048;
 
-async fn stream_usage_rows(
-    socket: WebSocket,
-    state: AppState,
-) {
+async fn stream_usage_rows(socket: WebSocket, state: AppState) {
     // Split the WebSocket into a sender and receiver half. The
     // sender half moves into a dedicated tokio task that drains the
     // outbox mpsc and writes to the socket; the receiver half stays
@@ -2325,10 +2307,9 @@ pub async fn usage_stream(
     }
 
     match authenticate_admin_ws(&s, &headers, q.token.as_deref()) {
-        Ok(()) => {
-            ws.on_upgrade(move |socket| stream_usage_rows(socket, s))
-                .into_response()
-        }
+        Ok(()) => ws
+            .on_upgrade(move |socket| stream_usage_rows(socket, s))
+            .into_response(),
         Err(e) => e.into_response(),
     }
 }
@@ -2348,9 +2329,10 @@ pub async fn usage_detail(
         let row = usage::detail_by_id(&r, q.id)?;
         match row {
             Some(r) => Ok(Json(UsageDetailResponse { row: r })),
-            None => Err(ApiError(CoreError::Internal(
-                format!("usage row {} not found", q.id),
-            ))),
+            None => Err(ApiError(CoreError::Internal(format!(
+                "usage row {} not found",
+                q.id
+            )))),
         }
     }
     .await;
@@ -2383,10 +2365,8 @@ pub async fn get_recording(
     if let Err(e) = authenticate_admin_ws(&s, &headers, None) {
         return e.into();
     }
-    let body: Result<Json<serde_json::Value>, ApiError> = async {
-        Ok(Json(serde_json::json!({ "recording": s.is_recording() })))
-    }
-    .await;
+    let body: Result<Json<serde_json::Value>, ApiError> =
+        async { Ok(Json(serde_json::json!({ "recording": s.is_recording() }))) }.await;
     body.into()
 }
 
@@ -2562,7 +2542,7 @@ pub async fn update_combo(
                     return Err(ApiError(CoreError::Validation(format!(
                         "priority_mode must be a string or null, got {}",
                         other
-                    ))))
+                    ))));
                 }
             };
             combos::update_priority_mode(&w, ComboId(id), mode)?;
@@ -2584,13 +2564,15 @@ pub async fn update_combo(
                     return Err(ApiError(CoreError::Validation(format!(
                         "cooldown_mode must be a string or null, got {}",
                         other
-                    ))))
+                    ))));
                 }
             };
             combos::update_cooldown_mode(&w, ComboId(id), mode)?;
         }
         if let Some(v) = body.get("cooldown_base_secs") {
-            let base = if v.is_null() { None } else {
+            let base = if v.is_null() {
+                None
+            } else {
                 Some(v.as_u64().ok_or_else(|| {
                     ApiError(CoreError::Validation(
                         "cooldown_base_secs must be a non-negative integer or null".into(),
@@ -2600,7 +2582,9 @@ pub async fn update_combo(
             combos::update_cooldown_base(&w, ComboId(id), base)?;
         }
         if let Some(v) = body.get("cooldown_max_secs") {
-            let max = if v.is_null() { None } else {
+            let max = if v.is_null() {
+                None
+            } else {
                 Some(v.as_u64().ok_or_else(|| {
                     ApiError(CoreError::Validation(
                         "cooldown_max_secs must be a non-negative integer or null".into(),
@@ -2610,7 +2594,9 @@ pub async fn update_combo(
             combos::update_cooldown_max(&w, ComboId(id), max)?;
         }
         if let Some(v) = body.get("cooldown_factor") {
-            let factor = if v.is_null() { None } else {
+            let factor = if v.is_null() {
+                None
+            } else {
                 Some(v.as_u64().ok_or_else(|| {
                     ApiError(CoreError::Validation(
                         "cooldown_factor must be a non-negative integer or null".into(),
@@ -2694,11 +2680,7 @@ pub async fn update_combo_target(
                 ))));
             }
             let w = s.db_pool().writer();
-            combos::update_target_priority(
-                &w,
-                ComboTargetId(target_id),
-                priority_order as i32,
-            )?;
+            combos::update_target_priority(&w, ComboTargetId(target_id), priority_order as i32)?;
         }
         // Optional `weight` (migration 000035).
         if let Some(v) = body.get("weight") {
@@ -2749,11 +2731,7 @@ pub async fn delete_combo_target(
 ) -> ApiResult<Json<serde_json::Value>> {
     let body: Result<Json<serde_json::Value>, ApiError> = async {
         let w = s.db_pool().writer();
-        admin::delete_combo_target(
-            &w,
-            ComboId(combo_id),
-            ComboTargetId(target_id),
-        )?;
+        admin::delete_combo_target(&w, ComboId(combo_id), ComboTargetId(target_id))?;
         Ok(Json(serde_json::json!({ "deleted": target_id })))
     }
     .await;
@@ -2781,11 +2759,7 @@ pub async fn clear_combo_target_cooldown(
 ) -> ApiResult<Json<serde_json::Value>> {
     let body: Result<Json<serde_json::Value>, ApiError> = async {
         let w = s.db_pool().writer();
-        admin::clear_combo_target_cooldown(
-            &w,
-            ComboId(combo_id),
-            ComboTargetId(target_id),
-        )?;
+        admin::clear_combo_target_cooldown(&w, ComboId(combo_id), ComboTargetId(target_id))?;
         Ok(Json(
             serde_json::json!({ "ok": true, "cleared": target_id }),
         ))
@@ -2834,11 +2808,7 @@ pub async fn reorder_combo_targets(
 ) -> ApiResult<Json<serde_json::Value>> {
     let body: Result<Json<serde_json::Value>, ApiError> = async {
         let mut w = s.db_pool().writer();
-        let ordered: Vec<ComboTargetId> = body
-            .target_ids
-            .into_iter()
-            .map(ComboTargetId)
-            .collect();
+        let ordered: Vec<ComboTargetId> = body.target_ids.into_iter().map(ComboTargetId).collect();
         admin::reorder_combo_targets(&mut w, ComboId(combo_id), &ordered)?;
         Ok(Json(serde_json::json!({
             "reordered": combo_id,
@@ -3010,7 +2980,9 @@ async fn run_test_for_model(
     account_id: Option<AccountId>,
     opts: TestOptions,
 ) -> TestResult {
-    use openproxy_core::translation::{openai_to_anthropic, openai_to_gemini, OpenAIMessage, OpenAIRequest};
+    use openproxy_core::translation::{
+        OpenAIMessage, OpenAIRequest, openai_to_anthropic, openai_to_gemini,
+    };
 
     let row_id = ModelRowId(model_row_id);
 
@@ -3121,9 +3093,7 @@ async fn run_test_for_model(
             Some(aid) => {
                 let w = s.db_pool().writer();
                 match accounts::decrypt_api_key(&w, aid, s.master_key().as_ref())
-                    .or_else(|_| {
-                        accounts::decrypt_access_token(&w, aid, s.master_key().as_ref())
-                    })
+                    .or_else(|_| accounts::decrypt_access_token(&w, aid, s.master_key().as_ref()))
                     .map_err(ApiError)
                 {
                     Ok(k) => k,
@@ -3256,11 +3226,8 @@ async fn run_test_for_model(
             "antigravity" | "antigravity-cli" => {
                 let project_id = {
                     let w = s.db_pool().writer();
-                    openproxy_core::executor_antigravity::read_project_id(
-                        &w,
-                        test_account_id,
-                    )
-                    .unwrap_or_default()
+                    openproxy_core::executor_antigravity::read_project_id(&w, test_account_id)
+                        .unwrap_or_default()
                 };
                 let http_client = s.upstream_client();
                 // No client connection of its own on the admin
@@ -3279,15 +3246,13 @@ async fn run_test_for_model(
             "kiro" => {
                 let (region, profile_arn) = {
                     let w = s.db_pool().writer();
-                    let meta = openproxy_core::executor_kiro::read_account_meta(
-                        &w,
-                        test_account_id,
-                    )
-                    .unwrap_or(None);
+                    let meta =
+                        openproxy_core::executor_kiro::read_account_meta(&w, test_account_id)
+                            .unwrap_or(None);
                     (
-                        meta.as_ref()
-                            .map(|m| m.region.clone())
-                            .unwrap_or_else(|| openproxy_core::executor_kiro::KIRO_DEFAULT_REGION.to_string()),
+                        meta.as_ref().map(|m| m.region.clone()).unwrap_or_else(|| {
+                            openproxy_core::executor_kiro::KIRO_DEFAULT_REGION.to_string()
+                        }),
                         meta.as_ref().and_then(|m| m.profile_arn.clone()),
                     )
                 };
@@ -3350,73 +3315,70 @@ async fn run_test_for_model(
     //    (OpenAI-compatible, Anthropic, Gemini).
     //    `serde_json::to_value` cannot fail for these struct shapes in
     //    practice, but we still want a typed error if it ever does.
-    let (url, mut body_value): (String, serde_json::Value) = if model.target_format
-        == openproxy_core::models::TargetFormat::Anthropic
-    {
-        let anthropic_req = openai_to_anthropic(&openai_req);
-        let url = adapter.build_chat_url_for_account(
-            openproxy_core::models::TargetFormat::Anthropic,
-            &model.model_id,
-            &_account_label,
-        );
-        match serde_json::to_value(&anthropic_req) {
-            Ok(v) => (url, v),
-            Err(e) => {
-                let err = CoreError::Internal(format!("serialize anthropic req: {}", e));
-                return TestResult {
-                    row_id: model_row_id,
-                    status: 500,
-                    elapsed_ms: 0,
-                    error_msg: Some(err.to_string()),
-                    skipped: true,
-                    skip_reason: Some(err.to_string()),
-                };
+    let (url, mut body_value): (String, serde_json::Value) =
+        if model.target_format == openproxy_core::models::TargetFormat::Anthropic {
+            let anthropic_req = openai_to_anthropic(&openai_req);
+            let url = adapter.build_chat_url_for_account(
+                openproxy_core::models::TargetFormat::Anthropic,
+                &model.model_id,
+                &_account_label,
+            );
+            match serde_json::to_value(&anthropic_req) {
+                Ok(v) => (url, v),
+                Err(e) => {
+                    let err = CoreError::Internal(format!("serialize anthropic req: {}", e));
+                    return TestResult {
+                        row_id: model_row_id,
+                        status: 500,
+                        elapsed_ms: 0,
+                        error_msg: Some(err.to_string()),
+                        skipped: true,
+                        skip_reason: Some(err.to_string()),
+                    };
+                }
             }
-        }
-    } else if model.target_format
-        == openproxy_core::models::TargetFormat::Gemini
-    {
-        let gemini_req = openai_to_gemini(&openai_req);
-        let url = adapter.build_chat_url_for_account(
-            openproxy_core::models::TargetFormat::Gemini,
-            &model.model_id,
-            &_account_label,
-        );
-        match serde_json::to_value(&gemini_req) {
-            Ok(v) => (url, v),
-            Err(e) => {
-                let err = CoreError::Internal(format!("serialize gemini req: {}", e));
-                return TestResult {
-                    row_id: model_row_id,
-                    status: 500,
-                    elapsed_ms: 0,
-                    error_msg: Some(err.to_string()),
-                    skipped: true,
-                    skip_reason: Some(err.to_string()),
-                };
+        } else if model.target_format == openproxy_core::models::TargetFormat::Gemini {
+            let gemini_req = openai_to_gemini(&openai_req);
+            let url = adapter.build_chat_url_for_account(
+                openproxy_core::models::TargetFormat::Gemini,
+                &model.model_id,
+                &_account_label,
+            );
+            match serde_json::to_value(&gemini_req) {
+                Ok(v) => (url, v),
+                Err(e) => {
+                    let err = CoreError::Internal(format!("serialize gemini req: {}", e));
+                    return TestResult {
+                        row_id: model_row_id,
+                        status: 500,
+                        elapsed_ms: 0,
+                        error_msg: Some(err.to_string()),
+                        skipped: true,
+                        skip_reason: Some(err.to_string()),
+                    };
+                }
             }
-        }
-    } else {
-        let url = adapter.build_chat_url_for_account(
-            openproxy_core::models::TargetFormat::Openai,
-            &model.model_id,
-            &_account_label,
-        );
-        match serde_json::to_value(&openai_req) {
-            Ok(v) => (url, v),
-            Err(e) => {
-                let err = CoreError::Internal(format!("serialize openai req: {}", e));
-                return TestResult {
-                    row_id: model_row_id,
-                    status: 500,
-                    elapsed_ms: 0,
-                    error_msg: Some(err.to_string()),
-                    skipped: true,
-                    skip_reason: Some(err.to_string()),
-                };
+        } else {
+            let url = adapter.build_chat_url_for_account(
+                openproxy_core::models::TargetFormat::Openai,
+                &model.model_id,
+                &_account_label,
+            );
+            match serde_json::to_value(&openai_req) {
+                Ok(v) => (url, v),
+                Err(e) => {
+                    let err = CoreError::Internal(format!("serialize openai req: {}", e));
+                    return TestResult {
+                        row_id: model_row_id,
+                        status: 500,
+                        elapsed_ms: 0,
+                        error_msg: Some(err.to_string()),
+                        skipped: true,
+                        skip_reason: Some(err.to_string()),
+                    };
+                }
             }
-        }
-    };
+        };
 
     // 7b. Let the adapter normalize the request body (e.g. CloudFlare
     //     strips `temperature`, flattens content arrays to strings).
@@ -3580,9 +3542,7 @@ pub async fn update_account_api_key(
 /// extra fields to drive the toggle and refresh buttons; this endpoint
 /// returns them. There is no filter — the dashboard's model list is
 /// small enough that a single shot is fine.
-pub async fn list_models_admin(
-    State(s): State<AppState>,
-) -> ApiResult<Json<Vec<models::Model>>> {
+pub async fn list_models_admin(State(s): State<AppState>) -> ApiResult<Json<Vec<models::Model>>> {
     let body: Result<Json<Vec<models::Model>>, ApiError> = async {
         // Read-only SELECT — use the READER.
         let r = s.db_pool().reader();
@@ -3899,7 +3859,10 @@ async fn refresh_oauth_if_needed(
     );
 
     let upstream_client = s.upstream_client();
-    match provider.refresh_token(&refresh_token, upstream_client).await {
+    match provider
+        .refresh_token(&refresh_token, upstream_client)
+        .await
+    {
         Ok(token) => {
             let expires_at = token.expires_in.map(|secs| {
                 (chrono::Utc::now() + chrono::Duration::seconds(secs as i64))
@@ -4060,7 +4023,9 @@ async fn run_provider_refresh(
                 let w = s.db_pool().writer();
                 match accounts::get(&w, account_id) {
                     Ok(Some(a)) => a,
-                    Ok(None) => return ApiResult::err(ApiError(CoreError::AccountNotFound(account_id.0))),
+                    Ok(None) => {
+                        return ApiResult::err(ApiError(CoreError::AccountNotFound(account_id.0)));
+                    }
                     Err(e) => return ApiResult::err(ApiError(e)),
                 }
             };
@@ -4227,48 +4192,47 @@ pub async fn update_api_key(
     let body: Result<Json<serde_json::Value>, ApiError> = async {
         let label = body.get("label").and_then(|v| v.as_str());
 
-        let scopes_owned: Option<Vec<String>> = body
-            .get("scopes")
-            .and_then(|v| v.as_array())
-            .map(|a| a.iter().filter_map(|x| x.as_str().map(String::from)).collect());
+        let scopes_owned: Option<Vec<String>> =
+            body.get("scopes").and_then(|v| v.as_array()).map(|a| {
+                a.iter()
+                    .filter_map(|x| x.as_str().map(String::from))
+                    .collect()
+            });
         let scopes_slice: Option<&[String]> = scopes_owned.as_deref();
 
         // `allowed_models`: absent = no-op; present + null = clear to NULL;
         // present + array = set to that array.
-        let allowed_models_owned: Option<Option<Vec<String>>> = body
-            .get("allowed_models")
-            .map(|v| {
+        let allowed_models_owned: Option<Option<Vec<String>>> =
+            body.get("allowed_models").map(|v| {
                 if v.is_null() {
                     None
                 } else {
                     v.as_array().map(|a| {
-                        a.iter().filter_map(|x| x.as_str().map(String::from)).collect()
+                        a.iter()
+                            .filter_map(|x| x.as_str().map(String::from))
+                            .collect()
                     })
                 }
             });
         let allowed_models_slice: Option<Option<&[String]>> =
             allowed_models_owned.as_ref().map(|o| o.as_deref());
 
-        let allowed_combos_owned: Option<Option<Vec<i64>>> = body
-            .get("allowed_combos")
-            .map(|v| {
-                if v.is_null() {
-                    None
-                } else {
-                    v.as_array().map(|a| a.iter().filter_map(|x| x.as_i64()).collect())
-                }
-            });
+        let allowed_combos_owned: Option<Option<Vec<i64>>> = body.get("allowed_combos").map(|v| {
+            if v.is_null() {
+                None
+            } else {
+                v.as_array()
+                    .map(|a| a.iter().filter_map(|x| x.as_i64()).collect())
+            }
+        });
         let allowed_combos_slice: Option<Option<&[i64]>> =
             allowed_combos_owned.as_ref().map(|o| o.as_deref());
 
         let is_active = body.get("is_active").and_then(|v| v.as_bool());
 
-        let expires_owned: Option<Option<String>> = body
-            .get("expires_at")
-            .map(|v| v.as_str().map(String::from));
-        let expires_slice: Option<Option<&str>> = expires_owned
-            .as_ref()
-            .map(|o| o.as_deref());
+        let expires_owned: Option<Option<String>> =
+            body.get("expires_at").map(|v| v.as_str().map(String::from));
+        let expires_slice: Option<Option<&str>> = expires_owned.as_ref().map(|o| o.as_deref());
 
         let w = s.db_pool().writer();
         core_api_keys::update(
@@ -4422,8 +4386,7 @@ pub async fn oauth_authorize(
         // kept for backwards compatibility; a follow-up could rename
         // it to `OPENPROXY_PORT` once the deprecated openproxy-web
         // crate is removed from the workspace.
-        let web_port = std::env::var("OPENPROXY_WEB_PORT")
-            .unwrap_or_else(|_| "8788".to_string());
+        let web_port = std::env::var("OPENPROXY_WEB_PORT").unwrap_or_else(|_| "8788".to_string());
         let redirect_uri = format!("http://localhost:{}/admin/callback.html", web_port);
 
         let (auth_url, code_verifier, _code_challenge) =
@@ -4457,12 +4420,11 @@ pub async fn oauth_exchange(
             .get("code")
             .and_then(|v| v.as_str())
             .ok_or_else(|| CoreError::Validation("missing 'code'".into()))?;
-        let code_verifier = input.get("code_verifier")
+        let code_verifier = input
+            .get("code_verifier")
             .and_then(|v| v.as_str())
             .unwrap_or(""); // Optional — not needed for device code flow
-        let account_id_input = input
-            .get("account_id")
-            .and_then(|v| v.as_i64());
+        let account_id_input = input.get("account_id").and_then(|v| v.as_i64());
         let redirect_uri = input
             .get("redirect_uri")
             .and_then(|v| v.as_str())
@@ -4492,9 +4454,9 @@ pub async fn oauth_exchange(
                     &provider_id,
                     None, // no API key — OAuth account
                     s.master_key(),
-                    None,   // label
-                    10,     // default priority
-                    None,   // extra_config_json
+                    None, // label
+                    10,   // default priority
+                    None, // extra_config_json
                 )?
             }
         };
@@ -4878,9 +4840,7 @@ pub async fn debug_logs(
 /// buffer. Used for "reproduce then capture" workflows: the operator
 /// clears the buffer, reproduces the bug, then reads the buffer to
 /// see only the events from the reproduction.
-pub async fn debug_logs_clear(
-    State(_s): State<AppState>,
-) -> ApiResult<Json<serde_json::Value>> {
+pub async fn debug_logs_clear(State(_s): State<AppState>) -> ApiResult<Json<serde_json::Value>> {
     crate::debug_log::clear();
     ApiResult::ok(Json(serde_json::json!({ "cleared": true })))
 }
@@ -4921,19 +4881,14 @@ pub async fn list_notifications(
     State(s): State<AppState>,
     Query(q): Query<NotificationsQuery>,
 ) -> ApiResult<Json<Vec<openproxy_core::notifications::NotificationRow>>> {
-    let body: Result<
-        Json<Vec<openproxy_core::notifications::NotificationRow>>,
-        ApiError,
-    > = async {
+    let body: Result<Json<Vec<openproxy_core::notifications::NotificationRow>>, ApiError> = async {
         let unread_only = q.unread.unwrap_or(false);
         let limit = q.limit.unwrap_or(50);
         // Read-only SELECT — use the READER so the dashboard's poll
         // doesn't serialize through the writer mutex.
         let r = s.db_pool().reader();
         let rows = openproxy_core::notifications::list(&r, unread_only, limit, q.before_id)
-            .map_err(|e| {
-                CoreError::Internal(format!("notifications::list: {}", e))
-            })?;
+            .map_err(|e| CoreError::Internal(format!("notifications::list: {}", e)))?;
         Ok(Json(rows))
     }
     .await;
@@ -4948,9 +4903,7 @@ pub async fn notifications_unread_count(
     let body: Result<Json<serde_json::Value>, ApiError> = async {
         let r = s.db_pool().reader();
         let count = openproxy_core::notifications::unread_count(&r)
-            .map_err(|e| {
-                CoreError::Internal(format!("notifications::unread_count: {}", e))
-            })?;
+            .map_err(|e| CoreError::Internal(format!("notifications::unread_count: {}", e)))?;
         Ok(Json(serde_json::json!({ "count": count })))
     }
     .await;
@@ -4967,9 +4920,7 @@ pub async fn mark_notification_read(
     let body: Result<Json<serde_json::Value>, ApiError> = async {
         let w = s.db_pool().writer();
         openproxy_core::notifications::mark_read(&w, id)
-            .map_err(|e| {
-                CoreError::Internal(format!("notifications::mark_read: {}", e))
-            })?;
+            .map_err(|e| CoreError::Internal(format!("notifications::mark_read: {}", e)))?;
         Ok(Json(serde_json::json!({ "ok": true })))
     }
     .await;
@@ -4985,9 +4936,7 @@ pub async fn mark_all_notifications_read(
     let body: Result<Json<serde_json::Value>, ApiError> = async {
         let w = s.db_pool().writer();
         let updated = openproxy_core::notifications::mark_all_read(&w)
-            .map_err(|e| {
-                CoreError::Internal(format!("notifications::mark_all_read: {}", e))
-            })?;
+            .map_err(|e| CoreError::Internal(format!("notifications::mark_all_read: {}", e)))?;
         Ok(Json(serde_json::json!({ "updated": updated })))
     }
     .await;
@@ -5004,9 +4953,7 @@ pub async fn archive_notification(
     let body: Result<Json<serde_json::Value>, ApiError> = async {
         let w = s.db_pool().writer();
         openproxy_core::notifications::archive(&w, id)
-            .map_err(|e| {
-                CoreError::Internal(format!("notifications::archive: {}", e))
-            })?;
+            .map_err(|e| CoreError::Internal(format!("notifications::archive: {}", e)))?;
         Ok(Json(serde_json::json!({ "ok": true })))
     }
     .await;
@@ -5064,10 +5011,10 @@ pub async fn delete_notification(
 mod tests {
     use super::*;
     use axum::{
+        Router,
         body::Body,
         http::{Request, StatusCode},
         routing::{get, post, put},
-        Router,
     };
     use openproxy_core::config::TimeoutsConfig;
     use openproxy_core::db as core_db;
@@ -5108,9 +5055,8 @@ mod tests {
     }
 
     async fn make_state_with_key(dir: &std::path::Path) -> (AppState, String) {
-        let pool = std::sync::Arc::new(
-            core_db::DbPool::open(&dir.join("smoke.db")).expect("open pool"),
-        );
+        let pool =
+            std::sync::Arc::new(core_db::DbPool::open(&dir.join("smoke.db")).expect("open pool"));
         // Migrations + bootstrap are required for api_keys to exist
         // and for `authenticate_admin_ws` to find the row.
         {
@@ -5159,10 +5105,7 @@ mod tests {
         assert_eq!(initial.connect_ms, 5_000);
 
         let app = Router::new()
-            .route(
-                "/admin/config/timeouts",
-                put(put_runtime_timeouts),
-            )
+            .route("/admin/config/timeouts", put(put_runtime_timeouts))
             .with_state(state.clone());
 
         let body = serde_json::json!({
@@ -5187,8 +5130,7 @@ mod tests {
         let bytes = axum::body::to_bytes(resp.into_body(), 16 * 1024)
             .await
             .expect("body");
-        let parsed: serde_json::Value = serde_json::from_slice(&bytes)
-            .expect("json body");
+        let parsed: serde_json::Value = serde_json::from_slice(&bytes).expect("json body");
         assert_eq!(parsed["connect_ms"], 1);
         assert_eq!(parsed["request_send_ms"], 2);
         assert_eq!(parsed["ttft_ms"], 3);
@@ -5200,13 +5142,16 @@ mod tests {
         let after = state.timeouts();
         assert_eq!(after.connect_ms, 1);
         assert_eq!(after.total_ms, 5);
-        assert_eq!(after, TimeoutsConfig {
-            connect_ms: 1,
-            request_send_ms: 2,
-            ttft_ms: 3,
-            idle_chunk_ms: 4,
-            total_ms: 5,
-        });
+        assert_eq!(
+            after,
+            TimeoutsConfig {
+                connect_ms: 1,
+                request_send_ms: 2,
+                ttft_ms: 3,
+                idle_chunk_ms: 4,
+                total_ms: 5,
+            }
+        );
 
         // The row landed in the DB (one row, key='timeouts').
         let count: i64 = state.db_pool().with_conn(|c| {
@@ -5214,7 +5159,8 @@ mod tests {
                 "SELECT COUNT(*) FROM app_config WHERE key = 'timeouts'",
                 [],
                 |r| r.get(0),
-            ).unwrap()
+            )
+            .unwrap()
         });
         assert_eq!(count, 1, "PUT must have written a row");
     }
@@ -5224,10 +5170,7 @@ mod tests {
         let dir = tempdir();
         let (state, _plaintext) = make_state_with_key(&dir).await;
         let app = Router::new()
-            .route(
-                "/admin/config/timeouts",
-                put(put_runtime_timeouts),
-            )
+            .route("/admin/config/timeouts", put(put_runtime_timeouts))
             .with_state(state);
         let body = serde_json::json!({
             "connect_ms": 1_u64, "request_send_ms": 2_u64, "ttft_ms": 3_u64,
@@ -5250,10 +5193,7 @@ mod tests {
         let dir = tempdir();
         let (state, plaintext) = make_state_with_key(&dir).await;
         let app = Router::new()
-            .route(
-                "/admin/config/timeouts",
-                put(put_runtime_timeouts),
-            )
+            .route("/admin/config/timeouts", put(put_runtime_timeouts))
             .with_state(state);
         let req = Request::builder()
             .method("PUT")
@@ -5273,7 +5213,8 @@ mod tests {
         assert!(
             resp.status() == StatusCode::BAD_REQUEST
                 || resp.status() == StatusCode::UNPROCESSABLE_ENTITY,
-            "expected 400 or 422, got {:?}", resp.status()
+            "expected 400 or 422, got {:?}",
+            resp.status()
         );
     }
 
@@ -5382,8 +5323,16 @@ mod tests {
         let result = q.into_filter();
         let err = result.expect_err("garbage timestamp must be rejected");
         let msg = format!("{:?}", err);
-        assert!(msg.contains("from"), "error must mention the bad field, got: {}", msg);
-        assert!(msg.contains("garbage"), "error must include the bad value, got: {}", msg);
+        assert!(
+            msg.contains("from"),
+            "error must mention the bad field, got: {}",
+            msg
+        );
+        assert!(
+            msg.contains("garbage"),
+            "error must include the bad value, got: {}",
+            msg
+        );
     }
 
     #[test]
@@ -5405,7 +5354,11 @@ mod tests {
         let from = f.from.expect("from present");
         // The offset is normalised to UTC and the suffix is `Z`.
         assert!(from.ends_with('Z'), "expected Z-suffix, got: {}", from);
-        assert!(from.starts_with("2026-06-18T05:00:00"), "expected 05:00 UTC, got: {}", from);
+        assert!(
+            from.starts_with("2026-06-18T05:00:00"),
+            "expected 05:00 UTC, got: {}",
+            from
+        );
     }
 
     #[test]
@@ -5441,9 +5394,15 @@ mod tests {
             api_key_id: None,
             preset: None,
         };
-        let err = q.into_filter().expect_err("reversed range must be rejected");
+        let err = q
+            .into_filter()
+            .expect_err("reversed range must be rejected");
         let msg = format!("{:?}", err);
-        assert!(msg.contains("must be <="), "expected ordering error, got: {}", msg);
+        assert!(
+            msg.contains("must be <="),
+            "expected ordering error, got: {}",
+            msg
+        );
     }
 
     #[test]
@@ -5487,10 +5446,22 @@ mod tests {
         let f = q.into_filter().expect("this_month preset is valid");
         let from = f.from.expect("from is computed from preset");
         let to = f.to.expect("to is computed from preset");
-        assert!(from.ends_with("T00:00:00Z"), "from is midnight UTC: {}", from);
+        assert!(
+            from.ends_with("T00:00:00Z"),
+            "from is midnight UTC: {}",
+            from
+        );
         assert!(to.ends_with("T00:00:00Z"), "to is midnight UTC: {}", to);
-        assert!(from.ends_with("-01T00:00:00Z"), "from is the 1st of the month: {}", from);
-        assert!(to.ends_with("-01T00:00:00Z"), "to is the 1st of the month: {}", to);
+        assert!(
+            from.ends_with("-01T00:00:00Z"),
+            "from is the 1st of the month: {}",
+            from
+        );
+        assert!(
+            to.ends_with("-01T00:00:00Z"),
+            "to is the 1st of the month: {}",
+            to
+        );
         assert!(from < to, "from must be before to");
     }
 
@@ -5514,8 +5485,16 @@ mod tests {
         let from = f.from.expect("from is computed from preset");
         // The explicit `2000-01-01` would have been used if preset
         // did not take precedence — assert it is not 2000.
-        assert!(!from.starts_with("2000-"), "preset must override explicit from: {}", from);
-        assert!(from.starts_with("20"), "from is a recent-ish year: {}", from);
+        assert!(
+            !from.starts_with("2000-"),
+            "preset must override explicit from: {}",
+            from
+        );
+        assert!(
+            from.starts_with("20"),
+            "from is a recent-ish year: {}",
+            from
+        );
     }
 
     #[test]
@@ -5551,10 +5530,20 @@ mod tests {
             api_key_id: None,
             preset: Some("last_week".to_string()),
         };
-        let err = q.into_filter().expect_err("unknown preset must be rejected");
+        let err = q
+            .into_filter()
+            .expect_err("unknown preset must be rejected");
         let msg = format!("{:?}", err);
-        assert!(msg.contains("preset"), "error must mention preset, got: {}", msg);
-        assert!(msg.contains("last_week"), "error must include the bad value, got: {}", msg);
+        assert!(
+            msg.contains("preset"),
+            "error must mention preset, got: {}",
+            msg
+        );
+        assert!(
+            msg.contains("last_week"),
+            "error must include the bad value, got: {}",
+            msg
+        );
     }
 
     // ---- MEDIUM fix: DefaultBodyLimit is raised to 32 MiB ----
@@ -5742,10 +5731,7 @@ mod tests {
         assert_eq!(state.recording_ttl_secs(), 300);
 
         let app = Router::new()
-            .route(
-                "/admin/config/recording-ttl",
-                get(get_recording_ttl),
-            )
+            .route("/admin/config/recording-ttl", get(get_recording_ttl))
             .with_state(state.clone());
 
         let req = Request::builder()
@@ -5761,8 +5747,7 @@ mod tests {
         let bytes = axum::body::to_bytes(resp.into_body(), 1024)
             .await
             .expect("body");
-        let parsed: serde_json::Value =
-            serde_json::from_slice(&bytes).expect("json body");
+        let parsed: serde_json::Value = serde_json::from_slice(&bytes).expect("json body");
         assert_eq!(
             parsed["recording_ttl_secs"], 300,
             "default recording TTL must be 300"
@@ -5797,8 +5782,7 @@ mod tests {
         let bytes = axum::body::to_bytes(resp.into_body(), 1024)
             .await
             .expect("body");
-        let parsed: serde_json::Value =
-            serde_json::from_slice(&bytes).expect("json body");
+        let parsed: serde_json::Value = serde_json::from_slice(&bytes).expect("json body");
         assert_eq!(parsed["recording_ttl_secs"], 600);
         assert_eq!(parsed["applies_to"], "next_prune_tick");
 
@@ -5814,10 +5798,7 @@ mod tests {
             )
             .unwrap()
         });
-        assert_eq!(
-            count, 1,
-            "PUT must have written a row to app_config"
-        );
+        assert_eq!(count, 1, "PUT must have written a row to app_config");
 
         // The persisted value matches what we sent.
         let value: String = state.db_pool().with_conn(|c| {
@@ -5838,10 +5819,7 @@ mod tests {
         let (state, plaintext) = make_state_with_key(&dir).await;
 
         let app = Router::new()
-            .route(
-                "/admin/config/recording-ttl",
-                put(put_recording_ttl),
-            )
+            .route("/admin/config/recording-ttl", put(put_recording_ttl))
             .with_state(state.clone());
 
         let body = serde_json::json!({ "recording_ttl_secs": -1_i64 });
@@ -5856,8 +5834,7 @@ mod tests {
         let resp = app.oneshot(req).await.expect("oneshot");
         let status = resp.status();
         assert!(
-            status == StatusCode::BAD_REQUEST
-                || status == StatusCode::UNPROCESSABLE_ENTITY,
+            status == StatusCode::BAD_REQUEST || status == StatusCode::UNPROCESSABLE_ENTITY,
             "expected 400 or 422 for negative TTL, got {:?}",
             status
         );
@@ -5877,10 +5854,7 @@ mod tests {
         let (state, plaintext) = make_state_with_key(&dir).await;
 
         let app = Router::new()
-            .route(
-                "/admin/config/recording-ttl",
-                put(put_recording_ttl),
-            )
+            .route("/admin/config/recording-ttl", put(put_recording_ttl))
             .with_state(state.clone());
 
         // Send a valid JSON object but missing the required
@@ -5896,8 +5870,7 @@ mod tests {
         let resp = app.oneshot(req).await.expect("oneshot");
         let status = resp.status();
         assert!(
-            status == StatusCode::BAD_REQUEST
-                || status == StatusCode::UNPROCESSABLE_ENTITY,
+            status == StatusCode::BAD_REQUEST || status == StatusCode::UNPROCESSABLE_ENTITY,
             "expected 400 or 422 for missing required field, got {:?}",
             status
         );
@@ -5917,10 +5890,7 @@ mod tests {
         let (state, plaintext) = make_state_with_key(&dir).await;
 
         let app = Router::new()
-            .route(
-                "/admin/config/recording-ttl",
-                put(put_recording_ttl),
-            )
+            .route("/admin/config/recording-ttl", put(put_recording_ttl))
             .with_state(state.clone());
 
         let req = Request::builder()
@@ -5934,8 +5904,7 @@ mod tests {
         let resp = app.oneshot(req).await.expect("oneshot");
         let status = resp.status();
         assert!(
-            status == StatusCode::BAD_REQUEST
-                || status == StatusCode::UNPROCESSABLE_ENTITY,
+            status == StatusCode::BAD_REQUEST || status == StatusCode::UNPROCESSABLE_ENTITY,
             "expected 400 or 422 for invalid JSON syntax, got {:?}",
             status
         );
@@ -6018,13 +5987,10 @@ mod tests {
 
         // Wrap in a timeout — if the handler hangs, the test fails
         // instead of blocking forever.
-        let resp = tokio::time::timeout(
-            std::time::Duration::from_secs(5),
-            app.oneshot(req),
-        )
-        .await
-        .expect("refresh-quota handler hung for >5s (regression)")
-        .expect("oneshot");
+        let resp = tokio::time::timeout(std::time::Duration::from_secs(5), app.oneshot(req))
+            .await
+            .expect("refresh-quota handler hung for >5s (regression)")
+            .expect("oneshot");
 
         assert_eq!(resp.status(), StatusCode::OK, "expected 200");
         let body = axum::body::to_bytes(resp.into_body(), 1024)
@@ -6056,18 +6022,17 @@ mod tests {
             .body(Body::empty())
             .expect("build req");
 
-        let resp = tokio::time::timeout(
-            std::time::Duration::from_secs(5),
-            app.oneshot(req),
-        )
-        .await
-        .expect("refresh-provider handler hung for >5s (regression)")
-        .expect("oneshot");
+        let resp = tokio::time::timeout(std::time::Duration::from_secs(5), app.oneshot(req))
+            .await
+            .expect("refresh-provider handler hung for >5s (regression)")
+            .expect("oneshot");
 
         // The handler returns 200 with an error in the JSON body, or
         // a 4xx/5xx. Either is acceptable as long as it doesn't hang.
         assert!(
-            resp.status().is_client_error() || resp.status().is_server_error() || resp.status() == StatusCode::OK,
+            resp.status().is_client_error()
+                || resp.status().is_server_error()
+                || resp.status() == StatusCode::OK,
             "expected error or 200, got {:?}",
             resp.status()
         );
@@ -6095,13 +6060,10 @@ mod tests {
             .body(Body::empty())
             .expect("build req");
 
-        let resp = tokio::time::timeout(
-            std::time::Duration::from_secs(5),
-            app.oneshot(req),
-        )
-        .await
-        .expect("refresh-quota handler hung for >5s on nonexistent account (regression)")
-        .expect("oneshot");
+        let resp = tokio::time::timeout(std::time::Duration::from_secs(5), app.oneshot(req))
+            .await
+            .expect("refresh-quota handler hung for >5s on nonexistent account (regression)")
+            .expect("oneshot");
 
         // Account not found -> 404 or 500. Either is fine as long as
         // it doesn't hang.
@@ -6111,5 +6073,4 @@ mod tests {
             resp.status()
         );
     }
-
 }

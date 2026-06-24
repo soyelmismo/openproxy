@@ -14,7 +14,7 @@
 use crate::error::{CoreError, Result};
 use crate::ids::ApiKeyId;
 use chrono::{DateTime, Utc};
-use rusqlite::{params, Connection, OptionalExtension, Row};
+use rusqlite::{Connection, OptionalExtension, Row, params};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::fmt;
@@ -155,13 +155,17 @@ pub fn create(
     let scopes_json = serde_json::to_string(&input.scopes)
         .map_err(|e| CoreError::Parse(format!("serialize scopes: {e}")))?;
     let allowed_models_json = match &input.allowed_models {
-        Some(v) => Some(serde_json::to_string(v)
-            .map_err(|e| CoreError::Parse(format!("serialize allowed_models: {e}")))?),
+        Some(v) => Some(
+            serde_json::to_string(v)
+                .map_err(|e| CoreError::Parse(format!("serialize allowed_models: {e}")))?,
+        ),
         None => None,
     };
     let allowed_combos_json = match &input.allowed_combos {
-        Some(v) => Some(serde_json::to_string(v)
-            .map_err(|e| CoreError::Parse(format!("serialize allowed_combos: {e}")))?),
+        Some(v) => Some(
+            serde_json::to_string(v)
+                .map_err(|e| CoreError::Parse(format!("serialize allowed_combos: {e}")))?,
+        ),
         None => None,
     };
 
@@ -395,25 +399,31 @@ pub fn update(
             ));
         }
     }
-    let scopes_json: Option<String> = scopes.map(|s| {
-        serde_json::to_string(s).map_err(|e| CoreError::Parse(format!("serialize scopes: {e}")))
-    }).transpose()?;
-    let allowed_models_json: Option<Option<String>> = allowed_models.map(|inner| {
-        inner
-            .map(|v| {
-                serde_json::to_string(v)
-                    .map_err(|e| CoreError::Parse(format!("serialize allowed_models: {e}")))
-            })
-            .transpose()
-    }).transpose()?;
-    let allowed_combos_json: Option<Option<String>> = allowed_combos.map(|inner| {
-        inner
-            .map(|v| {
-                serde_json::to_string(v)
-                    .map_err(|e| CoreError::Parse(format!("serialize allowed_combos: {e}")))
-            })
-            .transpose()
-    }).transpose()?;
+    let scopes_json: Option<String> = scopes
+        .map(|s| {
+            serde_json::to_string(s).map_err(|e| CoreError::Parse(format!("serialize scopes: {e}")))
+        })
+        .transpose()?;
+    let allowed_models_json: Option<Option<String>> = allowed_models
+        .map(|inner| {
+            inner
+                .map(|v| {
+                    serde_json::to_string(v)
+                        .map_err(|e| CoreError::Parse(format!("serialize allowed_models: {e}")))
+                })
+                .transpose()
+        })
+        .transpose()?;
+    let allowed_combos_json: Option<Option<String>> = allowed_combos
+        .map(|inner| {
+            inner
+                .map(|v| {
+                    serde_json::to_string(v)
+                        .map_err(|e| CoreError::Parse(format!("serialize allowed_combos: {e}")))
+                })
+                .transpose()
+        })
+        .transpose()?;
     let expires_at_str: Option<Option<&str>> = expires_at;
 
     // Build the dynamic SET clause. We only touch columns that the
@@ -478,8 +488,10 @@ pub fn update(
 
     let sql = format!("UPDATE api_keys SET {} WHERE id = ?", sets.join(", "));
     bound.push(Box::new(id.0));
-    let param_refs: Vec<&dyn rusqlite::ToSql> =
-        bound.iter().map(|b| b.as_ref() as &dyn rusqlite::ToSql).collect();
+    let param_refs: Vec<&dyn rusqlite::ToSql> = bound
+        .iter()
+        .map(|b| b.as_ref() as &dyn rusqlite::ToSql)
+        .collect();
 
     let affected = conn
         .execute(&sql, rusqlite::params_from_iter(param_refs))
@@ -540,7 +552,7 @@ pub fn usage_summary(conn: &Connection, id: ApiKeyId) -> Result<UsageSummary> {
             message: format!("select last_used_at for api_key {}: {e}", id.0),
             source: Some(Box::new(e)),
         })?
-        .flatten();  // outer None (row gone) → None; inner None (column NULL) → None.
+        .flatten(); // outer None (row gone) → None; inner None (column NULL) → None.
 
     Ok(UsageSummary {
         total_rows: row.0.max(0) as u64,
@@ -648,10 +660,8 @@ mod tests {
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_nanos())
             .unwrap_or(0);
-        let dir = std::env::temp_dir().join(format!(
-            "openproxy-apikeys-test-{}-{}-{}",
-            pid, nanos, n
-        ));
+        let dir =
+            std::env::temp_dir().join(format!("openproxy-apikeys-test-{}-{}-{}", pid, nanos, n));
         std::fs::create_dir_all(&dir).expect("mkdir tempdir");
         let path = dir.join("apikeys.db");
         let mut conn = Connection::open(&path).expect("open");
@@ -707,7 +717,9 @@ mod tests {
     fn is_expired_returns_true_when_now_is_after_rfc3339() {
         // Stored in the exact format the codebase writes today.
         let stored = "2020-01-01T00:00:00Z";
-        let now = "2025-06-18T12:00:00Z".parse::<chrono::DateTime<Utc>>().unwrap();
+        let now = "2025-06-18T12:00:00Z"
+            .parse::<chrono::DateTime<Utc>>()
+            .unwrap();
         assert!(
             is_expired(Some(stored), now).expect("ok"),
             "2020 timestamp with a 2025 now must be expired"
@@ -733,22 +745,21 @@ mod tests {
         // RFC3339 with a non-Z timezone must be normalised to UTC
         // before comparison. 2025-06-18T15:00:00+02:00 == 13:00 UTC.
         let stored = "2025-06-18T15:00:00+02:00";
-        let now_just_before = "2025-06-18T12:59:59Z".parse::<chrono::DateTime<Utc>>().unwrap();
-        let now_just_after  = "2025-06-18T13:00:01Z".parse::<chrono::DateTime<Utc>>().unwrap();
+        let now_just_before = "2025-06-18T12:59:59Z"
+            .parse::<chrono::DateTime<Utc>>()
+            .unwrap();
+        let now_just_after = "2025-06-18T13:00:01Z"
+            .parse::<chrono::DateTime<Utc>>()
+            .unwrap();
 
         assert!(!is_expired(Some(stored), now_just_before).expect("ok"));
-        assert!( is_expired(Some(stored), now_just_after).expect("ok"));
+        assert!(is_expired(Some(stored), now_just_after).expect("ok"));
     }
 
     #[test]
     fn create_returns_plaintext_once() {
         let (conn, _p) = fresh_pool();
-        let (key, plaintext) = create(
-            &conn,
-            make_input("test"),
-            "admin",
-        )
-        .expect("create");
+        let (key, plaintext) = create(&conn, make_input("test"), "admin").expect("create");
         assert!(plaintext.starts_with("op_live_"));
         // The hash is stored; the plaintext is not.
         assert_eq!(key.key_hash, hash_key(&plaintext));
@@ -869,22 +880,21 @@ mod tests {
         let (key, _) = create(&conn, make_input("u"), "admin").expect("create");
 
         // Update only label.
-        update(
-            &conn, key.id,
-            Some("renamed"),
-            None, None, None, None, None,
-        )
-        .expect("update label");
+        update(&conn, key.id, Some("renamed"), None, None, None, None, None).expect("update label");
         let after = get_by_id(&conn, key.id).expect("get").expect("present");
         assert_eq!(after.label.as_deref(), Some("renamed"));
         assert_eq!(after.scopes, vec!["chat".to_string()], "scopes unchanged");
 
         // Update scopes to ["manage", "read"].
         update(
-            &conn, key.id,
+            &conn,
+            key.id,
             None,
             Some(&["manage".to_string(), "read".to_string()]),
-            None, None, None, None,
+            None,
+            None,
+            None,
+            None,
         )
         .expect("update scopes");
         let after = get_by_id(&conn, key.id).expect("get").expect("present");
@@ -892,41 +902,43 @@ mod tests {
 
         // Update allowed_models via Some(Some(&slice)).
         update(
-            &conn, key.id,
-            None, None,
+            &conn,
+            key.id,
+            None,
+            None,
             Some(Some(&["openai/gpt-4o".to_string()])),
-            None, None, None,
+            None,
+            None,
+            None,
         )
         .expect("update allowed_models");
         let after = get_by_id(&conn, key.id).expect("get").expect("present");
-        assert_eq!(after.allowed_models, Some(vec!["openai/gpt-4o".to_string()]));
+        assert_eq!(
+            after.allowed_models,
+            Some(vec!["openai/gpt-4o".to_string()])
+        );
 
         // Clear allowed_models via Some(None).
-        update(
-            &conn, key.id,
-            None, None,
-            Some(None),
-            None, None, None,
-        )
-        .expect("clear allowed_models");
+        update(&conn, key.id, None, None, Some(None), None, None, None)
+            .expect("clear allowed_models");
         let after = get_by_id(&conn, key.id).expect("get").expect("present");
         assert!(after.allowed_models.is_none(), "allowed_models cleared");
 
         // Reject empty scopes.
-        let err = update(
-            &conn, key.id,
-            None,
-            Some(&[]),
-            None, None, None, None,
-        )
-        .expect_err("empty scopes");
+        let err = update(&conn, key.id, None, Some(&[]), None, None, None, None)
+            .expect_err("empty scopes");
         assert!(matches!(err, CoreError::Validation(_)));
 
         // Missing id → Internal.
         let err = update(
-            &conn, ApiKeyId(9999),
+            &conn,
+            ApiKeyId(9999),
             Some("x"),
-            None, None, None, None, None,
+            None,
+            None,
+            None,
+            None,
+            None,
         )
         .expect_err("missing");
         assert!(matches!(err, CoreError::Internal(_)));
@@ -937,19 +949,13 @@ mod tests {
         let (conn, _p) = fresh_pool();
         let (key, _) = create(&conn, make_input("dis"), "admin").expect("create");
 
-        update(
-            &conn, key.id, None, None, None, None, Some(false), None,
-        )
-        .expect("disable");
+        update(&conn, key.id, None, None, None, None, Some(false), None).expect("disable");
         let after = get_by_id(&conn, key.id).expect("get").expect("present");
         assert!(!after.is_active);
         assert!(after.revoked_at.is_some());
 
         // Re-enable clears revoked_at.
-        update(
-            &conn, key.id, None, None, None, None, Some(true), None,
-        )
-        .expect("enable");
+        update(&conn, key.id, None, None, None, None, Some(true), None).expect("enable");
         let after = get_by_id(&conn, key.id).expect("get").expect("present");
         assert!(after.is_active);
         assert!(after.revoked_at.is_none());

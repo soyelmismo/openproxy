@@ -39,12 +39,12 @@ impl ResolvedTimeouts {
     /// total=300s).
     pub const SYSTEM_DEFAULTS: Self = Self {
         dns_ms: 5_000,
-        dial_ms: 5_000, // == `connect_ms` system default
-        tls_ms: 5_000,  // rolled into `connect_ms` for backward compat
-        write_ms: 10_000, // == `request_send_ms` system default
-        headers_ms: 30_000, // == `ttft_ms` system default (wait-for-headers)
+        dial_ms: 5_000,         // == `connect_ms` system default
+        tls_ms: 5_000,          // rolled into `connect_ms` for backward compat
+        write_ms: 10_000,       // == `request_send_ms` system default
+        headers_ms: 30_000,     // == `ttft_ms` system default (wait-for-headers)
         body_chunk_ms: 120_000, // == `idle_chunk_ms` system default
-        total_ms: 300_000, // == `total_ms` system default
+        total_ms: 300_000,      // == `total_ms` system default
     };
 }
 

@@ -222,7 +222,11 @@ pub fn extract_think_from_content(content: &str) -> ExtractedThink {
 fn find_earliest_tag<'a>(s: &str, tags: &[&'a str]) -> Option<(usize, &'a str)> {
     let lower = s.to_ascii_lowercase();
     tags.iter()
-        .filter_map(|tag| lower.find(tag.to_ascii_lowercase().as_str()).map(|pos| (pos, *tag)))
+        .filter_map(|tag| {
+            lower
+                .find(tag.to_ascii_lowercase().as_str())
+                .map(|pos| (pos, *tag))
+        })
         .min_by_key(|(pos, _)| *pos)
 }
 
@@ -251,11 +255,7 @@ fn strip_orphaned_close_tags(content: &str) -> String {
                 break;
             }
             // Remove the orphaned close tag.
-            result = format!(
-                "{}{}",
-                &result[..pos],
-                &result[pos + close_tag.len()..]
-            );
+            result = format!("{}{}", &result[..pos], &result[pos + close_tag.len()..]);
         }
     }
     result
@@ -378,9 +378,7 @@ impl ThinkStreamExtractor {
         self.inside_think = true;
 
         // Skip past the opening tag.
-        let after_tag_content = after_tag
-            .get(tag_str.len()..)
-            .unwrap_or("");
+        let after_tag_content = after_tag.get(tag_str.len()..).unwrap_or("");
 
         if after_tag_content.is_empty() {
             // The tag was exactly at the end — nothing more to process.
@@ -591,7 +589,7 @@ mod tests {
         //   <think>reasoning</think>\n\n</think>
         // The first </think> is matched, the second is orphaned.
         let r = extract_think_from_content(
-            "<think>\nNow I have a comprehensive understanding.\n</think>\n\n</think>"
+            "<think>\nNow I have a comprehensive understanding.\n</think>\n\n</think>",
         );
         assert_eq!(r.content, "");
         assert_eq!(r.reasoning, "Now I have a comprehensive understanding.");
@@ -600,9 +598,7 @@ mod tests {
     #[test]
     fn orphaned_close_tag_with_content_after() {
         // Same bug but with actual content after the orphaned tag.
-        let r = extract_think_from_content(
-            "<think>reasoning</think>\n\n</think>\nThe answer."
-        );
+        let r = extract_think_from_content("<think>reasoning</think>\n\n</think>\nThe answer.");
         assert_eq!(r.content, "The answer.");
         assert_eq!(r.reasoning, "reasoning");
     }
@@ -738,13 +734,18 @@ mod tests {
         };
         resp = extract_think_from_response(resp);
         // Content should be cleaned (no <think> tags).
-        let content = resp.choices[0].message.content.as_ref()
+        let content = resp.choices[0]
+            .message
+            .content
+            .as_ref()
             .and_then(|v| v.as_str())
             .unwrap_or("");
         assert_eq!(content, "The answer is 42.");
         // reasoning_content should NOT be duplicated — the upstream's
         // native value should be preserved as-is.
-        let rc = resp.choices[0].message.extra
+        let rc = resp.choices[0]
+            .message
+            .extra
             .get("reasoning_content")
             .and_then(|v| v.as_str())
             .unwrap_or("");

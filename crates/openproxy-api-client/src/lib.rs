@@ -40,11 +40,16 @@
 //! el patrón de extracción de `{"id": ...}`.
 
 use openproxy_core::{
-    accounts, admin::{AddTargetInput, CreateAccountInput, CreateComboInput, CreateProviderInput, UpdateAccountApiKeyInput},
+    CoreError, accounts,
+    admin::{
+        AddTargetInput, CreateAccountInput, CreateComboInput, CreateProviderInput,
+        UpdateAccountApiKeyInput,
+    },
     analytics::{LatencyPercentiles, RaceStats},
-    combos, ids::{AccountId, ComboId, ModelRowId, ProviderId},
-    providers, usage::{ByAccountRow, ByModelRow, ByStatusRow, ErrorRow, UsageFilter, UsageSummary},
-    CoreError,
+    combos,
+    ids::{AccountId, ComboId, ModelRowId, ProviderId},
+    providers,
+    usage::{ByAccountRow, ByModelRow, ByStatusRow, ErrorRow, UsageFilter, UsageSummary},
 };
 use std::fmt::Write as _;
 
@@ -113,15 +118,12 @@ impl Client {
             .send()
             .await?;
         let body: serde_json::Value = parse_json(resp).await?;
-        let id = body
-            .get("id")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| ClientError::Deserialize(serde_json::Error::io(
-                std::io::Error::new(
-                    std::io::ErrorKind::InvalidData,
-                    "missing \"id\" string in create_provider response",
-                ),
-            )))?;
+        let id = body.get("id").and_then(|v| v.as_str()).ok_or_else(|| {
+            ClientError::Deserialize(serde_json::Error::io(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "missing \"id\" string in create_provider response",
+            )))
+        })?;
         Ok(ProviderId::new(id.to_string()))
     }
 
@@ -162,15 +164,12 @@ impl Client {
             .send()
             .await?;
         let body: serde_json::Value = parse_json(resp).await?;
-        let id = body
-            .get("id")
-            .and_then(|v| v.as_i64())
-            .ok_or_else(|| ClientError::Deserialize(serde_json::Error::io(
-                std::io::Error::new(
-                    std::io::ErrorKind::InvalidData,
-                    "missing numeric \"id\" in create_account response",
-                ),
-            )))?;
+        let id = body.get("id").and_then(|v| v.as_i64()).ok_or_else(|| {
+            ClientError::Deserialize(serde_json::Error::io(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "missing numeric \"id\" in create_account response",
+            )))
+        })?;
         Ok(AccountId::new(id))
     }
 
@@ -189,12 +188,7 @@ impl Client {
         input: UpdateAccountApiKeyInput,
     ) -> Result<(), ClientError> {
         let path = format!("/admin/accounts/{}/api-key", id.0);
-        let resp = self
-            .http
-            .put(self.url(&path))
-            .json(&input)
-            .send()
-            .await?;
+        let resp = self.http.put(self.url(&path)).json(&input).send().await?;
         parse_unit(resp).await
     }
 
@@ -209,10 +203,7 @@ impl Client {
     }
 
     /// `POST /admin/combos`. Devuelve el `ComboId` recién creado.
-    pub async fn create_combo(
-        &self,
-        input: CreateComboInput,
-    ) -> Result<ComboId, ClientError> {
+    pub async fn create_combo(&self, input: CreateComboInput) -> Result<ComboId, ClientError> {
         let resp = self
             .http
             .post(self.url("/admin/combos"))
@@ -220,15 +211,12 @@ impl Client {
             .send()
             .await?;
         let body: serde_json::Value = parse_json(resp).await?;
-        let id = body
-            .get("id")
-            .and_then(|v| v.as_i64())
-            .ok_or_else(|| ClientError::Deserialize(serde_json::Error::io(
-                std::io::Error::new(
-                    std::io::ErrorKind::InvalidData,
-                    "missing numeric \"id\" in create_combo response",
-                ),
-            )))?;
+        let id = body.get("id").and_then(|v| v.as_i64()).ok_or_else(|| {
+            ClientError::Deserialize(serde_json::Error::io(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "missing numeric \"id\" in create_combo response",
+            )))
+        })?;
         Ok(ComboId(id))
     }
 
@@ -260,15 +248,12 @@ impl Client {
         let path = format!("/admin/combos/{}/targets", combo_id.0);
         let resp = self.http.post(self.url(&path)).json(&input).send().await?;
         let body: serde_json::Value = parse_json(resp).await?;
-        let id = body
-            .get("id")
-            .and_then(|v| v.as_i64())
-            .ok_or_else(|| ClientError::Deserialize(serde_json::Error::io(
-                std::io::Error::new(
-                    std::io::ErrorKind::InvalidData,
-                    "missing numeric \"id\" in add_target response",
-                ),
-            )))?;
+        let id = body.get("id").and_then(|v| v.as_i64()).ok_or_else(|| {
+            ClientError::Deserialize(serde_json::Error::io(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "missing numeric \"id\" in add_target response",
+            )))
+        })?;
         Ok(id)
     }
 
@@ -305,12 +290,12 @@ impl Client {
         let touched = body
             .get("touched")
             .and_then(|v| v.as_u64())
-            .ok_or_else(|| ClientError::Deserialize(serde_json::Error::io(
-                std::io::Error::new(
+            .ok_or_else(|| {
+                ClientError::Deserialize(serde_json::Error::io(std::io::Error::new(
                     std::io::ErrorKind::InvalidData,
                     "missing \"touched\" in refresh_models response",
-                ),
-            )))?;
+                )))
+            })?;
         usize::try_from(touched).map_err(|_| {
             ClientError::Deserialize(serde_json::Error::io(std::io::Error::new(
                 std::io::ErrorKind::InvalidData,
@@ -325,7 +310,11 @@ impl Client {
 
     /// `GET /admin/usage/summary?from=...&to=...&provider_id=...&...`.
     pub async fn usage_summary(&self, f: &UsageFilter) -> Result<UsageSummary, ClientError> {
-        let url = format!("{}?{}", self.url("/admin/usage/summary"), usage_filter_query(f));
+        let url = format!(
+            "{}?{}",
+            self.url("/admin/usage/summary"),
+            usage_filter_query(f)
+        );
         let resp = self.http.get(url).send().await?;
         parse_json(resp).await
     }
@@ -356,10 +345,7 @@ impl Client {
     }
 
     /// `GET /admin/usage/by-status?from=...&...`.
-    pub async fn usage_by_status(
-        &self,
-        f: &UsageFilter,
-    ) -> Result<Vec<ByStatusRow>, ClientError> {
+    pub async fn usage_by_status(&self, f: &UsageFilter) -> Result<Vec<ByStatusRow>, ClientError> {
         let url = format!(
             "{}?{}",
             self.url("/admin/usage/by-status"),
@@ -387,10 +373,7 @@ impl Client {
     }
 
     /// `GET /admin/usage/latency?from=...&...`.
-    pub async fn usage_latency(
-        &self,
-        f: &UsageFilter,
-    ) -> Result<LatencyPercentiles, ClientError> {
+    pub async fn usage_latency(&self, f: &UsageFilter) -> Result<LatencyPercentiles, ClientError> {
         let url = format!(
             "{}?{}",
             self.url("/admin/usage/latency"),
@@ -504,7 +487,12 @@ fn map_error_body(status: u16, bytes: &[u8]) -> ClientError {
     if let Ok(env) = serde_json::from_slice::<Envelope>(bytes) {
         match core_error_from_code(&env.error.code, &env.error.message) {
             Some(core_err) => return ClientError::Api(core_err),
-            None => return ClientError::Status(status, format!("{}: {}", env.error.code, env.error.message)),
+            None => {
+                return ClientError::Status(
+                    status,
+                    format!("{}: {}", env.error.code, env.error.message),
+                );
+            }
         }
     }
 
@@ -600,19 +588,11 @@ fn usage_filter_query(f: &UsageFilter) -> String {
         ("to", f.to.clone()),
         ("provider_id", f.provider_id.as_ref().map(|p| p.0.clone())),
         ("model_id", f.model_id.clone()),
-        (
-            "account_id",
-            f.account_id.map(|a| a.0.to_string()),
-        ),
-        (
-            "combo_id",
-            f.combo_id.map(|c| c.0.to_string()),
-        ),
+        ("account_id", f.account_id.map(|a| a.0.to_string())),
+        ("combo_id", f.combo_id.map(|c| c.0.to_string())),
     ];
-    let borrowed: Vec<(&str, Option<&str>)> = pairs
-        .iter()
-        .map(|(k, v)| (*k, v.as_deref()))
-        .collect();
+    let borrowed: Vec<(&str, Option<&str>)> =
+        pairs.iter().map(|(k, v)| (*k, v.as_deref())).collect();
     build_query(&borrowed)
 }
 
@@ -628,8 +608,9 @@ fn urlencoded(s: &str) -> String {
     for b in s.as_bytes() {
         match b {
             // unreserved (RFC 3986 §2.3)
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9'
-            | b'-' | b'_' | b'.' | b'~' => out.push(*b as char),
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                out.push(*b as char)
+            }
             // sub-delims y gen-delims que no se rompen en práctica
             b':' | b'/' => out.push(*b as char),
             // todo lo demás se escapa como %XX

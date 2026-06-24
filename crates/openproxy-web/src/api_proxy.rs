@@ -6,14 +6,14 @@
 use axum::{
     body::Body,
     extract::{Request, State, ws::WebSocketUpgrade},
-    http::{HeaderMap, StatusCode, Method, Version},
+    http::{HeaderMap, Method, StatusCode, Version},
     response::{IntoResponse, Response},
     routing::get,
 };
 use bytes::Bytes;
-use tokio_tungstenite::connect_async;
-use tokio_tungstenite::MaybeTlsStream;
 use futures::{SinkExt, StreamExt};
+use tokio_tungstenite::MaybeTlsStream;
+use tokio_tungstenite::connect_async;
 
 use crate::WebState;
 
@@ -41,7 +41,7 @@ async fn websocket_handler(
         upstream_url = format!("{}?token={}", upstream_url, token);
     }
     let mut upstream_headers = HeaderMap::new();
-    
+
     // Copy all non‑hop‑by‑hop headers from the client request
     for (key, value) in req.headers().iter() {
         if !is_hop_by_hop(key.as_str()) {
@@ -57,12 +57,15 @@ async fn websocket_handler(
     // Add admin token header if not already present
     if upstream_headers.get("authorization").is_none() {
         if let Some(token) = &state.admin_token {
-            upstream_headers.insert("authorization", format!("Bearer {}", token).parse().unwrap());
+            upstream_headers.insert(
+                "authorization",
+                format!("Bearer {}", token).parse().unwrap(),
+            );
         }
     }
 
-    let upstream_ws_connect = connect_async_with_headers(upstream_url.as_str(), upstream_headers)
-        .await;
+    let upstream_ws_connect =
+        connect_async_with_headers(upstream_url.as_str(), upstream_headers).await;
 
     let (upstream_ws, _) = match upstream_ws_connect {
         Ok(ws) => ws,
@@ -134,11 +137,7 @@ async fn http_handler(State(state): State<WebState>, req: Request) -> Response {
     let upstream_resp = match upstream_req.send().await {
         Ok(r) => r,
         Err(e) => {
-            return (
-                StatusCode::BAD_GATEWAY,
-                format!("upstream error: {}", e),
-            )
-                .into_response();
+            return (StatusCode::BAD_GATEWAY, format!("upstream error: {}", e)).into_response();
         }
     };
 
@@ -197,7 +196,13 @@ async fn handle_websocket_proxy(
 async fn connect_async_with_headers(
     url: &str,
     headers: HeaderMap,
-) -> Result<(tokio_tungstenite::WebSocketStream<MaybeTlsStream<tokio::net::TcpStream>>, axum::http::Response<Option<Vec<u8>>>), tokio_tungstenite::tungstenite::Error> {
+) -> Result<
+    (
+        tokio_tungstenite::WebSocketStream<MaybeTlsStream<tokio::net::TcpStream>>,
+        axum::http::Response<Option<Vec<u8>>>,
+    ),
+    tokio_tungstenite::tungstenite::Error,
+> {
     let mut request_builder = axum::http::Request::builder()
         .method(Method::GET)
         .uri(url)
@@ -205,7 +210,10 @@ async fn connect_async_with_headers(
         .header("Connection", "Upgrade")
         .header("Upgrade", "websocket")
         .header("Sec-WebSocket-Version", "13")
-        .header("Sec-WebSocket-Key", tungstenite::handshake::client::generate_key());
+        .header(
+            "Sec-WebSocket-Key",
+            tungstenite::handshake::client::generate_key(),
+        );
 
     if let Some(headers_map) = request_builder.headers_mut() {
         for (key, value) in headers.iter() {
@@ -229,29 +237,47 @@ async fn connect_async_with_headers(
     Ok((ws_stream, response))
 }
 
-fn to_tungstenite_msg(msg: axum::extract::ws::Message) -> Option<tokio_tungstenite::tungstenite::Message> {
+fn to_tungstenite_msg(
+    msg: axum::extract::ws::Message,
+) -> Option<tokio_tungstenite::tungstenite::Message> {
     match msg {
-        axum::extract::ws::Message::Text(s) => Some(tokio_tungstenite::tungstenite::Message::Text(s.to_string().into())),
-        axum::extract::ws::Message::Binary(v) => Some(tokio_tungstenite::tungstenite::Message::Binary(v)),
-        axum::extract::ws::Message::Ping(v) => Some(tokio_tungstenite::tungstenite::Message::Ping(v)),
-        axum::extract::ws::Message::Pong(v) => Some(tokio_tungstenite::tungstenite::Message::Pong(v)),
+        axum::extract::ws::Message::Text(s) => Some(tokio_tungstenite::tungstenite::Message::Text(
+            s.to_string().into(),
+        )),
+        axum::extract::ws::Message::Binary(v) => {
+            Some(tokio_tungstenite::tungstenite::Message::Binary(v))
+        }
+        axum::extract::ws::Message::Ping(v) => {
+            Some(tokio_tungstenite::tungstenite::Message::Ping(v))
+        }
+        axum::extract::ws::Message::Pong(v) => {
+            Some(tokio_tungstenite::tungstenite::Message::Pong(v))
+        }
         axum::extract::ws::Message::Close(frame) => {
-            Some(tokio_tungstenite::tungstenite::Message::Close(frame.map(|f| {
-                tokio_tungstenite::tungstenite::protocol::CloseFrame {
+            Some(tokio_tungstenite::tungstenite::Message::Close(frame.map(
+                |f| tokio_tungstenite::tungstenite::protocol::CloseFrame {
                     code: f.code.into(),
                     reason: f.reason.to_string().into(),
-                }
-            })))
+                },
+            )))
         }
     }
 }
 
 fn to_axum_msg(msg: tokio_tungstenite::tungstenite::Message) -> Option<axum::extract::ws::Message> {
     match msg {
-        tokio_tungstenite::tungstenite::Message::Text(s) => Some(axum::extract::ws::Message::Text(s.to_string().into())),
-        tokio_tungstenite::tungstenite::Message::Binary(v) => Some(axum::extract::ws::Message::Binary(v)),
-        tokio_tungstenite::tungstenite::Message::Ping(v) => Some(axum::extract::ws::Message::Ping(v)),
-        tokio_tungstenite::tungstenite::Message::Pong(v) => Some(axum::extract::ws::Message::Pong(v)),
+        tokio_tungstenite::tungstenite::Message::Text(s) => {
+            Some(axum::extract::ws::Message::Text(s.to_string().into()))
+        }
+        tokio_tungstenite::tungstenite::Message::Binary(v) => {
+            Some(axum::extract::ws::Message::Binary(v))
+        }
+        tokio_tungstenite::tungstenite::Message::Ping(v) => {
+            Some(axum::extract::ws::Message::Ping(v))
+        }
+        tokio_tungstenite::tungstenite::Message::Pong(v) => {
+            Some(axum::extract::ws::Message::Pong(v))
+        }
         tokio_tungstenite::tungstenite::Message::Close(frame) => {
             Some(axum::extract::ws::Message::Close(frame.map(|f| {
                 axum::extract::ws::CloseFrame {

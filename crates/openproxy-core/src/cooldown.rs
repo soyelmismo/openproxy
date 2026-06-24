@@ -33,7 +33,7 @@ use crate::combos::CooldownMode;
 use crate::error::{CoreError, Result};
 use crate::ids::{ComboId, ComboTargetId};
 use chrono::{DateTime, Utc};
-use rusqlite::{params, Connection, OptionalExtension};
+use rusqlite::{Connection, OptionalExtension, params};
 use serde::{Deserialize, Serialize};
 
 /// In-memory snapshot of one row of `target_cooldowns`. Surfaced by
@@ -338,9 +338,7 @@ pub fn list_for_combo(conn: &Connection, combo_id: ComboId) -> Result<Vec<Cooldo
 /// Cheap; the dashboard's targets endpoint builds this once per
 /// request and uses the map to enrich each row in O(1).
 pub fn index_by_target(rows: Vec<Cooldown>) -> std::collections::HashMap<ComboTargetId, Cooldown> {
-    rows.into_iter()
-        .map(|c| (c.combo_target_id, c))
-        .collect()
+    rows.into_iter().map(|c| (c.combo_target_id, c)).collect()
 }
 
 /// Convenience wrapper for callers that have a single `combo_id` and
@@ -358,10 +356,7 @@ pub fn index_for_combo(
 /// powers the dashboard's "cooldown reason" tooltip so we can also
 /// surface the row's `failure_count` even when the row is past its
 /// `cooldown_until` (it'll be swept at the next prune tick).
-pub fn get_for_target(
-    conn: &Connection,
-    target_id: ComboTargetId,
-) -> Result<Option<Cooldown>> {
+pub fn get_for_target(conn: &Connection, target_id: ComboTargetId) -> Result<Option<Cooldown>> {
     let row = conn
         .query_row(
             "SELECT combo_target_id, cooldown_until, reason, failure_count
@@ -374,7 +369,7 @@ pub fn get_for_target(
                     .map(|d| d.with_timezone(&Utc))
                     .unwrap_or_else(|_| Utc::now());
                 Ok(Cooldown {
-                combo_target_id: ComboTargetId(row.get::<_, i64>(0)?),
+                    combo_target_id: ComboTargetId(row.get::<_, i64>(0)?),
                     cooldown_until: until,
                     reason: row.get(2)?,
                     failure_count: row.get::<_, i64>(3)? as u32,
@@ -408,10 +403,8 @@ mod tests {
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_nanos())
             .unwrap_or(0);
-        let dir = std::env::temp_dir().join(format!(
-            "openproxy-cooldown-test-{}-{}-{}",
-            pid, nanos, n
-        ));
+        let dir =
+            std::env::temp_dir().join(format!("openproxy-cooldown-test-{}-{}-{}", pid, nanos, n));
         std::fs::create_dir_all(&dir).expect("mkdir tempdir");
         let path = dir.join("cooldown.db");
         let pool = DbPool::open(&path).expect("open pool");
@@ -447,7 +440,8 @@ mod tests {
         let model_rowid: i64 = conn
             .query_row("SELECT last_insert_rowid()", [], |r| r.get(0))
             .expect("last_insert_rowid");
-        let combo_id = combos::create_combo(conn, "c", combos::Strategy::Priority, 1).expect("combo");
+        let combo_id =
+            combos::create_combo(conn, "c", combos::Strategy::Priority, 1).expect("combo");
         let target_id = combos::add_target(
             conn,
             combos::AddTargetInput {
@@ -470,7 +464,9 @@ mod tests {
         let (_combo, target) = seed_target(&conn);
 
         record_failure(&conn, target, "boom", 60).expect("record");
-        let row = get_for_target(&conn, target).expect("get").expect("present");
+        let row = get_for_target(&conn, target)
+            .expect("get")
+            .expect("present");
         assert_eq!(row.failure_count, 1);
         assert_eq!(row.reason.as_deref(), Some("boom"));
     }
@@ -484,7 +480,9 @@ mod tests {
         record_failure(&conn, target, "first", 60).expect("first");
         record_failure(&conn, target, "second", 60).expect("second");
         record_failure(&conn, target, "third", 60).expect("third");
-        let row = get_for_target(&conn, target).expect("get").expect("present");
+        let row = get_for_target(&conn, target)
+            .expect("get")
+            .expect("present");
         assert_eq!(row.failure_count, 3);
         assert_eq!(row.reason.as_deref(), Some("third"));
     }

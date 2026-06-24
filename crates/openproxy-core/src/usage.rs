@@ -19,7 +19,7 @@
 use crate::error::{CoreError, Result};
 use crate::ids::{AccountId, ApiKeyId, ComboId, ComboTargetId, ModelRowId, ProviderId, UsageId};
 use once_cell::sync::OnceCell;
-use rusqlite::{params, params_from_iter, Connection, OptionalExtension, ToSql};
+use rusqlite::{Connection, OptionalExtension, ToSql, params, params_from_iter};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::BTreeMap;
@@ -467,7 +467,10 @@ struct BuiltWhere {
 impl BuiltWhere {
     fn from_filter(f: &UsageFilter) -> Self {
         if f.is_empty() {
-            return Self { sql: String::new(), params: Vec::new() };
+            return Self {
+                sql: String::new(),
+                params: Vec::new(),
+            };
         }
 
         let mut clauses: Vec<&'static str> = Vec::new();
@@ -707,7 +710,10 @@ pub fn by_provider(conn: &Connection, f: &UsageFilter) -> Result<Vec<ByProviderR
                 total_rows: as_u64(total_rows, "total_rows")?,
                 winners: as_u64(winners, "winners")?,
                 total_prompt_tokens: as_u64(total_prompt_tokens, "total_prompt_tokens")?,
-                total_completion_tokens: as_u64(total_completion_tokens, "total_completion_tokens")?,
+                total_completion_tokens: as_u64(
+                    total_completion_tokens,
+                    "total_completion_tokens",
+                )?,
                 total_cost_usd,
             })
         })
@@ -727,7 +733,10 @@ pub fn by_provider(conn: &Connection, f: &UsageFilter) -> Result<Vec<ByProviderR
 /// `winners` is intentionally omitted — the monthly view is for cost /
 /// token tracking, not race outcomes. Use [`by_provider`] if you need
 /// winner counts.
-pub fn monthly_by_provider(conn: &Connection, f: &UsageFilter) -> Result<Vec<MonthlyByProviderRow>> {
+pub fn monthly_by_provider(
+    conn: &Connection,
+    f: &UsageFilter,
+) -> Result<Vec<MonthlyByProviderRow>> {
     let w = BuiltWhere::from_filter(f);
     let sql = format!(
         "SELECT \
@@ -766,7 +775,10 @@ pub fn monthly_by_provider(conn: &Connection, f: &UsageFilter) -> Result<Vec<Mon
                 unique_requests: as_u64(unique_requests, "unique_requests")?,
                 total_rows: as_u64(total_rows, "total_rows")?,
                 total_prompt_tokens: as_u64(total_prompt_tokens, "total_prompt_tokens")?,
-                total_completion_tokens: as_u64(total_completion_tokens, "total_completion_tokens")?,
+                total_completion_tokens: as_u64(
+                    total_completion_tokens,
+                    "total_completion_tokens",
+                )?,
                 total_cost_usd,
             })
         })
@@ -820,7 +832,10 @@ pub fn by_day(conn: &Connection, f: &UsageFilter) -> Result<Vec<ByDayRow>> {
                 unique_requests: as_u64(unique_requests, "unique_requests")?,
                 total_rows: as_u64(total_rows, "total_rows")?,
                 total_prompt_tokens: as_u64(total_prompt_tokens, "total_prompt_tokens")?,
-                total_completion_tokens: as_u64(total_completion_tokens, "total_completion_tokens")?,
+                total_completion_tokens: as_u64(
+                    total_completion_tokens,
+                    "total_completion_tokens",
+                )?,
                 total_cost_usd,
                 errors: as_u64(errors, "errors")?,
             })
@@ -927,7 +942,10 @@ pub fn by_status(conn: &Connection, f: &UsageFilter) -> Result<Vec<ByStatusRow>>
                 return Err(rusqlite::Error::FromSqlConversionFailure(
                     0,
                     rusqlite::types::Type::Integer,
-                    Box::new(SimpleErr(format!("status_code out of u16 range: {}", status_code))),
+                    Box::new(SimpleErr(format!(
+                        "status_code out of u16 range: {}",
+                        status_code
+                    ))),
                 ));
             }
             Ok(ByStatusRow {
@@ -998,7 +1016,10 @@ pub fn errors(conn: &Connection, f: &UsageFilter, limit: u32) -> Result<Vec<Erro
                 return Err(rusqlite::Error::FromSqlConversionFailure(
                     4,
                     rusqlite::types::Type::Integer,
-                    Box::new(SimpleErr(format!("status_code out of u16 range: {}", status_code))),
+                    Box::new(SimpleErr(format!(
+                        "status_code out of u16 range: {}",
+                        status_code
+                    ))),
                 ));
             }
             Ok(ErrorRow {
@@ -1175,52 +1196,86 @@ pub fn recent(conn: &Connection, since_id: i64, limit: u32) -> Result<Vec<Recent
     let rows = stmt
         .query_map(params![since_id, limit_param], |row| {
             let mut col_idx = 0;
-            let id: i64 = row.get(col_idx)?; col_idx += 1;
-            let request_id: String = row.get(col_idx)?; col_idx += 1;
-            let trace_id: String = row.get(col_idx)?; col_idx += 1;
-            let provider_id: String = row.get(col_idx)?; col_idx += 1;
-            let upstream_model_id: String = row.get(col_idx)?; col_idx += 1;
-            let status_code: i64 = row.get(col_idx)?; col_idx += 1;
-            let total_ms: i64 = row.get(col_idx)?; col_idx += 1;
-            let prompt_tokens: Option<i64> = row.get(col_idx)?; col_idx += 1;
-            let completion_tokens: Option<i64> = row.get(col_idx)?; col_idx += 1;
-            let cost_usd: Option<f64> = row.get(col_idx)?; col_idx += 1;
-            let connect_ms: Option<i64> = row.get(col_idx)?; col_idx += 1;
-            let ttft_ms: Option<i64> = row.get(col_idx)?; col_idx += 1;
-            let request_body_json: Option<serde_json::Value> = row.get::<_, Option<String>>(col_idx)?.and_then(|s| serde_json::from_str(&s).ok()); col_idx += 1;
-            let response_body_json: Option<serde_json::Value> = row.get::<_, Option<String>>(col_idx)?.and_then(|s| serde_json::from_str(&s).ok()); col_idx += 1;
-            let request_headers: Option<String> = row.get(col_idx)?; col_idx += 1;
-            let response_headers: Option<String> = row.get(col_idx)?; col_idx += 1;
-            let error_msg_redacted: Option<String> = row.get(col_idx)?; col_idx += 1;
-            let error_msg: Option<String> = row.get(col_idx)?; col_idx += 1;
-            let race_total: i64 = row.get(col_idx)?; col_idx += 1;
-            let race_attempts: i64 = row.get(col_idx)?; col_idx += 1;
-            let is_streaming: i64 = row.get(col_idx)?; col_idx += 1;
-            let stream_complete: i64 = row.get(col_idx)?; col_idx += 1;
-            let race_lost: i64 = row.get(col_idx)?; col_idx += 1;
-            let created_at: String = row.get(col_idx)?; col_idx += 1;
-            let stop_reason: Option<String> = row.get(col_idx)?; col_idx += 1;
-            let compression_savings_pct: Option<f64> = row.get(col_idx)?; col_idx += 1;
+            let id: i64 = row.get(col_idx)?;
+            col_idx += 1;
+            let request_id: String = row.get(col_idx)?;
+            col_idx += 1;
+            let trace_id: String = row.get(col_idx)?;
+            col_idx += 1;
+            let provider_id: String = row.get(col_idx)?;
+            col_idx += 1;
+            let upstream_model_id: String = row.get(col_idx)?;
+            col_idx += 1;
+            let status_code: i64 = row.get(col_idx)?;
+            col_idx += 1;
+            let total_ms: i64 = row.get(col_idx)?;
+            col_idx += 1;
+            let prompt_tokens: Option<i64> = row.get(col_idx)?;
+            col_idx += 1;
+            let completion_tokens: Option<i64> = row.get(col_idx)?;
+            col_idx += 1;
+            let cost_usd: Option<f64> = row.get(col_idx)?;
+            col_idx += 1;
+            let connect_ms: Option<i64> = row.get(col_idx)?;
+            col_idx += 1;
+            let ttft_ms: Option<i64> = row.get(col_idx)?;
+            col_idx += 1;
+            let request_body_json: Option<serde_json::Value> = row
+                .get::<_, Option<String>>(col_idx)?
+                .and_then(|s| serde_json::from_str(&s).ok());
+            col_idx += 1;
+            let response_body_json: Option<serde_json::Value> = row
+                .get::<_, Option<String>>(col_idx)?
+                .and_then(|s| serde_json::from_str(&s).ok());
+            col_idx += 1;
+            let request_headers: Option<String> = row.get(col_idx)?;
+            col_idx += 1;
+            let response_headers: Option<String> = row.get(col_idx)?;
+            col_idx += 1;
+            let error_msg_redacted: Option<String> = row.get(col_idx)?;
+            col_idx += 1;
+            let error_msg: Option<String> = row.get(col_idx)?;
+            col_idx += 1;
+            let race_total: i64 = row.get(col_idx)?;
+            col_idx += 1;
+            let race_attempts: i64 = row.get(col_idx)?;
+            col_idx += 1;
+            let is_streaming: i64 = row.get(col_idx)?;
+            col_idx += 1;
+            let stream_complete: i64 = row.get(col_idx)?;
+            col_idx += 1;
+            let race_lost: i64 = row.get(col_idx)?;
+            col_idx += 1;
+            let created_at: String = row.get(col_idx)?;
+            col_idx += 1;
+            let stop_reason: Option<String> = row.get(col_idx)?;
+            col_idx += 1;
+            let compression_savings_pct: Option<f64> = row.get(col_idx)?;
+            col_idx += 1;
             let compression_techniques: Option<String> = row.get(col_idx)?;
 
             if !(0..=u16::MAX as i64).contains(&status_code) {
                 return Err(rusqlite::Error::FromSqlConversionFailure(
                     5,
                     rusqlite::types::Type::Integer,
-                    Box::new(SimpleErr(format!("status_code out of u16 range: {}", status_code))),
+                    Box::new(SimpleErr(format!(
+                        "status_code out of u16 range: {}",
+                        status_code
+                    ))),
                 ));
             }
             if total_ms < 0 {
                 return Err(rusqlite::Error::FromSqlConversionFailure(
                     6,
                     rusqlite::types::Type::Integer,
-                    Box::new(SimpleErr(format!("total_ms unexpectedly negative: {}", total_ms))),
+                    Box::new(SimpleErr(format!(
+                        "total_ms unexpectedly negative: {}",
+                        total_ms
+                    ))),
                 ));
             }
-            let request_headers =
-                request_headers.and_then(|s| serde_json::from_str(&s).ok());
-            let response_headers =
-                response_headers.and_then(|s| serde_json::from_str(&s).ok());
+            let request_headers = request_headers.and_then(|s| serde_json::from_str(&s).ok());
+            let response_headers = response_headers.and_then(|s| serde_json::from_str(&s).ok());
             let error_message = error_msg_redacted.or(error_msg);
             let prompt_tokens = prompt_tokens.and_then(|v| u32::try_from(v).ok());
             let completion_tokens = completion_tokens.and_then(|v| u32::try_from(v).ok());
@@ -1325,52 +1380,86 @@ pub fn recent_desc(conn: &Connection, limit: u32) -> Result<Vec<RecentUsageRow>>
     let rows = stmt
         .query_map(params![limit_param], |row| {
             let mut col_idx = 0;
-            let id: i64 = row.get(col_idx)?; col_idx += 1;
-            let request_id: String = row.get(col_idx)?; col_idx += 1;
-            let trace_id: String = row.get(col_idx)?; col_idx += 1;
-            let provider_id: String = row.get(col_idx)?; col_idx += 1;
-            let upstream_model_id: String = row.get(col_idx)?; col_idx += 1;
-            let status_code: i64 = row.get(col_idx)?; col_idx += 1;
-            let total_ms: i64 = row.get(col_idx)?; col_idx += 1;
-            let prompt_tokens: Option<i64> = row.get(col_idx)?; col_idx += 1;
-            let completion_tokens: Option<i64> = row.get(col_idx)?; col_idx += 1;
-            let cost_usd: Option<f64> = row.get(col_idx)?; col_idx += 1;
-            let connect_ms: Option<i64> = row.get(col_idx)?; col_idx += 1;
-            let ttft_ms: Option<i64> = row.get(col_idx)?; col_idx += 1;
-            let request_body_json: Option<serde_json::Value> = row.get::<_, Option<String>>(col_idx)?.and_then(|s| serde_json::from_str(&s).ok()); col_idx += 1;
-            let response_body_json: Option<serde_json::Value> = row.get::<_, Option<String>>(col_idx)?.and_then(|s| serde_json::from_str(&s).ok()); col_idx += 1;
-            let request_headers: Option<String> = row.get(col_idx)?; col_idx += 1;
-            let response_headers: Option<String> = row.get(col_idx)?; col_idx += 1;
-            let error_msg_redacted: Option<String> = row.get(col_idx)?; col_idx += 1;
-            let error_msg: Option<String> = row.get(col_idx)?; col_idx += 1;
-            let race_total: i64 = row.get(col_idx)?; col_idx += 1;
-            let race_attempts: i64 = row.get(col_idx)?; col_idx += 1;
-            let is_streaming: i64 = row.get(col_idx)?; col_idx += 1;
-            let stream_complete: i64 = row.get(col_idx)?; col_idx += 1;
-            let race_lost: i64 = row.get(col_idx)?; col_idx += 1;
-            let created_at: String = row.get(col_idx)?; col_idx += 1;
-            let stop_reason: Option<String> = row.get(col_idx)?; col_idx += 1;
-            let compression_savings_pct: Option<f64> = row.get(col_idx)?; col_idx += 1;
+            let id: i64 = row.get(col_idx)?;
+            col_idx += 1;
+            let request_id: String = row.get(col_idx)?;
+            col_idx += 1;
+            let trace_id: String = row.get(col_idx)?;
+            col_idx += 1;
+            let provider_id: String = row.get(col_idx)?;
+            col_idx += 1;
+            let upstream_model_id: String = row.get(col_idx)?;
+            col_idx += 1;
+            let status_code: i64 = row.get(col_idx)?;
+            col_idx += 1;
+            let total_ms: i64 = row.get(col_idx)?;
+            col_idx += 1;
+            let prompt_tokens: Option<i64> = row.get(col_idx)?;
+            col_idx += 1;
+            let completion_tokens: Option<i64> = row.get(col_idx)?;
+            col_idx += 1;
+            let cost_usd: Option<f64> = row.get(col_idx)?;
+            col_idx += 1;
+            let connect_ms: Option<i64> = row.get(col_idx)?;
+            col_idx += 1;
+            let ttft_ms: Option<i64> = row.get(col_idx)?;
+            col_idx += 1;
+            let request_body_json: Option<serde_json::Value> = row
+                .get::<_, Option<String>>(col_idx)?
+                .and_then(|s| serde_json::from_str(&s).ok());
+            col_idx += 1;
+            let response_body_json: Option<serde_json::Value> = row
+                .get::<_, Option<String>>(col_idx)?
+                .and_then(|s| serde_json::from_str(&s).ok());
+            col_idx += 1;
+            let request_headers: Option<String> = row.get(col_idx)?;
+            col_idx += 1;
+            let response_headers: Option<String> = row.get(col_idx)?;
+            col_idx += 1;
+            let error_msg_redacted: Option<String> = row.get(col_idx)?;
+            col_idx += 1;
+            let error_msg: Option<String> = row.get(col_idx)?;
+            col_idx += 1;
+            let race_total: i64 = row.get(col_idx)?;
+            col_idx += 1;
+            let race_attempts: i64 = row.get(col_idx)?;
+            col_idx += 1;
+            let is_streaming: i64 = row.get(col_idx)?;
+            col_idx += 1;
+            let stream_complete: i64 = row.get(col_idx)?;
+            col_idx += 1;
+            let race_lost: i64 = row.get(col_idx)?;
+            col_idx += 1;
+            let created_at: String = row.get(col_idx)?;
+            col_idx += 1;
+            let stop_reason: Option<String> = row.get(col_idx)?;
+            col_idx += 1;
+            let compression_savings_pct: Option<f64> = row.get(col_idx)?;
+            col_idx += 1;
             let compression_techniques: Option<String> = row.get(col_idx)?;
 
             if !(0..=u16::MAX as i64).contains(&status_code) {
                 return Err(rusqlite::Error::FromSqlConversionFailure(
                     5,
                     rusqlite::types::Type::Integer,
-                    Box::new(SimpleErr(format!("status_code out of u16 range: {}", status_code))),
+                    Box::new(SimpleErr(format!(
+                        "status_code out of u16 range: {}",
+                        status_code
+                    ))),
                 ));
             }
             if total_ms < 0 {
                 return Err(rusqlite::Error::FromSqlConversionFailure(
                     6,
                     rusqlite::types::Type::Integer,
-                    Box::new(SimpleErr(format!("total_ms unexpectedly negative: {}", total_ms))),
+                    Box::new(SimpleErr(format!(
+                        "total_ms unexpectedly negative: {}",
+                        total_ms
+                    ))),
                 ));
             }
-            let request_headers =
-                request_headers.and_then(|s| serde_json::from_str(&s).ok());
-            let response_headers =
-                response_headers.and_then(|s| serde_json::from_str(&s).ok());
+            let request_headers = request_headers.and_then(|s| serde_json::from_str(&s).ok());
+            let response_headers = response_headers.and_then(|s| serde_json::from_str(&s).ok());
             let error_message = error_msg_redacted.or(error_msg);
             let prompt_tokens = prompt_tokens.and_then(|v| u32::try_from(v).ok());
             let completion_tokens = completion_tokens.and_then(|v| u32::try_from(v).ok());
@@ -1465,30 +1554,42 @@ pub fn detail_by_id(conn: &Connection, id: i64) -> Result<Option<UsageDetailRow>
             let is_streaming: i64 = row.get(24)?;
             let stream_complete: i64 = row.get(25)?;
             let mut col_idx = 26;
-            let request_body_json: Option<serde_json::Value> = row.get::<_, Option<String>>(col_idx)?.and_then(|s| serde_json::from_str(&s).ok()); col_idx += 1;
-            let response_body_json: Option<serde_json::Value> = row.get::<_, Option<String>>(col_idx)?.and_then(|s| serde_json::from_str(&s).ok()); col_idx += 1;
-            let request_headers: Option<String> = row.get(col_idx)?; col_idx += 1;
-            let response_headers: Option<String> = row.get(col_idx)?; col_idx += 1;
+            let request_body_json: Option<serde_json::Value> = row
+                .get::<_, Option<String>>(col_idx)?
+                .and_then(|s| serde_json::from_str(&s).ok());
+            col_idx += 1;
+            let response_body_json: Option<serde_json::Value> = row
+                .get::<_, Option<String>>(col_idx)?
+                .and_then(|s| serde_json::from_str(&s).ok());
+            col_idx += 1;
+            let request_headers: Option<String> = row.get(col_idx)?;
+            col_idx += 1;
+            let response_headers: Option<String> = row.get(col_idx)?;
+            col_idx += 1;
             let error_message: Option<String> = row.get(col_idx)?;
 
             if !(0..=u16::MAX as i64).contains(&status_code) {
                 return Err(rusqlite::Error::FromSqlConversionFailure(
                     16,
                     rusqlite::types::Type::Integer,
-                    Box::new(SimpleErr(format!("status_code out of u16 range: {}", status_code))),
+                    Box::new(SimpleErr(format!(
+                        "status_code out of u16 range: {}",
+                        status_code
+                    ))),
                 ));
             }
             if total_ms < 0 {
                 return Err(rusqlite::Error::FromSqlConversionFailure(
                     14,
                     rusqlite::types::Type::Integer,
-                    Box::new(SimpleErr(format!("total_ms unexpectedly negative: {}", total_ms))),
+                    Box::new(SimpleErr(format!(
+                        "total_ms unexpectedly negative: {}",
+                        total_ms
+                    ))),
                 ));
             }
-            let request_headers =
-                request_headers.and_then(|s| serde_json::from_str(&s).ok());
-            let response_headers =
-                response_headers.and_then(|s| serde_json::from_str(&s).ok());
+            let request_headers = request_headers.and_then(|s| serde_json::from_str(&s).ok());
+            let response_headers = response_headers.and_then(|s| serde_json::from_str(&s).ok());
 
             Ok(UsageDetailRow {
                 id: UsageId(id),
@@ -1593,7 +1694,10 @@ pub fn prune_expired_recording_bodies(conn: &Connection, ttl_secs: i64) -> Resul
                  request_headers = NULL, \
                  response_headers = NULL \
              WHERE datetime(created_at) <= datetime(?1, ?2)",
-            params![chrono::Utc::now().to_rfc3339(), format!("-{} seconds", ttl_secs)],
+            params![
+                chrono::Utc::now().to_rfc3339(),
+                format!("-{} seconds", ttl_secs)
+            ],
         )
         .map_err(|e| CoreError::Database {
             message: format!("prune_expired_recording_bodies: {}", e),
@@ -1614,7 +1718,10 @@ pub fn prune_expired_usage_rows(conn: &Connection, ttl_secs: i64) -> Result<usiz
         .execute(
             "DELETE FROM usage \
              WHERE datetime(created_at) <= datetime(?1, ?2)",
-            params![chrono::Utc::now().to_rfc3339(), format!("-{} seconds", ttl_secs)],
+            params![
+                chrono::Utc::now().to_rfc3339(),
+                format!("-{} seconds", ttl_secs)
+            ],
         )
         .map_err(|e| CoreError::Database {
             message: format!("prune_expired_usage_rows: {}", e),
@@ -1642,7 +1749,11 @@ mod tests {
             .duration_since(UNIX_EPOCH)
             .map(|d| d.as_nanos())
             .unwrap_or(0);
-        let dir = base.join(format!("openproxy-usage-test-{}-{}", std::process::id(), nanos));
+        let dir = base.join(format!(
+            "openproxy-usage-test-{}-{}",
+            std::process::id(),
+            nanos
+        ));
         std::fs::create_dir_all(&dir).expect("mkdir");
         dir
     }
@@ -1716,9 +1827,54 @@ mod tests {
         let t1 = TraceId::new().to_string();
         let t2 = TraceId::new().to_string();
         let t3 = TraceId::new().to_string();
-        insert(&conn, &req, &t1, "openrouter", "openai/gpt-4o", Some(1), 200, 100, 50, 0.01, Some(200), 1200, false, None);
-        insert(&conn, &req, &t2, "openrouter", "openai/gpt-4o", Some(2), 200, 100, 50, 0.01, Some(200), 1200, true, None);
-        insert(&conn, &req, &t3, "openrouter", "openai/gpt-4o", Some(3), 200, 100, 50, 0.01, Some(200), 1200, true, None);
+        insert(
+            &conn,
+            &req,
+            &t1,
+            "openrouter",
+            "openai/gpt-4o",
+            Some(1),
+            200,
+            100,
+            50,
+            0.01,
+            Some(200),
+            1200,
+            false,
+            None,
+        );
+        insert(
+            &conn,
+            &req,
+            &t2,
+            "openrouter",
+            "openai/gpt-4o",
+            Some(2),
+            200,
+            100,
+            50,
+            0.01,
+            Some(200),
+            1200,
+            true,
+            None,
+        );
+        insert(
+            &conn,
+            &req,
+            &t3,
+            "openrouter",
+            "openai/gpt-4o",
+            Some(3),
+            200,
+            100,
+            50,
+            0.01,
+            Some(200),
+            1200,
+            true,
+            None,
+        );
 
         let s = summary(&conn, &UsageFilter::default()).expect("summary");
         assert_eq!(s.unique_requests, 1, "three rows share one request_id");
@@ -1744,11 +1900,59 @@ mod tests {
         let r1 = RequestId::new().to_string();
         let r2 = RequestId::new().to_string();
         let r3 = RequestId::new().to_string();
-        insert(&conn, &r1, &TraceId::new().to_string(), "openrouter", "openai/gpt-4o", Some(1), 200, 10, 5, 0.001, Some(100), 600, false, None);
-        insert(&conn, &r2, &TraceId::new().to_string(), "openrouter", "openai/gpt-4o", Some(2), 200, 10, 5, 0.001, Some(100), 600, false, None);
-        insert(&conn, &r3, &TraceId::new().to_string(), "anthropic", "claude-3.5-sonnet", Some(3), 200, 10, 5, 0.001, Some(100), 600, false, None);
+        insert(
+            &conn,
+            &r1,
+            &TraceId::new().to_string(),
+            "openrouter",
+            "openai/gpt-4o",
+            Some(1),
+            200,
+            10,
+            5,
+            0.001,
+            Some(100),
+            600,
+            false,
+            None,
+        );
+        insert(
+            &conn,
+            &r2,
+            &TraceId::new().to_string(),
+            "openrouter",
+            "openai/gpt-4o",
+            Some(2),
+            200,
+            10,
+            5,
+            0.001,
+            Some(100),
+            600,
+            false,
+            None,
+        );
+        insert(
+            &conn,
+            &r3,
+            &TraceId::new().to_string(),
+            "anthropic",
+            "claude-3.5-sonnet",
+            Some(3),
+            200,
+            10,
+            5,
+            0.001,
+            Some(100),
+            600,
+            false,
+            None,
+        );
 
-        let f = UsageFilter { provider_id: Some(ProviderId::new("openrouter")), ..Default::default() };
+        let f = UsageFilter {
+            provider_id: Some(ProviderId::new("openrouter")),
+            ..Default::default()
+        };
         let s = summary(&conn, &f).expect("filtered summary");
         assert_eq!(s.unique_requests, 2);
         assert_eq!(s.total_rows, 2);
@@ -1771,10 +1975,70 @@ mod tests {
         let r2 = RequestId::new().to_string();
         let r3 = RequestId::new().to_string();
         let r4 = RequestId::new().to_string();
-        insert(&conn, &r1, &TraceId::new().to_string(), "openrouter", "openai/gpt-4o", Some(1), 200, 100, 50, 0.5, Some(200), 1200, false, None);
-        insert(&conn, &r2, &TraceId::new().to_string(), "openrouter", "openai/gpt-4o", Some(1), 200, 100, 50, 0.5, Some(200), 1200, false, None);
-        insert(&conn, &r3, &TraceId::new().to_string(), "openrouter", "openai/gpt-4o-mini", Some(1), 200, 100, 50, 0.05, Some(200), 600, false, None);
-        insert(&conn, &r4, &TraceId::new().to_string(), "anthropic", "claude-3.5-sonnet", Some(2), 200, 100, 50, 1.0, Some(200), 1500, false, None);
+        insert(
+            &conn,
+            &r1,
+            &TraceId::new().to_string(),
+            "openrouter",
+            "openai/gpt-4o",
+            Some(1),
+            200,
+            100,
+            50,
+            0.5,
+            Some(200),
+            1200,
+            false,
+            None,
+        );
+        insert(
+            &conn,
+            &r2,
+            &TraceId::new().to_string(),
+            "openrouter",
+            "openai/gpt-4o",
+            Some(1),
+            200,
+            100,
+            50,
+            0.5,
+            Some(200),
+            1200,
+            false,
+            None,
+        );
+        insert(
+            &conn,
+            &r3,
+            &TraceId::new().to_string(),
+            "openrouter",
+            "openai/gpt-4o-mini",
+            Some(1),
+            200,
+            100,
+            50,
+            0.05,
+            Some(200),
+            600,
+            false,
+            None,
+        );
+        insert(
+            &conn,
+            &r4,
+            &TraceId::new().to_string(),
+            "anthropic",
+            "claude-3.5-sonnet",
+            Some(2),
+            200,
+            100,
+            50,
+            1.0,
+            Some(200),
+            1500,
+            false,
+            None,
+        );
 
         let rows = by_model(&conn, &UsageFilter::default()).expect("by_model");
         assert_eq!(rows.len(), 3, "three (provider, model) buckets");
@@ -1786,13 +2050,19 @@ mod tests {
         assert_eq!(rows[0].winners, 1);
 
         // openai/gpt-4o cost 1.0 (0.5 + 0.5) — second by cost.
-        let gpt = rows.iter().find(|r| r.upstream_model_id == "openai/gpt-4o").expect("gpt row");
+        let gpt = rows
+            .iter()
+            .find(|r| r.upstream_model_id == "openai/gpt-4o")
+            .expect("gpt row");
         assert_eq!(gpt.unique_requests, 2);
         assert_eq!(gpt.total_rows, 2);
         assert!((gpt.total_cost_usd - 1.0).abs() < 1e-9);
         assert_eq!(gpt.provider_id, ProviderId::new("openrouter"));
 
-        let mini = rows.iter().find(|r| r.upstream_model_id == "openai/gpt-4o-mini").expect("mini row");
+        let mini = rows
+            .iter()
+            .find(|r| r.upstream_model_id == "openai/gpt-4o-mini")
+            .expect("mini row");
         assert_eq!(mini.total_rows, 1);
         assert!((mini.total_cost_usd - 0.05).abs() < 1e-9);
     }
@@ -1809,10 +2079,70 @@ mod tests {
         let r2 = RequestId::new().to_string();
         let r3 = RequestId::new().to_string();
         let r4 = RequestId::new().to_string();
-        insert(&conn, &r1, &TraceId::new().to_string(), "openrouter", "openai/gpt-4o", Some(1), 200, 10, 5, 0.10, Some(100), 600, false, None);
-        insert(&conn, &r2, &TraceId::new().to_string(), "openrouter", "openai/gpt-4o", Some(1), 200, 10, 5, 0.10, Some(100), 600, false, None);
-        insert(&conn, &r3, &TraceId::new().to_string(), "openrouter", "openai/gpt-4o", Some(2), 200, 10, 5, 0.05, Some(100), 600, false, None);
-        insert(&conn, &r4, &TraceId::new().to_string(), "openrouter", "openai/gpt-4o", Some(2), 500, 10, 5, 0.0, Some(100), 600, false, Some("upstream 500"));
+        insert(
+            &conn,
+            &r1,
+            &TraceId::new().to_string(),
+            "openrouter",
+            "openai/gpt-4o",
+            Some(1),
+            200,
+            10,
+            5,
+            0.10,
+            Some(100),
+            600,
+            false,
+            None,
+        );
+        insert(
+            &conn,
+            &r2,
+            &TraceId::new().to_string(),
+            "openrouter",
+            "openai/gpt-4o",
+            Some(1),
+            200,
+            10,
+            5,
+            0.10,
+            Some(100),
+            600,
+            false,
+            None,
+        );
+        insert(
+            &conn,
+            &r3,
+            &TraceId::new().to_string(),
+            "openrouter",
+            "openai/gpt-4o",
+            Some(2),
+            200,
+            10,
+            5,
+            0.05,
+            Some(100),
+            600,
+            false,
+            None,
+        );
+        insert(
+            &conn,
+            &r4,
+            &TraceId::new().to_string(),
+            "openrouter",
+            "openai/gpt-4o",
+            Some(2),
+            500,
+            10,
+            5,
+            0.0,
+            Some(100),
+            600,
+            false,
+            Some("upstream 500"),
+        );
 
         let rows = by_account(&conn, &UsageFilter::default()).expect("by_account");
         assert_eq!(rows.len(), 2);
@@ -1839,15 +2169,57 @@ mod tests {
         let (conn, _p) = fresh_conn();
         // 3x 200, 2x 429, 1x 500
         for _ in 0..3 {
-            insert(&conn, &RequestId::new().to_string(), &TraceId::new().to_string(),
-                "openrouter", "openai/gpt-4o", Some(1), 200, 10, 5, 0.01, Some(100), 600, false, None);
+            insert(
+                &conn,
+                &RequestId::new().to_string(),
+                &TraceId::new().to_string(),
+                "openrouter",
+                "openai/gpt-4o",
+                Some(1),
+                200,
+                10,
+                5,
+                0.01,
+                Some(100),
+                600,
+                false,
+                None,
+            );
         }
         for _ in 0..2 {
-            insert(&conn, &RequestId::new().to_string(), &TraceId::new().to_string(),
-                "openrouter", "openai/gpt-4o", Some(1), 429, 10, 5, 0.0, Some(100), 600, false, Some("rate limited"));
+            insert(
+                &conn,
+                &RequestId::new().to_string(),
+                &TraceId::new().to_string(),
+                "openrouter",
+                "openai/gpt-4o",
+                Some(1),
+                429,
+                10,
+                5,
+                0.0,
+                Some(100),
+                600,
+                false,
+                Some("rate limited"),
+            );
         }
-        insert(&conn, &RequestId::new().to_string(), &TraceId::new().to_string(),
-            "openrouter", "openai/gpt-4o", Some(1), 500, 10, 5, 0.0, Some(100), 600, false, Some("oops"));
+        insert(
+            &conn,
+            &RequestId::new().to_string(),
+            &TraceId::new().to_string(),
+            "openrouter",
+            "openai/gpt-4o",
+            Some(1),
+            500,
+            10,
+            5,
+            0.0,
+            Some(100),
+            600,
+            false,
+            Some("oops"),
+        );
 
         let rows = by_status(&conn, &UsageFilter::default()).expect("by_status");
         assert_eq!(rows.len(), 3);
@@ -1867,13 +2239,55 @@ mod tests {
     fn errors_returns_only_4xx_5xx() {
         let (conn, _p) = fresh_conn();
         // 1 success
-        insert(&conn, &RequestId::new().to_string(), &TraceId::new().to_string(),
-            "openrouter", "openai/gpt-4o", Some(1), 200, 10, 5, 0.01, Some(100), 600, false, None);
+        insert(
+            &conn,
+            &RequestId::new().to_string(),
+            &TraceId::new().to_string(),
+            "openrouter",
+            "openai/gpt-4o",
+            Some(1),
+            200,
+            10,
+            5,
+            0.01,
+            Some(100),
+            600,
+            false,
+            None,
+        );
         // 1 400, 1 502
-        insert(&conn, &RequestId::new().to_string(), &TraceId::new().to_string(),
-            "openrouter", "openai/gpt-4o", Some(1), 400, 10, 5, 0.0, Some(100), 600, false, Some("bad request"));
-        insert(&conn, &RequestId::new().to_string(), &TraceId::new().to_string(),
-            "openrouter", "openai/gpt-4o", Some(1), 502, 10, 5, 0.0, Some(100), 600, false, Some("upstream down"));
+        insert(
+            &conn,
+            &RequestId::new().to_string(),
+            &TraceId::new().to_string(),
+            "openrouter",
+            "openai/gpt-4o",
+            Some(1),
+            400,
+            10,
+            5,
+            0.0,
+            Some(100),
+            600,
+            false,
+            Some("bad request"),
+        );
+        insert(
+            &conn,
+            &RequestId::new().to_string(),
+            &TraceId::new().to_string(),
+            "openrouter",
+            "openai/gpt-4o",
+            Some(1),
+            502,
+            10,
+            5,
+            0.0,
+            Some(100),
+            600,
+            false,
+            Some("upstream down"),
+        );
 
         let rows = errors(&conn, &UsageFilter::default(), 50).expect("errors");
         assert_eq!(rows.len(), 2);
@@ -1896,7 +2310,22 @@ mod tests {
         for i in 0..5 {
             let req = format!("req-{}", i);
             let trace = format!("trace-{}", i);
-            insert(&conn, &req, &trace, "openrouter", "openai/gpt-4o", Some(1), 500, 10, 5, 0.0, Some(100), 600, false, Some("err"));
+            insert(
+                &conn,
+                &req,
+                &trace,
+                "openrouter",
+                "openai/gpt-4o",
+                Some(1),
+                500,
+                10,
+                5,
+                0.0,
+                Some(100),
+                600,
+                false,
+                Some("err"),
+            );
         }
         let rows = errors(&conn, &UsageFilter::default(), 2).expect("errors");
         assert_eq!(rows.len(), 2, "limit caps the result set");
@@ -1962,10 +2391,38 @@ mod tests {
     fn avg_ttft_skips_null_rows() {
         let (conn, _p) = fresh_conn();
         // Row 1: ttft=100; Row 2: ttft NULL (race_lost pre-body).
-        insert(&conn, &RequestId::new().to_string(), &TraceId::new().to_string(),
-            "openrouter", "openai/gpt-4o", Some(1), 200, 10, 5, 0.01, Some(100), 600, false, None);
-        insert(&conn, &RequestId::new().to_string(), &TraceId::new().to_string(),
-            "openrouter", "openai/gpt-4o", Some(1), 200, 10, 5, 0.01, None, 600, true, Some("race lost"));
+        insert(
+            &conn,
+            &RequestId::new().to_string(),
+            &TraceId::new().to_string(),
+            "openrouter",
+            "openai/gpt-4o",
+            Some(1),
+            200,
+            10,
+            5,
+            0.01,
+            Some(100),
+            600,
+            false,
+            None,
+        );
+        insert(
+            &conn,
+            &RequestId::new().to_string(),
+            &TraceId::new().to_string(),
+            "openrouter",
+            "openai/gpt-4o",
+            Some(1),
+            200,
+            10,
+            5,
+            0.01,
+            None,
+            600,
+            true,
+            Some("race lost"),
+        );
         let s = summary(&conn, &UsageFilter::default()).expect("summary");
         assert_eq!(s.avg_ttft_ms, Some(100.0), "NULL ttft is excluded from AVG");
     }
@@ -1977,12 +2434,54 @@ mod tests {
     fn recent_returns_rows_after_since_id() {
         let (conn, _p) = fresh_conn();
         // Three rows, ids will be 1, 2, 3.
-        insert(&conn, &RequestId::new().to_string(), &TraceId::new().to_string(),
-            "openrouter", "openai/gpt-4o", Some(1), 200, 10, 5, 0.01, Some(100), 600, false, None);
-        insert(&conn, &RequestId::new().to_string(), &TraceId::new().to_string(),
-            "openrouter", "openai/gpt-4o", Some(2), 200, 20, 10, 0.02, Some(150), 700, true, None);
-        insert(&conn, &RequestId::new().to_string(), &TraceId::new().to_string(),
-            "anthropic", "claude-3.5-sonnet", Some(3), 500, 0, 0, 0.0, None, 800, false, Some("oops"));
+        insert(
+            &conn,
+            &RequestId::new().to_string(),
+            &TraceId::new().to_string(),
+            "openrouter",
+            "openai/gpt-4o",
+            Some(1),
+            200,
+            10,
+            5,
+            0.01,
+            Some(100),
+            600,
+            false,
+            None,
+        );
+        insert(
+            &conn,
+            &RequestId::new().to_string(),
+            &TraceId::new().to_string(),
+            "openrouter",
+            "openai/gpt-4o",
+            Some(2),
+            200,
+            20,
+            10,
+            0.02,
+            Some(150),
+            700,
+            true,
+            None,
+        );
+        insert(
+            &conn,
+            &RequestId::new().to_string(),
+            &TraceId::new().to_string(),
+            "anthropic",
+            "claude-3.5-sonnet",
+            Some(3),
+            500,
+            0,
+            0,
+            0.0,
+            None,
+            800,
+            false,
+            Some("oops"),
+        );
 
         // since_id = 0 returns all three, in id ASC order.
         let all = recent(&conn, 0, 50).expect("recent");
@@ -2018,12 +2517,54 @@ mod tests {
     #[test]
     fn recent_desc_returns_newest_first() {
         let (conn, _p) = fresh_conn();
-        insert(&conn, &RequestId::new().to_string(), &TraceId::new().to_string(),
-            "openrouter", "openai/gpt-4o", Some(1), 200, 10, 5, 0.01, Some(100), 600, false, None);
-        insert(&conn, &RequestId::new().to_string(), &TraceId::new().to_string(),
-            "openrouter", "openai/gpt-4o", Some(2), 200, 20, 10, 0.02, Some(150), 700, true, None);
-        insert(&conn, &RequestId::new().to_string(), &TraceId::new().to_string(),
-            "anthropic", "claude-3.5-sonnet", Some(3), 500, 0, 0, 0.0, None, 800, false, Some("oops"));
+        insert(
+            &conn,
+            &RequestId::new().to_string(),
+            &TraceId::new().to_string(),
+            "openrouter",
+            "openai/gpt-4o",
+            Some(1),
+            200,
+            10,
+            5,
+            0.01,
+            Some(100),
+            600,
+            false,
+            None,
+        );
+        insert(
+            &conn,
+            &RequestId::new().to_string(),
+            &TraceId::new().to_string(),
+            "openrouter",
+            "openai/gpt-4o",
+            Some(2),
+            200,
+            20,
+            10,
+            0.02,
+            Some(150),
+            700,
+            true,
+            None,
+        );
+        insert(
+            &conn,
+            &RequestId::new().to_string(),
+            &TraceId::new().to_string(),
+            "anthropic",
+            "claude-3.5-sonnet",
+            Some(3),
+            500,
+            0,
+            0,
+            0.0,
+            None,
+            800,
+            false,
+            Some("oops"),
+        );
 
         let rows = recent_desc(&conn, 2).expect("recent_desc");
         assert_eq!(rows.len(), 2);
@@ -2230,7 +2771,9 @@ mod tests {
         .expect("insert detail");
         let id = conn.last_insert_rowid();
 
-        let row = detail_by_id(&conn, id).expect("detail_by_id").expect("row exists");
+        let row = detail_by_id(&conn, id)
+            .expect("detail_by_id")
+            .expect("row exists");
         assert_eq!(row.id.0, id);
         assert_eq!(row.request_id, req);
         assert_eq!(row.trace_id, trace);
@@ -2255,7 +2798,11 @@ mod tests {
         assert_eq!(row.api_key_id, None);
         assert!(!row.created_at.is_empty());
 
-        assert!(detail_by_id(&conn, id + 1).expect("detail_by_id missing").is_none());
+        assert!(
+            detail_by_id(&conn, id + 1)
+                .expect("detail_by_id missing")
+                .is_none()
+        );
     }
 
     #[test]
@@ -2307,7 +2854,11 @@ mod tests {
         assert!(old_body.is_none(), "old row body should be NULL");
         // Verify: metadata (e.g. status_code) is preserved for both.
         let count: i64 = conn
-            .query_row("SELECT COUNT(*) FROM usage WHERE status_code = 200", [], |r| r.get(0))
+            .query_row(
+                "SELECT COUNT(*) FROM usage WHERE status_code = 200",
+                [],
+                |r| r.get(0),
+            )
             .expect("count");
         assert_eq!(count, 2, "metadata should be preserved for both rows");
     }
@@ -2350,10 +2901,70 @@ mod tests {
         let r2 = RequestId::new().to_string();
         let r3 = RequestId::new().to_string();
         let r4 = RequestId::new().to_string();
-        insert(&conn, &r1, &TraceId::new().to_string(), "openrouter", "openai/gpt-4o", Some(1), 200, 100, 50, 0.25, Some(200), 1200, false, None);
-        insert(&conn, &r2, &TraceId::new().to_string(), "openrouter", "openai/gpt-4o-mini", Some(1), 200, 100, 50, 0.25, Some(200), 600, false, None);
-        insert(&conn, &r3, &TraceId::new().to_string(), "anthropic", "claude-3.5-sonnet", Some(2), 200, 100, 50, 1.00, Some(200), 1500, false, None);
-        insert(&conn, &r4, &TraceId::new().to_string(), "openai", "gpt-4o", Some(3), 200, 100, 50, 0.10, Some(200), 800, true, None);
+        insert(
+            &conn,
+            &r1,
+            &TraceId::new().to_string(),
+            "openrouter",
+            "openai/gpt-4o",
+            Some(1),
+            200,
+            100,
+            50,
+            0.25,
+            Some(200),
+            1200,
+            false,
+            None,
+        );
+        insert(
+            &conn,
+            &r2,
+            &TraceId::new().to_string(),
+            "openrouter",
+            "openai/gpt-4o-mini",
+            Some(1),
+            200,
+            100,
+            50,
+            0.25,
+            Some(200),
+            600,
+            false,
+            None,
+        );
+        insert(
+            &conn,
+            &r3,
+            &TraceId::new().to_string(),
+            "anthropic",
+            "claude-3.5-sonnet",
+            Some(2),
+            200,
+            100,
+            50,
+            1.00,
+            Some(200),
+            1500,
+            false,
+            None,
+        );
+        insert(
+            &conn,
+            &r4,
+            &TraceId::new().to_string(),
+            "openai",
+            "gpt-4o",
+            Some(3),
+            200,
+            100,
+            50,
+            0.10,
+            Some(200),
+            800,
+            true,
+            None,
+        );
 
         let rows = by_provider(&conn, &UsageFilter::default()).expect("by_provider");
         assert_eq!(rows.len(), 3, "three distinct providers");
@@ -2425,13 +3036,13 @@ mod tests {
         // the filter `from`/`to` (also RFC-3339) is well-defined.
         insert_at("openrouter", 1.00, 100, "2026-06-01T12:00:00Z");
         insert_at("openrouter", 0.50, 100, "2026-06-15T12:00:00Z");
-        insert_at("anthropic",  0.25,  50, "2026-06-20T12:00:00Z");
+        insert_at("anthropic", 0.25, 50, "2026-06-20T12:00:00Z");
         // July 2026: openrouter $0.10; openai $0.75.
-        insert_at("openrouter", 0.10,  10, "2026-07-01T12:00:00Z");
-        insert_at("openai",     0.75,  20, "2026-07-31T12:00:00Z");
+        insert_at("openrouter", 0.10, 10, "2026-07-01T12:00:00Z");
+        insert_at("openai", 0.75, 20, "2026-07-31T12:00:00Z");
 
-        let rows = monthly_by_provider(&conn, &UsageFilter::default())
-            .expect("monthly_by_provider");
+        let rows =
+            monthly_by_provider(&conn, &UsageFilter::default()).expect("monthly_by_provider");
         assert_eq!(rows.len(), 4, "four (provider, month) buckets");
 
         // Ordered by month ASC, then cost DESC.
@@ -2479,17 +3090,73 @@ mod tests {
     fn summary_counts_rows_with_null_pricing() {
         let (conn, _p) = fresh_conn();
         // Row 1: normal — has prompt_tokens and a non-zero cost.
-        insert(&conn, &RequestId::new().to_string(), &TraceId::new().to_string(),
-            "openrouter", "openai/gpt-4o", Some(1), 200, 100, 50, 0.01, Some(100), 600, false, None);
+        insert(
+            &conn,
+            &RequestId::new().to_string(),
+            &TraceId::new().to_string(),
+            "openrouter",
+            "openai/gpt-4o",
+            Some(1),
+            200,
+            100,
+            50,
+            0.01,
+            Some(100),
+            600,
+            false,
+            None,
+        );
         // Row 2: NULL pricing — prompt_tokens > 0 but cost_usd = 0.
-        insert(&conn, &RequestId::new().to_string(), &TraceId::new().to_string(),
-            "openrouter", "openai/gpt-4o", Some(1), 200, 200, 50, 0.00, Some(100), 600, false, None);
+        insert(
+            &conn,
+            &RequestId::new().to_string(),
+            &TraceId::new().to_string(),
+            "openrouter",
+            "openai/gpt-4o",
+            Some(1),
+            200,
+            200,
+            50,
+            0.00,
+            Some(100),
+            600,
+            false,
+            None,
+        );
         // Row 3: NULL pricing — same shape, different provider.
-        insert(&conn, &RequestId::new().to_string(), &TraceId::new().to_string(),
-            "anthropic", "claude-3.5-sonnet", Some(2), 200, 300, 0, 0.00, Some(100), 600, false, None);
+        insert(
+            &conn,
+            &RequestId::new().to_string(),
+            &TraceId::new().to_string(),
+            "anthropic",
+            "claude-3.5-sonnet",
+            Some(2),
+            200,
+            300,
+            0,
+            0.00,
+            Some(100),
+            600,
+            false,
+            None,
+        );
         // Row 4: zero tokens AND zero cost — NOT null pricing (no tokens consumed).
-        insert(&conn, &RequestId::new().to_string(), &TraceId::new().to_string(),
-            "openrouter", "openai/gpt-4o", Some(1), 500, 0, 0, 0.00, Some(100), 600, false, Some("err"));
+        insert(
+            &conn,
+            &RequestId::new().to_string(),
+            &TraceId::new().to_string(),
+            "openrouter",
+            "openai/gpt-4o",
+            Some(1),
+            500,
+            0,
+            0,
+            0.00,
+            Some(100),
+            600,
+            false,
+            Some("err"),
+        );
 
         let s = summary(&conn, &UsageFilter::default()).expect("summary");
         assert_eq!(s.total_rows, 4);

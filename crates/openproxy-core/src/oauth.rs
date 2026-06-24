@@ -19,8 +19,7 @@ use tokio::sync::Mutex;
 
 // Re-export account-level OAuth helpers for convenience.
 pub use crate::accounts::{
-    decrypt_access_token, decrypt_refresh_token, list_expiring_oauth_accounts,
-    store_oauth_tokens,
+    decrypt_access_token, decrypt_refresh_token, list_expiring_oauth_accounts, store_oauth_tokens,
 };
 
 /// The OAuth flow used by a provider.
@@ -150,10 +149,7 @@ pub trait OAuthProvider: Send + Sync {
     ///   URL, or empty string for non-PKCE flows.
     ///
     /// Returns `Err` if the provider uses Device Code flow.
-    async fn build_auth_url(
-        &self,
-        redirect_uri: &str,
-    ) -> Result<(String, String, String)> {
+    async fn build_auth_url(&self, redirect_uri: &str) -> Result<(String, String, String)> {
         let _ = redirect_uri;
         Err(CoreError::Validation(format!(
             "provider '{}' does not support authorization URL",
@@ -252,9 +248,8 @@ impl OAuthProviderRegistry {
         let reg = Self::new();
         // Antigravity (Cloud Code) — registered under both `antigravity`
         // and `antigravity-cli` since they share the same OAuth flow.
-        let antigravity = std::sync::Arc::new(
-            crate::oauth_antigravity::AntigravityOAuthProvider::new(),
-        );
+        let antigravity =
+            std::sync::Arc::new(crate::oauth_antigravity::AntigravityOAuthProvider::new());
         reg.register_arc_with_name("antigravity", antigravity.clone());
         reg.register_arc_with_name("antigravity-cli", antigravity);
         reg.register_arc(std::sync::Arc::new(
@@ -340,11 +335,12 @@ pub async fn resolve_oauth_token(
     // 3. Decrypt refresh token under a fresh connection.
     let refresh_token = {
         let conn = db_pool.writer();
-        decrypt_refresh_token(&conn, account.id, master_key)?
-            .ok_or_else(|| CoreError::Auth(format!(
+        decrypt_refresh_token(&conn, account.id, master_key)?.ok_or_else(|| {
+            CoreError::Auth(format!(
                 "account {} has no refresh token, cannot refresh",
                 account.id.0
-            )))?
+            ))
+        })?
     };
 
     // 4. Find the provider implementation.
@@ -359,7 +355,9 @@ pub async fn resolve_oauth_token(
     );
 
     // 5. Refresh (async, no connection held).
-    let token = provider.refresh_token(&refresh_token, upstream_client).await?;
+    let token = provider
+        .refresh_token(&refresh_token, upstream_client)
+        .await?;
 
     // 6. Compute new expiry.
     let expires_at = token.expires_in.map(|secs| {
@@ -397,10 +395,7 @@ pub async fn resolve_oauth_token(
 /// Check whether we need to call `resolve_oauth_token` in the
 /// pipeline's custom-provider path. This is a lighter-weight check
 /// that avoids the full refresh flow when the token is still fresh.
-pub fn pipeline_token_needs_refresh(
-    db_expires_at: Option<&str>,
-    provider_id: &str,
-) -> bool {
+pub fn pipeline_token_needs_refresh(db_expires_at: Option<&str>, provider_id: &str) -> bool {
     let Some(ts) = db_expires_at else {
         return false; // no expiry set → don't know when it expires → assume fresh
     };
@@ -548,7 +543,10 @@ pub async fn start_refresh_scheduler(
             continue;
         }
 
-        tracing::debug!(count = accounts.len(), "oauth refresh: accounts due for refresh");
+        tracing::debug!(
+            count = accounts.len(),
+            "oauth refresh: accounts due for refresh"
+        );
 
         for (i, account) in accounts.iter().enumerate() {
             // Anti-burst staggering: 3s delay between consecutive accounts.
@@ -612,7 +610,10 @@ pub async fn start_refresh_scheduler(
 
             last_refresh_attempts.insert(account_id, chrono::Utc::now());
 
-            match provider.refresh_token(&refresh_token, &upstream_client).await {
+            match provider
+                .refresh_token(&refresh_token, &upstream_client)
+                .await
+            {
                 Ok(token) => {
                     // Reset failure tracking on success.
                     failure_counts.remove(&account_id);
@@ -769,7 +770,7 @@ mod tests {
 
     #[test]
     fn backoff_seconds_exponential_growth() {
-        assert_eq!(backoff_seconds(1), 60);  // 60 * 2^0
+        assert_eq!(backoff_seconds(1), 60); // 60 * 2^0
         assert_eq!(backoff_seconds(2), 120); // 60 * 2^1
         assert_eq!(backoff_seconds(3), 240); // 60 * 2^2
         assert_eq!(backoff_seconds(4), 480); // 60 * 2^3

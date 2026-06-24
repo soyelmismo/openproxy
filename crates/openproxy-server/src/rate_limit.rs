@@ -21,7 +21,7 @@ pub struct RateLimitConfig {
 impl Default for RateLimitConfig {
     fn default() -> Self {
         Self {
-            max_requests: 60,   // 60 requests per minute per key
+            max_requests: 60, // 60 requests per minute per key
             window: Duration::from_secs(60),
         }
     }
@@ -71,7 +71,8 @@ impl RateLimiter {
     pub fn cleanup(&self) {
         let now = Instant::now();
         let window = self.config.window;
-        self.windows.retain(|_, (_, start)| now.duration_since(*start) < window);
+        self.windows
+            .retain(|_, (_, start)| now.duration_since(*start) < window);
     }
 }
 

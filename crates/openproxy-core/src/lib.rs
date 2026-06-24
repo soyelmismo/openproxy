@@ -2,52 +2,52 @@
 //!
 //! See docs/architecture.md and docs/mvp-spec.md for the full spec.
 
-pub mod ids;
-pub mod error;
-pub mod config;
 pub mod capabilities;
+pub mod config;
+pub mod error;
+pub mod ids;
 pub mod routing;
 
-pub mod db;
-pub mod models;
-pub mod adapters;
-pub mod model_normalize;
-pub mod notifications;
-pub mod providers;
 pub mod accounts;
-pub mod api_keys;
-pub mod combos;
-pub mod usage;
-pub mod cost;
+pub mod adapters;
+pub mod admin;
 pub mod analytics;
-pub mod translation;
-pub mod sse;
-pub mod sse_accumulator;
-pub mod think_extractor;
-pub mod pipeline;
-pub mod timeouts;
-pub mod retry;
+pub mod api_keys;
+pub mod bootstrap;
 pub mod circuit_breaker;
+pub mod combos;
+pub mod compression;
 pub mod cooldown;
-pub mod race;
-pub mod race_sink;
-pub mod pricing;
-pub mod secrets;
+pub mod cost;
+pub mod db;
+pub mod discovery_scheduler;
+pub mod executor_antigravity;
+pub mod executor_kiro;
+pub mod model_normalize;
+pub mod models;
+pub mod models_dev_sync;
+pub mod notifications;
 pub mod oauth;
 pub mod oauth_antigravity;
 pub mod oauth_gemini;
 pub mod oauth_kiro;
 pub mod oauth_tickets;
-pub mod executor_kiro;
-pub mod executor_antigravity;
-pub mod admin;
+pub mod pipeline;
+pub mod pricing;
+pub mod providers;
 pub mod quota;
-pub mod seed;
-pub mod bootstrap;
-pub mod discovery_scheduler;
-pub mod models_dev_sync;
+pub mod race;
+pub mod race_sink;
 pub mod redact;
-pub mod compression;
+pub mod retry;
+pub mod secrets;
+pub mod seed;
+pub mod sse;
+pub mod sse_accumulator;
+pub mod think_extractor;
+pub mod timeouts;
+pub mod translation;
+pub mod usage;
 
 // Gate 0: hyper-based upstream client. See `upstream/mod.rs` for the
 // architecture and the `upstream-hyper` feature flag in `Cargo.toml`.

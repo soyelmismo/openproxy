@@ -13,8 +13,8 @@
 //! 10-ms polling loop detected the winner and fired `race_cancel`.
 
 use crate::upstream::CancellationToken;
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use tokio::sync::mpsc;
 
 /// Errors that can occur when writing to a [`StreamSink`].
@@ -48,9 +48,7 @@ impl StreamSink {
     /// in race mode).
     pub async fn send(&self, chunk: bytes::Bytes) -> Result<(), StreamSinkError> {
         match self {
-            StreamSink::Direct(tx) => {
-                tx.send(chunk).await.map_err(|_| StreamSinkError::Closed)
-            }
+            StreamSink::Direct(tx) => tx.send(chunk).await.map_err(|_| StreamSinkError::Closed),
             StreamSink::Race(handle) => handle.send(chunk).await,
         }
     }
@@ -252,7 +250,11 @@ mod tests {
         assert_eq!(wins.iter().filter(|&&b| b).count(), 1, "exactly one winner");
 
         // Exactly two losers should have their tokens cancelled
-        let cancelled = [tokens[0].is_cancelled(), tokens[1].is_cancelled(), tokens[2].is_cancelled()];
+        let cancelled = [
+            tokens[0].is_cancelled(),
+            tokens[1].is_cancelled(),
+            tokens[2].is_cancelled(),
+        ];
         assert_eq!(cancelled.iter().filter(|&&b| b).count(), 2);
 
         // Client should have exactly one chunk

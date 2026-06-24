@@ -93,10 +93,8 @@ impl UpstreamBodyStream {
         let limit_usize = usize::try_from(limit).unwrap_or(usize::MAX);
         let limited = http_body_util::Limited::new(body, limit_usize);
         let cancel_rx = cancel.subscribe();
-        let initial_deadline = std::cmp::min(
-            start + Duration::from_millis(body_chunk_ms),
-            total_deadline,
-        );
+        let initial_deadline =
+            std::cmp::min(start + Duration::from_millis(body_chunk_ms), total_deadline);
         Self {
             inner: Some(http_body_util::BodyStream::new(limited)),
             cancel_rx,
@@ -112,12 +110,15 @@ impl UpstreamBodyStream {
     /// Build a body stream that yields no data and reports a single
     /// error on first poll. Used when the upstream call fails before
     /// we have a body in hand.
-    pub fn empty(cancel: CancellationToken, start: Instant, body_chunk_ms: u64, total_deadline: Instant) -> Self {
+    pub fn empty(
+        cancel: CancellationToken,
+        start: Instant,
+        body_chunk_ms: u64,
+        total_deadline: Instant,
+    ) -> Self {
         let cancel_rx = cancel.subscribe();
-        let initial_deadline = std::cmp::min(
-            start + Duration::from_millis(body_chunk_ms),
-            total_deadline,
-        );
+        let initial_deadline =
+            std::cmp::min(start + Duration::from_millis(body_chunk_ms), total_deadline);
         Self {
             #[cfg(feature = "upstream-hyper")]
             inner: None,
@@ -156,10 +157,8 @@ impl UpstreamBodyStream {
             return Err(UpstreamError::Cancel);
         }
 
-        let chunk_gap_deadline = self
-            .last_chunk_at
-            .unwrap_or(self.start)
-            + Duration::from_millis(self.body_chunk_ms);
+        let chunk_gap_deadline =
+            self.last_chunk_at.unwrap_or(self.start) + Duration::from_millis(self.body_chunk_ms);
 
         #[cfg(feature = "upstream-hyper")]
         {

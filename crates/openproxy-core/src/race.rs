@@ -2,8 +2,8 @@
 //! Per spec §5.5.
 
 use crate::error::{CoreError, Result};
-use futures::stream::FuturesUnordered;
 use futures::StreamExt;
+use futures::stream::FuturesUnordered;
 use std::time::Duration;
 use tokio::sync::oneshot;
 use tokio::task::JoinHandle;
@@ -71,16 +71,17 @@ pub async fn run<T: 'static>(config: &RaceConfig, mut lanes: Vec<Lane<T>>) -> Ra
             Some(l) => l,
             None => {
                 return RaceResult::AllFailed {
-                    last_error: CoreError::Internal(
-                        "race::run called with zero lanes".into(),
-                    ),
+                    last_error: CoreError::Internal("race::run called with zero lanes".into()),
                 };
             }
         };
         // No cancellation in the single-lane path; drop the sender so it's never fired.
         drop(lane.abort_signal);
         match lane.future.await {
-            Ok(value) => RaceResult::Won { value, lane_index: 0 },
+            Ok(value) => RaceResult::Won {
+                value,
+                lane_index: 0,
+            },
             Err(e) => RaceResult::AllFailed { last_error: e },
         }
     } else {
@@ -121,10 +122,7 @@ async fn run_parallel<T: 'static>(config: &RaceConfig, lanes: Vec<Lane<T>>) -> R
     let mut stream = FuturesUnordered::new();
     for slot in slots.iter_mut() {
         let idx = slot.index;
-        let fut = slot
-            .combined
-            .take()
-            .expect("combined future missing");
+        let fut = slot.combined.take().expect("combined future missing");
         let wrapped = async move {
             let res = fut.await;
             (idx, res)
@@ -229,11 +227,7 @@ pub fn error_priority(err: &CoreError) -> u8 {
     use crate::error::CoreError::*;
     match err {
         UpstreamTimeout { .. } => 0,
-        UpstreamError { status, .. }
-            if *status == 502 || *status == 503 || *status == 504 =>
-        {
-            1
-        }
+        UpstreamError { status, .. } if *status == 502 || *status == 503 || *status == 504 => 1,
         RateLimited { .. } => 2,
         UpstreamError { status, .. } if (400..500).contains(status) => 3,
         UpstreamConnection(_) => 4,
@@ -350,7 +344,10 @@ mod tests {
 
         // The losers must have been signalled.
         assert!(r0.try_recv().is_ok(), "lane 0 should have been signalled");
-        assert!(r1.try_recv().is_err(), "lane 1 (winner) should not be signalled");
+        assert!(
+            r1.try_recv().is_err(),
+            "lane 1 (winner) should not be signalled"
+        );
         assert!(r2.try_recv().is_ok(), "lane 2 should have been signalled");
     }
 
@@ -418,12 +415,18 @@ mod tests {
         let elapsed = t0.elapsed();
 
         match result {
-            RaceResult::Won { value: (), lane_index } => assert_eq!(lane_index, 1),
+            RaceResult::Won {
+                value: (),
+                lane_index,
+            } => assert_eq!(lane_index, 1),
             _ => panic!("expected Won with lane_index=1"),
         }
 
         // The loser should have been signalled.
-        assert!(r0.try_recv().is_ok(), "loser should have received AbortReason::Lost");
+        assert!(
+            r0.try_recv().is_ok(),
+            "loser should have received AbortReason::Lost"
+        );
         // Total time should be much less than the 500ms the loser would have taken.
         assert!(
             elapsed < Duration::from_millis(grace_ms + 200),
@@ -472,7 +475,10 @@ mod tests {
         parked.notify_one();
 
         match result {
-            RaceResult::Won { value: (), lane_index } => assert_eq!(lane_index, 0),
+            RaceResult::Won {
+                value: (),
+                lane_index,
+            } => assert_eq!(lane_index, 0),
             _ => panic!("expected Won with lane_index=0"),
         }
 

@@ -100,10 +100,8 @@ mod tests {
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_nanos())
             .unwrap_or(0);
-        let dir = std::env::temp_dir().join(format!(
-            "openproxy-bootstrap-test-{}-{}-{}",
-            pid, nanos, n
-        ));
+        let dir =
+            std::env::temp_dir().join(format!("openproxy-bootstrap-test-{}-{}-{}", pid, nanos, n));
         std::fs::create_dir_all(&dir).expect("mkdir");
         let path = dir.join("bootstrap.db");
         let mut conn = Connection::open(&path).expect("open");
@@ -119,7 +117,9 @@ mod tests {
         assert!(r.plaintext.starts_with("op_live_"));
         // Scope includes both manage + chat so the operator can hit
         // admin and chat endpoints with the same key.
-        let key = api_keys::get_by_id(&conn, r.id).expect("get").expect("present");
+        let key = api_keys::get_by_id(&conn, r.id)
+            .expect("get")
+            .expect("present");
         assert!(key.scopes.contains(&"manage".to_string()));
         assert!(key.scopes.contains(&"chat".to_string()));
     }

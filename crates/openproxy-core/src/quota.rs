@@ -15,7 +15,9 @@
 //! `quota_*` columns and the UI shows "not supported by provider".
 
 use crate::error::{CoreError, Result};
-use crate::upstream::{CancellationToken, TimeoutProfile, UpstreamClient, UpstreamError, UpstreamRequest};
+use crate::upstream::{
+    CancellationToken, TimeoutProfile, UpstreamClient, UpstreamError, UpstreamRequest,
+};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
@@ -47,7 +49,7 @@ pub struct ModelQuotaDetail {
 pub struct AccountQuota {
     pub session_used: Option<i64>,
     pub session_limit: Option<i64>,
-    pub session_reset_at: Option<String>,  // ISO-8601 or epoch seconds
+    pub session_reset_at: Option<String>, // ISO-8601 or epoch seconds
     pub weekly_used: Option<i64>,
     pub weekly_limit: Option<i64>,
     pub weekly_reset_at: Option<String>,
@@ -67,9 +69,7 @@ impl AccountQuota {
     /// between "not fetched yet" (no rows ever written) and "fetched,
     /// but the upstream said nothing".
     pub fn is_empty(&self) -> bool {
-        self.session_used.is_none()
-            && self.weekly_used.is_none()
-            && self.fetch_error.is_none()
+        self.session_used.is_none() && self.weekly_used.is_none() && self.fetch_error.is_none()
     }
 }
 
@@ -115,7 +115,7 @@ pub async fn fetch_minimax_quota(
         plan_name: None,
         last_fetched_at: now_unix_secs_str(),
         fetch_error: Some(last_err.unwrap_or_else(|| "unknown error".into())),
-            model_details: None,
+        model_details: None,
     })
 }
 
@@ -153,8 +153,8 @@ async fn fetch_minimax_from_url(
         .await
         .map_err(|e| CoreError::UpstreamConnection(format!("{}: {}", url, e)))?;
 
-    let json: serde_json::Value = serde_json::from_slice(&body)
-        .map_err(|e| CoreError::Parse(format!("{}: {}", url, e)))?;
+    let json: serde_json::Value =
+        serde_json::from_slice(&body).map_err(|e| CoreError::Parse(format!("{}: {}", url, e)))?;
     parse_minimax_quota(&json, url)
 }
 
@@ -221,12 +221,7 @@ fn parse_minimax_quota(body: &serde_json::Value, url: &str) -> Result<AccountQuo
     let entries = body
         .get("model_remains")
         .and_then(|v| v.as_array())
-        .ok_or_else(|| {
-            CoreError::Parse(format!(
-                "{}: missing 'model_remains' array",
-                url
-            ))
-        })?;
+        .ok_or_else(|| CoreError::Parse(format!("{}: missing 'model_remains' array", url)))?;
 
     if entries.is_empty() {
         return Err(CoreError::Parse(format!("{}: empty model_remains", url)));
@@ -235,10 +230,7 @@ fn parse_minimax_quota(body: &serde_json::Value, url: &str) -> Result<AccountQuo
     let target = entries
         .iter()
         .find(|e| {
-            let name = e
-                .get("model_name")
-                .and_then(|v| v.as_str())
-                .unwrap_or("");
+            let name = e.get("model_name").and_then(|v| v.as_str()).unwrap_or("");
             let lower = name.to_ascii_lowercase();
             // Prefer the Coding Plan aggregate tier over a per-model
             // row. The upstream returns one `model_remains` entry per
@@ -254,10 +246,7 @@ fn parse_minimax_quota(body: &serde_json::Value, url: &str) -> Result<AccountQuo
             // quota informative when the upstream drops the `general`
             // entry but still returns a known-good per-model row.
             entries.iter().find(|e| {
-                let name = e
-                    .get("model_name")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("");
+                let name = e.get("model_name").and_then(|v| v.as_str()).unwrap_or("");
                 name.to_ascii_lowercase().starts_with("minimax-m")
             })
         })
@@ -299,7 +288,7 @@ fn parse_minimax_quota(body: &serde_json::Value, url: &str) -> Result<AccountQuo
         plan_name,
         last_fetched_at: now_unix_secs_str(),
         fetch_error: None,
-            model_details: None,
+        model_details: None,
     })
 }
 
@@ -409,10 +398,8 @@ async fn fetch_antigravity_models_quota(
             http::header::CONTENT_TYPE,
             http::HeaderValue::from_static("application/json"),
         );
-        req.headers.insert(
-            http::header::USER_AGENT,
-            http::HeaderValue::from_static(ua),
-        );
+        req.headers
+            .insert(http::header::USER_AGENT, http::HeaderValue::from_static(ua));
         req.headers.insert(
             "x-goog-api-client",
             http::HeaderValue::from_static("gl-node/22.21.1"),
@@ -457,7 +444,9 @@ fn parse_antigravity_models_response(body: &serde_json::Value) -> Result<Account
     let mut worst_model_id = String::new();
 
     for (model_id, model_data) in models {
-        let Some(quota_info) = model_data.get("quotaInfo") else { continue };
+        let Some(quota_info) = model_data.get("quotaInfo") else {
+            continue;
+        };
         let remaining_fraction = quota_info
             .get("remainingFraction")
             .and_then(|f| f.as_f64())
@@ -470,7 +459,11 @@ fn parse_antigravity_models_response(body: &serde_json::Value) -> Result<Account
 
         let is_unlimited = reset_time.is_none() && remaining_fraction >= 1.0;
         let remaining = (NORMALIZED_BASE as f64 * remaining_fraction) as i64;
-        let used = if is_unlimited { 0 } else { NORMALIZED_BASE.saturating_sub(remaining) };
+        let used = if is_unlimited {
+            0
+        } else {
+            NORMALIZED_BASE.saturating_sub(remaining)
+        };
 
         details.push(ModelQuotaDetail {
             model_id: model_id.clone(),
@@ -487,10 +480,15 @@ fn parse_antigravity_models_response(body: &serde_json::Value) -> Result<Account
     }
 
     if details.is_empty() {
-        return Err(CoreError::Internal("no quota info found in response".into()));
+        return Err(CoreError::Internal(
+            "no quota info found in response".into(),
+        ));
     }
 
-    let worst = details.iter().find(|d| d.model_id == worst_model_id).unwrap();
+    let worst = details
+        .iter()
+        .find(|d| d.model_id == worst_model_id)
+        .unwrap();
 
     Ok(AccountQuota {
         plan_name: Some(format!("Antigravity ({})", worst.model_id)),
@@ -594,7 +592,7 @@ fn parse_antigravity_user_quota_response(body: &serde_json::Value) -> Result<Acc
                 weekly_reset_at: None,
                 last_fetched_at: now_unix_secs_str(),
                 fetch_error: None,
-            model_details: None,
+                model_details: None,
             }
         })
         .next();
@@ -675,7 +673,7 @@ pub async fn fetch_openrouter_quota(
                 plan_name: None,
                 last_fetched_at: now_unix_secs_str(),
                 fetch_error: Some(format!("network: {e}")),
-            model_details: None,
+                model_details: None,
             });
         }
     };
@@ -720,7 +718,7 @@ pub async fn fetch_openrouter_quota(
                 plan_name: None,
                 last_fetched_at: now_unix_secs_str(),
                 fetch_error: Some(format!("collect: {e}")),
-            model_details: None,
+                model_details: None,
             });
         }
     };
@@ -738,7 +736,7 @@ pub async fn fetch_openrouter_quota(
                 plan_name: None,
                 last_fetched_at: now_unix_secs_str(),
                 fetch_error: Some(format!("parse: {e}")),
-            model_details: None,
+                model_details: None,
             });
         }
     };
@@ -805,12 +803,8 @@ fn parse_openrouter_quota(body: &serde_json::Value, last_fetched_at: String) -> 
     // Some(0) because that is a legitimate "no spend yet" reading
     // — only the limit's zero would render as the misleading
     // "0 / 0" cell.
-    let session_used = raw_usage
-        .filter(|u| *u >= 0.0)
-        .map(|u| (u * 100.0) as i64);
-    let session_limit = raw_limit
-        .filter(|l| *l > 0.0)
-        .map(|l| (l * 100.0) as i64);
+    let session_used = raw_usage.filter(|u| *u >= 0.0).map(|u| (u * 100.0) as i64);
+    let session_limit = raw_limit.filter(|l| *l > 0.0).map(|l| (l * 100.0) as i64);
 
     let plan_name = if is_free {
         "OpenRouter (free tier)".to_string()
@@ -1129,8 +1123,16 @@ mod tests {
         // Plan name folds in the rate-limit shape, with "m" expanded
         // to "min" for readability.
         let plan = q.plan_name.as_deref().unwrap_or("");
-        assert!(plan.contains("free"), "plan should mention free tier: {}", plan);
-        assert!(plan.contains("20 req/min"), "plan should include rate limit: {}", plan);
+        assert!(
+            plan.contains("free"),
+            "plan should mention free tier: {}",
+            plan
+        );
+        assert!(
+            plan.contains("20 req/min"),
+            "plan should include rate limit: {}",
+            plan
+        );
         assert!(q.fetch_error.is_none());
         assert_eq!(q.last_fetched_at, "1700000000");
     }
@@ -1154,8 +1156,16 @@ mod tests {
         assert_eq!(q.session_limit, Some(10000));
         let plan = q.plan_name.as_deref().unwrap_or("");
         assert!(plan.contains("OpenRouter"));
-        assert!(!plan.contains("free"), "paid tier should not say free: {}", plan);
-        assert!(plan.contains("1000 req/day"), "plan should include rate limit: {}", plan);
+        assert!(
+            !plan.contains("free"),
+            "paid tier should not say free: {}",
+            plan
+        );
+        assert!(
+            plan.contains("1000 req/day"),
+            "plan should include rate limit: {}",
+            plan
+        );
     }
 
     #[test]
@@ -1244,7 +1254,11 @@ mod tests {
         let q = parse_openrouter_quota(&body, "0".into());
         let plan = q.plan_name.as_deref().unwrap_or("");
         assert!(plan.contains("3 req/sec"), "got plan: {}", plan);
-        assert!(!plan.contains("10s"), "compound interval must not appear verbatim: {}", plan);
+        assert!(
+            !plan.contains("10s"),
+            "compound interval must not appear verbatim: {}",
+            plan
+        );
     }
 
     #[test]
@@ -1268,8 +1282,16 @@ mod tests {
         assert_eq!(q.session_limit, None);
         let plan = q.plan_name.as_deref().unwrap_or("");
         assert!(plan.contains("OpenRouter"));
-        assert!(!plan.contains("-1"), "plan must not contain literal -1: {}", plan);
-        assert!(!plan.contains("10s"), "plan must not contain compound interval: {}", plan);
+        assert!(
+            !plan.contains("-1"),
+            "plan must not contain literal -1: {}",
+            plan
+        );
+        assert!(
+            !plan.contains("10s"),
+            "plan must not contain compound interval: {}",
+            plan
+        );
         // All-sentinel shape is a soft error so the UI doesn't
         // pretend the account has a zero quota.
         assert!(q.fetch_error.is_some());
@@ -1355,10 +1377,7 @@ mod tests {
         let q = parse_antigravity_models_response(&body).expect("parse");
         assert_eq!(q.session_used, Some(400)); // 1000 * (1 - 0.6)
         assert_eq!(q.session_limit, Some(1000));
-        assert_eq!(
-            q.session_reset_at.as_deref(),
-            Some("2025-01-01T00:00:00Z")
-        );
+        assert_eq!(q.session_reset_at.as_deref(), Some("2025-01-01T00:00:00Z"));
         assert!(q.plan_name.unwrap().contains("claude-sonnet-4"));
         assert!(q.fetch_error.is_none());
     }
@@ -1412,10 +1431,7 @@ mod tests {
         let q = parse_antigravity_user_quota_response(&body).expect("parse");
         assert_eq!(q.session_used, Some(650)); // 1000 * (1 - 0.35)
         assert_eq!(q.session_limit, Some(1000));
-        assert_eq!(
-            q.session_reset_at.as_deref(),
-            Some("2025-06-01T12:00:00Z")
-        );
+        assert_eq!(q.session_reset_at.as_deref(), Some("2025-06-01T12:00:00Z"));
         assert_eq!(q.plan_name.as_deref(), Some("Antigravity"));
         assert!(q.fetch_error.is_none());
     }
@@ -1423,16 +1439,14 @@ mod tests {
     #[test]
     fn parse_antigravity_user_quota_response_missing_buckets() {
         let body = json!({ "not_buckets": [] });
-        let err =
-            parse_antigravity_user_quota_response(&body).expect_err("missing buckets");
+        let err = parse_antigravity_user_quota_response(&body).expect_err("missing buckets");
         assert!(matches!(err, CoreError::Internal(_)));
     }
 
     #[test]
     fn parse_antigravity_user_quota_response_empty_buckets() {
         let body = json!({ "buckets": [] });
-        let err =
-            parse_antigravity_user_quota_response(&body).expect_err("empty buckets");
+        let err = parse_antigravity_user_quota_response(&body).expect_err("empty buckets");
         assert!(matches!(err, CoreError::Internal(_)));
     }
 

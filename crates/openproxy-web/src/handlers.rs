@@ -1,7 +1,7 @@
 use axum::{
     body::Body,
     extract::State,
-    http::{header, HeaderValue, StatusCode},
+    http::{HeaderValue, StatusCode, header},
     response::{Html, IntoResponse, Json, Response},
 };
 use std::path::PathBuf;
@@ -17,8 +17,7 @@ pub async fn web_health(State(s): State<WebState>) -> impl IntoResponse {
         Ok(v) => Json(serde_json::json!({"status": "ok", "core": v})).into_response(),
         Err(e) => {
             tracing::warn!(error = %e, "core unreachable");
-            Json(serde_json::json!({"status": "degraded", "error": e.to_string()}))
-                .into_response()
+            Json(serde_json::json!({"status": "degraded", "error": e.to_string()})).into_response()
         }
     }
 }

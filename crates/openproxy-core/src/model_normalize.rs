@@ -8,12 +8,9 @@
 use once_cell::sync::Lazy;
 use regex::Regex;
 
-static DATE_SUFFIX_RE: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r"-\d{4}-\d{2}-\d{2}$").unwrap());
-static YYYYMM_SUFFIX_RE: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r"-\d{4}$").unwrap());
-static VERSION_SUFFIX_RE: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r"-v\d+$").unwrap());
+static DATE_SUFFIX_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"-\d{4}-\d{2}-\d{2}$").unwrap());
+static YYYYMM_SUFFIX_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"-\d{4}$").unwrap());
+static VERSION_SUFFIX_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"-v\d+$").unwrap());
 
 /// Normalize a model ID for matching against models.dev canonical IDs.
 ///
@@ -131,7 +128,10 @@ mod tests {
             normalize_model_id("openai/gpt-4-turbo-2024-04-09"),
             "gpt-4-turbo"
         );
-        assert_eq!(normalize_model_id("claude-sonnet-4-20250514"), "claude-sonnet-4");
+        assert_eq!(
+            normalize_model_id("claude-sonnet-4-20250514"),
+            "claude-sonnet-4"
+        );
         assert_eq!(
             normalize_model_id("claude-3-7-sonnet-20250219"),
             "claude-3-7-sonnet"

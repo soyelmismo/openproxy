@@ -11,7 +11,7 @@
 //! `GET /admin/debug/logs`. See `debug_log.rs` for the full rationale.
 
 use openproxy_core::config::{LogFormat, LoggingConfig};
-use tracing_subscriber::{fmt, prelude::*, EnvFilter};
+use tracing_subscriber::{EnvFilter, fmt, prelude::*};
 
 /// Initialize the global subscriber. Idempotent in the sense that calling
 /// it twice is a no-op the second time, but in practice `main` is the
@@ -25,8 +25,8 @@ pub fn init(config: &LoggingConfig) -> anyhow::Result<()> {
     // installed. `debug_log::init` is idempotent.
     crate::debug_log::init();
 
-    let filter = EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| EnvFilter::new(&config.level));
+    let filter =
+        EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(&config.level));
 
     let registry = tracing_subscriber::registry().with(filter);
 
@@ -38,7 +38,12 @@ pub fn init(config: &LoggingConfig) -> anyhow::Result<()> {
     match config.format {
         LogFormat::Json => {
             registry
-                .with(fmt::layer().json().with_current_span(true).with_span_list(false))
+                .with(
+                    fmt::layer()
+                        .json()
+                        .with_current_span(true)
+                        .with_span_list(false),
+                )
                 .with(debug_layer)
                 .try_init()?;
         }

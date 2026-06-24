@@ -7,7 +7,7 @@
 
 use crate::error::{CoreError, Result};
 use crate::ids::ProviderId;
-use rusqlite::{params, Connection, OptionalExtension};
+use rusqlite::{Connection, OptionalExtension, params};
 use serde::{Deserialize, Serialize};
 
 // Re-export the built-in predicates from `seed` so callers (and the
@@ -320,14 +320,11 @@ pub fn set_active(conn: &Connection, id: &ProviderId, active: bool) -> Result<()
 /// A missing id is a no-op (0 rows affected), not an error: deletes are
 /// idempotent.
 pub fn delete(conn: &Connection, id: &ProviderId) -> Result<()> {
-    conn.execute(
-        "DELETE FROM providers WHERE id = ?1",
-        params![id.as_str()],
-    )
-    .map_err(|e| CoreError::Database {
-        message: format!("delete provider {}: {}", id, e),
-        source: Some(Box::new(e)),
-    })?;
+    conn.execute("DELETE FROM providers WHERE id = ?1", params![id.as_str()])
+        .map_err(|e| CoreError::Database {
+            message: format!("delete provider {}: {}", id, e),
+            source: Some(Box::new(e)),
+        })?;
     Ok(())
 }
 
@@ -483,8 +480,8 @@ mod tests {
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_nanos())
             .unwrap_or(0);
-        let dir = std::env::temp_dir()
-            .join(format!("openproxy-providers-test-{}-{}-{}", pid, nanos, n));
+        let dir =
+            std::env::temp_dir().join(format!("openproxy-providers-test-{}-{}-{}", pid, nanos, n));
         std::fs::create_dir_all(&dir).expect("mkdir tempdir");
         let path = dir.join("providers.db");
         let pool = DbPool::open(&path).expect("open pool");
@@ -521,7 +518,10 @@ mod tests {
         assert_eq!(got.base_url, "https://openrouter.ai/api/v1");
         assert_eq!(got.auth_type, AuthType::Bearer);
         assert_eq!(got.format, ProviderFormat::Openai);
-        assert_eq!(got.extra_headers_json.as_deref(), Some(r#"{"X-Title":"openproxy"}"#));
+        assert_eq!(
+            got.extra_headers_json.as_deref(),
+            Some(r#"{"X-Title":"openproxy"}"#)
+        );
         assert_eq!(got.auto_activate_keyword.as_deref(), Some("claude"));
         assert!(!got.created_at.is_empty(), "created_at stamped by DB");
     }
@@ -844,7 +844,10 @@ mod tests {
         // `list` still shows b so the operator can see and reactivate.
         let all = list(&conn).expect("list");
         assert_eq!(all.len(), 3);
-        let b = all.iter().find(|p| p.id == ProviderId::new("b")).expect("b present");
+        let b = all
+            .iter()
+            .find(|p| p.id == ProviderId::new("b"))
+            .expect("b present");
         assert!(!b.active, "b is marked inactive in the full list");
     }
 
@@ -886,14 +889,17 @@ mod tests {
         let all = list(&conn).expect("list");
         assert_eq!(all.len(), 2, "list hides the virtual combo row");
         assert!(
-            all.iter().all(|p| p.id.as_str() != crate::seed::VIRTUAL_COMBO_PROVIDER_ID),
+            all.iter()
+                .all(|p| p.id.as_str() != crate::seed::VIRTUAL_COMBO_PROVIDER_ID),
             "virtual combo provider id absent from list()"
         );
 
         let active = list_active(&conn).expect("list_active");
         assert_eq!(active.len(), 2, "list_active hides the virtual combo row");
         assert!(
-            active.iter().all(|p| p.id.as_str() != crate::seed::VIRTUAL_COMBO_PROVIDER_ID),
+            active
+                .iter()
+                .all(|p| p.id.as_str() != crate::seed::VIRTUAL_COMBO_PROVIDER_ID),
             "virtual combo provider id absent from list_active()"
         );
 

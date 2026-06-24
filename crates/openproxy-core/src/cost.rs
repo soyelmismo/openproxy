@@ -8,7 +8,7 @@ use crate::ids::{
 };
 use crate::pricing;
 use once_cell::sync::Lazy;
-use rusqlite::{params, Connection};
+use rusqlite::{Connection, params};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -88,9 +88,7 @@ pub fn redact_error_msg(raw: &str) -> (String, String) {
     // Only run replace_all if the pattern is present — avoids the
     // Cow→String allocation when no match exists.
     if RE_SK.is_match(&sanitized) {
-        sanitized = RE_SK
-            .replace_all(&sanitized, "sk-[REDACTED]")
-            .into_owned();
+        sanitized = RE_SK.replace_all(&sanitized, "sk-[REDACTED]").into_owned();
     }
     if RE_XAPIKEY.is_match(&sanitized) {
         sanitized = RE_XAPIKEY
@@ -122,8 +120,7 @@ pub fn record(conn: &Connection, input: &UsageInput) -> Result<UsageId> {
     // Without this log, missing pricing was completely silent — rows
     // silently got `cost_usd = 0` with no signal to the operator.
     if price.is_none()
-        && (input.prompt_tokens.unwrap_or(0) > 0
-            || input.completion_tokens.unwrap_or(0) > 0)
+        && (input.prompt_tokens.unwrap_or(0) > 0 || input.completion_tokens.unwrap_or(0) > 0)
     {
         tracing::warn!(
             provider_id = %input.provider_id,
@@ -216,7 +213,6 @@ pub fn record(conn: &Connection, input: &UsageInput) -> Result<UsageId> {
             input.compression_techniques,
         ],
     )
-
     .map_err(|e| CoreError::Database {
         message: format!("insert usage row: {}", e),
         source: Some(Box::new(e)),
@@ -224,38 +220,38 @@ pub fn record(conn: &Connection, input: &UsageInput) -> Result<UsageId> {
 
     let rowid = conn.last_insert_rowid();
 
-        let row = crate::usage::RecentUsageRow {
-            id: UsageId(rowid),
-            request_id,
-            trace_id,
-            provider_id: input.provider_id.clone(),
-            upstream_model_id: input.upstream_model_id.clone(),
-            status_code: input.status_code,
-            total_ms: input.total_ms,
-            prompt_tokens: input.prompt_tokens,
-            completion_tokens: input.completion_tokens,
-            cost_usd: Some(cost_usd),
-            race_lost: input.race_lost,
-            created_at: chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string(),
-            connect_ms: input.connect_ms,
-            ttft_ms: input.ttft_ms,
-            // PERF: set heavy fields to None for the broadcast row.
-            // The dashboard never receives these fields — they're
-            // fetched on demand via GET /admin/usage/:id. Cloning
-            // them here was pure waste (up to MB of JSON per request).
-            request_body_json: None,
-            response_body_json: None,
-            request_headers: None,
-            response_headers: None,
-            error_message: error_msg_redacted_for_db.clone(),
-            race_total: Some(input.race_total),
-            race_attempts: Some(input.race_attempts),
-            is_streaming: input.is_streaming,
-            stream_complete: input.stream_complete,
-            stop_reason: input.stop_reason.clone(),
-            compression_savings_pct: input.compression_savings_pct,
-            compression_techniques: input.compression_techniques.clone(),
-        };
+    let row = crate::usage::RecentUsageRow {
+        id: UsageId(rowid),
+        request_id,
+        trace_id,
+        provider_id: input.provider_id.clone(),
+        upstream_model_id: input.upstream_model_id.clone(),
+        status_code: input.status_code,
+        total_ms: input.total_ms,
+        prompt_tokens: input.prompt_tokens,
+        completion_tokens: input.completion_tokens,
+        cost_usd: Some(cost_usd),
+        race_lost: input.race_lost,
+        created_at: chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string(),
+        connect_ms: input.connect_ms,
+        ttft_ms: input.ttft_ms,
+        // PERF: set heavy fields to None for the broadcast row.
+        // The dashboard never receives these fields — they're
+        // fetched on demand via GET /admin/usage/:id. Cloning
+        // them here was pure waste (up to MB of JSON per request).
+        request_body_json: None,
+        response_body_json: None,
+        request_headers: None,
+        response_headers: None,
+        error_message: error_msg_redacted_for_db.clone(),
+        race_total: Some(input.race_total),
+        race_attempts: Some(input.race_attempts),
+        is_streaming: input.is_streaming,
+        stream_complete: input.stream_complete,
+        stop_reason: input.stop_reason.clone(),
+        compression_savings_pct: input.compression_savings_pct,
+        compression_techniques: input.compression_techniques.clone(),
+    };
     crate::usage::publish_usage_row(row);
 
     Ok(UsageId(rowid))

@@ -49,7 +49,11 @@ impl Scheme {
 
 impl HostKey {
     pub fn new(scheme: Scheme, host: impl Into<String>, port: u16) -> Self {
-        Self { scheme, host: host.into(), port }
+        Self {
+            scheme,
+            host: host.into(),
+            port,
+        }
     }
 }
 
@@ -200,8 +204,18 @@ impl std::fmt::Debug for UpstreamConnectionPool {
         let g = self.inner.lock().expect("pool mutex poisoned");
         f.debug_struct("UpstreamConnectionPool")
             .field("host_count", &g.len())
-            .field("reuses", &g.values().map(|e| e.reuses.load(Ordering::SeqCst)).sum::<usize>())
-            .field("total", &g.values().map(|e| e.total.load(Ordering::SeqCst)).sum::<usize>())
+            .field(
+                "reuses",
+                &g.values()
+                    .map(|e| e.reuses.load(Ordering::SeqCst))
+                    .sum::<usize>(),
+            )
+            .field(
+                "total",
+                &g.values()
+                    .map(|e| e.total.load(Ordering::SeqCst))
+                    .sum::<usize>(),
+            )
             .finish()
     }
 }

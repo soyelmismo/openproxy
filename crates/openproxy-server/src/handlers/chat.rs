@@ -20,37 +20,32 @@
 //! plumbing is a follow-up.
 
 use axum::{
+    Json,
     extract::Extension,
     extract::State,
     http::{HeaderMap, StatusCode},
     response::IntoResponse,
-    Json,
 };
 use bytes::Bytes;
 use futures::stream::Stream;
+use openproxy_core::{
+    CoreError, api_keys as core_api_keys,
+    ids::{ApiKeyId, ComboId, RequestId, TraceId},
+    pipeline::{Pipeline, PipelineConfig, PipelineRequest},
+    redact::redact_sensitive_headers,
+    routing::{self, RoutingPlan, SYNTHETIC_COMBO_ID, build_synthetic_combo},
+    translation::OpenAIRequest,
+};
+use serde_json::json;
 use std::convert::Infallible;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 use std::time::Duration;
-use tokio_stream::wrappers::ReceiverStream;
-use openproxy_core::{
-    api_keys as core_api_keys,
-    ids::{ApiKeyId, ComboId, RequestId, TraceId},
-    pipeline::{Pipeline, PipelineConfig, PipelineRequest},
-    redact::redact_sensitive_headers,
-    routing::{self, build_synthetic_combo, RoutingPlan, SYNTHETIC_COMBO_ID},
-    translation::OpenAIRequest,
-    CoreError,
-};
-use serde_json::json;
 use std::time::Instant;
+use tokio_stream::wrappers::ReceiverStream;
 
-use crate::{
-    disconnect::CancelWatch,
-    error::ApiError,
-    state::AppState,
-};
+use crate::{disconnect::CancelWatch, error::ApiError, state::AppState};
 
 /// SSE keepalive interval. Sends `: keep-alive\n\n` (an SSE comment)
 /// every 15 seconds so proxies and load balancers don't close the
@@ -139,8 +134,8 @@ async fn run_pipeline(
     //    when a client sends an unexpected field that causes the
     //    upstream to behave differently.
     let raw_request_body = body.clone();
-    let openai_req: OpenAIRequest = serde_json::from_value(body)
-        .map_err(|e| ApiError(CoreError::Parse(e.to_string())))?;
+    let openai_req: OpenAIRequest =
+        serde_json::from_value(body).map_err(|e| ApiError(CoreError::Parse(e.to_string())))?;
 
     // 2. Authenticate (backward-compatible: no header = anonymous).
     //
@@ -166,7 +161,13 @@ async fn run_pipeline(
         // Use the connection's remote addr as the rate-limit key for
         // anonymous requests. If unavailable, fall back to a shared
         // "anon" bucket.
-        format!("ip:{}", headers.get("x-forwarded-for").and_then(|v| v.to_str().ok()).unwrap_or("anon"))
+        format!(
+            "ip:{}",
+            headers
+                .get("x-forwarded-for")
+                .and_then(|v| v.to_str().ok())
+                .unwrap_or("anon")
+        )
     };
     if !state.rate_limiter().check(&rl_key) {
         return Err(ApiError(CoreError::RateLimited {
@@ -234,7 +235,7 @@ async fn run_pipeline(
         && !allowed.contains(&combo_id.0)
     {
         return Err(ApiError(CoreError::Auth(
-            "combo not allowed for this key".to_string()
+            "combo not allowed for this key".to_string(),
         )));
     }
 
@@ -245,11 +246,8 @@ async fn run_pipeline(
             model_row_id,
             ..
         } => {
-            let (synthetic_combo, synthetic_targets) = build_synthetic_combo(
-                provider_id.clone(),
-                *account_id,
-                *model_row_id,
-            );
+            let (synthetic_combo, synthetic_targets) =
+                build_synthetic_combo(provider_id.clone(), *account_id, *model_row_id);
             // The pipeline carries the synthetic combo + targets in
             // its override slots; `combo_id` is the sentinel so
             // usage rows can be grepped for synthetic dispatch.
@@ -263,12 +261,7 @@ async fn run_pipeline(
         RoutingPlan::NotFound { model, hint } => {
             // Write a usage row so the dashboard's Live Logs tail
             // shows the misroute.
-            let _ = record_model_not_found_usage_row(
-                &state,
-                RequestId::new(),
-                api_key_id,
-                model,
-            );
+            let _ = record_model_not_found_usage_row(&state, RequestId::new(), api_key_id, model);
             let mut msg = format!("model not found: {}", model);
             if let Some(h) = hint {
                 msg.push_str(&format!(" (hint: {})", h));
@@ -282,9 +275,7 @@ async fn run_pipeline(
 
     // 5. Build the pipeline config from the app config.
     let config = PipelineConfig {
-        defaults: openproxy_core::timeouts::Timeouts::from_config(
-            &state.timeouts(),
-        ),
+        defaults: openproxy_core::timeouts::Timeouts::from_config(&state.timeouts()),
         racing: state.config().racing.clone(),
         retries: state.config().retries,
         max_attempts: state.config().retries.max_attempts,
@@ -496,8 +487,8 @@ async fn run_pipeline(
 
     // 9. Translate the pipeline result into an HTTP response.
     if let Some(err) = result.error {
-        let status = StatusCode::from_u16(err.http_status())
-            .unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
+        let status =
+            StatusCode::from_u16(err.http_status()).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
         tracing::debug!(
             status = status.as_u16(),
             attempts = result.attempts,
@@ -575,8 +566,8 @@ fn authenticate(
             // `count_active` is a SELECT COUNT(*) — use the READER so
             // the anonymous-fallback check doesn't serialize through
             // the writer mutex (see `db::conn::DbPool::reader`).
-            let active = core_api_keys::count_active(&state.db_pool().reader())
-                .map_err(ApiError)?;
+            let active =
+                core_api_keys::count_active(&state.db_pool().reader()).map_err(ApiError)?;
             if active == 0 {
                 tracing::debug!(
                     target: "openproxy::auth",
@@ -590,8 +581,7 @@ fn authenticate(
     if token.is_empty() {
         // Same gate: a bare `Authorization: Bearer ` (empty
         // token) is treated as "no header".
-        let active = core_api_keys::count_active(&state.db_pool().reader())
-            .map_err(ApiError)?;
+        let active = core_api_keys::count_active(&state.db_pool().reader()).map_err(ApiError)?;
         if active == 0 {
             return Ok(None);
         }
@@ -721,7 +711,10 @@ fn record_model_not_found_usage_row(
     // this write doesn't block indefinitely under admin lock contention.
     // If the lock can't be acquired in 100ms, log and drop the row —
     // a missing usage row is preferable to a 5xx on the 404 path.
-    let w = match state.db_pool().try_writer_for(std::time::Duration::from_millis(100)) {
+    let w = match state
+        .db_pool()
+        .try_writer_for(std::time::Duration::from_millis(100))
+    {
         Some(w) => w,
         None => {
             tracing::warn!("hot-path writer lock timeout on model_not_found usage row; dropping");

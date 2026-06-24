@@ -21,121 +21,202 @@ static PRICING_TABLE: Lazy<HashMap<(&'static str, &'static str), Price>> = Lazy:
     // OpenRouter
     table.insert(
         ("openrouter", "anthropic/claude-sonnet-4"),
-        Price { input_per_1m: 3.0, output_per_1m: 15.0 },
+        Price {
+            input_per_1m: 3.0,
+            output_per_1m: 15.0,
+        },
     );
     table.insert(
         ("openrouter", "anthropic/claude-3-5-sonnet"),
-        Price { input_per_1m: 3.0, output_per_1m: 15.0 },
+        Price {
+            input_per_1m: 3.0,
+            output_per_1m: 15.0,
+        },
     );
     table.insert(
         ("openrouter", "anthropic/claude-3-haiku"),
-        Price { input_per_1m: 0.25, output_per_1m: 1.25 },
+        Price {
+            input_per_1m: 0.25,
+            output_per_1m: 1.25,
+        },
     );
     table.insert(
         ("openrouter", "openai/gpt-4o"),
-        Price { input_per_1m: 2.5, output_per_1m: 10.0 },
+        Price {
+            input_per_1m: 2.5,
+            output_per_1m: 10.0,
+        },
     );
     table.insert(
         ("openrouter", "openai/gpt-4o-mini"),
-        Price { input_per_1m: 0.15, output_per_1m: 0.6 },
+        Price {
+            input_per_1m: 0.15,
+            output_per_1m: 0.6,
+        },
     );
     table.insert(
         ("openrouter", "openai/gpt-4.1"),
-        Price { input_per_1m: 2.0, output_per_1m: 8.0 },
+        Price {
+            input_per_1m: 2.0,
+            output_per_1m: 8.0,
+        },
     );
     table.insert(
         ("openrouter", "openai/gpt-4.1-mini"),
-        Price { input_per_1m: 0.4, output_per_1m: 1.6 },
+        Price {
+            input_per_1m: 0.4,
+            output_per_1m: 1.6,
+        },
     );
     table.insert(
         ("openrouter", "google/gemini-2.5-pro"),
-        Price { input_per_1m: 1.25, output_per_1m: 10.0 },
+        Price {
+            input_per_1m: 1.25,
+            output_per_1m: 10.0,
+        },
     );
     table.insert(
         ("openrouter", "google/gemini-2.5-flash"),
-        Price { input_per_1m: 0.075, output_per_1m: 0.30 },
+        Price {
+            input_per_1m: 0.075,
+            output_per_1m: 0.30,
+        },
     );
     table.insert(
         ("openrouter", "meta-llama/llama-3.3-70b-instruct"),
-        Price { input_per_1m: 0.59, output_per_1m: 0.79 },
+        Price {
+            input_per_1m: 0.59,
+            output_per_1m: 0.79,
+        },
     );
     table.insert(
         ("openrouter", "deepseek/deepseek-chat"),
-        Price { input_per_1m: 0.14, output_per_1m: 0.28 },
+        Price {
+            input_per_1m: 0.14,
+            output_per_1m: 0.28,
+        },
     );
     table.insert(
         ("openrouter", "deepseek/deepseek-r1"),
-        Price { input_per_1m: 0.55, output_per_1m: 2.19 },
+        Price {
+            input_per_1m: 0.55,
+            output_per_1m: 2.19,
+        },
     );
     table.insert(
         ("openrouter", "qwen/qwen-2.5-72b-instruct"),
-        Price { input_per_1m: 0.23, output_per_1m: 0.40 },
+        Price {
+            input_per_1m: 0.23,
+            output_per_1m: 0.40,
+        },
     );
     table.insert(
         ("openrouter", "mistralai/mistral-large"),
-        Price { input_per_1m: 2.0, output_per_1m: 6.0 },
+        Price {
+            input_per_1m: 2.0,
+            output_per_1m: 6.0,
+        },
     );
     table.insert(
         ("openrouter", "x-ai/grok-2"),
-        Price { input_per_1m: 2.0, output_per_1m: 10.0 },
+        Price {
+            input_per_1m: 2.0,
+            output_per_1m: 10.0,
+        },
     );
 
     // MiniMax — M3 is the latest paid model (~$1.0/1M tokens).
     table.insert(
         ("minimax", "minimax-m2.1"),
-        Price { input_per_1m: 0.2, output_per_1m: 0.2 },
+        Price {
+            input_per_1m: 0.2,
+            output_per_1m: 0.2,
+        },
     );
     table.insert(
         ("minimax", "MiniMax-M2"),
-        Price { input_per_1m: 0.2, output_per_1m: 0.2 },
+        Price {
+            input_per_1m: 0.2,
+            output_per_1m: 0.2,
+        },
     );
     table.insert(
         ("minimax", "MiniMax-M3"),
-        Price { input_per_1m: 1.0, output_per_1m: 1.0 },
+        Price {
+            input_per_1m: 1.0,
+            output_per_1m: 1.0,
+        },
     );
     // MiniMax-M3 also appears under other provider ids (nvidia-nim,
     // tokenrouter) — register it under those too so the exact-match
     // tier finds it without needing the cross-provider fallback.
     table.insert(
         ("nvidia-nim", "minimaxai/minimax-m3"),
-        Price { input_per_1m: 1.0, output_per_1m: 1.0 },
+        Price {
+            input_per_1m: 1.0,
+            output_per_1m: 1.0,
+        },
     );
     table.insert(
         ("tokenrouter", "MiniMax-M3"),
-        Price { input_per_1m: 1.0, output_per_1m: 1.0 },
+        Price {
+            input_per_1m: 1.0,
+            output_per_1m: 1.0,
+        },
     );
 
     // NVIDIA NIM — common models hosted on build.nvidia.com.
     // Pricing as of 2025; verify against NVIDIA's pricing page.
     table.insert(
         ("nvidia-nim", "meta/llama-3.3-70b-instruct"),
-        Price { input_per_1m: 0.77, output_per_1m: 0.77 },
+        Price {
+            input_per_1m: 0.77,
+            output_per_1m: 0.77,
+        },
     );
     table.insert(
         ("nvidia-nim", "meta/llama-3.1-8b-instruct"),
-        Price { input_per_1m: 0.18, output_per_1m: 0.18 },
+        Price {
+            input_per_1m: 0.18,
+            output_per_1m: 0.18,
+        },
     );
     table.insert(
         ("nvidia-nim", "nvidia/nemotron-3-ultra-550b-a55b"),
-        Price { input_per_1m: 0.77, output_per_1m: 0.77 },
+        Price {
+            input_per_1m: 0.77,
+            output_per_1m: 0.77,
+        },
     );
     table.insert(
         ("nvidia-nim", "moonshotai/kimi-k2.6"),
-        Price { input_per_1m: 0.60, output_per_1m: 2.50 },
+        Price {
+            input_per_1m: 0.60,
+            output_per_1m: 2.50,
+        },
     );
     table.insert(
         ("nvidia-nim", "z-ai/glm-5.1"),
-        Price { input_per_1m: 0.14, output_per_1m: 0.28 },
+        Price {
+            input_per_1m: 0.14,
+            output_per_1m: 0.28,
+        },
     );
     table.insert(
         ("nvidia-nim", "z-ai/glm-4.6"),
-        Price { input_per_1m: 0.14, output_per_1m: 0.28 },
+        Price {
+            input_per_1m: 0.14,
+            output_per_1m: 0.28,
+        },
     );
 
     // z.ai GLM models (common across providers)
     table.insert(
         ("zenmux", "z-ai/glm-5.2"),
-        Price { input_per_1m: 0.14, output_per_1m: 0.28 },
+        Price {
+            input_per_1m: 0.14,
+            output_per_1m: 0.28,
+        },
     );
 
     table
@@ -162,10 +243,7 @@ pub fn lookup(provider: &str, model: &str) -> Option<Price> {
     //    "tokenrouter", "nvidia-nim"). We try the exact model string
     //    first, then the normalized form (strips provider prefix,
     //    free suffixes, date suffixes).
-    if let Some((_, price)) = PRICING_TABLE
-        .iter()
-        .find(|((_, m), _)| *m == model)
-    {
+    if let Some((_, price)) = PRICING_TABLE.iter().find(|((_, m), _)| *m == model) {
         return Some(*price);
     }
     // 3. Normalized cross-provider fallback: strip the provider prefix
@@ -245,15 +323,17 @@ pub fn lookup_with_db(conn: &Connection, provider: &str, model: &str) -> Option<
 /// Try exact match in the sync table.
 fn lookup_exact_in_db(conn: &Connection, provider: &str, model: &str) -> Option<Price> {
     use rusqlite::OptionalExtension;
-    let result: Result<Option<(f64, f64)>, _> = conn.query_row(
-        "SELECT pricing_input_per_1m, pricing_output_per_1m \
+    let result: Result<Option<(f64, f64)>, _> = conn
+        .query_row(
+            "SELECT pricing_input_per_1m, pricing_output_per_1m \
          FROM model_capabilities_sync \
          WHERE provider_id = ?1 AND model_id = ?2 \
            AND pricing_input_per_1m IS NOT NULL \
            AND pricing_output_per_1m IS NOT NULL",
-        rusqlite::params![provider, model],
-        |row| Ok((row.get::<_, f64>(0)?, row.get::<_, f64>(1)?)),
-    ).optional();
+            rusqlite::params![provider, model],
+            |row| Ok((row.get::<_, f64>(0)?, row.get::<_, f64>(1)?)),
+        )
+        .optional();
     result.ok().flatten().map(|(inp, out)| Price {
         input_per_1m: inp,
         output_per_1m: out,
@@ -271,16 +351,18 @@ fn lookup_exact_in_db(conn: &Connection, provider: &str, model: &str) -> Option<
 /// models.dev data.
 pub(crate) fn lookup_by_normalized(conn: &Connection, normalized: &str) -> Option<Price> {
     use rusqlite::OptionalExtension;
-    let result: Result<Option<(f64, f64)>, _> = conn.query_row(
-        "SELECT pricing_input_per_1m, pricing_output_per_1m \
+    let result: Result<Option<(f64, f64)>, _> = conn
+        .query_row(
+            "SELECT pricing_input_per_1m, pricing_output_per_1m \
          FROM model_capabilities_sync \
          WHERE model_id_normalized = ?1 \
            AND pricing_input_per_1m IS NOT NULL \
            AND pricing_output_per_1m IS NOT NULL \
          LIMIT 1",
-        rusqlite::params![normalized],
-        |row| Ok((row.get::<_, f64>(0)?, row.get::<_, f64>(1)?)),
-    ).optional();
+            rusqlite::params![normalized],
+            |row| Ok((row.get::<_, f64>(0)?, row.get::<_, f64>(1)?)),
+        )
+        .optional();
     result.ok().flatten().map(|(inp, out)| Price {
         input_per_1m: inp,
         output_per_1m: out,
@@ -335,7 +417,10 @@ mod tests {
 
     #[test]
     fn compute_cost_basic() {
-        let price = Some(Price { input_per_1m: 1.0, output_per_1m: 2.0 });
+        let price = Some(Price {
+            input_per_1m: 1.0,
+            output_per_1m: 2.0,
+        });
         // 1.0 * 1000 / 1e6 + 2.0 * 500 / 1e6 = 0.001 + 0.001 = 0.002
         let cost = compute_cost(price, 1000, 500);
         assert!((cost - 0.002).abs() < 1e-12);
@@ -343,7 +428,10 @@ mod tests {
 
     #[test]
     fn compute_cost_with_zero_tokens() {
-        let price = Some(Price { input_per_1m: 5.0, output_per_1m: 10.0 });
+        let price = Some(Price {
+            input_per_1m: 5.0,
+            output_per_1m: 10.0,
+        });
         assert_eq!(compute_cost(price, 0, 0), 0.0);
     }
 

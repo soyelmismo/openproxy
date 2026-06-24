@@ -21,7 +21,9 @@ use crate::error::{CoreError, Result};
 use crate::ids::AccountId;
 use crate::oauth::{OAuthFlow, OAuthProvider, TokenResponse};
 use crate::secrets::MasterKey;
-use crate::upstream::{CancellationToken, TimeoutProfile, UpstreamClient, UpstreamError, UpstreamRequest};
+use crate::upstream::{
+    CancellationToken, TimeoutProfile, UpstreamClient, UpstreamError, UpstreamRequest,
+};
 use std::sync::Arc;
 
 /// Google OAuth client_id for Cloud Code (Antigravity).
@@ -51,8 +53,7 @@ const TOKEN_URL: &str = "https://oauth2.googleapis.com/token";
 /// the same `daily-cloudcode-pa.googleapis.com` the chat executor uses.
 const LOAD_CODE_ASSIST_URL: &str =
     "https://daily-cloudcode-pa.googleapis.com/v1internal:loadCodeAssist";
-const ONBOARD_USER_URL: &str =
-    "https://daily-cloudcode-pa.googleapis.com/v1internal:onboardUser";
+const ONBOARD_USER_URL: &str = "https://daily-cloudcode-pa.googleapis.com/v1internal:onboardUser";
 
 /// Cloud Code `metadata.ideType` used when the operator has not
 /// configured a custom IDE identity. The Antigravity client sends
@@ -90,10 +91,7 @@ impl OAuthProvider for AntigravityOAuthProvider {
         OAuthFlow::AuthorizationCodePkce
     }
 
-    async fn build_auth_url(
-        &self,
-        redirect_uri: &str,
-    ) -> Result<(String, String, String)> {
+    async fn build_auth_url(&self, redirect_uri: &str) -> Result<(String, String, String)> {
         let code_verifier = generate_code_verifier();
         let code_challenge = code_challenge_s256(&code_verifier);
 
@@ -161,9 +159,9 @@ impl OAuthProvider for AntigravityOAuthProvider {
             Err(e) => {
                 return Err(match e {
                     UpstreamError::Cancel => CoreError::ClientDisconnected,
-                    other => CoreError::UpstreamConnection(format!(
-                        "google token exchange: {other}"
-                    )),
+                    other => {
+                        CoreError::UpstreamConnection(format!("google token exchange: {other}"))
+                    }
                 });
             }
         };
@@ -251,9 +249,9 @@ impl OAuthProvider for AntigravityOAuthProvider {
             Err(e) => {
                 return Err(match e {
                     UpstreamError::Cancel => CoreError::ClientDisconnected,
-                    other => CoreError::UpstreamConnection(format!(
-                        "google token refresh: {other}"
-                    )),
+                    other => {
+                        CoreError::UpstreamConnection(format!("google token refresh: {other}"))
+                    }
                 });
             }
         };
@@ -314,11 +312,11 @@ impl OAuthProvider for AntigravityOAuthProvider {
                 .send()
                 .await
             {
-                Ok(resp) if resp.status().is_success() => {
-                    resp.json::<serde_json::Value>().await
-                        .ok()
-                        .and_then(|v| v.get("email").and_then(|e| e.as_str()).map(String::from))
-                }
+                Ok(resp) if resp.status().is_success() => resp
+                    .json::<serde_json::Value>()
+                    .await
+                    .ok()
+                    .and_then(|v| v.get("email").and_then(|e| e.as_str()).map(String::from)),
                 _ => None,
             }
         };
@@ -366,9 +364,8 @@ impl OAuthProvider for AntigravityOAuthProvider {
         let meta = AntigravityProviderMeta {
             project_id: Some(project_id),
         };
-        let meta_json = serde_json::to_string(&meta).map_err(|e| {
-            CoreError::Internal(format!("antigravity meta serialize: {e}"))
-        })?;
+        let meta_json = serde_json::to_string(&meta)
+            .map_err(|e| CoreError::Internal(format!("antigravity meta serialize: {e}")))?;
         let conn = db_pool.writer();
         conn.execute(
             "UPDATE accounts SET oauth_provider_specific = ?1 WHERE id = ?2",
@@ -410,9 +407,7 @@ async fn load_code_assist(
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(15))
         .build()
-        .map_err(|e| {
-            CoreError::UpstreamConnection(format!("antigravity load client: {e}"))
-        })?;
+        .map_err(|e| CoreError::UpstreamConnection(format!("antigravity load client: {e}")))?;
 
     let body = serde_json::json!({ "metadata": metadata });
 
@@ -423,9 +418,7 @@ async fn load_code_assist(
         .json(&body)
         .send()
         .await
-        .map_err(|e| {
-            CoreError::UpstreamConnection(format!("antigravity loadCodeAssist: {e}"))
-        })?;
+        .map_err(|e| CoreError::UpstreamConnection(format!("antigravity loadCodeAssist: {e}")))?;
 
     if !resp.status().is_success() {
         let status = resp.status().as_u16();
@@ -438,9 +431,10 @@ async fn load_code_assist(
         });
     }
 
-    let value: serde_json::Value = resp.json().await.map_err(|e| {
-        CoreError::Parse(format!("antigravity loadCodeAssist parse: {e}"))
-    })?;
+    let value: serde_json::Value = resp
+        .json()
+        .await
+        .map_err(|e| CoreError::Parse(format!("antigravity loadCodeAssist parse: {e}")))?;
 
     // `cloudaicompanionProject` may be a string or an object with
     // an `id` field depending on the upstream version. Normalize.
@@ -469,9 +463,7 @@ async fn onboard_user(
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(15))
         .build()
-        .map_err(|e| {
-            CoreError::UpstreamConnection(format!("antigravity onboard client: {e}"))
-        })?;
+        .map_err(|e| CoreError::UpstreamConnection(format!("antigravity onboard client: {e}")))?;
 
     let body = serde_json::json!({
         "projectId": project_id,
@@ -486,9 +478,7 @@ async fn onboard_user(
         .json(&body)
         .send()
         .await
-        .map_err(|e| {
-            CoreError::UpstreamConnection(format!("antigravity onboardUser: {e}"))
-        })?;
+        .map_err(|e| CoreError::UpstreamConnection(format!("antigravity onboardUser: {e}")))?;
 
     if !resp.status().is_success() {
         let status = resp.status().as_u16();
@@ -501,9 +491,10 @@ async fn onboard_user(
         });
     }
 
-    let value: serde_json::Value = resp.json().await.map_err(|e| {
-        CoreError::Parse(format!("antigravity onboardUser parse: {e}"))
-    })?;
+    let value: serde_json::Value = resp
+        .json()
+        .await
+        .map_err(|e| CoreError::Parse(format!("antigravity onboardUser parse: {e}")))?;
 
     let project_id = value
         .get("cloudaicompanionProject")
@@ -529,17 +520,13 @@ pub fn read_project_id(conn: &Connection, account_id: AccountId) -> Result<Optio
         )
         .optional()
         .map_err(|e| CoreError::Database {
-            message: format!(
-                "read_project_id for account {}: {}",
-                account_id.0, e
-            ),
+            message: format!("read_project_id for account {}: {}", account_id.0, e),
             source: Some(Box::new(e)),
         })?;
 
     let Some(raw) = raw else { return Ok(None) };
-    let meta: AntigravityProviderMeta = serde_json::from_str(&raw).map_err(|e| {
-        CoreError::Parse(format!("antigravity meta parse: {e}"))
-    })?;
+    let meta: AntigravityProviderMeta = serde_json::from_str(&raw)
+        .map_err(|e| CoreError::Parse(format!("antigravity meta parse: {e}")))?;
     Ok(meta.project_id)
 }
 
@@ -583,7 +570,10 @@ mod tests {
         assert!(v.len() >= 43);
         assert!(v.len() <= 128);
         // Must be base64url-safe characters only.
-        assert!(v.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_'));
+        assert!(
+            v.chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+        );
     }
 
     #[test]

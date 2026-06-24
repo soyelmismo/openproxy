@@ -14,7 +14,7 @@
 
 use crate::error::{CoreError, Result};
 use crate::usage::UsageFilter;
-use rusqlite::{params_from_iter, Connection, ToSql};
+use rusqlite::{Connection, ToSql, params_from_iter};
 use serde::{Deserialize, Serialize};
 use std::fmt::Write as _;
 use tdigest::TDigest;
@@ -108,7 +108,10 @@ impl BuiltWhere {
         }
 
         if clauses.is_empty() {
-            return Self { sql: String::new(), params };
+            return Self {
+                sql: String::new(),
+                params,
+            };
         }
         let joined = clauses.join(" AND ");
         let mut sql = String::with_capacity(joined.len() + 7);
@@ -249,16 +252,28 @@ pub fn latency_percentiles(conn: &Connection, f: &UsageFilter) -> Result<Latency
         // column. We never abort on nulls because the schema allows them
         // (e.g. `ttft_ms` is NULL when the request failed before the first
         // byte, `tokens_per_sec` is NULL when C3's guard fires).
-        if let Some(v) = row.get::<_, Option<i64>>(0).map_err(|e| map_row_err(e, "connect_ms"))? {
+        if let Some(v) = row
+            .get::<_, Option<i64>>(0)
+            .map_err(|e| map_row_err(e, "connect_ms"))?
+        {
             connect.push(v as f64);
         }
-        if let Some(v) = row.get::<_, Option<i64>>(1).map_err(|e| map_row_err(e, "ttft_ms"))? {
+        if let Some(v) = row
+            .get::<_, Option<i64>>(1)
+            .map_err(|e| map_row_err(e, "ttft_ms"))?
+        {
             ttft.push(v as f64);
         }
-        if let Some(v) = row.get::<_, Option<i64>>(2).map_err(|e| map_row_err(e, "total_ms"))? {
+        if let Some(v) = row
+            .get::<_, Option<i64>>(2)
+            .map_err(|e| map_row_err(e, "total_ms"))?
+        {
             total.push(v as f64);
         }
-        if let Some(v) = row.get::<_, Option<f64>>(3).map_err(|e| map_row_err(e, "tokens_per_sec"))? {
+        if let Some(v) = row
+            .get::<_, Option<f64>>(3)
+            .map_err(|e| map_row_err(e, "tokens_per_sec"))?
+        {
             tps.push(v);
         }
     }
@@ -363,8 +378,7 @@ pub fn race_stats(conn: &Connection, f: &UsageFilter) -> Result<RaceStats> {
 
     // (combo_target_id, win_count). NULL combo_target_ids are skipped —
     // they cannot be reported as a meaningful target identifier.
-    let mut wins_by_target: std::collections::HashMap<i64, u64> =
-        std::collections::HashMap::new();
+    let mut wins_by_target: std::collections::HashMap<i64, u64> = std::collections::HashMap::new();
 
     let mut rows = stmt
         .query(params_from_iter(params_slice))
@@ -439,7 +453,7 @@ pub fn race_stats(conn: &Connection, f: &UsageFilter) -> Result<RaceStats> {
 mod tests {
     use super::*;
     use crate::db::migrations;
-    use rusqlite::{params, Connection};
+    use rusqlite::{Connection, params};
     use std::path::PathBuf;
     use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -533,9 +547,15 @@ mod tests {
                 NULL, ?8, NULL, NULL, 1, ?9, datetime('now')\
              )",
             params![
-                request_id, trace_id, provider, model,
-                connect_ms, ttft_ms, total_ms,
-                status_code, race_lost as i64,
+                request_id,
+                trace_id,
+                provider,
+                model,
+                connect_ms,
+                ttft_ms,
+                total_ms,
+                status_code,
+                race_lost as i64,
             ],
         )
         .expect("insert_with_status");
@@ -573,16 +593,8 @@ mod tests {
         // (200 centroids over 100 samples is overkill but spec-prescribed).
         let p50 = r.p50_connect_ms.expect("p50 connect present");
         let p95 = r.p95_connect_ms.expect("p95 connect present");
-        assert!(
-            (p50 - 49.5).abs() < 5.0,
-            "p50 ≈ 49.5, got {}",
-            p50
-        );
-        assert!(
-            (p95 - 94.05).abs() < 5.0,
-            "p95 ≈ 94.05, got {}",
-            p95
-        );
+        assert!((p50 - 49.5).abs() < 5.0, "p50 ≈ 49.5, got {}", p50);
+        assert!((p95 - 94.05).abs() < 5.0, "p95 ≈ 94.05, got {}", p95);
         // The other metrics were never populated in this fixture:
         //   - ttft_ms: column is nullable; we wrote NULL → no samples.
         //   - tokens_per_sec: column is nullable; we wrote NULL → no samples.
@@ -640,7 +652,10 @@ mod tests {
         }
 
         let r = latency_percentiles(&conn, &UsageFilter::default()).expect("latency");
-        assert_eq!(r.samples, 10, "only winners counted in `samples` (race_lost=0 filter)");
+        assert_eq!(
+            r.samples, 10,
+            "only winners counted in `samples` (race_lost=0 filter)"
+        );
         let p50 = r.p50_connect_ms.expect("p50 connect present");
         let p95 = r.p95_connect_ms.expect("p95 connect present");
         // Winner distribution: 1000..=1009 → p50 ~1004.5, p95 ~1009.05.
@@ -707,11 +722,23 @@ mod tests {
         // ttft_ms has 5 samples (all 200) → p50 = p95 = 200.
         let p50_ttft = r.p50_ttft_ms.expect("p50 ttft present");
         let p95_ttft = r.p95_ttft_ms.expect("p95 ttft present");
-        assert!((p50_ttft - 200.0).abs() < 1.0, "p50 ttft ≈ 200, got {}", p50_ttft);
-        assert!((p95_ttft - 200.0).abs() < 1.0, "p95 ttft ≈ 200, got {}", p95_ttft);
+        assert!(
+            (p50_ttft - 200.0).abs() < 1.0,
+            "p50 ttft ≈ 200, got {}",
+            p50_ttft
+        );
+        assert!(
+            (p95_ttft - 200.0).abs() < 1.0,
+            "p95 ttft ≈ 200, got {}",
+            p95_ttft
+        );
         // tokens_per_sec has 5 samples (all 10.0).
         let p50_tps = r.p50_tokens_per_sec.expect("p50 tps present");
-        assert!((p50_tps - 10.0).abs() < 0.5, "p50 tps ≈ 10, got {}", p50_tps);
+        assert!(
+            (p50_tps - 10.0).abs() < 0.5,
+            "p50 tps ≈ 10, got {}",
+            p50_tps
+        );
     }
 
     // -----------------------------------------------------------------------
@@ -727,29 +754,47 @@ mod tests {
         // 10 successful rows: connect_ms = 100..110
         for i in 0..10i64 {
             insert_with_status(
-                &conn, &format!("ok-{}", i), &format!("t-{}", i),
-                "openrouter", "openai/gpt-4o",
-                Some(100 + i), Some(200 + i), 500 + i,
-                false, 200,
+                &conn,
+                &format!("ok-{}", i),
+                &format!("t-{}", i),
+                "openrouter",
+                "openai/gpt-4o",
+                Some(100 + i),
+                Some(200 + i),
+                500 + i,
+                false,
+                200,
             );
         }
         // 5 error rows (timeouts): connect_ms = 10000 — these must NOT
         // influence the percentiles even though race_lost=0.
         for i in 0..5i64 {
             insert_with_status(
-                &conn, &format!("err-{}", i), &format!("et-{}", i),
-                "openrouter", "openai/gpt-4o",
-                Some(10000), None, 10000,
-                false, 502,
+                &conn,
+                &format!("err-{}", i),
+                &format!("et-{}", i),
+                "openrouter",
+                "openai/gpt-4o",
+                Some(10000),
+                None,
+                10000,
+                false,
+                502,
             );
         }
         // 3 error rows (client disconnects): status_code=499
         for i in 0..3i64 {
             insert_with_status(
-                &conn, &format!("disc-{}", i), &format!("dt-{}", i),
-                "openrouter", "openai/gpt-4o",
-                Some(5000), None, 5000,
-                false, 499,
+                &conn,
+                &format!("disc-{}", i),
+                &format!("dt-{}", i),
+                "openrouter",
+                "openai/gpt-4o",
+                Some(5000),
+                None,
+                5000,
+                false,
+                499,
             );
         }
 
@@ -840,7 +885,7 @@ mod tests {
                 Some(200),
                 1000,
                 None,
-                1,  // not a race
+                1, // not a race
                 false,
                 None,
             );

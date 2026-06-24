@@ -100,10 +100,7 @@ struct ModelsDevModalities {
 /// Fetch models.dev data, map providers, upsert into DB.
 /// The caller must supply the already-fetched API response bytes so
 /// that `&Connection` is not held across async boundaries.
-pub fn upsert_models_dev(
-    body: &[u8],
-    conn: &Connection,
-) -> Result<usize> {
+pub fn upsert_models_dev(body: &[u8], conn: &Connection) -> Result<usize> {
     // models.dev root is a flat dict: provider_id -> { id, name, models }
     let root: HashMap<String, serde_json::Value> = serde_json::from_slice(body)
         .map_err(|e| CoreError::Parse(format!("models.dev parse: {e}")))?;
@@ -151,10 +148,14 @@ pub fn upsert_models_dev(
             let output_price = model.cost.as_ref().and_then(|c| c.output);
             let cached_price = model.cost.as_ref().and_then(|c| c.cache_read);
 
-            let mod_in = model.modalities.as_ref()
+            let mod_in = model
+                .modalities
+                .as_ref()
                 .and_then(|m| m.input.as_ref())
                 .map(|v| serde_json::to_string(v).unwrap_or_default());
-            let mod_out = model.modalities.as_ref()
+            let mod_out = model
+                .modalities
+                .as_ref()
                 .and_then(|m| m.output.as_ref())
                 .map(|v| serde_json::to_string(v).unwrap_or_default());
 
@@ -368,10 +369,7 @@ pub fn backfill_model_id_normalized(conn: &Connection) -> Result<usize> {
             })?;
         let rows = stmt
             .query_map([], |row| {
-                Ok((
-                    row.get::<_, String>(0)?,
-                    row.get::<_, String>(1)?,
-                ))
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
             })
             .map_err(|e| CoreError::Database {
                 message: format!("backfill query sync: {e}"),
@@ -466,8 +464,8 @@ pub fn recompute_costs(conn: &Connection) -> Result<usize> {
         if let Some(p) = price {
             let prompt = prompt_tokens.unwrap_or(0) as f64;
             let completion = completion_tokens.unwrap_or(0) as f64;
-            let cost = p.input_per_1m * prompt / 1_000_000.0
-                + p.output_per_1m * completion / 1_000_000.0;
+            let cost =
+                p.input_per_1m * prompt / 1_000_000.0 + p.output_per_1m * completion / 1_000_000.0;
             if cost > 0.0 {
                 conn.execute(
                     "UPDATE usage SET cost_usd = ?1 WHERE id = ?2",
@@ -526,8 +524,9 @@ pub fn enrich_models_from_sync(conn: &Connection) -> Result<usize> {
     backfill_model_id_normalized(conn)?;
 
     // ── context_length: refresh from sync on normalized match ───────
-    let ctx = conn.execute(
-        "UPDATE models SET context_length = COALESCE(
+    let ctx = conn
+        .execute(
+            "UPDATE models SET context_length = COALESCE(
             (SELECT s.context_length FROM model_capabilities_sync s
              WHERE s.model_id_normalized = models.model_id_normalized
                AND s.context_length IS NOT NULL
@@ -541,15 +540,17 @@ pub fn enrich_models_from_sync(conn: &Connection) -> Result<usize> {
              WHERE s.model_id_normalized = models.model_id_normalized
                AND s.context_length IS NOT NULL
            )",
-        [],
-    ).map_err(|e| CoreError::Database {
-        message: format!("enrich context_length (normalized): {e}"),
-        source: Some(Box::new(e)),
-    })?;
+            [],
+        )
+        .map_err(|e| CoreError::Database {
+            message: format!("enrich context_length (normalized): {e}"),
+            source: Some(Box::new(e)),
+        })?;
 
     // ── max_output_tokens: refresh from sync on normalized match ────
-    let tok = conn.execute(
-        "UPDATE models SET max_output_tokens = COALESCE(
+    let tok = conn
+        .execute(
+            "UPDATE models SET max_output_tokens = COALESCE(
             (SELECT s.max_output_tokens FROM model_capabilities_sync s
              WHERE s.model_id_normalized = models.model_id_normalized
                AND s.max_output_tokens IS NOT NULL
@@ -563,11 +564,12 @@ pub fn enrich_models_from_sync(conn: &Connection) -> Result<usize> {
              WHERE s.model_id_normalized = models.model_id_normalized
                AND s.max_output_tokens IS NOT NULL
            )",
-        [],
-    ).map_err(|e| CoreError::Database {
-        message: format!("enrich max_output_tokens (normalized): {e}"),
-        source: Some(Box::new(e)),
-    })?;
+            [],
+        )
+        .map_err(|e| CoreError::Database {
+            message: format!("enrich max_output_tokens (normalized): {e}"),
+            source: Some(Box::new(e)),
+        })?;
 
     // ── capabilities_json: refresh from sync on normalized match ────
     //
@@ -577,8 +579,9 @@ pub fn enrich_models_from_sync(conn: &Connection) -> Result<usize> {
     // preserved. The sync row is only applied when at least one flag
     // is non-NULL — otherwise the SELECT would emit an all-null patch
     // that wipes the existing JSON.
-    let cap = conn.execute(
-        "UPDATE models SET capabilities_json = (
+    let cap = conn
+        .execute(
+            "UPDATE models SET capabilities_json = (
             SELECT json_patch(
                 coalesce(models.capabilities_json, '{}'),
                 json_object(
@@ -602,11 +605,12 @@ pub fn enrich_models_from_sync(conn: &Connection) -> Result<usize> {
                AND (s.vision IS NOT NULL OR s.tool_call IS NOT NULL
                     OR s.reasoning IS NOT NULL OR s.structured_output IS NOT NULL)
            )",
-        [],
-    ).map_err(|e| CoreError::Database {
-        message: format!("enrich capabilities (normalized): {e}"),
-        source: Some(Box::new(e)),
-    })?;
+            [],
+        )
+        .map_err(|e| CoreError::Database {
+            message: format!("enrich capabilities (normalized): {e}"),
+            source: Some(Box::new(e)),
+        })?;
 
     Ok(ctx + tok + cap)
 }
@@ -619,8 +623,9 @@ pub fn enrich_models_from_sync(conn: &Connection) -> Result<usize> {
 pub fn auto_create_combos(conn: &Connection) -> Result<usize> {
     // Find model_ids that are active in ≥2 different providers with
     // healthy accounts. We use the `models` table joined with accounts.
-    let mut stmt = conn.prepare(
-        "SELECT m.model_id
+    let mut stmt = conn
+        .prepare(
+            "SELECT m.model_id
          FROM models m
          JOIN accounts a ON a.provider_id = m.provider_id
          WHERE m.active = 1
@@ -628,13 +633,15 @@ pub fn auto_create_combos(conn: &Connection) -> Result<usize> {
          GROUP BY m.model_id
          HAVING COUNT(DISTINCT m.provider_id) >= 2
          ORDER BY m.model_id",
-    ).map_err(|e| CoreError::Database {
-        message: format!("auto-combo query: {e}"),
-        source: Some(Box::new(e)),
-    })?;
+        )
+        .map_err(|e| CoreError::Database {
+            message: format!("auto-combo query: {e}"),
+            source: Some(Box::new(e)),
+        })?;
 
     let model_ids: Vec<String> = {
-        let rows = stmt.query_map([], |row| row.get::<_, String>(0))
+        let rows = stmt
+            .query_map([], |row| row.get::<_, String>(0))
             .map_err(|e| CoreError::Database {
                 message: format!("auto-combo query rows: {e}"),
                 source: Some(Box::new(e)),
@@ -653,38 +660,48 @@ pub fn auto_create_combos(conn: &Connection) -> Result<usize> {
 
     for model_id in &model_ids {
         // Check if a combo for this model already exists.
-        let exists: bool = conn.query_row(
-            "SELECT COUNT(*) FROM combos WHERE name = ?1",
-            rusqlite::params![format!("auto:{}", model_id)],
-            |row| row.get::<_, i64>(0),
-        ).map_err(|e| CoreError::Database {
-            message: format!("auto-combo exists check: {e}"),
-            source: Some(Box::new(e)),
-        })? > 0;
+        let exists: bool =
+            conn.query_row(
+                "SELECT COUNT(*) FROM combos WHERE name = ?1",
+                rusqlite::params![format!("auto:{}", model_id)],
+                |row| row.get::<_, i64>(0),
+            )
+            .map_err(|e| CoreError::Database {
+                message: format!("auto-combo exists check: {e}"),
+                source: Some(Box::new(e)),
+            })? > 0;
 
         if exists {
             continue;
         }
 
         // Get all (provider_id, model_row_id, account_id) combos for this model.
-        let mut target_stmt = conn.prepare(
-            "SELECT m.rowid, m.provider_id, a.id
+        let mut target_stmt = conn
+            .prepare(
+                "SELECT m.rowid, m.provider_id, a.id
              FROM models m
              JOIN accounts a ON a.provider_id = m.provider_id AND a.health_status = 'healthy'
              WHERE m.model_id = ?1 AND m.active = 1
              ORDER BY m.provider_id",
-        ).map_err(|e| CoreError::Database {
-            message: format!("auto-combo targets prepare: {e}"),
-            source: Some(Box::new(e)),
-        })?;
-
-        let targets: Vec<(i64, String, i64)> = {
-            let rows = target_stmt.query_map(rusqlite::params![model_id], |row| {
-                Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?, row.get::<_, i64>(2)?))
-            }).map_err(|e| CoreError::Database {
-                message: format!("auto-combo targets rows: {e}"),
+            )
+            .map_err(|e| CoreError::Database {
+                message: format!("auto-combo targets prepare: {e}"),
                 source: Some(Box::new(e)),
             })?;
+
+        let targets: Vec<(i64, String, i64)> = {
+            let rows = target_stmt
+                .query_map(rusqlite::params![model_id], |row| {
+                    Ok((
+                        row.get::<_, i64>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, i64>(2)?,
+                    ))
+                })
+                .map_err(|e| CoreError::Database {
+                    message: format!("auto-combo targets rows: {e}"),
+                    source: Some(Box::new(e)),
+                })?;
             let mut t = Vec::new();
             for row in rows {
                 t.push(row.map_err(|e| CoreError::Database {
@@ -706,7 +723,8 @@ pub fn auto_create_combos(conn: &Connection) -> Result<usize> {
         conn.execute(
             "INSERT INTO combos (name, strategy, race_size) VALUES (?1, 'priority', ?2)",
             rusqlite::params![&combo_name, race_size],
-        ).map_err(|e| CoreError::Database {
+        )
+        .map_err(|e| CoreError::Database {
             message: format!("auto-combo insert: {e}"),
             source: Some(Box::new(e)),
         })?;
@@ -938,8 +956,7 @@ mod tests {
         //   under its own ext_id "google": 1 model × 3 ids = 3 rows.
         // total = 7
         assert_eq!(
-            count,
-            7,
+            count, 7,
             "should upsert 7 rows (4 opencode+opencode-zen, 3 google+gemini+gemini-cli)"
         );
     }
@@ -970,21 +987,36 @@ mod tests {
         // The sync table has both "deepseek-v4-flash" (paid) and "deepseek-v4-flash-free" (free).
         // Exact match should find the paid one.
         let price = crate::pricing::lookup_with_db(&conn, "opencode-zen", "deepseek-v4-flash");
-        assert!(price.is_some(), "deepseek-v4-flash should have pricing via exact match");
+        assert!(
+            price.is_some(),
+            "deepseek-v4-flash should have pricing via exact match"
+        );
         let p = price.unwrap();
-        assert!((p.input_per_1m - 0.14).abs() < 1e-9, "paid model should be $0.14, got {}", p.input_per_1m);
+        assert!(
+            (p.input_per_1m - 0.14).abs() < 1e-9,
+            "paid model should be $0.14, got {}",
+            p.input_per_1m
+        );
 
         // User's model is "deepseek-v4-flash-free" (has -free suffix).
         // Exact match should find the free version.
         let price = crate::pricing::lookup_with_db(&conn, "opencode-zen", "deepseek-v4-flash-free");
         assert!(price.is_some());
         let p = price.unwrap();
-        assert!((p.input_per_1m - 0.0).abs() < 1e-9, "free model should be $0, got {}", p.input_per_1m);
+        assert!(
+            (p.input_per_1m - 0.0).abs() < 1e-9,
+            "free model should be $0, got {}",
+            p.input_per_1m
+        );
 
         // User's model is "deepseek-v4-flash-free-trial" — no exact match,
         // but fuzzy fallback strips -free-trial → matches "deepseek-v4-flash".
-        let price = crate::pricing::lookup_with_db(&conn, "opencode-zen", "deepseek-v4-flash-free-trial");
-        assert!(price.is_some(), "fuzzy fallback should strip -free-trial and match");
+        let price =
+            crate::pricing::lookup_with_db(&conn, "opencode-zen", "deepseek-v4-flash-free-trial");
+        assert!(
+            price.is_some(),
+            "fuzzy fallback should strip -free-trial and match"
+        );
         let p = price.unwrap();
         assert!((p.input_per_1m - 0.14).abs() < 1e-9);
 

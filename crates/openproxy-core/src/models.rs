@@ -45,7 +45,7 @@
 use crate::combos;
 use crate::error::{CoreError, Result};
 use crate::ids::{ModelId, ModelRowId, ProviderId};
-use rusqlite::{params, Connection, OptionalExtension, Row};
+use rusqlite::{Connection, OptionalExtension, Row, params};
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
 
@@ -75,7 +75,10 @@ impl TargetFormat {
             "openai" => Ok(TargetFormat::Openai),
             "anthropic" => Ok(TargetFormat::Anthropic),
             "gemini" => Ok(TargetFormat::Gemini),
-            other => Err(CoreError::Validation(format!("invalid target_format: {}", other))),
+            other => Err(CoreError::Validation(format!(
+                "invalid target_format: {}",
+                other
+            ))),
         }
     }
 }
@@ -326,10 +329,12 @@ pub fn upsert_many(
     let mut new_model_ids: Vec<crate::ids::ModelId> = Vec::new();
     let ttl_secs = ttl.as_secs() as i64;
 
-    let tx = conn.unchecked_transaction().map_err(|e| CoreError::Database {
-        message: format!("begin upsert_many tx: {}", e),
-        source: Some(Box::new(e)),
-    })?;
+    let tx = conn
+        .unchecked_transaction()
+        .map_err(|e| CoreError::Database {
+            message: format!("begin upsert_many tx: {}", e),
+            source: Some(Box::new(e)),
+        })?;
 
     // ----------------------------------------------------------------
     // Gate F1: snapshot the provider's existing model_id -> row_id map
@@ -458,19 +463,19 @@ pub fn upsert_many(
 
             let changed = stmt
                 .execute(params![
-                    provider.as_str(),            // 1. provider_id
-                    d.model_id.as_str(),          // 2. model_id
-                    d.display_name,               // 3. display_name
-                    d.target_format.as_str(),     // 4. target_format
-                    ttl_secs,                     // 5. (used in the datetime '+? seconds' expr)
-                    d.context_length,             // 6. context_length
-                    d.max_output_tokens,          // 7. max_output_tokens
-                    input_mods_json,              // 8. input_modalities_json
-                    output_mods_json,             // 9. output_modalities_json
-                    d.model_type,                 // 10. model_type
-                    d.family,                     // 11. family
-                    caps_json,                    // 12. capabilities_json
-                    &normalized,                  // 13. model_id_normalized
+                    provider.as_str(),        // 1. provider_id
+                    d.model_id.as_str(),      // 2. model_id
+                    d.display_name,           // 3. display_name
+                    d.target_format.as_str(), // 4. target_format
+                    ttl_secs,                 // 5. (used in the datetime '+? seconds' expr)
+                    d.context_length,         // 6. context_length
+                    d.max_output_tokens,      // 7. max_output_tokens
+                    input_mods_json,          // 8. input_modalities_json
+                    output_mods_json,         // 9. output_modalities_json
+                    d.model_type,             // 10. model_type
+                    d.family,                 // 11. family
+                    caps_json,                // 12. capabilities_json
+                    &normalized,              // 13. model_id_normalized
                 ])
                 .map_err(|e| CoreError::Database {
                     message: format!("execute upsert_many: {}", e),
@@ -529,8 +534,10 @@ pub fn upsert_many(
             // Vec outlives the temporaries `discovered` iterates over,
             // so we hoist the model_id strings into a local Vec<String>
             // and borrow from there.
-            let discovered_ids: Vec<String> =
-                discovered.iter().map(|d| d.model_id.as_str().to_string()).collect();
+            let discovered_ids: Vec<String> = discovered
+                .iter()
+                .map(|d| d.model_id.as_str().to_string())
+                .collect();
             let provider_str = provider.as_str().to_string();
             let mut bound: Vec<&dyn rusqlite::ToSql> = Vec::with_capacity(discovered_ids.len() + 1);
             bound.push(&provider_str);
@@ -568,7 +575,10 @@ pub fn upsert_many(
     // Failures here are swallowed with `.ok().flatten()` — a notification
     // insert error must NOT fail the entire discovery refresh.
     let mut new_to_broadcast: Vec<(i64, &'static str, serde_json::Value)> = Vec::new();
-    for d in discovered.iter().filter(|d| !existing.contains(d.model_id.as_str())) {
+    for d in discovered
+        .iter()
+        .filter(|d| !existing.contains(d.model_id.as_str()))
+    {
         let payload = serde_json::json!({
             "provider_id": provider.as_str(),
             "model_id": d.model_id.as_str(),
@@ -664,18 +674,15 @@ pub fn upsert_many(
             placeholders
         );
         let provider_str = provider.as_str().to_string();
-        let mut bound: Vec<&dyn rusqlite::ToSql> =
-            Vec::with_capacity(inserted_model_ids.len() + 1);
+        let mut bound: Vec<&dyn rusqlite::ToSql> = Vec::with_capacity(inserted_model_ids.len() + 1);
         bound.push(&provider_str);
         for id in &inserted_model_ids {
             bound.push(id);
         }
-        let mut stmt = tx
-            .prepare(&sql)
-            .map_err(|e| CoreError::Database {
-                message: format!("prepare upsert_many reconnect-select: {}", e),
-                source: Some(Box::new(e)),
-            })?;
+        let mut stmt = tx.prepare(&sql).map_err(|e| CoreError::Database {
+            message: format!("prepare upsert_many reconnect-select: {}", e),
+            source: Some(Box::new(e)),
+        })?;
         let rows = stmt
             .query_map(rusqlite::params_from_iter(bound.iter().copied()), |r| {
                 Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?))
@@ -757,7 +764,10 @@ pub fn upsert_many(
         let _ = crate::notifications::broadcast_one(conn, *id, kind, payload);
     }
 
-    Ok(UpsertResult { touched: total, new_model_ids })
+    Ok(UpsertResult {
+        touched: total,
+        new_model_ids,
+    })
 }
 
 /// List all active (live) models for a given provider.
@@ -881,10 +891,12 @@ pub fn list_all(conn: &Connection) -> Result<Vec<Model>> {
             source: Some(Box::new(e)),
         })?;
 
-    let rows = stmt.query_map([], map_row).map_err(|e| CoreError::Database {
-        message: format!("query list_all: {}", e),
-        source: Some(Box::new(e)),
-    })?;
+    let rows = stmt
+        .query_map([], map_row)
+        .map_err(|e| CoreError::Database {
+            message: format!("query list_all: {}", e),
+            source: Some(Box::new(e)),
+        })?;
 
     let mut out = Vec::new();
     for r in rows {
@@ -960,11 +972,7 @@ pub fn set_active(conn: &Connection, id: ModelRowId, active: bool) -> Result<()>
 ///
 /// Honors `custom = 1` rows (does NOT touch them), matching the
 /// behavior of `apply_auto_activation`.
-pub fn set_active_bulk(
-    conn: &Connection,
-    provider: &ProviderId,
-    active: bool,
-) -> Result<u64> {
+pub fn set_active_bulk(conn: &Connection, provider: &ProviderId, active: bool) -> Result<u64> {
     let bit = if active { 1i64 } else { 0i64 };
     let n = conn
         .execute(
@@ -1131,10 +1139,12 @@ pub fn set_test_status(conn: &Connection, id: ModelRowId, status: i32) -> Result
 ///
 /// Returns the number of rows removed from `models`.
 pub fn delete(conn: &Connection, id: ModelRowId) -> Result<u64> {
-    let tx = conn.unchecked_transaction().map_err(|e| CoreError::Database {
-        message: format!("begin delete model tx: {}", e),
-        source: Some(Box::new(e)),
-    })?;
+    let tx = conn
+        .unchecked_transaction()
+        .map_err(|e| CoreError::Database {
+            message: format!("begin delete model tx: {}", e),
+            source: Some(Box::new(e)),
+        })?;
 
     // combo_targets.model_row_id has ON DELETE CASCADE (migration 000030);
     // the target row is cascade-deleted alongside the model.
@@ -1186,10 +1196,7 @@ pub fn create_custom(
     let expires_expr = if ttl_seconds <= 0 {
         "NULL".to_string()
     } else {
-        format!(
-            "datetime('now', '+' || {} || ' seconds')",
-            ttl_seconds
-        )
+        format!("datetime('now', '+' || {} || ' seconds')", ttl_seconds)
     };
 
     // The `RETURNING id` clause gives us the rowid regardless of
@@ -1229,10 +1236,7 @@ pub fn create_custom(
             // `accounts::create` keeps error messages consistent.
             let msg = e.to_string();
             if msg.contains("FOREIGN KEY") {
-                CoreError::Validation(format!(
-                    "provider_id does not exist: {}",
-                    provider_id
-                ))
+                CoreError::Validation(format!("provider_id does not exist: {}", provider_id))
             } else {
                 CoreError::Database {
                     message: format!("create_custom model for {}: {}", provider_id, e),
@@ -1268,10 +1272,12 @@ pub fn apply_auto_activation(
     // so a failure in any step rolls back the auto-activation. Without
     // the tx, a notification insert error mid-way would leave the
     // `active` bit half-flipped for the rows we'd already UPDATEd.
-    let tx = conn.unchecked_transaction().map_err(|e| CoreError::Database {
-        message: format!("begin apply_auto_activation tx: {}", e),
-        source: Some(Box::new(e)),
-    })?;
+    let tx = conn
+        .unchecked_transaction()
+        .map_err(|e| CoreError::Database {
+            message: format!("begin apply_auto_activation tx: {}", e),
+            source: Some(Box::new(e)),
+        })?;
 
     // ----------------------------------------------------------------
     // Step 1: identify rows that will be flipped from `active = 0` to
@@ -1547,7 +1553,10 @@ mod tests {
         let n = upsert_many(
             &conn,
             &provider,
-            &[discovered("m1", TargetFormat::Openai), discovered("m2", TargetFormat::Anthropic)],
+            &[
+                discovered("m1", TargetFormat::Openai),
+                discovered("m2", TargetFormat::Anthropic),
+            ],
             Duration::from_secs(3600),
         )
         .expect("upsert_many");
@@ -1731,7 +1740,11 @@ mod tests {
         .unwrap();
 
         let row = list_all(&conn).unwrap().pop().unwrap();
-        assert_eq!(row.context_length, Some(200_000), "context_length refreshed");
+        assert_eq!(
+            row.context_length,
+            Some(200_000),
+            "context_length refreshed"
+        );
         assert_eq!(
             row.max_output_tokens,
             Some(8_192),
@@ -1962,7 +1975,10 @@ mod tests {
         // ...and the same with no keyword (would otherwise enable
         // every "new" non-custom row).
         let updated = apply_auto_activation(&conn, &provider, None).expect("apply none");
-        assert_eq!(updated, 0, "should affect 0 rows because the model is not new");
+        assert_eq!(
+            updated, 0,
+            "should affect 0 rows because the model is not new"
+        );
 
         // active is still the operator's hand-set value.
         let m = list_all(&conn).unwrap().pop().unwrap();
@@ -2096,7 +2112,10 @@ mod tests {
         let ids: Vec<&str> = active.iter().map(|m| m.model_id.as_str()).collect();
         assert!(ids.contains(&"a-live"), "provA live row included");
         assert!(ids.contains(&"b-live"), "provB live row included");
-        assert!(ids.contains(&"b-stale"), "past expires_at still counts as live");
+        assert!(
+            ids.contains(&"b-stale"),
+            "past expires_at still counts as live"
+        );
         assert!(!ids.contains(&"a-off"), "soft-disabled row excluded");
         assert_eq!(active.len(), 3);
     }
@@ -2211,8 +2230,16 @@ mod tests {
         let before = list_active(&conn, &provider).expect("list_active");
         assert_eq!(before.len(), 2, "both rows active by default");
 
-        let m1_id = before.iter().find(|m| m.model_id.as_str() == "m1").unwrap().row_id;
-        let m2_id = before.iter().find(|m| m.model_id.as_str() == "m2").unwrap().row_id;
+        let m1_id = before
+            .iter()
+            .find(|m| m.model_id.as_str() == "m1")
+            .unwrap()
+            .row_id;
+        let m2_id = before
+            .iter()
+            .find(|m| m.model_id.as_str() == "m2")
+            .unwrap()
+            .row_id;
 
         // Disable m1.
         set_active(&conn, m1_id, false).expect("disable m1");
@@ -2225,7 +2252,11 @@ mod tests {
         // Re-enable m1.
         set_active(&conn, m1_id, true).expect("enable m1");
         let after_enable = list_active(&conn, &provider).expect("list_active");
-        assert_eq!(after_enable.len(), 2, "m1 visible again after set_active(true)");
+        assert_eq!(
+            after_enable.len(),
+            2,
+            "m1 visible again after set_active(true)"
+        );
 
         // Toggling a missing id is a silent no-op (no error, no panic).
         set_active(&conn, ModelRowId(424242), false).expect("toggle missing is a no-op");
@@ -2258,8 +2289,7 @@ mod tests {
         assert_eq!(list_all(&conn).unwrap().len(), 4);
 
         // Bulk-disable.
-        let updated =
-            set_active_bulk(&conn, &provider, false).expect("set_active_bulk false");
+        let updated = set_active_bulk(&conn, &provider, false).expect("set_active_bulk false");
         assert_eq!(updated, 3, "exactly 3 non-custom rows touched");
 
         // Non-custom rows now inactive; custom row untouched.
@@ -2281,8 +2311,7 @@ mod tests {
 
         // Bulk-enable brings the 3 non-custom rows back; the custom row
         // was already active and stays that way.
-        let updated2 =
-            set_active_bulk(&conn, &provider, true).expect("set_active_bulk true");
+        let updated2 = set_active_bulk(&conn, &provider, true).expect("set_active_bulk true");
         assert_eq!(updated2, 3, "3 non-custom rows flipped back on");
 
         for id in ["a", "b", "c"] {
@@ -2452,7 +2481,10 @@ mod tests {
 
         let updated =
             apply_auto_activation(&conn, &provider, Some("claude")).expect("apply with keyword");
-        assert!(updated >= 2, "both claude rows touched, non-claude ones skipped");
+        assert!(
+            updated >= 2,
+            "both claude rows touched, non-claude ones skipped"
+        );
 
         // claude-3 and claude-2 should now be active; the others inactive.
         let active = list_active(&conn, &provider).expect("list_active");
@@ -2625,8 +2657,7 @@ mod tests {
         )
         .expect("seed new free");
 
-        let updated =
-            apply_auto_activation(&conn, &provider, Some("free")).expect("apply keyword");
+        let updated = apply_auto_activation(&conn, &provider, Some("free")).expect("apply keyword");
         assert_eq!(updated, 1, "only the new row matches the recency filter");
 
         let old_free = list_all(&conn)
@@ -2664,12 +2695,10 @@ mod tests {
             .expect("seed");
         }
 
-        let updated_none =
-            apply_auto_activation(&conn, &provider, None).expect("apply none");
+        let updated_none = apply_auto_activation(&conn, &provider, None).expect("apply none");
         assert_eq!(updated_none, 0, "no fresh rows -> 0 updates");
 
-        let updated_kw =
-            apply_auto_activation(&conn, &provider, Some("x")).expect("apply kw");
+        let updated_kw = apply_auto_activation(&conn, &provider, Some("x")).expect("apply kw");
         assert_eq!(updated_kw, 0, "no fresh rows + keyword -> 0 updates");
 
         // Nothing flipped.
@@ -2695,13 +2724,24 @@ mod tests {
         upsert_many(
             &conn,
             &provider,
-            &[discovered("m1", TargetFormat::Openai), discovered("m2", TargetFormat::Anthropic)],
+            &[
+                discovered("m1", TargetFormat::Openai),
+                discovered("m2", TargetFormat::Anthropic),
+            ],
             Duration::from_secs(3600),
         )
         .expect("seed");
         let all = list_all(&conn).unwrap();
-        let m1_id = all.iter().find(|m| m.model_id.as_str() == "m1").unwrap().row_id;
-        let m2_id = all.iter().find(|m| m.model_id.as_str() == "m2").unwrap().row_id;
+        let m1_id = all
+            .iter()
+            .find(|m| m.model_id.as_str() == "m1")
+            .unwrap()
+            .row_id;
+        let m2_id = all
+            .iter()
+            .find(|m| m.model_id.as_str() == "m2")
+            .unwrap()
+            .row_id;
 
         // Seed a combo + a target pointing at m1. The schema requires
         // a combos table; mirror the FK columns we depend on with a
@@ -2758,7 +2798,10 @@ mod tests {
                 |r| r.get(0),
             )
             .expect("count targets");
-        assert_eq!(count_targets, 0, "combo_target row cascade-deleted with model");
+        assert_eq!(
+            count_targets, 0,
+            "combo_target row cascade-deleted with model"
+        );
 
         // Idempotent: a second delete returns 0, not an error.
         let removed_again = delete(&conn, m1_id).expect("delete again");
@@ -2845,7 +2888,10 @@ mod tests {
         upsert_many(
             &conn,
             &provider,
-            &[discovered("m1", TargetFormat::Openai), discovered("m2", TargetFormat::Openai)],
+            &[
+                discovered("m1", TargetFormat::Openai),
+                discovered("m2", TargetFormat::Openai),
+            ],
             Duration::from_secs(3600),
         )
         .expect("second upsert");
@@ -2914,7 +2960,10 @@ mod tests {
         upsert_many(
             &conn,
             &provider,
-            &[discovered("m1", TargetFormat::Openai), discovered("m2", TargetFormat::Openai)],
+            &[
+                discovered("m1", TargetFormat::Openai),
+                discovered("m2", TargetFormat::Openai),
+            ],
             Duration::from_secs(3600),
         )
         .expect("second upsert");
@@ -2959,7 +3008,10 @@ mod tests {
         upsert_many(
             &conn,
             &provider,
-            &[discovered("m1", TargetFormat::Openai), discovered("m2", TargetFormat::Anthropic)],
+            &[
+                discovered("m1", TargetFormat::Openai),
+                discovered("m2", TargetFormat::Anthropic),
+            ],
             Duration::from_secs(3600),
         )
         .expect("seed");
@@ -2977,15 +3029,16 @@ mod tests {
 
         // Pre-condition: 3 rows total.
         let pre_total: i64 = conn
-            .query_row("SELECT COUNT(*) FROM models WHERE provider_id = ?1", ["prov-c"], |r| {
-                r.get(0)
-            })
+            .query_row(
+                "SELECT COUNT(*) FROM models WHERE provider_id = ?1",
+                ["prov-c"],
+                |r| r.get(0),
+            )
             .expect("count pre");
         assert_eq!(pre_total, 3, "pre-condition: 3 rows for prov-c");
 
         // Upstream returns an empty catalog.
-        upsert_many(&conn, &provider, &[], Duration::from_secs(3600))
-            .expect("empty upsert");
+        upsert_many(&conn, &provider, &[], Duration::from_secs(3600)).expect("empty upsert");
 
         // list_active for prov-c returns just the custom row.
         let active: Vec<String> = list_active(&conn, &provider)
@@ -2993,7 +3046,11 @@ mod tests {
             .into_iter()
             .map(|m| m.model_id.as_str().to_string())
             .collect();
-        assert_eq!(active, vec!["keep".to_string()], "only the custom row remains");
+        assert_eq!(
+            active,
+            vec!["keep".to_string()],
+            "only the custom row remains"
+        );
 
         // Sanity: the table itself has exactly one row, and it is the
         // custom one. m1 and m2 must be hard-deleted, not just hidden
@@ -3003,7 +3060,11 @@ mod tests {
             .into_iter()
             .map(|m| m.model_id.as_str().to_string())
             .collect();
-        assert_eq!(all, vec!["keep".to_string()], "only the custom row in the table");
+        assert_eq!(
+            all,
+            vec!["keep".to_string()],
+            "only the custom row in the table"
+        );
 
         // The custom row is still active+custom.
         let row = get_by_row_id(&conn, keep_id)
@@ -3020,7 +3081,10 @@ mod tests {
                 |r| r.get(0),
             )
             .expect("count non-custom");
-        assert_eq!(non_custom_remaining, 0, "no non-custom rows survive empty refresh");
+        assert_eq!(
+            non_custom_remaining, 0,
+            "no non-custom rows survive empty refresh"
+        );
     }
 
     /// Gate E2 test 4: pin the new visibility semantic. A row with
@@ -3179,11 +3243,9 @@ mod tests {
             [],
         )
         .expect("insert combo");
-        conn.query_row(
-            "SELECT id FROM combos ORDER BY id DESC LIMIT 1",
-            [],
-            |r| r.get::<_, i64>(0),
-        )
+        conn.query_row("SELECT id FROM combos ORDER BY id DESC LIMIT 1", [], |r| {
+            r.get::<_, i64>(0)
+        })
         .expect("read combo id")
     }
 
@@ -3353,8 +3415,7 @@ mod tests {
         .expect("insert target");
 
         // m_a disappears.
-        upsert_many(&conn, &provider, &[], Duration::from_secs(3600))
-            .expect("upsert empty");
+        upsert_many(&conn, &provider, &[], Duration::from_secs(3600)).expect("upsert empty");
         let (orphan_fk, orphan_up) = read_target_row(&conn, combo_id);
         assert!(orphan_fk.is_none(), "orphan after empty upsert");
         assert_eq!(orphan_up.as_deref(), Some("m_a"));
@@ -3431,8 +3492,7 @@ mod tests {
         .expect("insert target");
 
         // m1 disappears.
-        upsert_many(&conn, &provider, &[], Duration::from_secs(3600))
-            .expect("upsert empty");
+        upsert_many(&conn, &provider, &[], Duration::from_secs(3600)).expect("upsert empty");
         let (orphan_fk, _orphan_up) = read_target_row(&conn, combo_id);
         assert!(orphan_fk.is_none(), "orphan baseline");
 

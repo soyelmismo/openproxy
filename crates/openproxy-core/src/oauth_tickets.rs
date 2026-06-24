@@ -24,7 +24,7 @@
 
 use crate::error::{CoreError, Result};
 use crate::ids::AccountId;
-use rusqlite::{params, Connection, OptionalExtension};
+use rusqlite::{Connection, OptionalExtension, params};
 use serde::{Deserialize, Serialize};
 
 /// On-disk shape of a row in `oauth_device_tickets`.
@@ -177,9 +177,7 @@ pub fn lookup_active(conn: &Connection, device_code: &str) -> Result<TicketStatu
 /// succeed at marking it. The losing caller gets 0 rows updated and
 /// returns `Err(NotFound)`, which the handler surfaces as a 409.
 pub fn mark_consumed(conn: &Connection, device_code: &str) -> Result<i64> {
-    let now = chrono::Utc::now()
-        .format("%Y-%m-%dT%H:%M:%SZ")
-        .to_string();
+    let now = chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string();
     let rows = conn
         .execute(
             "UPDATE oauth_device_tickets
@@ -328,12 +326,7 @@ mod tests {
             "INSERT INTO oauth_device_tickets
                  (provider, device_code, user_code, expires_at)
              VALUES (?1, ?2, ?3, ?4)",
-            params![
-                "kiro",
-                "DEV-EXPIRED",
-                "USER-X",
-                "2000-01-01T00:00:00Z"
-            ],
+            params!["kiro", "DEV-EXPIRED", "USER-X", "2000-01-01T00:00:00Z"],
         )
         .expect("insert expired");
         match lookup_active(&conn, "DEV-EXPIRED").expect("lookup") {

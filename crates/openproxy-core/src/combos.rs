@@ -1,11 +1,11 @@
 //! Combos: ordered list of targets with a strategy. Priority or round-robin.
 //! Each target references a (provider, model, optional account). Accounts can be rotated within a provider.
 
-use rand::prelude::SliceRandom;
-use rand::RngExt;
 use crate::error::{CoreError, Result};
 use crate::ids::{AccountId, ComboId, ComboTargetId, ModelRowId, ProviderId};
-use rusqlite::{params, Connection, OptionalExtension, Row};
+use rand::RngExt;
+use rand::prelude::SliceRandom;
+use rusqlite::{Connection, OptionalExtension, Row, params};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
@@ -30,7 +30,10 @@ impl Strategy {
             "priority" => Ok(Self::Priority),
             "round_robin" => Ok(Self::RoundRobin),
             "shuffle" => Ok(Self::Shuffle),
-            other => Err(CoreError::Validation(format!("invalid strategy: {}", other))),
+            other => Err(CoreError::Validation(format!(
+                "invalid strategy: {}",
+                other
+            ))),
         }
     }
 }
@@ -215,7 +218,7 @@ pub struct ComboTarget {
     pub id: ComboTargetId,
     pub combo_id: ComboId,
     pub provider_id: ProviderId,
-    pub account_id: Option<AccountId>,  // None = rotate among healthy accounts of this provider
+    pub account_id: Option<AccountId>, // None = rotate among healthy accounts of this provider
     /// `Some(_)` for a flat (model) target; `None` when this target
     /// is a sub-combo (i.e. `sub_combo_id` is set). The XOR between
     /// `model_row_id` and `sub_combo_id` is enforced in
@@ -429,12 +432,12 @@ pub fn get_combo_by_name(conn: &Connection, name: &str) -> Result<Option<Combo>>
             message: format!("prepare get_combo_by_name: {}", e),
             source: Some(Box::new(e)),
         })?;
-    let mut rows = stmt
-        .query_map(params![name], row_to_combo)
-        .map_err(|e| CoreError::Database {
-            message: format!("query get_combo_by_name: {}", e),
-            source: Some(Box::new(e)),
-        })?;
+    let mut rows =
+        stmt.query_map(params![name], row_to_combo)
+            .map_err(|e| CoreError::Database {
+                message: format!("query get_combo_by_name: {}", e),
+                source: Some(Box::new(e)),
+            })?;
     match rows.next() {
         Some(row) => Ok(Some(row.map_err(|e| CoreError::Database {
             message: format!("read combo_by_name row: {}", e),
@@ -552,9 +555,7 @@ pub fn add_target(conn: &Connection, input: AddTargetInput) -> Result<ComboTarge
     // introduce a cycle in the sub-combo graph.
     if let Some(sub_id) = sub_combo_id {
         if sub_id == combo_id {
-            return Err(CoreError::Validation(
-                "combo cannot contain itself".into(),
-            ));
+            return Err(CoreError::Validation("combo cannot contain itself".into()));
         }
         let sub_exists: bool = conn
             .query_row(
@@ -628,10 +629,7 @@ pub fn add_target(conn: &Connection, input: AddTargetInput) -> Result<ComboTarge
                 |r| r.get::<_, String>(0),
             )
             .map_err(|e| CoreError::Database {
-                message: format!(
-                    "read model {} upstream model_id: {}",
-                    mrid.0, e
-                ),
+                message: format!("read model {} upstream model_id: {}", mrid.0, e),
                 source: Some(Box::new(e)),
             })?,
         )
@@ -955,14 +953,11 @@ pub fn get_target(conn: &Connection, id: ComboTargetId) -> Result<Option<ComboTa
 }
 
 pub fn delete_target(conn: &Connection, id: ComboTargetId) -> Result<()> {
-    conn.execute(
-        "DELETE FROM combo_targets WHERE id = ?1",
-        params![id.0],
-    )
-    .map_err(|e| CoreError::Database {
-        message: format!("delete combo_target {}: {}", id.0, e),
-        source: Some(Box::new(e)),
-    })?;
+    conn.execute("DELETE FROM combo_targets WHERE id = ?1", params![id.0])
+        .map_err(|e| CoreError::Database {
+            message: format!("delete combo_target {}: {}", id.0, e),
+            source: Some(Box::new(e)),
+        })?;
     Ok(())
 }
 
@@ -978,7 +973,10 @@ pub fn update_target_priority(
         params![new_order, target_id.0],
     )
     .map_err(|e| CoreError::Database {
-        message: format!("update priority_order for combo_target {}: {}", target_id.0, e),
+        message: format!(
+            "update priority_order for combo_target {}: {}",
+            target_id.0, e
+        ),
         source: Some(Box::new(e)),
     })?;
     Ok(())
@@ -1110,11 +1108,7 @@ pub fn reorder_targets(
 /// Update mutable fields of a combo. Currently only `race_size` is
 /// supported; passing `None` leaves the existing value untouched. The
 /// `1..=8` CHECK constraint from migration 000004 is enforced by SQLite.
-pub fn update_combo(
-    conn: &Connection,
-    id: ComboId,
-    race_size: Option<u8>,
-) -> Result<()> {
+pub fn update_combo(conn: &Connection, id: ComboId, race_size: Option<u8>) -> Result<()> {
     if let Some(rs) = race_size {
         if !(1..=8).contains(&rs) {
             return Err(CoreError::Validation(format!(
@@ -1184,11 +1178,7 @@ pub fn update_context_window(
 /// column is stored but ignored. We don't reject the call in those
 /// cases so the operator can flip the strategy back to `Priority`
 /// later without losing the mode they configured.
-pub fn update_priority_mode(
-    conn: &Connection,
-    id: ComboId,
-    mode: Option<&str>,
-) -> Result<()> {
+pub fn update_priority_mode(conn: &Connection, id: ComboId, mode: Option<&str>) -> Result<()> {
     let value: Option<String> = match mode {
         None => None,
         Some(s) => {
@@ -1511,10 +1501,7 @@ fn compute_context_window_recursive(
 }
 
 /// Look up a model's `context_length` by its `model_row_id`.
-fn get_model_context_length(
-    conn: &Connection,
-    model_row_id: ModelRowId,
-) -> Result<Option<i64>> {
+fn get_model_context_length(conn: &Connection, model_row_id: ModelRowId) -> Result<Option<i64>> {
     let cw: Option<i64> = conn
         .query_row(
             "SELECT context_length FROM models WHERE id = ?1",
@@ -1571,9 +1558,7 @@ pub struct SelectionRegistry {
     /// The `last_success` field is `0` when the target has never
     /// succeeded (or its success was outside the window); the
     /// `request_count` field is monotonic within the window.
-    inner: parking_lot::Mutex<
-        std::collections::HashMap<i64, SelectionRegistryEntry>,
-    >,
+    inner: parking_lot::Mutex<std::collections::HashMap<i64, SelectionRegistryEntry>>,
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -1768,9 +1753,7 @@ pub fn resolve_target_order_with_mode(
                 PriorityMode::LeastUsed => {
                     Ok(resolve_least_used(targets, window_secs, selection_registry))
                 }
-                PriorityMode::P2c => {
-                    Ok(resolve_p2c(targets, window_secs, selection_registry))
-                }
+                PriorityMode::P2c => Ok(resolve_p2c(targets, window_secs, selection_registry)),
             }
         }
     }
@@ -1809,10 +1792,7 @@ fn resolve_lkgp(
     // a target weighted by its position (priority_order). Targets
     // earlier in the list (lower priority_order) get higher weight.
     let mut rng = rand::rng();
-    if exploration_rate > 0.0
-        && rng.random::<f64>() < exploration_rate
-        && !targets.is_empty()
-    {
+    if exploration_rate > 0.0 && rng.random::<f64>() < exploration_rate && !targets.is_empty() {
         // Sort by priority_order first so the position-based weights
         // are assigned correctly regardless of the input order.
         targets.sort_by_key(|t| t.priority_order);
@@ -1848,7 +1828,8 @@ fn resolve_lkgp(
     targets.sort_by(|a, b| {
         let la = registry.last_success_within(a.id, window_secs);
         let lb = registry.last_success_within(b.id, window_secs);
-        lb.cmp(&la).then_with(|| a.priority_order.cmp(&b.priority_order))
+        lb.cmp(&la)
+            .then_with(|| a.priority_order.cmp(&b.priority_order))
     });
     targets
 }
@@ -1903,7 +1884,8 @@ fn resolve_least_used(
     targets.sort_by(|a, b| {
         let ca = registry.request_count_within(a.id, window_secs);
         let cb = registry.request_count_within(b.id, window_secs);
-        ca.cmp(&cb).then_with(|| a.priority_order.cmp(&b.priority_order))
+        ca.cmp(&cb)
+            .then_with(|| a.priority_order.cmp(&b.priority_order))
     });
     targets
 }
@@ -2224,9 +2206,7 @@ pub fn expand_account_rotation(
                 source: Some(Box::new(e)),
             })?;
         let rows = stmt
-            .query_map(params![t.provider_id.as_str()], |row| {
-                row.get::<_, i64>(0)
-            })
+            .query_map(params![t.provider_id.as_str()], |row| row.get::<_, i64>(0))
             .map_err(|e| CoreError::Database {
                 message: format!("query expand_account_rotation: {}", e),
                 source: Some(Box::new(e)),
@@ -2413,10 +2393,8 @@ mod tests {
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_nanos())
             .unwrap_or(0);
-        let dir = std::env::temp_dir().join(format!(
-            "openproxy-combos-test-{}-{}-{}",
-            pid, nanos, n
-        ));
+        let dir =
+            std::env::temp_dir().join(format!("openproxy-combos-test-{}-{}-{}", pid, nanos, n));
         std::fs::create_dir_all(&dir).expect("mkdir tempdir");
         let path = dir.join("combos.db");
         let pool = DbPool::open(&path).expect("open pool");
@@ -2564,8 +2542,7 @@ mod tests {
 
         // resolve_target_order with priority must return the same order.
         let rr = Arc::new(parking_lot::Mutex::new(std::collections::HashMap::new()));
-        let resolved =
-            resolve_target_order(&conn, cid, Strategy::Priority, &rr).expect("resolve");
+        let resolved = resolve_target_order(&conn, cid, Strategy::Priority, &rr).expect("resolve");
         assert_eq!(resolved.len(), 3);
         assert_eq!(resolved[0].priority_order, 10);
         assert_eq!(resolved[1].priority_order, 20);
@@ -2932,7 +2909,10 @@ mod tests {
         let after = list_targets(&conn, cid).expect("list after delete");
         assert_eq!(after.len(), 1, "only the surviving target remains");
         assert_eq!(after[0].id, t_keep, "the live target survives");
-        assert!(!after.iter().any(|t| t.id == t_orphan), "orphan is gone from result");
+        assert!(
+            !after.iter().any(|t| t.id == t_orphan),
+            "orphan is gone from result"
+        );
 
         // The CASCADE deleted the combo_targets row entirely —
         // it no longer exists in the table.
@@ -3016,7 +2996,10 @@ mod tests {
                 |r| r.get(0),
             )
             .expect("count raw rows");
-        assert_eq!(raw_count, 0, "CASCADE deleted all target rows from the table");
+        assert_eq!(
+            raw_count, 0,
+            "CASCADE deleted all target rows from the table"
+        );
 
         // Belt-and-braces: the routing layer agrees, because
         // `list_targets` is the only place a routing read can pick
@@ -3075,7 +3058,10 @@ mod tests {
         assert_eq!(targets.len(), 2);
         // account_id is None so account rotation kicks in at request time.
         for t in &targets {
-            assert!(t.account_id.is_none(), "auto-populate leaves account_id NULL");
+            assert!(
+                t.account_id.is_none(),
+                "auto-populate leaves account_id NULL"
+            );
             assert_eq!(t.provider_id, ProviderId::new("p"));
         }
     }
@@ -3347,8 +3333,7 @@ mod tests {
             .collect();
 
         // Drop t2.
-        let err = reorder_targets(&mut conn, cid, &[t1])
-            .expect_err("missing id must be rejected");
+        let err = reorder_targets(&mut conn, cid, &[t1]).expect_err("missing id must be rejected");
         assert!(matches!(err, CoreError::Validation(_)));
 
         let after: Vec<i32> = list_targets(&conn, cid)
@@ -3505,10 +3490,8 @@ mod tests {
         // populated and whose `model_row_id` is NULL.
         let (pool, _path) = fresh_pool();
         let conn = pool.writer();
-        let (cid_a, _) =
-            seed_combo_with_one_model(&conn, "A", "p1", "ma");
-        let (cid_b, _) =
-            seed_combo_with_one_model(&conn, "B", "p2", "mb");
+        let (cid_a, _) = seed_combo_with_one_model(&conn, "A", "p1", "ma");
+        let (cid_b, _) = seed_combo_with_one_model(&conn, "B", "p2", "mb");
 
         // We need the "combo" virtual provider to satisfy the
         // `combo_targets.provider_id` NOT-NULL + FK; the boot
@@ -3550,8 +3533,7 @@ mod tests {
         // any row is written.
         let (pool, _path) = fresh_pool();
         let conn = pool.writer();
-        let (cid_a, _) =
-            seed_combo_with_one_model(&conn, "self", "p1", "m");
+        let (cid_a, _) = seed_combo_with_one_model(&conn, "self", "p1", "m");
         let _ = seed_virtual_combo(&conn);
 
         let err = add_target(
@@ -3581,10 +3563,8 @@ mod tests {
         // must be rejected by the row-level probe.
         let (pool, _path) = fresh_pool();
         let conn = pool.writer();
-        let (cid_a, _) =
-            seed_combo_with_one_model(&conn, "A", "p1", "ma");
-        let (cid_b, _) =
-            seed_combo_with_one_model(&conn, "B", "p2", "mb");
+        let (cid_a, _) = seed_combo_with_one_model(&conn, "A", "p1", "ma");
+        let (cid_b, _) = seed_combo_with_one_model(&conn, "B", "p2", "mb");
         let _ = seed_virtual_combo(&conn);
 
         add_target(
@@ -3628,10 +3608,8 @@ mod tests {
         // sending both is a 400.
         let (pool, _path) = fresh_pool();
         let conn = pool.writer();
-        let (cid_a, m1) =
-            seed_combo_with_one_model(&conn, "A", "p1", "m1");
-        let (cid_b, _) =
-            seed_combo_with_one_model(&conn, "B", "p2", "m2");
+        let (cid_a, m1) = seed_combo_with_one_model(&conn, "A", "p1", "m1");
+        let (cid_b, _) = seed_combo_with_one_model(&conn, "B", "p2", "m2");
         let _ = seed_virtual_combo(&conn);
 
         let err = add_target(
@@ -3661,8 +3639,7 @@ mod tests {
         // Sending neither model_row_id nor sub_combo_id is a 400.
         let (pool, _path) = fresh_pool();
         let conn = pool.writer();
-        let (cid_a, _) =
-            seed_combo_with_one_model(&conn, "A", "p1", "m1");
+        let (cid_a, _) = seed_combo_with_one_model(&conn, "A", "p1", "m1");
         let _ = seed_virtual_combo(&conn);
 
         let err = add_target(
@@ -3695,10 +3672,8 @@ mod tests {
         // (prio 20/30 from B).
         let (pool, _path) = fresh_pool();
         let conn = pool.writer();
-        let (cid_a, m1) =
-            seed_combo_with_one_model(&conn, "A", "p1", "m1");
-        let (cid_b, m2) =
-            seed_combo_with_one_model(&conn, "B", "p2", "m2");
+        let (cid_a, m1) = seed_combo_with_one_model(&conn, "A", "p1", "m1");
+        let (cid_b, m2) = seed_combo_with_one_model(&conn, "B", "p2", "m2");
         // p3 needs an explicit provider row because
         // `seed_combo_with_one_model` only registers "p2" for B.
         seed_provider(&conn, "p3");
@@ -3729,11 +3704,9 @@ mod tests {
         )
         .expect("add B as sub-combo of A");
 
-        let flat = resolve_combo_to_targets(&conn, cid_a, &mut vec![], 0)
-            .expect("resolve");
+        let flat = resolve_combo_to_targets(&conn, cid_a, &mut vec![], 0).expect("resolve");
         assert_eq!(flat.len(), 3, "A=1 flat + B=2 flat → 3 total");
-        let model_ids: Vec<Option<ModelRowId>> =
-            flat.iter().map(|t| t.model_row_id).collect();
+        let model_ids: Vec<Option<ModelRowId>> = flat.iter().map(|t| t.model_row_id).collect();
         // All flattened entries must be directly executable.
         assert!(flat.iter().all(|t| t.sub_combo_id.is_none()));
         assert_eq!(model_ids, vec![Some(m1), Some(m2), Some(m3)]);
@@ -3761,8 +3734,7 @@ mod tests {
             let name = format!("C{}", i);
             let provider = format!("px-{}", i);
             let model = format!("mx-{}", i);
-            let (cid, _) =
-                seed_combo_with_one_model(&conn, &name, &provider, &model);
+            let (cid, _) = seed_combo_with_one_model(&conn, &name, &provider, &model);
             combos.push(cid);
         }
         for i in 0..combos.len() - 1 {
@@ -3801,10 +3773,8 @@ mod tests {
         // `resolve_combo_respects_max_depth` test above.
         let (pool, _path) = fresh_pool();
         let conn = pool.writer();
-        let (cid_a, _) =
-            seed_combo_with_one_model(&conn, "A", "p1", "m1");
-        let (cid_b, _) =
-            seed_combo_with_one_model(&conn, "B", "p2", "m2");
+        let (cid_a, _) = seed_combo_with_one_model(&conn, "A", "p1", "m1");
+        let (cid_b, _) = seed_combo_with_one_model(&conn, "B", "p2", "m2");
         let _ = seed_virtual_combo(&conn);
 
         add_target(
@@ -3849,10 +3819,8 @@ mod tests {
         // chain is short enough not to trip the depth probe.)
         let (pool, _path) = fresh_pool();
         let conn = pool.writer();
-        let (cid_a, _) =
-            seed_combo_with_one_model(&conn, "A", "p1", "m1");
-        let (cid_b, _) =
-            seed_combo_with_one_model(&conn, "B", "p2", "m2");
+        let (cid_a, _) = seed_combo_with_one_model(&conn, "A", "p1", "m1");
+        let (cid_b, _) = seed_combo_with_one_model(&conn, "B", "p2", "m2");
         let _ = seed_virtual_combo(&conn);
         add_target(
             &conn,
@@ -3866,8 +3834,7 @@ mod tests {
             },
         )
         .expect("add B as sub-combo of A");
-        let flat = resolve_combo_to_targets(&conn, cid_a, &mut vec![], 0)
-            .expect("resolve");
+        let flat = resolve_combo_to_targets(&conn, cid_a, &mut vec![], 0).expect("resolve");
         // 1 flat in A + 1 flat in B = 2
         assert_eq!(flat.len(), 2);
     }
@@ -3879,10 +3846,8 @@ mod tests {
         // empty and `model_row_id` None.
         let (pool, _path) = fresh_pool();
         let conn = pool.writer();
-        let (cid_a, _) =
-            seed_combo_with_one_model(&conn, "parent", "p1", "m1");
-        let (cid_b, _) =
-            seed_combo_with_one_model(&conn, "child", "p2", "m2");
+        let (cid_a, _) = seed_combo_with_one_model(&conn, "parent", "p1", "m1");
+        let (cid_b, _) = seed_combo_with_one_model(&conn, "child", "p2", "m2");
         let _ = seed_virtual_combo(&conn);
         add_target(
             &conn,
@@ -3897,8 +3862,7 @@ mod tests {
         )
         .expect("add sub-combo");
 
-        let enriched =
-            list_targets_with_model(&conn, cid_a).expect("enriched list");
+        let enriched = list_targets_with_model(&conn, cid_a).expect("enriched list");
         // 1 flat in A + 1 sub-combo target = 2 rows
         assert_eq!(enriched.len(), 2);
         let sub_row = enriched

@@ -17,7 +17,7 @@ use crate::capabilities;
 use crate::error::Result;
 use crate::ids::ProviderId;
 use crate::providers::{self, AuthType, ProviderFormat};
-use rusqlite::{params, Connection};
+use rusqlite::{Connection, params};
 
 /// Row describing a built-in provider preset.
 ///
@@ -178,7 +178,20 @@ const BUILTINS: &[Builtin<'static>] = &[
 /// Custom (operator-created) providers are not in this list and can
 /// be deleted normally.
 pub fn builtin_provider_ids() -> &'static [&'static str] {
-    &["openrouter", "minimax", "opencode-zen", "ollama-cloud", "nous-research", "nvidia-nim", "kilocode", "gemini", "antigravity", "antigravity-cli", "kiro", "cloudflare-workers-ai"]
+    &[
+        "openrouter",
+        "minimax",
+        "opencode-zen",
+        "ollama-cloud",
+        "nous-research",
+        "nvidia-nim",
+        "kilocode",
+        "gemini",
+        "antigravity",
+        "antigravity-cli",
+        "kiro",
+        "cloudflare-workers-ai",
+    ]
 }
 
 /// The id of the synthetic "combo" provider row used as a placeholder
@@ -380,8 +393,7 @@ mod tests {
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_nanos())
             .unwrap_or(0);
-        let dir =
-            std::env::temp_dir().join(format!("openproxy-seed-test-{}-{}-{}", pid, nanos, n));
+        let dir = std::env::temp_dir().join(format!("openproxy-seed-test-{}-{}-{}", pid, nanos, n));
         std::fs::create_dir_all(&dir).expect("mkdir tempdir");
         let path = dir.join("seed.db");
         let pool = DbPool::open(&path).expect("open pool");
@@ -400,7 +412,21 @@ mod tests {
         assert_eq!(n, 13, "first call inserts all thirteen");
 
         // All thirteen are present and reachable by id.
-        for id in ["openrouter", "minimax", "opencode-zen", "ollama-cloud", "nous-research", "nvidia-nim", "kilocode", "gemini", "gemini-cli", "antigravity", "antigravity-cli", "kiro", "cloudflare-workers-ai"] {
+        for id in [
+            "openrouter",
+            "minimax",
+            "opencode-zen",
+            "ollama-cloud",
+            "nous-research",
+            "nvidia-nim",
+            "kilocode",
+            "gemini",
+            "gemini-cli",
+            "antigravity",
+            "antigravity-cli",
+            "kiro",
+            "cloudflare-workers-ai",
+        ] {
             let p = providers::get(&conn, &ProviderId::new(id))
                 .expect("get")
                 .unwrap_or_else(|| panic!("{} not seeded", id));
@@ -449,10 +475,7 @@ mod tests {
         let p = providers::get(&conn, &ProviderId::new("openrouter"))
             .expect("get")
             .unwrap();
-        assert_eq!(
-            p.name, "Custom name override",
-            "existing row untouched"
-        );
+        assert_eq!(p.name, "Custom name override", "existing row untouched");
     }
 
     #[test]

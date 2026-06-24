@@ -38,7 +38,9 @@
 use crate::error::{CoreError, Result};
 use crate::ids::AccountId;
 use crate::translation::{OpenAIMessage, OpenAIRequest, OpenAIResponse, OpenAIUsage};
-use crate::upstream::{CancellationToken, TimeoutProfile, UpstreamClient, UpstreamError, UpstreamRequest};
+use crate::upstream::{
+    CancellationToken, TimeoutProfile, UpstreamClient, UpstreamError, UpstreamRequest,
+};
 use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -224,7 +226,11 @@ pub fn build_kiro_request(openai: &OpenAIRequest, profile_arn: Option<&str>) -> 
                     origin: "AI_EDITOR".to_string(),
                 },
             },
-            history: if history.is_empty() { None } else { Some(history) },
+            history: if history.is_empty() {
+                None
+            } else {
+                Some(history)
+            },
             chat_trigger_type: "MANUAL".to_string(),
         },
         profile_arn: profile_arn.map(|s| s.to_string()),
@@ -416,10 +422,9 @@ pub async fn execute_kiro(
     // `Authorization` and `x-amz-user-agent` are added here as
     // they are caller-specific (not generic to all POSTs).
     if let Ok(value) = http::HeaderValue::from_str(&format!("Bearer {access_token}")) {
-        upstream_request.headers.insert(
-            http::header::AUTHORIZATION,
-            value,
-        );
+        upstream_request
+            .headers
+            .insert(http::header::AUTHORIZATION, value);
     }
     upstream_request.headers.insert(
         http::header::HeaderName::from_static("x-amz-user-agent"),
@@ -642,7 +647,14 @@ mod tests {
     fn parse_response_extracts_top_level_content() {
         let body = serde_json::to_vec(&json!({"content": "hello"})).unwrap();
         let r = parse_kiro_response(&body, "auto").expect("parse");
-        assert_eq!(r.choices[0].message.content.as_ref().and_then(serde_json::Value::as_str), Some("hello"));
+        assert_eq!(
+            r.choices[0]
+                .message
+                .content
+                .as_ref()
+                .and_then(serde_json::Value::as_str),
+            Some("hello")
+        );
     }
 
     #[test]
@@ -652,7 +664,14 @@ mod tests {
         }))
         .unwrap();
         let r = parse_kiro_response(&body, "auto").expect("parse");
-        assert_eq!(r.choices[0].message.content.as_ref().and_then(serde_json::Value::as_str), Some("hi from message"));
+        assert_eq!(
+            r.choices[0]
+                .message
+                .content
+                .as_ref()
+                .and_then(serde_json::Value::as_str),
+            Some("hi from message")
+        );
     }
 
     #[test]
@@ -662,7 +681,14 @@ mod tests {
         }))
         .unwrap();
         let r = parse_kiro_response(&body, "auto").expect("parse");
-        assert_eq!(r.choices[0].message.content.as_ref().and_then(serde_json::Value::as_str), Some("from choices"));
+        assert_eq!(
+            r.choices[0]
+                .message
+                .content
+                .as_ref()
+                .and_then(serde_json::Value::as_str),
+            Some("from choices")
+        );
     }
 
     #[test]
@@ -670,7 +696,12 @@ mod tests {
         // 16 bytes of zeros — would not parse as JSON.
         let body = vec![0u8; 16];
         let r = parse_kiro_response(&body, "auto").expect("parse");
-        let content = r.choices[0].message.content.as_ref().and_then(serde_json::Value::as_str).unwrap();
+        let content = r.choices[0]
+            .message
+            .content
+            .as_ref()
+            .and_then(serde_json::Value::as_str)
+            .unwrap();
         assert!(content.contains("unparsed EventStream body"));
         assert!(content.contains("16 bytes"));
     }

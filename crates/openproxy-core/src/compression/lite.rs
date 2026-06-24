@@ -178,11 +178,7 @@ pub fn compress_tool_results(msgs: &mut Messages) -> Vec<&'static str> {
                 .nth(MAX_TOOL_CHARS)
                 .map(|(i, _)| i)
                 .unwrap_or(text.len());
-            let truncated = format!(
-                "{}…[truncated {} chars]",
-                &text[..cut],
-                text.len() - cut
-            );
+            let truncated = format!("{}…[truncated {} chars]", &text[..cut], text.len() - cut);
             *content = Value::String(truncated);
             applied.push("lite::compress_tool_results");
         }
@@ -235,7 +231,11 @@ pub fn replace_image_urls(msgs: &mut Messages) -> Vec<&'static str> {
                     .map(|url| {
                         let semi = url.find(';').unwrap_or(url.len());
                         let fmt = &url["data:image/".len()..semi];
-                        if fmt.is_empty() { "unknown".to_string() } else { fmt.to_string() }
+                        if fmt.is_empty() {
+                            "unknown".to_string()
+                        } else {
+                            fmt.to_string()
+                        }
                     })
                     .unwrap_or_else(|| "unknown".to_string());
                 if let Some(obj) = part.as_object_mut() {
@@ -309,16 +309,14 @@ mod tests {
     #[test]
     fn test_compress_tool_results_truncates() {
         let long = "x".repeat(3000);
-        let mut msgs = vec![
-            OpenAIMessage {
-                role: "tool".into(),
-                content: Some(Value::String(long)),
-                name: None,
-                tool_call_id: Some("call_1".into()),
-                tool_calls: None,
-                extra: Default::default(),
-            },
-        ];
+        let mut msgs = vec![OpenAIMessage {
+            role: "tool".into(),
+            content: Some(Value::String(long)),
+            name: None,
+            tool_call_id: Some("call_1".into()),
+            tool_calls: None,
+            extra: Default::default(),
+        }];
         let applied = compress_tool_results(&mut msgs);
         assert!(!applied.is_empty());
         let result = msgs[0].content.as_ref().and_then(|c| c.as_str()).unwrap();
@@ -387,18 +385,16 @@ mod tests {
 
     #[test]
     fn test_replace_image_urls_replaces_data_uri() {
-        let mut msgs = vec![
-            OpenAIMessage {
-                role: "user".into(),
-                content: Some(json!([
-                    {"type": "image_url", "image_url": {"url": "data:image/png;base64,iVBOR..."}}
-                ])),
-                name: None,
-                tool_call_id: None,
-                tool_calls: None,
-                extra: Default::default(),
-            },
-        ];
+        let mut msgs = vec![OpenAIMessage {
+            role: "user".into(),
+            content: Some(json!([
+                {"type": "image_url", "image_url": {"url": "data:image/png;base64,iVBOR..."}}
+            ])),
+            name: None,
+            tool_call_id: None,
+            tool_calls: None,
+            extra: Default::default(),
+        }];
         let applied = replace_image_urls(&mut msgs);
         assert!(!applied.is_empty());
         let parts = msgs[0].content.as_ref().and_then(|c| c.as_array()).unwrap();

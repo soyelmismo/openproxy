@@ -26,24 +26,20 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use axum::{
+    Router,
     extract::State as AxumState,
     http::StatusCode,
     response::{IntoResponse, Json as AxumJson},
     routing::get,
-    Router,
 };
 use openproxy_core::{
-    accounts,
-    admin,
-    adapters::{
-        AdapterAuthType, AdapterFormat, ProviderAdapter, ProviderAdapterConfig,
-    },
-    combos,
+    AppConfig, accounts,
+    adapters::{AdapterAuthType, AdapterFormat, ProviderAdapter, ProviderAdapterConfig},
+    admin, combos,
     db::{self as core_db, migrations},
     ids::{AccountId, ComboId, ComboTargetId, ModelId, ModelRowId, ProviderId},
     models::{self, DiscoveredModel, TargetFormat},
     secrets::MasterKey,
-    AppConfig,
 };
 use openproxy_server::state::AppState;
 use parking_lot::Mutex;
@@ -89,9 +85,7 @@ impl MockStateHandle {
     }
 }
 
-async fn mock_models_handler(
-    AxumState(state): AxumState<Arc<MockState>>,
-) -> impl IntoResponse {
+async fn mock_models_handler(AxumState(state): AxumState<Arc<MockState>>) -> impl IntoResponse {
     let ids = state.catalog.lock().clone();
     let data: Vec<serde_json::Value> = ids
         .into_iter()
@@ -168,11 +162,7 @@ impl ProviderAdapter for TestMockAdapter {
         &self.config
     }
 
-    fn build_chat_url(
-        &self,
-        _target_format: TargetFormat,
-        _model: &ModelId,
-    ) -> String {
+    fn build_chat_url(&self, _target_format: TargetFormat, _model: &ModelId) -> String {
         // The test never makes a chat call against the mock
         // (the `chat/completions` route is only here to round out
         // the surface), so this can be a stub. Build something
@@ -214,41 +204,31 @@ impl ProviderAdapter for TestMockAdapter {
                 openproxy_core::upstream::CancellationToken::new(),
             )
             .await
-            .map_err(|e| {
-                openproxy_core::error::CoreError::UpstreamConnection(e.to_string())
-            })?;
+            .map_err(|e| openproxy_core::error::CoreError::UpstreamConnection(e.to_string()))?;
         if !resp.status.is_success() {
             return Err(openproxy_core::error::CoreError::UpstreamConnection(
                 format!("mock returned status {}", resp.status),
             ));
         }
-        let body = resp
-            .collect()
-            .await
-            .map_err(|e| {
-                openproxy_core::error::CoreError::UpstreamConnection(format!(
-                    "collect body: {e}"
-                ))
-            })?;
+        let body = resp.collect().await.map_err(|e| {
+            openproxy_core::error::CoreError::UpstreamConnection(format!("collect body: {e}"))
+        })?;
         let value: serde_json::Value = serde_json::from_slice(&body).map_err(|e| {
-            openproxy_core::error::CoreError::Parse(format!(
-                "mock returned non-JSON: {e}"
-            ))
+            openproxy_core::error::CoreError::Parse(format!("mock returned non-JSON: {e}"))
         })?;
-        let arr = value.get("data").and_then(|v| v.as_array()).ok_or_else(|| {
-            openproxy_core::error::CoreError::Parse(
-                "mock response missing 'data' array".into(),
-            )
-        })?;
+        let arr = value
+            .get("data")
+            .and_then(|v| v.as_array())
+            .ok_or_else(|| {
+                openproxy_core::error::CoreError::Parse("mock response missing 'data' array".into())
+            })?;
         let mut out = Vec::with_capacity(arr.len());
         for entry in arr {
             let id = entry
                 .get("id")
                 .and_then(|v| v.as_str())
                 .ok_or_else(|| {
-                    openproxy_core::error::CoreError::Parse(
-                        "mock entry missing 'id' string".into(),
-                    )
+                    openproxy_core::error::CoreError::Parse("mock entry missing 'id' string".into())
                 })?
                 .to_string();
             out.push(DiscoveredModel {
@@ -284,10 +264,7 @@ impl ProviderAdapter for TestMockAdapter {
 /// the built-in adapter set, and we keep the `DbPool` + `AppState`
 /// in the test's hands so the test can mutate the DB directly
 /// between refreshes.
-async fn make_test_state(
-    dir: &std::path::Path,
-    adapter: Arc<dyn ProviderAdapter>,
-) -> AppState {
+async fn make_test_state(dir: &std::path::Path, adapter: Arc<dyn ProviderAdapter>) -> AppState {
     let pool = Arc::new(core_db::DbPool::open(&dir.join("e2e.db")).expect("open pool"));
     {
         let mut w = pool.writer();
@@ -351,10 +328,7 @@ struct ModelRowLite {
     custom: bool,
 }
 
-fn select_models(
-    conn: &Connection,
-    provider_id: &ProviderId,
-) -> Vec<ModelRowLite> {
+fn select_models(conn: &Connection, provider_id: &ProviderId) -> Vec<ModelRowLite> {
     let mut stmt = conn
         .prepare(
             "SELECT model_id, active, custom FROM models \
@@ -392,10 +366,7 @@ async fn call_refresh(
     api_key: &str,
     adapter: &Arc<dyn ProviderAdapter>,
 ) -> Option<models::UpsertResult> {
-    let conn = state
-        .db_pool()
-        .open_connection()
-        .expect("open_connection");
+    let conn = state.db_pool().open_connection().expect("open_connection");
     admin::refresh_models(
         conn,
         provider,
@@ -420,10 +391,8 @@ async fn e2e_discovery_and_delete_on_disappear() {
     let base_url = format!("http://{addr}");
 
     // --- Step 2: build the test adapter + AppState --------------
-    let adapter: Arc<dyn ProviderAdapter> = Arc::new(TestMockAdapter::new(
-        "e2e-mock",
-        base_url.clone(),
-    ));
+    let adapter: Arc<dyn ProviderAdapter> =
+        Arc::new(TestMockAdapter::new("e2e-mock", base_url.clone()));
     let tmp = TempDir::new().expect("tempdir");
     let state = make_test_state(tmp.path(), adapter.clone()).await;
     let provider = ProviderId::new("e2e-mock");
@@ -442,8 +411,7 @@ async fn e2e_discovery_and_delete_on_disappear() {
     // ============================================================
     let account_id: AccountId = {
         let w = state.db_pool().writer();
-        let accounts_list =
-            accounts::list(&w, Some(&provider)).expect("list accounts");
+        let accounts_list = accounts::list(&w, Some(&provider)).expect("list accounts");
         assert_eq!(accounts_list.len(), 1, "fixture must have one account");
         // `accounts::create` defaults `auth_type` to `"api_key"`
         // (the static-key flow). The test doesn't care which it
@@ -468,10 +436,7 @@ async fn e2e_discovery_and_delete_on_disappear() {
     let r1 = call_refresh(&state, &provider, "sk-e2e-fake", &adapter)
         .await
         .expect("refresh_models round 1");
-    assert_eq!(
-        r1.touched, 3,
-        "first refresh must have inserted 3 rows"
-    );
+    assert_eq!(r1.touched, 3, "first refresh must have inserted 3 rows");
     let r1_ids: BTreeSet<String> = r1
         .new_model_ids
         .iter()
@@ -489,8 +454,7 @@ async fn e2e_discovery_and_delete_on_disappear() {
     {
         let w = state.db_pool().writer();
         let rows = select_models(&w, &provider);
-        let ids: BTreeSet<String> =
-            rows.iter().map(|r| r.model_id.clone()).collect();
+        let ids: BTreeSet<String> = rows.iter().map(|r| r.model_id.clone()).collect();
         assert_eq!(
             ids,
             ["a", "b", "c"]
@@ -548,13 +512,12 @@ async fn e2e_discovery_and_delete_on_disappear() {
     {
         let w = state.db_pool().writer();
         let rows = select_models(&w, &provider);
-        let ids: BTreeSet<String> =
-            rows.iter().map(|r| r.model_id.clone()).collect();
+        let ids: BTreeSet<String> = rows.iter().map(|r| r.model_id.clone()).collect();
         assert_eq!(
             ids,
             ["a", "b"]
                 .into_iter()
-                    .map(String::from)
+                .map(String::from)
                 .collect::<BTreeSet<_>>(),
             "DB must contain exactly a, b; c must be gone"
         );
@@ -598,8 +561,7 @@ async fn e2e_discovery_and_delete_on_disappear() {
     {
         let w = state.db_pool().writer();
         let rows = select_models(&w, &provider);
-        let ids: BTreeSet<String> =
-            rows.iter().map(|r| r.model_id.clone()).collect();
+        let ids: BTreeSet<String> = rows.iter().map(|r| r.model_id.clone()).collect();
         assert_eq!(
             ids,
             ["a", "b", "z"]
@@ -685,13 +647,9 @@ async fn e2e_discovery_and_delete_on_disappear() {
     //       the model/provider cross-check both pass).
     let (combo_id, c_target_id) = {
         let w = state.db_pool().writer();
-        let combo_id: ComboId = combos::create_combo(
-            &w,
-            "e2e-combo",
-            combos::Strategy::Priority,
-            1,
-        )
-        .expect("create_combo");
+        let combo_id: ComboId =
+            combos::create_combo(&w, "e2e-combo", combos::Strategy::Priority, 1)
+                .expect("create_combo");
         let target_id: ComboTargetId = combos::add_target(
             &w,
             combos::AddTargetInput {
@@ -711,8 +669,8 @@ async fn e2e_discovery_and_delete_on_disappear() {
     //       `c` *before* the wipe.
     {
         let w = state.db_pool().writer();
-        let before = combos::list_targets_with_model(&w, combo_id)
-            .expect("list_targets_with_model before");
+        let before =
+            combos::list_targets_with_model(&w, combo_id).expect("list_targets_with_model before");
         assert_eq!(before.len(), 1);
         assert_eq!(
             before[0].model_id, "c",
@@ -762,8 +720,7 @@ async fn e2e_discovery_and_delete_on_disappear() {
 
         // The catalog no longer has `c`.
         let rows = select_models(&w, &provider);
-        let ids: BTreeSet<String> =
-            rows.iter().map(|r| r.model_id.clone()).collect();
+        let ids: BTreeSet<String> = rows.iter().map(|r| r.model_id.clone()).collect();
         assert!(
             !ids.contains("c"),
             "the catalog row for c must be gone after the refresh: \
@@ -774,8 +731,8 @@ async fn e2e_discovery_and_delete_on_disappear() {
         // on `combo_targets.model_row_id` (migration 000030) took
         // it with the model. Both the bookkeeping view and the
         // routable view return zero entries.
-        let after = combos::list_targets_with_model(&w, combo_id)
-            .expect("list_targets_with_model after");
+        let after =
+            combos::list_targets_with_model(&w, combo_id).expect("list_targets_with_model after");
         assert_eq!(
             after.len(),
             0,
@@ -783,8 +740,7 @@ async fn e2e_discovery_and_delete_on_disappear() {
              referenced c must be gone, not orphaned"
         );
 
-        let plain = combos::list_targets(&w, combo_id)
-            .expect("list_targets after");
+        let plain = combos::list_targets(&w, combo_id).expect("list_targets after");
         assert_eq!(
             plain.len(),
             0,
@@ -875,8 +831,7 @@ async fn e2e_discovery_and_delete_on_disappear() {
 
         // 9.g.iii. Routing — `combos::list_targets` returns exactly
         // ONE entry: the freshly added target.
-        let routable = combos::list_targets(&w, combo_id)
-            .expect("list_targets after re-add");
+        let routable = combos::list_targets(&w, combo_id).expect("list_targets after re-add");
         assert_eq!(
             routable.len(),
             1,

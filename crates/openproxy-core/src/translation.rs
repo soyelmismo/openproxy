@@ -4,7 +4,7 @@
 use crate::error::{CoreError, Result};
 use serde::de::Deserializer;
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 // =====================
 // OpenAI Chat Completions types (input/output)
@@ -46,7 +46,9 @@ pub struct OpenAIRequest {
     pub extra: serde_json::Map<String, serde_json::Value>,
 }
 
-fn deserialize_optional_content<'de, D>(deserializer: D) -> std::result::Result<Option<Value>, D::Error>
+fn deserialize_optional_content<'de, D>(
+    deserializer: D,
+) -> std::result::Result<Option<Value>, D::Error>
 where
     D: Deserializer<'de>,
 {
@@ -292,11 +294,15 @@ fn message_content_to_gemini_parts(content: &Option<serde_json::Value>) -> Vec<G
                 text: Some(openai_content_part_to_text(part)),
             })
             .collect(),
-        Some(Value::Null) => vec![GeminiPart { text: Some(String::new()) }],
+        Some(Value::Null) => vec![GeminiPart {
+            text: Some(String::new()),
+        }],
         Some(value) => vec![GeminiPart {
             text: Some(value.to_string()),
         }],
-        None => vec![GeminiPart { text: Some(String::new()) }],
+        None => vec![GeminiPart {
+            text: Some(String::new()),
+        }],
     }
 }
 
@@ -449,21 +455,29 @@ pub fn openai_to_anthropic(req: &OpenAIRequest) -> AnthropicRequest {
         // verbatim causes `(2013) function name or parameters is empty`
         // because the upstream looks for `name`/`input_schema` at the
         // top level and finds them missing.
-        tools: req.tools.as_ref().map(|tools| {
-            tools
-                .iter()
-                .filter_map(translate_openai_tool_to_anthropic)
-                .collect::<Vec<_>>()
-        }).filter(|t: &Vec<serde_json::Value>| !t.is_empty()),
+        tools: req
+            .tools
+            .as_ref()
+            .map(|tools| {
+                tools
+                    .iter()
+                    .filter_map(translate_openai_tool_to_anthropic)
+                    .collect::<Vec<_>>()
+            })
+            .filter(|t: &Vec<serde_json::Value>| !t.is_empty()),
         // Translate OpenAI `tool_choice` to Anthropic shape.
-        tool_choice: req.tool_choice.as_ref().and_then(translate_openai_tool_choice_to_anthropic),
+        tool_choice: req
+            .tool_choice
+            .as_ref()
+            .and_then(translate_openai_tool_choice_to_anthropic),
         // OpenAI's `user` field maps to Anthropic's `metadata.user_id`
         // (Anthropic reserves metadata for traceability, not for
         // function-calling). When the caller didn't set `user`, we
         // leave metadata None rather than synthesise an empty object.
-        metadata: req.user.as_ref().map(|u| {
-            serde_json::json!({ "user_id": u })
-        }),
+        metadata: req
+            .user
+            .as_ref()
+            .map(|u| serde_json::json!({ "user_id": u })),
         stream: req.stream,
     }
 }
@@ -525,7 +539,8 @@ fn translate_openai_tool_choice_to_anthropic(tc: &serde_json::Value) -> Option<s
                 "function" => {
                     // OpenAI object form: {"type":"function","function":{"name":"X"}}
                     // → Anthropic: {"type":"tool","name":"X"}
-                    let name = obj.get("function")
+                    let name = obj
+                        .get("function")
                         .and_then(|f| f.get("name"))
                         .and_then(|v| v.as_str())?;
                     if name.is_empty() {
@@ -690,18 +705,10 @@ pub fn gemini_to_openai(resp: &GeminiResponse) -> OpenAIResponse {
     let content = candidate
         .and_then(|c| c.content.as_ref())
         .and_then(|c| {
-            let text: String = c
-                .parts
-                .iter()
-                .filter_map(|p| p.text.as_deref())
-                .collect();
-            if text.is_empty() {
-                None
-            } else {
-                Some(text)
-            }
+            let text: String = c.parts.iter().filter_map(|p| p.text.as_deref()).collect();
+            if text.is_empty() { None } else { Some(text) }
         })
-    .unwrap_or_default();
+        .unwrap_or_default();
 
     let finish_reason = candidate
         .and_then(|c| c.finish_reason.as_deref())
@@ -720,14 +727,14 @@ pub fn gemini_to_openai(resp: &GeminiResponse) -> OpenAIResponse {
         model: String::new(),
         choices: vec![OpenAIChoice {
             index: 0,
-                message: OpenAIMessage {
-                    role: "assistant".to_string(),
-                    content: Some(Value::String(content)),
-                    name: None,
-                    tool_call_id: None,
-                    tool_calls: None,
-                    extra: serde_json::Map::new(),
-                },
+            message: OpenAIMessage {
+                role: "assistant".to_string(),
+                content: Some(Value::String(content)),
+                name: None,
+                tool_call_id: None,
+                tool_calls: None,
+                extra: serde_json::Map::new(),
+            },
             finish_reason,
         }],
         usage,
@@ -797,7 +804,8 @@ pub fn anthropic_sse_to_openai_chunks(
             vec![format_sse_data(&chunk)]
         }
 
-        AnthropicSseEvent::ContentBlockStart { .. } | AnthropicSseEvent::ContentBlockStop { .. } => {
+        AnthropicSseEvent::ContentBlockStart { .. }
+        | AnthropicSseEvent::ContentBlockStop { .. } => {
             // No-op boundaries: text is delivered through deltas only.
             Vec::new()
         }
@@ -967,7 +975,10 @@ mod tests {
         ]);
 
         let out = openai_to_anthropic(&req);
-        assert_eq!(out.system.as_deref(), Some("You are helpful.\n\nBe concise."));
+        assert_eq!(
+            out.system.as_deref(),
+            Some("You are helpful.\n\nBe concise.")
+        );
         assert_eq!(out.messages.len(), 2);
         assert_eq!(out.messages[0].role, "user");
         assert_eq!(out.messages[0].content, "Hi");
@@ -1028,7 +1039,14 @@ mod tests {
         assert_eq!(out.choices.len(), 1);
         assert_eq!(out.choices[0].index, 0);
         assert_eq!(out.choices[0].message.role, "assistant");
-        assert_eq!(out.choices[0].message.content.as_ref().and_then(Value::as_str), Some("Hello, world!"));
+        assert_eq!(
+            out.choices[0]
+                .message
+                .content
+                .as_ref()
+                .and_then(Value::as_str),
+            Some("Hello, world!")
+        );
         assert_eq!(out.choices[0].finish_reason.as_deref(), Some("stop"));
     }
 
@@ -1177,7 +1195,10 @@ mod tests {
         req.max_tokens = None;
         let out = openai_to_gemini(&req);
         let gen_cfg = out.generation_config.as_ref().unwrap();
-        assert_eq!(gen_cfg.max_output_tokens, Some(DEFAULT_GEMINI_MAX_OUTPUT_TOKENS));
+        assert_eq!(
+            gen_cfg.max_output_tokens,
+            Some(DEFAULT_GEMINI_MAX_OUTPUT_TOKENS)
+        );
 
         // When the client does provide max_tokens, it's preserved.
         let mut req = openai_req_with(vec![("user", "Hi")]);
@@ -1220,7 +1241,14 @@ mod tests {
         let out = gemini_to_openai(&resp);
         assert_eq!(out.choices.len(), 1);
         assert_eq!(out.choices[0].message.role, "assistant");
-        assert_eq!(out.choices[0].message.content.as_ref().and_then(Value::as_str), Some("Hello, world!"));
+        assert_eq!(
+            out.choices[0]
+                .message
+                .content
+                .as_ref()
+                .and_then(Value::as_str),
+            Some("Hello, world!")
+        );
         assert_eq!(out.choices[0].finish_reason.as_deref(), Some("stop"));
         let usage = out.usage.unwrap();
         assert_eq!(usage.prompt_tokens, 10);
@@ -1256,7 +1284,14 @@ mod tests {
 
         let out = gemini_to_openai(&resp);
         assert_eq!(out.choices.len(), 1);
-        assert_eq!(out.choices[0].message.content.as_ref().and_then(Value::as_str), Some(""));
+        assert_eq!(
+            out.choices[0]
+                .message
+                .content
+                .as_ref()
+                .and_then(Value::as_str),
+            Some("")
+        );
     }
 
     #[test]
@@ -1276,7 +1311,10 @@ mod tests {
         assert!(msg.content.as_ref().map(|v| v.is_null()).unwrap_or(false));
         assert_eq!(msg.tool_calls.as_ref().map(|v| v.len()), Some(1));
         let serialized = serde_json::to_value(&req).unwrap();
-        assert_eq!(serialized["messages"][0]["content"], serde_json::Value::Null);
+        assert_eq!(
+            serialized["messages"][0]["content"],
+            serde_json::Value::Null
+        );
         assert_eq!(
             serialized["messages"][0]["tool_calls"],
             serde_json::json!([{"id":"call_1","type":"function","function":{"name":"foo","arguments":"{}"}}])
@@ -1401,7 +1439,11 @@ mod tests {
         ]);
         let out = openai_to_anthropic(&req);
         let tools = out.tools.as_ref().expect("tools should be present");
-        assert_eq!(tools.len(), 1, "only the tool with a non-empty name should survive");
+        assert_eq!(
+            tools.len(),
+            1,
+            "only the tool with a non-empty name should survive"
+        );
         assert_eq!(tools[0]["name"], "valid_tool");
     }
 
@@ -1441,7 +1483,10 @@ mod tests {
         // The assistant message should have an array content with a tool_use block.
         let assistant_msg = &out.messages[1];
         assert_eq!(assistant_msg.role, "assistant");
-        let blocks = assistant_msg.content.as_array().expect("content should be an array");
+        let blocks = assistant_msg
+            .content
+            .as_array()
+            .expect("content should be an array");
         assert_eq!(blocks.len(), 1);
         assert_eq!(blocks[0]["type"], "tool_use");
         assert_eq!(blocks[0]["id"], "call_abc123");
@@ -1491,7 +1536,10 @@ mod tests {
         // `user`-role message with a `tool_result` content block.
         let tool_result_msg = &out.messages[2];
         assert_eq!(tool_result_msg.role, "user");
-        let blocks = tool_result_msg.content.as_array().expect("content should be an array");
+        let blocks = tool_result_msg
+            .content
+            .as_array()
+            .expect("content should be an array");
         assert_eq!(blocks.len(), 1);
         assert_eq!(blocks[0]["type"], "tool_result");
         assert_eq!(blocks[0]["tool_use_id"], "call_xyz");
@@ -1534,7 +1582,10 @@ mod tests {
         ];
         let out = openai_to_anthropic(&req);
         let assistant_msg = &out.messages[1];
-        let blocks = assistant_msg.content.as_array().expect("content should be an array");
+        let blocks = assistant_msg
+            .content
+            .as_array()
+            .expect("content should be an array");
         // text block + 1 valid tool_use block (the empty-name one is skipped)
         assert_eq!(blocks.len(), 2);
         assert_eq!(blocks[0]["type"], "text");
@@ -1562,7 +1613,10 @@ mod tests {
         }];
         let out = openai_to_anthropic(&req);
         let assistant_msg = &out.messages[0];
-        let blocks = assistant_msg.content.as_array().expect("content should be an array");
+        let blocks = assistant_msg
+            .content
+            .as_array()
+            .expect("content should be an array");
         assert_eq!(blocks[0]["type"], "tool_use");
         assert_eq!(blocks[0]["input"], json!({}));
     }
@@ -1591,13 +1645,16 @@ mod tests {
             OpenAIMessage {
                 role: "user".to_string(),
                 content: Some(json!("What's the weather in Paris?")),
-                name: None, tool_call_id: None, tool_calls: None,
+                name: None,
+                tool_call_id: None,
+                tool_calls: None,
                 extra: serde_json::Map::new(),
             },
             OpenAIMessage {
                 role: "assistant".to_string(),
                 content: Some(serde_json::Value::Null),
-                name: None, tool_call_id: None,
+                name: None,
+                tool_call_id: None,
                 tool_calls: Some(vec![json!({
                     "id": "call_1",
                     "type": "function",
@@ -1619,7 +1676,10 @@ mod tests {
         // Tools: Anthropic shape with name/description/input_schema.
         let tools = out.tools.as_ref().expect("tools present");
         assert_eq!(tools[0]["name"], "get_weather");
-        assert_eq!(tools[0]["input_schema"]["properties"]["city"]["type"], "string");
+        assert_eq!(
+            tools[0]["input_schema"]["properties"]["city"]["type"],
+            "string"
+        );
 
         // tool_choice: {"type":"auto"}
         assert_eq!(out.tool_choice.as_ref().unwrap(), &json!({"type": "auto"}));
@@ -1627,7 +1687,10 @@ mod tests {
         // Messages: 3 entries (user, assistant with tool_use, user with tool_result)
         assert_eq!(out.messages.len(), 3);
         assert_eq!(out.messages[0].role, "user");
-        assert_eq!(out.messages[0].content, json!("What's the weather in Paris?"));
+        assert_eq!(
+            out.messages[0].content,
+            json!("What's the weather in Paris?")
+        );
 
         let asst_blocks = out.messages[1].content.as_array().unwrap();
         assert_eq!(asst_blocks[0]["type"], "tool_use");
@@ -1666,7 +1729,10 @@ mod tests {
         let mut req = openai_req_with(vec![("user", "go")]);
         req.user = Some("user-abc-123".to_string());
         let out = openai_to_anthropic(&req);
-        let metadata = out.metadata.as_ref().expect("metadata set when user is set");
+        let metadata = out
+            .metadata
+            .as_ref()
+            .expect("metadata set when user is set");
         assert_eq!(metadata["user_id"], "user-abc-123");
     }
 

@@ -16,10 +16,20 @@ pub struct ErrorContext {
 
 impl fmt::Display for ErrorContext {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "req={} trace={} phase={}", self.request_id, self.trace_id, self.phase)?;
-        if let Some(p) = &self.provider { write!(f, " provider={}", p)?; }
-        if let Some(a) = self.account { write!(f, " account={}", a)?; }
-        if let Some(m) = &self.model { write!(f, " model={}", m)?; }
+        write!(
+            f,
+            "req={} trace={} phase={}",
+            self.request_id, self.trace_id, self.phase
+        )?;
+        if let Some(p) = &self.provider {
+            write!(f, " provider={}", p)?;
+        }
+        if let Some(a) = self.account {
+            write!(f, " account={}", a)?;
+        }
+        if let Some(m) = &self.model {
+            write!(f, " model={}", m)?;
+        }
         Ok(())
     }
 }
@@ -30,7 +40,10 @@ pub enum CoreError {
     Config(String),
 
     #[error("database: {message}")]
-    Database { message: String, source: Option<Box<dyn std::error::Error + Send + Sync>> },
+    Database {
+        message: String,
+        source: Option<Box<dyn std::error::Error + Send + Sync>>,
+    },
 
     #[error("migration {version} failed: {message}")]
     Migration { version: i64, message: String },
@@ -54,13 +67,21 @@ pub enum CoreError {
     UpstreamTimeout { phase: String, ms: u64 },
 
     #[error("upstream error: status={status} provider={provider} model={model} body={body}")]
-    UpstreamError { status: u16, provider: String, model: String, body: String },
+    UpstreamError {
+        status: u16,
+        provider: String,
+        model: String,
+        body: String,
+    },
 
     #[error("upstream connection error: {0}")]
     UpstreamConnection(String),
 
     #[error("rate limited: provider={provider} retry_after_ms={retry_after_ms}")]
-    RateLimited { provider: String, retry_after_ms: u64 },
+    RateLimited {
+        provider: String,
+        retry_after_ms: u64,
+    },
 
     #[error("parse error: {0}")]
     Parse(String),
@@ -129,16 +150,22 @@ impl CoreError {
                 phase: phase.clone(),
                 ms: *ms,
             },
-            CoreError::UpstreamError { status, provider, model, body } => {
-                CoreError::UpstreamError {
-                    status: *status,
-                    provider: provider.clone(),
-                    model: model.clone(),
-                    body: body.clone(),
-                }
-            }
+            CoreError::UpstreamError {
+                status,
+                provider,
+                model,
+                body,
+            } => CoreError::UpstreamError {
+                status: *status,
+                provider: provider.clone(),
+                model: model.clone(),
+                body: body.clone(),
+            },
             CoreError::UpstreamConnection(s) => CoreError::UpstreamConnection(s.clone()),
-            CoreError::RateLimited { provider, retry_after_ms } => CoreError::RateLimited {
+            CoreError::RateLimited {
+                provider,
+                retry_after_ms,
+            } => CoreError::RateLimited {
                 provider: provider.clone(),
                 retry_after_ms: *retry_after_ms,
             },
@@ -161,17 +188,22 @@ impl CoreError {
         match self {
             CoreError::Auth(_) => 401,
             CoreError::Validation(_) => 400,
-            CoreError::ProviderNotFound(_) | CoreError::AccountNotFound(_)
-                | CoreError::ComboNotFound(_) | CoreError::ModelNotFound { .. }
-                | CoreError::NotFound { .. } => 404,
+            CoreError::ProviderNotFound(_)
+            | CoreError::AccountNotFound(_)
+            | CoreError::ComboNotFound(_)
+            | CoreError::ModelNotFound { .. }
+            | CoreError::NotFound { .. } => 404,
             CoreError::RateLimited { .. } => 429,
             CoreError::UpstreamError { status, .. } => *status,
             CoreError::UpstreamTimeout { .. } => 529,
             CoreError::UpstreamConnection(_) | CoreError::NoHealthyTargets(_) => 502,
             CoreError::ClientDisconnected => 499,
             CoreError::RaceLost => 499,
-            CoreError::Parse(_) | CoreError::Database { .. } | CoreError::Migration { .. }
-                | CoreError::Config(_) | CoreError::Internal(_) => 500,
+            CoreError::Parse(_)
+            | CoreError::Database { .. }
+            | CoreError::Migration { .. }
+            | CoreError::Config(_)
+            | CoreError::Internal(_) => 500,
             // LOW fix (#14): 503 Service Unavailable for transient
             // resource exhaustion. The client (or the operator's
             // dashboard) should retry after a short backoff.
@@ -216,9 +248,23 @@ mod tests {
     fn http_status_mapping() {
         assert_eq!(CoreError::Auth("x".into()).http_status(), 401);
         assert_eq!(CoreError::Validation("x".into()).http_status(), 400);
-        assert_eq!(CoreError::RateLimited { provider: "p".into(), retry_after_ms: 1000 }.http_status(), 429);
+        assert_eq!(
+            CoreError::RateLimited {
+                provider: "p".into(),
+                retry_after_ms: 1000
+            }
+            .http_status(),
+            429
+        );
         assert_eq!(CoreError::ClientDisconnected.http_status(), 499);
-        assert_eq!(CoreError::UpstreamTimeout { phase: "ttft".into(), ms: 100 }.http_status(), 529);
+        assert_eq!(
+            CoreError::UpstreamTimeout {
+                phase: "ttft".into(),
+                ms: 100
+            }
+            .http_status(),
+            529
+        );
     }
 
     #[test]

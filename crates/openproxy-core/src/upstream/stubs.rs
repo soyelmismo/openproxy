@@ -41,7 +41,9 @@ impl CancellationToken {
     pub fn child(&self) -> Self {
         Self
     }
-    pub fn cancelled(&self) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + '_>> {
+    pub fn cancelled(
+        &self,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + '_>> {
         Box::pin(std::future::pending())
     }
     pub fn subscribe(&self) -> tokio::sync::watch::Receiver<bool> {

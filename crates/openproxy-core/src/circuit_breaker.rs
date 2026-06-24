@@ -2,10 +2,10 @@
 
 use crate::config::CircuitBreakerConfig;
 use crate::ids::AccountId;
-use std::sync::Arc;
-use std::time::{Duration, Instant};
 use parking_lot::Mutex;
 use std::collections::HashMap;
+use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Health {
@@ -87,11 +87,14 @@ impl CircuitBreakerRegistry {
     #[cfg(test)]
     pub fn force_unhealthy(&self, account: AccountId) {
         let mut g = self.inner.lock();
-        g.insert(account, AccountBreaker {
-            consecutive_failures: self.threshold,
-            state: Health::Unhealthy,
-            unhealthy_until: Some(Instant::now() + self.unhealthy_duration),
-        });
+        g.insert(
+            account,
+            AccountBreaker {
+                consecutive_failures: self.threshold,
+                state: Health::Unhealthy,
+                unhealthy_until: Some(Instant::now() + self.unhealthy_duration),
+            },
+        );
     }
 }
 

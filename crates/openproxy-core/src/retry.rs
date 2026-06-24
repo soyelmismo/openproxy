@@ -37,7 +37,8 @@ impl RetryPolicy {
         // jitter ±N%
         let jitter_amp = base.saturating_mul(self.backoff_jitter_pct as u64) / 100;
         let mut rng = rand::rng();
-        let jitter: i64 = rand::RngExt::random_range(&mut rng, -(jitter_amp as i64)..=(jitter_amp as i64));
+        let jitter: i64 =
+            rand::RngExt::random_range(&mut rng, -(jitter_amp as i64)..=(jitter_amp as i64));
         let total = (base as i64).saturating_add(jitter).max(0) as u64;
         Some(Duration::from_millis(total))
     }
@@ -53,10 +54,7 @@ impl RetryPolicy {
     /// next target). When false (default), they abort the walk.
     /// Connect/TTFT timeouts happen before any bytes reach the client,
     /// so they are safe to retry.
-    pub fn is_retryable(
-        err: &crate::error::CoreError,
-        idle_chunk_retryable: bool,
-    ) -> bool {
+    pub fn is_retryable(err: &crate::error::CoreError, idle_chunk_retryable: bool) -> bool {
         use crate::error::CoreError::*;
         match err {
             UpstreamTimeout { phase, .. } => match phase.as_str() {

@@ -12,14 +12,16 @@
 //! embeds it in every upstream request.
 
 use async_trait::async_trait;
-use rusqlite::{params, Connection, OptionalExtension};
+use rusqlite::{Connection, OptionalExtension, params};
 use serde::{Deserialize, Serialize};
 
 use crate::error::{CoreError, Result};
 use crate::ids::AccountId;
 use crate::oauth::{DeviceAuthorizationResponse, OAuthFlow, OAuthProvider, TokenResponse};
 use crate::secrets::MasterKey;
-use crate::upstream::{CancellationToken, TimeoutProfile, UpstreamClient, UpstreamError, UpstreamRequest};
+use crate::upstream::{
+    CancellationToken, TimeoutProfile, UpstreamClient, UpstreamError, UpstreamRequest,
+};
 use std::sync::Arc;
 
 /// AWS SSO OIDC endpoints.
@@ -161,10 +163,7 @@ impl OAuthProvider for KiroOAuthProvider {
         OAuthFlow::DeviceCode
     }
 
-    async fn build_auth_url(
-        &self,
-        _redirect_uri: &str,
-    ) -> Result<(String, String, String)> {
+    async fn build_auth_url(&self, _redirect_uri: &str) -> Result<(String, String, String)> {
         Err(CoreError::Validation(
             "kiro uses device code flow, not PKCE".into(),
         ))
@@ -197,7 +196,8 @@ impl OAuthProvider for KiroOAuthProvider {
             ],
         })
         .map_err(|e| CoreError::Parse(format!("kiro register serialize: {e}")))?;
-        let register_req = UpstreamRequest::post_json(REGISTER_URL, bytes::Bytes::from(register_body));
+        let register_req =
+            UpstreamRequest::post_json(REGISTER_URL, bytes::Bytes::from(register_body));
 
         let cancel = CancellationToken::new();
         let register_response = upstream_client
@@ -208,9 +208,9 @@ impl OAuthProvider for KiroOAuthProvider {
             Err(e) => {
                 return Err(match e {
                     UpstreamError::Cancel => CoreError::ClientDisconnected,
-                    other => CoreError::UpstreamConnection(format!(
-                        "kiro client register: {other}"
-                    )),
+                    other => {
+                        CoreError::UpstreamConnection(format!("kiro client register: {other}"))
+                    }
                 });
             }
         };
@@ -221,9 +221,9 @@ impl OAuthProvider for KiroOAuthProvider {
             Err(e) => {
                 return Err(match e {
                     UpstreamError::Cancel => CoreError::ClientDisconnected,
-                    other => CoreError::UpstreamConnection(format!(
-                        "kiro register body read: {other}"
-                    )),
+                    other => {
+                        CoreError::UpstreamConnection(format!("kiro register body read: {other}"))
+                    }
                 });
             }
         };
@@ -260,9 +260,9 @@ impl OAuthProvider for KiroOAuthProvider {
             Err(e) => {
                 return Err(match e {
                     UpstreamError::Cancel => CoreError::ClientDisconnected,
-                    other => CoreError::UpstreamConnection(format!(
-                        "kiro device authorization: {other}"
-                    )),
+                    other => {
+                        CoreError::UpstreamConnection(format!("kiro device authorization: {other}"))
+                    }
                 });
             }
         };
@@ -318,8 +318,7 @@ impl OAuthProvider for KiroOAuthProvider {
     ) -> Result<Option<TokenResponse>> {
         // Read OIDC client credentials from the thread-local cache
         // (stashed by request_device_code). AWS SSO OIDC requires them.
-        let (cid, csec) = crate::oauth_kiro::take_last_client()
-            .unwrap_or_default();
+        let (cid, csec) = crate::oauth_kiro::take_last_client().unwrap_or_default();
         let body = serde_json::json!({
             "clientId": cid,
             "clientSecret": csec,
@@ -339,9 +338,7 @@ impl OAuthProvider for KiroOAuthProvider {
             Err(e) => {
                 return Err(match e {
                     UpstreamError::Cancel => CoreError::ClientDisconnected,
-                    other => CoreError::UpstreamConnection(format!(
-                        "kiro device poll: {other}"
-                    )),
+                    other => CoreError::UpstreamConnection(format!("kiro device poll: {other}")),
                 });
             }
         };
@@ -403,9 +400,7 @@ impl OAuthProvider for KiroOAuthProvider {
             Err(e) => {
                 return Err(match e {
                     UpstreamError::Cancel => CoreError::ClientDisconnected,
-                    other => CoreError::UpstreamConnection(format!(
-                        "kiro token refresh: {other}"
-                    )),
+                    other => CoreError::UpstreamConnection(format!("kiro token refresh: {other}")),
                 });
             }
         };
@@ -473,9 +468,8 @@ impl OAuthProvider for KiroOAuthProvider {
                 })?;
 
             let meta: KiroProviderMeta = match raw {
-                Some(s) => serde_json::from_str(&s).map_err(|e| {
-                    CoreError::Parse(format!("kiro meta parse: {e}"))
-                })?,
+                Some(s) => serde_json::from_str(&s)
+                    .map_err(|e| CoreError::Parse(format!("kiro meta parse: {e}")))?,
                 None => {
                     // The device-code flow normally writes the meta first
                     // (with `client_id` / `client_secret` but no
@@ -509,9 +503,8 @@ impl OAuthProvider for KiroOAuthProvider {
         // 3. Persist the updated meta. The `client_id` /
         //    `client_secret` survive the round-trip so the chat
         //    executor can read them later.
-        let meta_json = serde_json::to_string(&meta).map_err(|e| {
-            CoreError::Internal(format!("kiro meta serialize: {e}"))
-        })?;
+        let meta_json = serde_json::to_string(&meta)
+            .map_err(|e| CoreError::Internal(format!("kiro meta serialize: {e}")))?;
         let conn = db_pool.writer();
         conn.execute(
             "UPDATE accounts SET oauth_provider_specific = ?1 WHERE id = ?2",
@@ -535,9 +528,7 @@ async fn list_available_profiles(access_token: &str) -> Result<Option<String>> {
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(15))
         .build()
-        .map_err(|e| {
-            CoreError::UpstreamConnection(format!("kiro profiles client: {e}"))
-        })?;
+        .map_err(|e| CoreError::UpstreamConnection(format!("kiro profiles client: {e}")))?;
 
     let body = serde_json::json!({ "origin": "AI_EDITOR" });
 
@@ -551,9 +542,7 @@ async fn list_available_profiles(access_token: &str) -> Result<Option<String>> {
         .json(&body)
         .send()
         .await
-        .map_err(|e| {
-            CoreError::UpstreamConnection(format!("kiro listAvailableProfiles: {e}"))
-        })?;
+        .map_err(|e| CoreError::UpstreamConnection(format!("kiro listAvailableProfiles: {e}")))?;
 
     if !resp.status().is_success() {
         let status = resp.status().as_u16();
@@ -566,9 +555,10 @@ async fn list_available_profiles(access_token: &str) -> Result<Option<String>> {
         });
     }
 
-    let value: serde_json::Value = resp.json().await.map_err(|e| {
-        CoreError::Parse(format!("kiro listAvailableProfiles parse: {e}"))
-    })?;
+    let value: serde_json::Value = resp
+        .json()
+        .await
+        .map_err(|e| CoreError::Parse(format!("kiro listAvailableProfiles parse: {e}")))?;
 
     // Upstream returns `{"profiles": [{"arn": "...", ...}, ...]}`.
     // Some older versions use `profileArn`; accept both.
@@ -599,10 +589,7 @@ pub fn read_profile_meta(
         )
         .optional()
         .map_err(|e| CoreError::Database {
-            message: format!(
-                "kiro read meta for account {}: {}",
-                account_id.0, e
-            ),
+            message: format!("kiro read meta for account {}: {}", account_id.0, e),
             source: Some(Box::new(e)),
         })?;
 

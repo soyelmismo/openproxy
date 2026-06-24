@@ -27,7 +27,7 @@
 use crate::compression::CompressionMode;
 use crate::config::TimeoutsConfig;
 use crate::error::{CoreError, Result};
-use rusqlite::{params, Connection};
+use rusqlite::{Connection, params};
 
 /// Key under which the [`TimeoutsConfig`] override is stored.
 pub const TIMEOUTS_KEY: &str = "timeouts";
@@ -48,21 +48,19 @@ pub const IDLE_CHUNK_RETRYABLE_KEY: &str = "idle_chunk_retryable";
 pub const IDLE_CHUNK_RETRYABLE_DEFAULT: bool = crate::config::IDLE_CHUNK_RETRYABLE_DEFAULT;
 
 /// Read the persisted `compression` override, if any.
-pub fn load_compression_override_from_db(
-    conn: &Connection,
-) -> Result<Option<CompressionMode>> {
-    let mut stmt = conn.prepare(
-        "SELECT value FROM app_config WHERE key = ?1"
-    ).map_err(|e| CoreError::Database {
-        message: format!("prepare load_compression_override: {}", e),
-        source: Some(Box::new(e)),
-    })?;
-    let mut rows = stmt.query(params![COMPRESSION_KEY]).map_err(|e|
-        CoreError::Database {
+pub fn load_compression_override_from_db(conn: &Connection) -> Result<Option<CompressionMode>> {
+    let mut stmt = conn
+        .prepare("SELECT value FROM app_config WHERE key = ?1")
+        .map_err(|e| CoreError::Database {
+            message: format!("prepare load_compression_override: {}", e),
+            source: Some(Box::new(e)),
+        })?;
+    let mut rows = stmt
+        .query(params![COMPRESSION_KEY])
+        .map_err(|e| CoreError::Database {
             message: format!("query load_compression_override: {}", e),
             source: Some(Box::new(e)),
-        }
-    )?;
+        })?;
     match rows.next() {
         Ok(Some(row)) => {
             let raw: String = row.get(0).map_err(|e| CoreError::Database {
@@ -96,15 +94,15 @@ pub fn save_compression_to_db(
     mode: &CompressionMode,
     now_unix_secs: i64,
 ) -> Result<()> {
-    let json = serde_json::to_string(mode).map_err(|e|
-        CoreError::Parse(format!("serialize compression mode: {}", e))
-    )?;
+    let json = serde_json::to_string(mode)
+        .map_err(|e| CoreError::Parse(format!("serialize compression mode: {}", e)))?;
     conn.execute(
         "INSERT INTO app_config (key, value, updated_at) VALUES (?1, ?2, ?3)
          ON CONFLICT(key) DO UPDATE SET value = excluded.value,
                                          updated_at = excluded.updated_at",
         params![COMPRESSION_KEY, json, now_unix_secs],
-    ).map_err(|e| CoreError::Database {
+    )
+    .map_err(|e| CoreError::Database {
         message: format!("upsert app_config.compression: {}", e),
         source: Some(Box::new(e)),
     })?;
@@ -115,21 +113,19 @@ pub fn save_compression_to_db(
 ///
 /// Returns `Ok(Some(bool))` if a row exists and parses cleanly,
 /// `Ok(None)` if no row or corrupt JSON (falls back to default).
-pub fn load_idle_chunk_retryable_from_db(
-    conn: &Connection,
-) -> Result<Option<bool>> {
-    let mut stmt = conn.prepare(
-        "SELECT value FROM app_config WHERE key = ?1"
-    ).map_err(|e| CoreError::Database {
-        message: format!("prepare load_idle_chunk_retryable: {}", e),
-        source: Some(Box::new(e)),
-    })?;
-    let mut rows = stmt.query(params![IDLE_CHUNK_RETRYABLE_KEY]).map_err(|e|
-        CoreError::Database {
-            message: format!("query load_idle_chunk_retryable: {}", e),
+pub fn load_idle_chunk_retryable_from_db(conn: &Connection) -> Result<Option<bool>> {
+    let mut stmt = conn
+        .prepare("SELECT value FROM app_config WHERE key = ?1")
+        .map_err(|e| CoreError::Database {
+            message: format!("prepare load_idle_chunk_retryable: {}", e),
             source: Some(Box::new(e)),
-        }
-    )?;
+        })?;
+    let mut rows =
+        stmt.query(params![IDLE_CHUNK_RETRYABLE_KEY])
+            .map_err(|e| CoreError::Database {
+                message: format!("query load_idle_chunk_retryable: {}", e),
+                source: Some(Box::new(e)),
+            })?;
     match rows.next() {
         Ok(Some(row)) => {
             let raw: String = row.get(0).map_err(|e| CoreError::Database {
@@ -163,15 +159,15 @@ pub fn save_idle_chunk_retryable_to_db(
     val: bool,
     now_unix_secs: i64,
 ) -> Result<()> {
-    let json = serde_json::to_string(&val).map_err(|e|
-        CoreError::Parse(format!("serialize idle_chunk_retryable: {}", e))
-    )?;
+    let json = serde_json::to_string(&val)
+        .map_err(|e| CoreError::Parse(format!("serialize idle_chunk_retryable: {}", e)))?;
     conn.execute(
         "INSERT INTO app_config (key, value, updated_at) VALUES (?1, ?2, ?3)
          ON CONFLICT(key) DO UPDATE SET value = excluded.value,
                                          updated_at = excluded.updated_at",
         params![IDLE_CHUNK_RETRYABLE_KEY, json, now_unix_secs],
-    ).map_err(|e| CoreError::Database {
+    )
+    .map_err(|e| CoreError::Database {
         message: format!("upsert app_config.idle_chunk_retryable: {}", e),
         source: Some(Box::new(e)),
     })?;
@@ -185,21 +181,19 @@ pub fn save_idle_chunk_retryable_to_db(
 /// - `Ok(None)` if no row exists, **or** the row exists but the JSON
 ///   is corrupt (logged at `WARN` — see §10 R2 of the spec).
 /// - `Err(CoreError::Database { .. })` only for actual DB I/O errors.
-pub fn load_timeouts_override_from_db(
-    conn: &Connection,
-) -> Result<Option<TimeoutsConfig>> {
-    let mut stmt = conn.prepare(
-        "SELECT value FROM app_config WHERE key = ?1"
-    ).map_err(|e| CoreError::Database {
-        message: format!("prepare load_timeouts_override: {}", e),
-        source: Some(Box::new(e)),
-    })?;
-    let mut rows = stmt.query(params![TIMEOUTS_KEY]).map_err(|e|
-        CoreError::Database {
+pub fn load_timeouts_override_from_db(conn: &Connection) -> Result<Option<TimeoutsConfig>> {
+    let mut stmt = conn
+        .prepare("SELECT value FROM app_config WHERE key = ?1")
+        .map_err(|e| CoreError::Database {
+            message: format!("prepare load_timeouts_override: {}", e),
+            source: Some(Box::new(e)),
+        })?;
+    let mut rows = stmt
+        .query(params![TIMEOUTS_KEY])
+        .map_err(|e| CoreError::Database {
             message: format!("query load_timeouts_override: {}", e),
             source: Some(Box::new(e)),
-        }
-    )?;
+        })?;
     match rows.next() {
         Ok(Some(row)) => {
             let raw: String = row.get(0).map_err(|e| CoreError::Database {
@@ -243,15 +237,15 @@ pub fn save_timeouts_to_db(
     cfg: &TimeoutsConfig,
     now_unix_secs: i64,
 ) -> Result<()> {
-    let json = serde_json::to_string(cfg).map_err(|e|
-        CoreError::Parse(format!("serialize timeouts: {}", e))
-    )?;
+    let json = serde_json::to_string(cfg)
+        .map_err(|e| CoreError::Parse(format!("serialize timeouts: {}", e)))?;
     conn.execute(
         "INSERT INTO app_config (key, value, updated_at) VALUES (?1, ?2, ?3)
          ON CONFLICT(key) DO UPDATE SET value = excluded.value,
                                          updated_at = excluded.updated_at",
         params![TIMEOUTS_KEY, json, now_unix_secs],
-    ).map_err(|e| CoreError::Database {
+    )
+    .map_err(|e| CoreError::Database {
         message: format!("upsert app_config.timeouts: {}", e),
         source: Some(Box::new(e)),
     })?;
@@ -265,21 +259,19 @@ pub fn save_timeouts_to_db(
 /// - `Ok(None)` if no row exists, **or** the row exists but the JSON
 ///   is corrupt (logged at `WARN` — see §10 R2 of the spec).
 /// - `Err(CoreError::Database { .. })` only for actual DB I/O errors.
-pub fn load_recording_ttl_from_db(
-    conn: &Connection,
-) -> Result<Option<i64>> {
-    let mut stmt = conn.prepare(
-        "SELECT value FROM app_config WHERE key = ?1"
-    ).map_err(|e| CoreError::Database {
-        message: format!("prepare load_recording_ttl: {}", e),
-        source: Some(Box::new(e)),
-    })?;
-    let mut rows = stmt.query(params![RECORDING_TTL_KEY]).map_err(|e|
-        CoreError::Database {
+pub fn load_recording_ttl_from_db(conn: &Connection) -> Result<Option<i64>> {
+    let mut stmt = conn
+        .prepare("SELECT value FROM app_config WHERE key = ?1")
+        .map_err(|e| CoreError::Database {
+            message: format!("prepare load_recording_ttl: {}", e),
+            source: Some(Box::new(e)),
+        })?;
+    let mut rows = stmt
+        .query(params![RECORDING_TTL_KEY])
+        .map_err(|e| CoreError::Database {
             message: format!("query load_recording_ttl: {}", e),
             source: Some(Box::new(e)),
-        }
-    )?;
+        })?;
     match rows.next() {
         Ok(Some(row)) => {
             let raw: String = row.get(0).map_err(|e| CoreError::Database {
@@ -317,15 +309,15 @@ pub fn save_recording_ttl_to_db(
     ttl_secs: i64,
     now_unix_secs: i64,
 ) -> Result<()> {
-    let json = serde_json::to_string(&ttl_secs).map_err(|e|
-        CoreError::Parse(format!("serialize recording_ttl_secs: {}", e))
-    )?;
+    let json = serde_json::to_string(&ttl_secs)
+        .map_err(|e| CoreError::Parse(format!("serialize recording_ttl_secs: {}", e)))?;
     conn.execute(
         "INSERT INTO app_config (key, value, updated_at) VALUES (?1, ?2, ?3)
          ON CONFLICT(key) DO UPDATE SET value = excluded.value,
                                          updated_at = excluded.updated_at",
         params![RECORDING_TTL_KEY, json, now_unix_secs],
-    ).map_err(|e| CoreError::Database {
+    )
+    .map_err(|e| CoreError::Database {
         message: format!("upsert app_config.recording_ttl_secs: {}", e),
         source: Some(Box::new(e)),
     })?;
@@ -445,22 +437,24 @@ mod tests {
             save_timeouts_to_db(&w, &cfg, 2).unwrap();
         }
         // Only one row for the key.
-        let count: i64 = pool.with_conn(|c|
+        let count: i64 = pool.with_conn(|c| {
             c.query_row(
                 "SELECT COUNT(*) FROM app_config WHERE key = ?1",
                 params![TIMEOUTS_KEY],
                 |r| r.get(0),
-            ).unwrap()
-        );
+            )
+            .unwrap()
+        });
         assert_eq!(count, 1, "UPSERT must collapse to a single row");
         // updated_at reflects the last write.
-        let updated_at: i64 = pool.with_conn(|c|
+        let updated_at: i64 = pool.with_conn(|c| {
             c.query_row(
                 "SELECT updated_at FROM app_config WHERE key = ?1",
                 params![TIMEOUTS_KEY],
                 |r| r.get(0),
-            ).unwrap()
-        );
+            )
+            .unwrap()
+        });
         assert_eq!(updated_at, 2);
     }
 
@@ -478,7 +472,8 @@ mod tests {
             w.execute(
                 "INSERT INTO app_config (key, value, updated_at) VALUES (?1, ?2, ?3)",
                 params![TIMEOUTS_KEY, "this is not json", 1_i64],
-            ).unwrap();
+            )
+            .unwrap();
         }
         let got = {
             let w = pool.writer();

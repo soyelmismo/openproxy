@@ -22,7 +22,7 @@
 //! authoritative bound; this secondary cap exists to bound the
 //! per-stream heap footprint of the accumulator itself.
 
-use serde_json::{json, Map, Value};
+use serde_json::{Map, Value, json};
 
 use crate::translation::OpenAIUsage;
 
@@ -101,8 +101,8 @@ pub fn normalize_nonstandard_reasoning_fields(payload: &str) -> Option<String> {
     if !payload.contains("reasoning") {
         return None;
     }
-    let has_reasoning = payload.contains("\"reasoning\":")
-        && !payload.contains("\"reasoning_content\":");
+    let has_reasoning =
+        payload.contains("\"reasoning\":") && !payload.contains("\"reasoning_content\":");
     let has_details = payload.contains("\"reasoning_details\":");
     if !has_reasoning && !has_details {
         return None;
@@ -149,10 +149,7 @@ pub fn normalize_nonstandard_reasoning_fields(payload: &str) -> Option<String> {
         {
             let combined: String = arr
                 .iter()
-                .filter_map(|d| {
-                    d.get("text")
-                        .and_then(|t| t.as_str())
-                })
+                .filter_map(|d| d.get("text").and_then(|t| t.as_str()))
                 .collect();
             if !combined.is_empty() {
                 if let Some(existing) = obj.get_mut("reasoning_content")
@@ -338,12 +335,7 @@ impl ResponseAccumulator {
     /// wire format already gives the call as a single chunk; the only
     /// reason we accumulate is so the persisted `response_body_json`
     /// carries a clean tool_calls array (not the streaming deltas).
-    pub fn append_openai_tool_call(
-        &mut self,
-        id: Option<String>,
-        name: String,
-        arguments: String,
-    ) {
+    pub fn append_openai_tool_call(&mut self, id: Option<String>, name: String, arguments: String) {
         self.tool_calls.push(AccumulatedToolCall {
             id: id.unwrap_or_default(),
             name,
@@ -379,9 +371,7 @@ impl ResponseAccumulator {
 
     /// True if any content was accumulated.
     pub fn is_empty(&self) -> bool {
-        self.content.is_empty()
-            && self.reasoning.is_none()
-            && self.tool_calls.is_empty()
+        self.content.is_empty() && self.reasoning.is_none() && self.tool_calls.is_empty()
     }
 
     /// True if `MAX_ACCUMULATED_BYTES` was reached.
@@ -468,7 +458,10 @@ impl ResponseAccumulator {
         );
         response.insert("created".to_string(), Value::Number(created.into()));
         response.insert("model".to_string(), Value::String(model.to_string()));
-        response.insert("choices".to_string(), Value::Array(vec![Value::Object(choice)]));
+        response.insert(
+            "choices".to_string(),
+            Value::Array(vec![Value::Object(choice)]),
+        );
         if let Some(usage) = &self.usage {
             response.insert(
                 "usage".to_string(),
@@ -546,7 +539,10 @@ mod tests {
         assert_eq!(tool_calls.len(), 1);
         assert_eq!(tool_calls[0]["id"], "toolu_1");
         assert_eq!(tool_calls[0]["function"]["name"], "get_weather");
-        assert_eq!(tool_calls[0]["function"]["arguments"], r#"{"city":"Madrid"}"#);
+        assert_eq!(
+            tool_calls[0]["function"]["arguments"],
+            r#"{"city":"Madrid"}"#
+        );
     }
 
     #[test]
@@ -561,7 +557,9 @@ mod tests {
         acc.append_openai_raw(&payload);
         assert!(!acc.is_truncated());
         // One more chunk pushes it over the cap.
-        acc.append_openai_raw(r#"{"choices":[{"index":0,"delta":{"content":"more"},"finish_reason":null}]}"#);
+        acc.append_openai_raw(
+            r#"{"choices":[{"index":0,"delta":{"content":"more"},"finish_reason":null}]}"#,
+        );
         assert!(acc.is_truncated());
         let v = acc.finish("id", 0, "m");
         assert_eq!(v["choices"][0]["message"]["truncated"], Value::Bool(true));
@@ -592,13 +590,24 @@ mod tests {
         assert!(result.is_some(), "should normalize reasoning field");
         let normalized = result.unwrap();
         // Should contain reasoning_content instead of reasoning
-        assert!(normalized.contains("\"reasoning_content\""), "should have reasoning_content: {normalized}");
-        assert!(!normalized.contains("\"reasoning\":"), "should NOT have raw reasoning field: {normalized}");
+        assert!(
+            normalized.contains("\"reasoning_content\""),
+            "should have reasoning_content: {normalized}"
+        );
+        assert!(
+            !normalized.contains("\"reasoning\":"),
+            "should NOT have raw reasoning field: {normalized}"
+        );
         // Content should still be present
-        assert!(normalized.contains("\"content\":\"\""), "should preserve content: {normalized}");
+        assert!(
+            normalized.contains("\"content\":\"\""),
+            "should preserve content: {normalized}"
+        );
         // Parse and verify
         let v: serde_json::Value = serde_json::from_str(&normalized).unwrap();
-        let rc = v["choices"][0]["delta"]["reasoning_content"].as_str().unwrap();
+        let rc = v["choices"][0]["delta"]["reasoning_content"]
+            .as_str()
+            .unwrap();
         assert_eq!(rc, " Need");
     }
 
@@ -609,28 +618,40 @@ mod tests {
         assert!(result.is_some(), "should normalize reasoning_details");
         let normalized = result.unwrap();
         let v: serde_json::Value = serde_json::from_str(&normalized).unwrap();
-        let rc = v["choices"][0]["delta"]["reasoning_content"].as_str().unwrap();
+        let rc = v["choices"][0]["delta"]["reasoning_content"]
+            .as_str()
+            .unwrap();
         assert_eq!(rc, "Need to", "should merge reasoning_details texts");
-        assert!(v["choices"][0]["delta"].get("reasoning_details").is_none(), "should remove reasoning_details");
+        assert!(
+            v["choices"][0]["delta"].get("reasoning_details").is_none(),
+            "should remove reasoning_details"
+        );
     }
 
     #[test]
     fn normalize_standard_reasoning_content_unchanged() {
         let payload = r#"{"id":"x","object":"chat.completion.chunk","created":0,"model":"m","choices":[{"index":0,"delta":{"content":"","reasoning_content":"hello"},"finish_reason":null}]}"#;
         let result = normalize_nonstandard_reasoning_fields(payload);
-        assert!(result.is_none(), "standard reasoning_content should not trigger normalization");
+        assert!(
+            result.is_none(),
+            "standard reasoning_content should not trigger normalization"
+        );
     }
 
     #[test]
     fn normalize_no_reasoning_fields_unchanged() {
         let payload = r#"{"id":"x","object":"chat.completion.chunk","created":0,"model":"m","choices":[{"index":0,"delta":{"content":"hello"},"finish_reason":null}]}"#;
         let result = normalize_nonstandard_reasoning_fields(payload);
-        assert!(result.is_none(), "no reasoning fields should not trigger normalization");
+        assert!(
+            result.is_none(),
+            "no reasoning fields should not trigger normalization"
+        );
     }
 
     #[test]
     fn extract_reasoning_content_from_normalized() {
-        let payload = r#"{"choices":[{"delta":{"content":"","reasoning_content":" step by step"}}]}"#;
+        let payload =
+            r#"{"choices":[{"delta":{"content":"","reasoning_content":" step by step"}}]}"#;
         let rc = extract_reasoning_content(payload);
         assert_eq!(rc, Some(" step by step"));
     }
@@ -648,7 +669,9 @@ mod tests {
         let result = normalize_nonstandard_reasoning_fields(payload);
         assert!(result.is_some());
         let v: serde_json::Value = serde_json::from_str(&result.unwrap()).unwrap();
-        let rc = v["choices"][0]["delta"]["reasoning_content"].as_str().unwrap();
+        let rc = v["choices"][0]["delta"]["reasoning_content"]
+            .as_str()
+            .unwrap();
         // `reasoning` wins over `reasoning_details` — only "think",
         // not "think more" (which would be the merge). Providers
         // like NVIDIA send the same text in both fields; merging
@@ -657,7 +680,9 @@ mod tests {
         assert!(v["choices"][0]["delta"].get("reasoning").is_none());
         // reasoning_details must also be stripped when reasoning
         // was present — it's non-standard and duplicates the text.
-        assert!(v["choices"][0]["delta"].get("reasoning_details").is_none(),
-            "reasoning_details should be stripped even when reasoning is present");
+        assert!(
+            v["choices"][0]["delta"].get("reasoning_details").is_none(),
+            "reasoning_details should be stripped even when reasoning is present"
+        );
     }
 }

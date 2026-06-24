@@ -354,7 +354,10 @@ async fn run_one_tick(
         );
         return;
     }
-    let is_anonymous = matches!(provider_row.as_ref().map(|p| p.auth_type), Some(AuthType::None));
+    let is_anonymous = matches!(
+        provider_row.as_ref().map(|p| p.auth_type),
+        Some(AuthType::None)
+    );
     if accounts_list.is_empty() {
         if is_anonymous {
             // Anonymous provider: empty accounts is expected, no
@@ -489,8 +492,7 @@ async fn run_one_tick(
                     let keyword_ref: Option<&str> = provider_row
                         .as_ref()
                         .and_then(|p| p.auto_activate_keyword.as_deref());
-                    if let Err(e) =
-                        models::apply_auto_activation(&aa_conn, &provider, keyword_ref)
+                    if let Err(e) = models::apply_auto_activation(&aa_conn, &provider, keyword_ref)
                     {
                         tracing::warn!(
                             provider = %provider,
@@ -550,8 +552,8 @@ mod tests {
     use async_trait::async_trait;
     use rusqlite::Connection;
     use std::path::PathBuf;
-    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Arc as StdArc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
     /// A 1-second-interval config that staggers nothing (the
     /// first tick fires immediately on every provider).
@@ -571,8 +573,8 @@ mod tests {
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_nanos())
             .unwrap_or(0);
-        let dir = std::env::temp_dir()
-            .join(format!("openproxy-discovery-test-{}-{}-{}", pid, nanos, n));
+        let dir =
+            std::env::temp_dir().join(format!("openproxy-discovery-test-{}-{}-{}", pid, nanos, n));
         std::fs::create_dir_all(&dir).expect("mkdir tempdir");
         let path = dir.join("discovery.db");
         let pool = DbPool::open(&path).expect("open pool");
@@ -632,11 +634,7 @@ mod tests {
             });
             Box::leak(cfg)
         }
-        fn build_chat_url(
-            &self,
-            _target_format: TargetFormat,
-            _model: &ModelId,
-        ) -> String {
+        fn build_chat_url(&self, _target_format: TargetFormat, _model: &ModelId) -> String {
             String::new()
         }
         fn build_auth_header(&self, _api_key: &str) -> (String, String) {
@@ -653,7 +651,10 @@ mod tests {
             // don't go through the default because we have
             // no real config; emit a minimal set instead.
             let (k, v) = self.build_auth_header(api_key);
-            vec![("Content-Type".to_string(), "application/json".to_string()), (k, v)]
+            vec![
+                ("Content-Type".to_string(), "application/json".to_string()),
+                (k, v),
+            ]
         }
         fn models_url(&self) -> Option<String> {
             Some(format!("https://mock-{}/models", self.id))
@@ -800,11 +801,7 @@ mod tests {
         );
 
         let rows = models_with_provider(&pool, "openrouter");
-        assert_eq!(
-            rows.len(),
-            3,
-            "expected three models in DB, got {rows:?}"
-        );
+        assert_eq!(rows.len(), 3, "expected three models in DB, got {rows:?}");
 
         // Cancel the scheduler so the task exits before the
         // test drops the runtime.
@@ -1056,11 +1053,7 @@ mod tests {
     /// the Gate B hard-delete of vanished rows doesn't wipe the
     /// previously seeded ones (the `discovered` list passed to each
     /// `upsert_many` is the universe of model_ids that survive).
-    fn seed_three_models(
-        conn: &Connection,
-        provider: &crate::ids::ProviderId,
-        ids: &[&str],
-    ) {
+    fn seed_three_models(conn: &Connection, provider: &crate::ids::ProviderId, ids: &[&str]) {
         // The `models` table has a FK on `providers.id`; the
         // `upsert_many` call below will fail with a constraint
         // violation if the provider row doesn't exist.
@@ -1118,13 +1111,15 @@ mod tests {
 
         seed_three_models(&conn, &provider, &["gpt-4", "claude-3", "llama-3"]);
 
-        let updated =
-            models::apply_auto_activation(&conn, &provider, Some("gpt")).expect("apply");
+        let updated = models::apply_auto_activation(&conn, &provider, Some("gpt")).expect("apply");
         assert!(updated >= 1, "gpt-4 row should have been updated");
 
         let active = active_ids_for(&conn, &provider);
         assert!(active.contains(&"gpt-4".to_string()), "gpt-4 stays active");
-        assert!(!active.contains(&"claude-3".to_string()), "claude-3 disabled");
+        assert!(
+            !active.contains(&"claude-3".to_string()),
+            "claude-3 disabled"
+        );
         assert!(!active.contains(&"llama-3".to_string()), "llama-3 disabled");
     }
 
@@ -1145,20 +1140,22 @@ mod tests {
         let conn = pool.open_connection().expect("open conn");
         let provider = CoreProviderId::new("acme");
 
-        seed_three_models(
-            &conn,
-            &provider,
-            &["gpt-4", "gpt-legacy", "claude-3"],
-        );
+        seed_three_models(&conn, &provider, &["gpt-4", "gpt-legacy", "claude-3"]);
 
         let updated =
             models::apply_auto_activation(&conn, &provider, Some("legacy")).expect("apply");
         assert!(updated >= 1);
 
         let active = active_ids_for(&conn, &provider);
-        assert!(active.contains(&"gpt-legacy".to_string()), "gpt-legacy stays active");
+        assert!(
+            active.contains(&"gpt-legacy".to_string()),
+            "gpt-legacy stays active"
+        );
         assert!(!active.contains(&"gpt-4".to_string()), "gpt-4 deactivated");
-        assert!(!active.contains(&"claude-3".to_string()), "claude-3 deactivated");
+        assert!(
+            !active.contains(&"claude-3".to_string()),
+            "claude-3 deactivated"
+        );
     }
 
     /// AC3: no keyword → every non-custom row stays active (no-op
@@ -1393,11 +1390,7 @@ mod tests {
                 });
                 Box::leak(cfg)
             }
-            fn build_chat_url(
-                &self,
-                _target_format: TargetFormat,
-                _model: &ModelId,
-            ) -> String {
+            fn build_chat_url(&self, _target_format: TargetFormat, _model: &ModelId) -> String {
                 String::new()
             }
             fn build_auth_header(&self, _api_key: &str) -> (String, String) {

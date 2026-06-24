@@ -2,7 +2,7 @@ use once_cell::sync::Lazy;
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use super::smart_truncate::{smart_truncate, CompiledTruncateConfig};
+use super::smart_truncate::{CompiledTruncateConfig, smart_truncate};
 
 // ─── Compiled filter structs ─────────────────────────────────────────────────
 
@@ -112,9 +112,8 @@ macro_rules! filter_skeleton {
 // `filter_stderr_prefixes` was previously compiling this regex on every
 // call. Phase B already moved `strip_ansi` to memchr; this finishes the
 // job for the stderr-prefix path.
-static STDERR_RE: Lazy<regex::Regex> = Lazy::new(|| {
-    regex::Regex::new(r"(?m)^\s*(?:stderr|err)\s*(?:\||:)\s*").unwrap()
-});
+static STDERR_RE: Lazy<regex::Regex> =
+    Lazy::new(|| regex::Regex::new(r"(?m)^\s*(?:stderr|err)\s*(?:\||:)\s*").unwrap());
 
 fn filter_stderr_prefixes(text: &str) -> String {
     STDERR_RE.replace_all(text, "").into_owned()
@@ -139,7 +138,8 @@ pub static BUILTIN_FILTERS: Lazy<HashMap<&'static str, Arc<CompiledFilter>>> = L
     m
 });
 
-pub static GENERIC_FILTER: Lazy<Arc<CompiledFilter>> = Lazy::new(|| Arc::new(make_generic_filter()));
+pub static GENERIC_FILTER: Lazy<Arc<CompiledFilter>> =
+    Lazy::new(|| Arc::new(make_generic_filter()));
 
 /// Obtiene el filtro built-in para un tipo de comando detectado.
 ///
@@ -171,11 +171,9 @@ fn make_git_status_filter() -> CompiledFilter {
         /* filter_stderr */ false,
         /* replace */ vec![],
         /* match_output */ vec![],
-        /* strip_patterns */ vec![
-            compile_re(r"^\s*(\(use .*\))$"),
-            compile_re(r"^\s*$"),
-        ],
-        /* keep_patterns */ vec![
+        /* strip_patterns */ vec![compile_re(r"^\s*(\(use .*\))$"), compile_re(r"^\s*$"),],
+        /* keep_patterns */
+        vec![
             compile_re(r"^On branch "),
             compile_re(r"^Your branch "),
             compile_re(r"^Changes "),
@@ -187,7 +185,8 @@ fn make_git_status_filter() -> CompiledFilter {
         /* collapse_patterns */ vec![],
         /* truncate_line_at */ 0,
         /* on_empty */ "",
-        /* truncate */ Some(CompiledTruncateConfig {
+        /* truncate */
+        Some(CompiledTruncateConfig {
             max_lines: 60,
             head_lines: 15,
             tail_lines: 15,
@@ -270,10 +269,7 @@ fn make_npm_test_filter() -> CompiledFilter {
             message: "✓ tests passed",
             unless: Some(compile_re(r"failed")),
         }],
-        vec![
-            compile_re(r"^\s*$"),
-            compile_re(r"^\s*(PASS|FAIL)\s+"),
-        ],
+        vec![compile_re(r"^\s*$"), compile_re(r"^\s*(PASS|FAIL)\s+"),],
         vec![
             compile_re(r"FAIL\s+"),
             compile_re(r"✖\s+"),
@@ -301,10 +297,7 @@ fn make_docker_ps_filter() -> CompiledFilter {
         vec![],
         vec![],
         vec![],
-        vec![
-            compile_re(r"^CONTAINER ID"),
-            compile_re(r"^[0-9a-f]{12}"),
-        ],
+        vec![compile_re(r"^CONTAINER ID"), compile_re(r"^[0-9a-f]{12}"),],
         vec![],
         0,
         "(no containers)",
@@ -374,7 +367,9 @@ fn make_generic_error_filter() -> CompiledFilter {
         vec![],
         vec![],
         vec![],
-        vec![compile_re(r"(?i)(error|failed|exception|traceback|panic|FAIL)")],
+        vec![compile_re(
+            r"(?i)(error|failed|exception|traceback|panic|FAIL)"
+        )],
         vec![],
         0,
         "",
@@ -394,10 +389,7 @@ fn make_generic_filter() -> CompiledFilter {
         true,
         vec![],
         vec![],
-        vec![
-            compile_re(r"^\s*$"),
-            compile_re(r"^\s*(warning:)"),
-        ],
+        vec![compile_re(r"^\s*$"), compile_re(r"^\s*(warning:)"),],
         vec![],
         vec![],
         0,

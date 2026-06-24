@@ -11,16 +11,16 @@
 
 use crate::adapters::{AdapterFormat, ProviderAdapter};
 use crate::circuit_breaker::{CircuitBreakerRegistry, Health};
-use crate::compression::{stats::CompressionStats, CompressionMode};
 use crate::combos::{self, Combo, ComboTarget, SelectionRegistry, Strategy};
+use crate::compression::{CompressionMode, stats::CompressionStats};
 use crate::config::{CircuitBreakerConfig, RacingConfig, RetriesConfig, TimeoutsConfig};
-use crate::think_extractor::extract_think_from_response;
 use crate::cost::{self, UsageInput};
 use crate::error::{CoreError, ErrorContext, Result};
 use crate::ids::{ApiKeyId, ComboId, RequestId, TraceId};
 use crate::models::{self, Model};
 use crate::retry::RetryPolicy;
 use crate::secrets::MasterKey;
+use crate::think_extractor::extract_think_from_response;
 use crate::timeouts::{self, ModelTimeoutOverrides, Timeouts};
 use crate::translation::{OpenAIRequest, OpenAIResponse};
 use crate::upstream::{
@@ -102,23 +102,18 @@ fn sse_payload_needs_parse(payload: &str) -> bool {
             // clients) serializes without a space, and upstream
             // providers that emit `"usage": null` consistently use
             // the same compact shape for `"usage": {...}`.
-            if !has_usage
-                && i + 9 <= bytes.len()
-                && &bytes[i..i+9] == b"\"usage\":{"
-            {
+            if !has_usage && i + 9 <= bytes.len() && &bytes[i..i + 9] == b"\"usage\":{" {
                 has_usage = true;
             }
             // Check for "finish_reason (14 bytes)
             if !has_finish_reason
                 && i + 14 <= bytes.len()
-                && &bytes[i..i+14] == b"\"finish_reason"
+                && &bytes[i..i + 14] == b"\"finish_reason"
             {
                 has_finish_reason = true;
                 // The closing quote of the key is at i+14.
                 // Check for ":null after it (6 bytes).
-                if i + 20 <= bytes.len()
-                    && &bytes[i+14..i+20] == b"\":null"
-                {
+                if i + 20 <= bytes.len() && &bytes[i + 14..i + 20] == b"\":null" {
                     has_finish_reason_null = true;
                 }
             }
@@ -245,13 +240,20 @@ fn apply_reasoning_normalizations(
 
     // Step 2: think extraction on content (only if content is a string).
     if has_content {
-        if let Some(content) = obj.get("content").and_then(|c| c.as_str()).map(|s| s.to_string()) {
+        if let Some(content) = obj
+            .get("content")
+            .and_then(|c| c.as_str())
+            .map(|s| s.to_string())
+        {
             let (clean_content, extracted_reasoning) = think_extractor.process(&content);
             let content_changed = clean_content != content;
             let has_native_reasoning = obj.contains_key("reasoning_content");
 
             if content_changed {
-                obj.insert("content".to_string(), serde_json::Value::String(clean_content));
+                obj.insert(
+                    "content".to_string(),
+                    serde_json::Value::String(clean_content),
+                );
                 modified = true;
             }
 
@@ -274,9 +276,7 @@ fn apply_reasoning_normalizations(
                     Some(o) => o,
                     None => continue,
                 };
-                let index = tc_obj.get("index")
-                    .and_then(|i| i.as_u64())
-                    .unwrap_or(0);
+                let index = tc_obj.get("index").and_then(|i| i.as_u64()).unwrap_or(0);
                 let func = match tc_obj.get_mut("function").and_then(|f| f.as_object_mut()) {
                     Some(f) => f,
                     None => continue,
@@ -626,7 +626,8 @@ impl Pipeline {
     /// Set the recording state. When `true`, the pipeline will record
     /// full request/response bodies and headers in the `usage` table.
     pub fn set_recording(&self, enabled: bool) {
-        self.record_bodies_and_headers.store(enabled, Ordering::Relaxed);
+        self.record_bodies_and_headers
+            .store(enabled, Ordering::Relaxed);
     }
 
     /// Drive one chat-completion request to completion.
@@ -761,10 +762,11 @@ impl Pipeline {
                     // `attempt > 1` guard above prevents that, but
                     // restarting the loop body is cheaper than
                     // re-validating.
-                    let targets = match self.resolve_targets(&combo, req.targets_override.as_deref()) {
-                        Ok(t) => t,
-                        Err(e) => return self.failure(e, attempt - 1, ErrorPhase::Resolve),
-                    };
+                    let targets =
+                        match self.resolve_targets(&combo, req.targets_override.as_deref()) {
+                            Ok(t) => t,
+                            Err(e) => return self.failure(e, attempt - 1, ErrorPhase::Resolve),
+                        };
                     let flat_targets = match self.flatten_targets(&combo.id, targets) {
                         Ok(t) => t,
                         Err(e) => return self.failure(e, attempt - 1, ErrorPhase::Resolve),
@@ -772,9 +774,7 @@ impl Pipeline {
                     let re_eligible: Vec<ComboTarget> = flat_targets
                         .into_iter()
                         .filter(|t| match t.account_id {
-                            Some(aid) => {
-                                self.circuit_breaker.is_healthy(aid) == Health::Healthy
-                            }
+                            Some(aid) => self.circuit_breaker.is_healthy(aid) == Health::Healthy,
                             None => true,
                         })
                         .take(self.config.racing.max_race_size as usize)
@@ -901,31 +901,33 @@ impl Pipeline {
             let cooldown_conn = self.conn.lock();
             to_run
                 .into_iter()
-                .filter(|t| match crate::cooldown::is_in_cooldown(&cooldown_conn, t.id) {
-                    Ok(true) => {
-                        tracing::debug!(
-                            combo_id = combo.id.0,
-                            target_id = t.id.0,
-                            provider = %t.provider_id,
-                            "target in cooldown, skipping"
-                        );
-                        false
-                    }
-                    Ok(false) => true,
-                    Err(e) => {
-                        // DB read failure on the cooldown table
-                        // is non-fatal: fall through to the
-                        // upstream call rather than block the
-                        // whole combo on a bookkeeping error.
-                        tracing::warn!(
-                            combo_id = combo.id.0,
-                            target_id = t.id.0,
-                            error = %e,
-                            "is_in_cooldown check failed; proceeding without filter"
-                        );
-                        true
-                    }
-                })
+                .filter(
+                    |t| match crate::cooldown::is_in_cooldown(&cooldown_conn, t.id) {
+                        Ok(true) => {
+                            tracing::debug!(
+                                combo_id = combo.id.0,
+                                target_id = t.id.0,
+                                provider = %t.provider_id,
+                                "target in cooldown, skipping"
+                            );
+                            false
+                        }
+                        Ok(false) => true,
+                        Err(e) => {
+                            // DB read failure on the cooldown table
+                            // is non-fatal: fall through to the
+                            // upstream call rather than block the
+                            // whole combo on a bookkeeping error.
+                            tracing::warn!(
+                                combo_id = combo.id.0,
+                                target_id = t.id.0,
+                                error = %e,
+                                "is_in_cooldown check failed; proceeding without filter"
+                            );
+                            true
+                        }
+                    },
+                )
                 .collect()
         };
 
@@ -994,9 +996,7 @@ impl Pipeline {
             let race_n = (combo.race_size as usize)
                 .min(to_run.len())
                 .min(self.config.racing.max_race_size as usize);
-            return self
-                .run_race(&req, &combo, to_run, race_n as u8)
-                .await;
+            return self.run_race(&req, &combo, to_run, race_n as u8).await;
         }
 
         for target in to_run.iter() {
@@ -1053,7 +1053,11 @@ impl Pipeline {
             let mut target_attempt: u8 = 1;
             let mut result = self
                 .execute_single(
-                    &req, &combo, target, target_attempt, race_size as u8,
+                    &req,
+                    &combo,
+                    target,
+                    target_attempt,
+                    race_size as u8,
                     &CancellationToken::new(),
                 )
                 .await;
@@ -1124,7 +1128,11 @@ impl Pipeline {
                 target_attempt = target_attempt.saturating_add(1);
                 result = self
                     .execute_single(
-                        &req, &combo, target, target_attempt, race_size as u8,
+                        &req,
+                        &combo,
+                        target,
+                        target_attempt,
+                        race_size as u8,
                         &CancellationToken::new(),
                     )
                     .await;
@@ -1139,7 +1147,9 @@ impl Pipeline {
             //     what handles those, if anything).
             let cooldown_op = match &result.error {
                 None => Some("clear"),
-                Some(e) if RetryPolicy::is_retryable(e, self.config.idle_chunk_retryable) => Some("record"),
+                Some(e) if RetryPolicy::is_retryable(e, self.config.idle_chunk_retryable) => {
+                    Some("record")
+                }
                 Some(_) => None,
             };
             // 6a-2. Update the in-memory selection registry used by
@@ -1163,9 +1173,7 @@ impl Pipeline {
                 let cooldown_conn = self.conn.lock();
                 match cooldown_op {
                     Some("clear") => {
-                        if let Err(e) =
-                            crate::cooldown::clear(&cooldown_conn, target.id)
-                        {
+                        if let Err(e) = crate::cooldown::clear(&cooldown_conn, target.id) {
                             tracing::warn!(
                                 combo_id = combo.id.0,
                                 target_id = target.id.0,
@@ -1196,9 +1204,7 @@ impl Pipeline {
                         let max_secs = combo
                             .cooldown_max_secs
                             .unwrap_or(self.config.cooldown_max_secs);
-                        let factor = combo
-                            .cooldown_factor
-                            .unwrap_or(self.config.cooldown_factor);
+                        let factor = combo.cooldown_factor.unwrap_or(self.config.cooldown_factor);
                         if let Err(e) = crate::cooldown::record_failure_with_mode(
                             &cooldown_conn,
                             target.id,
@@ -1448,10 +1454,7 @@ impl Pipeline {
             combo_id: Some(combo.id),
             combo_target_id: None,
             model_row_id: None,
-            upstream_model_id: req
-                .openai_request
-                .model
-                .clone(),
+            upstream_model_id: req.openai_request.model.clone(),
             prompt_tokens: None,
             completion_tokens: None,
             connect_ms: None,
@@ -1604,7 +1607,9 @@ impl Pipeline {
                     // this token the instant another worker sends the
                     // first chunk.  The atomic load is nanoseconds —
                     // no async hop needed.
-                    let worker_token = req.race_cancel.as_ref()
+                    let worker_token = req
+                        .race_cancel
+                        .as_ref()
                         .expect("run_race: worker must have race_cancel");
                     if worker_token.is_cancelled() {
                         if running.fetch_sub(1, Ordering::AcqRel) == 1 {
@@ -1642,10 +1647,7 @@ impl Pipeline {
                     }
 
                     let result = p
-                        .execute_single(
-                            &req, &combo, &target, 1, race_size,
-                            worker_token,
-                        )
+                        .execute_single(&req, &combo, &target, 1, race_size, worker_token)
                         .await;
 
                     if result.error.is_none() {
@@ -1691,9 +1693,8 @@ impl Pipeline {
                     // "cancelled" stage event, and write their usage
                     // row. This runs detached so the client gets the
                     // winner's response with no added latency.
-                    let grace = std::time::Duration::from_millis(
-                        self.config.racing.abort_grace_ms.max(50),
-                    );
+                    let grace =
+                        std::time::Duration::from_millis(self.config.racing.abort_grace_ms.max(50));
                     tokio::spawn(async move {
                         let _ = tokio::time::timeout(grace, async {
                             while set.join_next().await.is_some() {}
@@ -1710,7 +1711,9 @@ impl Pipeline {
                 for token in &worker_tokens {
                     token.cancel();
                 }
-                let err = last_err.lock().take()
+                let err = last_err
+                    .lock()
+                    .take()
                     .unwrap_or(CoreError::NoHealthyTargets(combo.id.0));
                 return PipelineResult {
                     status_code: err.http_status(),
@@ -1833,9 +1836,12 @@ impl Pipeline {
         // the placeholder.
         if race_cancel.is_cancelled() {
             return self.record_and_fail_with_trace_id(
-                req, combo, target,
+                req,
+                combo,
+                target,
                 FailureContext {
-                    attempt, race_size,
+                    attempt,
+                    race_size,
                     err: &CoreError::RaceLost,
                     started,
                     model: None,
@@ -1905,16 +1911,16 @@ impl Pipeline {
                                 combo,
                                 target,
                                 FailureContext {
-                                attempt,
-                                race_size,
-                                err: &e,
-                                started,
-                                model: None,
-                                connect_ms: None,
-                                ttft_ms: None,
-                                status_code: e.http_status(),
-},
-);
+                                    attempt,
+                                    race_size,
+                                    err: &e,
+                                    started,
+                                    model: None,
+                                    connect_ms: None,
+                                    ttft_ms: None,
+                                    status_code: e.http_status(),
+                                },
+                            );
                         }
                     };
 
@@ -1970,16 +1976,16 @@ impl Pipeline {
                                         combo,
                                         target,
                                         FailureContext {
-                                        attempt,
-                                        race_size,
-                                        err: &e,
-                                        started,
-                                        model: None,
-                                        connect_ms: None,
-                                        ttft_ms: None,
-                                        status_code: e.http_status(),
-},
-);
+                                            attempt,
+                                            race_size,
+                                            err: &e,
+                                            started,
+                                            model: None,
+                                            connect_ms: None,
+                                            ttft_ms: None,
+                                            status_code: e.http_status(),
+                                        },
+                                    );
                                 }
                             }
                         }
@@ -2005,10 +2011,9 @@ impl Pipeline {
                     {
                         Ok(token) => {
                             let expires_at = token.expires_in.map(|secs| {
-                                (chrono::Utc::now()
-                                    + chrono::Duration::seconds(secs as i64))
-                                .format("%Y-%m-%dT%H:%M:%SZ")
-                                .to_string()
+                                (chrono::Utc::now() + chrono::Duration::seconds(secs as i64))
+                                    .format("%Y-%m-%dT%H:%M:%SZ")
+                                    .to_string()
                             });
                             // Store under lock.
                             {
@@ -2049,9 +2054,7 @@ impl Pipeline {
                             .as_ref()
                             .map(|m| m.region.as_str())
                             .unwrap_or(crate::executor_kiro::KIRO_DEFAULT_REGION);
-                        let profile_arn = kiro_meta
-                            .as_ref()
-                            .and_then(|m| m.profile_arn.as_deref());
+                        let profile_arn = kiro_meta.as_ref().and_then(|m| m.profile_arn.as_deref());
                         // Gate 3: the kiro executor now takes
                         // `&Arc<UpstreamClient>` (the hyper-based
                         // client) instead of `&reqwest::Client`. The
@@ -2111,10 +2114,10 @@ impl Pipeline {
                             trace_id,
                             response.usage.as_ref().map(|u| u.prompt_tokens),
                             response.usage.as_ref().map(|u| u.completion_tokens),
-                            None, // request_body_json
-                            None, // response_body_json
-                            None, // request_headers
-                            None, // response_headers
+                            None,  // request_body_json
+                            None,  // response_body_json
+                            None,  // request_headers
+                            None,  // response_headers
                             false, // is_streaming (H5)
                             true,  // stream_complete (H5)
                             None,  // stop_reason
@@ -2131,16 +2134,16 @@ impl Pipeline {
                         combo,
                         target,
                         FailureContext {
-                        attempt,
-                        race_size,
-                        err: &e,
-                        started,
-                        model: None,
-                        connect_ms: None,
-                        ttft_ms: None,
-                        status_code: e.http_status(),
-},
-),
+                            attempt,
+                            race_size,
+                            err: &e,
+                            started,
+                            model: None,
+                            connect_ms: None,
+                            ttft_ms: None,
+                            status_code: e.http_status(),
+                        },
+                    ),
                 };
             }
         }
@@ -2155,16 +2158,16 @@ impl Pipeline {
                     combo,
                     target,
                     FailureContext {
-                    attempt,
-                    race_size,
-                    err: &err,
-                    started,
-                    model: None,
-                    connect_ms: None,
-                    ttft_ms: None,
-                    status_code: 0,
-},
-);
+                        attempt,
+                        race_size,
+                        err: &err,
+                        started,
+                        model: None,
+                        connect_ms: None,
+                        ttft_ms: None,
+                        status_code: 0,
+                    },
+                );
             }
         };
 
@@ -2185,16 +2188,16 @@ impl Pipeline {
                     combo,
                     target,
                     FailureContext {
-                    attempt,
-                    race_size,
-                    err: &err,
-                    started,
-                    model: None,
-                    connect_ms: None,
-                    ttft_ms: None,
-                    status_code: 0,
-},
-);
+                        attempt,
+                        race_size,
+                        err: &err,
+                        started,
+                        model: None,
+                        connect_ms: None,
+                        ttft_ms: None,
+                        status_code: 0,
+                    },
+                );
             }
         };
         let model = match self.load_model(model_row_id) {
@@ -2205,16 +2208,16 @@ impl Pipeline {
                     combo,
                     target,
                     FailureContext {
-                    attempt,
-                    race_size,
-                    err: &e,
-                    started,
-                    model: None,
-                    connect_ms: None,
-                    ttft_ms: None,
-                    status_code: 0,
-},
-);
+                        attempt,
+                        race_size,
+                        err: &e,
+                        started,
+                        model: None,
+                        connect_ms: None,
+                        ttft_ms: None,
+                        status_code: 0,
+                    },
+                );
             }
         };
 
@@ -2223,46 +2226,48 @@ impl Pipeline {
         //    see it's dropped well before the dispatch `.await`.
         let resolved_timeouts = {
             let conn = self.conn.lock();
-            let provider_timeouts = match timeouts::load_provider_timeouts(&conn, &target.provider_id) {
-                Ok(t) => t,
-                Err(e) => {
-                    return self.record_and_fail(
-                        req,
-                        combo,
-                        target,
-                        FailureContext {
-                        attempt,
-                        race_size,
-                        err: &e,
-                        started,
-                        model: Some(&model),
-                        connect_ms: None,
-                        ttft_ms: None,
-                        status_code: 0,
-},
-);
-                }
-            };
-            let model_overrides = match ModelTimeoutOverrides::from_json(model.timeout_overrides_json.as_deref()) {
-                Ok(o) => o,
-                Err(e) => {
-                    return self.record_and_fail(
-                        req,
-                        combo,
-                        target,
-                        FailureContext {
-                        attempt,
-                        race_size,
-                        err: &e,
-                        started,
-                        model: Some(&model),
-                        connect_ms: None,
-                        ttft_ms: None,
-                        status_code: 0,
-},
-);
-                }
-            };
+            let provider_timeouts =
+                match timeouts::load_provider_timeouts(&conn, &target.provider_id) {
+                    Ok(t) => t,
+                    Err(e) => {
+                        return self.record_and_fail(
+                            req,
+                            combo,
+                            target,
+                            FailureContext {
+                                attempt,
+                                race_size,
+                                err: &e,
+                                started,
+                                model: Some(&model),
+                                connect_ms: None,
+                                ttft_ms: None,
+                                status_code: 0,
+                            },
+                        );
+                    }
+                };
+            let model_overrides =
+                match ModelTimeoutOverrides::from_json(model.timeout_overrides_json.as_deref()) {
+                    Ok(o) => o,
+                    Err(e) => {
+                        return self.record_and_fail(
+                            req,
+                            combo,
+                            target,
+                            FailureContext {
+                                attempt,
+                                race_size,
+                                err: &e,
+                                started,
+                                model: Some(&model),
+                                connect_ms: None,
+                                ttft_ms: None,
+                                status_code: 0,
+                            },
+                        );
+                    }
+                };
             timeouts::resolve(
                 &self.config.defaults,
                 provider_timeouts.as_ref(),
@@ -2337,7 +2342,13 @@ impl Pipeline {
                     &upstream_req,
                     adapter.as_ref(),
                     "openai request",
-                    req, combo, target, attempt, race_size, started, &model,
+                    req,
+                    combo,
+                    target,
+                    attempt,
+                    race_size,
+                    started,
+                    &model,
                 ) {
                     Ok(b) => b,
                     Err(r) => return r,
@@ -2349,7 +2360,13 @@ impl Pipeline {
                     &anthro,
                     adapter.as_ref(),
                     "anthropic request",
-                    req, combo, target, attempt, race_size, started, &model,
+                    req,
+                    combo,
+                    target,
+                    attempt,
+                    race_size,
+                    started,
+                    &model,
                 ) {
                     Ok(b) => b,
                     Err(r) => return r,
@@ -2361,7 +2378,13 @@ impl Pipeline {
                     &gemini,
                     adapter.as_ref(),
                     "gemini request",
-                    req, combo, target, attempt, race_size, started, &model,
+                    req,
+                    combo,
+                    target,
+                    attempt,
+                    race_size,
+                    started,
+                    &model,
                 ) {
                     Ok(b) => b,
                     Err(r) => return r,
@@ -2387,16 +2410,16 @@ impl Pipeline {
                     combo,
                     target,
                     FailureContext {
-                    attempt,
-                    race_size,
-                    err: &e,
-                    started,
-                    model: Some(&model),
-                    connect_ms: None,
-                    ttft_ms: None,
-                    status_code: 0,
-},
-);
+                        attempt,
+                        race_size,
+                        err: &e,
+                        started,
+                        model: Some(&model),
+                        connect_ms: None,
+                        ttft_ms: None,
+                        status_code: 0,
+                    },
+                );
             }
         };
 
@@ -2408,11 +2431,8 @@ impl Pipeline {
         // `build_chat_url` when the adapter doesn't override, so
         // non-label-using providers are unaffected.
         let account_label_str = account_label.as_deref().unwrap_or("");
-        let url = adapter.build_chat_url_for_account(
-            target_format,
-            &model.model_id,
-            account_label_str,
-        );
+        let url =
+            adapter.build_chat_url_for_account(target_format, &model.model_id, account_label_str);
         let headers = adapter.build_headers(&api_key, target_format, &model.model_id);
 
         // Synchronous race_cancel check before publishing
@@ -2456,8 +2476,7 @@ impl Pipeline {
         // compression columns read NULL on the dashboard's
         // `connecting` row even when Lite/RTK actually shrank the
         // request.
-        let compression_stats_at_connecting =
-            self.compression_stats_cell.read().clone();
+        let compression_stats_at_connecting = self.compression_stats_cell.read().clone();
         crate::usage::publish_stage_event(crate::usage::StageEvent {
             request_id: req.request_id.to_string(),
             trace_id: trace_id.to_string(),
@@ -2598,9 +2617,18 @@ impl Pipeline {
             if let Some(sink) = &req.stream_sink {
                 return self
                     .dispatch_upstream_streaming(
-                        target, combo, req, model, target_format,
-                        sink, resolved_timeouts, started, attempt,
-                        race_size, trace_id, upstream_request,
+                        target,
+                        combo,
+                        req,
+                        model,
+                        target_format,
+                        sink,
+                        resolved_timeouts,
+                        started,
+                        attempt,
+                        race_size,
+                        trace_id,
+                        upstream_request,
                     )
                     .await;
             }
@@ -2637,16 +2665,16 @@ impl Pipeline {
                 combo,
                 target,
                 FailureContext {
-                attempt,
-                race_size,
-                err: &CoreError::ClientDisconnected,
-                started,
-                model: Some(model),
-                connect_ms: Some(elapsed),
-                ttft_ms: None,
-                status_code: CoreError::ClientDisconnected.http_status(),
-},
-);
+                    attempt,
+                    race_size,
+                    err: &CoreError::ClientDisconnected,
+                    started,
+                    model: Some(model),
+                    connect_ms: Some(elapsed),
+                    ttft_ms: None,
+                    status_code: CoreError::ClientDisconnected.http_status(),
+                },
+            );
         }
         let cancel_token = CancellationToken::from_watch(req.client_disconnected.clone());
         let result = self
@@ -2666,100 +2694,101 @@ impl Pipeline {
         // `e.to_string()` mapping 1-to-1, except we now have
         // per-phase `UpstreamPhase` attribution and the `Cancel`
         // variant.
-        let response_result: std::result::Result<crate::upstream::UpstreamResponse, UpstreamError> = match result {
-            Ok(r) => Ok(r),
-            Err(UpstreamError::Cancel) => {
-                tracing::warn!(
-                    combo_id = combo.id.0,
-                    target_id = target.id.0,
-                    provider = %target.provider_id,
-                    elapsed_ms = connect_and_send_ms,
-                    "client cancelled during upstream send; aborting attempt"
-                );
-                return self.record_and_fail(
-                    req,
-                    combo,
-                    target,
-                    FailureContext {
-                    attempt,
-                    race_size,
-                    err: &CoreError::ClientDisconnected,
-                    started,
-                    model: Some(model),
-                    connect_ms: Some(connect_and_send_ms),
-                    ttft_ms: None,
-                    status_code: CoreError::ClientDisconnected.http_status(),
-},
-);
-            }
-            Err(UpstreamError::Timeout(phase)) => {
-                // Bug fix: attribute the timeout to the CORRECT phase
-                // instead of collapsing DNS/Dial/TLS/Write/Headers all
-                // into "connect". The user configures per-phase budgets
-                // (connect_ms, request_send_ms, ttft_ms) and the error
-                // message must reflect which budget actually fired so
-                // they can tune the right knob. The old mapping (all
-                // → "connect") was a leftover from the pre-migration
-                // reqwest path that couldn't separate phases.
-                let phase_label = match phase {
-                    crate::upstream::UpstreamPhase::Dns => "dns",
-                    crate::upstream::UpstreamPhase::Dial => "dial",
-                    crate::upstream::UpstreamPhase::Tls => "tls",
-                    crate::upstream::UpstreamPhase::Write => "write",
-                    crate::upstream::UpstreamPhase::Headers => "headers",
-                    crate::upstream::UpstreamPhase::Body => "body",
-                };
-                tracing::warn!(
-                    combo_id = combo.id.0,
-                    target_id = target.id.0,
-                    provider = %target.provider_id,
-                    phase = %phase,
-                    elapsed_ms = connect_and_send_ms,
-                    "upstream phase timed out; aborting attempt"
-                );
-                let err = CoreError::UpstreamTimeout {
-                    phase: phase_label.to_string(),
-                    ms: connect_and_send_ms,
-                };
-                return self.record_and_fail(
-                    req,
-                    combo,
-                    target,
-                    FailureContext {
-                    attempt,
-                    race_size,
-                    err: &err,
-                    started,
-                    model: Some(model),
-                    connect_ms: Some(connect_and_send_ms),
-                    ttft_ms: None,
-                    status_code: err.http_status(),
-},
-);
-            }
-            Err(UpstreamError::Connection(msg))
-            | Err(UpstreamError::Tls(msg))
-            | Err(UpstreamError::Http(msg))
-            | Err(UpstreamError::Decode(msg))
-            | Err(UpstreamError::Invalid(msg)) => {
-                let err = CoreError::UpstreamConnection(msg);
-                return self.record_and_fail(
-                    req,
-                    combo,
-                    target,
-                    FailureContext {
-                    attempt,
-                    race_size,
-                    err: &err,
-                    started,
-                    model: Some(model),
-                    connect_ms: Some(connect_and_send_ms),
-                    ttft_ms: None,
-                    status_code: err.http_status(),
-},
-);
-            }
-        };
+        let response_result: std::result::Result<crate::upstream::UpstreamResponse, UpstreamError> =
+            match result {
+                Ok(r) => Ok(r),
+                Err(UpstreamError::Cancel) => {
+                    tracing::warn!(
+                        combo_id = combo.id.0,
+                        target_id = target.id.0,
+                        provider = %target.provider_id,
+                        elapsed_ms = connect_and_send_ms,
+                        "client cancelled during upstream send; aborting attempt"
+                    );
+                    return self.record_and_fail(
+                        req,
+                        combo,
+                        target,
+                        FailureContext {
+                            attempt,
+                            race_size,
+                            err: &CoreError::ClientDisconnected,
+                            started,
+                            model: Some(model),
+                            connect_ms: Some(connect_and_send_ms),
+                            ttft_ms: None,
+                            status_code: CoreError::ClientDisconnected.http_status(),
+                        },
+                    );
+                }
+                Err(UpstreamError::Timeout(phase)) => {
+                    // Bug fix: attribute the timeout to the CORRECT phase
+                    // instead of collapsing DNS/Dial/TLS/Write/Headers all
+                    // into "connect". The user configures per-phase budgets
+                    // (connect_ms, request_send_ms, ttft_ms) and the error
+                    // message must reflect which budget actually fired so
+                    // they can tune the right knob. The old mapping (all
+                    // → "connect") was a leftover from the pre-migration
+                    // reqwest path that couldn't separate phases.
+                    let phase_label = match phase {
+                        crate::upstream::UpstreamPhase::Dns => "dns",
+                        crate::upstream::UpstreamPhase::Dial => "dial",
+                        crate::upstream::UpstreamPhase::Tls => "tls",
+                        crate::upstream::UpstreamPhase::Write => "write",
+                        crate::upstream::UpstreamPhase::Headers => "headers",
+                        crate::upstream::UpstreamPhase::Body => "body",
+                    };
+                    tracing::warn!(
+                        combo_id = combo.id.0,
+                        target_id = target.id.0,
+                        provider = %target.provider_id,
+                        phase = %phase,
+                        elapsed_ms = connect_and_send_ms,
+                        "upstream phase timed out; aborting attempt"
+                    );
+                    let err = CoreError::UpstreamTimeout {
+                        phase: phase_label.to_string(),
+                        ms: connect_and_send_ms,
+                    };
+                    return self.record_and_fail(
+                        req,
+                        combo,
+                        target,
+                        FailureContext {
+                            attempt,
+                            race_size,
+                            err: &err,
+                            started,
+                            model: Some(model),
+                            connect_ms: Some(connect_and_send_ms),
+                            ttft_ms: None,
+                            status_code: err.http_status(),
+                        },
+                    );
+                }
+                Err(UpstreamError::Connection(msg))
+                | Err(UpstreamError::Tls(msg))
+                | Err(UpstreamError::Http(msg))
+                | Err(UpstreamError::Decode(msg))
+                | Err(UpstreamError::Invalid(msg)) => {
+                    let err = CoreError::UpstreamConnection(msg);
+                    return self.record_and_fail(
+                        req,
+                        combo,
+                        target,
+                        FailureContext {
+                            attempt,
+                            race_size,
+                            err: &err,
+                            started,
+                            model: Some(model),
+                            connect_ms: Some(connect_and_send_ms),
+                            ttft_ms: None,
+                            status_code: err.http_status(),
+                        },
+                    );
+                }
+            };
 
         // Live-log stage helper closure. Only fires when recording
         // is ON; OFF means the dashboard's "Record" toggle is off
@@ -2784,12 +2813,8 @@ impl Pipeline {
                 status_code: status,
                 error: err,
                 stop_reason: None,
-                compression_savings_pct: snapshot
-                    .as_ref()
-                    .and_then(|s| s.savings_pct_opt()),
-                compression_techniques: snapshot
-                    .as_ref()
-                    .and_then(|s| s.techniques_csv()),
+                compression_savings_pct: snapshot.as_ref().and_then(|s| s.savings_pct_opt()),
+                compression_techniques: snapshot.as_ref().and_then(|s| s.techniques_csv()),
                 timestamp: String::new(),
             });
         };
@@ -2806,17 +2831,23 @@ impl Pipeline {
 
         let status_code = response.status.as_u16();
         // Extract response headers BEFORE consuming the body
-        let response_headers: Option<std::collections::BTreeMap<String, String>> = if self.is_recording() {
-            Some(
-                response
-                    .headers
-                    .iter()
-                    .map(|(k, v)| (k.as_str().to_string(), v.to_str().unwrap_or_default().to_string()))
-                    .collect(),
-            )
-        } else {
-            None
-        };
+        let response_headers: Option<std::collections::BTreeMap<String, String>> =
+            if self.is_recording() {
+                Some(
+                    response
+                        .headers
+                        .iter()
+                        .map(|(k, v)| {
+                            (
+                                k.as_str().to_string(),
+                                v.to_str().unwrap_or_default().to_string(),
+                            )
+                        })
+                        .collect(),
+                )
+            } else {
+                None
+            };
         // Live-log: socket+headers are in, body streaming next.
         // For non-2xx we go to the error branch below; emit there.
         if (200..300).contains(&status_code) {
@@ -2849,15 +2880,12 @@ impl Pipeline {
         // body-chunk gap fires. The user configured `ttft_ms: 10000`
         // expecting the whole non-streaming response to land within
         // 10s — this honors that expectation.
-        let non_streaming_body_deadline = started
-            + std::time::Duration::from_millis(resolved_timeouts.ttft.as_millis() as u64);
+        let non_streaming_body_deadline =
+            started + std::time::Duration::from_millis(resolved_timeouts.ttft.as_millis() as u64);
         let remaining = non_streaming_body_deadline
             .checked_duration_since(Instant::now())
             .unwrap_or(std::time::Duration::ZERO);
-        let body_bytes = match tokio::time::timeout(
-            remaining,
-            response.collect(),
-        ).await {
+        let body_bytes = match tokio::time::timeout(remaining, response.collect()).await {
             Ok(Ok(b)) => b,
             Ok(Err(UpstreamError::Cancel)) => {
                 tracing::warn!(
@@ -2872,16 +2900,16 @@ impl Pipeline {
                     combo,
                     target,
                     FailureContext {
-                    attempt,
-                    race_size,
-                    err: &CoreError::ClientDisconnected,
-                    started,
-                    model: Some(model),
-                    connect_ms: Some(connect_and_send_ms),
-                    ttft_ms: Some(ttft_ms),
-                    status_code: CoreError::ClientDisconnected.http_status(),
-},
-);
+                        attempt,
+                        race_size,
+                        err: &CoreError::ClientDisconnected,
+                        started,
+                        model: Some(model),
+                        connect_ms: Some(connect_and_send_ms),
+                        ttft_ms: Some(ttft_ms),
+                        status_code: CoreError::ClientDisconnected.http_status(),
+                    },
+                );
             }
             Ok(Err(UpstreamError::Timeout(phase))) => {
                 let err = CoreError::UpstreamTimeout {
@@ -2893,16 +2921,16 @@ impl Pipeline {
                     combo,
                     target,
                     FailureContext {
-                    attempt,
-                    race_size,
-                    err: &err,
-                    started,
-                    model: Some(model),
-                    connect_ms: Some(connect_and_send_ms),
-                    ttft_ms: Some(ttft_ms),
-                    status_code: err.http_status(),
-},
-);
+                        attempt,
+                        race_size,
+                        err: &err,
+                        started,
+                        model: Some(model),
+                        connect_ms: Some(connect_and_send_ms),
+                        ttft_ms: Some(ttft_ms),
+                        status_code: err.http_status(),
+                    },
+                );
             }
             Ok(Err(e)) => {
                 let err = CoreError::UpstreamConnection(format!("read upstream body: {e}"));
@@ -2911,16 +2939,16 @@ impl Pipeline {
                     combo,
                     target,
                     FailureContext {
-                    attempt,
-                    race_size,
-                    err: &err,
-                    started,
-                    model: Some(model),
-                    connect_ms: Some(connect_and_send_ms),
-                    ttft_ms: Some(ttft_ms),
-                    status_code: err.http_status(),
-},
-);
+                        attempt,
+                        race_size,
+                        err: &err,
+                        started,
+                        model: Some(model),
+                        connect_ms: Some(connect_and_send_ms),
+                        ttft_ms: Some(ttft_ms),
+                        status_code: err.http_status(),
+                    },
+                );
             }
             // Bug fix: the `tokio::time::timeout` Elapsed arm — the
             // non-streaming body read exceeded `ttft_ms`. Attribute
@@ -2944,16 +2972,16 @@ impl Pipeline {
                     combo,
                     target,
                     FailureContext {
-                    attempt,
-                    race_size,
-                    err: &err,
-                    started,
-                    model: Some(model),
-                    connect_ms: Some(connect_and_send_ms),
-                    ttft_ms: Some(ttft_ms),
-                    status_code: err.http_status(),
-},
-);
+                        attempt,
+                        race_size,
+                        err: &err,
+                        started,
+                        model: Some(model),
+                        connect_ms: Some(connect_and_send_ms),
+                        ttft_ms: Some(ttft_ms),
+                        status_code: err.http_status(),
+                    },
+                );
             }
         };
 
@@ -2987,16 +3015,16 @@ impl Pipeline {
                     combo,
                     target,
                     FailureContext {
-                    attempt,
-                    race_size,
-                    err: &err,
-                    started,
-                    model: Some(model),
-                    connect_ms: Some(connect_and_send_ms),
-                    ttft_ms: Some(ttft_ms),
-                    status_code,
-},
-);
+                        attempt,
+                        race_size,
+                        err: &err,
+                        started,
+                        model: Some(model),
+                        connect_ms: Some(connect_and_send_ms),
+                        ttft_ms: Some(ttft_ms),
+                        status_code,
+                    },
+                );
             }
             let err = CoreError::UpstreamError {
                 status: status_code,
@@ -3009,16 +3037,16 @@ impl Pipeline {
                 combo,
                 target,
                 FailureContext {
-                attempt,
-                race_size,
-                err: &err,
-                started,
-                model: Some(model),
-                connect_ms: Some(connect_and_send_ms),
-                ttft_ms: Some(ttft_ms),
-                status_code,
-},
-);
+                    attempt,
+                    race_size,
+                    err: &err,
+                    started,
+                    model: Some(model),
+                    connect_ms: Some(connect_and_send_ms),
+                    ttft_ms: Some(ttft_ms),
+                    status_code,
+                },
+            );
         }
 
         // R2 fix: 2xx non-streaming success. The non-streaming path
@@ -3046,9 +3074,7 @@ impl Pipeline {
             compression_savings_pct: streaming_snapshot
                 .as_ref()
                 .and_then(|s| s.savings_pct_opt()),
-            compression_techniques: streaming_snapshot
-                .as_ref()
-                .and_then(|s| s.techniques_csv()),
+            compression_techniques: streaming_snapshot.as_ref().and_then(|s| s.techniques_csv()),
             timestamp: String::new(),
         });
 
@@ -3063,16 +3089,16 @@ impl Pipeline {
                     combo,
                     target,
                     FailureContext {
-                    attempt,
-                    race_size,
-                    err: &err,
-                    started,
-                    model: Some(model),
-                    connect_ms: Some(connect_and_send_ms),
-                    ttft_ms: Some(ttft_ms),
-                    status_code: err.http_status(),
-},
-);
+                        attempt,
+                        race_size,
+                        err: &err,
+                        started,
+                        model: Some(model),
+                        connect_ms: Some(connect_and_send_ms),
+                        ttft_ms: Some(ttft_ms),
+                        status_code: err.http_status(),
+                    },
+                );
             }
         };
 
@@ -3083,27 +3109,29 @@ impl Pipeline {
         let response_body_value = response_body_raw.clone();
 
         let openai_response = match target_format {
-            crate::models::TargetFormat::Openai => match serde_json::from_value::<OpenAIResponse>(response_body_raw) {
-                Ok(r) => r,
-                Err(e) => {
-                    let err = CoreError::Parse(format!("parse openai response: {e}"));
-                    return self.record_and_fail(
-                        req,
-                        combo,
-                        target,
-                        FailureContext {
-                        attempt,
-                        race_size,
-                        err: &err,
-                        started,
-                        model: Some(model),
-                        connect_ms: Some(connect_and_send_ms),
-                        ttft_ms: Some(ttft_ms),
-                        status_code: err.http_status(),
-},
-);
+            crate::models::TargetFormat::Openai => {
+                match serde_json::from_value::<OpenAIResponse>(response_body_raw) {
+                    Ok(r) => r,
+                    Err(e) => {
+                        let err = CoreError::Parse(format!("parse openai response: {e}"));
+                        return self.record_and_fail(
+                            req,
+                            combo,
+                            target,
+                            FailureContext {
+                                attempt,
+                                race_size,
+                                err: &err,
+                                started,
+                                model: Some(model),
+                                connect_ms: Some(connect_and_send_ms),
+                                ttft_ms: Some(ttft_ms),
+                                status_code: err.http_status(),
+                            },
+                        );
+                    }
                 }
-            },
+            }
             crate::models::TargetFormat::Anthropic => {
                 let anthropic_resp: crate::translation::AnthropicResponse =
                     match serde_json::from_value(response_body_raw) {
@@ -3115,16 +3143,16 @@ impl Pipeline {
                                 combo,
                                 target,
                                 FailureContext {
-                                attempt,
-                                race_size,
-                                err: &err,
-                                started,
-                                model: Some(model),
-                                connect_ms: Some(connect_and_send_ms),
-                                ttft_ms: Some(ttft_ms),
-                                status_code: err.http_status(),
-},
-);
+                                    attempt,
+                                    race_size,
+                                    err: &err,
+                                    started,
+                                    model: Some(model),
+                                    connect_ms: Some(connect_and_send_ms),
+                                    ttft_ms: Some(ttft_ms),
+                                    status_code: err.http_status(),
+                                },
+                            );
                         }
                     };
                 crate::translation::anthropic_to_openai(&anthropic_resp)
@@ -3140,16 +3168,16 @@ impl Pipeline {
                                 combo,
                                 target,
                                 FailureContext {
-                                attempt,
-                                race_size,
-                                err: &err,
-                                started,
-                                model: Some(model),
-                                connect_ms: Some(connect_and_send_ms),
-                                ttft_ms: Some(ttft_ms),
-                                status_code: err.http_status(),
-},
-);
+                                    attempt,
+                                    race_size,
+                                    err: &err,
+                                    started,
+                                    model: Some(model),
+                                    connect_ms: Some(connect_and_send_ms),
+                                    ttft_ms: Some(ttft_ms),
+                                    status_code: err.http_status(),
+                                },
+                            );
                         }
                     };
                 crate::translation::gemini_to_openai(&gemini_resp)
@@ -3171,12 +3199,16 @@ impl Pipeline {
         // empty response to the client.
         let is_empty_response = openai_response.choices.first().is_some_and(|c| {
             let msg = &c.message;
-            let content_empty = msg.content.as_ref().map_or(true, |v| {
-                v.as_str().map_or(true, |s| s.is_empty())
-            });
+            let content_empty = msg
+                .content
+                .as_ref()
+                .map_or(true, |v| v.as_str().map_or(true, |s| s.is_empty()));
             let no_tool_calls = msg.tool_calls.as_ref().map_or(true, |t| t.is_empty());
             let no_reasoning = !msg.extra.contains_key("reasoning_content");
-            let no_finish = c.finish_reason.as_ref().map_or(true, |f| f == "null" || f.is_empty());
+            let no_finish = c
+                .finish_reason
+                .as_ref()
+                .map_or(true, |f| f == "null" || f.is_empty());
             content_empty && no_tool_calls && no_reasoning && no_finish
         });
         if is_empty_response {
@@ -3184,9 +3216,14 @@ impl Pipeline {
                 "upstream returned 200 but response is empty (content=null, finish_reason=null, no tool_calls, no reasoning) — treating as error for retry".to_string(),
             );
             return self.record_and_fail(
-                req, combo, target,
+                req,
+                combo,
+                target,
                 FailureContext {
-                    attempt, race_size, err: &err, started,
+                    attempt,
+                    race_size,
+                    err: &err,
+                    started,
                     model: Some(model),
                     connect_ms: Some(connect_and_send_ms),
                     ttft_ms: Some(ttft_ms),
@@ -3209,21 +3246,29 @@ impl Pipeline {
         // apply the same scrubbing here for code paths
         // that don't go through `chat.rs`.
         let request_headers_btm: std::collections::BTreeMap<String, String> =
-            crate::redact::redact_btreemap_sensitive(
-                headers.iter().cloned().collect(),
-            );
+            crate::redact::redact_btreemap_sensitive(headers.iter().cloned().collect());
         let _ = self.record_attempt_raw_with_tokens(
-            req, combo, target, Some(model), None,
-            Some(connect_and_send_ms), Some(ttft_ms), total_ms_now,
-            status_code, attempt, race_size, trace_id,
-            prompt_tokens, completion_tokens,
+            req,
+            combo,
+            target,
+            Some(model),
+            None,
+            Some(connect_and_send_ms),
+            Some(ttft_ms),
+            total_ms_now,
+            status_code,
+            attempt,
+            race_size,
+            trace_id,
+            prompt_tokens,
+            completion_tokens,
             Some(serde_json::from_slice(&body_bytes).unwrap_or(serde_json::Value::Null)),
-            Some(response_body_value),      // response body: snapshot captured before the parse consumed body_value
-            Some(request_headers_btm),      // request headers
-            response_headers,               // response headers (captured before body was read)
-            false, // is_streaming (H5): non-streaming success
-            true,  // stream_complete (H5): 2xx, full body received
-            None,  // stop_reason (non-streaming: extracted from response, not SSE)
+            Some(response_body_value), // response body: snapshot captured before the parse consumed body_value
+            Some(request_headers_btm), // request headers
+            response_headers,          // response headers (captured before body was read)
+            false,                     // is_streaming (H5): non-streaming success
+            true,                      // stream_complete (H5): 2xx, full body received
+            None, // stop_reason (non-streaming: extracted from response, not SSE)
         );
 
         PipelineResult {
@@ -3291,22 +3336,19 @@ impl Pipeline {
                 combo,
                 target,
                 FailureContext {
-                attempt,
-                race_size,
-                err: &CoreError::ClientDisconnected,
-                started,
-                model: Some(model),
-                connect_ms: Some(elapsed),
-                ttft_ms: None,
-                status_code: CoreError::ClientDisconnected.http_status(),
-},
-);
+                    attempt,
+                    race_size,
+                    err: &CoreError::ClientDisconnected,
+                    started,
+                    model: Some(model),
+                    connect_ms: Some(elapsed),
+                    ttft_ms: None,
+                    status_code: CoreError::ClientDisconnected.http_status(),
+                },
+            );
         }
         let cancel_token = if let Some(rc) = req.race_cancel.as_ref() {
-            CancellationToken::from_watch_and_token(
-                req.client_disconnected.clone(),
-                rc.clone(),
-            )
+            CancellationToken::from_watch_and_token(req.client_disconnected.clone(), rc.clone())
         } else {
             CancellationToken::from_watch(req.client_disconnected.clone())
         };
@@ -3331,95 +3373,96 @@ impl Pipeline {
         // `phase: "total"` from reqwest's whole-request timeout),
         // so `Body` here maps to the same `"total"` label to keep
         // the dashboards consistent.
-        let response_result: std::result::Result<crate::upstream::UpstreamResponse, UpstreamError> = match result {
-            Ok(r) => Ok(r),
-            Err(UpstreamError::Cancel) => {
-                tracing::warn!(
-                    combo_id = combo.id.0,
-                    target_id = target.id.0,
-                    provider = %target.provider_id,
-                    elapsed_ms = connect_and_send_ms,
-                    "client cancelled during upstream streaming send; aborting attempt"
-                );
-                return self.record_and_fail(
-                    req,
-                    combo,
-                    target,
-                    FailureContext {
-                    attempt,
-                    race_size,
-                    err: &CoreError::ClientDisconnected,
-                    started,
-                    model: Some(model),
-                    connect_ms: Some(connect_and_send_ms),
-                    ttft_ms: None,
-                    status_code: CoreError::ClientDisconnected.http_status(),
-},
-);
-            }
-            Err(UpstreamError::Timeout(phase)) => {
-                // Bug fix (PR #33): attribute the timeout to the
-                // CORRECT phase instead of collapsing all into
-                // "connect". Mirrors the non-streaming path's fix.
-                let phase_label = match phase {
-                    crate::upstream::UpstreamPhase::Dns => "dns",
-                    crate::upstream::UpstreamPhase::Dial => "dial",
-                    crate::upstream::UpstreamPhase::Tls => "tls",
-                    crate::upstream::UpstreamPhase::Write => "write",
-                    crate::upstream::UpstreamPhase::Headers => "headers",
-                    crate::upstream::UpstreamPhase::Body => "body",
-                };
-                tracing::warn!(
-                    combo_id = combo.id.0,
-                    target_id = target.id.0,
-                    provider = %target.provider_id,
-                    phase = %phase,
-                    elapsed_ms = connect_and_send_ms,
-                    "upstream phase timed out; aborting streaming attempt"
-                );
-                let err = CoreError::UpstreamTimeout {
-                    phase: phase_label.to_string(),
-                    ms: connect_and_send_ms,
-                };
-                return self.record_and_fail(
-                    req,
-                    combo,
-                    target,
-                    FailureContext {
-                    attempt,
-                    race_size,
-                    err: &err,
-                    started,
-                    model: Some(model),
-                    connect_ms: Some(connect_and_send_ms),
-                    ttft_ms: None,
-                    status_code: err.http_status(),
-},
-);
-            }
-            Err(UpstreamError::Connection(msg))
-            | Err(UpstreamError::Tls(msg))
-            | Err(UpstreamError::Http(msg))
-            | Err(UpstreamError::Decode(msg))
-            | Err(UpstreamError::Invalid(msg)) => {
-                let err = CoreError::UpstreamConnection(msg);
-                return self.record_and_fail(
-                    req,
-                    combo,
-                    target,
-                    FailureContext {
-                    attempt,
-                    race_size,
-                    err: &err,
-                    started,
-                    model: Some(model),
-                    connect_ms: Some(connect_and_send_ms),
-                    ttft_ms: None,
-                    status_code: err.http_status(),
-},
-);
-            }
-        };
+        let response_result: std::result::Result<crate::upstream::UpstreamResponse, UpstreamError> =
+            match result {
+                Ok(r) => Ok(r),
+                Err(UpstreamError::Cancel) => {
+                    tracing::warn!(
+                        combo_id = combo.id.0,
+                        target_id = target.id.0,
+                        provider = %target.provider_id,
+                        elapsed_ms = connect_and_send_ms,
+                        "client cancelled during upstream streaming send; aborting attempt"
+                    );
+                    return self.record_and_fail(
+                        req,
+                        combo,
+                        target,
+                        FailureContext {
+                            attempt,
+                            race_size,
+                            err: &CoreError::ClientDisconnected,
+                            started,
+                            model: Some(model),
+                            connect_ms: Some(connect_and_send_ms),
+                            ttft_ms: None,
+                            status_code: CoreError::ClientDisconnected.http_status(),
+                        },
+                    );
+                }
+                Err(UpstreamError::Timeout(phase)) => {
+                    // Bug fix (PR #33): attribute the timeout to the
+                    // CORRECT phase instead of collapsing all into
+                    // "connect". Mirrors the non-streaming path's fix.
+                    let phase_label = match phase {
+                        crate::upstream::UpstreamPhase::Dns => "dns",
+                        crate::upstream::UpstreamPhase::Dial => "dial",
+                        crate::upstream::UpstreamPhase::Tls => "tls",
+                        crate::upstream::UpstreamPhase::Write => "write",
+                        crate::upstream::UpstreamPhase::Headers => "headers",
+                        crate::upstream::UpstreamPhase::Body => "body",
+                    };
+                    tracing::warn!(
+                        combo_id = combo.id.0,
+                        target_id = target.id.0,
+                        provider = %target.provider_id,
+                        phase = %phase,
+                        elapsed_ms = connect_and_send_ms,
+                        "upstream phase timed out; aborting streaming attempt"
+                    );
+                    let err = CoreError::UpstreamTimeout {
+                        phase: phase_label.to_string(),
+                        ms: connect_and_send_ms,
+                    };
+                    return self.record_and_fail(
+                        req,
+                        combo,
+                        target,
+                        FailureContext {
+                            attempt,
+                            race_size,
+                            err: &err,
+                            started,
+                            model: Some(model),
+                            connect_ms: Some(connect_and_send_ms),
+                            ttft_ms: None,
+                            status_code: err.http_status(),
+                        },
+                    );
+                }
+                Err(UpstreamError::Connection(msg))
+                | Err(UpstreamError::Tls(msg))
+                | Err(UpstreamError::Http(msg))
+                | Err(UpstreamError::Decode(msg))
+                | Err(UpstreamError::Invalid(msg)) => {
+                    let err = CoreError::UpstreamConnection(msg);
+                    return self.record_and_fail(
+                        req,
+                        combo,
+                        target,
+                        FailureContext {
+                            attempt,
+                            race_size,
+                            err: &err,
+                            started,
+                            model: Some(model),
+                            connect_ms: Some(connect_and_send_ms),
+                            ttft_ms: None,
+                            status_code: err.http_status(),
+                        },
+                    );
+                }
+            };
 
         // `response_result` is `Ok` here because every error arm
         // above already returned. The `match` is needed to satisfy
@@ -3451,16 +3494,16 @@ impl Pipeline {
                 combo,
                 target,
                 FailureContext {
-                attempt,
-                race_size,
-                err: &err,
-                started,
-                model: Some(model),
-                connect_ms: Some(connect_and_send_ms),
-                ttft_ms: None,
-                status_code,
-},
-);
+                    attempt,
+                    race_size,
+                    err: &err,
+                    started,
+                    model: Some(model),
+                    connect_ms: Some(connect_and_send_ms),
+                    ttft_ms: None,
+                    status_code,
+                },
+            );
         }
 
         let chunk_id = format!("chatcmpl-{}", uuid::Uuid::new_v4());
@@ -3585,9 +3628,20 @@ impl Pipeline {
                 // connection / sends RST_STREAM to stop token billing.
                 drop(stream);
                 return self.fail_stream_client_disconnected(
-                    req, combo, target, attempt, race_size, started, model,
-                    connect_and_send_ms, ttft_ms, trace_id,
-                    acc.as_mut(), &chunk_id, created, &model_name,
+                    req,
+                    combo,
+                    target,
+                    attempt,
+                    race_size,
+                    started,
+                    model,
+                    connect_and_send_ms,
+                    ttft_ms,
+                    trace_id,
+                    acc.as_mut(),
+                    &chunk_id,
+                    created,
+                    &model_name,
                 );
             }
 
@@ -3607,12 +3661,10 @@ impl Pipeline {
                     // errors to `UpstreamConnection`. We use the
                     // pre-migration label for dashboard consistency.
                     let err = match e {
-                        UpstreamError::Timeout(UpstreamPhase::Body) => {
-                            CoreError::UpstreamTimeout {
-                                phase: "idle_chunk".into(),
-                                ms: resolved_timeouts.idle_chunk.as_millis() as u64,
-                            }
-                        }
+                        UpstreamError::Timeout(UpstreamPhase::Body) => CoreError::UpstreamTimeout {
+                            phase: "idle_chunk".into(),
+                            ms: resolved_timeouts.idle_chunk.as_millis() as u64,
+                        },
                         UpstreamError::Cancel => {
                             // The hyper body returned cancel — the
                             // client_disconnected watch has fired.
@@ -3622,65 +3674,57 @@ impl Pipeline {
                             break;
                         }
                         UpstreamError::Connection(msg) => {
-                            CoreError::UpstreamConnection(
-                                format!("stream read: {}", msg),
-                            )
+                            CoreError::UpstreamConnection(format!("stream read: {}", msg))
                         }
                         UpstreamError::Tls(msg) => {
-                            CoreError::UpstreamConnection(
-                                format!("stream read: {}", msg),
-                            )
+                            CoreError::UpstreamConnection(format!("stream read: {}", msg))
                         }
                         UpstreamError::Http(msg) => {
-                            CoreError::UpstreamConnection(
-                                format!("stream read: {}", msg),
-                            )
+                            CoreError::UpstreamConnection(format!("stream read: {}", msg))
                         }
                         UpstreamError::Decode(msg) => {
-                            CoreError::UpstreamConnection(
-                                format!("stream read: {}", msg),
-                            )
+                            CoreError::UpstreamConnection(format!("stream read: {}", msg))
                         }
                         UpstreamError::Invalid(msg) => {
-                            CoreError::UpstreamConnection(
-                                format!("stream read: {}", msg),
-                            )
+                            CoreError::UpstreamConnection(format!("stream read: {}", msg))
                         }
                         // Body-phase timeout that isn't `Body` (e.g.
                         // a future phase variant) — treat as idle.
                         UpstreamError::Timeout(_) => {
-                            CoreError::UpstreamConnection(
-                                format!("stream read: {}", e),
-                            )
+                            CoreError::UpstreamConnection(format!("stream read: {}", e))
                         }
                     };
                     // Mark the accumulator as partial (the stream was
                     // interrupted by an error) and pass it down so the
                     // partial response is persisted. We take a reference
                     // to the accumulator's inner value after marking it.
-                    let acc_ref: Option<&crate::sse_accumulator::ResponseAccumulator> = match &mut acc {
-                        Some(a) => {
-                            a.mark_partial();
-                            Some(&*a)
-                        }
-                        None => None,
-                    };
+                    let acc_ref: Option<&crate::sse_accumulator::ResponseAccumulator> =
+                        match &mut acc {
+                            Some(a) => {
+                                a.mark_partial();
+                                Some(&*a)
+                            }
+                            None => None,
+                        };
                     return self.record_and_fail_with_trace_id_and_partial(
                         req,
                         combo,
                         target,
                         FailureContext {
-                        attempt,
-                        race_size,
-                        err: &err,
-                        started,
-                        model: Some(model),
-                        connect_ms: Some(connect_and_send_ms),
-                        ttft_ms,
-                        status_code: err.http_status(),
+                            attempt,
+                            race_size,
+                            err: &err,
+                            started,
+                            model: Some(model),
+                            connect_ms: Some(connect_and_send_ms),
+                            ttft_ms,
+                            status_code: err.http_status(),
                         },
                         trace_id,
-                        acc_ref, Some(&chunk_id), created, &model_name,
+                        acc_ref,
+                        Some(&chunk_id),
+                        created,
+                        &model_name,
                     );
                 }
             };
@@ -3726,20 +3770,20 @@ impl Pipeline {
                     combo,
                     target,
                     FailureContext {
-                    attempt,
-                    race_size,
-                    err: &CoreError::UpstreamConnection(format!(
-                        "SSE line buffer exceeded {} bytes (memory-DoS guard)",
-                        MAX_SSE_LINE_BYTES
-                    )),
-                    started,
-                    model: Some(model),
-                    connect_ms: Some(connect_and_send_ms),
-                    ttft_ms,
-                    status_code: 502,
-},
+                        attempt,
+                        race_size,
+                        err: &CoreError::UpstreamConnection(format!(
+                            "SSE line buffer exceeded {} bytes (memory-DoS guard)",
+                            MAX_SSE_LINE_BYTES
+                        )),
+                        started,
+                        model: Some(model),
+                        connect_ms: Some(connect_and_send_ms),
+                        ttft_ms,
+                        status_code: 502,
+                    },
                     trace_id,
-);
+                );
             }
 
             // Process complete lines.
@@ -3783,8 +3827,7 @@ impl Pipeline {
                     // arrived. The dashboard updates the row's
                     // "in phase" label from "waiting_ttft" to
                     // "streaming" and shows the ttft value.
-                    let streaming_ttft_snapshot =
-                        self.compression_stats_cell.read().clone();
+                    let streaming_ttft_snapshot = self.compression_stats_cell.read().clone();
                     crate::usage::publish_stage_event(crate::usage::StageEvent {
                         request_id: req.request_id.to_string(),
                         trace_id: trace_id.to_string(),
@@ -3815,9 +3858,20 @@ impl Pipeline {
                 // vs. repeating the same check at every send site.
                 if req.race_cancel.as_ref().is_some_and(|rc| rc.is_cancelled()) {
                     return self.fail_stream_client_disconnected(
-                        req, combo, target, attempt, race_size, started, model,
-                        connect_and_send_ms, ttft_ms, trace_id,
-                        acc.as_mut(), &chunk_id, created, &model_name,
+                        req,
+                        combo,
+                        target,
+                        attempt,
+                        race_size,
+                        started,
+                        model,
+                        connect_and_send_ms,
+                        ttft_ms,
+                        trace_id,
+                        acc.as_mut(),
+                        &chunk_id,
+                        created,
+                        &model_name,
                     );
                 }
 
@@ -3838,18 +3892,27 @@ impl Pipeline {
                     let json_payload_bytes = skip_leading_spaces(payload_bytes);
                     // Use unchecked — we already know it's UTF-8
                     // (from_utf8_unchecked was called on line_bytes above).
-                    let json_payload = unsafe {
-                        std::str::from_utf8_unchecked(json_payload_bytes)
-                    };
+                    let json_payload = unsafe { std::str::from_utf8_unchecked(json_payload_bytes) };
                     // Fast [DONE] check: compare first 6 bytes.
                     if json_payload.len() == 6 && json_payload.as_bytes() == b"[DONE]" {
                         // Race cancellation guard: if another target
                         // already won, discard this chunk instantly.
                         if req.race_cancel.as_ref().is_some_and(|rc| rc.is_cancelled()) {
                             return self.fail_stream_client_disconnected(
-                                req, combo, target, attempt, race_size, started, model,
-                                connect_and_send_ms, ttft_ms, trace_id,
-                                acc.as_mut(), &chunk_id, created, &model_name,
+                                req,
+                                combo,
+                                target,
+                                attempt,
+                                race_size,
+                                started,
+                                model,
+                                connect_and_send_ms,
+                                ttft_ms,
+                                trace_id,
+                                acc.as_mut(),
+                                &chunk_id,
+                                created,
+                                &model_name,
                             );
                         }
                         if let Err(e) = sink.send(SSE_DONE_BYTES.clone()).await {
@@ -3861,9 +3924,21 @@ impl Pipeline {
                             // SUCCESS row instead of a
                             // ClientDisconnected failure row.
                             return self.fail_on_sink_send_error(
-                                e, req, combo, target, attempt, race_size, started, model,
-                                connect_and_send_ms, ttft_ms, trace_id,
-                                acc.as_mut(), &chunk_id, created, &model_name,
+                                e,
+                                req,
+                                combo,
+                                target,
+                                attempt,
+                                race_size,
+                                started,
+                                model,
+                                connect_and_send_ms,
+                                ttft_ms,
+                                trace_id,
+                                acc.as_mut(),
+                                &chunk_id,
+                                created,
+                                &model_name,
                             );
                         }
                         done_sent = true;
@@ -3911,7 +3986,8 @@ impl Pipeline {
                                     &mut think_extractor,
                                     &mut tool_call_acc,
                                 );
-                                let payload_str = effective_payload.as_deref().unwrap_or(json_payload);
+                                let payload_str =
+                                    effective_payload.as_deref().unwrap_or(json_payload);
                                 // G1 fix: feed the accumulator so the
                                 // persisted `response_body_json` carries
                                 // the full assistant message. Slow path:
@@ -3941,7 +4017,10 @@ impl Pipeline {
                                     //   - `payload_str` is the source of
                                     //     truth after normalization.
                                     if payload_str.contains("\"reasoning_content\"")
-                                        && let Some(rc) = crate::sse_accumulator::extract_reasoning_content(payload_str)
+                                        && let Some(rc) =
+                                            crate::sse_accumulator::extract_reasoning_content(
+                                                payload_str,
+                                            )
                                         && !rc.is_empty()
                                     {
                                         a.append_reasoning(rc);
@@ -3954,18 +4033,21 @@ impl Pipeline {
                                     // natively.
                                     let _ = chunk.delta_reasoning.take();
                                     for tc in chunk.delta_tool_calls.drain(..) {
-                                        let name = tc.get("function")
+                                        let name = tc
+                                            .get("function")
                                             .and_then(|f| f.get("name"))
                                             .and_then(|n| n.as_str())
                                             .map(String::from);
-                                        let args = tc.get("function")
+                                        let args = tc
+                                            .get("function")
                                             .and_then(|f| f.get("arguments"))
                                             .map(|a| match a {
                                                 serde_json::Value::String(s) => s.clone(),
                                                 other => other.to_string(),
                                             });
                                         if let (Some(name), Some(args)) = (name, args) {
-                                            let id = tc.get("id")
+                                            let id = tc
+                                                .get("id")
                                                 .and_then(|i| i.as_str())
                                                 .map(String::from);
                                             a.append_openai_tool_call(id, name, args);
@@ -3983,16 +4065,39 @@ impl Pipeline {
                                 // chunk to prevent interleaving.
                                 if req.race_cancel.as_ref().is_some_and(|rc| rc.is_cancelled()) {
                                     return self.fail_stream_client_disconnected(
-                                        req, combo, target, attempt, race_size, started, model,
-                                        connect_and_send_ms, ttft_ms, trace_id,
-                                        acc.as_mut(), &chunk_id, created, &model_name,
+                                        req,
+                                        combo,
+                                        target,
+                                        attempt,
+                                        race_size,
+                                        started,
+                                        model,
+                                        connect_and_send_ms,
+                                        ttft_ms,
+                                        trace_id,
+                                        acc.as_mut(),
+                                        &chunk_id,
+                                        created,
+                                        &model_name,
                                     );
                                 }
                                 if let Err(e) = sink.send(sse_bytes).await {
                                     return self.fail_on_sink_send_error(
-                                        e, req, combo, target, attempt, race_size, started, model,
-                                        connect_and_send_ms, ttft_ms, trace_id,
-                                        acc.as_mut(), &chunk_id, created, &model_name,
+                                        e,
+                                        req,
+                                        combo,
+                                        target,
+                                        attempt,
+                                        race_size,
+                                        started,
+                                        model,
+                                        connect_and_send_ms,
+                                        ttft_ms,
+                                        trace_id,
+                                        acc.as_mut(),
+                                        &chunk_id,
+                                        created,
+                                        &model_name,
                                     );
                                 }
                             }
@@ -4081,7 +4186,8 @@ impl Pipeline {
                                 // per chunk on the recording path. The guard
                                 // itself short-circuits on first non-match.
                                 if payload.contains("\"reasoning_content\"")
-                                    && let Some(rc) = crate::sse_accumulator::extract_reasoning_content(payload)
+                                    && let Some(rc) =
+                                        crate::sse_accumulator::extract_reasoning_content(payload)
                                     && !rc.is_empty()
                                 {
                                     a.append_reasoning(rc);
@@ -4113,16 +4219,39 @@ impl Pipeline {
                         // writing to the shared sink.
                         if req.race_cancel.as_ref().is_some_and(|rc| rc.is_cancelled()) {
                             return self.fail_stream_client_disconnected(
-                                req, combo, target, attempt, race_size, started, model,
-                                connect_and_send_ms, ttft_ms, trace_id,
-                                acc.as_mut(), &chunk_id, created, &model_name,
+                                req,
+                                combo,
+                                target,
+                                attempt,
+                                race_size,
+                                started,
+                                model,
+                                connect_and_send_ms,
+                                ttft_ms,
+                                trace_id,
+                                acc.as_mut(),
+                                &chunk_id,
+                                created,
+                                &model_name,
                             );
                         }
                         if let Err(e) = sink.send(sse_bytes).await {
                             return self.fail_on_sink_send_error(
-                                e, req, combo, target, attempt, race_size, started, model,
-                                connect_and_send_ms, ttft_ms, trace_id,
-                                acc.as_mut(), &chunk_id, created, &model_name,
+                                e,
+                                req,
+                                combo,
+                                target,
+                                attempt,
+                                race_size,
+                                started,
+                                model,
+                                connect_and_send_ms,
+                                ttft_ms,
+                                trace_id,
+                                acc.as_mut(),
+                                &chunk_id,
+                                created,
+                                &model_name,
                             );
                         }
                     }
@@ -4130,9 +4259,7 @@ impl Pipeline {
                 }
 
                 let parsed = match target_format {
-                    crate::models::TargetFormat::Openai => {
-                        crate::sse::parse_openai_sse_line(line)
-                    }
+                    crate::models::TargetFormat::Openai => crate::sse::parse_openai_sse_line(line),
                     crate::models::TargetFormat::Gemini => {
                         crate::sse::parse_gemini_sse_line(line, &chunk_id, created, &model_name)
                     }
@@ -4143,7 +4270,10 @@ impl Pipeline {
                         // OpenAI-style `tool_calls` chunks. The
                         // accumulator lives across iterations of the
                         // outer loop.
-                        match crate::sse::parse_anthropic_sse_stream_line(line, &mut current_event_type) {
+                        match crate::sse::parse_anthropic_sse_stream_line(
+                            line,
+                            &mut current_event_type,
+                        ) {
                             Ok(Some(payload)) => {
                                 // H5 fix: thread the tool_use accumulator
                                 // through the translator. The counter
@@ -4184,9 +4314,20 @@ impl Pipeline {
                             // sentinel below does not double-emit.
                             if req.race_cancel.as_ref().is_some_and(|rc| rc.is_cancelled()) {
                                 return self.fail_stream_client_disconnected(
-                                    req, combo, target, attempt, race_size, started, model,
-                                    connect_and_send_ms, ttft_ms, trace_id,
-                                    acc.as_mut(), &chunk_id, created, &model_name,
+                                    req,
+                                    combo,
+                                    target,
+                                    attempt,
+                                    race_size,
+                                    started,
+                                    model,
+                                    connect_and_send_ms,
+                                    ttft_ms,
+                                    trace_id,
+                                    acc.as_mut(),
+                                    &chunk_id,
+                                    created,
+                                    &model_name,
                                 );
                             }
                             if let Err(e) = sink.send(SSE_DONE_BYTES.clone()).await {
@@ -4194,9 +4335,21 @@ impl Pipeline {
                                 // — see the matching fix at the OpenAI
                                 // fast-path [DONE] send above.
                                 return self.fail_on_sink_send_error(
-                                    e, req, combo, target, attempt, race_size, started, model,
-                                    connect_and_send_ms, ttft_ms, trace_id,
-                                    acc.as_mut(), &chunk_id, created, &model_name,
+                                    e,
+                                    req,
+                                    combo,
+                                    target,
+                                    attempt,
+                                    race_size,
+                                    started,
+                                    model,
+                                    connect_and_send_ms,
+                                    ttft_ms,
+                                    trace_id,
+                                    acc.as_mut(),
+                                    &chunk_id,
+                                    created,
+                                    &model_name,
                                 );
                             }
                             done_sent = true;
@@ -4254,17 +4407,20 @@ impl Pipeline {
                                 // a Close event here (the accumulator's
                                 // Close is a no-op anyway).
                                 for tc in delta_tool_calls {
-                                    let has_name = tc.get("function")
+                                    let has_name = tc
+                                        .get("function")
                                         .and_then(|f| f.get("name"))
                                         .and_then(|n| n.as_str())
                                         .is_some();
                                     let has_id = tc.get("id").is_some();
                                     if has_id && has_name {
-                                        let id = tc.get("id")
+                                        let id = tc
+                                            .get("id")
                                             .and_then(|i| i.as_str())
                                             .unwrap_or("")
                                             .to_string();
-                                        let name = tc.get("function")
+                                        let name = tc
+                                            .get("function")
                                             .and_then(|f| f.get("name"))
                                             .and_then(|n| n.as_str())
                                             .unwrap_or("")
@@ -4276,7 +4432,8 @@ impl Pipeline {
                                             },
                                         );
                                     } else {
-                                        let partial = tc.get("function")
+                                        let partial = tc
+                                            .get("function")
                                             .and_then(|f| f.get("arguments"))
                                             .map(|a| match a {
                                                 serde_json::Value::String(s) => s.clone(),
@@ -4315,9 +4472,21 @@ impl Pipeline {
                                 // `record_attempt_raw_with_tokens`
                                 // accepts an `Option<u32>` pair.
                                 return self.fail_on_sink_send_error(
-                                    e, req, combo, target, attempt, race_size, started, model,
-                                    connect_and_send_ms, ttft_ms, trace_id,
-                                    acc.as_mut(), &chunk_id, created, &model_name,
+                                    e,
+                                    req,
+                                    combo,
+                                    target,
+                                    attempt,
+                                    race_size,
+                                    started,
+                                    model,
+                                    connect_and_send_ms,
+                                    ttft_ms,
+                                    trace_id,
+                                    acc.as_mut(),
+                                    &chunk_id,
+                                    created,
+                                    &model_name,
                                 );
                             }
                         }
@@ -4346,9 +4515,20 @@ impl Pipeline {
             // to prevent chunk interleaving.
             if req.race_cancel.as_ref().is_some_and(|rc| rc.is_cancelled()) {
                 return self.fail_stream_client_disconnected(
-                    req, combo, target, attempt, race_size, started, model,
-                    connect_and_send_ms, ttft_ms, trace_id,
-                    acc.as_mut(), &chunk_id, created, &model_name,
+                    req,
+                    combo,
+                    target,
+                    attempt,
+                    race_size,
+                    started,
+                    model,
+                    connect_and_send_ms,
+                    ttft_ms,
+                    trace_id,
+                    acc.as_mut(),
+                    &chunk_id,
+                    created,
+                    &model_name,
                 );
             }
             if let Ok(line) = std::str::from_utf8(&buffer) {
@@ -4362,10 +4542,16 @@ impl Pipeline {
                             crate::sse::parse_gemini_sse_line(line, &chunk_id, created, &model_name)
                         }
                         crate::models::TargetFormat::Anthropic => {
-                            match crate::sse::parse_anthropic_sse_stream_line(line, &mut current_event_type) {
+                            match crate::sse::parse_anthropic_sse_stream_line(
+                                line,
+                                &mut current_event_type,
+                            ) {
                                 Ok(Some(payload)) => {
                                     match crate::sse::translate_anthropic_sse_payload(
-                                        &payload, &chunk_id, created, &model_name,
+                                        &payload,
+                                        &chunk_id,
+                                        created,
+                                        &model_name,
                                     ) {
                                         Ok(Some(chunk)) => Ok(Some(chunk)),
                                         Ok(None) => Ok(None),
@@ -4386,9 +4572,21 @@ impl Pipeline {
                             if let Err(e) = sink.send(sse_bytes).await {
                                 // Bug fix: handle BOTH `Lost` and `Closed`.
                                 return self.fail_on_sink_send_error(
-                                    e, req, combo, target, attempt, race_size, started, model,
-                                    connect_and_send_ms, ttft_ms, trace_id,
-                                    acc.as_mut(), &chunk_id, created, &model_name,
+                                    e,
+                                    req,
+                                    combo,
+                                    target,
+                                    attempt,
+                                    race_size,
+                                    started,
+                                    model,
+                                    connect_and_send_ms,
+                                    ttft_ms,
+                                    trace_id,
+                                    acc.as_mut(),
+                                    &chunk_id,
+                                    created,
+                                    &model_name,
                                 );
                             }
                         }
@@ -4422,16 +4620,16 @@ impl Pipeline {
                 combo,
                 target,
                 FailureContext {
-                attempt,
-                race_size,
-                err: &CoreError::ClientDisconnected,
-                started,
-                model: Some(model),
-                connect_ms: Some(connect_and_send_ms),
-                ttft_ms,
-                status_code: CoreError::ClientDisconnected.http_status(),
-},
-);
+                    attempt,
+                    race_size,
+                    err: &CoreError::ClientDisconnected,
+                    started,
+                    model: Some(model),
+                    connect_ms: Some(connect_and_send_ms),
+                    ttft_ms,
+                    status_code: CoreError::ClientDisconnected.http_status(),
+                },
+            );
         }
 
         // Send [DONE] if the upstream didn't send it explicitly.
@@ -4449,17 +4647,40 @@ impl Pipeline {
             // send [DONE] to the shared sink.
             if req.race_cancel.as_ref().is_some_and(|rc| rc.is_cancelled()) {
                 return self.fail_stream_client_disconnected(
-                    req, combo, target, attempt, race_size, started, model,
-                    connect_and_send_ms, ttft_ms, trace_id,
-                    acc.as_mut(), &chunk_id, created, &model_name,
+                    req,
+                    combo,
+                    target,
+                    attempt,
+                    race_size,
+                    started,
+                    model,
+                    connect_and_send_ms,
+                    ttft_ms,
+                    trace_id,
+                    acc.as_mut(),
+                    &chunk_id,
+                    created,
+                    &model_name,
                 );
             }
             if let Err(e) = sink.send(SSE_DONE_BYTES.clone()).await {
                 // Bug fix: handle BOTH `Lost` and `Closed`.
                 return self.fail_on_sink_send_error(
-                    e, req, combo, target, attempt, race_size, started, model,
-                    connect_and_send_ms, ttft_ms, trace_id,
-                    acc.as_mut(), &chunk_id, created, &model_name,
+                    e,
+                    req,
+                    combo,
+                    target,
+                    attempt,
+                    race_size,
+                    started,
+                    model,
+                    connect_and_send_ms,
+                    ttft_ms,
+                    trace_id,
+                    acc.as_mut(),
+                    &chunk_id,
+                    created,
+                    &model_name,
                 );
             }
         }
@@ -4478,19 +4699,31 @@ impl Pipeline {
                 "streaming response was empty (no content, no reasoning, no tool_calls) — treating as error for retry".to_string(),
             );
             let acc_ref: Option<&crate::sse_accumulator::ResponseAccumulator> = match &mut acc {
-                Some(a) => { a.mark_partial(); Some(&*a) }
+                Some(a) => {
+                    a.mark_partial();
+                    Some(&*a)
+                }
                 None => None,
             };
             return self.record_and_fail_with_trace_id_and_partial(
-                req, combo, target,
+                req,
+                combo,
+                target,
                 FailureContext {
-                    attempt, race_size, err: &err, started,
+                    attempt,
+                    race_size,
+                    err: &err,
+                    started,
                     model: Some(model),
-                    connect_ms: Some(connect_and_send_ms), ttft_ms,
+                    connect_ms: Some(connect_and_send_ms),
+                    ttft_ms,
                     status_code: 502,
                 },
                 trace_id,
-                acc_ref, Some(&chunk_id), created, &model_name,
+                acc_ref,
+                Some(&chunk_id),
+                created,
+                &model_name,
             );
         }
 
@@ -4521,17 +4754,29 @@ impl Pipeline {
         // re-serializing the typed struct when the raw body wasn't
         // captured (e.g., requests constructed internally without
         // going through the HTTP handler).
-        let request_body_json = req.request_body_json.clone()
+        let request_body_json = req
+            .request_body_json
+            .clone()
             .or_else(|| serde_json::to_value(&req.openai_request).ok());
         let _ = self.record_attempt_raw_with_tokens(
-            req, combo, target, Some(model), None,
-            Some(connect_and_send_ms), ttft_ms, total_ms,
-            status_code, attempt, race_size, trace_id,
-            prompt_tokens, completion_tokens,
+            req,
+            combo,
+            target,
+            Some(model),
+            None,
+            Some(connect_and_send_ms),
+            ttft_ms,
+            total_ms,
+            status_code,
+            attempt,
+            race_size,
+            trace_id,
+            prompt_tokens,
+            completion_tokens,
             request_body_json,
             response_body_json,
-            None, // request_headers
-            None, // response_headers
+            None,        // request_headers
+            None,        // response_headers
             true,        // is_streaming (H5)
             done_sent,   // stream_complete (H5)
             stop_reason, // captured from upstream SSE chunk
@@ -4549,7 +4794,10 @@ impl Pipeline {
     // Helpers
     // ---------------------------------------------------------------------
 
-    fn adapter_for(&self, provider_id: &crate::ids::ProviderId) -> Option<Arc<dyn ProviderAdapter>> {
+    fn adapter_for(
+        &self,
+        provider_id: &crate::ids::ProviderId,
+    ) -> Option<Arc<dyn ProviderAdapter>> {
         self.config
             .adapters
             .iter()
@@ -4698,13 +4946,7 @@ impl Pipeline {
         // uuid here, which silently orphaned the
         // chat-handler-assigned trace_id and broke
         // dashboard-side correlation.
-        self.record_and_fail_with_trace_id(
-            req,
-            combo,
-            target,
-            ctx,
-            req.trace_id,
-        )
+        self.record_and_fail_with_trace_id(req, combo, target, ctx, req.trace_id)
     }
 
     /// Same as [`Self::record_and_fail`] but lets the caller supply
@@ -4729,8 +4971,7 @@ impl Pipeline {
         trace_id: TraceId,
     ) -> PipelineResult {
         self.record_and_fail_with_trace_id_and_partial(
-            req, combo, target, ctx, trace_id,
-            None, None, 0, "",
+            req, combo, target, ctx, trace_id, None, None, 0, "",
         )
     }
 
@@ -4788,7 +5029,9 @@ impl Pipeline {
         // re-serializing the typed struct when the raw body wasn't
         // captured (e.g., requests constructed internally without
         // going through the HTTP handler).
-        let request_body_json = req.request_body_json.clone()
+        let request_body_json = req
+            .request_body_json
+            .clone()
             .or_else(|| serde_json::to_value(&req.openai_request).ok());
         // C2 fix: also redact the request_headers at the
         // failure-recording point. `req.request_headers` is
@@ -4796,9 +5039,7 @@ impl Pipeline {
         // `dispatch_upstream` (already redacted at line ~1908),
         // but we re-apply the scrub here as a defence in
         // depth in case a future code path forgets to.
-        let request_headers = crate::redact::redact_btreemap_sensitive(
-            req.request_headers.clone(),
-        );
+        let request_headers = crate::redact::redact_btreemap_sensitive(req.request_headers.clone());
         // Partial response capture: when the streaming loop was
         // interrupted mid-flight and we have a non-empty
         // accumulator, persist the partial JSON so the operator
@@ -4806,9 +5047,8 @@ impl Pipeline {
         // The accumulator's `mark_partial()` was already called by
         // the streaming failure helpers, so `finish()` will include
         // `"partial": true` in the JSON's `extra` map.
-        let response_body_json: Option<serde_json::Value> = acc
-            .filter(|a| !a.is_empty())
-            .map(|a| {
+        let response_body_json: Option<serde_json::Value> =
+            acc.filter(|a| !a.is_empty()).map(|a| {
                 let chunk_id_str = chunk_id.unwrap_or("partial");
                 a.finish(chunk_id_str, created, model_name)
             });
@@ -4842,7 +5082,7 @@ impl Pipeline {
             None,
             is_streaming,
             stream_complete,
-            None,  // stop_reason: failures don't have a stop_reason
+            None, // stop_reason: failures don't have a stop_reason
         );
         PipelineResult {
             status_code: err.http_status(),
@@ -4897,15 +5137,24 @@ impl Pipeline {
             None => None,
         };
         self.record_and_fail_with_trace_id_and_partial(
-            req, combo, target,
+            req,
+            combo,
+            target,
             FailureContext {
-                attempt, race_size,
+                attempt,
+                race_size,
                 err: &CoreError::ClientDisconnected,
-                started, model: Some(model),
-                connect_ms: Some(connect_ms), ttft_ms,
+                started,
+                model: Some(model),
+                connect_ms: Some(connect_ms),
+                ttft_ms,
                 status_code: 499,
-            }, trace_id,
-            acc_ref, Some(chunk_id), created, model_name,
+            },
+            trace_id,
+            acc_ref,
+            Some(chunk_id),
+            created,
+            model_name,
         )
     }
 
@@ -4943,15 +5192,24 @@ impl Pipeline {
             None => None,
         };
         self.record_and_fail_with_trace_id_and_partial(
-            req, combo, target,
+            req,
+            combo,
+            target,
             FailureContext {
-                attempt, race_size,
+                attempt,
+                race_size,
                 err: &CoreError::RaceLost,
-                started, model: Some(model),
-                connect_ms: Some(connect_ms), ttft_ms,
+                started,
+                model: Some(model),
+                connect_ms: Some(connect_ms),
+                ttft_ms,
                 status_code: 499,
-            }, trace_id,
-            acc_ref, Some(chunk_id), created, model_name,
+            },
+            trace_id,
+            acc_ref,
+            Some(chunk_id),
+            created,
+            model_name,
         )
     }
 
@@ -4995,15 +5253,24 @@ impl Pipeline {
             None => None,
         };
         self.record_and_fail_with_trace_id_and_partial(
-            req, combo, target,
+            req,
+            combo,
+            target,
             FailureContext {
-                attempt, race_size,
+                attempt,
+                race_size,
                 err: &err,
-                started, model: Some(model),
-                connect_ms: Some(connect_ms), ttft_ms,
+                started,
+                model: Some(model),
+                connect_ms: Some(connect_ms),
+                ttft_ms,
                 status_code: err.http_status(),
-            }, trace_id,
-            acc_ref, Some(chunk_id), created, model_name,
+            },
+            trace_id,
+            acc_ref,
+            Some(chunk_id),
+            created,
+            model_name,
         )
     }
 
@@ -5073,8 +5340,7 @@ impl Pipeline {
         // means we never reached `apply_compression` (early
         // failure path before compression); `Some(_)`
         // means we did, and we forward the real values.
-        let compression_stats_snapshot =
-            self.compression_stats_cell.read().clone();
+        let compression_stats_snapshot = self.compression_stats_cell.read().clone();
         let compression_savings_pct = compression_stats_snapshot
             .as_ref()
             .and_then(|s| s.savings_pct_opt());
@@ -5138,8 +5404,8 @@ impl Pipeline {
             } else {
                 "failed"
             };
-            let error_str: Option<String> = err
-                .map(|e| crate::cost::redact_error_msg(&e.to_string()).0);
+            let error_str: Option<String> =
+                err.map(|e| crate::cost::redact_error_msg(&e.to_string()).0);
             // Terminal event. By the time we get here we've
             // already snapshotted the stats into `input`
             // (UsageInput.compression_savings_pct / techniques).
@@ -5150,8 +5416,7 @@ impl Pipeline {
             // applied" even when the DB row said otherwise (once
             // the DB row was fixed; before this whole change both
             // said None).
-            let terminal_snapshot =
-                self.compression_stats_cell.read().clone();
+            let terminal_snapshot = self.compression_stats_cell.read().clone();
             crate::usage::publish_stage_event(crate::usage::StageEvent {
                 request_id: req.request_id.to_string(),
                 trace_id: trace_id.to_string(),
@@ -5169,9 +5434,7 @@ impl Pipeline {
                 compression_savings_pct: terminal_snapshot
                     .as_ref()
                     .and_then(|s| s.savings_pct_opt()),
-                compression_techniques: terminal_snapshot
-                    .as_ref()
-                    .and_then(|s| s.techniques_csv()),
+                compression_techniques: terminal_snapshot.as_ref().and_then(|s| s.techniques_csv()),
                 timestamp: String::new(),
             });
         }
@@ -5305,10 +5568,13 @@ fn _instant_marker(_: Instant) {}
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::adapters::{AdapterAuthType, ProviderAdapterConfig};
     use crate::combos;
     use crate::db::conn::DbPool;
     use crate::db::migrations;
-    use crate::ids::{AccountId, ComboId, ComboTargetId, ModelRowId, ProviderId, RequestId, TraceId};
+    use crate::ids::{
+        AccountId, ComboId, ComboTargetId, ModelRowId, ProviderId, RequestId, TraceId,
+    };
     use crate::models::TargetFormat;
     use crate::providers::{self, AuthType, ProviderFormat};
     use crate::secrets::MasterKey;
@@ -5317,7 +5583,6 @@ mod tests {
     use std::sync::atomic::AtomicU64;
     use std::time::Duration;
     use tokio::sync::{mpsc, watch};
-    use crate::adapters::{AdapterAuthType, ProviderAdapterConfig};
 
     // NEW-2 fix unit tests: parse_retry_after_ms handles integer-seconds
     // and HTTP-date forms, applies the 5-minute cap to malicious values,
@@ -5360,10 +5625,8 @@ mod tests {
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_nanos())
             .unwrap_or(0);
-        let dir = std::env::temp_dir().join(format!(
-            "openproxy-pipeline-test-{}-{}-{}",
-            pid, nanos, n
-        ));
+        let dir =
+            std::env::temp_dir().join(format!("openproxy-pipeline-test-{}-{}-{}", pid, nanos, n));
         std::fs::create_dir_all(&dir).expect("mkdir tempdir");
         let path = dir.join("pipeline.db");
         let pool = DbPool::open(&path).expect("open pool");
@@ -5726,16 +5989,8 @@ mod tests {
             )
             .expect("seed m2");
             let provider = ProviderId::new("p");
-            crate::accounts::create(
-                &writer,
-                &provider,
-                Some("sk-test"),
-                &mk,
-                None,
-                1,
-                None,
-            )
-            .expect("seed account");
+            crate::accounts::create(&writer, &provider, Some("sk-test"), &mk, None, 1, None)
+                .expect("seed account");
             combos::create_combo(&writer, "nerd", Strategy::Priority, 1).expect("create")
         };
 
@@ -5880,7 +6135,8 @@ mod tests {
                 None,
             )
             .expect("seed account");
-            let combo_id = combos::create_combo(&writer, "c", Strategy::Priority, 1).expect("combo");
+            let combo_id =
+                combos::create_combo(&writer, "c", Strategy::Priority, 1).expect("combo");
             let target_id = combos::add_target(
                 &writer,
                 combos::AddTargetInput {
@@ -5893,7 +6149,9 @@ mod tests {
                 },
             )
             .expect("add target");
-            combos::get_target(&writer, target_id).expect("get target").expect("target")
+            combos::get_target(&writer, target_id)
+                .expect("get target")
+                .expect("target")
         };
 
         let cfg = test_config(Arc::new(mk));
@@ -5917,7 +6175,8 @@ mod tests {
             let model_rowid: i64 = writer
                 .query_row("SELECT last_insert_rowid()", [], |r| r.get(0))
                 .expect("last_insert_rowid");
-            let combo_id = combos::create_combo(&writer, "c", Strategy::Priority, 1).expect("combo");
+            let combo_id =
+                combos::create_combo(&writer, "c", Strategy::Priority, 1).expect("combo");
             let target_id = combos::add_target(
                 &writer,
                 combos::AddTargetInput {
@@ -5930,7 +6189,9 @@ mod tests {
                 },
             )
             .expect("add target");
-            combos::get_target(&writer, target_id).expect("get target").expect("target")
+            combos::get_target(&writer, target_id)
+                .expect("get target")
+                .expect("target")
         };
 
         let cfg = test_config(Arc::new(MasterKey::generate()));
@@ -5954,7 +6215,8 @@ mod tests {
             let model_rowid: i64 = writer
                 .query_row("SELECT last_insert_rowid()", [], |r| r.get(0))
                 .expect("last_insert_rowid");
-            let combo_id = combos::create_combo(&writer, "c", Strategy::Priority, 1).expect("combo");
+            let combo_id =
+                combos::create_combo(&writer, "c", Strategy::Priority, 1).expect("combo");
             let target_id = combos::add_target(
                 &writer,
                 combos::AddTargetInput {
@@ -5967,7 +6229,9 @@ mod tests {
                 },
             )
             .expect("add target");
-            combos::get_target(&writer, target_id).expect("get target").expect("target")
+            combos::get_target(&writer, target_id)
+                .expect("get target")
+                .expect("target")
         };
 
         let cfg = test_config(Arc::new(MasterKey::generate()));
@@ -6068,7 +6332,13 @@ mod tests {
         let provider = ProviderId::new("openrouter");
         let stripped = strip_provider_prefix(&req, &provider);
         assert_eq!(stripped.messages.len(), 1);
-        assert_eq!(stripped.messages[0].content.as_ref().and_then(serde_json::Value::as_str), Some("hi"));
+        assert_eq!(
+            stripped.messages[0]
+                .content
+                .as_ref()
+                .and_then(serde_json::Value::as_str),
+            Some("hi")
+        );
         assert!(!stripped.stream);
         assert_eq!(stripped.model, "foo/bar");
     }
@@ -6188,14 +6458,20 @@ mod tests {
                 // which would be the same as NoHealthyTargets — so
                 // we *don't* assert on status_code here; we only
                 // assert the error variant is the real one.
-                assert!(!msg.is_empty(), "UpstreamConnection message should not be empty");
+                assert!(
+                    !msg.is_empty(),
+                    "UpstreamConnection message should not be empty"
+                );
             }
             Some(other) => {
                 // Other retryable upstream errors (timeouts, etc.)
                 // are also acceptable; the contract is just that we
                 // do NOT get NoHealthyTargets.
-                eprintln!("pipeline_probes_parked_target_when_only_option: \
-                           non-NoHealthyTargets error {:?} (acceptable)", other);
+                eprintln!(
+                    "pipeline_probes_parked_target_when_only_option: \
+                           non-NoHealthyTargets error {:?} (acceptable)",
+                    other
+                );
             }
             None => panic!(
                 "expected a real upstream error from probing the parked target, \
@@ -6311,7 +6587,10 @@ mod tests {
                 id
             ),
             Some(CoreError::UpstreamConnection(msg)) => {
-                assert!(!msg.is_empty(), "UpstreamConnection message should not be empty");
+                assert!(
+                    !msg.is_empty(),
+                    "UpstreamConnection message should not be empty"
+                );
             }
             Some(other) => {
                 eprintln!(
@@ -6425,11 +6704,9 @@ mod tests {
                 let mut content_length: Option<usize> = None;
                 let mut header_end: Option<usize> = None;
                 loop {
-                    let read_result = tokio::time::timeout(
-                        Duration::from_secs(2),
-                        sock.read(&mut buf[total..]),
-                    )
-                    .await;
+                    let read_result =
+                        tokio::time::timeout(Duration::from_secs(2), sock.read(&mut buf[total..]))
+                            .await;
                     match read_result {
                         Err(_) => break,
                         Ok(Ok(0)) => break,
@@ -6440,8 +6717,7 @@ mod tests {
                                     buf[..total].windows(4).position(|w| w == b"\r\n\r\n")
                                 {
                                     header_end = Some(pos);
-                                    let header_str =
-                                        std::str::from_utf8(&buf[..pos]).unwrap_or("");
+                                    let header_str = std::str::from_utf8(&buf[..pos]).unwrap_or("");
                                     for line in header_str.split("\r\n") {
                                         if let Some(rest) = line
                                             .to_ascii_lowercase()
@@ -6525,8 +6801,8 @@ mod tests {
             // production default from admin.rs). Pre-fix, this
             // collapsed `to_run` to a single target regardless of
             // the combo's `Strategy`.
-            let combo_id = combos::create_combo(&w, "prio-test", Strategy::Priority, 1)
-                .expect("create combo");
+            let combo_id =
+                combos::create_combo(&w, "prio-test", Strategy::Priority, 1).expect("create combo");
             let mut tids = Vec::new();
             for (label, prio) in [("a1", 10_i32), ("a2", 20_i32), ("a3", 30_i32)] {
                 let account_id = crate::accounts::create(
@@ -6702,17 +6978,27 @@ mod tests {
                 let mut buf = vec![0u8; 64 * 1024];
                 let mut total = 0usize;
                 loop {
-                    if let Ok(Ok(0)) =
-                        tokio::time::timeout(Duration::from_millis(500), sock.read(&mut buf[total..])).await
+                    if let Ok(Ok(0)) = tokio::time::timeout(
+                        Duration::from_millis(500),
+                        sock.read(&mut buf[total..]),
+                    )
+                    .await
                     {
                         break;
                     }
-                    if let Ok(Ok(n)) =
-                        tokio::time::timeout(Duration::from_millis(500), sock.read(&mut buf[total..])).await
+                    if let Ok(Ok(n)) = tokio::time::timeout(
+                        Duration::from_millis(500),
+                        sock.read(&mut buf[total..]),
+                    )
+                    .await
                     {
-                        if n == 0 { break; }
+                        if n == 0 {
+                            break;
+                        }
                         total += n;
-                        if buf[..total].windows(4).any(|w| w == b"\r\n\r\n") { break; }
+                        if buf[..total].windows(4).any(|w| w == b"\r\n\r\n") {
+                            break;
+                        }
                     } else {
                         break;
                     }
@@ -6895,11 +7181,16 @@ mod tests {
                 let mut buf = vec![0u8; 64 * 1024];
                 let mut total = 0usize;
                 while let Ok(Ok(n)) =
-                    tokio::time::timeout(Duration::from_millis(500), sock.read(&mut buf[total..])).await
+                    tokio::time::timeout(Duration::from_millis(500), sock.read(&mut buf[total..]))
+                        .await
                 {
-                    if n == 0 { break; }
+                    if n == 0 {
+                        break;
+                    }
                     total += n;
-                    if buf[..total].windows(4).any(|w| w == b"\r\n\r\n") { break; }
+                    if buf[..total].windows(4).any(|w| w == b"\r\n\r\n") {
+                        break;
+                    }
                 }
                 let (status_line, body) = match my_call {
                     1 => ("HTTP/1.1 400 Bad Request",
@@ -7068,11 +7359,16 @@ mod tests {
                 let mut buf = vec![0u8; 64 * 1024];
                 let mut total = 0usize;
                 while let Ok(Ok(n)) =
-                    tokio::time::timeout(Duration::from_millis(500), sock.read(&mut buf[total..])).await
+                    tokio::time::timeout(Duration::from_millis(500), sock.read(&mut buf[total..]))
+                        .await
                 {
-                    if n == 0 { break; }
+                    if n == 0 {
+                        break;
+                    }
                     total += n;
-                    if buf[..total].windows(4).any(|w| w == b"\r\n\r\n") { break; }
+                    if buf[..total].windows(4).any(|w| w == b"\r\n\r\n") {
+                        break;
+                    }
                 }
                 let (status_line, body) = match my_call {
                     1 => ("HTTP/1.1 400 Bad Request",
@@ -7220,11 +7516,16 @@ mod tests {
                 let mut buf = vec![0u8; 64 * 1024];
                 let mut total = 0usize;
                 while let Ok(Ok(n)) =
-                    tokio::time::timeout(Duration::from_millis(500), sock.read(&mut buf[total..])).await
+                    tokio::time::timeout(Duration::from_millis(500), sock.read(&mut buf[total..]))
+                        .await
                 {
-                    if n == 0 { break; }
+                    if n == 0 {
+                        break;
+                    }
                     total += n;
-                    if buf[..total].windows(4).any(|w| w == b"\r\n\r\n") { break; }
+                    if buf[..total].windows(4).any(|w| w == b"\r\n\r\n") {
+                        break;
+                    }
                 }
                 let (status_line, body) = match my_call {
                     1 | 2 => ("HTTP/1.1 400 Bad Request",
@@ -7266,8 +7567,8 @@ mod tests {
             let model_id = crate::ids::ModelRowId(model_rowid);
 
             // Sub-combo B with X, Y.
-            let sub_combo_id = combos::create_combo(&w, "sub-B", Strategy::Priority, 1)
-                .expect("create sub-combo");
+            let sub_combo_id =
+                combos::create_combo(&w, "sub-B", Strategy::Priority, 1).expect("create sub-combo");
             for i in 0..2 {
                 let account_label = format!("sub{}", i);
                 let account_id = crate::accounts::create(
@@ -7308,8 +7609,8 @@ mod tests {
                     sub_combo_id: Some(sub_combo_id),
                     priority_order: 10,
                 },
-                )
-                .expect("add sub-combo entry to parent");
+            )
+            .expect("add sub-combo entry to parent");
             // Entry 2: model Z.
             let z_account_id = crate::accounts::create(
                 &w,
@@ -7331,8 +7632,8 @@ mod tests {
                     sub_combo_id: None,
                     priority_order: 20,
                 },
-                )
-                .expect("add Z entry to parent");
+            )
+            .expect("add Z entry to parent");
             parent_combo_id
         };
 
@@ -7475,9 +7776,13 @@ mod tests {
             while let Ok(Ok(n)) =
                 tokio::time::timeout(Duration::from_millis(500), sock.read(&mut buf[total..])).await
             {
-                if n == 0 { break; }
+                if n == 0 {
+                    break;
+                }
                 total += n;
-                if buf[..total].windows(4).any(|w| w == b"\r\n\r\n") { break; }
+                if buf[..total].windows(4).any(|w| w == b"\r\n\r\n") {
+                    break;
+                }
             }
             // Capture everything after the header block.
             let header_end = buf[..total]
@@ -7625,15 +7930,19 @@ mod tests {
         use std::time::Instant;
         let (pool, conn, _path) = fresh_pool();
         let mk = Arc::new(MasterKey::generate());
-        let (combo_id, target_ids, _account_id, _model_id) =
-            { let w = pool.writer(); seed_target_with_account(&w, mk.as_ref()) };
+        let (combo_id, target_ids, _account_id, _model_id) = {
+            let w = pool.writer();
+            seed_target_with_account(&w, mk.as_ref())
+        };
         // Add 2 more targets to make it a 3-target row. (Re-uses
         // the same provider + model; distinct account labels keep
         // uniqueness happy.)
         {
             let w = pool.writer();
             let model_rowid: i64 = w
-                .query_row("SELECT id FROM models WHERE provider_id = 'p'", [], |r| r.get(0))
+                .query_row("SELECT id FROM models WHERE provider_id = 'p'", [], |r| {
+                    r.get(0)
+                })
                 .expect("model rowid");
             for i in 1..=2 {
                 let account_label = format!("adv{}", i);
@@ -7706,7 +8015,10 @@ mod tests {
         // error, or the row was truly empty and the contract says
         // NoHealthyTargets is acceptable. Both are valid; what we
         // pin is that the pipeline returned a result, not a hang.
-        eprintln!("[adversarial c] result.error = {:?}, elapsed = {:?}", result.error, elapsed);
+        eprintln!(
+            "[adversarial c] result.error = {:?}, elapsed = {:?}",
+            result.error, elapsed
+        );
         let _ = Ordering::SeqCst;
     }
 
@@ -7745,11 +8057,16 @@ mod tests {
                 let mut buf = vec![0u8; 64 * 1024];
                 let mut total = 0usize;
                 while let Ok(Ok(n)) =
-                    tokio::time::timeout(Duration::from_millis(500), sock.read(&mut buf[total..])).await
+                    tokio::time::timeout(Duration::from_millis(500), sock.read(&mut buf[total..]))
+                        .await
                 {
-                    if n == 0 { break; }
+                    if n == 0 {
+                        break;
+                    }
                     total += n;
-                    if buf[..total].windows(4).any(|w| w == b"\r\n\r\n") { break; }
+                    if buf[..total].windows(4).any(|w| w == b"\r\n\r\n") {
+                        break;
+                    }
                 }
                 let body = r#"{"error":{"message":"flaky","type":"server_error"}}"#.to_string();
                 let response = format!(
@@ -7905,11 +8222,9 @@ mod tests {
                 let n = server_call_count.fetch_add(1, AtomicOrdering::SeqCst);
                 let mut buf = vec![0u8; 64 * 1024];
                 let mut total = 0usize;
-                while let Ok(Ok(rd)) = tokio::time::timeout(
-                    Duration::from_millis(500),
-                    sock.read(&mut buf[total..]),
-                )
-                .await
+                while let Ok(Ok(rd)) =
+                    tokio::time::timeout(Duration::from_millis(500), sock.read(&mut buf[total..]))
+                        .await
                 {
                     if rd == 0 {
                         break;
@@ -7976,8 +8291,8 @@ mod tests {
                 .expect("seed account");
                 account_ids.push(account_id);
             }
-            let combo_id = combos::create_combo(&w, "adv-bug4", Strategy::Priority, 1)
-                .expect("create combo");
+            let combo_id =
+                combos::create_combo(&w, "adv-bug4", Strategy::Priority, 1).expect("create combo");
             for (i, prio) in [10_i32, 20].iter().enumerate() {
                 combos::add_target(
                     &w,
@@ -8113,10 +8428,7 @@ mod tests {
         let (pool, _conn, _path) = fresh_pool();
         let (combo_id, target_id, _account_id, _model_id) = {
             let w = pool.writer();
-            seed_target_with_account(
-                &w,
-                &MasterKey::generate(),
-            )
+            seed_target_with_account(&w, &MasterKey::generate())
         };
         {
             let w = pool.writer();
@@ -8621,12 +8933,8 @@ mod tests {
         let (pool, conn, _path) = fresh_pool();
         let mk = Arc::new(MasterKey::generate());
 
-        let (combo_id, _account_id) = seed_solo_combo_at_url(
-            &pool.writer(),
-            "openrouter",
-            "http://127.0.0.1:1",
-            &mk,
-        );
+        let (combo_id, _account_id) =
+            seed_solo_combo_at_url(&pool.writer(), "openrouter", "http://127.0.0.1:1", &mk);
 
         let cfg = test_config_with_adapters(mk);
         let p = Pipeline::new(conn, cfg);
@@ -8664,12 +8972,8 @@ mod tests {
         let (pool, conn, _path) = fresh_pool();
         let mk = Arc::new(MasterKey::generate());
 
-        let (combo_id, account_id) = seed_solo_combo_at_url(
-            &pool.writer(),
-            "openrouter",
-            "http://127.0.0.1:1",
-            &mk,
-        );
+        let (combo_id, account_id) =
+            seed_solo_combo_at_url(&pool.writer(), "openrouter", "http://127.0.0.1:1", &mk);
         let cfg = test_config_with_adapters(mk);
         let p = Pipeline::new(conn.clone(), cfg);
 
@@ -8765,11 +9069,9 @@ mod tests {
             let mut content_length: Option<usize> = None;
             let mut header_end: Option<usize> = None;
             loop {
-                let read_result = tokio::time::timeout(
-                    Duration::from_secs(2),
-                    sock.read(&mut buf[total..]),
-                )
-                .await;
+                let read_result =
+                    tokio::time::timeout(Duration::from_secs(2), sock.read(&mut buf[total..]))
+                        .await;
                 match read_result {
                     Err(_) => break,
                     Ok(Ok(0)) => break,
@@ -8782,9 +9084,8 @@ mod tests {
                                 header_end = Some(pos);
                                 let header_str = std::str::from_utf8(&buf[..pos]).unwrap_or("");
                                 for line in header_str.split("\r\n") {
-                                    if let Some(rest) = line
-                                        .to_ascii_lowercase()
-                                        .strip_prefix("content-length:")
+                                    if let Some(rest) =
+                                        line.to_ascii_lowercase().strip_prefix("content-length:")
                                     {
                                         content_length = rest.trim().parse().ok();
                                     }
@@ -8822,15 +9123,15 @@ mod tests {
         // ----- 3. Build the pipeline config + pipeline -----
         let (pool, conn, _path) = fresh_pool();
         let mk = Arc::new(MasterKey::generate());
-        let (combo_id, _account_id) = seed_solo_combo_at_url(
-            &pool.writer(),
-            "non-streaming-test",
-            &upstream_url,
-            &mk,
-        );
+        let (combo_id, _account_id) =
+            seed_solo_combo_at_url(&pool.writer(), "non-streaming-test", &upstream_url, &mk);
 
         let defaults = Timeouts::from_config(&TimeoutsConfig::default());
-        let mock = MockAdapter::new("non-streaming-test", upstream_url.clone(), AdapterFormat::Openai);
+        let mock = MockAdapter::new(
+            "non-streaming-test",
+            upstream_url.clone(),
+            AdapterFormat::Openai,
+        );
         let cfg = PipelineConfig {
             defaults,
             racing: RacingConfig::default(),
@@ -8891,8 +9192,8 @@ mod tests {
     #[tokio::test]
     async fn bug_a_body_reaches_upstream() {
         use crate::adapters::{AdapterFormat, ProviderAdapter};
-        use std::sync::atomic::{AtomicUsize, Ordering};
         use std::sync::Arc;
+        use std::sync::atomic::{AtomicUsize, Ordering};
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
         use tokio::net::TcpListener;
 
@@ -8913,11 +9214,8 @@ mod tests {
             let mut content_length: Option<usize> = None;
             let mut header_end: Option<usize> = None;
             loop {
-                let r = tokio::time::timeout(
-                    Duration::from_secs(2),
-                    sock.read(&mut buf[total..]),
-                )
-                .await;
+                let r = tokio::time::timeout(Duration::from_secs(2), sock.read(&mut buf[total..]))
+                    .await;
                 match r {
                     Err(_) | Ok(Ok(0)) | Ok(Err(_)) => break,
                     Ok(Ok(n)) => {
@@ -8927,12 +9225,10 @@ mod tests {
                                 buf[..total].windows(4).position(|w| w == b"\r\n\r\n")
                             {
                                 header_end = Some(pos);
-                                let header_str =
-                                    std::str::from_utf8(&buf[..pos]).unwrap_or("");
+                                let header_str = std::str::from_utf8(&buf[..pos]).unwrap_or("");
                                 for line in header_str.split("\r\n") {
-                                    if let Some(rest) = line
-                                        .to_ascii_lowercase()
-                                        .strip_prefix("content-length:")
+                                    if let Some(rest) =
+                                        line.to_ascii_lowercase().strip_prefix("content-length:")
                                     {
                                         content_length = rest.trim().parse().ok();
                                     }
@@ -8956,10 +9252,7 @@ mod tests {
                 let body_start = he + 4;
                 let body_end = std::cmp::min(body_start + cl, total);
                 if body_end > body_start {
-                    bytes_received_clone.store(
-                        body_end - body_start,
-                        Ordering::SeqCst,
-                    );
+                    bytes_received_clone.store(body_end - body_start, Ordering::SeqCst);
                 }
             }
             let body = r#"{"id":"chatcmpl-test","object":"chat.completion","created":1,"model":"m","choices":[{"index":0,"message":{"role":"assistant","content":"hello"},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}"#;
@@ -8979,12 +9272,8 @@ mod tests {
 
         let (pool, conn, _path) = fresh_pool();
         let mk = Arc::new(MasterKey::generate());
-        let (combo_id, _account_id) = seed_solo_combo_at_url(
-            &pool.writer(),
-            "body-bug-test",
-            &upstream_url,
-            &mk,
-        );
+        let (combo_id, _account_id) =
+            seed_solo_combo_at_url(&pool.writer(), "body-bug-test", &upstream_url, &mk);
 
         let defaults = Timeouts::from_config(&TimeoutsConfig::default());
         let mock = MockAdapter::new("body-bug-test", upstream_url.clone(), AdapterFormat::Openai);
@@ -9124,11 +9413,9 @@ mod tests {
             let mut header_end: Option<usize> = None;
             let mut content_length: Option<usize> = None;
             loop {
-                let read_result = tokio::time::timeout(
-                    Duration::from_secs(2),
-                    sock.read(&mut buf[total..]),
-                )
-                .await;
+                let read_result =
+                    tokio::time::timeout(Duration::from_secs(2), sock.read(&mut buf[total..]))
+                        .await;
                 match read_result {
                     Err(_) => break,
                     Ok(Ok(0)) => break,
@@ -9139,12 +9426,10 @@ mod tests {
                                 buf[..total].windows(4).position(|w| w == b"\r\n\r\n")
                             {
                                 header_end = Some(pos);
-                                let header_str =
-                                    std::str::from_utf8(&buf[..pos]).unwrap_or("");
+                                let header_str = std::str::from_utf8(&buf[..pos]).unwrap_or("");
                                 for line in header_str.split("\r\n") {
-                                    if let Some(rest) = line
-                                        .to_ascii_lowercase()
-                                        .strip_prefix("content-length:")
+                                    if let Some(rest) =
+                                        line.to_ascii_lowercase().strip_prefix("content-length:")
                                     {
                                         content_length = rest.trim().parse().ok();
                                     }
@@ -9217,12 +9502,8 @@ mod tests {
         // ----- 3. Build the pipeline config + pipeline -----
         let (pool, conn, _path) = fresh_pool();
         let mk = Arc::new(MasterKey::generate());
-        let (combo_id, _account_id) = seed_solo_combo_at_url(
-            &pool.writer(),
-            "streaming-test",
-            &upstream_url,
-            &mk,
-        );
+        let (combo_id, _account_id) =
+            seed_solo_combo_at_url(&pool.writer(), "streaming-test", &upstream_url, &mk);
 
         let defaults = Timeouts::from_config(&TimeoutsConfig::default());
         let mock = MockAdapter {
@@ -9312,7 +9593,10 @@ mod tests {
         // The [DONE] sentinel is sent by the pipeline
         // itself, but the upstream also sends it; either way
         // at least one [DONE] must be present.
-        let done_count = collected.iter().filter(|b| **b == *crate::pipeline::SSE_DONE_BYTES).count();
+        let done_count = collected
+            .iter()
+            .filter(|b| **b == *crate::pipeline::SSE_DONE_BYTES)
+            .count();
         assert!(
             done_count >= 1,
             "expected at least one [DONE] sentinel in the sink output, got: {:?}",
@@ -9329,11 +9613,12 @@ mod tests {
                 .unwrap_or_else(|| panic!("sink item is not a valid SSE frame: {:?}", item));
             let payload_str = std::str::from_utf8(payload_bytes)
                 .unwrap_or_else(|_| panic!("SSE payload is not valid UTF-8: {:?}", payload_bytes));
-            let parsed: serde_json::Value = serde_json::from_str(payload_str)
-                .unwrap_or_else(|e| panic!(
+            let parsed: serde_json::Value = serde_json::from_str(payload_str).unwrap_or_else(|e| {
+                panic!(
                     "sink item is not valid JSON: {:?} (parse error: {})",
                     payload_str, e
-                ));
+                )
+            });
             assert!(
                 parsed.get("choices").is_some(),
                 "translated chunk must carry a `choices` field: {:?}",
@@ -9399,12 +9684,8 @@ mod tests {
 
         let (pool, conn, _path) = fresh_pool();
         let mk = Arc::new(MasterKey::generate());
-        let (combo_id, _account_id) = seed_solo_combo_at_url(
-            &pool.writer(),
-            "openrouter",
-            "http://127.0.0.1:1",
-            &mk,
-        );
+        let (combo_id, _account_id) =
+            seed_solo_combo_at_url(&pool.writer(), "openrouter", "http://127.0.0.1:1", &mk);
 
         let cfg = test_config_with_adapters(mk);
         let p = Pipeline::new(conn, cfg);
@@ -9415,8 +9696,10 @@ mod tests {
 
         let result = tokio::time::timeout(Duration::from_secs(3), p.run(req))
             .await
-            .expect("streaming pipeline.run did not abort within 3s of cancel — \
-                    the per-target boundary check is not engaging for streaming requests");
+            .expect(
+                "streaming pipeline.run did not abort within 3s of cancel — \
+                    the per-target boundary check is not engaging for streaming requests",
+            );
 
         match &result.error {
             Some(CoreError::ClientDisconnected) => {}
@@ -9533,10 +9816,7 @@ mod tests {
         //    bails with `ProviderNotFound` before reaching the HTTP
         //    layer. We want ONLY our mock to be discoverable.
         // -----------------------------------------------------------------
-        fn test_config_with_mock(
-            master_key: Arc<MasterKey>,
-            base_url: String,
-        ) -> PipelineConfig {
+        fn test_config_with_mock(master_key: Arc<MasterKey>, base_url: String) -> PipelineConfig {
             let defaults = Timeouts::from_config(&TimeoutsConfig::default());
             let mock = MockAdapter {
                 config: ProviderAdapterConfig {
@@ -9553,8 +9833,7 @@ mod tests {
                 retries: RetriesConfig::default(),
                 max_attempts: 1,
                 master_key,
-                adapters: Arc::new(vec![Arc::new(mock)
-                    as Arc<dyn ProviderAdapter>]),
+                adapters: Arc::new(vec![Arc::new(mock) as Arc<dyn ProviderAdapter>]),
                 http_client: reqwest::Client::new(),
                 cooldown_secs: 60,
                 cooldown_max_secs: 3600,
@@ -9661,7 +9940,11 @@ mod tests {
             }
             // Wrap the chunk in chunked-encoding framing so the
             // client sees a proper open-ended stream.
-            let framed = format!("{:x}\r\n{}\r\n", chunk.len(), std::str::from_utf8(chunk).unwrap());
+            let framed = format!(
+                "{:x}\r\n{}\r\n",
+                chunk.len(),
+                std::str::from_utf8(chunk).unwrap()
+            );
             if sock.write_all(framed.as_bytes()).await.is_err() {
                 return;
             }
@@ -9677,8 +9960,7 @@ mod tests {
             // socket ourselves; the pipeline's `bytes_stream().next()`
             // must stay pending throughout this period.
             let mut stall_buf = [0u8; 1024];
-            let stall_deadline = std::time::Instant::now()
-                + std::time::Duration::from_secs(10);
+            let stall_deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
             let mut poll_count = 0u32;
             loop {
                 let now = std::time::Instant::now();
@@ -9686,25 +9968,26 @@ mod tests {
                     break;
                 }
                 let remaining = stall_deadline - now;
-                let read = tokio::time::timeout(
-                    remaining,
-                    sock.read(&mut stall_buf),
-                )
-                .await;
+                let read = tokio::time::timeout(remaining, sock.read(&mut stall_buf)).await;
                 poll_count += 1;
                 match read {
                     // Client closed the connection — this is the
                     // signal that reqwest propagated the
                     // cancellation all the way down to the socket.
                     Ok(Ok(0)) => {
-                        eprintln!("[test server] client closed connection after {} polls", poll_count);
+                        eprintln!(
+                            "[test server] client closed connection after {} polls",
+                            poll_count
+                        );
                         server_client_closed.store(true, Ordering::SeqCst);
                         break;
                     }
                     Ok(Ok(n)) => {
-                        eprintln!("[test server] received {} bytes from client (poll {})", n, poll_count);
-                        server_bytes
-                            .fetch_add(n as u64, Ordering::SeqCst);
+                        eprintln!(
+                            "[test server] received {} bytes from client (poll {})",
+                            n, poll_count
+                        );
+                        server_bytes.fetch_add(n as u64, Ordering::SeqCst);
                     }
                     // Read errored out (typically a reset from the
                     // peer once reqwest drops the body future).
@@ -9718,7 +10001,10 @@ mod tests {
                     // so we keep watching for the close.
                     Err(_) => {
                         if poll_count % 20 == 0 {
-                            eprintln!("[test server] still waiting for close (poll {})", poll_count);
+                            eprintln!(
+                                "[test server] still waiting for close (poll {})",
+                                poll_count
+                            );
                         }
                     }
                 }
@@ -9735,12 +10021,8 @@ mod tests {
         // -----------------------------------------------------------------
         let (pool, conn, _path) = fresh_pool();
         let mk = Arc::new(MasterKey::generate());
-        let (combo_id, _account_id) = seed_solo_combo_at_url(
-            &pool.writer(),
-            "test-mock-sse",
-            &upstream_url,
-            &mk,
-        );
+        let (combo_id, _account_id) =
+            seed_solo_combo_at_url(&pool.writer(), "test-mock-sse", &upstream_url, &mk);
 
         // -----------------------------------------------------------------
         // 5. Wire the pipeline to the mock adapter and run the
@@ -9767,16 +10049,13 @@ mod tests {
             let _ = cancel_tx_clone.send(true);
         });
 
-        let result = tokio::time::timeout(
-            Duration::from_secs(3),
-            p.run(req),
-        )
-        .await
-        .expect(
-            "mid-stream cancellation: pipeline.run did not abort within 3s of \
+        let result = tokio::time::timeout(Duration::from_secs(3), p.run(req))
+            .await
+            .expect(
+                "mid-stream cancellation: pipeline.run did not abort within 3s of \
              cancel — the stream-side tokio::select! (response.bytes_stream().next() \
              vs client_disconnected) is not being honored",
-        );
+            );
 
         // The cancel task is fire-and-forget; just await it for
         // tidiness.
@@ -9829,11 +10108,8 @@ mod tests {
         // We surface the observed value in the test logs so a
         // regression in the cancellation path is visible even
         // if the connection eventually reuses elsewhere.
-        let close_deadline = std::time::Instant::now()
-            + std::time::Duration::from_secs(5);
-        while !client_closed.load(Ordering::SeqCst)
-            && std::time::Instant::now() < close_deadline
-        {
+        let close_deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while !client_closed.load(Ordering::SeqCst) && std::time::Instant::now() < close_deadline {
             tokio::time::sleep(Duration::from_millis(50)).await;
         }
         let client_closed_observed = client_closed.load(Ordering::SeqCst);
@@ -9912,11 +10188,8 @@ mod tests {
             let mut content_length: Option<usize> = None;
             let mut header_end: Option<usize> = None;
             loop {
-                let r = tokio::time::timeout(
-                    Duration::from_secs(2),
-                    sock.read(&mut buf[total..]),
-                )
-                .await;
+                let r = tokio::time::timeout(Duration::from_secs(2), sock.read(&mut buf[total..]))
+                    .await;
                 match r {
                     Err(_) | Ok(Ok(0)) | Ok(Err(_)) => break,
                     Ok(Ok(n)) => {
@@ -9926,12 +10199,10 @@ mod tests {
                                 buf[..total].windows(4).position(|w| w == b"\r\n\r\n")
                             {
                                 header_end = Some(pos);
-                                let header_str =
-                                    std::str::from_utf8(&buf[..pos]).unwrap_or("");
+                                let header_str = std::str::from_utf8(&buf[..pos]).unwrap_or("");
                                 for line in header_str.split("\r\n") {
-                                    if let Some(rest) = line
-                                        .to_ascii_lowercase()
-                                        .strip_prefix("content-length:")
+                                    if let Some(rest) =
+                                        line.to_ascii_lowercase().strip_prefix("content-length:")
                                     {
                                         content_length = rest.trim().parse().ok();
                                     }
@@ -9969,12 +10240,8 @@ mod tests {
         let (pool, conn, _path) = fresh_pool();
         let mk = Arc::new(MasterKey::generate());
         let provider_id = "phase-rob";
-        let (combo_id, _account_id) = seed_solo_combo_at_url(
-            &pool.writer(),
-            provider_id,
-            &upstream_url,
-            &mk,
-        );
+        let (combo_id, _account_id) =
+            seed_solo_combo_at_url(&pool.writer(), provider_id, &upstream_url, &mk);
 
         let defaults = Timeouts::from_config(&TimeoutsConfig::default());
         let mock = MockAdapter::new(provider_id, upstream_url.clone(), AdapterFormat::Openai);
@@ -10048,19 +10315,15 @@ mod tests {
             match tokio::time::timeout(remaining, rx.recv()).await {
                 Ok(Ok(ev)) => {
                     if ev.request_id == request_id_str {
-                        let terminal =
-                            ev.stage == "completed" || ev.stage == "failed";
+                        let terminal = ev.stage == "completed" || ev.stage == "failed";
                         events.push(ev);
                         if terminal {
                             // Give the broadcast a brief moment to
                             // deliver any trailing events (e.g. a
                             // duplicate that would prove the dedup
                             // regression), but don't wait long.
-                            if let Ok(Ok(ev2)) = tokio::time::timeout(
-                                Duration::from_millis(50),
-                                rx.recv(),
-                            )
-                            .await
+                            if let Ok(Ok(ev2)) =
+                                tokio::time::timeout(Duration::from_millis(50), rx.recv()).await
                             {
                                 if ev2.request_id == request_id_str {
                                     events.push(ev2);
@@ -10102,14 +10365,13 @@ mod tests {
     #[tokio::test]
     async fn phase_robustness_non_streaming_emits_full_stage_sequence() {
         let body = r#"{"id":"chatcmpl-x","object":"chat.completion","created":1,"model":"m","choices":[{"index":0,"message":{"role":"assistant","content":"hello"},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}"#;
-        let (events, result, _request_id) =
-            run_with_fake_upstream_and_capture_stages(
-                "HTTP/1.1 200 OK",
-                body,
-                "application/json",
-                /* streaming = */ false,
-            )
-            .await;
+        let (events, result, _request_id) = run_with_fake_upstream_and_capture_stages(
+            "HTTP/1.1 200 OK",
+            body,
+            "application/json",
+            /* streaming = */ false,
+        )
+        .await;
 
         assert!(
             result.error.is_none(),
@@ -10210,14 +10472,13 @@ mod tests {
         let body = "\
 data: {\"id\":\"x\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"m\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"hi\"},\"finish_reason\":null}]}\n\n\
 data: [DONE]\n\n";
-        let (events, result, _request_id) =
-            run_with_fake_upstream_and_capture_stages(
-                "HTTP/1.1 200 OK",
-                body,
-                "text/event-stream",
-                /* streaming = */ true,
-            )
-            .await;
+        let (events, result, _request_id) = run_with_fake_upstream_and_capture_stages(
+            "HTTP/1.1 200 OK",
+            body,
+            "text/event-stream",
+            /* streaming = */ true,
+        )
+        .await;
 
         assert!(
             result.error.is_none(),
@@ -10292,14 +10553,13 @@ data: [DONE]\n\n";
     #[tokio::test]
     async fn phase_robustness_failure_emits_exactly_one_failed() {
         let body = r#"{"error":{"message":"upstream boom","type":"server_error"}}"#;
-        let (events, result, _request_id) =
-            run_with_fake_upstream_and_capture_stages(
-                "HTTP/1.1 500 Internal Server Error",
-                body,
-                "application/json",
-                /* streaming = */ false,
-            )
-            .await;
+        let (events, result, _request_id) = run_with_fake_upstream_and_capture_stages(
+            "HTTP/1.1 500 Internal Server Error",
+            body,
+            "application/json",
+            /* streaming = */ false,
+        )
+        .await;
 
         // The run must report a 5xx-level error.
         assert!(
@@ -10314,15 +10574,16 @@ data: [DONE]\n\n";
 
         // Count `failed` events for THIS request. The spec is
         // strict: exactly 1.
-        let failed_count = events
-            .iter()
-            .filter(|e| e.stage == "failed")
-            .count();
+        let failed_count = events.iter().filter(|e| e.stage == "failed").count();
         assert_eq!(
-            failed_count, 1,
+            failed_count,
+            1,
             "expected exactly one `failed` stage event, got {} (all: {:?})",
             failed_count,
-            events.iter().map(|e| (&e.stage, e.status_code)).collect::<Vec<_>>()
+            events
+                .iter()
+                .map(|e| (&e.stage, e.status_code))
+                .collect::<Vec<_>>()
         );
 
         // The single `failed` event must carry the 500 status and
@@ -10397,11 +10658,8 @@ data: [DONE]\n\n";
             let mut header_end: Option<usize> = None;
             let mut content_length: Option<usize> = None;
             loop {
-                let r = tokio::time::timeout(
-                    Duration::from_secs(2),
-                    sock.read(&mut buf[total..]),
-                )
-                .await;
+                let r = tokio::time::timeout(Duration::from_secs(2), sock.read(&mut buf[total..]))
+                    .await;
                 match r {
                     Err(_) | Ok(Ok(0)) | Ok(Err(_)) => break,
                     Ok(Ok(n)) => {
@@ -10411,12 +10669,10 @@ data: [DONE]\n\n";
                                 buf[..total].windows(4).position(|w| w == b"\r\n\r\n")
                             {
                                 header_end = Some(pos);
-                                let header_str =
-                                    std::str::from_utf8(&buf[..pos]).unwrap_or("");
+                                let header_str = std::str::from_utf8(&buf[..pos]).unwrap_or("");
                                 for line in header_str.split("\r\n") {
-                                    if let Some(rest) = line
-                                        .to_ascii_lowercase()
-                                        .strip_prefix("content-length:")
+                                    if let Some(rest) =
+                                        line.to_ascii_lowercase().strip_prefix("content-length:")
                                     {
                                         content_length = rest.trim().parse().ok();
                                     }
@@ -10492,18 +10748,18 @@ data: [DONE]\n\n";
             },
         )
         .expect("seed provider");
-        let model_rowid: i64 = {
-            pool.writer().execute(
+        let model_rowid: i64 =
+            {
+                pool.writer().execute(
                 "INSERT INTO models(provider_id, model_id, target_format) VALUES (?1, 'm', ?2)",
                 rusqlite::params![provider_id, target_format.as_str()],
             ).expect("seed model");
-            pool.writer()
-                .query_row("SELECT last_insert_rowid()", [], |r| r.get(0))
-                .expect("last_insert_rowid")
-        };
-        let combo_id =
-            combos::create_combo(&pool.writer(), "c", combos::Strategy::Priority, 1)
-                .expect("create combo");
+                pool.writer()
+                    .query_row("SELECT last_insert_rowid()", [], |r| r.get(0))
+                    .expect("last_insert_rowid")
+            };
+        let combo_id = combos::create_combo(&pool.writer(), "c", combos::Strategy::Priority, 1)
+            .expect("create combo");
         let account_id = crate::accounts::create(
             &pool.writer(),
             &ProviderId::new(provider_id),
@@ -10568,10 +10824,7 @@ data: [DONE]\n\n";
         // — the test fixture inserts exactly one).
         let writer = pool.writer();
         let rows = crate::usage::recent(&writer, 0, 1).expect("usage::recent");
-        let response_body_json = rows
-            .into_iter()
-            .next()
-            .and_then(|r| r.response_body_json);
+        let response_body_json = rows.into_iter().next().and_then(|r| r.response_body_json);
 
         server_handle.abort();
         let _ = server_handle.await;
@@ -10612,17 +10865,18 @@ data: [DONE]\n\n";
         )
         .await;
 
-        assert!(result.error.is_none(), "pipeline must succeed: {:?}", result.error);
+        assert!(
+            result.error.is_none(),
+            "pipeline must succeed: {:?}",
+            result.error
+        );
         assert_eq!(result.status_code, 200);
 
-        let body = response_body_json.expect(
-            "recording=true must produce a non-NULL response_body_json"
-        );
+        let body =
+            response_body_json.expect("recording=true must produce a non-NULL response_body_json");
         // The persisted body must round-trip through OpenAIResponse.
-        let parsed: OpenAIResponse =
-            serde_json::from_value(body.clone()).expect(
-                "persisted body must round-trip through OpenAIResponse",
-            );
+        let parsed: OpenAIResponse = serde_json::from_value(body.clone())
+            .expect("persisted body must round-trip through OpenAIResponse");
         let content = parsed
             .choices
             .first()
@@ -10668,12 +10922,16 @@ data: [DONE]\n\n";
         )
         .await;
 
-        assert!(result.error.is_none(), "pipeline must succeed: {:?}", result.error);
+        assert!(
+            result.error.is_none(),
+            "pipeline must succeed: {:?}",
+            result.error
+        );
         assert_eq!(result.status_code, 200);
 
         let body = response_body_json.expect("recording=true must produce non-NULL body");
-        let parsed: OpenAIResponse =
-            serde_json::from_value(body.clone()).expect("body must round-trip through OpenAIResponse");
+        let parsed: OpenAIResponse = serde_json::from_value(body.clone())
+            .expect("body must round-trip through OpenAIResponse");
 
         // tool_calls must have one entry with the right name and a
         // parseable arguments JSON object.
@@ -10684,12 +10942,14 @@ data: [DONE]\n\n";
             .expect("tool_calls must be Some");
         assert_eq!(tool_calls.len(), 1, "expected exactly one tool_call");
         let tc = &tool_calls[0];
-        let name = tc.get("function")
+        let name = tc
+            .get("function")
             .and_then(|f| f.get("name"))
             .and_then(|n| n.as_str())
             .expect("function.name must be present");
         assert_eq!(name, "get_weather");
-        let arguments_str = tc.get("function")
+        let arguments_str = tc
+            .get("function")
             .and_then(|f| f.get("arguments"))
             .and_then(|a| a.as_str())
             .expect("function.arguments must be a string");
@@ -10734,7 +10994,11 @@ data: [DONE]\n\n";
         )
         .await;
 
-        assert!(result.error.is_none(), "pipeline must succeed: {:?}", result.error);
+        assert!(
+            result.error.is_none(),
+            "pipeline must succeed: {:?}",
+            result.error
+        );
         assert_eq!(result.status_code, 200);
 
         let body = response_body_json.expect("recording=true must produce non-NULL body");
@@ -10779,7 +11043,11 @@ data: [DONE]\n\n";
         )
         .await;
 
-        assert!(result.error.is_none(), "pipeline must succeed: {:?}", result.error);
+        assert!(
+            result.error.is_none(),
+            "pipeline must succeed: {:?}",
+            result.error
+        );
         assert_eq!(result.status_code, 200);
 
         let body = response_body_json.expect("recording=true must produce non-NULL body");
@@ -10832,7 +11100,11 @@ data: [DONE]\n\n";
         )
         .await;
 
-        assert!(result.error.is_none(), "pipeline must succeed: {:?}", result.error);
+        assert!(
+            result.error.is_none(),
+            "pipeline must succeed: {:?}",
+            result.error
+        );
         assert_eq!(result.status_code, 200);
 
         let body = response_body_json.expect("recording=true must produce non-NULL body");
@@ -10881,7 +11153,11 @@ data: [DONE]\n\n";
         )
         .await;
 
-        assert!(result.error.is_none(), "pipeline must succeed: {:?}", result.error);
+        assert!(
+            result.error.is_none(),
+            "pipeline must succeed: {:?}",
+            result.error
+        );
         let body = response_body_json.expect("recording=true must produce non-NULL body");
         let parsed: OpenAIResponse =
             serde_json::from_value(body.clone()).expect("body must round-trip");
@@ -10933,7 +11209,11 @@ data: [DONE]\n\n";
         )
         .await;
 
-        assert!(result.error.is_none(), "pipeline must succeed: {:?}", result.error);
+        assert!(
+            result.error.is_none(),
+            "pipeline must succeed: {:?}",
+            result.error
+        );
         assert_eq!(result.status_code, 200);
         assert!(
             response_body_json.is_none(),
@@ -10987,7 +11267,11 @@ data: [DONE]\n\n";
         )
         .await;
 
-        assert!(result.error.is_none(), "pipeline must succeed: {:?}", result.error);
+        assert!(
+            result.error.is_none(),
+            "pipeline must succeed: {:?}",
+            result.error
+        );
         assert_eq!(result.status_code, 200);
         let body = response_body_json.expect("recording=true must produce non-NULL body");
         let parsed: OpenAIResponse =
@@ -10999,7 +11283,13 @@ data: [DONE]\n\n";
             .and_then(|v| v.as_str())
             .unwrap_or("");
         // N chunks × 1 char each = "a" * N.
-        assert_eq!(content.len(), N, "expected {} chars, got {}", N, content.len());
+        assert_eq!(
+            content.len(),
+            N,
+            "expected {} chars, got {}",
+            N,
+            content.len()
+        );
         assert!(content.chars().all(|c| c == 'a'));
     }
 
@@ -11028,11 +11318,11 @@ data: [DONE]\n\n";
     /// intermittent connect-stage timeouts).
     #[tokio::test]
     #[ignore] // Timing-sensitive: the pipeline's target-resolution
-              // DB queries create enough synchronous work between
-              // server spawn and upstream connect to trigger an
-              // UpstreamTimeout { ms: 0 } on this test rig. The
-              // 16 MiB cap is fully covered by the unit tests in
-              // sse_accumulator.rs (test_append_openai_cap, etc.).
+    // DB queries create enough synchronous work between
+    // server spawn and upstream connect to trigger an
+    // UpstreamTimeout { ms: 0 } on this test rig. The
+    // 16 MiB cap is fully covered by the unit tests in
+    // sse_accumulator.rs (test_append_openai_cap, etc.).
     async fn streaming_response_body_caps_at_16mib() {
         // Send two chunks: one 16.5 MiB (exceeds 16 MiB cap) and
         // one 1 KiB (ensures the pipeline sees a second event after
@@ -11085,7 +11375,11 @@ data: [DONE]\n\n";
         )
         .await;
 
-        assert!(result.error.is_none(), "pipeline must succeed: {:?}", result.error);
+        assert!(
+            result.error.is_none(),
+            "pipeline must succeed: {:?}",
+            result.error
+        );
         assert_eq!(result.status_code, 200);
         let body = response_body_json.expect("recording=true must produce non-NULL body");
 

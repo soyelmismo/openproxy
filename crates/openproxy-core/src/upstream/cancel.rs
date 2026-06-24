@@ -6,8 +6,8 @@
 //! `tokio_util::sync::CancellationToken` so this module has zero extra
 //! dependencies.
 
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use tokio::sync::watch;
 
 /// A cloneable, thread-safe cancel signal.
@@ -247,7 +247,10 @@ mod tests {
         let parent2 = CancellationToken::new();
         let child2 = parent2.child();
         child2.cancel();
-        assert!(!parent2.is_cancelled(), "parent stays valid after child cancel");
+        assert!(
+            !parent2.is_cancelled(),
+            "parent stays valid after child cancel"
+        );
     }
 
     // The `from_watch` tests below need a Tokio runtime because the
@@ -348,7 +351,9 @@ mod tests {
 
         tx.send(true).unwrap();
         for _ in 0..50 {
-            if token.is_cancelled() { break; }
+            if token.is_cancelled() {
+                break;
+            }
             tokio::task::yield_now().await;
         }
         assert!(token.is_cancelled());
@@ -363,7 +368,9 @@ mod tests {
 
         race_token.cancel();
         for _ in 0..50 {
-            if token.is_cancelled() { break; }
+            if token.is_cancelled() {
+                break;
+            }
             tokio::task::yield_now().await;
         }
         assert!(token.is_cancelled());

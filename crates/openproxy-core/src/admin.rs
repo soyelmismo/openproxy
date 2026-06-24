@@ -18,8 +18,8 @@
 //!   an error.
 
 use crate::accounts;
-use crate::cooldown;
 use crate::combos;
+use crate::cooldown;
 use crate::error::{CoreError, Result};
 use crate::ids::{AccountId, ComboId, ComboTargetId, ModelId, ModelRowId, ProviderId};
 use crate::models;
@@ -27,7 +27,7 @@ use crate::providers::{self, AuthType, ProviderFormat};
 use crate::quota::{self, AccountQuota};
 use crate::secrets::MasterKey;
 use crate::upstream::UpstreamClient;
-use rusqlite::{params, Connection};
+use rusqlite::{Connection, params};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use std::time::Duration;
@@ -170,9 +170,7 @@ impl<'de> Deserialize<'de> for UpdateProviderInput {
                     match key {
                         Field::Name => out.name = Some(map.next_value()?),
                         Field::BaseUrl => out.base_url = Some(map.next_value()?),
-                        Field::ExtraHeadersJson => {
-                            out.extra_headers_json = Some(map.next_value()?)
-                        }
+                        Field::ExtraHeadersJson => out.extra_headers_json = Some(map.next_value()?),
                         Field::AutoActivateKeyword => {
                             // The whole point of this custom deserialize:
                             // pull the raw value, then branch on whether
@@ -318,11 +316,7 @@ pub fn decrypt_api_key_for_account(
 
 /// Stamp a quota snapshot onto an account row. See
 /// [`accounts::set_quota`] for the column-level semantics.
-pub fn persist_account_quota(
-    conn: &Connection,
-    id: AccountId,
-    q: &AccountQuota,
-) -> Result<()> {
+pub fn persist_account_quota(conn: &Connection, id: AccountId, q: &AccountQuota) -> Result<()> {
     accounts::set_quota(conn, id, q)
 }
 
@@ -331,10 +325,7 @@ pub fn persist_account_quota(
 /// id is missing. The caller still holds the writer guard when this
 /// returns; the typical pattern is to call this, drop the guard, then
 /// fire the upstream HTTP call.
-pub fn account_for_quota_refresh(
-    conn: &Connection,
-    id: AccountId,
-) -> Result<accounts::Account> {
+pub fn account_for_quota_refresh(conn: &Connection, id: AccountId) -> Result<accounts::Account> {
     accounts::get(conn, id)?.ok_or(CoreError::AccountNotFound(id.0))
 }
 
@@ -379,7 +370,7 @@ pub async fn fetch_account_quota(
                 plan_name: None,
                 last_fetched_at: now_unix_secs_str(),
                 fetch_error: Some(e.to_string()),
-            model_details: None,
+                model_details: None,
             },
         },
         "openrouter" => match quota::fetch_openrouter_quota(upstream, api_key).await {
@@ -400,7 +391,7 @@ pub async fn fetch_account_quota(
                 plan_name: None,
                 last_fetched_at: now_unix_secs_str(),
                 fetch_error: Some(e.to_string()),
-            model_details: None,
+                model_details: None,
             },
         },
         "antigravity" | "antigravity-cli" | "agy" | "gemini-cli" => {
@@ -416,9 +407,7 @@ pub async fn fetch_account_quota(
                         weekly_reset_at: None,
                         plan_name: None,
                         last_fetched_at: now_unix_secs_str(),
-                        fetch_error: Some(
-                            "antigravity requires OAuth access token".into(),
-                        ),
+                        fetch_error: Some("antigravity requires OAuth access token".into()),
                         model_details: None,
                     };
                 }
@@ -435,7 +424,7 @@ pub async fn fetch_account_quota(
                     plan_name: None,
                     last_fetched_at: now_unix_secs_str(),
                     fetch_error: Some(e.to_string()),
-            model_details: None,
+                    model_details: None,
                 },
             }
         }
@@ -631,10 +620,7 @@ pub struct ComboSummary {
 /// renders a stable list. Combos with the same id as `combo_id` are
 /// silently filtered (no error — the picker is allowed to ask about
 /// a combo's own valid sub-combos at any time).
-pub fn list_valid_sub_combos(
-    conn: &Connection,
-    combo_id: ComboId,
-) -> Result<Vec<ComboSummary>> {
+pub fn list_valid_sub_combos(conn: &Connection, combo_id: ComboId) -> Result<Vec<ComboSummary>> {
     let all = combos::list_combos(conn)?;
     let mut out = Vec::with_capacity(all.len());
     for c in all {
@@ -646,12 +632,7 @@ pub fn list_valid_sub_combos(
         // in the sub-combo graph (i.e. `c` already contains
         // `combo_id` somewhere downstream). The probe walks down
         // from `c`; see [`combos::combo_in_chain`].
-        if combos::combo_in_chain(
-            conn,
-            combo_id,
-            c.id,
-            combos::MAX_SUB_COMBO_DEPTH,
-        )? {
+        if combos::combo_in_chain(conn, combo_id, c.id, combos::MAX_SUB_COMBO_DEPTH)? {
             continue;
         }
         out.push(ComboSummary {
@@ -691,7 +672,10 @@ pub fn add_target_to_combo(
 }
 
 /// List targets for a combo, ordered by `(priority_order ASC, id ASC)`.
-pub fn list_combo_targets(conn: &Connection, combo_id: ComboId) -> Result<Vec<combos::ComboTarget>> {
+pub fn list_combo_targets(
+    conn: &Connection,
+    combo_id: ComboId,
+) -> Result<Vec<combos::ComboTarget>> {
     combos::list_targets(conn, combo_id)
 }
 
@@ -823,10 +807,7 @@ pub fn clear_combo_target_cooldown(
 /// List all known models for a provider, optionally filtered.
 ///
 /// When `provider` is `None`, every row in the `models` table is returned.
-pub fn list_models(
-    conn: &Connection,
-    provider: Option<&ProviderId>,
-) -> Result<Vec<models::Model>> {
+pub fn list_models(conn: &Connection, provider: Option<&ProviderId>) -> Result<Vec<models::Model>> {
     match provider {
         Some(p) => models::list_all(conn)?
             .into_iter()
@@ -855,10 +836,7 @@ pub struct CreateCustomModelInput {
 
 /// Create a hand-picked model row. See [`models::create_custom`] for the
 /// SQL semantics. Returns the row id of the new (or upserted) row.
-pub fn create_custom_model(
-    conn: &Connection,
-    input: CreateCustomModelInput,
-) -> Result<ModelRowId> {
+pub fn create_custom_model(conn: &Connection, input: CreateCustomModelInput) -> Result<ModelRowId> {
     let provider = ProviderId::new(input.provider_id);
     let model = ModelId::new(input.model_id);
     let target_format = models::TargetFormat::parse(&input.target_format)?;
@@ -974,10 +952,8 @@ mod tests {
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_nanos())
             .unwrap_or(0);
-        let dir = std::env::temp_dir().join(format!(
-            "openproxy-admin-test-{}-{}-{}",
-            pid, nanos, n
-        ));
+        let dir =
+            std::env::temp_dir().join(format!("openproxy-admin-test-{}-{}-{}", pid, nanos, n));
         std::fs::create_dir_all(&dir).expect("mkdir tempdir");
         let path = dir.join("admin.db");
         let pool = DbPool::open(&path).expect("open pool");
@@ -1069,8 +1045,8 @@ mod tests {
         assert_eq!(all[0].priority, 10);
 
         // Filtered by provider.
-        let filtered = list_accounts(&conn, Some(&ProviderId::new("openrouter")))
-            .expect("list filtered");
+        let filtered =
+            list_accounts(&conn, Some(&ProviderId::new("openrouter"))).expect("list filtered");
         assert_eq!(filtered.len(), 1);
 
         // The plaintext is NOT visible in the raw BLOB.
@@ -1451,9 +1427,7 @@ mod tests {
         assert!(matches!(set.auto_activate_keyword, Some(Some(ref s)) if s == "claude"));
 
         // Bad type surfaces as a deserialization error.
-        let bad = serde_json::from_str::<UpdateProviderInput>(
-            r#"{"auto_activate_keyword": 42}"#,
-        );
+        let bad = serde_json::from_str::<UpdateProviderInput>(r#"{"auto_activate_keyword": 42}"#);
         assert!(bad.is_err());
     }
 
@@ -1500,7 +1474,9 @@ mod tests {
             },
         )
         .expect("create custom");
-        let m = models::get_by_row_id(&conn, row_id).unwrap().expect("present");
+        let m = models::get_by_row_id(&conn, row_id)
+            .unwrap()
+            .expect("present");
         assert!(m.custom);
         assert!(m.active);
     }
@@ -1519,8 +1495,7 @@ mod tests {
 
         for builtin_id in crate::seed::builtin_provider_ids() {
             let id = ProviderId::new(*builtin_id);
-            let err = delete_provider(&conn, &id)
-                .expect_err("built-in delete must fail");
+            let err = delete_provider(&conn, &id).expect_err("built-in delete must fail");
             match &err {
                 CoreError::Validation(msg) => {
                     assert!(
@@ -1672,7 +1647,13 @@ mod tests {
             },
         )
         .expect("add t2");
-        ComboTargetFixture { combo_id, m1, m2, t1, t2 }
+        ComboTargetFixture {
+            combo_id,
+            m1,
+            m2,
+            t1,
+            t2,
+        }
     }
 
     #[test]
@@ -1705,16 +1686,22 @@ mod tests {
             .expect_err("cross-combo delete must fail");
         match &err {
             CoreError::Validation(msg) => {
-                assert!(msg.contains("not in combo"),
+                assert!(
+                    msg.contains("not in combo"),
                     "error message must explain the cross-combo mismatch, got: {}",
-                    msg);
+                    msg
+                );
             }
             other => panic!("expected Validation, got {:?}", other),
         }
 
         // t1 is still present in the original combo.
         let remaining = list_combo_targets(&conn, fx.combo_id).expect("list");
-        assert_eq!(remaining.len(), 2, "rejected delete must not touch anything");
+        assert_eq!(
+            remaining.len(),
+            2,
+            "rejected delete must not touch anything"
+        );
     }
 
     #[test]
@@ -1727,8 +1714,7 @@ mod tests {
         let fx = seed_combo_with_two_targets(&conn);
 
         // Reverse the order: send [t2, t1] and expect priority 1 = t2, priority 2 = t1.
-        reorder_combo_targets(&mut conn, fx.combo_id, &[fx.t2, fx.t1])
-            .expect("reorder");
+        reorder_combo_targets(&mut conn, fx.combo_id, &[fx.t2, fx.t1]).expect("reorder");
 
         let targets = list_combo_targets(&conn, fx.combo_id).expect("list");
         assert_eq!(targets.len(), 2);
@@ -1780,8 +1766,7 @@ mod tests {
         let conn = pool.writer();
         let fx = seed_combo_with_two_targets(&conn);
 
-        let enriched = list_combo_targets_with_model(&conn, fx.combo_id)
-            .expect("list with model");
+        let enriched = list_combo_targets_with_model(&conn, fx.combo_id).expect("list with model");
         assert_eq!(enriched.len(), 2);
         // Order matches `priority_order ASC` (t1=10, t2=20).
         assert_eq!(enriched[0].model_id, "m1");

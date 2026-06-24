@@ -46,9 +46,26 @@ pub fn extract_command(text: &str) -> Option<String> {
             // Primer token
             let first_word = trimmed.split_whitespace().next()?;
             let known = [
-                "git", "cargo", "npm", "pnpm", "yarn", "docker", "kubectl",
-                "ls", "grep", "rg", "find", "cat", "make", "terraform",
-                "systemctl", "ps", "df", "du", "curl", "wget",
+                "git",
+                "cargo",
+                "npm",
+                "pnpm",
+                "yarn",
+                "docker",
+                "kubectl",
+                "ls",
+                "grep",
+                "rg",
+                "find",
+                "cat",
+                "make",
+                "terraform",
+                "systemctl",
+                "ps",
+                "df",
+                "du",
+                "curl",
+                "wget",
             ];
             if known.contains(&first_word) {
                 return Some(trimmed.to_string());
@@ -74,7 +91,11 @@ pub fn detect(text: &str) -> Detection {
     }
 
     match best {
-        Some((id, conf)) => Detection { id, confidence: conf, command },
+        Some((id, conf)) => Detection {
+            id,
+            confidence: conf,
+            command,
+        },
         None => Detection {
             id: "unknown".into(),
             confidence: 0.1,
@@ -116,9 +137,12 @@ fn detect_git_diff(text: &str, cmd: Option<&str>) -> Option<(String, f64)> {
 
 fn detect_git_log(text: &str, cmd: Option<&str>) -> Option<(String, f64)> {
     let cmd_match = cmd.is_some_and(|c| c.starts_with("git log"));
-    let content_match = text.contains('\n') && text.lines().any(|l| {
-        l.starts_with("commit ") && l.len() > 40 && l[7..].bytes().all(|b| b.is_ascii_hexdigit())
-    });
+    let content_match = text.contains('\n')
+        && text.lines().any(|l| {
+            l.starts_with("commit ")
+                && l.len() > 40
+                && l[7..].bytes().all(|b| b.is_ascii_hexdigit())
+        });
     if cmd_match && content_match {
         Some(("git-log".into(), 0.95))
     } else if content_match {
@@ -140,9 +164,12 @@ fn detect_git_branch(_text: &str, cmd: Option<&str>) -> Option<(String, f64)> {
 }
 
 fn detect_cargo_test(text: &str, cmd: Option<&str>) -> Option<(String, f64)> {
-    let cmd_match = cmd.is_some_and(|c| c.starts_with("cargo test") || c.starts_with("cargo nextest"));
+    let cmd_match =
+        cmd.is_some_and(|c| c.starts_with("cargo test") || c.starts_with("cargo nextest"));
     let content_match = text.contains("running ") && text.contains(" tests")
-        || text.lines().any(|l| l.starts_with("test ") && l.contains("... ok"));
+        || text
+            .lines()
+            .any(|l| l.starts_with("test ") && l.contains("... ok"));
     if cmd_match {
         Some(("cargo-test".into(), if content_match { 0.95 } else { 0.60 }))
     } else if content_match {
@@ -154,14 +181,19 @@ fn detect_cargo_test(text: &str, cmd: Option<&str>) -> Option<(String, f64)> {
 
 fn detect_cargo_build(text: &str, cmd: Option<&str>) -> Option<(String, f64)> {
     let cmd_match = cmd.is_some_and(|c| {
-        c.starts_with("cargo build") || c.starts_with("cargo check") || c.starts_with("cargo clippy")
+        c.starts_with("cargo build")
+            || c.starts_with("cargo check")
+            || c.starts_with("cargo clippy")
     });
     let content_match = text.contains("Compiling ")
         || text.contains("error[E")
         || text.contains("warning[")
         || (text.contains("Finished ") && text.contains("profile"));
     if cmd_match {
-        Some(("cargo-build".into(), if content_match { 0.90 } else { 0.55 }))
+        Some((
+            "cargo-build".into(),
+            if content_match { 0.90 } else { 0.55 },
+        ))
     } else if content_match {
         Some(("cargo-build".into(), 0.50))
     } else {
@@ -171,10 +203,15 @@ fn detect_cargo_build(text: &str, cmd: Option<&str>) -> Option<(String, f64)> {
 
 fn detect_npm_test(text: &str, cmd: Option<&str>) -> Option<(String, f64)> {
     let cmd_match = cmd.is_some_and(|c| {
-        c.starts_with("npm test") || c.starts_with("npm run test") || c.starts_with("npx vitest") || c.starts_with("npx jest")
+        c.starts_with("npm test")
+            || c.starts_with("npm run test")
+            || c.starts_with("npx vitest")
+            || c.starts_with("npx jest")
     });
-    let content_match = text.contains("PASS ") || text.contains("FAIL ")
-        || text.contains("Test Suites:") || text.contains("Tests:");
+    let content_match = text.contains("PASS ")
+        || text.contains("FAIL ")
+        || text.contains("Test Suites:")
+        || text.contains("Tests:");
     if cmd_match {
         Some(("npm-test".into(), if content_match { 0.95 } else { 0.55 }))
     } else if content_match {
@@ -186,12 +223,18 @@ fn detect_npm_test(text: &str, cmd: Option<&str>) -> Option<(String, f64)> {
 
 fn detect_npm_install(text: &str, cmd: Option<&str>) -> Option<(String, f64)> {
     let cmd_match = cmd.is_some_and(|c| {
-        c.starts_with("npm install") || c.starts_with("npm add") || c.starts_with("pnpm install") || c.starts_with("yarn add")
+        c.starts_with("npm install")
+            || c.starts_with("npm add")
+            || c.starts_with("pnpm install")
+            || c.starts_with("yarn add")
     });
     let content_match = text.contains("added ") && text.contains(" packages")
         || text.contains("audited ") && text.contains(" packages");
     if cmd_match {
-        Some(("npm-install".into(), if content_match { 0.90 } else { 0.55 }))
+        Some((
+            "npm-install".into(),
+            if content_match { 0.90 } else { 0.55 },
+        ))
     } else if content_match {
         Some(("npm-install".into(), 0.45))
     } else {
@@ -212,7 +255,8 @@ fn detect_docker_ps(text: &str, cmd: Option<&str>) -> Option<(String, f64)> {
 }
 
 fn detect_docker_logs(_text: &str, cmd: Option<&str>) -> Option<(String, f64)> {
-    let cmd_match = cmd.is_some_and(|c| c.starts_with("docker logs") || c.starts_with("docker compose logs"));
+    let cmd_match =
+        cmd.is_some_and(|c| c.starts_with("docker logs") || c.starts_with("docker compose logs"));
     if cmd_match {
         Some(("docker-logs".into(), 0.80))
     } else {
@@ -243,9 +287,8 @@ fn detect_shell_ls(_text: &str, cmd: Option<&str>) -> Option<(String, f64)> {
 }
 
 fn detect_shell_grep(_text: &str, cmd: Option<&str>) -> Option<(String, f64)> {
-    let cmd_match = cmd.is_some_and(|c| {
-        c.starts_with("grep") || c.starts_with("rg ") || c.starts_with("ag ")
-    });
+    let cmd_match =
+        cmd.is_some_and(|c| c.starts_with("grep") || c.starts_with("rg ") || c.starts_with("ag "));
     if cmd_match {
         Some(("shell-grep".into(), 0.70))
     } else {

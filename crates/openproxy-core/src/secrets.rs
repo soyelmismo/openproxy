@@ -6,8 +6,8 @@
 
 use aes_gcm::aead::{Aead, AeadCore, KeyInit, OsRng};
 use aes_gcm::{Aes256Gcm, Key, Nonce};
-use base64::engine::general_purpose::STANDARD as BASE64;
 use base64::Engine as _;
+use base64::engine::general_purpose::STANDARD as BASE64;
 
 use crate::error::{CoreError, Result};
 
@@ -29,12 +29,11 @@ impl MasterKey {
     /// Load from `OPENPROXY_MASTER_KEY` env var, expected base64 of 32 bytes.
     /// Also loads `OPENPROXY_MASTER_KEY_PREVIOUS` if set (for key rotation).
     pub fn from_env() -> Result<Self> {
-        let raw = std::env::var(ENV_VAR).map_err(|_| {
-            CoreError::Config(format!("env var {ENV_VAR} is not set"))
-        })?;
-        let decoded = BASE64.decode(raw.trim()).map_err(|e| {
-            CoreError::Config(format!("{ENV_VAR} is not valid base64: {e}"))
-        })?;
+        let raw = std::env::var(ENV_VAR)
+            .map_err(|_| CoreError::Config(format!("env var {ENV_VAR} is not set")))?;
+        let decoded = BASE64
+            .decode(raw.trim())
+            .map_err(|e| CoreError::Config(format!("{ENV_VAR} is not valid base64: {e}")))?;
         let current: [u8; KEY_LEN] = decoded.try_into().map_err(|v: Vec<u8>| {
             CoreError::Config(format!(
                 "{ENV_VAR} must decode to {KEY_LEN} bytes, got {}",
@@ -44,32 +43,28 @@ impl MasterKey {
 
         // Load previous key for rotation (optional).
         let previous = match std::env::var(PREVIOUS_ENV_VAR) {
-            Ok(prev_raw) => {
-                match BASE64.decode(prev_raw.trim()) {
-                    Ok(decoded) => {
-                        match TryInto::<[u8; KEY_LEN]>::try_into(decoded) {
-                            Ok(bytes) => {
-                                tracing::info!(
-                                    "loaded OPENPROXY_MASTER_KEY_PREVIOUS for rotation fallback"
-                                );
-                                Some(bytes)
-                            }
-                            Err(v) => {
-                                let v_len = v.len();
-                                return Err(CoreError::Config(format!(
-                                    "{PREVIOUS_ENV_VAR} must decode to {KEY_LEN} bytes, got {}",
-                                    v_len
-                                )));
-                            }
-                        }
+            Ok(prev_raw) => match BASE64.decode(prev_raw.trim()) {
+                Ok(decoded) => match TryInto::<[u8; KEY_LEN]>::try_into(decoded) {
+                    Ok(bytes) => {
+                        tracing::info!(
+                            "loaded OPENPROXY_MASTER_KEY_PREVIOUS for rotation fallback"
+                        );
+                        Some(bytes)
                     }
-                    Err(e) => {
+                    Err(v) => {
+                        let v_len = v.len();
                         return Err(CoreError::Config(format!(
-                            "{PREVIOUS_ENV_VAR} is not valid base64: {e}"
+                            "{PREVIOUS_ENV_VAR} must decode to {KEY_LEN} bytes, got {}",
+                            v_len
                         )));
                     }
+                },
+                Err(e) => {
+                    return Err(CoreError::Config(format!(
+                        "{PREVIOUS_ENV_VAR} is not valid base64: {e}"
+                    )));
                 }
-            }
+            },
             Err(_) => None,
         };
 
@@ -80,7 +75,10 @@ impl MasterKey {
     pub fn generate() -> Self {
         let key = Aes256Gcm::generate_key(OsRng);
         let bytes: [u8; KEY_LEN] = key.into();
-        Self { current: bytes, previous: None }
+        Self {
+            current: bytes,
+            previous: None,
+        }
     }
 
     /// Encrypt a UTF-8 plaintext (API key) into a self-contained blob.
@@ -111,8 +109,9 @@ impl MasterKey {
         // Try current key first.
         let cipher = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(&self.current));
         if let Ok(pt) = cipher.decrypt(nonce, ct) {
-            return String::from_utf8(pt)
-                .map_err(|e| CoreError::Internal(format!("decrypted plaintext is not utf-8: {e}")));
+            return String::from_utf8(pt).map_err(|e| {
+                CoreError::Internal(format!("decrypted plaintext is not utf-8: {e}"))
+            });
         }
 
         // Fall back to previous key (rotation).
@@ -120,8 +119,9 @@ impl MasterKey {
             let prev_cipher = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(prev));
             if let Ok(pt) = prev_cipher.decrypt(nonce, ct) {
                 tracing::debug!("decrypted with previous master key (rotation fallback)");
-                return String::from_utf8(pt)
-                    .map_err(|e| CoreError::Internal(format!("decrypted plaintext is not utf-8: {e}")));
+                return String::from_utf8(pt).map_err(|e| {
+                    CoreError::Internal(format!("decrypted plaintext is not utf-8: {e}"))
+                });
             }
         }
 
@@ -164,11 +164,15 @@ mod tests {
         // Point at a definitely-unset var by temporarily unsetting it.
         let prev = std::env::var(ENV_VAR).ok();
         // SAFETY: tests are single-threaded; no other thread reads this env var.
-        unsafe { std::env::remove_var(ENV_VAR); }
+        unsafe {
+            std::env::remove_var(ENV_VAR);
+        }
         let res = MasterKey::from_env();
         if let Some(v) = prev {
             // SAFETY: same single-threaded test context.
-            unsafe { std::env::set_var(ENV_VAR, v); }
+            unsafe {
+                std::env::set_var(ENV_VAR, v);
+            }
         }
         assert!(matches!(res, Err(CoreError::Config(_))));
     }
@@ -179,13 +183,19 @@ mod tests {
         let short = BASE64.encode([0u8; 16]);
         let prev = std::env::var(ENV_VAR).ok();
         // SAFETY: tests are single-threaded; no other thread reads this env var.
-        unsafe { std::env::set_var(ENV_VAR, &short); }
+        unsafe {
+            std::env::set_var(ENV_VAR, &short);
+        }
         let res = MasterKey::from_env();
         // SAFETY: same single-threaded test context.
-        unsafe { std::env::remove_var(ENV_VAR); }
+        unsafe {
+            std::env::remove_var(ENV_VAR);
+        }
         if let Some(v) = prev {
             // SAFETY: same single-threaded test context.
-            unsafe { std::env::set_var(ENV_VAR, v); }
+            unsafe {
+                std::env::set_var(ENV_VAR, v);
+            }
         }
         assert!(matches!(res, Err(CoreError::Config(_))));
     }

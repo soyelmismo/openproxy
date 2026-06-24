@@ -13,12 +13,12 @@
 //! cheap-to-clone and the type itself is `Send + Sync` by construction.
 
 use openproxy_core::{
-    adapters, db,
+    AppConfig, adapters, db,
     discovery_scheduler::{self, DiscoveryScheduler},
     oauth,
     secrets::MasterKey,
     upstream::UpstreamClient,
-    usage, AppConfig,
+    usage,
 };
 use parking_lot::RwLock;
 use std::sync::Arc;
@@ -193,9 +193,7 @@ impl AppState {
             //     `pipeline.rs`). Mirrors the timeouts /
             //     recording_ttl / idle_chunk_retryable pattern
             //     immediately above.
-            if let Some(mode) =
-                db::app_config::load_compression_override_from_db(&w)?
-            {
+            if let Some(mode) = db::app_config::load_compression_override_from_db(&w)? {
                 tracing::info!(
                     ?mode,
                     "loaded persisted compression override from app_config"
@@ -213,10 +211,7 @@ impl AppState {
             // run. The seed is idempotent: existing rows are skipped.
             let seeded = openproxy_core::seed::seed_builtin_providers(&w)?;
             if seeded > 0 {
-                tracing::info!(
-                    seeded,
-                    "auto-seeded built-in providers on first start"
-                );
+                tracing::info!(seeded, "auto-seeded built-in providers on first start");
             }
             // Seed the virtual "combo" provider row used as a placeholder
             // `provider_id` on sub-combo (combo-in-combo) targets. Idempotent
@@ -274,9 +269,7 @@ impl AppState {
             // out of the boot logs and uses it for everything (admin
             // calls, chat calls) until they rotate to a per-client
             // key. No-op on subsequent boots.
-            if let Some(b) = openproxy_core::bootstrap::ensure_bootstrap_key(
-                &w, "bootstrap"
-            )? {
+            if let Some(b) = openproxy_core::bootstrap::ensure_bootstrap_key(&w, "bootstrap")? {
                 tracing::info!(
                     id = b.id.0,
                     prefix = ?b.key_prefix,
@@ -303,9 +296,7 @@ impl AppState {
         // full mapping.
         let http_client = reqwest::Client::builder()
             .user_agent("openproxy/0.1")
-            .connect_timeout(Duration::from_millis(
-                config.timeouts.connect_ms,
-            ))
+            .connect_timeout(Duration::from_millis(config.timeouts.connect_ms))
             .build()?;
 
         // 4. Adapters — built-in + any custom providers stored in DB.
@@ -399,7 +390,11 @@ impl AppState {
                 match pruned {
                     Ok(0) => {}
                     Ok(n) => {
-                        tracing::info!(pruned = n, ttl_secs = ttl, "pruned expired recording bodies");
+                        tracing::info!(
+                            pruned = n,
+                            ttl_secs = ttl,
+                            "pruned expired recording bodies"
+                        );
                     }
                     Err(e) => {
                         tracing::warn!(error = %e, ttl_secs = ttl, "recording TTL prune tick failed");
@@ -444,8 +439,8 @@ impl AppState {
                 refresh_key,
                 refresh_upstream,
                 scheduler_registry,
-                60,    // check every 60s
-                900,   // refresh tokens that expire in the next 15min
+                60,  // check every 60s
+                900, // refresh tokens that expire in the next 15min
             )
             .await;
         });
@@ -566,13 +561,14 @@ impl AppState {
         config: AppConfig,
         db_pool: Arc<db::DbPool>,
         master_key: Arc<MasterKey>,
-    adapters: Arc<RwLock<Vec<Arc<dyn adapters::ProviderAdapter>>>>,
+        adapters: Arc<RwLock<Vec<Arc<dyn adapters::ProviderAdapter>>>>,
     ) -> Self {
         // 60-second prune cadence matches production; the spawned
         // task holds only `Arc<DbPool>` so the test's drop of the
         // AppState at the end of the test is enough to terminate
         // it cleanly.
-        let recording_ttl_secs_cell = Arc::new(RwLock::new(db::app_config::RECORDING_TTL_DEFAULT_SECS));
+        let recording_ttl_secs_cell =
+            Arc::new(RwLock::new(db::app_config::RECORDING_TTL_DEFAULT_SECS));
         let prune_pool = db_pool.clone();
         tokio::spawn(async move {
             let mut tick = tokio::time::interval(std::time::Duration::from_secs(60));
@@ -644,9 +640,7 @@ impl AppState {
             http_client: Arc::new(RwLock::new(
                 reqwest::Client::builder()
                     .user_agent("openproxy-test/0.1")
-                    .connect_timeout(Duration::from_millis(
-                        timeouts_initial.connect_ms,
-                    ))
+                    .connect_timeout(Duration::from_millis(timeouts_initial.connect_ms))
                     .build()
                     .expect("build test http client"),
             )),
@@ -655,7 +649,9 @@ impl AppState {
             stage_tx: usage::init_stage_broadcast(),
             record_bodies_and_headers: Arc::new(AtomicBool::new(false)),
             timeouts_cell: Arc::new(RwLock::new(timeouts_initial)),
-            compression_mode_cell: Arc::new(RwLock::new(openproxy_core::compression::CompressionMode::Off)),
+            compression_mode_cell: Arc::new(RwLock::new(
+                openproxy_core::compression::CompressionMode::Off,
+            )),
             recording_ttl_secs_cell: Arc::clone(&recording_ttl_secs_cell),
             discovery_scheduler: Arc::new(discovery_scheduler),
             oauth_provider_registry: Arc::new(oauth::OAuthProviderRegistry::builtin()),
@@ -734,8 +730,7 @@ impl AppState {
         }?;
         for p in &all_providers {
             if !openproxy_core::seed::is_builtin(p.id.as_str()) {
-                new_adapters
-                    .push(Arc::new(adapters::CustomAdapter::from_provider_row(p)));
+                new_adapters.push(Arc::new(adapters::CustomAdapter::from_provider_row(p)));
             }
         }
         // 3. Atomic swap into the shared slot.
@@ -892,13 +887,15 @@ impl AppState {
 
     /// Read the current `idle_chunk_retryable` flag (hot-swappable).
     pub fn idle_chunk_retryable(&self) -> bool {
-        self.idle_chunk_retryable_cell.load(std::sync::atomic::Ordering::Relaxed)
+        self.idle_chunk_retryable_cell
+            .load(std::sync::atomic::Ordering::Relaxed)
     }
 
     /// Replace the live `idle_chunk_retryable` flag. Called by the
     /// admin PUT endpoint after the DB UPSERT.
     pub fn set_idle_chunk_retryable(&self, val: bool) {
-        self.idle_chunk_retryable_cell.store(val, std::sync::atomic::Ordering::Relaxed);
+        self.idle_chunk_retryable_cell
+            .store(val, std::sync::atomic::Ordering::Relaxed);
     }
 
     /// Return a clone of the shared selection registry. The chat
@@ -928,28 +925,22 @@ mod tests {
     use super::*;
     use crate::state::AppState;
     use openproxy_core::{
-        adapters,
-        db as core_db,
-        ids::ProviderId,
-        providers,
-        secrets::MasterKey,
-        AppConfig,
+        AppConfig, adapters, db as core_db, ids::ProviderId, providers, secrets::MasterKey,
     };
     use std::path::PathBuf;
     use std::sync::Arc;
 
     /// Build an in-process pool: temp dir on disk, migrations applied.
     fn fresh_pool() -> (core_db::DbPool, PathBuf) {
-        static SEQ: std::sync::atomic::AtomicU64 =
-            std::sync::atomic::AtomicU64::new(0);
+        static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
         let n = SEQ.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         let pid = std::process::id();
         let nanos = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_nanos())
             .unwrap_or(0);
-        let dir = std::env::temp_dir()
-            .join(format!("openproxy-state-test-{}-{}-{}", pid, nanos, n));
+        let dir =
+            std::env::temp_dir().join(format!("openproxy-state-test-{}-{}-{}", pid, nanos, n));
         std::fs::create_dir_all(&dir).expect("mkdir tempdir");
         let path = dir.join("state.db");
         let pool = core_db::DbPool::open(&path).expect("open pool");
@@ -972,13 +963,7 @@ mod tests {
         // is responsible for filling in both the built-ins and any
         // custom rows.
         let adapters = Arc::new(RwLock::new(Vec::<Arc<dyn adapters::ProviderAdapter>>::new()));
-        AppState::for_test(
-            AppConfig::default(),
-            db_pool,
-            master_key,
-            adapters,
-        )
-        .await
+        AppState::for_test(AppConfig::default(), db_pool, master_key, adapters).await
     }
 
     /// Regression test for the frozen-registry bug.

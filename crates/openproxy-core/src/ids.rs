@@ -11,11 +11,15 @@ use uuid::Uuid;
 pub struct RequestId(pub Uuid);
 
 impl RequestId {
-    pub fn new() -> Self { Self(Uuid::new_v4()) }
+    pub fn new() -> Self {
+        Self(Uuid::new_v4())
+    }
 }
 
 impl Default for RequestId {
-    fn default() -> Self { Self::new() }
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl fmt::Display for RequestId {
@@ -29,11 +33,15 @@ impl fmt::Display for RequestId {
 pub struct TraceId(pub Uuid);
 
 impl TraceId {
-    pub fn new() -> Self { Self(Uuid::new_v4()) }
+    pub fn new() -> Self {
+        Self(Uuid::new_v4())
+    }
 }
 
 impl Default for TraceId {
-    fn default() -> Self { Self::new() }
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl fmt::Display for TraceId {
@@ -47,19 +55,27 @@ impl fmt::Display for TraceId {
 pub struct ProviderId(pub String);
 
 impl ProviderId {
-    pub fn new(s: impl Into<String>) -> Self { Self(s.into()) }
-    pub fn as_str(&self) -> &str { &self.0 }
+    pub fn new(s: impl Into<String>) -> Self {
+        Self(s.into())
+    }
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
 }
 
 impl fmt::Display for ProviderId {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result { write!(f, "{}", self.0) }
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.0)
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Ord, PartialOrd)]
 pub struct AccountId(pub i64);
 
 impl AccountId {
-    pub fn new(v: i64) -> Self { Self(v) }
+    pub fn new(v: i64) -> Self {
+        Self(v)
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Ord, PartialOrd)]
@@ -70,16 +86,20 @@ pub struct ComboTargetId(pub i64);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(transparent)]
-pub struct ModelId(pub String);  // upstream model id, e.g. "anthropic/claude-sonnet-4"
+pub struct ModelId(pub String); // upstream model id, e.g. "anthropic/claude-sonnet-4"
 
 impl ModelId {
-    pub fn new(s: impl Into<String>) -> Self { Self(s.into()) }
-    pub fn as_str(&self) -> &str { &self.0 }
+    pub fn new(s: impl Into<String>) -> Self {
+        Self(s.into())
+    }
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(transparent)]
-pub struct ModelRowId(pub i64);  // primary key in models table
+pub struct ModelRowId(pub i64); // primary key in models table
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Ord, PartialOrd)]
 pub struct UsageId(pub i64);
@@ -88,7 +108,9 @@ pub struct UsageId(pub i64);
 pub struct ApiKeyId(pub i64);
 
 impl ApiKeyId {
-    pub fn new(v: i64) -> Self { Self(v) }
+    pub fn new(v: i64) -> Self {
+        Self(v)
+    }
 }
 
 #[cfg(test)]

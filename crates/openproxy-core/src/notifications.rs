@@ -27,7 +27,7 @@
 
 use anyhow::Result;
 use once_cell::sync::OnceCell;
-use rusqlite::{params, Connection, OptionalExtension};
+use rusqlite::{Connection, OptionalExtension, params};
 use serde::{Deserialize, Serialize};
 use tokio::sync::broadcast;
 
@@ -264,7 +264,8 @@ pub fn list(
     // `:before` degenerates to "no upper bound"). This avoids the
     // rusqlite "Invalid parameter name" error that fires when the SQL
     // doesn't reference a param we tried to bind.
-    let sql = format!(
+    let sql =
+        format!(
         "SELECT id, kind, payload_json, read_at, archived_at, created_at, dedup_key, provider_id
          FROM notifications
          WHERE archived_at IS NULL{unread}
@@ -519,10 +520,8 @@ mod tests {
     #[test]
     fn record_system_dedupes_by_code() {
         let conn = fresh_db();
-        let id1 =
-            record_system(&conn, "discovery_failed", "boom", Some("p1"), None).unwrap();
-        let id2 =
-            record_system(&conn, "discovery_failed", "boom-again", Some("p1"), None).unwrap();
+        let id1 = record_system(&conn, "discovery_failed", "boom", Some("p1"), None).unwrap();
+        let id2 = record_system(&conn, "discovery_failed", "boom-again", Some("p1"), None).unwrap();
         // Same code within 24h collapses to the same row.
         assert_eq!(id1, id2);
         assert_eq!(unread_count(&conn).unwrap(), 1);

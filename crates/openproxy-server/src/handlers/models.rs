@@ -26,11 +26,7 @@
 //! model picker) can address a combo by its alias and the chat path
 //! resolves the alias to the combo's target list.
 
-use axum::{
-    extract::State,
-    http::HeaderMap,
-    Json,
-};
+use axum::{Json, extract::State, http::HeaderMap};
 use openproxy_core::{capabilities, combos, models};
 
 use crate::{
@@ -76,10 +72,8 @@ pub async fn list_models(
         let rows = models::list_active_all(&w)?;
         let combo_rows = combos::list_combos(&w)?;
 
-        let mut data: Vec<serde_json::Value> = rows
-            .into_iter()
-            .map(|m| build_model_entry(&m))
-            .collect();
+        let mut data: Vec<serde_json::Value> =
+            rows.into_iter().map(|m| build_model_entry(&m)).collect();
         for c in &combo_rows {
             // Compute the effective context window: explicit override
             // on the combo row, or auto-compute (min across all
@@ -87,8 +81,7 @@ pub async fn list_models(
             let effective_cw = if c.context_window.is_some() {
                 c.context_window
             } else {
-                combos::compute_effective_context_window(&w, c.id)
-                    .unwrap_or(None)
+                combos::compute_effective_context_window(&w, c.id).unwrap_or(None)
             };
             data.push(build_combo_entry(c, effective_cw));
         }
@@ -143,9 +136,8 @@ fn authenticate_chat_or_anonymous(
     // admin and chat auth paths).
     let r = state.db_pool().reader();
     let key = api_keys::get_by_hash(&r, &key_hash).map_err(ApiError)?;
-    let key = key.ok_or_else(|| {
-        ApiError(openproxy_core::CoreError::Auth("invalid api key".into()))
-    })?;
+    let key =
+        key.ok_or_else(|| ApiError(openproxy_core::CoreError::Auth("invalid api key".into())))?;
 
     if !key.is_active {
         return Err(ApiError(openproxy_core::CoreError::Auth(
@@ -154,9 +146,11 @@ fn authenticate_chat_or_anonymous(
     }
 
     if let Some(exp) = &key.expires_at {
-        if openproxy_core::api_keys::is_expired(Some(exp), chrono::Utc::now())
-            .map_err(|e| ApiError(openproxy_core::CoreError::Internal(format!("expires_at check: {e}"))))?
-        {
+        if openproxy_core::api_keys::is_expired(Some(exp), chrono::Utc::now()).map_err(|e| {
+            ApiError(openproxy_core::CoreError::Internal(format!(
+                "expires_at check: {e}"
+            )))
+        })? {
             return Err(ApiError(openproxy_core::CoreError::Auth(
                 "api key expired".into(),
             )));
@@ -188,7 +182,10 @@ fn authenticate_chat_or_anonymous(
 /// to be combos. Capability fields are `null` because a combo is an
 /// alias for an operator-chosen list of targets, not a real model;
 /// per-model metadata would be misleading.
-fn build_combo_entry(c: &openproxy_core::combos::Combo, effective_context_window: Option<i64>) -> serde_json::Value {
+fn build_combo_entry(
+    c: &openproxy_core::combos::Combo,
+    effective_context_window: Option<i64>,
+) -> serde_json::Value {
     let id = format!("combo:{}", c.name);
     serde_json::json!({
         "id": id,
@@ -449,11 +446,20 @@ mod tests {
         // The test pins down the exact shape: `<provider>/<upstream_id>`.
         let m = empty_model();
         let v = build_model_entry(&m);
-        let id = v.get("id").and_then(|x| x.as_str()).expect("id is a string");
+        let id = v
+            .get("id")
+            .and_then(|x| x.as_str())
+            .expect("id is a string");
         // empty_model() uses provider "openrouter" + upstream "openai/gpt-4o".
-        assert_eq!(id, "openrouter/openai/gpt-4o", "id must be provider-prefixed");
+        assert_eq!(
+            id, "openrouter/openai/gpt-4o",
+            "id must be provider-prefixed"
+        );
         // `root` mirrors `id` to keep SDKs that compare them happy.
-        let root = v.get("root").and_then(|x| x.as_str()).expect("root is a string");
+        let root = v
+            .get("root")
+            .and_then(|x| x.as_str())
+            .expect("root is a string");
         assert_eq!(root, id, "root mirrors id");
     }
 
@@ -468,7 +474,10 @@ mod tests {
         let mut m = empty_model();
         m.model_id = openproxy_core::ids::ModelId::new("nex-agi/nex-n2-pro:free");
         let v = build_model_entry(&m);
-        let id = v.get("id").and_then(|x| x.as_str()).expect("id is a string");
+        let id = v
+            .get("id")
+            .and_then(|x| x.as_str())
+            .expect("id is a string");
         assert_eq!(id, "openrouter/nex-agi/nex-n2-pro:free");
     }
 }

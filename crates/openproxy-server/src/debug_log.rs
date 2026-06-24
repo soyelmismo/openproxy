@@ -45,12 +45,12 @@
 use std::collections::VecDeque;
 use std::sync::OnceLock;
 
+use chrono::Utc;
 use parking_lot::Mutex;
 use serde::Serialize;
 use tracing::field::{Field, Visit};
 use tracing::{Event, Subscriber};
 use tracing_subscriber::{Layer, layer::Context};
-use chrono::Utc;
 
 /// Maximum number of entries kept in the ring buffer. Older entries
 /// are evicted when this is exceeded. 1000 entries × ~500 B avg ≈
@@ -375,7 +375,11 @@ mod tests {
         // The oldest entry should be entry 10 (entries 0-9 were evicted).
         assert!(snap[0].message.contains("entry 10"));
         // The newest should be entry BUFFER_CAPACITY + 9.
-        assert!(snap[snap.len() - 1].message.contains(&format!("entry {}", BUFFER_CAPACITY + 9)));
+        assert!(
+            snap[snap.len() - 1]
+                .message
+                .contains(&format!("entry {}", BUFFER_CAPACITY + 9))
+        );
     }
 
     #[test]
@@ -399,7 +403,12 @@ mod tests {
                 });
             }
             // Take snapshot inside the lock to avoid races.
-            guard.entries.iter().filter(|e| e.seq > 2).cloned().collect::<Vec<_>>()
+            guard
+                .entries
+                .iter()
+                .filter(|e| e.seq > 2)
+                .cloned()
+                .collect::<Vec<_>>()
         };
         // Should return entries with seq > 2, i.e. seq 3, 4, 5.
         assert_eq!(snap.len(), 3);

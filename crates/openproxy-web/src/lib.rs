@@ -39,7 +39,7 @@ impl WebState {
 }
 
 pub fn build_router(state: WebState) -> axum::Router {
-    use axum::{routing::get, Router};
+    use axum::{Router, routing::get};
 
     Router::new()
         // Dashboard UI

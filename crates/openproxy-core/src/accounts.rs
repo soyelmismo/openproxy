@@ -7,7 +7,7 @@
 use crate::error::{CoreError, Result};
 use crate::ids::{AccountId, ProviderId};
 use crate::secrets::MasterKey;
-use rusqlite::{params, Connection, OptionalExtension};
+use rusqlite::{Connection, OptionalExtension, params};
 use serde::{Deserialize, Serialize};
 
 /// Health flag tracked per account. `Healthy` is the default; `Degraded` and
@@ -35,10 +35,7 @@ impl HealthStatus {
             "healthy" => Ok(Self::Healthy),
             "degraded" => Ok(Self::Degraded),
             "unhealthy" => Ok(Self::Unhealthy),
-            other => Err(CoreError::Validation(format!(
-                "invalid health: {}",
-                other
-            ))),
+            other => Err(CoreError::Validation(format!("invalid health: {}", other))),
         }
     }
 }
@@ -119,10 +116,7 @@ pub fn create(
         // FK violation → unknown provider.
         let msg = e.to_string();
         if msg.contains("FOREIGN KEY") {
-            CoreError::Validation(format!(
-                "provider_id does not exist: {}",
-                provider_id
-            ))
+            CoreError::Validation(format!("provider_id does not exist: {}", provider_id))
         } else {
             CoreError::Database {
                 message: format!("insert account for {}: {}", provider_id, e),
@@ -202,12 +196,13 @@ pub fn list(conn: &Connection, provider: Option<&ProviderId>) -> Result<Vec<Acco
     let mapper = |row: &rusqlite::Row<'_>| -> rusqlite::Result<Account> { row_to_account(row) };
 
     let rows = match provider {
-        Some(pid) => stmt
-            .query_map(params![pid.as_str()], mapper)
-            .map_err(|e| CoreError::Database {
-                message: format!("query list accounts: {}", e),
-                source: Some(Box::new(e)),
-            })?,
+        Some(pid) => {
+            stmt.query_map(params![pid.as_str()], mapper)
+                .map_err(|e| CoreError::Database {
+                    message: format!("query list accounts: {}", e),
+                    source: Some(Box::new(e)),
+                })?
+        }
         None => stmt
             .query_map([], mapper)
             .map_err(|e| CoreError::Database {
@@ -246,9 +241,8 @@ pub fn decrypt_api_key(conn: &Connection, id: AccountId, master_key: &MasterKey)
         })?
         .ok_or(CoreError::AccountNotFound(id.0))?;
 
-    let blob = blob.ok_or_else(|| {
-        CoreError::Validation("account has no API key (OAuth account?)".into())
-    })?;
+    let blob = blob
+        .ok_or_else(|| CoreError::Validation("account has no API key (OAuth account?)".into()))?;
     master_key.decrypt(&blob)
 }
 
@@ -287,9 +281,8 @@ pub fn decrypt_api_key_and_label(
         Some(r) => r,
         None => return Err(CoreError::AccountNotFound(id.0)),
     };
-    let blob = blob.ok_or_else(|| {
-        CoreError::Validation("account has no API key (OAuth account?)".into())
-    })?;
+    let blob = blob
+        .ok_or_else(|| CoreError::Validation("account has no API key (OAuth account?)".into()))?;
     let key = master_key.decrypt(&blob)?;
     Ok((key, label))
 }
@@ -344,11 +337,7 @@ pub fn set_rate_limited_until(
 /// weekly missing) is never observable.
 ///
 /// A failure to find the row surfaces as [`CoreError::AccountNotFound`].
-pub fn set_quota(
-    conn: &Connection,
-    id: AccountId,
-    q: &crate::quota::AccountQuota,
-) -> Result<()> {
+pub fn set_quota(conn: &Connection, id: AccountId, q: &crate::quota::AccountQuota) -> Result<()> {
     let affected = conn
         .execute(
             "UPDATE accounts SET \
@@ -488,9 +477,10 @@ pub fn store_oauth_tokens(
     let expires_at_resolved = match expires_at {
         Some(ts) => Some(ts),
         None => {
-            expires_at_owned = (chrono::Utc::now() + chrono::Duration::seconds(DEFAULT_EXPIRES_IN_SECS))
-                .format("%Y-%m-%dT%H:%M:%SZ")
-                .to_string();
+            expires_at_owned = (chrono::Utc::now()
+                + chrono::Duration::seconds(DEFAULT_EXPIRES_IN_SECS))
+            .format("%Y-%m-%dT%H:%M:%SZ")
+            .to_string();
             Some(expires_at_owned.as_str())
         }
     };
@@ -716,10 +706,8 @@ mod tests {
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_nanos())
             .unwrap_or(0);
-        let dir = std::env::temp_dir().join(format!(
-            "openproxy-accounts-test-{}-{}-{}",
-            pid, nanos, n
-        ));
+        let dir =
+            std::env::temp_dir().join(format!("openproxy-accounts-test-{}-{}-{}", pid, nanos, n));
         std::fs::create_dir_all(&dir).expect("mkdir tempdir");
         let path = dir.join("accounts.db");
         let pool = DbPool::open(&path).expect("open pool");
@@ -922,8 +910,7 @@ mod tests {
         assert_eq!(a.health_status, HealthStatus::Healthy);
 
         // Missing id → AccountNotFound.
-        let err = set_health(&conn, AccountId(7777), HealthStatus::Healthy)
-            .expect_err("missing");
+        let err = set_health(&conn, AccountId(7777), HealthStatus::Healthy).expect_err("missing");
         assert!(matches!(err, CoreError::AccountNotFound(7777)));
     }
 
@@ -951,7 +938,10 @@ mod tests {
 
         set_rate_limited_until(&conn, id, Some("2026-06-13T12:34:56Z")).expect("set");
         let a = get(&conn, id).expect("get").expect("present");
-        assert_eq!(a.rate_limited_until.as_deref(), Some("2026-06-13T12:34:56Z"));
+        assert_eq!(
+            a.rate_limited_until.as_deref(),
+            Some("2026-06-13T12:34:56Z")
+        );
 
         // Clear with None.
         set_rate_limited_until(&conn, id, None).expect("clear");
@@ -959,8 +949,7 @@ mod tests {
         assert!(a.rate_limited_until.is_none());
 
         // Missing id → AccountNotFound.
-        let err = set_rate_limited_until(&conn, AccountId(12321), Some("x"))
-            .expect_err("missing");
+        let err = set_rate_limited_until(&conn, AccountId(12321), Some("x")).expect_err("missing");
         assert!(matches!(err, CoreError::AccountNotFound(12321)));
     }
 
@@ -1140,21 +1129,20 @@ mod tests {
         seed_provider(&conn, "openrouter");
 
         let mk = MasterKey::generate();
-        let id = create(&conn, &ProviderId::new("openrouter"), None, &mk, None, 10, None)
-            .expect("create");
+        let id = create(
+            &conn,
+            &ProviderId::new("openrouter"),
+            None,
+            &mk,
+            None,
+            10,
+            None,
+        )
+        .expect("create");
 
         let access = "ya29.a0AfH6SMB_test-access-token_12345";
         store_oauth_tokens(
-            &conn,
-            id,
-            access,
-            None,
-            &mk,
-            "Bearer",
-            None,
-            None,
-            None,
-            None,
+            &conn, id, access, None, &mk, "Bearer", None, None, None, None,
         )
         .expect("store");
 
@@ -1169,8 +1157,16 @@ mod tests {
         seed_provider(&conn, "openrouter");
 
         let mk = MasterKey::generate();
-        let id = create(&conn, &ProviderId::new("openrouter"), None, &mk, None, 10, None)
-            .expect("create");
+        let id = create(
+            &conn,
+            &ProviderId::new("openrouter"),
+            None,
+            &mk,
+            None,
+            10,
+            None,
+        )
+        .expect("create");
 
         let access = "ya29.access";
         let refresh = "1//0test-refresh-token_xyz";
@@ -1199,8 +1195,16 @@ mod tests {
         seed_provider(&conn, "openrouter");
 
         let mk = MasterKey::generate();
-        let id = create(&conn, &ProviderId::new("openrouter"), None, &mk, None, 10, None)
-            .expect("create");
+        let id = create(
+            &conn,
+            &ProviderId::new("openrouter"),
+            None,
+            &mk,
+            None,
+            10,
+            None,
+        )
+        .expect("create");
 
         // Store with no refresh token.
         store_oauth_tokens(
@@ -1228,8 +1232,16 @@ mod tests {
         seed_provider(&conn, "openrouter");
 
         let mk = MasterKey::generate();
-        let id = create(&conn, &ProviderId::new("openrouter"), None, &mk, None, 10, None)
-            .expect("create");
+        let id = create(
+            &conn,
+            &ProviderId::new("openrouter"),
+            None,
+            &mk,
+            None,
+            10,
+            None,
+        )
+        .expect("create");
 
         store_oauth_tokens(&conn, id, "", None, &mk, "Bearer", None, None, None, None)
             .expect("store empty access token");
@@ -1245,8 +1257,16 @@ mod tests {
         seed_provider(&conn, "openrouter");
 
         let mk = MasterKey::generate();
-        let id = create(&conn, &ProviderId::new("openrouter"), None, &mk, None, 10, None)
-            .expect("create");
+        let id = create(
+            &conn,
+            &ProviderId::new("openrouter"),
+            None,
+            &mk,
+            None,
+            10,
+            None,
+        )
+        .expect("create");
 
         store_oauth_tokens(
             &conn,
@@ -1273,8 +1293,16 @@ mod tests {
         seed_provider(&conn, "openrouter");
 
         let mk = MasterKey::generate();
-        let id = create(&conn, &ProviderId::new("openrouter"), None, &mk, None, 10, None)
-            .expect("create");
+        let id = create(
+            &conn,
+            &ProviderId::new("openrouter"),
+            None,
+            &mk,
+            None,
+            10,
+            None,
+        )
+        .expect("create");
 
         let long_access = "a".repeat(10_000);
         let long_refresh = "r".repeat(10_000);
@@ -1306,8 +1334,16 @@ mod tests {
         seed_provider(&conn, "openrouter");
 
         let mk = MasterKey::generate();
-        let id = create(&conn, &ProviderId::new("openrouter"), None, &mk, None, 10, None)
-            .expect("create");
+        let id = create(
+            &conn,
+            &ProviderId::new("openrouter"),
+            None,
+            &mk,
+            None,
+            10,
+            None,
+        )
+        .expect("create");
 
         let unicode_access = "tok_日本語🔑_emoji_🎉_ñ";
         store_oauth_tokens(
@@ -1335,8 +1371,16 @@ mod tests {
         seed_provider(&conn, "openrouter");
 
         let mk = MasterKey::generate();
-        let id = create(&conn, &ProviderId::new("openrouter"), None, &mk, None, 10, None)
-            .expect("create");
+        let id = create(
+            &conn,
+            &ProviderId::new("openrouter"),
+            None,
+            &mk,
+            None,
+            10,
+            None,
+        )
+        .expect("create");
 
         store_oauth_tokens(
             &conn,
@@ -1403,8 +1447,16 @@ mod tests {
         seed_provider(&conn, "openrouter");
 
         let mk = MasterKey::generate();
-        let id = create(&conn, &ProviderId::new("openrouter"), None, &mk, None, 10, None)
-            .expect("create");
+        let id = create(
+            &conn,
+            &ProviderId::new("openrouter"),
+            None,
+            &mk,
+            None,
+            10,
+            None,
+        )
+        .expect("create");
 
         // First store.
         store_oauth_tokens(
@@ -1436,10 +1488,7 @@ mod tests {
         )
         .expect("store2");
 
-        assert_eq!(
-            decrypt_access_token(&conn, id, &mk).unwrap(),
-            "new-access"
-        );
+        assert_eq!(decrypt_access_token(&conn, id, &mk).unwrap(), "new-access");
         assert_eq!(
             decrypt_refresh_token(&conn, id, &mk).unwrap().as_deref(),
             Some("new-refresh")
@@ -1453,8 +1502,16 @@ mod tests {
         seed_provider(&conn, "openrouter");
 
         let mk = MasterKey::generate();
-        let id = create(&conn, &ProviderId::new("openrouter"), None, &mk, None, 10, None)
-            .expect("create");
+        let id = create(
+            &conn,
+            &ProviderId::new("openrouter"),
+            None,
+            &mk,
+            None,
+            10,
+            None,
+        )
+        .expect("create");
 
         // Store with expires_at = None.
         store_oauth_tokens(
@@ -1493,8 +1550,16 @@ mod tests {
         seed_provider(&conn, "openrouter");
 
         let mk = MasterKey::generate();
-        let id = create(&conn, &ProviderId::new("openrouter"), None, &mk, None, 10, None)
-            .expect("create");
+        let id = create(
+            &conn,
+            &ProviderId::new("openrouter"),
+            None,
+            &mk,
+            None,
+            10,
+            None,
+        )
+        .expect("create");
 
         let explicit = "2099-01-01T00:00:00Z";
         store_oauth_tokens(
@@ -1523,8 +1588,16 @@ mod tests {
 
         // OAuth account: api_key = None → api_key_encrypted = NULL in DB.
         let mk = MasterKey::generate();
-        let id = create(&conn, &ProviderId::new("openrouter"), None, &mk, None, 10, None)
-            .expect("create");
+        let id = create(
+            &conn,
+            &ProviderId::new("openrouter"),
+            None,
+            &mk,
+            None,
+            10,
+            None,
+        )
+        .expect("create");
 
         let err = decrypt_api_key(&conn, id, &mk).expect_err("OAuth account has no key");
         assert!(
@@ -1541,8 +1614,16 @@ mod tests {
         seed_provider(&conn, "openrouter");
 
         let mk = MasterKey::generate();
-        let id = create(&conn, &ProviderId::new("openrouter"), None, &mk, None, 10, None)
-            .expect("create");
+        let id = create(
+            &conn,
+            &ProviderId::new("openrouter"),
+            None,
+            &mk,
+            None,
+            10,
+            None,
+        )
+        .expect("create");
 
         // Initially no key (OAuth account).
         let err = decrypt_api_key(&conn, id, &mk).expect_err("no key yet");
@@ -1560,8 +1641,8 @@ mod tests {
         assert!(matches!(err, CoreError::Validation(_)));
 
         // Missing id → AccountNotFound.
-        let err = update_api_key(&conn, AccountId(99999), Some("x"), &mk)
-            .expect_err("missing account");
+        let err =
+            update_api_key(&conn, AccountId(99999), Some("x"), &mk).expect_err("missing account");
         assert!(matches!(err, CoreError::AccountNotFound(99999)));
     }
 

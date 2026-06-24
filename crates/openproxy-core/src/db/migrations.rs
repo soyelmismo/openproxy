@@ -6,7 +6,7 @@
 //! invocation against an already-migrated DB applies zero new versions.
 
 use crate::error::{CoreError, Result};
-use rusqlite::{params, Connection, Transaction};
+use rusqlite::{Connection, Transaction, params};
 
 /// One embedded migration. `version` is the integer PK stored in
 /// `schema_migrations`. `sql` is the raw file contents.
@@ -264,16 +264,20 @@ fn apply_one(conn: &mut Connection, m: &Migration) -> Result<()> {
     // execute the pragma *before* the transaction — it has no effect
     // inside a SQLite transaction.
     if m.sql.contains("PRAGMA foreign_keys = OFF") {
-        conn.execute_batch("PRAGMA foreign_keys = OFF").map_err(|e| CoreError::Migration {
-            version: m.version,
-            message: format!("{}: PRAGMA foreign_keys = OFF: {}", m.name, e),
-        })?;
+        conn.execute_batch("PRAGMA foreign_keys = OFF")
+            .map_err(|e| CoreError::Migration {
+                version: m.version,
+                message: format!("{}: PRAGMA foreign_keys = OFF: {}", m.name, e),
+            })?;
     }
 
     // Use IMMEDIATE so the migration lock is taken up-front, matching spec §9.
     let tx: Transaction<'_> = conn
         .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
-        .map_err(|e| CoreError::Migration { version: m.version, message: format!("begin tx: {}", e) })?;
+        .map_err(|e| CoreError::Migration {
+            version: m.version,
+            message: format!("begin tx: {}", e),
+        })?;
 
     tx.execute_batch(m.sql).map_err(|e| CoreError::Migration {
         version: m.version,
@@ -296,10 +300,11 @@ fn apply_one(conn: &mut Connection, m: &Migration) -> Result<()> {
 
     // Re-enable foreign keys if the migration had disabled them.
     if m.sql.contains("PRAGMA foreign_keys = OFF") {
-        conn.execute_batch("PRAGMA foreign_keys = ON").map_err(|e| CoreError::Migration {
-            version: m.version,
-            message: format!("{}: PRAGMA foreign_keys = ON: {}", m.name, e),
-        })?;
+        conn.execute_batch("PRAGMA foreign_keys = ON")
+            .map_err(|e| CoreError::Migration {
+                version: m.version,
+                message: format!("{}: PRAGMA foreign_keys = ON: {}", m.name, e),
+            })?;
     }
 
     Ok(())
@@ -333,7 +338,11 @@ mod tests {
         let count: i64 = conn
             .query_row("SELECT COUNT(*) FROM schema_migrations", [], |r| r.get(0))
             .expect("count");
-        assert_eq!(count, MIGRATIONS.len() as i64, "all embedded migrations applied");
+        assert_eq!(
+            count,
+            MIGRATIONS.len() as i64,
+            "all embedded migrations applied"
+        );
 
         // Sanity: every table the spec §8 promises is present.
         for table in [
@@ -409,22 +418,23 @@ mod tests {
             let mut writer = pool.writer();
             crate::db::migrations::run(&mut writer).expect("first run");
         }
-        let count_first: i64 = pool
-            .with_conn(|c| {
-                c.query_row("SELECT COUNT(*) FROM schema_migrations", [], |r| r.get(0))
-                    .expect("count")
-            });
-        assert_eq!(count_first, 35, "thirty-five migrations applied (versions 1-6, 8-36)");
+        let count_first: i64 = pool.with_conn(|c| {
+            c.query_row("SELECT COUNT(*) FROM schema_migrations", [], |r| r.get(0))
+                .expect("count")
+        });
+        assert_eq!(
+            count_first, 35,
+            "thirty-five migrations applied (versions 1-6, 8-36)"
+        );
 
         {
             let mut writer = pool.writer();
             crate::db::migrations::run(&mut writer).expect("second run");
         }
-        let count_second: i64 = pool
-            .with_conn(|c| {
-                c.query_row("SELECT COUNT(*) FROM schema_migrations", [], |r| r.get(0))
-                    .expect("count")
-            });
+        let count_second: i64 = pool.with_conn(|c| {
+            c.query_row("SELECT COUNT(*) FROM schema_migrations", [], |r| r.get(0))
+                .expect("count")
+        });
         assert_eq!(count_second, count_first, "idempotent: same row count");
     }
 
@@ -490,7 +500,10 @@ mod tests {
                     |r| r.get(0),
                 )
                 .expect("query format 1");
-            assert_eq!(fmt1, "gemini", "antigravity should be gemini after migration 20");
+            assert_eq!(
+                fmt1, "gemini",
+                "antigravity should be gemini after migration 20"
+            );
 
             let fmt2: String = conn
                 .query_row(
@@ -499,7 +512,10 @@ mod tests {
                     |r| r.get(0),
                 )
                 .expect("query format 2");
-            assert_eq!(fmt2, "gemini", "antigravity-cli should be gemini after migration 20");
+            assert_eq!(
+                fmt2, "gemini",
+                "antigravity-cli should be gemini after migration 20"
+            );
         }
     }
 
@@ -545,7 +561,10 @@ mod tests {
                     |r| r.get(0),
                 )
                 .expect("query format");
-            assert_eq!(fmt, "openai", "non-antigravity provider should not be changed");
+            assert_eq!(
+                fmt, "openai",
+                "non-antigravity provider should not be changed"
+            );
         }
     }
 
@@ -687,8 +706,11 @@ mod tests {
         //    `combo_targets` row is removed alongside it.
         {
             let conn = pool.writer();
-            conn.execute("DELETE FROM models WHERE id = ?1", rusqlite::params![model_row_id])
-                .expect("delete model must succeed under CASCADE");
+            conn.execute(
+                "DELETE FROM models WHERE id = ?1",
+                rusqlite::params![model_row_id],
+            )
+            .expect("delete model must succeed under CASCADE");
         }
 
         // 3. Assert the `combo_targets` row was cascade-deleted
@@ -726,8 +748,11 @@ mod tests {
                     |r| r.get(0),
                 )
                 .expect("extra model id");
-            conn.execute("DELETE FROM models WHERE id = ?1", rusqlite::params![extra_id])
-                .expect("delete extra model must still work");
+            conn.execute(
+                "DELETE FROM models WHERE id = ?1",
+                rusqlite::params![extra_id],
+            )
+            .expect("delete extra model must still work");
         }
     }
 

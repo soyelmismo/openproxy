@@ -73,18 +73,13 @@
 //! - [`client_disconnect_middleware`]: the middleware factory.
 //! - [`DisconnectBody`]: the body newtype; re-exported for tests.
 
-use axum::{
-    body::Body,
-    extract::Request,
-    middleware::Next,
-    response::Response,
-};
+use axum::{body::Body, extract::Request, middleware::Next, response::Response};
 use http_body::{Body as HttpBody, Frame, SizeHint};
 use std::{
     pin::Pin,
     sync::{
-        atomic::{AtomicBool, Ordering},
         Arc,
+        atomic::{AtomicBool, Ordering},
     },
     task::{Context, Poll},
 };
@@ -139,7 +134,8 @@ pub async fn client_disconnect_middleware(mut req: Request, next: Next) -> Respo
     //    The handler clones `tx` for any *additional* cancel sources
     //    it wants to merge (deadline watchdog) and threads `rx`
     //    into the pipeline.
-    req.extensions_mut().insert(CancelWatch { tx: tx.clone(), rx });
+    req.extensions_mut()
+        .insert(CancelWatch { tx: tx.clone(), rx });
 
     // 2. Wrap the request body so an upload-time disconnect is
     //    observable to the handler / pipeline.
@@ -398,11 +394,7 @@ mod tests {
     async fn normal_completion_does_not_fire_watch() {
         let (tx, rx) = new_cancel_pair();
         let fired = Arc::new(AtomicBool::new(false));
-        let mut body = DisconnectBody::new(
-            OneFrameBody { delivered: false },
-            tx,
-            fired,
-        );
+        let mut body = DisconnectBody::new(OneFrameBody { delivered: false }, tx, fired);
 
         // First poll: returns a frame.
         let first = poll_once(&mut body);
@@ -492,11 +484,7 @@ mod tests {
         let (tx, rx) = new_cancel_pair();
         let fired = Arc::new(AtomicBool::new(false));
         // `Full<Bytes>` is a non-`Unpin` body from http-body-util.
-        let mut body = DisconnectBody::new(
-            Full::new(Bytes::from_static(b"hello")),
-            tx,
-            fired,
-        );
+        let mut body = DisconnectBody::new(Full::new(Bytes::from_static(b"hello")), tx, fired);
         let first = poll_once(&mut body);
         assert!(matches!(first, Poll::Ready(Some(Ok(_)))));
         assert!(

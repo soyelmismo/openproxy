@@ -371,10 +371,7 @@ mod tests {
         // be enforced here too or the two entry points diverge.
         use std::collections::BTreeMap;
         let mut h = BTreeMap::new();
-        h.insert(
-            "user-agent".to_string(),
-            "x".repeat(64 * 1024),
-        );
+        h.insert("user-agent".to_string(), "x".repeat(64 * 1024));
         let out = redact_btreemap_sensitive(h);
         let v = out.get("user-agent").expect("present");
         assert!(v.ends_with("...[truncated]"));

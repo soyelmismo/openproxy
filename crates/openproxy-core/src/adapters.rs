@@ -445,7 +445,8 @@ impl ProviderAdapter for OpenRouterAdapter {
                 let caps = derive_capabilities(&entry);
 
                 // Derive model_type from id and modalities.
-                let model_type = infer_model_type_openrouter(&id_string, entry.architecture.as_ref());
+                let model_type =
+                    infer_model_type_openrouter(&id_string, entry.architecture.as_ref());
 
                 // Extract modalities (skip empty arrays so they serialize
                 // as NULL rather than `[]`).
@@ -538,9 +539,7 @@ struct OpenRouterModelEntry {
 /// is set only when there's positive evidence; everything else stays
 /// `None` so the public `GET /v1/models` projection can distinguish
 /// "unknown" from "explicitly false".
-fn derive_capabilities(
-    entry: &OpenRouterModelEntry,
-) -> crate::capabilities::ModelCapabilities {
+fn derive_capabilities(entry: &OpenRouterModelEntry) -> crate::capabilities::ModelCapabilities {
     use crate::capabilities::ModelCapabilities;
     let mut caps = ModelCapabilities::empty();
 
@@ -565,7 +564,10 @@ fn derive_capabilities(
     if params.iter().any(|p| p == "tools") {
         caps.tool_calling = Some(true);
     }
-    if params.iter().any(|p| p == "reasoning" || p == "include_reasoning") {
+    if params
+        .iter()
+        .any(|p| p == "reasoning" || p == "include_reasoning")
+    {
         caps.reasoning = Some(true);
         caps.thinking = Some(true);
     }
@@ -599,10 +601,7 @@ fn derive_capabilities(
 /// Classify a model id into a coarse `model_type` string
 /// (`"chat" | "embedding" | "image" | "audio" | "rerank"`) using both
 /// the id's name and the `architecture.output_modalities` field.
-fn infer_model_type_openrouter(
-    id: &str,
-    architecture: Option<&OpenRouterArchitecture>,
-) -> String {
+fn infer_model_type_openrouter(id: &str, architecture: Option<&OpenRouterArchitecture>) -> String {
     let lower = id.to_lowercase();
 
     if lower.contains("embed") {
@@ -835,9 +834,7 @@ impl ProviderAdapter for MiniMaxAdapter {
             .or_else(|| body.get("models"))
             .and_then(|v| v.as_array())
             .ok_or_else(|| {
-                CoreError::Parse(
-                    "minimax /v1/models: missing 'data' or 'models' array".into(),
-                )
+                CoreError::Parse("minimax /v1/models: missing 'data' or 'models' array".into())
             })?;
 
         let out = arr
@@ -987,9 +984,8 @@ impl ProviderAdapter for OpenCodeZenAdapter {
         .await
         .map_err(|e| CoreError::UpstreamConnection(format!("opencode-zen /models: {e}")))?;
 
-        let payload: OpenAIModelsResponse = serde_json::from_value(body).map_err(|e| {
-            CoreError::Validation(format!("opencode-zen /models parse: {e}"))
-        })?;
+        let payload: OpenAIModelsResponse = serde_json::from_value(body)
+            .map_err(|e| CoreError::Validation(format!("opencode-zen /models parse: {e}")))?;
 
         let out = payload
             .data
@@ -1129,9 +1125,8 @@ impl ProviderAdapter for OllamaCloudAdapter {
         .await
         .map_err(|e| CoreError::UpstreamConnection(format!("ollama-cloud /api/tags: {e}")))?;
 
-        let payload: OllamaTagsResponse = serde_json::from_value(body).map_err(|e| {
-            CoreError::Parse(format!("ollama-cloud /api/tags parse: {e}"))
-        })?;
+        let payload: OllamaTagsResponse = serde_json::from_value(body)
+            .map_err(|e| CoreError::Parse(format!("ollama-cloud /api/tags parse: {e}")))?;
 
         let out = payload
             .models
@@ -1586,9 +1581,7 @@ impl ProviderAdapter for CloudflareWorkersAIAdapter {
         let arr = body
             .get("result")
             .and_then(|v| v.as_array())
-            .ok_or_else(|| {
-                CoreError::Parse("cloudflare response missing 'result' array".into())
-            })?;
+            .ok_or_else(|| CoreError::Parse("cloudflare response missing 'result' array".into()))?;
 
         let models: Vec<DiscoveredModel> = arr
             .iter()
@@ -1598,12 +1591,8 @@ impl ProviderAdapter for CloudflareWorkersAIAdapter {
                     model_id: ModelId::new(name),
                     display_name: Some(name.to_string()),
                     target_format: TargetFormat::Openai,
-                    context_length: raw
-                        .get("max_total_tokens")
-                        .and_then(|v| v.as_i64()),
-                    max_output_tokens: raw
-                        .get("max_total_tokens")
-                        .and_then(|v| v.as_i64()),
+                    context_length: raw.get("max_total_tokens").and_then(|v| v.as_i64()),
+                    max_output_tokens: raw.get("max_total_tokens").and_then(|v| v.as_i64()),
                     input_modalities: None,
                     output_modalities: None,
                     model_type: None,
@@ -1627,10 +1616,7 @@ impl ProviderAdapter for CloudflareWorkersAIAdapter {
             // etc.) regardless of value, plus any null optional fields.
             let remove_keys: Vec<String> = obj
                 .iter()
-                .filter(|(k, v)| {
-                    matches!(k.as_str(), "temperature")
-                        || v.is_null()
-                })
+                .filter(|(k, v)| matches!(k.as_str(), "temperature") || v.is_null())
                 .map(|(k, _)| k.clone())
                 .collect();
             for k in remove_keys {
@@ -1788,9 +1774,9 @@ impl ProviderAdapter for GeminiAdapter {
         upstream_client: &Arc<UpstreamClient>,
         api_key: &str,
     ) -> Result<Vec<DiscoveredModel>> {
-        let url = self.models_url().ok_or_else(|| {
-            CoreError::Internal("gemini: models_url is None (impossible)".into())
-        })?;
+        let url = self
+            .models_url()
+            .ok_or_else(|| CoreError::Internal("gemini: models_url is None (impossible)".into()))?;
 
         // Gemini uses `x-goog-api-key: <key>` (not Bearer). The
         // header name is non-standard so we still pass it through
@@ -1808,9 +1794,7 @@ impl ProviderAdapter for GeminiAdapter {
         let arr = body
             .get("models")
             .and_then(|v| v.as_array())
-            .ok_or_else(|| {
-                CoreError::Parse("gemini /models: missing 'models' array".into())
-            })?;
+            .ok_or_else(|| CoreError::Parse("gemini /models: missing 'models' array".into()))?;
 
         let out = arr
             .iter()
@@ -1877,7 +1861,8 @@ impl AntigravityAdapter {
             "gemini-3.5-flash-high" => "gemini-3.5-flash-high",
             "gemini-3-flash-agent" => "gemini-3.5-flash-high",
             _ => upstream_id,
-        }.to_string()
+        }
+        .to_string()
     }
 
     /// Parse fetchAvailableModels response into DiscoveredModel list.
@@ -2191,7 +2176,8 @@ impl AntigravityCliAdapter {
             "gemini-3.5-flash-high" => "gemini-3.5-flash-high",
             "gemini-3-flash-agent" => "gemini-3.5-flash-high",
             _ => upstream_id,
-        }.to_string()
+        }
+        .to_string()
     }
 
     /// Parse fetchAvailableModels response into DiscoveredModel list.
@@ -2599,7 +2585,10 @@ impl ProviderAdapter for CustomAdapter {
         api_key: &str,
     ) -> Result<Vec<DiscoveredModel>> {
         let url = self.models_url().ok_or_else(|| {
-            CoreError::Internal(format!("{}: models_url is None (impossible)", self.config.id))
+            CoreError::Internal(format!(
+                "{}: models_url is None (impossible)",
+                self.config.id
+            ))
         })?;
 
         // Build auth header based on the provider's auth type.
@@ -2770,8 +2759,14 @@ mod tests {
         let a = OpenRouterAdapter::new();
         let headers = a.build_headers("k", TargetFormat::Openai, &ModelId::new("any"));
         assert_eq!(first_header(&headers, "Authorization"), Some("Bearer k"));
-        assert_eq!(first_header(&headers, "Content-Type"), Some("application/json"));
-        assert_eq!(first_header(&headers, "HTTP-Referer"), Some("https://openproxy.local"));
+        assert_eq!(
+            first_header(&headers, "Content-Type"),
+            Some("application/json")
+        );
+        assert_eq!(
+            first_header(&headers, "HTTP-Referer"),
+            Some("https://openproxy.local")
+        );
         assert_eq!(first_header(&headers, "X-Title"), Some("openproxy"));
     }
 
@@ -2781,7 +2776,10 @@ mod tests {
     fn minimax_builds_messages_url_with_beta() {
         let a = MiniMaxAdapter::new();
         let url = a.build_chat_url(TargetFormat::Anthropic, &ModelId::new("m"));
-        assert_eq!(url, "https://api.minimax.io/anthropic/v1/messages?beta=true");
+        assert_eq!(
+            url,
+            "https://api.minimax.io/anthropic/v1/messages?beta=true"
+        );
     }
 
     #[test]
@@ -2798,8 +2796,14 @@ mod tests {
         let a = MiniMaxAdapter::new();
         let headers = a.build_headers("k", TargetFormat::Anthropic, &ModelId::new("m"));
         assert_eq!(first_header(&headers, "Authorization"), Some("Bearer k"));
-        assert_eq!(first_header(&headers, "Content-Type"), Some("application/json"));
-        assert_eq!(first_header(&headers, "Anthropic-Version"), Some("2023-06-01"));
+        assert_eq!(
+            first_header(&headers, "Content-Type"),
+            Some("application/json")
+        );
+        assert_eq!(
+            first_header(&headers, "Anthropic-Version"),
+            Some("2023-06-01")
+        );
     }
 
     // ---- OpenCode Zen ------------------------------------------------
@@ -2826,14 +2830,20 @@ mod tests {
         // No Bearer auth on the Anthropic branch.
         assert!(first_header(&headers, "Authorization").is_none());
         // Anthropic-Version must be present.
-        assert_eq!(first_header(&headers, "Anthropic-Version"), Some("2023-06-01"));
+        assert_eq!(
+            first_header(&headers, "Anthropic-Version"),
+            Some("2023-06-01")
+        );
     }
 
     #[test]
     fn opencode_zen_uses_bearer_for_openai() {
         let a = OpenCodeZenAdapter::new();
         let headers = a.build_headers("k-openai", TargetFormat::Openai, &ModelId::new("m"));
-        assert_eq!(first_header(&headers, "Authorization"), Some("Bearer k-openai"));
+        assert_eq!(
+            first_header(&headers, "Authorization"),
+            Some("Bearer k-openai")
+        );
         // No x-api-key on the OpenAI branch.
         assert!(first_header(&headers, "x-api-key").is_none());
         // No Anthropic-Version on the OpenAI branch.
@@ -2848,7 +2858,10 @@ mod tests {
         assert!(first_header(&headers, "Authorization").is_none());
         assert!(first_header(&headers, "x-api-key").is_none());
         // Content-Type and User-Agent are still present.
-        assert_eq!(first_header(&headers, "Content-Type"), Some("application/json"));
+        assert_eq!(
+            first_header(&headers, "Content-Type"),
+            Some("application/json")
+        );
         assert_eq!(first_header(&headers, "User-Agent"), Some("openproxy/0.1"));
     }
 
@@ -2858,7 +2871,10 @@ mod tests {
         for fmt in [TargetFormat::Openai, TargetFormat::Anthropic] {
             let headers = a.build_headers("k", fmt, &ModelId::new("m"));
             assert_eq!(first_header(&headers, "User-Agent"), Some("openproxy/0.1"));
-            assert_eq!(first_header(&headers, "Content-Type"), Some("application/json"));
+            assert_eq!(
+                first_header(&headers, "Content-Type"),
+                Some("application/json")
+            );
             assert!(has_header(&headers, "Content-Type"));
         }
     }
@@ -2882,10 +2898,7 @@ mod tests {
             classify_zen_target_format("MiniMax-M2"),
             TargetFormat::Anthropic
         );
-        assert_eq!(
-            classify_zen_target_format("gpt-4o"),
-            TargetFormat::Openai
-        );
+        assert_eq!(classify_zen_target_format("gpt-4o"), TargetFormat::Openai);
         assert_eq!(
             classify_zen_target_format("llama-3.1-70b"),
             TargetFormat::Openai
@@ -2943,7 +2956,10 @@ mod tests {
         let a = OllamaCloudAdapter::new();
         let headers = a.build_headers("k", TargetFormat::Openai, &ModelId::new("any"));
         assert_eq!(first_header(&headers, "Authorization"), Some("Bearer k"));
-        assert_eq!(first_header(&headers, "Content-Type"), Some("application/json"));
+        assert_eq!(
+            first_header(&headers, "Content-Type"),
+            Some("application/json")
+        );
     }
 
     // ---- Nous Research ------------------------------------------------
@@ -2952,7 +2968,10 @@ mod tests {
     fn nous_research_builds_correct_url() {
         let a = NousResearchAdapter::new();
         let url = a.build_chat_url(TargetFormat::Openai, &ModelId::new("Hermes-4-405B"));
-        assert_eq!(url, "https://inference-api.nousresearch.com/v1/chat/completions");
+        assert_eq!(
+            url,
+            "https://inference-api.nousresearch.com/v1/chat/completions"
+        );
     }
 
     #[test]
@@ -2977,7 +2996,10 @@ mod tests {
         let a = NousResearchAdapter::new();
         let headers = a.build_headers("k", TargetFormat::Openai, &ModelId::new("any"));
         assert_eq!(first_header(&headers, "Authorization"), Some("Bearer k"));
-        assert_eq!(first_header(&headers, "Content-Type"), Some("application/json"));
+        assert_eq!(
+            first_header(&headers, "Content-Type"),
+            Some("application/json")
+        );
     }
 
     // ---- NVIDIA NIM ---------------------------------------------------
@@ -2985,7 +3007,10 @@ mod tests {
     #[test]
     fn nvidia_nim_builds_correct_url() {
         let a = NvidiaNimAdapter::new();
-        let url = a.build_chat_url(TargetFormat::Openai, &ModelId::new("nvidia/nemotron-3-super-120b-a12b"));
+        let url = a.build_chat_url(
+            TargetFormat::Openai,
+            &ModelId::new("nvidia/nemotron-3-super-120b-a12b"),
+        );
         assert_eq!(url, "https://integrate.api.nvidia.com/v1/chat/completions");
     }
 
@@ -3011,7 +3036,10 @@ mod tests {
         let a = NvidiaNimAdapter::new();
         let headers = a.build_headers("k", TargetFormat::Openai, &ModelId::new("any"));
         assert_eq!(first_header(&headers, "Authorization"), Some("Bearer k"));
-        assert_eq!(first_header(&headers, "Content-Type"), Some("application/json"));
+        assert_eq!(
+            first_header(&headers, "Content-Type"),
+            Some("application/json")
+        );
     }
 
     // ---- Kilocode -----------------------------------------------------
@@ -3020,7 +3048,10 @@ mod tests {
     fn kilocode_builds_correct_url() {
         let a = KilocodeAdapter::new();
         let url = a.build_chat_url(TargetFormat::Openai, &ModelId::new("openai/gpt-5.5"));
-        assert_eq!(url, "https://api.kilo.ai/api/openrouter/v1/chat/completions");
+        assert_eq!(
+            url,
+            "https://api.kilo.ai/api/openrouter/v1/chat/completions"
+        );
     }
 
     #[test]
@@ -3045,7 +3076,10 @@ mod tests {
         let a = KilocodeAdapter::new();
         let headers = a.build_headers("k", TargetFormat::Openai, &ModelId::new("any"));
         assert_eq!(first_header(&headers, "Authorization"), Some("Bearer k"));
-        assert_eq!(first_header(&headers, "Content-Type"), Some("application/json"));
+        assert_eq!(
+            first_header(&headers, "Content-Type"),
+            Some("application/json")
+        );
     }
 
     // ---- Gemini -------------------------------------------------------
@@ -3082,7 +3116,10 @@ mod tests {
         let a = GeminiAdapter::new();
         let headers = a.build_headers("k", TargetFormat::Gemini, &ModelId::new("any"));
         assert_eq!(first_header(&headers, "x-goog-api-key"), Some("k"));
-        assert_eq!(first_header(&headers, "Content-Type"), Some("application/json"));
+        assert_eq!(
+            first_header(&headers, "Content-Type"),
+            Some("application/json")
+        );
     }
 
     // ---- Antigravity ---------------------------------------------------
@@ -3211,8 +3248,7 @@ mod tests {
         let a = CustomAdapter::from_provider_row(&p);
         let openai_url = a.build_chat_url(TargetFormat::Openai, &ModelId::new("gpt-4o"));
         assert_eq!(openai_url, "https://agg.example.com/v1/chat/completions");
-        let anthropic_url =
-            a.build_chat_url(TargetFormat::Anthropic, &ModelId::new("claude-4"));
+        let anthropic_url = a.build_chat_url(TargetFormat::Anthropic, &ModelId::new("claude-4"));
         assert_eq!(anthropic_url, "https://agg.example.com/v1/messages");
     }
 
@@ -3296,6 +3332,10 @@ mod tests {
         p.extra_headers_json = Some(r#"{"X-Custom":"value1"}"#.into());
         let a = CustomAdapter::from_provider_row(&p);
         let headers = a.build_headers("sk-test", TargetFormat::Openai, &ModelId::new("gpt-4o"));
-        assert!(headers.iter().any(|(k, v)| k == "X-Custom" && v == "value1"));
+        assert!(
+            headers
+                .iter()
+                .any(|(k, v)| k == "X-Custom" && v == "value1")
+        );
     }
 }

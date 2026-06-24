@@ -292,7 +292,10 @@ fn profile_chat_default_values() {
     assert_eq!(t.tls_ms, 5_000, "tls_ms should equal system default");
     assert_eq!(t.write_ms, 10_000, "write_ms should equal system default");
     assert_eq!(t.headers_ms, 20_000, "Chat tightens headers_ms to 20s");
-    assert_eq!(t.body_chunk_ms, 90_000, "Chat tightens body_chunk_ms to 90s");
+    assert_eq!(
+        t.body_chunk_ms, 90_000,
+        "Chat tightens body_chunk_ms to 90s"
+    );
     assert_eq!(t.total_ms, 300_000, "total_ms inherits system default");
 }
 
@@ -573,11 +576,7 @@ async fn phase_timeout_dial_real() {
     });
     let t0 = std::time::Instant::now();
     let res = client
-        .call(
-            UpstreamRequest::get("http://192.0.2.1/"),
-            profile,
-            cancel,
-        )
+        .call(UpstreamRequest::get("http://192.0.2.1/"), profile, cancel)
         .await;
     let elapsed = t0.elapsed();
     assert!(res.is_err(), "expected error, got {res:?}");
@@ -731,9 +730,9 @@ async fn adversarial_phased_connector_respects_dynamic_timeouts_via_atomic() {
         dial: Duration::from_millis(50),
         tls: Duration::from_secs(5),
     };
-    let read_back = CALL_TIMEOUTS.scope(tight, async {
-        connector.effective_timeouts()
-    }).await;
+    let read_back = CALL_TIMEOUTS
+        .scope(tight, async { connector.effective_timeouts() })
+        .await;
     assert_eq!(read_back.dial, Duration::from_millis(50));
     assert_eq!(read_back.dns, Duration::from_millis(50));
 
@@ -844,9 +843,7 @@ async fn adversarial_phase_timeout_body_chunk_gap_resets_after_each_chunk() {
     assert!(res.is_err(), "expected error on 4th chunk, got {res:?}");
     match res.unwrap_err() {
         UpstreamError::Timeout(UpstreamPhase::Body) => {}
-        other => panic!(
-            "expected Timeout(Body) on 4th chunk, got {other:?}"
-        ),
+        other => panic!("expected Timeout(Body) on 4th chunk, got {other:?}"),
     }
     // Post-fix: the gap timer is anchored at chunk3 (~600ms after
     // start), so the 4th-chunk read should fire at ~600+1000=1600ms.
@@ -1015,7 +1012,11 @@ async fn headers_timeout_fires_on_silent_http_server() {
 
     let t0 = std::time::Instant::now();
     let res = client
-        .call(UpstreamRequest::post_json(url, bytes::Bytes::from("{}")), profile, cancel)
+        .call(
+            UpstreamRequest::post_json(url, bytes::Bytes::from("{}")),
+            profile,
+            cancel,
+        )
         .await;
     let elapsed = t0.elapsed();
 

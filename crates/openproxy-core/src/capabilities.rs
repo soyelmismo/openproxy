@@ -108,7 +108,14 @@ pub fn infer_capabilities(model_id: &str) -> ModelCapabilities {
 
     // Reasoning / thinking: o1, o3, deepseek-r1, qwq, etc.
     const REASONING_KW: &[&str] = &[
-        "o1", "o3", "o4", "reasoning", "r1", "qwq", "think", "opus-4",
+        "o1",
+        "o3",
+        "o4",
+        "reasoning",
+        "r1",
+        "qwq",
+        "think",
+        "opus-4",
     ];
     if REASONING_KW.iter().any(|k| lower.contains(k)) {
         caps.reasoning = Some(true);
@@ -344,7 +351,10 @@ mod tests {
     #[test]
     fn model_type_classification() {
         assert_eq!(infer_model_type("text-embedding-3-small"), "embedding");
-        assert_eq!(infer_model_type("openai/text-embedding-3-large"), "embedding");
+        assert_eq!(
+            infer_model_type("openai/text-embedding-3-large"),
+            "embedding"
+        );
         assert_eq!(infer_model_type("dall-e-3"), "image");
         assert_eq!(infer_model_type("black-forest-labs/flux-1.1"), "image");
         assert_eq!(infer_model_type("gpt-4o"), "chat");
