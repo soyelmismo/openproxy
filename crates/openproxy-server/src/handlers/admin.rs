@@ -1705,6 +1705,19 @@ struct ClientWsMessage {
     since_id: Option<i64>,
 }
 
+/// Outcome of one poll of the optional notifications broadcast receiver
+/// inside `stream_usage_rows` (F2). The receiver is `Option<...>` (the
+/// channel may not be initialized in tests), so we wrap the recv result
+/// in this enum and match on it in the `select!` arm. `Closed` is
+/// separate from `Lagged` because we want to drop the receiver (set
+/// the Option to None) on Closed without breaking the WS connection —
+/// the stage/usage channels may still be live.
+enum NotifRxEvent {
+    Event(openproxy_core::notifications::NotificationEvent),
+    Lagged(u64),
+    Closed,
+}
+
 fn json_text(value: serde_json::Value) -> Result<String, ApiError> {
     serde_json::to_string(&value).map_err(|e| {
         ApiError(CoreError::Internal(format!(
@@ -1900,6 +1913,23 @@ async fn stream_usage_rows(
         let mut usage_rx = state.usage_tx().subscribe();
         let mut stage_rx = state.stage_tx().subscribe();
 
+        // F2: also subscribe to the notifications broadcast channel
+        // (created by F1 in `notifications::NOTIF_TX`). The channel is
+        // initialized in `AppState::new` / `AppState::for_test`, but
+        // some test paths construct a minimal AppState without that
+        // init — `try_get_tx()` returns `None` there and the
+        // notifications select! arm below becomes a no-op
+        // (`std::future::pending()`).
+        //
+        // The receiver is `Option<broadcast::Receiver<NotificationEvent>>`
+        // because (a) the channel might not be initialized in tests,
+        // and (b) we want to drop the receiver on `RecvError::Closed`
+        // (server shutting down) without breaking the WS connection
+        // — setting it to `None` makes the arm a permanent no-op
+        // until the connection closes.
+        let mut notification_rx = openproxy_core::notifications::try_get_tx()
+            .map(|tx| tx.subscribe());
+
         // 2. Spawn a DEDICATED sender task that owns `ws_sender.send`.
         //    The receiver loop forwards every broadcast event into
         //    `outbox` (a bounded mpsc); the sender task drains it and
@@ -1972,18 +2002,18 @@ async fn stream_usage_rows(
         // finding RACE-F-5.
         let mut last_known_id: i64 = rows.iter().map(|r| r.id.0).max().unwrap_or(0);
 
-        // 4. Event loop — usage_rx and stage_rx are already
-        //    subscribed above, before the history query. The
+        // 4. Event loop — usage_rx, stage_rx, and notification_rx are
+        //    already subscribed above, before the history query. The
         //    outbox decouples this loop from the WS sender task.
         //
-        // `biased` ensures the broadcast channels (stage + usage)
-        // are polled BEFORE the ws_receiver. The ws_receiver almost
-        // never has messages (only ping/subscribe from the client,
-        // which are rare), so polling it first wastes a branch on
-        // every iteration. More importantly, when the browser is
-        // slow and the outbox backs up, we want to prioritize
-        // draining the broadcast channels (which have a fixed
-        // capacity and will lag if not drained) over reading
+        // `biased` ensures the broadcast channels (stage + usage +
+        // notifications) are polled BEFORE the ws_receiver. The
+        // ws_receiver almost never has messages (only ping/subscribe
+        // from the client, which are rare), so polling it first wastes
+        // a branch on every iteration. More importantly, when the
+        // browser is slow and the outbox backs up, we want to
+        // prioritize draining the broadcast channels (which have a
+        // fixed capacity and will lag if not drained) over reading
         // client messages (which can wait indefinitely).
         loop {
             tokio::select! {
@@ -2033,6 +2063,70 @@ async fn stream_usage_rows(
                             outbox_send(&outbox_tx, json!({ "type": "resync", "since_id": last_known_id })).await;
                         }
                         Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                    }
+                }
+                // F2: notifications THIRD — model_new / model_gone /
+                // model_auto_activated / system events surfaced to the
+                // dashboard tray. Less frequent than stage/usage (a
+                // handful per discovery cycle, default 1h) but still
+                // real-time. The receiver is an Option because
+                // `try_get_tx()` returns None in tests that don't
+                // initialize the broadcast channel; in that case the
+                // async block degenerates to `pending().await` and
+                // this arm is a permanent no-op (never wins select!).
+                //
+                // On `Lagged(n)` we send a `lag_warning` with
+                // `channel: "notifications"` so the client can refetch
+                // via `GET /admin/api/notifications` (notifications are
+                // persisted, so refetch is the source of truth — we do
+                // NOT send a `resync` envelope because there is no
+                // `since_id` semantics for notifications; the client
+                // just lists the latest 50).
+                //
+                // On `Closed` (server shutting down) we set
+                // `notification_rx = None` so this arm becomes a no-op
+                // for the rest of the connection's lifetime — the
+                // stage/usage/ws arms continue running normally.
+                evt = async {
+                    match notification_rx.as_mut() {
+                        Some(rx) => match rx.recv().await {
+                            Ok(n) => NotifRxEvent::Event(n),
+                            Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                                NotifRxEvent::Lagged(n)
+                            }
+                            Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+                                NotifRxEvent::Closed
+                            }
+                        },
+                        None => std::future::pending().await,
+                    }
+                } => {
+                    match evt {
+                        NotifRxEvent::Event(n) => {
+                            outbox_send(
+                                &outbox_tx,
+                                json!({ "type": "notification", "data": n }),
+                            )
+                            .await;
+                        }
+                        NotifRxEvent::Lagged(skipped) => {
+                            outbox_try_send(&outbox_tx, json!({
+                                "type": "lag_warning",
+                                "skipped": skipped,
+                                "channel": "notifications",
+                                "message": format!(
+                                    "notifications broadcast channel lagged; {} event(s) skipped — refetch via GET /admin/api/notifications",
+                                    skipped
+                                ),
+                            })).await;
+                        }
+                        NotifRxEvent::Closed => {
+                            // Channel closed (server shutting down). Drop
+                            // the receiver so this arm becomes a no-op;
+                            // the WS connection stays alive as long as
+                            // stage/usage still have receivers.
+                            notification_rx = None;
+                        }
                     }
                 }
                 // WS receiver LAST — client messages (subscribe, ping)

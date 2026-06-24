@@ -50,6 +50,7 @@ import {
   hasCompleteLogDetail,
 } from "../components/log-detail.js";
 import type { RecentUsageRow, StageEvent } from "../lib/types/api.js";
+import type { NotificationEvent } from "../lib/types/notifications.js";
 
 // Local copy of the LogDetailLog shape from components/log-detail.ts.
 // G3 kept that interface private (it's an "open record" union of
@@ -64,16 +65,35 @@ interface LogDetailLog {
   [k: string]: unknown;
 }
 
-// WebSocket message envelope. The server sends one of four
-// payload types — see `handleLogsMessage` below for the
-// per-branch handling. We model the discriminated union on
-// `type` and let the per-branch data be `unknown` so the
-// consumers have to type-guard before reading it.
-interface WsEnvelope {
-  type: string;
-  data?: unknown;
+// WebSocket message envelope. The server sends one of several payload
+// types — see `handleLogsMessage` below for the per-branch handling. We
+// model the discriminated union on `type` and let the per-branch data be
+// a tight union of the known payload shapes (consumers type-guard before
+// reading). `export`d so `state/ws-bus.ts` (F2) can subscribe by type.
+//
+// F2 added `'notification'` to the `type` union and `NotificationEvent`
+// to the `data` union — the dashboard's notifications tray subscribes to
+// the new type via `subscribeWs('notification', ...)` in `state/ws-bus.ts`.
+//
+// We mark fields optional so old code that accesses `msg.data ?? msg.row
+// ?? msg` keeps type-checking; consumers narrow via type-guards. The
+// `channel` field is set on `lag_warning` envelopes so the client can
+// distinguish `notifications` lags from `usage` / `stage` lags and refetch
+// from the appropriate REST endpoint (notifications are refetched via
+// `GET /admin/api/notifications`; usage/stage use the `resync` envelope).
+export interface WsEnvelope {
+  type:
+    | "history"
+    | "row"
+    | "stage"
+    | "lag_warning"
+    | "resync"
+    | "pong"
+    | "error"
+    | "notification";
+  data?: StageEvent | RecentUsageRow | NotificationEvent;
   row?: unknown;
-  rows?: unknown;
+  rows?: RecentUsageRow[];
   message?: string;
   request_id?: string;
   delta?: string;
@@ -89,7 +109,17 @@ interface WsEnvelope {
   // optional so existing usage of `WsEnvelope` keeps
   // type-checking.
   skipped?: number;
+  // F2: `channel` is set on `lag_warning` envelopes to tell the
+  // client which broadcast channel lagged. `notifications` lags
+  // should refetch via `GET /admin/api/notifications`; `usage` /
+  // `stage` lags are followed by a `resync` envelope with
+  // `since_id`. Absent on `resync` envelopes.
+  channel?: "usage" | "stage" | "notifications";
   since_id?: number;
+  // F2: `server_time` is set on `pong` envelopes (the server's
+  // RFC-3339 timestamp when it processed the client's `ping`).
+  // Already in use by the existing pong handler.
+  server_time?: string;
 }
 
 // ---- Module-local UI state ----------------------------------------------
@@ -849,17 +879,32 @@ function handleLogsMessage(raw: MessageEvent): void {
     showToast(msg.message || "Live Logs WebSocket error", "error");
   } else if (msg.type === "lag_warning") {
     // H7 fix: the server detected a broadcast `Lagged(_)` on
-    // either the row or the stage channel. A `resync` envelope
-    // follows immediately (handled below). Show a persistent
-    // banner so the operator knows the displayed log is not
-    // a complete picture; the resync fetch will fill in the
-    // gap in the background.
+    // either the row, stage, or notifications channel. A `resync`
+    // envelope follows immediately for row/stage lags (handled
+    // below). Show a persistent banner so the operator knows the
+    // displayed log is not a complete picture; the resync fetch
+    // will fill in the gap in the background.
+    //
+    // F2: a `notifications` lag does NOT carry a `resync` follow-up
+    // — the notifications tray (F4) refetches via
+    // `GET /admin/api/notifications` (notifications are persisted,
+    // so the REST list is the source of truth). We show a different
+    // toast so the operator knows it's the tray that lagged, not
+    // the live-logs feed.
     const skipped = Number(msg.skipped || 0);
-    showToast(
-      `Live Logs broadcast lagged; ${skipped} event(s) skipped. ` +
-        `Refetching to catch up…`,
-      "warning",
-    );
+    if (msg.channel === "notifications") {
+      showToast(
+        `Notifications feed lagged; ${skipped} event(s) skipped. ` +
+          `Refetching the tray…`,
+        "warning",
+      );
+    } else {
+      showToast(
+        `Live Logs broadcast lagged; ${skipped} event(s) skipped. ` +
+          `Refetching to catch up…`,
+        "warning",
+      );
+    }
   } else if (msg.type === "resync") {
     // H7 fix: the server lost us on a broadcast channel and
     // is asking the dashboard to fetch any rows newer than
@@ -867,6 +912,15 @@ function handleLogsMessage(raw: MessageEvent): void {
     // prevents permanent state loss for slow dashboards.
     const sinceId = Number(msg.since_id || 0);
     void resyncUsageRows(sinceId);
+  } else if (msg.type === "notification") {
+    // F2: notifications (model_new / model_gone / model_auto_activated /
+    // system) are surfaced to the dashboard tray, NOT to the logs view.
+    // The logs handler intentionally does nothing here — the envelope
+    // is dispatched to ws-bus subscribers (notifications tray F4, live-
+    // store F5) by `state/ws.ts` after this handler returns. Listed
+    // explicitly so the discriminated union on `msg.type` is exhaustive
+    // and a future `else if (msg.type === ...)` doesn't accidentally
+    // swallow notifications.
   }
 }
 

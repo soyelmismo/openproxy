@@ -5,6 +5,8 @@
 import { state } from "./index.js";
 import { LOGS_WS_RECONNECT_DELAYS } from "../lib/constants.js";
 import type { StageEvent } from "../lib/types/api.js";
+import { dispatchWs } from "./ws-bus.js";
+import type { WsEnvelope } from "../views/logs.js";
 
 /** Connection status for the live-logs view. */
 export type LogsStatus = "connected" | "connecting" | "reconnecting" | "disconnected";
@@ -131,20 +133,53 @@ export function connectLogsWebSocket(): void {
     // Track pong responses for the heartbeat. Any message from the
     // server means the connection is alive — not just pongs.
     lastPong = Date.now();
-    if (typeof messageHandler !== "function") return;
-    // CRITICAL: wrap the entire handler in try/catch. Without this,
-    // a single malformed WS message (e.g. an unexpected null field
-    // in a usage row) would throw out of `messageHandler`, leave
-    // `state.logs` in an inconsistent mid-update state, and any
-    // subsequent WS messages would be queued behind the broken
-    // listener invocation.
-    try {
-      messageHandler(event);
-    } catch (err) {
-      const snippet: string = typeof event.data === "string"
-        ? event.data.slice(0, 200)
-        : String(event.data).slice(0, 200);
-      console.error("[openproxy] live-logs WS message handler threw:", err, "message snippet:", snippet);
+    if (typeof messageHandler === "function") {
+      // CRITICAL: wrap the entire handler in try/catch. Without this,
+      // a single malformed WS message (e.g. an unexpected null field
+      // in a usage row) would throw out of `messageHandler`, leave
+      // `state.logs` in an inconsistent mid-update state, and any
+      // subsequent WS messages would be queued behind the broken
+      // listener invocation.
+      try {
+        messageHandler(event);
+      } catch (err) {
+        const snippet: string = typeof event.data === "string"
+          ? event.data.slice(0, 200)
+          : String(event.data).slice(0, 200);
+        console.error("[openproxy] live-logs WS message handler threw:", err, "message snippet:", snippet);
+      }
+    }
+    // F2: fan the parsed envelope out to ws-bus subscribers. The
+    // logs handler above has already updated `state.logs` (e.g.
+    // `lastSeenId` from a `row` envelope), so subscribers see a
+    // consistent snapshot. The bus is independent of the logs view
+    // — subscribers for `notification` (F4 tray), `row` (F5 live-
+    // store), etc. register via `subscribeWs` in `state/ws-bus.ts`.
+    //
+    // We re-parse the JSON here (the logs handler parses its own
+    // copy). The duplicate parse is a few KB per message — negligible
+    // — and decoupling the two paths is worth it (the logs handler
+    // can stay focused on logs without having to forward the parsed
+    // object back to the bus). Malformed JSON is silently skipped:
+    // the logs handler already showed a toast for it.
+    if (typeof event.data === "string") {
+      try {
+        const parsed: unknown = JSON.parse(event.data);
+        if (
+          parsed !== null &&
+          typeof parsed === "object" &&
+          "type" in parsed
+        ) {
+          const envelope = parsed as { type: unknown };
+          if (typeof envelope.type === "string") {
+            // dispatchWs is wrapped in try/catch internally per
+            // subscriber, so it never throws.
+            dispatchWs(parsed as WsEnvelope);
+          }
+        }
+      } catch (_e) {
+        // Malformed JSON — logs handler already toasted. Skip dispatch.
+      }
     }
   });
   ws.addEventListener("close", () => {
