@@ -23,6 +23,10 @@ const options = {
   legalComments: 'eof',
   packages: 'bundle',
   logLevel: 'info',
+  // Treat .css imports as plain text strings so the uPlot wrapper can
+  // inline the chart CSS via a <style> tag at runtime. This keeps the
+  // bundle as a single app.js (no separate .css output to ship / link).
+  loader: { '.css': 'text' },
 };
 
 if (isWatch) {

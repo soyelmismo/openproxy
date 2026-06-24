@@ -18,6 +18,7 @@
     "typescript": "5.6.3"
   },
   "dependencies": {
-    "lit-html": "^3.3.3"
+    "lit-html": "^3.3.3",
+    "uplot": "^1.6.31"
   }
 }

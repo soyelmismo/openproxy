@@ -1618,3 +1618,397 @@ abbr {
   display: flex;
   justify-content: flex-end;
 }
+
+/* ============================================
+   F6: LIVE DASHBOARD — home view
+   ============================================ */
+
+.home-dashboard {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  padding: var(--space-3) var(--space-4) var(--space-6);
+  max-width: var(--layout-max-w);
+  margin: 0 auto;
+}
+
+/* ----- Page header with window selector ----- */
+.home-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-4);
+  flex-wrap: wrap;
+  margin-bottom: 0;
+}
+.home-header-text {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  min-width: 0;
+}
+.home-header-text h2 {
+  margin: 0;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+.home-subtitle {
+  margin: 0;
+  font-size: var(--fs-sm);
+}
+.home-header-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-shrink: 0;
+}
+
+/* ----- Connection state dot (in header) ----- */
+.home-conn-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  box-shadow: 0 0 0 2px var(--color-surface);
+}
+.home-conn-dot-ok {
+  background: var(--color-success);
+  animation: home-conn-pulse 2s ease-in-out infinite;
+}
+.home-conn-dot-warn {
+  background: var(--color-warn);
+  animation: home-conn-pulse 1s ease-in-out infinite;
+}
+.home-conn-dot-err {
+  background: var(--color-error);
+}
+@keyframes home-conn-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
+}
+
+/* ----- Connection state banner (above KPIs) ----- */
+.home-banner {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  border: var(--border-w) var(--border-style);
+  font-size: var(--fs-sm);
+  font-family: var(--font-sans);
+}
+.home-banner-icon {
+  font-size: var(--fs-md);
+  line-height: 1;
+}
+.home-banner-warn {
+  background: var(--color-warn-soft);
+  border-color: var(--color-warn);
+  color: var(--color-warn);
+}
+.home-banner-error {
+  background: var(--color-error-soft);
+  border-color: var(--color-error);
+  color: var(--color-error);
+}
+
+/* ----- Window selector (segmented control) ----- */
+.home-window-selector {
+  display: inline-flex;
+  border: var(--border-w) var(--border-style) var(--color-border);
+  background: var(--color-surface-2);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+}
+.home-window-btn {
+  padding: var(--space-1) var(--space-3);
+  border: none;
+  background: transparent;
+  color: var(--color-text-muted);
+  font-family: var(--font-sans);
+  font-size: var(--fs-sm);
+  cursor: pointer;
+  transition: background var(--t-fast), color var(--t-fast);
+  border-right: var(--border-w) var(--border-style) var(--color-border);
+}
+.home-window-btn:last-child {
+  border-right: none;
+}
+.home-window-btn:hover {
+  background: var(--color-surface);
+  color: var(--color-text);
+}
+.home-window-btn.active {
+  background: var(--color-primary);
+  color: var(--color-primary-fg);
+  font-weight: bold;
+}
+
+/* ----- KPI tiles grid ----- */
+.home-kpi-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: var(--space-3);
+}
+.home-kpi-tile {
+  padding: var(--space-3) var(--space-4);
+  background: var(--color-surface);
+  border: var(--border-w) var(--border-style) var(--color-border);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  min-width: 0;
+}
+.home-kpi-label {
+  font-size: var(--fs-xs);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--color-text-muted);
+  font-family: var(--font-display);
+}
+.home-kpi-value {
+  font-size: var(--fs-2xl);
+  font-weight: bold;
+  font-family: var(--font-mono);
+  line-height: var(--lh-tight);
+}
+.home-kpi-spark {
+  height: 24px;
+  margin-top: var(--space-1);
+  /* The uPlot instance is mounted inside this div; it fills the
+     container via the ResizeObserver in uplot-chart.ts. */
+}
+
+/* ----- Charts grid (2x2) ----- */
+.home-charts-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: var(--space-4);
+}
+.home-chart-card {
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+}
+.home-chart-card > .card-title {
+  padding: var(--space-2) var(--space-3);
+  border-bottom: var(--border-w) var(--border-style) var(--color-border);
+  font-family: var(--font-display);
+  font-size: var(--fs-sm);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+.home-chart-card > .card-subtitle {
+  padding: var(--space-1) var(--space-3);
+  font-size: var(--fs-xs);
+  color: var(--color-text-muted);
+  border-bottom: var(--border-w) var(--border-style) var(--color-border-soft);
+}
+.home-chart-container {
+  height: 220px;
+  padding: var(--space-2);
+  min-width: 0;
+  /* The uPlot instance is mounted inside this div. */
+}
+
+/* ----- Race outcomes stat blocks ----- */
+.home-race-stats {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: var(--space-2);
+  padding: var(--space-3);
+  flex: 1;
+}
+.home-race-stat {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-1);
+  padding: var(--space-3) var(--space-2);
+  border: var(--border-w) var(--border-style) var(--color-border-soft);
+  background: var(--color-surface-2);
+}
+.home-race-stat-value {
+  font-size: var(--fs-2xl);
+  font-weight: bold;
+  font-family: var(--font-mono);
+  line-height: var(--lh-tight);
+}
+.home-race-stat-label {
+  font-size: var(--fs-xs);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--color-text-muted);
+  font-family: var(--font-display);
+  text-align: center;
+}
+.home-race-stat-count {
+  font-size: var(--fs-sm);
+  color: var(--color-text-muted);
+  font-family: var(--font-mono);
+}
+.home-race-stat-won {
+  border-left: 3px solid var(--color-success);
+}
+.home-race-stat-lost {
+  border-left: 3px solid var(--color-error);
+}
+.home-race-stat-single {
+  border-left: 3px solid var(--color-info);
+}
+
+/* ----- Activity feed ----- */
+.home-activity-card {
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+}
+.home-activity-card > .card-title {
+  padding: var(--space-2) var(--space-3);
+  border-bottom: var(--border-w) var(--border-style) var(--color-border);
+  font-family: var(--font-display);
+  font-size: var(--fs-sm);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+.home-activity-header {
+  display: grid;
+  grid-template-columns: 80px 1fr 120px 70px 80px 100px 80px;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  border-bottom: var(--border-w) var(--border-style) var(--color-border);
+  font-size: var(--fs-xs);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--color-text-muted);
+  font-family: var(--font-display);
+}
+.home-activity-list {
+  max-height: 320px;
+  overflow-y: auto;
+  /* Smooth scrolling for new row prepends. */
+  scroll-behavior: smooth;
+}
+.home-activity-row {
+  display: grid;
+  grid-template-columns: 80px 1fr 120px 70px 80px 100px 80px;
+  gap: var(--space-2);
+  padding: var(--space-1) var(--space-3);
+  border-bottom: var(--border-w) var(--border-style) var(--color-border-soft);
+  font-size: var(--fs-sm);
+  font-family: var(--font-mono);
+  align-items: center;
+  transition: background var(--t-fast);
+}
+.home-activity-row:hover {
+  background: var(--color-surface-2);
+}
+.home-activity-row:last-child {
+  border-bottom: none;
+}
+.home-activity-time {
+  color: var(--color-text-muted);
+  white-space: nowrap;
+}
+.home-activity-model {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.home-activity-provider {
+  color: var(--color-text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.home-activity-status {
+  display: flex;
+  align-items: center;
+}
+.home-activity-latency,
+.home-activity-tokens,
+.home-activity-cost {
+  text-align: right;
+  white-space: nowrap;
+}
+.home-activity-cost {
+  color: var(--color-text-muted);
+}
+.home-activity-empty {
+  padding: var(--space-6) var(--space-3);
+  text-align: center;
+  font-size: var(--fs-sm);
+}
+
+/* ----- Responsive: tablet (640-1023px) ----- */
+@media (max-width: 1023px) {
+  .home-kpi-grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+  .home-charts-grid {
+    grid-template-columns: 1fr;
+  }
+  .home-activity-header,
+  .home-activity-row {
+    grid-template-columns: 70px 1fr 80px 60px 70px 90px 70px;
+  }
+}
+
+/* ----- Responsive: mobile (<640px) ----- */
+@media (max-width: 639px) {
+  .home-dashboard {
+    padding: var(--space-2) var(--space-2) var(--space-4);
+  }
+  .home-header {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .home-kpi-grid {
+    grid-template-columns: 1fr;
+  }
+  .home-race-stats {
+    grid-template-columns: 1fr;
+  }
+  /* On mobile, hide the provider + tokens columns to save horizontal
+     space — the most important info (time, model, status, latency,
+     cost) stays visible. */
+  .home-activity-header,
+  .home-activity-row {
+    grid-template-columns: 70px 1fr 60px 70px 70px;
+  }
+  .home-activity-header > :nth-child(3),
+  .home-activity-header > :nth-child(6),
+  .home-activity-row > :nth-child(3),
+  .home-activity-row > :nth-child(6) {
+    display: none;
+  }
+  .home-chart-container {
+    height: 180px;
+  }
+}
+
+/* ----- uPlot overrides — match the dashboard's design tokens ----- */
+/* uPlot's default CSS sets a transparent background and gray grid. We
+   override to use the project's border/text tokens so the charts blend
+   with the rest of the UI. These rules are scoped to .home-chart-container
+   so they don't affect other uPlot instances that might be added later. */
+.home-chart-container .uplot {
+  width: 100% !important;
+  height: 100% !important;
+  font-family: var(--font-mono);
+  color: var(--color-text);
+}
+.home-kpi-spark .uplot {
+  width: 100% !important;
+  height: 100% !important;
+}
+.home-chart-container .u-axis,
+.home-kpi-spark .u-axis {
+  stroke: var(--color-border);
+}
+.home-chart-container .u-label {
+  fill: var(--color-text-muted);
+}
