@@ -57,6 +57,7 @@
   "notifications.action.add_to_combo": "Add to combo",
   "notifications.action.dismiss": "Dismiss",
   "notifications.dnd.hint": "Drag onto a combo to add this model",
+  "notifications.dnd.overlay_subhead": "Drop on a combo header to append, or hover to expand and pick a position. Press Escape to cancel.",
   "notifications.dnd.drop_here": "Drop here to append to {{combo_name}}",
   "notifications.dnd.release_to_position": "Release to position in {{combo_name}}",
   "notifications.dnd.expand_combo": "Hover to expand {{combo_name}} targets",

@@ -1319,3 +1319,302 @@ abbr {
   border-bottom: 1px dotted var(--color-text-muted);
   cursor: help;
 }
+
+/* ============================================
+   F4 — Notifications view + sidebar badge + DnD overlay
+   ============================================ */
+
+/* Sidebar badge — red pill on the Notifications nav entry. Hidden
+   via JS when the count is 0 (no DOM node emitted). */
+.sidebar-badge {
+  margin-left: auto;
+  min-width: 1.4rem;
+  padding: 0 0.4rem;
+  font-size: var(--fs-xs);
+  font-family: var(--font-mono);
+  text-align: center;
+  background: var(--color-error);
+  color: var(--color-surface);
+  border-radius: var(--radius-pill);
+  line-height: 1.4;
+  /* Subtle pulse on first paint so the user notices the badge.
+     Animation runs once (no infinite) — once seen, it's just a
+     static pill. */
+  animation: sidebar-badge-pop 280ms ease-out 1;
+}
+.sidebar-badge.collapsed {
+  /* Collapsed sidebar: badge sits next to the icon. Smaller, no
+     text overflow. */
+  margin-left: 0.25rem;
+  font-size: 9px;
+  min-width: 1rem;
+  padding: 0 0.25rem;
+}
+@keyframes sidebar-badge-pop {
+  0%   { transform: scale(0.6); opacity: 0; }
+  60%  { transform: scale(1.15); opacity: 1; }
+  100% { transform: scale(1); }
+}
+
+/* Notifications view */
+.notification-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+.notification-card {
+  display: grid;
+  grid-template-columns: 32px 1fr auto;
+  gap: var(--space-3);
+  padding: var(--space-3);
+  background: var(--color-surface);
+  border: var(--border-w) var(--border-style) var(--color-border);
+  border-left-width: 3px;
+  border-left-color: var(--color-border);
+  transition: background var(--t-fast), border-color var(--t-fast);
+}
+.notification-card.unread {
+  border-left-color: var(--color-primary);
+  background: var(--color-primary-soft);
+}
+.notification-card.draggable {
+  cursor: grab;
+}
+.notification-card.draggable:active {
+  cursor: grabbing;
+}
+.notification-card.draggable:hover {
+  border-color: var(--color-primary);
+}
+.notification-card-icon {
+  font-size: 1.4rem;
+  line-height: 1;
+  text-align: center;
+  color: var(--color-text-muted);
+}
+.notification-card.unread .notification-card-icon {
+  color: var(--color-primary);
+}
+.notification-card-body {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+.notification-card-text {
+  font-size: var(--fs-sm);
+  word-break: break-word;
+}
+.notification-card-meta {
+  display: flex;
+  gap: var(--space-2);
+  align-items: center;
+  font-size: var(--fs-xs);
+  color: var(--color-text-muted);
+  flex-wrap: wrap;
+}
+.notification-card-kind {
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  font-family: var(--font-mono);
+}
+.notification-card-ago {
+  font-family: var(--font-mono);
+}
+.notification-card-unread-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--color-primary);
+  display: inline-block;
+}
+.notification-card-actions {
+  display: flex;
+  gap: var(--space-1);
+  align-items: flex-start;
+  flex-wrap: wrap;
+}
+.notification-empty {
+  padding: var(--space-6) var(--space-4);
+  text-align: center;
+  color: var(--color-text-muted);
+}
+.notification-empty-icon {
+  font-size: 2.5rem;
+  margin-bottom: var(--space-2);
+  opacity: 0.6;
+}
+.notification-no-unread-hint {
+  padding: var(--space-2) var(--space-3);
+  margin-bottom: var(--space-2);
+  background: var(--color-success-soft);
+  color: var(--color-success);
+  border: var(--border-w) var(--border-style) var(--color-success);
+  border-radius: var(--radius-pill);
+  font-size: var(--fs-sm);
+  text-align: center;
+}
+.notification-filter {
+  font-size: var(--fs-sm);
+  padding: 0.2rem 0.4rem;
+}
+
+/* Page-header title row — needed so the badge sits next to the H2. */
+.page-header-title {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+
+/* DnD overlay — covers the whole viewport with a darkened backdrop.
+   The inner card is centered and scrollable. */
+.dnd-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.55);
+  z-index: 10000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--space-4);
+}
+.dnd-overlay-card {
+  background: var(--color-surface);
+  border: var(--border-w-2) var(--border-style) var(--color-border);
+  border-radius: var(--radius-md, 6px);
+  max-width: 540px;
+  width: 100%;
+  max-height: 80vh;
+  display: flex;
+  flex-direction: column;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.35);
+}
+.dnd-overlay-header {
+  padding: var(--space-3) var(--space-4);
+  border-bottom: var(--border-w) var(--border-style) var(--color-border);
+}
+.dnd-overlay-header h3 {
+  margin: 0 0 var(--space-1);
+  font-size: var(--fs-md);
+}
+.dnd-overlay-header .muted {
+  margin: 0;
+  font-size: var(--fs-xs);
+  color: var(--color-text-muted);
+}
+.dnd-combos-list {
+  flex: 1;
+  overflow-y: auto;
+  padding: var(--space-2);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+.dnd-loading,
+.dnd-empty,
+.dnd-error {
+  padding: var(--space-3);
+  text-align: center;
+  color: var(--color-text-muted);
+  font-size: var(--fs-sm);
+}
+.dnd-error { color: var(--color-error); }
+.dnd-combo {
+  background: var(--color-surface-2);
+  border: var(--border-w) var(--border-style) var(--color-border);
+  border-radius: var(--radius-sm, 4px);
+  overflow: hidden;
+}
+.dnd-combo.expanded {
+  border-color: var(--color-primary);
+}
+.dnd-combo-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  background: var(--color-surface);
+  cursor: pointer;
+  transition: background var(--t-fast);
+}
+.dnd-combo-header:hover {
+  background: var(--color-primary-soft);
+}
+.dnd-combo-name {
+  font-weight: 600;
+  font-size: var(--fs-sm);
+}
+.dnd-combo-hint {
+  font-size: var(--fs-xs);
+  color: var(--color-text-muted);
+  text-align: right;
+  flex: 1;
+  min-width: 0;
+}
+.dnd-combo-targets {
+  padding: var(--space-1) var(--space-2) var(--space-2);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.dnd-target {
+  display: grid;
+  grid-template-columns: 24px 1fr auto;
+  gap: var(--space-2);
+  align-items: center;
+  padding: var(--space-1) var(--space-2);
+  background: var(--color-surface);
+  border: var(--border-w) var(--border-style) var(--color-border-soft);
+  font-size: var(--fs-xs);
+}
+.dnd-target-pos {
+  font-family: var(--font-mono);
+  color: var(--color-text-muted);
+  text-align: right;
+}
+.dnd-target-name {
+  font-family: var(--font-mono);
+  word-break: break-all;
+}
+.dnd-target-provider {
+  color: var(--color-text-muted);
+  font-size: 10px;
+}
+.dnd-drop-indicator {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: 2px var(--space-2);
+  min-height: 18px;
+  cursor: pointer;
+}
+.dnd-drop-indicator-line {
+  flex: 1;
+  height: 2px;
+  background: var(--color-border);
+  border-radius: 1px;
+  transition: background var(--t-fast), height var(--t-fast);
+}
+.dnd-drop-indicator-hint {
+  font-size: 10px;
+  color: transparent;
+  transition: color var(--t-fast);
+  white-space: nowrap;
+}
+.dnd-drop-indicator:hover .dnd-drop-indicator-line,
+.dnd-drop-indicator.over .dnd-drop-indicator-line {
+  background: var(--color-primary);
+  height: 3px;
+}
+.dnd-drop-indicator:hover .dnd-drop-indicator-hint,
+.dnd-drop-indicator.over .dnd-drop-indicator-hint {
+  color: var(--color-primary);
+}
+.dnd-overlay-footer {
+  padding: var(--space-2) var(--space-4);
+  border-top: var(--border-w) var(--border-style) var(--color-border);
+  display: flex;
+  justify-content: flex-end;
+}

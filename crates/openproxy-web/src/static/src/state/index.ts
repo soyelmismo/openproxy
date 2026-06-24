@@ -37,7 +37,8 @@ export type RouteName =
   | "analytics"
   | "logs"
   | "debug-logs"
-  | "config";
+  | "config"
+  | "notifications";
 
 /** Live-logs WebSocket connection status. Mirrors the `setLogsStatus`
  *  labels in `state/ws.ts`. */

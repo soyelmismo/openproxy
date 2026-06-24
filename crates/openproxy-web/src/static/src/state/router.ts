@@ -22,6 +22,7 @@ import { mountAnalytics } from "../views/analytics.js";
 import { mountLogs } from "../views/logs.js";
 import { mountConfig } from "../views/config.js";
 import { mountDebugLogs } from "../views/debug-logs.js";
+import { mountNotifications } from "../views/notifications.js";
 
 export type RouteName =
   | "home"
@@ -34,7 +35,8 @@ export type RouteName =
   | "analytics"
   | "logs"
   | "debug-logs"
-  | "config";
+  | "config"
+  | "notifications";
 
 export type ViewMount = (ctx: string) => unknown;
 
@@ -77,6 +79,12 @@ const ROUTES: readonly Route[] = [
     return mountDebugLogs(main);
   }) as ViewMount },
   { name: "config", pattern: /^#?\/config$/, mount: mountConfig as ViewMount },
+  // Notifications tray (F4). The view mounts at `#/notifications` and
+  // manages its own state (list, filter, DnD overlay, WS subscription
+  // via the notifications store). It returns a cleanup function that
+  // unsubscribes from the store's event stream so navigating away
+  // doesn't leak the listener.
+  { name: "notifications", pattern: /^#?\/notifications$/, mount: mountNotifications as ViewMount },
 ];
 
 export interface ParsedHash {

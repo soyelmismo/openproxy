@@ -5,14 +5,28 @@ import { html, render, type TemplateResult } from 'lit-html';
 import { unsafeHTML } from 'lit-html/directives/unsafe-html.js';
 import { state } from "../state/index.js";
 import { mountThemeToggle } from "./theme-toggle.js";
+import { t } from "../i18n/index.js";
+import {
+  initNotificationsStore,
+  getUnreadCount,
+  onUnreadCountChange,
+} from "../state/notifications-store.js";
 
 interface UiState { sidebarCollapsed?: boolean; }
 type MutableDashboard = { ui?: UiState };
 function mutableState(): MutableDashboard { return state as unknown as MutableDashboard; }
 
-type NavIconName = "home" | "providers" | "combos" | "keys" | "analytics" | "logs" | "debug-logs" | "config";
+type NavIconName = "home" | "providers" | "combos" | "keys" | "analytics" | "logs" | "debug-logs" | "config" | "notifications";
 
-interface SidebarLink { href: string; icon: NavIconName; label: string; }
+interface SidebarLink {
+  href: string;
+  icon: NavIconName;
+  label: string;
+  /** Optional badge key. When set, the sidebar renders a small red
+   *  pill next to the label whose numeric value comes from the
+   *  notifications store. Hidden when the value is 0. */
+  badgeKind?: "notifications-unread";
+}
 interface SidebarGroup { label: string; links: SidebarLink[]; }
 
 const HOME_LINK: SidebarLink = { href: "#/", icon: "home", label: "Home" };
@@ -26,6 +40,7 @@ const GROUPS: readonly SidebarGroup[] = [
   { label: "Insights", links: [
     { href: "#/analytics", icon: "analytics", label: "Analytics" },
     { href: "#/logs", icon: "logs", label: "Live Logs" },
+    { href: "#/notifications", icon: "notifications", label: "Notifications", badgeKind: "notifications-unread" },
     { href: "#/debug-logs", icon: "debug-logs", label: "Debug Logs" },
   ]},
   { label: "System", links: [
@@ -43,6 +58,9 @@ function navIconSvg(name: NavIconName): TemplateResult {
     logs: `<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round" stroke-linecap="round"><path d="M2 8 H5 L7 3 L9 13 L11 8 H14"/></svg>`,
     "debug-logs": `<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round" stroke-linecap="round"><ellipse cx="8" cy="9" rx="3.5" ry="4"/><circle cx="8" cy="4" r="1.2"/><path d="M8 5 V5.5"/><path d="M4.5 7 L2 6 M4.5 9 L1.5 9 M4.5 11 L2.5 12.5"/><path d="M11.5 7 L14 6 M11.5 9 L14.5 9 M11.5 11 L13.5 12.5"/></svg>`,
     config: `<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2"><circle cx="8" cy="8" r="2.5"/><path d="M8 1 V3.5 M8 12.5 V15 M1 8 H3.5 M12.5 8 H15 M3 3 L4.8 4.8 M11.2 11.2 L13 13 M3 13 L4.8 11.2 M11.2 4.8 L13 3"/></svg>`,
+    // Bell-ish glyph. The dot is filled via stroke="currentColor" so
+    // it inherits the active link colour.
+    notifications: `<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round" stroke-linecap="round"><path d="M3 12 H13 L11.5 10 V7 a3.5 3.5 0 0 0 -7 0 V10 Z"/><path d="M6.5 12 V12.5 a1.5 1.5 0 0 0 3 0 V12"/></svg>`,
   };
   return html`${unsafeHTML(svgs[name] || "")}`;
 }
@@ -64,14 +82,49 @@ function applyActiveState(): void {
 const STORAGE_KEY = "openproxy:sidebarCollapsed";
 
 function renderLink(l: SidebarLink, collapsed: boolean): TemplateResult {
+  // The notifications badge lives next to the nav label. It is hidden
+  // when the count is 0 (lit-html `nothing` sentinel — emits no DOM
+  // node, so the layout doesn't shift when the count drops to 0).
+  let badge: TemplateResult = html``;
+  if (l.badgeKind === "notifications-unread") {
+    const count: number = getUnreadCount();
+    if (count > 0) {
+      // When collapsed, show only the count pill (no label). The pill
+      // sits in the same flex row so it visually replaces the label.
+      const display: string = count > 99 ? "99+" : String(count);
+      badge = html`<span class="sidebar-badge ${collapsed ? "collapsed" : ""}" title=${t("notifications.unread_count", { count })}>${display}</span>`;
+    }
+  }
   return html`<a href=${l.href} data-nav=${l.href} title=${l.label}>
-    <span class="nav-icon" aria-hidden="true">${navIconSvg(l.icon)}</span><span class="nav-label" ?hidden=${collapsed}> ${l.label}</span>
+    <span class="nav-icon" aria-hidden="true">${navIconSvg(l.icon)}</span><span class="nav-label" ?hidden=${collapsed}> ${l.label}</span>${badge}
   </a>`;
+}
+
+let storeBootstrapped: boolean = false;
+
+/** Initialise the notifications store + WS subscription the first
+ *  time the sidebar renders. Idempotent — safe to call from every
+ *  `renderSidebar()`. The store bootstraps the WS, the 30s poll, and
+ *  the ws-bus subscription; we then subscribe to count changes so
+ *  the badge re-renders on every update. */
+function maybeBootstrapNotifications(): void {
+  if (storeBootstrapped) return;
+  storeBootstrapped = true;
+  initNotificationsStore();
+  // Re-render the sidebar on every count change so the badge stays
+  // in sync. The notifications view also subscribes to count changes
+  // for its own header badge — both fire on every change, which is
+  // fine (lit-html's diff is cheap).
+  onUnreadCountChange(() => {
+    // Only re-render the sidebar — the view handles its own updates.
+    renderSidebar();
+  });
 }
 
 export function renderSidebar(): void {
   const sb = document.querySelector(".sidebar");
   if (!sb) return;
+  maybeBootstrapNotifications();
   const health = state.health;
   const legacyHealthClass = !health ? "loading" : (health.status === "ok" || health.status === "healthy") ? "ok" : "error";
   const dotClass = !health ? "warn" : (health.status === "ok" || health.status === "healthy") ? "ok" : "err";
