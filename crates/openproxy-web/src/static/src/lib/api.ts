@@ -1,6 +1,11 @@
 // lib/api.ts — thin fetch wrapper. Throws `new Error("<status>: <body>")`
 // on non-2xx so call sites can pull a human message out with
 // `extractApiErrorMessage(e)`.
+//
+// Post-F0 (single-binary merge): the dashboard talks DIRECTLY to the
+// openproxy server's `/admin/api/*` surface — same origin, no proxy.
+// The previous `/web/api/*` prefix (which the separate `openproxy-web`
+// binary reverse-proxied to `/admin/*` on the core server) is gone.
 
 import { state } from "../state/index.js";
 import type { DebugLogsResponse } from "./types/api.js";
@@ -13,7 +18,7 @@ export interface ApiOptions {
 export async function api(path: string, opts: ApiOptions = {}): Promise<unknown> {
   const init: RequestInit = { method: opts.method || "GET", headers: { "Content-Type": "application/json" } };
   if (opts.body) init.body = opts.body;
-  const r = await fetch("/web/api" + path, init);
+  const r = await fetch("/admin/api" + path, init);
   if (!r.ok) {
     const txt = await r.text();
     throw new Error(`${r.status}: ${txt}`);
@@ -30,8 +35,8 @@ export async function api(path: string, opts: ApiOptions = {}): Promise<unknown>
 export function lastApiLatency(): number { return state.lastApiLatencyMs; }
 
 // ----------------------------------------------------------------------------
-// Debug logs — typed wrappers around `GET /admin/debug/logs` and
-// `POST /admin/debug/clear`. The view (`views/debug-logs.ts`) calls
+// Debug logs — typed wrappers around `GET /admin/api/debug/logs` and
+// `POST /admin/api/debug/clear`. The view (`views/debug-logs.ts`) calls
 // these instead of `api()` directly so the response shape is checked
 // at compile time and the query-string construction is centralised.
 // ----------------------------------------------------------------------------
@@ -58,10 +63,11 @@ export interface FetchDebugLogsOpts {
   trace_id?: string;
 }
 
-/** `GET /admin/debug/logs` — fetch recent `tracing` events from the
- *  server's in-memory ring buffer. The proxy at `/web/api/*` strips
- *  the `/web/api` prefix and forwards to `/admin/debug/logs`, so the
- *  path passed to `api()` is `/debug/logs`. */
+/** `GET /admin/api/debug/logs` — fetch recent `tracing` events from
+ *  the server's in-memory ring buffer. The dashboard talks directly
+ *  to the server's `/admin/api/*` surface (post-F0 single-binary
+ *  merge), so the path passed to `api()` is `/debug/logs` and the
+ *  `/admin/api` prefix is prepended by `api()` itself. */
 export async function fetchDebugLogs(opts: FetchDebugLogsOpts = {}): Promise<DebugLogsResponse> {
   const params = new URLSearchParams();
   if (opts.since !== undefined) params.set("since", String(opts.since));
@@ -79,7 +85,7 @@ export async function fetchDebugLogs(opts: FetchDebugLogsOpts = {}): Promise<Deb
   return data as DebugLogsResponse;
 }
 
-/** `POST /admin/debug/clear` — wipe the in-memory debug log ring
+/** `POST /admin/api/debug/clear` — wipe the in-memory debug log ring
  *  buffer on the server. Used by the "Clear" button in the Debug
  *  Logs view for "reproduce then capture" workflows. Returns void;
  *  errors propagate as `Error("<status>: <body>")` from `api()`. */

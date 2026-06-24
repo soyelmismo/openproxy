@@ -10,7 +10,7 @@
 // every 3s, to keep the sidebar health pill live. The user
 // explicitly asked for this: "no, solo dejamos polling a ese
 // endpoint health que es liviano, para indicar en tiempo real el
-// estado del backend". /web/api/health returns a tiny JSON object
+// estado del backend". /admin/health returns a tiny JSON object
 // (`{status, message}`) so the cost is negligible.
 //
 // If a view needs live updates in the future (e.g. a "live quota"
@@ -28,7 +28,7 @@ import { api } from "./api.js";
 
 const POLL_MS = 3000;
 
-/** Health payload as returned by /web/api/health. Kept narrow
+/** Health payload as returned by /admin/health. Kept narrow
  *  because the pill only reads `.status`. The `message` field is
  *  informational and shown in tooltips. */
 interface HealthPayload {
@@ -63,7 +63,7 @@ async function healthTick(): Promise<void> {
 }
 
 /** Narrow an `unknown` into the HealthPayload shape we expect
- *  from /web/api/health. The bg-poll never crashes on a bad
+ *  from /admin/health. The bg-poll never crashes on a bad
  *  payload — the pill just shows "—" until the next tick. */
 function isHealthPayload(x: unknown): x is HealthPayload {
   if (typeof x !== "object" || x === null) return false;

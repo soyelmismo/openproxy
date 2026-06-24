@@ -3,10 +3,16 @@
   <head>
     <meta charset="utf-8">
     <title>openproxy admin</title>
-    <link rel="stylesheet" href="/styles/index.css">
+    <!--
+      Asset paths are absolute (`/admin/...`) so client-side SPA
+      routing to deep paths like `/admin/combos/42/edit` doesn't
+      break the asset loads. The server serves these from the
+      rust-embedded `crates/openproxy-web/src/static/` tree.
+    -->
+    <link rel="stylesheet" href="/admin/styles/index.css">
   </head>
   <body>
     <div id="app"></div>
-    <script type="module" src="/dist/app.js"></script>
+    <script type="module" src="/admin/dist/app.js"></script>
   </body>
 </html>

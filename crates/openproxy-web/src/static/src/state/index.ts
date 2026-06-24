@@ -135,7 +135,7 @@ export interface DashboardState {
    *  dashboard views hydrate it from `/admin/api-keys`. Kept
    *  loose here (out of G3 scope — G4 will narrow it). */
   apiKeys: unknown[];
-  /** Health payload from /web/api/health. `null` until the first
+  /** Health payload from /admin/health. `null` until the first
    *  tick resolves, or if the request fails. The bg-poll only
    *  reads `.status` (and `.message` for tooltips). */
   health: { status: string; message?: string } | null;

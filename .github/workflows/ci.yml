@@ -117,10 +117,15 @@ jobs:
           workspaces: 'crates'
 
       - name: Download web-dist artifact
-        # openproxy-web's lib.rs has no build.rs that requires dist/ at
-        # compile time, but `cargo check` will still try to build the
-        # openproxy-web crate — keeping the artifact in place mirrors
-        # the production build environment.
+        # `openproxy-server` embeds the dashboard SPA's `dist/` tree at
+        # compile time via `rust-embed` (see
+        # `crates/openproxy-server/src/admin_ui.rs`). The embedded
+        # folder is `crates/openproxy-web/src/static/` (which is in the
+        # checkout), but without this artifact the `dist/` subdirectory
+        # is empty — `cargo check` would still pass (rust-embed embeds
+        # whatever is present), but a real `cargo build` would produce a
+        # binary with a broken SPA (no `app.js` to serve). Keeping the
+        # artifact in place mirrors the production build environment.
         uses: actions/download-artifact@v4
         with:
           name: web-dist
@@ -218,7 +223,8 @@ jobs:
 
   # -----------------------------------------------------------------------------
   # 4. Build matrix — 7 targets. Each leg:
-  #      - downloads web-dist so the openproxy-web crate has its dist/ tree
+  #      - downloads web-dist so rust-embed can bake the SPA bundle into
+  #        the openproxy-server binary at compile time
   #      - builds openproxy-server (produces the `openproxy` binary)
   #      - zips binary + config.example.toml + dist/ + README
   #
@@ -319,20 +325,23 @@ jobs:
           ====================================
 
           Contents:
-            openproxy              - the API server binary
+            openproxy              - the API + dashboard server binary
             config.example.toml    - sample config; copy to config.toml and edit
-            dist/                  - dashboard web assets (used by openproxy-web)
+            dist/                  - dashboard web assets (also embedded in the binary,
+                                      shipped separately for reference / debugging)
 
           Quick start:
             cp config.example.toml config.toml
             # edit config.toml: set [server].bind = "0.0.0.0:8787" for non-loopback
             ./openproxy --config config.toml
 
+          The single binary serves BOTH the OpenAI-compatible API
+          (/v1/*, /admin/api/*) and the dashboard SPA (/admin/*) on
+          the same port. Open http://127.0.0.1:8787/admin/ in your
+          browser to access the dashboard.
+
           Health check:
             curl http://127.0.0.1:8787/v1/health
-
-          Note: this zip contains the API server only. The dashboard UI is
-          served by a separate `openproxy-web` binary (see docs/architecture.md).
           EOF
           zip -r "openproxy-${VERSION}-${TARGET}.zip" "${STAGE}"
 
@@ -353,20 +362,23 @@ jobs:
           ====================================
 
           Contents:
-            openproxy.exe          - the API server binary
+            openproxy.exe          - the API + dashboard server binary
             config.example.toml    - sample config; copy to config.toml and edit
-            dist/                  - dashboard web assets (used by openproxy-web)
+            dist/                  - dashboard web assets (also embedded in the binary,
+                                      shipped separately for reference / debugging)
 
           Quick start (PowerShell):
             Copy-Item config.example.toml config.toml
             # edit config.toml: set [server].bind = "0.0.0.0:8787"
             .\openproxy.exe --config config.toml
 
+          The single binary serves BOTH the OpenAI-compatible API
+          (/v1/*, /admin/api/*) and the dashboard SPA (/admin/*) on
+          the same port. Open http://127.0.0.1:8787/admin/ in your
+          browser to access the dashboard.
+
           Health check:
             curl http://127.0.0.1:8787/v1/health
-
-          Note: this zip contains the API server only. The dashboard UI is
-          served by a separate openproxy-web binary (see docs/architecture.md).
           EOF
           # 7z is preinstalled on windows-latest Git Bash.
           7z a "openproxy-${VERSION}-${TARGET}.zip" "${STAGE}"

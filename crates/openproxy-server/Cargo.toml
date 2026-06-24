@@ -33,6 +33,15 @@ http-body = "1"
 http-body-util = "0.1"
 bytes = "1"
 parking_lot = { workspace = true }
+# Embeds the dashboard SPA's dist/ bundle into the binary so the
+# server ships as a single self-contained executable that serves
+# both the API (/v1/*, /admin/api/*) and the dashboard SPA
+# (/admin/*, /admin/dist/*). The `mime-guess` feature lets us emit
+# the correct Content-Type for each embedded asset; we also pull in
+# `mime_guess` directly so the handler in `admin_ui.rs` can call
+# `mime_guess::from_path` without going through rust-embed's re-export.
+rust-embed = { version = "8", features = ["mime-guess"] }
+mime_guess = "2"
 # mimalloc as the global allocator. glibc malloc retains freed arenas
 # aggressively, which inflates idle RSS for long-running services that
 # go through bursts of allocation (migrations, models.dev sync,

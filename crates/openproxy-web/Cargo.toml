@@ -1,3 +1,10 @@
+# NOTE: This crate is being phased out. The dashboard SPA it produces is now
+# embedded into openproxy-server via rust-embed (see
+# `crates/openproxy-server/src/admin_ui.rs`). The frontend source files
+# (under src/static/) are still maintained here. The Rust binary in this
+# crate (src/lib.rs, src/main.rs, src/api_proxy.rs, src/handlers.rs) is
+# DEAD CODE and will be removed in a follow-up commit once we've confirmed
+# the embedded-SPA migration is solid.
 [package]
 name = "openproxy-web"
 version.workspace = true

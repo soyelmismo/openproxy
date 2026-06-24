@@ -16,3 +16,10 @@ pub mod rate_limit;
 /// dashboard via `GET /admin/debug/logs`. See `debug_log.rs` for the
 /// full design rationale.
 pub mod debug_log;
+/// Dashboard SPA embedded in the server binary via `rust-embed`.
+/// Serves `index.html`, `callback.html`, and the `dist/` /
+/// `styles/` / `fonts/` asset tree at `/admin/*`. The admin REST
+/// API lives at `/admin/api/*` (see `router.rs`) and the live-logs
+/// WebSocket lives at `/admin/ws` — neither is served from this
+/// module.
+pub mod admin_ui;

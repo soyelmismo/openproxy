@@ -22,7 +22,7 @@ export async function api(path: string, opts: ApiCallOptions = {}): Promise<unkn
     headers: { "Content-Type": "application/json" },
   };
   if (opts.body) init.body = opts.body;
-  const r: Response = await fetch("/web/api" + path, init);
+  const r: Response = await fetch("/admin/api" + path, init);
   if (!r.ok) {
     const txt: string = await r.text();
     throw new Error(`${r.status}: ${txt}`);

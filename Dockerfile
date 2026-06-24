@@ -66,11 +66,12 @@ RUN pnpm install --frozen-lockfile \
     && test -f src/static/dist/app.js
 
 # Build the openproxy release binary. `openproxy-server` produces the
-# `openproxy` binary. The frontend dist/ is left in place — the
-# `openproxy-web` crate reads static files from CARGO_MANIFEST_DIR at
-# runtime (see crates/openproxy-web/src/handlers.rs::serve_static), so
-# the build needs the dist/ tree to exist on disk for the dashboard to
-# work in case the operator also runs openproxy-web from this image.
+# `openproxy` binary, which now serves BOTH the API (/v1/*, /admin/api/*)
+# and the dashboard SPA (/admin/*, embedded via rust-embed — see
+# `crates/openproxy-server/src/admin_ui.rs`). The frontend dist/ tree
+# MUST exist before this step because rust-embed bakes it into the
+# binary at compile time. The previous step (`pnpm build`) just
+# produced `crates/openproxy-web/src/static/dist/app.js` and friends.
 WORKDIR /build
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/build/target \
