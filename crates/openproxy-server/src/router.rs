@@ -393,7 +393,28 @@ pub fn build_router(state: AppState) -> Router {
         // registered here — it lives at `/admin/oauth/callback`
         // (top-level public route in `admin_routes` below, the
         // browser-callback URL, no auth required).
-        ;
+        //
+        // B1 (Bug 1): JSON 404 fallback for unmatched `/admin/api/*`
+        // routes. In axum 0.8, when a nested router doesn't match,
+        // the request falls through to the PARENT router's fallback.
+        // Without this fallback here, an unmatched `/admin/api/*`
+        // path (e.g. `/admin/api/health` — there's a public
+        // `/admin/health` but no `/admin/api/health`) would fall
+        // through to `admin_routes`'s `.fallback(admin_ui::serve_asset)`,
+        // which returns the SPA's `index.html` (HTML) — confusing
+        // for API clients that expect JSON. This fallback returns a
+        // proper JSON 404 with a structured `{"error":{"code":...}}`
+        // body, matching the shape used by the rest of the admin
+        // API's error responses. Only truly non-API paths under
+        // `/admin/*` (e.g. `/admin/combos/42/edit`) now fall through
+        // to the SPA.
+        .fallback(|| async {
+            (
+                axum::http::StatusCode::NOT_FOUND,
+                [(axum::http::header::CONTENT_TYPE, "application/json")],
+                r#"{"error":{"code":"not_found","message":"endpoint not found"}}"#,
+            )
+        });
 
     // Apply the admin auth middleware to the protected admin REST
     // routes ONLY. The state-clone is required because

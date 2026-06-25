@@ -9,9 +9,21 @@
 //! [`DebugLogLayer`](crate::debug_log::DebugLogLayer) that captures every
 //! event into an in-memory ring buffer exposed to the dashboard via
 //! `GET /admin/debug/logs`. See `debug_log.rs` for the full rationale.
+//!
+//! ## B1 (Bug 3): per-layer filtering
+//!
+//! The `fmt` layer (stdout) honors the operator's `RUST_LOG` (or the
+//! `LoggingConfig.level` default of `"info"`). The `DebugLogLayer` is
+//! given its OWN per-layer filter (`LevelFilter::WARN`) so it ALWAYS
+//! captures WARN+ERROR events into the ring buffer — even when the
+//! operator sets `RUST_LOG=error` (silencing WARN from stdout) or
+//! `RUST_LOG=off` (silencing everything). Without this, the dashboard's
+//! Debug Logs view would silently miss discovery-tick failures and other
+//! WARN-level events that the operator needed to see in order to
+//! troubleshoot upstream 404s like the Cloudflare account-id bug.
 
 use openproxy_core::config::{LogFormat, LoggingConfig};
-use tracing_subscriber::{EnvFilter, fmt, prelude::*};
+use tracing_subscriber::{EnvFilter, filter::LevelFilter, fmt, prelude::*};
 
 /// Initialize the global subscriber. Idempotent in the sense that calling
 /// it twice is a no-op the second time, but in practice `main` is the
@@ -25,32 +37,52 @@ pub fn init(config: &LoggingConfig) -> anyhow::Result<()> {
     // installed. `debug_log::init` is idempotent.
     crate::debug_log::init();
 
-    let filter =
+    // The fmt layer's filter: operator-controlled via RUST_LOG, with
+    // a fallback to `LoggingConfig.level` (default "info"). This is
+    // the only filter that controls stdout output.
+    let fmt_filter =
         EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(&config.level));
 
-    let registry = tracing_subscriber::registry().with(filter);
-
-    // The DebugLogLayer captures every event into the in-memory ring
-    // buffer. It's installed alongside the fmt layer so stdout output
-    // is unaffected.
-    let debug_layer = crate::debug_log::DebugLogLayer;
+    // The DebugLogLayer's filter: ALWAYS WARN+. This is independent
+    // of `fmt_filter` (per-layer filters apply to their OWN layer
+    // only) — so even when the operator sets `RUST_LOG=error` (which
+    // would silence WARN from stdout), the DebugLogLayer still
+    // captures WARN events into the ring buffer for the dashboard's
+    // Debug Logs view. `LevelFilter` accepts all events at or above
+    // the given level (WARN, ERROR).
+    //
+    // NOTE: the `with_filter` call is constructed INSIDE each match
+    // arm rather than once before the match. The reason is subtle:
+    // `Layer::with_filter` returns `Filtered<Self, F, S>` where `S`
+    // is the layer's subscriber-type parameter, and that parameter
+    // must be inferable at the point of construction. If we build
+    // the filtered layer once before the `match`, the compiler
+    // commits to a single `S` inferred from the first usage site
+    // (the JSON branch), and the second usage site (the Text branch)
+    // fails to unify because its `fmt::Layer` uses
+    // `DefaultFields`+`Format<Compact>` rather than
+    // `JsonFields`+`Format<Json>`. Constructing the filtered
+    // `DebugLogLayer` separately in each arm lets the compiler infer
+    // the right `S` for each arm.
+    let debug_filter = LevelFilter::WARN;
 
     match config.format {
         LogFormat::Json => {
-            registry
+            tracing_subscriber::registry()
                 .with(
                     fmt::layer()
                         .json()
                         .with_current_span(true)
-                        .with_span_list(false),
+                        .with_span_list(false)
+                        .with_filter(fmt_filter),
                 )
-                .with(debug_layer)
+                .with(crate::debug_log::DebugLogLayer.with_filter(debug_filter))
                 .try_init()?;
         }
         LogFormat::Text => {
-            registry
-                .with(fmt::layer().compact())
-                .with(debug_layer)
+            tracing_subscriber::registry()
+                .with(fmt::layer().compact().with_filter(fmt_filter))
+                .with(crate::debug_log::DebugLogLayer.with_filter(debug_filter))
                 .try_init()?;
         }
     }

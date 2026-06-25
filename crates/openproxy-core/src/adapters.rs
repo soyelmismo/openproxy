@@ -1541,6 +1541,15 @@ impl ProviderAdapter for CloudflareWorkersAIAdapter {
     }
 
     fn models_url_for_account(&self, account_label: &str) -> Option<String> {
+        // B1 (Bug 2): mirror the `fetch_models_for_account` validation.
+        // An empty label would build a URL with a double slash
+        // (`accounts//ai/models/search`) — return `None` so callers
+        // that probe the URL without fetching (e.g. debug diagnostics)
+        // also see the missing-label condition. The actual fetch path
+        // returns a `Validation` error for the same case.
+        if account_label.trim().is_empty() {
+            return None;
+        }
         Some(format!(
             "{}/{}/ai/models/search",
             self.config.base_url, account_label
@@ -1563,6 +1572,21 @@ impl ProviderAdapter for CloudflareWorkersAIAdapter {
         api_key: &str,
         account_label: &str,
     ) -> Result<Vec<DiscoveredModel>> {
+        // B1 (Bug 2): validate the label is non-empty BEFORE building
+        // the URL. An empty `account_label` would produce a URL like
+        // `https://api.cloudflare.com/client/v4/accounts//ai/models/search`
+        // (note the double slash) which Cloudflare answers with a
+        // confusing 404 — the operator sees "upstream connection error:
+        // status 404" with no hint that the account label is missing.
+        // Returning a `Validation` error here surfaces the actual root
+        // cause in the WARN log + the dashboard's Debug Logs view.
+        if account_label.trim().is_empty() {
+            return Err(CoreError::Validation(
+                "cloudflare-workers-ai: account label is empty — \
+                 set the account's `label` field to the Cloudflare account ID"
+                    .into(),
+            ));
+        }
         let url = format!(
             "{}/{}/ai/models/search",
             self.config.base_url, account_label
@@ -2923,6 +2947,75 @@ mod tests {
         assert!(ids.contains(&"gemini"));
         assert!(ids.contains(&"antigravity"));
         assert!(ids.contains(&"antigravity-cli"));
+    }
+
+    // ---- Cloudflare Workers AI ---------------------------------------
+
+    // B1 (Bug 2): the discovery scheduler used to pass an empty
+    // `account_label` to `fetch_models_for_account`, which produced
+    // URLs like `accounts//ai/models/search` and 404'd every tick.
+    // The adapter now validates the label up-front and returns a
+    // `Validation` error instead of building a broken URL — the
+    // error is logged at WARN by the discovery scheduler and surfaces
+    // in the dashboard's Debug Logs view with a clear root-cause
+    // message ("account label is empty — set the account's `label`
+    // field to the Cloudflare account ID").
+    #[tokio::test]
+    async fn cloudflare_fetch_models_for_account_rejects_empty_label() {
+        let a = CloudflareWorkersAIAdapter::new();
+        let upstream = Arc::new(UpstreamClient::new());
+        let res = a
+            .fetch_models_for_account(&upstream, "cf-test-key", "")
+            .await;
+        assert!(res.is_err(), "expected Validation error for empty label");
+        let msg = match res.unwrap_err() {
+            CoreError::Validation(s) => s,
+            other => panic!("expected CoreError::Validation, got {other:?}"),
+        };
+        assert!(
+            msg.contains("account label is empty"),
+            "error message should explain the empty-label root cause, got: {msg}",
+        );
+    }
+
+    // The non-empty path builds a URL of the form
+    // `https://api.cloudflare.com/client/v4/accounts/{label}/ai/models/search`.
+    // We don't hit the network here — we just exercise the
+    // `models_url_for_account` helper, which is the URL the
+    // `fetch_models_for_account` body would also build (kept in
+    // sync by the adapter).
+    #[test]
+    fn cloudflare_models_url_for_account_builds_expected_path() {
+        let a = CloudflareWorkersAIAdapter::new();
+        assert_eq!(
+            a.models_url_for_account("abc123").as_deref(),
+            Some("https://api.cloudflare.com/client/v4/accounts/abc123/ai/models/search"),
+        );
+    }
+
+    #[test]
+    fn cloudflare_models_url_for_account_rejects_empty_label() {
+        // The trait default for `models_url_for_account` would just
+        // delegate to `models_url`, which returns `None` for the
+        // Cloudflare adapter. We override it to mirror the
+        // `fetch_models_for_account` validation: an empty label is a
+        // configuration error, not a "no models URL" case.
+        let a = CloudflareWorkersAIAdapter::new();
+        assert_eq!(a.models_url_for_account("").as_deref(), None);
+    }
+
+    #[test]
+    fn cloudflare_build_chat_url_for_account_substitutes_label() {
+        let a = CloudflareWorkersAIAdapter::new();
+        let url = a.build_chat_url_for_account(
+            TargetFormat::Openai,
+            &ModelId::new("@cf/meta/llama-3.1-8b-instruct"),
+            "abc123",
+        );
+        assert_eq!(
+            url,
+            "https://api.cloudflare.com/client/v4/accounts/abc123/ai/v1/chat/completions",
+        );
     }
 
     // ---- Ollama Cloud ------------------------------------------------

@@ -11,6 +11,17 @@ import {
   getUnreadCount,
   onUnreadCountChange,
 } from "../state/notifications-store.js";
+// B1 (Bug 3): the sidebar now also renders a badge on the "Debug
+// Logs" link showing the count of unviewed WARN+ERROR entries in
+// the server's debug-log ring buffer. The store polls every 30s
+// (independent of the debug-logs view's own 2s poll) so the badge
+// reflects new errors even when the user isn't on the Debug Logs
+// page.
+import {
+  initDebugLogsStore,
+  getUnviewedWarnErrorCount,
+  onUnviewedWarnErrorCountChange,
+} from "../state/debug-logs-store.js";
 // DASHBOARD-FIX (Bug 2 / Step 2f): the sidebar now renders a Logout
 // button in its footer. The button calls `clearToken()` (wipes the
 // localStorage key + the in-memory cache) and navigates to `#/login`,
@@ -30,8 +41,8 @@ interface SidebarLink {
   label: string;
   /** Optional badge key. When set, the sidebar renders a small red
    *  pill next to the label whose numeric value comes from the
-   *  notifications store. Hidden when the value is 0. */
-  badgeKind?: "notifications-unread";
+   *  corresponding store. Hidden when the value is 0. */
+  badgeKind?: "notifications-unread" | "debug-logs-unviewed";
 }
 interface SidebarGroup { label: string; links: SidebarLink[]; }
 
@@ -47,7 +58,7 @@ const GROUPS: readonly SidebarGroup[] = [
     { href: "#/analytics", icon: "analytics", label: "Analytics" },
     { href: "#/logs", icon: "logs", label: "Live Logs" },
     { href: "#/notifications", icon: "notifications", label: "Notifications", badgeKind: "notifications-unread" },
-    { href: "#/debug-logs", icon: "debug-logs", label: "Debug Logs" },
+    { href: "#/debug-logs", icon: "debug-logs", label: "Debug Logs", badgeKind: "debug-logs-unviewed" },
   ]},
   { label: "System", links: [
     { href: "#/config", icon: "config", label: "Config" },
@@ -91,6 +102,11 @@ function renderLink(l: SidebarLink, collapsed: boolean): TemplateResult {
   // The notifications badge lives next to the nav label. It is hidden
   // when the count is 0 (lit-html `nothing` sentinel — emits no DOM
   // node, so the layout doesn't shift when the count drops to 0).
+  // B1 (Bug 3): added the `debug-logs-unviewed` badge kind, which
+  // surfaces the count of unviewed WARN+ERROR entries in the
+  // server's debug-log ring buffer so discovery failures (and other
+  // WARN-level events) are visible without navigating to the Debug
+  // Logs view.
   let badge: TemplateResult = html``;
   if (l.badgeKind === "notifications-unread") {
     const count: number = getUnreadCount();
@@ -100,6 +116,16 @@ function renderLink(l: SidebarLink, collapsed: boolean): TemplateResult {
       const display: string = count > 99 ? "99+" : String(count);
       badge = html`<span class="sidebar-badge ${collapsed ? "collapsed" : ""}" title=${t("notifications.unread_count", { count })}>${display}</span>`;
     }
+  } else if (l.badgeKind === "debug-logs-unviewed") {
+    const count: number = getUnviewedWarnErrorCount();
+    if (count > 0) {
+      // Same red pill style as the notifications badge (the base
+      // `.sidebar-badge` class already uses `var(--color-error)`
+      // as the background). The title gives hover-help in case the
+      // user wonders what the number means.
+      const display: string = count > 99 ? "99+" : String(count);
+      badge = html`<span class="sidebar-badge ${collapsed ? "collapsed" : ""}" title=${count + " unviewed WARN/ERROR debug log entries"}>${display}</span>`;
+    }
   }
   return html`<a href=${l.href} data-nav=${l.href} title=${l.label}>
     <span class="nav-icon" aria-hidden="true">${navIconSvg(l.icon)}</span><span class="nav-label" ?hidden=${collapsed}> ${l.label}</span>${badge}
@@ -107,6 +133,7 @@ function renderLink(l: SidebarLink, collapsed: boolean): TemplateResult {
 }
 
 let storeBootstrapped: boolean = false;
+let debugLogsStoreBootstrapped: boolean = false;
 
 /** Initialise the notifications store + WS subscription the first
  *  time the sidebar renders. Idempotent — safe to call from every
@@ -139,10 +166,29 @@ function maybeBootstrapNotifications(): void {
   });
 }
 
+/** Initialise the debug-logs store the first time the sidebar
+ *  renders (after login). Idempotent. Mirrors the
+ *  `maybeBootstrapNotifications` guard — the 30s poll hits an
+ *  authenticated endpoint, so we don't want to start it until the
+ *  user is logged in (otherwise it would 401 every 30s before
+ *  login). */
+function maybeBootstrapDebugLogs(): void {
+  if (debugLogsStoreBootstrapped) return;
+  if (!isLoggedIn()) return;
+  debugLogsStoreBootstrapped = true;
+  initDebugLogsStore();
+  // Re-render the sidebar on every unviewed-count change so the
+  // badge reflects new WARN+ERROR entries as they arrive.
+  onUnviewedWarnErrorCountChange(() => {
+    renderSidebar();
+  });
+}
+
 export function renderSidebar(): void {
   const sb = document.querySelector(".sidebar");
   if (!sb) return;
   maybeBootstrapNotifications();
+  maybeBootstrapDebugLogs();
   const health = state.health;
   const legacyHealthClass = !health ? "loading" : (health.status === "ok" || health.status === "healthy") ? "ok" : "error";
   const dotClass = !health ? "warn" : (health.status === "ok" || health.status === "healthy") ? "ok" : "err";

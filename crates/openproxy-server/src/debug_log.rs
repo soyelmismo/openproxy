@@ -415,4 +415,79 @@ mod tests {
         assert_eq!(snap[0].seq, 3);
         assert_eq!(snap[2].seq, 5);
     }
+
+    // B1 (Bug 3): verify the DebugLogLayer captures WARN events
+    // when wired into a real subscriber. This test does NOT call
+    // `telemetry::init` (which would `try_init` a global subscriber
+    // and pollute other tests); instead it uses
+    // `tracing_subscriber::registry().with(...).set_default(...)`
+    // to install a thread-local subscriber for the duration of the
+    // scope. The previous tests pushed entries directly into the
+    // buffer; this one exercises the full path from
+    // `tracing::warn!(...)` → `DebugLogLayer::on_event` → buffer.
+    //
+    // We also verify that INFO events are NOT captured when the
+    // layer is wrapped in a `LevelFilter::WARN` per-layer filter
+    // (the production wiring in `telemetry::init`). This guards
+    // against a future refactor that accidentally drops the
+    // per-layer filter, which would re-introduce the bug where
+    // `RUST_LOG=error` silences WARN from the ring buffer.
+    #[test]
+    fn debug_log_layer_captures_warn_and_error_via_subscriber() {
+        init();
+        // Reset the buffer to a known-empty state inside the lock
+        // so we don't see entries from other tests that ran first.
+        {
+            let buf = DEBUG_LOG_BUFFER.get().expect("init");
+            let mut guard = buf.lock();
+            guard.entries.clear();
+            guard.next_seq = 1;
+        }
+        let before = latest_seq();
+
+        // Install a thread-local subscriber with the DebugLogLayer
+        // wrapped in the same `LevelFilter::WARN` filter used by
+        // `telemetry::init`. `set_default` returns a guard that
+        // uninstalls the subscriber on drop — keeping the test
+        // hermetic. The `tracing_subscriber::prelude::*` import
+        // pulls in `SubscriberExt` (for `Registry::with`) and
+        // `Layer` (for `with_filter`).
+        use tracing_subscriber::filter::LevelFilter;
+        use tracing_subscriber::prelude::*;
+        let _guard = tracing_subscriber::registry()
+            .with(DebugLogLayer.with_filter(LevelFilter::WARN))
+            .set_default();
+
+        tracing::warn!(
+            target: "test::bug3",
+            key = "warn-event",
+            "simulated discovery tick failure",
+        );
+        tracing::error!(
+            target: "test::bug3",
+            key = "error-event",
+            "simulated hard failure",
+        );
+        tracing::info!(
+            target: "test::bug3",
+            key = "info-event",
+            "this should be filtered out by LevelFilter::WARN",
+        );
+
+        // Only WARN + ERROR should be in the buffer (INFO filtered out).
+        let snap = snapshot_since(before);
+        assert_eq!(
+            snap.len(),
+            2,
+            "expected exactly 2 entries (WARN + ERROR), got {snap:?}",
+        );
+        // Oldest-first ordering: WARN comes before ERROR.
+        assert_eq!(snap[0].level, "WARN");
+        assert_eq!(snap[1].level, "ERROR");
+        assert!(snap[0].message.contains("simulated discovery tick failure"));
+        assert!(snap[0].message.contains("key=warn-event"));
+        assert!(snap[1].message.contains("simulated hard failure"));
+        assert!(snap[1].message.contains("key=error-event"));
+        assert_eq!(snap[0].target, "test::bug3");
+    }
 }

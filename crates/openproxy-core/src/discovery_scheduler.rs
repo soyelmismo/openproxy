@@ -387,8 +387,22 @@ async fn run_one_tick(
     // point we'd be calling it). This mirrors the existing
     // admin path: `api_key = String::new()` for the
     // selected_account_id == None branch.
-    let api_key: String = match accounts_list.first() {
+    //
+    // B1 (Bug 2): also resolve the account's `label` so providers
+    // like `cloudflare-workers-ai` that interpolate the account
+    // label into their URL path (see
+    // `CloudflareWorkersAIAdapter::fetch_models_for_account` and
+    // `build_chat_url_for_account`) get a non-empty value here.
+    // Previously this branch passed `""` as the label, which
+    // produced URLs like `accounts//ai/models/search` (double
+    // slash — empty account id) and 404'd on every Cloudflare
+    // discovery tick. The admin handler in
+    // `handlers/admin.rs::refresh_models` already does the same
+    // `a.label.unwrap_or_default()` lookup; the discovery
+    // scheduler was the only path that didn't.
+    let (api_key, account_label): (String, String) = match accounts_list.first() {
         Some(acc) => {
+            let label = acc.label.clone().unwrap_or_default();
             // `auth_type` is a free-form `String` on the
             // `Account` row; "oauth" is the only value that
             // signals "no encrypted API key". For those we
@@ -396,11 +410,11 @@ async fn run_one_tick(
             // work without auth (rare) or fail; the failure is
             // logged at WARN and the next tick tries again.
             if acc.auth_type == "oauth" {
-                String::new()
+                (String::new(), label)
             } else {
                 let w = db_pool.writer();
                 match accounts::decrypt_api_key(&w, acc.id, master_key.as_ref()) {
-                    Ok(k) => k,
+                    Ok(k) => (k, label),
                     Err(e) => {
                         tracing::warn!(
                             provider = %provider,
@@ -430,7 +444,7 @@ async fn run_one_tick(
                 }
             }
         }
-        None => String::new(),
+        None => (String::new(), String::new()),
     };
 
     // (4) Open a fresh connection and run the refresh. The
@@ -456,7 +470,7 @@ async fn run_one_tick(
         adapter.as_ref(),
         upstream_client,
         DISCOVERY_TTL_SECONDS,
-        "",
+        &account_label,
     )
     .await;
 

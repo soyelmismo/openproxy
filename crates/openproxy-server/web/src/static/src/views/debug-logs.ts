@@ -26,6 +26,12 @@ import type { FetchDebugLogsOpts } from "../lib/api.js";
 import { showToast } from "../components/toast.js";
 import { mountView, requestUpdate } from "../state/reactive.js";
 import type { DebugLogEntry } from "../lib/types/api.js";
+// B1 (Bug 3): mark the debug-log entries as viewed on every
+// successful poll so the sidebar badge (driven by
+// `state/debug-logs-store.ts`) clears while the user is on this
+// page. The store's 30s poll resumes accumulating when the user
+// navigates away.
+import { markDebugLogsViewed } from "../state/debug-logs-store.js";
 
 // Poll interval. Chained via setTimeout — see `pollNow` below.
 const POLL_INTERVAL_MS: number = 2000;
@@ -169,6 +175,9 @@ async function onClear(): Promise<void> {
     sinceSeq = 0;
     lastTotalInBuffer = 0;
     pollErrorMessage = null;
+    // B1 (Bug 3): clear the sidebar badge too — after a server-side
+    // clear, the ring buffer is empty so there's nothing unviewed.
+    markDebugLogsViewed();
     requestUpdate();
     showToast("Debug log buffer cleared on the server.", "success");
   } catch (e: unknown) {
@@ -260,6 +269,12 @@ async function pollNow(): Promise<void> {
     sinceSeq = resp.latest_seq;
     lastPollFailed = false;
     pollErrorMessage = null;
+    // B1 (Bug 3): advance the debug-logs store's "viewed" cursor to
+    // the latest seq we just fetched, which clears the sidebar badge
+    // for unviewed WARN+ERROR entries. Subsequent entries arriving
+    // after this point will re-trigger the badge once the user
+    // navigates away.
+    markDebugLogsViewed();
     requestUpdate();
   } catch (e: unknown) {
     if (stopped || myEpoch !== epoch) return;
