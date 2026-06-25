@@ -576,3 +576,208 @@ export function buildLatencyChart(container: HTMLElement, windowSecs: number): u
     ],
   });
 }
+
+// ----------------------------------------------------------------------------
+// Builders used by the analytics view (B3)
+// ----------------------------------------------------------------------------
+
+/** Date formatter for the daily-usage chart's X axis. Formats timestamps
+ *  (in seconds) as "MM-DD" so the labels stay compact even on narrow
+ *  viewports. The year is omitted (the analytics view's window is at
+ *  most a year, so the year is implied by the selected preset). */
+function dateFormatter(_u: uPlot, vals: number[]): string[] {
+  return vals.map((v: number) => {
+    if (!Number.isFinite(v)) return "";
+    const d: Date = new Date(v * 1000);
+    if (Number.isNaN(d.getTime())) return "";
+    const mm: string = String(d.getUTCMonth() + 1).padStart(2, "0");
+    const dd: string = String(d.getUTCDate()).padStart(2, "0");
+    return `${mm}-${dd}`;
+  });
+}
+
+/** Cost formatter for the right Y-axis of the daily-usage chart. Uses
+ *  3 decimal places for sub-dollar amounts (typical for daily cost) and
+ *  2 decimals for ≥ $1. */
+function costAxisFormatter(_u: uPlot, vals: number[]): string[] {
+  return vals.map((v: number) => {
+    if (!Number.isFinite(v)) return "";
+    if (v >= 1) return "$" + v.toFixed(1);
+    if (v > 0) return "$" + v.toFixed(3);
+    return "$0";
+  });
+}
+
+/** Daily usage chart: 2 line series on dual Y axes over time.
+ *  - Left axis: unique requests per day (blue line).
+ *  - Right axis: total cost USD per day (orange line).
+ *
+ *  The X axis is time (dates as "MM-DD"). Built for the analytics view's
+ *  `/usage/by-day` payload (B3). The caller populates it via
+ *  `setData([[ts1, ts2, ...], [reqs1, reqs2, ...], [cost1, cost2, ...]])`
+ *  where timestamps are in seconds since epoch (UTC midnight of each day). */
+export function buildDailyUsageChart(container: HTMLElement): uPlot {
+  return createLiveChart(container, {
+    series: [
+      {}, // X (time)
+      {
+        label: "requests",
+        stroke: CHART_COLORS.blue,
+        width: 1.5,
+        points: { show: false },
+        fill: "rgba(43, 90, 120, 0.15)",
+        scale: "reqs",
+      },
+      {
+        label: "cost",
+        stroke: CHART_COLORS.orange,
+        width: 1.5,
+        points: { show: false },
+        scale: "cost",
+        value: (_u: uPlot, raw: number): string => "$" + raw.toFixed(4),
+      },
+    ],
+    scales: {
+      x: { time: true },
+      reqs: { auto: true },
+      cost: { auto: true },
+    },
+    axes: [
+      {
+        grid: { stroke: "var(--color-border-soft)", width: 1 },
+        ticks: { stroke: "var(--color-border)", width: 1 },
+        stroke: "var(--color-text-muted)",
+        font: "10px 'Courier New', monospace",
+        values: dateFormatter,
+      },
+      {
+        scale: "reqs",
+        side: 3, // left
+        grid: { show: false },
+        stroke: "var(--color-text-muted)",
+        font: "10px 'Courier New', monospace",
+        values: compactNumber,
+        size: 40,
+      },
+      {
+        scale: "cost",
+        side: 1, // right
+        grid: { show: false },
+        stroke: "var(--color-text-muted)",
+        font: "10px 'Courier New', monospace",
+        values: costAxisFormatter,
+        size: 44,
+      },
+    ],
+  });
+}
+
+/** Categorical vertical bar chart. Used by the analytics view for:
+ *    - Usage by model (top N models, sorted by cost)
+ *    - Usage by provider (sorted by cost)
+ *    - Status codes (4 buckets: 2xx / 4xx / 5xx / Other)
+ *    - Latency percentiles (6 bars: p50/p95 × connect/ttft/total)
+ *
+ *  The X axis is categorical (integer indices 0..n-1) with a `values`
+ *  formatter that maps indices back to `labels`. The Y axis is the value
+ *  (auto-scaled). One series, one color. The caller populates the chart
+ *  via `setData([[0, 1, 2, ...], [val0, val1, val2, ...]])`.
+ *
+ *  `labels` is captured by closure into the X-axis formatter — the chart
+ *  must be destroyed + recreated if the label set changes (e.g. when the
+ *  user changes filters and the top-N models change). This matches the
+ *  analytics view's lifecycle: charts are created after each fetch and
+ *  destroyed on unmount / re-mount.
+ *
+ *  `valueFormatter` formats the cursor readout (the value shown when the
+ *  user hovers a bar). Pass `null` to use the raw number. */
+export function buildCategoryBarsChart(
+  container: HTMLElement,
+  labels: string[],
+  color: string,
+  valueFormatter: ((u: uPlot, raw: number) => string) | null,
+): uPlot {
+  const paths: uPlot.Series.PathBuilder | null = barsPathBuilder();
+  const fill: string = color + "cc"; // 80% alpha via 0xcc hex suffix (color is #RRGGBB)
+  // Cursor readout: show "label: value" so the user can identify which bar
+  // they're hovering even when the X-axis label is truncated.
+  const values: uPlot.Series.Values = (_u: uPlot, _seriesIdx: number, idx: number | null): object => {
+    if (idx == null) return {};
+    const label: string = labels[idx] ?? "";
+    return { label };
+  };
+  // X-axis tick formatter: map integer indices back to category labels.
+  const xValues: (u: uPlot, vals: number[]) => string[] = (_u: uPlot, vals: number[]): string[] => {
+    return vals.map((v: number) => {
+      const idx: number = Math.round(v);
+      if (!Number.isInteger(idx) || idx < 0 || idx >= labels.length) return "";
+      return labels[idx] ?? "";
+    });
+  };
+
+  // Build the series. We construct it without `paths` if the bars factory
+  // is unavailable (exactOptionalPropertyTypes requires this branch).
+  const series: uPlot.Series[] = [
+    {}, // X (categorical indices)
+    paths !== null
+      ? {
+          label: "value",
+          stroke: color,
+          fill,
+          width: 1,
+          points: { show: false },
+          paths,
+          values,
+          value: valueFormatter ?? ((_u: uPlot, raw: number): string => String(raw)),
+        }
+      : {
+          label: "value",
+          stroke: color,
+          fill: color + "33",
+          width: 1.5,
+          points: { show: false },
+          values,
+          value: valueFormatter ?? ((_u: uPlot, raw: number): string => String(raw)),
+        },
+  ];
+
+  return createLiveChart(container, {
+    series,
+    scales: {
+      // distr: 2 = categorical — each X value is a category center, and
+      // the axis ticks land on integer positions (0, 1, 2, ...). Without
+      // this, uPlot treats X as a continuous linear scale and the bars
+      // cluster at the left edge.
+      x: { time: false, distr: 2 },
+      y: { auto: true, range: (_u: uPlot, min: number, max: number): [number, number] => {
+        // Always include 0 in the range so bars start from the baseline.
+        if (!Number.isFinite(min) || !Number.isFinite(max)) return [0, 1];
+        const top: number = max <= 0 ? 1 : max;
+        return [0, top];
+      } },
+    },
+    axes: [
+      {
+        grid: { stroke: "var(--color-border-soft)", width: 1 },
+        ticks: { stroke: "var(--color-border)", width: 1 },
+        stroke: "var(--color-text-muted)",
+        font: "10px 'Courier New', monospace",
+        values: xValues,
+        // Rotate long labels 45° so they don't overlap. Short labels
+        // (e.g. "2xx", "p50c") fit horizontally and look better un-rotated,
+        // but rotation is a single setting per axis — we accept the slight
+        // aesthetic cost on short-label charts in exchange for not having
+        // to thread a "rotate" flag through every caller.
+        rotate: 45,
+      },
+      {
+        side: 3, // left
+        grid: { show: false },
+        stroke: "var(--color-text-muted)",
+        font: "10px 'Courier New', monospace",
+        values: compactNumber,
+        size: 40,
+      },
+    ],
+  });
+}

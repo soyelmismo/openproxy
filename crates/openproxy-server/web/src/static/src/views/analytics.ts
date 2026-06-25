@@ -1,6 +1,6 @@
 // views/analytics.ts — analytics dashboards: filter bar, time-range
 // preset selector, summary, latency percentiles, race stats, daily
-// usage chart, status distribution donut, by-model breakdown,
+// usage chart, status distribution, by-model breakdown,
 // by-provider totals, providers × months cost matrix, and a recent
 // errors table. Every `/usage/*` endpoint is queried with a combined
 // `?preset=X&provider_id=Y&api_key_id=Z` query built from the URL
@@ -8,22 +8,31 @@
 // hash looks like `#/analytics?range=this_month&provider_id=openrouter&api_key_id=12`;
 // the router regex tolerates the trailing `?...` suffix and the
 // `hashchange` event re-mounts the view so every fetch picks up the
-// new query string. After each fetch resolves we call
-// `requestUpdate()` so lit-html re-renders with the fresh data.
+// new query string.
 //
-// MIGRATED to lit-html for atomic DOM updates — see views/combos.ts
-// for the reference pattern.
+// B3 MIGRATION: all charts now use uPlot via `components/uplot-chart.ts`
+// (the same wrapper the home dashboard uses). Replaces the old
+// inline-SVG `dailyUsageChart` + `statusDonut` from
+// `components/charts.ts`. The chart lifecycle follows the home view's
+// pattern: instances are created once after the first data-bearing
+// render, `setData(...)` is called on each fetch completion, and
+// `destroy()` is called on view unmount. Tables (by-model, by-provider,
+// monthly matrix, recent errors) remain tables — their data is
+// naturally tabular and a bar chart would lose the multi-column detail
+// (unique_requests, total_rows, tokens, cost) that the operator needs.
 
 import { html, type TemplateResult } from "lit-html";
-import { unsafeHTML } from "lit-html/directives/unsafe-html.js";
+import type uPlot from "uplot";
 import { state } from "../state/index.js";
 import { api } from "../state/api.js";
 import { mountView, requestUpdate } from "../state/reactive.js";
+import { t } from "../i18n/index.js";
 import {
-  dailyUsageChart,
-  statusDonut,
-  type StatusSlice,
-} from "../components/charts.js";
+  buildDailyUsageChart,
+  buildCategoryBarsChart,
+  observeResize,
+  CHART_COLORS,
+} from "../components/uplot-chart.js";
 import type {
   ByDayRow,
   ByModelRow,
@@ -78,27 +87,32 @@ const PRESETS: readonly UsagePreset[] = [
   "ytd", "custom",
 ];
 
-// Friendly labels for the preset buttons. `custom` is labelled
-// "All time" because the dashboard has no custom date-picker —
-// selecting it sends no `?preset=`, so the server returns the full
-// history.
-const PRESET_LABELS: Record<UsagePreset, string> = {
-  today: "Today",
-  "7d": "7 days",
-  "30d": "30 days",
-  this_month: "This month",
-  last_month: "Last month",
-  last_6_months: "6 months",
-  ytd: "YTD",
-  custom: "All time",
+// Friendly labels for the preset buttons, keyed by the preset value.
+// `custom` is labelled "All time" because the dashboard has no custom
+// date-picker — selecting it sends no `?preset=`, so the server
+// returns the full history.
+const PRESET_LABEL_KEYS: Record<UsagePreset, string> = {
+  today: "analytics.preset.today",
+  "7d": "analytics.preset.7d",
+  "30d": "analytics.preset.30d",
+  this_month: "analytics.preset.this_month",
+  last_month: "analytics.preset.last_month",
+  last_6_months: "analytics.preset.last_6_months",
+  ytd: "analytics.preset.ytd",
+  custom: "analytics.preset.custom",
 };
-
-function fmtMs(v: number | null | undefined): string {
-  return v == null ? "—" : `${v.toFixed(0)} ms`;
-}
 
 function fmtCost(v: number): string {
   return `$${v.toFixed(2)}`;
+}
+
+/** Truncate a string to `maxLen` characters, appending an ellipsis if
+ *  truncated. Used for bar-chart category labels (model names can be
+ *  30+ chars; the X axis only has room for ~14 before labels overlap
+ *  even with 45° rotation). */
+function truncate(s: string, maxLen: number): string {
+  if (s.length <= maxLen) return s;
+  return s.slice(0, maxLen - 1) + "…";
 }
 
 // ── URL hash parsing ────────────────────────────────────────────────
@@ -296,13 +310,18 @@ function pivotMonthlyByProvider(
   };
 }
 
-// ── Status grouping for the donut ───────────────────────────────────
+// ── Status grouping for the bar chart ───────────────────────────────
 // The by-status endpoint returns one row per HTTP status code. The
-// donut cares about four buckets: 2xx (success), 4xx (client error),
+// chart cares about four buckets: 2xx (success), 4xx (client error),
 // 5xx (server error), Other (everything else — redirects, 0-status
-// connection failures, etc.). Colors come from the theme tokens so
-// the donut adapts to light/dark.
-function groupByStatus(rows: ByStatusRow[]): StatusSlice[] {
+// connection failures, etc.).
+interface StatusBuckets {
+  s2xx: number;
+  s4xx: number;
+  s5xx: number;
+  other: number;
+}
+function groupByStatus(rows: ByStatusRow[]): StatusBuckets {
   let s2 = 0, s4 = 0, s5 = 0, other = 0;
   for (const r of rows) {
     if (r.status_code >= 200 && r.status_code < 300) s2 += r.count;
@@ -310,12 +329,95 @@ function groupByStatus(rows: ByStatusRow[]): StatusSlice[] {
     else if (r.status_code >= 500 && r.status_code < 600) s5 += r.count;
     else other += r.count;
   }
-  return [
-    { label: "2xx", count: s2, color: "var(--color-success)" },
-    { label: "4xx", count: s4, color: "var(--color-warn)" },
-    { label: "5xx", count: s5, color: "var(--color-error)" },
-    { label: "Other", count: other, color: "var(--color-text-muted)" },
+  return { s2xx: s2, s4xx: s4, s5xx: s5, other };
+}
+
+// ── Data preparation for uPlot ───────────────────────────────────────
+// Each function converts a slice of the fetched API payload into
+// uPlot's `AlignedData` format (`[xs, y1s, ...]`) plus the category
+// labels (for bar charts). The chart instances are created with these
+// labels baked in (via `buildCategoryBarsChart`'s closure-captured
+// `labels` arg), so a label-set change requires a chart recreate —
+// which the view's re-mount-on-hashchange already guarantees.
+
+/** Parse a "YYYY-MM-DD" date string into a UTC-midnight timestamp in
+ *  seconds (uPlot's X-axis units when `time: true`). */
+function dateToSeconds(date: string): number {
+  // `Date.parse("YYYY-MM-DDT00:00:00Z")` returns ms since epoch in UTC.
+  // Appending the time + "Z" forces UTC interpretation; without it,
+  // `Date.parse` is implementation-defined for date-only strings.
+  const ms: number = Date.parse(date + "T00:00:00Z");
+  if (!Number.isFinite(ms)) return 0;
+  return ms / 1000;
+}
+
+/** Daily usage chart data: `[xs, reqs, cost]` where `xs` are UTC
+ *  midnight timestamps. */
+function dailyUsageData(rows: ByDayRow[]): uPlot.AlignedData {
+  const xs: number[] = new Array<number>(rows.length);
+  const reqs: number[] = new Array<number>(rows.length);
+  const cost: number[] = new Array<number>(rows.length);
+  for (let i = 0; i < rows.length; i++) {
+    const r: ByDayRow = rows[i]!;
+    xs[i] = dateToSeconds(r.date);
+    reqs[i] = r.unique_requests;
+    cost[i] = r.total_cost_usd;
+  }
+  return [xs, reqs, cost];
+}
+
+/** By-model bar chart data: top N models sorted by total cost DESC.
+ *  Returns the data array + the labels (truncated model names). */
+function byModelBars(rows: ByModelRow[]): { data: uPlot.AlignedData; labels: string[] } {
+  const sorted = [...rows].sort((a, b) => b.total_cost_usd - a.total_cost_usd).slice(0, 10);
+  const labels: string[] = sorted.map((r: ByModelRow) => truncate(r.upstream_model_id, 14));
+  const xs: number[] = sorted.map((_, i: number) => i);
+  const ys: number[] = sorted.map((r: ByModelRow) => r.total_cost_usd);
+  return { data: [xs, ys], labels };
+}
+
+/** By-provider bar chart data: all providers sorted by total cost DESC. */
+function byProviderBars(rows: ByProviderRow[]): { data: uPlot.AlignedData; labels: string[] } {
+  const sorted = [...rows].sort((a, b) => b.total_cost_usd - a.total_cost_usd);
+  const labels: string[] = sorted.map((r: ByProviderRow) => truncate(r.provider_id, 14));
+  const xs: number[] = sorted.map((_, i: number) => i);
+  const ys: number[] = sorted.map((r: ByProviderRow) => r.total_cost_usd);
+  return { data: [xs, ys], labels };
+}
+
+/** Status-codes bar chart data: 4 buckets in fixed order
+ *  (2xx / 4xx / 5xx / Other). Labels are the bucket names. */
+function statusCodesBars(buckets: StatusBuckets): { data: uPlot.AlignedData; labels: string[] } {
+  return {
+    data: [[0, 1, 2, 3], [buckets.s2xx, buckets.s4xx, buckets.s5xx, buckets.other]],
+    labels: ["2xx", "4xx", "5xx", "Other"],
+  };
+}
+
+/** Latency bar chart data: 6 metrics in fixed order
+ *  (p50 conn / p95 conn / p50 ttft / p95 ttft / p50 total / p95 total).
+ *  Null values (no samples for that percentile) are coerced to 0 so
+ *  the bar renders as a flat baseline rather than a gap. */
+function latencyBars(payload: LatencyPayload): { data: uPlot.AlignedData; labels: string[] } {
+  const vals: number[] = [
+    payload.p50_connect_ms ?? 0,
+    payload.p95_connect_ms ?? 0,
+    payload.p50_ttft_ms ?? 0,
+    payload.p95_ttft_ms ?? 0,
+    payload.p50_total_ms ?? 0,
+    payload.p95_total_ms ?? 0,
   ];
+  return {
+    data: [[0, 1, 2, 3, 4, 5], vals],
+    labels: [
+      t("analytics.latency.p50_connect"),
+      t("analytics.latency.p95_connect"),
+      t("analytics.latency.p50_ttft"),
+      t("analytics.latency.p95_ttft"),
+      t("analytics.latency.p50_total"),
+      t("analytics.latency.p95_total"),
+    ],
+  };
 }
 
 // ---- View state ----
@@ -334,25 +436,144 @@ let errors: ErrorRow[] = [];
 let providers: Provider[] = [];
 let apiKeys: ApiKeyFilterRow[] = [];
 
+// ---- Chart instances + lifecycle ----
+// Created after the first data-bearing lit-html render (so the
+// chart-container `<div>`s exist in the DOM), populated via setData
+// immediately after creation, and destroyed on view unmount.
+interface AnalyticsCharts {
+  dailyUsage: uPlot;
+  byModel: uPlot;
+  byProvider: uPlot;
+  statusCodes: uPlot;
+  latency: uPlot;
+  resizeDisposers: Array<() => void>;
+}
+let charts: AnalyticsCharts | null = null;
+
+/** Create the 5 uPlot chart instances after the first data-bearing
+ *  render. Each chart's category labels are baked in from the fetched
+ *  data, so a label-set change (e.g. user changes filters) requires
+ *  destroying + recreating the chart — which the view's
+ *  re-mount-on-hashchange already guarantees. */
+function createAnalyticsCharts(): void {
+  if (charts) return; // idempotent
+
+  const dailyEl: HTMLElement | null = document.getElementById("chart-daily-usage");
+  const byModelEl: HTMLElement | null = document.getElementById("chart-by-model");
+  const byProviderEl: HTMLElement | null = document.getElementById("chart-by-provider");
+  const statusEl: HTMLElement | null = document.getElementById("chart-status-codes");
+  const latencyEl: HTMLElement | null = document.getElementById("chart-latency");
+
+  if (!dailyEl || !byModelEl || !byProviderEl || !statusEl || !latencyEl) {
+    // Containers not in the DOM yet — the loading state hasn't
+    // cleared, or the render hasn't committed. The caller should
+    // defer via requestAnimationFrame.
+    return;
+  }
+
+  const resizeDisposers: Array<() => void> = [];
+
+  // Daily usage — time-series line chart (requests + cost on dual axes).
+  const dailyUsage: uPlot = buildDailyUsageChart(dailyEl);
+  resizeDisposers.push(observeResize(dailyUsage, dailyEl));
+
+  // By-model — categorical bar chart. Labels are truncated model IDs.
+  const modelBars = byModelBars(byModel);
+  const byModelChart: uPlot = buildCategoryBarsChart(
+    byModelEl,
+    modelBars.labels,
+    CHART_COLORS.purple,
+    (_u: uPlot, raw: number): string => "$" + raw.toFixed(4),
+  );
+  resizeDisposers.push(observeResize(byModelChart, byModelEl));
+
+  // By-provider — categorical bar chart.
+  const providerBars = byProviderBars(byProvider);
+  const byProviderChart: uPlot = buildCategoryBarsChart(
+    byProviderEl,
+    providerBars.labels,
+    CHART_COLORS.blue,
+    (_u: uPlot, raw: number): string => "$" + raw.toFixed(4),
+  );
+  resizeDisposers.push(observeResize(byProviderChart, byProviderEl));
+
+  // Status codes — categorical bar chart, 4 fixed buckets.
+  const statusBars = statusCodesBars(groupByStatus(byStatus));
+  const statusCodes: uPlot = buildCategoryBarsChart(
+    statusEl,
+    statusBars.labels,
+    CHART_COLORS.green,
+    null,
+  );
+  resizeDisposers.push(observeResize(statusCodes, statusEl));
+
+  // Latency — categorical bar chart, 6 fixed metrics.
+  const latencyChartData = latencyBars(latency ?? {});
+  const latencyChart: uPlot = buildCategoryBarsChart(
+    latencyEl,
+    latencyChartData.labels,
+    CHART_COLORS.orange,
+    (_u: uPlot, raw: number): string => {
+      if (!Number.isFinite(raw)) return "—";
+      if (raw >= 1000) return (raw / 1000).toFixed(1) + "s";
+      return Math.round(raw) + "ms";
+    },
+  );
+  resizeDisposers.push(observeResize(latencyChart, latencyEl));
+
+  charts = {
+    dailyUsage,
+    byModel: byModelChart,
+    byProvider: byProviderChart,
+    statusCodes,
+    latency: latencyChart,
+    resizeDisposers,
+  };
+
+  // Push the current data into the new charts immediately.
+  charts.dailyUsage.setData(dailyUsageData(byDay));
+  charts.byModel.setData(modelBars.data);
+  charts.byProvider.setData(providerBars.data);
+  charts.statusCodes.setData(statusBars.data);
+  charts.latency.setData(latencyChartData.data);
+}
+
+/** Destroy all uPlot instances + disconnect their ResizeObservers.
+ *  Called on view unmount. */
+function destroyAnalyticsCharts(): void {
+  if (!charts) return;
+  for (const disposer of charts.resizeDisposers) {
+    try { disposer(); } catch (e: unknown) {
+      console.warn("[analytics] resize disposer threw:", e);
+    }
+  }
+  try { charts.dailyUsage.destroy(); } catch (e: unknown) { console.warn("[analytics] dailyUsage.destroy threw:", e); }
+  try { charts.byModel.destroy(); } catch (e: unknown) { console.warn("[analytics] byModel.destroy threw:", e); }
+  try { charts.byProvider.destroy(); } catch (e: unknown) { console.warn("[analytics] byProvider.destroy threw:", e); }
+  try { charts.statusCodes.destroy(); } catch (e: unknown) { console.warn("[analytics] statusCodes.destroy threw:", e); }
+  try { charts.latency.destroy(); } catch (e: unknown) { console.warn("[analytics] latency.destroy threw:", e); }
+  charts = null;
+}
+
 // ---- Templates ----
 
 function renderPresetSelector(active: UsagePreset): TemplateResult {
-  return html`<div class="preset-selector" role="group" aria-label="Time range">
-    ${PRESETS.map((p) => html`<button class="preset-btn${p === active ? " active" : ""}" type="button" @click=${() => setHashParams({ preset: p })}>${PRESET_LABELS[p]}</button>`)}
+  return html`<div class="preset-selector" role="group" aria-label=${t("analytics.range_label")}>
+    ${PRESETS.map((p) => html`<button class="preset-btn${p === active ? " active" : ""}" type="button" @click=${() => setHashParams({ preset: p })}>${t(PRESET_LABEL_KEYS[p])}</button>`)}
   </div>`;
 }
 
 function renderAnalyticsFilters(providerId: string, apiKeyId: string): TemplateResult {
   return html`<div class="analytics-filters">
     <select class="filter-dropdown" .value=${providerId} @change=${(e: Event) => setHashParams({ providerId: (e.target as HTMLSelectElement).value })}>
-      <option value="">All providers</option>
+      <option value="">${t("analytics.filter.all_providers")}</option>
       ${providers.map((p) => html`<option value=${p.id}>${p.name}</option>`)}
     </select>
     <select class="filter-dropdown" .value=${apiKeyId} @change=${(e: Event) => setHashParams({ apiKeyId: (e.target as HTMLSelectElement).value })}>
-      <option value="">All API keys</option>
+      <option value="">${t("analytics.filter.all_api_keys")}</option>
       ${apiKeys.map((k) => html`<option value=${String(k.id)}>${k.key_prefix || "—"} (${k.label || "—"})</option>`)}
     </select>
-    <button class="btn-link" @click=${() => setHashParams({ providerId: "", apiKeyId: "" })}>Clear filters</button>
+    <button class="btn-link" @click=${() => setHashParams({ providerId: "", apiKeyId: "" })}>${t("analytics.filter.clear")}</button>
   </div>`;
 }
 
@@ -360,64 +581,91 @@ function card(title: string, body: TemplateResult): TemplateResult {
   return html`<section class="card"><div class="section-header"><h3>${title}</h3></div>${body}</section>`;
 }
 
-function chartCard(title: string, bodyHtml: string): TemplateResult {
-  return html`<section class="card chart-card">
+/** Chart card — same structure as the home dashboard's
+ *  `.home-chart-card` (title + subtitle + container div). The
+ *  container has a stable ID so lit-html preserves it across
+ *  re-renders and the uPlot instance stays attached. */
+function chartCard(title: string, subtitle: string, containerId: string): TemplateResult {
+  return html`<section class="card analytics-chart-card">
     <div class="card-title">${title}</div>
-    <div class="card-body">${unsafeHTML(bodyHtml)}</div>
+    <div class="card-subtitle">${subtitle}</div>
+    <div class="analytics-chart-container" id="${containerId}"></div>
   </section>`;
 }
 
 function renderSummaryBlock(): TemplateResult {
   if (!summary) return html``;
-  return card("Summary", html`<div class="metrics">
-    <div><label>Unique requests</label><div class="value">${summary.unique_requests}</div></div>
-    <div><label>Total rows</label><div class="value">${summary.total_rows}</div></div>
-    <div><label>Winners</label><div class="value">${summary.winners}</div></div>
-    <div><label>Losers</label><div class="value">${summary.losers}</div></div>
-    <div><label>Errors</label><div class="value">${summary.errors}</div></div>
-    <div><label>Prompt tokens</label><div class="value">${summary.total_prompt_tokens}</div></div>
-    <div><label>Completion tokens</label><div class="value">${summary.total_completion_tokens}</div></div>
-    <div><label>Total cost USD</label><div class="value">$${summary.total_cost_usd.toFixed(4)}</div></div>
-    <div><label>Avg TTFT ms</label><div class="value">${summary.avg_ttft_ms ? summary.avg_ttft_ms.toFixed(1) : "—"}</div></div>
+  return card(t("analytics.summary"), html`<div class="metrics">
+    <div><label>${t("analytics.summary.unique_requests")}</label><div class="value">${summary.unique_requests}</div></div>
+    <div><label>${t("analytics.summary.total_rows")}</label><div class="value">${summary.total_rows}</div></div>
+    <div><label>${t("analytics.summary.winners")}</label><div class="value">${summary.winners}</div></div>
+    <div><label>${t("analytics.summary.losers")}</label><div class="value">${summary.losers}</div></div>
+    <div><label>${t("analytics.summary.errors")}</label><div class="value">${summary.errors}</div></div>
+    <div><label>${t("analytics.summary.prompt_tokens")}</label><div class="value">${summary.total_prompt_tokens}</div></div>
+    <div><label>${t("analytics.summary.completion_tokens")}</label><div class="value">${summary.total_completion_tokens}</div></div>
+    <div><label>${t("analytics.summary.total_cost")}</label><div class="value">$${summary.total_cost_usd.toFixed(4)}</div></div>
+    <div><label>${t("analytics.summary.avg_ttft")}</label><div class="value">${summary.avg_ttft_ms ? summary.avg_ttft_ms.toFixed(1) : "—"}</div></div>
   </div>`);
 }
 
-function renderLatencyBlock(): TemplateResult {
-  if (!latency) return html``;
-  return card("Latency percentiles (winners only)", html`<div class="metrics">
-    <div><label>Samples</label><div class="value">${latency.samples ?? "—"}</div></div>
-    <div><label>p50 connect ms</label><div class="value">${fmtMs(latency.p50_connect_ms)}</div></div>
-    <div><label>p95 connect ms</label><div class="value">${fmtMs(latency.p95_connect_ms)}</div></div>
-    <div><label>p50 TTFT ms</label><div class="value">${fmtMs(latency.p50_ttft_ms)}</div></div>
-    <div><label>p95 TTFT ms</label><div class="value">${fmtMs(latency.p95_ttft_ms)}</div></div>
-    <div><label>p50 total ms</label><div class="value">${fmtMs(latency.p50_total_ms)}</div></div>
-    <div><label>p95 total ms</label><div class="value">${fmtMs(latency.p95_total_ms)}</div></div>
-  </div>`);
-}
-
+/** Race outcomes card — 3 stat blocks (Won / Lost / Total). Matches
+ *  the home dashboard's race-outcomes pattern (3 numbers, not a
+ *  donut) per the B3 spec. */
 function renderRaceBlock(): TemplateResult {
   if (!races) return html``;
-  return card("Race stats", html`<div class="metrics">
-    <div><label>Total races</label><div class="value">${races.total_races ?? "—"}</div></div>
-    <div><label>Winners</label><div class="value">${races.winners ?? "—"}</div></div>
-    <div><label>Losers</label><div class="value">${races.losers ?? "—"}</div></div>
-  </div>`);
+  const won: number = races.winners ?? 0;
+  const lost: number = races.losers ?? 0;
+  const total: number = races.total_races ?? 0;
+  const pct: (n: number) => string = (n: number) =>
+    total > 0 ? Math.round((n / total) * 100) + "%" : "—";
+
+  return html`<section class="card analytics-chart-card">
+    <div class="card-title">${t("analytics.chart.race_outcomes")}</div>
+    <div class="card-subtitle">${t("analytics.chart.race_outcomes.subtitle")}</div>
+    <div class="analytics-race-stats">
+      <div class="analytics-race-stat analytics-race-stat-won">
+        <div class="analytics-race-stat-value">${pct(won)}</div>
+        <div class="analytics-race-stat-label">${t("analytics.chart.race_outcomes.won")}</div>
+        <div class="analytics-race-stat-count">${won}</div>
+      </div>
+      <div class="analytics-race-stat analytics-race-stat-lost">
+        <div class="analytics-race-stat-value">${pct(lost)}</div>
+        <div class="analytics-race-stat-label">${t("analytics.chart.race_outcomes.lost")}</div>
+        <div class="analytics-race-stat-count">${lost}</div>
+      </div>
+      <div class="analytics-race-stat analytics-race-stat-total">
+        <div class="analytics-race-stat-value">${total}</div>
+        <div class="analytics-race-stat-label">${t("analytics.chart.race_outcomes.total")}</div>
+        <div class="analytics-race-stat-count">${t("analytics.latency.samples")}: ${races.total_races ?? "—"}</div>
+      </div>
+    </div>
+  </section>`;
 }
 
-function renderByModelBlock(): TemplateResult {
+// Latency is rendered as a uPlot bar chart (6 metrics). The latency
+// payload also carries a `samples` count — we surface it as a small
+// caption under the chart card title so the operator knows how many
+// requests the percentiles were computed over.
+function renderLatencyCaption(): TemplateResult {
+  if (!latency) return html``;
+  const samples: string = latency.samples != null ? String(latency.samples) : "—";
+  return html`<div class="card-subtitle">${t("analytics.chart.latency.subtitle")} · ${t("analytics.latency.samples")}: ${samples}</div>`;
+}
+
+function renderByModelTable(): TemplateResult {
   const body = byModel.length
     ? html`<table>
-        <thead><tr><th>Provider</th><th>Model</th><th>Unique</th><th>Total</th><th>Cost USD</th></tr></thead>
+        <thead><tr><th>${t("analytics.table.col_provider")}</th><th>${t("analytics.table.col_model")}</th><th>${t("analytics.table.col_unique")}</th><th>${t("analytics.table.col_total")}</th><th>${t("analytics.table.col_cost")}</th></tr></thead>
         <tbody>${byModel.map((r) => html`<tr><td>${r.provider_id}</td><td>${r.upstream_model_id}</td><td>${r.unique_requests}</td><td>${r.total_rows}</td><td>${fmtCost(r.total_cost_usd)}</td></tr>`)}</tbody>
       </table>`
-    : html`<p class="empty">No usage in this range.</p>`;
-  return card("By model", body);
+    : html`<p class="empty">${t("analytics.empty.no_usage")}</p>`;
+  return card(t("analytics.chart.by_model"), body);
 }
 
-function renderByProviderBlock(): TemplateResult {
+function renderByProviderTable(): TemplateResult {
   const body = byProvider.length
     ? html`<table>
-        <thead><tr><th>Provider</th><th class="num">Unique</th><th class="num">Total</th><th class="num">Winners</th><th class="num">Prompt tok</th><th class="num">Completion tok</th><th class="num">Cost USD</th></tr></thead>
+        <thead><tr><th>${t("analytics.table.col_provider")}</th><th class="num">${t("analytics.table.col_unique")}</th><th class="num">${t("analytics.table.col_total")}</th><th class="num">${t("analytics.table.col_winners")}</th><th class="num">${t("analytics.table.col_prompt_tok")}</th><th class="num">${t("analytics.table.col_completion_tok")}</th><th class="num">${t("analytics.table.col_cost")}</th></tr></thead>
         <tbody>${byProvider.map((r) => html`<tr>
           <td>${r.provider_id}</td>
           <td class="num">${r.unique_requests}</td>
@@ -428,8 +676,8 @@ function renderByProviderBlock(): TemplateResult {
           <td class="num">${fmtCost(r.total_cost_usd)}</td>
         </tr>`)}</tbody>
       </table>`
-    : html`<p class="empty">No usage in this range.</p>`;
-  return card("Usage by provider", body);
+    : html`<p class="empty">${t("analytics.empty.no_usage")}</p>`;
+  return card(t("analytics.chart.by_provider"), body);
 }
 
 // Render the providers × months cost matrix. Cells show cost (USD,
@@ -440,7 +688,7 @@ function renderByProviderBlock(): TemplateResult {
 function renderMonthlyMatrix(): TemplateResult {
   const pivot = pivotMonthlyByProvider(monthlyByProvider);
   if (pivot.providers.length === 0 || pivot.months.length === 0) {
-    return card("Monthly usage by provider", html`<p class="empty">No usage in this range.</p>`);
+    return card(t("analytics.monthly.title"), html`<p class="empty">${t("analytics.empty.no_usage")}</p>`);
   }
   const bodyRows = pivot.providers.map((p) => {
     const pCells = pivot.cells.get(p);
@@ -454,16 +702,16 @@ function renderMonthlyMatrix(): TemplateResult {
     return html`<tr><td>${p}</td>${tds}<td class="num total">${fmtCost(total)}</td></tr>`;
   });
   const footMonths = pivot.months.map((m) => {
-    const t = pivot.totalsByMonth.get(m) ?? 0;
-    return html`<th class="num">${fmtCost(t)}</th>`;
+    const tt = pivot.totalsByMonth.get(m) ?? 0;
+    return html`<th class="num">${fmtCost(tt)}</th>`;
   });
-  return card("Monthly usage by provider", html`<table class="monthly-matrix">
+  return card(t("analytics.monthly.title"), html`<table class="monthly-matrix">
     <thead>
-      <tr><th>Provider</th>${pivot.months.map((m) => html`<th>${m}</th>`)}<th class="num">Total</th></tr>
+      <tr><th>${t("analytics.monthly.col_provider")}</th>${pivot.months.map((m) => html`<th>${m}</th>`)}<th class="num">${t("analytics.monthly.col_total")}</th></tr>
     </thead>
     <tbody>${bodyRows}</tbody>
     <tfoot>
-      <tr><th>Total</th>${footMonths}<th class="num">${fmtCost(pivot.grandTotal)}</th></tr>
+      <tr><th>${t("analytics.monthly.col_total")}</th>${footMonths}<th class="num">${fmtCost(pivot.grandTotal)}</th></tr>
     </tfoot>
   </table>`);
 }
@@ -478,10 +726,10 @@ function renderMonthlyMatrix(): TemplateResult {
 function renderRecentErrors(): TemplateResult {
   const slice = (errors || []).slice(0, 10);
   if (slice.length === 0) {
-    return card("Recent errors", html`<p class="empty">No errors in this range.</p>`);
+    return card(t("analytics.errors.title"), html`<p class="empty">${t("analytics.empty.no_errors")}</p>`);
   }
   const body = html`<table>
-    <thead><tr><th>Time</th><th>Provider</th><th>Model</th><th>Status</th><th>Error message</th></tr></thead>
+    <thead><tr><th>${t("analytics.errors.col_time")}</th><th>${t("analytics.errors.col_provider")}</th><th>${t("analytics.errors.col_model")}</th><th>${t("analytics.errors.col_status")}</th><th>${t("analytics.errors.col_message")}</th></tr></thead>
     <tbody>${slice.map((e) => {
       const href = `#/logs?request_id=${e.request_id || ""}`;
       return html`<tr class="clickable" @click=${() => { location.hash = href; }}>
@@ -489,38 +737,52 @@ function renderRecentErrors(): TemplateResult {
         <td>${e.provider_id || ""}</td>
         <td>${e.upstream_model_id || ""}</td>
         <td><span class="status-pill err">${e.status_code || "—"}</span></td>
-        <td>${e.error_msg_redacted || "(no message)"}<br><small class="muted"><code>${e.trace_id || ""}</code></small></td>
+        <td>${e.error_msg_redacted || t("analytics.errors.no_message")}<br><small class="muted"><code>${e.trace_id || ""}</code></small></td>
       </tr>`;
     })}</tbody>
   </table>`;
-  return card("Recent errors", body);
+  return card(t("analytics.errors.title"), body);
 }
 
 function renderBody(): TemplateResult {
-  if (loading) return html`<div class="loading">Loading...</div>`;
+  if (loading) return html`<div class="loading">${t("common.loading")}</div>`;
   if (errorMsg) return html`<div class="banner banner-error">${errorMsg}</div>`;
-  if (!summary) return html`<div class="loading">Loading...</div>`;
+  if (!summary) return html`<div class="loading">${t("common.loading")}</div>`;
 
   // Null-pricing warning: rows that consumed tokens but recorded
   // $0 cost (pricing was missing at record time). Surfaces
   // under-reporting so the operator knows to run models.dev sync.
   const nullPricingCount = summary.rows_with_null_pricing ?? 0;
   const nullPricingBanner = nullPricingCount > 0
-    ? html`<div class="banner banner-warning">⚠ ${nullPricingCount} rows had no pricing data (cost = $0). Run models.dev sync or manually set pricing to fix cost reporting.</div>`
+    ? html`<div class="banner banner-warning">${t("analytics.null_pricing_warning", { count: nullPricingCount })}</div>`
     : html``;
 
-  const dailyChartBlock = chartCard("Daily usage", dailyUsageChart(byDay));
-  const donutBlock = card("Status distribution", html`${unsafeHTML(statusDonut(groupByStatus(byStatus)))}`);
-  const summaryDonutRow = html`<div class="home-row">${renderSummaryBlock()}${donutBlock}</div>`;
-
+  // Charts grid: 2 columns on desktop, 1 on mobile. Daily usage
+  // spans the full width (it's a time series that benefits from the
+  // extra horizontal room). The 4 categorical bar charts pair up
+  // (by-model | by-provider, status | latency). Race outcomes is a
+  // full-width row of 3 stat blocks.
   return html`
     ${nullPricingBanner}
-    ${dailyChartBlock}
-    ${summaryDonutRow}
-    ${renderLatencyBlock()}
-    ${renderRaceBlock()}
-    ${renderByModelBlock()}
-    ${renderByProviderBlock()}
+    <div class="analytics-charts-grid">
+      <div class="analytics-chart-span-2">
+        ${chartCard(t("analytics.chart.daily_usage"), t("analytics.chart.daily_usage.subtitle"), "chart-daily-usage")}
+      </div>
+      ${chartCard(t("analytics.chart.by_model"), t("analytics.chart.by_model.subtitle"), "chart-by-model")}
+      ${chartCard(t("analytics.chart.by_provider"), t("analytics.chart.by_provider.subtitle"), "chart-by-provider")}
+      ${chartCard(t("analytics.chart.status_codes"), t("analytics.chart.status_codes.subtitle"), "chart-status-codes")}
+      <section class="card analytics-chart-card">
+        <div class="card-title">${t("analytics.chart.latency")}</div>
+        ${renderLatencyCaption()}
+        <div class="analytics-chart-container" id="chart-latency"></div>
+      </section>
+      <div class="analytics-chart-span-2">
+        ${renderRaceBlock()}
+      </div>
+    </div>
+    ${renderSummaryBlock()}
+    ${renderByModelTable()}
+    ${renderByProviderTable()}
     ${renderMonthlyMatrix()}
     ${renderRecentErrors()}`;
 }
@@ -528,7 +790,7 @@ function renderBody(): TemplateResult {
 function renderAnalytics(): TemplateResult {
   const { preset, providerId, apiKeyId } = parseHashParams();
   return html`
-    <div class="page-header"><h2>Analytics</h2></div>
+    <div class="page-header"><h2>${t("analytics.title")}</h2></div>
     ${renderAnalyticsFilters(providerId, apiKeyId)}
     ${renderPresetSelector(preset)}
     ${renderBody()}`;
@@ -540,9 +802,12 @@ export async function mountAnalytics(): Promise<(() => void) | void> {
   const el = document.getElementById("main");
   if (!el) return;
 
+  // Reset view-local state on every mount. The previous mount's
+  // charts were destroyed by its cleanup function; we start fresh.
   loading = true;
   errorMsg = null;
-  const cleanup = mountView(el, renderAnalytics);
+  charts = null;
+  const cleanupReactive = mountView(el, renderAnalytics);
 
   const { preset, providerId, apiKeyId } = parseHashParams();
   try {
@@ -593,6 +858,14 @@ export async function mountAnalytics(): Promise<(() => void) | void> {
 
     loading = false;
     requestUpdate();
+    // Create the uPlot charts after the data-bearing render commits.
+    // `requestUpdate()` schedules a microtask re-render; the
+    // `requestAnimationFrame` callback runs after the next paint, so
+    // the chart-container `<div>`s exist by then. `createAnalyticsCharts`
+    // is idempotent (no-op if `charts` is already set).
+    requestAnimationFrame(() => {
+      createAnalyticsCharts();
+    });
   } catch (e: unknown) {
     errorMsg = e instanceof Error ? e.message : String(e);
     providers = state.providers || [];
@@ -600,5 +873,8 @@ export async function mountAnalytics(): Promise<(() => void) | void> {
     loading = false;
     requestUpdate();
   }
-  return cleanup;
+  return () => {
+    destroyAnalyticsCharts();
+    cleanupReactive();
+  };
 }

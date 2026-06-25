@@ -2021,3 +2021,128 @@ abbr {
 .home-chart-container .u-label {
   fill: var(--color-text-muted);
 }
+
+/* ----- Analytics view (B3): uPlot chart grid + race stat blocks -----
+   Mirrors the home dashboard's chart-card styling so the two views
+   look consistent. The grid is 2 columns on desktop, 1 on mobile;
+   `.analytics-chart-span-2` makes a card span both columns (used for
+   the daily-usage time-series and the race-outcomes row). */
+.analytics-charts-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: var(--space-4);
+  margin-bottom: var(--space-4);
+}
+.analytics-chart-span-2 {
+  grid-column: 1 / -1;
+}
+.analytics-chart-card {
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+}
+.analytics-chart-card > .card-title {
+  padding: var(--space-2) var(--space-3);
+  border-bottom: var(--border-w) var(--border-style) var(--color-border);
+  font-family: var(--font-display);
+  font-size: var(--fs-sm);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+.analytics-chart-card > .card-subtitle {
+  padding: var(--space-1) var(--space-3);
+  font-size: var(--fs-xs);
+  color: var(--color-text-muted);
+  border-bottom: var(--border-w) var(--border-style) var(--color-border-soft);
+}
+.analytics-chart-container {
+  height: 220px;
+  padding: var(--space-2);
+  min-width: 0;
+  /* The uPlot instance is mounted inside this div. */
+}
+
+/* uPlot token overrides — same as .home-chart-container above, scoped
+   to the analytics container so both views share the same look. */
+.analytics-chart-container .uplot {
+  width: 100% !important;
+  height: 100% !important;
+  font-family: var(--font-mono);
+  color: var(--color-text);
+}
+.analytics-chart-container .u-axis {
+  stroke: var(--color-border);
+}
+.analytics-chart-container .u-label {
+  fill: var(--color-text-muted);
+}
+
+/* ----- Analytics race-outcomes stat blocks (mirrors home-race-stat) ----- */
+.analytics-race-stats {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: var(--space-2);
+  padding: var(--space-3);
+  flex: 1;
+}
+.analytics-race-stat {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-1);
+  padding: var(--space-3) var(--space-2);
+  border: var(--border-w) var(--border-style) var(--color-border-soft);
+  background: var(--color-surface-2);
+}
+.analytics-race-stat-value {
+  font-size: var(--fs-2xl);
+  font-weight: bold;
+  font-family: var(--font-mono);
+  line-height: var(--lh-tight);
+}
+.analytics-race-stat-label {
+  font-size: var(--fs-xs);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--color-text-muted);
+  font-family: var(--font-display);
+  text-align: center;
+}
+.analytics-race-stat-count {
+  font-size: var(--fs-sm);
+  color: var(--color-text-muted);
+  font-family: var(--font-mono);
+}
+.analytics-race-stat-won {
+  border-left: 3px solid var(--color-success);
+}
+.analytics-race-stat-lost {
+  border-left: 3px solid var(--color-error);
+}
+.analytics-race-stat-total {
+  border-left: 3px solid var(--color-info);
+}
+
+/* ----- Responsive: tablet (≤900px) — analytics grid collapses to 1 col ----- */
+@media (max-width: 900px) {
+  .analytics-charts-grid {
+    grid-template-columns: 1fr;
+  }
+  .analytics-chart-span-2 {
+    grid-column: 1;
+  }
+  .analytics-chart-container {
+    height: 200px;
+  }
+}
+
+/* ----- Responsive: mobile (<640px) — shorter charts, stacked race stats ----- */
+@media (max-width: 639px) {
+  .analytics-race-stats {
+    grid-template-columns: 1fr;
+  }
+  .analytics-chart-container {
+    height: 180px;
+  }
+}
