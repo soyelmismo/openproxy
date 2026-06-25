@@ -623,6 +623,21 @@ impl Pipeline {
         self.record_bodies_and_headers.load(Ordering::Relaxed)
     }
 
+    /// Evict idle entries from the circuit breaker's per-account map.
+    /// Call from a background sweep (e.g. every 10 minutes from
+    /// `AppState::new`) to prevent the map from growing unbounded as
+    /// accounts are created and deleted over the process lifetime.
+    /// See [`CircuitBreakerRegistry::prune_idle`] for semantics.
+    pub fn prune_circuit_breaker_idle(&self, max_idle: std::time::Duration) -> usize {
+        self.circuit_breaker.prune_idle(max_idle)
+    }
+
+    /// Current number of tracked accounts in the circuit breaker.
+    /// Diagnostic only — used by the `/admin/debug/memory` endpoint.
+    pub fn circuit_breaker_len(&self) -> usize {
+        self.circuit_breaker.len()
+    }
+
     /// Set the recording state. When `true`, the pipeline will record
     /// full request/response bodies and headers in the `usage` table.
     pub fn set_recording(&self, enabled: bool) {

@@ -615,6 +615,12 @@ async fn resolve_host(host: &str, port: u16) -> io::Result<Vec<SocketAddr>> {
     // The cache is a process-wide DashMap; entries are (addrs, expiry).
     // On cache hit, return the cached addrs if not expired.
     // On cache miss or expiry, fall through to tokio::net::lookup_host.
+    //
+    // LEAK FIX: a background sweep (started on first insert) evicts
+    // expired entries every 5 minutes. Without this, the cache grows
+    // unbounded as the process sees new hosts (provider rotation,
+    // CDN shards, etc.) — each entry is ~200 bytes but over weeks of
+    // uptime with many providers it adds up.
     static DNS_CACHE: std::sync::OnceLock<
         dashmap::DashMap<String, (Vec<SocketAddr>, std::time::Instant)>,
     > = std::sync::OnceLock::new();
@@ -635,6 +641,30 @@ async fn resolve_host(host: &str, port: u16) -> io::Result<Vec<SocketAddr>> {
     // Cache the result (even if empty — an empty result for 60s is
     // better than hammering getaddrinfo on a misconfigured host).
     cache.insert(cache_key, (addrs.clone(), now + DNS_TTL));
+
+    // Start the background eviction sweep on the first successful
+    // insert. The sweep runs every 5 minutes and drops entries whose
+    // TTL has expired. Idempotent via `OnceLock` on the sweep-started
+    // flag — only the first caller spawns the task.
+    static SWEEP_STARTED: std::sync::OnceLock<()> = std::sync::OnceLock::new();
+    SWEEP_STARTED.get_or_init(|| {
+        let cache_for_sweep = DNS_CACHE.get().expect("DNS_CACHE init order");
+        tokio::spawn(async move {
+            let mut tick = tokio::time::interval(std::time::Duration::from_secs(300));
+            tick.tick().await; // skip immediate first tick
+            loop {
+                tick.tick().await;
+                let now = std::time::Instant::now();
+                let before = cache_for_sweep.len();
+                cache_for_sweep.retain(|_, (_, expiry)| *expiry > now);
+                let after = cache_for_sweep.len();
+                if before != after {
+                    tracing::debug!(before, after, evicted = before - after, "DNS cache sweep");
+                }
+            }
+        });
+    });
+
     Ok(addrs)
 }
 

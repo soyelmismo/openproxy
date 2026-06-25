@@ -48,7 +48,9 @@ mime_guess = "2"
 # discovery refresh). mimalloc returns memory to the OS more eagerly
 # and typically cuts idle RSS 20-40% on Rust services like this one.
 # The `default-features = false` avoids pulling in the `libmimalloc-sys`
-# `extended` build flags we don't need.
+# `extended` build flags we don't need. `mimalloc::heap_trim()` is
+# available without extra feature flags and is called from a periodic
+# background sweep to force arena return to the OS after bursts.
 mimalloc = { version = "0.1", default-features = false }
 
 [dev-dependencies]

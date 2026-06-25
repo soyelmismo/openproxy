@@ -19,6 +19,24 @@ struct AccountBreaker {
     consecutive_failures: u8,
     state: Health,
     unhealthy_until: Option<Instant>,
+    /// Wall-clock monotonic timestamp of the last `record_failure` or
+    /// `record_success` call. Used by [`CircuitBreakerRegistry::prune_idle`]
+    /// to evict entries for accounts that haven't been seen recently
+    /// (deleted accounts, one-off requests, etc.). Without this, the
+    /// map grows unbounded over the process lifetime — a slow memory
+    /// leak (~80 bytes per distinct account id seen).
+    last_activity_ms: u64,
+}
+
+/// Monotonic milliseconds since process start. Used for the
+/// `last_activity_ms` field on [`AccountBreaker`] so we can evict
+/// idle entries via [`CircuitBreakerRegistry::prune_idle`] without
+/// holding a separate `Instant` (which isn't `AtomicU64`-compatible).
+fn now_ms() -> u64 {
+    use std::sync::OnceLock;
+    static START: OnceLock<Instant> = OnceLock::new();
+    let start = *START.get_or_init(Instant::now);
+    Instant::now().duration_since(start).as_millis() as u64
 }
 
 /// Outcome of a single [`CircuitBreakerRegistry::record_failure_outcome`]
@@ -66,10 +84,11 @@ impl CircuitBreakerRegistry {
     /// Check if account is eligible. If unhealthy and cooldown passed, transition to healthy.
     pub fn is_healthy(&self, account: AccountId) -> Health {
         let mut g = self.inner.lock();
-        let entry = g.entry(account).or_insert(AccountBreaker {
+        let entry = g.entry(account).or_insert_with(|| AccountBreaker {
             consecutive_failures: 0,
             state: Health::Healthy,
             unhealthy_until: None,
+            last_activity_ms: now_ms(),
         });
         if entry.state == Health::Unhealthy {
             if let Some(until) = entry.unhealthy_until {
@@ -80,6 +99,7 @@ impl CircuitBreakerRegistry {
                 }
             }
         }
+        entry.last_activity_ms = now_ms();
         entry.state
     }
 
@@ -90,6 +110,7 @@ impl CircuitBreakerRegistry {
             entry.consecutive_failures = 0;
             entry.state = Health::Healthy;
             entry.unhealthy_until = None;
+            entry.last_activity_ms = now_ms();
         }
     }
 
@@ -107,10 +128,11 @@ impl CircuitBreakerRegistry {
     /// check-then-act race against concurrent callers).
     pub fn record_failure_outcome(&self, account: AccountId) -> FailureOutcome {
         let mut g = self.inner.lock();
-        let entry = g.entry(account).or_insert(AccountBreaker {
+        let entry = g.entry(account).or_insert_with(|| AccountBreaker {
             consecutive_failures: 0,
             state: Health::Healthy,
             unhealthy_until: None,
+            last_activity_ms: now_ms(),
         });
         entry.consecutive_failures = entry.consecutive_failures.saturating_add(1);
         let just_opened =
@@ -121,6 +143,7 @@ impl CircuitBreakerRegistry {
             } else {
                 false
             };
+        entry.last_activity_ms = now_ms();
         FailureOutcome {
             health: entry.state,
             just_opened,
@@ -139,8 +162,44 @@ impl CircuitBreakerRegistry {
                 consecutive_failures: self.threshold,
                 state: Health::Unhealthy,
                 unhealthy_until: Some(Instant::now() + self.unhealthy_duration),
+                last_activity_ms: now_ms(),
             },
         );
+    }
+
+    /// Evict entries that have been idle (no `is_healthy` / `record_*`
+    /// call) for longer than `max_idle` AND are currently `Healthy`.
+    /// `Unhealthy` entries are kept even if idle — they're still
+    /// serving their cooldown window and the pipeline needs to see
+    /// the `Unhealthy` state to skip the account.
+    ///
+    /// Call this from a background sweep (e.g. every 10 minutes) to
+    /// prevent the map from growing unbounded as accounts are
+    /// created and deleted over the process lifetime. Returns the
+    /// number of entries evicted.
+    ///
+    /// The default `max_idle` of 1 hour is conservative: an account
+    /// that hasn't been touched in an hour is almost certainly either
+    /// deleted or on a provider that's been de-activated. The
+    /// pipeline re-creates the entry (as `Healthy`) on the next
+    /// `is_healthy` call if the account comes back.
+    pub fn prune_idle(&self, max_idle: Duration) -> usize {
+        let mut g = self.inner.lock();
+        let cutoff = now_ms().saturating_sub(max_idle.as_millis() as u64);
+        let before = g.len();
+        g.retain(|_, e| {
+            // Keep unhealthy entries (they're in cooldown).
+            // Keep entries with recent activity.
+            e.state == Health::Unhealthy || e.last_activity_ms >= cutoff
+        });
+        before - g.len()
+    }
+
+    /// Current number of tracked accounts. Diagnostic only — used by
+    /// the `/admin/debug/memory` endpoint to surface the breaker
+    /// map size alongside other in-memory collections.
+    pub fn len(&self) -> usize {
+        self.inner.lock().len()
     }
 }
 

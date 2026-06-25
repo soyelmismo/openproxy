@@ -501,6 +501,7 @@ impl AppState {
         let rate_limiter = Arc::new(crate::rate_limit::RateLimiter::new(
             crate::rate_limit::RateLimitConfig::default(),
         ));
+        let selection_registry = Arc::new(openproxy_core::combos::SelectionRegistry::new());
         // Spawn a periodic cleanup of the rate-limiter's per-key map.
         // Without this sweep, entries for API keys / IPs that were used
         // once and never again would accumulate forever (the lazy
@@ -518,6 +519,30 @@ impl AppState {
                 }
             });
         }
+        // LEAK FIX: periodic sweep of the selection_registry. Each
+        // `record_success` / `record_request` call creates an entry
+        // via `entry().or_default()`; deleted combo targets leave
+        // stale entries forever. Sweep every 10 min, evict entries
+        // with no success in the last hour.
+        {
+            let sr = Arc::clone(&selection_registry);
+            tokio::spawn(async move {
+                let mut tick = tokio::time::interval(std::time::Duration::from_secs(600));
+                tick.tick().await; // skip immediate first tick
+                loop {
+                    tick.tick().await;
+                    let pruned = sr.prune_stale(std::time::Duration::from_secs(3600));
+                    if pruned > 0 {
+                        tracing::debug!(
+                            pruned,
+                            remaining = sr.len(),
+                            "selection_registry sweep: evicted stale target entries"
+                        );
+                    }
+                }
+            });
+        }
+
         let state = Self {
             config,
             db_pool,
@@ -535,7 +560,7 @@ impl AppState {
             discovery_scheduler,
             oauth_provider_registry,
             idle_chunk_retryable_cell: Arc::new(AtomicBool::new(idle_chunk_retryable)),
-            selection_registry: Arc::new(openproxy_core::combos::SelectionRegistry::new()),
+            selection_registry: Arc::clone(&selection_registry),
         };
         // Hot-reload custom adapters from DB so the registry is
         // complete before the first request arrives.
@@ -594,6 +619,36 @@ impl AppState {
                 );
             }
         });
+
+        // LEAK FIX: periodic sweep of in-memory collections that grow
+        // without bound as accounts/combos/targets are created and
+        // deleted over the process lifetime. Mirrors the production
+        // sweep in `AppState::new`.
+        let selection_registry = Arc::new(openproxy_core::combos::SelectionRegistry::new());
+        {
+            let sr = Arc::clone(&selection_registry);
+            tokio::spawn(async move {
+                // Periodic sweep of in-memory collections. The
+                // selection_registry prune runs every 10 minutes;
+                // mimalloc's automatic arena decay (~1s) handles
+                // returning freed memory to the OS without an
+                // explicit `mi_collect` call (which would require
+                // the `extended` feature of libmimalloc-sys).
+                let mut tick = tokio::time::interval(std::time::Duration::from_secs(600));
+                tick.tick().await; // skip immediate first tick
+                loop {
+                    tick.tick().await;
+                    let pruned = sr.prune_stale(std::time::Duration::from_secs(3600));
+                    if pruned > 0 {
+                        tracing::debug!(
+                            pruned,
+                            remaining = sr.len(),
+                            "selection_registry sweep: evicted stale target entries"
+                        );
+                    }
+                }
+            });
+        }
 
         // Test-only discovery scheduler: the test path doesn't
         // need a real `UpstreamClient` because the per-provider
@@ -658,7 +713,7 @@ impl AppState {
             idle_chunk_retryable_cell: Arc::new(AtomicBool::new(
                 db::app_config::IDLE_CHUNK_RETRYABLE_DEFAULT,
             )),
-            selection_registry: Arc::new(openproxy_core::combos::SelectionRegistry::new()),
+            selection_registry: Arc::clone(&selection_registry),
         }
     }
 

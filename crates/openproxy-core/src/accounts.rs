@@ -620,6 +620,59 @@ pub fn list_expiring_oauth_accounts(
     Ok(out)
 }
 
+/// List the DB row ids of all OAuth accounts (regardless of expiry).
+/// Used by the OAuth refresh scheduler's leak-fix prune pass to
+/// detect accounts that have been deleted from the DB but still have
+/// in-memory tracking entries (`failure_counts`, `last_refresh_attempts`).
+pub fn list_oauth_account_ids(conn: &Connection) -> Result<Vec<i64>> {
+    let mut stmt = conn
+        .prepare("SELECT id FROM accounts WHERE auth_type = 'oauth'")
+        .map_err(|e| CoreError::Database {
+            message: format!("prepare list_oauth_account_ids: {}", e),
+            source: Some(Box::new(e)),
+        })?;
+    let rows = stmt
+        .query_map([], |r| r.get::<_, i64>(0))
+        .map_err(|e| CoreError::Database {
+            message: format!("query list_oauth_account_ids: {}", e),
+            source: Some(Box::new(e)),
+        })?;
+    let mut out = Vec::new();
+    for r in rows {
+        out.push(r.map_err(|e| CoreError::Database {
+            message: format!("read list_oauth_account_ids row: {}", e),
+            source: Some(Box::new(e)),
+        })?);
+    }
+    Ok(out)
+}
+
+/// List the distinct provider ids that currently have at least one
+/// OAuth account. Used by the OAuth refresh scheduler's leak-fix
+/// prune pass to drop `provider_mutexes` entries for deleted providers.
+pub fn list_oauth_provider_ids(conn: &Connection) -> Result<Vec<String>> {
+    let mut stmt = conn
+        .prepare("SELECT DISTINCT provider_id FROM accounts WHERE auth_type = 'oauth'")
+        .map_err(|e| CoreError::Database {
+            message: format!("prepare list_oauth_provider_ids: {}", e),
+            source: Some(Box::new(e)),
+        })?;
+    let rows = stmt
+        .query_map([], |r| r.get::<_, String>(0))
+        .map_err(|e| CoreError::Database {
+            message: format!("query list_oauth_provider_ids: {}", e),
+            source: Some(Box::new(e)),
+        })?;
+    let mut out = Vec::new();
+    for r in rows {
+        out.push(r.map_err(|e| CoreError::Database {
+            message: format!("read list_oauth_provider_ids row: {}", e),
+            source: Some(Box::new(e)),
+        })?);
+    }
+    Ok(out)
+}
+
 /// Map a single SELECT row into an `Account`. Shared by `get` and `list`.
 fn row_to_account(row: &rusqlite::Row<'_>) -> rusqlite::Result<Account> {
     let id: i64 = row.get(0)?;

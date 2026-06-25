@@ -745,6 +745,67 @@ pub async fn start_refresh_scheduler(
             // 2-second settle gap after each refresh (Auth0 protection).
             tokio::time::sleep(std::time::Duration::from_secs(SETTLE_GAP_SECS)).await;
         }
+
+        // LEAK FIX: prune `failure_counts` / `last_refresh_attempts`
+        // entries for accounts that no longer exist in the DB.
+        // Without this, deleting an OAuth account leaves its failure
+        // tracking entries in memory forever (~80 bytes each). The
+        // `provider_mutexes` map is cleaned separately below.
+        //
+        // We also prune `provider_mutexes` for providers that no
+        // longer have any OAuth accounts — a deleted provider's
+        // mutex is dead weight.
+        {
+            let live_account_ids: std::collections::HashSet<i64> = {
+                let conn = db_pool.writer();
+                match crate::accounts::list_oauth_account_ids(&conn) {
+                    Ok(ids) => ids.into_iter().collect(),
+                    Err(e) => {
+                        tracing::debug!(
+                            error = %e,
+                            "oauth refresh: failed to list live account ids for prune"
+                        );
+                        // Skip this prune pass on DB error — don't
+                        // block the refresh loop.
+                        continue;
+                    }
+                }
+            };
+            let before_fc = failure_counts.len();
+            let before_lra = last_refresh_attempts.len();
+            failure_counts.retain(|id, _| live_account_ids.contains(id));
+            last_refresh_attempts.retain(|id, _| live_account_ids.contains(id));
+            let pruned_fc = before_fc - failure_counts.len();
+            let pruned_lra = before_lra - last_refresh_attempts.len();
+            if pruned_fc > 0 || pruned_lra > 0 {
+                tracing::debug!(
+                    pruned_failure_counts = pruned_fc,
+                    pruned_last_refresh_attempts = pruned_lra,
+                    "oauth refresh: pruned stale account tracking entries"
+                );
+            }
+
+            // Prune provider_mutexes: collect live provider ids from
+            // the live account set, then drop mutexes for providers
+            // that have zero live accounts.
+            let live_provider_ids: std::collections::HashSet<String> = {
+                let conn = db_pool.writer();
+                match crate::accounts::list_oauth_provider_ids(&conn) {
+                    Ok(ids) => ids.into_iter().collect(),
+                    Err(_) => std::collections::HashSet::new(),
+                }
+            };
+            let mut pm = provider_mutexes.lock().await;
+            let before_pm = pm.len();
+            pm.retain(|pid, _| live_provider_ids.contains(pid));
+            let pruned_pm = before_pm - pm.len();
+            if pruned_pm > 0 {
+                tracing::debug!(
+                    pruned_provider_mutexes = pruned_pm,
+                    "oauth refresh: pruned stale provider mutexes"
+                );
+            }
+        }
     }
 }
 

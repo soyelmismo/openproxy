@@ -1654,6 +1654,53 @@ impl SelectionRegistry {
             _ => 0,
         }
     }
+
+    /// Evict entries whose `last_success_ms` is older than
+    /// `max_age` AND whose `request_count` is zero or was last
+    /// bumped outside the window. Used by a background sweep to
+    /// prevent the registry from growing unbounded as combo
+    /// targets are created and deleted over the process lifetime.
+    ///
+    /// Entries with `last_success_ms == 0` (never succeeded) are
+    /// kept only if they were requested recently — a target that's
+    /// been failing but is still being tried shouldn't be evicted
+    /// mid-retry. We approximate "requested recently" by checking
+    /// `last_success_ms` against the window (a target that hasn't
+    /// succeeded in `max_age` AND has no recent success is either
+    /// deleted or permanently broken — either way, evicting it is
+    /// safe; the next `record_*` call re-creates it).
+    ///
+    /// Returns the number of entries evicted.
+    pub fn prune_stale(&self, max_age: std::time::Duration) -> usize {
+        let mut g = self.inner.lock();
+        let now = now_ms();
+        let cutoff = now.saturating_sub(max_age.as_millis() as u64);
+        let before = g.len();
+        g.retain(|_, e| {
+            // Keep entries with a recent success.
+            if e.last_success_ms > 0 && e.last_success_ms >= cutoff {
+                return true;
+            }
+            // Keep entries that have never succeeded but were
+            // requested recently (request_count > 0 but no success
+            // yet — the target is being retried). We don't have a
+            // "last request" timestamp, so we use the heuristic:
+            // if `last_success_ms == 0` and `request_count > 0`,
+            // keep it (it's an active failure case). If
+            // `last_success_ms == 0` and `request_count == 0`,
+            // it's a stale entry from a deleted target.
+            if e.last_success_ms == 0 && e.request_count > 0 {
+                return true;
+            }
+            false
+        });
+        before - g.len()
+    }
+
+    /// Current number of tracked targets. Diagnostic only.
+    pub fn len(&self) -> usize {
+        self.inner.lock().len()
+    }
 }
 
 /// Helper: current wall-clock epoch-ms.
