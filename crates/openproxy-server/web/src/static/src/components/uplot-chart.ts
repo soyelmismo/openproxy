@@ -155,7 +155,15 @@ function buildOptions(
  *  is the only mutation path. */
 export function createLiveChart(container: HTMLElement, opts: LiveChartOpts): uPlot {
   injectUplotCss();
-  const w: number = Math.max(100, container.clientWidth || 600);
+  // CRITICAL: read the container's ACTUAL size, not a fallback.
+  // If clientWidth is 0 (container not yet laid out by the browser),
+  // defer creation by one animation frame so the layout has a chance
+  // to compute. Creating a uPlot with a 600px default when the
+  // container is actually 400px causes the canvas to overflow, which
+  // pushes the layout wider, which triggers ResizeObserver, which
+  // calls setSize with the new (larger) width — the chart-grows-
+  // without-bound bug.
+  const w: number = Math.max(100, container.clientWidth);
   const h: number = Math.max(80, container.clientHeight || 200);
   const data: ChartData = opts.initialData ?? [[]];
   const u: uPlot = new uPlot(
@@ -163,6 +171,14 @@ export function createLiveChart(container: HTMLElement, opts: LiveChartOpts): uP
     data,
     container,
   );
+  // Force a resize on the next frame — the container may have been
+  // laid out between the `clientWidth` read above and now. This also
+  // catches the case where uPlot's own CSS (`.uplot { width: min-content }`,
+  // overridden by our global `.uplot { width: 100% !important }`)
+  // causes a transient size mismatch on first paint.
+  requestAnimationFrame(() => {
+    resizeChart(u, container);
+  });
   return u;
 }
 
@@ -178,7 +194,7 @@ export function createLiveChart(container: HTMLElement, opts: LiveChartOpts): uP
  *  hidden, so the scale doesn't matter. */
 export function createSparkline(container: HTMLElement, color: string): uPlot {
   injectUplotCss();
-  const w: number = Math.max(40, container.clientWidth || 100);
+  const w: number = Math.max(40, container.clientWidth);
   const h: number = Math.max(16, container.clientHeight || 24);
   const opts: uPlot.Options = {
     width: w,
@@ -213,7 +229,13 @@ export function createSparkline(container: HTMLElement, color: string): uPlot {
       { show: false },
     ],
   };
-  return new uPlot(opts, [[]], container);
+  const u: uPlot = new uPlot(opts, [[]], container);
+  // Same rAF resize as createLiveChart — see that function for the
+  // rationale (container may not be laid out yet at creation time).
+  requestAnimationFrame(() => {
+    resizeChart(u, container);
+  });
+  return u;
 }
 
 // ----------------------------------------------------------------------------
@@ -224,12 +246,20 @@ export function createSparkline(container: HTMLElement, color: string): uPlot {
  *  and on every ResizeObserver callback. Cheap — uPlot's `setSize` just
  *  resizes the canvas and redraws; it doesn't recreate the chart. */
 export function resizeChart(u: uPlot, container: HTMLElement): void {
-  const w: number = Math.max(100, container.clientWidth);
-  const h: number = Math.max(80, container.clientHeight);
+  // Read the container's CONTENT width (excluding padding) via
+  // clientWidth. If the container has padding, clientWidth is already
+  // the inner size. If clientWidth is 0 (container display:none or
+  // not laid out), skip — the ResizeObserver will fire again when
+  // the container becomes visible.
+  const w: number = container.clientWidth;
+  const h: number = container.clientHeight;
+  if (w === 0 || h === 0) return;
+  const cw: number = Math.max(100, w);
+  const ch: number = Math.max(80, h);
   // Guard against no-op resizes (uPlot triggers a full redraw on every
   // setSize call, even if the size hasn't changed).
-  if (u.width === w && u.height === h) return;
-  u.setSize({ width: w, height: h });
+  if (u.width === cw && u.height === ch) return;
+  u.setSize({ width: cw, height: ch });
 }
 
 /** Attach a ResizeObserver that keeps the chart sized to its container.
@@ -240,29 +270,44 @@ export function resizeChart(u: uPlot, container: HTMLElement): void {
  *
  *  DEBOUNCE: ResizeObserver can fire in a tight loop if the chart's
  *  own setSize() triggers a container reflow (which re-fires the
- *  observer). We debounce with a 100ms trailing edge + a guard that
- *  skips the call if the size hasn't actually changed (resizeChart
- *  already has this guard, but the debounce prevents the observer
- *  callback itself from running 60+ times/sec). Without this, a CSS
- *  rule like `.uplot { width: 100% }` creates a feedback loop that
- *  grows the chart without bound and tanks FPS. */
+ *  observer). We debounce with a requestAnimationFrame coalescer + a
+ *  guard in `resizeChart` that skips the call if the size hasn't
+ *  actually changed. Without this, the chart's canvas reflowing the
+ *  container could re-fire the observer 60+ times/sec.
+ *
+ *  INITIAL SIZING PASS: `ro.observe(container)` causes the observer
+ *  to fire once asynchronously with the container's current size.
+ *  That fire is enough in the common case, but it can deliver a 0x0
+ *  size if the container is briefly `display:none` or not yet laid
+ *  out at observe() time (the chart is then stuck at the fallback
+ *  600x200 from `createLiveChart` until the next real resize event).
+ *  We schedule an explicit `resizeChart()` via rAF right after
+ *  observe() so the chart self-corrects on the next frame even if
+ *  the observer's initial fire is delayed or delivers 0x0. The
+ *  `resizeChart` no-op guard makes this redundant in the happy path
+ *  but costs nothing. */
 export function observeResize(u: uPlot, container: HTMLElement): () => void {
   if (typeof ResizeObserver === "undefined") {
     const handler = (): void => resizeChart(u, container);
     window.addEventListener("resize", handler);
+    // Initial sizing pass for the no-ResizeObserver fallback.
+    requestAnimationFrame(handler);
     return () => window.removeEventListener("resize", handler);
   }
   let rafId: number | null = null;
-  const ro: ResizeObserver = new ResizeObserver(() => {
-    // Debounce via requestAnimationFrame — coalesce multiple
-    // observer callbacks into one resize per frame.
+  const scheduleResize = (): void => {
     if (rafId !== null) return;
     rafId = requestAnimationFrame(() => {
       rafId = null;
       resizeChart(u, container);
     });
-  });
+  };
+  const ro: ResizeObserver = new ResizeObserver(scheduleResize);
   ro.observe(container);
+  // Explicit initial sizing pass — see the docstring above. Uses the
+  // same rAF coalescer so it merges with any observer fire that
+  // happened to land first.
+  scheduleResize();
   return () => {
     if (rafId !== null) {
       cancelAnimationFrame(rafId);

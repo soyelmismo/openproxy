@@ -1785,9 +1785,16 @@ abbr {
 }
 .home-kpi-spark {
   height: 24px;
+  width: 100%;
+  min-width: 0;
   margin-top: var(--space-1);
   /* The uPlot instance is mounted inside this div; it fills the
-     container via the ResizeObserver in uplot-chart.ts. */
+     container via the global `.uplot { width: 100%; height: 100% }`
+     rule (see uPlot overrides section below) and the ResizeObserver
+     in uplot-chart.ts. `width: 100%` + `min-width: 0` are required
+     so the `.uplot` div (which uPlot's own CSS sizes to `min-content`
+     by default — overridden globally below) has a real reference
+     width to fill, instead of feeding back off the canvas size. */
 }
 
 /* ----- Charts grid (2x2) ----- */
@@ -1800,6 +1807,8 @@ abbr {
   padding: 0;
   display: flex;
   flex-direction: column;
+  min-width: 0;
+  overflow: hidden;
 }
 .home-chart-card > .card-title {
   padding: var(--space-2) var(--space-3);
@@ -1817,9 +1826,15 @@ abbr {
 }
 .home-chart-container {
   height: 220px;
+  width: 100%;
   padding: var(--space-2);
   min-width: 0;
-  /* The uPlot instance is mounted inside this div. */
+  overflow: hidden;
+  /* The uPlot instance is mounted inside this div. `width: 100%` +
+     `min-width: 0` + `overflow: hidden` give the global `.uplot`
+     rule (below) a real reference width to fill, and clip any
+     transient canvas overflow before `resizeChart()` corrects the
+     canvas size on the next frame. */
 }
 
 /* ----- Race outcomes stat blocks ----- */
@@ -2000,21 +2015,58 @@ abbr {
 }
 
 /* ----- uPlot overrides — match the dashboard's design tokens ----- */
+
+/* GLOBAL `.uplot` SIZE OVERRIDE — fixes the resize feedback loop.
+   uPlot's own CSS (injected at runtime by `injectUplotCss()` in
+   components/uplot-chart.ts) sets:
+     .uplot         { width: min-content; }
+     .uplot canvas  { width: 100%; height: 100%; }
+   The `min-content` on `.uplot` is the root cause of the chart-grows-
+   without-bound bug: the `.uplot` div shrinks to its canvas's inline
+   width, the canvas's CSS `width: 100%` then resolves against that
+   same size, and any drift between what `setSize()` set and what
+   `clientWidth` reports next frame is amplified by the grid cell's
+   own min-content sizing — pushing the cell wider on each observer
+   fire until the layout overflows.
+
+   The fix: pin `.uplot` to its parent's content box (`width: 100%`;
+   `height: 100%`) with `!important` so it beats uPlot's own
+   `min-content` rule (same specificity, but `!important` wins).
+   We do NOT touch `.uplot canvas` — uPlot's `setSize()` writes
+   inline `width`/`height` on the canvas, and inline styles (without
+   `!important`) override CSS rules (without `!important`). So the
+   canvas still uses uPlot's pixel dimensions; the `.uplot` div just
+   stops feeding back off them.
+
+   Why `!important` is safe here: the only other rule that sets
+   `.uplot` width/height is uPlot's own `min-content` (no `!important`).
+   No code in this project writes inline `width`/`height` on the
+   `.uplot` div itself (uPlot only writes them on the canvas). */
+.uplot {
+  width: 100% !important;
+  height: 100% !important;
+  /* `overflow: hidden` prevents a transient canvas overflow (before
+     resizeChart() runs on the next frame) from pushing the layout
+     wider. Without this, a canvas created at 600px default width
+     inside a 400px container would overflow, the parent grid cell
+     would grow, ResizeObserver would fire with the new (larger)
+     width, and the chart would drift wider. Clipping at the .uplot
+     level contains the overflow so the parent layout is stable. */
+  overflow: hidden !important;
+}
+
 /* uPlot's default CSS sets a transparent background and gray grid. We
    override to use the project's border/text tokens so the charts blend
    with the rest of the UI. These rules are scoped to .home-chart-container
    so they don't affect other uPlot instances that might be added later.
-   NOTE: do NOT set `width/height: 100% !important` on `.uplot` — uPlot
-   controls the canvas size via `setSize()` and a CSS width/height fights
-   with it, creating a resize loop that grows charts without bound and
-   tanks FPS. The `.uplot` div gets its width/height from uPlot's inline
-   styles; CSS should only override colors/fonts here. */
+   They set ONLY colors/fonts — sizing is handled by the global `.uplot`
+   rule above + uPlot's inline canvas styles. */
 .home-chart-container .uplot {
   font-family: var(--font-mono);
   color: var(--color-text);
 }
 .home-kpi-spark .uplot {
-  /* No width/height — uPlot sets them via setSize(). */
+  /* No width/height here — the global `.uplot` rule above sets them. */
 }
 .home-chart-container .u-axis,
 .home-kpi-spark .u-axis {
@@ -2042,6 +2094,8 @@ abbr {
   padding: 0;
   display: flex;
   flex-direction: column;
+  min-width: 0;
+  overflow: hidden;
 }
 .analytics-chart-card > .card-title {
   padding: var(--space-2) var(--space-3);
@@ -2059,20 +2113,24 @@ abbr {
 }
 .analytics-chart-container {
   height: 220px;
+  width: 100%;
   padding: var(--space-2);
   min-width: 0;
-  /* The uPlot instance is mounted inside this div. */
+  overflow: hidden;
+  /* The uPlot instance is mounted inside this div. `width: 100%` +
+     `min-width: 0` + `overflow: hidden` give the global `.uplot`
+     rule (above) a real reference width to fill, and clip any
+     transient canvas overflow before `resizeChart()` corrects the
+     canvas size on the next frame. */
 }
 
 /* uPlot token overrides — same as .home-chart-container above, scoped
    to the analytics container so both views share the same look.
-   NOTE: do NOT set `width: 100% !important` on `.uplot` — uPlot
-   controls the canvas size via `setSize()` and a CSS `width: 100%`
-   fights with it, creating a resize loop (ResizeObserver fires →
-   setSize → canvas reflows → container resizes → ResizeObserver
-   fires again → ...). This loop causes the charts to grow
-   horizontally without bound and tanks FPS. The `.uplot` div should
-   have NO explicit width/height — uPlot sets them via inline styles. */
+   Sizing is handled by the global `.uplot { width: 100% !important;
+   height: 100% !important }` rule above — DO NOT re-add width/height
+   here. uPlot's `setSize()` writes inline styles on the canvas, which
+   beat the canvas's CSS `width: 100%; height: 100%` (inline > CSS,
+   no `!important` on either side). */
 .analytics-chart-container .uplot {
   font-family: var(--font-mono);
   color: var(--color-text);
