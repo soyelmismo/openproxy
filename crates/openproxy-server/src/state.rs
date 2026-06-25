@@ -519,25 +519,60 @@ impl AppState {
                 }
             });
         }
-        // LEAK FIX: periodic sweep of the selection_registry. Each
-        // `record_success` / `record_request` call creates an entry
-        // via `entry().or_default()`; deleted combo targets leave
-        // stale entries forever. Sweep every 10 min, evict entries
-        // with no success in the last hour.
+        // LEAK FIX: periodic sweep of in-memory collections + mimalloc
+        // arena trim.
+        //
+        // - `selection_registry`: per-target LKGP/least_used/p2c
+        //   tracking. Each `record_success` / `record_request` call
+        //   creates an entry via `entry().or_default()`; deleted
+        //   combo targets leave stale entries forever. Sweep every
+        //   10 min, evict entries with no success in the last hour.
+        //
+        // - `mi_collect(false)`: tell mimalloc to return freed-but-
+        //   retained arenas to the OS NOW, rather than waiting for
+        //   its ~1s automatic decay. This is the primary fix for the
+        //   "instant 20MB jump" symptom: after a burst of allocations
+        //   (large SSE response, discovery refresh, models.dev sync),
+        //   mimalloc holds onto arenas for its decay window even
+        //   though the memory is logically free. `mi_collect(false)`
+        //   is cheap (~µs when nothing to trim) and safe from a tokio
+        //   task. NOT a GC — see the Cargo.toml comment on the
+        //   `mimalloc` dependency for the full rationale.
         {
             let sr = Arc::clone(&selection_registry);
             tokio::spawn(async move {
-                let mut tick = tokio::time::interval(std::time::Duration::from_secs(600));
-                tick.tick().await; // skip immediate first tick
+                // Fast tick (60s) for mi_collect; slow counter for
+                // the 10-min selection_registry prune.
+                let mut fast_tick = tokio::time::interval(std::time::Duration::from_secs(60));
+                let mut slow_counter: u32 = 0;
+                fast_tick.tick().await; // skip immediate first tick
                 loop {
-                    tick.tick().await;
-                    let pruned = sr.prune_stale(std::time::Duration::from_secs(3600));
-                    if pruned > 0 {
-                        tracing::debug!(
-                            pruned,
-                            remaining = sr.len(),
-                            "selection_registry sweep: evicted stale target entries"
-                        );
+                    fast_tick.tick().await;
+                    // Force mimalloc to return freed arenas to the OS.
+                    // `false` = don't force-claim everything (which
+                    // would be expensive); just release what's already
+                    // abandoned. Equivalent to glibc's `malloc_trim(0)`
+                    // or jemalloc's `je_mallctl("arena.0.purge")`.
+                    //
+                    // SAFETY: `mi_collect` is thread-safe and
+                    // reentrant. The `false` argument is the `force`
+                    // bool. We call it from a tokio task — no
+                    // Rust-level locks held.
+                    unsafe {
+                        libmimalloc_sys::mi_collect(false);
+                    }
+
+                    // Every 10 ticks (10 min), prune selection_registry.
+                    slow_counter = slow_counter.wrapping_add(1);
+                    if slow_counter % 10 == 0 {
+                        let pruned = sr.prune_stale(std::time::Duration::from_secs(3600));
+                        if pruned > 0 {
+                            tracing::debug!(
+                                pruned,
+                                remaining = sr.len(),
+                                "selection_registry sweep: evicted stale target entries"
+                            );
+                        }
                     }
                 }
             });
@@ -620,31 +655,30 @@ impl AppState {
             }
         });
 
-        // LEAK FIX: periodic sweep of in-memory collections that grow
-        // without bound as accounts/combos/targets are created and
-        // deleted over the process lifetime. Mirrors the production
-        // sweep in `AppState::new`.
+        // LEAK FIX: periodic sweep of in-memory collections + mimalloc
+        // arena trim. Mirrors the production sweep in `AppState::new`.
         let selection_registry = Arc::new(openproxy_core::combos::SelectionRegistry::new());
         {
             let sr = Arc::clone(&selection_registry);
             tokio::spawn(async move {
-                // Periodic sweep of in-memory collections. The
-                // selection_registry prune runs every 10 minutes;
-                // mimalloc's automatic arena decay (~1s) handles
-                // returning freed memory to the OS without an
-                // explicit `mi_collect` call (which would require
-                // the `extended` feature of libmimalloc-sys).
-                let mut tick = tokio::time::interval(std::time::Duration::from_secs(600));
-                tick.tick().await; // skip immediate first tick
+                let mut fast_tick = tokio::time::interval(std::time::Duration::from_secs(60));
+                let mut slow_counter: u32 = 0;
+                fast_tick.tick().await;
                 loop {
-                    tick.tick().await;
-                    let pruned = sr.prune_stale(std::time::Duration::from_secs(3600));
-                    if pruned > 0 {
-                        tracing::debug!(
-                            pruned,
-                            remaining = sr.len(),
-                            "selection_registry sweep: evicted stale target entries"
-                        );
+                    fast_tick.tick().await;
+                    unsafe {
+                        libmimalloc_sys::mi_collect(false);
+                    }
+                    slow_counter = slow_counter.wrapping_add(1);
+                    if slow_counter % 10 == 0 {
+                        let pruned = sr.prune_stale(std::time::Duration::from_secs(3600));
+                        if pruned > 0 {
+                            tracing::debug!(
+                                pruned,
+                                remaining = sr.len(),
+                                "selection_registry sweep: evicted stale target entries"
+                            );
+                        }
                     }
                 }
             });

@@ -47,11 +47,29 @@ mime_guess = "2"
 # go through bursts of allocation (migrations, models.dev sync,
 # discovery refresh). mimalloc returns memory to the OS more eagerly
 # and typically cuts idle RSS 20-40% on Rust services like this one.
-# The `default-features = false` avoids pulling in the `libmimalloc-sys`
-# `extended` build flags we don't need. `mimalloc::heap_trim()` is
-# available without extra feature flags and is called from a periodic
-# background sweep to force arena return to the OS after bursts.
-mimalloc = { version = "0.1", default-features = false }
+#
+# The `extended` feature enables `libmimalloc-sys`'s extended build,
+# which exposes `mi_collect(force)` via FFI. We call `mi_collect(false)`
+# from a 60-second background sweep in `state.rs` to force mimalloc to
+# return abandoned arenas to the OS immediately (rather than waiting
+# for mimalloc's ~1s automatic decay). This is the primary fix for
+# the "instant 20MB jump" symptom under burst allocation: after a
+# large SSE response or discovery refresh, mimalloc holds onto freed
+# arenas for its decay window, inflating RSS even though the memory
+# is logically free. `mi_collect(false)` is cheap (~microseconds when
+# there's nothing to trim) and safe to call from a tokio task.
+#
+# NOTE: `mi_collect` is NOT a garbage collector. Rust's ownership model
+# already freed the memory at the language level when values were
+# dropped. `mi_collect` just tells mimalloc "return the freed-but-
+# retained arenas to the OS now" — equivalent to glibc's `malloc_trim`
+# or jemalloc's `je_mallctl("arena.0.purge")`. It's allocator hygiene,
+# not GC.
+mimalloc = { version = "0.1", default-features = false, features = ["extended"] }
+# Direct dep on libmimalloc-sys so we can call `mi_collect(false)` from
+# the memory-sweep task in state.rs. The `extended` feature exposes
+# `mi_collect` (and other extended APIs) via FFI.
+libmimalloc-sys = { version = "0.1", default-features = false, features = ["extended"] }
 
 [dev-dependencies]
 tower = { version = "0.5", features = ["util"] }
