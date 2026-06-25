@@ -1,3 +1,6 @@
+packages:
+  - "."
+
 # pnpm 11.x workspace config. The `allowBuilds` map records which
 # dependencies are permitted to run their install-time build scripts
 # (postinstall, etc.). esbuild ships a platform-specific binary that
