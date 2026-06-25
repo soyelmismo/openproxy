@@ -927,6 +927,15 @@ function renderProviderDetail(): TemplateResult {
   if (!detailProviderId) return html`<div class="loading">Loading...</div>`;
   const provider = (state.providers || []).find((p) => p.id === detailProviderId);
   if (!provider) {
+    // If state.providers is empty, the fetch is still in progress —
+    // show "Loading..." instead of "not found". The "not found" error
+    // only shows after the fetch completes and the provider still
+    // isn't in the list. This fixes the "phantom provider" issue
+    // where navigating from a notification's "View provider" button
+    // showed an empty provider page because the data hadn't loaded yet.
+    if ((state.providers || []).length === 0) {
+      return html`<div class="loading">Loading provider...</div>`;
+    }
     return html`<div class="banner banner-error">Provider ${detailProviderId} not found. <a href="#/providers">← Back</a></div>`;
   }
   const accounts = (state.accounts || []).filter((a) => a.provider_id === detailProviderId);

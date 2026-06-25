@@ -24,6 +24,10 @@
 // a time and avoids the classic setInterval(asyncFn) re-entrancy.
 
 import { state, setPollHandle } from "./index.js";
+// Import renderSidebar so the health pill updates via lit-html's
+// diff (not direct DOM manipulation, which lit-html overwrites on
+// the next sidebar re-render).
+import { renderSidebar } from "../components/sidebar.js";
 
 const POLL_MS = 3000;
 
@@ -40,25 +44,26 @@ async function healthTick(): Promise<void> {
     // Hit the PUBLIC /admin/health endpoint (not /admin/api/health).
     // The public endpoint is unauthenticated (it's the LB liveness
     // probe), so the health pill works even on the login page before
-    // the user has entered a token. Using `api("/health")` here would
-    // prepend `/admin/api/` and hit the auth-gated router — which 401s
-    // without a token and spams the console on the login screen.
-    // Direct `fetch()` to `/admin/health` avoids the auth middleware
-    // entirely.
+    // the user has entered a token.
     const res: Response = await fetch("/admin/health");
     if (!res.ok) throw new Error(`${res.status}`);
     const raw: unknown = await res.json();
     const health: HealthPayload | null = isHealthPayload(raw) ? raw : null;
-    if (health) state.health = health;
-    const pill: HTMLElement | null = document.getElementById("health-status");
-    if (pill) {
-      if (!health) { pill.className = "loading"; pill.textContent = "—"; }
-      else if (health.status === "ok" || health.status === "healthy") {
-        pill.className = "ok"; pill.textContent = "🟢 healthy";
-      } else {
-        pill.className = "error"; pill.textContent = "🔴 " + (health.status || "down");
-      }
+    if (health) {
+      state.health = health;
+    } else {
+      state.health = { status: "unknown" };
     }
+    // Re-render the sidebar so the health pill updates via lit-html's
+    // diff. Previously the bg-poll updated `#health-status` directly
+    // via `pill.textContent = ...`, but the sidebar's lit-html
+    // re-render (triggered by any `renderSidebar()` call from the
+    // router, notifications store, etc.) would overwrite the direct
+    // DOM update with the stale `state.health` value — leaving the
+    // pill stuck on "—" even after the poll succeeded. Routing through
+    // `renderSidebar()` ensures the pill always reflects the current
+    // `state.health`.
+    renderSidebar();
   } catch (_e: unknown) { /* swallow — next tick will try again */ }
   finally {
     if (state && state.__healthPollActive) {

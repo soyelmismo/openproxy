@@ -49,20 +49,25 @@ export async function loadLang(lang: Lang): Promise<void> {
 
 /** Synchronous translate. Returns the key itself if not found. */
 export function t(key: string, params?: Record<string, string | number>): string {
-  let template = strings[key];
+  // Pluralization: if `count` is in params, try the _one/_other variant
+  // FIRST. This allows keys like "notifications.unread_count" to exist
+  // ONLY as _one/_other variants without a base key — the previous
+  // logic looked up the base key first and returned the raw key string
+  // if the base didn't exist, never reaching the pluralization check.
+  let template: string | undefined;
+  if (params && typeof params['count'] === 'number') {
+    const pluralKey = params['count'] === 1 ? `${key}_one` : `${key}_other`;
+    template = strings[pluralKey];
+  }
+  // Fall back to the base key if no plural variant was found (or if
+  // there's no `count` param).
+  if (template == null) {
+    template = strings[key];
+  }
   if (template == null) {
     // Fall back to the key itself — visible in the UI so missing strings
     // are obvious during development.
     return key;
-  }
-  // Pluralization: if `count` is in params and the key has _one/_other
-  // variants, pick the right one.
-  if (params && typeof params['count'] === 'number') {
-    const pluralKey = params['count'] === 1 ? `${key}_one` : `${key}_other`;
-    const pluralTemplate = strings[pluralKey];
-    if (pluralTemplate != null) {
-      template = pluralTemplate;
-    }
   }
   // {{param}} interpolation
   if (params) {

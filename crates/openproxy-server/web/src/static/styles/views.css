@@ -1533,6 +1533,7 @@ abbr {
   border: var(--border-w) var(--border-style) var(--color-border);
   border-radius: var(--radius-sm, 4px);
   overflow: hidden;
+  min-height: 48px;
 }
 .dnd-combo.expanded {
   border-color: var(--color-primary);

@@ -606,7 +606,7 @@ function renderComboRow(combo: Combo, payload: DragPayload): TemplateResult {
          }}
          @click=${overlayClickMode ? () => { void onDropAppend(combo, payload); } : null}
       >
-      <span class="dnd-combo-name">${combo.name}</span>
+      <span class="dnd-combo-name">${combo.name || ("Combo #" + String(combo.id))}</span>
       <span class="dnd-combo-hint">${hint}</span>
     </div>
     ${isExpanded ? html`<div class="dnd-combo-targets">
