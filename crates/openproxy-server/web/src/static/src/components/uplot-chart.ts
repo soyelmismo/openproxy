@@ -43,6 +43,37 @@ import uPlot from "uplot";
 import uplotCss from "uplot/dist/uPlot.min.css";
 
 // ----------------------------------------------------------------------------
+// CSS variable resolver
+// ----------------------------------------------------------------------------
+//
+// TRIPLE-FIX (Bug 2): uPlot renders axis text + grid + ticks on a Canvas
+// 2D context (`ctx.fillText`, `ctx.strokeLine` etc.). Canvas 2D
+// `fillStyle` / `strokeStyle` do NOT resolve CSS variables — passing
+// `"var(--color-text-muted)"` is silently ignored and the canvas falls
+// back to its default (black `#000000`). This made every axis label,
+// tick value, and gridline render as black text/lines in dark mode,
+// where the chart background is dark — visually invisible.
+//
+// The fix: resolve the CSS variables to actual color strings at chart
+// creation time via `getComputedStyle(document.documentElement)`.
+// Charts are created ONCE per view mount (see lifecycle note above),
+// so the colors are read at mount time. If the user toggles the theme
+// (light ↔ dark) while a chart is on screen, the chart's colors will
+// NOT update until the view re-mounts. This is an acceptable MVP
+// limitation — a future iteration could observe `theme-toggle` events
+// and call `u.axes[i].stroke = cssVar(...)` + `u.redraw()` on every
+// existing chart. Documented here so a future maintainer knows.
+
+/** Resolve a CSS custom property to its computed value at call time.
+ *  Returns a sensible dark-grey fallback if `window` is unavailable
+ *  (SSR) or the property is not defined. */
+function cssVar(name: string): string {
+  if (typeof window === "undefined") return "#5a5a5a";
+  const v: string = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+  return v || "#5a5a5a";
+}
+
+// ----------------------------------------------------------------------------
 // CSS injection
 // ----------------------------------------------------------------------------
 
@@ -424,9 +455,9 @@ export function buildThroughputChart(container: HTMLElement, windowSecs: number)
     },
     axes: [
       {
-        grid: { stroke: "var(--color-border-soft)", width: 1 },
-        ticks: { stroke: "var(--color-border)", width: 1 },
-        stroke: "var(--color-text-muted)",
+        grid: { stroke: cssVar("--color-border-soft"), width: 1 },
+        ticks: { stroke: cssVar("--color-border"), width: 1 },
+        stroke: cssVar("--color-text-muted"),
         font: "10px 'Courier New', monospace",
         values: timeFormatter(windowSecs),
       },
@@ -434,7 +465,7 @@ export function buildThroughputChart(container: HTMLElement, windowSecs: number)
         scale: "rps",
         side: 3, // left
         grid: { show: false },
-        stroke: "var(--color-text-muted)",
+        stroke: cssVar("--color-text-muted"),
         font: "10px 'Courier New', monospace",
         values: compactNumber,
         size: 40,
@@ -443,7 +474,7 @@ export function buildThroughputChart(container: HTMLElement, windowSecs: number)
         scale: "tps",
         side: 1, // right
         grid: { show: false },
-        stroke: "var(--color-text-muted)",
+        stroke: cssVar("--color-text-muted"),
         font: "10px 'Courier New', monospace",
         values: compactNumber,
         size: 40,
@@ -516,16 +547,16 @@ export function buildStatusCodesChart(container: HTMLElement, windowSecs: number
       },
       axes: [
         {
-          grid: { stroke: "var(--color-border-soft)", width: 1 },
-          ticks: { stroke: "var(--color-border)", width: 1 },
-          stroke: "var(--color-text-muted)",
+          grid: { stroke: cssVar("--color-border-soft"), width: 1 },
+          ticks: { stroke: cssVar("--color-border"), width: 1 },
+          stroke: cssVar("--color-text-muted"),
           font: "10px 'Courier New', monospace",
           values: timeFormatter(windowSecs),
         },
         {
           side: 3, // left
           grid: { show: false },
-          stroke: "var(--color-text-muted)",
+          stroke: cssVar("--color-text-muted"),
           font: "10px 'Courier New', monospace",
           values: compactNumber,
           size: 40,
@@ -567,16 +598,16 @@ export function buildStatusCodesChart(container: HTMLElement, windowSecs: number
     },
     axes: [
       {
-        grid: { stroke: "var(--color-border-soft)", width: 1 },
-        ticks: { stroke: "var(--color-border)", width: 1 },
-        stroke: "var(--color-text-muted)",
+        grid: { stroke: cssVar("--color-border-soft"), width: 1 },
+        ticks: { stroke: cssVar("--color-border"), width: 1 },
+        stroke: cssVar("--color-text-muted"),
         font: "10px 'Courier New', monospace",
         values: timeFormatter(windowSecs),
       },
       {
         side: 3,
         grid: { show: false },
-        stroke: "var(--color-text-muted)",
+        stroke: cssVar("--color-text-muted"),
         font: "10px 'Courier New', monospace",
         values: compactNumber,
         size: 40,
@@ -618,16 +649,16 @@ export function buildLatencyChart(container: HTMLElement, windowSecs: number): u
     },
     axes: [
       {
-        grid: { stroke: "var(--color-border-soft)", width: 1 },
-        ticks: { stroke: "var(--color-border)", width: 1 },
-        stroke: "var(--color-text-muted)",
+        grid: { stroke: cssVar("--color-border-soft"), width: 1 },
+        ticks: { stroke: cssVar("--color-border"), width: 1 },
+        stroke: cssVar("--color-text-muted"),
         font: "10px 'Courier New', monospace",
         values: timeFormatter(windowSecs),
       },
       {
         side: 3,
         grid: { show: false },
-        stroke: "var(--color-text-muted)",
+        stroke: cssVar("--color-text-muted"),
         font: "10px 'Courier New', monospace",
         values: (_u: uPlot, vals: number[]): string[] => {
           return vals.map((v: number) => {
@@ -709,9 +740,9 @@ export function buildDailyUsageChart(container: HTMLElement): uPlot {
     },
     axes: [
       {
-        grid: { stroke: "var(--color-border-soft)", width: 1 },
-        ticks: { stroke: "var(--color-border)", width: 1 },
-        stroke: "var(--color-text-muted)",
+        grid: { stroke: cssVar("--color-border-soft"), width: 1 },
+        ticks: { stroke: cssVar("--color-border"), width: 1 },
+        stroke: cssVar("--color-text-muted"),
         font: "10px 'Courier New', monospace",
         values: dateFormatter,
       },
@@ -719,7 +750,7 @@ export function buildDailyUsageChart(container: HTMLElement): uPlot {
         scale: "reqs",
         side: 3, // left
         grid: { show: false },
-        stroke: "var(--color-text-muted)",
+        stroke: cssVar("--color-text-muted"),
         font: "10px 'Courier New', monospace",
         values: compactNumber,
         size: 40,
@@ -728,7 +759,7 @@ export function buildDailyUsageChart(container: HTMLElement): uPlot {
         scale: "cost",
         side: 1, // right
         grid: { show: false },
-        stroke: "var(--color-text-muted)",
+        stroke: cssVar("--color-text-muted"),
         font: "10px 'Courier New', monospace",
         values: costAxisFormatter,
         size: 44,
@@ -823,9 +854,9 @@ export function buildCategoryBarsChart(
     },
     axes: [
       {
-        grid: { stroke: "var(--color-border-soft)", width: 1 },
-        ticks: { stroke: "var(--color-border)", width: 1 },
-        stroke: "var(--color-text-muted)",
+        grid: { stroke: cssVar("--color-border-soft"), width: 1 },
+        ticks: { stroke: cssVar("--color-border"), width: 1 },
+        stroke: cssVar("--color-text-muted"),
         font: "10px 'Courier New', monospace",
         values: xValues,
         // Rotate long labels 45° so they don't overlap. Short labels
@@ -838,7 +869,7 @@ export function buildCategoryBarsChart(
       {
         side: 3, // left
         grid: { show: false },
-        stroke: "var(--color-text-muted)",
+        stroke: cssVar("--color-text-muted"),
         font: "10px 'Courier New', monospace",
         values: compactNumber,
         size: 40,

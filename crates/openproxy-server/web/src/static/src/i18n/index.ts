@@ -23,7 +23,18 @@ export async function loadLang(lang: Lang): Promise<void> {
   loadPromise = (async () => {
     try {
       const res = await fetch(`/admin/i18n/${lang}.json`, {
-        cache: 'force-cache', // hashed content; safe to cache aggressively
+        // TRIPLE-FIX (Bug 3): was `cache: 'force-cache'`, which made the
+        // browser serve a stale copy of en.json indefinitely — even after
+        // a server upgrade that added new keys (e.g. analytics.*). The
+        // stale pack would have none of the new keys, so `t()` fell back
+        // to returning the raw key string (e.g. "analytics.chart.daily_usage"
+        // appeared verbatim in the UI). `no-cache` revalidates with the
+        // server on every fetch (sends an `If-Modified-Since` /
+        // `If-None-Match` and accepts a 304 Not Modified response, so the
+        // payload is only re-downloaded when it actually changes). This
+        // is the correct cache strategy for a versioned, server-served
+        // JSON asset whose lifetime is decoupled from the JS bundle hash.
+        cache: 'no-cache',
       });
       if (!res.ok) {
         console.error(`i18n: failed to load ${lang}:`, res.status);

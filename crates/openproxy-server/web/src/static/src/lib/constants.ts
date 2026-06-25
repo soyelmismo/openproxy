@@ -25,7 +25,23 @@ export const STAGE_LABELS: Readonly<Record<string, string>> = {
 };
 
 // Live logs WS reconnect backoff in ms.
-export const LOGS_WS_RECONNECT_DELAYS: readonly number[] = [1000, 2000, 4000, 8000, 16000, 30000];
+//
+// TRIPLE-FIX (Bug 1): the first reconnect delay was 1000ms, which
+// made the live dashboard show "⚠ Disconnected from real-time
+// stream" for ~1s after every transient failure (e.g. the first
+// attempt hitting a 401 because the token wasn't yet attached to
+// the WS upgrade URL, or a network blip). Reduced the first delay
+// to 250ms so the dashboard recovers within a quarter-second on
+// transient failures, then back off progressively: 250 → 500 →
+// 1s → 2s → 5s → 10s → 30s. The 30s cap is preserved so a
+// permanently-down server doesn't trigger a tight retry loop.
+//
+// `connectLogsWebSocket()` is itself invoked synchronously from
+// `initNotificationsStore()` (which is called by the sidebar's
+// `maybeBootstrapNotifications()` gate on the first render after
+// login), so the very first connection attempt happens immediately
+// on login — these delays only govern retries AFTER a failure.
+export const LOGS_WS_RECONNECT_DELAYS: readonly number[] = [250, 500, 1000, 2000, 5000, 10000, 30000];
 
 // Local-storage key for the user theme choice.
 export const THEME_STORAGE_KEY = "openproxy-theme";
