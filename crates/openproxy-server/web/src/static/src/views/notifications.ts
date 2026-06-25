@@ -97,6 +97,112 @@ const KIND_ICON: Record<NotificationKind, string> = {
   system: "ℹ",
 };
 
+/**
+ * Per-code icon glyph for `system` notifications. Falls back to
+ * `KIND_ICON.system` (`ℹ`) for unknown codes — the same generic info
+ * glyph the pre-G2 tray used for every system row.
+ *
+ * Unicode symbols (NOT emoji) are used to match the existing
+ * `KIND_ICON` convention. The variants picked are the closest
+ * non-emoji Unicode has to each semantic:
+ *
+ *  - `discovery_failed`            ⚠  WARNING SIGN (U+26A0)
+ *  - `account_key_decrypt_failed`  ⚿  SQUARED KEY (U+26BF)
+ *  - `circuit_open`                ⏻  POWER SYMBOL (U+23FB) — breaker "off"
+ *  - `oauth_expired`               ⊘  CIRCLED DIVISION SLASH (U+2298) — token "blocked"
+ *  - `account_invalid`             ⊗  CIRCLED TIMES (U+2297) — access "denied"
+ *  - `quota_low`                   ▼  BLACK DOWN-POINTING TRIANGLE (U+25BC) — "low"
+ *
+ * The frontend learns about new codes defensively: a code that the
+ * server starts emitting before this map is updated renders with the
+ * generic `ℹ` glyph (still visible, just not semantically colored).
+ */
+const SYSTEM_CODE_ICON: Record<string, string> = {
+  discovery_failed: "⚠",
+  account_key_decrypt_failed: "⚿", // U+26BF SQUARED KEY
+  circuit_open: "⏻", // U+23FB POWER SYMBOL
+  oauth_expired: "⊘", // U+2298 CIRCLED DIVISION SLASH
+  account_invalid: "⊗", // U+2297 CIRCLED TIMES
+  quota_low: "▼", // U+25BC BLACK DOWN-POINTING TRIANGLE
+};
+
+/**
+ * Per-code CSS color variable for `system` notifications. The icon
+ * glyph gets this color via the `notification-card-icon--code-{code}`
+ * class (added by `renderCard` only when `r.kind === "system"` and
+ * `payload.code` is set). Unread state still bumps to `--color-primary`
+ * so the tray badge semantics ("unread is loud") survive the per-code
+ * coloring.
+ *
+ *  - `discovery_failed`            warn   (orange) — transient upstream issue
+ *  - `account_key_decrypt_failed`  error  (red)    — local config broken
+ *  - `circuit_open`                error  (red)    — routing dehydrated
+ *  - `oauth_expired`               warn   (orange) — operator action needed
+ *  - `account_invalid`             error  (red)    — upstream rejected creds
+ *  - `quota_low`                   warn   (orange) — approaching limit
+ */
+const SYSTEM_CODE_COLOR_VAR: Record<string, string> = {
+  discovery_failed: "var(--color-warn)",
+  account_key_decrypt_failed: "var(--color-error)",
+  circuit_open: "var(--color-error)",
+  oauth_expired: "var(--color-warn)",
+  account_invalid: "var(--color-error)",
+  quota_low: "var(--color-warn)",
+};
+
+/** Resolve the icon glyph for a row. For `system` rows, dispatches on
+ *  `payload.code`; for everything else, uses the per-kind table. */
+function notificationIcon(r: NotificationRow): string {
+  if (r.kind === "system") {
+    const code: string = payloadString(r.payload, "code");
+    if (code) {
+      return SYSTEM_CODE_ICON[code] ?? KIND_ICON.system;
+    }
+    return KIND_ICON.system;
+  }
+  return KIND_ICON[r.kind] ?? "•";
+}
+
+/** Resolve the CSS color variable for a system notification's icon,
+ *  or `null` if the row shouldn't get a per-code color override
+ *  (non-system rows, or system rows with an unknown code — those
+ *  fall back to the default `--color-text-muted` / `--color-primary`
+ *  coloring the card already has). */
+function notificationIconColorVar(r: NotificationRow): string | null {
+  if (r.kind !== "system") return null;
+  const code: string = payloadString(r.payload, "code");
+  if (!code) return null;
+  return SYSTEM_CODE_COLOR_VAR[code] ?? null;
+}
+
+/** Resolve the kind label for the card's meta row. For `system`
+ *  notifications, dispatches on `payload.code` to surface a more
+ *  specific label than the generic "System" (e.g. "Circuit breaker
+ *  opened", "Quota running low"). Falls back to
+ *  `notifications.kind.system` when the code is missing or has no
+ *  dedicated i18n key.
+ *
+ *  The `t()` helper returns the key itself when missing, so we
+ *  detect that case explicitly and route back to the generic
+ *  `notifications.kind.system` label rather than showing the raw
+ *  key string in the UI. */
+function notificationKindLabel(r: NotificationRow): string {
+  if (r.kind !== "system") {
+    return t("notifications.kind." + r.kind);
+  }
+  const code: string = payloadString(r.payload, "code");
+  if (!code) {
+    return t("notifications.kind.system");
+  }
+  const perCodeKey: string = `notifications.code.${code}`;
+  const rendered: string = t(perCodeKey);
+  if (rendered === perCodeKey) {
+    // Missing i18n key — fall back to the generic "System" label.
+    return t("notifications.kind.system");
+  }
+  return rendered;
+}
+
 /** Kinds that are draggable — i.e. that carry a `model_id` we can add
  *  to a combo. `model_gone` and `system` are informational only. */
 const DRAGGABLE_KINDS: ReadonlySet<NotificationKind> = new Set<NotificationKind>([
@@ -799,13 +905,22 @@ async function onDismiss(r: NotificationRow): Promise<void> {
 // ============================================================================
 
 function renderCard(r: NotificationRow): TemplateResult {
-  const icon: string = KIND_ICON[r.kind] ?? "•";
+  const icon: string = notificationIcon(r);
+  const iconColorVar: string | null = notificationIconColorVar(r);
   const body: string = notificationBody(r);
   const ago: string = formatRelativeAgo(r.created_at);
   const unread: boolean = isUnread(r);
   const draggable: boolean = DRAGGABLE_KINDS.has(r.kind) && !!payloadModelId(r) && !!payloadProviderId(r);
   const showAddToCombo: boolean = DRAGGABLE_KINDS.has(r.kind);
   const cardClasses: string = "notification-card" + (unread ? " unread" : "") + (draggable ? " draggable" : "");
+  // Per-code icon color override (system notifications only). The
+  // CSS rule `.notification-card-icon[data-color-var="..."]` reads
+  // the variable name from the data attribute and applies it via
+  // `style.setProperty('--icon-color', ...)`. Using a data attribute
+  // (rather than a per-code class) keeps the CSS O(1) — we don't
+  // need a new rule for every code the server invents; we just need
+  // an entry in `SYSTEM_CODE_COLOR_VAR`.
+  const iconStyle: string = iconColorVar ? `--icon-color: ${iconColorVar};` : "";
   // Drag handlers — only attached when `draggable` is true. lit-html
   // happily accepts `null` for an event handler and skips it.
   const dragStartHandler: ((e: DragEvent) => void) | null = draggable
@@ -851,11 +966,11 @@ function renderCard(r: NotificationRow): TemplateResult {
       @dragstart=${dragStartHandler}
       @dragend=${dragEndHandler}
     >
-    <div class="notification-card-icon" aria-hidden="true">${icon}</div>
+    <div class="notification-card-icon" style=${iconStyle} aria-hidden="true">${icon}</div>
     <div class="notification-card-body">
       <div class="notification-card-text">${body}</div>
       <div class="notification-card-meta">
-        <span class="notification-card-kind">${t("notifications.kind." + r.kind)}</span>
+        <span class="notification-card-kind">${notificationKindLabel(r)}</span>
         ${ago ? html`<span class="notification-card-ago">${ago}</span>` : nothing}
         ${unread ? html`<span class="notification-card-unread-dot" title=${t("common.unread")}></span>` : nothing}
       </div>

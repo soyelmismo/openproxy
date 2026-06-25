@@ -1390,9 +1390,17 @@ abbr {
   font-size: 1.4rem;
   line-height: 1;
   text-align: center;
-  color: var(--color-text-muted);
+  /* `--icon-color` is set inline (via `style="--icon-color: var(--color-warn);"`)
+   * by `renderCard` for `system` notifications whose `payload.code`
+   * has a per-code color override (see `SYSTEM_CODE_COLOR_VAR` in
+   * `views/notifications.ts`). When unset, falls back to the default
+   * `--color-text-muted` / `--color-primary` coloring. */
+  color: var(--icon-color, var(--color-text-muted));
 }
 .notification-card.unread .notification-card-icon {
+  /* Unread state wins over the per-code color so the "unread is loud"
+   * tray badge semantics survive. Read system rows keep their
+   * per-code color; unread ones bump to `--color-primary`. */
   color: var(--color-primary);
 }
 .notification-card-body {

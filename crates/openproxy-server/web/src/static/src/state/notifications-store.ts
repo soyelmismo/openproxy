@@ -147,7 +147,17 @@ export function decrementUnread(by: number = 1): void {
 
 /** Pull the per-kind body text via `t()`. Accepts either a live
  *  `NotificationEvent` or a persisted `NotificationRow` — both have
- *  `kind` + `payload`. */
+ *  `kind` + `payload`.
+ *
+ *  For `system` notifications (G2), dispatches on `payload.code` to
+ *  pick a per-code body template (`notifications.body.{code}`). The
+ *  template receives the per-payload `details` fields as
+ *  interpolation params, so the server-side `details` shape is the
+ *  contract for what placeholders are available. If the per-code
+ *  template is missing (older i18n pack, or a brand-new code the
+ *  pack hasn't been updated for), falls back to the generic
+ *  `notifications.body.system` template that just echoes `message`.
+ */
 export function notificationBody(evt: NotificationEvent | NotificationRow): string {
   const p: Record<string, unknown> = evt.payload || {};
   const modelId: string = typeof p["model_id"] === "string" ? p["model_id"] : "";
@@ -168,10 +178,55 @@ export function notificationBody(evt: NotificationEvent | NotificationRow): stri
         ? t("notifications.body.model_auto_activated", { model_id: modelId, provider_id: providerId, keyword })
         : t("notifications.body.model_auto_activated_no_keyword", { model_id: modelId, provider_id: providerId });
     case "system":
-      return t("notifications.body.system", { message });
+      return systemBody(p, message);
     default:
       return "";
   }
+}
+
+/** Per-code body template lookup for `system` notifications. Mirrors
+ *  the per-code constants on the Rust side
+ *  (`notifications::CODE_*`). Falls back to `notifications.body.system`
+ *  (which just echoes `{{message}}`) when the per-code key isn't in
+ *  the i18n pack — `t()` returns the key itself when missing, so we
+ *  detect that case explicitly and route to the generic template
+ *  rather than showing the raw key string to the user. */
+function systemBody(p: Record<string, unknown>, message: string): string {
+  const code: string = typeof p["code"] === "string" ? p["code"] : "";
+  if (!code) {
+    return t("notifications.body.system", { message });
+  }
+  // Pull the per-code template. `t()` returns the key itself if the
+  // string isn't loaded, so we detect that fallback and route to the
+  // generic system template instead.
+  const perCodeKey: string = `notifications.body.${code}`;
+  const details: Record<string, unknown> =
+    (p["details"] && typeof p["details"] === "object" && !Array.isArray(p["details"]))
+      ? p["details"] as Record<string, unknown>
+      : {};
+  // Interpolation params: merge top-level payload fields + `details`
+  // so templates can use either `{{account_id}}` (top-level on
+  // SystemPayload? no — `account_id` lives inside `details`) or
+  // `{{provider_id}}` (top-level on SystemPayload). Both shapes are
+  // available to the template.
+  const params: Record<string, string | number> = { message };
+  for (const [k, v] of Object.entries(p)) {
+    if (typeof v === "string") params[k] = v;
+    else if (typeof v === "number") params[k] = v;
+  }
+  for (const [k, v] of Object.entries(details)) {
+    if (typeof v === "string") params[k] = v;
+    else if (typeof v === "number") params[k] = v;
+    else if (typeof v === "boolean") params[k] = v ? "true" : "false";
+  }
+  const rendered: string = t(perCodeKey, params);
+  if (rendered === perCodeKey) {
+    // Missing i18n key — fall back to the generic system body so
+    // the user sees the server-provided `message` instead of the
+    // raw key string.
+    return t("notifications.body.system", { message });
+  }
+  return rendered;
 }
 
 /** Format a `created_at` RFC-3339 timestamp as a relative "X ago"

@@ -419,7 +419,7 @@ async fn run_one_tick(
                         if let Ok(notif_conn) = db_pool.open_connection() {
                             let _ = crate::notifications::record_system(
                                 &notif_conn,
-                                "account_key_decrypt_failed",
+                                crate::notifications::CODE_ACCOUNT_KEY_DECRYPT_FAILED,
                                 &format!("account_id={}: {}", acc.id.0, e),
                                 Some(provider.as_str()),
                                 None,
@@ -531,7 +531,7 @@ async fn run_one_tick(
             if let Ok(notif_conn) = db_pool.open_connection() {
                 let _ = crate::notifications::record_system(
                     &notif_conn,
-                    "discovery_failed",
+                    crate::notifications::CODE_DISCOVERY_FAILED,
                     &e.to_string(),
                     Some(provider.as_str()),
                     None,

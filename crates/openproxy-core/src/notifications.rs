@@ -38,6 +38,57 @@ pub const KIND_SYSTEM: &str = "system";
 
 pub const BROADCAST_CAPACITY: usize = 256;
 
+// =====================================================================
+// System notification codes
+// =====================================================================
+//
+// The `code` field in [`SystemPayload`] is a stable machine-readable
+// identifier for the system event. The frontend uses it to pick an
+// icon/color/body template for the notification card. The dedup
+// semantics depend on which insert path the caller uses:
+//
+// - [`record_system`] deduplicates by `code` alone (one row per code
+//   per 24h). Use this for provider-wide or global events where
+//   per-entity spam isn't a concern (e.g. `discovery_failed`).
+// - For per-entity events (`circuit_open`, `oauth_expired`,
+//   `account_invalid`, `quota_low`), call [`insert_and_broadcast`]
+//   directly with a custom `dedup_key` like
+//   `"circuit_open:{account_id}"` so different entities each get
+//   their own row, while the same entity flapping within 24h
+//   collapses to one row.
+
+/// Discovery tick failed for a provider (network down, upstream 5xx,
+/// bad key). Emitted by `discovery_scheduler`. Dedup: per-code (one
+/// row per 24h per provider, via `record_system`).
+pub const CODE_DISCOVERY_FAILED: &str = "discovery_failed";
+
+/// An account's API key failed to decrypt (wrong master key, corrupt
+/// ciphertext). Emitted by `discovery_scheduler`. Dedup: per-code.
+pub const CODE_ACCOUNT_KEY_DECRYPT_FAILED: &str = "account_key_decrypt_failed";
+
+/// A per-account circuit breaker transitioned from closed (Healthy) to
+/// open (Unhealthy) after the failure threshold was reached. Emitted
+/// by the pipeline's `execute_single` post-dispatch path. Dedup:
+/// per-account (`circuit_open:{account_id}`).
+pub const CODE_CIRCUIT_OPEN: &str = "circuit_open";
+
+/// An OAuth token refresh failed repeatedly, or an OAuth-protected
+/// request returned 401 and the token couldn't be refreshed. Emitted
+/// by `oauth::start_refresh_scheduler` and the pipeline's proactive
+/// refresh path. Dedup: per-account (`oauth_expired:{account_id}`).
+pub const CODE_OAUTH_EXPIRED: &str = "oauth_expired";
+
+/// An account's API key is being rejected by the upstream (401/403).
+/// Emitted by the pipeline's `dispatch_upstream` 4xx detection path.
+/// Dedup: per-account (`account_invalid:{account_id}`).
+pub const CODE_ACCOUNT_INVALID: &str = "account_invalid";
+
+/// An account's remaining quota is below the low-water threshold
+/// (default 10% of the limit). Emitted by the
+/// `refresh_account_quota` admin handler after a successful fetch.
+/// Dedup: per-account (`quota_low:{account_id}`).
+pub const CODE_QUOTA_LOW: &str = "quota_low";
+
 /// Process-global broadcast channel for real-time push to WS clients.
 /// Subscribed by `stream_usage_rows` in handlers/admin.rs (see F2).
 pub static NOTIF_TX: OnceCell<broadcast::Sender<NotificationEvent>> = OnceCell::new();

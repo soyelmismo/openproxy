@@ -684,6 +684,53 @@ pub async fn start_refresh_scheduler(
                         );
                     }
 
+                    // G2.2: surface an `oauth_expired` system
+                    // notification when the refresh has failed
+                    // `UNHEALTHY_THRESHOLD` times in a row — at that
+                    // point the account is marked Unhealthy and the
+                    // next chat request routed to it will fail with a
+                    // 401. Firing on the threshold (rather than on
+                    // every failure) keeps the tray quiet during
+                    // transient blips while still surfacing
+                    // persistently broken accounts.
+                    //
+                    // Per-account dedup (`oauth_expired:{account_id}`)
+                    // collapses repeats within 24h so a stuck account
+                    // doesn't spam the tray on every scheduler tick.
+                    // The same dedup key is used by the pipeline's
+                    // OAuth-executor 401 hook, so the two paths
+                    // coalesce into at most one row per account per
+                    // day.
+                    if *count >= UNHEALTHY_THRESHOLD {
+                        let provider_id_str = account.provider_id.as_str().to_string();
+                        let dedup_key = format!(
+                            "{}:{}",
+                            crate::notifications::CODE_OAUTH_EXPIRED,
+                            account_id
+                        );
+                        let payload = serde_json::json!({
+                            "code": crate::notifications::CODE_OAUTH_EXPIRED,
+                            "message": format!(
+                                "OAuth token for account {} on {} expired or could not be refreshed ({} consecutive failures)",
+                                account_id, provider_id_str, *count,
+                            ),
+                            "provider_id": &provider_id_str,
+                            "details": {
+                                "account_id": account_id,
+                                "provider_id": &provider_id_str,
+                                "reason": "refresh_failed",
+                                "consecutive_failures": *count,
+                            },
+                        });
+                        let _ = crate::notifications::insert_and_broadcast(
+                            &conn,
+                            crate::notifications::KIND_SYSTEM,
+                            &payload,
+                            Some(&dedup_key),
+                            Some(&provider_id_str),
+                        );
+                    }
+
                     tracing::warn!(
                         account = account_id,
                         provider = %account.provider_id,

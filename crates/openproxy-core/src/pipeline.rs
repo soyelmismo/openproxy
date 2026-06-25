@@ -2129,21 +2129,70 @@ impl Pipeline {
                             attempts: attempt,
                         }
                     }
-                    Err(e) => self.record_and_fail(
-                        req,
-                        combo,
-                        target,
-                        FailureContext {
-                            attempt,
-                            race_size,
-                            err: &e,
-                            started,
-                            model: None,
-                            connect_ms: None,
-                            ttft_ms: None,
-                            status_code: e.http_status(),
-                        },
-                    ),
+                    Err(e) => {
+                        // G2.2: surface an `oauth_expired` system
+                        // notification when an OAuth-protected
+                        // request returns 401 (the proactive refresh
+                        // at L2008 either didn't fire — token wasn't
+                        // expiring soon — or failed, and the existing
+                        // token is now being rejected by the
+                        // upstream). 403 is NOT included here: a 403
+                        // from an OAuth provider typically means the
+                        // account lacks permission for the resource
+                        // (not that the token is expired) — that
+                        // case is left for a future `account_invalid`
+                        // hook in the OAuth executors if needed.
+                        //
+                        // Per-account dedup
+                        // (`oauth_expired:{account_id}`) — the same
+                        // key the OAuth refresh scheduler uses, so
+                        // the two paths coalesce into at most one row
+                        // per account per 24h.
+                        if let CoreError::UpstreamError { status: 401, .. } = &e {
+                            let provider_id_str = target.provider_id.to_string();
+                            let dedup_key = format!(
+                                "{}:{}",
+                                crate::notifications::CODE_OAUTH_EXPIRED,
+                                account_id.0
+                            );
+                            let payload = serde_json::json!({
+                                "code": crate::notifications::CODE_OAUTH_EXPIRED,
+                                "message": format!(
+                                    "OAuth token for account {} on {} rejected by upstream (HTTP 401)",
+                                    account_id.0, provider_id_str,
+                                ),
+                                "provider_id": &provider_id_str,
+                                "details": {
+                                    "account_id": account_id.0,
+                                    "provider_id": &provider_id_str,
+                                    "reason": "upstream_401",
+                                },
+                            });
+                            let conn = self.conn.lock();
+                            let _ = crate::notifications::insert_and_broadcast(
+                                &conn,
+                                crate::notifications::KIND_SYSTEM,
+                                &payload,
+                                Some(&dedup_key),
+                                Some(&provider_id_str),
+                            );
+                        }
+                        self.record_and_fail(
+                            req,
+                            combo,
+                            target,
+                            FailureContext {
+                                attempt,
+                                race_size,
+                                err: &e,
+                                started,
+                                model: None,
+                                connect_ms: None,
+                                ttft_ms: None,
+                                status_code: e.http_status(),
+                            },
+                        )
+                    }
                 };
             }
         }
@@ -2541,7 +2590,63 @@ impl Pipeline {
                     );
                 }
                 Some(e) if RetryPolicy::is_retryable(e, self.config.idle_chunk_retryable) => {
-                    self.circuit_breaker.record_failure(aid);
+                    // G2.1: surface a `circuit_open` system notification
+                    // the first time the breaker transitions from
+                    // Healthy → Unhealthy for this account. We use
+                    // `record_failure_outcome` instead of
+                    // `record_failure` so the transition flag is
+                    // atomic with the increment (the naive
+                    // "is_healthy before + record_failure after"
+                    // pattern has a check-then-act race against
+                    // concurrent callers in race mode).
+                    //
+                    // Dedup: `circuit_open:{account_id}` — different
+                    // accounts get separate rows; the same account
+                    // re-opening within 24h collapses to one row
+                    // (the dedup index is on
+                    // `(kind, dedup_key, date(created_at))`). The
+                    // per-account key is important: a per-code key
+                    // (`"circuit_open"`) would mean only the FIRST
+                    // account to trip its breaker each day would be
+                    // surfaced, hiding the rest.
+                    //
+                    // Failure to record the notification is swallowed
+                    // (best-effort) — the WARN log + the breaker's
+                    // in-memory state are the source of truth; the
+                    // notification is a UX nicety.
+                    let outcome = self.circuit_breaker.record_failure_outcome(aid);
+                    if outcome.just_opened {
+                        let provider_id_str = target.provider_id.to_string();
+                        let model_id_str = model.model_id.as_str().to_string();
+                        let combo_target_id = target.id.0;
+                        let conn = self.conn.lock();
+                        let dedup_key =
+                            format!("{}:{}", crate::notifications::CODE_CIRCUIT_OPEN, aid.0);
+                        let payload = serde_json::json!({
+                            "code": crate::notifications::CODE_CIRCUIT_OPEN,
+                            "message": format!(
+                                "Circuit breaker opened for account {} on {} ({}) — {}/{} failures",
+                                aid.0, provider_id_str, model_id_str,
+                                outcome.consecutive_failures, outcome.threshold,
+                            ),
+                            "provider_id": &provider_id_str,
+                            "details": {
+                                "combo_target_id": combo_target_id,
+                                "account_id": aid.0,
+                                "provider_id": &provider_id_str,
+                                "model_id": &model_id_str,
+                                "failure_count": outcome.consecutive_failures,
+                                "threshold": outcome.threshold,
+                            },
+                        });
+                        let _ = crate::notifications::insert_and_broadcast(
+                            &conn,
+                            crate::notifications::KIND_SYSTEM,
+                            &payload,
+                            Some(&dedup_key),
+                            Some(&provider_id_str),
+                        );
+                    }
                 }
                 _ => {
                     self.circuit_breaker.record_success(aid);
@@ -3026,6 +3131,49 @@ impl Pipeline {
                     },
                 );
             }
+            // G2.3: surface an `account_invalid` system notification
+            // when the upstream rejects the account's credentials
+            // (401 Unauthorized / 403 Forbidden). Other 4xx codes
+            // (400 validation, 404 model gone, 408 timeout handled
+            // above) are NOT account-level rejections and stay
+            // silent. We fire one notification PER 4xx response —
+            // the per-account dedup key collapses repeats within
+            // 24h so a stuck upstream doesn't flood the tray, but a
+            // different account hitting the same upstream 401 still
+            // gets surfaced.
+            //
+            // Only fire when the target carries an `account_id`
+            // (anonymous/account-rotation targets don't have a
+            // specific account to flag).
+            if (status_code == 401 || status_code == 403)
+                && let Some(aid) = target.account_id
+            {
+                let provider_id_str = target.provider_id.to_string();
+                let model_id_str = model.model_id.as_str().to_string();
+                let dedup_key = format!("{}:{}", crate::notifications::CODE_ACCOUNT_INVALID, aid.0);
+                let payload = serde_json::json!({
+                    "code": crate::notifications::CODE_ACCOUNT_INVALID,
+                    "message": format!(
+                        "Account {} on {} rejected by upstream (HTTP {})",
+                        aid.0, provider_id_str, status_code,
+                    ),
+                    "provider_id": &provider_id_str,
+                    "details": {
+                        "account_id": aid.0,
+                        "provider_id": &provider_id_str,
+                        "model_id": &model_id_str,
+                        "status_code": status_code,
+                    },
+                });
+                let conn = self.conn.lock();
+                let _ = crate::notifications::insert_and_broadcast(
+                    &conn,
+                    crate::notifications::KIND_SYSTEM,
+                    &payload,
+                    Some(&dedup_key),
+                    Some(&provider_id_str),
+                );
+            }
             let err = CoreError::UpstreamError {
                 status: status_code,
                 provider: target.provider_id.to_string(),
@@ -3483,6 +3631,42 @@ impl Pipeline {
                 Ok(b) => String::from_utf8_lossy(&b).to_string(),
                 Err(_) => String::new(),
             };
+            // G2.3: surface `account_invalid` on 401/403 (mirrors the
+            // non-streaming path's hook above). The streaming path
+            // can hit this branch BEFORE any byte is streamed to the
+            // client — the upstream rejects the auth on the request
+            // headers, returns a non-2xx with a body, and we surface
+            // it as `UpstreamError`. See the non-streaming hook for
+            // the full rationale.
+            if (status_code == 401 || status_code == 403)
+                && let Some(aid) = target.account_id
+            {
+                let provider_id_str = target.provider_id.to_string();
+                let model_id_str = model.model_id.as_str().to_string();
+                let dedup_key = format!("{}:{}", crate::notifications::CODE_ACCOUNT_INVALID, aid.0);
+                let payload = serde_json::json!({
+                    "code": crate::notifications::CODE_ACCOUNT_INVALID,
+                    "message": format!(
+                        "Account {} on {} rejected by upstream (HTTP {})",
+                        aid.0, provider_id_str, status_code,
+                    ),
+                    "provider_id": &provider_id_str,
+                    "details": {
+                        "account_id": aid.0,
+                        "provider_id": &provider_id_str,
+                        "model_id": &model_id_str,
+                        "status_code": status_code,
+                    },
+                });
+                let conn = self.conn.lock();
+                let _ = crate::notifications::insert_and_broadcast(
+                    &conn,
+                    crate::notifications::KIND_SYSTEM,
+                    &payload,
+                    Some(&dedup_key),
+                    Some(&provider_id_str),
+                );
+            }
             let err = CoreError::UpstreamError {
                 status: status_code,
                 provider: target.provider_id.to_string(),
