@@ -15,9 +15,9 @@ export function logsWsUrl(): string {
   const scheme: "ws:" | "wss:" = location.protocol === "https:" ? "wss:" : "ws:";
   // Post-F0 single-binary merge: the live-logs WebSocket is served
   // directly by the openproxy server at `/admin/ws` (was
-  // `/web/api/usage/stream` on the separate openproxy-web binary,
-  // which reverse-proxied to `/admin/usage/stream` on the core
-  // server).
+  // `/web/api/usage/stream` on the now-removed separate dashboard
+  // binary, which reverse-proxied to `/admin/usage/stream` on the
+  // core server).
   return `${scheme}//${location.host}/admin/ws`;
 }
 

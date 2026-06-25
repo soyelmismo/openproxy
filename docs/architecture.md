@@ -5,11 +5,14 @@
 **openproxy** is a headless, minimal LLM proxy/router written in Rust. It is inspired by
 OmniRoute but deliberately stripped of non-essential machinery. It accepts OpenAI-compatible
 chat completion requests, routes them across multiple upstream providers and accounts, and
-exposes operational telemetry.
+exposes operational telemetry. The dashboard SPA is embedded into the server binary at
+compile time via `rust-embed`, so a single `openproxy` binary serves both the API and the
+admin UI on the same port.
 
 ### Guiding principles
 
-1. **Headless by default.** The server runs as a single binary with no required UI.
+1. **Single binary by default.** The server runs as one self-contained binary that serves
+   the OpenAI-compatible API, the admin REST API, and the dashboard SPA on the same port.
 2. **Bloat is a bug.** Every feature must justify its weight. We start with three providers
    and two routing strategies. Nothing more.
 3. **Live discovery, no hardcoding.** Models are fetched from upstream at runtime. Adding a
@@ -30,6 +33,7 @@ exposes operational telemetry.
                        │           openproxy-server (axum)            │
    HTTP/SSE in  ───────►  /v1/chat/completions   /v1/models          │
    (OpenAI comp.)        /v1/admin/* (api-key guarded)               │
+                        /admin/* (dashboard SPA, rust-embedded)      │
                        └────────────┬─────────────────────────────────┘
                                     │
                                     ▼
@@ -51,7 +55,7 @@ exposes operational telemetry.
                        │  ┌────────────────────▼───────────────────┐  │
                        │  │   Cost · Analytics · SQLite · Tracing  │  │
                        │  └────────────────────────────────────────┘  │
-                       └────────────┬────────────────┬────────────────┘
+                       └────────────┬─────────────────────────────────┘
                                     │                │
                           (rustls/reqwest)    (rusqlite)
                                     │                │
@@ -63,16 +67,12 @@ exposes operational telemetry.
                        │  OpenCode Zen  │  │  combos, usage     │
                        └────────────────┘  └────────────────────┘
 
-   ┌──────────────────────┐        ┌──────────────────────────────┐
-   │ openproxy-web        │  ────► │  openproxy-api-client        │
-   │ (feature-gated)      │        │  (typed wrapper over admin   │
-   │ optional dashboard   │        │   /v1/admin/* endpoints)      │
-   └──────────────────────┘        └──────────────┬───────────────┘
-                                                 │
-                                                 ▼
-                                       openproxy-core (read-only
-                                       queries + same adapter set)
-```
+   The dashboard SPA (lit-html + TypeScript, in `crates/openproxy-server/web/`)
+   is compiled to a JS bundle by `pnpm build` (esbuild) and embedded into the
+   `openproxy-server` binary via `rust-embed` at compile time — there is no
+   separate `openproxy-web` crate anymore. The optional `openproxy-api-client`
+   crate remains for external automation scripts that want a typed wrapper
+   around the admin REST API.
 
 ## 3. Crate Boundaries and Responsibilities
 
@@ -91,26 +91,22 @@ exposes operational telemetry.
 
 ### `openproxy-server`
 - axum router and handlers.
-- Bound to a TCP port; serves the public proxy endpoints and the admin API.
+- Bound to a TCP port; serves the public proxy endpoints, the admin API, and the dashboard SPA.
 - Public endpoints: `POST /v1/chat/completions`, `GET /v1/models`.
-- Admin endpoints: `/v1/admin/providers`, `/v1/admin/accounts`, `/v1/admin/combos`,
-  `/v1/admin/usage/*` (the five analytics endpoints from mvp-spec §7),
-  `/v1/admin/refresh-models` — guarded by a hashed API key in the `api_keys` table.
+- Admin endpoints: `/admin/api/providers`, `/admin/api/accounts`, `/admin/api/combos`,
+  `/admin/api/usage/*` (the five analytics endpoints from mvp-spec §7),
+  `/admin/api/refresh-models` — guarded by a hashed API key in the `api_keys` table.
+- Dashboard SPA: `GET /admin/*` serves the embedded frontend (lit-html + TypeScript,
+  bundled by esbuild, embedded via `rust-embed`).
 - Wires together the request pipeline: parse → translate → select combo → pick account
   → forward → stream response → record usage.
-- Headless. No templates, no static files.
+- The frontend source tree lives in `crates/openproxy-server/web/` and is built by `pnpm build`.
 
 ### `openproxy-api-client`
 - Rust client that wraps the admin endpoints of `openproxy-server`.
-- Used by `openproxy-web` and by external automation.
+- Used by external automation scripts and integrations.
 - No business logic; no direct DB or provider access.
 - Depends only on `openproxy-core` for shared types (e.g. enums, DTOs).
-
-### `openproxy-web`
-- Optional dashboard binary, gated behind a Cargo feature flag in the workspace.
-- Talks to the server exclusively through `openproxy-api-client`.
-- Provides views for providers, accounts, combos, usage, and live request inspector.
-- Never reaches into `openproxy-core` for provider internals; the client is the contract.
 
 ## 4. Dependency DAG
 
@@ -118,12 +114,13 @@ The workspace is a strict acyclic graph. Cycles are rejected at compile time.
 
 ```
 openproxy-server  ───►  openproxy-core
-openproxy-web     ───►  openproxy-api-client  ───►  openproxy-core
+openproxy-api-client  ───►  openproxy-core
 openproxy-core    ───►  (no internal crates; only external deps)
 ```
 
-External dependency direction is one-way: server and web are leaves with respect to core;
-`openproxy-api-client` sits between the dashboard and the contract surface.
+External dependency direction is one-way: the server and the api-client crate are leaves
+with respect to core. The dashboard SPA is embedded into the server binary, so there is no
+runtime wire hop between the UI and the API.
 
 ## 5. Provider Adapter Trait
 
@@ -356,20 +353,27 @@ Propagation rules:
 - **Response.** `x-request-id` is echoed back to the client on every response,
   including errors.
 
-## 10. Dashboard Integration (Feature Flag)
+## 10. Dashboard Integration
 
-The dashboard is **not** part of the server binary. It is a separate binary
-`openproxy-web` that is built only when the workspace feature `dashboard` is enabled.
+The dashboard SPA is part of the `openproxy-server` binary. The frontend source tree
+(lit-html + TypeScript) lives in `crates/openproxy-server/web/` and is bundled into a
+single `app.js` by `pnpm build` (esbuild). The bundle and the rest of the static tree
+(`index.html`, `callback.html`, CSS, fonts, i18n JSON) are embedded into the server
+binary at compile time via `rust-embed` (see `crates/openproxy-server/src/admin_ui.rs`).
 
-- The default build (`cargo build --release`) produces **only** the headless server.
-- Enabling the dashboard (`cargo build --release -p openproxy-web --features dashboard`)
-  produces an additional binary that talks to the running server over HTTP.
+- A single `cargo build --release -p openproxy-server` produces a binary that serves
+  BOTH the API (`/v1/*`, `/admin/api/*`) and the dashboard SPA (`/admin/*`) on the same
+  port — no second process, no second port, no proxy hop.
+- The build pipeline requires a Node 22 + pnpm toolchain to run `pnpm build` BEFORE
+  `cargo build` (because `rust-embed` bakes the `dist/` tree into the binary). The
+  Dockerfile and `.github/workflows/ci.yml` orchestrate this; on a fresh clone,
+  `cargo build` would still succeed because the rest of the static tree
+  (HTML, CSS, fonts, i18n) is checked in and `rust-embed` only walks what
+  exists on disk.
 - The dashboard has **no direct access** to SQLite or provider adapters. Every action
-  goes through `openproxy-api-client`, which calls the server's admin endpoints.
-- This means a deployment may run the server with or without the dashboard present on
-  the same host. The two communicate exclusively over the wire.
+  goes through the server's admin REST API (typed on the Rust side by the optional
+  `openproxy-api-client` crate, which external automation can also consume).
 - Auth: the dashboard presents an admin API key prompt; the key is stored in the
-  browser's `localStorage` and sent as `Authorization: Bearer <key>` on every request.
-
-The feature flag also gates the `openproxy-api-client` re-exports used only by the
-web UI, so the server binary never compiles unused client code paths.
+  browser's `localStorage` and sent as `Authorization: Bearer <key>` on every
+  `/admin/api/*` request. The `/admin/ws` WebSocket does its own auth via a `?token=`
+  query parameter (browsers can't set headers on WS handshakes).

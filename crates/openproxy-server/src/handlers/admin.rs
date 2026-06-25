@@ -4378,14 +4378,14 @@ pub async fn oauth_authorize(
         // The user will paste the callback URL manually in the dashboard.
         //
         // Post-F0 single-binary merge: the dashboard is served by the
-        // openproxy server itself (no separate openproxy-web binary),
-        // so the OAuth callback page lives at `/admin/callback.html`
-        // on the server's port. Operators set `OPENPROXY_WEB_PORT` to
-        // the server's port (typically 8787) so the upstream provider
-        // redirects the browser to the right URL. The env-var name is
-        // kept for backwards compatibility; a follow-up could rename
-        // it to `OPENPROXY_PORT` once the deprecated openproxy-web
-        // crate is removed from the workspace.
+        // openproxy server itself (no separate binary), so the OAuth
+        // callback page lives at `/admin/callback.html` on the server's
+        // port. Operators set `OPENPROXY_WEB_PORT` to the server's port
+        // (typically 8787) so the upstream provider redirects the browser
+        // to the right URL. The env-var name is kept for backwards
+        // compatibility with operators who already have it set in their
+        // environment; a future breaking-change release could rename it
+        // to `OPENPROXY_PORT`.
         let web_port = std::env::var("OPENPROXY_WEB_PORT").unwrap_or_else(|_| "8788".to_string());
         let redirect_uri = format!("http://localhost:{}/admin/callback.html", web_port);
 

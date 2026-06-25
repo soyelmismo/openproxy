@@ -5,7 +5,7 @@
 # Stage 1 (builder):
 #   - Rust 1.85 on Debian Bookworm.
 #   - Node.js 22 + pnpm for the dashboard frontend (TypeScript + esbuild).
-#   - Builds the frontend bundle (crates/openproxy-web/src/static/dist/).
+#   - Builds the frontend bundle (crates/openproxy-server/web/src/static/dist/).
 #   - Compiles the openproxy release binary.
 #
 # Stage 2 (runtime):
@@ -57,8 +57,8 @@ COPY . .
 
 # Build the dashboard frontend. `pnpm install --frozen-lockfile` requires
 # the pnpm-lock.yaml to match package.json exactly. The build emits
-# `crates/openproxy-web/src/static/dist/app.js` and friends.
-WORKDIR /build/crates/openproxy-web
+# `crates/openproxy-server/web/src/static/dist/app.js` and friends.
+WORKDIR /build/crates/openproxy-server/web
 RUN pnpm install --frozen-lockfile \
     && pnpm typecheck \
     && pnpm typecheck:tests \
@@ -71,7 +71,8 @@ RUN pnpm install --frozen-lockfile \
 # `crates/openproxy-server/src/admin_ui.rs`). The frontend dist/ tree
 # MUST exist before this step because rust-embed bakes it into the
 # binary at compile time. The previous step (`pnpm build`) just
-# produced `crates/openproxy-web/src/static/dist/app.js` and friends.
+# produced `crates/openproxy-server/web/src/static/dist/app.js` and
+# friends.
 WORKDIR /build
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/build/target \

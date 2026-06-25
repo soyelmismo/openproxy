@@ -1,7 +1,9 @@
 //! openproxy-api-client: cliente HTTP para la admin API de openproxy.
 //!
 //! Consume los endpoints `/admin/*` de un openproxy-server corriendo.
-//! Se usa desde openproxy-web y desde scripts externos.
+//! Se usa desde scripts externos y automatización (el dashboard SPA se
+//! sirve desde el propio binario openproxy-server vía rust-embed, así que
+//! ya no hay un crate `openproxy-web` que lo consuma internamente).
 //!
 //! ## Forma de uso
 //!

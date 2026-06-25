@@ -844,7 +844,8 @@ request-handling code:
 omit the request-scoped fields.
 
 [features]
-dashboard = false               # gates the openproxy-web build
+# (none — the dashboard SPA is always part of the openproxy-server binary,
+# embedded at compile time via rust-embed)
 ```
 
 Env-var mapping example: `OPENPROXY_SERVER__BIND=0.0.0.0:9090` overrides
@@ -954,9 +955,10 @@ The MVP is "done" when **all** of the following hold:
 9. The `x-request-id` header sent by the client (or generated if absent) appears
    in the response headers, the upstream request headers, the `usage` row, and
    every structured log line for the request.
-10. With the `dashboard` feature disabled, the server binary contains **no** code
-    from `openproxy-web`; verified by `cargo bloat --release` not listing any
-    dashboard symbols.
+10. The dashboard SPA is embedded into the `openproxy` binary at compile time
+    via `rust-embed`; `cargo bloat --release` lists the embedded assets as
+    `DashboardAssets`/`I18nAssets` statics, but the embedded blobs are
+    negligible compared to the rest of the binary.
 11. Migration runner applies all bundled migrations on an empty DB and is
     idempotent on restart (no duplicate `schema_migrations` rows). The
     `migration_idempotence` integration test (described in §11) passes.
@@ -1042,5 +1044,7 @@ demoable artifact.
 - Documentation: this file, `architecture.md`, `README.md` quickstart.
 - Final acceptance pass against §12; tag `v0.1.0`.
 
-The dashboard (`openproxy-web`) is intentionally **not** part of the MVP phases. It
-ships later as a separate workstream gated by the `dashboard` feature flag.
+The dashboard SPA is part of the `openproxy-server` binary (embedded at compile
+time via `rust-embed`, source tree at `crates/openproxy-server/web/`). It is
+intentionally **not** part of the MVP phases; it ships later as part of the
+single-binary release.

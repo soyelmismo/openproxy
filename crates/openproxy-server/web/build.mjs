@@ -1,4 +1,4 @@
-// build.mjs — esbuild bundler for the openproxy-web frontend.
+// build.mjs — esbuild bundler for the openproxy dashboard frontend.
 //
 // Bundles all TS source + lit-html into a single app.js that the
 // browser can load without import maps or a dev server.

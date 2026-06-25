@@ -10,7 +10,7 @@
 //     to the right link)
 //
 // Run with: npx playwright test sidebar-collapse.spec.ts
-// (or via `npm test` from crates/openproxy-web).
+// (or via `npm test` from crates/openproxy-server/web).
 //
 // @see tsconfig.test.json for type settings.
 

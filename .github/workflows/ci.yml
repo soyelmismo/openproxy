@@ -60,38 +60,47 @@ jobs:
         with:
           node-version: '22'
           cache: 'pnpm'
-          cache-dependency-path: crates/openproxy-web/pnpm-lock.yaml
+          cache-dependency-path: crates/openproxy-server/web/pnpm-lock.yaml
 
       - name: Install dependencies
-        working-directory: crates/openproxy-web
+        working-directory: crates/openproxy-server/web
         run: pnpm install --frozen-lockfile
 
       - name: Typecheck app
-        working-directory: crates/openproxy-web
+        working-directory: crates/openproxy-server/web
         run: pnpm typecheck
 
       - name: Typecheck e2e tests
-        working-directory: crates/openproxy-web
+        working-directory: crates/openproxy-server/web
         run: pnpm typecheck:tests
 
       - name: Build (esbuild + tsc --emitDeclarationOnly)
-        working-directory: crates/openproxy-web
+        working-directory: crates/openproxy-server/web
         run: pnpm build
 
       - name: Verify critical emit
-        working-directory: crates/openproxy-web
+        working-directory: crates/openproxy-server/web
         run: |
           set -e
-          test -f src/static/dist/app.js        || { echo "ERROR: app.js not emitted"; exit 1; }
-          test -f src/static/dist/lib/escape.js || { echo "ERROR: escape.js not emitted"; exit 1; }
-          test -f src/static/dist/handlers/registry.js || { echo "ERROR: registry.js not emitted"; exit 1; }
+          # The build pipeline emits:
+          #   - `app.js` (esbuild-bundled SPA entry point; everything
+          #     else is inlined into this single file)
+          #   - `<module>.d.ts` per source file (tsc --emitDeclarationOnly)
+          # The per-module `.js` files no longer exist as separate files
+          # because esbuild bundles the whole graph into `app.js` (the
+          # bundle setting in build.mjs is `bundle: true`). Verify the
+          # critical emit by checking `app.js` + a couple of declaration
+          # files that prove tsc actually walked the source tree.
+          test -f src/static/dist/app.js                || { echo "ERROR: app.js not emitted"; exit 1; }
+          test -f src/static/dist/lib/escape.d.ts       || { echo "ERROR: escape.d.ts not emitted"; exit 1; }
+          test -f src/static/dist/handlers/registry.d.ts || { echo "ERROR: registry.d.ts not emitted"; exit 1; }
           echo "Critical emit OK"
 
       - name: Upload web-dist artifact
         uses: actions/upload-artifact@v4
         with:
           name: web-dist
-          path: crates/openproxy-web/src/static/dist/
+          path: crates/openproxy-server/web/src/static/dist/
           retention-days: 1
           if-no-files-found: error
 
@@ -120,16 +129,17 @@ jobs:
         # `openproxy-server` embeds the dashboard SPA's `dist/` tree at
         # compile time via `rust-embed` (see
         # `crates/openproxy-server/src/admin_ui.rs`). The embedded
-        # folder is `crates/openproxy-web/src/static/` (which is in the
-        # checkout), but without this artifact the `dist/` subdirectory
-        # is empty — `cargo check` would still pass (rust-embed embeds
-        # whatever is present), but a real `cargo build` would produce a
-        # binary with a broken SPA (no `app.js` to serve). Keeping the
-        # artifact in place mirrors the production build environment.
+        # folder is `crates/openproxy-server/web/src/static/` (which is
+        # in the checkout), but without this artifact the `dist/`
+        # subdirectory is empty — `cargo check` would still pass
+        # (rust-embed embeds whatever is present), but a real
+        # `cargo build` would produce a binary with a broken SPA (no
+        # `app.js` to serve). Keeping the artifact in place mirrors the
+        # production build environment.
         uses: actions/download-artifact@v4
         with:
           name: web-dist
-          path: crates/openproxy-web/src/static/dist/
+          path: crates/openproxy-server/web/src/static/dist/
 
       - name: cargo fmt --check
         run: cargo fmt --all -- --check
@@ -285,7 +295,7 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: web-dist
-          path: crates/openproxy-web/src/static/dist/
+          path: crates/openproxy-server/web/src/static/dist/
 
       - name: Install Linux cross-compiler
         if: matrix.apt_cross != ''
@@ -319,7 +329,7 @@ jobs:
           mkdir -p "${STAGE}"
           cp "target/${TARGET}/release/openproxy" "${STAGE}/openproxy"
           cp config.example.toml "${STAGE}/"
-          cp -r crates/openproxy-web/src/static/dist "${STAGE}/dist"
+          cp -r crates/openproxy-server/web/src/static/dist "${STAGE}/dist"
           cat > "${STAGE}/README" <<EOF
           openproxy ${VERSION} (${TARGET})
           ====================================
@@ -356,7 +366,7 @@ jobs:
           mkdir -p "${STAGE}"
           cp "target/${TARGET}/release/openproxy.exe" "${STAGE}/openproxy.exe"
           cp config.example.toml "${STAGE}/"
-          cp -r crates/openproxy-web/src/static/dist "${STAGE}/dist"
+          cp -r crates/openproxy-server/web/src/static/dist "${STAGE}/dist"
           cat > "${STAGE}/README" <<EOF
           openproxy ${VERSION} (${TARGET})
           ====================================

@@ -4,8 +4,9 @@
 //
 // Post-F0 (single-binary merge): the dashboard talks DIRECTLY to the
 // openproxy server's `/admin/api/*` surface — same origin, no proxy.
-// The previous `/web/api/*` prefix (which the separate `openproxy-web`
-// binary reverse-proxied to `/admin/*` on the core server) is gone.
+// The previous `/web/api/*` prefix (which the now-removed separate
+// dashboard binary reverse-proxied to `/admin/*` on the core server)
+// is gone.
 
 import { state } from "../state/index.js";
 import type { DebugLogsResponse } from "./types/api.js";

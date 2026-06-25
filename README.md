@@ -107,7 +107,7 @@ openproxy with one base-URL change.
   bucketed aggregations are computed client-side in a ring buffer (5 min at
   1-sec granularity, 30 min at 5-sec, 24h at 1-min).
 - **i18n-ready UI** — All user-facing dashboard strings live in
-  `crates/openproxy-web/src/static/src/i18n/en.json` and are served at
+  `crates/openproxy-server/web/src/static/src/i18n/en.json` and are served at
   `/admin/i18n/{lang}.json`. English is the default; adding a language is a
   single JSON file + a `Lang` union type extension. The `t(key, params)` API
   supports `{{param}}` interpolation and `count`-based pluralization.
@@ -184,8 +184,8 @@ time via `rust-embed`, so a Node toolchain is required at build time
 git clone https://github.com/soyelmismo/openproxy.git
 cd openproxy
 
-# 1. Build the dashboard frontend (emits crates/openproxy-web/src/static/dist/)
-cd crates/openproxy-web && pnpm install && pnpm build && cd ../..
+# 1. Build the dashboard frontend (emits crates/openproxy-server/web/src/static/dist/)
+cd crates/openproxy-server/web && pnpm install && pnpm build && cd ../../..
 
 # 2. Build the server binary (embeds the frontend via rust-embed)
 cargo build --release -p openproxy-server
@@ -326,7 +326,8 @@ curl http://127.0.0.1:8787/v1/health
 
 ## Project layout
 
-openproxy is a Rust workspace of four crates:
+openproxy is a Rust workspace of three crates (plus the frontend source
+tree bundled into the server binary at compile time):
 
 ```
 openproxy/
@@ -339,14 +340,14 @@ openproxy/
 │   │                           # /admin/api/* (CRUD + telemetry + notifications),
 │   │                           # /admin/ws (WebSocket), and /admin/*
 │   │                           # (dashboard SPA embedded via rust-embed).
-│   ├── openproxy-api-client/   # Rust client library for the /admin/api/* API.
-│   │                           # Used by external scripts and integrations.
-│   └── openproxy-web/          # Frontend source tree (lit-html + TypeScript).
-│                               # The Rust binary in this crate is deprecated
-│                               # and will be removed; the dashboard is now
-│                               # served by openproxy-server via rust-embed.
-│                               # `pnpm build` emits to src/static/dist/,
-│                               # which openproxy-server embeds at compile time.
+│   │   └── web/                # Frontend source tree (lit-html + TypeScript).
+│   │                           # `pnpm build` emits to src/static/dist/,
+│   │                           # which openproxy-server embeds at compile time.
+│   └── openproxy-api-client/   # Optional Rust client library for the
+│                               # /admin/api/* REST API. Used by external
+│                               # scripts and integrations (no longer used
+│                               # internally now that the dashboard ships
+│                               # as part of the server binary).
 ├── docs/                       # architecture.md, mvp-spec.md, pending/
 ├── config.example.toml         # Annotated config starting point
 ├── Dockerfile                  # Multi-stage build: frontend + server in one image
@@ -377,8 +378,8 @@ release process: frontend build → Rust checks → version computation →
 7-target matrix build → Docker image → GitHub Release.
 
 For the dashboard frontend, run `pnpm install` then `pnpm typecheck` and
-`pnpm build` inside `crates/openproxy-web/` before submitting changes that
-touch the UI.
+`pnpm build` inside `crates/openproxy-server/web/` before submitting changes
+that touch the UI.
 
 ## License
 

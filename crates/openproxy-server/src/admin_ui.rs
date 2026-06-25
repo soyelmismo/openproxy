@@ -1,10 +1,10 @@
 //! Dashboard SPA embedded in the server binary.
 //!
-//! The frontend is built by `pnpm build` in `crates/openproxy-web/` and
-//! emits to `crates/openproxy-web/src/static/dist/`. We embed the whole
-//! `crates/openproxy-web/src/static/` tree at compile time via
-//! `rust-embed`, so the server binary is self-contained and ships both
-//! the API and the dashboard on the same port.
+//! The frontend is built by `pnpm build` in `crates/openproxy-server/web/`
+//! and emits to `crates/openproxy-server/web/src/static/dist/`. We embed
+//! the whole `crates/openproxy-server/web/src/static/` tree at compile
+//! time via `rust-embed`, so the server binary is self-contained and
+//! ships both the API and the dashboard on the same port.
 //!
 //! Routes mounted at `/admin/*` (NOT `/admin/api/*` or `/admin/ws` —
 //! those are the API and WS, served by other handlers). See
@@ -32,24 +32,28 @@ use axum::{
 use mime_guess::from_path;
 use rust_embed::RustEmbed;
 
-/// Embedded copy of `crates/openproxy-web/src/static/`.
+/// Embedded copy of `crates/openproxy-server/web/src/static/`.
 ///
 /// `rust-embed` resolves the `#[folder]` path relative to this crate's
-/// `Cargo.toml`, so `../openproxy-web/src/static/` points at
-/// `crates/openproxy-web/src/static/`. We embed the whole tree (not
-/// just `dist/`) so the SPA's `index.html` can reference
+/// `Cargo.toml`, so `web/src/static/` points at
+/// `crates/openproxy-server/web/src/static/`. We embed the whole tree
+/// (not just `dist/`) so the SPA's `index.html` can reference
 /// `/admin/dist/app.js`, `/admin/styles/index.css`, and
 /// `/admin/fonts/...` from a single embedded namespace.
 ///
-/// A `.gitkeep` placeholder lives in `dist/` so a fresh checkout
-/// (where `pnpm build` hasn't run yet) still compiles — `rust-embed`
-/// happily embeds an empty directory.
+/// `dist/` is the esbuild output — it's produced by `pnpm build` and
+/// is in the frontend's `.gitignore`, so a fresh checkout has no
+/// `dist/` directory. `rust-embed` happily embeds the rest of the tree
+/// (HTML, CSS, fonts, i18n JSON) without it; a real release build runs
+/// `pnpm build` before `cargo build` (see `Dockerfile` and
+/// `.github/workflows/ci.yml`) so the binary ships with the full
+/// dashboard bundle.
 #[derive(RustEmbed)]
-#[folder = "../openproxy-web/src/static/"]
+#[folder = "web/src/static/"]
 struct DashboardAssets;
 
-/// Embedded copy of `crates/openproxy-web/src/static/src/i18n/` — the
-/// per-language JSON string packs consumed by the frontend's
+/// Embedded copy of `crates/openproxy-server/web/src/static/src/i18n/`
+/// — the per-language JSON string packs consumed by the frontend's
 /// `i18n/index.ts` `loadLang()` helper.
 ///
 /// Served at `/admin/i18n/{lang}.json` by [`serve_i18n`]. The folder
@@ -58,26 +62,26 @@ struct DashboardAssets;
 ///
 /// Only files present at compile time are exposed; if a future
 /// translation is added as `es.json`, it must land in
-/// `crates/openproxy-web/src/static/src/i18n/` before the server is
-/// rebuilt — `rust-embed` bakes the tree into the binary. We do NOT
+/// `crates/openproxy-server/web/src/static/src/i18n/` before the server
+/// is rebuilt — `rust-embed` bakes the tree into the binary. We do NOT
 /// serve from disk at runtime, so operators can't drop new language
 /// packs into a running server; that's intentional (the dashboard
 /// string contract is part of the binary, not a runtime config).
 #[derive(RustEmbed)]
-#[folder = "../openproxy-web/src/static/src/i18n/"]
+#[folder = "web/src/static/src/i18n/"]
 struct I18nAssets;
 
 /// Serve the SPA shell. The HTML is `include_str!`-embedded so the
 /// handler returns `Html<&'static str>` with no allocation.
 pub async fn index_html() -> Html<&'static str> {
-    Html(include_str!("../../openproxy-web/src/static/index.html"))
+    Html(include_str!("../web/src/static/index.html"))
 }
 
 /// Serve the OAuth callback page (a tiny static HTML file that grabs
 /// the `code` query param and `postMessage`s it back to the opener
 /// window). Same `include_str!` strategy as `index_html`.
 pub async fn callback_html() -> Html<&'static str> {
-    Html(include_str!("../../openproxy-web/src/static/callback.html"))
+    Html(include_str!("../web/src/static/callback.html"))
 }
 
 /// Serve a static asset from the embedded `src/static/` tree.

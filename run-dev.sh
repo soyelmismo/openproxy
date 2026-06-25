@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# run-dev.sh — start openproxy (server + web) in background for local testing.
+# run-dev.sh — start openproxy in background for local testing.
 #
 # Usage: ./run-dev.sh
 #
@@ -8,10 +8,15 @@
 #                          one is generated for this run and stored in
 #                          .openproxy.env so restarts keep the same DB usable.
 #   OPENPROXY_BIND         server bind (default 0.0.0.0:8787)
-#   OPENPROXY_WEB_BIND     web bind    (default 0.0.0.0:8788)
-#   OPENPROXY_CORE_URL     URL the web uses to reach the server
-#                          (default http://127.0.0.1:8787)
 #   OPENPROXY_DATA_DIR     where the SQLite DB lives (default ~/.openproxy)
+#
+# The openproxy binary now serves BOTH the OpenAI-compatible API (/v1/*,
+# /admin/api/*) and the dashboard SPA (/admin/*) on the same port — the
+# dashboard is embedded at compile time via rust-embed (see
+# `crates/openproxy-server/src/admin_ui.rs`). There is no separate
+# `openproxy-web` binary anymore; the frontend source tree lives at
+# `crates/openproxy-server/web/` and is built by `pnpm build` before
+# `cargo build --release -p openproxy-server`.
 
 set -euo pipefail
 
@@ -19,9 +24,7 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DATA_DIR="${OPENPROXY_DATA_DIR:-$HOME/.openproxy}"
 ENV_FILE="$ROOT_DIR/.openproxy.env"
 SERVER_LOG="$ROOT_DIR/openproxy.log"
-WEB_LOG="$ROOT_DIR/openproxy-web.log"
 SERVER_PID_FILE="$ROOT_DIR/.openproxy.pid"
-WEB_PID_FILE="$ROOT_DIR/.web.pid"
 
 mkdir -p "$DATA_DIR"
 
@@ -44,24 +47,17 @@ export OPENPROXY_MASTER_KEY
 
 # --- Paths --------------------------------------------------------------------
 BIN_SERVER="$ROOT_DIR/target/release/openproxy"
-BIN_WEB="$ROOT_DIR/target/release/openproxy-web"
 SERVER_BIND="0.0.0.0:8787"
-WEB_BIND="0.0.0.0:8788"
-CORE_URL="http://127.0.0.1:8787"
-export OPENPROXY_WEB_BIND="$WEB_BIND"
-export OPENPROXY_CORE_URL="$CORE_URL"
 
 # --- Stop already running instances (idempotent) -----------------------------
-for pid_file in "$SERVER_PID_FILE" "$WEB_PID_FILE"; do
-  if [ -f "$pid_file" ]; then
-    old_pid="$(cat "$pid_file" 2>/dev/null || true)"
-    if [ -n "$old_pid" ] && kill -0 "$old_pid" 2>/dev/null; then
-      echo "[run-dev] stopping previous process from $pid_file (pid=$old_pid)"
-      kill "$old_pid" 2>/dev/null || true
-    fi
-    rm -f "$pid_file"
+if [ -f "$SERVER_PID_FILE" ]; then
+  old_pid="$(cat "$SERVER_PID_FILE" 2>/dev/null || true)"
+  if [ -n "$old_pid" ] && kill -0 "$old_pid" 2>/dev/null; then
+    echo "[run-dev] stopping previous process from $SERVER_PID_FILE (pid=$old_pid)"
+    kill "$old_pid" 2>/dev/null || true
   fi
-done
+  rm -f "$SERVER_PID_FILE"
+fi
 
 # --- Start server -------------------------------------------------------------
 echo "[run-dev] starting server on $SERVER_BIND (log: $SERVER_LOG)"
@@ -69,28 +65,20 @@ nohup "$BIN_SERVER" >"$SERVER_LOG" 2>&1 &
 SERVER_PID=$!
 echo "$SERVER_PID" > "$SERVER_PID_FILE"
 
-# --- Start web ----------------------------------------------------------------
-echo "[run-dev] starting web on $WEB_BIND -> $CORE_URL (log: $WEB_LOG)"
-nohup "$BIN_WEB" >"$WEB_LOG" 2>&1 &
-WEB_PID=$!
-echo "$WEB_PID" > "$WEB_PID_FILE"
-
 sleep 2
 
 # --- Report -------------------------------------------------------------------
 echo
 echo "================================================================"
-echo " openproxy MVP"
+echo " openproxy"
 echo "================================================================"
 echo " server  pid=$SERVER_PID  http://$SERVER_BIND"
-echo " web     pid=$WEB_PID     http://$WEB_BIND"
 echo " data    $DATA_DIR"
 echo " logs    $SERVER_LOG"
-echo "         $WEB_LOG"
 echo "================================================================"
 echo " Try:"
 echo "   curl -s http://$SERVER_BIND/v1/health"
 echo "   curl -s http://$SERVER_BIND/v1/models"
-echo "   curl -s http://$SERVER_BIND/v1/admin/providers"
-echo "   open http://$WEB_BIND"
+echo "   curl -s http://$SERVER_BIND/admin/api/providers"
+echo "   open http://$SERVER_BIND/admin"
 echo "================================================================"

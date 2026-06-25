@@ -7,7 +7,7 @@
 //! outermost layer so every response — public or admin — carries an
 //! `x-request-id` header.
 //!
-//! ## Top-level URL layout (post-F0 merge of `openproxy-web` into
+//! ## Top-level URL layout (post-F0 merge of the dashboard SPA into
 //! the server binary)
 //!
 //! | Path                          | Handler / source                          |

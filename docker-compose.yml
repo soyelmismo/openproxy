@@ -9,11 +9,10 @@
 #   2. `docker compose up -d`
 #   3. Visit http://localhost:8787/v1/health to confirm the server is up.
 #
-# The dashboard UI served by the `openproxy-web` binary is NOT included
-# in this image (see Dockerfile). To run the UI, either:
-#   - Run `openproxy-web` in a sidecar container, or
-#   - Build a future image that bundles both binaries.
-# See docs/architecture.md for the openproxy vs openproxy-web split.
+# The dashboard SPA is embedded into the openproxy binary at compile time via
+# rust-embed (see `crates/openproxy-server/src/admin_ui.rs`), so this single
+# container serves BOTH the API (/v1/*, /admin/api/*) and the dashboard
+# (/admin/*) on the same port. No second container, no second port.
 
 services:
   openproxy:
