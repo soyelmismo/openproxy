@@ -216,8 +216,17 @@ jobs:
           if [ -z "$PREV_TAG" ]; then
             # No prior tag — emit the most recent 200 commits as the
             # initial changelog. Truncate so the release body stays
-            # readable on GitHub's UI.
-            BODY="$(git log --pretty=format:'- %s (%h)' | head -n 200)"
+            # readable on GitHub's UI. Capture in a `while read` loop
+            # so the SIGPIPE that `head` raises when it closes the
+            # pipe after N lines does not kill `git log` under
+            # `set -o pipefail` (it would exit 141 and abort the step).
+            BODY=""
+            count=0
+            while IFS= read -r line; do
+              BODY+="${line}"$'\n'
+              count=$((count+1))
+              [ "$count" -ge 200 ] && break
+            done < <(git log --pretty=format:'- %s (%h)')
           else
             BODY="$(git log "${PREV_TAG}..HEAD" --pretty=format:'- %s (%h)')"
           fi
