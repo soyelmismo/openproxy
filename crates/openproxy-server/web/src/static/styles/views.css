@@ -2003,16 +2003,18 @@ abbr {
 /* uPlot's default CSS sets a transparent background and gray grid. We
    override to use the project's border/text tokens so the charts blend
    with the rest of the UI. These rules are scoped to .home-chart-container
-   so they don't affect other uPlot instances that might be added later. */
+   so they don't affect other uPlot instances that might be added later.
+   NOTE: do NOT set `width/height: 100% !important` on `.uplot` — uPlot
+   controls the canvas size via `setSize()` and a CSS width/height fights
+   with it, creating a resize loop that grows charts without bound and
+   tanks FPS. The `.uplot` div gets its width/height from uPlot's inline
+   styles; CSS should only override colors/fonts here. */
 .home-chart-container .uplot {
-  width: 100% !important;
-  height: 100% !important;
   font-family: var(--font-mono);
   color: var(--color-text);
 }
 .home-kpi-spark .uplot {
-  width: 100% !important;
-  height: 100% !important;
+  /* No width/height — uPlot sets them via setSize(). */
 }
 .home-chart-container .u-axis,
 .home-kpi-spark .u-axis {
@@ -2063,10 +2065,15 @@ abbr {
 }
 
 /* uPlot token overrides — same as .home-chart-container above, scoped
-   to the analytics container so both views share the same look. */
+   to the analytics container so both views share the same look.
+   NOTE: do NOT set `width: 100% !important` on `.uplot` — uPlot
+   controls the canvas size via `setSize()` and a CSS `width: 100%`
+   fights with it, creating a resize loop (ResizeObserver fires →
+   setSize → canvas reflows → container resizes → ResizeObserver
+   fires again → ...). This loop causes the charts to grow
+   horizontally without bound and tanks FPS. The `.uplot` div should
+   have NO explicit width/height — uPlot sets them via inline styles. */
 .analytics-chart-container .uplot {
-  width: 100% !important;
-  height: 100% !important;
   font-family: var(--font-mono);
   color: var(--color-text);
 }

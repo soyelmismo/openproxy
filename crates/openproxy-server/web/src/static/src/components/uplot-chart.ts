@@ -236,20 +236,40 @@ export function resizeChart(u: uPlot, container: HTMLElement): void {
  *  Returns a disposer — call it on view unmount to release the observer.
  *
  *  Falls back to `window.resize` if ResizeObserver is unavailable (very
- *  old browsers — uPlot's targets are evergreen, so this is defensive). */
+ *  old browsers — uPlot's targets are evergreen, so this is defensive).
+ *
+ *  DEBOUNCE: ResizeObserver can fire in a tight loop if the chart's
+ *  own setSize() triggers a container reflow (which re-fires the
+ *  observer). We debounce with a 100ms trailing edge + a guard that
+ *  skips the call if the size hasn't actually changed (resizeChart
+ *  already has this guard, but the debounce prevents the observer
+ *  callback itself from running 60+ times/sec). Without this, a CSS
+ *  rule like `.uplot { width: 100% }` creates a feedback loop that
+ *  grows the chart without bound and tanks FPS. */
 export function observeResize(u: uPlot, container: HTMLElement): () => void {
   if (typeof ResizeObserver === "undefined") {
     const handler = (): void => resizeChart(u, container);
     window.addEventListener("resize", handler);
     return () => window.removeEventListener("resize", handler);
   }
-  // Debounce isn't needed — ResizeObserver already batches callbacks per
-  // frame. uPlot's redraw is cheap (sub-millisecond for ≤1800 points).
+  let rafId: number | null = null;
   const ro: ResizeObserver = new ResizeObserver(() => {
-    resizeChart(u, container);
+    // Debounce via requestAnimationFrame — coalesce multiple
+    // observer callbacks into one resize per frame.
+    if (rafId !== null) return;
+    rafId = requestAnimationFrame(() => {
+      rafId = null;
+      resizeChart(u, container);
+    });
   });
   ro.observe(container);
-  return () => ro.disconnect();
+  return () => {
+    if (rafId !== null) {
+      cancelAnimationFrame(rafId);
+      rafId = null;
+    }
+    ro.disconnect();
+  };
 }
 
 // ----------------------------------------------------------------------------

@@ -104,18 +104,14 @@ pub fn build_router(state: AppState) -> Router {
     // request), so the per-handler auth check there is the source
     // of truth for the WebSocket path.
     let admin_api_routes = Router::new()
-        .route(
-            "/config",
-            get(handlers::admin::get_runtime_config),
-        )
+        .route("/config", get(handlers::admin::get_runtime_config))
         .route(
             "/config/timeouts",
             axum::routing::put(handlers::admin::put_runtime_timeouts),
         )
         .route(
             "/config/recording-ttl",
-            get(handlers::admin::get_recording_ttl)
-                .put(handlers::admin::put_recording_ttl),
+            get(handlers::admin::get_recording_ttl).put(handlers::admin::put_recording_ttl),
         )
         .route(
             "/config/compression",
@@ -208,14 +204,8 @@ pub fn build_router(state: AppState) -> Router {
             axum::routing::patch(handlers::admin::update_combo_target)
                 .delete(handlers::admin::delete_combo_target),
         )
-        .route(
-            "/usage/summary",
-            get(handlers::admin::usage_summary),
-        )
-        .route(
-            "/usage/by-model",
-            get(handlers::admin::usage_by_model),
-        )
+        .route("/usage/summary", get(handlers::admin::usage_summary))
+        .route("/usage/by-model", get(handlers::admin::usage_by_model))
         .route(
             "/usage/by-provider",
             get(handlers::admin::usage_by_provider),
@@ -224,46 +214,16 @@ pub fn build_router(state: AppState) -> Router {
             "/usage/monthly-by-provider",
             get(handlers::admin::usage_monthly_by_provider),
         )
-        .route(
-            "/usage/by-day",
-            get(handlers::admin::usage_by_day),
-        )
-        .route(
-            "/usage/by-account",
-            get(handlers::admin::usage_by_account),
-        )
-        .route(
-            "/usage/by-status",
-            get(handlers::admin::usage_by_status),
-        )
-        .route(
-            "/usage/errors",
-            get(handlers::admin::usage_errors),
-        )
-        .route(
-            "/usage/latency",
-            get(handlers::admin::usage_latency),
-        )
-        .route(
-            "/usage/races",
-            get(handlers::admin::usage_races),
-        )
-        .route(
-            "/usage/recent",
-            get(handlers::admin::usage_recent),
-        )
-        .route(
-            "/usage/detail",
-            get(handlers::admin::usage_detail),
-        )
-        .route(
-            "/debug/logs",
-            get(handlers::admin::debug_logs),
-        )
-        .route(
-            "/debug/clear",
-            post(handlers::admin::debug_logs_clear),
-        )
+        .route("/usage/by-day", get(handlers::admin::usage_by_day))
+        .route("/usage/by-account", get(handlers::admin::usage_by_account))
+        .route("/usage/by-status", get(handlers::admin::usage_by_status))
+        .route("/usage/errors", get(handlers::admin::usage_errors))
+        .route("/usage/latency", get(handlers::admin::usage_latency))
+        .route("/usage/races", get(handlers::admin::usage_races))
+        .route("/usage/recent", get(handlers::admin::usage_recent))
+        .route("/usage/detail", get(handlers::admin::usage_detail))
+        .route("/debug/logs", get(handlers::admin::debug_logs))
+        .route("/debug/clear", post(handlers::admin::debug_logs_clear))
         .route(
             "/recording",
             get(handlers::admin::get_recording).post(handlers::admin::set_recording),
@@ -272,10 +232,7 @@ pub fn build_router(state: AppState) -> Router {
             "/models/{id}/refresh",
             post(handlers::admin::refresh_models),
         )
-        .route(
-            "/models/{id}/toggle",
-            post(handlers::admin::toggle_model),
-        )
+        .route("/models/{id}/toggle", post(handlers::admin::toggle_model))
         .route(
             "/models/bulk-toggle",
             post(handlers::admin::bulk_toggle_models),
@@ -284,18 +241,9 @@ pub fn build_router(state: AppState) -> Router {
             "/models/{id}",
             axum::routing::delete(handlers::admin::delete_model),
         )
-        .route(
-            "/models",
-            get(handlers::admin::list_models_admin),
-        )
-        .route(
-            "/models/custom",
-            post(handlers::admin::create_custom_model),
-        )
-        .route(
-            "/models/{id}/test",
-            post(handlers::admin::test_model),
-        )
+        .route("/models", get(handlers::admin::list_models_admin))
+        .route("/models/custom", post(handlers::admin::create_custom_model))
+        .route("/models/{id}/test", post(handlers::admin::test_model))
         .route(
             "/providers/{id}/refresh",
             post(handlers::admin::refresh_provider_models),
@@ -314,18 +262,12 @@ pub fn build_router(state: AppState) -> Router {
                 .patch(handlers::admin::update_api_key)
                 .delete(handlers::admin::delete_api_key),
         )
-        .route(
-            "/keys/{id}/revoke",
-            post(handlers::admin::revoke_api_key),
-        )
+        .route("/keys/{id}/revoke", post(handlers::admin::revoke_api_key))
         .route(
             "/keys/{id}/regenerate",
             post(handlers::admin::regenerate_api_key),
         )
-        .route(
-            "/keys/{id}/usage",
-            get(handlers::admin::api_key_usage),
-        )
+        .route("/keys/{id}/usage", get(handlers::admin::api_key_usage))
         // OAuth endpoints
         // models.dev sync
         .route(
@@ -349,10 +291,7 @@ pub fn build_router(state: AppState) -> Router {
         // `/notifications/unread-count`) MUST come before the
         // `{id}`-param routes so axum 0.8's registration-order
         // matcher doesn't let `{id}` swallow `read-all` / `unread-count`.
-        .route(
-            "/notifications",
-            get(handlers::admin::list_notifications),
-        )
+        .route("/notifications", get(handlers::admin::list_notifications))
         .route(
             "/notifications/read-all",
             post(handlers::admin::mark_all_notifications_read),
