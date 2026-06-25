@@ -11,6 +11,12 @@ import {
   getUnreadCount,
   onUnreadCountChange,
 } from "../state/notifications-store.js";
+// DASHBOARD-FIX (Bug 2 / Step 2f): the sidebar now renders a Logout
+// button in its footer. The button calls `clearToken()` (wipes the
+// localStorage key + the in-memory cache) and navigates to `#/login`,
+// which the router's auth gate lets through because `isLoggedIn()`
+// is now false.
+import { clearToken } from "../state/auth.js";
 
 interface UiState { sidebarCollapsed?: boolean; }
 type MutableDashboard = { ui?: UiState };
@@ -150,6 +156,10 @@ export function renderSidebar(): void {
               title=${collapsed ? "Expand sidebar" : "Collapse sidebar"}
               aria-label=${collapsed ? "Expand sidebar" : "Collapse sidebar"}>${toggleLabel}</button>
       <span id="theme-toggle-slot"></span>
+      <button class="sidebar-logout" type="button" data-action="logout"
+              title=${t("nav.logout")}
+              aria-label=${t("nav.logout")}
+              ?hidden=${collapsed}>${t("nav.logout")}</button>
     </div>
   `, sb as HTMLElement);
   applyActiveState();
@@ -165,6 +175,24 @@ export function toggleSidebar(): void {
   s.ui = { ...(s.ui ?? {}), sidebarCollapsed: nextCollapsed };
   try { localStorage.setItem(STORAGE_KEY, nextCollapsed ? "1" : "0"); } catch (_e: unknown) {}
   renderSidebar();
+}
+
+/** Wipe the stored admin token and bounce to the login route.
+ *  Registered as `data-action="logout"` in `handlers/registry.ts`
+ *  so the sidebar button can dispatch via the same shim every
+ *  other data-action uses. We deliberately don't also stop the
+ *  bg-poll or close the WS here — `navigate()` re-evaluates on
+ *  hashchange, the auth gate redirects to login, and the login
+ *  view's mount path doesn't call `startBgPoll()` (it's already
+ *  running from boot, but its 401s are silently swallowed by
+ *  `bg-poll.ts::healthTick`'s catch). The WS, if connected,
+ *  will be torn down by its own close handler when the server
+ *  rejects the next frame — and `state/ws.ts::connectLogsWebSocket`
+ *  won't be re-invoked until the user logs in again and a
+ *  live-store-viewing route is mounted. */
+export function logout(): void {
+  clearToken();
+  location.hash = "#/login";
 }
 
 export function loadSidebarCollapsedFromStorage(): void {

@@ -9,6 +9,12 @@ import { html, render } from 'lit-html';
 import { state } from "./index.js";
 import { startBgPoll } from "./bg-poll.js";
 import { stopLogLatencyTicker } from "./ticker.js";
+// DASHBOARD-FIX (Bug 2 / Step 2e): the router now imports the auth
+// helper `isLoggedIn` and the login view `mountLogin`. `navigate()`
+// below gates every route on `isLoggedIn()` except `login`; a logged-
+// out user is redirected to `#/login` before any view mounts, so the
+// bg-poll / api calls / WS that would otherwise 401 never fire.
+import { isLoggedIn } from "./auth.js";
 // View mounts stay .js for now (out of G3 scope). tsc+Bundler
 // resolves the import to the .js at runtime; the not-yet-typed
 // returns flow through as `unknown`, which is fine for the
@@ -23,6 +29,7 @@ import { mountLogs } from "../views/logs.js";
 import { mountConfig } from "../views/config.js";
 import { mountDebugLogs } from "../views/debug-logs.js";
 import { mountNotifications } from "../views/notifications.js";
+import { mountLogin } from "../views/login.js";
 
 export type RouteName =
   | "home"
@@ -36,7 +43,8 @@ export type RouteName =
   | "logs"
   | "debug-logs"
   | "config"
-  | "notifications";
+  | "notifications"
+  | "login";
 
 export type ViewMount = (ctx: string) => unknown;
 
@@ -85,6 +93,12 @@ const ROUTES: readonly Route[] = [
   // unsubscribes from the store's event stream so navigating away
   // doesn't leak the listener.
   { name: "notifications", pattern: /^#?\/notifications$/, mount: mountNotifications as ViewMount },
+  // Login (DASHBOARD-FIX Bug 2/Step 2d). The ONLY route accessible
+  // without a token — the auth gate in `navigate()` redirects every
+  // other route here when `isLoggedIn()` is false. Pattern is
+  // `#/login` (and the bare `#/login/` form, harmless). The view
+  // itself is in `views/login.ts`.
+  { name: "login", pattern: /^#?\/login\/?$/, mount: mountLogin as ViewMount },
 ];
 
 export interface ParsedHash {
@@ -118,6 +132,34 @@ export function parseHash(hash: string): ParsedHash | null {
 export function navigate(): void {
   const r: ParsedHash | null = parseHash(location.hash);
   if (!r) { location.hash = "#/"; return; }
+  // ---- Auth gate (DASHBOARD-FIX Bug 2/Step 2e) ----
+  // The dashboard now requires a manage-scope API key for every
+  // /admin/api/* call and the /admin/ws upgrade. The login view is
+  // the only screen that should mount without a token; every other
+  // route is redirected there until the user logs in. We also
+  // redirect a logged-in user away from `#/login` so a stale URL
+  // (e.g. bookmarked) doesn't strand them on the login form after
+  // they've already authenticated.
+  //
+  // Setting `location.hash` triggers a `hashchange` event, which
+  // calls `navigate()` again — same pattern as the `if (!r)` branch
+  // above. The re-entry falls through this gate (route is now
+  // "login" / not-"login" respectively) and proceeds to mount.
+  const loggedIn: boolean = isLoggedIn();
+  if (!loggedIn && r.name !== "login") {
+    location.hash = "#/login";
+    return;
+  }
+  if (loggedIn && r.name === "login") {
+    location.hash = "#/";
+    return;
+  }
+  // Toggle a body class so CSS can hide the sidebar on the login
+  // page (the sidebar's nav links would otherwise bounce back to
+  // #/login via the auth gate, which is confusing on the login
+  // screen). See styles/layout.css for the `body.on-login-page`
+  // rule.
+  document.body.classList.toggle("on-login-page", r.name === "login");
   state.currentView = { name: r.name, context: r.context };
   // Sidebar active state
   document.querySelectorAll(".sidebar nav a").forEach((a: Element) => {

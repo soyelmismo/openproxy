@@ -7,8 +7,18 @@
 // `.ts` for the .ts importers, and the `.js` is still used by the
 // not-yet-migrated views/handlers/components. They expose the same
 // runtime shape, so the dual import resolves cleanly.
+//
+// DASHBOARD-FIX (Bug 2): every request now carries an
+// `Authorization: Bearer <token>` header sourced from
+// `state/auth.ts::getToken()`. This is the `api()` used by every
+// view/handler/component EXCEPT `state/live-store.ts` and
+// `views/debug-logs.ts` (which import from `lib/api.ts` — same
+// fix applied there). Without this patch, the 401s the user saw
+// (`fetchRecordingState failed`, `live-store rehydrate failed`,
+// every Keys / Combos / Providers fetch) would persist.
 
 import { state } from "./index.js";
+import { getToken } from "./auth.js";
 
 export interface ApiCallOptions {
   method?: string;
@@ -17,9 +27,14 @@ export interface ApiCallOptions {
 
 export async function api(path: string, opts: ApiCallOptions = {}): Promise<unknown> {
   const t0: number = performance.now();
+  const headers: Record<string, string> = { "Content-Type": "application/json" };
+  const token: string | null = getToken();
+  if (token) {
+    headers["Authorization"] = `Bearer ${token}`;
+  }
   const init: RequestInit = {
     method: opts.method || "GET",
-    headers: { "Content-Type": "application/json" },
+    headers,
   };
   if (opts.body) init.body = opts.body;
   const r: Response = await fetch("/admin/api" + path, init);

@@ -64,7 +64,7 @@ import {
   toggleModelPicker, filterModelPicker, removeModelFromKey,
 } from "../components/model-picker.js";
 import { mountThemeToggle } from "../components/theme-toggle.js";
-import { toggleSidebar } from "../components/sidebar.js";
+import { toggleSidebar, logout } from "../components/sidebar.js";
 import { OAuthLogin } from "./oauth-handlers.js";
 import { logsPrevPage, logsNextPage, logsGoPage, logsSetFollow, toggleColumnsMenu, toggleColumn } from "../views/logs.js";
 import { configSaveTimeouts, configSaveRecordingTtl, configSaveIdleChunkRetryable, configSaveCompression } from "../views/config.js";
@@ -287,6 +287,12 @@ export const HANDLERS: Record<string, ActionHandler> = {
   // (data-action="toggleSidebar") and persists the choice to
   // localStorage.
   toggleSidebar,
+
+  // DASHBOARD-FIX (Bug 2 / Step 2f): sidebar Logout button. Wipes
+  // the stored admin token and navigates to the login route. See
+  // `components/sidebar.ts::logout` for the rationale on why we
+  // don't also stop bg-poll / close the WS here.
+  logout,
 
   // Router utilities (data-action friendly). The router keeps its
   // own window.navigate / window.rerenderCurrentView aliases for

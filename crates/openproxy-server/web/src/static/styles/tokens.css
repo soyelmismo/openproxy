@@ -10,21 +10,26 @@
    - Two themes: light (default) and dark.
    ============================================ */
 
-/* Ubuntu is loaded from /fonts/Ubuntu-Regular.ttf and Ubuntu-Bold.ttf
-   (Ubuntu Font Licence 1.0 — see fonts/Ubuntu-LICENCE.txt). */
+/* Ubuntu is loaded from /admin/fonts/Ubuntu-Regular.ttf and
+   /admin/fonts/Ubuntu-Bold.ttf (Ubuntu Font Licence 1.0 — see
+   fonts/Ubuntu-LICENCE.txt). The `/admin/` prefix is required because
+   the server only serves static assets under `/admin/*` (see
+   `admin_ui::serve_asset`); a bare `/fonts/...` URL hits the SPA
+   fallback and returns HTML, which the browser rejects as a font → 404.
+   (DASHBOARD-FIX: Bug 1.) */
 @font-face {
   font-family: "Ubuntu";
   font-style: normal;
   font-weight: 400;
   font-display: swap;
-  src: url("/fonts/Ubuntu-Regular.ttf") format("truetype");
+  src: url("/admin/fonts/Ubuntu-Regular.ttf") format("truetype");
 }
 @font-face {
   font-family: "Ubuntu";
   font-style: normal;
   font-weight: 700;
   font-display: swap;
-  src: url("/fonts/Ubuntu-Bold.ttf") format("truetype");
+  src: url("/admin/fonts/Ubuntu-Bold.ttf") format("truetype");
 }
 
 :root {

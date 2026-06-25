@@ -31,6 +31,14 @@
   "nav.debug_logs": "Debug Logs",
   "nav.config": "Config",
   "nav.system": "System",
+  "nav.logout": "Logout",
+
+  "login.title": "Login",
+  "login.subtitle": "Enter your manage-scope API key to access the dashboard",
+  "login.api_key_label": "API Key",
+  "login.submit": "Login",
+  "login.error_invalid": "Invalid API key — please check and try again",
+  "login.help_text": "Don't have a key? Create one via the CLI or the admin API.",
 
   "notifications.title": "Notifications",
   "notifications.unread_count_one": "{{count}} unread",

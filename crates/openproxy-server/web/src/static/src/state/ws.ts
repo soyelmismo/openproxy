@@ -7,6 +7,7 @@ import { LOGS_WS_RECONNECT_DELAYS } from "../lib/constants.js";
 import type { StageEvent } from "../lib/types/api.js";
 import { dispatchWs } from "./ws-bus.js";
 import type { WsEnvelope } from "../views/logs.js";
+import { getToken } from "./auth.js";
 
 /** Connection status for the live-logs view. */
 export type LogsStatus = "connected" | "connecting" | "reconnecting" | "disconnected";
@@ -18,7 +19,28 @@ export function logsWsUrl(): string {
   // `/web/api/usage/stream` on the now-removed separate dashboard
   // binary, which reverse-proxied to `/admin/usage/stream` on the
   // core server).
-  return `${scheme}//${location.host}/admin/ws`;
+  //
+  // DASHBOARD-FIX (Bug 3): the WS upgrade handler
+  // (`handlers/admin.rs::usage_stream`) authenticates via
+  // `authenticate_admin_ws`, which accepts EITHER an
+  // `Authorization: Bearer <token>` header OR a `?token=<key>` query
+  // param. Browsers cannot set custom headers on `new WebSocket()`
+  // (the WebSocket API only supports the `protocols` arg, not
+  // arbitrary headers), so we MUST use the query-param path. Without
+  // it the upgrade is rejected with 401 before the WS handshake
+  // completes → "Firefox no puede establecer una conexión con el
+  // servidor en ws://.../admin/ws".
+  //
+  // `encodeURIComponent` is important: tokens are opaque strings
+  // that may contain `+`, `=`, `/` (base64-ish chars). The server
+  // decodes via axum's `Query<T>` deserializer, which percent-decodes
+  // for us; the encode/decode round-trip preserves the token.
+  const base: string = `${scheme}//${location.host}/admin/ws`;
+  const token: string | null = getToken();
+  if (token) {
+    return `${base}?token=${encodeURIComponent(token)}`;
+  }
+  return base;
 }
 
 export function setLogsStatus(status: LogsStatus): void {

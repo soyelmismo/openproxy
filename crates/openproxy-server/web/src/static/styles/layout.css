@@ -289,3 +289,77 @@ section.card {
      don't push the viewport sideways. */
   pre, code { font-size: 0.8rem; }
 }
+
+/* ============================================
+   LOGIN PAGE — DASHBOARD-FIX (Bug 2 / Step 2d)
+   ------------------------------------------
+   The login view is the only screen mounted
+   without an admin token. We hide the sidebar
+   (its nav links would bounce back to #/login
+   via the auth gate anyway) and centre the
+   login card in the available space.
+   The body class is toggled by `state/router.ts::navigate()`.
+   ============================================ */
+body.on-login-page #app {
+  grid-template-columns: 1fr;
+}
+body.on-login-page .sidebar { display: none; }
+
+.login-page {
+  max-width: 480px;
+  margin: 0 auto;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  min-height: calc(100vh - 2 * var(--space-6));
+}
+.login-card { padding: var(--space-6); }
+.login-subtitle { margin-top: 0; margin-bottom: var(--space-4); }
+.login-form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+.login-field { display: flex; flex-direction: column; gap: var(--space-1); }
+.login-field input {
+  padding: 0.5rem 0.6rem;
+  border: var(--border-w) var(--border-style) var(--color-border);
+  border-radius: var(--radius-sm);
+  font-family: var(--font-mono);
+  font-size: var(--fs-md);
+  background: var(--color-surface);
+  color: var(--color-text);
+}
+.login-field input:focus {
+  outline: none;
+  border-color: var(--color-primary);
+  box-shadow: 0 0 0 2px var(--color-primary-soft);
+}
+.login-error-slot { min-height: 0; }
+.login-error { margin: 0; }
+.login-submit { align-self: flex-start; }
+.login-help {
+  margin-top: var(--space-4);
+  margin-bottom: 0;
+  font-size: var(--fs-sm);
+}
+
+/* Sidebar logout button (DASHBOARD-FIX Bug 2/Step 2f). Sits in
+   the sidebar footer under the collapse toggle + theme toggle.
+   Uses the same surface palette as the toggle for visual
+   consistency; the danger colour is reserved for hover to signal
+   that the action ends the session. */
+.sidebar-logout {
+  background: var(--color-surface);
+  border: var(--border-w) var(--border-style) var(--color-border);
+  color: var(--color-text-muted);
+  padding: 0.3rem 0.5rem;
+  font-size: var(--fs-sm);
+  cursor: pointer;
+  transition: background var(--t-fast), color var(--t-fast), border-color var(--t-fast);
+}
+.sidebar-logout:hover {
+  border-color: var(--color-error);
+  color: var(--color-error);
+  background: var(--color-error-soft);
+}

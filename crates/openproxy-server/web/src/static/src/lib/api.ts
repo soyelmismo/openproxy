@@ -7,8 +7,18 @@
 // The previous `/web/api/*` prefix (which the now-removed separate
 // dashboard binary reverse-proxied to `/admin/*` on the core server)
 // is gone.
+//
+// DASHBOARD-FIX (Bug 2): every request now carries an
+// `Authorization: Bearer <token>` header sourced from
+// `state/auth.ts::getToken()`. If the user is not logged in (no
+// token), the header is omitted — the server then returns 401, the
+// caller throws, and the router's auth gate redirects to the login
+// view. This is intentional: the only path that should reach the
+// server without a token is the login view's own validation call
+// (which sets the token optimistically before the call).
 
 import { state } from "../state/index.js";
+import { getToken } from "../state/auth.js";
 import type { DebugLogsResponse } from "./types/api.js";
 
 export interface ApiOptions {
@@ -17,7 +27,17 @@ export interface ApiOptions {
 }
 
 export async function api(path: string, opts: ApiOptions = {}): Promise<unknown> {
-  const init: RequestInit = { method: opts.method || "GET", headers: { "Content-Type": "application/json" } };
+  // Build the headers as a mutable record so we can conditionally
+  // attach the Authorization header. The cast through
+  // `Record<string, string>` is necessary because `RequestInit.headers`
+  // is typed as `HeadersInit` (which includes `Headers` and
+  // `[string, string][]`), and TS won't let us index into the union.
+  const headers: Record<string, string> = { "Content-Type": "application/json" };
+  const token: string | null = getToken();
+  if (token) {
+    headers["Authorization"] = `Bearer ${token}`;
+  }
+  const init: RequestInit = { method: opts.method || "GET", headers };
   if (opts.body) init.body = opts.body;
   const r = await fetch("/admin/api" + path, init);
   if (!r.ok) {
