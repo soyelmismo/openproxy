@@ -15,7 +15,7 @@
 import { state } from "../state/index.js";
 import { api } from "../state/api.js";
 import { html, render, type TemplateResult } from "lit-html";
-import type { Provider, Account, Model, ComboSummary } from "../lib/types/api.js";
+import type { Account, Model, ComboSummary } from "../lib/types/api.js";
 import { requestUpdate } from "../state/reactive.js";
 import { showToast } from "../components/toast.js";
 
@@ -351,24 +351,8 @@ function subComboOptionsTemplate(subCombos: ComboSummary[]): TemplateResult {
   return html`${subCombos.map((c) => html`<option value=${c.id}>${c.name} (id ${c.id})</option>`)}`;
 }
 
-function providerOptionsTemplate(providers: Provider[]): TemplateResult {
-  return html`
-    <option value="">Select provider...</option>
-    ${providers.map((p) => html`<option value=${p.id}>${p.name || p.id}</option>`)}
-  `;
-}
-
-function accountOptionsTemplate(accounts: Account[]): TemplateResult {
-  return html`
-    <option value="">— rotate —</option>
-    ${accounts.map((a) => html`<option value=${String(a.id)}>${a.provider_id}/${a.label || String(a.id)}</option>`)}
-  `;
-}
-
 function addTargetTemplate(
   comboId: number,
-  providers: Provider[],
-  accounts: Account[],
   validSubCombos: ComboSummary[],
   wrapper: HTMLElement,
 ): TemplateResult {
@@ -391,22 +375,10 @@ function addTargetTemplate(
             </div>
             <div id="model-fields">
               <div class="field">
-                <label for="target-provider">Provider</label>
-                <select id="target-provider" name="provider_id" @change=${() => onTargetProviderChange()} required>
-                  ${providerOptionsTemplate(providers)}
-                </select>
-              </div>
-              <div class="field">
-                <label for="target-account">Account (optional, leave blank to rotate)</label>
-                <select id="target-account" name="account_id">
-                  ${accountOptionsTemplate(accounts)}
-                </select>
-              </div>
-              <div class="field">
-                <label>Models <small>(select one or more)</small></label>
+                <label>Models <small>(select one or more — set account + priority per row)</small></label>
                 <div class="model-search-wrap">
                   <input type="text" id="target-model-search" placeholder="Search all models across providers (e.g. gpt)…" @input=${onTargetModelSearch}>
-                  <small class="model-search-hint">Empty search shows only the selected provider's models.</small>
+                  <small class="model-search-hint">Empty search shows all active models from all providers, grouped by provider.</small>
                 </div>
                 <div class="model-checkbox-header">
                   <button type="button" class="link" @click=${selectAllModelsInModal}>Select all</button>
@@ -425,10 +397,10 @@ function addTargetTemplate(
                 </select>
                 <small>Only combos that won't close a cycle with combo ${comboId} are listed.</small>
               </div>
-            </div>
-            <div class="field">
-              <label for="target-priority">Priority</label>
-              <input id="target-priority" name="priority_order" type="number" value="100" required>
+              <div class="field">
+                <label for="target-priority">Priority</label>
+                <input id="target-priority" name="priority_order" type="number" value="100" required>
+              </div>
             </div>
           </div>
           <div class="modal-footer">
@@ -443,16 +415,37 @@ function addTargetTemplate(
 
 export async function showAddTarget(comboId: number): Promise<void> {
   if (!state.models || state.models.length === 0) state.models = await api("/models") as typeof state.models;
-  const pResp = await api("/providers") as Provider[];
-  const aResp = await api("/accounts") as Account[];
+  // The per-model account selects read from `state.accounts`
+  // directly (see `accountsForProviderTemplate`), so the modal
+  // template no longer takes `accounts` as a parameter. We still
+  // need to make sure the global cache is populated — otherwise
+  // every model would see an empty `<option value="">— rotate —</option>`
+  // list and the user couldn't pin a specific account.
+  state.accounts = await api("/accounts") as Account[];
   const sResp = await api(`/combos/${comboId}/targets/valid-sub-combos`).catch(() => [] as ComboSummary[]) as ComboSummary[];
-  const providers: Provider[] = pResp;
-  const accounts: Account[] = aResp;
   const validSubCombos: ComboSummary[] = sResp;
   const wrapper = document.createElement("div");
   ensureModalRoot().appendChild(wrapper);
-  render(addTargetTemplate(comboId, providers, accounts, validSubCombos, wrapper), wrapper);
-  onTargetProviderChange();
+  render(addTargetTemplate(comboId, validSubCombos, wrapper), wrapper);
+  // Render the modal's default view: all active models grouped by
+  // provider. The search box is wired to the same `buildGlobalSearchGroups`
+  // helper, so an empty query here and an empty query there are identical.
+  renderInitialModelList();
+}
+
+function renderInitialModelList(): void {
+  const modelList = document.getElementById("target-model-list");
+  const countEl = document.getElementById("model-checkbox-count");
+  if (!modelList) return;
+  const groups = buildGlobalSearchGroups("");
+  render(globalModelSearchTemplate(groups), modelList);
+  if (countEl) {
+    const checked = document.querySelectorAll<HTMLInputElement>(
+      "#target-model-list input[name='model_row_ids']:checked"
+    );
+    countEl.textContent = `${checked.length} selected`;
+  }
+  updateAddButtonLabel();
 }
 
 export function onTargetKindChange(): void {
@@ -480,6 +473,19 @@ export function closeAddTarget(): void {
   }
 }
 
+// Filter the global `state.accounts` to just those owned by the
+// given provider. The per-model account select only offers
+// accounts that actually match the model's provider — picking an
+// account from a different provider would always fail server-side
+// (the target row carries a single `provider_id`).
+function accountsForProviderTemplate(providerId: string): TemplateResult {
+  const matches = (state.accounts || []).filter((a) => a.provider_id === providerId);
+  return html`
+    <option value="">— rotate —</option>
+    ${matches.map((a) => html`<option value=${String(a.id)}>${a.provider_id}/${a.label || String(a.id)}</option>`)}
+  `;
+}
+
 function modelCheckboxListTemplate(models: ModelWithFallbacks[]): TemplateResult {
   if (models.length === 0) {
     return html`<p class="model-checkbox-empty">No active models for this provider</p>`;
@@ -487,82 +493,69 @@ function modelCheckboxListTemplate(models: ModelWithFallbacks[]): TemplateResult
   return html`${models.map((m) => {
     const rowId = m.row_id;
     const upstreamId = m.model_id || m.id;
+    const providerId = m.provider_id;
     if (rowId == null) return html``;
+    // The wrapper is a <div> (not a <label>) so clicking the
+    // sibling account select / priority input doesn't toggle the
+    // checkbox. The visible label only wraps the checkbox + name
+    // + test button. Controls are rendered hidden and toggled by
+    // `updateModelControlsVisibility` on check/uncheck.
     return html`
-      <label class="model-checkbox-item">
-        <input type="checkbox" name="model_row_ids" value=${String(rowId)} @change=${onModelCheckboxChange}>
-        <span class="model-checkbox-id">${m.display_name ? html`${upstreamId} — ${m.display_name}` : html`${String(upstreamId)}`}</span>
-        <button type="button" class="small model-test-btn" title="Test this model" @click=${async (e: Event) => {
-          e.preventDefault();
-          e.stopPropagation();
-          const btn = e.target as HTMLButtonElement;
-          btn.disabled = true;
-          btn.textContent = "⏳";
-          try {
-            const result = await api(`/models/${rowId}/test`, { method: "POST" }) as { status: number; elapsed_ms?: number };
-            btn.textContent = result.status >= 200 && result.status < 300 ? "✓" : "✗";
-            btn.style.color = result.status >= 200 && result.status < 300 ? "var(--color-success)" : "var(--color-error)";
-          } catch { btn.textContent = "✗"; btn.style.color = "var(--color-error)"; }
-          setTimeout(() => { btn.disabled = false; btn.textContent = "🧪"; btn.style.color = ""; }, 3000);
-        }}>🧪</button>
-      </label>
+      <div class="model-checkbox-item">
+        <label class="model-checkbox-main">
+          <input type="checkbox" name="model_row_ids" value=${String(rowId)} @change=${onModelCheckboxChange}>
+          <span class="model-checkbox-id">${m.display_name ? html`${upstreamId} — ${m.display_name}` : html`${String(upstreamId)}`}</span>
+          <button type="button" class="small model-test-btn" title="Test this model" @click=${async (e: Event) => {
+            e.preventDefault();
+            e.stopPropagation();
+            const btn = e.target as HTMLButtonElement;
+            btn.disabled = true;
+            btn.textContent = "⏳";
+            try {
+              const result = await api(`/models/${rowId}/test`, { method: "POST" }) as { status: number; elapsed_ms?: number };
+              btn.textContent = result.status >= 200 && result.status < 300 ? "✓" : "✗";
+              btn.style.color = result.status >= 200 && result.status < 300 ? "var(--color-success)" : "var(--color-error)";
+            } catch { btn.textContent = "✗"; btn.style.color = "var(--color-error)"; }
+            setTimeout(() => { btn.disabled = false; btn.textContent = "🧪"; btn.style.color = ""; }, 3000);
+          }}>🧪</button>
+        </label>
+        <div class="model-checkbox-controls"
+             style="display: none"
+             @click=${(e: Event) => e.stopPropagation()}>
+          <select class="target-per-model-account"
+                  name="target_account_${rowId}"
+                  data-model-row=${String(rowId)}
+                  title="Account (rotate if blank)">
+            ${accountsForProviderTemplate(providerId)}
+          </select>
+          <input class="target-per-model-priority"
+                 name="target_priority_${rowId}"
+                 data-model-row=${String(rowId)}
+                 type="number"
+                 value="100"
+                 min="1"
+                 step="1"
+                 title="Priority (lower = preferred)">
+        </div>
+      </div>
     `;
   })}`;
-}
-
-export function onTargetProviderChange(): void {
-  // When the provider changes, clear the global search box so the
-  // per-provider list is what the user sees. Otherwise a stale
-  // search filter would keep showing global results even after the
-  // user picked a different provider.
-  const searchEl = document.getElementById("target-model-search") as HTMLInputElement | null;
-  if (searchEl && searchEl.value !== "") searchEl.value = "";
-
-  const providerSel = document.getElementById("target-provider") as HTMLSelectElement | null;
-  const modelList = document.getElementById("target-model-list");
-  const countEl = document.getElementById("model-checkbox-count");
-  if (!providerSel || !modelList) return;
-
-  const provider = providerSel.value;
-  if (!provider) {
-    render(html`<p class="model-checkbox-empty">Select a provider first</p>`, modelList);
-    if (countEl) countEl.textContent = "0 selected";
-    updateAddButtonLabel();
-    return;
-  }
-
-  const filtered = (state.models || []).filter(
-    (m) => m.provider_id === provider && m.active
-  );
-
-  if (filtered.length === 0) {
-    render(html`<p class="model-checkbox-empty">No active models for this provider</p>`, modelList);
-    if (countEl) countEl.textContent = "0 selected";
-    updateAddButtonLabel();
-    return;
-  }
-
-  render(modelCheckboxListTemplate(filtered as ModelWithFallbacks[]), modelList);
-
-  if (countEl) countEl.textContent = "0 selected";
-
-  updateAddButtonLabel();
 }
 
 // ---- Global model search ----
 //
 // The user can type a query (e.g. "gpt") into the search box at the
 // top of the model list to filter ALL active models from ALL
-// providers, not just the selected one. Results are grouped by
-// provider so the user can see at a glance which provider each
-// match belongs to. Selecting models from multiple providers at
-// once is supported — `addTarget` looks up each model's
-// `provider_id` from `state.models` so the right provider is sent
-// to the backend even when the form's provider dropdown is set to
-// a different value.
+// providers. Results are grouped by provider so the user can see at
+// a glance which provider each match belongs to. Selecting models
+// from multiple providers at once is supported — `addTarget` looks
+// up each model's `provider_id` from `state.models` so the right
+// provider is sent to the backend.
 //
-// Empty query → defer to `onTargetProviderChange()` (per-provider
-// list, the existing fallback behaviour).
+// Empty query → all active models from all providers (the default
+// view when the modal opens). The same `buildGlobalSearchGroups`
+// helper is used for both the initial render and the on-input
+// re-render, so the two paths are guaranteed to be in sync.
 
 function globalModelSearchTemplate(groups: Map<string, ModelWithFallbacks[]>): TemplateResult {
   if (groups.size === 0) {
@@ -584,18 +577,21 @@ function globalModelSearchTemplate(groups: Map<string, ModelWithFallbacks[]>): T
 
 // Build the grouped-by-provider map of models matching the search
 // query. The query matches case-insensitively against `model_id`,
-// `display_name`, and `provider_id`. Inactive models are excluded
-// (they can't be selected as a combo target anyway).
+// `display_name`, and `provider_id`. Whitespace-separated tokens are
+// AND-combined: a model matches only if every token appears as a
+// substring somewhere in those three fields. Inactive models are
+// excluded (they can't be selected as a combo target anyway).
 function buildGlobalSearchGroups(query: string): Map<string, ModelWithFallbacks[]> {
   const q = query.trim().toLowerCase();
   const groups = new Map<string, ModelWithFallbacks[]>();
-  if (!q) return groups;
   for (const m of (state.models || [])) {
     if (!m.active) continue;
-    const modelId = (m.model_id || "").toLowerCase();
-    const display = (m.display_name || "").toLowerCase();
-    const provider = (m.provider_id || "").toLowerCase();
-    if (!modelId.includes(q) && !display.includes(q) && !provider.includes(q)) continue;
+    if (q) {
+      const haystack = `${m.model_id || ""} ${m.display_name || ""} ${m.provider_id || ""}`.toLowerCase();
+      const tokens = q.split(/\s+/).filter(Boolean);
+      // Every token must be a substring of the haystack.
+      if (!tokens.every((t) => haystack.includes(t))) continue;
+    }
     const p: string = m.provider_id;
     if (!groups.has(p)) groups.set(p, []);
     groups.get(p)!.push(m as ModelWithFallbacks);
@@ -610,12 +606,10 @@ export function onTargetModelSearch(): void {
   if (!searchEl || !modelList) return;
 
   const query = searchEl.value;
-  // Empty query → restore the per-provider list (the existing
-  // fallback). We re-run `onTargetProviderChange()` after clearing
-  // the search box (it's already empty here) so the list reflects
-  // the currently-selected provider.
+  // Empty query → restore the all-providers grouped view (the default
+  // also used when the modal first opens).
   if (query.trim() === "") {
-    onTargetProviderChange();
+    renderInitialModelList();
     return;
   }
 
@@ -634,6 +628,17 @@ export function onTargetModelSearch(): void {
   updateAddButtonLabel();
 }
 
+// Show or hide the per-model account + priority controls. The
+// controls live inside the same `.model-checkbox-item` as the
+// checkbox; we toggle their `display` here so the row only
+// shows them when the checkbox is on. The visual indent (see
+// `.model-checkbox-controls` in components.css) makes it clear
+// the controls belong to the row above.
+function updateModelControlsVisibility(checked: boolean, item: HTMLElement): void {
+  const controls = item.querySelector(".model-checkbox-controls") as HTMLElement | null;
+  if (controls) controls.style.display = checked ? "" : "none";
+}
+
 // WARNING FIX W4: handler bound via addEventListener, not data-action
 export function onModelCheckboxChange(): void {
   const countEl = document.getElementById("model-checkbox-count");
@@ -643,6 +648,16 @@ export function onModelCheckboxChange(): void {
   );
   countEl.textContent = `${checked.length} selected`;
   updateAddButtonLabel();
+  // Sync the visibility of every row's per-model controls so
+  // unchecked rows hide their account/priority inputs and
+  // checked rows show them.
+  const allCheckboxes = document.querySelectorAll<HTMLInputElement>(
+    "#target-model-list input[name='model_row_ids']"
+  );
+  allCheckboxes.forEach((cb) => {
+    const item = cb.closest(".model-checkbox-item") as HTMLElement | null;
+    if (item) updateModelControlsVisibility(cb.checked, item);
+  });
 }
 
 export function selectAllModelsInModal(): void {
@@ -706,7 +721,15 @@ export async function addTarget(comboId: number, e: Event, wrapper?: HTMLElement
     return;
   }
 
-  // Model: multi-select batch add
+  // Model: multi-select batch add.
+  //
+  // Account and priority are now per-model — read each from the
+  // row's own controls (`.target-per-model-account` and
+  // `.target-per-model-priority`) so the user can pin a specific
+  // account on one row and let another row rotate freely.
+  // `provider_id` still comes from `state.models` since the global
+  // search lets the user mix models from multiple providers in one
+  // batch — there's no single form-level provider to read.
   const checkedBoxes = document.querySelectorAll<HTMLInputElement>(
     "#target-model-list input[name='model_row_ids']:checked"
   );
@@ -718,18 +741,12 @@ export async function addTarget(comboId: number, e: Event, wrapper?: HTMLElement
     return;
   }
 
-  const accountId = f.get("account_id") ? parseInt(String(f.get("account_id"))) : null;
-  const basePriority = parseInt(String(f.get("priority_order")));
-  const fallbackProviderId = String(f.get("provider_id"));
-
   // Build a row_id → provider_id lookup from `state.models` so the
   // global-search workflow (where the user can select models from
   // multiple providers in a single batch) sends the correct
-  // `provider_id` for each target. Falls back to the form's
-  // `provider_id` (the selected dropdown value) when the model
-  // can't be found in `state.models` — e.g. the model was deleted
-  // between the modal open and the submit, or the dashboard's
-  // model cache is stale.
+  // `provider_id` for each target. Falls back to the model's own
+  // `provider_id` field when the lookup misses — the model already
+  // carries it as part of the row data.
   const rowIdToProvider = new Map<number, string>();
   for (const m of (state.models || [])) {
     if (m.row_id != null) rowIdToProvider.set(m.row_id, m.provider_id);
@@ -738,12 +755,23 @@ export async function addTarget(comboId: number, e: Event, wrapper?: HTMLElement
   let added = 0;
   const errors: string[] = [];
 
-  // WARNING FIX W1: assign incrementing priorities: basePriority + index
-  for (let i = 0; i < modelRowIds.length; i++) {
-    const modelRowId = modelRowIds[i]!;
-    const providerForModel = rowIdToProvider.get(modelRowId) ?? fallbackProviderId ?? "";
+  for (let i = 0; i < checkedBoxes.length; i++) {
+    const cb = checkedBoxes[i]!;
+    const modelRowId = parseInt(cb.value, 10);
+    if (Number.isNaN(modelRowId)) continue;
+    // Find this row's sibling controls. The controls live inside
+    // the same `.model-checkbox-item` wrapper as the checkbox.
+    const item = cb.closest(".model-checkbox-item") as HTMLElement | null;
+    const accountSel = item?.querySelector(".target-per-model-account") as HTMLSelectElement | null;
+    const priorityInput = item?.querySelector(".target-per-model-priority") as HTMLInputElement | null;
+    // Empty string ("— rotate —") or blank input → null. A user-typed
+    // non-numeric value would NaN — treat as null rather than crash.
+    const accountIdRaw = accountSel && accountSel.value ? parseInt(accountSel.value, 10) : NaN;
+    const accountId: number | null = Number.isNaN(accountIdRaw) ? null : accountIdRaw;
+    const priorityOrder = priorityInput ? (parseInt(priorityInput.value, 10) || 100) : 100;
+    const providerForModel = rowIdToProvider.get(modelRowId) ?? "";
     if (!providerForModel) {
-      errors.push(`Model row #${modelRowId}: could not determine provider — select a provider in the dropdown or ensure the model exists in the models cache.`);
+      errors.push(`Model row #${modelRowId}: could not determine provider — ensure the model exists in the models cache.`);
       continue;
     }
     const body = {
@@ -751,7 +779,7 @@ export async function addTarget(comboId: number, e: Event, wrapper?: HTMLElement
       account_id: accountId,
       model_row_id: modelRowId,
       sub_combo_id: null,
-      priority_order: basePriority + i,
+      priority_order: priorityOrder,
     };
     try {
       await api(`/combos/${comboId}/targets`, { method: "POST", body: JSON.stringify(body) });

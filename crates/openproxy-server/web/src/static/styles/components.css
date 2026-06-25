@@ -710,11 +710,11 @@ tr.dnd-dragging {
 }
 .model-checkbox-item {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: var(--space-2);
   padding: 0.35rem var(--space-3);
   border-bottom: var(--border-w) var(--border-style) var(--color-border-soft);
-  cursor: pointer;
   font-size: var(--fs-sm);
 }
 .model-checkbox-item:last-child {
@@ -732,6 +732,48 @@ tr.dnd-dragging {
   font-family: var(--font-mono);
   font-size: var(--fs-xs);
   word-break: break-all;
+}
+
+/* Inner label wraps just the checkbox + model id + test button.
+   Sitting inside `.model-checkbox-item` (now a flex container)
+   so the per-model account + priority controls can sit on the
+   same row as siblings without inheriting the label's
+   click-to-toggle behaviour. */
+.model-checkbox-main {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex: 1;
+  min-width: 0;
+  cursor: pointer;
+}
+
+/* Per-model account + priority controls. Hidden until the
+   matching checkbox is ticked (see
+   `updateModelControlsVisibility` in
+   combo-target-handlers.ts). `flex-basis: 100%` forces them
+   onto a new line beneath the main label so the row's height
+   stays predictable when controls are revealed. The left
+   padding aligns them with the model id text, not the
+   checkbox. */
+.model-checkbox-controls {
+  display: none;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  flex-basis: 100%;
+  padding-left: 1.5rem;
+  align-items: center;
+}
+.model-checkbox-controls select,
+.model-checkbox-controls input {
+  font-size: var(--fs-xs);
+  padding: 0.15rem 0.3rem;
+}
+.model-checkbox-controls select {
+  min-width: 12rem;
+}
+.model-checkbox-controls input[type="number"] {
+  width: 5rem;
 }
 
 /* Provider group header shown when the global search returns models

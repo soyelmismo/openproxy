@@ -32,7 +32,7 @@ import {
   updateLkgpExplorationRate, updateSelectionWindow,
 } from "./combo-handlers.js";
 import {
-  showAddTarget, closeAddTarget, onTargetKindChange, onTargetProviderChange,
+  showAddTarget, closeAddTarget, onTargetKindChange,
   addTarget, deleteTarget, resetCooldown, changePriority,
   toggleTargetSelection, toggleSelectAllTargets, clearTargetSelection, bulkDeleteSelectedTargets,
   onModelCheckboxChange,
@@ -127,7 +127,6 @@ export const HANDLERS: Record<string, ActionHandler> = {
   showAddTarget,
   closeAddTarget,
   onTargetKindChange,
-  onTargetProviderChange,
   onModelCheckboxChange,
   selectAllModelsInModal,
   deselectAllModelsInModal,
