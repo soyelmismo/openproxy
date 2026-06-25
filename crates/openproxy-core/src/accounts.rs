@@ -452,6 +452,7 @@ pub fn delete(conn: &Connection, id: AccountId) -> Result<()> {
 /// Default token lifetime when the upstream omits `expires_in` (1 hour).
 const DEFAULT_EXPIRES_IN_SECS: i64 = 3600;
 
+#[allow(clippy::too_many_arguments)]
 pub fn store_oauth_tokens(
     conn: &Connection,
     id: AccountId,

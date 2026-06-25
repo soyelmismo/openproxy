@@ -1750,6 +1750,8 @@ impl Pipeline {
     /// the given `label` (e.g. "openai request"). On error, records the failure
     /// via `record_and_fail` and returns `Err(PipelineResult)` so the caller
     /// can early-return with `?`.
+    #[allow(clippy::too_many_arguments)]
+    #[allow(clippy::result_large_err)]
     fn normalize_and_serialize(
         &self,
         value: &impl serde::Serialize,
@@ -3365,13 +3367,13 @@ impl Pipeline {
             let content_empty = msg
                 .content
                 .as_ref()
-                .map_or(true, |v| v.as_str().map_or(true, |s| s.is_empty()));
-            let no_tool_calls = msg.tool_calls.as_ref().map_or(true, |t| t.is_empty());
+                .is_none_or(|v| v.as_str().is_none_or(|s| s.is_empty()));
+            let no_tool_calls = msg.tool_calls.as_ref().is_none_or(|t| t.is_empty());
             let no_reasoning = !msg.extra.contains_key("reasoning_content");
             let no_finish = c
                 .finish_reason
                 .as_ref()
-                .map_or(true, |f| f == "null" || f.is_empty());
+                .is_none_or(|f| f == "null" || f.is_empty());
             content_empty && no_tool_calls && no_reasoning && no_finish
         });
         if is_empty_response {
@@ -5188,6 +5190,7 @@ impl Pipeline {
     /// are set so the row is correctly labeled as a streaming
     /// request that didn't finish. When `acc` is `None` or empty,
     /// behavior is identical to `record_and_fail_with_trace_id`.
+    #[allow(clippy::too_many_arguments)]
     fn record_and_fail_with_trace_id_and_partial(
         &self,
         req: &PipelineRequest,
@@ -5307,6 +5310,7 @@ impl Pipeline {
     /// `response_body_json`. The accumulator is marked as `partial`
     /// before being saved so the dashboard shows a "Partial
     /// response — stream was interrupted" banner.
+    #[allow(clippy::too_many_arguments)]
     fn fail_stream_client_disconnected(
         &self,
         req: &PipelineRequest,
@@ -5366,6 +5370,7 @@ impl Pipeline {
     ///
     /// Same partial-response capture as `fail_stream_client_disconnected`.
     #[allow(dead_code)]
+    #[allow(clippy::too_many_arguments)]
     fn fail_stream_race_lost(
         &self,
         req: &PipelineRequest,
@@ -5422,6 +5427,7 @@ impl Pipeline {
     /// two streaming-failure helpers.
     ///
     /// Same partial-response capture as `fail_stream_client_disconnected`.
+    #[allow(clippy::too_many_arguments)]
     fn fail_on_sink_send_error(
         &self,
         e: crate::race_sink::StreamSinkError,
@@ -11021,9 +11027,11 @@ data: [DONE]\n\n";
         // Query the usage table for the most-recently inserted row
         // for this test (we use `recent(0, 1)` to get the newest row
         // — the test fixture inserts exactly one).
-        let writer = pool.writer();
-        let rows = crate::usage::recent(&writer, 0, 1).expect("usage::recent");
-        let response_body_json = rows.into_iter().next().and_then(|r| r.response_body_json);
+        let response_body_json = {
+            let writer = pool.writer();
+            let rows = crate::usage::recent(&writer, 0, 1).expect("usage::recent");
+            rows.into_iter().next().and_then(|r| r.response_body_json)
+        };
 
         server_handle.abort();
         let _ = server_handle.await;

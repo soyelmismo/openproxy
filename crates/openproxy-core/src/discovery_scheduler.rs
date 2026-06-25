@@ -233,6 +233,7 @@ pub async fn start(
 ///     }
 ///   }
 /// ```
+#[allow(clippy::too_many_arguments)]
 async fn run_one_provider(
     provider: ProviderId,
     adapter: Arc<dyn ProviderAdapter>,

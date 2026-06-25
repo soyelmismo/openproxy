@@ -353,6 +353,7 @@ mod tests {
 
     /// Pump a `DisconnectBody` once and return the result. Pulled
     /// out into a helper because both tests do exactly this.
+    #[allow(clippy::type_complexity)]
     fn poll_once<B: HttpBody + Unpin>(
         body: &mut DisconnectBody<B>,
     ) -> Poll<Option<Result<Frame<B::Data>, B::Error>>> {

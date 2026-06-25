@@ -410,9 +410,11 @@ pub fn backfill_model_id_normalized(conn: &Connection) -> Result<usize> {
 /// updates their `cost_usd`.
 ///
 /// Returns the number of rows re-priced.
+type UsageRow = (i64, String, String, Option<u32>, Option<u32>);
+
 pub fn recompute_costs(conn: &Connection) -> Result<usize> {
     // Load rows that need re-pricing.
-    let rows: Vec<(i64, String, String, Option<u32>, Option<u32>)> = {
+    let rows: Vec<UsageRow> = {
         let mut stmt = conn
             .prepare(
                 "SELECT id, provider_id, upstream_model_id, prompt_tokens, completion_tokens \

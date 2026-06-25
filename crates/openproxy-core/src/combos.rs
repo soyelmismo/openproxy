@@ -1701,6 +1701,10 @@ impl SelectionRegistry {
     pub fn len(&self) -> usize {
         self.inner.lock().len()
     }
+
+    pub fn is_empty(&self) -> bool {
+        self.inner.lock().is_empty()
+    }
 }
 
 /// Helper: current wall-clock epoch-ms.

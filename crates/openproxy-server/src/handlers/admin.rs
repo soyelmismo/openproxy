@@ -5362,7 +5362,6 @@ mod tests {
         // exists, the request must succeed. This is the legitimate
         // "dev convenience" path and the operator has explicitly opted
         // in.
-        let _guard = AUTH_BYPASS_TEST_LOCK.lock().unwrap();
         let tmp = tempfile::tempdir().expect("tempdir");
         let (state, _key) = make_state_with_key(tmp.path()).await;
         // Drop the API key the helper just created so the request
@@ -5375,6 +5374,7 @@ mod tests {
         // SAFETY: the AUTH_BYPASS_TEST_LOCK mutex serializes all tests
         // that touch this env var, so the set-var → read → restore-var
         // sequence is atomic with respect to other tests in this module.
+        let _guard = AUTH_BYPASS_TEST_LOCK.lock().unwrap();
         let prev = std::env::var("OPENPROXY_DASHBOARD_AUTH_BYPASS").ok();
         unsafe { std::env::set_var("OPENPROXY_DASHBOARD_AUTH_BYPASS", "1") };
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -5400,7 +5400,6 @@ mod tests {
         // fix restricts the bypass to the exact sentinel `1`; everything
         // else must fall through to normal auth, which fails here because
         // no API key is configured.
-        let _guard = AUTH_BYPASS_TEST_LOCK.lock().unwrap();
         let tmp = tempfile::tempdir().expect("tempdir");
         let (state, _key) = make_state_with_key(tmp.path()).await;
         {
@@ -5410,6 +5409,7 @@ mod tests {
         for sentinel in ["false", "yes", "0", "true", "TRUE", "legacy-token", " "] {
             let headers = HeaderMap::new();
             // SAFETY: serialized by AUTH_BYPASS_TEST_LOCK.
+            let _guard = AUTH_BYPASS_TEST_LOCK.lock().unwrap();
             let prev = std::env::var("OPENPROXY_DASHBOARD_AUTH_BYPASS").ok();
             unsafe { std::env::set_var("OPENPROXY_DASHBOARD_AUTH_BYPASS", sentinel) };
             let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {

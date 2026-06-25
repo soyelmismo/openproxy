@@ -129,11 +129,7 @@ pub async fn serve_asset(uri: Uri) -> Response {
         // immutable cache would be a footgun on redeploys. Keep the
         // no-cache policy for now; if we add content hashing later,
         // flip `dist/` to `public, max-age=31536000, immutable`.
-        let cache = if path.starts_with("dist/") {
-            "no-cache, no-store, must-revalidate"
-        } else {
-            "no-cache, no-store, must-revalidate"
-        };
+        let cache = "no-cache, no-store, must-revalidate";
         let mut headers = axum::http::HeaderMap::new();
         // `mime.as_ref()` is `&str`; `HeaderValue::from_str` only
         // fails on invisible ASCII / control chars, which a

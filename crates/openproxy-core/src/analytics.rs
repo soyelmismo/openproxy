@@ -479,6 +479,7 @@ mod tests {
 
     /// Insert a usage row with explicit race-related fields so each test can
     /// shape its own distribution. Uses status_code=200 by default.
+    #[allow(clippy::too_many_arguments)]
     fn insert(
         conn: &Connection,
         request_id: &str,
@@ -523,6 +524,7 @@ mod tests {
 
     /// Like `insert` but with an explicit `status_code` — used to test
     /// error-row exclusion in latency percentiles.
+    #[allow(clippy::too_many_arguments)]
     fn insert_with_status(
         conn: &Connection,
         request_id: &str,

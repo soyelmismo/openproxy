@@ -105,7 +105,7 @@ enum HyperDispatch {
     /// task-local — there is no per-call state to push into the
     /// connector anymore.
     Production {
-        hyper: HyperClient<PhasedConnector, Full<Bytes>>,
+        hyper: Box<HyperClient<PhasedConnector, Full<Bytes>>>,
     },
     /// Test: any `C` that satisfies the hyper-util connect shape.
     /// Wrapped in `Arc<dyn HyperDispatchDyn>` so the `HyperDispatch`
@@ -218,7 +218,9 @@ impl UpstreamClient {
             spawn_eviction_loop(pool.clone());
             Arc::new(Self {
                 pool,
-                dispatch: HyperDispatch::Production { hyper },
+                dispatch: HyperDispatch::Production {
+                    hyper: Box::new(hyper),
+                },
             })
         }
         #[cfg(not(feature = "upstream-hyper"))]
@@ -419,7 +421,7 @@ impl UpstreamClient {
                 // which guarantees the connector reads the correct
                 // per-call timeouts when its `call()` is polled.
                 let prod: Arc<dyn HyperDispatchDyn> = Arc::new(ProductionDispatch {
-                    inner: hyper.clone(),
+                    inner: (**hyper).clone(),
                 });
                 prod
             }

@@ -487,10 +487,11 @@ impl AppState {
         //    shutdown path. The returned handle is stored on
         //    AppState so a future `Drop` impl can call
         //    `.cancel()` if needed.
+        let adapters_clone = Arc::new(adapters.read().clone());
         let discovery_scheduler = discovery_scheduler::start(
             db_pool.clone(),
             master_key.clone(),
-            Arc::new(adapters.read().clone()),
+            adapters_clone,
             upstream_client.clone(),
             discovery_scheduler::DiscoverySchedulerConfig::default(),
         )
@@ -691,10 +692,11 @@ impl AppState {
         // here keeps the field wired and matches the production
         // shape so handler tests can hit the same code path.
         let upstream_client = UpstreamClient::new();
+        let adapters_clone = Arc::new(adapters.read().clone());
         let discovery_scheduler = discovery_scheduler::start(
             db_pool.clone(),
             master_key.clone(),
-            Arc::new(adapters.read().clone()),
+            adapters_clone,
             upstream_client.clone(),
             discovery_scheduler::DiscoverySchedulerConfig {
                 // 1h cadence + 0 stagger = first tick is
