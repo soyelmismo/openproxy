@@ -175,7 +175,7 @@ edit it, and run:
 
 ### Option C: Build from source
 
-You need Rust 1.85+ (edition 2024), Node 22, and pnpm 9. The frontend
+You need Rust 1.86+ (edition 2024), Node 22, and pnpm 9. The frontend
 is built with pnpm/esbuild and embedded into the Rust binary at compile
 time via `rust-embed`, so a Node toolchain is required at build time
 (but NOT at runtime — the released binary is self-contained).
