@@ -15,6 +15,9 @@ import { stopLogLatencyTicker } from "./ticker.js";
 // out user is redirected to `#/login` before any view mounts, so the
 // bg-poll / api calls / WS that would otherwise 401 never fire.
 import { isLoggedIn } from "./auth.js";
+// Re-render the sidebar after route changes so it picks up the
+// post-login state (notifications store bootstrap, badge count, etc.).
+import { renderSidebar } from "../components/sidebar.js";
 // View mounts stay .js for now (out of G3 scope). tsc+Bundler
 // resolves the import to the .js at runtime; the not-yet-typed
 // returns flow through as `unknown`, which is fine for the
@@ -161,6 +164,17 @@ export function navigate(): void {
   // rule.
   document.body.classList.toggle("on-login-page", r.name === "login");
   state.currentView = { name: r.name, context: r.context };
+  // Re-render the sidebar on every route change. This is critical
+  // for the post-login flow: the sidebar was first rendered at boot
+  // (by `mountShell()`) when the user was NOT logged in, so
+  // `maybeBootstrapNotifications()` returned early without opening
+  // the WS or starting the notifications poll. After a successful
+  // login, `navigate()` is called again (via `location.hash = "#/"`
+  // in `views/login.ts`), and this `renderSidebar()` call is the
+  // first one that runs with `isLoggedIn()` true — so the
+  // notifications store finally bootstraps and the WS opens with
+  // the token attached.
+  renderSidebar();
   // Sidebar active state
   document.querySelectorAll(".sidebar nav a").forEach((a: Element) => {
     a.classList.toggle("active", "#" + (a.getAttribute("href") || "").replace(/^#/, "") === location.hash);

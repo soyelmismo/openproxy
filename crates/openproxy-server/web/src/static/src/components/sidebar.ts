@@ -16,7 +16,7 @@ import {
 // localStorage key + the in-memory cache) and navigates to `#/login`,
 // which the router's auth gate lets through because `isLoggedIn()`
 // is now false.
-import { clearToken } from "../state/auth.js";
+import { clearToken, isLoggedIn } from "../state/auth.js";
 
 interface UiState { sidebarCollapsed?: boolean; }
 type MutableDashboard = { ui?: UiState };
@@ -112,9 +112,21 @@ let storeBootstrapped: boolean = false;
  *  time the sidebar renders. Idempotent — safe to call from every
  *  `renderSidebar()`. The store bootstraps the WS, the 30s poll, and
  *  the ws-bus subscription; we then subscribe to count changes so
- *  the badge re-renders on every update. */
+ *  the badge re-renders on every update.
+ *
+ *  IMPORTANT: we only bootstrap when the user is logged in. On the
+ *  login page the sidebar is hidden via CSS (`body.on-login-page`),
+ *  but `renderSidebar()` still runs (it's called by `mountShell()`
+ *  at boot, before the router's auth gate redirects to #/login).
+ *  Without this guard, `initNotificationsStore()` would open the
+ *  WebSocket — which fails with 401 because there's no token yet,
+ *  producing the "Firefox no puede establecer una conexión con el
+ *  servidor en ws://.../admin/ws" console error on the login screen.
+ *  The store is lazily bootstrapped on the first `renderSidebar()`
+ *  call that happens AFTER login (when `isLoggedIn()` returns true). */
 function maybeBootstrapNotifications(): void {
   if (storeBootstrapped) return;
+  if (!isLoggedIn()) return;
   storeBootstrapped = true;
   initNotificationsStore();
   // Re-render the sidebar on every count change so the badge stays

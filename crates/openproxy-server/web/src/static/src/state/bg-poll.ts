@@ -24,7 +24,6 @@
 // a time and avoids the classic setInterval(asyncFn) re-entrancy.
 
 import { state, setPollHandle } from "./index.js";
-import { api } from "./api.js";
 
 const POLL_MS = 3000;
 
@@ -38,10 +37,17 @@ interface HealthPayload {
 
 async function healthTick(): Promise<void> {
   try {
-    // `api()` returns `unknown` (Bun-style). We narrow to
-    // HealthPayload | null with a defensive guard so the pill
-    // stays a no-op if the server ever changes the shape.
-    const raw: unknown = await api("/health");
+    // Hit the PUBLIC /admin/health endpoint (not /admin/api/health).
+    // The public endpoint is unauthenticated (it's the LB liveness
+    // probe), so the health pill works even on the login page before
+    // the user has entered a token. Using `api("/health")` here would
+    // prepend `/admin/api/` and hit the auth-gated router — which 401s
+    // without a token and spams the console on the login screen.
+    // Direct `fetch()` to `/admin/health` avoids the auth middleware
+    // entirely.
+    const res: Response = await fetch("/admin/health");
+    if (!res.ok) throw new Error(`${res.status}`);
+    const raw: unknown = await res.json();
     const health: HealthPayload | null = isHealthPayload(raw) ? raw : null;
     if (health) state.health = health;
     const pill: HTMLElement | null = document.getElementById("health-status");
