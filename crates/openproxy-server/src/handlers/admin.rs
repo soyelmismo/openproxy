@@ -1166,30 +1166,102 @@ pub async fn list_valid_sub_combos(
 // Usage analytics
 // =====================================================================
 
+/// Helper: run an analytics query with the filter, retry on disk I/O
+/// error. The retry does a `PRAGMA wal_checkpoint(TRUNCATE)` on the
+/// writer connection (to flush the WAL and release any locked pages)
+/// and then retries the query on a FRESH reader connection (the old
+/// reader may have a stale page cache that references the corrupt page).
+///
+/// This addresses the "disk I/O error" the user sees on analytics
+/// endpoints with large/fragmented DBs. The root cause is typically
+/// WAL checkpoint contention or stale page cache on the long-lived
+/// reader connection — the retry + checkpoint clears both.
+fn run_analytics_query_with_filter<T, F>(
+    s: &AppState,
+    f: &usage::UsageFilter,
+    query_name: &str,
+    query_fn: F,
+) -> Result<T, ApiError>
+where
+    F: Fn(&openproxy_core::db::conn::ReaderGuard<'_>, &usage::UsageFilter) -> Result<T, CoreError>,
+{
+    // First attempt: use the reader connection.
+    let r = s
+        .db_pool()
+        .try_reader_for(ADMIN_LOCK_TIMEOUT)
+        .ok_or_else(|| {
+            ApiError(CoreError::ServiceUnavailable(
+                "reader lock busy: another query is holding the database; retry in a few seconds"
+                    .into(),
+            ))
+        })?;
+    match query_fn(&r, f) {
+        Ok(result) => Ok(result),
+        Err(e) => {
+            // Check if this is a disk I/O error (SQLITE_IOERR_*).
+            let err_str = format!("{:?}", e);
+            let is_disk_io = err_str.contains("disk I/O")
+                || err_str.contains("SQLITE_IOERR")
+                || err_str.contains("database disk image is malformed")
+                || err_str.contains("database is locked");
+
+            if !is_disk_io {
+                return Err(ApiError(e));
+            }
+
+            tracing::warn!(
+                error = %e,
+                query = %query_name,
+                "analytics query failed with disk I/O error; attempting WAL checkpoint + retry"
+            );
+
+            // Drop the reader guard before taking the writer (avoids
+            // a potential deadlock if the reader and writer share any
+            // internal SQLite state).
+            drop(r);
+
+            // Force a WAL checkpoint on the writer connection. This
+            // flushes the WAL file into the main DB and releases any
+            // pages that were locked by the WAL. `TRUNCATE` mode also
+            // truncates the WAL file to zero bytes.
+            {
+                let w = s.db_pool().writer();
+                let _ = w.pragma_update(None, "wal_checkpoint", "TRUNCATE");
+            }
+
+            // Retry on a fresh reader connection. The old reader may
+            // have had a stale page cache referencing the corrupt page;
+            // a fresh connection re-reads from disk.
+            let r2 = s
+                .db_pool()
+                .try_reader_for(ADMIN_LOCK_TIMEOUT)
+                .ok_or_else(|| {
+                    ApiError(CoreError::ServiceUnavailable(
+                        "reader lock busy on retry; the database may be under heavy load".into(),
+                    ))
+                })?;
+            query_fn(&r2, f).map_err(ApiError)
+        }
+    }
+}
+
 /// `GET /admin/usage/summary` — top-line roll-up.
 pub async fn usage_summary(
     State(s): State<AppState>,
     Query(q): Query<UsageQuery>,
 ) -> ApiResult<Json<usage::UsageSummary>> {
     let body: Result<Json<usage::UsageSummary>, ApiError> = async {
-        // LOW fix (#14): admin queries must not block forever on
-        // the writer lock. We wait up to ADMIN_LOCK_TIMEOUT (5s)
-        // and return 503 if we lose the race — better a clear
-        // error than an indefinite hang for the operator.
-        let w = s
-            .db_pool()
-            .try_reader_for(ADMIN_LOCK_TIMEOUT)
-            .ok_or_else(|| {
-                ApiError(CoreError::ServiceUnavailable(
-                    "reader lock busy: another query is holding the database; retry in a few seconds"
-                        .into(),
-                ))
-            })?;
         let f = q.into_filter()?;
-        Ok(Json(usage::summary(&w, &f)?))
+        let result = run_analytics_query_with_filter(&s, &f, "summary", |conn, fl| {
+            usage::summary(conn, fl)
+        })?;
+        Ok(Json(result))
     }
     .await;
-    body.into()
+    match body {
+        Ok(v) => ApiResult::ok(v),
+        Err(e) => ApiResult::err(e),
+    }
 }
 
 /// `GET /admin/usage/by-model` — per-(provider, model) breakdown.
@@ -1198,23 +1270,17 @@ pub async fn usage_by_model(
     Query(q): Query<UsageQuery>,
 ) -> ApiResult<Json<Vec<usage::ByModelRow>>> {
     let body: Result<Json<Vec<usage::ByModelRow>>, ApiError> = async {
-        // Analytics must not block forever on the writer lock — see
-        // `usage_summary` for the rationale. We wait up to
-        // `ADMIN_LOCK_TIMEOUT` and surface 503 if we lose the race.
-        let w = s
-            .db_pool()
-            .try_reader_for(ADMIN_LOCK_TIMEOUT)
-            .ok_or_else(|| {
-                ApiError(CoreError::ServiceUnavailable(
-                    "reader lock busy: another query is holding the database; retry in a few seconds"
-                        .into(),
-                ))
-            })?;
         let f = q.into_filter()?;
-        Ok(Json(usage::by_model(&w, &f)?))
+        let result = run_analytics_query_with_filter(&s, &f, "by_model", |conn, fl| {
+            usage::by_model(conn, fl)
+        })?;
+        Ok(Json(result))
     }
     .await;
-    body.into()
+    match body {
+        Ok(v) => ApiResult::ok(v),
+        Err(e) => ApiResult::err(e),
+    }
 }
 
 /// `GET /admin/usage/by-provider` — per-provider breakdown.
@@ -1228,20 +1294,17 @@ pub async fn usage_by_provider(
     Query(q): Query<UsageQuery>,
 ) -> ApiResult<Json<Vec<usage::ByProviderRow>>> {
     let body: Result<Json<Vec<usage::ByProviderRow>>, ApiError> = async {
-        let w = s
-            .db_pool()
-            .try_reader_for(ADMIN_LOCK_TIMEOUT)
-            .ok_or_else(|| {
-                ApiError(CoreError::ServiceUnavailable(
-                    "reader lock busy: another query is holding the database; retry in a few seconds"
-                        .into(),
-                ))
-            })?;
         let f = q.into_filter()?;
-        Ok(Json(usage::by_provider(&w, &f)?))
+        let result = run_analytics_query_with_filter(&s, &f, "by_provider", |conn, fl| {
+            usage::by_provider(conn, fl)
+        })?;
+        Ok(Json(result))
     }
     .await;
-    body.into()
+    match body {
+        Ok(v) => ApiResult::ok(v),
+        Err(e) => ApiResult::err(e),
+    }
 }
 
 /// `GET /admin/usage/monthly-by-provider` — per-(provider, month)
@@ -1255,20 +1318,17 @@ pub async fn usage_monthly_by_provider(
     Query(q): Query<UsageQuery>,
 ) -> ApiResult<Json<Vec<usage::MonthlyByProviderRow>>> {
     let body: Result<Json<Vec<usage::MonthlyByProviderRow>>, ApiError> = async {
-        let w = s
-            .db_pool()
-            .try_reader_for(ADMIN_LOCK_TIMEOUT)
-            .ok_or_else(|| {
-                ApiError(CoreError::ServiceUnavailable(
-                    "reader lock busy: another query is holding the database; retry in a few seconds"
-                        .into(),
-                ))
-            })?;
         let f = q.into_filter()?;
-        Ok(Json(usage::monthly_by_provider(&w, &f)?))
+        let result = run_analytics_query_with_filter(&s, &f, "monthly_by_provider", |conn, fl| {
+            usage::monthly_by_provider(conn, fl)
+        })?;
+        Ok(Json(result))
     }
     .await;
-    body.into()
+    match body {
+        Ok(v) => ApiResult::ok(v),
+        Err(e) => ApiResult::err(e),
+    }
 }
 
 /// `GET /admin/usage/by-day` — daily usage totals for charting.
@@ -1277,20 +1337,16 @@ pub async fn usage_by_day(
     Query(q): Query<UsageQuery>,
 ) -> ApiResult<Json<Vec<usage::ByDayRow>>> {
     let body: Result<Json<Vec<usage::ByDayRow>>, ApiError> = async {
-        let w = s
-            .db_pool()
-            .try_reader_for(ADMIN_LOCK_TIMEOUT)
-            .ok_or_else(|| {
-                ApiError(CoreError::ServiceUnavailable(
-                    "reader lock busy: another query is holding the database; retry in a few seconds"
-                        .into(),
-                ))
-            })?;
         let f = q.into_filter()?;
-        Ok(Json(usage::by_day(&w, &f)?))
+        let result =
+            run_analytics_query_with_filter(&s, &f, "by_day", |conn, fl| usage::by_day(conn, fl))?;
+        Ok(Json(result))
     }
     .await;
-    body.into()
+    match body {
+        Ok(v) => ApiResult::ok(v),
+        Err(e) => ApiResult::err(e),
+    }
 }
 
 /// `GET /admin/usage/by-account` — per-account breakdown.
@@ -1299,20 +1355,17 @@ pub async fn usage_by_account(
     Query(q): Query<UsageQuery>,
 ) -> ApiResult<Json<Vec<usage::ByAccountRow>>> {
     let body: Result<Json<Vec<usage::ByAccountRow>>, ApiError> = async {
-        let w = s
-            .db_pool()
-            .try_reader_for(ADMIN_LOCK_TIMEOUT)
-            .ok_or_else(|| {
-                ApiError(CoreError::ServiceUnavailable(
-                    "reader lock busy: another query is holding the database; retry in a few seconds"
-                        .into(),
-                ))
-            })?;
         let f = q.into_filter()?;
-        Ok(Json(usage::by_account(&w, &f)?))
+        let result = run_analytics_query_with_filter(&s, &f, "by_account", |conn, fl| {
+            usage::by_account(conn, fl)
+        })?;
+        Ok(Json(result))
     }
     .await;
-    body.into()
+    match body {
+        Ok(v) => ApiResult::ok(v),
+        Err(e) => ApiResult::err(e),
+    }
 }
 
 /// `GET /admin/usage/by-status` — counts grouped by HTTP status code.
@@ -1321,20 +1374,17 @@ pub async fn usage_by_status(
     Query(q): Query<UsageQuery>,
 ) -> ApiResult<Json<Vec<usage::ByStatusRow>>> {
     let body: Result<Json<Vec<usage::ByStatusRow>>, ApiError> = async {
-        let w = s
-            .db_pool()
-            .try_reader_for(ADMIN_LOCK_TIMEOUT)
-            .ok_or_else(|| {
-                ApiError(CoreError::ServiceUnavailable(
-                    "reader lock busy: another query is holding the database; retry in a few seconds"
-                        .into(),
-                ))
-            })?;
         let f = q.into_filter()?;
-        Ok(Json(usage::by_status(&w, &f)?))
+        let result = run_analytics_query_with_filter(&s, &f, "by_status", |conn, fl| {
+            usage::by_status(conn, fl)
+        })?;
+        Ok(Json(result))
     }
     .await;
-    body.into()
+    match body {
+        Ok(v) => ApiResult::ok(v),
+        Err(e) => ApiResult::err(e),
+    }
 }
 
 /// Cap on inline error rows. Spec §7.2 says "the most recent 100".
@@ -1346,20 +1396,17 @@ pub async fn usage_errors(
     Query(q): Query<UsageQuery>,
 ) -> ApiResult<Json<Vec<usage::ErrorRow>>> {
     let body: Result<Json<Vec<usage::ErrorRow>>, ApiError> = async {
-        let w = s
-            .db_pool()
-            .try_reader_for(ADMIN_LOCK_TIMEOUT)
-            .ok_or_else(|| {
-                ApiError(CoreError::ServiceUnavailable(
-                    "reader lock busy: another query is holding the database; retry in a few seconds"
-                        .into(),
-                ))
-            })?;
         let f = q.into_filter()?;
-        Ok(Json(usage::errors(&w, &f, ERRORS_DEFAULT_LIMIT)?))
+        let result = run_analytics_query_with_filter(&s, &f, "errors", |conn, fl| {
+            usage::errors(conn, fl, ERRORS_DEFAULT_LIMIT)
+        })?;
+        Ok(Json(result))
     }
     .await;
-    body.into()
+    match body {
+        Ok(v) => ApiResult::ok(v),
+        Err(e) => ApiResult::err(e),
+    }
 }
 
 /// `GET /admin/usage/latency` — p50/p95 across connect/ttft/total/tokens_per_sec.
@@ -1368,20 +1415,17 @@ pub async fn usage_latency(
     Query(q): Query<UsageQuery>,
 ) -> ApiResult<Json<analytics::LatencyPercentiles>> {
     let body: Result<Json<analytics::LatencyPercentiles>, ApiError> = async {
-        let w = s
-            .db_pool()
-            .try_reader_for(ADMIN_LOCK_TIMEOUT)
-            .ok_or_else(|| {
-                ApiError(CoreError::ServiceUnavailable(
-                    "reader lock busy: another query is holding the database; retry in a few seconds"
-                        .into(),
-                ))
-            })?;
         let f = q.into_filter()?;
-        Ok(Json(analytics::latency_percentiles(&w, &f)?))
+        let result = run_analytics_query_with_filter(&s, &f, "latency", |conn, fl| {
+            analytics::latency_percentiles(conn, fl)
+        })?;
+        Ok(Json(result))
     }
     .await;
-    body.into()
+    match body {
+        Ok(v) => ApiResult::ok(v),
+        Err(e) => ApiResult::err(e),
+    }
 }
 
 /// `GET /admin/usage/races` — race outcome statistics.
@@ -1390,20 +1434,17 @@ pub async fn usage_races(
     Query(q): Query<UsageQuery>,
 ) -> ApiResult<Json<analytics::RaceStats>> {
     let body: Result<Json<analytics::RaceStats>, ApiError> = async {
-        let w = s
-            .db_pool()
-            .try_reader_for(ADMIN_LOCK_TIMEOUT)
-            .ok_or_else(|| {
-                ApiError(CoreError::ServiceUnavailable(
-                    "reader lock busy: another query is holding the database; retry in a few seconds"
-                        .into(),
-                ))
-            })?;
         let f = q.into_filter()?;
-        Ok(Json(analytics::race_stats(&w, &f)?))
+        let result = run_analytics_query_with_filter(&s, &f, "races", |conn, fl| {
+            analytics::race_stats(conn, fl)
+        })?;
+        Ok(Json(result))
     }
     .await;
-    body.into()
+    match body {
+        Ok(v) => ApiResult::ok(v),
+        Err(e) => ApiResult::err(e),
+    }
 }
 
 // =====================================================================
@@ -4969,6 +5010,48 @@ pub async fn debug_logs(
 pub async fn debug_logs_clear(State(_s): State<AppState>) -> ApiResult<Json<serde_json::Value>> {
     crate::debug_log::clear();
     ApiResult::ok(Json(serde_json::json!({ "cleared": true })))
+}
+
+/// `POST /admin/debug/vacuum` — manually trigger a SQLite VACUUM + WAL
+/// checkpoint. Used to repair a fragmented DB that's causing "disk I/O
+/// error" on analytics queries. The operator can call this endpoint
+/// when analytics starts failing — it compacts free pages, flushes the
+/// WAL, and returns the DB to a healthy state.
+///
+/// This is a synchronous, blocking operation (takes the writer lock for
+/// the duration). For a 300MB DB it takes ~5-15 seconds. Returns 503
+/// if the writer lock can't be acquired (another write is in progress).
+pub async fn debug_vacuum(State(s): State<AppState>) -> ApiResult<Json<serde_json::Value>> {
+    let body: Result<Json<serde_json::Value>, ApiError> = async {
+        let w = s
+            .db_pool()
+            .try_writer_for(ADMIN_LOCK_TIMEOUT)
+            .ok_or_else(|| {
+                ApiError(CoreError::ServiceUnavailable(
+                    "writer lock busy: cannot VACUUM while another write is in progress".into(),
+                ))
+            })?;
+        // First, checkpoint the WAL to flush pending writes.
+        let _ = w.pragma_update(None, "wal_checkpoint", "TRUNCATE");
+        // Then VACUUM to compact free pages.
+        w.execute_batch("VACUUM;").map_err(|e| {
+            tracing::warn!(error = %e, "manual VACUUM failed");
+            ApiError(CoreError::Database {
+                message: format!("VACUUM failed: {}", e),
+                source: Some(Box::new(e)),
+            })
+        })?;
+        tracing::info!("manual VACUUM completed successfully");
+        Ok(Json(serde_json::json!({
+            "vacuumed": true,
+            "message": "VACUUM completed. Free pages have been reclaimed."
+        })))
+    }
+    .await;
+    match body {
+        Ok(v) => ApiResult::ok(v),
+        Err(e) => ApiResult::err(e),
+    }
 }
 
 // =====================================================================

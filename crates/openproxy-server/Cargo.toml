@@ -70,10 +70,14 @@ mimalloc = { version = "0.1", default-features = false, features = ["extended"] 
 # the memory-sweep task in state.rs. The `extended` feature exposes
 # `mi_collect` (and other extended APIs) via FFI.
 libmimalloc-sys = { version = "0.1", default-features = false, features = ["extended"] }
+# rusqlite is needed in production code for the analytics query retry
+# helper in handlers/admin.rs (the helper takes a `&rusqlite::Connection`
+# as a closure parameter). Previously it was only a dev-dependency (for
+# tests), but the retry helper needs it at build time.
+rusqlite = { workspace = true }
 
 [dev-dependencies]
 tower = { version = "0.5", features = ["util"] }
-rusqlite = { workspace = true }
 # `async_trait` is required by the Gate-C E2E test
 # (`tests/e2e_models_discovery.rs`) for the in-file
 # `TestMockAdapter` impl. The `ProviderAdapter` trait (defined in
