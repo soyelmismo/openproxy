@@ -3008,22 +3008,28 @@ impl Pipeline {
         // prefix, matching the pre-migration `record_and_fail` call
         // shape.
         //
-        // Bug fix: wrap the body read in a `tokio::time::timeout`
-        // bounded by `ttft_ms` (== headers_ms). For non-streaming,
-        // `ttft_ms` is the user's "time to first byte" budget, but
-        // in practice it means "time to full response" because there
-        // is no streaming — the client waits for the entire body.
-        // The `UpstreamBodyStream` inside `response` already honors
-        // `body_chunk_ms` (gap) and `total_deadline`, but those are
-        // loose bounds: `body_chunk_ms` defaults to 120s and
-        // `total_ms` to 300s. Without this tighter `ttft_ms` cap,
-        // a non-streaming request whose headers arrive quickly but
-        // whose body stalls can hang for 2-5 minutes before the
-        // body-chunk gap fires. The user configured `ttft_ms: 10000`
-        // expecting the whole non-streaming response to land within
-        // 10s — this honors that expectation.
+        // Bug fix: for non-streaming requests, use `total_ms` (not
+        // `ttft_ms`) as the body-read deadline. The previous code used
+        // `ttft_ms` (default 30s) which is far too short for a
+        // non-streaming request — the LLM has to generate the ENTIRE
+        // response before sending anything, which can take 60-120s
+        // for long responses.
+        //
+        // `ttft_ms` is a streaming concept: "how long to wait for the
+        // first token". In non-streaming there are no tokens until the
+        // full response is ready, so `ttft_ms` doesn't apply.
+        // `idle_chunk_ms` is also a streaming concept (max gap between
+        // chunks) and doesn't apply.
+        //
+        // For non-streaming, the correct timeout after connection +
+        // headers is `total_ms` (the hard ceiling, default 300s = 5min).
+        // The upstream client's internal `headers_deadline` (== ttft_ms)
+        // still applies to the "wait for response headers" phase — that's
+        // correct (the server should respond with HTTP headers quickly
+        // even for non-streaming). But once headers arrive, the body
+        // read should be bounded by `total_ms`, not `ttft_ms`.
         let non_streaming_body_deadline =
-            started + std::time::Duration::from_millis(resolved_timeouts.ttft.as_millis() as u64);
+            started + std::time::Duration::from_millis(resolved_timeouts.total.as_millis() as u64);
         let remaining = non_streaming_body_deadline
             .checked_duration_since(Instant::now())
             .unwrap_or(std::time::Duration::ZERO);
@@ -3093,13 +3099,13 @@ impl Pipeline {
                 );
             }
             // Bug fix: the `tokio::time::timeout` Elapsed arm — the
-            // non-streaming body read exceeded `ttft_ms`. Attribute
-            // to the "headers" phase (closest existing label for
-            // "waiting for the server to finish responding").
+            // non-streaming body read exceeded `total_ms`. This means
+            // the upstream took longer than the total budget to
+            // generate and return the full response.
             Err(_elapsed) => {
                 let elapsed = started.elapsed().as_millis() as u64;
                 let err = CoreError::UpstreamTimeout {
-                    phase: "headers".to_string(),
+                    phase: "total (config: total_ms)".to_string(),
                     ms: elapsed,
                 };
                 tracing::warn!(
@@ -3107,7 +3113,7 @@ impl Pipeline {
                     target_id = target.id.0,
                     provider = %target.provider_id,
                     elapsed_ms = elapsed,
-                    "non-streaming body read exceeded ttft_ms; aborting attempt"
+                    "non-streaming body read exceeded total_ms; aborting attempt"
                 );
                 return self.record_and_fail(
                     req,
