@@ -565,7 +565,7 @@ impl AppState {
 
                     // Every 10 ticks (10 min), prune selection_registry.
                     slow_counter = slow_counter.wrapping_add(1);
-                    if slow_counter % 10 == 0 {
+                    if slow_counter.is_multiple_of(10) {
                         let pruned = sr.prune_stale(std::time::Duration::from_secs(3600));
                         if pruned > 0 {
                             tracing::debug!(
@@ -671,7 +671,7 @@ impl AppState {
                         libmimalloc_sys::mi_collect(false);
                     }
                     slow_counter = slow_counter.wrapping_add(1);
-                    if slow_counter % 10 == 0 {
+                    if slow_counter.is_multiple_of(10) {
                         let pruned = sr.prune_stale(std::time::Duration::from_secs(3600));
                         if pruned > 0 {
                             tracing::debug!(

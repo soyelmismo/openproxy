@@ -145,16 +145,16 @@ fn authenticate_chat_or_anonymous(
         )));
     }
 
-    if let Some(exp) = &key.expires_at {
-        if openproxy_core::api_keys::is_expired(Some(exp), chrono::Utc::now()).map_err(|e| {
+    if let Some(exp) = &key.expires_at
+        && openproxy_core::api_keys::is_expired(Some(exp), chrono::Utc::now()).map_err(|e| {
             ApiError(openproxy_core::CoreError::Internal(format!(
                 "expires_at check: {e}"
             )))
-        })? {
-            return Err(ApiError(openproxy_core::CoreError::Auth(
-                "api key expired".into(),
-            )));
-        }
+        })?
+    {
+        return Err(ApiError(openproxy_core::CoreError::Auth(
+            "api key expired".into(),
+        )));
     }
 
     if !key.scopes.iter().any(|s| s == "chat") {

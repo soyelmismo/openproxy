@@ -917,10 +917,10 @@ pub fn parse_anthropic_sse_line(line: &str) -> Result<Option<AnthropicSseEvent>>
     let probe: serde_json::Value = serde_json::from_str(payload)
         .map_err(|e| CoreError::Parse(format!("invalid SSE JSON: {e}")))?;
 
-    if let Some(t) = probe.get("type").and_then(|v| v.as_str()) {
-        if t == "ping" {
-            return Ok(None);
-        }
+    if let Some(t) = probe.get("type").and_then(|v| v.as_str())
+        && t == "ping"
+    {
+        return Ok(None);
     }
 
     let event: AnthropicSseEvent = serde_json::from_value(probe)

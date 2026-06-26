@@ -239,60 +239,59 @@ fn apply_reasoning_normalizations(
     let mut modified = false;
 
     // Step 2: think extraction on content (only if content is a string).
-    if has_content {
-        if let Some(content) = obj
+    if has_content
+        && let Some(content) = obj
             .get("content")
             .and_then(|c| c.as_str())
             .map(|s| s.to_string())
-        {
-            let (clean_content, extracted_reasoning) = think_extractor.process(&content);
-            let content_changed = clean_content != content;
-            let has_native_reasoning = obj.contains_key("reasoning_content");
+    {
+        let (clean_content, extracted_reasoning) = think_extractor.process(&content);
+        let content_changed = clean_content != content;
+        let has_native_reasoning = obj.contains_key("reasoning_content");
 
-            if content_changed {
-                obj.insert(
-                    "content".to_string(),
-                    serde_json::Value::String(clean_content),
-                );
-                modified = true;
-            }
+        if content_changed {
+            obj.insert(
+                "content".to_string(),
+                serde_json::Value::String(clean_content),
+            );
+            modified = true;
+        }
 
-            if !extracted_reasoning.is_empty() && !has_native_reasoning {
-                obj.insert(
-                    "reasoning_content".to_string(),
-                    serde_json::Value::String(extracted_reasoning),
-                );
-                modified = true;
-            }
+        if !extracted_reasoning.is_empty() && !has_native_reasoning {
+            obj.insert(
+                "reasoning_content".to_string(),
+                serde_json::Value::String(extracted_reasoning),
+            );
+            modified = true;
         }
     }
 
     // Step 3: normalize tool_call arguments — detect running-total
     // pattern and replace with just the new fragment.
-    if has_tool_calls {
-        if let Some(tool_calls) = obj.get_mut("tool_calls").and_then(|t| t.as_array_mut()) {
-            for tc in tool_calls.iter_mut() {
-                let tc_obj = match tc.as_object_mut() {
-                    Some(o) => o,
-                    None => continue,
-                };
-                let index = tc_obj.get("index").and_then(|i| i.as_u64()).unwrap_or(0);
-                let func = match tc_obj.get_mut("function").and_then(|f| f.as_object_mut()) {
-                    Some(f) => f,
-                    None => continue,
-                };
-                let arguments = match func.get("arguments").and_then(|a| a.as_str()) {
-                    Some(a) => a.to_string(),
-                    None => continue,
-                };
-                let new_fragment = tool_call_acc.process(index, &arguments);
-                if new_fragment != arguments {
-                    func.insert(
-                        "arguments".to_string(),
-                        serde_json::Value::String(new_fragment),
-                    );
-                    modified = true;
-                }
+    if has_tool_calls
+        && let Some(tool_calls) = obj.get_mut("tool_calls").and_then(|t| t.as_array_mut())
+    {
+        for tc in tool_calls.iter_mut() {
+            let tc_obj = match tc.as_object_mut() {
+                Some(o) => o,
+                None => continue,
+            };
+            let index = tc_obj.get("index").and_then(|i| i.as_u64()).unwrap_or(0);
+            let func = match tc_obj.get_mut("function").and_then(|f| f.as_object_mut()) {
+                Some(f) => f,
+                None => continue,
+            };
+            let arguments = match func.get("arguments").and_then(|a| a.as_str()) {
+                Some(a) => a.to_string(),
+                None => continue,
+            };
+            let new_fragment = tool_call_acc.process(index, &arguments);
+            if new_fragment != arguments {
+                func.insert(
+                    "arguments".to_string(),
+                    serde_json::Value::String(new_fragment),
+                );
+                modified = true;
             }
         }
     }
@@ -2735,25 +2734,25 @@ impl Pipeline {
         // them in real-time. Both paths now share the same
         // `UpstreamRequest`; the streaming helper takes ownership of
         // it and calls the hyper-based `UpstreamClient` itself.
-        if req.openai_request.stream {
-            if let Some(sink) = &req.stream_sink {
-                return self
-                    .dispatch_upstream_streaming(
-                        target,
-                        combo,
-                        req,
-                        model,
-                        target_format,
-                        sink,
-                        resolved_timeouts,
-                        started,
-                        attempt,
-                        race_size,
-                        trace_id,
-                        upstream_request,
-                    )
-                    .await;
-            }
+        if req.openai_request.stream
+            && let Some(sink) = &req.stream_sink
+        {
+            return self
+                .dispatch_upstream_streaming(
+                    target,
+                    combo,
+                    req,
+                    model,
+                    target_format,
+                    sink,
+                    resolved_timeouts,
+                    started,
+                    attempt,
+                    race_size,
+                    trace_id,
+                    upstream_request,
+                )
+                .await;
         }
 
         // Send + measure.
@@ -6917,26 +6916,24 @@ mod tests {
                         Ok(Ok(0)) => break,
                         Ok(Ok(n)) => {
                             total += n;
-                            if header_end.is_none() {
-                                if let Some(pos) =
+                            if header_end.is_none()
+                                && let Some(pos) =
                                     buf[..total].windows(4).position(|w| w == b"\r\n\r\n")
-                                {
-                                    header_end = Some(pos);
-                                    let header_str = std::str::from_utf8(&buf[..pos]).unwrap_or("");
-                                    for line in header_str.split("\r\n") {
-                                        if let Some(rest) = line
-                                            .to_ascii_lowercase()
-                                            .strip_prefix("content-length:")
-                                        {
-                                            content_length = rest.trim().parse().ok();
-                                        }
+                            {
+                                header_end = Some(pos);
+                                let header_str = std::str::from_utf8(&buf[..pos]).unwrap_or("");
+                                for line in header_str.split("\r\n") {
+                                    if let Some(rest) =
+                                        line.to_ascii_lowercase().strip_prefix("content-length:")
+                                    {
+                                        content_length = rest.trim().parse().ok();
                                     }
                                 }
                             }
-                            if let (Some(he), Some(cl)) = (header_end, content_length) {
-                                if total - (he + 4) >= cl {
-                                    break;
-                                }
+                            if let (Some(he), Some(cl)) = (header_end, content_length)
+                                && total - (he + 4) >= cl
+                            {
+                                break;
                             }
                             if total == buf.len() {
                                 break;
@@ -9282,25 +9279,24 @@ mod tests {
                     Ok(Ok(0)) => break,
                     Ok(Ok(n)) => {
                         total += n;
-                        if header_end.is_none() {
-                            if let Some(pos) =
+                        if header_end.is_none()
+                            && let Some(pos) =
                                 buf[..total].windows(4).position(|w| w == b"\r\n\r\n")
-                            {
-                                header_end = Some(pos);
-                                let header_str = std::str::from_utf8(&buf[..pos]).unwrap_or("");
-                                for line in header_str.split("\r\n") {
-                                    if let Some(rest) =
-                                        line.to_ascii_lowercase().strip_prefix("content-length:")
-                                    {
-                                        content_length = rest.trim().parse().ok();
-                                    }
+                        {
+                            header_end = Some(pos);
+                            let header_str = std::str::from_utf8(&buf[..pos]).unwrap_or("");
+                            for line in header_str.split("\r\n") {
+                                if let Some(rest) =
+                                    line.to_ascii_lowercase().strip_prefix("content-length:")
+                                {
+                                    content_length = rest.trim().parse().ok();
                                 }
                             }
                         }
-                        if let (Some(he), Some(cl)) = (header_end, content_length) {
-                            if total - (he + 4) >= cl {
-                                break;
-                            }
+                        if let (Some(he), Some(cl)) = (header_end, content_length)
+                            && total - (he + 4) >= cl
+                        {
+                            break;
                         }
                         if total == buf.len() {
                             break;
@@ -9425,25 +9421,24 @@ mod tests {
                     Err(_) | Ok(Ok(0)) | Ok(Err(_)) => break,
                     Ok(Ok(n)) => {
                         total += n;
-                        if header_end.is_none() {
-                            if let Some(pos) =
+                        if header_end.is_none()
+                            && let Some(pos) =
                                 buf[..total].windows(4).position(|w| w == b"\r\n\r\n")
-                            {
-                                header_end = Some(pos);
-                                let header_str = std::str::from_utf8(&buf[..pos]).unwrap_or("");
-                                for line in header_str.split("\r\n") {
-                                    if let Some(rest) =
-                                        line.to_ascii_lowercase().strip_prefix("content-length:")
-                                    {
-                                        content_length = rest.trim().parse().ok();
-                                    }
+                        {
+                            header_end = Some(pos);
+                            let header_str = std::str::from_utf8(&buf[..pos]).unwrap_or("");
+                            for line in header_str.split("\r\n") {
+                                if let Some(rest) =
+                                    line.to_ascii_lowercase().strip_prefix("content-length:")
+                                {
+                                    content_length = rest.trim().parse().ok();
                                 }
                             }
                         }
-                        if let (Some(he), Some(cl)) = (header_end, content_length) {
-                            if total - (he + 4) >= cl {
-                                break;
-                            }
+                        if let (Some(he), Some(cl)) = (header_end, content_length)
+                            && total - (he + 4) >= cl
+                        {
+                            break;
                         }
                         if total == buf.len() {
                             break;
@@ -9626,25 +9621,24 @@ mod tests {
                     Ok(Ok(0)) => break,
                     Ok(Ok(n)) => {
                         total += n;
-                        if header_end.is_none() {
-                            if let Some(pos) =
+                        if header_end.is_none()
+                            && let Some(pos) =
                                 buf[..total].windows(4).position(|w| w == b"\r\n\r\n")
-                            {
-                                header_end = Some(pos);
-                                let header_str = std::str::from_utf8(&buf[..pos]).unwrap_or("");
-                                for line in header_str.split("\r\n") {
-                                    if let Some(rest) =
-                                        line.to_ascii_lowercase().strip_prefix("content-length:")
-                                    {
-                                        content_length = rest.trim().parse().ok();
-                                    }
+                        {
+                            header_end = Some(pos);
+                            let header_str = std::str::from_utf8(&buf[..pos]).unwrap_or("");
+                            for line in header_str.split("\r\n") {
+                                if let Some(rest) =
+                                    line.to_ascii_lowercase().strip_prefix("content-length:")
+                                {
+                                    content_length = rest.trim().parse().ok();
                                 }
                             }
                         }
-                        if let (Some(he), Some(cl)) = (header_end, content_length) {
-                            if total - (he + 4) >= cl {
-                                break;
-                            }
+                        if let (Some(he), Some(cl)) = (header_end, content_length)
+                            && total - (he + 4) >= cl
+                        {
+                            break;
                         }
                         if total == buf.len() {
                             break;
@@ -9838,20 +9832,16 @@ mod tests {
             if *item == crate::pipeline::SSE_DONE_BYTES {
                 continue;
             }
-            if let Some(payload_bytes) = strip_sse_frame(item) {
-                if let Ok(payload_str) = std::str::from_utf8(payload_bytes) {
-                    if let Ok(v) = serde_json::from_str::<serde_json::Value>(payload_str) {
-                        if let Some(delta) = v
-                            .get("choices")
-                            .and_then(|c| c.get(0))
-                            .and_then(|c| c.get("delta"))
-                        {
-                            if let Some(content) = delta.get("content").and_then(|s| s.as_str()) {
-                                reconstructed.push_str(content);
-                            }
-                        }
-                    }
-                }
+            if let Some(payload_bytes) = strip_sse_frame(item)
+                && let Ok(payload_str) = std::str::from_utf8(payload_bytes)
+                && let Ok(v) = serde_json::from_str::<serde_json::Value>(payload_str)
+                && let Some(delta) = v
+                    .get("choices")
+                    .and_then(|c| c.get(0))
+                    .and_then(|c| c.get("delta"))
+                && let Some(content) = delta.get("content").and_then(|s| s.as_str())
+            {
+                reconstructed.push_str(content);
             }
         }
         assert_eq!(
@@ -10205,7 +10195,7 @@ mod tests {
                     // holding the socket open. Loop and try again
                     // so we keep watching for the close.
                     Err(_) => {
-                        if poll_count % 20 == 0 {
+                        if poll_count.is_multiple_of(20) {
                             eprintln!(
                                 "[test server] still waiting for close (poll {})",
                                 poll_count
@@ -10399,25 +10389,24 @@ mod tests {
                     Err(_) | Ok(Ok(0)) | Ok(Err(_)) => break,
                     Ok(Ok(n)) => {
                         total += n;
-                        if header_end.is_none() {
-                            if let Some(pos) =
+                        if header_end.is_none()
+                            && let Some(pos) =
                                 buf[..total].windows(4).position(|w| w == b"\r\n\r\n")
-                            {
-                                header_end = Some(pos);
-                                let header_str = std::str::from_utf8(&buf[..pos]).unwrap_or("");
-                                for line in header_str.split("\r\n") {
-                                    if let Some(rest) =
-                                        line.to_ascii_lowercase().strip_prefix("content-length:")
-                                    {
-                                        content_length = rest.trim().parse().ok();
-                                    }
+                        {
+                            header_end = Some(pos);
+                            let header_str = std::str::from_utf8(&buf[..pos]).unwrap_or("");
+                            for line in header_str.split("\r\n") {
+                                if let Some(rest) =
+                                    line.to_ascii_lowercase().strip_prefix("content-length:")
+                                {
+                                    content_length = rest.trim().parse().ok();
                                 }
                             }
                         }
-                        if let (Some(he), Some(cl)) = (header_end, content_length) {
-                            if total - (he + 4) >= cl {
-                                break;
-                            }
+                        if let (Some(he), Some(cl)) = (header_end, content_length)
+                            && total - (he + 4) >= cl
+                        {
+                            break;
                         }
                         if total == buf.len() {
                             break;
@@ -10529,10 +10518,9 @@ mod tests {
                             // regression), but don't wait long.
                             if let Ok(Ok(ev2)) =
                                 tokio::time::timeout(Duration::from_millis(50), rx.recv()).await
+                                && ev2.request_id == request_id_str
                             {
-                                if ev2.request_id == request_id_str {
-                                    events.push(ev2);
-                                }
+                                events.push(ev2);
                             }
                             break;
                         }
@@ -10869,25 +10857,24 @@ data: [DONE]\n\n";
                     Err(_) | Ok(Ok(0)) | Ok(Err(_)) => break,
                     Ok(Ok(n)) => {
                         total += n;
-                        if header_end.is_none() {
-                            if let Some(pos) =
+                        if header_end.is_none()
+                            && let Some(pos) =
                                 buf[..total].windows(4).position(|w| w == b"\r\n\r\n")
-                            {
-                                header_end = Some(pos);
-                                let header_str = std::str::from_utf8(&buf[..pos]).unwrap_or("");
-                                for line in header_str.split("\r\n") {
-                                    if let Some(rest) =
-                                        line.to_ascii_lowercase().strip_prefix("content-length:")
-                                    {
-                                        content_length = rest.trim().parse().ok();
-                                    }
+                        {
+                            header_end = Some(pos);
+                            let header_str = std::str::from_utf8(&buf[..pos]).unwrap_or("");
+                            for line in header_str.split("\r\n") {
+                                if let Some(rest) =
+                                    line.to_ascii_lowercase().strip_prefix("content-length:")
+                                {
+                                    content_length = rest.trim().parse().ok();
                                 }
                             }
                         }
-                        if let (Some(he), Some(cl)) = (header_end, content_length) {
-                            if total - (he + 4) >= cl {
-                                break;
-                            }
+                        if let (Some(he), Some(cl)) = (header_end, content_length)
+                            && total - (he + 4) >= cl
+                        {
+                            break;
                         }
                         if total == buf.len() {
                             break;

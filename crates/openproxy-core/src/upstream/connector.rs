@@ -629,10 +629,10 @@ async fn resolve_host(host: &str, port: u16) -> io::Result<Vec<SocketAddr>> {
     let now = std::time::Instant::now();
     const DNS_TTL: std::time::Duration = std::time::Duration::from_secs(60);
 
-    if let Some(entry) = cache.get(&cache_key) {
-        if now < entry.1 {
-            return Ok(entry.0.clone());
-        }
+    if let Some(entry) = cache.get(&cache_key)
+        && now < entry.1
+    {
+        return Ok(entry.0.clone());
     }
 
     // Cache miss or expired — do the actual DNS lookup.

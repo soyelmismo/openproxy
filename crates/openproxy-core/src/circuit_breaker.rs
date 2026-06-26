@@ -90,14 +90,13 @@ impl CircuitBreakerRegistry {
             unhealthy_until: None,
             last_activity_ms: now_ms(),
         });
-        if entry.state == Health::Unhealthy {
-            if let Some(until) = entry.unhealthy_until {
-                if Instant::now() >= until {
-                    entry.state = Health::Healthy;
-                    entry.consecutive_failures = 0;
-                    entry.unhealthy_until = None;
-                }
-            }
+        if entry.state == Health::Unhealthy
+            && let Some(until) = entry.unhealthy_until
+            && Instant::now() >= until
+        {
+            entry.state = Health::Healthy;
+            entry.consecutive_failures = 0;
+            entry.unhealthy_until = None;
         }
         entry.last_activity_ms = now_ms();
         entry.state

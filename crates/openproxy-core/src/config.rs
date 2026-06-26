@@ -314,14 +314,14 @@ impl AppConfig {
 
     /// Expand ~ to home dir in storage.database_path.
     pub fn expanded_database_path(&self) -> PathBuf {
-        if self.storage.database_path.starts_with("~/") {
-            if let Some(home) = dirs_home() {
-                return PathBuf::from(self.storage.database_path.replacen(
-                    "~/",
-                    &format!("{}/", home),
-                    1,
-                ));
-            }
+        if self.storage.database_path.starts_with("~/")
+            && let Some(home) = dirs_home()
+        {
+            return PathBuf::from(self.storage.database_path.replacen(
+                "~/",
+                &format!("{}/", home),
+                1,
+            ));
         }
         PathBuf::from(&self.storage.database_path)
     }
@@ -358,14 +358,14 @@ mod tests {
     fn expand_home_dir() {
         let cfg = AppConfig::default();
         let p = cfg.expanded_database_path();
-        if let Ok(home) = std::env::var("HOME") {
-            if cfg.storage.database_path.starts_with("~/") {
-                assert!(
-                    p.starts_with(&home),
-                    "expected to start with home dir, got {:?}",
-                    p
-                );
-            }
+        if let Ok(home) = std::env::var("HOME")
+            && cfg.storage.database_path.starts_with("~/")
+        {
+            assert!(
+                p.starts_with(&home),
+                "expected to start with home dir, got {:?}",
+                p
+            );
         }
     }
 }

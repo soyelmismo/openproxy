@@ -307,12 +307,12 @@ impl UsageQuery {
 
         // If both are present, from must not be after to. (Both
         // are inclusive at the lower bound in the SQL.)
-        if let (Some(f), Some(t)) = (&from, &to) {
-            if f > t {
-                return Err(
-                    CoreError::Validation(format!("from ({}) must be <= to ({})", f, t)).into(),
-                );
-            }
+        if let (Some(f), Some(t)) = (&from, &to)
+            && f > t
+        {
+            return Err(
+                CoreError::Validation(format!("from ({}) must be <= to ({})", f, t)).into(),
+            );
         }
         let account_id = self.account_id.map(AccountId::new);
         let combo_id = self.combo_id.map(ComboId);
@@ -1720,17 +1720,17 @@ fn authenticate_admin_ws(
     // `=legacy-token`) cannot silently grant full admin access. The match
     // is logged at WARN level so the bypass is visible in production logs
     // and dashboards alerting on auth-bypass are wired correctly.
-    if let Ok(bypass) = std::env::var("OPENPROXY_DASHBOARD_AUTH_BYPASS") {
-        if bypass == "1" {
-            tracing::warn!(
-                target: "openproxy::security",
-                path = ?headers.get("x-original-uri").and_then(|v| v.to_str().ok()),
-                method = ?headers.get("x-original-method").and_then(|v| v.to_str().ok()),
-                "admin auth bypassed via OPENPROXY_DASHBOARD_AUTH_BYPASS=1 — \
-                 every admin endpoint is open. Remove this env var to restore auth."
-            );
-            return Ok(());
-        }
+    if let Ok(bypass) = std::env::var("OPENPROXY_DASHBOARD_AUTH_BYPASS")
+        && bypass == "1"
+    {
+        tracing::warn!(
+            target: "openproxy::security",
+            path = ?headers.get("x-original-uri").and_then(|v| v.to_str().ok()),
+            method = ?headers.get("x-original-method").and_then(|v| v.to_str().ok()),
+            "admin auth bypassed via OPENPROXY_DASHBOARD_AUTH_BYPASS=1 — \
+             every admin endpoint is open. Remove this env var to restore auth."
+        );
+        return Ok(());
     }
 
     // Extract token from Authorization header or from query parameter

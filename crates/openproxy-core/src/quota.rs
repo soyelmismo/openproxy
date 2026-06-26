@@ -312,10 +312,10 @@ fn extract_used_limit(
     //    quota anyway — treat as missing).
     let used = entry.get(used_count_key).and_then(|v| v.as_i64());
     let limit = entry.get(limit_count_key).and_then(|v| v.as_i64());
-    if let (Some(u), Some(l)) = (used, limit) {
-        if l > 0 {
-            return (Some(u), Some(l));
-        }
+    if let (Some(u), Some(l)) = (used, limit)
+        && l > 0
+    {
+        return (Some(u), Some(l));
     }
 
     // 2. Percent: the upstream exposes "remaining" (e.g. 25 = 25%
@@ -325,11 +325,11 @@ fn extract_used_limit(
     //    send them, and trusting them would let a bug paint a 200%
     //    bar.
     let remaining = entry.get(remaining_pct_key).and_then(|v| v.as_i64());
-    if let Some(rp) = remaining {
-        if (0..=100).contains(&rp) {
-            let used_calc = (100 - rp).max(0);
-            return (Some(used_calc), Some(100));
-        }
+    if let Some(rp) = remaining
+        && (0..=100).contains(&rp)
+    {
+        let used_calc = (100 - rp).max(0);
+        return (Some(used_calc), Some(100));
     }
 
     (None, None)
@@ -408,15 +408,15 @@ async fn fetch_antigravity_models_quota(
         let cancel = CancellationToken::new();
         let response = upstream.call(req, TimeoutProfile::Quota, cancel).await;
 
-        if let Ok(resp) = response {
-            if resp.status.is_success() {
-                let body = match resp.collect().await {
-                    Ok(b) => b,
-                    Err(_) => continue,
-                };
-                if let Ok(json) = serde_json::from_slice::<serde_json::Value>(&body) {
-                    return parse_antigravity_models_response(&json);
-                }
+        if let Ok(resp) = response
+            && resp.status.is_success()
+        {
+            let body = match resp.collect().await {
+                Ok(b) => b,
+                Err(_) => continue,
+            };
+            if let Ok(json) = serde_json::from_slice::<serde_json::Value>(&body) {
+                return parse_antigravity_models_response(&json);
             }
         }
     }

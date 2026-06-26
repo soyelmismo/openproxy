@@ -126,14 +126,11 @@ fn classify_chunk(v: &serde_json::Value) -> ChunkKind {
     // Check for "response" key
     if let Some(resp) = v.get("response") {
         // Gemini: response has "candidates"
-        if let Some(candidates) = resp.get("candidates") {
-            if candidates.is_array() {
-                if let Ok(response) =
-                    serde_json::from_value::<AntigravityGeminiResponse>(resp.clone())
-                {
-                    return ChunkKind::Gemini { response };
-                }
-            }
+        if let Some(candidates) = resp.get("candidates")
+            && candidates.is_array()
+            && let Ok(response) = serde_json::from_value::<AntigravityGeminiResponse>(resp.clone())
+        {
+            return ChunkKind::Gemini { response };
         }
         // Markdown inner: response has "markdown"
         if let Some(text) = resp.get("markdown").and_then(|m| m.as_str()) {

@@ -1936,12 +1936,10 @@ mod tests {
         for line in lines {
             if let Some(payload) =
                 parse_anthropic_sse_stream_line(line, &mut current_event).unwrap()
-            {
-                if let Some(chunk) =
+                && let Some(chunk) =
                     translate_anthropic_sse_payload(&payload, "test", 0, "claude-3").unwrap()
-                {
-                    chunks.push(chunk);
-                }
+            {
+                chunks.push(chunk);
             }
         }
 

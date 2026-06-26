@@ -40,14 +40,14 @@ pub fn apply_rtk(msgs: &mut [OpenAIMessage]) -> Vec<String> {
         let detection = command_detector::detect(&content_str);
 
         // Seleccionar filtro
-        if detection.id != "unknown" {
-            if let Some(filter) = get_builtin_filter(&detection.id) {
-                let (filtered, rules) = apply_line_filter(&content_str, &filter);
-                if filtered != content_str {
-                    msg.content = Some(serde_json::Value::String(filtered));
-                    all_techniques.extend(rules.into_iter().map(String::from));
-                    continue; // ya aplicamos filtro específico, no aplicar el genérico
-                }
+        if detection.id != "unknown"
+            && let Some(filter) = get_builtin_filter(&detection.id)
+        {
+            let (filtered, rules) = apply_line_filter(&content_str, &filter);
+            if filtered != content_str {
+                msg.content = Some(serde_json::Value::String(filtered));
+                all_techniques.extend(rules.into_iter().map(String::from));
+                continue; // ya aplicamos filtro específico, no aplicar el genérico
             }
         }
 

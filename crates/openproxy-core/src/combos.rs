@@ -1346,13 +1346,13 @@ pub fn update_lkgp_settings(
     id: ComboId,
     exploration_rate: Option<f64>,
 ) -> Result<()> {
-    if let Some(rate) = exploration_rate {
-        if !(0.0..=1.0).contains(&rate) {
-            return Err(CoreError::Validation(format!(
-                "lkgp_exploration_rate must be in [0.0, 1.0], got {}",
-                rate
-            )));
-        }
+    if let Some(rate) = exploration_rate
+        && !(0.0..=1.0).contains(&rate)
+    {
+        return Err(CoreError::Validation(format!(
+            "lkgp_exploration_rate must be in [0.0, 1.0], got {}",
+            rate
+        )));
     }
     let affected = conn
         .execute(

@@ -392,12 +392,12 @@ pub fn update(
     is_active: Option<bool>,
     expires_at: Option<Option<&str>>,
 ) -> Result<()> {
-    if let Some(s) = scopes {
-        if s.is_empty() {
-            return Err(CoreError::Validation(
-                "scopes must contain at least one entry".into(),
-            ));
-        }
+    if let Some(s) = scopes
+        && s.is_empty()
+    {
+        return Err(CoreError::Validation(
+            "scopes must contain at least one entry".into(),
+        ));
     }
     let scopes_json: Option<String> = scopes
         .map(|s| {
