@@ -66,6 +66,14 @@ pub struct UpstreamBodyStream {
     start: Instant,
     body_chunk_ms: u64,
     total_deadline: Instant,
+    /// When `false` (non-streaming), the body-chunk gap timeout is
+    /// NOT applied. Only `total_deadline` bounds the body read.
+    /// This is because non-streaming responses arrive as a single
+    /// chunk — the LLM generates the full response server-side before
+    /// sending anything. The `body_chunk_ms` (idle_chunk_ms) timeout
+    /// is a streaming concept (max gap between SSE chunks) and doesn't
+    /// apply to non-streaming.
+    is_streaming: bool,
     /// PERF: reusable Sleep stored in a Box<Pin<Sleep>> to allow
     /// in-place reset without timer-wheel register/deregister per chunk.
     sleep: std::pin::Pin<Box<tokio::time::Sleep>>,
@@ -89,12 +97,19 @@ impl UpstreamBodyStream {
         body_chunk_ms: u64,
         total_deadline: Instant,
         limit: u64,
+        is_streaming: bool,
     ) -> Self {
         let limit_usize = usize::try_from(limit).unwrap_or(usize::MAX);
         let limited = http_body_util::Limited::new(body, limit_usize);
         let cancel_rx = cancel.subscribe();
-        let initial_deadline =
-            std::cmp::min(start + Duration::from_millis(body_chunk_ms), total_deadline);
+        // For non-streaming, the initial deadline is total_deadline
+        // (not start + body_chunk_ms). The LLM needs time to generate
+        // the full response before sending the first (and only) chunk.
+        let initial_deadline = if is_streaming {
+            std::cmp::min(start + Duration::from_millis(body_chunk_ms), total_deadline)
+        } else {
+            total_deadline
+        };
         Self {
             inner: Some(http_body_util::BodyStream::new(limited)),
             cancel_rx,
@@ -103,6 +118,7 @@ impl UpstreamBodyStream {
             start,
             body_chunk_ms,
             total_deadline,
+            is_streaming,
             sleep: Box::pin(tokio::time::sleep_until(initial_deadline.into())),
         }
     }
@@ -115,10 +131,14 @@ impl UpstreamBodyStream {
         start: Instant,
         body_chunk_ms: u64,
         total_deadline: Instant,
+        is_streaming: bool,
     ) -> Self {
         let cancel_rx = cancel.subscribe();
-        let initial_deadline =
-            std::cmp::min(start + Duration::from_millis(body_chunk_ms), total_deadline);
+        let initial_deadline = if is_streaming {
+            std::cmp::min(start + Duration::from_millis(body_chunk_ms), total_deadline)
+        } else {
+            total_deadline
+        };
         Self {
             #[cfg(feature = "upstream-hyper")]
             inner: None,
@@ -128,6 +148,7 @@ impl UpstreamBodyStream {
             start,
             body_chunk_ms,
             total_deadline,
+            is_streaming,
             sleep: Box::pin(tokio::time::sleep_until(initial_deadline.into())),
         }
     }
@@ -157,8 +178,16 @@ impl UpstreamBodyStream {
             return Err(UpstreamError::Cancel);
         }
 
-        let chunk_gap_deadline =
-            self.last_chunk_at.unwrap_or(self.start) + Duration::from_millis(self.body_chunk_ms);
+        // For non-streaming: only total_deadline applies (no chunk gap).
+        // The LLM generates the full response server-side before sending
+        // the first chunk — measuring a "gap" between chunks is meaningless.
+        let min_deadline = if self.is_streaming {
+            let chunk_gap_deadline = self.last_chunk_at.unwrap_or(self.start)
+                + Duration::from_millis(self.body_chunk_ms);
+            std::cmp::min(chunk_gap_deadline, self.total_deadline)
+        } else {
+            self.total_deadline
+        };
 
         #[cfg(feature = "upstream-hyper")]
         {
@@ -166,8 +195,6 @@ impl UpstreamBodyStream {
                 Some(s) => s,
                 None => return Ok(None),
             };
-
-            let min_deadline = std::cmp::min(chunk_gap_deadline, self.total_deadline);
 
             // PERF: reset the reusable Sleep instead of creating a fresh
             // sleep_until future. `reset()` updates the timer-wheel entry
@@ -197,7 +224,7 @@ impl UpstreamBodyStream {
 
         #[cfg(not(feature = "upstream-hyper"))]
         {
-            let _ = (chunk_gap_deadline, self.body_chunk_ms);
+            let _ = (min_deadline, self.body_chunk_ms, self.is_streaming);
             Ok(None)
         }
     }

@@ -2727,6 +2727,13 @@ impl Pipeline {
         // `body_bytes` is pre-serialized by the caller (single pass
         // from the translated struct — no intermediate `Value`).
         let mut upstream_request = UpstreamRequest::post_json(url.to_string(), body_bytes);
+        // Set is_streaming based on the client's request. When false
+        // (non-streaming), the body-chunk gap timeout (idle_chunk_ms)
+        // is NOT applied to the response body — only total_ms bounds
+        // the body read. This prevents non-streaming requests from
+        // timing out after idle_chunk_ms when the LLM is still
+        // generating the full response server-side.
+        upstream_request.is_streaming = req.openai_request.stream;
         // Caller-supplied headers (auth, content-type overrides from
         // the adapter, etc.) — `post_json` already sets
         // `Content-Type: application/json`, so `insert` overwrites if

@@ -41,6 +41,12 @@ pub struct UpstreamRequest {
     pub url: String,
     pub headers: HeaderMap,
     pub body: Option<Bytes>,
+    /// When `false`, the body-chunk gap timeout (idle_chunk_ms) is NOT
+    /// applied to the response body. Only `total_ms` bounds the body
+    /// read. Set to `false` for non-streaming requests where the LLM
+    /// generates the full response server-side before sending anything.
+    /// Default: `true` (streaming).
+    pub is_streaming: bool,
 }
 
 impl UpstreamRequest {
@@ -51,6 +57,7 @@ impl UpstreamRequest {
             url: url.into(),
             headers: HeaderMap::new(),
             body: None,
+            is_streaming: true,
         }
     }
 
@@ -66,6 +73,7 @@ impl UpstreamRequest {
             url: url.into(),
             headers,
             body: Some(body),
+            is_streaming: true,
         }
     }
 }
@@ -585,6 +593,7 @@ impl UpstreamClient {
             // are rarely >1 MiB; 8 MiB is a generous ceiling that
             // bounds worst-case memory per concurrent request.
             8 * 1024 * 1024,
+            spec.is_streaming,
         );
 
         Ok(UpstreamResponse {
