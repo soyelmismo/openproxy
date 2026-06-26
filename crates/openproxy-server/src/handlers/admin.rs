@@ -5089,9 +5089,22 @@ pub async fn debug_logs_clear(State(_s): State<AppState>) -> ApiResult<Json<serd
 /// the duration). For a 300MB DB it takes ~5-15 seconds. Returns 503
 /// if the writer lock can't be acquired (another write is in progress).
 pub async fn debug_vacuum(State(s): State<AppState>) -> ApiResult<Json<serde_json::Value>> {
-    // Mark VACUUM as in-progress so the dashboard button shows a spinner.
     s.set_vacuum_in_progress(true);
     let body: Result<Json<serde_json::Value>, ApiError> = async {
+        // Step 0: Reopen both connections BEFORE attempting VACUUM.
+        // The long-lived writer + reader connections hold stale page
+        // caches that reference pages from the pre-repair DB file.
+        // After an offline DB repair (sqlite3 .recover), the file on
+        // disk is completely different but the in-process connections
+        // still see the old file. Reopening gives us fresh connections
+        // that see the current state of the DB file.
+        tracing::info!("VACUUM step 0: reopening DB connections to clear stale page cache");
+        if let Err(e) = s.db_pool().reopen() {
+            tracing::warn!(error = %e, "VACUUM step 0: reopen failed (continuing with existing connection)");
+        }
+        // Drop the old writer guard — reopen() took its own locks
+        // internally. Now acquire a fresh writer for the VACUUM.
+
         let w = s
             .db_pool()
             .try_writer_for(ADMIN_LOCK_TIMEOUT)
@@ -5101,29 +5114,26 @@ pub async fn debug_vacuum(State(s): State<AppState>) -> ApiResult<Json<serde_jso
                 ))
             })?;
 
-        // Step 1: Checkpoint the WAL. This flushes pending writes
-        // from the WAL file into the main DB. If the WAL is the
-        // source of the corruption, this resolves it.
+        // Step 1: Checkpoint the WAL.
         let _ = w.pragma_update(None, "wal_checkpoint", "TRUNCATE");
         tracing::info!("VACUUM step 1: WAL checkpoint done");
 
-        // Step 2: Run integrity check to understand the DB state.
+        // Step 2: Integrity check.
         let integrity: String = w
             .query_row("PRAGMA integrity_check;", [], |r| r.get::<_, String>(0))
             .unwrap_or_else(|e| format!("integrity_check error: {}", e));
         tracing::info!("VACUUM step 2: integrity_check = {}", integrity);
 
         if integrity != "ok" {
-            // The DB has corruption. VACUUM will fail because it
-            // tries to read every page. Instead, try incremental_vacuum
-            // (which only touches free pages, not corrupt ones), then
-            // return the integrity error so the operator knows the DB
-            // needs manual repair.
             let _ = w.pragma_update(None, "auto_vacuum", "INCREMENTAL");
             let inc_result = w.execute_batch("PRAGMA incremental_vacuum(1000);");
             match inc_result {
                 Ok(()) => {
                     tracing::info!("VACUUM: incremental_vacuum succeeded despite integrity issues");
+                    // Reopen connections so subsequent queries see the
+                    // compacted DB.
+                    drop(w);
+                    let _ = s.db_pool().reopen();
                     s.record_vacuum_result("partial (integrity issues — incremental only)");
                     return Ok(Json(serde_json::json!({
                         "vacuumed": true,
@@ -5158,30 +5168,35 @@ pub async fn debug_vacuum(State(s): State<AppState>) -> ApiResult<Json<serde_jso
         match w.execute_batch("VACUUM;") {
             Ok(()) => {
                 tracing::info!("VACUUM step 3: full VACUUM completed");
+                // Reopen connections so subsequent queries see the
+                // compacted DB (VACUUM rebuilds the file; the old
+                // connection's page cache is stale).
+                drop(w);
+                let _ = s.db_pool().reopen();
                 s.record_vacuum_result("ok");
                 Ok(Json(serde_json::json!({
                     "vacuumed": true,
                     "integrity_check": "ok",
-                    "message": "VACUUM completed. Free pages have been reclaimed."
+                    "message": "VACUUM completed. Free pages have been reclaimed. \
+                                DB connections reopened to refresh page cache."
                 })))
             }
             Err(e) => {
-                // Full VACUUM failed even though integrity_check passed.
-                // This can happen if the DB is on a full disk or if
-                // there's a transient I/O issue. Try incremental as a
-                // fallback — it's less demanding.
                 tracing::warn!(error = %e, "VACUUM step 3: full VACUUM failed, trying incremental");
                 let _ = w.pragma_update(None, "auto_vacuum", "INCREMENTAL");
                 match w.execute_batch("PRAGMA incremental_vacuum(1000);") {
                     Ok(()) => {
                         tracing::info!("VACUUM: incremental fallback succeeded");
+                        drop(w);
+                        let _ = s.db_pool().reopen();
                         s.record_vacuum_result("partial (full VACUUM failed, incremental fallback)");
                         Ok(Json(serde_json::json!({
                             "vacuumed": true,
                             "partial": true,
                             "message": "Full VACUUM failed but incremental reclaim succeeded. \
-                                        The database is usable but may still have fragmentation. \
-                                        Try a full VACUUM again later or restart the server."
+                                        DB connections have been reopened. \
+                                        The database is usable — try a full VACUUM again later \
+                                        or restart the server for a clean state."
                         })))
                     }
                     Err(e2) => {
@@ -5202,7 +5217,6 @@ pub async fn debug_vacuum(State(s): State<AppState>) -> ApiResult<Json<serde_jso
         }
     }
     .await;
-    // Ensure in_progress is cleared even on error.
     s.set_vacuum_in_progress(false);
     match body {
         Ok(v) => ApiResult::ok(v),

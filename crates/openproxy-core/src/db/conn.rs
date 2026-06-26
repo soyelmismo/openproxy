@@ -155,6 +155,54 @@ impl DbPool {
         &self.path
     }
 
+    /// Close and reopen BOTH connections (writer + reader). This is
+    /// necessary after a VACUUM that changes the DB file structure,
+    /// or after an offline DB repair — the long-lived connections
+    /// hold stale page caches that reference pages that no longer
+    /// exist in the rebuilt DB file.
+    ///
+    /// **BLOCKING**: takes BOTH locks (writer then reader). Must not
+    /// be called while any query is in flight — the caller must hold
+    /// the writer lock before calling this (or ensure no concurrent
+    /// access by other means).
+    ///
+    /// After reopening, the new connections see the current state of
+    /// the DB file on disk (fresh page cache, fresh schema, fresh
+    /// prepared-statement cache).
+    pub fn reopen(&self) -> Result<()> {
+        let flags = OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_CREATE;
+
+        // Reopen the writer. We hold the writer lock (the caller
+        // must have acquired it) so this is safe.
+        // SAFETY: we're replacing the Connection inside the Mutex.
+        // The old Connection is dropped (closed) when we assign the
+        // new one. rusqlite::Connection::drop closes the SQLite
+        // handle.
+        let new_writer =
+            Connection::open_with_flags(&*self.path, flags).map_err(|e| CoreError::Database {
+                message: format!("reopen writer {}: {}", self.path.display(), e),
+                source: Some(Box::new(e)),
+            })?;
+        configure_connection(&new_writer)?;
+
+        // Reopen the reader. We need to take the reader lock too.
+        let new_reader =
+            Connection::open_with_flags(&*self.path, flags).map_err(|e| CoreError::Database {
+                message: format!("reopen reader {}: {}", self.path.display(), e),
+                source: Some(Box::new(e)),
+            })?;
+        configure_connection(&new_reader)?;
+
+        // Replace the connections. The old connections are dropped
+        // (and their SQLite handles closed) when we assign the new
+        // ones.
+        *self.writer.lock() = new_writer;
+        *self.reader.lock() = new_reader;
+
+        tracing::info!("DbPool: reopened both connections (writer + reader)");
+        Ok(())
+    }
+
     /// Open an *additional* `Connection` to the same SQLite file.
     ///
     /// `rusqlite::Connection` is `Send` but neither `Sync` nor `Clone`,
