@@ -105,11 +105,16 @@ impl UpstreamBodyStream {
         // For non-streaming, the initial deadline is total_deadline
         // (not start + body_chunk_ms). The LLM needs time to generate
         // the full response before sending the first (and only) chunk.
-        let initial_deadline = if is_streaming {
-            std::cmp::min(start + Duration::from_millis(body_chunk_ms), total_deadline)
-        } else {
-            total_deadline
-        };
+        // For streaming, the initial deadline is also total_deadline
+        // — the first chunk is bounded by the headers_deadline
+        // (ttft_ms) which is enforced by the upstream client's
+        // select! in call_inner. The body_chunk_ms gap only applies
+        // AFTER the first chunk arrives (in next_chunk's gap calc).
+        // Previously, the initial deadline was start + body_chunk_ms
+        // which killed streaming requests whose first token took
+        // longer than body_chunk_ms (e.g. 10s) even though ttft_ms
+        // (30s) hadn't expired yet.
+        let initial_deadline = total_deadline;
         Self {
             inner: Some(http_body_util::BodyStream::new(limited)),
             cancel_rx,
@@ -134,11 +139,8 @@ impl UpstreamBodyStream {
         is_streaming: bool,
     ) -> Self {
         let cancel_rx = cancel.subscribe();
-        let initial_deadline = if is_streaming {
-            std::cmp::min(start + Duration::from_millis(body_chunk_ms), total_deadline)
-        } else {
-            total_deadline
-        };
+        let _ = (start, body_chunk_ms, is_streaming);
+        let initial_deadline = total_deadline;
         Self {
             #[cfg(feature = "upstream-hyper")]
             inner: None,
