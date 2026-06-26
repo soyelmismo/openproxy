@@ -18,7 +18,10 @@ const options = {
   format: 'esm',
   target: 'es2022',
   outfile: join(outDir, 'app.js'),
-  sourcemap: true,
+  // No sourcemap in production builds — the .map file (1.4MB) gets
+  // embedded into the Rust binary via rust-embed and wastes 1.4MB of
+  // RAM. For development debugging, run `node build.mjs --sourcemap`.
+  sourcemap: process.argv.includes('--sourcemap'),
   minify: false,
   legalComments: 'eof',
   packages: 'bundle',
