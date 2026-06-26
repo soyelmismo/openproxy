@@ -234,10 +234,34 @@ async function triggerVacuum(): Promise<void> {
   vacuumStatus.in_progress = true;
   requestUpdate();
   try {
-    await api("/debug/vacuum", { method: "POST" });
-    showToast("VACUUM completed successfully", "success");
+    const result = await api("/debug/vacuum", { method: "POST" }) as { vacuumed?: boolean; partial?: boolean; integrity_check?: string; message?: string };
+    if (result.partial) {
+      showToast("VACUUM partial: " + (result.message || "see details"), "warning");
+    } else {
+      showToast("VACUUM completed successfully", "success");
+    }
   } catch (e: unknown) {
-    showToast("VACUUM failed: " + errStr(e), "error");
+    // VACUUM failed — the error message includes repair instructions
+    // if the DB is corrupt. Show it as a toast and also try the
+    // recover endpoint for diagnostics.
+    const errMsg = errStr(e);
+    showToast("VACUUM failed: " + errMsg, "error");
+    // If the error mentions "disk I/O" or "integrity", auto-trigger
+    // the recover diagnostic so the operator sees the repair instructions.
+    if (errMsg.includes("disk I/O") || errMsg.includes("integrity")) {
+      try {
+        const recovery = await api("/debug/recover", { method: "POST" }) as { instructions?: string; tables?: unknown[]; needs_manual_repair?: boolean };
+        if (recovery.needs_manual_repair && recovery.instructions) {
+          // Show the repair instructions in a more prominent way —
+          // a longer-lived toast with the full instructions.
+          showToast("DB needs manual repair. Check console for instructions.", "error");
+          console.error("=== DATABASE REPAIR INSTRUCTIONS ===\n" + recovery.instructions + "\n=== END INSTRUCTIONS ===");
+        }
+      } catch {
+        // Recovery endpoint also failed — non-fatal, the operator
+        // already has the VACUUM error message.
+      }
+    }
   } finally {
     await pollVacuumStatus();
   }

@@ -234,6 +234,7 @@ pub fn build_router(state: AppState) -> Router {
         .route("/debug/logs", get(handlers::admin::debug_logs))
         .route("/debug/clear", post(handlers::admin::debug_logs_clear))
         .route("/debug/vacuum", post(handlers::admin::debug_vacuum))
+        .route("/debug/recover", post(handlers::admin::debug_recover))
         .route(
             "/recording",
             get(handlers::admin::get_recording).post(handlers::admin::set_recording),

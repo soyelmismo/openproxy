@@ -148,6 +148,13 @@ impl DbPool {
         f(&guard)
     }
 
+    /// The filesystem path of the SQLite database file. Used by the
+    /// `POST /admin/api/debug/recover` endpoint to give the operator
+    /// the exact path for manual repair commands.
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+
     /// Open an *additional* `Connection` to the same SQLite file.
     ///
     /// `rusqlite::Connection` is `Send` but neither `Sync` nor `Clone`,
