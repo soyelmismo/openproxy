@@ -639,7 +639,7 @@ function handleStageEvent(event: StageEvent): void {
     if (event.status_code > 0) existing.status_code = event.status_code;
   }
   if (state.logs.followTail) state.logs.page = 1;
-  requestUpdate();
+  if (state.currentView?.name === "logs") requestUpdate();
 }
 
 // Mirror the stage event into the two stage maps keyed by
@@ -793,7 +793,7 @@ function reapStaleInflight(): void {
   scan(state.logs.inflightByRequestId, false);
   // Only re-render when something actually changed — avoids a full
   // table re-render every tick while ordinary inflight entries exist.
-  if (reaped) requestUpdate();
+  if (reaped && state.currentView?.name === "logs") requestUpdate();
 }
 
 export function startStaleInflightReaper(): void {
@@ -837,7 +837,7 @@ async function resyncUsageRows(sinceId: number): Promise<void> {
         synthesizeTerminalEvent(r);
       }
       if (state.logs.followTail) state.logs.page = 1;
-      requestUpdate();
+      if (state.currentView?.name === "logs") requestUpdate();
     }
   } catch (e: unknown) {
     const err = e instanceof Error ? e : null;
@@ -870,6 +870,19 @@ function handleLogsMessage(raw: MessageEvent): void {
     showToast("Live Logs received an invalid WebSocket message.", "error");
     return;
   }
+  // CRASH FIX: only call requestUpdate() if the logs view is the
+  // currently mounted view. During boot, the WS opens (via
+  // initNotificationsStore in the sidebar) BEFORE the router has
+  // mounted any view into #main. If a WS message arrives during
+  // this window and we call requestUpdate(), lit-html tries to
+  // render the logs template (which uses `repeat`) into a container
+  // that either doesn't exist yet or belongs to a different view —
+  // causing "can't access property 'data', this._$AA.nextSibling
+  // is null" (a lit-html internal crash).
+  //
+  // We still update `state.logs.*` (so the data is fresh when the
+  // user navigates to logs), but we skip the requestUpdate() call.
+  const isLogsViewActive: boolean = state.currentView?.name === "logs";
   if (msg.type === "history") {
     const rawRows = Array.isArray(msg.rows) ? msg.rows : [];
     const rows: RecentUsageRow[] = rawRows.filter(isRecentUsageRowShape);
@@ -880,7 +893,8 @@ function handleLogsMessage(raw: MessageEvent): void {
     for (const r of rows) {
       synthesizeTerminalEvent(r);
     }
-    state.logs.page = 1; state.logs.followTail = true; requestUpdate();
+    state.logs.page = 1; state.logs.followTail = true;
+    if (isLogsViewActive) requestUpdate();
   } else if (msg.type === "row") {
     const candidate = msg.data ?? msg.row ?? msg;
     if (!isRecentUsageRowShape(candidate)) return;
@@ -914,8 +928,8 @@ function handleLogsMessage(raw: MessageEvent): void {
       reapRaceLosers(row);
     }
     if (state.logs.followTail) state.logs.page = 1;
-    requestUpdate();
-    updateOpenLogDetail(row as unknown as LogDetailLog);
+    if (isLogsViewActive) requestUpdate();
+    if (isLogsViewActive) updateOpenLogDetail(row as unknown as LogDetailLog);
   } else if (msg.type === "stage") {
     const candidate = msg.data ?? msg;
     if (isStageEventShape(candidate)) {

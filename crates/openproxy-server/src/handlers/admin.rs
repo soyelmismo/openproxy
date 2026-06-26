@@ -1296,9 +1296,25 @@ where
                 let _ = w.pragma_update(None, "wal_checkpoint", "TRUNCATE");
             }
 
-            // Retry on a fresh reader connection. The old reader may
-            // have had a stale page cache referencing the corrupt page;
-            // a fresh connection re-reads from disk.
+            // Reopen BOTH connections (writer + reader). The long-lived
+            // reader connection holds a stale page cache that references
+            // pages from the pre-repair / pre-VACUUM DB file. Simply
+            // re-acquiring the reader lock (try_reader_for) reuses the
+            // SAME connection with the SAME stale cache. reopen()
+            // closes the old connections and opens fresh ones that
+            // re-read from disk.
+            tracing::info!(
+                query = %query_name,
+                "analytics retry: reopening DB connections to clear stale page cache"
+            );
+            if let Err(e) = s.db_pool().reopen() {
+                tracing::warn!(
+                    error = %e,
+                    "analytics retry: reopen failed (continuing with existing connection)"
+                );
+            }
+
+            // Retry on the (now fresh) reader connection.
             let r2 = s
                 .db_pool()
                 .try_reader_for(ADMIN_LOCK_TIMEOUT)
