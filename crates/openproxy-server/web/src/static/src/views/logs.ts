@@ -30,7 +30,6 @@
 // file focused on orchestration.
 
 import { html, type TemplateResult } from "lit-html";
-import { repeat } from "lit-html/directives/repeat.js";
 // unsafeHTML import removed — log-row.ts now returns TemplateResult directly.
 import { state } from "../state/index.js";
 import { api } from "../state/api.js";
@@ -398,16 +397,7 @@ function renderLogsView(): TemplateResult {
         ${renderHeaderRow(visibleColKeys)}
         ${pageRows.length === 0
           ? html`<div class="empty" style="padding:2rem;">No recent requests yet. Use the API to see logs appear here in real time.</div>`
-          : repeat(
-              pageRows,
-              // Key by trace_id — unique per attempt. A retry has the
-              // same request_id but a different trace_id, so this key
-              // correctly distinguishes retry attempts as separate rows.
-              // The fallback chain covers synthetic inflight placeholders
-              // that may not have a trace_id yet.
-              (r) => r.trace_id || `id:${r.id}` || `req:${r.request_id}`,
-              (r) => renderLogRow(r, visibleColKeys),
-            )}
+          : pageRows.map((r) => html`<div data-key=${r.trace_id || `id:${r.id}` || `req:${r.request_id}`}>${renderLogRow(r, visibleColKeys)}</div>`)}
       </div>
       ${renderPagination(totalRows, totalP)}
     </div>

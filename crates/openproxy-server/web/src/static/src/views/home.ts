@@ -42,7 +42,6 @@
 // `ResizeObserver` (created in `observeResize`).
 
 import { html, type TemplateResult } from "lit-html";
-import { repeat } from "lit-html/directives/repeat.js";
 import { ref } from "lit-html/directives/ref.js";
 import type uPlot from "uplot";
 
@@ -461,11 +460,7 @@ function renderActivityFeed(snapshot: Snapshot | null): TemplateResult {
   const body: TemplateResult = rows.length === 0
     ? html`<div class="home-activity-empty muted">${t("home.activity_feed.empty")}</div>`
     : html`<div class="home-activity-list" ${ref(activityFeedRef)}>
-        ${repeat(
-          rows,
-          (r: RecentUsageRow) => r.id,
-          (r: RecentUsageRow, i: number) => renderActivityRow(r, i),
-        )}
+        ${rows.map((r: RecentUsageRow, i: number) => html`<div data-key=${r.id}>${renderActivityRow(r, i)}</div>`)}
       </div>`;
 
   return html`<section class="card home-activity-card">

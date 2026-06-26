@@ -12,11 +12,12 @@
 // - The router calls `mountView` for each route and captures the
 //   returned cleanup function.
 
-import { render, type TemplateResult } from 'lit-html';
+import { render, nothing, type TemplateResult } from 'lit-html';
 
 let currentContainer: HTMLElement | null = null;
 let currentRenderFn: (() => TemplateResult) | null = null;
 let updateScheduled = false;
+let renderBroken = false;
 
 /** Mount a view into `container`. Returns a cleanup function. */
 export function mountView(
@@ -25,6 +26,7 @@ export function mountView(
 ): () => void {
   currentContainer = container;
   currentRenderFn = renderFn;
+  renderBroken = false;
   render(renderFn(), container);
   return () => {
     if (currentContainer === container) {
@@ -36,47 +38,55 @@ export function mountView(
 
 /** Schedule a re-render on the next microtask. Coalesces calls.
  *
- *  CRASH FIX: checks that the container is actually connected to the
- *  DOM before rendering. During boot, the WS opens (via
- *  initNotificationsStore in the sidebar) BEFORE the router mounts
- *  the first view. If a WS message arrives during this window and
- *  triggers requestUpdate(), lit-html tries to render into a
- *  container that either doesn't exist yet or was cleaned up —
- *  causing "can't access property 'data', nextSibling is null"
- *  (a lit-html internal crash in the repeat() directive).
- *
- *  The `isConnected` check (Node.isConnected) returns true only when
- *  the element is in the document. This is a cheap O(1) check that
- *  prevents the crash without needing per-view guards. */
+ *  CRASH RECOVERY: if the previous render() threw (lit-html's repeat
+ *  directive can crash when the DOM is in an inconsistent state),
+ *  lit-html's internal state is corrupted — subsequent renders will
+ *  also crash. To recover, we clear the container completely
+ *  (render `nothing` to tear down lit-html's internal refs, then
+ *  clear innerHTML as a belt-and-suspenders reset) before doing a
+ *  fresh render. This is equivalent to a full unmount + remount. */
 export function requestUpdate(): void {
   if (updateScheduled) return;
   updateScheduled = true;
   queueMicrotask(() => {
     updateScheduled = false;
-    // Guard: only render if the container is connected AND has
-    // already been initialized by a mountView() call (has childNodes).
-    // During boot, the WS opens before the first view mounts — the
-    // #main div exists and isConnected=true, but it's empty. Calling
-    // render() on an empty container with a template that uses
-    // repeat() causes lit-html to crash ("nextSibling is null")
-    // because the directive expects to diff against existing DOM nodes.
-    // The childNodes.length > 0 check ensures we only re-render
-    // containers that have already been initialized.
     if (
-      currentContainer &&
-      currentRenderFn &&
-      currentContainer.isConnected &&
-      currentContainer.childNodes.length > 0
+      !currentContainer ||
+      !currentRenderFn ||
+      !currentContainer.isConnected ||
+      currentContainer.childNodes.length === 0
     ) {
-      try {
-        render(currentRenderFn(), currentContainer);
-      } catch (e) {
-        // lit-html can crash if the DOM is in an inconsistent state
-        // (e.g. a view was unmounted between the requestUpdate()
-        // call and the microtask). Log the error but don't propagate
-        // — the next requestUpdate() will try again with a clean DOM.
-        console.error("[openproxy] requestUpdate render() threw:", e);
+      return;
+    }
+    try {
+      if (renderBroken) {
+        // Previous render crashed — lit-html's internal state is
+        // corrupted. Reset by clearing the container, then do a
+        // fresh render from scratch.
+        render(nothing, currentContainer);
+        currentContainer.innerHTML = '';
+        renderBroken = false;
       }
+      render(currentRenderFn(), currentContainer);
+    } catch (e) {
+      console.error("[openproxy] requestUpdate render() threw:", e);
+      renderBroken = true;
+      // Schedule a recovery render on the next microtask.
+      updateScheduled = true;
+      queueMicrotask(() => {
+        updateScheduled = false;
+        if (currentContainer && currentRenderFn && currentContainer.isConnected) {
+          try {
+            render(nothing, currentContainer);
+            currentContainer.innerHTML = '';
+            render(currentRenderFn(), currentContainer);
+            renderBroken = false;
+          } catch (e2) {
+            console.error("[openproxy] recovery render also failed:", e2);
+            renderBroken = true;
+          }
+        }
+      });
     }
   });
 }
@@ -85,15 +95,22 @@ export function requestUpdate(): void {
 export function forceUpdate(): void {
   updateScheduled = false;
   if (
-    currentContainer &&
-    currentRenderFn &&
-    currentContainer.isConnected &&
-    currentContainer.childNodes.length > 0
+    !currentContainer ||
+    !currentRenderFn ||
+    !currentContainer.isConnected ||
+    currentContainer.childNodes.length === 0
   ) {
-    try {
-      render(currentRenderFn(), currentContainer);
-    } catch (e) {
-      console.error("[openproxy] forceUpdate render() threw:", e);
+    return;
+  }
+  try {
+    if (renderBroken) {
+      render(nothing, currentContainer);
+      currentContainer.innerHTML = '';
+      renderBroken = false;
     }
+    render(currentRenderFn(), currentContainer);
+  } catch (e) {
+    console.error("[openproxy] forceUpdate render() threw:", e);
+    renderBroken = true;
   }
 }
