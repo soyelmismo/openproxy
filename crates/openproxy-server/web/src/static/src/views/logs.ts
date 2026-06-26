@@ -549,7 +549,7 @@ function handleStageEvent(event: StageEvent): void {
   if (exactRow) {
     if (exactRow.id != null) state.logs.rowById.set(exactRow.id, exactRow);
     if (state.logs.followTail) state.logs.page = 1;
-    if (state.currentView?.name === "logs") requestUpdate();
+    // Rendering handled by the 250ms render interval in mountLogs — no requestUpdate() here.
     if (state.currentView?.name === "logs") updateOpenLogDetail(exactRow as unknown as LogDetailLog);
     return;
   }
@@ -629,7 +629,7 @@ function handleStageEvent(event: StageEvent): void {
     if (event.status_code > 0) existing.status_code = event.status_code;
   }
   if (state.logs.followTail) state.logs.page = 1;
-  if (state.currentView?.name === "logs") requestUpdate();
+  // Rendering handled by the 250ms render interval in mountLogs — no requestUpdate() here.
 }
 
 // Mirror the stage event into the two stage maps keyed by
@@ -742,7 +742,6 @@ function reapStaleInflight(): void {
   const now = Date.now();
   const isTerminal = (s: string | undefined): boolean =>
     !!s && (s === "completed" || s === "failed" || s === "cancelled");
-  let reaped = false;
   const scan = (map: Map<string, RecentUsageRow>, byTrace: boolean): void => {
     for (const [key, placeholder] of map) {
       const stage = byTrace
@@ -776,14 +775,13 @@ function reapStaleInflight(): void {
       // modal showed "200" (from the placeholder's status_code).
       placeholder.status_code = 499;
       placeholder.error_message = "Stream stalled — no response from upstream for 120s. The request was cancelled by the stale-inflight reaper.";
-      reaped = true;
     }
   };
   scan(state.logs.inflightByTraceId, true);
   scan(state.logs.inflightByRequestId, false);
   // Only re-render when something actually changed — avoids a full
   // table re-render every tick while ordinary inflight entries exist.
-  if (reaped && state.currentView?.name === "logs") requestUpdate();
+  // Rendering handled by the 250ms render interval in mountLogs.
 }
 
 export function startStaleInflightReaper(): void {
@@ -827,7 +825,7 @@ async function resyncUsageRows(sinceId: number): Promise<void> {
         synthesizeTerminalEvent(r);
       }
       if (state.logs.followTail) state.logs.page = 1;
-      if (state.currentView?.name === "logs") requestUpdate();
+      // Rendering handled by the 250ms render interval in mountLogs — no requestUpdate() here.
     }
   } catch (e: unknown) {
     const err = e instanceof Error ? e : null;
@@ -884,7 +882,7 @@ function handleLogsMessage(raw: MessageEvent): void {
       synthesizeTerminalEvent(r);
     }
     state.logs.page = 1; state.logs.followTail = true;
-    if (isLogsViewActive) requestUpdate();
+    // Rendering handled by the 250ms render interval in mountLogs.
   } else if (msg.type === "row") {
     const candidate = msg.data ?? msg.row ?? msg;
     if (!isRecentUsageRowShape(candidate)) return;
@@ -918,7 +916,7 @@ function handleLogsMessage(raw: MessageEvent): void {
       reapRaceLosers(row);
     }
     if (state.logs.followTail) state.logs.page = 1;
-    if (isLogsViewActive) requestUpdate();
+    // Rendering handled by the 250ms render interval in mountLogs.
     if (isLogsViewActive) updateOpenLogDetail(row as unknown as LogDetailLog);
   } else if (msg.type === "stage") {
     const candidate = msg.data ?? msg;
@@ -1167,15 +1165,30 @@ export async function mountLogs(): Promise<(() => void) | void> {
   startLogLatencyTicker();
   startStaleInflightReaper();
 
-  // Cleanup: tear down all three (WS, ticker, reaper) and release
-  // the lit-html container so the next view's `mountView` doesn't
-  // race with our `requestUpdate()`.
-  // CRITICAL: clear the message handler so the WS (which may be
-  // re-opened by the notifications store) doesn't route messages
-  // to handleLogsMessage when the logs view is no longer mounted.
-  // Without this, handleLogsMessage runs with a stale renderFn
-  // and crashes lit-html.
+  // CRASH FIX: render on a fixed 250ms interval instead of calling
+  // requestUpdate() from WS message handlers. The previous approach
+  // (requestUpdate on every WS message) crashed lit-html because:
+  // 1. WS messages arrive asynchronously during boot, before the
+  //    view's DOM is fully initialized
+  // 2. The ticker modifies DOM nodes directly (textContent), which
+  //    can corrupt lit-html's internal state when requestUpdate()
+  //    tries to diff against the modified DOM
+  // 3. Rapid requestUpdate() calls (multiple per second under load)
+  //    overwhelm lit-html's microtask coalescing
+  //
+  // The interval approach decouples data updates (WS handlers modify
+  // state.logs.*) from rendering (the interval calls requestUpdate()
+  // at a controlled 4Hz cadence). This is the same pattern the
+  // live-store uses for the home dashboard.
+  let renderInterval: ReturnType<typeof setInterval> | null = setInterval(() => {
+    requestUpdate();
+  }, 250);
+
   return () => {
+    if (renderInterval) {
+      clearInterval(renderInterval);
+      renderInterval = null;
+    }
     setMessageHandler(null);
     disconnectLogsWebSocket();
     stopLogLatencyTicker();
