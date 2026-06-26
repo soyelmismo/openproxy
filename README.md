@@ -158,8 +158,6 @@ targets:
 | `aarch64-unknown-linux-gnu` | ARM64 Linux |
 | `armv7-unknown-linux-gnueabihf` | ARMv7 (arm32) Linux |
 | `x86_64-pc-windows-msvc` | x86_64 Windows |
-| `aarch64-pc-windows-msvc` | ARM64 Windows (experimental) |
-| `x86_64-apple-darwin` | Intel macOS |
 | `aarch64-apple-darwin` | Apple Silicon macOS |
 
 Each zip contains the `openproxy` (or `openproxy.exe`) binary plus
