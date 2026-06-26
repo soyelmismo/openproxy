@@ -100,7 +100,7 @@ pub struct OAuthProviderMeta {
 ///
 /// # Why `#[async_trait]` is still here (edition 2024 migration)
 ///
-/// The workspace was upgraded to Rust edition 2024 / rustc 1.89+, which
+/// The workspace was upgraded to Rust edition 2024 / rustc 1.96+, which
 /// supports native `async fn` in traits. We intentionally keep
 /// `#[async_trait]` on this trait (and every `impl OAuthProvider for ...`
 /// block) because the trait is used as a *trait object* — the

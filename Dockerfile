@@ -3,7 +3,7 @@
 # Multi-stage Dockerfile for openproxy.
 #
 # Stage 1 (builder):
-#   - Rust 1.89 on Debian Bookworm.
+#   - Rust 1.96 on Debian Bookworm.
 #   - Node.js 22 + pnpm for the dashboard frontend (TypeScript + esbuild).
 #   - Builds the frontend bundle (crates/openproxy-server/web/src/static/dist/).
 #   - Compiles the openproxy release binary.
@@ -25,7 +25,7 @@
 # ------------------------------------------------------------------------------
 # Stage 1 — builder
 # ------------------------------------------------------------------------------
-FROM rust:1.89-bookworm AS builder
+FROM rust:1.96-bookworm AS builder
 
 # Install Node.js 22 from NodeSource and enable pnpm via corepack.
 # `ca-certificates` and `curl` are needed to fetch the NodeSource setup
