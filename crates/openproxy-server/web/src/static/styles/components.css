@@ -585,11 +585,25 @@ body.sidebar-collapsed .sidebar-toggle { text-align: center; }
 .logs-connection-badge.disconnected { background: var(--color-error-soft);   color: var(--color-error);   border-color: var(--color-error); }
 
 /* ----- Logs container ----- */
+/* The outer #logs is a flex column: the scroll area (header + rows)
+   grows/shrinks with a max-height, and the pagination bar stays
+   fixed at the bottom OUTSIDE the scroll area. Previously the
+   pagination was inside the scroll container, which meant it
+   scrolled away with the rows — the user had to scroll to the
+   bottom to reach it, and the canvas/layout shifted on every
+   scroll event. */
 #logs {
   border: var(--border-w) var(--border-style) var(--color-border);
   background: var(--color-bg);
   max-height: 70vh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.logs-scroll-area {
+  flex: 1;
   overflow-y: auto;
+  min-height: 0;
 }
 
 /* ----- Sortable table headers ----- */

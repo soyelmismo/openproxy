@@ -177,43 +177,77 @@ function saveVisibleColumns(): void {
 }
 
 function mergeLogsByDescId(existing: RecentUsageRow[], incoming: RecentUsageRow[]): RecentUsageRow[] {
-  const merged = new Map<string | number, RecentUsageRow>();
+  // Key strategy: use (trace_id, request_id) as the primary identity
+  // for rows that haven't been persisted yet (id === 0 or null), and
+  // fall back to the DB id for finalized rows. This prevents the bug
+  // where multiple inflight rows with id=0 collapse into a single
+  // entry (the "new requests don't appear / overlap" issue).
+  const merged = new Map<string, RecentUsageRow>();
+  const rowKey = (r: RecentUsageRow): string => {
+    if (r.id && r.id > 0) return `id:${r.id}`;
+    if (r.trace_id) return `tid:${r.trace_id}`;
+    if (r.request_id) return `rid:${r.request_id}`;
+    return `fallback:${Math.random()}`;
+  };
   for (const row of existing) {
-    const k = Number(row.id) || row.id;
+    const k = rowKey(row);
     merged.set(k, row);
+    // Also index by request_id for backwards-compat lookups, but
+    // only as a secondary alias (the primary key is the rowKey above).
     if (row.request_id) merged.set("req:" + row.request_id, row);
   }
   for (const row of incoming) {
-    if (row == null || row.id == null) continue;
-    const k = Number(row.id) || row.id;
+    if (row == null) continue;
+    const k = rowKey(row);
     let base = merged.get(k);
-    if ((!k || k === 0) && row.request_id) {
-      const reqKey = "req:" + row.request_id;
-      if (merged.has(reqKey)) base = merged.get(reqKey) as RecentUsageRow;
+    // If the incoming row has id=0 (inflight), try to match an
+    // existing row by trace_id or request_id as a fallback.
+    if ((!row.id || row.id === 0) && row.trace_id) {
+      const tidKey = `tid:${row.trace_id}`;
+      if (merged.has(tidKey)) base = merged.get(tidKey) as RecentUsageRow;
     }
-    merged.set(k, { ...(base || {}), ...row });
-    if (row.request_id) merged.set("req:" + row.request_id, merged.get(k) as RecentUsageRow);
-    state.logs.lastSeenId = Math.max(state.logs.lastSeenId, row.id);
+    if ((!row.id || row.id === 0) && row.request_id) {
+      const reqKey = "req:" + row.request_id;
+      if (merged.has(reqKey) && !base) base = merged.get(reqKey) as RecentUsageRow;
+    }
+    const mergedRow = { ...(base || {}), ...row };
+    merged.set(k, mergedRow);
+    if (row.request_id) merged.set("req:" + row.request_id, mergedRow);
+    if (row.id && row.id > 0) state.logs.lastSeenId = Math.max(state.logs.lastSeenId, row.id);
   }
-  const seenKeys = new Set<string | number | symbol>();
-  const result = Array.from(merged.values()).filter((r) => {
-    const key = r.id != null ? Number(r.id) : (r.request_id ? "r:" + r.request_id : Symbol());
-    if (typeof key === "symbol" || seenKeys.has(key)) return false;
-    seenKeys.add(key);
-    return true;
-  }).sort((a, b) => (b.id || 0) - (a.id || 0));
+  // Deduplicate: a row might be indexed under both its primary key
+  // and a "req:" alias. Filter to only the primary-keyed entries,
+  // preserving insertion order.
+  const seen = new Set<RecentUsageRow>();
+  const result: RecentUsageRow[] = [];
+  for (const row of merged.values()) {
+    if (seen.has(row)) continue;
+    seen.add(row);
+    result.push(row);
+  }
+  result.sort((a, b) => {
+    // Finalized rows (id > 0) sort by id descending. Inflight rows
+    // (id === 0) sort by created_at descending so the newest
+    // inflight appears at the top.
+    if (a.id && a.id > 0 && b.id && b.id > 0) return b.id - a.id;
+    const aTime = Date.parse(a.created_at || "") || 0;
+    const bTime = Date.parse(b.created_at || "") || 0;
+    return bTime - aTime;
+  });
   const limit = state.logs.maxRows;
   if (result.length > limit) {
-    const removed = result.slice(limit);
     const finalResult = result.slice(0, limit);
-    for (const r of removed) {
-      const k = Number(r.id) || r.id;
-      merged.delete(k);
+    // Rebuild the merged map without the trimmed entries so
+    // rowById lookups don't return stale rows.
+    const trimmed = new Map<string, RecentUsageRow>();
+    for (const r of finalResult) {
+      trimmed.set(rowKey(r), r);
+      if (r.request_id) trimmed.set("req:" + r.request_id, r);
     }
-    state.logs.rowById = merged as Map<number, RecentUsageRow>;
+    state.logs.rowById = trimmed as unknown as Map<number, RecentUsageRow>;
     return finalResult;
   }
-  state.logs.rowById = merged as Map<number, RecentUsageRow>;
+  state.logs.rowById = merged as unknown as Map<number, RecentUsageRow>;
   return result;
 }
 
@@ -360,19 +394,21 @@ function renderLogsView(): TemplateResult {
       </div>
     </div>
     <div class="logs" id="logs" @click=${onLogsClick}>
-      ${renderHeaderRow(visibleColKeys)}
-      ${pageRows.length === 0
-        ? html`<div class="empty" style="padding:2rem;">No recent requests yet. Use the API to see logs appear here in real time.</div>`
-        : repeat(
-            pageRows,
-            // Key by trace_id — unique per attempt. A retry has the
-            // same request_id but a different trace_id, so this key
-            // correctly distinguishes retry attempts as separate rows.
-            // The fallback chain covers synthetic inflight placeholders
-            // that may not have a trace_id yet.
-            (r) => r.trace_id || `id:${r.id}` || `req:${r.request_id}`,
-            (r) => renderLogRow(r, visibleColKeys),
-          )}
+      <div class="logs-scroll-area" id="logs-scroll-area">
+        ${renderHeaderRow(visibleColKeys)}
+        ${pageRows.length === 0
+          ? html`<div class="empty" style="padding:2rem;">No recent requests yet. Use the API to see logs appear here in real time.</div>`
+          : repeat(
+              pageRows,
+              // Key by trace_id — unique per attempt. A retry has the
+              // same request_id but a different trace_id, so this key
+              // correctly distinguishes retry attempts as separate rows.
+              // The fallback chain covers synthetic inflight placeholders
+              // that may not have a trace_id yet.
+              (r) => r.trace_id || `id:${r.id}` || `req:${r.request_id}`,
+              (r) => renderLogRow(r, visibleColKeys),
+            )}
+      </div>
       ${renderPagination(totalRows, totalP)}
     </div>
   `;
