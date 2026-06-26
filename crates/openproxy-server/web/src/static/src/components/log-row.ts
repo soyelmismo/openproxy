@@ -15,17 +15,28 @@ export function renderLogPhaseHtml(
     return html`<span class="log-phase log-phase--idle" title="No live phase info (request finished before live-log opened)">—</span>`;
   }
   const phase: string = stage.stage || "started";
-  const elapsed: number = stage.elapsed_ms || 0;
   const label: string = STAGE_LABELS[phase] || phase;
   const cls: string = `log-phase log-phase--${phase}`;
   let sublabel: string;
   if (phase === "completed" || phase === "failed" || phase === "cancelled") {
-    sublabel = (total_ms != null && total_ms > 0) ? `total ${total_ms}ms` : `${elapsed}ms`;
+    sublabel = (total_ms != null && total_ms > 0) ? `total ${total_ms}ms` : `${stage.elapsed_ms || 0}ms`;
   } else if (total_ms != null && total_ms > 0) {
     sublabel = `${total_ms}ms stale`;
-  } else if (phase === "streaming" && stage.ttft_ms != null) sublabel = `ttft ${stage.ttft_ms}ms`;
-  else if ((phase === "waiting_ttft" || phase === "streaming") && stage.connect_ms != null) sublabel = `connect ${stage.connect_ms}ms`;
-  else sublabel = `${elapsed}ms`;
+  } else {
+    // LIVE LATENCY: compute elapsed time from the stage event's
+    // timestamp. This replaces the old ticker (which modified DOM
+    // directly and crashed lit-html). The 250ms render interval in
+    // mountLogs refreshes this at 4Hz.
+    const t: number = Date.parse(stage.timestamp || "");
+    const liveMs: number = isFinite(t) ? Math.max(0, Date.now() - t) : (stage.elapsed_ms || 0);
+    // Stale cap: if no new stage event for 60s (non-streaming) or
+    // 2s (streaming), freeze the counter so it doesn't climb forever.
+    const cap: number = phase === "streaming" ? 2_000 : 60_000;
+    const displayMs: number = liveMs > cap ? cap : liveMs;
+    if (phase === "streaming" && stage.ttft_ms != null) sublabel = `ttft ${stage.ttft_ms}ms`;
+    else if ((phase === "waiting_ttft" || phase === "streaming") && stage.connect_ms != null) sublabel = `connect ${stage.connect_ms}ms`;
+    else sublabel = `${displayMs}ms`;
+  }
   return html`<span class="${cls}" title="${label} (${sublabel})">${label}<span class="log-phase-sub">${sublabel}</span></span>`;
 }
 
@@ -43,7 +54,19 @@ function buildLogRowCells(
   if (has("provider")) cells.push(html`<span class="log-provider">${row.provider_id || ""}</span>`);
   if (has("model"))    cells.push(html`<span class="log-model">${row.upstream_model_id || ""}</span>`);
   if (has("tokens"))   cells.push(html`<span class="log-tokens">${formatContext(row.prompt_tokens)}↓ ${formatContext(row.completion_tokens)}↑</span>`);
-  if (has("latency"))  cells.push(html`<span class="log-latency">${row.total_ms || 0}ms</span>`);
+  if (has("latency"))  {
+    // Live latency for inflight rows: compute from stage timestamp.
+    // For finalized rows, use the DB total_ms.
+    let latencyMs: number = row.total_ms || 0;
+    if (latencyMs === 0 && stage && stage.timestamp) {
+      const t = Date.parse(stage.timestamp);
+      if (isFinite(t)) {
+        const live = Date.now() - t;
+        if (live > 0) latencyMs = live;
+      }
+    }
+    cells.push(html`<span class="log-latency">${latencyMs}ms</span>`);
+  }
   if (has("cost"))     cells.push(html`<span class="log-cost">$${(row.cost_usd || 0).toFixed(4)}</span>`);
   if (has("compression")) {
     const savings = row.compression_savings_pct ?? stage?.compression_savings_pct ?? null;

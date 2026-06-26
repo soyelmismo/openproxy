@@ -40,7 +40,6 @@ import {
   setMessageHandler,
   disconnectLogsWebSocket,
 } from "../state/ws.js";
-import { startLogLatencyTicker, stopLogLatencyTicker } from "../state/ticker.js";
 import { fetchRecordingState, toggleRecording } from "../components/recording-toggle.js";
 import { showToast } from "../components/toast.js";
 import { mountView, requestUpdate } from "../state/reactive.js";
@@ -1162,7 +1161,17 @@ export async function mountLogs(): Promise<(() => void) | void> {
   fetchRecordingState();
   setMessageHandler(handleLogsMessage);
   connectLogsWebSocket();
-  startLogLatencyTicker();
+  // CRASH FIX: do NOT start the latency ticker. The ticker (100ms
+  // interval) modifies DOM nodes directly (sub.textContent = ...)
+  // which conflicts with lit-html's diffing. When the 250ms render
+  // interval re-renders the template, lit-html finds DOM nodes in a
+  // state that doesn't match its internal template tree → crash
+  // 'nextSibling is null'. The live latency is now computed in the
+  // render function itself (renderLogRow reads stage.timestamp and
+  // computes elapsed = Date.now() - timestamp on each render). The
+  // 250ms render interval refreshes it at 4Hz — slightly less smooth
+  // than the ticker's 10Hz but without the DOM conflict.
+  // startLogLatencyTicker();  // DISABLED — see comment above
   startStaleInflightReaper();
 
   // CRASH FIX: render on a fixed 250ms interval instead of calling
@@ -1191,7 +1200,7 @@ export async function mountLogs(): Promise<(() => void) | void> {
     }
     setMessageHandler(null);
     disconnectLogsWebSocket();
-    stopLogLatencyTicker();
+    // stopLogLatencyTicker();  // not started — see comment in mount body
     stopStaleInflightReaper();
     cleanupReactive();
   };
