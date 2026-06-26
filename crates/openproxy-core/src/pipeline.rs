@@ -693,7 +693,7 @@ impl Pipeline {
         //    has `sub_combo_id = None` and is directly
         //    executable. Cycle / max-depth errors from the
         //    resolver abort the request before any upstream call.
-        let flat_targets = match self.flatten_targets(&combo.id, targets) {
+        let flat_targets = match self.flatten_targets(&combo.id, targets.clone()) {
             Ok(t) => t,
             Err(e) => return self.failure(e, attempt - 1, ErrorPhase::Resolve),
         };
@@ -1304,6 +1304,16 @@ impl Pipeline {
         // each target gets its own fresh retry budget. If every
         // target errored, surface the last per-target retry's
         // final result (which carries the last failure).
+        if let Some(ref r) = last_result {
+            if r.error.is_some() {
+                tracing::warn!(
+                    combo_id = combo.id.0,
+                    targets_tried = targets.len(),
+                    last_error = ?r.error,
+                    "combo exhausted: all targets failed, returning last error to client"
+                );
+            }
+        }
         last_result.unwrap_or_else(|| {
             self.failure(
                 CoreError::NoHealthyTargets(combo.id.0),

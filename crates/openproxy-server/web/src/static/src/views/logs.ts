@@ -1004,7 +1004,12 @@ async function openLogDetail(id: string, requestId: string, traceId?: string): P
   // 404/500 with "not found in database" — and surface a clear reason
   // in the modal instead. This covers race-loser ghosts whose terminal
   // event arrived but whose usage row was dropped (DB lock timeout).
-  const isInflight: boolean = !!inflight || (isSyntheticId && row.status_code === 0);
+  // ALSO: any row with a synthetic ID (Number.MAX_SAFE_INTEGER - ts,
+  // which is > 1_000_000_000) is an inflight/ghost regardless of
+  // status_code — the real DB row hasn't arrived yet. Without this
+  // check, clicking a completed-but-still-inflight row sends the
+  // synthetic ID to /usage/detail and gets a 500.
+  const isInflight: boolean = !!inflight || isSyntheticId || (row.status_code === 0);
   // Do not merge inflight/ghost rows into `state.logs.rows` — they
   // have id 0 / synthetic ids and would duplicate the inflight
   // placeholder already rendered from the inflight maps.
@@ -1055,7 +1060,12 @@ async function openLogDetail(id: string, requestId: string, traceId?: string): P
   // Fetch detail FIRST if the row is incomplete (broadcast rows have
   // request_body_json / response_body_json redacted). Then render
   // the modal with complete data — avoids the "flash of not recorded".
-  if (!hasCompleteLogDetail(row as unknown as LogDetailLog) && Number.isFinite(numericId) && numericId > 0) {
+  // Skip the fetch for synthetic IDs (inflight/ghost entries) — they
+  // don't exist in the DB and the fetch would 500.
+  if (!hasCompleteLogDetail(row as unknown as LogDetailLog)
+      && Number.isFinite(numericId)
+      && numericId > 0
+      && !isSyntheticId) {
     try {
       const detail = await api(`/usage/detail?id=${encodeURIComponent(id)}`) as { row?: RecentUsageRow; detail?: RecentUsageRow } | RecentUsageRow | null;
       const fetched = (detail && typeof detail === "object" && ("row" in detail || "detail" in detail))
