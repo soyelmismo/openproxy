@@ -576,6 +576,10 @@ impl Pipeline {
             config,
             record_bodies_and_headers,
             Arc::new(SelectionRegistry::new()),
+            CircuitBreakerRegistry::new(&CircuitBreakerConfig {
+                failure_threshold: 5,
+                unhealthy_duration_ms: 60_000,
+            }),
         )
     }
 
@@ -588,20 +592,24 @@ impl Pipeline {
     /// here with a fresh, per-pipeline registry — fine for tests
     /// but not for production (LKGP state would not survive across
     /// requests).
+    ///
+    /// LEAK FIX: `circuit_breaker` is now a parameter (not created
+    /// fresh per request). The registry is `Clone` (its inner state
+    /// is `Arc<Mutex<...>>`), so cloning shares the state across
+    /// per-request Pipelines. This makes the breaker actually work
+    /// (failures in one request affect the next) AND allows the
+    /// `prune_idle` sweep in `AppState` to clean up stale entries.
     pub fn with_selection_registry(
         conn: Arc<parking_lot::Mutex<Connection>>,
         config: PipelineConfig,
         record_bodies_and_headers: Arc<AtomicBool>,
         selection_registry: Arc<SelectionRegistry>,
+        circuit_breaker: CircuitBreakerRegistry,
     ) -> Self {
-        let cb = CircuitBreakerRegistry::new(&CircuitBreakerConfig {
-            failure_threshold: 5,
-            unhealthy_duration_ms: 60_000,
-        });
         Self {
             conn,
             config,
-            circuit_breaker: cb,
+            circuit_breaker,
             rr_counters: Arc::new(parking_lot::Mutex::new(HashMap::new())),
             selection_registry,
             record_bodies_and_headers,

@@ -117,6 +117,14 @@ pub struct AppState {
     /// [`Pipeline::with_selection_registry`] so LKGP state
     /// survives across requests.
     selection_registry: Arc<openproxy_core::combos::SelectionRegistry>,
+    /// Shared circuit breaker registry. Created once at boot and
+    /// cloned into every per-request `Pipeline` (the registry is
+    /// `Clone` — its inner state is `Arc<Mutex<...>>`, so clones
+    /// share the same underlying map). This makes the breaker
+    /// actually functional: failures in one request affect the
+    /// next, and the `prune_idle` sweep in the background task
+    /// can clean up stale entries.
+    circuit_breaker: openproxy_core::circuit_breaker::CircuitBreakerRegistry,
 }
 
 impl AppState {
@@ -512,6 +520,12 @@ impl AppState {
             crate::rate_limit::RateLimitConfig::default(),
         ));
         let selection_registry = Arc::new(openproxy_core::combos::SelectionRegistry::new());
+        let circuit_breaker = openproxy_core::circuit_breaker::CircuitBreakerRegistry::new(
+            &openproxy_core::config::CircuitBreakerConfig {
+                failure_threshold: 5,
+                unhealthy_duration_ms: 60_000,
+            },
+        );
         // Spawn a periodic cleanup of the rate-limiter's per-key map.
         // Without this sweep, entries for API keys / IPs that were used
         // once and never again would accumulate forever (the lazy
@@ -609,6 +623,11 @@ impl AppState {
         //   combo targets leave stale entries forever. Sweep every
         //   10 min, evict entries with no success in the last hour.
         //
+        // - `circuit_breaker`: per-account breaker map. Now that the
+        //   breaker is shared across requests (LEAK-HUNT-2 fix),
+        //   entries accumulate for every account_id seen. Sweep every
+        //   10 min, evict Healthy entries idle > 1 hour.
+        //
         // - `mi_collect(false)`: tell mimalloc to return freed-but-
         //   retained arenas to the OS NOW, rather than waiting for
         //   its ~1s automatic decay. This is the primary fix for the
@@ -621,6 +640,7 @@ impl AppState {
         //   `mimalloc` dependency for the full rationale.
         {
             let sr = Arc::clone(&selection_registry);
+            let cb = circuit_breaker.clone();
             tokio::spawn(async move {
                 // Fast tick (60s) for mi_collect; slow counter for
                 // the 10-min selection_registry prune.
@@ -643,7 +663,8 @@ impl AppState {
                         libmimalloc_sys::mi_collect(false);
                     }
 
-                    // Every 10 ticks (10 min), prune selection_registry.
+                    // Every 10 ticks (10 min), prune selection_registry
+                    // and circuit_breaker.
                     slow_counter = slow_counter.wrapping_add(1);
                     if slow_counter.is_multiple_of(10) {
                         let pruned = sr.prune_stale(std::time::Duration::from_secs(3600));
@@ -652,6 +673,13 @@ impl AppState {
                                 pruned,
                                 remaining = sr.len(),
                                 "selection_registry sweep: evicted stale target entries"
+                            );
+                        }
+                        let cb_pruned = cb.prune_idle(std::time::Duration::from_secs(3600));
+                        if cb_pruned > 0 {
+                            tracing::debug!(
+                                pruned = cb_pruned,
+                                "circuit_breaker sweep: evicted idle account entries"
                             );
                         }
                     }
@@ -677,6 +705,7 @@ impl AppState {
             oauth_provider_registry,
             idle_chunk_retryable_cell: Arc::new(AtomicBool::new(idle_chunk_retryable)),
             selection_registry: Arc::clone(&selection_registry),
+            circuit_breaker,
         };
         // Hot-reload custom adapters from DB so the registry is
         // complete before the first request arrives.
@@ -739,8 +768,15 @@ impl AppState {
         // LEAK FIX: periodic sweep of in-memory collections + mimalloc
         // arena trim. Mirrors the production sweep in `AppState::new`.
         let selection_registry = Arc::new(openproxy_core::combos::SelectionRegistry::new());
+        let circuit_breaker = openproxy_core::circuit_breaker::CircuitBreakerRegistry::new(
+            &openproxy_core::config::CircuitBreakerConfig {
+                failure_threshold: 5,
+                unhealthy_duration_ms: 60_000,
+            },
+        );
         {
             let sr = Arc::clone(&selection_registry);
+            let cb = circuit_breaker.clone();
             tokio::spawn(async move {
                 let mut fast_tick = tokio::time::interval(std::time::Duration::from_secs(60));
                 let mut slow_counter: u32 = 0;
@@ -758,6 +794,13 @@ impl AppState {
                                 pruned,
                                 remaining = sr.len(),
                                 "selection_registry sweep: evicted stale target entries"
+                            );
+                        }
+                        let cb_pruned = cb.prune_idle(std::time::Duration::from_secs(3600));
+                        if cb_pruned > 0 {
+                            tracing::debug!(
+                                pruned = cb_pruned,
+                                "circuit_breaker sweep: evicted idle account entries"
                             );
                         }
                     }
@@ -832,6 +875,7 @@ impl AppState {
                 db::app_config::IDLE_CHUNK_RETRYABLE_DEFAULT,
             )),
             selection_registry: Arc::clone(&selection_registry),
+            circuit_breaker,
         }
     }
 
@@ -1078,6 +1122,14 @@ impl AppState {
     /// across all in-flight requests.
     pub fn selection_registry(&self) -> Arc<openproxy_core::combos::SelectionRegistry> {
         Arc::clone(&self.selection_registry)
+    }
+
+    /// Borrow the shared circuit breaker registry. Cloned into every
+    /// per-request `Pipeline` so failures in one request affect the
+    /// next. The registry is `Clone` (inner `Arc<Mutex<...>>`), so
+    /// the clone shares the same underlying map.
+    pub fn circuit_breaker(&self) -> openproxy_core::circuit_breaker::CircuitBreakerRegistry {
+        self.circuit_breaker.clone()
     }
 }
 

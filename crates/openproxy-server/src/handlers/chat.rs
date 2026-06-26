@@ -312,6 +312,7 @@ async fn run_pipeline(
         config,
         state.record_bodies_and_flags(),
         state.selection_registry(),
+        state.circuit_breaker(),
     );
 
     // 6. Per-request IDs. The middleware already stamped a
@@ -378,14 +379,32 @@ async fn run_pipeline(
     // not the pipeline state, so a panic in the spawn is contained
     // to this task and the request still completes via the
     // existing `total` timeout on the reqwest send.
+    //
+    // LEAK FIX: the watchdog used to `sleep(watchdog_budget_ms)`
+    // unconditionally — even after the pipeline finished. With
+    // `total_ms` defaulting to 300,000 (5 min), every request left
+    // a lingering task holding the `cancel_tx` Arc for 5 minutes.
+    // At 100 req/min × 5 min = ~500 lingering tasks (~250-350 KB),
+    // and with race_size=8 → ~4,000 tasks (~2-3 MB). The fix: race
+    // the sleep against a `done_rx` signal that fires when the
+    // pipeline completes. The watchdog exits immediately on
+    // `done_rx.recv()` (pipeline finished) or on timeout (soft cancel).
+    let (done_tx, done_rx) = tokio::sync::oneshot::channel::<()>();
     {
         let cancel_tx = cancel_tx.clone();
         tokio::spawn(async move {
-            tokio::time::sleep(std::time::Duration::from_millis(watchdog_budget_ms)).await;
-            // `send` on a watch is a no-op if the channel is closed
-            // (i.e. the receiver was dropped because the pipeline
-            // finished earlier). We don't care about the result.
-            let _ = cancel_tx.send(true);
+            tokio::select! {
+                // Normal path: pipeline finished, cancel the watchdog.
+                _ = done_rx => {
+                    // Pipeline done — no need to fire the cancel.
+                    // The `cancel_tx` Arc is dropped here.
+                }
+                // Fallback: soft-cancel deadline reached before the
+                // pipeline finished. Fire the cancel signal.
+                _ = tokio::time::sleep(std::time::Duration::from_millis(watchdog_budget_ms)) => {
+                    let _ = cancel_tx.send(true);
+                }
+            }
         });
     }
 
@@ -431,6 +450,12 @@ async fn run_pipeline(
 
         tokio::spawn(async move {
             let result = pipeline.run(req).await;
+
+            // LEAK FIX: signal the watchdog that the pipeline
+            // finished so it cancels its sleep and drops the
+            // cancel_tx Arc immediately (instead of lingering for
+            // up to 5 minutes).
+            let _ = done_tx.send(());
 
             if let Some(err) = result.error {
                 let error_json = serde_json::json!({
@@ -483,6 +508,8 @@ async fn run_pipeline(
     // Non-streaming path: run the pipeline synchronously.
     let started = Instant::now();
     let result = pipeline.run(req).await;
+    // LEAK FIX: signal the watchdog that the pipeline finished.
+    let _ = done_tx.send(());
     let elapsed_ms = started.elapsed().as_millis();
 
     // 9. Translate the pipeline result into an HTTP response.
