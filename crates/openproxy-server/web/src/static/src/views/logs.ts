@@ -1154,11 +1154,14 @@ export async function mountLogs(): Promise<(() => void) | void> {
     w.__logsColumnsDocClickBound = true;
   }
 
-  // Start the WS, ticker, and reaper. All three are idempotent
-  // (they check their own handle before starting), but we always
-  // call them here so a fresh mount after cleanup gets a fresh
-  // connection / interval.
   fetchRecordingState();
+  // CRITICAL: register the message handler IMMEDIATELY so stage
+  // events arriving via WS are processed into inflight placeholders
+  // even before the first render completes. The 250ms render interval
+  // picks up the inflight data on the next tick.
+  // The handler is also registered at module load (see bottom of file)
+  // so stage events arriving during boot (before mountLogs runs) are
+  // captured.
   setMessageHandler(handleLogsMessage);
   connectLogsWebSocket();
   // CRASH FIX: do NOT start the latency ticker. The ticker (100ms
@@ -1198,10 +1201,24 @@ export async function mountLogs(): Promise<(() => void) | void> {
       clearInterval(renderInterval);
       renderInterval = null;
     }
-    setMessageHandler(null);
+    // Do NOT clear the message handler on unmount. The handler only
+    // updates state.logs.* (no requestUpdate, no DOM mutation) so it's
+    // safe to keep running. This ensures stage events arriving while
+    // the user is on another view are still processed — inflight
+    // placeholders are created so when the user navigates back to logs,
+    // they see the live requests immediately. The 250ms render interval
+    // (which only runs while logs is mounted) picks up the data.
+    // setMessageHandler(null);  // intentionally NOT called
     disconnectLogsWebSocket();
     // stopLogLatencyTicker();  // not started — see comment in mount body
     stopStaleInflightReaper();
     cleanupReactive();
   };
 }
+
+// Register the WS message handler at module load time so stage events
+// arriving during boot (before the user navigates to the logs view) are
+// captured into inflight placeholders. The handler is safe to call at
+// any time — it only updates state.logs.* data, never touches the DOM
+// (rendering is done by the 250ms render interval in mountLogs).
+setMessageHandler(handleLogsMessage);
