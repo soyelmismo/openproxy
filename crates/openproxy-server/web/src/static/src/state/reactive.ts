@@ -53,7 +53,21 @@ export function requestUpdate(): void {
   updateScheduled = true;
   queueMicrotask(() => {
     updateScheduled = false;
-    if (currentContainer && currentRenderFn && currentContainer.isConnected) {
+    // Guard: only render if the container is connected AND has
+    // already been initialized by a mountView() call (has childNodes).
+    // During boot, the WS opens before the first view mounts — the
+    // #main div exists and isConnected=true, but it's empty. Calling
+    // render() on an empty container with a template that uses
+    // repeat() causes lit-html to crash ("nextSibling is null")
+    // because the directive expects to diff against existing DOM nodes.
+    // The childNodes.length > 0 check ensures we only re-render
+    // containers that have already been initialized.
+    if (
+      currentContainer &&
+      currentRenderFn &&
+      currentContainer.isConnected &&
+      currentContainer.childNodes.length > 0
+    ) {
       try {
         render(currentRenderFn(), currentContainer);
       } catch (e) {
@@ -70,7 +84,16 @@ export function requestUpdate(): void {
 /** Force an immediate synchronous re-render. */
 export function forceUpdate(): void {
   updateScheduled = false;
-  if (currentContainer && currentRenderFn) {
-    render(currentRenderFn(), currentContainer);
+  if (
+    currentContainer &&
+    currentRenderFn &&
+    currentContainer.isConnected &&
+    currentContainer.childNodes.length > 0
+  ) {
+    try {
+      render(currentRenderFn(), currentContainer);
+    } catch (e) {
+      console.error("[openproxy] forceUpdate render() threw:", e);
+    }
   }
 }

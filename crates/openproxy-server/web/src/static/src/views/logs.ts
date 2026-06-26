@@ -1180,7 +1180,13 @@ export async function mountLogs(): Promise<(() => void) | void> {
   // Cleanup: tear down all three (WS, ticker, reaper) and release
   // the lit-html container so the next view's `mountView` doesn't
   // race with our `requestUpdate()`.
+  // CRITICAL: clear the message handler so the WS (which may be
+  // re-opened by the notifications store) doesn't route messages
+  // to handleLogsMessage when the logs view is no longer mounted.
+  // Without this, handleLogsMessage runs with a stale renderFn
+  // and crashes lit-html.
   return () => {
+    setMessageHandler(null);
     disconnectLogsWebSocket();
     stopLogLatencyTicker();
     stopStaleInflightReaper();
