@@ -541,6 +541,73 @@ pub async fn put_idle_chunk_retryable(
 // Recording TTL
 // =====================================================================
 
+/// `GET /admin/config/maintenance` — read the current maintenance
+/// config (auto_vacuum, vacuum_interval_hours, usage_retention_days)
+/// and the VACUUM status (last_run, in_progress, next_scheduled).
+pub async fn get_maintenance_config(
+    State(s): State<AppState>,
+    headers: HeaderMap,
+) -> ApiResult<Json<serde_json::Value>> {
+    if let Err(e) = authenticate_admin_ws(&s, &headers, None) {
+        return e.into();
+    }
+    let cfg = s.maintenance_config();
+    let status = s.vacuum_status();
+    ApiResult::ok(Json(serde_json::json!({
+        "auto_vacuum": cfg.auto_vacuum,
+        "vacuum_interval_hours": cfg.vacuum_interval_hours,
+        "usage_retention_days": cfg.usage_retention_days,
+        "vacuum_status": status,
+    })))
+}
+
+/// `PUT /admin/config/maintenance` — update the maintenance config at
+/// runtime. Body: `{ "auto_vacuum": bool, "vacuum_interval_hours": u32,
+/// "usage_retention_days": u32 }`. All fields are optional — missing
+/// fields keep their current value. Changes take effect on the next
+/// background tick (no restart needed).
+pub async fn put_maintenance_config(
+    State(s): State<AppState>,
+    headers: HeaderMap,
+    Json(body): Json<serde_json::Value>,
+) -> ApiResult<Json<serde_json::Value>> {
+    if let Err(e) = authenticate_admin_ws(&s, &headers, None) {
+        return e.into();
+    }
+    let mut cfg = s.maintenance_config();
+    if let Some(v) = body.get("auto_vacuum").and_then(|v| v.as_bool()) {
+        cfg.auto_vacuum = v;
+    }
+    if let Some(v) = body.get("vacuum_interval_hours").and_then(|v| v.as_u64()) {
+        cfg.vacuum_interval_hours = v.max(1) as u32;
+    }
+    if let Some(v) = body.get("usage_retention_days").and_then(|v| v.as_u64()) {
+        cfg.usage_retention_days = v as u32;
+    }
+    s.set_maintenance_config(cfg.clone());
+    ApiResult::ok(Json(serde_json::json!({
+        "updated": true,
+        "config": {
+            "auto_vacuum": cfg.auto_vacuum,
+            "vacuum_interval_hours": cfg.vacuum_interval_hours,
+            "usage_retention_days": cfg.usage_retention_days,
+        }
+    })))
+}
+
+/// `GET /admin/config/vacuum-status` — read the current VACUUM status
+/// (last_run, last_result, in_progress, next_scheduled). Polled by
+/// the dashboard's config view button.
+pub async fn get_vacuum_status(
+    State(s): State<AppState>,
+    headers: HeaderMap,
+) -> ApiResult<Json<crate::state::VacuumStatus>> {
+    if let Err(e) = authenticate_admin_ws(&s, &headers, None) {
+        return e.into();
+    }
+    ApiResult::ok(Json(s.vacuum_status()))
+}
+
 /// `GET /admin/config/recording-ttl` — read the current recording body
 /// TTL in seconds.
 pub async fn get_recording_ttl(
@@ -5022,6 +5089,8 @@ pub async fn debug_logs_clear(State(_s): State<AppState>) -> ApiResult<Json<serd
 /// the duration). For a 300MB DB it takes ~5-15 seconds. Returns 503
 /// if the writer lock can't be acquired (another write is in progress).
 pub async fn debug_vacuum(State(s): State<AppState>) -> ApiResult<Json<serde_json::Value>> {
+    // Mark VACUUM as in-progress so the dashboard button shows a spinner.
+    s.set_vacuum_in_progress(true);
     let body: Result<Json<serde_json::Value>, ApiError> = async {
         let w = s
             .db_pool()
@@ -5036,18 +5105,22 @@ pub async fn debug_vacuum(State(s): State<AppState>) -> ApiResult<Json<serde_jso
         // Then VACUUM to compact free pages.
         w.execute_batch("VACUUM;").map_err(|e| {
             tracing::warn!(error = %e, "manual VACUUM failed");
+            s.record_vacuum_result(&e.to_string());
             ApiError(CoreError::Database {
                 message: format!("VACUUM failed: {}", e),
                 source: Some(Box::new(e)),
             })
         })?;
         tracing::info!("manual VACUUM completed successfully");
+        s.record_vacuum_result("ok");
         Ok(Json(serde_json::json!({
             "vacuumed": true,
             "message": "VACUUM completed. Free pages have been reclaimed."
         })))
     }
     .await;
+    // Ensure in_progress is cleared even on error.
+    s.set_vacuum_in_progress(false);
     match body {
         Ok(v) => ApiResult::ok(v),
         Err(e) => ApiResult::err(e),

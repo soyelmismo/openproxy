@@ -29,6 +29,10 @@ impl Default for ServerConfig {
 pub struct StorageConfig {
     pub database_path: String,
     pub encryption_key_source: EncryptionKeySource,
+    /// Database maintenance: automatic VACUUM + usage row retention.
+    /// Defaults to auto_vacuum=true, interval=6h, retention=7d.
+    #[serde(default)]
+    pub maintenance: MaintenanceConfig,
 }
 
 impl Default for StorageConfig {
@@ -36,6 +40,7 @@ impl Default for StorageConfig {
         Self {
             database_path: "~/.openproxy/data.db".into(),
             encryption_key_source: EncryptionKeySource::Env,
+            maintenance: MaintenanceConfig::default(),
         }
     }
 }
@@ -248,6 +253,70 @@ impl Default for CompressionConfig {
     fn default() -> Self {
         Self {
             mode: CompressionMode::Off,
+        }
+    }
+}
+
+/// Database maintenance configuration: automatic VACUUM + usage row
+/// retention. All fields have sensible defaults so the `[storage]`
+/// section in `config.toml` can omit the entire `[storage.maintenance]`
+/// subsection.
+///
+/// ## TOML example
+///
+/// ```toml
+/// [storage.maintenance]
+/// auto_vacuum = true          # default: true
+/// vacuum_interval_hours = 6   # default: 6
+/// usage_retention_days = 7    # default: 7
+/// ```
+///
+/// Set `auto_vacuum = false` to disable the background VACUUM task
+/// entirely (the manual `POST /admin/api/debug/vacuum` endpoint still
+/// works). The usage row prune task runs regardless (it prevents the
+/// `usage` table from growing without bound), but `usage_retention_days`
+/// controls how old rows must be before they're deleted.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MaintenanceConfig {
+    /// When `true` (default), the background task runs `VACUUM` (or
+    /// `PRAGMA incremental_vacuum` if auto_vacuum is enabled) every
+    /// `vacuum_interval_hours` hours. When `false`, VACUUM only runs
+    /// when the operator manually triggers it via the dashboard button
+    /// or `POST /admin/api/debug/vacuum`.
+    #[serde(default = "default_auto_vacuum")]
+    pub auto_vacuum: bool,
+
+    /// Hours between automatic VACUUM runs. Default: 6 (4×/day).
+    /// Minimum: 1 (anything lower is clamped to 1 to avoid running
+    /// VACUUM more than once per hour — VACUUM takes an exclusive
+    /// lock and a 300MB DB needs ~5-15s).
+    #[serde(default = "default_vacuum_interval_hours")]
+    pub vacuum_interval_hours: u32,
+
+    /// Days of usage rows to retain before the prune task deletes them.
+    /// Default: 7. Set to 0 to disable pruning (NOT recommended — the
+    /// `usage` table grows by one row per request and will eventually
+    /// cause disk I/O errors on a large DB).
+    #[serde(default = "default_usage_retention_days")]
+    pub usage_retention_days: u32,
+}
+
+fn default_auto_vacuum() -> bool {
+    true
+}
+fn default_vacuum_interval_hours() -> u32 {
+    6
+}
+fn default_usage_retention_days() -> u32 {
+    7
+}
+
+impl Default for MaintenanceConfig {
+    fn default() -> Self {
+        Self {
+            auto_vacuum: default_auto_vacuum(),
+            vacuum_interval_hours: default_vacuum_interval_hours(),
+            usage_retention_days: default_usage_retention_days(),
         }
     }
 }

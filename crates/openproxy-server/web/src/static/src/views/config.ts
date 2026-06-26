@@ -63,6 +63,18 @@ interface ConfigPayload {
   compression?: string | null;
   /** When true, idle_chunk timeouts are treated as retryable. */
   idle_chunk_retryable?: boolean | null;
+  /** Maintenance config (auto_vacuum, interval, retention). */
+  maintenance?: {
+    auto_vacuum?: boolean | null;
+    vacuum_interval_hours?: number | null;
+    usage_retention_days?: number | null;
+    vacuum_status?: {
+      last_run?: string | null;
+      last_result?: string | null;
+      in_progress?: boolean | null;
+      next_scheduled?: string | null;
+    } | null;
+  } | null;
 }
 
 type TimeoutKey = "connect_ms" | "request_send_ms" | "ttft_ms" | "idle_chunk_ms" | "total_ms";
@@ -90,6 +102,14 @@ let liveTimeouts: Record<TimeoutKey, number> = { ...DEFAULT_TIMEOUTS };
 let liveRecordingTtl = 300;
 let liveCompression = "off";
 let liveIdleChunkRetryable = false;
+// Maintenance / VACUUM state
+let liveAutoVacuum = true;
+let liveVacuumIntervalHours = 6;
+let liveUsageRetentionDays = 7;
+let vacuumStatus: { last_run: string | null; last_result: string | null; in_progress: boolean; next_scheduled: string | null } = {
+  last_run: null, last_result: null, in_progress: false, next_scheduled: null,
+};
+let vacuumPollHandle: ReturnType<typeof setInterval> | null = null;
 
 // Banner state. Set by the patch helpers after each save.
 let bannerKind: "info" | "success" = "info";
@@ -187,6 +207,54 @@ async function patchIdleChunkRetryable(val: boolean): Promise<boolean> {
     showToast("Error: " + errStr(e), "error");
     requestUpdate();
     return false;
+  }
+}
+
+// ---- Maintenance / VACUUM ----
+
+async function patchMaintenance(): Promise<void> {
+  try {
+    await api("/config/maintenance", {
+      method: "PUT",
+      body: JSON.stringify({
+        auto_vacuum: liveAutoVacuum,
+        vacuum_interval_hours: liveVacuumIntervalHours,
+        usage_retention_days: liveUsageRetentionDays,
+      }),
+    });
+    showToast("Maintenance config updated", "success");
+    requestUpdate();
+  } catch (e: unknown) {
+    showToast("Error: " + errStr(e), "error");
+  }
+}
+
+async function triggerVacuum(): Promise<void> {
+  if (vacuumStatus.in_progress) return;
+  vacuumStatus.in_progress = true;
+  requestUpdate();
+  try {
+    await api("/debug/vacuum", { method: "POST" });
+    showToast("VACUUM completed successfully", "success");
+  } catch (e: unknown) {
+    showToast("VACUUM failed: " + errStr(e), "error");
+  } finally {
+    await pollVacuumStatus();
+  }
+}
+
+async function pollVacuumStatus(): Promise<void> {
+  try {
+    const data = await api("/config/vacuum-status") as { last_run?: string | null; last_result?: string | null; in_progress?: boolean; next_scheduled?: string | null };
+    vacuumStatus = {
+      last_run: data.last_run ?? null,
+      last_result: data.last_result ?? null,
+      in_progress: data.in_progress ?? false,
+      next_scheduled: data.next_scheduled ?? null,
+    };
+    requestUpdate();
+  } catch {
+    // Non-fatal — the status will update on the next poll.
   }
 }
 
@@ -425,6 +493,52 @@ function renderConfig(): TemplateResult {
     </div>`)}
   </details>`;
 
+  // Maintenance / VACUUM card
+  const vacuumBtnLabel = vacuumStatus.in_progress
+    ? "⏳ VACUUM in progress…"
+    : "🧹 Run VACUUM now";
+  const lastRunText = vacuumStatus.last_run
+    ? new Date(vacuumStatus.last_run).toLocaleString()
+    : "never";
+  const lastResultText = vacuumStatus.last_result
+    ? (vacuumStatus.last_result === "ok" ? "✅ ok" : "❌ " + vacuumStatus.last_result)
+    : "—";
+  const nextScheduledText = vacuumStatus.next_scheduled
+    ? new Date(vacuumStatus.next_scheduled).toLocaleString()
+    : (liveAutoVacuum ? "scheduled (next tick)" : "disabled");
+  const maintenanceCard = card("Database Maintenance", html`
+    <div class="config-field">
+      <label class="checkbox-label">
+        <input type="checkbox" ?checked=${liveAutoVacuum} @change=${(e: Event) => { liveAutoVacuum = (e.target as HTMLInputElement).checked; void patchMaintenance(); }}>
+        <span>Automatic VACUUM</span>
+      </label>
+      <p class="muted">When enabled, the server runs VACUUM every ${liveVacuumIntervalHours}h to compact freed pages. Disable to run VACUUM only manually.</p>
+    </div>
+    <div class="config-field">
+      <label>VACUUM interval (hours)</label>
+      <input type="number" min="1" max="168" .value=${String(liveVacuumIntervalHours)} @change=${(e: Event) => { const v = parseInt((e.target as HTMLInputElement).value, 10); if (v >= 1) { liveVacuumIntervalHours = v; void patchMaintenance(); } }}>
+    </div>
+    <div class="config-field">
+      <label>Usage retention (days)</label>
+      <input type="number" min="0" max="365" .value=${String(liveUsageRetentionDays)} @change=${(e: Event) => { const v = parseInt((e.target as HTMLInputElement).value, 10); if (v >= 0) { liveUsageRetentionDays = v; void patchMaintenance(); } }}>
+      <p class="muted">Rows older than this are deleted hourly. 0 = keep forever (not recommended).</p>
+    </div>
+    <div class="config-field">
+      <button class="btn ${vacuumStatus.in_progress ? "btn-disabled" : "btn-primary"}"
+              ?disabled=${vacuumStatus.in_progress}
+              @click=${() => void triggerVacuum()}>
+        ${vacuumBtnLabel}
+      </button>
+    </div>
+    <div class="config-field">
+      <span class="label">Last run:</span> <span class="value">${lastRunText}</span>
+      <span class="label" style="margin-left:1rem;">Result:</span> <span class="value">${lastResultText}</span>
+    </div>
+    <div class="config-field">
+      <span class="label">Next scheduled:</span> <span class="value">${nextScheduledText}</span>
+    </div>
+  `);
+
   return html`
     <div class="page-header"><h2>Config</h2></div>
     <div class="banner banner-${bannerKind}">
@@ -436,6 +550,7 @@ function renderConfig(): TemplateResult {
       ${recordingTtlCard}
       ${compressionCard}
       ${idleChunkCard}
+      ${maintenanceCard}
     </div>
     ${staticRegion}
     <details class="config-details">
@@ -474,8 +589,32 @@ export async function mountConfig(): Promise<(() => void) | void> {
     liveRecordingTtl = cfg.recording_ttl_secs ?? 300;
     liveCompression = cfg.compression ?? "off";
     liveIdleChunkRetryable = cfg.idle_chunk_retryable ?? false;
+    // Load maintenance config + vacuum status
+    try {
+      const maint = await api("/config/maintenance") as {
+        auto_vacuum?: boolean; vacuum_interval_hours?: number; usage_retention_days?: number;
+        vacuum_status?: { last_run?: string | null; last_result?: string | null; in_progress?: boolean; next_scheduled?: string | null };
+      };
+      liveAutoVacuum = maint.auto_vacuum ?? true;
+      liveVacuumIntervalHours = maint.vacuum_interval_hours ?? 6;
+      liveUsageRetentionDays = maint.usage_retention_days ?? 7;
+      if (maint.vacuum_status) {
+        vacuumStatus = {
+          last_run: maint.vacuum_status.last_run ?? null,
+          last_result: maint.vacuum_status.last_result ?? null,
+          in_progress: maint.vacuum_status.in_progress ?? false,
+          next_scheduled: maint.vacuum_status.next_scheduled ?? null,
+        };
+      }
+    } catch {
+      // Maintenance endpoint not available — keep defaults
+    }
+    // Start polling vacuum status every 5s (so the button updates
+    // when a VACUUM completes)
+    if (vacuumPollHandle) clearInterval(vacuumPollHandle);
+    vacuumPollHandle = setInterval(() => void pollVacuumStatus(), 5000);
     setBanner("info", "Live values.",
-      "The values below are the ones the server is currently using. Timeouts, Recording TTL, Compression, and the Idle Chunk Retryable flag are editable; the other sections reflect the loaded config.toml. Changes are persisted in the database and apply to the next request (timeouts) or the next prune tick (Recording TTL).");
+      "The values below are the ones the server is currently using. Timeouts, Recording TTL, Compression, the Idle Chunk Retryable flag, and Database Maintenance are editable; the other sections reflect the loaded config.toml.");
     loading = false;
     requestUpdate();
   } catch (e: unknown) {
@@ -483,5 +622,11 @@ export async function mountConfig(): Promise<(() => void) | void> {
     loading = false;
     requestUpdate();
   }
-  return cleanup;
+  return () => {
+    if (vacuumPollHandle) {
+      clearInterval(vacuumPollHandle);
+      vacuumPollHandle = null;
+    }
+    cleanup();
+  };
 }

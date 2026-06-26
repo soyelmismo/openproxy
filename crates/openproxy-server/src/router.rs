@@ -122,6 +122,15 @@ pub fn build_router(state: AppState) -> Router {
             axum::routing::put(handlers::admin::put_idle_chunk_retryable),
         )
         .route(
+            "/config/maintenance",
+            get(handlers::admin::get_maintenance_config)
+                .put(handlers::admin::put_maintenance_config),
+        )
+        .route(
+            "/config/vacuum-status",
+            get(handlers::admin::get_vacuum_status),
+        )
+        .route(
             "/providers",
             get(handlers::admin::list_providers).post(handlers::admin::create_provider),
         )

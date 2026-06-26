@@ -125,6 +125,31 @@ pub struct AppState {
     /// next, and the `prune_idle` sweep in the background task
     /// can clean up stale entries.
     circuit_breaker: openproxy_core::circuit_breaker::CircuitBreakerRegistry,
+    /// VACUUM maintenance settings (runtime-editable via the dashboard
+    /// config view or `PUT /admin/api/config/maintenance`). The
+    /// background task reads these on every tick.
+    maintenance_cell: Arc<RwLock<openproxy_core::config::MaintenanceConfig>>,
+    /// VACUUM status: last-run timestamp, last-run result, and whether
+    /// a VACUUM is currently in progress. Read by the dashboard's
+    /// config view to show the button state.
+    vacuum_status: Arc<RwLock<VacuumStatus>>,
+}
+
+/// VACUUM status reported to the dashboard. Updated by the background
+/// task and by the manual `POST /admin/api/debug/vacuum` endpoint.
+#[derive(Debug, Clone, Default, serde::Serialize)]
+pub struct VacuumStatus {
+    /// ISO-8601 timestamp of the last VACUUM run (manual or automatic).
+    /// `None` if no VACUUM has run since boot.
+    pub last_run: Option<String>,
+    /// `"ok"` or the error message from the last run.
+    pub last_result: Option<String>,
+    /// `true` while a VACUUM is in progress (the button shows a
+    /// spinner and is disabled).
+    pub in_progress: bool,
+    /// ISO-8601 timestamp of the next scheduled automatic VACUUM.
+    /// `None` if auto_vacuum is disabled.
+    pub next_scheduled: Option<String>,
 }
 
 impl AppState {
@@ -392,6 +417,18 @@ impl AppState {
         //     so the live-logs table does not grow indefinitely. Both
         //     prunes share the same TTL value and 60s cadence.
         let recording_ttl_secs_cell = Arc::new(RwLock::new(recording_ttl_secs));
+        // Maintenance config (auto_vacuum, interval, retention) —
+        // runtime-editable via the dashboard. Initialized from the
+        // config file; the dashboard can override via
+        // `PUT /admin/api/config/maintenance`.
+        let maintenance_config = config.storage.maintenance.clone();
+        let maintenance_cell = Arc::new(RwLock::new(maintenance_config));
+        let vacuum_status = Arc::new(RwLock::new(VacuumStatus {
+            last_run: None,
+            last_result: None,
+            in_progress: false,
+            next_scheduled: None,
+        }));
         let recording_ttl_pool = db_pool.clone();
         let recording_ttl_cell = Arc::clone(&recording_ttl_secs_cell);
         tokio::spawn(async move {
@@ -548,93 +585,111 @@ impl AppState {
         //
         // The `usage` table grows by one row per request. Without
         // pruning, it reaches 18,974 rows / 344MB in 24h of moderate
-        // load. SQLite's page cache maps a portion of the DB into
-        // RSS — a bigger DB means more resident memory even with the
-        // 2MB cache_size cap, because mmap_size (8MB) + WAL + page
-        // metadata all scale with DB size.
+        // load. This task:
+        //   1. Deletes entire usage rows older than `usage_retention_days`
+        //      (default 7 days, configurable via [storage.maintenance]).
+        //   2. Runs VACUUM every `vacuum_interval_hours` (default 6h)
+        //      IF `auto_vacuum` is true (default). When auto_vacuum is
+        //      false, VACUUM only runs when the operator triggers it
+        //      manually via the dashboard button or the
+        //      `POST /admin/api/debug/vacuum` endpoint.
         //
-        // `prune_expired_usage_rows` (in usage.rs) exists but was
-        // NEVER WIRED — only `prune_expired_recording_bodies` (which
-        // nulls heavy columns but keeps the row) was called. This
-        // task deletes entire rows older than USAGE_RETENTION_SECS
-        // (default 7 days), then runs `VACUUM` every 6 hours to
-        // compact the freed pages back to the OS.
-        //
-        // VACUUM requires an exclusive lock on the DB; we run it at
-        // a 6-hour cadence (not the 60s cadence of the row prune)
-        // to avoid contention with live requests. The VACUUM itself
-        // takes ~1-5s for a 300MB DB — acceptable for an admin proxy.
+        // Both settings are runtime-editable via `PUT /admin/api/config/maintenance`
+        // and the dashboard's config view. The background task reads
+        // the current values on every tick so changes take effect
+        // immediately (no restart needed).
         {
             let prune_pool = db_pool.clone();
+            let maint_cell = Arc::clone(&maintenance_cell);
+            let vac_status = Arc::clone(&vacuum_status);
             tokio::spawn(async move {
                 // Row prune: every 1 hour.
                 let mut prune_tick = tokio::time::interval(std::time::Duration::from_secs(3600));
                 prune_tick.tick().await; // skip immediate first tick
-                // VACUUM: every 6 hours (6 ticks of the prune interval).
                 let mut vacuum_counter: u32 = 0;
-                const USAGE_RETENTION_SECS: i64 = 7 * 24 * 3600; // 7 days
-                const VACUUM_EVERY_N_PRUNES: u32 = 6; // 6h / 1h = 6
                 loop {
                     prune_tick.tick().await;
-                    // Delete old usage rows.
-                    let pruned = {
-                        let w = prune_pool.writer();
-                        openproxy_core::usage::prune_expired_usage_rows(&w, USAGE_RETENTION_SECS)
+                    // Read current maintenance config (may have been
+                    // changed via the dashboard since the last tick).
+                    let (auto_vacuum, interval_hours, retention_days) = {
+                        let m = maint_cell.read();
+                        (
+                            m.auto_vacuum,
+                            m.vacuum_interval_hours,
+                            m.usage_retention_days,
+                        )
                     };
-                    match pruned {
-                        Ok(0) => {}
-                        Ok(n) => {
-                            tracing::info!(
-                                pruned_rows = n,
-                                retention_secs = USAGE_RETENTION_SECS,
-                                "usage row prune: deleted old rows"
-                            );
-                        }
-                        Err(e) => {
-                            tracing::warn!(error = %e, "usage row prune failed");
+                    let retention_secs: i64 = (retention_days as i64) * 24 * 3600;
+                    // Delete old usage rows (always runs, even if
+                    // auto_vacuum is false — pruning prevents the
+                    // table from growing without bound).
+                    if retention_secs > 0 {
+                        let pruned = {
+                            let w = prune_pool.writer();
+                            openproxy_core::usage::prune_expired_usage_rows(&w, retention_secs)
+                        };
+                        match pruned {
+                            Ok(0) => {}
+                            Ok(n) => {
+                                tracing::info!(
+                                    pruned_rows = n,
+                                    retention_secs = retention_secs,
+                                    "usage row prune: deleted old rows"
+                                );
+                            }
+                            Err(e) => {
+                                tracing::warn!(error = %e, "usage row prune failed");
+                            }
                         }
                     }
-                    // VACUUM every N prune cycles to compact freed pages.
-                    // Use `PRAGMA incremental_vacuum` (not `VACUUM`) —
-                    // incremental_vacuum is less disruptive: it reclaims
-                    // free pages in batches without rebuilding the whole
-                    // DB, and it doesn't hold an exclusive lock for the
-                    // entire duration. This prevents the "disk I/O error"
-                    // the user saw on the monthly_by_provider query when
-                    // VACUUM was running concurrently.
+                    // VACUUM: check if it's time to run. The interval
+                    // is in hours; we tick every 1h, so we run VACUUM
+                    // every `interval_hours` ticks.
+                    let interval_ticks = interval_hours.max(1) as u32;
                     vacuum_counter = vacuum_counter.wrapping_add(1);
-                    if vacuum_counter >= VACUUM_EVERY_N_PRUNES {
+                    if auto_vacuum && vacuum_counter >= interval_ticks {
                         vacuum_counter = 0;
-                        // Set auto_vacuum to incremental mode if not
-                        // already set. This is a no-op if already set.
-                        // NOTE: `PRAGMA auto_vacuum` can only be changed
-                        // on an empty DB — if it's already 0 (none) on
-                        // an existing DB, this PRAGMA is a no-op and we
-                        // fall through to a full VACUUM below.
+                        // Mark VACUUM as in-progress for the dashboard.
+                        {
+                            let mut st = vac_status.write();
+                            st.in_progress = true;
+                        }
                         let vacuum_result = {
                             let w = prune_pool.writer();
-                            // Try incremental_vacuum first (reclaims up
-                            // to N free pages). If auto_vacuum isn't
-                            // enabled, this is a no-op.
                             let _ = w.pragma_update(None, "auto_vacuum", "INCREMENTAL");
                             let inc_result = w.execute_batch("PRAGMA incremental_vacuum(1000);");
-                            // If incremental_vacuum reclaimed nothing
-                            // (auto_vacuum wasn't enabled on this DB),
-                            // fall back to a full VACUUM. This is more
-                            // disruptive but is the only way to reclaim
-                            // space on a DB that wasn't created with
-                            // auto_vacuum=INCREMENTAL.
                             match inc_result {
                                 Ok(()) => Ok(()),
                                 Err(_) => w.execute_batch("VACUUM;"),
                             }
                         };
-                        match vacuum_result {
+                        let now = chrono::Utc::now().to_rfc3339();
+                        let result_str = match vacuum_result {
                             Ok(()) => {
                                 tracing::info!("SQLite VACUUM: compacted freed pages");
+                                "ok".to_string()
                             }
                             Err(e) => {
-                                tracing::warn!(error = %e, "SQLite VACUUM failed (non-fatal — will retry next cycle)");
+                                tracing::warn!(
+                                    error = %e,
+                                    "SQLite VACUUM failed (non-fatal — will retry next cycle)"
+                                );
+                                e.to_string()
+                            }
+                        };
+                        // Update status.
+                        {
+                            let mut st = vac_status.write();
+                            st.in_progress = false;
+                            st.last_run = Some(now);
+                            st.last_result = Some(result_str);
+                            // Schedule next run.
+                            if auto_vacuum {
+                                let next = chrono::Utc::now()
+                                    + chrono::Duration::hours(interval_hours as i64);
+                                st.next_scheduled = Some(next.to_rfc3339());
+                            } else {
+                                st.next_scheduled = None;
                             }
                         }
                     }
@@ -733,6 +788,8 @@ impl AppState {
             idle_chunk_retryable_cell: Arc::new(AtomicBool::new(idle_chunk_retryable)),
             selection_registry: Arc::clone(&selection_registry),
             circuit_breaker,
+            maintenance_cell,
+            vacuum_status,
         };
         // Hot-reload custom adapters from DB so the registry is
         // complete before the first request arrives.
@@ -801,6 +858,10 @@ impl AppState {
                 unhealthy_duration_ms: 60_000,
             },
         );
+        let maintenance_cell = Arc::new(RwLock::new(
+            openproxy_core::config::MaintenanceConfig::default(),
+        ));
+        let vacuum_status = Arc::new(RwLock::new(VacuumStatus::default()));
         {
             let sr = Arc::clone(&selection_registry);
             let cb = circuit_breaker.clone();
@@ -903,6 +964,8 @@ impl AppState {
             )),
             selection_registry: Arc::clone(&selection_registry),
             circuit_breaker,
+            maintenance_cell,
+            vacuum_status,
         }
     }
 
@@ -1157,6 +1220,39 @@ impl AppState {
     /// the clone shares the same underlying map.
     pub fn circuit_breaker(&self) -> openproxy_core::circuit_breaker::CircuitBreakerRegistry {
         self.circuit_breaker.clone()
+    }
+
+    /// Read the current maintenance config (auto_vacuum, interval,
+    /// retention). Returns a clone so callers don't hold the lock.
+    pub fn maintenance_config(&self) -> openproxy_core::config::MaintenanceConfig {
+        self.maintenance_cell.read().clone()
+    }
+
+    /// Update the maintenance config at runtime. Persists to the
+    /// in-memory cell; the background task picks up the new values
+    /// on its next tick.
+    pub fn set_maintenance_config(&self, cfg: openproxy_core::config::MaintenanceConfig) {
+        *self.maintenance_cell.write() = cfg;
+    }
+
+    /// Read the current VACUUM status (last_run, in_progress, etc.)
+    /// for the dashboard's config view.
+    pub fn vacuum_status(&self) -> VacuumStatus {
+        self.vacuum_status.read().clone()
+    }
+
+    /// Mark VACUUM as in-progress (called by the manual vacuum endpoint).
+    pub fn set_vacuum_in_progress(&self, in_progress: bool) {
+        self.vacuum_status.write().in_progress = in_progress;
+    }
+
+    /// Record the result of a VACUUM run (called by both the manual
+    /// endpoint and the background task).
+    pub fn record_vacuum_result(&self, result: &str) {
+        let mut st = self.vacuum_status.write();
+        st.in_progress = false;
+        st.last_run = Some(chrono::Utc::now().to_rfc3339());
+        st.last_result = Some(result.to_string());
     }
 }
 
