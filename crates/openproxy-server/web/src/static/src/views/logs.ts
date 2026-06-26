@@ -559,8 +559,8 @@ function handleStageEvent(event: StageEvent): void {
   if (exactRow) {
     if (exactRow.id != null) state.logs.rowById.set(exactRow.id, exactRow);
     if (state.logs.followTail) state.logs.page = 1;
-    requestUpdate();
-    updateOpenLogDetail(exactRow as unknown as LogDetailLog);
+    if (state.currentView?.name === "logs") requestUpdate();
+    if (state.currentView?.name === "logs") updateOpenLogDetail(exactRow as unknown as LogDetailLog);
     return;
   }
   // A row exists for this `request_id` but with a different

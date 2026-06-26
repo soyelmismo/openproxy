@@ -34,14 +34,35 @@ export function mountView(
   };
 }
 
-/** Schedule a re-render on the next microtask. Coalesces calls. */
+/** Schedule a re-render on the next microtask. Coalesces calls.
+ *
+ *  CRASH FIX: checks that the container is actually connected to the
+ *  DOM before rendering. During boot, the WS opens (via
+ *  initNotificationsStore in the sidebar) BEFORE the router mounts
+ *  the first view. If a WS message arrives during this window and
+ *  triggers requestUpdate(), lit-html tries to render into a
+ *  container that either doesn't exist yet or was cleaned up —
+ *  causing "can't access property 'data', nextSibling is null"
+ *  (a lit-html internal crash in the repeat() directive).
+ *
+ *  The `isConnected` check (Node.isConnected) returns true only when
+ *  the element is in the document. This is a cheap O(1) check that
+ *  prevents the crash without needing per-view guards. */
 export function requestUpdate(): void {
   if (updateScheduled) return;
   updateScheduled = true;
   queueMicrotask(() => {
     updateScheduled = false;
-    if (currentContainer && currentRenderFn) {
-      render(currentRenderFn(), currentContainer);
+    if (currentContainer && currentRenderFn && currentContainer.isConnected) {
+      try {
+        render(currentRenderFn(), currentContainer);
+      } catch (e) {
+        // lit-html can crash if the DOM is in an inconsistent state
+        // (e.g. a view was unmounted between the requestUpdate()
+        // call and the microtask). Log the error but don't propagate
+        // — the next requestUpdate() will try again with a clean DOM.
+        console.error("[openproxy] requestUpdate render() threw:", e);
+      }
     }
   });
 }
