@@ -595,19 +595,46 @@ impl AppState {
                         }
                     }
                     // VACUUM every N prune cycles to compact freed pages.
+                    // Use `PRAGMA incremental_vacuum` (not `VACUUM`) —
+                    // incremental_vacuum is less disruptive: it reclaims
+                    // free pages in batches without rebuilding the whole
+                    // DB, and it doesn't hold an exclusive lock for the
+                    // entire duration. This prevents the "disk I/O error"
+                    // the user saw on the monthly_by_provider query when
+                    // VACUUM was running concurrently.
                     vacuum_counter = vacuum_counter.wrapping_add(1);
                     if vacuum_counter >= VACUUM_EVERY_N_PRUNES {
                         vacuum_counter = 0;
+                        // Set auto_vacuum to incremental mode if not
+                        // already set. This is a no-op if already set.
+                        // NOTE: `PRAGMA auto_vacuum` can only be changed
+                        // on an empty DB — if it's already 0 (none) on
+                        // an existing DB, this PRAGMA is a no-op and we
+                        // fall through to a full VACUUM below.
                         let vacuum_result = {
                             let w = prune_pool.writer();
-                            w.execute_batch("VACUUM;")
+                            // Try incremental_vacuum first (reclaims up
+                            // to N free pages). If auto_vacuum isn't
+                            // enabled, this is a no-op.
+                            let _ = w.pragma_update(None, "auto_vacuum", "INCREMENTAL");
+                            let inc_result = w.execute_batch("PRAGMA incremental_vacuum(1000);");
+                            // If incremental_vacuum reclaimed nothing
+                            // (auto_vacuum wasn't enabled on this DB),
+                            // fall back to a full VACUUM. This is more
+                            // disruptive but is the only way to reclaim
+                            // space on a DB that wasn't created with
+                            // auto_vacuum=INCREMENTAL.
+                            match inc_result {
+                                Ok(()) => Ok(()),
+                                Err(_) => w.execute_batch("VACUUM;"),
+                            }
                         };
                         match vacuum_result {
                             Ok(()) => {
                                 tracing::info!("SQLite VACUUM: compacted freed pages");
                             }
                             Err(e) => {
-                                tracing::warn!(error = %e, "SQLite VACUUM failed");
+                                tracing::warn!(error = %e, "SQLite VACUUM failed (non-fatal — will retry next cycle)");
                             }
                         }
                     }

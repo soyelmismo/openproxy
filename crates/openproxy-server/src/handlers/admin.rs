@@ -1178,10 +1178,10 @@ pub async fn usage_summary(
         // error than an indefinite hang for the operator.
         let w = s
             .db_pool()
-            .try_writer_for(ADMIN_LOCK_TIMEOUT)
+            .try_reader_for(ADMIN_LOCK_TIMEOUT)
             .ok_or_else(|| {
                 ApiError(CoreError::ServiceUnavailable(
-                    "writer lock busy: another query is holding the database; retry in a few seconds"
+                    "reader lock busy: another query is holding the database; retry in a few seconds"
                         .into(),
                 ))
             })?;
@@ -1203,10 +1203,10 @@ pub async fn usage_by_model(
         // `ADMIN_LOCK_TIMEOUT` and surface 503 if we lose the race.
         let w = s
             .db_pool()
-            .try_writer_for(ADMIN_LOCK_TIMEOUT)
+            .try_reader_for(ADMIN_LOCK_TIMEOUT)
             .ok_or_else(|| {
                 ApiError(CoreError::ServiceUnavailable(
-                    "writer lock busy: another query is holding the database; retry in a few seconds"
+                    "reader lock busy: another query is holding the database; retry in a few seconds"
                         .into(),
                 ))
             })?;
@@ -1230,10 +1230,10 @@ pub async fn usage_by_provider(
     let body: Result<Json<Vec<usage::ByProviderRow>>, ApiError> = async {
         let w = s
             .db_pool()
-            .try_writer_for(ADMIN_LOCK_TIMEOUT)
+            .try_reader_for(ADMIN_LOCK_TIMEOUT)
             .ok_or_else(|| {
                 ApiError(CoreError::ServiceUnavailable(
-                    "writer lock busy: another query is holding the database; retry in a few seconds"
+                    "reader lock busy: another query is holding the database; retry in a few seconds"
                         .into(),
                 ))
             })?;
@@ -1257,10 +1257,10 @@ pub async fn usage_monthly_by_provider(
     let body: Result<Json<Vec<usage::MonthlyByProviderRow>>, ApiError> = async {
         let w = s
             .db_pool()
-            .try_writer_for(ADMIN_LOCK_TIMEOUT)
+            .try_reader_for(ADMIN_LOCK_TIMEOUT)
             .ok_or_else(|| {
                 ApiError(CoreError::ServiceUnavailable(
-                    "writer lock busy: another query is holding the database; retry in a few seconds"
+                    "reader lock busy: another query is holding the database; retry in a few seconds"
                         .into(),
                 ))
             })?;
@@ -1279,10 +1279,10 @@ pub async fn usage_by_day(
     let body: Result<Json<Vec<usage::ByDayRow>>, ApiError> = async {
         let w = s
             .db_pool()
-            .try_writer_for(ADMIN_LOCK_TIMEOUT)
+            .try_reader_for(ADMIN_LOCK_TIMEOUT)
             .ok_or_else(|| {
                 ApiError(CoreError::ServiceUnavailable(
-                    "writer lock busy: another query is holding the database; retry in a few seconds"
+                    "reader lock busy: another query is holding the database; retry in a few seconds"
                         .into(),
                 ))
             })?;
@@ -1301,10 +1301,10 @@ pub async fn usage_by_account(
     let body: Result<Json<Vec<usage::ByAccountRow>>, ApiError> = async {
         let w = s
             .db_pool()
-            .try_writer_for(ADMIN_LOCK_TIMEOUT)
+            .try_reader_for(ADMIN_LOCK_TIMEOUT)
             .ok_or_else(|| {
                 ApiError(CoreError::ServiceUnavailable(
-                    "writer lock busy: another query is holding the database; retry in a few seconds"
+                    "reader lock busy: another query is holding the database; retry in a few seconds"
                         .into(),
                 ))
             })?;
@@ -1323,10 +1323,10 @@ pub async fn usage_by_status(
     let body: Result<Json<Vec<usage::ByStatusRow>>, ApiError> = async {
         let w = s
             .db_pool()
-            .try_writer_for(ADMIN_LOCK_TIMEOUT)
+            .try_reader_for(ADMIN_LOCK_TIMEOUT)
             .ok_or_else(|| {
                 ApiError(CoreError::ServiceUnavailable(
-                    "writer lock busy: another query is holding the database; retry in a few seconds"
+                    "reader lock busy: another query is holding the database; retry in a few seconds"
                         .into(),
                 ))
             })?;
@@ -1348,10 +1348,10 @@ pub async fn usage_errors(
     let body: Result<Json<Vec<usage::ErrorRow>>, ApiError> = async {
         let w = s
             .db_pool()
-            .try_writer_for(ADMIN_LOCK_TIMEOUT)
+            .try_reader_for(ADMIN_LOCK_TIMEOUT)
             .ok_or_else(|| {
                 ApiError(CoreError::ServiceUnavailable(
-                    "writer lock busy: another query is holding the database; retry in a few seconds"
+                    "reader lock busy: another query is holding the database; retry in a few seconds"
                         .into(),
                 ))
             })?;
@@ -1370,10 +1370,10 @@ pub async fn usage_latency(
     let body: Result<Json<analytics::LatencyPercentiles>, ApiError> = async {
         let w = s
             .db_pool()
-            .try_writer_for(ADMIN_LOCK_TIMEOUT)
+            .try_reader_for(ADMIN_LOCK_TIMEOUT)
             .ok_or_else(|| {
                 ApiError(CoreError::ServiceUnavailable(
-                    "writer lock busy: another query is holding the database; retry in a few seconds"
+                    "reader lock busy: another query is holding the database; retry in a few seconds"
                         .into(),
                 ))
             })?;
@@ -1392,10 +1392,10 @@ pub async fn usage_races(
     let body: Result<Json<analytics::RaceStats>, ApiError> = async {
         let w = s
             .db_pool()
-            .try_writer_for(ADMIN_LOCK_TIMEOUT)
+            .try_reader_for(ADMIN_LOCK_TIMEOUT)
             .ok_or_else(|| {
                 ApiError(CoreError::ServiceUnavailable(
-                    "writer lock busy: another query is holding the database; retry in a few seconds"
+                    "reader lock busy: another query is holding the database; retry in a few seconds"
                         .into(),
                 ))
             })?;

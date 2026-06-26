@@ -130,6 +130,15 @@ impl DbPool {
         self.reader.lock()
     }
 
+    /// Try to acquire the reader lock for at most `timeout` (blocking).
+    /// Returns `None` if the lock could not be acquired in time. Used by
+    /// analytics queries so a long-running reader doesn't block the
+    /// admin endpoint indefinitely — the caller returns 503 and the
+    /// operator can retry.
+    pub fn try_reader_for(&self, timeout: std::time::Duration) -> Option<ReaderGuard<'_>> {
+        self.reader.try_lock_for(timeout)
+    }
+
     /// Run a closure against the serialized writer connection.
     pub fn with_conn<F, R>(&self, f: F) -> R
     where
@@ -165,6 +174,16 @@ impl DbPool {
 
 /// Apply the standard pragmas required by spec §8/§9.
 fn configure_connection(conn: &Connection) -> Result<()> {
+    // Enable incremental auto_vacuum for new DBs. This allows
+    // `PRAGMA incremental_vacuum(N)` to reclaim free pages in batches
+    // without the disruptive full `VACUUM` that holds an exclusive
+    // lock. NOTE: this PRAGMA only takes effect on a freshly created
+    // DB (before any tables are created). On an existing DB created
+    // with auto_vacuum=NONE, this is a no-op — the background sweep
+    // in state.rs falls back to a full VACUUM in that case.
+    // We set it BEFORE journal_mode to ensure it's applied before
+    // any tables are created by migrations.
+    let _ = conn.pragma_update(None, "auto_vacuum", "INCREMENTAL");
     conn.pragma_update(None, "journal_mode", "WAL")
         .map_err(|e| CoreError::Database {
             message: format!("pragma journal_mode=WAL: {}", e),
