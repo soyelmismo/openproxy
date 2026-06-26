@@ -2869,13 +2869,15 @@ impl Pipeline {
                     // they can tune the right knob. The old mapping (all
                     // → "connect") was a leftover from the pre-migration
                     // reqwest path that couldn't separate phases.
-                    let phase_label = match phase {
-                        crate::upstream::UpstreamPhase::Dns => "dns",
-                        crate::upstream::UpstreamPhase::Dial => "dial",
-                        crate::upstream::UpstreamPhase::Tls => "tls",
-                        crate::upstream::UpstreamPhase::Write => "write",
-                        crate::upstream::UpstreamPhase::Headers => "headers",
-                        crate::upstream::UpstreamPhase::Body => "body",
+                    // Include the config field name so the operator
+                    // knows which timeout to adjust in the dashboard.
+                    let (phase_label, config_hint) = match phase {
+                        crate::upstream::UpstreamPhase::Dns => ("dns", "connect_ms"),
+                        crate::upstream::UpstreamPhase::Dial => ("dial", "connect_ms"),
+                        crate::upstream::UpstreamPhase::Tls => ("tls", "connect_ms"),
+                        crate::upstream::UpstreamPhase::Write => ("write", "request_send_ms"),
+                        crate::upstream::UpstreamPhase::Headers => ("headers", "ttft_ms"),
+                        crate::upstream::UpstreamPhase::Body => ("body", "idle_chunk_ms"),
                     };
                     tracing::warn!(
                         combo_id = combo.id.0,
@@ -2883,10 +2885,11 @@ impl Pipeline {
                         provider = %target.provider_id,
                         phase = %phase,
                         elapsed_ms = connect_and_send_ms,
+                        config_hint = config_hint,
                         "upstream phase timed out; aborting attempt"
                     );
                     let err = CoreError::UpstreamTimeout {
-                        phase: phase_label.to_string(),
+                        phase: format!("{} (config: {})", phase_label, config_hint),
                         ms: connect_and_send_ms,
                     };
                     return self.record_and_fail(

@@ -448,11 +448,11 @@ function renderConfig(): TemplateResult {
   const timeoutsCard = card(html`Timeouts <small>(ms)</small>`, html`
     <p class="muted">Precedence (highest wins): <code>model overrides</code> → <code>provider_timeouts</code> → <code>system default</code>. Editing these values takes effect on the next request; in-flight requests keep the previous value.</p>
     <div class="config-grid">
-      ${renderField("connect_ms", "timeouts.connect_ms", liveTimeouts.connect_ms, "TCP connect to the upstream.", (e) => { void onTimeoutChange("connect_ms", e); }, { editable: true })}
-      ${renderField("request_send_ms", "timeouts.request_send_ms", liveTimeouts.request_send_ms, "Max time to flush the request body.", (e) => { void onTimeoutChange("request_send_ms", e); }, { editable: true })}
-      ${renderField("ttft_ms", "timeouts.ttft_ms", liveTimeouts.ttft_ms, "Time-to-first-token for streaming responses.", (e) => { void onTimeoutChange("ttft_ms", e); }, { editable: true })}
-      ${renderField("idle_chunk_ms", "timeouts.idle_chunk_ms", liveTimeouts.idle_chunk_ms, "Max gap between SSE chunks.", (e) => { void onTimeoutChange("idle_chunk_ms", e); }, { editable: true })}
-      ${renderField("total_ms", "timeouts.total_ms", liveTimeouts.total_ms, "Hard ceiling for the whole request.", (e) => { void onTimeoutChange("total_ms", e); }, { editable: true })}
+      ${renderField("connect_ms", "timeouts.connect_ms", liveTimeouts.connect_ms, "DNS + TCP connect + TLS handshake (upstream phases: dns, dial, tls).", (e) => { void onTimeoutChange("connect_ms", e); }, { editable: true })}
+      ${renderField("request_send_ms", "timeouts.request_send_ms", liveTimeouts.request_send_ms, "Max time to write request headers + body (upstream phase: write).", (e) => { void onTimeoutChange("request_send_ms", e); }, { editable: true })}
+      ${renderField("ttft_ms", "timeouts.ttft_ms", liveTimeouts.ttft_ms, "Time-to-first-token: wait for response headers (upstream phase: headers).", (e) => { void onTimeoutChange("ttft_ms", e); }, { editable: true })}
+      ${renderField("idle_chunk_ms", "timeouts.idle_chunk_ms", liveTimeouts.idle_chunk_ms, "Max gap between SSE chunks (upstream phase: body).", (e) => { void onTimeoutChange("idle_chunk_ms", e); }, { editable: true })}
+      ${renderField("total_ms", "timeouts.total_ms", liveTimeouts.total_ms, "Hard ceiling for the whole request (upstream phase: total → reported as headers).", (e) => { void onTimeoutChange("total_ms", e); }, { editable: true })}
     </div>
   `);
 
