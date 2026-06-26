@@ -41,6 +41,12 @@ pub enum StreamSinkError {
 pub enum StreamSink {
     Direct(mpsc::Sender<bytes::Bytes>),
     Race(RaceSinkHandle),
+    /// Discard all chunks. Used for non-streaming client requests where
+    /// the pipeline still uses the streaming path to the upstream (to
+    /// get proper TTFT + timeout semantics) but the client doesn't want
+    /// SSE — the pipeline accumulates the response internally and
+    /// returns it as a single JSON object.
+    Discard,
 }
 
 impl StreamSink {
@@ -50,6 +56,7 @@ impl StreamSink {
         match self {
             StreamSink::Direct(tx) => tx.send(chunk).await.map_err(|_| StreamSinkError::Closed),
             StreamSink::Race(handle) => handle.send(chunk).await,
+            StreamSink::Discard => Ok(()), // silently drop
         }
     }
 }

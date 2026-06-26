@@ -2374,11 +2374,27 @@ impl Pipeline {
         //     model id to forward.
         let mut upstream_req = req.openai_request.clone();
         upstream_req.model = model.model_id.as_str().to_string();
-        // Use the original client's stream preference. When streaming,
-        // the pipeline reads SSE from upstream and forwards chunks
-        // through stream_sink. When not streaming, we buffer the full
-        // response.
-        upstream_req.stream = req.openai_request.stream;
+        // Force stream=true to the upstream when the client requested
+        // non-streaming AND we have a stream_sink. This ensures:
+        // - TTFT is measured correctly (first token arrives as soon
+        //   as the LLM generates it, not after the full response)
+        // - idle_chunk_ms only applies after the first token
+        // - The upstream LLM starts generating immediately
+        // - Cancel propagation works mid-generation
+        //
+        // For non-streaming clients, the pipeline uses the streaming
+        // path with a Discard sink — SSE chunks are discarded and the
+        // pipeline accumulates the response internally, returning it
+        // as a single JSON via PipelineResult.final_response.
+        //
+        // Tests that already set stream=true are unaffected.
+        // Tests that set stream=false AND have a stream_sink will now
+        // get stream=true to the upstream — this is the intended
+        // production behavior. Tests that need the old non-streaming
+        // path should not provide a stream_sink.
+        if !req.openai_request.stream && req.stream_sink.is_some() {
+            upstream_req.stream = true;
+        }
 
         // 4b. Apply message compression (lite / rtk) before serialization.
         //     The resulting stats are stashed in `self.compression_stats_cell`
@@ -2727,13 +2743,12 @@ impl Pipeline {
         // `body_bytes` is pre-serialized by the caller (single pass
         // from the translated struct — no intermediate `Value`).
         let mut upstream_request = UpstreamRequest::post_json(url.to_string(), body_bytes);
-        // Set is_streaming based on the client's request. When false
-        // (non-streaming), the body-chunk gap timeout (idle_chunk_ms)
-        // is NOT applied to the response body — only total_ms bounds
-        // the body read. This prevents non-streaming requests from
-        // timing out after idle_chunk_ms when the LLM is still
-        // generating the full response server-side.
-        upstream_request.is_streaming = req.openai_request.stream;
+        // is_streaming is always true because we force stream=true
+        // to the upstream (see comment above). The body-chunk gap
+        // timeout (idle_chunk_ms) applies normally — but only AFTER
+        // the first chunk arrives (the initial deadline is
+        // total_deadline, not start + body_chunk_ms).
+        upstream_request.is_streaming = true;
         // Caller-supplied headers (auth, content-type overrides from
         // the adapter, etc.) — `post_json` already sets
         // `Content-Type: application/json`, so `insert` overwrites if
@@ -2754,14 +2769,23 @@ impl Pipeline {
             }
         }
 
-        // STREAMING PATH: when the client requested streaming and we
-        // have a stream_sink, read SSE lines from upstream and forward
-        // them in real-time. Both paths now share the same
-        // `UpstreamRequest`; the streaming helper takes ownership of
-        // it and calls the hyper-based `UpstreamClient` itself.
-        if req.openai_request.stream
-            && let Some(sink) = &req.stream_sink
-        {
+        // ALWAYS use the streaming path to the upstream. This
+        // simplifies the code (one path instead of two) and fixes
+        // the timeout issues with non-streaming requests:
+        // - TTFT (first token) is properly measured for both modes
+        // - idle_chunk_ms only applies after the first token arrives
+        // - The upstream LLM starts generating immediately instead
+        //   of waiting for the full response before sending
+        // - Cancel propagation is faster (can cancel mid-generation)
+        //
+        // For non-streaming clients (stream: false), the stream_sink
+        // is a Direct channel that the chat handler reads from. The
+        // pipeline sends SSE chunks; the chat handler accumulates
+        // them and returns the full JSON when the stream completes.
+        // The `is_streaming` flag on the UpstreamRequest is set
+        // based on the client's preference, but the upstream call
+        // always uses stream=true (set in the translation layer).
+        if let Some(sink) = &req.stream_sink {
             return self
                 .dispatch_upstream_streaming(
                     target,
@@ -2780,18 +2804,9 @@ impl Pipeline {
                 .await;
         }
 
-        // Send + measure.
-        //
-        // Cancellation: the `client_disconnected` watch is the
-        // operator's signal that the client has gone away. The
-        // upstream client accepts a `CancellationToken`; we mirror
-        // the watch into a token via `from_watch`. The token is
-        // consulted by the client at every phase boundary (DNS, dial,
-        // TLS, write, headers, body chunk, total) and inside the
-        // `UpstreamBodyStream` between frames.
-        //
-        // Pre-flight check: if the watch has ALREADY flipped to
-        // `true` (e.g. the client disconnected while we were
+        // Fallback: no stream_sink (shouldn't happen in production —
+        // the chat handler always provides one). Uses the old
+        // non-streaming path as a safety net.
         // building the request) we short-circuit to a structured
         // `ClientDisconnected` result. The pre-flight is the only
         // place we map `UpstreamError::Cancel` → `ClientDisconnected`

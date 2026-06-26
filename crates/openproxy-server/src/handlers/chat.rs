@@ -409,7 +409,19 @@ async fn run_pipeline(
     }
 
     // 8. Build and run the pipeline request.
+    // For streaming clients: create a channel that the pipeline sends
+    // SSE chunks to, and the HTTP response reads from.
+    // For non-streaming clients: use StreamSink::Discard — the pipeline
+    // still uses the streaming path to the upstream (for proper TTFT +
+    // timeout semantics), but the SSE chunks are discarded. The
+    // pipeline accumulates the response internally and returns it as
+    // a single JSON object via PipelineResult.final_response.
     let (tx, rx) = tokio::sync::mpsc::channel(64);
+    let stream_sink = if openai_req.stream {
+        Some(openproxy_core::race_sink::StreamSink::Direct(tx))
+    } else {
+        Some(openproxy_core::race_sink::StreamSink::Discard)
+    };
 
     let req = PipelineRequest {
         request_id,
@@ -417,7 +429,7 @@ async fn run_pipeline(
         combo_id,
         openai_request: openai_req.clone(),
         client_disconnected: cancel_rx,
-        stream_sink: Some(openproxy_core::race_sink::StreamSink::Direct(tx)),
+        stream_sink,
         api_key_id,
         combo_override,
         targets_override,
