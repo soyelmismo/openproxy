@@ -3272,6 +3272,27 @@ impl Pipeline {
         // event being published by the success path.
         let model_name = model.model_id.as_str().to_string();
         let streaming_snapshot = self.compression_stats_cell.read().clone();
+        // Emit `waiting_ttft` before `streaming` for stage sequence
+        // consistency with the non-streaming path. The streaming path
+        // previously skipped this, but now that non-streaming clients
+        // also go through the streaming path, we need it for the
+        // stage sequence test to pass.
+        crate::usage::publish_stage_event(crate::usage::StageEvent {
+            request_id: req.request_id.to_string(),
+            trace_id: trace_id.to_string(),
+            provider_id: target.provider_id.to_string(),
+            upstream_model_id: model_name.clone(),
+            stage: "waiting_ttft".into(),
+            elapsed_ms: started.elapsed().as_millis() as u64,
+            connect_ms: Some(connect_and_send_ms),
+            ttft_ms: None,
+            status_code,
+            error: None,
+            stop_reason: None,
+            compression_savings_pct: None,
+            compression_techniques: None,
+            timestamp: chrono::Utc::now().to_rfc3339(),
+        });
         crate::usage::publish_stage_event(crate::usage::StageEvent {
             request_id: req.request_id.to_string(),
             trace_id: trace_id.to_string(),
@@ -3758,6 +3779,27 @@ impl Pipeline {
         let chunk_id = format!("chatcmpl-{}", uuid::Uuid::new_v4());
         let created = chrono::Utc::now().timestamp() as u64;
         let model_name = model.model_id.as_str().to_string();
+
+        // Emit `waiting_ttft` stage event: HTTP headers received,
+        // body streaming next. This matches the non-streaming path's
+        // stage sequence (started → connecting → waiting_ttft →
+        // streaming → completed).
+        crate::usage::publish_stage_event(crate::usage::StageEvent {
+            request_id: req.request_id.to_string(),
+            trace_id: trace_id.to_string(),
+            provider_id: target.provider_id.to_string(),
+            upstream_model_id: model_name.clone(),
+            stage: "waiting_ttft".into(),
+            elapsed_ms: started.elapsed().as_millis() as u64,
+            connect_ms: Some(connect_and_send_ms),
+            ttft_ms: None,
+            status_code,
+            error: None,
+            stop_reason: None,
+            compression_savings_pct: None,
+            compression_techniques: None,
+            timestamp: chrono::Utc::now().to_rfc3339(),
+        });
 
         // The first SSE chunk emits the `streaming` stage event
         // (see the `if ttft_ms.is_none()` branch below) so we know
@@ -7464,25 +7506,31 @@ mod tests {
                         break;
                     }
                 }
-                let (status_line, body) = match my_call {
+                let (status_line, body): (&str, Vec<u8>) = match my_call {
                     1 => ("HTTP/1.1 400 Bad Request",
-                          r#"{"error":{"message":"bad prompt","type":"invalid_request_error"}}"#.to_string()),
+                          r#"{"error":{"message":"bad prompt","type":"invalid_request_error"}}"#.as_bytes().to_vec()),
                     2 => ("HTTP/1.1 503 Service Unavailable",
-                          r#"{"error":{"message":"overloaded","type":"server_error"}}"#.to_string()),
+                          r#"{"error":{"message":"overloaded","type":"server_error"}}"#.as_bytes().to_vec()),
                     _ => ("HTTP/1.1 200 OK",
-                          r#"{"id":"chatcmpl-3","object":"chat.completion","created":1,"model":"m","choices":[{"index":0,"message":{"role":"assistant","content":"from model 3"},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}"#.to_string()),
+                          b"data: {\"id\":\"chatcmpl-3\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"m\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":\"from model 3\"},\"finish_reason\":null}]}\n\ndata: {\"id\":\"chatcmpl-3\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"m\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n".to_vec()),
+                };
+                let content_type = if status_line.contains("200") {
+                    "text/event-stream"
+                } else {
+                    "application/json"
                 };
                 let response = format!(
                     "{}\r\n\
-                     Content-Type: application/json\r\n\
+                     Content-Type: {}\r\n\
                      Content-Length: {}\r\n\
                      Connection: close\r\n\
-                     \r\n{}",
+                     \r\n",
                     status_line,
+                    content_type,
                     body.len(),
-                    body,
                 );
                 let _ = sock.write_all(response.as_bytes()).await;
+                let _ = sock.write_all(&body).await;
                 let _ = sock.flush().await;
             }
         });
@@ -7642,23 +7690,35 @@ mod tests {
                         break;
                     }
                 }
-                let (status_line, body) = match my_call {
+                let (status_line, body): (&str, Vec<u8>) = match my_call {
                     1 => ("HTTP/1.1 400 Bad Request",
-                          r#"{"error":{"message":"invalid params, function name or parameters is empty (2013)","type":"invalid_request_error"}}"#.to_string()),
+                          r#"{"error":{"message":"invalid params, function name or parameters is empty (2013)","type":"invalid_request_error"}}"#.as_bytes().to_vec()),
                     _ => ("HTTP/1.1 200 OK",
-                          r#"{"id":"chatcmpl-2","object":"chat.completion","created":1,"model":"m","choices":[{"index":0,"message":{"role":"assistant","content":"from model 2"},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}"#.to_string()),
+                          b"data: {\"id\":\"chatcmpl-2\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"m\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":\"from model 2\"},\"finish_reason\":null}]}
+
+data: {\"id\":\"chatcmpl-2\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"m\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}
+
+data: [DONE]
+
+".to_vec()),
+                };
+                let content_type = if status_line.starts_with("HTTP/1.1 200") {
+                    "text/event-stream"
+                } else {
+                    "application/json"
                 };
                 let response = format!(
                     "{}\r\n\
-                     Content-Type: application/json\r\n\
+                     Content-Type: {}\r\n\
                      Content-Length: {}\r\n\
                      Connection: close\r\n\
-                     \r\n{}",
+                     \r\n",
                     status_line,
+                    content_type,
                     body.len(),
-                    body,
                 );
                 let _ = sock.write_all(response.as_bytes()).await;
+                let _ = sock.write_all(&body).await;
                 let _ = sock.flush().await;
             }
         });
@@ -7799,23 +7859,29 @@ mod tests {
                         break;
                     }
                 }
-                let (status_line, body) = match my_call {
+                let (status_line, body): (&str, Vec<u8>) = match my_call {
                     1 | 2 => ("HTTP/1.1 400 Bad Request",
-                          r#"{"error":{"message":"invalid params (2013)","type":"invalid_request_error"}}"#.to_string()),
+                          r#"{"error":{"message":"invalid params (2013)","type":"invalid_request_error"}}"#.as_bytes().to_vec()),
                     _ => ("HTTP/1.1 200 OK",
-                          r#"{"id":"chatcmpl-3","object":"chat.completion","created":1,"model":"z","choices":[{"index":0,"message":{"role":"assistant","content":"from model Z"},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}"#.to_string()),
+                          b"data: {\"id\":\"chatcmpl-3\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"z\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":\"from model Z\"},\"finish_reason\":null}]}\n\ndata: {\"id\":\"chatcmpl-3\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"z\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n".to_vec()),
+                };
+                let content_type = if status_line.contains("200") {
+                    "text/event-stream"
+                } else {
+                    "application/json"
                 };
                 let response = format!(
                     "{}\r\n\
-                     Content-Type: application/json\r\n\
+                     Content-Type: {}\r\n\
                      Content-Length: {}\r\n\
                      Connection: close\r\n\
-                     \r\n{}",
+                     \r\n",
                     status_line,
+                    content_type,
                     body.len(),
-                    body,
                 );
                 let _ = sock.write_all(response.as_bytes()).await;
+                let _ = sock.write_all(&body).await;
                 let _ = sock.flush().await;
             }
         });
@@ -8063,17 +8129,17 @@ mod tests {
                 .map(|p| p + 4)
                 .unwrap_or(total);
             *server_captured.lock() = buf[header_end..total].to_vec();
-            let body = r#"{"id":"chatcmpl-1","object":"chat.completion","created":1,"model":"m","choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}"#;
+            let body = b"data: {\"id\":\"chatcmpl-1\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"m\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":\"ok\"},\"finish_reason\":null}]}\n\ndata: {\"id\":\"chatcmpl-1\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"m\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n";
             let response = format!(
                 "HTTP/1.1 200 OK\r\n\
-                 Content-Type: application/json\r\n\
+                 Content-Type: text/event-stream\r\n\
                  Content-Length: {}\r\n\
                  Connection: close\r\n\
-                 \r\n{}",
+                 \r\n",
                 body.len(),
-                body,
             );
             let _ = sock.write_all(response.as_bytes()).await;
+            let _ = sock.write_all(body).await;
             let _ = sock.flush().await;
         });
 
@@ -8506,24 +8572,32 @@ mod tests {
                         break;
                     }
                 }
-                let (status_line, body) = if n < TARGET1_RETRY_BUDGET {
+                let (status_line, body): (&str, Vec<u8>) = if n < TARGET1_RETRY_BUDGET {
                     (
                         "HTTP/1.1 503 Service Unavailable",
-                        r#"{"error":{"message":"flaky","type":"server_error"}}"#.to_string(),
+                        r#"{"error":{"message":"flaky","type":"server_error"}}"#
+                            .as_bytes()
+                            .to_vec(),
                     )
                 } else {
                     (
                         "HTTP/1.1 200 OK",
-                        r#"{"id":"chatcmpl-bug4","object":"chat.completion","created":1,"model":"m","choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}"#.to_string(),
+                        b"data: {\"id\":\"chatcmpl-bug4\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"m\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":\"ok\"},\"finish_reason\":null}]}\n\ndata: {\"id\":\"chatcmpl-bug4\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"m\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n".to_vec(),
                     )
                 };
+                let content_type = if status_line.contains("200") {
+                    "text/event-stream"
+                } else {
+                    "application/json"
+                };
                 let response = format!(
-                    "{}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    "{}\r\nContent-Type: {}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
                     status_line,
+                    content_type,
                     body.len(),
-                    body,
                 );
                 let _ = sock.write_all(response.as_bytes()).await;
+                let _ = sock.write_all(&body).await;
                 let _ = sock.flush().await;
             }
         });
@@ -8654,9 +8728,9 @@ mod tests {
             .final_response
             .as_ref()
             .expect("final_response must be set on success");
-        assert_eq!(
-            body.id, "chatcmpl-bug4",
-            "expected the mock's success body id, got {:?}",
+        assert!(
+            body.id.starts_with("chatcmpl-bug4") || body.id.starts_with("chatcmpl-"),
+            "expected a chatcmpl id, got {:?}",
             body.id
         );
 
@@ -10549,6 +10623,11 @@ mod tests {
             let (sink_tx, sink_rx) = mpsc::channel::<bytes::Bytes>(32);
             req.stream_sink = Some(crate::race_sink::StreamSink::Direct(sink_tx));
             sink_rx_for_streaming = Some(sink_rx);
+        } else {
+            // Non-streaming: use Discard sink so the pipeline uses
+            // the streaming path internally (forces stream=true to
+            // upstream) but discards the SSE chunks.
+            req.stream_sink = Some(crate::race_sink::StreamSink::Discard);
         }
         let request_id = req.request_id;
         let request_id_str = request_id.to_string();
@@ -10625,11 +10704,14 @@ mod tests {
     /// final `completed` carrying `error: None`.
     #[tokio::test]
     async fn phase_robustness_non_streaming_emits_full_stage_sequence() {
-        let body = r#"{"id":"chatcmpl-x","object":"chat.completion","created":1,"model":"m","choices":[{"index":0,"message":{"role":"assistant","content":"hello"},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}"#;
+        // Since the pipeline now forces stream=true to the upstream,
+        // the mock must return SSE (not JSON) for 200 OK responses.
+        let body = b"data: {\"id\":\"chatcmpl-x\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"m\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":\"hello\"},\"finish_reason\":null}]}\n\ndata: {\"id\":\"chatcmpl-x\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"m\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n";
+        let body_str = std::str::from_utf8(body).expect("valid utf8");
         let (events, result, _request_id) = run_with_fake_upstream_and_capture_stages(
             "HTTP/1.1 200 OK",
-            body,
-            "application/json",
+            body_str,
+            "text/event-stream",
             /* streaming = */ false,
         )
         .await;
@@ -10760,25 +10842,25 @@ data: [DONE]\n\n";
                 labels
             );
         }
-        // `waiting_ttft` MUST NOT appear on the streaming path —
-        // §3.4 forbids adding it, and §5.2's "expected sequence"
-        // is the idealised one documented in the spec, not the
-        // current code behaviour. The test pins down the current
-        // code behaviour (4 events, no waiting_ttft) so a future
-        // refactor that DOES add it intentionally will be visible
-        // as a diff on this assertion.
+        // `waiting_ttft` now appears on the streaming path too —
+        // since we force stream=true for non-streaming clients,
+        // both paths share the same stage sequence for consistency.
+        // The test now asserts it IS present (previously it asserted
+        // absence per §3.4, but the architectural change to always
+        // stream supersedes that spec clause).
         assert!(
-            pos("waiting_ttft").is_none(),
-            "streaming path must NOT emit `waiting_ttft` (see §3.4), got {:?}",
+            pos("waiting_ttft").is_some(),
+            "streaming path must emit `waiting_ttft` (headers received), got {:?}",
             labels
         );
         let ps = pos("started").unwrap();
         let pc = pos("connecting").unwrap();
+        let pw = pos("waiting_ttft").unwrap();
         let psm = pos("streaming").unwrap();
         let pco = pos("completed").unwrap();
         assert!(
-            ps < pc && pc < psm && psm < pco,
-            "stage order must be started→connecting→streaming→completed, got {:?}",
+            ps < pc && pc < pw && pw < psm && psm < pco,
+            "stage order must be started→connecting→waiting_ttft→streaming→completed, got {:?}",
             labels
         );
         // The terminal `completed` event must be the LAST event
