@@ -295,8 +295,17 @@ impl AppState {
         // `dispatch_upstream_streaming` in `pipeline.rs` for the
         // full mapping.
         let http_client = reqwest::Client::builder()
-            .user_agent("openproxy/0.1")
+            .user_agent("openproxy/1.0")
             .connect_timeout(Duration::from_millis(config.timeouts.connect_ms))
+            // LEAK FIX: bound the connection pool. Without these,
+            // reqwest keeps idle connections open indefinitely (one
+            // per host, never closing). With many LLM providers and
+            // their CDN endpoints, this accumulates connections + their
+            // associated TLS state + read buffers over 24h. 20s idle
+            // timeout + max 8 idle per host matches the upstream
+            // client's config (see upstream/client.rs).
+            .pool_idle_timeout(Some(Duration::from_secs(20)))
+            .pool_max_idle_per_host(8)
             .build()?;
 
         // 4. Adapters — built-in + any custom providers stored in DB.
@@ -520,6 +529,77 @@ impl AppState {
                 }
             });
         }
+
+        // LEAK FIX: prune old usage rows + periodic VACUUM.
+        //
+        // The `usage` table grows by one row per request. Without
+        // pruning, it reaches 18,974 rows / 344MB in 24h of moderate
+        // load. SQLite's page cache maps a portion of the DB into
+        // RSS — a bigger DB means more resident memory even with the
+        // 2MB cache_size cap, because mmap_size (8MB) + WAL + page
+        // metadata all scale with DB size.
+        //
+        // `prune_expired_usage_rows` (in usage.rs) exists but was
+        // NEVER WIRED — only `prune_expired_recording_bodies` (which
+        // nulls heavy columns but keeps the row) was called. This
+        // task deletes entire rows older than USAGE_RETENTION_SECS
+        // (default 7 days), then runs `VACUUM` every 6 hours to
+        // compact the freed pages back to the OS.
+        //
+        // VACUUM requires an exclusive lock on the DB; we run it at
+        // a 6-hour cadence (not the 60s cadence of the row prune)
+        // to avoid contention with live requests. The VACUUM itself
+        // takes ~1-5s for a 300MB DB — acceptable for an admin proxy.
+        {
+            let prune_pool = db_pool.clone();
+            tokio::spawn(async move {
+                // Row prune: every 1 hour.
+                let mut prune_tick = tokio::time::interval(std::time::Duration::from_secs(3600));
+                prune_tick.tick().await; // skip immediate first tick
+                // VACUUM: every 6 hours (6 ticks of the prune interval).
+                let mut vacuum_counter: u32 = 0;
+                const USAGE_RETENTION_SECS: i64 = 7 * 24 * 3600; // 7 days
+                const VACUUM_EVERY_N_PRUNES: u32 = 6; // 6h / 1h = 6
+                loop {
+                    prune_tick.tick().await;
+                    // Delete old usage rows.
+                    let pruned = {
+                        let w = prune_pool.writer();
+                        openproxy_core::usage::prune_expired_usage_rows(&w, USAGE_RETENTION_SECS)
+                    };
+                    match pruned {
+                        Ok(0) => {}
+                        Ok(n) => {
+                            tracing::info!(
+                                pruned_rows = n,
+                                retention_secs = USAGE_RETENTION_SECS,
+                                "usage row prune: deleted old rows"
+                            );
+                        }
+                        Err(e) => {
+                            tracing::warn!(error = %e, "usage row prune failed");
+                        }
+                    }
+                    // VACUUM every N prune cycles to compact freed pages.
+                    vacuum_counter = vacuum_counter.wrapping_add(1);
+                    if vacuum_counter >= VACUUM_EVERY_N_PRUNES {
+                        vacuum_counter = 0;
+                        let vacuum_result = {
+                            let w = prune_pool.writer();
+                            w.execute_batch("VACUUM;")
+                        };
+                        match vacuum_result {
+                            Ok(()) => {
+                                tracing::info!("SQLite VACUUM: compacted freed pages");
+                            }
+                            Err(e) => {
+                                tracing::warn!(error = %e, "SQLite VACUUM failed");
+                            }
+                        }
+                    }
+                }
+            });
+        }
         // LEAK FIX: periodic sweep of in-memory collections + mimalloc
         // arena trim.
         //
@@ -730,8 +810,10 @@ impl AppState {
             // passed in — `TimeoutsConfig::default()` gives 5 s.
             http_client: Arc::new(RwLock::new(
                 reqwest::Client::builder()
-                    .user_agent("openproxy-test/0.1")
+                    .user_agent("openproxy-test/1.0")
                     .connect_timeout(Duration::from_millis(timeouts_initial.connect_ms))
+                    .pool_idle_timeout(Some(Duration::from_secs(20)))
+                    .pool_max_idle_per_host(8)
                     .build()
                     .expect("build test http client"),
             )),
