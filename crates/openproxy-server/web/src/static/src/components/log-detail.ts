@@ -1162,15 +1162,31 @@ export function updateOpenLogDetail(row: LogDetailLog | null | undefined): void 
   // Re-render into the wrapper to let lit-html diff efficiently.
   const wrapper = modal.parentElement;
   if (!wrapper) return;
-  const sel = state.logs.selectedRow as unknown as (LogDetailLog & { request_id?: string }) | null;
+  const sel = state.logs.selectedRow as unknown as
+    | (LogDetailLog & { request_id?: string; trace_id?: string })
+    | null;
   if (!sel || sel.request_id !== row.request_id) return;
+  // Per-attempt isolation: a retry has the same request_id but a
+  // different trace_id. The open modal is bound to a specific attempt
+  // (identified by trace_id). If a different attempt's row event
+  // arrives, skip the update — the modal should only reflect the
+  // attempt the user opened it for, not a sibling retry.
+  const selTrace = sel.trace_id;
+  const rowTrace = (row as LogDetailLog & { trace_id?: string }).trace_id;
+  if (selTrace && rowTrace && selTrace !== rowTrace) return;
   const merged: Record<string, unknown> = { ...sel } as Record<string, unknown>;
   for (const [k, v] of Object.entries(row as Record<string, unknown>)) {
     if (v != null) merged[k] = v;
   }
   state.logs.selectedRow = merged as unknown as (typeof state.logs)["selectedRow"];
+  // Preserve the active tab across re-renders. The previous code
+  // called initializeLogDetailTabs() unconditionally, which reset the
+  // active tab to the first one on every WS event — even legitimate
+  // same-row updates caused the user's tab selection to be lost.
+  // Instead, only initialize tabs on first open (handled in
+  // showLogDetail), and on updates just re-render the modal body
+  // without touching the tab state.
   render(renderLogDetailModal(state.logs.selectedRow as unknown as LogDetailLog), wrapper);
-  initializeLogDetailTabs();
 }
 
 // A row has complete detail if it carries a request body, a response
