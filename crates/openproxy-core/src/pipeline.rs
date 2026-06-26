@@ -3845,7 +3845,14 @@ impl Pipeline {
         // `response_body_json` column is non-NULL for streaming turns. Only
         // constructed when recording is ON — when OFF the only cost is a
         // single bool check.
-        let mut acc: Option<crate::sse_accumulator::ResponseAccumulator> = if self.is_recording() {
+        // ALSO construct when the sink is Discard (non-streaming client)
+        // — we need the accumulated response to return as JSON.
+        let needs_accumulator = self.is_recording()
+            || matches!(
+                req.stream_sink.as_ref(),
+                Some(crate::race_sink::StreamSink::Discard)
+            );
+        let mut acc: Option<crate::sse_accumulator::ResponseAccumulator> = if needs_accumulator {
             Some(crate::sse_accumulator::ResponseAccumulator::new())
         } else {
             None
@@ -5023,7 +5030,7 @@ impl Pipeline {
             prompt_tokens,
             completion_tokens,
             request_body_json,
-            response_body_json,
+            response_body_json.clone(),
             None,        // request_headers
             None,        // response_headers
             true,        // is_streaming (H5)
@@ -5034,7 +5041,21 @@ impl Pipeline {
         PipelineResult {
             status_code,
             error: None,
-            final_response: None, // Streaming: no buffered response
+            // For non-streaming clients (StreamSink::Discard), return
+            // the accumulated response so the chat handler can serialize
+            // it as JSON. For streaming clients, the chunks were already
+            // forwarded via the sink — return None (the chat handler
+            // doesn't need the full response, it already sent the SSE).
+            final_response: if matches!(
+                req.stream_sink.as_ref(),
+                Some(crate::race_sink::StreamSink::Discard)
+            ) {
+                response_body_json
+                    .as_ref()
+                    .and_then(|v| serde_json::from_value(v.clone()).ok())
+            } else {
+                None
+            },
             attempts: attempt,
         }
     }
@@ -5985,7 +6006,6 @@ mod tests {
     /// Build a `PipelineRequest` with sensible defaults.
     fn make_request(combo_id: ComboId) -> (PipelineRequest, watch::Sender<bool>) {
         let (_dis_tx, dis_rx) = watch::channel(false);
-        let (_sink_tx, _sink_rx) = mpsc::channel::<bytes::Bytes>(8);
         let req = PipelineRequest {
             request_id: RequestId::new(),
             trace_id: TraceId::new(),
@@ -6012,7 +6032,11 @@ mod tests {
                 extra: serde_json::Map::new(),
             },
             client_disconnected: dis_rx,
-            stream_sink: Some(crate::race_sink::StreamSink::Direct(_sink_tx)),
+            // Use Discard sink for non-streaming test requests. The
+            // pipeline forces stream=true to the upstream, but SSE
+            // chunks are discarded — the pipeline accumulates the
+            // response internally via ResponseAccumulator.
+            stream_sink: Some(crate::race_sink::StreamSink::Discard),
             api_key_id: None,
             combo_override: None,
             targets_override: None,
@@ -6993,34 +7017,31 @@ mod tests {
                 }
 
                 // Build the response for this call.
-                let (status_line, body) = if my_call == 1 {
+                let (status_line, body): (&str, Vec<u8>) = if my_call == 1 {
                     (
                         "HTTP/1.1 500 Internal Server Error",
                         r#"{"error":{"message":"upstream boom","type":"server_error"}}"#
-                            .to_string(),
+                            .as_bytes()
+                            .to_vec(),
                     )
                 } else {
                     (
                         "HTTP/1.1 200 OK",
-                        r#"{"id":"chatcmpl-2","object":"chat.completion","created":1,"model":"m","choices":[{"index":0,"message":{"role":"assistant","content":"from model 2"},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}"#.to_string(),
+                        b"data: {\"id\":\"chatcmpl-2\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"m\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":\"from model 2\"},\"finish_reason\":null}]}\n\ndata: {\"id\":\"chatcmpl-2\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"m\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n".to_vec(),
                     )
                 };
                 let response = format!(
                     "{}\r\n\
-                     Content-Type: application/json\r\n\
+                     Content-Type: text/event-stream\r\n\
                      Content-Length: {}\r\n\
                      Connection: close\r\n\
-                     \r\n\
-                     {}",
+                     \r\n",
                     status_line,
                     body.len(),
-                    body,
                 );
                 let _ = sock.write_all(response.as_bytes()).await;
+                let _ = sock.write_all(&body).await;
                 let _ = sock.flush().await;
-                // drop sock → connection closes; the pipeline is
-                // not streaming so it will return after reading the
-                // body.
             }
         });
 
@@ -9355,18 +9376,17 @@ mod tests {
                 }
             }
             // Return a minimal-but-valid OpenAI chat completion.
-            let body = r#"{"id":"chatcmpl-test","object":"chat.completion","created":1,"model":"m","choices":[{"index":0,"message":{"role":"assistant","content":"hello"},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}"#;
+            let body = b"data: {\"id\":\"chatcmpl-test\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"m\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":\"hello\"},\"finish_reason\":null}]}\n\ndata: {\"id\":\"chatcmpl-test\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"m\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n";
             let response = format!(
                 "HTTP/1.1 200 OK\r\n\
-                 Content-Type: application/json\r\n\
+                 Content-Type: text/event-stream\r\n\
                  Content-Length: {}\r\n\
                  Connection: close\r\n\
-                 \r\n\
-                 {}",
+                 \r\n",
                 body.len(),
-                body,
             );
             let _ = sock.write_all(response.as_bytes()).await;
+            let _ = sock.write_all(body).await;
             let _ = sock.flush().await;
         });
 
@@ -9504,18 +9524,17 @@ mod tests {
                     bytes_received_clone.store(body_end - body_start, Ordering::SeqCst);
                 }
             }
-            let body = r#"{"id":"chatcmpl-test","object":"chat.completion","created":1,"model":"m","choices":[{"index":0,"message":{"role":"assistant","content":"hello"},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}"#;
+            let body = b"data: {\"id\":\"chatcmpl-test\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"m\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":\"hello\"},\"finish_reason\":null}]}\n\ndata: {\"id\":\"chatcmpl-test\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"m\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n";
             let response = format!(
                 "HTTP/1.1 200 OK\r\n\
-                 Content-Type: application/json\r\n\
+                 Content-Type: text/event-stream\r\n\
                  Content-Length: {}\r\n\
                  Connection: close\r\n\
-                 \r\n\
-                 {}",
+                 \r\n",
                 body.len(),
-                body,
             );
             let _ = sock.write_all(response.as_bytes()).await;
+            let _ = sock.write_all(body).await;
             let _ = sock.flush().await;
         });
 
