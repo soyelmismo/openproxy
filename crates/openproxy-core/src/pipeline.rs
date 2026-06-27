@@ -3753,11 +3753,34 @@ impl Pipeline {
                     Some(&provider_id_str),
                 );
             }
-            let err = CoreError::UpstreamError {
-                status: status_code,
-                provider: target.provider_id.to_string(),
-                model: model.model_id.as_str().to_string(),
-                body: body_str,
+            // NEW-2 fix: when the upstream returns 429 (or 408/503)
+            // with a `Retry-After` header, surface the error as
+            // `CoreError::RateLimited` so the per-target retry loop
+            // honors the upstream-requested delay instead of using
+            // the fixed exponential backoff. Mirrors the non-streaming
+            // path's handling at line 3172.
+            let retry_after_ms: Option<u64> = response
+                .headers
+                .get("retry-after")
+                .or_else(|| response.headers.get("Retry-After"))
+                .and_then(|v| v.to_str().ok())
+                .and_then(|s| parse_retry_after_ms(s));
+            let is_rate_limited_status =
+                status_code == 429 || status_code == 408 || status_code == 503;
+            let err = if let Some(retry_ms) =
+                retry_after_ms.filter(|_| is_rate_limited_status)
+            {
+                CoreError::RateLimited {
+                    provider: target.provider_id.to_string(),
+                    retry_after_ms: retry_ms,
+                }
+            } else {
+                CoreError::UpstreamError {
+                    status: status_code,
+                    provider: target.provider_id.to_string(),
+                    model: model.model_id.as_str().to_string(),
+                    body: body_str,
+                }
             };
             return self.record_and_fail(
                 req,
