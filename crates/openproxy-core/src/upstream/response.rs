@@ -63,6 +63,10 @@ pub struct UpstreamBodyStream {
     /// Polled via `changed()` in the hot loop — no per-chunk allocation.
     cancel_rx: watch::Receiver<bool>,
     last_chunk_at: Option<Instant>,
+    /// Request start instant. Kept for debugging/diagnostics but no
+    /// longer used in the deadline calc — the first chunk now uses
+    /// total_deadline (not start + body_chunk_ms).
+    #[allow(dead_code)]
     start: Instant,
     body_chunk_ms: u64,
     total_deadline: Instant,
