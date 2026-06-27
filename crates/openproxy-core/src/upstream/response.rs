@@ -183,10 +183,26 @@ impl UpstreamBodyStream {
         // For non-streaming: only total_deadline applies (no chunk gap).
         // The LLM generates the full response server-side before sending
         // the first chunk — measuring a "gap" between chunks is meaningless.
+        //
+        // For streaming: the gap timeout (body_chunk_ms / idle_chunk_ms)
+        // only applies AFTER the first chunk arrives. For the FIRST chunk
+        // (last_chunk_at is None), the wait is bounded by total_deadline
+        // — the upstream client's headers_deadline (ttft_ms) already
+        // bounds the HTTP headers, and the LLM needs time to generate
+        // the first token. Using start + body_chunk_ms for the first
+        // chunk was the root cause of the persistent "idle_chunk after
+        // 10000ms" errors: the LLM hadn't produced any token yet but
+        // the gap timer fired.
         let min_deadline = if self.is_streaming {
-            let chunk_gap_deadline = self.last_chunk_at.unwrap_or(self.start)
-                + Duration::from_millis(self.body_chunk_ms);
-            std::cmp::min(chunk_gap_deadline, self.total_deadline)
+            if let Some(last) = self.last_chunk_at {
+                // Subsequent chunk: gap = last_chunk + body_chunk_ms
+                let chunk_gap_deadline =
+                    last + Duration::from_millis(self.body_chunk_ms);
+                std::cmp::min(chunk_gap_deadline, self.total_deadline)
+            } else {
+                // First chunk: no gap, only total_deadline
+                self.total_deadline
+            }
         } else {
             self.total_deadline
         };
