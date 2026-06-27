@@ -332,7 +332,25 @@ pub fn openai_to_anthropic(req: &OpenAIRequest) -> AnthropicRequest {
     let mut system_parts: Vec<String> = Vec::new();
     let mut conversation: Vec<AnthropicMessage> = Vec::with_capacity(req.messages.len());
 
+    // Track whether the previous message was a tool result. Anthropic
+    // requires that consecutive tool results (from multiple tool_calls
+    // in the same assistant message) be merged into a SINGLE user
+    // message with multiple tool_result content blocks. If we emit
+    // separate user messages for each tool result, MiniMax rejects
+    // with (2013) "tool call result does not follow tool call".
+    let mut pending_tool_results: Vec<serde_json::Value> = Vec::new();
+
     for m in &req.messages {
+        // Before processing any non-tool message, flush any pending
+        // tool results as a single user message.
+        let is_tool = m.role.as_str() == "tool";
+        if !is_tool && !pending_tool_results.is_empty() {
+            conversation.push(AnthropicMessage {
+                role: "user".to_string(),
+                content: serde_json::Value::Array(std::mem::take(&mut pending_tool_results)),
+            });
+        }
+
         match m.role.as_str() {
             "system" => system_parts.push(message_content_to_text(&m.content)),
             "assistant" => {
@@ -396,6 +414,16 @@ pub fn openai_to_anthropic(req: &OpenAIRequest) -> AnthropicRequest {
                     // array, and matches Anthropic's canonical shape
                     // for text-only messages).
                     let text = message_content_to_text(&m.content);
+                    // Skip empty assistant messages that were injected
+                    // by client-side "operation interrupted" markers.
+                    // These break the Anthropic tool_call → tool_result
+                    // → assistant sequence and cause (2013) rejections.
+                    if text.is_empty()
+                        || text.starts_with("Operation interrupted")
+                        || text.starts_with("[System:")
+                    {
+                        continue;
+                    }
                     conversation.push(AnthropicMessage {
                         role: "assistant".to_string(),
                         content: serde_json::Value::String(text),
@@ -412,25 +440,33 @@ pub fn openai_to_anthropic(req: &OpenAIRequest) -> AnthropicRequest {
             }
             "tool" => {
                 // OpenAI `tool`-role message: a tool result. Translate
-                // to Anthropic's `tool_result` content block under a
-                // `user`-role message (Anthropic has no `tool` role).
-                // The `tool_call_id` field carries the id of the
-                // assistant's tool_use block this result responds to.
+                // to Anthropic's `tool_result` content block. Multiple
+                // consecutive tool results are accumulated into
+                // `pending_tool_results` and flushed as a SINGLE user
+                // message when a non-tool message arrives. This is
+                // required by Anthropic/MiniMax: all tool_results from
+                // the same assistant turn must be in one user message.
                 let tool_use_id = m.tool_call_id.as_deref().unwrap_or("");
                 let content_text = message_content_to_text(&m.content);
-                conversation.push(AnthropicMessage {
-                    role: "user".to_string(),
-                    content: json!([{
-                        "type": "tool_result",
-                        "tool_use_id": tool_use_id,
-                        "content": content_text,
-                    }]),
-                });
+                pending_tool_results.push(json!({
+                    "type": "tool_result",
+                    "tool_use_id": tool_use_id,
+                    "content": content_text,
+                }));
             }
             // Unknown roles (function, developer, etc.) are ignored
             // at the translation boundary.
             _ => {}
         }
+    }
+
+    // Flush any remaining pending tool results (in case the
+    // conversation ends with tool results — unusual but possible).
+    if !pending_tool_results.is_empty() {
+        conversation.push(AnthropicMessage {
+            role: "user".to_string(),
+            content: serde_json::Value::Array(std::mem::take(&mut pending_tool_results)),
+        });
     }
 
     let system = if system_parts.is_empty() {
