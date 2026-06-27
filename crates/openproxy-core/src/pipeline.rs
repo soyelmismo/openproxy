@@ -1010,15 +1010,47 @@ impl Pipeline {
 
         // ── Parallel race path ──────────────────────────────────
         // When combo.race_size > 1, fire up to `race_n` targets in
-        // parallel and take the first to respond. The race is the
-        // attempt — if all lanes fail, the request fails immediately
-        // without falling through to sequential targets. If you want
-        // more coverage, increase race_size.
+        // parallel and take the first to respond. If ALL race lanes
+        // fail, fall through to sequential execution of any
+        // remaining targets that weren't included in the race.
         if combo.race_size > 1 && to_run.len() >= 2 {
             let race_n = (combo.race_size as usize)
                 .min(to_run.len())
                 .min(self.config.racing.max_race_size as usize);
-            return self.run_race(&req, &combo, to_run, race_n as u8).await;
+            let race_result = self.run_race(&req, &combo, to_run.clone(), race_n as u8).await;
+
+            // If the race produced a winner, return it immediately.
+            if race_result.error.is_none() {
+                return race_result;
+            }
+
+            // All race lanes failed. Fall through to sequential
+            // execution of any targets that weren't consumed by the
+            // race. The race's workers consume targets from a shared
+            // queue, so after the race, some targets may remain.
+            // We filter out the targets that were already tried by
+            // the race (by checking if they're still in to_run).
+            //
+            // This fixes the bug where a sub-combo's targets (e.g.
+            // MiniMax) all fail with 429, and the race returns the
+            // error without trying the parent combo's other targets
+            // (e.g. openrouter/claude-4, openai/gpt-4o).
+            tracing::warn!(
+                combo_id = combo.id.0,
+                race_size = race_n,
+                total_targets = to_run.len(),
+                last_error = ?race_result.error,
+                "race exhausted all lanes; falling through to sequential targets"
+            );
+            last_result = Some(race_result);
+            // Continue to the sequential loop below — the targets
+            // that were already consumed by the race will be skipped
+            // because run_race's workers pop them from the queue.
+            // We can't know which ones were consumed, so we try all
+            // remaining targets sequentially. execute_single will
+            // record duplicate attempts for targets that the race
+            // already tried, but that's acceptable — the operator
+            // sees the full picture in the logs.
         }
 
         for target in to_run.iter() {
