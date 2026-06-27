@@ -581,12 +581,11 @@ impl UpstreamClient {
         let (parts, body) = response.into_parts();
         // Wrap the streaming body in our cancellable adapter. The
         // body-chunk timer is computed as a GAP inside `next_chunk`
-        // (see the doc on `UpstreamBodyStream`), so we only pass the
-        // request start, the gap budget in ms, and the total ceiling.
+        // (see the doc on `UpstreamBodyStream`), so we pass the gap
+        // budget in ms and the total ceiling.
         let body_stream = UpstreamBodyStream::from_hyper(
             body,
             cancel.clone(),
-            deadlines.start,
             timeouts.body_chunk_ms,
             deadlines.total_deadline,
             // 8 MiB hard cap per body (was 32 MiB). LLM responses

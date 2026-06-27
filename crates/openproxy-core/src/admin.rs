@@ -1561,11 +1561,9 @@ mod tests {
     /// Seed two providers + two models + a combo + two targets, used
     /// by the delete/reorder tests below. Returns the ids in a
     /// struct so each test can name exactly what it needs.
-    #[allow(dead_code)] // m2 isn't read by every test in the suite
     struct ComboTargetFixture {
         combo_id: ComboId,
         m1: ModelRowId,
-        m2: ModelRowId,
         t1: ComboTargetId,
         t2: ComboTargetId,
     }
@@ -1650,7 +1648,6 @@ mod tests {
         ComboTargetFixture {
             combo_id,
             m1,
-            m2,
             t1,
             t2,
         }

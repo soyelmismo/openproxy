@@ -90,11 +90,9 @@ pub struct AppState {
     /// stop them explicitly. Today no caller cancels it — the
     /// scheduler is fire-and-forget at boot.
     ///
-    /// Marked `dead_code` because Gate B (read side) hasn't
-    /// landed yet; suppressing the warning keeps the field
-    /// discoverable for the Drop impl / future admin endpoints
-    /// without sprinkling `#[allow]` on every reference.
-    #[allow(dead_code)]
+    /// Exposed via [`Self::discovery_scheduler`] so the field
+    /// stays live (and is discoverable for the future Drop impl
+    /// / admin endpoints) without an `#[allow(dead_code)]`.
     discovery_scheduler: Arc<DiscoveryScheduler>,
     /// Registry of OAuth provider implementations. Used by the
     /// pipeline (on-demand token refresh during chat requests),
@@ -645,7 +643,7 @@ impl AppState {
                     // VACUUM: check if it's time to run. The interval
                     // is in hours; we tick every 1h, so we run VACUUM
                     // every `interval_hours` ticks.
-                    let interval_ticks = interval_hours.max(1) as u32;
+                    let interval_ticks = interval_hours.max(1);
                     vacuum_counter = vacuum_counter.wrapping_add(1);
                     if auto_vacuum && vacuum_counter >= interval_ticks {
                         vacuum_counter = 0;
@@ -1087,6 +1085,20 @@ impl AppState {
     /// internally `Arc`-backed).
     pub fn oauth_provider_registry(&self) -> Arc<oauth::OAuthProviderRegistry> {
         self.oauth_provider_registry.clone()
+    }
+
+    /// Borrow the background discovery scheduler handle.
+    ///
+    /// No call site reads the scheduler today (Gate B / read side
+    /// hasn't landed), but the handle must stay alive on
+    /// `AppState` for the process lifetime: dropping it would NOT
+    /// cancel the per-provider refresh tasks (the scheduler owns
+    /// the parent `CancellationToken`), but the field is the only
+    /// path a future `Drop` impl or admin endpoint has to call
+    /// `.cancel()`. Exposed as a public accessor so the field is
+    /// considered live by the compiler without an `#[allow]`.
+    pub fn discovery_scheduler(&self) -> &Arc<DiscoveryScheduler> {
+        &self.discovery_scheduler
     }
 
     /// Borrow the usage broadcast sender.

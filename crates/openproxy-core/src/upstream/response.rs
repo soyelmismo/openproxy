@@ -50,9 +50,9 @@ impl UpstreamResponse {
 /// timeout), NOT as a deadline relative to the request start.
 /// `last_chunk_at` tracks the instant of the most recent chunk; the
 /// next per-chunk deadline is computed as
-/// `last_chunk_at + body_chunk_ms`. For the first chunk we fall back
-/// to `start`, which preserves the implicit TTFT ceiling: a server
-/// that never produces the first chunk will be killed by the
+/// `last_chunk_at + body_chunk_ms`. For the first chunk we use
+/// `total_deadline`, which preserves the implicit TTFT ceiling: a
+/// server that never produces the first chunk will be killed by the
 /// `headers_deadline` (applied in `client::call_inner`) before the
 /// per-chunk gap ever starts being measured.
 pub struct UpstreamBodyStream {
@@ -63,11 +63,6 @@ pub struct UpstreamBodyStream {
     /// Polled via `changed()` in the hot loop — no per-chunk allocation.
     cancel_rx: watch::Receiver<bool>,
     last_chunk_at: Option<Instant>,
-    /// Request start instant. Kept for debugging/diagnostics but no
-    /// longer used in the deadline calc — the first chunk now uses
-    /// total_deadline (not start + body_chunk_ms).
-    #[allow(dead_code)]
-    start: Instant,
     body_chunk_ms: u64,
     total_deadline: Instant,
     /// When `false` (non-streaming), the body-chunk gap timeout is
@@ -88,16 +83,13 @@ impl UpstreamBodyStream {
     /// `limited` argument caps the total bytes read (use a large value
     /// for unlimited).
     ///
-    /// `start` is the wall-clock instant the upstream call began; the
-    /// body-chunk gap timer falls back to it before the first chunk
-    /// arrives (preserves the implicit TTFT ceiling). `body_chunk_ms`
-    /// is the max gap between consecutive chunks (not a deadline
-    /// relative to `start`).
+    /// `body_chunk_ms` is the max gap between consecutive chunks (not
+    /// a deadline relative to the request start). The first chunk is
+    /// bounded by `total_deadline`; subsequent chunks use the gap.
     #[cfg(feature = "upstream-hyper")]
     pub fn from_hyper(
         body: hyper::body::Incoming,
         cancel: CancellationToken,
-        start: Instant,
         body_chunk_ms: u64,
         total_deadline: Instant,
         limit: u64,
@@ -106,25 +98,24 @@ impl UpstreamBodyStream {
         let limit_usize = usize::try_from(limit).unwrap_or(usize::MAX);
         let limited = http_body_util::Limited::new(body, limit_usize);
         let cancel_rx = cancel.subscribe();
-        // For non-streaming, the initial deadline is total_deadline
-        // (not start + body_chunk_ms). The LLM needs time to generate
-        // the full response before sending the first (and only) chunk.
-        // For streaming, the initial deadline is also total_deadline
-        // — the first chunk is bounded by the headers_deadline
-        // (ttft_ms) which is enforced by the upstream client's
-        // select! in call_inner. The body_chunk_ms gap only applies
-        // AFTER the first chunk arrives (in next_chunk's gap calc).
-        // Previously, the initial deadline was start + body_chunk_ms
-        // which killed streaming requests whose first token took
-        // longer than body_chunk_ms (e.g. 10s) even though ttft_ms
-        // (30s) hadn't expired yet.
+        // For non-streaming, the initial deadline is total_deadline.
+        // The LLM needs time to generate the full response before
+        // sending the first (and only) chunk. For streaming, the
+        // initial deadline is also total_deadline — the first chunk
+        // is bounded by the headers_deadline (ttft_ms) which is
+        // enforced by the upstream client's select! in call_inner.
+        // The body_chunk_ms gap only applies AFTER the first chunk
+        // arrives (in next_chunk's gap calc). Previously, the
+        // initial deadline was start + body_chunk_ms which killed
+        // streaming requests whose first token took longer than
+        // body_chunk_ms (e.g. 10s) even though ttft_ms (30s) hadn't
+        // expired yet.
         let initial_deadline = total_deadline;
         Self {
             inner: Some(http_body_util::BodyStream::new(limited)),
             cancel_rx,
             cancel,
             last_chunk_at: None,
-            start,
             body_chunk_ms,
             total_deadline,
             is_streaming,
@@ -137,13 +128,11 @@ impl UpstreamBodyStream {
     /// we have a body in hand.
     pub fn empty(
         cancel: CancellationToken,
-        start: Instant,
         body_chunk_ms: u64,
         total_deadline: Instant,
         is_streaming: bool,
     ) -> Self {
         let cancel_rx = cancel.subscribe();
-        let _ = (start, body_chunk_ms, is_streaming);
         let initial_deadline = total_deadline;
         Self {
             #[cfg(feature = "upstream-hyper")]
@@ -151,7 +140,6 @@ impl UpstreamBodyStream {
             cancel_rx,
             cancel,
             last_chunk_at: None,
-            start,
             body_chunk_ms,
             total_deadline,
             is_streaming,
@@ -177,8 +165,8 @@ impl UpstreamBodyStream {
     ///
     /// Honors `cancel`, the body-chunk **gap** deadline (recomputed
     /// after every chunk as `last_chunk_at + body_chunk_ms`, with
-    /// `start` as the fallback for the very first chunk), and the
-    /// `total_deadline`.
+    /// `total_deadline` as the ceiling for the very first chunk), and
+    /// the `total_deadline`.
     pub async fn next_chunk(&mut self) -> UpstreamResult<Option<Bytes>> {
         if self.cancel.is_cancelled() {
             return Err(UpstreamError::Cancel);

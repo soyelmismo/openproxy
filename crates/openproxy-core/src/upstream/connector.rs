@@ -698,10 +698,11 @@ pub fn phased_phase(err: &(dyn std::error::Error + 'static)) -> Option<UpstreamP
 // Unpin + Send + 'static`. We hand-implement `Connection` for
 // `PhasedConnection` above; the assertions below make the
 // contract statically checkable from the editor (and from CI via
-// `cargo check`).
-#[allow(dead_code)]
-fn _assert_impl_bounds() {
+// `cargo check`). Wrapped in an anonymous const block so the
+// inner `_assert` is referenced (and thus the bound checks fire)
+// without producing a dead_code warning on an uncalled function.
+const _: () = {
     fn _assert<R: Read + Write + HyperConnection + Unpin + Send + 'static>() {}
-    _assert::<PhasedConnection>();
-    _assert::<TokioIo<TcpStream>>();
-}
+    let _ = _assert::<PhasedConnection>;
+    let _ = _assert::<TokioIo<TcpStream>>;
+};

@@ -13,9 +13,9 @@ use crate::adapters::{AdapterFormat, ProviderAdapter};
 use crate::circuit_breaker::{CircuitBreakerRegistry, Health};
 use crate::combos::{self, Combo, ComboTarget, SelectionRegistry, Strategy};
 use crate::compression::{CompressionMode, stats::CompressionStats};
-use crate::config::{CircuitBreakerConfig, RacingConfig, RetriesConfig, TimeoutsConfig};
+use crate::config::{CircuitBreakerConfig, RacingConfig, RetriesConfig};
 use crate::cost::{self, UsageInput};
-use crate::error::{CoreError, ErrorContext, Result};
+use crate::error::{CoreError, Result};
 use crate::ids::{ApiKeyId, ComboId, RequestId, TraceId};
 use crate::models::{self, Model};
 use crate::retry::RetryPolicy;
@@ -1304,15 +1304,15 @@ impl Pipeline {
         // each target gets its own fresh retry budget. If every
         // target errored, surface the last per-target retry's
         // final result (which carries the last failure).
-        if let Some(ref r) = last_result {
-            if r.error.is_some() {
-                tracing::warn!(
-                    combo_id = combo.id.0,
-                    targets_tried = targets.len(),
-                    last_error = ?r.error,
-                    "combo exhausted: all targets failed, returning last error to client"
-                );
-            }
+        if let Some(ref r) = last_result
+            && r.error.is_some()
+        {
+            tracing::warn!(
+                combo_id = combo.id.0,
+                targets_tried = targets.len(),
+                last_error = ?r.error,
+                "combo exhausted: all targets failed, returning last error to client"
+            );
         }
         last_result.unwrap_or_else(|| {
             self.failure(
@@ -5125,7 +5125,7 @@ impl Pipeline {
         })
     }
 
-    #[allow(dead_code)]
+    #[cfg(test)]
     fn decrypt_account_key(&self, account_id: crate::ids::AccountId) -> Result<String> {
         let conn = self.conn.lock();
         crate::accounts::decrypt_api_key(&conn, account_id, &self.config.master_key)
@@ -5139,7 +5139,7 @@ impl Pipeline {
     /// - `account_id = None` and the provider requires auth (Bearer,
     ///   XApiKey, etc.): return `CoreError::Auth` — the target has no
     ///   credential and the upstream does not accept anonymous requests.
-    #[allow(dead_code)]
+    #[cfg(test)]
     fn resolve_target_api_key(&self, target: &ComboTarget) -> Result<String> {
         match target.account_id {
             Some(account_id) => self.decrypt_account_key(account_id),
@@ -5472,62 +5472,6 @@ impl Pipeline {
         )
     }
 
-    /// Sink-send returned `StreamSinkError::Lost` — another target
-    /// already won the race, so this target's bytes would interleave
-    /// with the winner's. Records a failure row with
-    /// `err = CoreError::RaceLost` (HTTP 499),
-    /// `connect_ms = connect_and_send_ms`, and the streaming loop's
-    /// accumulated `ttft_ms`.
-    ///
-    /// Same partial-response capture as `fail_stream_client_disconnected`.
-    #[allow(dead_code)]
-    #[allow(clippy::too_many_arguments)]
-    fn fail_stream_race_lost(
-        &self,
-        req: &PipelineRequest,
-        combo: &Combo,
-        target: &ComboTarget,
-        attempt: u8,
-        race_size: u8,
-        started: Instant,
-        model: &Model,
-        connect_ms: u64,
-        ttft_ms: Option<u64>,
-        trace_id: TraceId,
-        acc: Option<&mut crate::sse_accumulator::ResponseAccumulator>,
-        chunk_id: &str,
-        created: u64,
-        model_name: &str,
-    ) -> PipelineResult {
-        let acc_ref: Option<&crate::sse_accumulator::ResponseAccumulator> = match acc {
-            Some(a) => {
-                a.mark_partial();
-                Some(&*a)
-            }
-            None => None,
-        };
-        self.record_and_fail_with_trace_id_and_partial(
-            req,
-            combo,
-            target,
-            FailureContext {
-                attempt,
-                race_size,
-                err: &CoreError::RaceLost,
-                started,
-                model: Some(model),
-                connect_ms: Some(connect_ms),
-                ttft_ms,
-                status_code: 499,
-            },
-            trace_id,
-            acc_ref,
-            Some(chunk_id),
-            created,
-            model_name,
-        )
-    }
-
     /// Sink-send returned `Lost` or `Closed`. Maps the
     /// `StreamSinkError` to the matching `CoreError` variant
     /// (`Lost → RaceLost`, `Closed → ClientDisconnected`) and records
@@ -5814,11 +5758,6 @@ impl std::fmt::Display for ErrorPhase {
     }
 }
 
-// Make `combo.strategy` slightly easier to consume in tests; silences the
-// unused-import warning when no test in the module reads the type directly.
-#[allow(dead_code)]
-fn _strategy_marker(_: Strategy) {}
-
 /// Parse an HTTP `Retry-After` header value (RFC 7231 §7.1.3) into
 /// milliseconds. Accepts either an integer number of seconds
 /// (`Retry-After: 30`) or an HTTP-date
@@ -5860,23 +5799,6 @@ fn parse_retry_after_ms(value: &str) -> Option<u64> {
     None
 }
 
-// `ErrorContext` is reserved for a future structured-logging upgrade that
-// will let the pipeline attach req/trace/provider metadata to every error.
-// Keep the import live so the symbol is available when that work lands.
-#[allow(dead_code)]
-fn _context_marker(_: ErrorContext) {}
-
-// `TimeoutsConfig` is used by callers to build `PipelineConfig::defaults`;
-// the import ensures the type re-export stays valid.
-#[allow(dead_code)]
-fn _timeouts_marker(_: TimeoutsConfig) {}
-
-// `Instant` is the wall-clock source for the connect/ttft/total timers that
-// `record_attempt` persists. The import is also kept live for the
-// not-yet-implemented `dispatch_upstream` body.
-#[allow(dead_code)]
-fn _instant_marker(_: Instant) {}
-
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -5886,6 +5808,7 @@ mod tests {
     use super::*;
     use crate::adapters::{AdapterAuthType, ProviderAdapterConfig};
     use crate::combos;
+    use crate::config::TimeoutsConfig;
     use crate::db::conn::DbPool;
     use crate::db::migrations;
     use crate::ids::{

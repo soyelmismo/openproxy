@@ -81,8 +81,6 @@ struct AntigravityGeminiResponse {
 #[serde(rename_all = "camelCase")]
 struct AntigravityCandidate {
     content: Option<AntigravityContent>,
-    #[allow(dead_code)]
-    finish_reason: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -106,7 +104,6 @@ struct AntigravityUsageMetadata {
 }
 
 /// Chunk kind returned after inspecting the JSON shape.
-#[allow(dead_code)]
 enum ChunkKind {
     Markdown { text: String },
     Gemini { response: AntigravityGeminiResponse },

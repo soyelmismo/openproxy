@@ -59,7 +59,6 @@ struct RegisterClientRequest {
 struct RegisterClientResponse {
     #[serde(rename = "clientId")]
     client_id: String,
-    #[allow(dead_code)]
     #[serde(rename = "clientSecret")]
     client_secret: String,
 }

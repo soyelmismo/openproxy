@@ -125,10 +125,6 @@ struct OpenAiChoiceProbe {
 
 #[derive(serde::Deserialize)]
 struct OpenAiDeltaProbe {
-    #[allow(dead_code)]
-    // populated for shape parity with OpenAI's wire format; we only extract reasoning_content on the slow path
-    #[serde(default)]
-    content: Option<String>,
     #[serde(default)]
     reasoning_content: Option<String>,
 }

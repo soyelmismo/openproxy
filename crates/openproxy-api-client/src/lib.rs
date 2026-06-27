@@ -482,7 +482,6 @@ fn map_error_body(status: u16, bytes: &[u8]) -> ClientError {
     #[derive(serde::Deserialize)]
     struct EnvelopeError {
         code: String,
-        #[allow(dead_code)]
         message: String,
     }
 

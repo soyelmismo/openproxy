@@ -3928,11 +3928,9 @@ pub async fn refresh_account_quota(
 /// zero, the absolute floor of 1000 is used (matches the task spec's
 /// "absolute threshold like 1000"). Encoded as the integer test
 /// `remaining * 10 < limit` in [`is_low`] below to stay in integer
-/// arithmetic — this constant documents the fraction; the actual
-/// comparison doesn't reference it (floats would just add rounding
-/// noise for no benefit at this scale).
-#[allow(dead_code)]
-const QUOTA_LOW_FRACTION: f64 = 0.10;
+/// arithmetic — the actual comparison doesn't reference a float
+/// constant (floats would just add rounding noise for no benefit at
+/// this scale).
 const QUOTA_LOW_ABSOLUTE_FLOOR: i64 = 1_000;
 
 /// Inspect a freshly-fetched [`AccountQuota`] and decide whether to
@@ -3979,7 +3977,7 @@ fn compute_low_quota_signal(
 }
 
 /// Low-water test. When `limit > 0`, fires iff
-/// `remaining < limit * QUOTA_LOW_FRACTION` (i.e. < 10% remaining).
+/// `remaining < limit * 0.10` (i.e. < 10% remaining).
 /// When `limit == 0` (degenerate row), falls back to the absolute
 /// floor: `remaining < QUOTA_LOW_ABSOLUTE_FLOOR`.
 fn is_low(remaining: i64, limit: i64) -> bool {
