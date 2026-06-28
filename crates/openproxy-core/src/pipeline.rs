@@ -4437,14 +4437,19 @@ impl Pipeline {
                                 // Mark this chunk as "real content" so the
                                 // body stream switches from `total_deadline`
                                 // to the chunk-gap (`body_chunk_ms`) timer
-                                // for subsequent reads. Without this call,
-                                // stub events (e.g. `event: message_start`)
-                                // would keep the body stream on
-                                // `total_deadline` indefinitely, but
-                                // marking every emitted content chunk
-                                // ensures idle_chunk fires correctly if
-                                // the upstream goes silent mid-stream.
-                                stream.note_content_chunk();
+                                // for subsequent reads. Only chunks with
+                                // `has_content == true` reset the timer —
+                                // metadata-only events (e.g. a final chunk
+                                // carrying only `usage`/`finish_reason`)
+                                // must NOT reset it because no real token
+                                // was generated. This prevents the
+                                // idle_chunk timer from firing when the
+                                // upstream sends a metadata event and
+                                // then goes silent while the model is
+                                // still generating.
+                                if chunk.has_content {
+                                    stream.note_content_chunk();
+                                }
                                 if let Err(e) = sink.send(sse_bytes).await {
                                     return self.fail_on_sink_send_error(
                                         e,
@@ -4602,8 +4607,13 @@ impl Pipeline {
                         // Mark this chunk as "real content" so the body
                         // stream switches from `total_deadline` to the
                         // chunk-gap (`body_chunk_ms`) timer for the next
-                        // read. See the matching call in the slow path
-                        // above for the full rationale.
+                        // read. The fast path only runs for chunks
+                        // WITHOUT `usage` or non-null `finish_reason`
+                        // (those go to the slow path above), so every
+                        // chunk reaching this point is a content delta
+                        // — we unconditionally reset the timer here.
+                        // See the slow path above for the `has_content`
+                        // gate that metadata-only chunks must NOT reset.
                         stream.note_content_chunk();
                         if let Err(e) = sink.send(sse_bytes).await {
                             return self.fail_on_sink_send_error(
@@ -4755,6 +4765,16 @@ impl Pipeline {
                             // consuming the chunk.
                             let delta_reasoning = chunk.delta_reasoning.take();
                             let delta_tool_calls = std::mem::take(&mut chunk.delta_tool_calls);
+                            // Capture has_content BEFORE consuming
+                            // the chunk — `into_json_string()` takes
+                            // `self` by value. We use this flag below
+                            // to decide whether to call
+                            // `note_content_chunk()`. Metadata-only
+                            // events (message_start, message_delta,
+                            // content_block_start for tool_use) have
+                            // `has_content == false` and must NOT
+                            // reset the chunk-gap timer.
+                            let chunk_has_content = chunk.has_content;
                             let json_str = chunk.into_json_string();
                             if let Some(a) = acc.as_mut() {
                                 if let Some(u) = &usage {
@@ -4823,20 +4843,26 @@ impl Pipeline {
                             }
                             // Pre-format as SSE frame to avoid per-chunk String alloc + axum Event overhead.
                             let sse_frame = crate::sse::build_sse_frame(&json_str);
-                            // Mark this chunk as "real content" — this
-                            // is the Anthropic/Gemini translated path,
-                            // so the chunk is a content_block_delta
-                            // (text/input_json/thinking) that has been
-                            // translated to OpenAI shape. Marking it
-                            // ensures the body stream switches from
-                            // `total_deadline` to the chunk-gap timer
-                            // for the next read. Anthropic upstreams
-                            // that send `event: message_start` (a
-                            // metadata-only event the translator
-                            // returns `Ok(None)` for) will NOT reach
-                            // this point — so stub events correctly
-                            // leave the body stream on `total_deadline`.
-                            stream.note_content_chunk();
+                            // Mark this chunk as "real content" so the
+                            // body stream switches from `total_deadline`
+                            // to the chunk-gap timer for the next read.
+                            // Only chunks with `has_content == true`
+                            // reset the timer — metadata-only events
+                            // (message_start, message_delta,
+                            // content_block_start for tool_use) have
+                            // `has_content == false` because they
+                            // carry no generated tokens. This is the
+                            // root fix for the "idle_chunk after
+                            // 10000ms" bug on MiniMax-M3 tool calls:
+                            // the content_block_start event arrived
+                            // at ~0ms with empty arguments, and
+                            // resetting the timer there caused the
+                            // 10s gap timer to fire while the model
+                            // was still generating the first argument
+                            // fragment.
+                            if chunk_has_content {
+                                stream.note_content_chunk();
+                            }
                             if let Err(e) = sink.send(sse_frame).await {
                                 // C4 fix: a real client disconnect
                                 // mid-stream previously returned

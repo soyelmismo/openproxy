@@ -38,6 +38,23 @@ pub struct UpstreamSseChunk {
     ///
     /// Empty when this chunk carries no tool_calls.
     pub delta_tool_calls: Vec<serde_json::Value>,
+    /// Whether this chunk carries "real content" — i.e. actual generated
+    /// tokens (text, reasoning, or tool-call argument fragments) as
+    /// opposed to metadata-only events (block announcements, stop
+    /// signals, usage reports).
+    ///
+    /// The pipeline uses this flag to decide whether to call
+    /// [`UpstreamBodyStream::note_content_chunk`], which resets the
+    /// chunk-gap (`idle_chunk_ms`) timer. Only chunks with `has_content
+    /// == true` should reset the timer — metadata-only events (like
+    /// Anthropic's `content_block_start` for a `tool_use` block, which
+    /// announces the tool call id+name but carries empty arguments)
+    /// must NOT reset it, because the model hasn't started generating
+    /// actual argument tokens yet.
+    ///
+    /// Default is `true` (most chunks carry content). Set to `false`
+    /// explicitly in translators for metadata-only events.
+    pub has_content: bool,
 }
 
 impl UpstreamSseChunk {
@@ -151,6 +168,7 @@ pub fn parse_openai_sse_line(line: &str) -> Result<Option<UpstreamSseChunk>> {
             stop_reason: None,
             delta_reasoning: None,
             delta_tool_calls: Vec::new(),
+            has_content: false, // [DONE] sentinel — no content
         }));
     }
     // Fast targeted parse: only extracts usage + finish_reason,
@@ -192,6 +210,7 @@ pub fn parse_openai_sse_line(line: &str) -> Result<Option<UpstreamSseChunk>> {
         stop_reason: finish_reason,
         delta_reasoning,
         delta_tool_calls: Vec::new(),
+        has_content: true,
     }))
 }
 
@@ -289,6 +308,7 @@ pub fn parse_gemini_sse_line(
             stop_reason: None,
             delta_reasoning: None,
             delta_tool_calls: Vec::new(),
+            has_content: true,
         }));
     }
     // Fast targeted parse: only extracts candidates[].content.parts[].text
@@ -394,6 +414,7 @@ pub fn parse_gemini_sse_line(
         stop_reason: finish_reason,
         delta_reasoning,
         delta_tool_calls: Vec::new(),
+        has_content: true,
     }))
 }
 
@@ -481,6 +502,11 @@ pub fn translate_anthropic_sse_payload(
                 stop_reason: None,
                 delta_reasoning: None,
                 delta_tool_calls: Vec::new(),
+                // message_start is a metadata-only event: it announces
+                // the assistant role but carries no generated tokens.
+                // Must NOT reset the idle_chunk timer — the model
+                // hasn't started producing content yet.
+                has_content: false,
             }))
         }
         "content_block_delta" => {
@@ -529,6 +555,7 @@ pub fn translate_anthropic_sse_payload(
                     stop_reason: None,
                     delta_reasoning: Some(thinking.to_string()),
                     delta_tool_calls: Vec::new(),
+                    has_content: true,
                 }));
             }
 
@@ -564,6 +591,7 @@ pub fn translate_anthropic_sse_payload(
                 stop_reason: None,
                 delta_reasoning: None,
                 delta_tool_calls: Vec::new(),
+                has_content: true,
             }))
         }
         "message_delta" => {
@@ -608,6 +636,10 @@ pub fn translate_anthropic_sse_payload(
                 stop_reason: stop_reason.map(|s| s.to_string()),
                 delta_reasoning: None,
                 delta_tool_calls: Vec::new(),
+                // message_delta carries only stop_reason + usage —
+                // no generated tokens. Must NOT reset the idle_chunk
+                // timer.
+                has_content: false,
             }))
         }
         "message_stop" => {
@@ -776,6 +808,7 @@ pub fn translate_anthropic_sse_event(
                     stop_reason: None,
                     delta_reasoning: None,
                     delta_tool_calls: vec![tool_call_obj],
+                    has_content: true,
                 }));
             }
             // No accumulator open — drop the fragment.
@@ -812,6 +845,7 @@ pub fn translate_anthropic_sse_event(
                 stop_reason: None,
                 delta_reasoning: Some(thinking.to_string()),
                 delta_tool_calls: Vec::new(),
+                has_content: true,
             }));
         }
         // text_delta (or unknown subtype — fall back to text
@@ -840,6 +874,7 @@ pub fn translate_anthropic_sse_event(
             stop_reason: None,
             delta_reasoning: None,
             delta_tool_calls: Vec::new(),
+            has_content: true,
         }));
     }
 
@@ -923,6 +958,21 @@ pub fn translate_anthropic_sse_event(
                 stop_reason: None,
                 delta_reasoning: None,
                 delta_tool_calls: vec![tool_call_obj],
+                // content_block_start (tool_use) is a metadata-only
+                // event: it announces the tool call id+name with EMPTY
+                // arguments. The actual argument tokens come later in
+                // content_block_delta (input_json_delta) events. Must
+                // NOT reset the idle_chunk timer here — the model
+                // hasn't produced any argument tokens yet. This was
+                // the root cause of the user-visible bug where
+                // MiniMax-M3 tool calls failed with "idle_chunk after
+                // 10000ms" even though ttft_ms was Some(0): the
+                // content_block_start event arrived at ~0ms, the
+                // pipeline called note_content_chunk(), the chunk-gap
+                // timer started, and 10s later the timer fired while
+                // the model was still generating the first argument
+                // fragment.
+                has_content: false,
             }));
         }
         // Non-tool_use content_block_start (e.g. text block) —
@@ -1510,6 +1560,11 @@ mod tests {
             "assistant"
         );
         assert_eq!(chunk.payload["id"].as_str().unwrap(), "chunk-1");
+        // message_start is metadata-only (role announcement, no tokens).
+        assert!(
+            !chunk.has_content,
+            "message_start must have has_content=false"
+        );
     }
 
     #[test]
@@ -1525,6 +1580,11 @@ mod tests {
                 .as_str()
                 .unwrap(),
             "Hello"
+        );
+        // content_block_delta with text carries real content.
+        assert!(
+            chunk.has_content,
+            "content_block_delta (text) must have has_content=true"
         );
     }
 
@@ -1543,6 +1603,11 @@ mod tests {
             "stop"
         );
         assert!(chunk.usage.is_some());
+        // message_delta carries only stop_reason + usage, no tokens.
+        assert!(
+            !chunk.has_content,
+            "message_delta must have has_content=false"
+        );
     }
 
     #[test]
@@ -1600,6 +1665,21 @@ mod tests {
         assert_eq!(acc.as_ref().unwrap().name, "get_weather");
         // Index counter is monotonically increasing.
         assert_eq!(counter, 1);
+        // CRITICAL: content_block_start (tool_use) is a metadata-only
+        // event — it announces id+name with EMPTY arguments. The
+        // actual argument tokens come later in content_block_delta
+        // (input_json_delta) events. `has_content` must be `false`
+        // so the pipeline does NOT call `note_content_chunk()` here
+        // (which would reset the idle_chunk timer and cause the
+        // 10s gap timer to fire while the model is still generating
+        // the first argument fragment). This was the root cause of
+        // the user-visible "idle_chunk after 10000ms" bug on
+        // MiniMax-M3 tool calls.
+        assert!(
+            !chunk.has_content,
+            "content_block_start (tool_use) must have has_content=false \
+             — it carries no generated tokens, only id+name metadata"
+        );
     }
 
     #[test]
