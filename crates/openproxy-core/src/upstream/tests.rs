@@ -388,6 +388,17 @@ async fn phase_timeout_body_chunk_gap() {
     let first_chunk_arrived_at = t_first.elapsed();
     assert_eq!(&chunk[..5], b"first");
 
+    // Mark the first chunk as "real content" — this is the new
+    // contract introduced when we stopped auto-updating
+    // `last_chunk_at` inside `next_chunk()`. Without this call the
+    // second-chunk wait would be bounded by `total_deadline` (30s),
+    // not `body_chunk_ms` (1s), and the test would hang for ~30s
+    // instead of failing fast at ~1s. In production the pipeline
+    // calls this after emitting a content-bearing SSE event; here we
+    // call it directly because we're testing the body stream in
+    // isolation (raw bytes, no SSE parsing).
+    resp.body.note_content_chunk();
+
     // Second chunk should NOT arrive for 5s. With body_chunk_ms=1000
     // we expect a Timeout(Body) at roughly 1000ms after the first
     // chunk. The OLD code would error instantly (deadline already in
@@ -422,6 +433,142 @@ async fn phase_timeout_body_chunk_gap() {
     assert!(
         first_chunk_arrived_at < Duration::from_secs(2),
         "first_chunk_arrived_at = {first_chunk_arrived_at:?}"
+    );
+}
+
+// -----------------------------------------------------------------------
+// Test 6b (stub-event bug): a stub byte frame (e.g. an Anthropic
+// `event: message_start` line, an empty `data:` line, or any other
+// SSE metadata event) must NOT start the chunk-gap timer. The body
+// stream's `last_chunk_at` is only updated when the caller invokes
+// `note_content_chunk()`. Until then, every `next_chunk` wait is
+// bounded by `total_deadline` — so an upstream that opens the
+// stream with a stub event and then goes silent is killed by
+// `total_deadline`, not by `body_chunk_ms`.
+//
+// This is the regression test for the user-visible bug where
+// `ttft_ms=Some(0)` (a stub event arrived at 0ms) was followed by
+// `idle_chunk after 10000ms` (the gap timer fired) even though no
+// real token had been produced. The fix decoupled `last_chunk_at`
+// from raw byte arrivals — only `note_content_chunk()` updates it.
+// -----------------------------------------------------------------------
+
+/// A server that sends one stub byte frame, then goes silent for a
+/// long time. With the OLD code (auto-update of `last_chunk_at`),
+/// `body_chunk_ms=500` would fire at ~500ms after the stub. With
+/// the NEW code, the gap timer never starts (caller never calls
+/// `note_content_chunk()`), so the wait is bounded by `total_ms`
+/// and times out at ~2s.
+async fn spawn_stub_then_silent_server() -> std::net::SocketAddr {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        if let Ok((mut tcp, _peer)) = listener.accept().await {
+            use tokio::io::{AsyncReadExt, AsyncWriteExt};
+            let mut buf = vec![0u8; 4096];
+            let _ = tcp.read(&mut buf).await;
+
+            // Send headers + a stub byte frame. In production this
+            // would be an Anthropic `event: message_start\ndata: {...}\n\n`
+            // block — a metadata-only event with no content. The body
+            // stream sees it as a byte frame and (without the fix)
+            // would update `last_chunk_at`, starting the chunk-gap
+            // timer even though no real token has been produced.
+            //
+            // Chunk size is 4 (length of "stub"). Getting this wrong
+            // causes hyper's chunked decoder to surface an Http error
+            // instead of cleanly waiting for the next chunk.
+            let stub = "HTTP/1.1 200 OK\r\n\
+                        content-type: text/event-stream\r\n\
+                        transfer-encoding: chunked\r\n\r\n\
+                        4\r\nstub\r\n";
+            let _ = tcp.write_all(stub.as_bytes()).await;
+            let _ = tcp.flush().await;
+
+            // Go silent. The body stream's next read should NOT time
+            // out at `body_chunk_ms` (500ms) — it should time out at
+            // `total_ms` (2s) because `note_content_chunk()` was
+            // never called.
+            tokio::time::sleep(Duration::from_secs(30)).await;
+        }
+    });
+    addr
+}
+
+#[tokio::test]
+async fn stub_event_does_not_start_chunk_gap_timer() {
+    let addr = spawn_stub_then_silent_server().await;
+    let url = format!("http://{addr}/");
+    let client = UpstreamClient::new();
+    let cancel = CancellationToken::new();
+    let profile = TimeoutProfile::Custom(ResolvedTimeouts {
+        dns_ms: 5_000,
+        dial_ms: 5_000,
+        tls_ms: 5_000,
+        write_ms: 5_000,
+        headers_ms: 5_000,
+        // Tight chunk gap: 500ms. With the OLD (broken) code, the
+        // stub event would start this timer and the next read would
+        // fire at ~500ms. With the NEW code, this timer is NOT
+        // started (no `note_content_chunk()` call), so the next
+        // read is bounded by `total_ms` below.
+        body_chunk_ms: 500,
+        // Tight total: 2s. The next read MUST fire at ~2s, NOT at
+        // ~500ms. If it fires at ~500ms, the stub event incorrectly
+        // started the chunk-gap timer (regression).
+        total_ms: 2_000,
+    });
+    let mut resp = client
+        .call(UpstreamRequest::get(url), profile, cancel)
+        .await
+        .expect("dispatch ok");
+    assert_eq!(resp.status, StatusCode::OK);
+
+    // First chunk: the stub byte frame. Arrives promptly. We
+    // deliberately do NOT call `note_content_chunk()` here —
+    // simulating the production scenario where the pipeline receives
+    // an SSE metadata event (e.g. `event: message_start`) that
+    // carries no content and therefore does not reset the chunk-gap
+    // timer.
+    let chunk = resp
+        .body
+        .next_chunk()
+        .await
+        .expect("first chunk ok")
+        .expect("first chunk data");
+    assert_eq!(&chunk[..4], b"stub");
+
+    // Second read: should time out at `total_ms` (~2s), NOT at
+    // `body_chunk_ms` (~500ms). The proof: elapsed >= 1.5s (closer
+    // to total_ms than body_chunk_ms). With the OLD code, elapsed
+    // would be ~500ms.
+    let t = std::time::Instant::now();
+    let res = resp.body.next_chunk().await;
+    let elapsed = t.elapsed();
+
+    assert!(res.is_err(), "expected error on 2nd chunk, got {res:?}");
+    match res.unwrap_err() {
+        UpstreamError::Timeout(UpstreamPhase::Body) => {}
+        other => panic!("expected Timeout(Body), got {other:?}"),
+    }
+    // MUST be >= 1.5s — i.e. the chunk-gap timer (500ms) did NOT
+    // fire. If this fails with elapsed ~500ms, the stub event
+    // incorrectly started the chunk-gap timer (regression of the
+    // user-visible "idle_chunk after 10000ms with ttft_ms=Some(0)"
+    // bug).
+    assert!(
+        elapsed >= Duration::from_millis(1_500),
+        "elapsed = {elapsed:?}: the chunk-gap timer (500ms) fired \
+         even though `note_content_chunk()` was never called. This \
+         is the regression — stub SSE events must NOT start the \
+         chunk-gap timer."
+    );
+    // Sanity: MUST be < 3s — i.e. the total_ms (2s) did fire.
+    assert!(
+        elapsed < Duration::from_secs(3),
+        "elapsed = {elapsed:?}: the total_ms (2s) deadline did not \
+         fire — the body stream is not falling back to total_deadline \
+         when `note_content_chunk()` is not called."
     );
 }
 
@@ -819,7 +966,10 @@ async fn adversarial_phase_timeout_body_chunk_gap_resets_after_each_chunk() {
 
     // Consume chunks 1, 2, 3 promptly. Each `next_chunk` should
     // return the data without error (we are well within the gap
-    // budget).
+    // budget). We mark each chunk as "real content" via
+    // `note_content_chunk()` so the body stream's chunk-gap timer
+    // resets after each one — mirroring what the production pipeline
+    // does after emitting a content-bearing SSE event.
     let mut got = 0usize;
     for _ in 0..3 {
         let chunk = resp
@@ -829,6 +979,7 @@ async fn adversarial_phase_timeout_body_chunk_gap_resets_after_each_chunk() {
             .expect("chunk ok")
             .expect("chunk data");
         got += chunk.len();
+        resp.body.note_content_chunk();
     }
     assert!(got > 0, "expected 3 chunks of data, got {got} bytes");
 
@@ -929,6 +1080,14 @@ async fn adversarial_phase_timeout_body_chunk_not_attributed_to_write() {
         .expect("first chunk ok")
         .expect("first chunk data");
     assert!(!chunk.is_empty());
+
+    // Mark the first chunk as "real content" so the body stream's
+    // chunk-gap timer (`body_chunk_ms = 200ms`) applies to the next
+    // read. Without this call, the next `next_chunk()` would be
+    // bounded by `total_deadline` (30s) instead of the chunk gap,
+    // and the test would hang for ~5s waiting for the server's
+    // second chunk instead of failing fast at ~200ms.
+    resp.body.note_content_chunk();
 
     // Now we wait for chunk 2 (which won't arrive for 5s on the
     // server). The body-chunk gap timer must fire at ~200ms.

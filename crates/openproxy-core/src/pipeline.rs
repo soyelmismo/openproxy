@@ -4434,6 +4434,17 @@ impl Pipeline {
                                         &model_name,
                                     );
                                 }
+                                // Mark this chunk as "real content" so the
+                                // body stream switches from `total_deadline`
+                                // to the chunk-gap (`body_chunk_ms`) timer
+                                // for subsequent reads. Without this call,
+                                // stub events (e.g. `event: message_start`)
+                                // would keep the body stream on
+                                // `total_deadline` indefinitely, but
+                                // marking every emitted content chunk
+                                // ensures idle_chunk fires correctly if
+                                // the upstream goes silent mid-stream.
+                                stream.note_content_chunk();
                                 if let Err(e) = sink.send(sse_bytes).await {
                                     return self.fail_on_sink_send_error(
                                         e,
@@ -4588,6 +4599,12 @@ impl Pipeline {
                                 &model_name,
                             );
                         }
+                        // Mark this chunk as "real content" so the body
+                        // stream switches from `total_deadline` to the
+                        // chunk-gap (`body_chunk_ms`) timer for the next
+                        // read. See the matching call in the slow path
+                        // above for the full rationale.
+                        stream.note_content_chunk();
                         if let Err(e) = sink.send(sse_bytes).await {
                             return self.fail_on_sink_send_error(
                                 e,
@@ -4806,6 +4823,20 @@ impl Pipeline {
                             }
                             // Pre-format as SSE frame to avoid per-chunk String alloc + axum Event overhead.
                             let sse_frame = crate::sse::build_sse_frame(&json_str);
+                            // Mark this chunk as "real content" — this
+                            // is the Anthropic/Gemini translated path,
+                            // so the chunk is a content_block_delta
+                            // (text/input_json/thinking) that has been
+                            // translated to OpenAI shape. Marking it
+                            // ensures the body stream switches from
+                            // `total_deadline` to the chunk-gap timer
+                            // for the next read. Anthropic upstreams
+                            // that send `event: message_start` (a
+                            // metadata-only event the translator
+                            // returns `Ok(None)` for) will NOT reach
+                            // this point — so stub events correctly
+                            // leave the body stream on `total_deadline`.
+                            stream.note_content_chunk();
                             if let Err(e) = sink.send(sse_frame).await {
                                 // C4 fix: a real client disconnect
                                 // mid-stream previously returned

@@ -46,15 +46,23 @@ impl UpstreamResponse {
 /// stream; the stream holds a clone.
 ///
 /// Body-chunk timeout semantics: `body_chunk_ms` is enforced as the
-/// maximum gap between two consecutive chunks (the "idle chunk"
-/// timeout), NOT as a deadline relative to the request start.
-/// `last_chunk_at` tracks the instant of the most recent chunk; the
-/// next per-chunk deadline is computed as
-/// `last_chunk_at + body_chunk_ms`. For the first chunk we use
-/// `total_deadline`, which preserves the implicit TTFT ceiling: a
-/// server that never produces the first chunk will be killed by the
-/// `headers_deadline` (applied in `client::call_inner`) before the
-/// per-chunk gap ever starts being measured.
+/// maximum gap between two consecutive **content-bearing** chunks
+/// (the "idle chunk" timeout), NOT as a deadline relative to the
+/// request start. `last_chunk_at` tracks the instant of the most
+/// recent chunk **that the caller marked as real content** via
+/// [`UpstreamBodyStream::note_content_chunk`]; the next per-chunk
+/// deadline is computed as `last_chunk_at + body_chunk_ms`. Until
+/// the first content chunk is noted, every `next_chunk` wait is
+/// bounded by `total_deadline` — so a server that opens the stream
+/// with a stub event (`event: message_start`, an empty `data:` line,
+/// a `: keep-alive` comment) and then goes silent is killed by
+/// `total_deadline`, not by `body_chunk_ms`.
+///
+/// This contract exists because SSE stub events arrive as bytes on
+/// the wire and would otherwise update `last_chunk_at` automatically,
+/// starting the chunk-gap timer even though no real token has been
+/// produced. The pipeline (which understands SSE semantics) is the
+/// only entity that can decide "this chunk had real content".
 pub struct UpstreamBodyStream {
     #[cfg(feature = "upstream-hyper")]
     inner: Option<http_body_util::BodyStream<http_body_util::Limited<hyper::body::Incoming>>>,
@@ -164,9 +172,22 @@ impl UpstreamBodyStream {
     /// Yield the next chunk. Returns `Ok(None)` at end of stream.
     ///
     /// Honors `cancel`, the body-chunk **gap** deadline (recomputed
-    /// after every chunk as `last_chunk_at + body_chunk_ms`, with
-    /// `total_deadline` as the ceiling for the very first chunk), and
-    /// the `total_deadline`.
+    /// after every **content-bearing** chunk as
+    /// `last_chunk_at + body_chunk_ms`, with `total_deadline` as the
+    /// ceiling while no content chunk has been noted), and the
+    /// `total_deadline`.
+    ///
+    /// **Contract**: the caller MUST call [`note_content_chunk`]
+    /// after parsing a chunk that carries real content (token delta,
+    /// tool-call fragment, etc.). Until that first call, every
+    /// `next_chunk` wait is bounded by `total_deadline` only —
+    /// `body_chunk_ms` does NOT apply. This is intentional: a stub
+    /// SSE event (`event: message_start`, empty `data:`) that
+    /// arrives before the first real token should NOT start the
+    /// chunk-gap timer; the request should be bounded by
+    /// `total_deadline` until real content flows.
+    ///
+    /// [`note_content_chunk`]: Self::note_content_chunk
     pub async fn next_chunk(&mut self) -> UpstreamResult<Option<Bytes>> {
         if self.cancel.is_cancelled() {
             return Err(UpstreamError::Cancel);
@@ -177,14 +198,16 @@ impl UpstreamBodyStream {
         // the first chunk — measuring a "gap" between chunks is meaningless.
         //
         // For streaming: the gap timeout (body_chunk_ms / idle_chunk_ms)
-        // only applies AFTER the first chunk arrives. For the FIRST chunk
-        // (last_chunk_at is None), the wait is bounded by total_deadline
-        // — the upstream client's headers_deadline (ttft_ms) already
-        // bounds the HTTP headers, and the LLM needs time to generate
-        // the first token. Using start + body_chunk_ms for the first
-        // chunk was the root cause of the persistent "idle_chunk after
-        // 10000ms" errors: the LLM hadn't produced any token yet but
-        // the gap timer fired.
+        // only applies AFTER the caller marks a chunk as "real content"
+        // via `note_content_chunk()`. Until that first call,
+        // `last_chunk_at` is None and every wait is bounded by
+        // `total_deadline`. This prevents stub SSE events
+        // (`event: message_start`, empty `data:` lines, `:` comments)
+        // from starting the chunk-gap timer before any real token has
+        // been produced — the root cause of the "idle_chunk after
+        // 10000ms" errors users saw when an upstream opened the stream
+        // with a metadata event and then went silent for >10s while
+        // generating the first token.
         let min_deadline = if self.is_streaming {
             if let Some(last) = self.last_chunk_at {
                 // Subsequent chunk: gap = last_chunk + body_chunk_ms
@@ -222,7 +245,19 @@ impl UpstreamBodyStream {
                 res = futures_util::StreamExt::next(stream) => {
                     match res {
                         Some(Ok(frame)) => {
-                            self.last_chunk_at = Some(Instant::now());
+                            // Do NOT auto-update `last_chunk_at` here.
+                            // The caller (pipeline) decides whether this
+                            // byte frame carries "real content" (a token
+                            // delta, a tool-call fragment, etc.) or is a
+                            // stub event (`event: message_start`, an
+                            // empty `data:` line, a `:` comment). Only
+                            // real content resets the chunk-gap timer
+                            // — stub events leave `last_chunk_at` alone
+                            // so the next-chunk wait stays bounded by
+                            // `total_deadline` instead of `body_chunk_ms`.
+                            // The caller signals "real content" by
+                            // calling `note_content_chunk()` after
+                            // parsing the SSE event.
                             Ok(Some(frame.into_data().unwrap_or_default()))
                         }
                         Some(Err(e)) => Err(UpstreamError::Http(e.to_string())),
@@ -237,6 +272,32 @@ impl UpstreamBodyStream {
             let _ = (min_deadline, self.body_chunk_ms, self.is_streaming);
             Ok(None)
         }
+    }
+
+    /// Mark the most recent chunk as "real content" — i.e. the chunk
+    /// carried a token delta, tool-call fragment, or other meaningful
+    /// payload that the pipeline actually forwarded to the client.
+    ///
+    /// This resets the chunk-gap (`body_chunk_ms`) timer: subsequent
+    /// `next_chunk()` calls will use `last_chunk_at + body_chunk_ms`
+    /// as the per-chunk deadline (clamped by `total_deadline`).
+    ///
+    /// Until this method is called at least once, `next_chunk()`
+    /// uses `total_deadline` for every wait — so stub events
+    /// (`event: message_start`, empty `data:` lines, `:` comments)
+    /// that arrive before the first real content chunk do NOT start
+    /// the idle-chunk timer. A server that opens the stream with a
+    /// stub event and then goes silent is killed by `total_deadline`,
+    /// not by `body_chunk_ms`.
+    ///
+    /// Call this from the streaming loop AFTER successfully parsing
+    /// and emitting a content-bearing SSE event. For Anthropic-shaped
+    /// upstreams that means `content_block_delta` (text_delta,
+    /// input_json_delta, thinking_delta). For OpenAI-shaped upstreams
+    /// that means `choices[0].delta` with non-empty `content`,
+    /// `tool_calls`, or `reasoning_content`.
+    pub fn note_content_chunk(&mut self) {
+        self.last_chunk_at = Some(Instant::now());
     }
 }
 
