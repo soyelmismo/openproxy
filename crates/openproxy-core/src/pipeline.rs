@@ -2932,6 +2932,7 @@ impl Pipeline {
                         crate::upstream::UpstreamPhase::Write => ("write", "request_send_ms"),
                         crate::upstream::UpstreamPhase::Headers => ("headers", "ttft_ms"),
                         crate::upstream::UpstreamPhase::Body => ("body", "idle_chunk_ms"),
+                        crate::upstream::UpstreamPhase::Total => ("total", "total_ms"),
                     };
                     tracing::warn!(
                         combo_id = combo.id.0,
@@ -3677,6 +3678,7 @@ impl Pipeline {
                         crate::upstream::UpstreamPhase::Write => "write",
                         crate::upstream::UpstreamPhase::Headers => "headers",
                         crate::upstream::UpstreamPhase::Body => "body",
+                        crate::upstream::UpstreamPhase::Total => "total",
                     };
                     tracing::warn!(
                         combo_id = combo.id.0,
@@ -4009,15 +4011,36 @@ impl Pipeline {
                     // Map the `UpstreamError` to `CoreError` for the
                     // per-chunk failure path. Body chunk timeouts
                     // map to `UpstreamTimeout { phase: "idle_chunk" }`
-                    // (the same label reqwest+StreamExt would have
-                    // surfaced — the per-chunk gap budget), other
-                    // errors to `UpstreamConnection`. We use the
-                    // pre-migration label for dashboard consistency.
+                    // (the per-chunk gap budget). Total-deadline
+                    // timeouts (no content chunk ever arrived) map to
+                    // `UpstreamTimeout { phase: "total" }` so the
+                    // operator can distinguish "model stalled
+                    // mid-stream" from "model never produced a token".
                     let err = match e {
                         UpstreamError::Timeout(UpstreamPhase::Body) => CoreError::UpstreamTimeout {
                             phase: "idle_chunk".into(),
                             ms: resolved_timeouts.idle_chunk.as_millis() as u64,
                         },
+                        UpstreamError::Timeout(UpstreamPhase::Total) => {
+                            // The total_ms deadline fired while reading
+                            // the body — no content chunk arrived (or
+                            // only metadata-only events arrived). This
+                            // is NOT an idle_chunk timeout; it's the
+                            // total request budget expiring. Report
+                            // it with the actual total_ms value so the
+                            // error message is accurate.
+                            tracing::warn!(
+                                phase = "total",
+                                idle_chunk_ms = resolved_timeouts.idle_chunk.as_millis() as u64,
+                                total_ms = resolved_timeouts.total.as_millis() as u64,
+                                ttft_ms = ?ttft_ms,
+                                "body stream timed out on total_deadline (no content chunk was ever marked)"
+                            );
+                            CoreError::UpstreamTimeout {
+                                phase: "total".into(),
+                                ms: resolved_timeouts.total.as_millis() as u64,
+                            }
+                        }
                         UpstreamError::Cancel => {
                             // The hyper body returned cancel — the
                             // client_disconnected watch has fired.
@@ -4041,8 +4064,9 @@ impl Pipeline {
                         UpstreamError::Invalid(msg) => {
                             CoreError::UpstreamConnection(format!("stream read: {}", msg))
                         }
-                        // Body-phase timeout that isn't `Body` (e.g.
-                        // a future phase variant) — treat as idle.
+                        // Body-phase timeout that isn't `Body` or
+                        // `Total` (shouldn't happen in the body
+                        // stream) — treat as a generic connection error.
                         UpstreamError::Timeout(_) => {
                             CoreError::UpstreamConnection(format!("stream read: {}", e))
                         }

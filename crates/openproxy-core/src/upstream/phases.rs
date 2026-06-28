@@ -36,6 +36,12 @@ pub enum UpstreamPhase {
     /// Reading the response body, chunk-by-chunk. Each chunk is bounded
     /// by `body_chunk_ms`; the total body is bounded by `total_ms`.
     Body,
+    /// The total request deadline (`total_ms`) fired while reading the
+    /// body. This is distinct from `Body` (which means the per-chunk
+    /// gap / `idle_chunk_ms` fired). The pipeline maps `Body` →
+    /// `idle_chunk` and `Total` → `total` so the error message
+    /// correctly identifies which timer killed the request.
+    Total,
 }
 
 impl UpstreamPhase {
@@ -48,6 +54,7 @@ impl UpstreamPhase {
             UpstreamPhase::Write => "write",
             UpstreamPhase::Headers => "headers",
             UpstreamPhase::Body => "body",
+            UpstreamPhase::Total => "total",
         }
     }
 }
@@ -152,6 +159,7 @@ impl ResolvedPhaseDeadlines {
             UpstreamPhase::Write => self.write_deadline,
             UpstreamPhase::Headers => self.headers_deadline,
             UpstreamPhase::Body => self.body_chunk_deadline,
+            UpstreamPhase::Total => self.total_deadline,
         }
     }
 }

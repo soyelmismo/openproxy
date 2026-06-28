@@ -548,8 +548,14 @@ async fn stub_event_does_not_start_chunk_gap_timer() {
 
     assert!(res.is_err(), "expected error on 2nd chunk, got {res:?}");
     match res.unwrap_err() {
-        UpstreamError::Timeout(UpstreamPhase::Body) => {}
-        other => panic!("expected Timeout(Body), got {other:?}"),
+        // Since `note_content_chunk()` was never called, `last_chunk_at`
+        // is None, so the body stream returns `Timeout(Total)` (the
+        // total_deadline fired), NOT `Timeout(Body)` (the chunk-gap
+        // timer). This distinction is critical for the pipeline's error
+        // labeling: `Timeout(Total)` → "total" phase, `Timeout(Body)`
+        // → "idle_chunk" phase.
+        UpstreamError::Timeout(UpstreamPhase::Total) => {}
+        other => panic!("expected Timeout(Total), got {other:?}"),
     }
     // MUST be >= 1.5s — i.e. the chunk-gap timer (500ms) did NOT
     // fire. If this fails with elapsed ~500ms, the stub event

@@ -240,7 +240,24 @@ impl UpstreamBodyStream {
                     Err(UpstreamError::Cancel)
                 }
                 _ = &mut self.sleep => {
-                    Err(UpstreamError::Timeout(UpstreamPhase::Body))
+                    // Distinguish chunk-gap timeout from total-deadline
+                    // timeout. When `last_chunk_at` is Some, the sleep
+                    // was set to `last_chunk_at + body_chunk_ms` — this
+                    // is a genuine idle_chunk timeout (the upstream
+                    // stalled between content chunks). When
+                    // `last_chunk_at` is None, the sleep was set to
+                    // `total_deadline` — this is the total request
+                    // budget expiring before any content chunk arrived
+                    // (or between metadata-only events that did NOT
+                    // reset the chunk-gap timer). The pipeline maps
+                    // these to different error labels so the operator
+                    // can distinguish "model stalled mid-stream" from
+                    // "model never produced a token".
+                    if self.last_chunk_at.is_some() {
+                        Err(UpstreamError::Timeout(UpstreamPhase::Body))
+                    } else {
+                        Err(UpstreamError::Timeout(UpstreamPhase::Total))
+                    }
                 }
                 res = futures_util::StreamExt::next(stream) => {
                     match res {
