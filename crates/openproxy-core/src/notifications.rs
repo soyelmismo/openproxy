@@ -577,4 +577,96 @@ mod tests {
         assert_eq!(id1, id2);
         assert_eq!(unread_count(&conn).unwrap(), 1);
     }
+
+    // NOTIF-FIX (bug D): regression test for archived notifications
+    // still counting as unread. The `unread_count` query MUST filter
+    // `archived_at IS NULL` in addition to `read_at IS NULL` — an
+    // archived-but-unread row has `read_at = NULL` (the archive path
+    // doesn't touch `read_at`), so without the `archived_at IS NULL`
+    // filter the row would still be counted and the badge would never
+    // decrease after a dismiss.
+    #[test]
+    fn archived_rows_excluded_from_unread_count() {
+        let conn = fresh_db();
+        let id = insert(
+            &conn,
+            KIND_MODEL_NEW,
+            &serde_json::json!({}),
+            Some("p1:m1"),
+            Some("p1"),
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(unread_count(&conn).unwrap(), 1);
+        // Archive the (still-unread) row. `read_at` stays NULL — the
+        // archive path doesn't touch it.
+        archive(&conn, id).unwrap();
+        // The unread count must drop to 0 because `archived_at IS NULL`
+        // is now false for this row.
+        assert_eq!(unread_count(&conn).unwrap(), 0);
+        // Sanity: `read_at` is still NULL (archive didn't touch it).
+        let row = list(&conn, false, 10, None).unwrap();
+        assert!(row.is_empty(), "archived row should be hidden from list");
+    }
+
+    // NOTIF-FIX (bug D): regression test for `mark_all_read` not
+    // filtering `archived_at IS NULL`. If the WHERE clause only
+    // checked `read_at IS NULL`, an archived-but-unread row would
+    // get its `read_at` set by `mark_all_read` — harmless for the
+    // count (archived_at IS NOT NULL already excludes it) but a
+    // wasteful write and a contract violation (archived rows are
+    // supposed to be immutable except for `archived_at`). More
+    // importantly, the count returned by `mark_all_read` would
+    // include archived rows, which would mislead the client into
+    // thinking more rows were updated than actually were.
+    #[test]
+    fn mark_all_read_skips_archived_rows() {
+        let conn = fresh_db();
+        let id_active = insert(
+            &conn,
+            KIND_MODEL_NEW,
+            &serde_json::json!({}),
+            Some("p1:active"),
+            Some("p1"),
+        )
+        .unwrap()
+        .unwrap();
+        let id_archived = insert(
+            &conn,
+            KIND_MODEL_NEW,
+            &serde_json::json!({}),
+            Some("p1:archived"),
+            Some("p1"),
+        )
+        .unwrap()
+        .unwrap();
+        // Archive one of the two unread rows.
+        archive(&conn, id_archived).unwrap();
+        // `mark_all_read` should only touch the active row.
+        let changed = mark_all_read(&conn).unwrap();
+        assert_eq!(changed, 1, "mark_all_read should skip archived rows");
+        // The active row is now read; the archived row's `read_at`
+        // is still NULL (mark_all_read didn't touch it).
+        assert_eq!(unread_count(&conn).unwrap(), 0);
+        // Verify by reading raw columns (list() hides archived rows).
+        let active_read_at: Option<String> = conn
+            .query_row(
+                "SELECT read_at FROM notifications WHERE id = ?1",
+                params![id_active],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let archived_read_at: Option<String> = conn
+            .query_row(
+                "SELECT read_at FROM notifications WHERE id = ?1",
+                params![id_archived],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(active_read_at.is_some(), "active row should be marked read");
+        assert!(
+            archived_read_at.is_none(),
+            "archived row should NOT be marked read by mark_all_read"
+        );
+    }
 }

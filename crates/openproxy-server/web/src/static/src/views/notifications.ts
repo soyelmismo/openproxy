@@ -53,6 +53,7 @@ import {
   setUnreadCount,
   decrementUnread,
   refreshUnreadCount,
+  markIdsSeen,
   onUnreadCountChange,
   onNotificationEvent,
   setSuppressToasts,
@@ -328,7 +329,16 @@ function matchesFilter(r: NotificationRow): boolean {
 // ============================================================================
 
 /** Fetch the initial list. The endpoint returns the 50 most-recent
- *  rows (read + unread). The view filters client-side. */
+ *  rows (read + unread). The view filters client-side.
+ *
+ *  NOTIF-FIX (bug B): after fetching, we tell the notifications store
+ *  about the ids we just loaded via `markIdsSeen()`. Without this, a
+ *  WS rebroadcast for any of these rows (the server rebroadcasts the
+ *  same id on dedup-hit inserts) would cause a spurious optimistic
+ *  +1 on the badge — the row is already in our local list (so the
+ *  view's WS handler refuses to prepend it again), but the store
+ *  would still increment, producing the "1 new unread but no new
+ *  notification appears in the list" ghost. */
 async function fetchInitial(): Promise<void> {
   try {
     const raw: unknown = await api("/notifications?limit=50");
@@ -342,6 +352,9 @@ async function fetchInitial(): Promise<void> {
     loadError = e instanceof Error ? e.message : String(e);
     rows = [];
   }
+  // Tell the store which ids we've already loaded so WS rebroadcasts
+  // for them don't cause a spurious optimistic +1 on the badge.
+  markIdsSeen(rows.map((r) => r.id));
   requestUpdate();
 }
 
@@ -365,7 +378,13 @@ async function markAsRead(id: number): Promise<void> {
   }
 }
 
-/** Mark all notifications as read. Updates local state + count. */
+/** Mark all notifications as read. Updates local state + count.
+ *  NOTIF-FIX: also calls `refreshUnreadCount()` after the API
+ *  succeeds to (a) confirm the local count is in sync with the
+ *  server and (b) clear the store's `dirty` flag if any optimistic
+ *  change was pending. The `setUnreadCount(0)` here is applied as
+ *  a server-confirmed value (not optimistic) because the API has
+ *  already returned by the time we call it. */
 async function markAllRead(): Promise<void> {
   try {
     await api("/notifications/read-all", { method: "POST" });
@@ -375,6 +394,8 @@ async function markAllRead(): Promise<void> {
     }
     setUnreadCount(0);
     requestUpdate();
+    // Confirm + clear the store's dirty flag.
+    void refreshUnreadCount();
   } catch (e: unknown) {
     showToast("Error: " + (e instanceof Error ? e.message : String(e)), "error");
   }
@@ -382,7 +403,15 @@ async function markAllRead(): Promise<void> {
 
 /** Archive (dismiss) a notification. The card is removed from the
  *  list optimistically; the server call follows. On error, we
- *  refetch the list to restore the row. */
+ *  refetch the list to restore the row.
+ *
+ *  NOTIF-FIX: the optimistic decrement via `decrementUnread` sets
+ *  the store's `dirty` flag (protecting the decrement from a racing
+ *  30s poll). On API failure we restore the count locally, but the
+ *  `dirty` flag is still set — we explicitly call `refreshUnreadCount()`
+ *  to (a) confirm the server's true count (the local restore assumes
+ *  the server didn't change, which may not be true if another client
+ *  was active) and (b) clear `dirty` so the 30s poll resumes. */
 async function archive(id: number): Promise<void> {
   const snapshot: NotificationRow[] = rows;
   const wasUnread: boolean = rows.find((x) => x.id === id)?.read_at === null;
@@ -396,10 +425,15 @@ async function archive(id: number): Promise<void> {
     // Restore the row + count. The user sees a brief flash.
     rows = snapshot;
     if (wasUnread) {
-      // decrementUnread above reduced the count; restore it.
+      // decrementUnread above reduced the count; restore it. We pass
+      // `optimistic: false` (the default) because this is a revert
+      // to a known state, not a new optimistic change.
       setUnreadCount(getUnreadCount() + 1);
     }
     requestUpdate();
+    // Re-sync from the server to clear `dirty` and pick up any count
+    // changes that happened while the failed archive was in flight.
+    void refreshUnreadCount();
     showToast("Error: " + (e instanceof Error ? e.message : String(e)), "error");
   }
 }
@@ -1104,10 +1138,44 @@ export async function mountNotifications(): Promise<(() => void) | void> {
 
   // Cleanup: unsubscribe from the store + release the lit-html
   // container. Also close the DnD overlay if it was open.
+  //
+  // NOTIF-FIX (task 4): fire-and-forget a `mark_all_read` call on
+  // close so the sidebar badge syncs to 0 once the user has viewed
+  // the tray. This mirrors the "tray pattern" from email clients
+  // (viewing the tray clears the unread badge) and prevents the
+  // badge from staying inflated after the user has seen every
+  // notification. The call is best-effort: if it fails (network
+  // drop, server restarting), the next 30s poll will re-sync the
+  // count from the server. We skip it entirely when there's nothing
+  // unread to mark (avoids a pointless POST + the toast that
+  // `markAllRead` shows on error).
   return () => {
     if (unsubEvents) { unsubEvents(); unsubEvents = null; }
     if (unsubCount) { unsubCount(); unsubCount = null; }
     closeOverlay();
     cleanupReactive();
+    if (rows.some((r) => r.read_at === null && r.archived_at === null)) {
+      void markAllReadOnClose();
+    }
   };
+}
+
+/** NOTIF-FIX (task 4): best-effort `mark_all_read` fired from the
+ *  view's cleanup path. Unlike the user-facing `markAllRead`, this
+ *  variant is silent on error (no toast — the user has already
+ *  navigated away) and skips the local-row mutation + re-render
+ *  (the view is unmounted, so re-rendering would be wasted work).
+ *  The important side effects are the POST to the server (which
+ *  marks all unread rows as read) and the local count drop to 0
+ *  (so the sidebar badge clears immediately). A follow-up
+ *  `refreshUnreadCount()` confirms the server's view and clears
+ *  the store's dirty flag. */
+async function markAllReadOnClose(): Promise<void> {
+  try {
+    await api("/notifications/read-all", { method: "POST" });
+    setUnreadCount(0);
+    void refreshUnreadCount();
+  } catch (_e: unknown) {
+    // Swallow — best-effort sync. The 30s poll will re-sync.
+  }
 }

@@ -10,7 +10,7 @@
 // Responsibilities:
 //   1. Hold the authoritative unread count (server-fetched on init
 //      and on every 30s tick; incremented optimistically on each
-//      live WS event, then re-synced 500ms later).
+//      novel live WS event, then re-synced 500ms later).
 //   2. Subscribe to ws-bus `'notification'` events once at boot and
 //      fan them out to registered listeners (sidebar, view).
 //   3. Open the live-logs WebSocket at boot so `notification` events
@@ -22,6 +22,16 @@
 //      is in progress — the `suppressToasts` flag is toggled by the
 //      DnD overlay so a fresh notification mid-drag doesn't yank
 //      focus).
+//
+// NOTIF-FIX (bugs A, B, D): the count is now guarded by a `dirty`
+// flag that prevents the 30s poll from overwriting optimistic local
+// changes (decrements after dismiss, increments after a WS event)
+// until a user-initiated `refreshUnreadCount()` confirms them. The
+// WS handler also deduplicates by notification id — the server
+// rebroadcasts the same id for dedup-hit inserts (e.g. a flapping
+// `discovery_failed` code within 24h), and without dedup the badge
+// would inflate by +1 per rebroadcast even though the underlying
+// row (and therefore the server's unread count) hasn't changed.
 //
 // The store is process-global and never tears down. The 30s poll
 // handles the case where the WS is closed (e.g. the user navigated
@@ -47,7 +57,11 @@ import type {
 // ----------------------------------------------------------------------------
 
 // `GET /admin/api/notifications/unread-count` returns
-// `{ "unread_count": <number> }`. We narrow defensively via
+// `{ "count": <number> }`. (NOTIF-FIX: previously this code read
+// `unread_count` which never matched the server's response field,
+// so the count was never actually synced from the server — only
+// optimistic WS increments accumulated, producing the inflated
+// "99" badge with an empty list.) We narrow defensively via
 // `Record<string, unknown>` rather than a dedicated interface — the
 // server contract is small enough that an inline narrowing is
 // clearer than a one-field type alias.
@@ -62,6 +76,31 @@ type EventListener = (evt: NotificationEvent) => void;
 let unreadCount: number = 0;
 let initialized: boolean = false;
 let suppressToasts: boolean = false;
+
+/** NOTIF-FIX (bug A): dirty flag set whenever the local count is
+ *  "ahead" of the server (after an optimistic increment on a WS
+ *  event or an optimistic decrement on a dismiss/mark-read). While
+ *  dirty, the 30s background poll skips applying its fetched count
+ *  — otherwise a poll that races with an in-flight dismiss API
+ *  call would clobber the optimistic decrement with the server's
+ *  stale "still unread" value. The flag is cleared by the next
+ *  successful user-initiated `refreshUnreadCount()` (which always
+ *  applies the server's response). */
+let dirty: boolean = false;
+
+/** NOTIF-FIX (bug B): set of notification ids we've already counted
+ *  via a WS event. The server rebroadcasts the same id for dedup-hit
+ *  inserts (e.g. `record_system("discovery_failed", ...)` twice in
+ *  24h), so without dedup the badge would inflate by +1 per
+ *  rebroadcast even though the underlying row hasn't changed.
+ *  Populated from WS events and from `markIdsSeen()` (called by the
+ *  notifications view after its initial list fetch). Capped at
+ *  `SEEN_IDS_CAP` to bound memory; when the cap is exceeded we
+ *  clear the set and start fresh (the 500ms debounced refresh
+ *  will re-sync the count from the server, so a brief overcount
+ *  window after the clear is acceptable). */
+const seenIds: Set<number> = new Set<number>();
+const SEEN_IDS_CAP: number = 1000;
 
 /** 30s poll handle for `GET /notifications/unread-count`. Cleared on
  *  every tick and rescheduled inside the tick's `finally` so a slow
@@ -87,15 +126,29 @@ export function getUnreadCount(): number {
 
 /** Replace the unread count and notify every subscriber (sidebar,
  *  view header). Callers should pass a non-negative number; we clamp
- *  defensively in case a server bug returns -1. */
-export function setUnreadCount(n: number): void {
+ *  defensively in case a server bug returns -1.
+ *
+ *  NOTIF-FIX: the `opts.optimistic` flag marks the local count as
+ *  "ahead of the server" (sets the dirty flag). Pass `optimistic: true`
+ *  for local changes that haven't yet been confirmed by a server
+ *  fetch — e.g. an optimistic decrement after dismiss, or an
+ *  optimistic increment on a novel WS event. Pass `optimistic: false`
+ *  (the default) when applying a server-confirmed value (e.g. inside
+ *  `refreshUnreadCount` after a successful fetch, or restoring a
+ *  reverted optimistic change after an API failure). */
+export function setUnreadCount(n: number, opts: { optimistic?: boolean } = {}): void {
   const next: number = Math.max(0, n | 0);
-  if (next === unreadCount) return;
-  unreadCount = next;
-  for (const fn of countListeners) {
-    try { fn(unreadCount); } catch (e: unknown) {
-      console.error("[notifications-store] count listener threw", e);
+  const changed: boolean = next !== unreadCount;
+  if (changed) {
+    unreadCount = next;
+    for (const fn of countListeners) {
+      try { fn(unreadCount); } catch (e: unknown) {
+        console.error("[notifications-store] count listener threw", e);
+      }
     }
+  }
+  if (opts.optimistic && changed) {
+    dirty = true;
   }
 }
 
@@ -120,13 +173,25 @@ export function setSuppressToasts(b: boolean): void {
 }
 
 /** Force a refetch of the unread count from the server. Used by the
- *  notifications view after a mark-as-read / archive call. */
+ *  notifications view after a mark-as-read / archive call, by the WS
+ *  event handler's debounced re-sync (500ms after each event), and by
+ *  the 30s background poll.
+ *
+ *  NOTIF-FIX: always applies the fetched count (regardless of the
+ *  `dirty` flag) and clears `dirty` on success — this is the
+ *  "confirmation" half of the dirty-flag protocol. The 30s poll
+ *  goes through `pollRefreshUnreadCount()` which skips when dirty.
+ *  Also fixed the response field name from `unread_count` (never
+ *  matched the server's `count` field) to `count`. */
 export async function refreshUnreadCount(): Promise<void> {
   try {
     const raw: unknown = await api("/notifications/unread-count");
-    if (raw && typeof raw === "object" && "unread_count" in raw) {
-      const n: unknown = (raw as Record<string, unknown>)["unread_count"];
-      if (typeof n === "number") setUnreadCount(n);
+    if (raw && typeof raw === "object" && "count" in raw) {
+      const n: unknown = (raw as Record<string, unknown>)["count"];
+      if (typeof n === "number") {
+        setUnreadCount(n);
+        dirty = false;
+      }
     }
   } catch (_e: unknown) {
     // Swallow — the 30s poll will try again. The badge just stays
@@ -134,10 +199,39 @@ export async function refreshUnreadCount(): Promise<void> {
   }
 }
 
+/** NOTIF-FIX: 30s background poll. Skips the fetch entirely when
+ *  `dirty` is set — the local count is ahead of the server (an
+ *  optimistic increment or decrement hasn't yet been confirmed by
+ *  a user-initiated refresh), so applying the server's stale value
+ *  would clobber the optimistic change. The next user action (or
+ *  the WS handler's 500ms debounced refresh) will clear dirty and
+ *  re-enable normal polling. */
+async function pollRefreshUnreadCount(): Promise<void> {
+  if (dirty) return;
+  await refreshUnreadCount();
+}
+
 /** Decrement the unread count locally (e.g. after the user marks a
- *  single notification as read). Clamped at 0. */
+ *  single notification as read). Clamped at 0. Marks the local
+ *  count as optimistic (dirty) so the 30s poll doesn't overwrite it
+ *  before the next `refreshUnreadCount()` confirms. */
 export function decrementUnread(by: number = 1): void {
-  setUnreadCount(unreadCount - by);
+  setUnreadCount(unreadCount - by, { optimistic: true });
+}
+
+/** NOTIF-FIX (bug B): mark a set of notification ids as "already
+ *  seen" so a subsequent WS rebroadcast for the same id (dedup-hit
+ *  on the server) doesn't cause a spurious optimistic increment.
+ *  Called by the notifications view after its initial list fetch.
+ *  The set is capped at `SEEN_IDS_CAP`; when the cap is exceeded we
+ *  clear it and start fresh. */
+export function markIdsSeen(ids: Iterable<number>): void {
+  for (const id of ids) {
+    seenIds.add(id);
+  }
+  if (seenIds.size > SEEN_IDS_CAP) {
+    seenIds.clear();
+  }
 }
 
 // ----------------------------------------------------------------------------
@@ -286,29 +380,55 @@ export function initNotificationsStore(): void {
   // Subscribe to ws-bus `notification` events. The bus is independent
   // of the WS connection state — when the WS is closed, no events
   // arrive and the 30s poll is the only source of truth.
+  //
+  // NOTIF-FIX (bug B): only increment the count for NOVEL ids. The
+  // server rebroadcasts the same id on dedup-hit inserts (e.g. a
+  // flapping `discovery_failed` code within 24h, or a `model_new`
+  // for the same provider:model that re-discovery sees again). The
+  // underlying row already exists in those cases, so the server's
+  // unread count is unchanged — incrementing the badge for each
+  // rebroadcast produced the inflated "99" badge with an empty
+  // list (the view's WS handler refuses to prepend a row whose id
+  // is already in the list, so the rebroadcast was invisible in
+  // the list but still +1 on the badge).
   subscribeWs("notification", (msg) => {
     const data: unknown = msg.data;
     if (!data || typeof data !== "object") return;
     const evt: NotificationEvent = data as NotificationEvent;
-    // Optimistic increment so the badge reacts instantly. The server
-    // is the source of truth — we re-sync 500ms later (debounced).
-    setUnreadCount(unreadCount + 1);
-    // Fan out to listeners (sidebar, view). Each listener is
-    // responsible for its own error handling.
+    const isNovel: boolean = !seenIds.has(evt.id);
+    if (isNovel) {
+      seenIds.add(evt.id);
+      if (seenIds.size > SEEN_IDS_CAP) seenIds.clear();
+      // Optimistic increment so the badge reacts instantly. The
+      // server is the source of truth — we re-sync 500ms later
+      // (debounced) and clear the dirty flag then. The dirty flag
+      // also protects this increment from being clobbered by a
+      // racing 30s poll.
+      setUnreadCount(unreadCount + 1, { optimistic: true });
+    }
+    // Fan out to listeners (sidebar, view) regardless of novelty —
+    // a rebroadcast for an already-known id still carries real-time
+    // signal (the event is happening again right now), so listeners
+    // may want to e.g. move the row to the top of the list. Each
+    // listener is responsible for its own error handling.
     for (const fn of eventListeners) {
       try { fn(evt); } catch (e: unknown) {
         console.error("[notifications-store] event listener threw", e);
       }
     }
     // Debounced re-sync. Multiple events arriving in quick succession
-    // coalesce into a single server call.
+    // coalesce into a single server call. This is the "confirm"
+    // half of the dirty-flag protocol: it always applies the server's
+    // count and clears dirty.
     if (refreshDebounce !== null) clearTimeout(refreshDebounce);
     refreshDebounce = setTimeout(() => {
       refreshDebounce = null;
       void refreshUnreadCount();
     }, 500);
     // Transient toast. Suppressed during DnD so a fresh notification
-    // mid-drag doesn't yank focus.
+    // mid-drag doesn't yank focus. We show the toast for rebroadcasts
+    // too — the user-perceived event ("discovery failed again") is
+    // new even if the underlying row isn't.
     if (!suppressToasts) {
       const title: string = t("notifications.kind." + (evt.kind as NotificationKind));
       const body: string = notificationBody(evt);
@@ -331,7 +451,11 @@ function schedulePoll(): void {
   pollHandle = setTimeout(() => {
     pollHandle = null;
     void (async () => {
-      try { await refreshUnreadCount(); }
+      // NOTIF-FIX: poll goes through `pollRefreshUnreadCount` which
+      // skips when `dirty` is set, so an in-flight optimistic change
+      // can't be clobbered by a racing poll. The next user-initiated
+      // `refreshUnreadCount()` clears dirty and re-enables polling.
+      try { await pollRefreshUnreadCount(); }
       finally { schedulePoll(); }
     })();
   }, 30_000);
