@@ -1309,15 +1309,34 @@ impl Pipeline {
                 // order, RoundRobin = rotated, Shuffle = randomized).
                 // It does NOT change failure semantics.
                 Some(e) => {
-                    tracing::debug!(
-                        combo_id = combo.id.0,
-                        target_id = target.id.0,
-                        provider = %target.provider_id,
-                        strategy = ?combo.strategy,
-                        retryable = RetryPolicy::is_retryable(e, self.config.idle_chunk_retryable),
-                        error = %e,
-                        "target failed; trying next target"
-                    );
+                    // Log at WARN level for rate-limit errors so the
+                    // operator can see the combo walk absorbing them.
+                    // Other errors stay at DEBUG to avoid log noise.
+                    let is_rate_limit = matches!(e, CoreError::RateLimited { .. })
+                        || (matches!(e, CoreError::UpstreamError { status, .. } if *status == 429));
+                    if is_rate_limit {
+                        tracing::warn!(
+                            combo_id = combo.id.0,
+                            target_id = target.id.0,
+                            provider = %target.provider_id,
+                            model_row_id = ?target.model_row_id,
+                            attempt = target_attempt,
+                            retryable = RetryPolicy::is_retryable(e, self.config.idle_chunk_retryable),
+                            error = %e,
+                            remaining_targets = to_run.len(),
+                            "target rate-limited; trying next target in combo"
+                        );
+                    } else {
+                        tracing::debug!(
+                            combo_id = combo.id.0,
+                            target_id = target.id.0,
+                            provider = %target.provider_id,
+                            strategy = ?combo.strategy,
+                            retryable = RetryPolicy::is_retryable(e, self.config.idle_chunk_retryable),
+                            error = %e,
+                            "target failed; trying next target"
+                        );
+                    }
                     last_result = Some(result);
                 }
             }
