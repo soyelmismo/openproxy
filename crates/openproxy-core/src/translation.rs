@@ -332,41 +332,77 @@ pub fn openai_to_anthropic(req: &OpenAIRequest) -> AnthropicRequest {
     let mut system_parts: Vec<String> = Vec::new();
     let mut conversation: Vec<AnthropicMessage> = Vec::with_capacity(req.messages.len());
 
-    // Track whether the previous message was a tool result. Anthropic
-    // requires that consecutive tool results (from multiple tool_calls
-    // in the same assistant message) be merged into a SINGLE user
-    // message with multiple tool_result content blocks. If we emit
-    // separate user messages for each tool result, MiniMax rejects
-    // with (2013) "tool call result does not follow tool call".
+    // Anthropic requires strictly alternating user/assistant messages.
+    // OpenAI's format allows consecutive same-role messages (e.g. a
+    // client that sends multiple assistant chunks as separate messages,
+    // or multiple tool results). We accumulate both:
+    //
+    // - `pending_tool_results`: consecutive tool results → merged into
+    //   a single user message with [tool_result...] content blocks.
+    // - `pending_assistant_text`: consecutive plain-text assistant
+    //   messages → merged into a single assistant message by joining
+    //   the text with newlines.
+    //
+    // When a role transition happens, we flush the pending buffer for
+    // the previous role before emitting the new role's message. Special
+    // case: a user message following tool_results merges them into the
+    // SAME user message (tool_result blocks + text block) rather than
+    // emitting two consecutive user messages.
     let mut pending_tool_results: Vec<serde_json::Value> = Vec::new();
+    let mut pending_assistant_text: Vec<String> = Vec::new();
 
-    for m in &req.messages {
-        // Before processing any non-tool, non-user message, flush any
-        // pending tool results as a single user message. We deliberately
-        // do NOT flush for `user` messages here — the `user` arm below
-        // merges pending tool_results into the SAME user message as the
-        // user's text (as [tool_result..., text] content blocks).
-        // Flushing here for user messages would produce two consecutive
-        // user messages, which Anthropic/MiniMax rejects with (2013).
-        let is_tool = m.role.as_str() == "tool";
-        let is_user = m.role.as_str() == "user";
-        if !is_tool && !is_user && !pending_tool_results.is_empty() {
-            conversation.push(AnthropicMessage {
+    // Helper: flush pending assistant text as a single assistant message.
+    // Called when a non-assistant message arrives.
+    let flush_assistant = |conv: &mut Vec<AnthropicMessage>, pending: &mut Vec<String>| {
+        if !pending.is_empty() {
+            let text = pending.join("\n\n");
+            conv.push(AnthropicMessage {
+                role: "assistant".to_string(),
+                content: serde_json::Value::String(text),
+            });
+            pending.clear();
+        }
+    };
+
+    // Helper: flush pending tool results as a single user message.
+    // Called when a non-tool, non-user message arrives.
+    let flush_tool_results = |conv: &mut Vec<AnthropicMessage>, pending: &mut Vec<serde_json::Value>| {
+        if !pending.is_empty() {
+            conv.push(AnthropicMessage {
                 role: "user".to_string(),
-                content: serde_json::Value::Array(std::mem::take(&mut pending_tool_results)),
+                content: serde_json::Value::Array(std::mem::take(pending)),
             });
         }
+    };
 
-        match m.role.as_str() {
+    for m in &req.messages {
+        let role = m.role.as_str();
+
+        // On role transitions, flush pending buffers for the previous
+        // role. Order matters: flush assistant text first, then tool
+        // results. We do NOT flush tool results when the incoming
+        // message is a user message — the user arm below merges them.
+        if role != "assistant" {
+            flush_assistant(&mut conversation, &mut pending_assistant_text);
+        }
+        if role != "tool" && role != "user" {
+            flush_tool_results(&mut conversation, &mut pending_tool_results);
+        }
+
+        match role {
             "system" => system_parts.push(message_content_to_text(&m.content)),
             "assistant" => {
-                // If the assistant message has `tool_calls`, emit a
-                // content-blocks array with optional text + tool_use
-                // blocks. Anthropic requires tool_use blocks to carry
-                // both `id` and `name` and a valid JSON `input` —
-                // MiniMax rejects with `(2013)` otherwise.
                 if let Some(tool_calls) = m.tool_calls.as_ref() {
+                    // Assistant message with tool_calls. First flush
+                    // any pending assistant text (from previous
+                    // consecutive plain-text assistant messages) into
+                    // this same assistant message's content blocks.
                     let mut blocks: Vec<serde_json::Value> = Vec::new();
+                    if !pending_assistant_text.is_empty() {
+                        let text = pending_assistant_text.join("\n\n");
+                        blocks.push(json!({"type": "text", "text": text}));
+                        pending_assistant_text.clear();
+                    }
                     let text = message_content_to_text(&m.content);
                     if !text.is_empty() {
                         blocks.push(json!({"type": "text", "text": text}));
@@ -382,17 +418,11 @@ pub fn openai_to_anthropic(req: &OpenAIRequest) -> AnthropicRequest {
                             .and_then(|f| f.get("arguments"))
                             .and_then(|v| v.as_str())
                             .unwrap_or("");
-                        // Parse arguments string to a JSON object for
-                        // Anthropic's `input` field. Empty or invalid
-                        // arguments become an empty object (Anthropic
-                        // requires `input` to be present, even if empty).
                         let input: serde_json::Value = if arguments_str.is_empty() {
                             json!({})
                         } else {
                             serde_json::from_str(arguments_str).unwrap_or(json!({}))
                         };
-                        // Skip tool_calls with empty name — they would
-                        // trigger MiniMax's `(2013)` rejection.
                         if name.is_empty() {
                             continue;
                         }
@@ -403,10 +433,6 @@ pub fn openai_to_anthropic(req: &OpenAIRequest) -> AnthropicRequest {
                             "input": input,
                         }));
                     }
-                    // If we ended up with no blocks (e.g. all tool_calls
-                    // had empty names), fall back to a single text block
-                    // so the message is non-empty (Anthropic rejects
-                    // empty content arrays).
                     if blocks.is_empty() {
                         blocks.push(json!({"type": "text", "text": ""}));
                     }
@@ -415,36 +441,26 @@ pub fn openai_to_anthropic(req: &OpenAIRequest) -> AnthropicRequest {
                         content: serde_json::Value::Array(blocks),
                     });
                 } else {
-                    // Plain text assistant message — use the string
-                    // form of `content` (cheaper than a single-element
-                    // array, and matches Anthropic's canonical shape
-                    // for text-only messages).
+                    // Plain text assistant message. Accumulate into
+                    // pending_assistant_text instead of emitting
+                    // immediately — consecutive assistant text messages
+                    // will be merged into a single assistant message.
                     let text = message_content_to_text(&m.content);
-                    // Skip empty assistant messages that were injected
-                    // by client-side "operation interrupted" markers.
-                    // These break the Anthropic tool_call → tool_result
-                    // → assistant sequence and cause (2013) rejections.
+                    // Skip empty / system-injected markers.
                     if text.is_empty()
                         || text.starts_with("Operation interrupted")
                         || text.starts_with("[System:")
                     {
                         continue;
                     }
-                    conversation.push(AnthropicMessage {
-                        role: "assistant".to_string(),
-                        content: serde_json::Value::String(text),
-                    });
+                    pending_assistant_text.push(text);
                 }
             }
             "user" => {
-                // Plain user message. If there are pending tool results,
-                // we MUST merge them into the SAME user message as the
-                // text — Anthropic/MiniMax rejects two consecutive user
-                // messages with error (2013) "tool call result does not
-                // follow tool call". The merge produces a user message
-                // whose content is an array of [tool_result..., text]
-                // blocks. When there are no pending tool results, use
-                // the cheaper string form.
+                // If there are pending tool results, merge them into
+                // the SAME user message as the text (content =
+                // [tool_result..., text]). Otherwise emit the text as
+                // a plain string user message.
                 let text = message_content_to_text(&m.content);
                 if !pending_tool_results.is_empty() {
                     pending_tool_results.push(json!({"type": "text", "text": text}));
@@ -460,13 +476,6 @@ pub fn openai_to_anthropic(req: &OpenAIRequest) -> AnthropicRequest {
                 }
             }
             "tool" => {
-                // OpenAI `tool`-role message: a tool result. Translate
-                // to Anthropic's `tool_result` content block. Multiple
-                // consecutive tool results are accumulated into
-                // `pending_tool_results` and flushed as a SINGLE user
-                // message when a non-tool message arrives. This is
-                // required by Anthropic/MiniMax: all tool_results from
-                // the same assistant turn must be in one user message.
                 let tool_use_id = m.tool_call_id.as_deref().unwrap_or("");
                 let content_text = message_content_to_text(&m.content);
                 pending_tool_results.push(json!({
@@ -475,20 +484,13 @@ pub fn openai_to_anthropic(req: &OpenAIRequest) -> AnthropicRequest {
                     "content": content_text,
                 }));
             }
-            // Unknown roles (function, developer, etc.) are ignored
-            // at the translation boundary.
             _ => {}
         }
     }
 
-    // Flush any remaining pending tool results (in case the
-    // conversation ends with tool results — unusual but possible).
-    if !pending_tool_results.is_empty() {
-        conversation.push(AnthropicMessage {
-            role: "user".to_string(),
-            content: serde_json::Value::Array(std::mem::take(&mut pending_tool_results)),
-        });
-    }
+    // Flush any remaining pending buffers.
+    flush_assistant(&mut conversation, &mut pending_assistant_text);
+    flush_tool_results(&mut conversation, &mut pending_tool_results);
 
     let system = if system_parts.is_empty() {
         None
@@ -1780,20 +1782,25 @@ mod tests {
     #[test]
     fn minimax_tool_result_then_user_merges_into_single_user_message() {
         // Regression test for MiniMax error (2013) "tool call result
-        // does not follow tool call". The bug: when a user message
-        // follows a tool_result, the translator emitted TWO consecutive
-        // user messages (one with tool_result, one with text) —
-        // Anthropic rejects consecutive same-role messages.
+        // does not follow tool call". Two bugs were fixed:
+        //
+        // 1. When a user message follows a tool_result, the translator
+        //    emitted TWO consecutive user messages — merged into one.
+        // 2. Consecutive assistant text messages were emitted as
+        //    separate assistant messages — merged into one by joining
+        //    text with newlines.
         //
         // Sequence (from real MiniMax-M3 failure):
+        //   user("que falta?")
+        //   assistant("text1") × 18 consecutive  ← BUG #2
+        //   user("You've reached max iterations")
+        //   assistant("text2") × 2 consecutive   ← BUG #2
+        //   user(...)
         //   assistant(tool_calls=[A,B])
         //   tool(A) → tool(B)
         //   assistant(tool_calls=[C])  (empty content)
         //   tool(C)
-        //   user("no se que mecanismo es...")
-        //
-        // The fix merges the tool_result C and the user text into a
-        // SINGLE user message with content = [tool_result, text].
+        //   user("no se que mecanismo es...")    ← BUG #1
         let mut req = openai_req_with(vec![]);
         req.model = "MiniMax-M3".to_string();
         req.tools = Some(vec![json!({
@@ -1809,6 +1816,53 @@ mod tests {
             OpenAIMessage {
                 role: "user".to_string(),
                 content: Some(json!("que falta?")),
+                name: None, tool_call_id: None, tool_calls: None,
+                extra: serde_json::Map::new(),
+            },
+            // 3 consecutive assistant text messages (simulating the
+            // 18-consecutive-assistant pattern from the real failure)
+            OpenAIMessage {
+                role: "assistant".to_string(),
+                content: Some(json!("Veo cómo se renderiza:")),
+                name: None, tool_call_id: None, tool_calls: None,
+                extra: serde_json::Map::new(),
+            },
+            OpenAIMessage {
+                role: "assistant".to_string(),
+                content: Some(json!("Eso no es el render del bloque...")),
+                name: None, tool_call_id: None, tool_calls: None,
+                extra: serde_json::Map::new(),
+            },
+            OpenAIMessage {
+                role: "assistant".to_string(),
+                content: Some(json!("El bloque core/html no tiene render_callback...")),
+                name: None, tool_call_id: None, tool_calls: None,
+                extra: serde_json::Map::new(),
+            },
+            // user message after consecutive assistants
+            OpenAIMessage {
+                role: "user".to_string(),
+                content: Some(json!("You've reached the maximum number of tool-calling iterations.")),
+                name: None, tool_call_id: None, tool_calls: None,
+                extra: serde_json::Map::new(),
+            },
+            // 2 consecutive assistant text messages
+            OpenAIMessage {
+                role: "assistant".to_string(),
+                content: Some(json!("**0 placeholders sin reemplazar.**")),
+                name: None, tool_call_id: None, tool_calls: None,
+                extra: serde_json::Map::new(),
+            },
+            OpenAIMessage {
+                role: "assistant".to_string(),
+                content: Some(json!("Falta muy poco. Repaso el checklist.")),
+                name: None, tool_call_id: None, tool_calls: None,
+                extra: serde_json::Map::new(),
+            },
+            // user
+            OpenAIMessage {
+                role: "user".to_string(),
+                content: Some(json!("Seleccionar reporte_mensual...")),
                 name: None, tool_call_id: None, tool_calls: None,
                 extra: serde_json::Map::new(),
             },
@@ -1840,7 +1894,7 @@ mod tests {
                 tool_calls: None,
                 extra: serde_json::Map::new(),
             },
-            // assistant with 1 tool_call (empty content — common pattern)
+            // assistant with 1 tool_call (empty content)
             OpenAIMessage {
                 role: "assistant".to_string(),
                 content: Some(serde_json::Value::Null),
@@ -1859,7 +1913,7 @@ mod tests {
                 tool_calls: None,
                 extra: serde_json::Map::new(),
             },
-            // user message — THIS is where the bug manifested
+            // user message — tool_result + user merge
             OpenAIMessage {
                 role: "user".to_string(),
                 content: Some(json!("no se que mecanismo es...")),
@@ -1869,23 +1923,24 @@ mod tests {
         ];
         let out = openai_to_anthropic(&req);
 
-        // Expected Anthropic message sequence:
+        // Expected Anthropic message sequence (after merging):
         //   [0] user("que falta?")
-        //   [1] assistant(text + tool_use A + tool_use B)
-        //   [2] user(tool_result A + tool_result B)
-        //   [3] assistant(tool_use C)  (empty text skipped)
-        //   [4] user(tool_result C + text "no se que...")  ← MERGED
-        //
-        // The bug would produce 6 messages with [4] and [5] both user.
+        //   [1] assistant("Veo...\n\nEso no es...\n\nEl bloque...")  ← 3 merged
+        //   [2] user("You've reached...")
+        //   [3] assistant("**0 placeholders...\n\nFalta muy poco...") ← 2 merged
+        //   [4] user("Seleccionar reporte_mensual...")
+        //   [5] assistant(text + tool_use A + tool_use B)
+        //   [6] user(tool_result A + tool_result B)
+        //   [7] assistant(tool_use C)
+        //   [8] user(tool_result C + text "no se que...")  ← MERGED
         assert_eq!(
             out.messages.len(),
-            5,
-            "expected 5 messages, got {} — likely the tool_result+user \
-             merge is broken (would produce 6 with two consecutive user)",
+            9,
+            "expected 9 messages after merging consecutive same-role, got {}",
             out.messages.len()
         );
 
-        // Verify no two consecutive messages have the same role.
+        // CRITICAL: verify NO two consecutive messages have the same role.
         for i in 1..out.messages.len() {
             assert_ne!(
                 out.messages[i].role, out.messages[i - 1].role,
@@ -1895,9 +1950,24 @@ mod tests {
             );
         }
 
-        // The last message (index 4) must be a user message with an
+        // Verify the merged assistant message [1] contains all 3 texts.
+        let asst1 = &out.messages[1];
+        assert_eq!(asst1.role, "assistant");
+        let text1 = asst1.content.as_str().expect("string content");
+        assert!(text1.contains("Veo cómo se renderiza"));
+        assert!(text1.contains("Eso no es el render"));
+        assert!(text1.contains("El bloque core/html"));
+
+        // Verify the merged assistant message [3] contains both texts.
+        let asst3 = &out.messages[3];
+        assert_eq!(asst3.role, "assistant");
+        let text3 = asst3.content.as_str().expect("string content");
+        assert!(text3.contains("0 placeholders"));
+        assert!(text3.contains("Falta muy poco"));
+
+        // The last message (index 8) must be a user message with an
         // array content containing [tool_result, text].
-        let last = &out.messages[4];
+        let last = &out.messages[8];
         assert_eq!(last.role, "user");
         let blocks = last.content.as_array().expect("last msg is array");
         assert_eq!(blocks.len(), 2, "tool_result + text");
