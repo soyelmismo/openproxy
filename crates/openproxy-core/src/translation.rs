@@ -341,10 +341,16 @@ pub fn openai_to_anthropic(req: &OpenAIRequest) -> AnthropicRequest {
     let mut pending_tool_results: Vec<serde_json::Value> = Vec::new();
 
     for m in &req.messages {
-        // Before processing any non-tool message, flush any pending
-        // tool results as a single user message.
+        // Before processing any non-tool, non-user message, flush any
+        // pending tool results as a single user message. We deliberately
+        // do NOT flush for `user` messages here — the `user` arm below
+        // merges pending tool_results into the SAME user message as the
+        // user's text (as [tool_result..., text] content blocks).
+        // Flushing here for user messages would produce two consecutive
+        // user messages, which Anthropic/MiniMax rejects with (2013).
         let is_tool = m.role.as_str() == "tool";
-        if !is_tool && !pending_tool_results.is_empty() {
+        let is_user = m.role.as_str() == "user";
+        if !is_tool && !is_user && !pending_tool_results.is_empty() {
             conversation.push(AnthropicMessage {
                 role: "user".to_string(),
                 content: serde_json::Value::Array(std::mem::take(&mut pending_tool_results)),
@@ -431,12 +437,27 @@ pub fn openai_to_anthropic(req: &OpenAIRequest) -> AnthropicRequest {
                 }
             }
             "user" => {
-                // Plain user message — string form.
+                // Plain user message. If there are pending tool results,
+                // we MUST merge them into the SAME user message as the
+                // text — Anthropic/MiniMax rejects two consecutive user
+                // messages with error (2013) "tool call result does not
+                // follow tool call". The merge produces a user message
+                // whose content is an array of [tool_result..., text]
+                // blocks. When there are no pending tool results, use
+                // the cheaper string form.
                 let text = message_content_to_text(&m.content);
-                conversation.push(AnthropicMessage {
-                    role: "user".to_string(),
-                    content: serde_json::Value::String(text),
-                });
+                if !pending_tool_results.is_empty() {
+                    pending_tool_results.push(json!({"type": "text", "text": text}));
+                    conversation.push(AnthropicMessage {
+                        role: "user".to_string(),
+                        content: serde_json::Value::Array(std::mem::take(&mut pending_tool_results)),
+                    });
+                } else {
+                    conversation.push(AnthropicMessage {
+                        role: "user".to_string(),
+                        content: serde_json::Value::String(text),
+                    });
+                }
             }
             "tool" => {
                 // OpenAI `tool`-role message: a tool result. Translate
@@ -1754,6 +1775,137 @@ mod tests {
         req.top_k = Some(40);
         let out = openai_to_anthropic(&req);
         assert_eq!(out.top_k, Some(40));
+    }
+
+    #[test]
+    fn minimax_tool_result_then_user_merges_into_single_user_message() {
+        // Regression test for MiniMax error (2013) "tool call result
+        // does not follow tool call". The bug: when a user message
+        // follows a tool_result, the translator emitted TWO consecutive
+        // user messages (one with tool_result, one with text) —
+        // Anthropic rejects consecutive same-role messages.
+        //
+        // Sequence (from real MiniMax-M3 failure):
+        //   assistant(tool_calls=[A,B])
+        //   tool(A) → tool(B)
+        //   assistant(tool_calls=[C])  (empty content)
+        //   tool(C)
+        //   user("no se que mecanismo es...")
+        //
+        // The fix merges the tool_result C and the user text into a
+        // SINGLE user message with content = [tool_result, text].
+        let mut req = openai_req_with(vec![]);
+        req.model = "MiniMax-M3".to_string();
+        req.tools = Some(vec![json!({
+            "type": "function",
+            "function": {
+                "name": "search_files",
+                "description": "Search files",
+                "parameters": {"type": "object", "properties": {}}
+            }
+        })]);
+        req.messages = vec![
+            // user asks
+            OpenAIMessage {
+                role: "user".to_string(),
+                content: Some(json!("que falta?")),
+                name: None, tool_call_id: None, tool_calls: None,
+                extra: serde_json::Map::new(),
+            },
+            // assistant with 2 tool_calls
+            OpenAIMessage {
+                role: "assistant".to_string(),
+                content: Some(json!("Diagnóstico")),
+                name: None, tool_call_id: None,
+                tool_calls: Some(vec![
+                    json!({"id":"call_A","type":"function","function":{"name":"search_files","arguments":"{}"}}),
+                    json!({"id":"call_B","type":"function","function":{"name":"search_files","arguments":"{}"}}),
+                ]),
+                extra: serde_json::Map::new(),
+            },
+            // tool results A and B
+            OpenAIMessage {
+                role: "tool".to_string(),
+                content: Some(json!("result A")),
+                name: None,
+                tool_call_id: Some("call_A".to_string()),
+                tool_calls: None,
+                extra: serde_json::Map::new(),
+            },
+            OpenAIMessage {
+                role: "tool".to_string(),
+                content: Some(json!("result B")),
+                name: None,
+                tool_call_id: Some("call_B".to_string()),
+                tool_calls: None,
+                extra: serde_json::Map::new(),
+            },
+            // assistant with 1 tool_call (empty content — common pattern)
+            OpenAIMessage {
+                role: "assistant".to_string(),
+                content: Some(serde_json::Value::Null),
+                name: None, tool_call_id: None,
+                tool_calls: Some(vec![
+                    json!({"id":"call_C","type":"function","function":{"name":"search_files","arguments":"{}"}}),
+                ]),
+                extra: serde_json::Map::new(),
+            },
+            // tool result C
+            OpenAIMessage {
+                role: "tool".to_string(),
+                content: Some(json!("result C")),
+                name: None,
+                tool_call_id: Some("call_C".to_string()),
+                tool_calls: None,
+                extra: serde_json::Map::new(),
+            },
+            // user message — THIS is where the bug manifested
+            OpenAIMessage {
+                role: "user".to_string(),
+                content: Some(json!("no se que mecanismo es...")),
+                name: None, tool_call_id: None, tool_calls: None,
+                extra: serde_json::Map::new(),
+            },
+        ];
+        let out = openai_to_anthropic(&req);
+
+        // Expected Anthropic message sequence:
+        //   [0] user("que falta?")
+        //   [1] assistant(text + tool_use A + tool_use B)
+        //   [2] user(tool_result A + tool_result B)
+        //   [3] assistant(tool_use C)  (empty text skipped)
+        //   [4] user(tool_result C + text "no se que...")  ← MERGED
+        //
+        // The bug would produce 6 messages with [4] and [5] both user.
+        assert_eq!(
+            out.messages.len(),
+            5,
+            "expected 5 messages, got {} — likely the tool_result+user \
+             merge is broken (would produce 6 with two consecutive user)",
+            out.messages.len()
+        );
+
+        // Verify no two consecutive messages have the same role.
+        for i in 1..out.messages.len() {
+            assert_ne!(
+                out.messages[i].role, out.messages[i - 1].role,
+                "consecutive messages [{}] and [{}] both have role '{}' — \
+                 Anthropic/MiniMax rejects this with (2013)",
+                i - 1, i, out.messages[i].role
+            );
+        }
+
+        // The last message (index 4) must be a user message with an
+        // array content containing [tool_result, text].
+        let last = &out.messages[4];
+        assert_eq!(last.role, "user");
+        let blocks = last.content.as_array().expect("last msg is array");
+        assert_eq!(blocks.len(), 2, "tool_result + text");
+        assert_eq!(blocks[0]["type"], "tool_result");
+        assert_eq!(blocks[0]["tool_use_id"], "call_C");
+        assert_eq!(blocks[0]["content"], "result C");
+        assert_eq!(blocks[1]["type"], "text");
+        assert_eq!(blocks[1]["text"], "no se que mecanismo es...");
     }
 
     #[test]
