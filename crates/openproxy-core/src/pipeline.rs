@@ -3809,6 +3809,27 @@ impl Pipeline {
                     retry_after_ms: retry_ms,
                 }
             } else {
+                // Diagnostic: when MiniMax returns a 400 with error
+                // code 2013 ("tool call and result not match" or
+                // "tool call result does not follow tool call"), log
+                // the full error body and the request's tool-related
+                // metadata so we can diagnose the translation bug.
+                // This is the most common MiniMax failure and the
+                // error message alone doesn't tell us which
+                // tool_use/tool_result pair is the problem.
+                if status_code == 400 && body_str.contains("2013") {
+                    tracing::warn!(
+                        status_code = status_code,
+                        provider = %target.provider_id,
+                        model = %model.model_id.as_str(),
+                        error_body = %body_str,
+                        openai_request_messages_count = req.openai_request.messages.len(),
+                        openai_request_tools_count = req.openai_request.tools.as_ref().map(|t| t.len()).unwrap_or(0),
+                        "MiniMax 2013 error: tool_call/tool_result mismatch. \
+                         Enable RUST_LOG=openproxy_core::translation=debug to see the \
+                         translated Anthropic message structure."
+                    );
+                }
                 CoreError::UpstreamError {
                     status: status_code,
                     provider: target.provider_id.to_string(),

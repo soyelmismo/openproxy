@@ -492,6 +492,76 @@ pub fn openai_to_anthropic(req: &OpenAIRequest) -> AnthropicRequest {
     flush_assistant(&mut conversation, &mut pending_assistant_text);
     flush_tool_results(&mut conversation, &mut pending_tool_results);
 
+    // Diagnostic logging: log the translated message structure so we
+    // can debug MiniMax 2013 errors. We log:
+    // - the role sequence (to catch consecutive same-role bugs)
+    // - tool_use IDs declared by assistant messages
+    // - tool_result IDs provided by user messages
+    // - whether every tool_use has a matching tool_result
+    // This is traced at DEBUG level so it doesn't spam production logs
+    // unless RUST_LOG=debug is set.
+    if tracing::enabled!(tracing::Level::DEBUG) {
+        let role_seq: Vec<&str> = conversation.iter().map(|m| m.role.as_str()).collect();
+        let mut tool_use_ids: Vec<String> = Vec::new();
+        let mut tool_result_ids: Vec<String> = Vec::new();
+        for m in &conversation {
+            if m.role == "assistant" {
+                if let Some(arr) = m.content.as_array() {
+                    for block in arr {
+                        if block.get("type").and_then(|t| t.as_str()) == Some("tool_use") {
+                            if let Some(id) = block.get("id").and_then(|v| v.as_str()) {
+                                tool_use_ids.push(id.to_string());
+                            }
+                        }
+                    }
+                }
+            } else if m.role == "user" {
+                if let Some(arr) = m.content.as_array() {
+                    for block in arr {
+                        if block.get("type").and_then(|t| t.as_str()) == Some("tool_result") {
+                            if let Some(id) = block.get("tool_use_id").and_then(|v| v.as_str()) {
+                                tool_result_ids.push(id.to_string());
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        let use_set: std::collections::HashSet<&str> = tool_use_ids.iter().map(|s| s.as_str()).collect();
+        let result_set: std::collections::HashSet<&str> = tool_result_ids.iter().map(|s| s.as_str()).collect();
+        let missing_results: Vec<&str> = use_set.difference(&result_set).copied().collect();
+        let orphan_results: Vec<&str> = result_set.difference(&use_set).copied().collect();
+        tracing::debug!(
+            role_sequence = ?role_seq,
+            tool_use_count = tool_use_ids.len(),
+            tool_result_count = tool_result_ids.len(),
+            tool_use_ids = ?tool_use_ids,
+            tool_result_ids = ?tool_result_ids,
+            missing_results = ?missing_results,
+            orphan_results = ?orphan_results,
+            "openai_to_anthropic translation result"
+        );
+        // Also warn if there's a structural problem so it shows up
+        // even at default log level.
+        if !missing_results.is_empty() || !orphan_results.is_empty() {
+            tracing::warn!(
+                missing_results = ?missing_results,
+                orphan_results = ?orphan_results,
+                "translation: tool_use/tool_result ID mismatch — MiniMax will reject with (2013)"
+            );
+        }
+        // Warn on consecutive same-role messages.
+        for i in 1..conversation.len() {
+            if conversation[i].role == conversation[i - 1].role {
+                tracing::warn!(
+                    idx = i,
+                    role = %conversation[i].role,
+                    "translation: consecutive same-role messages — Anthropic/MiniMax rejects this with (2013)"
+                );
+            }
+        }
+    }
+
     let system = if system_parts.is_empty() {
         None
     } else {
