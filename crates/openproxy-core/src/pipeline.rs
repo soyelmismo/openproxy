@@ -893,74 +893,28 @@ impl Pipeline {
         // rationale (cooldown protects BETWEEN requests, not WITHIN
         // a single request when doing so would deny a priority
         // combo the chance to walk its full row).
+        // 5b. Cooldown filter — DISABLED within a single request.
+        //
+        // The persistent cooldown registry protects BETWEEN requests:
+        // if a target failed retryably on the previous request, the
+        // next request skips it for `cooldown_secs`. But filtering
+        // WITHIN a single request is wrong: if targets A, B, C are
+        // all in cooldown (from previous requests), and target D is
+        // not, the operator's expectation is "try D, and if D fails,
+        // try A/B/C anyway (they might have recovered)". The previous
+        // code filtered A/B/C out, leaving only D — if D failed, the
+        // request failed without ever trying A/B/C.
+        //
+        // The cooldown is still RECORDED on failures (via
+        // `record_failure_with_mode` below) so it protects the NEXT
+        // request. But within THIS request, all eligible targets are
+        // available for the walk.
+        //
+        // The `to_run_unfiltered_snapshot` is kept for the
+        // post-walk "all targets in cooldown" fallback below, but
+        // we no longer filter `to_run` itself.
         let to_run_unfiltered_snapshot: Vec<ComboTarget> = to_run.clone();
-
-        // 5b. Filter out targets currently parked in the persistent
-        //     cooldown registry. The DB read is cheap (indexed on
-        //     `combo_target_id`) and keeps the in-loop path off the
-        //     hot path's mutex. Sub-combo rows (`model_row_id = None`)
-        //     never reach this point — `flatten_targets` already
-        //     replaced them with their children, so each child is
-        //     independently checkable.
-        //
-        //     IMPORTANT: this filter runs *after* `to_run` is built,
-        //     so a target that was eligible when we picked the race
-        //     window but entered cooldown between then and now is
-        //     also skipped. The race window itself stays as-is (no
-        //     backfill): a request that found N targets, then saw M
-        //     of them go into cooldown, will run on N-M and not
-        //     chase the next best substitute. That keeps the
-        //     cooldown behavior predictable from the operator's POV.
-        //
-        //     Cooldown semantics: the persistent cooldown protects
-        //     *between* requests, not *within* a single request. If
-        //     the cooldown filter empties `to_run` we don't want
-        //     the request to give up with a 502 — for a priority
-        //     combo the operator expects the request to walk the
-        //     full row of targets until one succeeds. We preserve
-        //     the pre-filter list as `to_run_unfiltered` and, when
-        //     the post-filter list is empty, fall through to the
-        //     dispatch loop using the unfiltered list. The per-
-        //     target cooldown is *re-checked* in the dispatch loop
-        //     via `record_failure` only on the *result* of trying
-        //     the target, so an upstream that has come back online
-        //     during the gap (and would no longer be in cooldown)
-        //     still gets exercised. The DB row stays in the table
-        //     until `prune_expired` sweeps it, so the cross-request
-        //     protection is preserved.
-        let mut to_run: Vec<ComboTarget> = {
-            let cooldown_conn = self.conn.lock();
-            to_run
-                .into_iter()
-                .filter(
-                    |t| match crate::cooldown::is_in_cooldown(&cooldown_conn, t.id) {
-                        Ok(true) => {
-                            tracing::debug!(
-                                combo_id = combo.id.0,
-                                target_id = t.id.0,
-                                provider = %t.provider_id,
-                                "target in cooldown, skipping"
-                            );
-                            false
-                        }
-                        Ok(false) => true,
-                        Err(e) => {
-                            // DB read failure on the cooldown table
-                            // is non-fatal: fall through to the
-                            // upstream call rather than block the
-                            // whole combo on a bookkeeping error.
-                            tracing::warn!(
-                                combo_id = combo.id.0,
-                                target_id = t.id.0,
-                                error = %e,
-                                "is_in_cooldown check failed; proceeding without filter"
-                            );
-                            true
-                        }
-                    },
-                )
-                .collect()
-        };
+        let mut to_run: Vec<ComboTarget> = to_run;
 
         // `to_run_unfiltered` is the post-circuit-breaker, pre-cooldown
         // list — i.e. the targets we *would* have walked if there were
