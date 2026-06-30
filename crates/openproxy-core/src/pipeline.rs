@@ -5430,10 +5430,18 @@ impl Pipeline {
     /// - `pipeline.rs:1027` (race winner)
     /// - `pipeline.rs:1373` (`last_result.unwrap_or(...)` — final failure)
     ///
-    /// The UPDATE is best-effort: a failure (e.g. writer lock
-    /// unavailable) is logged and swallowed — the row was already
-    /// recorded with `client_response = false`, so the worst case
-    /// is a false negative (the dashboard shows "intermediate" for
+    /// After the UPDATE, re-reads the row and broadcasts it via the
+    /// usage WS channel so the dashboard's Live Logs updates the
+    /// client_response indicator in real-time. Without the re-broadcast,
+    /// the dashboard would show the row with `client_response = false`
+    /// (the value it was originally inserted with) until the next
+    /// long-poll refetch — which could be never if the user is just
+    /// watching the live stream.
+    ///
+    /// The UPDATE + re-broadcast are best-effort: a failure (e.g.
+    /// writer lock unavailable) is logged and swallowed — the row was
+    /// already recorded with `client_response = false`, so the worst
+    /// case is a false negative (the dashboard shows "intermediate" for
     /// a row that was actually the winner).
     fn mark_client_response(&self, usage_row_id: Option<UsageId>) {
         let Some(id) = usage_row_id else { return };
@@ -5456,6 +5464,48 @@ impl Pipeline {
                     usage_row_id = id.0,
                     "marked usage row as client_response = true"
                 );
+                // Re-read the row and broadcast it so the dashboard's
+                // Live Logs updates the client_response indicator in
+                // real-time. The original broadcast (at INSERT time)
+                // carried client_response = false; this re-broadcast
+                // carries the corrected client_response = true.
+                if let Ok(Some(updated_row)) = crate::usage::detail_by_id(&conn, id.0) {
+                    // Convert UsageDetailRow → RecentUsageRow for broadcast.
+                    // The RecentUsageRow is the shape the WS channel
+                    // expects; UsageDetailRow has all the same fields
+                    // plus a few extras (account_id, combo_id, etc.)
+                    // that the redact_for_broadcast helper strips.
+                    let recent_row = crate::usage::RecentUsageRow {
+                        id: updated_row.id,
+                        request_id: updated_row.request_id,
+                        trace_id: updated_row.trace_id,
+                        provider_id: updated_row.provider_id,
+                        upstream_model_id: updated_row.upstream_model_id,
+                        status_code: updated_row.status_code,
+                        total_ms: updated_row.total_ms as u64,
+                        prompt_tokens: updated_row.prompt_tokens.and_then(|v| u32::try_from(v).ok()),
+                        completion_tokens: updated_row.completion_tokens.and_then(|v| u32::try_from(v).ok()),
+                        cost_usd: None, // cost is not in UsageDetailRow; the dashboard already has it from the original broadcast
+                        connect_ms: updated_row.connect_ms.map(|v| v as u64),
+                        ttft_ms: updated_row.ttft_ms.map(|v| v as u64),
+                        request_body_json: None,
+                        response_body_json: None,
+                        request_headers: None,
+                        response_headers: None,
+                        error_message: updated_row.error_message,
+                        race_total: Some(updated_row.race_total as u8),
+                        race_attempts: Some(updated_row.race_attempts as u8),
+                        is_streaming: updated_row.is_streaming,
+                        stream_complete: updated_row.stream_complete,
+                        race_lost: updated_row.race_lost,
+                        stop_reason: None,
+                        compression_savings_pct: None,
+                        compression_techniques: None,
+                        client_response: updated_row.client_response,
+                        created_at: updated_row.created_at,
+                    };
+                    crate::usage::publish_usage_row(recent_row);
+                }
             }
             Ok(_) => {
                 tracing::warn!(

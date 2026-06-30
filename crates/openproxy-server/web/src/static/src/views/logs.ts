@@ -208,7 +208,18 @@ function mergeLogsByDescId(existing: RecentUsageRow[], incoming: RecentUsageRow[
       const reqKey = "req:" + row.request_id;
       if (merged.has(reqKey) && !base) base = merged.get(reqKey) as RecentUsageRow;
     }
-    const mergedRow = { ...(base || {}), ...row };
+    // Merge: start from base, then overlay incoming fields. BUT —
+    // only overlay fields that are not null/undefined in the incoming
+    // row. This prevents a re-broadcast (e.g. the client_response
+    // UPDATE re-broadcast) from clobbering fields it doesn't carry
+    // (cost_usd, compression_savings_pct, etc.) with null.
+    const mergedRow: RecentUsageRow = { ...(base || {} as RecentUsageRow) };
+    const target = mergedRow as unknown as Record<string, unknown>;
+    for (const [key, value] of Object.entries(row)) {
+      if (value !== null && value !== undefined) {
+        target[key] = value;
+      }
+    }
     merged.set(k, mergedRow);
     if (row.request_id) merged.set("req:" + row.request_id, mergedRow);
     if (row.id && row.id > 0) state.logs.lastSeenId = Math.max(state.logs.lastSeenId, row.id);
