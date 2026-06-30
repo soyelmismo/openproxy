@@ -43,29 +43,84 @@ impl RetryPolicy {
         Some(Duration::from_millis(total))
     }
 
-    /// True if the error is retryable per spec §5.4:
-    /// 5xx, 429, network/timeout errors. NOT 4xx (except 429).
+    /// True if the error is retryable per spec §5.4.
     ///
-    /// Mid-stream timeouts (`body`, `total`) are NOT retryable:
-    /// bytes were already sent to the client, so retrying would write
-    /// a second stream on top of the first, corrupting the output.
-    /// When `idle_chunk_retryable` is true, `idle_chunk` timeouts are
-    /// treated as retryable (the pipeline can fall through to the
-    /// next target). When false (default), they abort the walk.
-    /// Connect/TTFT timeouts happen before any bytes reach the client,
-    /// so they are safe to retry.
+    /// ## Policy (revised)
+    ///
+    /// **Almost everything is retryable.** The only exception is
+    /// `idle_chunk` timeouts, which are gated by the `idle_chunk_retryable`
+    /// switch (default: false). This is because idle_chunk fires
+    /// mid-stream (after bytes were already sent to the client), so
+    /// retrying would write a second stream on top of the first.
+    ///
+    /// All other errors — connect timeouts, TTFT timeouts, total
+    /// timeouts, connection errors, rate limits, 4xx, 5xx — are
+    /// retryable. The combo walk's per-target retry loop will retry
+    /// the same target up to `max_attempts` times, then fall through
+    /// to the next target. This ensures every target in the combo
+    /// gets its full retry budget before the request fails.
+    ///
+    /// ### Why even 4xx is retryable
+    ///
+    /// A 400 from one provider (e.g. MiniMax's "(2013) tool call
+    /// result does not follow tool call") is a provider-specific
+    /// validation error. The next target in the combo (e.g. a
+    /// different provider) may accept the same request just fine.
+    /// Treating 4xx as non-retryable would abort the per-target
+    /// retry loop early AND, more importantly, give the operator
+    /// the false impression that the whole combo is broken when
+    /// only one provider rejected the request.
+    ///
+    /// ### Mid-stream safety
+    ///
+    /// `body` and `total` timeouts are retryable here because the
+    /// pipeline's streaming dispatch only calls `record_and_fail`
+    /// (which returns to the combo walk) when the error occurs
+    /// BEFORE any byte was sent to the client. If bytes were
+    /// already sent, the streaming loop's failure path records
+    /// the error and returns a `PipelineResult` with `error: Some(_)`,
+    /// but the combo walk's per-target retry loop checks
+    /// `is_retryable` BEFORE deciding to retry — and a mid-stream
+    /// error would have already been recorded as a partial response,
+    /// so the retry would produce a second stream. The streaming
+    /// dispatch handles this correctly by NOT returning to the
+    /// combo walk after bytes were sent; it returns the error
+    /// directly to the client.
+    ///
+    /// `idle_chunk` is the exception because it specifically fires
+    /// mid-stream (after content chunks were sent), and the
+    /// `idle_chunk_retryable` switch lets the operator decide
+    /// whether to treat it as retryable (fall through to next
+    /// target) or as a hard failure (abort the walk).
     pub fn is_retryable(err: &crate::error::CoreError, idle_chunk_retryable: bool) -> bool {
         use crate::error::CoreError::*;
         match err {
             UpstreamTimeout { phase, .. } => match phase.as_str() {
-                "body" | "total" => false,
+                // idle_chunk is the ONLY switchable exception. It
+                // fires mid-stream and retrying would corrupt the
+                // output, so it's gated by `idle_chunk_retryable`.
                 "idle_chunk" => idle_chunk_retryable,
+                // ALL other timeout phases (dns, dial, tls, write,
+                // headers, body, total) are retryable. The streaming
+                // dispatch ensures body/total timeouts that fire
+                // mid-stream do not return to the combo walk.
                 _ => true,
             },
             UpstreamConnection(_) => true,
             RateLimited { .. } => true,
-            UpstreamError { status, .. } => *status >= 500 || *status == 429,
-            _ => false,
+            // 4xx is retryable: a provider-specific validation error
+            // (e.g. MiniMax 2013) should not abort the whole combo.
+            // The next provider may accept the same request.
+            UpstreamError { .. } => true,
+            // ClientDisconnected is NOT retryable — the client is
+            // gone, there's no point trying more targets.
+            ClientDisconnected => false,
+            // RaceLost is NOT retryable — another target already won.
+            RaceLost => false,
+            // Everything else (internal errors, config errors, etc.)
+            // is retryable to be safe — the combo walk will exhaust
+            // all targets before surfacing the error.
+            _ => true,
         }
     }
 }
@@ -139,19 +194,33 @@ mod tests {
     }
 
     #[test]
-    fn not_retryable_4xx() {
+    fn retryable_4xx() {
+        // 4xx is now retryable: a provider-specific validation error
+        // (e.g. MiniMax 2013) should not abort the whole combo.
+        // The next provider may accept the same request.
         let err = CoreError::UpstreamError {
             status: 400,
             provider: "p".into(),
             model: "m".into(),
             body: "b".into(),
         };
+        assert!(
+            RetryPolicy::is_retryable(&err, false),
+            "4xx errors must be retryable so the combo walk tries the next target"
+        );
+    }
+
+    #[test]
+    fn not_retryable_client_disconnected() {
+        // ClientDisconnected is NOT retryable — the client is gone.
+        let err = CoreError::ClientDisconnected;
         assert!(!RetryPolicy::is_retryable(&err, false));
     }
 
     #[test]
-    fn not_retryable_validation() {
-        let err = CoreError::Validation("bad input".into());
+    fn not_retryable_race_lost() {
+        // RaceLost is NOT retryable — another target already won.
+        let err = CoreError::RaceLost;
         assert!(!RetryPolicy::is_retryable(&err, false));
     }
 
@@ -174,12 +243,30 @@ mod tests {
     }
 
     #[test]
-    fn not_retryable_total_timeout() {
+    fn retryable_total_timeout() {
+        // total timeout is now retryable — the streaming dispatch
+        // ensures mid-stream errors don't return to the combo walk.
         let err = CoreError::UpstreamTimeout {
             phase: "total".into(),
             ms: 300_000,
         };
-        assert!(!RetryPolicy::is_retryable(&err, false));
+        assert!(
+            RetryPolicy::is_retryable(&err, false),
+            "total timeout must be retryable so the combo walk tries the next target"
+        );
+    }
+
+    #[test]
+    fn retryable_body_timeout() {
+        // body timeout is now retryable — same rationale as total.
+        let err = CoreError::UpstreamTimeout {
+            phase: "body".into(),
+            ms: 10_000,
+        };
+        assert!(
+            RetryPolicy::is_retryable(&err, false),
+            "body timeout must be retryable so the combo walk tries the next target"
+        );
     }
 
     #[test]

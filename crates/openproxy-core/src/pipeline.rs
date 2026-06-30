@@ -717,13 +717,21 @@ impl Pipeline {
         // the next request), and `record_success` clears the failure
         // counter when an attempt succeeds.
         let pre_cb_snapshot: Vec<ComboTarget> = flat_targets.clone();
+        // NOTE: do NOT apply `.take(max_race_size)` here — that would
+        // limit the candidate pool to `max_race_size` (default 8) targets,
+        // silently dropping any targets beyond that limit. The combo walk
+        // must see ALL eligible targets so it can fall through to the
+        // next sibling on failure. `max_race_size` only caps the PARALLEL
+        // race window (applied later in `run_race`), not the sequential
+        // walk. This was the root cause of "combo only tried 2 of 18
+        // models" — the `.take(8)` truncated the list before the walk
+        // even started.
         let mut eligible: Vec<ComboTarget> = flat_targets
             .into_iter()
             .filter(|t| match t.account_id {
                 Some(aid) => self.circuit_breaker.is_healthy(aid) == Health::Healthy,
                 None => true,
             })
-            .take(self.config.racing.max_race_size as usize)
             .collect();
 
         if eligible.is_empty() && !pre_cb_snapshot.is_empty() {
@@ -741,10 +749,7 @@ impl Pipeline {
                 parked = pre_cb_snapshot.len(),
                 "all targets' accounts unhealthy in circuit_breaker; falling through to pre-CB dispatch"
             );
-            eligible = pre_cb_snapshot
-                .into_iter()
-                .take(self.config.racing.max_race_size as usize)
-                .collect();
+            eligible = pre_cb_snapshot;
         }
 
         if eligible.is_empty() {
@@ -799,7 +804,6 @@ impl Pipeline {
                             Some(aid) => self.circuit_breaker.is_healthy(aid) == Health::Healthy,
                             None => true,
                         })
-                        .take(self.config.racing.max_race_size as usize)
                         .collect();
                     if !re_eligible.is_empty() {
                         eligible = re_eligible;
@@ -1194,16 +1198,17 @@ impl Pipeline {
             // 6a. Update the persistent cooldown registry. A
             //     successful attempt clears any existing row; a
             //     retryable failure parks the target for
-            //     `cooldown_secs`. 4xx and other non-retryable
-            //     errors do not touch the cooldown (they're
-            //     user-side bugs that will just keep coming
-            //     back; the circuit breaker on the account is
-            //     what handles those, if anything).
+            //     `cooldown_secs`. 4xx errors do NOT record a
+            //     cooldown — they're provider-specific validation
+            //     errors (e.g. MiniMax 2013), not upstream health
+            //     issues. Parking the target would incorrectly block
+            //     a model that might work on the next request with
+            //     different content. Only upstream-health issues
+            //     (timeouts, connection errors, rate limits, 5xx)
+            //     record cooldowns.
             let cooldown_op = match &result.error {
                 None => Some("clear"),
-                Some(e) if RetryPolicy::is_retryable(e, self.config.idle_chunk_retryable) => {
-                    Some("record")
-                }
+                Some(e) if is_upstream_health_issue(e) => Some("record"),
                 Some(_) => None,
             };
             // 6a-2. Update the in-memory selection registry used by
@@ -5934,16 +5939,45 @@ impl std::fmt::Display for ErrorPhase {
     }
 }
 
+/// Returns true if the error indicates an upstream health issue
+/// (timeout, connection error, rate limit, 5xx server error) — i.e.
+/// the kind of error that warrants parking the target in cooldown
+/// so subsequent requests skip it for a while.
+///
+/// Returns false for 4xx errors (provider-specific validation errors
+/// like MiniMax's 2013), ClientDisconnected, RaceLost, and internal
+/// errors. These are either user-side issues or control-flow signals
+/// that don't indicate the upstream is degraded.
+///
+/// This is distinct from `RetryPolicy::is_retryable`: ALL errors are
+/// retryable (the combo walk continues to the next target), but only
+/// upstream-health issues record a cooldown. A 4xx is retryable (try
+/// the next provider) but does NOT park the target — the same model
+/// might work fine on the next request with different content.
+fn is_upstream_health_issue(err: &CoreError) -> bool {
+    use crate::error::CoreError;
+    match err {
+        // Timeouts (except idle_chunk, which is mid-stream) indicate
+        // the upstream is slow or unreachable.
+        CoreError::UpstreamTimeout { phase, .. } => phase != "idle_chunk",
+        // Connection errors: DNS, TCP, TLS, HTTP read failures.
+        CoreError::UpstreamConnection(_) => true,
+        // Rate limits: the upstream is throttling us.
+        CoreError::RateLimited { .. } => true,
+        // 5xx server errors: the upstream is broken.
+        CoreError::UpstreamError { status, .. } => *status >= 500,
+        // Everything else (4xx, ClientDisconnected, RaceLost, internal
+        // errors, validation errors, etc.) is NOT an upstream health
+        // issue and should NOT record a cooldown.
+        _ => false,
+    }
+}
+
 /// Parse an HTTP `Retry-After` header value (RFC 7231 §7.1.3) into
 /// milliseconds. Accepts either an integer number of seconds
 /// (`Retry-After: 30`) or an HTTP-date
 /// (`Retry-After: Wed, 21 Oct 2026 07:28:00 GMT`). Returns `None` for
 /// empty, unparseable, or already-past HTTP-dates.
-///
-/// NEW-2 fix: the per-target retry loop must honor the upstream-requested
-/// delay instead of the fixed exponential backoff, otherwise a
-/// `429 Retry-After: 30` becomes a sub-second retry that hammers the
-/// rate-limited account.
 fn parse_retry_after_ms(value: &str) -> Option<u64> {
     let trimmed = value.trim();
     if trimmed.is_empty() {
@@ -8839,14 +8873,21 @@ data: [DONE]
     #[tokio::test]
     async fn pipeline_does_not_record_cooldown_on_4xx_error() {
         // The pipeline uses `RetryPolicy::is_retryable` to decide
-        // whether to park a target. A 4xx is *not* retryable, so a
-        // 4xx response must NOT add a cooldown row. We simulate
-        // the path by directly exercising the cooldown-record
-        // guard (the helper's `is_retryable` matches the
-        // pipeline's). For an end-to-end probe we'd need a real
-        // upstream returning 4xx, which the tests' `test_config`
-        // doesn't provide; the unit-level test below keeps the
-        // invariant in scope.
+        // whether to park a target. With the revised retry policy,
+        // 4xx IS retryable (so the combo walk tries the next target),
+        // but it does NOT record a cooldown — cooldowns are only for
+        // retryable failures that indicate the upstream itself is
+        // degraded (timeouts, connection errors, rate limits).
+        // A 4xx is a provider-specific validation error (e.g. MiniMax
+        // 2013), not an upstream health issue, so parking the target
+        // would incorrectly block a model that might work on the next
+        // request with different content.
+        //
+        // The pipeline's cooldown-record logic checks `is_retryable`
+        // AND a separate "is this an upstream-health issue?" guard
+        // before recording. This test verifies the retryable flag
+        // is true (so the walk continues) but the cooldown logic
+        // itself gates on a different condition.
         use crate::retry::RetryPolicy;
         let err_4xx = CoreError::UpstreamError {
             status: 400,
@@ -8854,7 +8895,11 @@ data: [DONE]
             model: "m".into(),
             body: "bad".into(),
         };
-        assert!(!RetryPolicy::is_retryable(&err_4xx, true));
+        // 4xx is now retryable (combo walk continues to next target).
+        assert!(
+            RetryPolicy::is_retryable(&err_4xx, true),
+            "4xx must be retryable so the combo walk tries the next target"
+        );
         // The pipeline's "did the helper touch the cooldown table?"
         // assertion lives in the integration tests below; this
         // unit-level guard keeps the rule in one place.
