@@ -533,6 +533,10 @@ export interface RecentUsageRow {
   compression_savings_pct: number | null;
   /** Compression techniques applied (CSV) or null when off. */
   compression_techniques: string | null;
+  /** True iff this row's response was actually delivered to the HTTP
+   *  client (winning attempt). False for intermediate retries that
+   *  were tried internally but never reached the client. */
+  client_response: boolean;
   created_at: string;
 }
 

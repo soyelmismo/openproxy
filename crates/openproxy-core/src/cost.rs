@@ -51,6 +51,15 @@ pub struct UsageInput {
     pub compression_savings_pct: Option<f64>,
     /// Compression techniques applied (CSV), None if off.
     pub compression_techniques: Option<String>,
+    /// True iff this row's response was actually delivered to the
+    /// HTTP client (the winning attempt in a combo walk, or the final
+    /// error). False for intermediate attempts that were retried
+    /// internally — their response never reached the client.
+    ///
+    /// Set to `false` at recording time for all attempts; the combo
+    /// walk's winner-decision point UPDATEs the winning row to `true`
+    /// after `Pipeline::run` decides which result to return.
+    pub client_response: bool,
 }
 
 /// Computes (cost_usd, tokens_per_sec) from pricing + tokens + timing.
@@ -149,11 +158,12 @@ pub fn record(conn: &Connection, input: &UsageInput) -> Result<UsageId> {
             race_total, race_attempts, race_lost, api_key_id, created_at, \
             request_body_json, response_body_json, request_headers, \
             response_headers, error_message, is_streaming, stream_complete, \
-            stop_reason, compression_savings_pct, compression_techniques\
+            stop_reason, compression_savings_pct, compression_techniques, \
+            client_response\
          ) VALUES (\
             ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, \
             ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, \
-            ?21, ?22, ?23, datetime('now'), ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31, ?32, ?33\
+            ?21, ?22, ?23, datetime('now'), ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31, ?32, ?33, ?34\
          )",
         params![
             request_id,
@@ -211,6 +221,7 @@ pub fn record(conn: &Connection, input: &UsageInput) -> Result<UsageId> {
             input.stop_reason,
             input.compression_savings_pct,
             input.compression_techniques,
+            input.client_response as i64,
         ],
     )
     .map_err(|e| CoreError::Database {
@@ -251,6 +262,7 @@ pub fn record(conn: &Connection, input: &UsageInput) -> Result<UsageId> {
         stop_reason: input.stop_reason.clone(),
         compression_savings_pct: input.compression_savings_pct,
         compression_techniques: input.compression_techniques.clone(),
+        client_response: input.client_response,
     };
     crate::usage::publish_usage_row(row);
 
@@ -293,6 +305,7 @@ mod tests {
             stop_reason: None,
             compression_savings_pct: None,
             compression_techniques: None,
+            client_response: false,
         }
     }
 

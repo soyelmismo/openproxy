@@ -457,6 +457,7 @@
  * extra horizontal space. */
 .log-row .log-time     { flex: 0 0 auto; min-width: 150px; color: var(--color-text-muted); }
 .log-row .log-phase    { flex: 0 0 auto; min-width: 150px; }
+.log-row .log-client   { flex: 0 0 auto; min-width: 32px; display: inline-flex; align-items: center; justify-content: center; }
 .log-row .log-status   { flex: 0 0 auto; min-width: 60px;  font-weight: 600; }
 .log-row .log-provider { flex: 0 0 auto; min-width: 120px; }
 .log-row .log-model    { flex: 1 1 auto; min-width: 120px; }
@@ -465,6 +466,11 @@
 .log-row .log-cost     { flex: 0 0 auto; min-width: 70px;  color: var(--color-primary); }
 .log-row .log-compression { flex: 0 0 auto; min-width: 60px; color: var(--color-success, #22c55e); font-size: 0.85em; }
 .log-row .log-compression--none { color: var(--color-text-muted); font-weight: 400; }
+
+/* Client response indicator: checkmark (winner) vs dashed circle (internal) */
+.log-client--winner   { color: var(--color-success, #22c55e); }
+.log-client--internal { color: var(--color-text-muted); opacity: 0.6; }
+.log-client svg { display: block; }
 
 /* Sticky header row inside #logs */
 #logs > .log-row[style*="sticky"],

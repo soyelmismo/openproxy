@@ -50,6 +50,16 @@ function buildLogRowCells(
   const has = (k: string): boolean => !visibleColumns || visibleColumns.has(k);
   if (has("time"))     cells.push(html`<span class="log-time">${row.created_at || ""}</span>`);
   if (has("phase"))    cells.push(renderLogPhaseHtml(stage, row, total_ms));
+  if (has("client")) {
+    // Client response indicator: shows whether this row's response
+    // was actually delivered to the HTTP client (winner) or was an
+    // intermediate retry that never reached the client.
+    if (row.client_response) {
+      cells.push(html`<span class="log-client log-client--winner" title="Response delivered to client (winning attempt)"><svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path d="M3 8.5l3.5 3.5L13 5.5" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg></span>`);
+    } else {
+      cells.push(html`<span class="log-client log-client--internal" title="Intermediate retry (not returned to client)"><svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><circle cx="8" cy="8" r="5.5" stroke="currentColor" stroke-width="1.5" fill="none" stroke-dasharray="3 2"/></svg></span>`);
+    }
+  }
   if (has("status"))   cells.push(html`<span class="log-status">${row.status_code ?? "—"}</span>`);
   if (has("provider")) cells.push(html`<span class="log-provider">${row.provider_id || ""}</span>`);
   if (has("model"))    cells.push(html`<span class="log-model">${row.upstream_model_id || ""}</span>`);

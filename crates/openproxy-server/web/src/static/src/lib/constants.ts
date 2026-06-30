@@ -63,6 +63,7 @@ export interface LogColumn {
 export const LOG_COLUMNS: readonly LogColumn[] = [
   { key: "time",     label: "Time"     },
   { key: "phase",    label: "Phase"    },
+  { key: "client",   label: "Client"   },
   { key: "status",   label: "Status"   },
   { key: "provider", label: "Provider" },
   { key: "model",    label: "Model"    },

@@ -16,7 +16,7 @@ use crate::compression::{CompressionMode, stats::CompressionStats};
 use crate::config::{CircuitBreakerConfig, RacingConfig, RetriesConfig};
 use crate::cost::{self, UsageInput};
 use crate::error::{CoreError, Result};
-use crate::ids::{ApiKeyId, ComboId, RequestId, TraceId};
+use crate::ids::{ApiKeyId, ComboId, RequestId, TraceId, UsageId};
 use crate::models::{self, Model};
 use crate::retry::RetryPolicy;
 use crate::secrets::MasterKey;
@@ -28,7 +28,7 @@ use crate::upstream::{
 };
 use bytes::Buf;
 use parking_lot::RwLock;
-use rusqlite::Connection;
+use rusqlite::{params, Connection};
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -482,6 +482,11 @@ pub struct PipelineResult {
     pub final_response: Option<OpenAIResponse>,
     /// Number of upstream attempts (sequential retries + race losers).
     pub attempts: u8,
+    /// The usage-row id for this attempt. The combo walk uses this to
+    /// UPDATE the winning row's `client_response` flag to `true` after
+    /// deciding which result to return to the client. `None` for
+    /// synthetic results (e.g. NoHealthyTargets) that didn't record a row.
+    pub usage_row_id: Option<UsageId>,
 }
 
 /// Bundle of "what kind of failure" inputs for [`Pipeline::record_and_fail`]
@@ -1025,6 +1030,7 @@ impl Pipeline {
 
             // If the race produced a winner, return it immediately.
             if race_result.error.is_none() {
+                self.mark_client_response(race_result.usage_row_id);
                 return race_result;
             }
 
@@ -1285,7 +1291,10 @@ impl Pipeline {
                 }
             }
             match &result.error {
-                None => return result,
+                None => {
+                    self.mark_client_response(result.usage_row_id);
+                    return result;
+                }
                 // Fall through to the next target on ANY error
                 // (retryable OR non-retryable). The previous behavior
                 // short-circuited the walk on non-retryable errors
@@ -1369,6 +1378,9 @@ impl Pipeline {
                 last_error = ?r.error,
                 "combo exhausted: all targets failed, returning last error to client"
             );
+            // This is the final error the client will see — mark the
+            // last-attempt row as client_response = true.
+            self.mark_client_response(r.usage_row_id);
         }
         last_result.unwrap_or_else(|| {
             self.failure(
@@ -1568,6 +1580,10 @@ impl Pipeline {
             // attempted but saved nothing.
             compression_savings_pct: None,
             compression_techniques: None,
+            // No-healthy-targets is a terminal failure — it's the
+            // final response the client receives (502). Mark as
+            // client_response = true so the dashboard shows it.
+            client_response: true,
         };
         let conn = self.conn.lock();
         let _ = crate::cost::record(&conn, &input);
@@ -1623,6 +1639,7 @@ impl Pipeline {
                 error: Some(CoreError::NoHealthyTargets(combo.id.0)),
                 final_response: None,
                 attempts: 0,
+                usage_row_id: None,
             };
         }
 
@@ -1661,6 +1678,7 @@ impl Pipeline {
                     )),
                     final_response: None,
                     attempts: 0,
+                    usage_row_id: None,
                 };
             }
         };
@@ -1808,6 +1826,7 @@ impl Pipeline {
                     error: Some(err),
                     final_response: None,
                     attempts: race_size,
+                    usage_row_id: None,
                 };
             }
             // Wait for a worker to signal progress instead of
@@ -2189,7 +2208,7 @@ impl Pipeline {
                         // success: `is_streaming: false`,
                         // `stream_complete: true` on the 200
                         // status_code below.
-                        let _ = self.record_attempt_raw_with_tokens(
+                        let usage_row_id = match self.record_attempt_raw_with_tokens(
                             req,
                             combo,
                             target,
@@ -2211,12 +2230,19 @@ impl Pipeline {
                             false, // is_streaming (H5)
                             true,  // stream_complete (H5)
                             None,  // stop_reason
-                        );
+                        ) {
+                            Ok(id) => id,
+                            Err(e) => {
+                                tracing::warn!(error = %e, "record_attempt_raw_with_tokens failed; non-fatal");
+                                None
+                            }
+                        };
                         PipelineResult {
                             status_code: 200,
                             error: None,
                             final_response: Some(response),
                             attempts: attempt,
+                            usage_row_id,
                         }
                     }
                     Err(e) => {
@@ -3538,7 +3564,7 @@ impl Pipeline {
         // that don't go through `chat.rs`.
         let request_headers_btm: std::collections::BTreeMap<String, String> =
             crate::redact::redact_btreemap_sensitive(headers.iter().cloned().collect());
-        let _ = self.record_attempt_raw_with_tokens(
+        let usage_row_id = match self.record_attempt_raw_with_tokens(
             req,
             combo,
             target,
@@ -3560,13 +3586,20 @@ impl Pipeline {
             false,                     // is_streaming (H5): non-streaming success
             true,                      // stream_complete (H5): 2xx, full body received
             None, // stop_reason (non-streaming: extracted from response, not SSE)
-        );
+        ) {
+            Ok(id) => id,
+            Err(e) => {
+                tracing::warn!(error = %e, "record_attempt_raw_with_tokens failed; non-fatal");
+                None
+            }
+        };
 
         PipelineResult {
             status_code,
             error: None,
             final_response: Some(openai_response),
             attempts: attempt,
+            usage_row_id,
         }
     }
 
@@ -5237,7 +5270,7 @@ impl Pipeline {
             .request_body_json
             .clone()
             .or_else(|| serde_json::to_value(&req.openai_request).ok());
-        let _ = self.record_attempt_raw_with_tokens(
+        let usage_row_id = match self.record_attempt_raw_with_tokens(
             req,
             combo,
             target,
@@ -5259,7 +5292,13 @@ impl Pipeline {
             true,        // is_streaming (H5)
             done_sent,   // stream_complete (H5)
             stop_reason, // captured from upstream SSE chunk
-        );
+        ) {
+            Ok(id) => id,
+            Err(e) => {
+                tracing::warn!(error = %e, "record_attempt_raw_with_tokens failed; non-fatal");
+                None
+            }
+        };
 
         PipelineResult {
             status_code,
@@ -5280,6 +5319,7 @@ impl Pipeline {
                 None
             },
             attempts: attempt,
+            usage_row_id,
         }
     }
 
@@ -5381,6 +5421,58 @@ impl Pipeline {
         }
     }
 
+    /// Mark a usage row's `client_response` flag as `true` — this row's
+    /// response was actually delivered to the HTTP client (it's the
+    /// winning attempt in a combo walk, or the final error).
+    ///
+    /// Called at the combo walk's winner-decision points:
+    /// - `pipeline.rs:1293` (`None => return result` — success winner)
+    /// - `pipeline.rs:1027` (race winner)
+    /// - `pipeline.rs:1373` (`last_result.unwrap_or(...)` — final failure)
+    ///
+    /// The UPDATE is best-effort: a failure (e.g. writer lock
+    /// unavailable) is logged and swallowed — the row was already
+    /// recorded with `client_response = false`, so the worst case
+    /// is a false negative (the dashboard shows "intermediate" for
+    /// a row that was actually the winner).
+    fn mark_client_response(&self, usage_row_id: Option<UsageId>) {
+        let Some(id) = usage_row_id else { return };
+        let conn = match self.conn.try_lock_for(crate::db::conn::HOT_PATH_LOCK_TIMEOUT) {
+            Some(g) => g,
+            None => {
+                tracing::warn!(
+                    usage_row_id = id.0,
+                    "writer lock unavailable within 100ms; skipping client_response UPDATE"
+                );
+                return;
+            }
+        };
+        match conn.execute(
+            "UPDATE usage SET client_response = 1 WHERE id = ?1",
+            params![id.0],
+        ) {
+            Ok(n) if n > 0 => {
+                tracing::debug!(
+                    usage_row_id = id.0,
+                    "marked usage row as client_response = true"
+                );
+            }
+            Ok(_) => {
+                tracing::warn!(
+                    usage_row_id = id.0,
+                    "client_response UPDATE matched 0 rows — row may have been dropped"
+                );
+            }
+            Err(e) => {
+                tracing::warn!(
+                    usage_row_id = id.0,
+                    error = %e,
+                    "client_response UPDATE failed; non-fatal"
+                );
+            }
+        }
+    }
+
     /// Build a `(status, error)` result without writing a usage row.
     fn failure(&self, err: CoreError, attempts: u8, _phase: ErrorPhase) -> PipelineResult {
         PipelineResult {
@@ -5388,6 +5480,7 @@ impl Pipeline {
             error: Some(err),
             final_response: None,
             attempts,
+            usage_row_id: None,
         }
     }
 
@@ -5555,7 +5648,7 @@ impl Pipeline {
         } else {
             (false, false)
         };
-        let _ = self.record_attempt_raw_with_tokens(
+        let usage_row_id = match self.record_attempt_raw_with_tokens(
             req,
             combo,
             target,
@@ -5577,12 +5670,19 @@ impl Pipeline {
             is_streaming,
             stream_complete,
             None, // stop_reason: failures don't have a stop_reason
-        );
+        ) {
+            Ok(id) => id,
+            Err(e) => {
+                tracing::warn!(error = %e, "record_attempt_raw_with_tokens failed; non-fatal");
+                None
+            }
+        };
         PipelineResult {
             status_code: err.http_status(),
             error: Some(err.clone_for_result()),
             final_response: None,
             attempts: attempt,
+            usage_row_id,
         }
     }
 
@@ -5770,7 +5870,7 @@ impl Pipeline {
         stream_complete: bool,
         // Upstream stop reason (e.g. "end_turn", "max_tokens").
         stop_reason: Option<String>,
-    ) -> Result<()> {
+    ) -> Result<Option<UsageId>> {
         let recording = self.is_recording();
         // Snapshot the per-attempt compression stats that
         // `execute_single` stashed in the side cell after
@@ -5830,6 +5930,10 @@ impl Pipeline {
             stop_reason: stop_reason.clone(),
             compression_savings_pct,
             compression_techniques,
+            // Default: false. The combo walk's winner-decision point
+            // UPDATEs the winning row to client_response = 1 after
+            // Pipeline::run decides which result to return.
+            client_response: false,
         };
         // Publish the terminal stage event FIRST, before the
         // writer lock attempt. This ensures the dashboard always
@@ -5910,11 +6014,11 @@ impl Pipeline {
                 // doesn't fail the request because of bookkeeping.
                 // The terminal stage event was already published,
                 // so the dashboard is synchronized.
-                return Ok(());
+                return Ok(None);
             }
         };
-        cost::record(&conn, &input)?;
-        Ok(())
+        let usage_id = cost::record(&conn, &input)?;
+        Ok(Some(usage_id))
     }
 }
 

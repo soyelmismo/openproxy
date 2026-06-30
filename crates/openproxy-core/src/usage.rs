@@ -1081,6 +1081,9 @@ pub struct RecentUsageRow {
     pub compression_savings_pct: Option<f64>,
     /// Compression techniques (CSV).
     pub compression_techniques: Option<String>,
+    /// True iff this row's response was actually delivered to the HTTP
+    /// client (winning attempt). False for intermediate retries.
+    pub client_response: bool,
     pub created_at: String,
 }
 
@@ -1117,6 +1120,9 @@ pub struct UsageDetailRow {
     pub is_streaming: bool,
     pub stream_complete: bool,
     pub api_key_id: Option<ApiKeyId>,
+    /// True iff this row's response was actually delivered to the HTTP
+    /// client (winning attempt). False for intermediate retries.
+    pub client_response: bool,
     pub created_at: String,
 }
 
@@ -1171,7 +1177,8 @@ pub fn recent(conn: &Connection, since_id: i64, limit: u32) -> Result<Vec<Recent
                         MAX(stream_complete) AS agg_stream_complete, \
                         MAX(race_lost) AS agg_race_lost, \
                         MAX(compression_savings_pct) AS agg_compression_savings_pct, \
-                        MAX(compression_techniques) AS agg_compression_techniques \
+                        MAX(compression_techniques) AS agg_compression_techniques, \
+                        MAX(client_response) AS agg_client_response \
                  FROM usage \
                  WHERE id > ?1 \
                  GROUP BY request_id \
@@ -1182,7 +1189,8 @@ pub fn recent(conn: &Connection, since_id: i64, limit: u32) -> Result<Vec<Recent
                     u.request_headers, u.response_headers, u.error_msg_redacted, u.error_msg, \
                     g.agg_race_total, g.agg_race_attempts, g.agg_is_streaming, g.agg_stream_complete, \
                     g.agg_race_lost, g.agg_created_at, u.stop_reason, \
-                    g.agg_compression_savings_pct, g.agg_compression_techniques \
+                    g.agg_compression_savings_pct, g.agg_compression_techniques, \
+                    g.agg_client_response \
              FROM grouped g \
              JOIN usage u ON u.id = g.agg_id \
              ORDER BY g.agg_id ASC \
@@ -1253,6 +1261,8 @@ pub fn recent(conn: &Connection, since_id: i64, limit: u32) -> Result<Vec<Recent
             let compression_savings_pct: Option<f64> = row.get(col_idx)?;
             col_idx += 1;
             let compression_techniques: Option<String> = row.get(col_idx)?;
+            col_idx += 1;
+            let client_response: i64 = row.get(col_idx)?;
 
             if !(0..=u16::MAX as i64).contains(&status_code) {
                 return Err(rusqlite::Error::FromSqlConversionFailure(
@@ -1309,6 +1319,7 @@ pub fn recent(conn: &Connection, since_id: i64, limit: u32) -> Result<Vec<Recent
                 stop_reason,
                 compression_savings_pct,
                 compression_techniques,
+                client_response: client_response != 0,
                 created_at,
             })
         })
@@ -1356,7 +1367,8 @@ pub fn recent_desc(conn: &Connection, limit: u32) -> Result<Vec<RecentUsageRow>>
                         MAX(stream_complete) AS agg_stream_complete, \
                         MAX(race_lost) AS agg_race_lost, \
                         MAX(compression_savings_pct) AS agg_compression_savings_pct, \
-                        MAX(compression_techniques) AS agg_compression_techniques \
+                        MAX(compression_techniques) AS agg_compression_techniques, \
+                        MAX(client_response) AS agg_client_response \
                  FROM usage \
                  GROUP BY request_id \
              ) \
@@ -1366,7 +1378,8 @@ pub fn recent_desc(conn: &Connection, limit: u32) -> Result<Vec<RecentUsageRow>>
                     u.request_headers, u.response_headers, u.error_msg_redacted, u.error_msg, \
                     g.agg_race_total, g.agg_race_attempts, g.agg_is_streaming, g.agg_stream_complete, \
                     g.agg_race_lost, g.agg_created_at, u.stop_reason, \
-                    g.agg_compression_savings_pct, g.agg_compression_techniques \
+                    g.agg_compression_savings_pct, g.agg_compression_techniques, \
+                    g.agg_client_response \
              FROM grouped g \
              JOIN usage u ON u.id = g.agg_id \
              ORDER BY g.agg_id DESC \
@@ -1437,6 +1450,8 @@ pub fn recent_desc(conn: &Connection, limit: u32) -> Result<Vec<RecentUsageRow>>
             let compression_savings_pct: Option<f64> = row.get(col_idx)?;
             col_idx += 1;
             let compression_techniques: Option<String> = row.get(col_idx)?;
+            col_idx += 1;
+            let client_response: i64 = row.get(col_idx)?;
 
             if !(0..=u16::MAX as i64).contains(&status_code) {
                 return Err(rusqlite::Error::FromSqlConversionFailure(
@@ -1494,6 +1509,7 @@ pub fn recent_desc(conn: &Connection, limit: u32) -> Result<Vec<RecentUsageRow>>
                 stop_reason,
                 compression_savings_pct,
                 compression_techniques,
+                client_response: client_response != 0,
                 created_at,
             })
         })
@@ -1516,7 +1532,7 @@ pub fn detail_by_id(conn: &Connection, id: i64) -> Result<Option<UsageDetailRow>
                     error_msg_redacted, race_total, race_attempts, race_lost, \
                     api_key_id, created_at, is_streaming, stream_complete, \
                     request_body_json, response_body_json, request_headers, \
-                    response_headers, error_message \
+                    response_headers, error_message, client_response \
              FROM usage \
              WHERE id = ?1",
         )
@@ -1567,6 +1583,8 @@ pub fn detail_by_id(conn: &Connection, id: i64) -> Result<Option<UsageDetailRow>
             let response_headers: Option<String> = row.get(col_idx)?;
             col_idx += 1;
             let error_message: Option<String> = row.get(col_idx)?;
+            col_idx += 1;
+            let client_response: i64 = row.get(col_idx)?;
 
             if !(0..=u16::MAX as i64).contains(&status_code) {
                 return Err(rusqlite::Error::FromSqlConversionFailure(
@@ -1623,6 +1641,7 @@ pub fn detail_by_id(conn: &Connection, id: i64) -> Result<Option<UsageDetailRow>
                 created_at,
                 api_key_id: api_key_id.map(ApiKeyId),
                 error_message,
+                client_response: client_response != 0,
             })
         })
         .optional()
