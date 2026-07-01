@@ -42,7 +42,8 @@ pub fn apply_compression(
     match mode {
         CompressionMode::Off => CompressionStats::empty(),
         CompressionMode::Lite => {
-            let original = count_content_chars(messages);
+            let original_chars = count_content_chars(messages);
+            let original_tokens = crate::token_estimate::estimate_prompt_tokens(messages) as usize;
             // Content routing runs FIRST so SmartCrusher/LogCompressor/
             // DiffCompressor see the full content before lite's brute
             // truncation (compress_tool_results) kicks in as a fallback.
@@ -53,17 +54,33 @@ pub fn apply_compression(
                     .map(|s| (*s).to_string())
                     .collect::<Vec<_>>(),
             );
-            let compressed = count_content_chars(messages);
-            CompressionStats::new(original, compressed, techniques)
+            let compressed_chars = count_content_chars(messages);
+            let compressed_tokens = crate::token_estimate::estimate_prompt_tokens(messages) as usize;
+            CompressionStats::new(
+                original_chars,
+                compressed_chars,
+                original_tokens,
+                compressed_tokens,
+                techniques,
+            )
         }
         CompressionMode::Rtk => {
-            let original = count_content_chars(messages);
+            let original_chars = count_content_chars(messages);
+            let original_tokens = crate::token_estimate::estimate_prompt_tokens(messages) as usize;
             let techniques = rtk::apply_rtk(messages);
-            let compressed = count_content_chars(messages);
-            CompressionStats::new(original, compressed, techniques)
+            let compressed_chars = count_content_chars(messages);
+            let compressed_tokens = crate::token_estimate::estimate_prompt_tokens(messages) as usize;
+            CompressionStats::new(
+                original_chars,
+                compressed_chars,
+                original_tokens,
+                compressed_tokens,
+                techniques,
+            )
         }
         CompressionMode::LiteRtk => {
-            let original = count_content_chars(messages);
+            let original_chars = count_content_chars(messages);
+            let original_tokens = crate::token_estimate::estimate_prompt_tokens(messages) as usize;
             // Content routing first (smart compression), then lite
             // (normalization + fallback truncation), then rtk
             // (command-aware CLI filtering).
@@ -75,8 +92,15 @@ pub fn apply_compression(
                     .collect::<Vec<_>>(),
             );
             techniques.extend(rtk::apply_rtk(messages));
-            let compressed = count_content_chars(messages);
-            CompressionStats::new(original, compressed, techniques)
+            let compressed_chars = count_content_chars(messages);
+            let compressed_tokens = crate::token_estimate::estimate_prompt_tokens(messages) as usize;
+            CompressionStats::new(
+                original_chars,
+                compressed_chars,
+                original_tokens,
+                compressed_tokens,
+                techniques,
+            )
         }
     }
 }

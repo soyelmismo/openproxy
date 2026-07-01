@@ -60,6 +60,12 @@ regex = { workspace = true }
 sha2 = { workspace = true }
 urlencoding = { workspace = true }
 memchr = "2"
+# Real BPE tokenizer (cl100k_base — the same tokenizer OpenAI uses for
+# GPT-4/GPT-3.5). Used for accurate token estimation when upstream
+# providers don't report usage, and for compression savings calculation.
+# The vocab is ~1.6MB embedded at compile time; tokenization is ~1-5µs
+# per token, fast enough for the hot path.
+tiktoken-rs = "0.6"
 
 # --- hyper-based upstream client (Gate 0) ---
 # Pinned to versions that are already present in the workspace lockfile
