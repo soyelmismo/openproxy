@@ -63,7 +63,14 @@ function buildLogRowCells(
   if (has("status"))   cells.push(html`<span class="log-status">${row.status_code ?? "—"}</span>`);
   if (has("provider")) cells.push(html`<span class="log-provider">${row.provider_id || ""}</span>`);
   if (has("model"))    cells.push(html`<span class="log-model">${row.upstream_model_id || ""}</span>`);
-  if (has("tokens"))   cells.push(html`<span class="log-tokens">${formatContext(row.prompt_tokens)}↓ ${formatContext(row.completion_tokens)}↑</span>`);
+  if (has("tokens")) {
+    const ptEst = row.prompt_tokens_estimated ? "≈" : "";
+    const ctEst = row.completion_tokens_estimated ? "≈" : "";
+    const title = (row.prompt_tokens_estimated || row.completion_tokens_estimated)
+      ? "Tokens marked ≈ are estimated (upstream didn't report usage)"
+      : "Tokens reported by upstream";
+    cells.push(html`<span class="log-tokens" title="${title}">${ptEst}${formatContext(row.prompt_tokens)}↓ ${ctEst}${formatContext(row.completion_tokens)}↑</span>`);
+  }
   if (has("latency"))  {
     // Live latency for inflight rows: compute from stage timestamp.
     // For finalized rows, use the DB total_ms.

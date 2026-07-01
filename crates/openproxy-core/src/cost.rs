@@ -60,6 +60,10 @@ pub struct UsageInput {
     /// walk's winner-decision point UPDATEs the winning row to `true`
     /// after `Pipeline::run` decides which result to return.
     pub client_response: bool,
+    /// True if prompt_tokens were estimated (upstream didn't report usage).
+    pub prompt_tokens_estimated: bool,
+    /// True if completion_tokens were estimated (upstream didn't report usage).
+    pub completion_tokens_estimated: bool,
 }
 
 /// Computes (cost_usd, tokens_per_sec) from pricing + tokens + timing.
@@ -159,11 +163,11 @@ pub fn record(conn: &Connection, input: &UsageInput) -> Result<UsageId> {
             request_body_json, response_body_json, request_headers, \
             response_headers, error_message, is_streaming, stream_complete, \
             stop_reason, compression_savings_pct, compression_techniques, \
-            client_response\
+            client_response, prompt_tokens_estimated, completion_tokens_estimated\
          ) VALUES (\
             ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, \
             ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, \
-            ?21, ?22, ?23, datetime('now'), ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31, ?32, ?33, ?34\
+            ?21, ?22, ?23, datetime('now'), ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31, ?32, ?33, ?34, ?35, ?36\
          )",
         params![
             request_id,
@@ -222,6 +226,8 @@ pub fn record(conn: &Connection, input: &UsageInput) -> Result<UsageId> {
             input.compression_savings_pct,
             input.compression_techniques,
             input.client_response as i64,
+            input.prompt_tokens_estimated as i64,
+            input.completion_tokens_estimated as i64,
         ],
     )
     .map_err(|e| CoreError::Database {
@@ -263,6 +269,8 @@ pub fn record(conn: &Connection, input: &UsageInput) -> Result<UsageId> {
         compression_savings_pct: input.compression_savings_pct,
         compression_techniques: input.compression_techniques.clone(),
         client_response: input.client_response,
+        prompt_tokens_estimated: input.prompt_tokens_estimated,
+        completion_tokens_estimated: input.completion_tokens_estimated,
     };
     crate::usage::publish_usage_row(row);
 
@@ -306,6 +314,8 @@ mod tests {
             compression_savings_pct: None,
             compression_techniques: None,
             client_response: false,
+            prompt_tokens_estimated: false,
+            completion_tokens_estimated: false,
         }
     }
 

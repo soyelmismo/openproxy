@@ -1538,6 +1538,8 @@ impl Pipeline {
             // final response the client receives (502). Mark as
             // client_response = true so the dashboard shows it.
             client_response: true,
+            prompt_tokens_estimated: false,
+            completion_tokens_estimated: false,
         };
         let conn = self.conn.lock();
         let _ = crate::cost::record(&conn, &input);
@@ -5456,6 +5458,8 @@ impl Pipeline {
                         compression_savings_pct: None,
                         compression_techniques: None,
                         client_response: updated_row.client_response,
+                        prompt_tokens_estimated: updated_row.prompt_tokens_estimated,
+                        completion_tokens_estimated: updated_row.completion_tokens_estimated,
                         created_at: updated_row.created_at,
                     };
                     crate::usage::publish_usage_row(recent_row);
@@ -5892,6 +5896,54 @@ impl Pipeline {
         let compression_techniques = compression_stats_snapshot
             .as_ref()
             .and_then(|s| s.techniques_csv());
+        // Token estimation: when the upstream didn't report usage
+        // (prompt_tokens is None), estimate from the request messages
+        // so cost tracking and analytics are not silently zero.
+        let (prompt_tokens, prompt_tokens_estimated) = match prompt_tokens {
+            Some(t) => (Some(t), false),
+            None => {
+                let est = crate::token_estimate::estimate_prompt_tokens(&req.openai_request.messages);
+                if est > 0 {
+                    tracing::debug!(
+                        request_id = %req.request_id,
+                        estimated_prompt_tokens = est,
+                        "upstream did not report usage; estimated prompt tokens from request messages"
+                    );
+                    (Some(est), true)
+                } else {
+                    (None, false)
+                }
+            }
+        };
+        // For completion tokens: estimate from the response body if
+        // available (streaming accumulator or non-streaming response).
+        // On failure paths, completion is 0 (no tokens generated).
+        let (completion_tokens, completion_tokens_estimated) = match completion_tokens {
+            Some(t) => (Some(t), false),
+            None => {
+                let completion_text = response_body_json
+                    .as_ref()
+                    .and_then(|v| {
+                        v.get("choices")
+                            .and_then(|c| c.get(0))
+                            .and_then(|c| c.get("message"))
+                            .and_then(|m| m.get("content"))
+                            .and_then(|c| c.as_str())
+                    })
+                    .unwrap_or("");
+                if !completion_text.is_empty() {
+                    let est = crate::token_estimate::estimate_completion_tokens(completion_text);
+                    tracing::debug!(
+                        request_id = %req.request_id,
+                        estimated_completion_tokens = est,
+                        "upstream did not report usage; estimated completion tokens from response body"
+                    );
+                    (Some(est), true)
+                } else {
+                    (None, false)
+                }
+            }
+        };
         // Build the UsageInput first so the row and the
         // stage event agree on every field. The `is_streaming`
         // / `stream_complete` flags come from the caller (H5)
@@ -5938,6 +5990,8 @@ impl Pipeline {
             // UPDATEs the winning row to client_response = 1 after
             // Pipeline::run decides which result to return.
             client_response: false,
+            prompt_tokens_estimated,
+            completion_tokens_estimated,
         };
         // Publish the terminal stage event FIRST, before the
         // writer lock attempt. This ensures the dashboard always

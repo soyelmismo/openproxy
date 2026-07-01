@@ -747,6 +747,9 @@ fn record_model_not_found_usage_row(
         compression_techniques: None,
         // model_not_found is a terminal 404 — the client sees this error.
         client_response: true,
+        // model_not_found: tokens are not estimated (no request was sent)
+        prompt_tokens_estimated: false,
+        completion_tokens_estimated: false,
     };
     // MEDIUM-5 fix: use try_writer_for with the hot-path timeout so
     // this write doesn't block indefinitely under admin lock contention.

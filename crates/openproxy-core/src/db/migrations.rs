@@ -197,6 +197,11 @@ const MIGRATIONS: &[Migration] = &[
         name: "000037_add_client_response",
         sql: include_str!("../../migrations/000037_add_client_response.sql"),
     },
+    Migration {
+        version: 38,
+        name: "000038_add_estimated_tokens",
+        sql: include_str!("../../migrations/000038_add_estimated_tokens.sql"),
+    },
 ];
 
 /// Apply pending migrations on `conn`. Idempotent: skips versions already in
@@ -428,8 +433,8 @@ mod tests {
                 .expect("count")
         });
         assert_eq!(
-            count_first, 36,
-            "thirty-six migrations applied (versions 1-6, 8-37)"
+            count_first, 37,
+            "thirty-seven migrations applied (versions 1-6, 8-38)"
         );
 
         {

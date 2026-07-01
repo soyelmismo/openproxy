@@ -537,6 +537,10 @@ export interface RecentUsageRow {
    *  client (winning attempt). False for intermediate retries that
    *  were tried internally but never reached the client. */
   client_response: boolean;
+  /** True if prompt_tokens were estimated (upstream didn't report usage). */
+  prompt_tokens_estimated: boolean;
+  /** True if completion_tokens were estimated (upstream didn't report usage). */
+  completion_tokens_estimated: boolean;
   created_at: string;
 }
 

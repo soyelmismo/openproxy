@@ -46,6 +46,7 @@ pub mod sse;
 pub mod sse_accumulator;
 pub mod think_extractor;
 pub mod timeouts;
+pub mod token_estimate;
 pub mod translation;
 pub mod usage;
 

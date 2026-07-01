@@ -594,6 +594,8 @@ function handleStageEvent(event: StageEvent): void {
       compression_savings_pct: null,
       compression_techniques: null,
       client_response: false,
+      prompt_tokens_estimated: false,
+      completion_tokens_estimated: false,
     });
   } else if (traceId && state.logs.inflightByTraceId.has(traceId)) {
     // Update existing inflight placeholder with new stage event
@@ -632,6 +634,8 @@ function handleStageEvent(event: StageEvent): void {
       compression_savings_pct: null,
       compression_techniques: null,
       client_response: false,
+      prompt_tokens_estimated: false,
+      completion_tokens_estimated: false,
     });
   } else if (!traceId && state.logs.inflightByRequestId.has(requestId)) {
     const existing = state.logs.inflightByRequestId.get(requestId)!;
@@ -1013,6 +1017,8 @@ async function openLogDetail(id: string, requestId: string, traceId?: string): P
       compression_savings_pct: null,
       compression_techniques: null,
       client_response: false,
+      prompt_tokens_estimated: false,
+      completion_tokens_estimated: false,
     };
   // In-flight / ghost entries have no DB row (id === 0 / synthetic id
   // / status_code === 0). Skip the /usage/detail fetch — it would
