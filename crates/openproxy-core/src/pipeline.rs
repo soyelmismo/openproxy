@@ -5905,8 +5905,8 @@ impl Pipeline {
         // (prompt_tokens is None), estimate from the request messages
         // so cost tracking and analytics are not silently zero.
         let (prompt_tokens, prompt_tokens_estimated) = match prompt_tokens {
-            Some(t) => (Some(t), false),
-            None => {
+            Some(t) if t > 0 => (Some(t), false),
+            _ => {
                 let est = crate::token_estimate::estimate_prompt_tokens(&req.openai_request.messages);
                 if est > 0 {
                     tracing::debug!(
@@ -5924,8 +5924,8 @@ impl Pipeline {
         // available (streaming accumulator or non-streaming response).
         // On failure paths, completion is 0 (no tokens generated).
         let (completion_tokens, completion_tokens_estimated) = match completion_tokens {
-            Some(t) => (Some(t), false),
-            None => {
+            Some(t) if t > 0 => (Some(t), false),
+            _ => {
                 let completion_text = response_body_json
                     .as_ref()
                     .and_then(|v| {

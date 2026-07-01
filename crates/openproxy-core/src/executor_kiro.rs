@@ -37,7 +37,7 @@
 
 use crate::error::{CoreError, Result};
 use crate::ids::AccountId;
-use crate::translation::{OpenAIMessage, OpenAIRequest, OpenAIResponse, OpenAIUsage};
+use crate::translation::{OpenAIMessage, OpenAIRequest, OpenAIResponse};
 use crate::upstream::{
     CancellationToken, TimeoutProfile, UpstreamClient, UpstreamError, UpstreamRequest,
 };
@@ -291,11 +291,7 @@ pub fn parse_kiro_response(body: &[u8], model: &str) -> Result<OpenAIResponse> {
                     },
                     finish_reason: Some("stop".to_string()),
                 }],
-                usage: Some(OpenAIUsage {
-                    prompt_tokens: 0,
-                    completion_tokens: 0,
-                    total_tokens: 0,
-                }),
+                usage: None, // Kiro never reports usage — let the pipeline estimate
             });
         }
     }
@@ -328,11 +324,7 @@ pub fn parse_kiro_response(body: &[u8], model: &str) -> Result<OpenAIResponse> {
             },
             finish_reason: Some("stop".to_string()),
         }],
-        usage: Some(OpenAIUsage {
-            prompt_tokens: 0,
-            completion_tokens: 0,
-            total_tokens: 0,
-        }),
+        usage: None, // Kiro never reports usage — let the pipeline estimate
     })
 }
 

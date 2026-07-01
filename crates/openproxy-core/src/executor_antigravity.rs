@@ -425,11 +425,7 @@ pub async fn execute_antigravity(
             },
             finish_reason: Some("stop".to_string()),
         }],
-        usage: Some(usage.unwrap_or(OpenAIUsage {
-            prompt_tokens: 0,
-            completion_tokens: 0,
-            total_tokens: 0,
-        })),
+        usage, // None if upstream didn't report — let the pipeline estimate
     })
 }
 

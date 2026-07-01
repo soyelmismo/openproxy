@@ -30,10 +30,13 @@ interface LogDetailLog {
   total_ms?: number;
   prompt_tokens?: number | null;
   completion_tokens?: number | null;
+  prompt_tokens_estimated?: boolean;
+  completion_tokens_estimated?: boolean;
+  tokens_per_sec?: number | null;
   cost_usd?: number | null;
   is_streaming?: boolean;
   stream_complete?: boolean;
-  /** Compression savings (0.0–100.0) or null when off. */
+  /** Compression savings in tokens (0.0–100.0) or null when off. */
   compression_savings_pct?: number | null;
   compression_techniques?: string | null;
   race_lost?: boolean;
@@ -968,6 +971,9 @@ export function renderLogDetailModal(log: LogDetailLog): TemplateResult {
             <div><strong>Combo:</strong> ${comboText}</div>
             <div><strong>Model:</strong> ${String(model)}</div>
             <div><strong>Latency:</strong> ${latency}</div>
+            <div><strong>Prompt tokens:</strong> ${log.prompt_tokens_estimated ? "≈" : ""}${log.prompt_tokens ?? "—"}</div>
+            <div><strong>Completion tokens:</strong> ${log.completion_tokens_estimated ? "≈" : ""}${log.completion_tokens ?? "—"}</div>
+            <div><strong>Tokens/sec:</strong> ${log.tokens_per_sec != null ? log.tokens_per_sec.toFixed(1) : "—"}</div>
             <div><strong>Cost:</strong> ${costText}</div>
             ${renderCompressionSummary(log)}
             <div><strong>Created:</strong> ${String(createdAt)}</div>
@@ -1143,11 +1149,9 @@ function renderCompressionSummary(log: LogDetailLog): TemplateResult | null {
   if (pct == null || pct <= 0) return null;
   const tech = log.compression_techniques ?? "";
   const pctRounded = Math.round(pct);
-  const pctText = `-${pctRounded}%`;
-  if (tech.length > 0) {
-    return html`<div><strong>Compression:</strong> <span title=${tech}>${pctText}</span></div>`;
-  }
-  return html`<div><strong>Compression:</strong> ${pctText}</div>`;
+  const pctText = `-${pctRounded}% tok`;
+  const tooltip = `Token savings: ${pctRounded}% (BPE cl100k_base)${tech.length > 0 ? " — " + tech : ""}`;
+  return html`<div><strong>Compression:</strong> <span title=${tooltip}>${pctText}</span></div>`;
 }
 
 // Update the open log-detail modal with a new row (called from the
@@ -1290,12 +1294,12 @@ export function buildDebugBundle(log: LogDetailLog): string {
   lines.push(`- **Stream complete:** ${String(log.stream_complete ?? false)}`);
   lines.push(`- **Total ms:** ${String(log.total_ms ?? "—")}`);
   lines.push(`- **Cost USD:** ${String(log.cost_usd ?? "—")}`);
-  lines.push(`- **Prompt tokens:** ${String(log.prompt_tokens ?? "—")}`);
-  lines.push(`- **Completion tokens:** ${String(log.completion_tokens ?? "—")}`);
+  lines.push(`- **Prompt tokens:** ${String(log.prompt_tokens ?? "—")}${log.prompt_tokens_estimated ? " (estimated)" : ""}`);
+  lines.push(`- **Completion tokens:** ${String(log.completion_tokens ?? "—")}${log.completion_tokens_estimated ? " (estimated)" : ""}`);
   lines.push(`- **API key ID:** ${String(log.api_key_id ?? "—")}`);
   lines.push(`- **Race lost:** ${String(log.race_lost ?? false)}`);
   if (log.compression_savings_pct != null) {
-    lines.push(`- **Compression savings:** ${log.compression_savings_pct}%`);
+    lines.push(`- **Compression savings:** ${log.compression_savings_pct}% (token-based, BPE cl100k_base)`);
   }
   if (log.compression_techniques) {
     lines.push(`- **Compression techniques:** ${log.compression_techniques}`);
