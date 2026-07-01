@@ -3980,11 +3980,16 @@ impl Pipeline {
         // single bool check.
         // ALSO construct when the sink is Discard (non-streaming client)
         // — we need the accumulated response to return as JSON.
+        // ALSO always construct for token estimation — even when
+        // recording is off, we need the accumulated content text to
+        // estimate completion tokens when the upstream doesn't report
+        // usage.
         let needs_accumulator = self.is_recording()
             || matches!(
                 req.stream_sink.as_ref(),
                 Some(crate::race_sink::StreamSink::Discard)
-            );
+            )
+            || true; // always: needed for token estimation
         let mut acc: Option<crate::sse_accumulator::ResponseAccumulator> = if needs_accumulator {
             Some(crate::sse_accumulator::ResponseAccumulator::new())
         } else {

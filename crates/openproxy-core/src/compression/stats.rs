@@ -16,6 +16,10 @@ pub struct CompressionStats {
     /// Este es el porcentaje real que refleja el ahorro de costos —
     /// el ahorro en chars puede ser engañoso porque BPE no es lineal.
     pub savings_pct: f64,
+    /// Porcentaje de ahorro en CHARS (bytes). Se conserva para
+    /// diagnóstico — el savings en tokens puede diferir del savings
+    /// en chars porque BPE no es lineal.
+    pub savings_pct_chars: f64,
     /// Técnicas aplicadas (ej: "lite::collapse_whitespace", "rtk::git-status").
     pub techniques: Vec<String>,
 }
@@ -29,6 +33,7 @@ impl CompressionStats {
             original_tokens: 0,
             compressed_tokens: 0,
             savings_pct: 0.0,
+            savings_pct_chars: 0.0,
             techniques: Vec::new(),
         }
     }
@@ -53,12 +58,20 @@ impl CompressionStats {
         } else {
             0.0
         };
+        // savings_pct_chars siempre basado en chars
+        let savings_pct_chars = if original_chars > 0 {
+            let saved = original_chars.saturating_sub(compressed_chars);
+            (saved as f64 / original_chars as f64) * 100.0
+        } else {
+            0.0
+        };
         Self {
             original_chars,
             compressed_chars,
             original_tokens,
             compressed_tokens,
             savings_pct,
+            savings_pct_chars,
             techniques,
         }
     }

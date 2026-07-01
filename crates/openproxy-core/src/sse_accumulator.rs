@@ -242,6 +242,13 @@ pub struct ResponseAccumulator {
 }
 
 impl ResponseAccumulator {
+    /// Public accessor for the accumulated content text. Used by the
+    /// token estimator to estimate completion tokens when the upstream
+    /// didn't report usage.
+    pub fn content_text(&self) -> &str {
+        &self.content
+    }
+
     pub fn new() -> Self {
         Self {
             content: String::new(),
