@@ -1017,6 +1017,13 @@ impl Pipeline {
             // sees the full picture in the logs.
         }
 
+        // Track every target we actually tried, so we can log a
+        // detailed combo-walk summary at the end. This is the only
+        // way for the operator to answer "did the combo try all 18
+        // models or just 2?" — the usage row only carries the LAST
+        // attempt's data, not the full walk.
+        let mut combo_walk_log: Vec<String> = Vec::new();
+
         for target in to_run.iter() {
             let client_disconnected = {
                 let mut rx = req.client_disconnected.clone();
@@ -1305,6 +1312,15 @@ impl Pipeline {
                             "target failed; trying next target"
                         );
                     }
+                    // Record this target's outcome for the combo-walk
+                    // summary log at the end of the walk.
+                    combo_walk_log.push(format!(
+                        "  target_id={} provider={} attempts={} error={}",
+                        target.id.0,
+                        target.provider_id,
+                        target_attempt,
+                        e
+                    ));
                     last_result = Some(result);
                 }
             }
@@ -1326,11 +1342,18 @@ impl Pipeline {
         if let Some(ref r) = last_result
             && r.error.is_some()
         {
+            // Detailed combo-walk summary: log every target that was
+            // tried, its provider, attempts, and error. This is the
+            // ONLY way for the operator to answer "did the combo try
+            // all 18 models or just 2?" from the server logs.
             tracing::warn!(
                 combo_id = combo.id.0,
-                targets_tried = targets.len(),
+                total_targets = to_run.len(),
+                targets_tried = combo_walk_log.len(),
                 last_error = ?r.error,
-                "combo exhausted: all targets failed, returning last error to client"
+                "combo exhausted: all {} target(s) failed, returning last error to client.\nCombo walk summary:\n{}",
+                combo_walk_log.len(),
+                combo_walk_log.join("\n")
             );
             // This is the final error the client will see — mark the
             // last-attempt row as client_response = true.
