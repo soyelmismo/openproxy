@@ -147,7 +147,9 @@ async function onDeleteTarget(targetId: number): Promise<void> {
 }
 async function onChangePriority(targetId: number, delta: number): Promise<void> {
   try {
-    const ordered = [...detailTargets].sort((a, b) => a.priority_order - b.priority_order);
+    // Re-fetch current targets to avoid stale IDs
+    const currentTargets = await api(`/combos/${detailComboId}/targets`) as ComboTargetWithModel[];
+    const ordered = [...currentTargets].sort((a, b) => a.priority_order - b.priority_order);
     const idx = ordered.findIndex((t) => t.id === targetId);
     if (idx < 0) return;
     const newIdx = idx + delta;
@@ -336,11 +338,25 @@ function renderTargetRow(t: ComboTargetWithModel, showWeight: boolean): Template
       (e.currentTarget as HTMLElement).classList.remove("drag-over");
       const draggedId = parseInt(e.dataTransfer?.getData("text/plain") || "0", 10);
       if (!draggedId || draggedId === t.id || !detailComboId) return;
-      // Reorder: move draggedId to the position of t.id
-      const ordered = [...detailTargets].sort((a, b) => a.priority_order - b.priority_order);
+      // Re-fetch the current targets from the server to ensure we
+      // have the latest IDs (the local detailTargets may be stale
+      // if a target was added/deleted but the view hasn't re-mounted
+      // yet — the backend rejects reorder if the IDs don't match
+      // exactly).
+      let currentTargets: ComboTargetWithModel[];
+      try {
+        currentTargets = await api(`/combos/${detailComboId}/targets`) as ComboTargetWithModel[];
+      } catch {
+        showToast("Reorder failed: could not fetch current targets", "error");
+        return;
+      }
+      const ordered = [...currentTargets].sort((a, b) => a.priority_order - b.priority_order);
       const fromIdx = ordered.findIndex((x) => x.id === draggedId);
       const toIdx = ordered.findIndex((x) => x.id === t.id);
-      if (fromIdx < 0 || toIdx < 0) return;
+      if (fromIdx < 0 || toIdx < 0) {
+        showToast("Reorder failed: target not found in current list", "error");
+        return;
+      }
       const [moved] = ordered.splice(fromIdx, 1);
       ordered.splice(toIdx, 0, moved!);
       try {
