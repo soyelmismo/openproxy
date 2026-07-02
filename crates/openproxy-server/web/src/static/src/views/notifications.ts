@@ -99,6 +99,57 @@ const KIND_ICON: Record<NotificationKind, string> = {
 };
 
 /**
+ * Per-kind CSS color variable for the card's left border accent and
+ * background tint. This gives each notification type an intuitive
+ * color at a glance:
+ *
+ *  - `model_new`              green   — new model available
+ *  - `model_gone`             red     — model removed
+ *  - `model_auto_activated`   blue    — model auto-enabled
+ *  - `system`                 gray    — system info (overridden per-code below)
+ */
+const KIND_COLOR_VAR: Record<NotificationKind, string> = {
+  model_new: "var(--color-success, #22c55e)",
+  model_gone: "var(--color-error, #ef4444)",
+  model_auto_activated: "var(--color-info, #3b82f6)",
+  system: "var(--color-text-muted, #6b7280)",
+};
+
+/**
+ * Per-code CSS color variable for system notification cards.
+ * Overrides the kind-level color for system notifications based
+ * on the specific code:
+ *
+ *  - `discovery_failed`            warn   (orange) — transient upstream issue
+ *  - `account_key_decrypt_failed`  error  (red)    — local config broken
+ *  - `circuit_open`                error  (red)    — routing dehydrated
+ *  - `oauth_expired`               warn   (orange) — operator action needed
+ *  - `account_invalid`             error  (red)    — upstream rejected creds
+ *  - `quota_low`                   warn   (orange) — approaching limit
+ */
+const SYSTEM_CODE_CARD_COLOR: Record<string, string> = {
+  discovery_failed: "var(--color-warn, #f59e0b)",
+  account_key_decrypt_failed: "var(--color-error, #ef4444)",
+  circuit_open: "var(--color-error, #ef4444)",
+  oauth_expired: "var(--color-warn, #f59e0b)",
+  account_invalid: "var(--color-error, #ef4444)",
+  quota_low: "var(--color-warn, #f59e0b)",
+};
+
+/** Resolve the card accent color for a notification row.
+ *  For system rows, dispatches on `payload.code`; for everything
+ *  else, uses the per-kind color. */
+function notificationCardColor(r: NotificationRow): string {
+  if (r.kind === "system") {
+    const code: string = payloadString(r.payload, "code");
+    if (code && SYSTEM_CODE_CARD_COLOR[code]) {
+      return SYSTEM_CODE_CARD_COLOR[code];
+    }
+  }
+  return KIND_COLOR_VAR[r.kind] ?? "var(--color-text-muted, #6b7280)";
+}
+
+/**
  * Per-code icon glyph for `system` notifications. Falls back to
  * `KIND_ICON.system` (`ℹ`) for unknown codes — the same generic info
  * glyph the pre-G2 tray used for every system row.
@@ -941,20 +992,17 @@ async function onDismiss(r: NotificationRow): Promise<void> {
 function renderCard(r: NotificationRow): TemplateResult {
   const icon: string = notificationIcon(r);
   const iconColorVar: string | null = notificationIconColorVar(r);
+  const cardColor: string = notificationCardColor(r);
   const body: string = notificationBody(r);
   const ago: string = formatRelativeAgo(r.created_at);
   const unread: boolean = isUnread(r);
   const draggable: boolean = DRAGGABLE_KINDS.has(r.kind) && !!payloadModelId(r) && !!payloadProviderId(r);
   const showAddToCombo: boolean = DRAGGABLE_KINDS.has(r.kind);
   const cardClasses: string = "notification-card" + (unread ? " unread" : "") + (draggable ? " draggable" : "");
-  // Per-code icon color override (system notifications only). The
-  // CSS rule `.notification-card-icon[data-color-var="..."]` reads
-  // the variable name from the data attribute and applies it via
-  // `style.setProperty('--icon-color', ...)`. Using a data attribute
-  // (rather than a per-code class) keeps the CSS O(1) — we don't
-  // need a new rule for every code the server invents; we just need
-  // an entry in `SYSTEM_CODE_COLOR_VAR`.
-  const iconStyle: string = iconColorVar ? `--icon-color: ${iconColorVar};` : "";
+  // Card accent color: left border + icon color + faint background tint.
+  // Set as CSS custom property so the stylesheet can use it for border,
+  // background, and icon color via a single inline style.
+  const cardStyle: string = `--card-accent: ${cardColor};${iconColorVar ? ` --icon-color: ${iconColorVar};` : ""}`;
   // Drag handlers — only attached when `draggable` is true. lit-html
   // happily accepts `null` for an event handler and skips it.
   const dragStartHandler: ((e: DragEvent) => void) | null = draggable
@@ -996,11 +1044,12 @@ function renderCard(r: NotificationRow): TemplateResult {
       }
     : null;
   return html`<div class=${cardClasses} data-id=${String(r.id)}
+      style=${cardStyle}
       draggable=${draggable ? "true" : "false"}
       @dragstart=${dragStartHandler}
       @dragend=${dragEndHandler}
     >
-    <div class="notification-card-icon" style=${iconStyle} aria-hidden="true">${icon}</div>
+    <div class="notification-card-icon" style=${cardStyle} aria-hidden="true">${icon}</div>
     <div class="notification-card-body">
       <div class="notification-card-text">${body}</div>
       <div class="notification-card-meta">

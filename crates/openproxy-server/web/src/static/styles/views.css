@@ -1376,11 +1376,19 @@ abbr {
   background: var(--color-surface);
   border: var(--border-w) var(--border-style) var(--color-border);
   border-left-width: 3px;
-  border-left-color: var(--color-border);
+  border-left-color: var(--card-accent, var(--color-border));
+  /* Faint background tint from the accent color — gives each
+   * notification type an intuitive color at a glance without
+   * being overwhelming. Uses color-mix for a very subtle tint. */
+  background-image: linear-gradient(
+    90deg,
+    color-mix(in srgb, var(--card-accent, transparent) 8%, transparent) 0%,
+    transparent 40%
+  );
   transition: background var(--t-fast), border-color var(--t-fast);
 }
 .notification-card.unread {
-  border-left-color: var(--color-primary);
+  border-left-color: var(--card-accent, var(--color-primary));
   background: var(--color-primary-soft);
 }
 .notification-card.draggable {
@@ -1390,12 +1398,13 @@ abbr {
   cursor: grabbing;
 }
 .notification-card.draggable:hover {
-  border-color: var(--color-primary);
+  border-color: var(--card-accent, var(--color-primary));
 }
 .notification-card-icon {
   font-size: 1.4rem;
   line-height: 1;
   text-align: center;
+  color: var(--card-accent, var(--color-text-muted));
   /* `--icon-color` is set inline (via `style="--icon-color: var(--color-warn);"`)
    * by `renderCard` for `system` notifications whose `payload.code`
    * has a per-code color override (see `SYSTEM_CODE_COLOR_VAR` in
@@ -1431,6 +1440,8 @@ abbr {
   text-transform: uppercase;
   letter-spacing: 0.04em;
   font-family: var(--font-mono);
+  color: var(--card-accent, var(--color-text-muted));
+  font-weight: 600;
 }
 .notification-card-ago {
   font-family: var(--font-mono);
