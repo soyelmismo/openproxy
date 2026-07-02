@@ -15,7 +15,7 @@
 import { state } from "../state/index.js";
 import { api } from "../state/api.js";
 import { html, render, type TemplateResult } from "lit-html";
-import type { Account, Model, ComboSummary } from "../lib/types/api.js";
+import type { Account, Model, ComboSummary, ComboTargetWithModel } from "../lib/types/api.js";
 import { requestUpdate } from "../state/reactive.js";
 import { showToast } from "../components/toast.js";
 
@@ -166,6 +166,19 @@ let dragFromHandle = false;
 // `<td colspan>` matches the actual layout (which changes when the
 // weighted mode adds a Weight column).
 let dropPlaceholderColspan = 8;
+
+// ---- Add-target modal: existing-targets cache ----
+//
+// The combo detail view stores its targets in a module-private
+// `detailTargets` array in `views/combos.ts`, so this handler file
+// can't read them directly. To filter models that are already in the
+// combo out of the "Add target" search results, we fetch the combo's
+// targets once in `showAddTarget` and stash their `model_row_id`
+// values here. `buildGlobalSearchGroups` then skips any model whose
+// `row_id` is in this set. Sub-combo targets have `model_row_id =
+// null` and are intentionally not excluded — they don't conflict
+// with adding the same upstream model directly.
+let existingTargetModelRowIds: Set<number> = new Set();
 
 function removePlaceholder(): void {
   if (dropPlaceholder && dropPlaceholder.parentNode) {
@@ -424,6 +437,22 @@ export async function showAddTarget(comboId: number): Promise<void> {
   state.accounts = await api("/accounts") as Account[];
   const sResp = await api(`/combos/${comboId}/targets/valid-sub-combos`).catch(() => [] as ComboSummary[]) as ComboSummary[];
   const validSubCombos: ComboSummary[] = sResp;
+  // Fetch the combo's current targets so `buildGlobalSearchGroups`
+  // can filter out models that are already in the combo. We stash
+  // their `model_row_id` values in `existingTargetModelRowIds`; the
+  // filter itself runs in `buildGlobalSearchGroups` so both the
+  // initial render and every keystroke search respect it. Failures
+  // here are non-fatal — an empty set just means no filtering.
+  try {
+    const existing: unknown = await api(`/combos/${comboId}/targets`);
+    existingTargetModelRowIds = new Set(
+      (Array.isArray(existing) ? (existing as ComboTargetWithModel[]) : [])
+        .map((t) => t.model_row_id)
+        .filter((id): id is number => typeof id === "number"),
+    );
+  } catch {
+    existingTargetModelRowIds = new Set();
+  }
   const wrapper = document.createElement("div");
   ensureModalRoot().appendChild(wrapper);
   render(addTargetTemplate(comboId, validSubCombos, wrapper), wrapper);
@@ -581,11 +610,18 @@ function globalModelSearchTemplate(groups: Map<string, ModelWithFallbacks[]>): T
 // AND-combined: a model matches only if every token appears as a
 // substring somewhere in those three fields. Inactive models are
 // excluded (they can't be selected as a combo target anyway).
+//
+// Models already in the combo (their `row_id` is in
+// `existingTargetModelRowIds`, populated by `showAddTarget`) are
+// also excluded — there's no point offering the user a model they
+// just added, and adding the same `model_row_id` twice would create
+// a duplicate target row in the combo.
 function buildGlobalSearchGroups(query: string): Map<string, ModelWithFallbacks[]> {
   const q = query.trim().toLowerCase();
   const groups = new Map<string, ModelWithFallbacks[]>();
   for (const m of (state.models || [])) {
     if (!m.active) continue;
+    if (m.row_id != null && existingTargetModelRowIds.has(m.row_id)) continue;
     if (q) {
       const haystack = `${m.model_id || ""} ${m.display_name || ""} ${m.provider_id || ""}`.toLowerCase();
       const tokens = q.split(/\s+/).filter(Boolean);
@@ -805,11 +841,12 @@ export async function addTarget(comboId: number, e: Event, wrapper?: HTMLElement
   // Re-fetch the combo's targets so the table reflects the new entries.
   // The combo detail view reads from a local `detailTargets` array that
   // is NOT in the global `state` — calling `requestUpdate()` alone won't
-  // refresh it. We need to navigate to re-mount the view, which re-fetches.
-  // The cleanest way: set the hash to the same combo detail URL, which
-  // triggers a re-mount via the router.
+  // refresh it. We use forceRerenderCurrentView() which calls navigate()
+  // directly, bypassing the hashchange requirement (setting location.hash
+  // to the same URL is a no-op — no hashchange fires).
   if (added > 0 && comboId) {
-    setTimeout(() => { location.hash = `#/combos/${comboId}`; }, 50);
+    const { forceRerenderCurrentView } = await import("../state/router.js");
+    forceRerenderCurrentView();
   }
 }
 
@@ -819,7 +856,8 @@ export async function deleteTarget(comboId: number, targetId: number): Promise<v
     await api(`/combos/${comboId}/targets/${targetId}`, { method: "DELETE" });
     showToast("Target deleted.", "success");
     // Re-mount the combo detail view to refresh the targets table.
-    setTimeout(() => { location.hash = `#/combos/${comboId}`; }, 50);
+    const { forceRerenderCurrentView } = await import("../state/router.js");
+    forceRerenderCurrentView();
   } catch (e: unknown) {
     showToast("Error: " + (e instanceof Error ? e.message : String(e)), "error");
   }

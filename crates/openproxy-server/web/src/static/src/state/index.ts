@@ -52,11 +52,43 @@ export type LogsStatus = "connected" | "connecting" | "reconnecting" | "disconne
  *  the maps narrowly typed where we know the shape. */
 export type LogsRequestId = string;
 
+/** A single row in the `POST /combos/:id/test-all` response. The
+ *  shape is intentionally compatible with the per-row result
+ *  returned by `POST /models/:id/test` (same `status` /
+ *  `elapsed_ms` / `error_msg` fields) so the UI can render both
+ *  through the same `statusPillClass()` helper. `target_id` is the
+ *  combo-target row id (the dashboard uses it to match a result
+ *  back to the row in the targets table); `row_id` is the upstream
+ *  model row id and is informational only. */
+export interface ComboTestResult {
+  target_id: number;
+  /** Set (and only set) for sub-combo targets — the fan-out skips them. */
+  sub_combo_id?: number | null;
+  sub_combo_name?: string | null;
+  provider_id: string;
+  account_id?: number | null;
+  model_row_id?: number | null;
+  model_id?: string;
+  model_display_name?: string | null;
+  /** HTTP status from the upstream probe (0 = network failure / skipped). */
+  status: number;
+  /** Round-trip wall clock in ms; `null` when skipped or never sent. */
+  elapsed_ms: number | null;
+  /** Error message from the upstream probe; `null` on success. */
+  error_msg: string | null;
+  /** `true` when the target was skipped (sub-combo, in cooldown, etc.). */
+  skipped: boolean;
+  /** Upstream model row id. Informational only — same as `model_row_id`. */
+  row_id?: number;
+}
+
 /** The latest test-all results per combo id. Populated by
- *  handlers/* (out of G3 scope) when the user clicks Test all.
- *  The shape is the same as `state.logs.testResults` upstream —
- *  we type it as `unknown` here and let the consumers narrow. */
-export type ComboTestResults = Record<number, unknown>;
+ *  `testAllTargets` (combo-handlers.ts) when the user clicks
+ *  "Test all" on the combos detail view. The dashboard reads this
+ *  when rendering the "Last test" column; we don't refetch on
+ *  bg-poll so the values only change when the user re-runs the
+ *  test. */
+export type ComboTestResults = Record<number, ComboTestResult[]>;
 
 /** Per-provider UI state for the detail view: search box, filter
  *  tab (all/active/inactive). Keyed by provider id so navigating

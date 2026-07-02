@@ -9,12 +9,13 @@
 //   - no full innerHTML rebuild — only changed attributes/text are patched
 
 import { html, type TemplateResult } from 'lit-html';
-import { state } from "../state/index.js";
+import { state, type ComboTestResult } from "../state/index.js";
 import { api } from "../state/api.js";
 import { mountView, requestUpdate } from "../state/reactive.js";
 import { showToast } from "../components/toast.js";
-import { showCreateCombo } from "../handlers/combo-handlers.js";
+import { showCreateCombo, testAllTargets } from "../handlers/combo-handlers.js";
 import { showAddTarget } from "../handlers/combo-target-handlers.js";
+import { statusPillClass } from "../lib/constants.js";
 import type {
   Combo,
   ComboTargetWithModel,
@@ -168,22 +169,83 @@ async function onResetCooldown(targetId: number): Promise<void> {
   } catch (err: unknown) { showToast("Error: " + (err instanceof Error ? err.message : String(err)), "error"); }
 }
 
-async function onTestAllTargets(): Promise<void> {
+// `onTestAllTargets` is now a thin shim into `testAllTargets` from
+// combo-handlers.ts. That handler:
+//   1. Disables the button and sets text to "🧪 Testing..."
+//   2. Calls `POST /combos/:id/test-all`
+//   3. Stores results in `state.comboTestResults[comboId]`
+//   4. Re-enables the button
+//   5. Calls `requestUpdate()`
+//
+// We keep this wrapper so the lit-html `@click=${onTestAllTargets}` site
+// (which fires with no arg) doesn't need to know about the `(comboId, e)`
+// signature. The previous implementation here discarded the results and
+// only showed a count toast — there was no "Last test" column, so the
+// operator couldn't see per-target outcomes without opening devtools.
+async function onTestAllTargets(e: Event): Promise<void> {
   if (!detailComboId) return;
-  try {
-    const results = await api(`/combos/${detailComboId}/test-all`, { method: "POST" });
-    showToast(`Tested ${Array.isArray(results) ? results.length : 0} target(s)`, "info");
-    requestUpdate();
-  } catch (err: unknown) { showToast("Error: " + (err instanceof Error ? err.message : String(err)), "error"); }
+  await testAllTargets(detailComboId, e);
 }
 
-async function onTestTarget(_targetId: number, modelRowId: number | null): Promise<void> {
+// Briefly paint a button a colour to confirm a click landed. Mirrors the
+// helper in views/providers.ts — inlined here so combos.ts doesn't have
+// to reach into the providers view (which would create a circular
+// coupling between two top-level views).
+function flashButton(btn: HTMLButtonElement | null, text: string, color: string): void {
+  if (!btn) return;
+  btn.textContent = text;
+  btn.style.background = color;
+  setTimeout(() => { btn.style.background = ""; }, 1500);
+}
+
+// Per-row test button. Mirrors `onTestModel` in views/providers.ts:
+// disable + "Testing..." text while in flight, then a ✓/✗ flash on
+// completion. The previous implementation here only showed a toast,
+// which gave no visible feedback on the row itself.
+async function onTestTarget(targetId: number, modelRowId: number | null, e: Event): Promise<void> {
+  const btn = (e && e.target instanceof HTMLButtonElement ? e.target : null) as HTMLButtonElement | null;
   if (!modelRowId) { showToast("No model to test for this target", "warning"); return; }
+  const oldText = btn ? btn.textContent : null;
+  if (btn) { btn.disabled = true; btn.textContent = "Testing..."; }
   try {
-    const result = await api(`/models/${modelRowId}/test`, { method: "POST" }) as { status: number };
-    showToast(`Test: ${result.status} ${result.status >= 200 && result.status < 300 ? "✓" : "✗"}`,
-      result.status >= 200 && result.status < 300 ? "info" : "error");
-  } catch (err: unknown) { showToast("Test failed: " + (err instanceof Error ? err.message : String(err)), "error"); }
+    const result = await api(`/models/${modelRowId}/test`, { method: "POST" }) as { status: number; elapsed_ms?: number };
+    if (result.status >= 200 && result.status < 300) {
+      if (btn) flashButton(btn, "✓", "#a6e3a1");
+    } else if (result.status === 0) {
+      if (btn) flashButton(btn, "✗ net", "#f38ba8");
+    } else {
+      if (btn) flashButton(btn, "✗ " + result.status, "#f38ba8");
+    }
+    // Also drop the result into the combo test-results cache so the
+    // "Last test" column updates for this row immediately. We synthesise
+    // a single-element array; the next full Test-all run will overwrite
+    // it with the complete picture.
+    if (detailComboId) {
+      const prev = state.comboTestResults[detailComboId] || [];
+      const next: ComboTestResult[] = prev.filter((r) => r.target_id !== targetId);
+      next.push({
+        target_id: targetId,
+        provider_id: "",
+        model_row_id: modelRowId,
+        status: result.status,
+        elapsed_ms: result.elapsed_ms ?? null,
+        error_msg: null,
+        skipped: false,
+      });
+      state.comboTestResults[detailComboId] = next;
+    }
+    requestUpdate();
+  } catch (err: unknown) {
+    if (btn) flashButton(btn, "✗", "#f38ba8");
+    showToast("Test failed: " + (err instanceof Error ? err.message : String(err)), "error");
+  } finally {
+    if (btn) {
+      setTimeout(() => {
+        btn.disabled = false;
+        btn.textContent = oldText || "🧪";
+      }, 1500);
+    }
+  }
 }
 
 // ---- Templates ----
@@ -237,6 +299,33 @@ function renderTargetRow(t: ComboTargetWithModel, showWeight: boolean): Template
   const accountCell = isSub ? html`<em>n/a</em>` : (t.account_id ? html`#${t.account_id}` : html`<em>rotate</em>`);
   const contextCell = isSub ? html`<em>sub-combo</em>` : (t.context_length != null ? html`<span title=${String(t.context_length)}>${formatTokens(t.context_length)}</span>` : html`—`);
   const weightCell = showWeight ? (isSub ? html`<td><em>n/a</em></td>` : html`<td><input type="number" min="1" .value=${String(t.weight ?? 1)} @change=${(e: Event) => onUpdateTargetWeight(t.id, e)} @input=${(e: Event) => onUpdateTargetWeight(t.id, e)} class="cw-input weight-input" title=${PARAM_TOOLTIPS.weight}></td>`) : html``;
+  // Look up the latest test-all result for this target row. The
+  // cache is keyed by combo id (see `testAllTargets` in
+  // combo-handlers.ts); we fall back to `—` when the user hasn't
+  // run a test yet, or when this row was added after the last run.
+  // For sub-combo rows the backend always returns `skipped: true`
+  // with `status: 0`, so we surface that as a muted "skipped" pill
+  // rather than a red "err" pill (status 0 would otherwise map
+  // to `lost` via `statusPillClass`).
+  const testResults: ComboTestResult[] | undefined = detailComboId != null
+    ? state.comboTestResults[detailComboId]
+    : undefined;
+  const tr = testResults?.find((r) => r.target_id === t.id);
+  let lastTestCell: TemplateResult;
+  if (!tr) {
+    lastTestCell = html`<span class="muted">—</span>`;
+  } else if (tr.skipped) {
+    // Skipped rows (sub-combo, in-cooldown) get a neutral pill —
+    // `status: 0` would otherwise render as `lost` (red) which is
+    // misleading; the row wasn't tested, not failed.
+    const reason = tr.error_msg ?? "skipped";
+    lastTestCell = html`<span class="status-pill off" title=${reason}>skipped</span> <small>${reason}</small>`;
+  } else {
+    const cls = statusPillClass(tr.status);
+    const ms = tr.elapsed_ms != null ? html` <small>${tr.elapsed_ms}ms</small>` : html``;
+    const err = tr.error_msg ? html` <small title=${tr.error_msg}>${tr.error_msg}</small>` : html``;
+    lastTestCell = html`<span class=${"status-pill " + cls}>${String(tr.status)}</span>${ms}${err}`;
+  }
   return html`<tr draggable="true" data-drag-id=${String(t.id)}
     @dragstart=${(e: DragEvent) => { e.dataTransfer?.setData("text/plain", String(t.id)); (e.target as HTMLElement).classList.add("dragging"); }}
     @dragend=${(e: DragEvent) => { (e.target as HTMLElement).classList.remove("dragging"); }}
@@ -261,8 +350,8 @@ function renderTargetRow(t: ComboTargetWithModel, showWeight: boolean): Template
       } catch (err: unknown) { showToast("Reorder failed: " + (err instanceof Error ? err.message : String(err)), "error"); }
     }}
   >
-    <td class="drag-handle" title="Drag to reorder">⠿</td><td>${t.priority_order}</td><td>${providerCell}</td><td>${accountCell}</td><td>${modelCell}</td><td>${contextCell}</td>${weightCell}
-    <td>${!isSub ? html`<button class="small" title="Test this model" @click=${() => onTestTarget(t.id, t.model_row_id)}>🧪</button>` : html``}<button class="small" @click=${() => onChangePriority(t.id, -1)}>↑</button><button class="small" @click=${() => onChangePriority(t.id, 1)}>↓</button>${t.in_cooldown && !isSub ? html`<button class="small" title="Clear cooldown" @click=${() => onResetCooldown(t.id)}>🔄</button>` : html``}<button class="small danger" @click=${() => onDeleteTarget(t.id)}>×</button></td>
+    <td class="drag-handle" title="Drag to reorder">⠿</td><td>${t.priority_order}</td><td>${providerCell}</td><td>${accountCell}</td><td>${modelCell}</td><td>${contextCell}</td>${weightCell}<td class="last-test-cell">${lastTestCell}</td>
+    <td>${!isSub ? html`<button class="small" title="Test this model" @click=${(e: Event) => onTestTarget(t.id, t.model_row_id, e)}>🧪</button>` : html``}<button class="small" @click=${() => onChangePriority(t.id, -1)}>↑</button><button class="small" @click=${() => onChangePriority(t.id, 1)}>↓</button>${t.in_cooldown && !isSub ? html`<button class="small" title="Clear cooldown" @click=${() => onResetCooldown(t.id)}>🔄</button>` : html``}<button class="small danger" @click=${() => onDeleteTarget(t.id)}>×</button></td>
   </tr>`;
 }
 
@@ -293,7 +382,7 @@ function renderComboDetail(): TemplateResult {
     <section class="detail-section"><div class="section-header"><h3>Targets (${targets.length})</h3>
       <div class="actions"><button @click=${onTestAllTargets}>🧪 Test all</button><button class="primary" @click=${() => showAddTarget(combo.id)}>+ Add target</button></div></div>
       ${targets.length === 0 ? html`<p class="empty">No targets. Add a target to start routing.</p>` : html`<table>
-        <thead><tr><th></th><th>#</th><th>Provider</th><th>Account</th><th>Model</th><th>Context</th>${weightTh}<th>Actions</th></tr></thead>
+        <thead><tr><th></th><th>#</th><th>Provider</th><th>Account</th><th>Model</th><th>Context</th>${weightTh}<th>Last test</th><th>Actions</th></tr></thead>
         <tbody>${targets.map((t) => renderTargetRow(t, showWeight))}</tbody></table>`}
     </section>`;
 }

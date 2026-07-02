@@ -804,6 +804,12 @@ async function onDropAppend(combo: Combo, payload: DragPayload): Promise<void> {
     );
     void markAsRead(payload.notification_id);
     closeOverlay();
+    // Navigate to the combo detail view so the user sees the
+    // refreshed targets list. The user is on `#/notifications` when
+    // the DnD fires, so the hash actually changes from
+    // `#/notifications` → `#/combos/<id>` — `hashchange` fires and
+    // the combo-detail view re-mounts, re-fetching its targets.
+    location.hash = `#/combos/${combo.id}`;
   } catch (e: unknown) {
     showToast(
       t("notifications.dnd.failed", {
@@ -922,6 +928,12 @@ async function onDropAtPosition(
     );
     void markAsRead(payload.notification_id);
     closeOverlay();
+    // Navigate to the combo detail view so the user sees the
+    // refreshed targets list. See `onDropAppend` for the rationale
+    // (the hash actually changes from `#/notifications` →
+    // `#/combos/<id>`, so `hashchange` fires and the combo-detail
+    // view re-mounts and re-fetches).
+    location.hash = `#/combos/${combo.id}`;
   } catch (e: unknown) {
     showToast(
       t("notifications.dnd.failed", {
