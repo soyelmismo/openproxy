@@ -64,6 +64,8 @@ pub struct UsageInput {
     pub prompt_tokens_estimated: bool,
     /// True if completion_tokens were estimated (upstream didn't report usage).
     pub completion_tokens_estimated: bool,
+    /// The endpoint kind (chat, audio, image, etc.). Defaults to Chat.
+    pub endpoint_kind: crate::endpoint::EndpointKind,
 }
 
 /// Computes (cost_usd, tokens_per_sec) from pricing + tokens + timing.
@@ -163,11 +165,13 @@ pub fn record(conn: &Connection, input: &UsageInput) -> Result<UsageId> {
             request_body_json, response_body_json, request_headers, \
             response_headers, error_message, is_streaming, stream_complete, \
             stop_reason, compression_savings_pct, compression_techniques, \
-            client_response, prompt_tokens_estimated, completion_tokens_estimated\
+            client_response, prompt_tokens_estimated, completion_tokens_estimated, \
+            endpoint_kind\
          ) VALUES (\
             ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, \
             ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, \
-            ?21, ?22, ?23, datetime('now'), ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31, ?32, ?33, ?34, ?35, ?36\
+            ?21, ?22, ?23, datetime('now'), ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31, ?32, ?33, ?34, ?35, ?36, \
+            ?37\
          )",
         params![
             request_id,
@@ -228,6 +232,7 @@ pub fn record(conn: &Connection, input: &UsageInput) -> Result<UsageId> {
             input.client_response as i64,
             input.prompt_tokens_estimated as i64,
             input.completion_tokens_estimated as i64,
+            input.endpoint_kind.as_str(),
         ],
     )
     .map_err(|e| CoreError::Database {
@@ -271,6 +276,7 @@ pub fn record(conn: &Connection, input: &UsageInput) -> Result<UsageId> {
         client_response: input.client_response,
         prompt_tokens_estimated: input.prompt_tokens_estimated,
         completion_tokens_estimated: input.completion_tokens_estimated,
+        endpoint_kind: input.endpoint_kind,
     };
     crate::usage::publish_usage_row(row);
 
@@ -316,6 +322,7 @@ mod tests {
             client_response: false,
             prompt_tokens_estimated: false,
             completion_tokens_estimated: false,
+            endpoint_kind: crate::endpoint::EndpointKind::Chat,
         }
     }
 

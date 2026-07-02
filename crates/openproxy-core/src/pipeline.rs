@@ -467,6 +467,10 @@ pub struct PipelineRequest {
     /// `record_attempt_raw_with_tokens`: `"cancelled"` instead of
     /// `"failed"`, and `race_lost: true` in the usage row.
     pub race_cancelled: bool,
+    /// The endpoint kind for this request. Defaults to Chat.
+    /// Used by the pipeline to select the correct dispatch path
+    /// and by cost/pricing to select the correct billing model.
+    pub endpoint_kind: crate::endpoint::EndpointKind,
 }
 
 /// Outcome of a single `Pipeline::run()` call.
@@ -1563,6 +1567,7 @@ impl Pipeline {
             client_response: true,
             prompt_tokens_estimated: false,
             completion_tokens_estimated: false,
+            endpoint_kind: crate::endpoint::EndpointKind::Chat,
         };
         let conn = self.conn.lock();
         let _ = crate::cost::record(&conn, &input);
@@ -1963,6 +1968,7 @@ impl Pipeline {
             compression_savings_pct: None,
             compression_techniques: None,
             timestamp: String::new(),
+            endpoint_kind: crate::endpoint::EndpointKind::Chat,
         });
 
         // 0. Check if this provider uses a custom executor.
@@ -2656,6 +2662,7 @@ impl Pipeline {
                 .as_ref()
                 .and_then(|s| s.techniques_csv()),
             timestamp: String::new(),
+            endpoint_kind: crate::endpoint::EndpointKind::Chat,
         });
 
         let result = self
@@ -3042,6 +3049,7 @@ impl Pipeline {
                 compression_savings_pct: snapshot.as_ref().and_then(|s| s.savings_pct_opt()),
                 compression_techniques: snapshot.as_ref().and_then(|s| s.techniques_csv()),
                 timestamp: String::new(),
+                endpoint_kind: crate::endpoint::EndpointKind::Chat,
             });
         };
 
@@ -3354,6 +3362,7 @@ impl Pipeline {
             compression_savings_pct: None,
             compression_techniques: None,
             timestamp: chrono::Utc::now().to_rfc3339(),
+            endpoint_kind: crate::endpoint::EndpointKind::Chat,
         });
         crate::usage::publish_stage_event(crate::usage::StageEvent {
             request_id: req.request_id.to_string(),
@@ -3372,6 +3381,7 @@ impl Pipeline {
                 .and_then(|s| s.savings_pct_opt()),
             compression_techniques: streaming_snapshot.as_ref().and_then(|s| s.techniques_csv()),
             timestamp: String::new(),
+            endpoint_kind: crate::endpoint::EndpointKind::Chat,
         });
 
         // 2xx: parse into the native wire format, then translate to
@@ -3913,6 +3923,7 @@ impl Pipeline {
             compression_savings_pct: None,
             compression_techniques: None,
             timestamp: chrono::Utc::now().to_rfc3339(),
+            endpoint_kind: crate::endpoint::EndpointKind::Chat,
         });
 
         // The first SSE chunk emits the `streaming` stage event
@@ -4286,6 +4297,7 @@ impl Pipeline {
                             .as_ref()
                             .and_then(|s| s.techniques_csv()),
                         timestamp: String::new(),
+                        endpoint_kind: crate::endpoint::EndpointKind::Chat,
                     });
                 }
 
@@ -5488,6 +5500,7 @@ impl Pipeline {
                         client_response: updated_row.client_response,
                         prompt_tokens_estimated: updated_row.prompt_tokens_estimated,
                         completion_tokens_estimated: updated_row.completion_tokens_estimated,
+                        endpoint_kind: updated_row.endpoint_kind,
                         created_at: updated_row.created_at,
                     };
                     crate::usage::publish_usage_row(recent_row);
@@ -6020,6 +6033,7 @@ impl Pipeline {
             client_response: false,
             prompt_tokens_estimated,
             completion_tokens_estimated,
+            endpoint_kind: crate::endpoint::EndpointKind::Chat,
         };
         // Publish the terminal stage event FIRST, before the
         // writer lock attempt. This ensures the dashboard always
@@ -6067,6 +6081,7 @@ impl Pipeline {
                     .and_then(|s| s.savings_pct_opt()),
                 compression_techniques: terminal_snapshot.as_ref().and_then(|s| s.techniques_csv()),
                 timestamp: String::new(),
+                endpoint_kind: crate::endpoint::EndpointKind::Chat,
             });
         }
         // H2: write the row. The row is written regardless of
@@ -6409,6 +6424,7 @@ mod tests {
             request_body_json: None,
             race_cancelled: false,
             race_cancel: None,
+            endpoint_kind: crate::endpoint::EndpointKind::Chat,
         };
         (req, _dis_tx)
     }

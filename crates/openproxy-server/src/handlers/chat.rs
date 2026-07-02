@@ -449,6 +449,7 @@ async fn run_pipeline(
         request_body_json: Some(raw_request_body),
         race_cancelled: false,
         race_cancel: None,
+        endpoint_kind: openproxy_core::endpoint::EndpointKind::Chat,
     };
 
     if openai_req.stream {
@@ -577,7 +578,7 @@ async fn run_pipeline(
 /// | key has expired                       | 401 `api key expired`. |
 /// | key lacks the `chat` scope            | 403 `api key lacks 'chat' scope`. |
 /// | key's model allowlist excludes request | 403 `model '...' not allowed for this key`. |
-fn authenticate(
+pub(crate) fn authenticate(
     state: &AppState,
     headers: &HeaderMap,
     requested_model: &str,
@@ -690,9 +691,9 @@ fn authenticate(
 
 /// Result of a successful chat authentication — the key id plus any
 /// per-key restrictions that need to be enforced after routing.
-struct AuthResult {
-    key_id: ApiKeyId,
-    allowed_combos: Option<Vec<i64>>,
+pub(crate) struct AuthResult {
+    pub(crate) key_id: ApiKeyId,
+    pub(crate) allowed_combos: Option<Vec<i64>>,
 }
 
 /// Record a single `usage` row for the `RoutingPlan::NotFound` path.
@@ -750,6 +751,7 @@ fn record_model_not_found_usage_row(
         // model_not_found: tokens are not estimated (no request was sent)
         prompt_tokens_estimated: false,
         completion_tokens_estimated: false,
+        endpoint_kind: openproxy_core::endpoint::EndpointKind::Chat,
     };
     // MEDIUM-5 fix: use try_writer_for with the hot-path timeout so
     // this write doesn't block indefinitely under admin lock contention.

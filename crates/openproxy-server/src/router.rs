@@ -1,7 +1,7 @@
 //! HTTP router.
 //!
 //! Spec §2: every public + admin endpoint is wired here, in axum 0.8
-//! syntax. Routes are grouped into nested sub-routers (`chat_routes`,
+//! syntax. Routes are grouped into nested sub-routers (`public_api_routes`,
 //! `admin_routes`, `admin_api_routes`) for readability, then merged
 //! into the root `Router`. The request-id middleware sits on the
 //! outermost layer so every response — public or admin — carries an
@@ -15,6 +15,7 @@
 //! | `GET  /v1/health`             | `health` (unauthenticated)                |
 //! | `GET  /v1/models`             | `handlers::models::list_models`           |
 //! | `POST /v1/chat/completions`   | `handlers::chat::chat_completions`        |
+//! | `POST /v1/audio/transcriptions` | `handlers::audio::transcribe` (Whisper) |
 //! | `GET  /admin`                 | SPA shell (`admin_ui::index_html`)        |
 //! | `GET  /admin/`                | SPA shell (`admin_ui::index_html`)        |
 //! | `GET  /admin/callback.html`   | OAuth callback page (`admin_ui::callback_html`) |
@@ -69,11 +70,22 @@ pub fn build_router(state: AppState) -> Router {
     // admin CRUD endpoints are short-lived and don't need
     // per-request cancel tracking, and the liveness probe would
     // pay the wrapper cost on every health check.
-    let chat_routes = Router::new()
+    let public_api_routes = Router::new()
         .route("/v1/models", get(handlers::models::list_models))
         .route(
             "/v1/chat/completions",
             post(handlers::chat::chat_completions),
+        )
+        // OpenAI-compatible Whisper endpoint. Lives in `public_api_routes`
+        // so it gets the `client_disconnect_middleware` (a client
+        // cancelling mid-upload still fires the watch, and the
+        // `DisconnectBody` wrapper on the request body cooperates with
+        // axum's `Multipart` extractor — `DisconnectBody` implements
+        // `http_body::Body` and delegates `poll_frame` to the inner
+        // body, so multipart parsing reads through it transparently).
+        .route(
+            "/v1/audio/transcriptions",
+            post(handlers::audio::transcribe),
         )
         .layer(middleware::from_fn(client_disconnect_middleware));
 
@@ -425,7 +437,7 @@ pub fn build_router(state: AppState) -> Router {
 
     Router::new()
         .route("/v1/health", get(health))
-        .merge(chat_routes)
+        .merge(public_api_routes)
         .nest("/admin", admin_routes)
         .layer(middleware::from_fn(request_id))
         // MEDIUM fix (audit finding #8): axum's default body limit is

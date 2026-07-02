@@ -140,6 +140,57 @@ pub trait ProviderAdapter: Send + Sync {
         self.build_chat_url(target_format, model)
     }
 
+    /// Build the URL for audio transcription (Whisper). Only
+    /// OpenAI-compatible providers that mirror OpenAI's
+    /// `/v1/audio/transcriptions` endpoint support this.
+    ///
+    /// Default: `{base_url}/audio/transcriptions`.
+    ///
+    /// The handler does NOT route through the chat `Pipeline` (which
+    /// is deeply coupled to JSON/SSE/tokens); it builds its own
+    /// upstream call and uses this URL. Providers that don't expose a
+    /// Whisper endpoint can override this to return a clearly-marked
+    /// sentinel URL — the upstream will 404 and the error will
+    /// surface to the client.
+    fn build_transcription_url(&self) -> String {
+        format!("{}/audio/transcriptions", self.config().base_url)
+    }
+
+    /// Build the URL for embeddings. Default: `{base_url}/embeddings`.
+    ///
+    /// The handler does NOT route through the chat `Pipeline`; it builds
+    /// its own upstream call and uses this URL. Providers that don't
+    /// expose an embeddings endpoint can override this to return a
+    /// clearly-marked sentinel URL — the upstream will 404 and the
+    /// error will surface to the client.
+    fn build_embeddings_url(&self) -> String {
+        format!("{}/embeddings", self.config().base_url)
+    }
+
+    /// Build the URL for image generation. Default:
+    /// `{base_url}/images/generations`.
+    ///
+    /// The handler does NOT route through the chat `Pipeline`; it builds
+    /// its own upstream call and uses this URL. Providers that don't
+    /// expose an image endpoint can override this to return a
+    /// clearly-marked sentinel URL — the upstream will 404 and the
+    /// error will surface to the client.
+    fn build_image_url(&self) -> String {
+        format!("{}/images/generations", self.config().base_url)
+    }
+
+    /// Build the URL for video generation. Default:
+    /// `{base_url}/video/generations`.
+    ///
+    /// The handler does NOT route through the chat `Pipeline`; it builds
+    /// its own upstream call and uses this URL. Providers that don't
+    /// expose a video endpoint can override this to return a
+    /// clearly-marked sentinel URL — the upstream will 404 and the
+    /// error will surface to the client.
+    fn build_video_url(&self) -> String {
+        format!("{}/video/generations", self.config().base_url)
+    }
+
     /// Build the auth header pair `(header_name, header_value)` for the given
     /// API key.
     fn build_auth_header(&self, api_key: &str) -> (String, String);

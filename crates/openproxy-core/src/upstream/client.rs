@@ -76,6 +76,38 @@ impl UpstreamRequest {
             is_streaming: true,
         }
     }
+
+    /// Create a POST request with a custom Content-Type (for
+    /// `multipart/form-data`). The caller must build the multipart
+    /// body themselves and pass a `Content-Type` value that includes
+    /// the boundary (e.g.
+    /// `multipart/form-data; boundary=----WebKitFormBoundary...`).
+    ///
+    /// Used by the audio-transcription handler to forward the
+    /// pre-built multipart body to the upstream's
+    /// `/audio/transcriptions` endpoint. The hyper-based
+    /// `UpstreamClient` does not need to know about the multipart
+    /// shape — it just ships the bytes through with the supplied
+    /// Content-Type.
+    pub fn post_multipart(url: impl Into<String>, content_type: String, body: Bytes) -> Self {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            http::header::CONTENT_TYPE,
+            http::HeaderValue::from_str(&content_type)
+                .unwrap_or_else(|_| http::HeaderValue::from_static("multipart/form-data")),
+        );
+        Self {
+            method: Method::POST,
+            url: url.into(),
+            headers,
+            body: Some(body),
+            // Non-streaming: the upstream builds the full transcription
+            // server-side before sending the response. Disabling the
+            // body-chunk gap timeout keeps the (potentially long)
+            // transcription from being killed by an idle-chunk watchdog.
+            is_streaming: false,
+        }
+    }
 }
 
 // -----------------------------------------------------------------------

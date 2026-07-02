@@ -9,10 +9,33 @@ use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+/// Pricing for a model. The `kind` field determines how the rates
+/// are applied (per-token for chat/embeddings, per-second for audio,
+/// per-image for image generation).
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Price {
     pub input_per_1m: f64,
     pub output_per_1m: f64,
+    /// How to interpret the rates. Defaults to "chat" (per-token).
+    /// "audio" = input_per_1m is per-second of audio (×1e6 for consistency)
+    /// "image" = input_per_1m is per-image
+    /// "embedding" = same as chat but output_per_1m = 0
+    #[serde(default = "default_pricing_kind")]
+    pub kind: String,
+}
+
+fn default_pricing_kind() -> String {
+    "chat".to_string()
+}
+
+impl Default for Price {
+    fn default() -> Self {
+        Self {
+            input_per_1m: 0.0,
+            output_per_1m: 0.0,
+            kind: "chat".to_string(),
+        }
+    }
 }
 
 static PRICING_TABLE: Lazy<HashMap<(&'static str, &'static str), Price>> = Lazy::new(|| {
@@ -24,6 +47,7 @@ static PRICING_TABLE: Lazy<HashMap<(&'static str, &'static str), Price>> = Lazy:
         Price {
             input_per_1m: 3.0,
             output_per_1m: 15.0,
+            ..Default::default()
         },
     );
     table.insert(
@@ -31,6 +55,7 @@ static PRICING_TABLE: Lazy<HashMap<(&'static str, &'static str), Price>> = Lazy:
         Price {
             input_per_1m: 3.0,
             output_per_1m: 15.0,
+            ..Default::default()
         },
     );
     table.insert(
@@ -38,6 +63,7 @@ static PRICING_TABLE: Lazy<HashMap<(&'static str, &'static str), Price>> = Lazy:
         Price {
             input_per_1m: 0.25,
             output_per_1m: 1.25,
+            ..Default::default()
         },
     );
     table.insert(
@@ -45,6 +71,7 @@ static PRICING_TABLE: Lazy<HashMap<(&'static str, &'static str), Price>> = Lazy:
         Price {
             input_per_1m: 2.5,
             output_per_1m: 10.0,
+            ..Default::default()
         },
     );
     table.insert(
@@ -52,6 +79,7 @@ static PRICING_TABLE: Lazy<HashMap<(&'static str, &'static str), Price>> = Lazy:
         Price {
             input_per_1m: 0.15,
             output_per_1m: 0.6,
+            ..Default::default()
         },
     );
     table.insert(
@@ -59,6 +87,7 @@ static PRICING_TABLE: Lazy<HashMap<(&'static str, &'static str), Price>> = Lazy:
         Price {
             input_per_1m: 2.0,
             output_per_1m: 8.0,
+            ..Default::default()
         },
     );
     table.insert(
@@ -66,6 +95,7 @@ static PRICING_TABLE: Lazy<HashMap<(&'static str, &'static str), Price>> = Lazy:
         Price {
             input_per_1m: 0.4,
             output_per_1m: 1.6,
+            ..Default::default()
         },
     );
     table.insert(
@@ -73,6 +103,7 @@ static PRICING_TABLE: Lazy<HashMap<(&'static str, &'static str), Price>> = Lazy:
         Price {
             input_per_1m: 1.25,
             output_per_1m: 10.0,
+            ..Default::default()
         },
     );
     table.insert(
@@ -80,6 +111,7 @@ static PRICING_TABLE: Lazy<HashMap<(&'static str, &'static str), Price>> = Lazy:
         Price {
             input_per_1m: 0.075,
             output_per_1m: 0.30,
+            ..Default::default()
         },
     );
     table.insert(
@@ -87,6 +119,7 @@ static PRICING_TABLE: Lazy<HashMap<(&'static str, &'static str), Price>> = Lazy:
         Price {
             input_per_1m: 0.59,
             output_per_1m: 0.79,
+            ..Default::default()
         },
     );
     table.insert(
@@ -94,6 +127,7 @@ static PRICING_TABLE: Lazy<HashMap<(&'static str, &'static str), Price>> = Lazy:
         Price {
             input_per_1m: 0.14,
             output_per_1m: 0.28,
+            ..Default::default()
         },
     );
     table.insert(
@@ -101,6 +135,7 @@ static PRICING_TABLE: Lazy<HashMap<(&'static str, &'static str), Price>> = Lazy:
         Price {
             input_per_1m: 0.55,
             output_per_1m: 2.19,
+            ..Default::default()
         },
     );
     table.insert(
@@ -108,6 +143,7 @@ static PRICING_TABLE: Lazy<HashMap<(&'static str, &'static str), Price>> = Lazy:
         Price {
             input_per_1m: 0.23,
             output_per_1m: 0.40,
+            ..Default::default()
         },
     );
     table.insert(
@@ -115,6 +151,7 @@ static PRICING_TABLE: Lazy<HashMap<(&'static str, &'static str), Price>> = Lazy:
         Price {
             input_per_1m: 2.0,
             output_per_1m: 6.0,
+            ..Default::default()
         },
     );
     table.insert(
@@ -122,6 +159,7 @@ static PRICING_TABLE: Lazy<HashMap<(&'static str, &'static str), Price>> = Lazy:
         Price {
             input_per_1m: 2.0,
             output_per_1m: 10.0,
+            ..Default::default()
         },
     );
 
@@ -131,6 +169,7 @@ static PRICING_TABLE: Lazy<HashMap<(&'static str, &'static str), Price>> = Lazy:
         Price {
             input_per_1m: 0.2,
             output_per_1m: 0.2,
+            ..Default::default()
         },
     );
     table.insert(
@@ -138,6 +177,7 @@ static PRICING_TABLE: Lazy<HashMap<(&'static str, &'static str), Price>> = Lazy:
         Price {
             input_per_1m: 0.2,
             output_per_1m: 0.2,
+            ..Default::default()
         },
     );
     table.insert(
@@ -145,6 +185,7 @@ static PRICING_TABLE: Lazy<HashMap<(&'static str, &'static str), Price>> = Lazy:
         Price {
             input_per_1m: 1.0,
             output_per_1m: 1.0,
+            ..Default::default()
         },
     );
     // MiniMax-M3 also appears under other provider ids (nvidia-nim,
@@ -155,6 +196,7 @@ static PRICING_TABLE: Lazy<HashMap<(&'static str, &'static str), Price>> = Lazy:
         Price {
             input_per_1m: 1.0,
             output_per_1m: 1.0,
+            ..Default::default()
         },
     );
     table.insert(
@@ -162,6 +204,7 @@ static PRICING_TABLE: Lazy<HashMap<(&'static str, &'static str), Price>> = Lazy:
         Price {
             input_per_1m: 1.0,
             output_per_1m: 1.0,
+            ..Default::default()
         },
     );
 
@@ -172,6 +215,7 @@ static PRICING_TABLE: Lazy<HashMap<(&'static str, &'static str), Price>> = Lazy:
         Price {
             input_per_1m: 0.77,
             output_per_1m: 0.77,
+            ..Default::default()
         },
     );
     table.insert(
@@ -179,6 +223,7 @@ static PRICING_TABLE: Lazy<HashMap<(&'static str, &'static str), Price>> = Lazy:
         Price {
             input_per_1m: 0.18,
             output_per_1m: 0.18,
+            ..Default::default()
         },
     );
     table.insert(
@@ -186,6 +231,7 @@ static PRICING_TABLE: Lazy<HashMap<(&'static str, &'static str), Price>> = Lazy:
         Price {
             input_per_1m: 0.77,
             output_per_1m: 0.77,
+            ..Default::default()
         },
     );
     table.insert(
@@ -193,6 +239,7 @@ static PRICING_TABLE: Lazy<HashMap<(&'static str, &'static str), Price>> = Lazy:
         Price {
             input_per_1m: 0.60,
             output_per_1m: 2.50,
+            ..Default::default()
         },
     );
     table.insert(
@@ -200,6 +247,7 @@ static PRICING_TABLE: Lazy<HashMap<(&'static str, &'static str), Price>> = Lazy:
         Price {
             input_per_1m: 0.14,
             output_per_1m: 0.28,
+            ..Default::default()
         },
     );
     table.insert(
@@ -207,6 +255,7 @@ static PRICING_TABLE: Lazy<HashMap<(&'static str, &'static str), Price>> = Lazy:
         Price {
             input_per_1m: 0.14,
             output_per_1m: 0.28,
+            ..Default::default()
         },
     );
 
@@ -216,6 +265,7 @@ static PRICING_TABLE: Lazy<HashMap<(&'static str, &'static str), Price>> = Lazy:
         Price {
             input_per_1m: 0.14,
             output_per_1m: 0.28,
+            ..Default::default()
         },
     );
 
@@ -235,7 +285,7 @@ pub fn lookup(provider: &str, model: &str) -> Option<Price> {
         .iter()
         .find(|((p, m), _)| *p == provider && *m == model)
     {
-        return Some(*price);
+        return Some(price.clone());
     }
     // 2. Cross-provider fallback: match by model_id only. This lets a
     //    model registered under one provider (e.g. "minimax") be found
@@ -244,7 +294,7 @@ pub fn lookup(provider: &str, model: &str) -> Option<Price> {
     //    first, then the normalized form (strips provider prefix,
     //    free suffixes, date suffixes).
     if let Some((_, price)) = PRICING_TABLE.iter().find(|((_, m), _)| *m == model) {
-        return Some(*price);
+        return Some(price.clone());
     }
     // 3. Normalized cross-provider fallback: strip the provider prefix
     //    from the incoming model id, then match against the table's
@@ -256,7 +306,7 @@ pub fn lookup(provider: &str, model: &str) -> Option<Price> {
         .iter()
         .find(|((_, m), _)| crate::model_normalize::normalize_model_id(m) == normalized)
     {
-        return Some(*price);
+        return Some(price.clone());
     }
     None
 }
@@ -337,6 +387,7 @@ fn lookup_exact_in_db(conn: &Connection, provider: &str, model: &str) -> Option<
     result.ok().flatten().map(|(inp, out)| Price {
         input_per_1m: inp,
         output_per_1m: out,
+        ..Default::default()
     })
 }
 
@@ -366,6 +417,7 @@ pub(crate) fn lookup_by_normalized(conn: &Connection, normalized: &str) -> Optio
     result.ok().flatten().map(|(inp, out)| Price {
         input_per_1m: inp,
         output_per_1m: out,
+        ..Default::default()
     })
 }
 
@@ -384,17 +436,46 @@ fn strip_free_suffixes(model: &str) -> Vec<String> {
     out
 }
 
-/// Cost in USD for given token counts.
+/// Cost in USD for given token counts (or audio seconds / image
+/// count, depending on `price.kind`).
 /// Returns 0.0 if price is None (unknown model — log WARN upstream).
+///
+/// Dispatch on `price.kind`:
+/// - `"chat"` / `"embedding"` / unknown: standard per-token pricing.
+/// - `"audio"`: `prompt_tokens` carries `audio_seconds × 1000` (we reuse
+///   the existing column to avoid a schema migration); `input_per_1m` is
+///   the per-second rate expressed as dollars per 1M seconds for
+///   consistency with the token-pricing convention.
+/// - `"image"`: `prompt_tokens` carries the image count; `input_per_1m`
+///   is the per-image rate expressed as dollars per 1M images for
+///   consistency.
 pub fn compute_cost(price: Option<Price>, prompt_tokens: u32, completion_tokens: u32) -> f64 {
     let price = match price {
         Some(p) => p,
         None => return 0.0,
     };
-
-    let input_cost = price.input_per_1m * (prompt_tokens as f64) / 1_000_000.0;
-    let output_cost = price.output_per_1m * (completion_tokens as f64) / 1_000_000.0;
-    input_cost + output_cost
+    match price.kind.as_str() {
+        "audio" => {
+            // For audio, prompt_tokens carries audio_seconds × 1000
+            // (we reuse the existing column to avoid a migration).
+            // input_per_1m is per-second rate (in dollars per 1M seconds
+            // for consistency with the token pricing convention).
+            let seconds = prompt_tokens as f64 / 1000.0;
+            price.input_per_1m * seconds / 1_000_000.0
+        }
+        "image" => {
+            // For images, prompt_tokens carries the image count.
+            // input_per_1m is per-image rate (in dollars per 1M images
+            // for consistency).
+            price.input_per_1m * prompt_tokens as f64 / 1_000_000.0
+        }
+        _ => {
+            // Chat / embedding / unknown: standard token-based pricing.
+            let input_cost = price.input_per_1m * (prompt_tokens as f64) / 1_000_000.0;
+            let output_cost = price.output_per_1m * (completion_tokens as f64) / 1_000_000.0;
+            input_cost + output_cost
+        }
+    }
 }
 
 #[cfg(test)]
@@ -420,6 +501,7 @@ mod tests {
         let price = Some(Price {
             input_per_1m: 1.0,
             output_per_1m: 2.0,
+            ..Default::default()
         });
         // 1.0 * 1000 / 1e6 + 2.0 * 500 / 1e6 = 0.001 + 0.001 = 0.002
         let cost = compute_cost(price, 1000, 500);
@@ -431,6 +513,7 @@ mod tests {
         let price = Some(Price {
             input_per_1m: 5.0,
             output_per_1m: 10.0,
+            ..Default::default()
         });
         assert_eq!(compute_cost(price, 0, 0), 0.0);
     }
@@ -470,5 +553,86 @@ mod tests {
         // A model that doesn't exist in ANY provider's entry.
         assert!(lookup("openrouter", "no/such-model-xyz").is_none());
         assert!(lookup("unknown-provider", "whatever").is_none());
+    }
+
+    #[test]
+    fn default_pricing_kind_is_chat() {
+        // A Price constructed with ..Default::default() must have
+        // kind == "chat" so existing table entries (which omit kind)
+        // continue to use per-token pricing.
+        let price = Price {
+            input_per_1m: 1.0,
+            output_per_1m: 2.0,
+            ..Default::default()
+        };
+        assert_eq!(price.kind, "chat");
+    }
+
+    #[test]
+    fn serde_default_pricing_kind_is_chat() {
+        // A Price deserialized from JSON without a "kind" field must
+        // default to "chat" (the #[serde(default)] attribute). This
+        // lets the DB sync table and any external pricing JSON omit
+        // the field and still get per-token pricing.
+        let json = r#"{"input_per_1m": 1.0, "output_per_1m": 2.0}"#;
+        let price: Price = serde_json::from_str(json).unwrap();
+        assert_eq!(price.kind, "chat");
+    }
+
+    #[test]
+    fn compute_cost_audio_dispatch() {
+        // Audio: input_per_1m is dollars per 1M seconds. prompt_tokens
+        // carries audio_seconds × 1000. With 60 seconds (prompt_tokens
+        // = 60_000) at $1.0/1M sec, cost = 1.0 * 60 / 1e6 = 6e-5.
+        let price = Some(Price {
+            input_per_1m: 1.0,
+            output_per_1m: 0.0,
+            kind: "audio".to_string(),
+        });
+        let cost = compute_cost(price, 60_000, 0);
+        assert!((cost - 60.0 / 1_000_000.0).abs() < 1e-15);
+    }
+
+    #[test]
+    fn compute_cost_image_dispatch() {
+        // Image: input_per_1m is dollars per 1M images. prompt_tokens
+        // carries the image count. With 4 images at $10/1M images,
+        // cost = 10.0 * 4 / 1e6 = 4e-5.
+        let price = Some(Price {
+            input_per_1m: 10.0,
+            output_per_1m: 0.0,
+            kind: "image".to_string(),
+        });
+        let cost = compute_cost(price, 4, 0);
+        assert!((cost - 40.0 / 1_000_000.0).abs() < 1e-15);
+    }
+
+    #[test]
+    fn compute_cost_chat_dispatch_ignores_completion_for_audio() {
+        // Sanity: audio pricing must NOT add a per-token completion
+        // cost even if completion_tokens is non-zero (audio has no
+        // output tokens).
+        let price = Some(Price {
+            input_per_1m: 1.0,
+            output_per_1m: 999_999.0, // would explode if treated as chat
+            kind: "audio".to_string(),
+        });
+        // 10 seconds of audio: 1.0 * 10 / 1e6 = 1e-5
+        let cost = compute_cost(price, 10_000, 1_000_000);
+        assert!((cost - 10.0 / 1_000_000.0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn compute_cost_unknown_kind_falls_back_to_chat() {
+        // An unknown kind string must fall back to standard per-token
+        // pricing rather than panic or return 0.
+        let price = Some(Price {
+            input_per_1m: 1.0,
+            output_per_1m: 2.0,
+            kind: "video".to_string(), // not yet supported
+        });
+        // 1.0 * 1000 / 1e6 + 2.0 * 500 / 1e6 = 0.002
+        let cost = compute_cost(price, 1000, 500);
+        assert!((cost - 0.002).abs() < 1e-12);
     }
 }

@@ -21,6 +21,7 @@ pub mod cooldown;
 pub mod cost;
 pub mod db;
 pub mod discovery_scheduler;
+pub mod endpoint;
 pub mod executor_antigravity;
 pub mod executor_kiro;
 pub mod model_normalize;
