@@ -1011,8 +1011,24 @@ async function openLogDetail(id: string, requestId: string, traceId?: string): P
     (requestId ? state.logs.inflightByRequestId.get(requestId) : undefined);
   const isSyntheticId: boolean =
     Number.isFinite(numericId) && numericId > 1_000_000_000;
+  // CRITICAL: find the row by BOTH request_id AND trace_id (when trace_id
+  // is available). The previous code used `state.logs.rows.find((r) =>
+  // r.request_id === requestId)` which returns the FIRST row with a
+  // matching request_id — in a combo with retries, multiple rows share
+  // the same request_id but have different trace_ids (and potentially
+  // different upstream_model_ids). The `.find()` returned the WRONG
+  // attempt, causing the modal to show a different model's data than the
+  // row the user clicked. This was the root cause of the "model name
+  // changes while I'm debugging" bug.
+  //
+  // Also try `rowById.get(numericId)` first (for finalized rows with real
+  // DB ids). Note: `rowById` is rebuilt by `mergeLogsByDescId` and may
+  // have inconsistent key types (number vs string), so the lookup may
+  // fail — the `rows.find()` fallback below handles this.
   let row: RecentUsageRow = (Number.isFinite(numericId) ? state.logs.rowById.get(numericId) : undefined)
-    || state.logs.rows.find((r) => r.request_id === requestId)
+    || (traceId
+      ? state.logs.rows.find((r) => r.request_id === requestId && r.trace_id === traceId)
+      : state.logs.rows.find((r) => r.request_id === requestId))
     || inflight
     || {
       id: numericId || 0, request_id: requestId, provider_id: "", upstream_model_id: "",
@@ -1048,9 +1064,22 @@ async function openLogDetail(id: string, requestId: string, traceId?: string): P
   if (!isInflight && !state.logs.rows.find((r) => r.id === row.id)) {
     state.logs.rows = mergeLogsByDescId(state.logs.rows, [row]);
   }
-  state.logs.selectedRow = row;
+  // SNAPSHOT: do NOT store a live reference to the row object. Create a
+  // shallow copy so mutations to the original (e.g. inflight placeholders
+  // being updated by stage events, or `mergeLogsByDescId` replacing the
+  // row in `state.logs.rows`) don't affect the modal's data. The modal
+  // reads from `state.logs.selectedRow` via `copyDebugBundle` and
+  // `updateOpenLogDetail`; if it's a live reference, the modal's data
+  // silently changes as background requests mutate the original object.
+  // This is the core decoupling fix.
+  state.logs.selectedRow = { ...row } as typeof state.logs.selectedRow;
 
   if (isInflight) {
+    // SNAPSHOT: work on a copy so we don't mutate the LIVE inflight
+    // placeholder (which is rendered in the table and may be updated by
+    // future stage events). The synthesized error_message below is for
+    // the MODAL only — it should not leak back into the table row.
+    row = { ...row };
     const stage: StageEvent | undefined =
       (traceId ? state.logs.stagesByTraceId.get(traceId) : undefined) ||
       (requestId ? state.logs.stagesByRequestId.get(requestId) : undefined);
@@ -1118,7 +1147,11 @@ async function openLogDetail(id: string, requestId: string, traceId?: string): P
         }
         row = merged as unknown as RecentUsageRow;
         state.logs.rowById.set(Number(row.id || id), row);
-        state.logs.selectedRow = row;
+        // SNAPSHOT: store a shallow copy, not a live reference. `row`
+        // here is already a new object (from the spread above), but we
+        // snapshot it anyway for consistency — the contract is that
+        // `selectedRow` is ALWAYS a snapshot, never a live reference.
+        state.logs.selectedRow = { ...row } as typeof state.logs.selectedRow;
       }
     } catch (e: unknown) {
       // RACE-CONDITION GUARD: same check on the error path — if the
