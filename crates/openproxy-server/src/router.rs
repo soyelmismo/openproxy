@@ -43,7 +43,6 @@ use serde_json::json;
 
 use crate::{
     admin_ui,
-    disconnect::client_disconnect_middleware,
     handlers::{self, admin::admin_auth_middleware},
     middleware::request_id,
     state::AppState,
@@ -70,24 +69,33 @@ pub fn build_router(state: AppState) -> Router {
     // admin CRUD endpoints are short-lived and don't need
     // per-request cancel tracking, and the liveness probe would
     // pay the wrapper cost on every health check.
+    //
+    // NOTE: client_disconnect_middleware was REMOVED from the chat
+    // path because it caused false-positive "client disconnected"
+    // errors. The middleware's DisconnectBody wraps both the request
+    // and response body, sharing the same watch sender. After axum
+    // consumes the request body, hyper can still poll the wrapped
+    // body in the background and detect residual socket errors (RST,
+    // half-close) that are NOT real client disconnects — causing the
+    // pipeline to abort with HTTP 499 while the upstream was still
+    // generating.
+    //
+    // The chat handler now creates its own fresh watch pair (driven
+    // only by the watchdog timer) and does NOT use the middleware's
+    // watch. The middleware is kept for the audio endpoint (which
+    // needs multipart body disconnect detection) but is NOT applied
+    // to chat/completions.
     let public_api_routes = Router::new()
         .route("/v1/models", get(handlers::models::list_models))
         .route(
             "/v1/chat/completions",
             post(handlers::chat::chat_completions),
         )
-        // OpenAI-compatible Whisper endpoint. Lives in `public_api_routes`
-        // so it gets the `client_disconnect_middleware` (a client
-        // cancelling mid-upload still fires the watch, and the
-        // `DisconnectBody` wrapper on the request body cooperates with
-        // axum's `Multipart` extractor — `DisconnectBody` implements
-        // `http_body::Body` and delegates `poll_frame` to the inner
-        // body, so multipart parsing reads through it transparently).
         .route(
             "/v1/audio/transcriptions",
             post(handlers::audio::transcribe),
         )
-        .layer(middleware::from_fn(client_disconnect_middleware));
+        ;
 
     // Admin REST API. Every route here is mounted under `/admin/api/*`
     // (see `admin_routes` below). The auth middleware

@@ -21,7 +21,6 @@
 
 use axum::{
     Json,
-    extract::Extension,
     extract::State,
     http::{HeaderMap, StatusCode},
     response::IntoResponse,
@@ -106,12 +105,19 @@ impl Stream for SseBytesStream {
 /// `reqwest::send()` `tokio::select!`, and the SSE `stream.next()`
 /// `tokio::select!` all observe the real cancel — no time-based
 /// watchdog needed.
+/// `POST /v1/chat/completions`.
+///
+/// The handler creates its own fresh cancel watch (NOT from the
+/// middleware — see router.rs for why the middleware was removed).
+/// The fresh watch is driven only by the watchdog timer (total_ms).
 pub async fn chat_completions(
     State(state): State<AppState>,
-    Extension(cancel): Extension<CancelWatch>,
     headers: HeaderMap,
     axum::Json(body): axum::Json<serde_json::Value>,
 ) -> Result<axum::response::Response, ApiError> {
+    // Create a dummy CancelWatch — the middleware is no longer
+    // applied to this route, so we create our own fresh watch pair.
+    let cancel = crate::disconnect::CancelWatch::new();
     run_pipeline(state, cancel, headers, body).await
 }
 
@@ -435,6 +441,10 @@ async fn run_pipeline(
                     // Pipeline done — no need to fire the cancel.
                 }
                 _ = tokio::time::sleep(std::time::Duration::from_millis(watchdog_budget_ms)) => {
+                    tracing::warn!(
+                        watchdog_budget_ms,
+                        "watchdog timer fired — cancelling pipeline (this is a total-budget timeout, NOT a client disconnect)"
+                    );
                     let _ = watchdog_tx.send(true);
                 }
             }
