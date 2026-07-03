@@ -296,7 +296,14 @@ function renderCooldownBar(combo: Combo): TemplateResult {
 function renderTargetRow(t: ComboTargetWithModel, showWeight: boolean): TemplateResult {
   const isSub = t.sub_combo_id != null;
   const cdBadge = t.in_cooldown ? html` <span class="badge badge-cooldown" title="Cooldown — ${t.cooldown_reason ?? ""} until ${t.cooldown_until ?? ""}">⏸</span>` : html``;
-  const modelCell = isSub ? html`<span class="chip combo-chip">→ combo: ${t.sub_combo_name ?? "#" + t.sub_combo_id}</span>` : html`${t.model_display_name || t.model_id || "row #" + t.model_row_id}${cdBadge}`;
+  // Provider-inactive badge: the target is still visible and reorderable,
+  // but it won't be used for routing until the provider is reactivated.
+  // This is NOT the same as cooldown — cooldown is transient (auto-clears
+  // after a timeout), provider-inactive is a manual admin action.
+  const inactiveBadge = (t.provider_active === false)
+    ? html` <span class="badge badge-inactive" title="Provider is inactive — this target is not used for routing. Reactivate the provider in the Providers page to enable it.">⚠ inactive</span>`
+    : html``;
+  const modelCell = isSub ? html`<span class="chip combo-chip">→ combo: ${t.sub_combo_name ?? "#" + t.sub_combo_id}</span>` : html`${t.model_display_name || t.model_id || "row #" + t.model_row_id}${cdBadge}${inactiveBadge}`;
   const providerCell = isSub ? html`<span class="virtual-provider">${t.provider_id}</span>` : html`<a href="#/providers/${encodeURIComponent(t.provider_id)}">${t.provider_id}</a>`;
   const accountCell = isSub ? html`<em>n/a</em>` : (t.account_id ? html`#${t.account_id}` : html`<em>rotate</em>`);
   const contextCell = isSub ? html`<em>sub-combo</em>` : (t.context_length != null ? html`<span title=${String(t.context_length)}>${formatTokens(t.context_length)}</span>` : html`—`);

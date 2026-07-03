@@ -92,6 +92,7 @@ tr.selected { background: var(--color-primary-soft); }
 .badge-warn    { background: var(--color-warn-soft);    color: var(--color-warn);    border-color: var(--color-warn); }
 .badge-error   { background: var(--color-error-soft);   color: var(--color-error);   border-color: var(--color-error); }
 .badge-cooldown{ background: var(--color-warn-soft);    color: var(--color-warn);    border-color: var(--color-warn); }
+.badge-inactive{ background: var(--color-error-soft);   color: var(--color-error);   border-color: var(--color-error); font-size: 0.7rem; }
 .badge-virtual { background: var(--color-phase-soft);   color: var(--color-phase-text);   border-color: var(--color-border-soft); font-style: italic; }
 
 .chip {

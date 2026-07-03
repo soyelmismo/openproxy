@@ -320,6 +320,27 @@ pub struct ComboTargetWithModel {
     /// `None` for sub-combo targets.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_output_tokens: Option<i64>,
+    /// `true` when this target's provider is active (`providers.active = 1`).
+    /// `false` when the provider has been deactivated. The dashboard
+    /// shows a "provider inactive" badge on these rows so the operator
+    /// knows the target won't be used for routing — but the row is still
+    /// visible (and reorderable) so the operator can manage it.
+    ///
+    /// CRITICAL: `list_targets_with_model` returns targets with BOTH
+    /// active and inactive providers. The routing path (`list_targets`)
+    /// still filters by `p.active = 1` — only active targets are used
+    /// for actual request routing. The dashboard view is a superset so
+    /// the operator can see and manage all targets, including the
+    /// inactive ones. This prevents the reorder bug where the GET
+    /// returned a filtered list (missing inactive targets) but the
+    /// reorder validation operated on the full list (including inactive
+    /// targets), causing a mismatch and a 400 error.
+    #[serde(default = "default_true")]
+    pub provider_active: bool,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 pub fn create_combo(
@@ -879,21 +900,30 @@ pub fn list_targets_with_model(
     // impossible today, but the dashboard should never crash on a
     // NULL string column).
     //
-    // The join against `models` is a `LEFT JOIN` (instead of INNER)
-    // because sub-combo targets have `model_row_id = NULL`. The
-    // sub-combo's own name is fetched via a second `LEFT JOIN` to
-    // `combos`; the columns are aliased to avoid the `id` / `name`
-    // collisions between the two joins.
+    // The join against `providers` is a `LEFT JOIN` (not INNER) so that
+    // targets with a deactivated provider are STILL returned. The
+    // dashboard needs to see and manage all targets (including inactive
+    // ones) so the operator can reorder them, delete them, or reactivate
+    // the provider. The `provider_active` flag (from `p.active`) tells
+    // the frontend which targets are currently routable.
     //
-    // The third `LEFT JOIN` is against `target_cooldowns` so the
-    // dashboard can render the "⏸ cooldown" badge inline with the
-    // target row. We project three columns out of it:
+    // CRITICAL: the routing path (`list_targets` below) still uses
+    // `INNER JOIN providers p ON p.id = ct.provider_id WHERE p.active = 1`
+    // — only active targets are used for actual request routing. This
+    // dashboard view is a SUPERSET (includes inactive-provider targets)
+    // so the reorder validation (which operates on ALL combo_targets
+    // rows) is consistent with what the dashboard shows.
     //
-    // - `cooldown_until`: passed through (ISO 8601 string).
-    // - `cooldown_until > datetime('now')`: collapsed to a 0/1
-    //   `in_cooldown` boolean via the CASE expression below; we don't
-    //   want the dashboard doing the timestamp comparison itself.
-    // - `reason`: the last error string that parked this target.
+    // Without this fix, the GET returned [A, B] (excluding C whose
+    // provider was inactive), the frontend sent `target_ids: [A, B]`,
+    // but the reorder validation compared against [A, B, C] (all
+    // combo_targets rows) → mismatch → 400 "target_ids must be a
+    // permutation of the combo's current targets".
+    //
+    // The `LEFT JOIN models m` is retained (sub-combo targets have
+    // `model_row_id = NULL`). The `LEFT JOIN combos sc` is retained
+    // (for the sub-combo's name). The `LEFT JOIN target_cooldowns tc`
+    // is retained (for the cooldown badge).
     let mut stmt = conn
         .prepare(
             "SELECT ct.id, ct.combo_id, ct.provider_id, ct.account_id, ct.model_row_id, \
@@ -906,13 +936,14 @@ pub fn list_targets_with_model(
                     tc.reason, \
                     m.context_length, \
                     m.max_output_tokens, \
-                    ct.weight \
+                    ct.weight, \
+                    COALESCE(p.active, 0) as provider_active \
              FROM combo_targets ct \
-             INNER JOIN providers p ON p.id = ct.provider_id \
+             LEFT JOIN providers p ON p.id = ct.provider_id \
              LEFT JOIN models m ON m.id = ct.model_row_id \
              LEFT JOIN combos sc ON sc.id = ct.sub_combo_id \
              LEFT JOIN target_cooldowns tc ON tc.combo_target_id = ct.id \
-             WHERE ct.combo_id = ?1 AND p.active = 1 \
+             WHERE ct.combo_id = ?1 \
              ORDER BY ct.priority_order ASC, ct.id ASC",
         )
         .map_err(|e| CoreError::Database {
@@ -2395,6 +2426,11 @@ fn row_to_target_with_model(row: &Row<'_>) -> rusqlite::Result<ComboTargetWithMo
     let max_output_tokens: Option<i64> = row.get(14)?;
     // Column 15 (migration 000035): per-target weight.
     let weight: i32 = row.get::<_, Option<i64>>(15)?.unwrap_or(1) as i32;
+    // Column 16: `provider_active` from `COALESCE(p.active, 0)`. This
+    // is `0` when the provider was deactivated (or the LEFT JOIN
+    // didn't match — which shouldn't happen because `provider_id` is
+    // NOT NULL, but COALESCE defends against it anyway).
+    let provider_active: i64 = row.get(16)?;
 
     Ok(ComboTargetWithModel {
         id: ComboTargetId(id),
@@ -2413,6 +2449,7 @@ fn row_to_target_with_model(row: &Row<'_>) -> rusqlite::Result<ComboTargetWithMo
         cooldown_reason,
         context_length,
         max_output_tokens,
+        provider_active: provider_active != 0,
     })
 }
 
@@ -3274,6 +3311,91 @@ mod tests {
     // -----------------------------------------------------------------
     // reorder_targets
     // -----------------------------------------------------------------
+
+    #[test]
+    fn list_targets_with_model_includes_inactive_provider_targets() {
+        // REGRESSION TEST: the dashboard's `list_targets_with_model` MUST
+        // include targets whose provider has been deactivated. The
+        // routing path (`list_targets`) filters them out, but the
+        // dashboard view is a SUPERSET — the operator needs to see and
+        // manage (reorder, delete) inactive-provider targets too.
+        //
+        // Without this, the GET returned [A] (excluding B whose provider
+        // was inactive), the frontend sent `target_ids: [A]` for reorder,
+        // but the reorder validation compared against [A, B] (all
+        // combo_targets rows) → mismatch → 400 "target_ids must be a
+        // permutation of the combo's current targets".
+        let (pool, _path) = fresh_pool();
+        let conn = pool.writer();
+        seed_provider(&conn, "live");
+        seed_provider(&conn, "dead");
+        let m_live = seed_model(&conn, "live", "ml");
+        let m_dead = seed_model(&conn, "dead", "md");
+        let cid = create_combo(&conn, "c", Strategy::Priority, 1).expect("create");
+        let t_live = add_target(
+            &conn,
+            AddTargetInput {
+                combo_id: cid,
+                provider_id: ProviderId::new("live"),
+                account_id: None,
+                model_row_id: Some(m_live),
+                sub_combo_id: None,
+                priority_order: 10,
+            },
+        )
+        .expect("add live");
+        let t_dead = add_target(
+            &conn,
+            AddTargetInput {
+                combo_id: cid,
+                provider_id: ProviderId::new("dead"),
+                account_id: None,
+                model_row_id: Some(m_dead),
+                sub_combo_id: None,
+                priority_order: 20,
+            },
+        )
+        .expect("add dead");
+
+        // Deactivate the "dead" provider.
+        crate::providers::set_active(&conn, &ProviderId::new("dead"), false).expect("deactivate");
+
+        // list_targets (routing) MUST filter out the inactive target.
+        let routing = list_targets(&conn, cid).expect("list_targets");
+        assert_eq!(routing.len(), 1, "routing list filters inactive provider");
+        assert_eq!(routing[0].id, t_live);
+
+        // list_targets_with_model (dashboard) MUST include BOTH targets.
+        let dashboard = list_targets_with_model(&conn, cid).expect("list_targets_with_model");
+        assert_eq!(
+            dashboard.len(),
+            2,
+            "dashboard list includes inactive-provider targets (regression)"
+        );
+        // The active target has provider_active = true.
+        let live_row = dashboard.iter().find(|t| t.id == t_live).expect("live row");
+        assert!(live_row.provider_active, "active provider → provider_active = true");
+        // The inactive target has provider_active = false.
+        let dead_row = dashboard.iter().find(|t| t.id == t_dead).expect("dead row");
+        assert!(
+            !dead_row.provider_active,
+            "inactive provider → provider_active = false"
+        );
+
+        // CRITICAL: the reorder validation operates on ALL combo_targets
+        // rows (no provider filter), so the dashboard's target ID set
+        // MUST match. If the dashboard excluded the inactive target,
+        // the reorder would fail with a 400.
+        let all_ids: std::collections::HashSet<i64> =
+            dashboard.iter().map(|t| t.id.0).collect();
+        let mut sorted: Vec<i64> = all_ids.into_iter().collect();
+        sorted.sort();
+        assert_eq!(
+            sorted,
+            vec![t_live.0, t_dead.0],
+            "dashboard ID set matches the full combo_targets ID set (reorder will succeed)"
+        );
+    }
 
     #[test]
     fn reorder_targets_assigns_sequential_priorities() {

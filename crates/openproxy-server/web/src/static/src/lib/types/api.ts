@@ -338,6 +338,10 @@ export interface ComboTargetWithModel extends ComboTarget {
   context_length: number | null;
   /** Max output tokens del modelo. `null` para sub-combo targets. */
   max_output_tokens: number | null;
+  /** `true` cuando el provider de este target está activo. `false`
+   *  cuando el provider fue desactivado — el target sigue visible y
+   *  reordenable en el dashboard, pero no se usa para routing. */
+  provider_active: boolean;
 }
 
 /** Proyección liviana para el picker "add sub-combo target".
