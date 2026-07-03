@@ -207,6 +207,11 @@ const MIGRATIONS: &[Migration] = &[
         name: "000039_add_endpoint_kind",
         sql: include_str!("../../migrations/000039_add_endpoint_kind.sql"),
     },
+    Migration {
+        version: 40,
+        name: "000040_drop_provider_timeouts",
+        sql: include_str!("../../migrations/000040_drop_provider_timeouts.sql"),
+    },
 ];
 
 /// Apply pending migrations on `conn`. Idempotent: skips versions already in
@@ -360,6 +365,10 @@ mod tests {
         );
 
         // Sanity: every table the spec §8 promises is present.
+        // NOTE: `provider_timeouts` was dropped in migration 000040 —
+        // the global `TimeoutsConfig` is the single source of truth
+        // for connect/request_send/total, so the table is NOT in this
+        // list anymore.
         for table in [
             "providers",
             "accounts",
@@ -369,7 +378,6 @@ mod tests {
             "usage",
             "api_keys",
             "schema_migrations",
-            "provider_timeouts",
         ] {
             let present: i64 = conn
                 .query_row(
@@ -438,8 +446,9 @@ mod tests {
                 .expect("count")
         });
         assert_eq!(
-            count_first, 38,
-            "thirty-eight migrations applied (versions 1-6, 8-39)"
+            count_first,
+            MIGRATIONS.len() as i64,
+            "all embedded migrations applied (versions 1-6, 8-40)"
         );
 
         {

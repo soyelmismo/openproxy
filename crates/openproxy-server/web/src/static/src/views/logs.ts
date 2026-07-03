@@ -47,6 +47,8 @@ import {
   showLogDetail,
   updateOpenLogDetail,
   hasCompleteLogDetail,
+  bumpOpenLogDetailGeneration,
+  isCurrentOpenLogDetailGeneration,
 } from "../components/log-detail.js";
 import type { RecentUsageRow, StageEvent } from "../lib/types/api.js";
 import type { NotificationEvent } from "../lib/types/notifications.js";
@@ -989,6 +991,15 @@ function handleLogsMessage(raw: MessageEvent): void {
 }
 
 async function openLogDetail(id: string, requestId: string, traceId?: string): Promise<void> {
+  // RACE-CONDITION GUARD: bump the generation counter at the very start.
+  // Each `openLogDetail` call captures the current generation; after the
+  // async `/usage/detail` fetch completes, we check whether this call is
+  // still the most recent. If the user clicked another row in the
+  // meantime (which bumps the generation again), the stale fetch's result
+  // is discarded — it doesn't overwrite the modal the user is now looking
+  // at. This prevents the "I clicked row A then row B, but the modal
+  // flipped back to A when A's slower fetch finished" race.
+  const gen: number = bumpOpenLogDetailGeneration();
   const numericId = Number(id);
   // Prefer the inflight placeholder (by trace_id) when this is an
   // in-flight / ghost entry — its real `id` is 0 and there is no DB
@@ -1089,6 +1100,14 @@ async function openLogDetail(id: string, requestId: string, traceId?: string): P
       && !isSyntheticId) {
     try {
       const detail = await api(`/usage/detail?id=${encodeURIComponent(id)}`) as { row?: RecentUsageRow; detail?: RecentUsageRow } | RecentUsageRow | null;
+      // RACE-CONDITION GUARD: if the user clicked another row while
+      // this fetch was in flight, `gen` is no longer current. Discard
+      // the result — the user is now looking at a different row's
+      // modal, and applying this fetch's data would either overwrite
+      // the wrong modal or open a stale modal on top of the current
+      // one. This is the second half of the generation-counter fix
+      // (the first half is `bumpOpenLogDetailGeneration` at the top).
+      if (!isCurrentOpenLogDetailGeneration(gen)) return;
       const fetched = (detail && typeof detail === "object" && ("row" in detail || "detail" in detail))
         ? (detail.row ?? detail.detail ?? null)
         : (detail as RecentUsageRow | null);
@@ -1102,11 +1121,19 @@ async function openLogDetail(id: string, requestId: string, traceId?: string): P
         state.logs.selectedRow = row;
       }
     } catch (e: unknown) {
+      // RACE-CONDITION GUARD: same check on the error path — if the
+      // user navigated away, don't show a stale toast.
+      if (!isCurrentOpenLogDetailGeneration(gen)) return;
       // Non-fatal: render with whatever we have — the modal will
       // show "not recorded" for missing fields, which is truthful.
       showToast(`Request detail unavailable: ${e instanceof Error ? e.message : String(e)}`, "error");
     }
   }
+  // RACE-CONDITION GUARD: final check before opening the modal. If the
+  // user clicked another row during the fetch (or during the inflight
+  // branch above), don't open this modal — the user's latest click
+  // should win.
+  if (!isCurrentOpenLogDetailGeneration(gen)) return;
   // Render the modal with the best data we have (possibly enriched
   // by the detail call above).
   showLogDetail(row as unknown as LogDetailLog);

@@ -2371,14 +2371,16 @@ impl Pipeline {
             }
         };
 
-        // 3. Resolve timeouts via the 3-level precedence rule.
+        // 3. Resolve timeouts via the 2-level precedence rule.
         //    Scope the lock guard into its own block so clippy can
         //    see it's dropped well before the dispatch `.await`.
         let resolved_timeouts = {
             // Per-provider timeouts have been REMOVED — the global
-            // config (TimeoutsConfig) is the single source of truth.
-            // The provider_timeouts table still exists in the DB for
-            // backward compatibility but is no longer read.
+            // config (TimeoutsConfig) is the single source of truth
+            // for connect, request_send, and total across all
+            // providers. Per-model overrides still apply to ttft and
+            // idle_chunk (streaming-relevant phases) via the
+            // `models.timeout_overrides_json` column.
             let model_overrides =
                 match ModelTimeoutOverrides::from_json(model.timeout_overrides_json.as_deref()) {
                     Ok(o) => o,
@@ -2400,11 +2402,7 @@ impl Pipeline {
                         );
                     }
                 };
-            timeouts::resolve(
-                &self.config.defaults,
-                None, // No per-provider overrides — global config only
-                Some(&model_overrides),
-            )
+            timeouts::resolve(&self.config.defaults, Some(&model_overrides))
         };
         tracing::debug!(
             combo_id = combo.id.0,

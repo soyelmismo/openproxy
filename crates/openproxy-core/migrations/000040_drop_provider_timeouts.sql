@@ -1,0 +1,13 @@
+-- 000040_drop_provider_timeouts.sql
+-- Drop the per-provider timeout override table. The global `timeouts`
+-- config (TimeoutsConfig, set via the dashboard's Config page) is now
+-- the single source of truth for connect, request_send, and total
+-- across all providers. Per-model overrides for ttft and idle_chunk
+-- still live in the `models.timeout_overrides_json` column.
+--
+-- The Rust code that read this table (load_provider_timeouts,
+-- ProviderTimeouts) has been removed. This migration drops the table
+-- so the schema matches the code; existing rows are discarded (they
+-- were invisible to the dashboard and the user confirmed they want
+-- them gone).
+DROP TABLE IF EXISTS provider_timeouts;

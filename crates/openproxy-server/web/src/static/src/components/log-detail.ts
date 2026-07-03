@@ -1081,6 +1081,75 @@ function removeLogDetailModal(m: HTMLElement): void {
   if (wrapper && wrapper.children.length === 0 && wrapper.parentElement?.id === "modal-root") {
     wrapper.remove();
   }
+  // Clear the pinned identity so subsequent WS events don't try to
+  // update a now-closed modal. Without this, `updateOpenLogDetail`
+  // would see no `.log-detail-modal` in the DOM and bail early
+  // anyway, but clearing the pin is belt-and-suspenders and makes
+  // the lifecycle explicit.
+  pinnedRequestId = null;
+  pinnedTraceId = null;
+}
+
+// ----------------------------------------------------------------------------
+// Pinned modal identity — the IMMUTABLE request_id + trace_id of the row the
+// user opened. Set in `showLogDetail`, cleared in `removeLogDetailModal`.
+//
+// WHY: `state.logs.selectedRow` is a mutable reference that can be reassigned
+// by `updateOpenLogDetail` itself (circular dependency) or by a race condition
+// in `openLogDetail` (user clicks row B while row A's detail fetch is in
+// flight). If `selectedRow` is somehow reassigned to a different row, the
+// filter in `updateOpenLogDetail` (which checks `sel.request_id !==
+// row.request_id`) would let the WRONG row's updates through, causing the
+// modal to be replaced by background requests — the exact "modal content
+// changes to other requests while I'm debugging" bug the user reported.
+//
+// The pinned identity is set ONCE when the modal opens and NEVER changes
+// until the modal closes. `updateOpenLogDetail` checks the incoming row
+// against the PINNED identity (not `state.logs.selectedRow`), making the
+// filter immune to any reassignment bugs in `selectedRow`.
+// ----------------------------------------------------------------------------
+let pinnedRequestId: string | null = null;
+let pinnedTraceId: string | null = null;
+
+// Generation counter for `openLogDetail` race-condition protection. Each
+// `openLogDetail` call captures the current generation; after the async
+// `/usage/detail` fetch completes, the callback checks whether the generation
+// is still current. If the user clicked another row in the meantime (which
+// increments the generation), the stale fetch's result is discarded — it
+// doesn't overwrite the modal the user is now looking at.
+let openLogDetailGeneration: number = 0;
+
+/** Increment the generation counter. Returns the new (current) generation.
+ *  Call this at the START of `openLogDetail` to invalidate any in-flight
+ *  fetch from a previous click. */
+export function bumpOpenLogDetailGeneration(): number {
+  openLogDetailGeneration += 1;
+  return openLogDetailGeneration;
+}
+
+/** Returns true iff `gen` is the current generation (i.e. the caller is
+ *  the most recent `openLogDetail` invocation). Call this AFTER an async
+ *  await to decide whether to proceed with the result or discard it. */
+export function isCurrentOpenLogDetailGeneration(gen: number): boolean {
+  return gen === openLogDetailGeneration;
+}
+
+/** Returns true iff `row` matches the pinned modal identity (the row the
+ *  user opened). When no modal is open (pinned identity is null), returns
+ *  false so no update is applied. */
+export function matchesPinnedModalIdentity(
+  row: { request_id?: string; trace_id?: string } | null | undefined,
+): boolean {
+  if (pinnedRequestId === null) return false;
+  if (!row) return false;
+  // request_id MUST match (it's the primary identity).
+  if (row.request_id !== pinnedRequestId) return false;
+  // If both the pinned identity and the incoming row have a trace_id,
+  // they MUST match too (per-attempt isolation — retries of the same
+  // request_id have different trace_ids). If either side has no
+  // trace_id (legacy / edge case), fall back to request_id-only matching.
+  if (pinnedTraceId && row.trace_id && pinnedTraceId !== row.trace_id) return false;
+  return true;
 }
 
 // Public API
@@ -1097,6 +1166,14 @@ export function showLogDetail(log: LogDetailLog): void {
   // read it. Without this, the copy button fails silently because
   // it reads selectedRow which is null or stale from a previous modal.
   state.logs.selectedRow = log as unknown as (typeof state.logs)["selectedRow"];
+  // PIN the identity of the row the user opened. This is the IMMUTABLE
+  // source of truth for `updateOpenLogDetail`'s filter — once pinned,
+  // only events for THIS row (same request_id, same trace_id) can
+  // update the modal. Background requests with different request_ids
+  // are rejected by the filter, even if `state.logs.selectedRow` is
+  // somehow reassigned by a race condition.
+  pinnedRequestId = log.request_id ?? null;
+  pinnedTraceId = log.trace_id ?? null;
   const root = ensureModalRoot();
   // Render the modal into a fresh wrapper div so lit-html can
   // diff efficiently on updateOpenLogDetail re-renders.
@@ -1158,6 +1235,14 @@ function renderCompressionSummary(log: LogDetailLog): TemplateResult | null {
 // WebSocket `row`/`stage` event handlers when the user has a row
 // detail modal open and a new event for that request arrives).
 // If no modal is open this is a no-op.
+//
+// CRITICAL: this function uses the PINNED IDENTITY (request_id + trace_id
+// captured in `showLogDetail`) to decide whether the incoming row belongs
+// to the open modal — NOT `state.logs.selectedRow`. The pinned identity is
+// immutable for the lifetime of the modal, so background requests with a
+// different request_id are ALWAYS rejected, even if `selectedRow` is
+// somehow reassigned by a race condition. This is the fix for the
+// "modal content is replaced by other entries while I'm debugging" bug.
 export function updateOpenLogDetail(row: LogDetailLog | null | undefined): void {
   if (!row) return;
   const modal: HTMLElement | null = document.querySelector(".log-detail-modal");
@@ -1166,19 +1251,25 @@ export function updateOpenLogDetail(row: LogDetailLog | null | undefined): void 
   // Re-render into the wrapper to let lit-html diff efficiently.
   const wrapper = modal.parentElement;
   if (!wrapper) return;
+  // PINNED IDENTITY CHECK: reject any row that doesn't match the
+  // request_id (and trace_id, when both are present) of the row the
+  // user opened. This is the immutable source of truth —
+  // `state.logs.selectedRow` is NOT consulted here because it can be
+  // reassigned by race conditions (e.g. user clicks row B while row
+  // A's detail fetch is in flight), which would let the wrong row's
+  // updates bleed into the modal.
+  if (!matchesPinnedModalIdentity(row as { request_id?: string; trace_id?: string })) return;
   const sel = state.logs.selectedRow as unknown as
     | (LogDetailLog & { request_id?: string; trace_id?: string })
     | null;
-  if (!sel || sel.request_id !== row.request_id) return;
-  // Per-attempt isolation: a retry has the same request_id but a
-  // different trace_id. The open modal is bound to a specific attempt
-  // (identified by trace_id). If a different attempt's row event
-  // arrives, skip the update — the modal should only reflect the
-  // attempt the user opened it for, not a sibling retry.
-  const selTrace = sel.trace_id;
-  const rowTrace = (row as LogDetailLog & { trace_id?: string }).trace_id;
-  if (selTrace && rowTrace && selTrace !== rowTrace) return;
-  const merged: Record<string, unknown> = { ...sel } as Record<string, unknown>;
+  // Defensive: if `selectedRow` was somehow cleared or reassigned to a
+  // different row (shouldn't happen now that the pinned identity is the
+  // gate, but belt-and-suspenders), start the merge from the pinned
+  // identity's last known data instead of clobbering with raw `row`.
+  const base: LogDetailLog = (sel && matchesPinnedModalIdentity(sel as { request_id?: string; trace_id?: string }))
+    ? sel
+    : (row as LogDetailLog);
+  const merged: Record<string, unknown> = { ...base } as Record<string, unknown>;
   for (const [k, v] of Object.entries(row as Record<string, unknown>)) {
     if (v != null) merged[k] = v;
   }

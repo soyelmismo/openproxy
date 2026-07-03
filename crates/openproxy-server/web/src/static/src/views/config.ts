@@ -446,7 +446,7 @@ function renderConfig(): TemplateResult {
   const rc = cfg.racing || {};
 
   const timeoutsCard = card(html`Timeouts <small>(ms)</small>`, html`
-    <p class="muted">Precedence (highest wins): <code>model overrides</code> → <code>provider_timeouts</code> → <code>system default</code>. Editing these values takes effect on the next request; in-flight requests keep the previous value.</p>
+    <p class="muted">Precedence (highest wins): <code>model overrides</code> → <code>system default</code>. These values are the single source of truth for <code>connect</code>, <code>request_send</code>, and <code>total</code> across all providers. Per-model overrides (set on each model row) only affect <code>ttft</code> and <code>idle_chunk</code>. Editing these values takes effect on the next request; in-flight requests keep the previous value.</p>
     <div class="config-grid">
       ${renderField("connect_ms", "timeouts.connect_ms", liveTimeouts.connect_ms, "DNS + TCP connect + TLS handshake (upstream phases: dns, dial, tls).", (e) => { void onTimeoutChange("connect_ms", e); }, { editable: true })}
       ${renderField("request_send_ms", "timeouts.request_send_ms", liveTimeouts.request_send_ms, "Max time to write request headers + body (upstream phase: write).", (e) => { void onTimeoutChange("request_send_ms", e); }, { editable: true })}
@@ -581,11 +581,10 @@ function renderConfig(): TemplateResult {
       <summary>What does the precedence chain look like?</summary>
       <p>The pipeline resolves the effective timeouts on every request via <code>openproxy_core::timeouts::resolve</code>:</p>
       <ol>
-        <li>Start with the system defaults shown above (this view).</li>
-        <li>Override <code>connect</code>, <code>request_send</code>, and <code>total</code> from <code>provider_timeouts</code> if a row exists for the selected provider.</li>
+        <li>Start with the system defaults shown above (this view). These are the single source of truth for <code>connect</code>, <code>request_send</code>, and <code>total</code> — there are no per-provider overrides anymore.</li>
         <li>Override <code>ttft</code> and <code>idle_chunk</code> from <code>models.timeout_overrides_json</code> if the target model sets them.</li>
       </ol>
-      <p>Provider/model overrides live in the database (not in <code>config.toml</code>), so they <em>can</em> change without a restart — but they are not exposed in this view. Use the Providers / Combos detail screens for those.</p>
+      <p>Per-model overrides live in the database (not in <code>config.toml</code>), so they <em>can</em> change without a restart — but they are not exposed in this view. Use the Providers / Combos detail screens for those.</p>
     </details>`;
 }
 
