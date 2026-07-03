@@ -566,13 +566,10 @@ impl UpstreamClient {
             biased;
             _ = &mut cancel_wait => return Err(UpstreamError::Cancel),
             // OUTERMOST ceiling: the absolute total budget. We
-            // attribute it to `Headers` (the closest existing
-            // phase boundary the dispatch future was waiting on)
-            // because `UpstreamPhase` does not have a `Total`
-            // variant. A stalled call that has burned through every
-            // per-phase budget surfaces as `Timeout(Headers)` from
-            // this outermost race.
-            _ = &mut total_sleep => return Err(UpstreamError::Timeout(UpstreamPhase::Headers)),
+            // attribute it to `Total` so the error message correctly
+            // says "upstream timeout in phase total after Nms" instead
+            // of the misleading "headers" label.
+            _ = &mut total_sleep => return Err(UpstreamError::Timeout(UpstreamPhase::Total)),
             // Dispatch-supplied phase hint. When the test harness
             // (or any future production wrapper) declares a
             // `phase_hint`, we honour its exact deadline and
