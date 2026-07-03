@@ -375,60 +375,70 @@ async fn run_pipeline(
         _ => total_ms,
     };
 
-    // Spawn the watchdog. It holds only the `cancel_tx` sender,
-    // not the pipeline state, so a panic in the spawn is contained
-    // to this task and the request still completes via the
-    // existing `total` timeout on the reqwest send.
+    // 8. Build and run the pipeline request.
     //
-    // LEAK FIX: the watchdog used to `sleep(watchdog_budget_ms)`
-    // unconditionally — even after the pipeline finished. With
-    // `total_ms` defaulting to 300,000 (5 min), every request left
-    // a lingering task holding the `cancel_tx` Arc for 5 minutes.
-    // At 100 req/min × 5 min = ~500 lingering tasks (~250-350 KB),
-    // and with race_size=8 → ~4,000 tasks (~2-3 MB). The fix: race
-    // the sleep against a `done_rx` signal that fires when the
-    // pipeline completes. The watchdog exits immediately on
-    // `done_rx.recv()` (pipeline finished) or on timeout (soft cancel).
+    // For non-streaming clients, we do NOT pass the middleware's
+    // disconnect watch to the pipeline. The middleware's watch fires
+    // on request-body read errors, but for non-streaming the body
+    // was already consumed by axum's JSON parser. Hyper may still
+    // poll the wrapped body in the background and detect "idle
+    // timeout" or "connection reset" from an intermediate proxy
+    // (nginx, cloudflare) — NOT a real client disconnect. This
+    // causes false-positive "client disconnected" errors that abort
+    // the pipeline while the upstream is still generating.
+    //
+    // Fix: for non-streaming, create a FRESH watch pair. The watchdog
+    // timer fires the fresh sender (not the middleware's sender).
+    // The pipeline watches the fresh receiver. The middleware's
+    // disconnect watch is simply ignored for non-streaming.
+    //
+    // For streaming, we DO use the middleware's watch — the client
+    // is actively reading SSE chunks, so a body error is a real
+    // disconnect.
+    let (tx, rx) = tokio::sync::mpsc::channel(64);
+    let (stream_sink, client_disconnected, watchdog_tx) = if openai_req.stream {
+        (
+            Some(openproxy_core::race_sink::StreamSink::Direct(tx)),
+            cancel_rx,
+            cancel_tx.clone(),
+        )
+    } else {
+        let (fresh_tx, fresh_rx) = tokio::sync::watch::channel(false);
+        (
+            Some(openproxy_core::race_sink::StreamSink::Discard),
+            fresh_rx,
+            fresh_tx,
+        )
+    };
+
+    // Spawn the watchdog. It races the pipeline completion (done_rx)
+    // against the watchdog_budget_ms timer. If the timer wins, it
+    // fires the watchdog_tx (which is the fresh_tx for non-streaming
+    // or the middleware's cancel_tx for streaming).
+    //
+    // LEAK FIX: the watchdog used to sleep unconditionally — even
+    // after the pipeline finished. Now it exits immediately on
+    // done_rx (pipeline finished) or on timeout (soft cancel).
     let (done_tx, done_rx) = tokio::sync::oneshot::channel::<()>();
     {
-        let cancel_tx = cancel_tx.clone();
         tokio::spawn(async move {
             tokio::select! {
-                // Normal path: pipeline finished, cancel the watchdog.
                 _ = done_rx => {
                     // Pipeline done — no need to fire the cancel.
-                    // The `cancel_tx` Arc is dropped here.
                 }
-                // Fallback: soft-cancel deadline reached before the
-                // pipeline finished. Fire the cancel signal.
                 _ = tokio::time::sleep(std::time::Duration::from_millis(watchdog_budget_ms)) => {
-                    let _ = cancel_tx.send(true);
+                    let _ = watchdog_tx.send(true);
                 }
             }
         });
     }
-
-    // 8. Build and run the pipeline request.
-    // For streaming clients: create a channel that the pipeline sends
-    // SSE chunks to, and the HTTP response reads from.
-    // For non-streaming clients: use StreamSink::Discard — the pipeline
-    // still uses the streaming path to the upstream (for proper TTFT +
-    // timeout semantics), but the SSE chunks are discarded. The
-    // pipeline accumulates the response internally and returns it as
-    // a single JSON object via PipelineResult.final_response.
-    let (tx, rx) = tokio::sync::mpsc::channel(64);
-    let stream_sink = if openai_req.stream {
-        Some(openproxy_core::race_sink::StreamSink::Direct(tx))
-    } else {
-        Some(openproxy_core::race_sink::StreamSink::Discard)
-    };
 
     let req = PipelineRequest {
         request_id,
         trace_id,
         combo_id,
         openai_request: openai_req.clone(),
-        client_disconnected: cancel_rx,
+        client_disconnected,
         stream_sink,
         api_key_id,
         combo_override,
