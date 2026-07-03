@@ -30,6 +30,7 @@
 // file focused on orchestration.
 
 import { html, type TemplateResult } from "lit-html";
+import { repeat } from "lit-html/directives/repeat.js";
 // unsafeHTML import removed — log-row.ts now returns TemplateResult directly.
 import { state } from "../state/index.js";
 import { api } from "../state/api.js";
@@ -177,11 +178,24 @@ function saveVisibleColumns(): void {
 }
 
 function mergeLogsByDescId(existing: RecentUsageRow[], incoming: RecentUsageRow[]): RecentUsageRow[] {
-  // Key strategy: use (trace_id, request_id) as the primary identity
-  // for rows that haven't been persisted yet (id === 0 or null), and
-  // fall back to the DB id for finalized rows. This prevents the bug
-  // where multiple inflight rows with id=0 collapse into a single
-  // entry (the "new requests don't appear / overlap" issue).
+  // Key strategy: each attempt is a SEPARATE row, keyed by its unique
+  // `trace_id` (per-attempt). Retries of the same `request_id` have
+  // DIFFERENT `trace_id`s and MUST NOT be collapsed into one row —
+  // collapsing causes the "row flickers / overlaps" bug where a new
+  // attempt's data overlays the previous attempt's data.
+  //
+  // Identity precedence:
+  //   1. DB id (for finalized rows with id > 0) — `id:<id>`
+  //   2. trace_id (for inflight rows) — `tid:<trace_id>`
+  //   3. request_id (only when trace_id is empty) — `rid:<request_id>`
+  //
+  // We do NOT use a `req:<request_id>` secondary alias anymore. The
+  // old alias caused race attempts (same request_id, different
+  // trace_id) to collapse into one row, which:
+  //   - made the table flicker as each attempt's data overlaid the last
+  //   - showed the WRONG attempt's model/tokens/latency
+  //   - broke the "new requests don't appear until they finish" flow
+  //     (the inflight placeholder was merged into a finalized row)
   const merged = new Map<string, RecentUsageRow>();
   const rowKey = (r: RecentUsageRow): string => {
     if (r.id && r.id > 0) return `id:${r.id}`;
@@ -190,25 +204,18 @@ function mergeLogsByDescId(existing: RecentUsageRow[], incoming: RecentUsageRow[
     return `fallback:${Math.random()}`;
   };
   for (const row of existing) {
-    const k = rowKey(row);
-    merged.set(k, row);
-    // Also index by request_id for backwards-compat lookups, but
-    // only as a secondary alias (the primary key is the rowKey above).
-    if (row.request_id) merged.set("req:" + row.request_id, row);
+    merged.set(rowKey(row), row);
   }
   for (const row of incoming) {
     if (row == null) continue;
     const k = rowKey(row);
     let base = merged.get(k);
-    // If the incoming row has id=0 (inflight), try to match an
-    // existing row by trace_id or request_id as a fallback.
+    // Inflight rows (id=0) with a trace_id: match by trace_id only.
+    // Do NOT match by request_id — sibling race attempts share the
+    // same request_id and must stay separate.
     if ((!row.id || row.id === 0) && row.trace_id) {
       const tidKey = `tid:${row.trace_id}`;
       if (merged.has(tidKey)) base = merged.get(tidKey) as RecentUsageRow;
-    }
-    if ((!row.id || row.id === 0) && row.request_id) {
-      const reqKey = "req:" + row.request_id;
-      if (merged.has(reqKey) && !base) base = merged.get(reqKey) as RecentUsageRow;
     }
     // Merge: start from base, then overlay incoming fields. BUT —
     // only overlay fields that are not null/undefined in the incoming
@@ -223,19 +230,10 @@ function mergeLogsByDescId(existing: RecentUsageRow[], incoming: RecentUsageRow[
       }
     }
     merged.set(k, mergedRow);
-    if (row.request_id) merged.set("req:" + row.request_id, mergedRow);
     if (row.id && row.id > 0) state.logs.lastSeenId = Math.max(state.logs.lastSeenId, row.id);
   }
-  // Deduplicate: a row might be indexed under both its primary key
-  // and a "req:" alias. Filter to only the primary-keyed entries,
-  // preserving insertion order.
-  const seen = new Set<RecentUsageRow>();
-  const result: RecentUsageRow[] = [];
-  for (const row of merged.values()) {
-    if (seen.has(row)) continue;
-    seen.add(row);
-    result.push(row);
-  }
+  // Build the result array from primary-keyed entries only (no aliases).
+  const result: RecentUsageRow[] = Array.from(merged.values());
   result.sort((a, b) => {
     // Finalized rows (id > 0) sort by id descending. Inflight rows
     // (id === 0) sort by created_at descending so the newest
@@ -253,7 +251,6 @@ function mergeLogsByDescId(existing: RecentUsageRow[], incoming: RecentUsageRow[
     const trimmed = new Map<string, RecentUsageRow>();
     for (const r of finalResult) {
       trimmed.set(rowKey(r), r);
-      if (r.request_id) trimmed.set("req:" + r.request_id, r);
     }
     state.logs.rowById = trimmed as unknown as Map<number, RecentUsageRow>;
     return finalResult;
@@ -409,7 +406,11 @@ function renderLogsView(): TemplateResult {
         ${renderHeaderRow(visibleColKeys)}
         ${pageRows.length === 0
           ? html`<div class="empty" style="padding:2rem;">No recent requests yet. Use the API to see logs appear here in real time.</div>`
-          : pageRows.map((r) => html`<div data-key=${r.trace_id || `id:${r.id}` || `req:${r.request_id}`}>${renderLogRow(r, visibleColKeys)}</div>`)}
+          : repeat(
+              pageRows,
+              (r: RecentUsageRow) => r.trace_id || `id:${r.id}` || `req:${r.request_id}`,
+              (r: RecentUsageRow) => html`<div data-key=${r.trace_id || `id:${r.id}` || `req:${r.request_id}`}>${renderLogRow(r, visibleColKeys)}</div>`,
+            )}
       </div>
       ${renderPagination(totalRows, totalP)}
     </div>

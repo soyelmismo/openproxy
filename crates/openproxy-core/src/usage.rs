@@ -1149,70 +1149,47 @@ pub struct UsageDetailRow {
 ///
 /// `limit` is a hard cap and is forwarded verbatim to SQL.
 pub fn recent(conn: &Connection, since_id: i64, limit: u32) -> Result<Vec<RecentUsageRow>> {
-    // H1 fix: each retry within a single request writes a
-    // separate row to the `usage` table (the per-attempt row is
-    // what the operator sees when they want to inspect a
-    // particular 5xx/4xx/timeout), but the dashboard groups
-    // rows by `request_id` and the cost/token SUMs MUST come
-    // from the GROUP BY. We do the aggregation in SQL with
-    // scalar fields pulled from the first-attempt row
-    // (`MIN(id)`), the SUMs for the per-attempt-additive
-    // billing fields, and a deterministic status_code rule:
-    //   1. if any attempt is 2xx, take the MIN of the 2xx rows
-    //      (i.e. the earliest success);
-    //   2. otherwise take the MAX of the failing rows (the
-    //      most-recent failure — what the user actually saw).
-    // The `id` returned to the dashboard is the first attempt's
-    // id so long-polling `since_id` continues to work.
+    // Each retry within a single request writes a separate row to the
+    // `usage` table. The dashboard's live-logs view shows EACH attempt
+    // as its own row (keyed by `trace_id`), so the operator can inspect
+    // a particular 5xx/4xx/timeout attempt individually.
+    //
+    // Previously this query GROUPed BY `request_id` and SUMmed
+    // `prompt_tokens` / `completion_tokens` / `cost_usd` across all
+    // attempts. That was misleading: a request with 10 race attempts
+    // of 128k tokens each showed "1.28M tokens" (or more) in the
+    // table, and the `client_response` indicator used `MAX(...)` so
+    // the checkmark appeared on rows where `client_response` was
+    // actually `false`. The operator cannot debug a specific attempt
+    // when its data is merged with sibling attempts.
+    //
+    // The fix: return each attempt as its own row, no grouping. The
+    // WS broadcast already sends individual rows (see
+    // `publish_usage_row`), so this makes the history fetch and the
+    // WS broadcast consistent — the merge function in the frontend
+    // keys by `trace_id` (per-attempt) and no longer collapses
+    // sibling attempts.
+    //
+    // `since_id` pagination still works: each row has its own unique
+    // `id`, and `id > ?1` correctly returns only rows the dashboard
+    // hasn't seen yet. The long-poll feed returns rows in id ASC order
+    // (oldest first) so the client processes them in arrival order;
+    // the dashboard's `mergeLogsByDescId` sorts by id DESC for display.
     let limit_param: i64 = limit as i64;
     let mut stmt = conn
         .prepare(
-            "WITH grouped AS ( \
-                 SELECT request_id, \
-                        MIN(id)         AS agg_id, \
-                        MIN(created_at) AS agg_created_at, \
-                        COALESCE( \
-                            (SELECT u2.status_code FROM usage u2 \
-                             WHERE u2.request_id = usage.request_id \
-                               AND u2.status_code BETWEEN 200 AND 299 \
-                             ORDER BY u2.id ASC LIMIT 1), \
-                            (SELECT MAX(u3.status_code) FROM usage u3 \
-                             WHERE u3.request_id = usage.request_id) \
-                        ) AS agg_status_code, \
-                        MAX(total_ms)   AS agg_total_ms, \
-                        SUM(COALESCE(prompt_tokens, 0))     AS agg_prompt_tokens, \
-                        SUM(COALESCE(completion_tokens, 0)) AS agg_completion_tokens, \
-                        SUM(COALESCE(cost_usd, 0.0))        AS agg_cost_usd, \
-                        MAX(connect_ms) AS agg_connect_ms, \
-                        MAX(ttft_ms)    AS agg_ttft_ms, \
-                        MAX(race_total) AS agg_race_total, \
-                        MAX(race_attempts) AS agg_race_attempts, \
-                        MAX(is_streaming)  AS agg_is_streaming, \
-                        MAX(stream_complete) AS agg_stream_complete, \
-                        MAX(race_lost) AS agg_race_lost, \
-                        MAX(compression_savings_pct) AS agg_compression_savings_pct, \
-                        MAX(compression_techniques) AS agg_compression_techniques, \
-                        MAX(client_response) AS agg_client_response, \
-                        MAX(prompt_tokens_estimated) AS agg_prompt_tokens_estimated, \
-                        MAX(completion_tokens_estimated) AS agg_completion_tokens_estimated, \
-                        MAX(endpoint_kind) AS agg_endpoint_kind \
-                 FROM usage \
-                 WHERE id > ?1 \
-                 GROUP BY request_id \
-             ) \
-             SELECT g.agg_id, u.request_id, u.trace_id, u.provider_id, u.upstream_model_id, \
-                    g.agg_status_code, g.agg_total_ms, g.agg_prompt_tokens, g.agg_completion_tokens, \
-                    g.agg_cost_usd, g.agg_connect_ms, g.agg_ttft_ms, u.request_body_json, u.response_body_json, \
-                    u.request_headers, u.response_headers, u.error_msg_redacted, u.error_msg, \
-                    g.agg_race_total, g.agg_race_attempts, g.agg_is_streaming, g.agg_stream_complete, \
-                    g.agg_race_lost, g.agg_created_at, u.stop_reason, \
-                    g.agg_compression_savings_pct, g.agg_compression_techniques, \
-                    g.agg_client_response, \
-                    g.agg_prompt_tokens_estimated, g.agg_completion_tokens_estimated, \
-                    g.agg_endpoint_kind \
-             FROM grouped g \
-             JOIN usage u ON u.id = g.agg_id \
-             ORDER BY g.agg_id ASC \
+            "SELECT id, request_id, trace_id, provider_id, upstream_model_id, \
+                    status_code, total_ms, prompt_tokens, completion_tokens, \
+                    cost_usd, connect_ms, ttft_ms, request_body_json, response_body_json, \
+                    request_headers, response_headers, error_msg_redacted, error_msg, \
+                    race_total, race_attempts, is_streaming, stream_complete, \
+                    race_lost, created_at, stop_reason, \
+                    compression_savings_pct, compression_techniques, \
+                    client_response, prompt_tokens_estimated, completion_tokens_estimated, \
+                    endpoint_kind \
+             FROM usage \
+             WHERE id > ?1 \
+             ORDER BY id ASC \
              LIMIT ?2",
         )
         .map_err(|e| CoreError::Database {
@@ -1376,54 +1353,27 @@ pub fn recent(conn: &Connection, since_id: i64, limit: u32) -> Result<Vec<Recent
 /// same 3-attempt request that `recent()` shows as 0.03
 /// cost would show as 0.01 in the admin table at the top.
 pub fn recent_desc(conn: &Connection, limit: u32) -> Result<Vec<RecentUsageRow>> {
+    // Each attempt as its own row, no grouping. See `recent()` for the
+    // full rationale — the short version is: grouping by `request_id`
+    // and SUMming tokens across race attempts produced misleading
+    // values (3.9M instead of 128k) and the `MAX(client_response)`
+    // showed a checkmark on rows where `client_response` was actually
+    // `false`. The WS broadcast sends individual rows, so the history
+    // fetch must too.
     let limit_param: i64 = limit as i64;
     let mut stmt = conn
         .prepare(
-            "WITH grouped AS ( \
-                 SELECT request_id, \
-                        MIN(id)         AS agg_id, \
-                        MIN(created_at) AS agg_created_at, \
-                        COALESCE( \
-                            (SELECT u2.status_code FROM usage u2 \
-                             WHERE u2.request_id = usage.request_id \
-                               AND u2.status_code BETWEEN 200 AND 299 \
-                             ORDER BY u2.id ASC LIMIT 1), \
-                            (SELECT MAX(u3.status_code) FROM usage u3 \
-                             WHERE u3.request_id = usage.request_id) \
-                        ) AS agg_status_code, \
-                        MAX(total_ms)   AS agg_total_ms, \
-                        SUM(COALESCE(prompt_tokens, 0))     AS agg_prompt_tokens, \
-                        SUM(COALESCE(completion_tokens, 0)) AS agg_completion_tokens, \
-                        SUM(COALESCE(cost_usd, 0.0))        AS agg_cost_usd, \
-                        MAX(connect_ms) AS agg_connect_ms, \
-                        MAX(ttft_ms)    AS agg_ttft_ms, \
-                        MAX(race_total) AS agg_race_total, \
-                        MAX(race_attempts) AS agg_race_attempts, \
-                        MAX(is_streaming)  AS agg_is_streaming, \
-                        MAX(stream_complete) AS agg_stream_complete, \
-                        MAX(race_lost) AS agg_race_lost, \
-                        MAX(compression_savings_pct) AS agg_compression_savings_pct, \
-                        MAX(compression_techniques) AS agg_compression_techniques, \
-                        MAX(client_response) AS agg_client_response, \
-                        MAX(prompt_tokens_estimated) AS agg_prompt_tokens_estimated, \
-                        MAX(completion_tokens_estimated) AS agg_completion_tokens_estimated, \
-                        MAX(endpoint_kind) AS agg_endpoint_kind \
-                 FROM usage \
-                 GROUP BY request_id \
-             ) \
-             SELECT g.agg_id, u.request_id, u.trace_id, u.provider_id, u.upstream_model_id, \
-                    g.agg_status_code, g.agg_total_ms, g.agg_prompt_tokens, g.agg_completion_tokens, \
-                    g.agg_cost_usd, g.agg_connect_ms, g.agg_ttft_ms, u.request_body_json, u.response_body_json, \
-                    u.request_headers, u.response_headers, u.error_msg_redacted, u.error_msg, \
-                    g.agg_race_total, g.agg_race_attempts, g.agg_is_streaming, g.agg_stream_complete, \
-                    g.agg_race_lost, g.agg_created_at, u.stop_reason, \
-                    g.agg_compression_savings_pct, g.agg_compression_techniques, \
-                    g.agg_client_response, \
-                    g.agg_prompt_tokens_estimated, g.agg_completion_tokens_estimated, \
-                    g.agg_endpoint_kind \
-             FROM grouped g \
-             JOIN usage u ON u.id = g.agg_id \
-             ORDER BY g.agg_id DESC \
+            "SELECT id, request_id, trace_id, provider_id, upstream_model_id, \
+                    status_code, total_ms, prompt_tokens, completion_tokens, \
+                    cost_usd, connect_ms, ttft_ms, request_body_json, response_body_json, \
+                    request_headers, response_headers, error_msg_redacted, error_msg, \
+                    race_total, race_attempts, is_streaming, stream_complete, \
+                    race_lost, created_at, stop_reason, \
+                    compression_savings_pct, compression_techniques, \
+                    client_response, prompt_tokens_estimated, completion_tokens_estimated, \
+                    endpoint_kind \
+             FROM usage \
+             ORDER BY id DESC \
              LIMIT ?1",
         )
         .map_err(|e| CoreError::Database {
@@ -2679,10 +2629,17 @@ mod tests {
     /// increasing.
     #[test]
     fn recent_aggregates_retry_attempts_by_request_id() {
+        // UPDATED: `recent` no longer groups by request_id. Each attempt
+        // is returned as its own row so the dashboard's live-logs view
+        // shows each attempt individually (the operator can inspect a
+        // specific 5xx/4xx/timeout attempt). The old grouping SUMmed
+        // tokens across attempts, which produced misleading values
+        // (e.g. "3.9M tokens" for a request with 10 race attempts of
+        // 128k each) and used MAX(client_response) so the checkmark
+        // appeared on rows where client_response was actually false.
         let (conn, _p) = fresh_conn();
         let shared_req = RequestId::new().to_string();
-        // Attempt 1: 502 upstream failure (we still pay for
-        // the tokens up to the failure; cost_usd = 0 here).
+        // Attempt 1: 502 upstream failure.
         insert(
             &conn,
             &shared_req,
@@ -2735,23 +2692,24 @@ mod tests {
         );
 
         let rows = recent(&conn, 0, 50).expect("recent");
-        assert_eq!(rows.len(), 1, "three attempts collapse to one row");
-        let row = &rows[0];
-        // id is the first attempt's id.
-        assert_eq!(row.id.0, 1);
-        assert_eq!(row.request_id, shared_req);
-        // status_code is the earliest 2xx — attempt 3's 200.
-        assert_eq!(row.status_code, 200);
-        // SUM(prompt_tokens) = 10 + 10 + 100 = 120.
-        assert_eq!(row.prompt_tokens, Some(120));
-        // SUM(completion_tokens) = 0 + 0 + 50 = 50.
-        assert_eq!(row.completion_tokens, Some(50));
-        // SUM(cost_usd) = 0.03.
-        let cost = row.cost_usd.expect("cost_usd present");
-        assert!((cost - 0.03).abs() < 1e-9, "cost_usd was {}", cost);
-        // trace_id is the first attempt's trace (the one we
-        // JOINed to from the grouped.MIN(id) row).
-        assert_eq!(row.trace_id, "trace-a");
+        // Each attempt is its own row — NO grouping.
+        assert_eq!(rows.len(), 3, "three attempts = three rows (no grouping)");
+        // `recent` returns rows in id ASC order (long-poll semantics):
+        // attempt 1, 2, 3.
+        assert_eq!(rows[0].trace_id, "trace-a");
+        assert_eq!(rows[0].status_code, 502);
+        assert_eq!(rows[0].prompt_tokens, Some(10));
+
+        assert_eq!(rows[1].trace_id, "trace-b");
+        assert_eq!(rows[1].status_code, 429);
+        assert_eq!(rows[1].prompt_tokens, Some(10));
+
+        assert_eq!(rows[2].trace_id, "trace-c");
+        assert_eq!(rows[2].status_code, 200);
+        assert_eq!(rows[2].prompt_tokens, Some(100));
+        assert_eq!(rows[2].completion_tokens, Some(50));
+        let cost3 = rows[2].cost_usd.expect("cost_usd present");
+        assert!((cost3 - 0.03).abs() < 1e-9, "cost_usd was {}", cost3);
     }
 
     /// H1 mirror: `recent_desc` (the head-of-table fetch the
@@ -2763,6 +2721,8 @@ mod tests {
     /// show the summed cost.
     #[test]
     fn recent_desc_aggregates_retry_attempts_by_request_id() {
+        // UPDATED: `recent_desc` no longer groups by request_id, mirroring
+        // `recent`. Each attempt is its own row.
         let (conn, _p) = fresh_conn();
         let shared_req = RequestId::new().to_string();
         insert(
@@ -2798,10 +2758,16 @@ mod tests {
             None,
         );
         let rows = recent_desc(&conn, 50).expect("recent_desc");
-        assert_eq!(rows.len(), 1);
-        assert_eq!(rows[0].request_id, shared_req);
-        assert_eq!(rows[0].prompt_tokens, Some(110));
+        // No grouping — two attempts = two rows.
+        assert_eq!(rows.len(), 2);
+        // Ordered by id DESC: attempt 2 (success) first, then attempt 1 (502).
+        assert_eq!(rows[0].trace_id, "trace-b");
+        assert_eq!(rows[0].status_code, 200);
+        assert_eq!(rows[0].prompt_tokens, Some(100));
         assert_eq!(rows[0].completion_tokens, Some(50));
+        assert_eq!(rows[1].trace_id, "trace-a");
+        assert_eq!(rows[1].status_code, 502);
+        assert_eq!(rows[1].prompt_tokens, Some(10));
     }
 
     /// Compression regression: `recent_desc` (used by the WS
