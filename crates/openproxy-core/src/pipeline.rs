@@ -5109,10 +5109,19 @@ impl Pipeline {
         // chunks to a client that has already given up — and we
         // must record a `ClientDisconnected` usage row, not a
         // success row, so the dashboard reflects the cancellation.
-        // The `tracing::warn!` is the same line the dispatch-loop
-        // emit for boundary-only disconnects, so operators see a
-        // single shape in their logs.
-        let client_disconnected = {
+        //
+        // IMPORTANT: we only treat this as a disconnect if the
+        // stream did NOT complete normally. If `done_sent` is true,
+        // the upstream sent [DONE] and the stream completed — the
+        // client may have closed the connection immediately after
+        // receiving [DONE] (which is normal behavior), and the
+        // DisconnectBody may have fired the watch on the residual
+        // socket close. In that case, the request was successful
+        // and should be recorded as such, not as a disconnect.
+        let client_disconnected = if done_sent {
+            // Stream completed — ignore any residual disconnect signal.
+            false
+        } else {
             let mut rx = req.client_disconnected.clone();
             self.is_client_disconnected(&mut rx)
         };
@@ -5690,12 +5699,18 @@ impl Pipeline {
             });
         // When we have a partial response, this is by definition a
         // streaming request that didn't finish. When we don't (acc
-        // is None or empty), preserve the legacy behavior: the
-        // non-streaming failure path keeps `is_streaming=false`.
+        // is None or empty), check if the request was actually
+        // streaming by looking at the stream_sink. Previously this
+        // hard-coded `is_streaming=false` when there was no partial
+        // response, which was wrong for streaming requests that
+        // failed before any content arrived (e.g. client
+        // disconnected during TTFT, or upstream timeout before
+        // first token).
+        let was_streaming = req.stream_sink.is_some();
         let (is_streaming, stream_complete) = if response_body_json.is_some() {
             (true, false)
         } else {
-            (false, false)
+            (was_streaming, false)
         };
         let usage_row_id = match self.record_attempt_raw_with_tokens(
             req,

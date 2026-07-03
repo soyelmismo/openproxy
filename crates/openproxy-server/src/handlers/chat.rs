@@ -48,9 +48,14 @@ use tokio_stream::wrappers::ReceiverStream;
 use crate::{disconnect::CancelWatch, error::ApiError, state::AppState};
 
 /// SSE keepalive interval. Sends `: keep-alive\n\n` (an SSE comment)
-/// every 15 seconds so proxies and load balancers don't close the
-/// connection while the upstream is still generating tokens.
-const SSE_KEEPALIVE_INTERVAL: Duration = Duration::from_secs(15);
+/// every 5 seconds to keep the connection alive while the upstream
+/// is generating. This is critical for streaming requests where the
+/// upstream takes a long time to produce the first token (e.g. large
+/// prompts, reasoning models). Without frequent keepalives,
+/// intermediate proxies (nginx, cloudflare) and client HTTP
+/// libraries may close the connection due to inactivity, causing
+/// false-positive "client disconnected" errors.
+const SSE_KEEPALIVE_INTERVAL: Duration = Duration::from_secs(5);
 
 /// A stream that yields pre-formatted SSE frames (`Bytes`) from an
 /// mpsc channel, interleaved with periodic SSE keepalive comments.
