@@ -106,7 +106,21 @@ impl RetryPolicy {
                 // mid-stream do not return to the combo walk.
                 _ => true,
             },
-            UpstreamConnection(_) => true,
+            UpstreamConnection(_) => {
+                // UpstreamConnection is normally retryable, BUT if
+                // the error message starts with "client disconnected"
+                // it means the SSE channel was closed (the client or
+                // proxy dropped the connection). In that case, ALL
+                // subsequent targets will also fail because the sink
+                // is closed — retrying is pointless. Return false to
+                // abort the combo walk immediately.
+                let msg = err.to_string();
+                if msg.starts_with("client disconnected") {
+                    false
+                } else {
+                    true
+                }
+            }
             RateLimited { .. } => true,
             // 4xx is retryable: a provider-specific validation error
             // (e.g. MiniMax 2013) should not abort the whole combo.
