@@ -2424,6 +2424,18 @@ impl Pipeline {
                 Some(&model_overrides),
             )
         };
+        tracing::debug!(
+            combo_id = combo.id.0,
+            target_id = target.id.0,
+            provider = %target.provider_id,
+            model = %model.model_id.as_str(),
+            connect_ms = resolved_timeouts.connect.as_millis() as u64,
+            request_send_ms = resolved_timeouts.request_send.as_millis() as u64,
+            ttft_ms = resolved_timeouts.ttft.as_millis() as u64,
+            idle_chunk_ms = resolved_timeouts.idle_chunk.as_millis() as u64,
+            total_ms = resolved_timeouts.total.as_millis() as u64,
+            "resolved timeouts for target"
+        );
 
         // 4. Decide the wire format. Mixed providers consult the model row.
         let target_format = match adapter.format() {
