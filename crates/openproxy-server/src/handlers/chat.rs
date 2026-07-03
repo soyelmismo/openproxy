@@ -354,8 +354,12 @@ async fn run_pipeline(
     // shrink the deadline with `x-request-deadline-ms`; we cap it
     // at `timeouts.total` so a misbehaving client cannot drag the
     // watchdog past the upstream call's own timeout.
-    let cancel_tx = cancel.tx.clone();
-    let cancel_rx = cancel.rx.clone();
+    // The middleware's cancel watch is no longer passed to the pipeline
+    // (see the comment below for why). We still clone it here for
+    // documentation purposes — the middleware's DisconnectBody still
+    // fires it on real TCP-level disconnects, but the pipeline ignores it.
+    let _cancel_tx = cancel.tx.clone();
+    let _cancel_rx = cancel.rx.clone();
 
     // Determine the deadline for the watchdog. The client may
     // override it via `x-request-deadline-ms` (a millisecond
@@ -382,38 +386,37 @@ async fn run_pipeline(
 
     // 8. Build and run the pipeline request.
     //
-    // For non-streaming clients, we do NOT pass the middleware's
-    // disconnect watch to the pipeline. The middleware's watch fires
-    // on request-body read errors, but for non-streaming the body
-    // was already consumed by axum's JSON parser. Hyper may still
-    // poll the wrapped body in the background and detect "idle
-    // timeout" or "connection reset" from an intermediate proxy
-    // (nginx, cloudflare) — NOT a real client disconnect. This
-    // causes false-positive "client disconnected" errors that abort
-    // the pipeline while the upstream is still generating.
+    // For BOTH streaming and non-streaming, we create a FRESH watch
+    // pair that is ONLY driven by the watchdog timer. The middleware's
+    // disconnect watch is NOT passed to the pipeline.
     //
-    // Fix: for non-streaming, create a FRESH watch pair. The watchdog
-    // timer fires the fresh sender (not the middleware's sender).
-    // The pipeline watches the fresh receiver. The middleware's
-    // disconnect watch is simply ignored for non-streaming.
+    // Why: the middleware wraps both the request body and response
+    // body in DisconnectBody, sharing the same watch sender. For
+    // streaming, the response body wrapper CAN detect real client
+    // disconnects (when hyper fails to write a chunk). But the
+    // request body wrapper can ALSO fire the watch — after the body
+    // was already consumed by axum's JSON extractor, hyper may
+    // poll the wrapped body in the background and detect residual
+    // socket errors (RST, half-close) that are NOT real client
+    // disconnects. This causes false-positive "client disconnected"
+    // errors that abort the pipeline while the upstream is still
+    // generating.
     //
-    // For streaming, we DO use the middleware's watch — the client
-    // is actively reading SSE chunks, so a body error is a real
-    // disconnect.
+    // The watchdog timer (total_ms, default 5 min) is the sole
+    // cancel source for the pipeline. This means a real client
+    // disconnect won't be detected until the pipeline finishes or
+    // the watchdog fires — but the upstream connection is still
+    // cancelled by hyper when the response future is dropped (which
+    // happens when the SseBytesStream ends or errors).
     let (tx, rx) = tokio::sync::mpsc::channel(64);
-    let (stream_sink, client_disconnected, watchdog_tx) = if openai_req.stream {
-        (
-            Some(openproxy_core::race_sink::StreamSink::Direct(tx)),
-            cancel_rx,
-            cancel_tx.clone(),
-        )
-    } else {
+    let (stream_sink, client_disconnected, watchdog_tx) = {
         let (fresh_tx, fresh_rx) = tokio::sync::watch::channel(false);
-        (
-            Some(openproxy_core::race_sink::StreamSink::Discard),
-            fresh_rx,
-            fresh_tx,
-        )
+        let sink = if openai_req.stream {
+            Some(openproxy_core::race_sink::StreamSink::Direct(tx))
+        } else {
+            Some(openproxy_core::race_sink::StreamSink::Discard)
+        };
+        (sink, fresh_rx, fresh_tx)
     };
 
     // Spawn the watchdog. It races the pipeline completion (done_rx)
