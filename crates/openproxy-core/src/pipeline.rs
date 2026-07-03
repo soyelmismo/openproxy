@@ -2375,28 +2375,10 @@ impl Pipeline {
         //    Scope the lock guard into its own block so clippy can
         //    see it's dropped well before the dispatch `.await`.
         let resolved_timeouts = {
-            let conn = self.conn.lock();
-            let provider_timeouts =
-                match timeouts::load_provider_timeouts(&conn, &target.provider_id) {
-                    Ok(t) => t,
-                    Err(e) => {
-                        return self.record_and_fail(
-                            req,
-                            combo,
-                            target,
-                            FailureContext {
-                                attempt,
-                                race_size,
-                                err: &e,
-                                started,
-                                model: Some(&model),
-                                connect_ms: None,
-                                ttft_ms: None,
-                                status_code: 0,
-                            },
-                        );
-                    }
-                };
+            // Per-provider timeouts have been REMOVED — the global
+            // config (TimeoutsConfig) is the single source of truth.
+            // The provider_timeouts table still exists in the DB for
+            // backward compatibility but is no longer read.
             let model_overrides =
                 match ModelTimeoutOverrides::from_json(model.timeout_overrides_json.as_deref()) {
                     Ok(o) => o,
@@ -2420,7 +2402,7 @@ impl Pipeline {
                 };
             timeouts::resolve(
                 &self.config.defaults,
-                provider_timeouts.as_ref(),
+                None, // No per-provider overrides — global config only
                 Some(&model_overrides),
             )
         };
