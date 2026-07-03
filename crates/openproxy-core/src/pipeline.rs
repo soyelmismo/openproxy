@@ -5132,20 +5132,21 @@ impl Pipeline {
                 provider = %target.provider_id,
                 "client cancelled during SSE stream; aborting attempt"
             );
-            return self.record_and_fail(
+            return self.fail_stream_client_disconnected(
                 req,
                 combo,
                 target,
-                FailureContext {
-                    attempt,
-                    race_size,
-                    err: &CoreError::ClientDisconnected,
-                    started,
-                    model: Some(model),
-                    connect_ms: Some(connect_and_send_ms),
-                    ttft_ms,
-                    status_code: CoreError::ClientDisconnected.http_status(),
-                },
+                attempt,
+                race_size,
+                started,
+                model,
+                connect_and_send_ms,
+                ttft_ms,
+                trace_id,
+                acc.as_mut(),
+                &chunk_id,
+                created,
+                &model_name,
             );
         }
 
@@ -5788,12 +5789,28 @@ impl Pipeline {
         // `finish()` includes `"partial": true`. We take a reference
         // to the inner value first so we can still pass it to the
         // downstream function without moving the Option.
+        let has_partial_content = acc
+            .as_ref()
+            .is_some_and(|a| !a.is_empty());
         let acc_ref: Option<&crate::sse_accumulator::ResponseAccumulator> = match acc {
             Some(a) => {
                 a.mark_partial();
                 Some(&*a)
             }
             None => None,
+        };
+        // Build a more descriptive error message that distinguishes
+        // between "client disconnected before any content" and
+        // "stream interrupted after partial content". This helps
+        // the operator diagnose whether the upstream was slow (no
+        // content → client gave up) or the upstream started but
+        // stalled (partial content → stream broke mid-generation).
+        let err: CoreError = if has_partial_content {
+            CoreError::UpstreamConnection(
+                "stream interrupted — client disconnected after receiving partial content".into()
+            )
+        } else {
+            CoreError::ClientDisconnected
         };
         self.record_and_fail_with_trace_id_and_partial(
             req,
@@ -5802,7 +5819,7 @@ impl Pipeline {
             FailureContext {
                 attempt,
                 race_size,
-                err: &CoreError::ClientDisconnected,
+                err: &err,
                 started,
                 model: Some(model),
                 connect_ms: Some(connect_ms),
