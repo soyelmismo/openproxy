@@ -1529,6 +1529,178 @@ pub fn recent_desc(conn: &Connection, limit: u32) -> Result<Vec<RecentUsageRow>>
     collect_rows(rows, "recent_desc")
 }
 
+/// Read a single usage row by id as a `RecentUsageRow` (the broadcast
+/// shape, with ALL fields including `cost_usd`, `stop_reason`, and
+/// compression stats). Used by `mark_client_response` to re-broadcast
+/// the row after the `client_response` UPDATE — the re-broadcast MUST
+/// carry all fields so the frontend's null-skipping merge preserves
+/// the enriched data (cost, stop_reason, compression) from the original
+/// broadcast. The previous code used `detail_by_id` which doesn't
+/// select `cost_usd` / `stop_reason` / `compression_*` — the
+/// re-broadcast hard-coded them to `None`, which could clobber the
+/// dashboard's data if the frontend's merge didn't skip nulls
+/// correctly.
+pub fn row_for_broadcast_by_id(conn: &Connection, id: i64) -> Result<Option<RecentUsageRow>> {
+    let mut stmt = conn
+        .prepare(
+            "SELECT id, request_id, trace_id, provider_id, upstream_model_id, \
+                    status_code, total_ms, prompt_tokens, completion_tokens, \
+                    cost_usd, connect_ms, ttft_ms, request_body_json, response_body_json, \
+                    request_headers, response_headers, error_msg_redacted, error_msg, \
+                    race_total, race_attempts, is_streaming, stream_complete, \
+                    race_lost, created_at, stop_reason, \
+                    compression_savings_pct, compression_techniques, \
+                    client_response, prompt_tokens_estimated, completion_tokens_estimated, \
+                    endpoint_kind \
+             FROM usage \
+             WHERE id = ?1",
+        )
+        .map_err(|e| CoreError::Database {
+            message: format!("prepare row_for_broadcast_by_id: {}", e),
+            source: Some(Box::new(e)),
+        })?;
+
+    let row = stmt
+        .query_row(params![id], |row| {
+            let mut col_idx = 0;
+            let id: i64 = row.get(col_idx)?;
+            col_idx += 1;
+            let request_id: String = row.get(col_idx)?;
+            col_idx += 1;
+            let trace_id: String = row.get(col_idx)?;
+            col_idx += 1;
+            let provider_id: String = row.get(col_idx)?;
+            col_idx += 1;
+            let upstream_model_id: String = row.get(col_idx)?;
+            col_idx += 1;
+            let status_code: i64 = row.get(col_idx)?;
+            col_idx += 1;
+            let total_ms: i64 = row.get(col_idx)?;
+            col_idx += 1;
+            let prompt_tokens: Option<i64> = row.get(col_idx)?;
+            col_idx += 1;
+            let completion_tokens: Option<i64> = row.get(col_idx)?;
+            col_idx += 1;
+            let cost_usd: Option<f64> = row.get(col_idx)?;
+            col_idx += 1;
+            let connect_ms: Option<i64> = row.get(col_idx)?;
+            col_idx += 1;
+            let ttft_ms: Option<i64> = row.get(col_idx)?;
+            col_idx += 1;
+            let request_body_json: Option<serde_json::Value> = row
+                .get::<_, Option<String>>(col_idx)?
+                .and_then(|s| serde_json::from_str(&s).ok());
+            col_idx += 1;
+            let response_body_json: Option<serde_json::Value> = row
+                .get::<_, Option<String>>(col_idx)?
+                .and_then(|s| serde_json::from_str(&s).ok());
+            col_idx += 1;
+            let request_headers: Option<String> = row.get(col_idx)?;
+            col_idx += 1;
+            let response_headers: Option<String> = row.get(col_idx)?;
+            col_idx += 1;
+            let error_msg_redacted: Option<String> = row.get(col_idx)?;
+            col_idx += 1;
+            let error_msg: Option<String> = row.get(col_idx)?;
+            col_idx += 1;
+            let race_total: i64 = row.get(col_idx)?;
+            col_idx += 1;
+            let race_attempts: i64 = row.get(col_idx)?;
+            col_idx += 1;
+            let is_streaming: i64 = row.get(col_idx)?;
+            col_idx += 1;
+            let stream_complete: i64 = row.get(col_idx)?;
+            col_idx += 1;
+            let race_lost: i64 = row.get(col_idx)?;
+            col_idx += 1;
+            let created_at: String = row.get(col_idx)?;
+            col_idx += 1;
+            let stop_reason: Option<String> = row.get(col_idx)?;
+            col_idx += 1;
+            let compression_savings_pct: Option<f64> = row.get(col_idx)?;
+            col_idx += 1;
+            let compression_techniques: Option<String> = row.get(col_idx)?;
+            col_idx += 1;
+            let client_response: i64 = row.get(col_idx)?;
+            col_idx += 1;
+            let prompt_tokens_estimated: i64 = row.get(col_idx)?;
+            col_idx += 1;
+            let completion_tokens_estimated: i64 = row.get(col_idx)?;
+            col_idx += 1;
+            let endpoint_kind_str: String = row.get(col_idx)?;
+
+            if !(0..=u16::MAX as i64).contains(&status_code) {
+                return Err(rusqlite::Error::FromSqlConversionFailure(
+                    5,
+                    rusqlite::types::Type::Integer,
+                    Box::new(SimpleErr(format!(
+                        "status_code out of u16 range: {}",
+                        status_code
+                    ))),
+                ));
+            }
+            let request_headers = request_headers.and_then(|s| serde_json::from_str(&s).ok());
+            let response_headers = response_headers.and_then(|s| serde_json::from_str(&s).ok());
+            let error_message = error_msg_redacted.or(error_msg);
+            let prompt_tokens = prompt_tokens.and_then(|v| u32::try_from(v).ok());
+            let completion_tokens = completion_tokens.and_then(|v| u32::try_from(v).ok());
+            let race_total_u8 = u8::try_from(race_total).ok();
+            let race_attempts_u8 = u8::try_from(race_attempts).ok();
+            let is_streaming_bool = is_streaming != 0;
+            let stream_complete_bool = stream_complete != 0;
+            let endpoint_kind = match endpoint_kind_str.as_str() {
+                "chat" => crate::endpoint::EndpointKind::Chat,
+                "audio" => crate::endpoint::EndpointKind::Audio,
+                "image" => crate::endpoint::EndpointKind::Image,
+                "embedding" => crate::endpoint::EndpointKind::Embedding,
+                "video" => crate::endpoint::EndpointKind::Video,
+                _ => crate::endpoint::EndpointKind::Chat,
+            };
+            Ok(RecentUsageRow {
+                id: UsageId(id),
+                request_id,
+                trace_id,
+                provider_id: ProviderId::new(provider_id),
+                upstream_model_id,
+                status_code: status_code as u16,
+                total_ms: total_ms as u64,
+                prompt_tokens,
+                completion_tokens,
+                cost_usd,
+                connect_ms: connect_ms.map(|v| v as u64),
+                ttft_ms: ttft_ms.map(|v| v as u64),
+                request_body_json,
+                response_body_json,
+                request_headers,
+                response_headers,
+                error_message,
+                race_total: race_total_u8,
+                race_attempts: race_attempts_u8,
+                is_streaming: is_streaming_bool,
+                stream_complete: stream_complete_bool,
+                race_lost: race_lost != 0,
+                stop_reason,
+                compression_savings_pct,
+                compression_techniques,
+                client_response: client_response != 0,
+                prompt_tokens_estimated: prompt_tokens_estimated != 0,
+                completion_tokens_estimated: completion_tokens_estimated != 0,
+                endpoint_kind,
+                created_at,
+            })
+        })
+        .map(Some);
+
+    match row {
+        Ok(r) => Ok(r),
+        Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+        Err(e) => Err(CoreError::Database {
+            message: format!("query row_for_broadcast_by_id: {}", e),
+            source: Some(Box::new(e)),
+        }),
+    }
+}
+
 /// Return one full `usage` row by id.
 pub fn detail_by_id(conn: &Connection, id: i64) -> Result<Option<UsageDetailRow>> {
     let mut stmt = conn

@@ -2061,7 +2061,6 @@ async fn stream_usage_rows(socket: WebSocket, state: AppState) {
                 }
             }
         };
-        outbox_send(&outbox_tx, json!({ "type": "history", "rows": rows })).await;
         // H7 fix: track the highest usage `id` we have
         // streamed to the dashboard so a `Lagged` broadcast
         // error can be answered with a targeted resync
@@ -2072,7 +2071,21 @@ async fn stream_usage_rows(socket: WebSocket, state: AppState) {
         // permanently lose rows it could not consume in time
         // and a toast was the only signal — see the audit
         // finding RACE-F-5.
+        //
+        // Compute `last_known_id` BEFORE redacting (redaction
+        // consumes `rows` via `into_iter`).
         let mut last_known_id: i64 = rows.iter().map(|r| r.id.0).max().unwrap_or(0);
+        outbox_send(&outbox_tx, json!({
+            "type": "history",
+            // SECURITY: redact heavyweight fields (request/response bodies
+            // and headers) before sending the initial history batch. The
+            // live `row` events below are already redacted by
+            // `publish_usage_row` → `redact_for_broadcast`; the history
+            // batch must apply the same redaction so the initial rows
+            // don't leak bodies/headers to the dashboard. The full
+            // bodies are available on demand via /usage/detail.
+            "rows": rows.into_iter().map(usage::redact_for_broadcast).collect::<Vec<_>>()
+        })).await;
 
         // 4. Event loop — usage_rx, stage_rx, and notification_rx are
         //    already subscribed above, before the history query. The

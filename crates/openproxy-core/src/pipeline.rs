@@ -5467,45 +5467,18 @@ impl Pipeline {
                 // real-time. The original broadcast (at INSERT time)
                 // carried client_response = false; this re-broadcast
                 // carries the corrected client_response = true.
-                if let Ok(Some(updated_row)) = crate::usage::detail_by_id(&conn, id.0) {
-                    // Convert UsageDetailRow → RecentUsageRow for broadcast.
-                    // The RecentUsageRow is the shape the WS channel
-                    // expects; UsageDetailRow has all the same fields
-                    // plus a few extras (account_id, combo_id, etc.)
-                    // that the redact_for_broadcast helper strips.
-                    let recent_row = crate::usage::RecentUsageRow {
-                        id: updated_row.id,
-                        request_id: updated_row.request_id,
-                        trace_id: updated_row.trace_id,
-                        provider_id: updated_row.provider_id,
-                        upstream_model_id: updated_row.upstream_model_id,
-                        status_code: updated_row.status_code,
-                        total_ms: updated_row.total_ms as u64,
-                        prompt_tokens: updated_row.prompt_tokens.and_then(|v| u32::try_from(v).ok()),
-                        completion_tokens: updated_row.completion_tokens.and_then(|v| u32::try_from(v).ok()),
-                        cost_usd: None, // cost is not in UsageDetailRow; the dashboard already has it from the original broadcast
-                        connect_ms: updated_row.connect_ms.map(|v| v as u64),
-                        ttft_ms: updated_row.ttft_ms.map(|v| v as u64),
-                        request_body_json: None,
-                        response_body_json: None,
-                        request_headers: None,
-                        response_headers: None,
-                        error_message: updated_row.error_message,
-                        race_total: Some(updated_row.race_total as u8),
-                        race_attempts: Some(updated_row.race_attempts as u8),
-                        is_streaming: updated_row.is_streaming,
-                        stream_complete: updated_row.stream_complete,
-                        race_lost: updated_row.race_lost,
-                        stop_reason: None,
-                        compression_savings_pct: None,
-                        compression_techniques: None,
-                        client_response: updated_row.client_response,
-                        prompt_tokens_estimated: updated_row.prompt_tokens_estimated,
-                        completion_tokens_estimated: updated_row.completion_tokens_estimated,
-                        endpoint_kind: updated_row.endpoint_kind,
-                        created_at: updated_row.created_at,
-                    };
-                    crate::usage::publish_usage_row(recent_row);
+                //
+                // CRITICAL: use `row_for_broadcast_by_id` (which
+                // returns a `RecentUsageRow` with ALL fields including
+                // cost_usd, stop_reason, and compression stats), NOT
+                // `detail_by_id` (which returns `UsageDetailRow`
+                // without those fields). The previous code used
+                // `detail_by_id` and hard-coded cost_usd / stop_reason
+                // / compression to `None` — the re-broadcast would
+                // clobber the dashboard's enriched data if the
+                // frontend's merge didn't skip nulls correctly.
+                if let Ok(Some(updated_row)) = crate::usage::row_for_broadcast_by_id(&conn, id.0) {
+                    crate::usage::publish_usage_row(updated_row);
                 }
             }
             Ok(_) => {

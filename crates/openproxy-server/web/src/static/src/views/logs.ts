@@ -246,16 +246,28 @@ function mergeLogsByDescId(existing: RecentUsageRow[], incoming: RecentUsageRow[
   const limit = state.logs.maxRows;
   if (result.length > limit) {
     const finalResult = result.slice(0, limit);
-    // Rebuild the merged map without the trimmed entries so
-    // rowById lookups don't return stale rows.
-    const trimmed = new Map<string, RecentUsageRow>();
+    // Rebuild `rowById` as a NUMBER-keyed map so `rowById.get(numericId)`
+    // lookups work correctly. The previous code cast the STRING-keyed
+    // `merged` map to `Map<number>` — a type lie that meant every
+    // `.get(number)` lookup returned `undefined`, forcing the caller to
+    // fall back to `rows.find()` (a linear scan). This is the WARNING-K
+    // fix from the debugger audit.
+    const trimmed = new Map<number, RecentUsageRow>();
     for (const r of finalResult) {
-      trimmed.set(rowKey(r), r);
+      if (r.id && r.id > 0) trimmed.set(r.id, r);
     }
-    state.logs.rowById = trimmed as unknown as Map<number, RecentUsageRow>;
+    state.logs.rowById = trimmed;
     return finalResult;
   }
-  state.logs.rowById = merged as unknown as Map<number, RecentUsageRow>;
+  // Build a proper NUMBER-keyed map for `rowById` (not a cast of the
+  // string-keyed `merged` map). Only finalized rows (id > 0) are
+  // indexed — inflight rows (id = 0) are looked up via the inflight
+  // maps, not `rowById`.
+  const byId = new Map<number, RecentUsageRow>();
+  for (const r of result) {
+    if (r.id && r.id > 0) byId.set(r.id, r);
+  }
+  state.logs.rowById = byId;
   return result;
 }
 
@@ -1065,15 +1077,24 @@ async function openLogDetail(id: string, requestId: string, traceId?: string): P
   if (!isInflight && !state.logs.rows.find((r) => r.id === row.id)) {
     state.logs.rows = mergeLogsByDescId(state.logs.rows, [row]);
   }
-  // SNAPSHOT: do NOT store a live reference to the row object. Create a
-  // shallow copy so mutations to the original (e.g. inflight placeholders
-  // being updated by stage events, or `mergeLogsByDescId` replacing the
-  // row in `state.logs.rows`) don't affect the modal's data. The modal
-  // reads from `state.logs.selectedRow` via `copyDebugBundle` and
-  // `updateOpenLogDetail`; if it's a live reference, the modal's data
-  // silently changes as background requests mutate the original object.
-  // This is the core decoupling fix.
-  state.logs.selectedRow = { ...row } as typeof state.logs.selectedRow;
+  // CRITICAL FIX: do NOT set `state.logs.selectedRow` here. The previous
+  // code (`state.logs.selectedRow = { ...row }`) ran BEFORE the async
+  // /usage/detail fetch and BEFORE `showLogDetail`. This created a window
+  // (the entire fetch duration) where `selectedRow` pointed to the NEW
+  // clicked row's non-enriched snapshot, while the modal still showed
+  // the OLD row and `pinnedRequestId` still pointed to the OLD row.
+  //
+  // Any WS event for the OLD pinned row during this window would pass
+  // the pinned identity check in `updateOpenLogDetail`, but `sel`
+  // (= `selectedRow`) would be the NEW row's snapshot (doesn't match
+  // the OLD pinned identity). The old fallback `base = row` would then
+  // CLOBBER the modal with the non-enriched WS event data.
+  //
+  // The fix: `selectedRow` is set ONLY by `showLogDetail` (which also
+  // sets the pinned identity) and by `updateOpenLogDetail` (which
+  // preserves the pinned identity). No other code path may set it.
+  // This ensures `selectedRow` and `pinnedRequestId`/`pinnedTraceId`
+  // are ALWAYS in sync.
 
   if (isInflight) {
     // SNAPSHOT: work on a copy so we don't mutate the LIVE inflight
@@ -1148,11 +1169,16 @@ async function openLogDetail(id: string, requestId: string, traceId?: string): P
         }
         row = merged as unknown as RecentUsageRow;
         state.logs.rowById.set(Number(row.id || id), row);
-        // SNAPSHOT: store a shallow copy, not a live reference. `row`
-        // here is already a new object (from the spread above), but we
-        // snapshot it anyway for consistency — the contract is that
-        // `selectedRow` is ALWAYS a snapshot, never a live reference.
-        state.logs.selectedRow = { ...row } as typeof state.logs.selectedRow;
+        // CRITICAL FIX: do NOT set `state.logs.selectedRow` here. The
+        // previous code (`state.logs.selectedRow = { ...row }`) ran
+        // BEFORE `showLogDetail` at the end of this function. That
+        // created the same race-condition window as the removed assignment
+        // at line ~1076: `selectedRow` would point to the NEW row while
+        // `pinnedRequestId` still pointed to the OLD row.
+        //
+        // `selectedRow` is set ONLY by `showLogDetail` (called at the
+        // end of this function), which also sets the pinned identity
+        // atomically. This guarantees they're always in sync.
       }
     } catch (e: unknown) {
       // RACE-CONDITION GUARD: same check on the error path — if the

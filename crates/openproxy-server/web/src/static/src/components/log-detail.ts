@@ -1315,17 +1315,33 @@ export function updateOpenLogDetail(row: LogDetailLog | null | undefined): void 
   const sel = state.logs.selectedRow as unknown as
     | (LogDetailLog & { request_id?: string; trace_id?: string })
     | null;
-  // Defensive: if `selectedRow` was somehow cleared or reassigned to a
-  // different row (shouldn't happen now that the pinned identity is the
-  // gate, but belt-and-suspenders), start the merge from the pinned
-  // identity's last known data instead of clobbering with raw `row`.
-  const base: LogDetailLog = (sel && matchesPinnedModalIdentity(sel as { request_id?: string; trace_id?: string }))
-    ? sel
-    : (row as LogDetailLog);
+  // CRITICAL FIX: if `selectedRow` doesn't match the pinned identity
+  // (e.g. because `openLogDetail` reassigned it to a NEW row during an
+  // async fetch), DO NOT fall back to using the incoming `row` as the
+  // merge base. The incoming `row` from a WS event is NOT enriched —
+  // it lacks `request_body_json` / `response_body_json` (stripped by
+  // `redact_for_broadcast`). Using it as the base would CLOBBER the
+  // enriched data we fetched via `/usage/detail`, causing the modal to
+  // show "No request body recorded" — the exact bug the user reported.
+  //
+  // Instead, return early. The modal stays frozen at its last known
+  // good snapshot. The incoming WS event's data is NOT lost — it's
+  // still merged into `state.logs.rows` by `handleLogsMessage`, so the
+  // TABLE shows the live data. Only the MODAL is frozen, which is the
+  // desired behavior (the user is debugging a specific request).
+  if (!sel || !matchesPinnedModalIdentity(sel as { request_id?: string; trace_id?: string })) {
+    console.debug(
+      "[openproxy log-detail] updateOpenLogDetail SKIP: selectedRow doesn't match pinned identity — modal stays frozen at last snapshot",
+    );
+    return;
+  }
+  const base: LogDetailLog = sel;
   // Create a NEW merged snapshot — never mutate the original row objects.
   // The spread `{ ...base }` creates a shallow copy, so the merge doesn't
-  // mutate `base` (which might be `sel` = the previous `selectedRow`
-  // snapshot, or the incoming `row` from the WS).
+  // mutate `base` (which is `sel` = the previous `selectedRow` snapshot).
+  // Only overlay NON-NULL fields from the incoming `row` — this preserves
+  // enriched fields (request_body_json, etc.) that the WS event doesn't
+  // carry, while still updating live fields (status_code, total_ms, etc.).
   const merged: Record<string, unknown> = { ...base } as Record<string, unknown>;
   for (const [k, v] of Object.entries(row as Record<string, unknown>)) {
     if (v != null) merged[k] = v;
