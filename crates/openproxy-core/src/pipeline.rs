@@ -5864,8 +5864,46 @@ impl Pipeline {
         model_name: &str,
     ) -> PipelineResult {
         let err = match e {
-            crate::race_sink::StreamSinkError::Lost => CoreError::RaceLost,
-            crate::race_sink::StreamSinkError::Closed => CoreError::ClientDisconnected,
+            crate::race_sink::StreamSinkError::Lost => {
+                tracing::debug!(
+                    combo_id = combo.id.0,
+                    target_id = target.id.0,
+                    "sink send failed: Lost (another race lane won)"
+                );
+                CoreError::RaceLost
+            }
+            crate::race_sink::StreamSinkError::Closed => {
+                // The SSE channel's receiver was dropped — this happens
+                // when the HTTP response body (Body::from_stream) is
+                // dropped by hyper, which happens when:
+                // 1. The client closes the TCP connection (real disconnect)
+                // 2. An intermediate proxy (nginx, cloudflare) closes
+                //    the connection due to idle timeout
+                // 3. The client's HTTP library times out waiting for
+                //    the first byte (if keepalive didn't fire in time)
+                let elapsed = started.elapsed().as_millis() as u64;
+                tracing::warn!(
+                    combo_id = combo.id.0,
+                    target_id = target.id.0,
+                    provider = %target.provider_id,
+                    model = %model.model_id.as_str(),
+                    elapsed_ms = elapsed,
+                    connect_ms = connect_ms,
+                    ttft_ms = ?ttft_ms,
+                    "sink send failed: Closed — client/proxy disconnected \
+                     (elapsed={}ms, connect={}ms, ttft={:?})",
+                    elapsed, connect_ms, ttft_ms
+                );
+                // Use UpstreamConnection with a descriptive message
+                // instead of ClientDisconnected so the error in the
+                // dashboard tells the operator WHAT happened, not just
+                // "client disconnected".
+                CoreError::UpstreamConnection(format!(
+                    "client disconnected (elapsed={}ms, connect={}ms, ttft={:?}) — \
+                     likely proxy idle timeout or client HTTP library timeout",
+                    elapsed, connect_ms, ttft_ms
+                ))
+            }
         };
         let acc_ref: Option<&crate::sse_accumulator::ResponseAccumulator> = match acc {
             Some(a) => {
