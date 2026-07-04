@@ -197,6 +197,40 @@
 .quota-cell.error { color: var(--color-error); }
 .quota-cell .quota-plan { color: var(--color-text-muted); font-size: 0.7rem; }
 
+/* Per-model quota styles */
+.quota-model-details {
+  margin-top: var(--space-2);
+  font-size: var(--fs-xs);
+}
+.quota-model-details summary {
+  cursor: pointer;
+  color: var(--color-text-muted);
+  font-weight: 500;
+}
+.quota-model-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  margin-top: var(--space-1);
+}
+.quota-model-row {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.quota-model-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: var(--space-2);
+}
+.quota-model-name {
+  font-family: var(--font-mono);
+}
+.quota-model-text {
+  color: var(--color-text-muted);
+}
+
 .auto-activate-bar {
   display: flex;
   align-items: center;

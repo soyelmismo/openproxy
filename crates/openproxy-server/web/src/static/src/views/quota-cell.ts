@@ -7,15 +7,23 @@ import type { Account, ModelQuotaDetail } from "../lib/types/api.js";
 function renderModelQuotaRows(details: ModelQuotaDetail[]): TemplateResult {
   return html`<details class="quota-model-details" open>
     <summary>Models (${details.length})</summary>
-    ${details.map((d) => {
-      const pct = d.session_limit > 0 ? Math.round(d.session_used / d.session_limit * 100) : 0;
-      const color = pct > 80 ? "danger" : pct > 50 ? "warn" : "ok";
-      return html`<div class="quota-model-row ${color}">
-        <span class="quota-model-name">${d.model_id}</span>
-        <div class="quota-bar mini ${color}"><div class="quota-bar-fill" style="width: ${Math.min(100, pct)}%"></div></div>
-        <span class="quota-model-text">${pct}% used${d.session_reset_at ? " · resets " + d.session_reset_at : ""}</span>
-      </div>`;
-    })}
+    <div class="quota-model-list">
+      ${details.map((d) => {
+        const pct = d.session_limit > 0 ? Math.round(d.session_used / d.session_limit * 100) : 0;
+        const color = pct > 80 ? "danger" : pct > 50 ? "warn" : "ok";
+        return html`<div class="quota-model-row">
+          <div class="quota-model-header">
+            <span class="quota-model-name">${d.model_id}</span>
+            <span class="quota-model-text">${pct}% used${d.session_reset_at ? " · resets " + d.session_reset_at : ""}</span>
+          </div>
+          <div class="quota-bar mini ${color}">
+            <div class="quota-bar-track">
+              <div class="quota-bar-fill" style="width: ${Math.min(100, pct)}%"></div>
+            </div>
+          </div>
+        </div>`;
+      })}
+    </div>
   </details>`;
 }
 
@@ -52,8 +60,18 @@ export function renderQuotaCell(a: Account): TemplateResult {
   };
   return html`<div class="quota-cell">
     ${a.quota_plan_name ? html`<small class="quota-plan">${a.quota_plan_name}</small>` : null}
-    <div class="quota-bar ${sessionColor}"><div class="quota-bar-fill" style="width: ${sessionPct == null ? 0 : Math.min(100, sessionPct)}%"></div><span>5h: ${sessionText}${resetHint(a.quota_session_reset_at)}</span></div>
-    <div class="quota-bar ${weeklyColor}"><div class="quota-bar-fill" style="width: ${weeklyPct == null ? 0 : Math.min(100, weeklyPct)}%"></div><span>weekly: ${weeklyText}${resetHint(a.quota_weekly_reset_at)}</span></div>
+    <div class="quota-bar ${sessionColor}">
+      <div class="quota-bar-track">
+        <div class="quota-bar-fill" style="width: ${sessionPct == null ? 0 : Math.min(100, sessionPct)}%"></div>
+      </div>
+      <span class="quota-bar-label">5h: ${sessionText}${resetHint(a.quota_session_reset_at)}</span>
+    </div>
+    <div class="quota-bar ${weeklyColor}">
+      <div class="quota-bar-track">
+        <div class="quota-bar-fill" style="width: ${weeklyPct == null ? 0 : Math.min(100, weeklyPct)}%"></div>
+      </div>
+      <span class="quota-bar-label">weekly: ${weeklyText}${resetHint(a.quota_weekly_reset_at)}</span>
+    </div>
     ${a.quota_model_details && a.quota_model_details.length > 0 ? renderModelQuotaRows(a.quota_model_details) : null}
   </div>`;
 }
