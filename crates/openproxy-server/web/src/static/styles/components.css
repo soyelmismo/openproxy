@@ -263,6 +263,10 @@ tr.selected { background: var(--color-primary-soft); }
   gap: 0.25rem;
   margin: var(--space-2) 0;
 }
+.quota-bar.mini {
+  margin: 0;
+  gap: 0;
+}
 .quota-bar-track {
   height: 8px;
   background: var(--color-surface-2);
@@ -270,13 +274,20 @@ tr.selected { background: var(--color-primary-soft); }
   position: relative;
   overflow: hidden;
 }
+.quota-bar.mini .quota-bar-track {
+  height: 4px;
+}
 .quota-bar-fill {
   height: 100%;
   background: var(--color-primary);
   transition: width var(--t-base);
 }
-.quota-bar-fill.warn    { background: var(--color-warn); }
-.quota-bar-fill.error   { background: var(--color-error); }
+.quota-bar.ok .quota-bar-fill { background: var(--color-success); }
+.quota-bar.warn .quota-bar-fill { background: var(--color-warn); }
+.quota-bar.danger .quota-bar-fill { background: var(--color-error); }
+/* Retain original variants for standalone quotaBar component usage */
+.quota-bar-fill.warn { background: var(--color-warn); }
+.quota-bar-fill.error { background: var(--color-error); }
 .quota-bar-label { font-size: var(--fs-xs); color: var(--color-text-muted); }
 
 /* ----- Bulk actions bar ----- */
