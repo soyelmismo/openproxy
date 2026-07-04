@@ -436,6 +436,32 @@ async fn run_phased_connect(
     is_https: bool,
     timeouts: PhasedTimeouts,
 ) -> Result<PhasedConnection, Box<dyn std::error::Error + Send + Sync>> {
+    // ---- Connect budget (accumulative) --------------------------------
+    // CRITICAL FIX: the connect phases (DNS + Dial + TLS) share a SINGLE
+    // accumulative budget derived from `connect_ms` (the largest of
+    // dns/dial/tls). Each phase gets only the REMAINING time from the
+    // budget, NOT a fresh `timeouts.dns` / `timeouts.dial` / `timeouts.tls`
+    // window from zero.
+    //
+    // BUG: the previous code used `tokio::time::timeout(timeouts.dns, ...)`,
+    // `tokio::time::timeout(timeouts.dial, ...)`, `tokio::time::timeout(timeouts.tls, ...)`
+    // — each with its OWN independent window. If DNS took 3.5s, Dial got
+    // a fresh 7s window (not 7s - 3.5s = 3.5s), and TLS got another fresh
+    // 7s window. The total connect time could be up to 17.5s even though
+    // the global `connect_ms` was 7000ms. This caused "client disconnected"
+    // errors at ~11s because the client (or an intermediate proxy) timed
+    // out waiting for the first byte while openproxy was still in the TLS
+    // handshake.
+    //
+    // The fix: compute a single `connect_deadline` = start + max(dns, dial, tls).
+    // Each phase's timeout is `connect_deadline - now` (clamped to >= 1ms).
+    // This ensures the TOTAL connect time never exceeds the configured
+    // `connect_ms` budget, regardless of how the time is split across
+    // phases.
+    let connect_start = std::time::Instant::now();
+    let connect_budget = timeouts.dns.max(timeouts.dial).max(timeouts.tls);
+    let connect_deadline = connect_start + connect_budget;
+
     // ---- Parse the URI ---------------------------------------------------
     let (host, port) = match parse_authority(&uri) {
         Ok(v) => v,
@@ -453,7 +479,16 @@ async fn run_phased_connect(
     let addrs: Vec<SocketAddr> = if let Some(literal) = parse_literal_ip(&host, port) {
         vec![literal]
     } else {
-        match tokio::time::timeout(timeouts.dns, resolve_host(&host, port)).await {
+        let dns_remaining = connect_deadline
+            .checked_duration_since(std::time::Instant::now())
+            .unwrap_or(std::time::Duration::from_millis(0));
+        if dns_remaining.is_zero() {
+            return Err(Box::new(PhasedConnectorError {
+                phase: UpstreamPhase::Dns,
+                kind: PhasedErrorKind::Timeout,
+            }));
+        }
+        match tokio::time::timeout(dns_remaining, resolve_host(&host, port)).await {
             Ok(Ok(v)) => v,
             Ok(Err(e)) => {
                 return Err(Box::new(PhasedConnectorError {
@@ -472,13 +507,22 @@ async fn run_phased_connect(
 
     // ---- Phase 2: Dial --------------------------------------------------
     // Try the addresses in order. The first one that succeeds wins; if
-    // all fail with I/O errors, return the last one. A `timeouts.dial`
+    // all fail with I/O errors, return the last one. A connect-budget
     // expiry on any single attempt is reported as `Timeout(Dial)` so
     // a stuck connect is correctly attributed.
     let mut last_err: Option<io::Error> = None;
     let mut stream: Option<TcpStream> = None;
     for addr in addrs {
-        match tokio::time::timeout(timeouts.dial, TcpStream::connect(addr)).await {
+        let dial_remaining = connect_deadline
+            .checked_duration_since(std::time::Instant::now())
+            .unwrap_or(std::time::Duration::from_millis(0));
+        if dial_remaining.is_zero() {
+            return Err(Box::new(PhasedConnectorError {
+                phase: UpstreamPhase::Dial,
+                kind: PhasedErrorKind::Timeout,
+            }));
+        }
+        match tokio::time::timeout(dial_remaining, TcpStream::connect(addr)).await {
             Ok(Ok(s)) => {
                 stream = Some(s);
                 break;
@@ -525,9 +569,10 @@ async fn run_phased_connect(
 
     // ---- Phase 3: TLS ---------------------------------------------------
     // Real `tokio-rustls` handshake. The connector is process-wide
-    // (rustls `ClientConfig` is `Arc`-backed). The handshake is
-    // bounded by `timeouts.tls`; a stalled or rejected TLS
-    // handshake surfaces as `Timeout(Tls)` or `Io(Tls)`.
+    // (rustls `ClientConfig` is `Arc`-backed). The handshake is bounded
+    // by the REMAINING connect budget (not a fresh `timeouts.tls` window);
+    // a stalled or rejected TLS handshake surfaces as `Timeout(Tls)` or
+    // `Io(Tls)`.
     if is_https {
         let server_name = match ServerName::try_from(host.clone()) {
             Ok(n) => n,
@@ -539,7 +584,16 @@ async fn run_phased_connect(
             }
         };
         let connector = tls_connector();
-        match tokio::time::timeout(timeouts.tls, connector.connect(server_name, stream)).await {
+        let tls_remaining = connect_deadline
+            .checked_duration_since(std::time::Instant::now())
+            .unwrap_or(std::time::Duration::from_millis(0));
+        if tls_remaining.is_zero() {
+            return Err(Box::new(PhasedConnectorError {
+                phase: UpstreamPhase::Tls,
+                kind: PhasedErrorKind::Timeout,
+            }));
+        }
+        match tokio::time::timeout(tls_remaining, connector.connect(server_name, stream)).await {
             Ok(Ok(tls_stream)) => {
                 // Bug fix: read the ALPN-negotiated protocol from the
                 // rustls ClientConnection BEFORE wrapping the stream
