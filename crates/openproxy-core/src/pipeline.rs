@@ -5846,7 +5846,14 @@ impl Pipeline {
                 //    the connection due to idle timeout
                 // 3. The client's HTTP library times out waiting for
                 //    the first byte (if keepalive didn't fire in time)
+                // 4. The client received a malformed/empty SSE frame and
+                //    closed the connection (e.g. a leading `: keep-alive`
+                //    comment before any `data: {...}` frame — fixed by
+                //    delaying the first keepalive tick)
                 let elapsed = started.elapsed().as_millis() as u64;
+                // Diagnostic: check if the watchdog fired (which would
+                // indicate a timeout rather than a real client disconnect).
+                let watchdog_fired = *req.client_disconnected.borrow();
                 tracing::warn!(
                     combo_id = combo.id.0,
                     target_id = target.id.0,
@@ -5855,9 +5862,10 @@ impl Pipeline {
                     elapsed_ms = elapsed,
                     connect_ms = connect_ms,
                     ttft_ms = ?ttft_ms,
+                    watchdog_fired,
                     "sink send failed: Closed — client/proxy disconnected \
-                     (elapsed={}ms, connect={}ms, ttft={:?})",
-                    elapsed, connect_ms, ttft_ms
+                     (elapsed={}ms, connect={}ms, ttft={:?}, watchdog_fired={})",
+                    elapsed, connect_ms, ttft_ms, watchdog_fired
                 );
                 // Use UpstreamConnection with a descriptive message
                 // instead of ClientDisconnected so the error in the

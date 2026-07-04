@@ -47,13 +47,23 @@ use tokio_stream::wrappers::ReceiverStream;
 use crate::{disconnect::CancelWatch, error::ApiError, state::AppState};
 
 /// SSE keepalive interval. Sends `: keep-alive\n\n` (an SSE comment)
-/// every 5 seconds to keep the connection alive while the upstream
-/// is generating. This is critical for streaming requests where the
+/// periodically to keep the connection alive while the upstream is
+/// generating. This is critical for streaming requests where the
 /// upstream takes a long time to produce the first token (e.g. large
 /// prompts, reasoning models). Without frequent keepalives,
 /// intermediate proxies (nginx, cloudflare) and client HTTP
 /// libraries may close the connection due to inactivity, causing
 /// false-positive "client disconnected" errors.
+///
+/// CRITICAL: the first keepalive is DELAYED by this interval (not
+/// sent immediately). The previous code used `tokio::time::interval`
+/// which fires on the FIRST tick (immediately), sending `: keep-alive\n\n`
+/// as the VERY FIRST bytes of the response body — before any `data: {...}`
+/// frame. Some SSE clients (notably the OpenAI Python library's httpx-sse
+/// parser) may not handle a leading SSE comment correctly and close the
+/// connection. Using `interval_at` with a delayed start ensures the first
+/// keepalive only fires after `SSE_KEEPALIVE_INTERVAL` of inactivity,
+/// giving the upstream time to send the first real data frame.
 const SSE_KEEPALIVE_INTERVAL: Duration = Duration::from_secs(5);
 
 /// A stream that yields pre-formatted SSE frames (`Bytes`) from an
@@ -528,7 +538,17 @@ async fn run_pipeline(
 
         let sse_stream = SseBytesStream {
             inner: merged,
-            keepalive: tokio::time::interval(SSE_KEEPALIVE_INTERVAL),
+            // Use `interval_at` with a delayed start so the first
+            // keepalive fires AFTER `SSE_KEEPALIVE_INTERVAL`, not
+            // immediately. `tokio::time::interval` fires on the first
+            // tick (t=0), which sends `: keep-alive\n\n` as the very
+            // first bytes of the response — before any `data: {...}`
+            // frame. Some SSE clients don't handle a leading comment
+            // and close the connection.
+            keepalive: tokio::time::interval_at(
+                tokio::time::Instant::now() + SSE_KEEPALIVE_INTERVAL,
+                SSE_KEEPALIVE_INTERVAL,
+            ),
         };
 
         // Use `Body::from_stream` to write the pre-formatted SSE
