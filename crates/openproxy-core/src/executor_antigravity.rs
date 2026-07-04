@@ -340,6 +340,17 @@ pub async fn execute_antigravity(
         http::header::ACCEPT,
         http::HeaderValue::from_static("text/event-stream"),
     );
+    // CRITICAL: inject Antigravity client-identity headers. Without
+    // these, the cloudcode-pa.googleapis.com API may reject the
+    // request or return errors. The headers mimic the official
+    // Antigravity client (x-client-name, x-client-version,
+    // x-machine-id, x-vscode-sessionid, x-goog-user-project, and the
+    // Antigravity User-Agent). See `antigravity_headers` module for
+    // the full rationale.
+    crate::antigravity_headers::inject_antigravity_headers(
+        &mut upstream_request.headers,
+        Some(project_id),
+    );
 
     // 3. Fire the request. Same rationale as the kiro executor: use
     //    `TimeoutProfile::Chat` (no per-call `Timeouts` is plumbed

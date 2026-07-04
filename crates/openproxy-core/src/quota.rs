@@ -387,8 +387,6 @@ async fn fetch_antigravity_models_quota(
         "https://cloudcode-pa.googleapis.com/v1internal:fetchAvailableModels",
     ];
 
-    let ua = "Antigravity/4.2.0 (X11; Linux x86_64) Chrome/132.0.6834.160 Electron/39.2.3";
-
     for endpoint in &endpoints {
         let mut req = UpstreamRequest::post_json(*endpoint, bytes::Bytes::from_static(b"{}"));
         if let Ok(v) = http::HeaderValue::from_str(&format!("Bearer {access_token}")) {
@@ -398,12 +396,13 @@ async fn fetch_antigravity_models_quota(
             http::header::CONTENT_TYPE,
             http::HeaderValue::from_static("application/json"),
         );
-        req.headers
-            .insert(http::header::USER_AGENT, http::HeaderValue::from_static(ua));
-        req.headers.insert(
-            "x-goog-api-client",
-            http::HeaderValue::from_static("gl-node/22.21.1"),
-        );
+        // CRITICAL: inject the full set of Antigravity client-identity
+        // headers (User-Agent, x-client-name, x-client-version,
+        // x-machine-id, x-vscode-sessionid). The previous code only
+        // sent a hardcoded User-Agent and x-goog-api-client — the API
+        // may reject requests missing the x-client-name / x-machine-id
+        // headers. See `antigravity_headers` module.
+        crate::antigravity_headers::inject_antigravity_headers(&mut req.headers, None);
 
         let cancel = CancellationToken::new();
         let response = upstream.call(req, TimeoutProfile::Quota, cancel).await;
@@ -518,6 +517,9 @@ async fn fetch_antigravity_user_quota(
         http::header::CONTENT_TYPE,
         http::HeaderValue::from_static("application/json"),
     );
+    // CRITICAL: inject Antigravity client-identity headers (same as
+    // the executor and fetchAvailableModels). See `antigravity_headers`.
+    crate::antigravity_headers::inject_antigravity_headers(&mut req.headers, None);
 
     let cancel = CancellationToken::new();
     let response = upstream

@@ -145,9 +145,14 @@ impl OAuthProvider for AntigravityOAuthProvider {
             http::header::CONTENT_TYPE,
             http::HeaderValue::from_static("application/x-www-form-urlencoded"),
         );
+        // Use the native Antigravity OAuth User-Agent (matches the
+        // Antigravity-Manager: `vscode/1.X.X (Antigravity/{version})`).
         req.headers.insert(
             http::header::USER_AGENT,
-            http::HeaderValue::from_static("vscode/1.100.0 (Antigravity/1.2.17)"),
+            http::HeaderValue::from_str(&crate::antigravity_headers::oauth_user_agent())
+                .unwrap_or_else(|_| {
+                    http::HeaderValue::from_static("vscode/1.X.X (Antigravity/4.3.0)")
+                }),
         );
 
         let cancel = CancellationToken::new();
@@ -238,6 +243,16 @@ impl OAuthProvider for AntigravityOAuthProvider {
         req.headers.insert(
             http::header::CONTENT_TYPE,
             http::HeaderValue::from_static("application/x-www-form-urlencoded"),
+        );
+        // Use the native Antigravity OAuth User-Agent for refresh too
+        // (Google's token endpoint may reject requests with a
+        // mismatched User-Agent).
+        req.headers.insert(
+            http::header::USER_AGENT,
+            http::HeaderValue::from_str(&crate::antigravity_headers::oauth_user_agent())
+                .unwrap_or_else(|_| {
+                    http::HeaderValue::from_static("vscode/1.X.X (Antigravity/4.3.0)")
+                }),
         );
 
         let cancel = CancellationToken::new();
@@ -411,10 +426,24 @@ async fn load_code_assist(
 
     let body = serde_json::json!({ "metadata": metadata });
 
-    let resp = client
+    // Build the request with Antigravity client-identity headers.
+    // Without these, the API may reject the loadCodeAssist call.
+    let mut req_builder = client
         .post(LOAD_CODE_ASSIST_URL)
         .bearer_auth(access_token)
-        .header("Content-Type", "application/json")
+        .header("Content-Type", "application/json");
+
+    // Inject the Antigravity identity headers using a temporary
+    // HeaderMap, then copy onto the reqwest builder.
+    {
+        let mut h = http::HeaderMap::new();
+        crate::antigravity_headers::inject_antigravity_headers(&mut h, None);
+        for (name, value) in h.iter() {
+            req_builder = req_builder.header(name, value);
+        }
+    }
+
+    let resp = req_builder
         .json(&body)
         .send()
         .await
