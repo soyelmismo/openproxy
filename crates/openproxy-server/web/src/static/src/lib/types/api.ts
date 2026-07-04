@@ -157,8 +157,10 @@ export interface Account {
   quota_plan_name: string | null;
   quota_last_fetched_at: string | null;
   quota_fetch_error: string | null;
-  /** Per-model quota details (Antigravity family). Not persisted in DB —
-   *  populated from the refresh-quota response. */
+  /** Per-model quota details (Antigravity family). Persisted in DB as
+   *  JSON text and deserialized by the backend into a JSON array for
+   *  the API response. Each entry has model_id, session_used,
+   *  session_limit, session_reset_at, remaining_fraction. */
   quota_model_details?: ModelQuotaDetail[] | null;
   /** "api_key" u "oauth" — texto libre, no enum. */
   auth_type: string;

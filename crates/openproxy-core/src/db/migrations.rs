@@ -212,6 +212,11 @@ const MIGRATIONS: &[Migration] = &[
         name: "000040_drop_provider_timeouts",
         sql: include_str!("../../migrations/000040_drop_provider_timeouts.sql"),
     },
+    Migration {
+        version: 41,
+        name: "000041_add_quota_model_details",
+        sql: include_str!("../../migrations/000041_add_quota_model_details.sql"),
+    },
 ];
 
 /// Apply pending migrations on `conn`. Idempotent: skips versions already in

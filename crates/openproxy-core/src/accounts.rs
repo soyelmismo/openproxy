@@ -65,6 +65,13 @@ pub struct Account {
     pub quota_plan_name: Option<String>,
     pub quota_last_fetched_at: Option<String>,
     pub quota_fetch_error: Option<String>,
+    /// Per-model quota details. Populated by providers that expose
+    /// per-model quota (Antigravity family). NULL for providers that
+    /// only expose aggregate quota. Stored in the DB as a JSON TEXT
+    /// column; deserialized into a `serde_json::Value` (Array) so the
+    /// API response sends a proper JSON array, not a stringified one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub quota_model_details: Option<serde_json::Value>,
     /// Account auth method: `api_key` (static key) or `oauth` (OAuth tokens).
     pub auth_type: String,
     /// Email associated with the OAuth account.
@@ -143,6 +150,7 @@ pub fn get(conn: &Connection, id: AccountId) -> Result<Option<Account>> {
                     quota_session_used, quota_session_limit, quota_session_reset_at, \
                     quota_weekly_used, quota_weekly_limit, quota_weekly_reset_at, \
                     quota_plan_name, quota_last_fetched_at, quota_fetch_error, \
+                    quota_model_details, \
                     auth_type, email, oauth_scope, oauth_provider_specific, expires_at, \
                     created_at \
              FROM accounts WHERE id = ?1",
@@ -168,6 +176,7 @@ pub fn list(conn: &Connection, provider: Option<&ProviderId>) -> Result<Vec<Acco
                     quota_session_used, quota_session_limit, quota_session_reset_at, \
                     quota_weekly_used, quota_weekly_limit, quota_weekly_reset_at, \
                     quota_plan_name, quota_last_fetched_at, quota_fetch_error, \
+                    quota_model_details, \
                     auth_type, email, oauth_scope, oauth_provider_specific, expires_at, \
                     created_at \
              FROM accounts WHERE provider_id = ?1 \
@@ -180,6 +189,7 @@ pub fn list(conn: &Connection, provider: Option<&ProviderId>) -> Result<Vec<Acco
                     quota_session_used, quota_session_limit, quota_session_reset_at, \
                     quota_weekly_used, quota_weekly_limit, quota_weekly_reset_at, \
                     quota_plan_name, quota_last_fetched_at, quota_fetch_error, \
+                    quota_model_details, \
                     auth_type, email, oauth_scope, oauth_provider_specific, expires_at, \
                     created_at \
              FROM accounts \
@@ -338,6 +348,14 @@ pub fn set_rate_limited_until(
 ///
 /// A failure to find the row surfaces as [`CoreError::AccountNotFound`].
 pub fn set_quota(conn: &Connection, id: AccountId, q: &crate::quota::AccountQuota) -> Result<()> {
+    // Serialize model_details (per-model quota breakdown) as JSON for
+    // storage. NULL when the provider doesn't expose per-model quota.
+    let model_details_json: Option<String> = q
+        .model_details
+        .as_ref()
+        .and_then(|d| serde_json::to_string(d).ok())
+        .filter(|s| s != "null" && s != "[]");
+
     let affected = conn
         .execute(
             "UPDATE accounts SET \
@@ -349,8 +367,9 @@ pub fn set_quota(conn: &Connection, id: AccountId, q: &crate::quota::AccountQuot
                 quota_weekly_reset_at    = ?6, \
                 quota_plan_name          = ?7, \
                 quota_last_fetched_at    = ?8, \
-                quota_fetch_error        = ?9 \
-             WHERE id = ?10",
+                quota_fetch_error        = ?9, \
+                quota_model_details      = ?10 \
+             WHERE id = ?11",
             params![
                 q.session_used,
                 q.session_limit,
@@ -361,6 +380,7 @@ pub fn set_quota(conn: &Connection, id: AccountId, q: &crate::quota::AccountQuot
                 q.plan_name,
                 q.last_fetched_at,
                 q.fetch_error,
+                model_details_json,
                 id.0,
             ],
         )
@@ -588,6 +608,7 @@ pub fn list_expiring_oauth_accounts(
                     quota_session_used, quota_session_limit, quota_session_reset_at, \
                     quota_weekly_used, quota_weekly_limit, quota_weekly_reset_at, \
                     quota_plan_name, quota_last_fetched_at, quota_fetch_error, \
+                    quota_model_details, \
                     auth_type, email, oauth_scope, oauth_provider_specific, expires_at, \
                     created_at \
              FROM accounts \
@@ -692,12 +713,19 @@ fn row_to_account(row: &rusqlite::Row<'_>) -> rusqlite::Result<Account> {
     let quota_plan_name: Option<String> = row.get(13)?;
     let quota_last_fetched_at: Option<String> = row.get(14)?;
     let quota_fetch_error: Option<String> = row.get(15)?;
-    let auth_type: String = row.get(16)?;
-    let email: Option<String> = row.get(17)?;
-    let oauth_scope: Option<String> = row.get(18)?;
-    let oauth_provider_specific: Option<String> = row.get(19)?;
-    let expires_at: Option<String> = row.get(20)?;
-    let created_at: String = row.get(21)?;
+    // quota_model_details is stored as a JSON TEXT column. Parse it into
+    // a serde_json::Value so the API response sends a proper JSON array.
+    let quota_model_details_raw: Option<String> = row.get(16).unwrap_or(None);
+    let auth_type: String = row.get(17)?;
+    let email: Option<String> = row.get(18)?;
+    let oauth_scope: Option<String> = row.get(19)?;
+    let oauth_provider_specific: Option<String> = row.get(20)?;
+    let expires_at: Option<String> = row.get(21)?;
+    let created_at: String = row.get(22)?;
+    let quota_model_details: Option<serde_json::Value> = quota_model_details_raw
+        .as_deref()
+        .filter(|s| !s.is_empty())
+        .and_then(|s| serde_json::from_str(s).ok());
 
     let health_status = HealthStatus::parse(&health_status).map_err(|e| {
         rusqlite::Error::FromSqlConversionFailure(
@@ -724,6 +752,7 @@ fn row_to_account(row: &rusqlite::Row<'_>) -> rusqlite::Result<Account> {
         quota_plan_name,
         quota_last_fetched_at,
         quota_fetch_error,
+        quota_model_details,
         auth_type,
         email,
         oauth_scope,

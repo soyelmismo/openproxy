@@ -949,6 +949,7 @@ mod tests {
             quota_plan_name: None,
             quota_last_fetched_at: None,
             quota_fetch_error: None,
+            quota_model_details: None,
             auth_type: "oauth".into(),
             email: Some("t@example.com".to_string()),
             oauth_scope: None,

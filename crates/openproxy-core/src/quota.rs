@@ -362,8 +362,12 @@ fn now_unix_secs_str() -> String {
 // =====================================================================
 
 /// Fetch quota for Antigravity (Google Cloud Code) using an OAuth access
-/// token. Tries `fetchAvailableModels` first; on failure, falls back to
-/// `retrieveUserQuota`.
+/// token. Calls BOTH endpoints and merges the results:
+///   - `fetchAvailableModels` → per-model quota (`model_details`)
+///   - `retrieveUserQuotaSummary` → weekly + 5h grouped quota
+///
+/// If one endpoint fails, the other's data is still returned (partial
+/// success). If both fail, the error from the first is returned.
 ///
 /// `access_token` is the *plaintext* OAuth access token — the caller
 /// is responsible for decrypting it from the account row.
@@ -371,9 +375,31 @@ pub async fn fetch_antigravity_quota(
     upstream: &Arc<UpstreamClient>,
     access_token: &str,
 ) -> Result<AccountQuota> {
-    match fetch_antigravity_models_quota(upstream, access_token).await {
-        Ok(quota) => Ok(quota),
-        Err(_) => fetch_antigravity_user_quota(upstream, access_token).await,
+    let models_result = fetch_antigravity_models_quota(upstream, access_token).await;
+    let summary_result = fetch_antigravity_user_quota(upstream, access_token).await;
+
+    match (models_result, summary_result) {
+        (Ok(mut models_quota), Ok(summary_quota)) => {
+            // Merge: models_quota has per-model details; summary_quota
+            // has weekly + 5h grouped quota. Overlay the summary's
+            // weekly fields onto the models quota.
+            if summary_quota.weekly_used.is_some() {
+                models_quota.weekly_used = summary_quota.weekly_used;
+                models_quota.weekly_limit = summary_quota.weekly_limit;
+                models_quota.weekly_reset_at = summary_quota.weekly_reset_at;
+            }
+            // If models_quota has no session data, use the summary's
+            // 5h (session) data as a fallback.
+            if models_quota.session_used.is_none() && summary_quota.session_used.is_some() {
+                models_quota.session_used = summary_quota.session_used;
+                models_quota.session_limit = summary_quota.session_limit;
+                models_quota.session_reset_at = summary_quota.session_reset_at;
+            }
+            Ok(models_quota)
+        }
+        (Ok(models_quota), Err(_)) => Ok(models_quota),
+        (Err(_), Ok(summary_quota)) => Ok(summary_quota),
+        (Err(models_err), Err(_)) => Err(models_err),
     }
 }
 
@@ -503,80 +529,127 @@ fn parse_antigravity_models_response(body: &serde_json::Value) -> Result<Account
     })
 }
 
-/// Fetch quota from the `retrieveUserQuota` endpoint.
+/// Fetch quota from the `retrieveUserQuotaSummary` endpoint. This
+/// endpoint returns grouped quota buckets (weekly + 5h rolling windows)
+/// with `remainingFraction` and `resetTime` per group.
 async fn fetch_antigravity_user_quota(
     upstream: &Arc<UpstreamClient>,
     access_token: &str,
 ) -> Result<AccountQuota> {
-    let url = "https://cloudcode-pa.googleapis.com/v1internal:retrieveUserQuota";
-    let mut req = UpstreamRequest::post_json(url, bytes::Bytes::from_static(b"{}"));
-    if let Ok(v) = http::HeaderValue::from_str(&format!("Bearer {access_token}")) {
-        req.headers.insert(http::header::AUTHORIZATION, v);
+    // Use retrieveUserQuotaSummary (not retrieveUserQuota). The Summary
+    // variant returns a `groups` array with nested `buckets` — each
+    // group represents a time window (weekly, 5h). The non-Summary
+    // variant returns a flat `buckets` array without window labels.
+    let endpoints = [
+        "https://daily-cloudcode-pa.sandbox.googleapis.com/v1internal:retrieveUserQuotaSummary",
+        "https://daily-cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary",
+        "https://cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary",
+    ];
+
+    let mut last_err: Option<CoreError> = None;
+    for url in &endpoints {
+        let mut req = UpstreamRequest::post_json(*url, bytes::Bytes::from_static(b"{}"));
+        if let Ok(v) = http::HeaderValue::from_str(&format!("Bearer {access_token}")) {
+            req.headers.insert(http::header::AUTHORIZATION, v);
+        }
+        req.headers.insert(
+            http::header::CONTENT_TYPE,
+            http::HeaderValue::from_static("application/json"),
+        );
+        crate::antigravity_headers::inject_antigravity_headers(&mut req.headers, None);
+
+        let cancel = CancellationToken::new();
+        let response = match upstream.call(req, TimeoutProfile::Quota, cancel).await {
+            Ok(r) => r,
+            Err(UpstreamError::Cancel) => return Err(CoreError::ClientDisconnected),
+            Err(e) => {
+                last_err = Some(CoreError::UpstreamConnection(format!(
+                    "retrieveUserQuotaSummary: {e}"
+                )));
+                continue;
+            }
+        };
+
+        if !response.status.is_success() {
+            last_err = Some(CoreError::UpstreamConnection(format!(
+                "retrieveUserQuotaSummary: status {}",
+                response.status.as_u16()
+            )));
+            continue;
+        }
+
+        let body = match response.collect().await {
+            Ok(b) => b,
+            Err(e) => {
+                last_err = Some(CoreError::UpstreamConnection(format!(
+                    "retrieveUserQuotaSummary body: {e}"
+                )));
+                continue;
+            }
+        };
+
+        let json: serde_json::Value = match serde_json::from_slice(&body) {
+            Ok(j) => j,
+            Err(e) => {
+                last_err = Some(CoreError::Parse(format!(
+                    "retrieveUserQuotaSummary parse: {e}"
+                )));
+                continue;
+            }
+        };
+
+        return parse_antigravity_user_quota_summary(&json);
     }
-    req.headers.insert(
-        http::header::CONTENT_TYPE,
-        http::HeaderValue::from_static("application/json"),
-    );
-    // CRITICAL: inject Antigravity client-identity headers (same as
-    // the executor and fetchAvailableModels). See `antigravity_headers`.
-    crate::antigravity_headers::inject_antigravity_headers(&mut req.headers, None);
 
-    let cancel = CancellationToken::new();
-    let response = upstream
-        .call(req, TimeoutProfile::Quota, cancel)
-        .await
-        .map_err(|e| match e {
-            UpstreamError::Cancel => CoreError::ClientDisconnected,
-            other => CoreError::UpstreamConnection(format!("retrieveUserQuota: {other}")),
-        })?;
-
-    if !response.status.is_success() {
-        return Err(CoreError::UpstreamConnection(format!(
-            "retrieveUserQuota: status {}",
-            response.status.as_u16()
-        )));
-    }
-
-    let body = response
-        .collect()
-        .await
-        .map_err(|e| CoreError::UpstreamConnection(format!("retrieveUserQuota body: {e}")))?;
-
-    let json: serde_json::Value = serde_json::from_slice(&body)
-        .map_err(|e| CoreError::Parse(format!("retrieveUserQuota parse: {e}")))?;
-
-    parse_antigravity_user_quota_response(&json)
+    Err(last_err.unwrap_or_else(|| {
+        CoreError::UpstreamConnection("retrieveUserQuotaSummary: all endpoints failed".into())
+    }))
 }
 
-/// Parse `retrieveUserQuota` response into `AccountQuota`.
-fn parse_antigravity_user_quota_response(body: &serde_json::Value) -> Result<AccountQuota> {
+/// Parse `retrieveUserQuotaSummary` response. The response has a `groups`
+/// array, each group has a `displayName` and a `buckets` array. Each bucket
+/// has `remainingFraction`, `resetTime`, `window` (e.g. "WEEKLY",
+/// "FIVE_HOUR"), and `displayName`.
+///
+/// We extract:
+/// - The WEEKLY bucket → `weekly_used` / `weekly_limit` / `weekly_reset_at`
+/// - The FIVE_HOUR (or first non-weekly) bucket → `session_used` / `session_limit` / `session_reset_at`
+fn parse_antigravity_user_quota_summary(body: &serde_json::Value) -> Result<AccountQuota> {
     const NORMALIZED_BASE: i64 = 1000;
 
-    let buckets = body
-        .get("buckets")
-        .and_then(|b| b.as_array())
-        .ok_or_else(|| CoreError::Internal("missing 'buckets' in response".into()))?;
+    let groups = body
+        .get("groups")
+        .and_then(|g| g.as_array())
+        .ok_or_else(|| CoreError::Internal("missing 'groups' in retrieveUserQuotaSummary".into()))?;
 
-    // Build the quota record from the first bucket. The map closure always
-    // returns `Some(...)` for every bucket, so we use `.map(..).next()` (the
-    // closure produces exactly one value per element) — `.next()` yields
-    // `Some(AccountQuota)` for non-empty `buckets` and `None` when empty,
-    // which `.ok_or_else(...)` then maps to the empty-buckets error.
-    let quota = buckets
-        .iter()
-        .map(|bucket| {
+    let mut weekly_used: Option<i64> = None;
+    let mut weekly_limit: Option<i64> = None;
+    let mut weekly_reset_at: Option<String> = None;
+    let mut session_used: Option<i64> = None;
+    let mut session_limit: Option<i64> = None;
+    let mut session_reset_at: Option<String> = None;
+
+    for group in groups {
+        let buckets = match group.get("buckets").and_then(|b| b.as_array()) {
+            Some(b) => b,
+            None => continue,
+        };
+
+        for bucket in buckets {
             let remaining_fraction = bucket
                 .get("remainingFraction")
                 .and_then(|f| f.as_f64())
                 .unwrap_or(1.0);
-
             let reset_time = bucket
                 .get("resetTime")
                 .and_then(|r| r.as_str())
                 .map(String::from);
+            let window = bucket
+                .get("window")
+                .and_then(|w| w.as_str())
+                .unwrap_or("");
 
             let is_unlimited = reset_time.is_none() && remaining_fraction >= 1.0;
-
             let remaining = (NORMALIZED_BASE as f64 * remaining_fraction) as i64;
             let used = if is_unlimited {
                 0
@@ -584,22 +657,40 @@ fn parse_antigravity_user_quota_response(body: &serde_json::Value) -> Result<Acc
                 NORMALIZED_BASE.saturating_sub(remaining)
             };
 
-            AccountQuota {
-                plan_name: Some("Antigravity".to_string()),
-                session_used: Some(used),
-                session_limit: Some(NORMALIZED_BASE),
-                session_reset_at: reset_time,
-                weekly_used: None,
-                weekly_limit: None,
-                weekly_reset_at: None,
-                last_fetched_at: now_unix_secs_str(),
-                fetch_error: None,
-                model_details: None,
+            // Route to weekly or session (5h) based on the window label.
+            let is_weekly = window.to_uppercase().contains("WEEK")
+                || window.eq_ignore_ascii_case("WEEKLY");
+            if is_weekly && weekly_used.is_none() {
+                weekly_used = Some(used);
+                weekly_limit = Some(NORMALIZED_BASE);
+                weekly_reset_at = reset_time;
+            } else if !is_weekly && session_used.is_none() {
+                // First non-weekly bucket (typically 5h) → session.
+                session_used = Some(used);
+                session_limit = Some(NORMALIZED_BASE);
+                session_reset_at = reset_time;
             }
-        })
-        .next();
+        }
+    }
 
-    quota.ok_or_else(|| CoreError::Internal("no buckets in response".into()))
+    if weekly_used.is_none() && session_used.is_none() {
+        return Err(CoreError::Internal(
+            "retrieveUserQuotaSummary: no usable buckets found".into(),
+        ));
+    }
+
+    Ok(AccountQuota {
+        session_used,
+        session_limit,
+        session_reset_at,
+        weekly_used,
+        weekly_limit,
+        weekly_reset_at,
+        plan_name: Some("Antigravity".to_string()),
+        last_fetched_at: now_unix_secs_str(),
+        fetch_error: None,
+        model_details: None,
+    })
 }
 
 // =====================================================================
@@ -1421,34 +1512,56 @@ mod tests {
     }
 
     #[test]
-    fn parse_antigravity_user_quota_response_with_buckets() {
+    fn parse_antigravity_user_quota_summary_with_buckets() {
+        // retrieveUserQuotaSummary response: a `groups` array, each group
+        // contains a `buckets` array. Each bucket has `remainingFraction`,
+        // `resetTime`, and a `window` label (WEEKLY / FIVE_HOUR / etc).
         let body = json!({
-            "buckets": [
+            "groups": [
                 {
-                    "remainingFraction": 0.35,
-                    "resetTime": "2025-06-01T12:00:00Z"
+                    "displayName": "Antigravity",
+                    "buckets": [
+                        {
+                            "remainingFraction": 0.35,
+                            "resetTime": "2025-06-01T12:00:00Z",
+                            "window": "FIVE_HOUR",
+                            "displayName": "5h rolling"
+                        },
+                        {
+                            "remainingFraction": 0.6,
+                            "resetTime": "2025-06-07T00:00:00Z",
+                            "window": "WEEKLY",
+                            "displayName": "Weekly rolling"
+                        }
+                    ]
                 }
             ]
         });
-        let q = parse_antigravity_user_quota_response(&body).expect("parse");
+        let q = parse_antigravity_user_quota_summary(&body).expect("parse");
+        // FIVE_HOUR bucket → session
         assert_eq!(q.session_used, Some(650)); // 1000 * (1 - 0.35)
         assert_eq!(q.session_limit, Some(1000));
         assert_eq!(q.session_reset_at.as_deref(), Some("2025-06-01T12:00:00Z"));
+        // WEEKLY bucket → weekly
+        assert_eq!(q.weekly_used, Some(400)); // 1000 * (1 - 0.6)
+        assert_eq!(q.weekly_limit, Some(1000));
+        assert_eq!(q.weekly_reset_at.as_deref(), Some("2025-06-07T00:00:00Z"));
         assert_eq!(q.plan_name.as_deref(), Some("Antigravity"));
         assert!(q.fetch_error.is_none());
     }
 
     #[test]
-    fn parse_antigravity_user_quota_response_missing_buckets() {
-        let body = json!({ "not_buckets": [] });
-        let err = parse_antigravity_user_quota_response(&body).expect_err("missing buckets");
+    fn parse_antigravity_user_quota_summary_missing_groups() {
+        let body = json!({ "not_groups": [] });
+        let err = parse_antigravity_user_quota_summary(&body).expect_err("missing groups");
         assert!(matches!(err, CoreError::Internal(_)));
     }
 
     #[test]
-    fn parse_antigravity_user_quota_response_empty_buckets() {
-        let body = json!({ "buckets": [] });
-        let err = parse_antigravity_user_quota_response(&body).expect_err("empty buckets");
+    fn parse_antigravity_user_quota_summary_empty_groups() {
+        // groups present but no buckets anywhere → no usable buckets.
+        let body = json!({ "groups": [] });
+        let err = parse_antigravity_user_quota_summary(&body).expect_err("empty groups");
         assert!(matches!(err, CoreError::Internal(_)));
     }
 
