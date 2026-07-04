@@ -274,6 +274,9 @@ test('Live Logs: stale streaming stage freezes the latency ticker', async ({ pag
         stop_reason: null,
         compression_savings_pct: null,
         compression_techniques: null,
+        client_response: false,
+        prompt_tokens_estimated: false,
+        completion_tokens_estimated: false,
       });
       logs.stagesByTraceId?.set(args.traceId, args.event);
 
@@ -282,27 +285,62 @@ test('Live Logs: stale streaming stage freezes the latency ticker', async ({ pag
     { event: streamingEvent, requestId, traceId },
   );
 
-  // Give the ticker at least one 100 ms tick to settle.
+  // Give the renderer at least one microtask to settle.
+  // (The 100ms latency ticker in `state/ticker.ts` is disabled —
+  // see `views/logs.ts:1351` — so the only path that mutates the
+  // latency cell is the `renderLogRowHtml` template, evaluated on
+  // each `requestUpdate()` cycle.)
   await page.waitForTimeout(150);
 
-  // Take a reading, wait 500 ms, take another. The two latency
-  // strings must be equal — the counter is frozen.
+  // Take a reading, wait 500 ms, take another. With Fix 1
+  // (monotonic latency in `components/log-row.ts:78-85`), the
+  // latency cell computes `live = stage.elapsed_ms + (now - stage.timestamp)`
+  // which equals `now - request_start` (monotonically growing).
+  // Previously the latency cell was frozen by §4.1's stale-cap
+  // path; Fix 1 removed that cap from the latency cell (the cap
+  // is now only applied to the `.log-phase-sub` sublabel, see
+  // `renderLogPhaseHtml` line 34-35). The two reads must therefore
+  // DIFFER — the second read must be ~500 ms higher than the first.
   const obs = await readFreezeObservation(page, requestId, traceId, 500);
 
   expect(obs.stateExposed).toBe(true);
   expect(obs.rowFound).toBe(true);
   // Sanity: the stage IS in the map (this is what feeds the
-  // ticker) and the row is NOT finalized (no `total_ms`).
+  // renderer) and the row is NOT finalized (no `total_ms`).
   expect(obs.stageInMap).toBe('streaming');
   expect(obs.totalMsInRow).toBeNull();
-  // The two latency reads, separated by 500 ms, must match.
-  // Before the §4.1 fix, `now - t` would grow by 500 ms between
-  // the two reads, so this assertion catches the regression.
+  // Fix 1 contract: the latency cell shows
+  //   `(stage.elapsed_ms || 0) + (now - stage.timestamp)`
+  // which is monotonic. Both reads must be non-null, the second
+  // must be strictly greater than the first (the 500 ms wait
+  // between reads guarantees ~500 ms of growth), and both must
+  // be in the expected range for the synthetic event
+  // (`elapsed_ms=5_000` + `now - 5s_ago` ≈ 10_000 ms).
   expect(obs.firstLatency).not.toBeNull();
-  expect(obs.secondLatency).toBe(obs.firstLatency);
+  expect(obs.secondLatency).not.toBeNull();
+  // Parse the integer ms value out of the `"NNNNms"` textContent.
+  const firstMs: number = parseInt(obs.firstLatency!.replace(/ms$/, ''), 10);
+  const secondMs: number = parseInt(obs.secondLatency!.replace(/ms$/, ''), 10);
+  expect(Number.isFinite(firstMs)).toBe(true);
+  expect(Number.isFinite(secondMs)).toBe(true);
+  // Monotonic growth: second read > first read.
+  expect(secondMs).toBeGreaterThan(firstMs);
+  // The growth between reads (separated by 500 ms) should be at
+  // least 100 ms (allows for scheduler jitter) and at most 2_000 ms
+  // (sanity ceiling — anything bigger means the renderer is
+  // double-counting elapsed time).
+  const delta: number = secondMs - firstMs;
+  expect(delta).toBeGreaterThanOrEqual(100);
+  expect(delta).toBeLessThanOrEqual(2_000);
+  // The absolute value of the first read must be at least
+  // `stage.elapsed_ms` (5_000) — the formula is
+  // `elapsed_ms + sinceEvent`, and `sinceEvent >= 0`, so the
+  // rendered latency is always >= elapsed_ms.
+  expect(firstMs).toBeGreaterThanOrEqual(5_000);
   // The sublabel class `log-phase-sub--ticking` should be
-  // absent — the row is frozen, so the CSS class that signals
-  // "still climbing" must be off.
+  // absent — the ticker (`state/ticker.ts`) is disabled in this
+  // build, and the renderer (`renderLogPhaseHtml`) never adds
+  // the class itself, so it can never be present.
   expect(obs.tickingClassPresent).toBe(false);
 });
 
@@ -362,6 +400,9 @@ test('Live Logs: finalized row freezes ticker at the row total_ms', async ({ pag
     stop_reason: null,
     compression_savings_pct: null,
     compression_techniques: null,
+    client_response: true,
+    prompt_tokens_estimated: false,
+    completion_tokens_estimated: false,
   };
 
   await page.evaluate(

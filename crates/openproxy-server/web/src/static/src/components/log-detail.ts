@@ -125,6 +125,28 @@ const PINNED_REQUEST_KEYS: readonly string[] = [
   "model", "messages", "tools", "temperature", "stream", "max_tokens",
 ];
 
+/** Whitelist of LIVE fields the WS broadcast actually carries that
+ *  `updateOpenLogDetail` should overlay onto the modal's snapshot.
+ *  Identity/immutable fields (`id`, `request_id`, `trace_id`,
+ *  `created_at`) and enriched fields (`request_body_json`,
+ *  `response_body_json`, `request_headers`, `response_headers` —
+ *  stripped by `redact_for_broadcast`) are intentionally NOT here.
+ *  Hoisted to module scope so the Set is built once, not on every WS
+ *  event. `error_message` is special-cased in the overlay loop
+ *  (always overlay, even null) so the synthetic "Request in progress"
+ *  message set by `openLogDetail` for inflight rows is cleared when
+ *  the real row arrives with `error_message: null` (success). */
+const OVERLAYABLE_FIELDS: ReadonlySet<string> = new Set<string>([
+  "status_code", "total_ms", "connect_ms", "ttft_ms",
+  "prompt_tokens", "completion_tokens", "cost_usd",
+  "is_streaming", "stream_complete", "race_lost",
+  "race_total", "race_attempts", "client_response",
+  "error_message", "stop_reason",
+  "compression_savings_pct", "compression_techniques",
+  "provider_id", "upstream_model_id",
+  "prompt_tokens_estimated", "completion_tokens_estimated",
+]);
+
 /** A single tool call extracted from an OpenAI chat-completion
  *  response's `choices[0].message.tool_calls[i]`. The `arguments`
  *  field is commonly a JSON-encoded string, hence `unknown`. */
@@ -1088,6 +1110,9 @@ function removeLogDetailModal(m: HTMLElement): void {
   // the lifecycle explicit.
   pinnedRequestId = null;
   pinnedTraceId = null;
+  // Clear the snapshot so copyDebugBundle and other readers don't see
+  // stale data after the modal is closed (HALLAZGO 1).
+  state.logs.selectedRow = null;
 }
 
 // ----------------------------------------------------------------------------
@@ -1156,6 +1181,12 @@ export function matchesPinnedModalIdentity(
   // to a single canonical value so "" === null === undefined.
   const pinnedTid = pinnedTraceId || "";
   const rowTid = row.trace_id || "";
+  // If both trace_ids are empty, we cannot positively confirm identity.
+  // Returning false here keeps the modal frozen on its snapshot rather
+  // than risk overlaying data from a different request that happens to
+  // share request_id with empty trace_id (HALLAZGO 6, rare in production
+  // because the backend always emits trace_id, but defensive).
+  if (pinnedTid === "" && rowTid === "") return false;
   if (pinnedTid !== rowTid) return false;
   return true;
 }
@@ -1186,7 +1217,12 @@ export function matchesPinnedModalIdentity(
 // ----------------------------------------------------------------------------
 function snapshotRow<T>(row: T): T {
   if (row == null || typeof row !== "object") return row;
-  return { ...row };
+  // Deep-clone so nested objects (request_body_json, response_body_json,
+  // request_headers, response_headers) are disconnected from any live
+  // row reference. Shallow copy left nested objects as SHARED references,
+  // which is fragile if any future code path mutates them in-place
+  // (HALLAZGO 4 — no active bug today, but defensive hardening).
+  return JSON.parse(JSON.stringify(row));
 }
 
 // Public API
@@ -1343,7 +1379,23 @@ export function updateOpenLogDetail(row: LogDetailLog | null | undefined): void 
   // enriched fields (request_body_json, etc.) that the WS event doesn't
   // carry, while still updating live fields (status_code, total_ms, etc.).
   const merged: Record<string, unknown> = { ...base } as Record<string, unknown>;
+  // Overlay only LIVE fields the WS event actually carries. Skip
+  // identity/immutable fields (id, request_id, trace_id, created_at)
+  // and enriched fields (request_body_json, response_body_json,
+  // request_headers, response_headers) that the broadcast redacts.
+  // Special-case error_message: always overlay (even null) so the
+  // synthetic "Request in progress" message set by openLogDetail
+  // for inflight rows is cleared when the real row arrives with
+  // error_message: null (success). Without this, the modal shows
+  // status=200 but error="Request in progress — current stage:
+  // started" — contradictory data (the user-reported "modal se
+  // bugea" bug, HALLAZGO 5).
   for (const [k, v] of Object.entries(row as Record<string, unknown>)) {
+    if (!OVERLAYABLE_FIELDS.has(k)) continue;
+    if (k === "error_message") {
+      merged[k] = v;
+      continue;
+    }
     if (v != null) merged[k] = v;
   }
   // SNAPSHOT: store a shallow copy of the merged result so the modal's
@@ -1741,4 +1793,18 @@ function showBundleInModal(bundle: string, headerMessage: string): void {
       </div>
     </div>
   `, wrapper);
+}
+
+// Expose for E2E tests so they can simulate WS events arriving while
+// the modal is open (regression coverage for the "modal se bugea" bug).
+// Declared via `declare global` so tests get type-safe access without
+// their own `as any` cast, consistent with the `__openproxyState` /
+// `__openproxyLogsGoPage` hooks in app.ts.
+declare global {
+  interface Window {
+    __openproxyUpdateLogDetail?: typeof updateOpenLogDetail;
+  }
+}
+if (typeof window !== "undefined") {
+  window.__openproxyUpdateLogDetail = updateOpenLogDetail;
 }

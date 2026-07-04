@@ -23,12 +23,12 @@ export function renderLogPhaseHtml(
   } else if (total_ms != null && total_ms > 0) {
     sublabel = `${total_ms}ms stale`;
   } else {
-    // LIVE LATENCY: compute elapsed time from the stage event's
-    // timestamp. This replaces the old ticker (which modified DOM
-    // directly and crashed lit-html). The 250ms render interval in
-    // mountLogs refreshes this at 4Hz.
+    // Monotonic latency: elapsed_ms at event time + time elapsed since
+    // the event. Sum equals (now - request_start). The 250ms render
+    // interval in mountLogs refreshes this at 4Hz.
     const t: number = Date.parse(stage.timestamp || "");
-    const liveMs: number = isFinite(t) ? Math.max(0, Date.now() - t) : (stage.elapsed_ms || 0);
+    const sinceEvent: number = isFinite(t) ? Math.max(0, Date.now() - t) : 0;
+    const liveMs: number = (stage.elapsed_ms || 0) + sinceEvent;
     // Stale cap: if no new stage event for 60s (non-streaming) or
     // 2s (streaming), freeze the counter so it doesn't climb forever.
     const cap: number = phase === "streaming" ? 2_000 : 60_000;
@@ -75,12 +75,13 @@ function buildLogRowCells(
     // Live latency for inflight rows: compute from stage timestamp.
     // For finalized rows, use the DB total_ms.
     let latencyMs: number = row.total_ms || 0;
-    if (latencyMs === 0 && stage && stage.timestamp) {
-      const t = Date.parse(stage.timestamp);
-      if (isFinite(t)) {
-        const live = Date.now() - t;
-        if (live > 0) latencyMs = live;
-      }
+    if (latencyMs === 0 && stage) {
+      // Monotonic fallback (matches phase cell): elapsed_ms at event
+      // time + time since the event = (now - request_start).
+      const t = Date.parse(stage.timestamp || "");
+      const sinceEvent = isFinite(t) ? Math.max(0, Date.now() - t) : 0;
+      const live = (stage.elapsed_ms || 0) + sinceEvent;
+      if (live > 0) latencyMs = live;
     }
     cells.push(html`<span class="log-latency">${latencyMs}ms</span>`);
   }

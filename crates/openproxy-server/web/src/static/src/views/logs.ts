@@ -301,15 +301,23 @@ function renderLogRow(
   // empty (synthetic events emitted from the frontend
   // itself).
   //
-  // CRITICAL: for finalized rows (status_code > 0), derive
-  // the stage from the row's own status_code instead of
-  // looking up the shared stage map. When a request is
-  // retried, trace_id is reused across attempts, so the
-  // stage map only holds one entry — the retry's
-  // "completed" would overwrite the failed attempt's
-  // "failed", causing the failed row to show "completado".
+  // CRITICAL: for finalized rows (status_code > 0 AND not
+  // inflight), derive the stage from the row's own status_code
+  // instead of looking up the shared stage map. When a request
+  // is retried, trace_id is reused across attempts, so the
+  // stage map only holds one entry — the retry's "completed"
+  // would overwrite the failed attempt's "failed", causing the
+  // failed row to show "completado".
+  //
+  // Inflight placeholders MUST NOT take this path: the backend
+  // sends status_code=200 from waiting_ttft/streaming (not only
+  // terminal), so synthesizing a terminal stage from
+  // status_code>0 would render "completed / 0ms" while the
+  // request is still streaming (see HALLAZGO 1 + NUEVO BUG A).
+  const isInflight: boolean =
+    !!r.__inflight || !r.id || r.id <= 0 || r.id > 1_000_000_000;
   let stage: StageEvent | undefined;
-  if (r.status_code > 0) {
+  if (!isInflight && r.status_code > 0) {
     const hasError = !!(r.error_message && r.error_message.length > 0);
     stage = {
       request_id: r.request_id,
@@ -362,15 +370,24 @@ function renderColumnsMenu(): TemplateResult {
 function renderLogsView(): TemplateResult {
   // Build the merged row list: historical rows + in-flight
   // placeholders. The inflight rows get a synthetic id
-  // (MAX_SAFE_INTEGER - created_at_ms) so they sort to the top of
-  // the descending-id list (newest first) without colliding with
-  // real DB ids.
+  // (MAX_SAFE_INTEGER - (now - created_at_ms)) so they sort to the
+  // top of the descending-id list (newest first) without colliding
+  // with real DB ids, AND so newer inflights render above older
+  // ones (see HALLAZGO 2).
   const inflightRows: (RecentUsageRow & { __inflight: boolean })[] = [
     ...Array.from(state.logs.inflightByTraceId.values()),
     ...Array.from(state.logs.inflightByRequestId.values()),
   ].map((p) => {
     const t = Date.parse(p.created_at);
-    const syntheticId = isFinite(t) ? (Number.MAX_SAFE_INTEGER - t) : Number.MAX_SAFE_INTEGER;
+    const now = Date.now();
+    // Older inflight → larger (now - t) → smaller syntheticId → renders BELOW newer ones.
+    // Newer inflight → smaller (now - t) → syntheticId near MAX_SAFE_INTEGER → renders at TOP.
+    // This preserves newest-first ordering consistent with finalized rows
+    // (sorted by DB id DESC). Previously syntheticId = MAX_SAFE_INTEGER - t
+    // caused newer inflight to render BELOW older ones (HALLAZGO 2).
+    const syntheticId = isFinite(t)
+      ? Number.MAX_SAFE_INTEGER - Math.max(0, now - t)
+      : Number.MAX_SAFE_INTEGER;
     return Object.assign({}, p, { id: syntheticId, __inflight: true });
   });
   const rows = (state.logs.rows as (RecentUsageRow & { __inflight?: boolean })[])
@@ -420,8 +437,8 @@ function renderLogsView(): TemplateResult {
           ? html`<div class="empty" style="padding:2rem;">No recent requests yet. Use the API to see logs appear here in real time.</div>`
           : repeat(
               pageRows,
-              (r: RecentUsageRow) => r.trace_id || `id:${r.id}` || `req:${r.request_id}`,
-              (r: RecentUsageRow) => html`<div data-key=${r.trace_id || `id:${r.id}` || `req:${r.request_id}`}>${renderLogRow(r, visibleColKeys)}</div>`,
+              (r: RecentUsageRow) => r.trace_id || (r.id && r.id > 0 ? `id:${r.id}` : `req:${r.request_id || Math.random()}`),
+              (r: RecentUsageRow) => html`<div data-key=${r.trace_id || (r.id && r.id > 0 ? `id:${r.id}` : `req:${r.request_id || Math.random()}`)}>${renderLogRow(r, visibleColKeys)}</div>`,
             )}
       </div>
       ${renderPagination(totalRows, totalP)}
@@ -574,7 +591,7 @@ function handleStageEvent(event: StageEvent): void {
   if (exactRow) {
     if (exactRow.id != null) state.logs.rowById.set(exactRow.id, exactRow);
     if (state.logs.followTail) state.logs.page = 1;
-    // Rendering handled by the 250ms render interval in mountLogs — no requestUpdate() here.
+    if (state.currentView?.name === "logs") requestUpdate();
     if (state.currentView?.name === "logs") updateOpenLogDetail(exactRow as unknown as LogDetailLog);
     return;
   }
@@ -622,6 +639,24 @@ function handleStageEvent(event: StageEvent): void {
     if (event.provider_id) existing.provider_id = event.provider_id;
     if (event.stage === "streaming") existing.is_streaming = true;
     if (event.status_code > 0) existing.status_code = event.status_code;
+    // Propagate timing/latency fields so renderLogRow has accurate
+    // data even before the terminal `row` event arrives. Without
+    // this, the inflight placeholder keeps total_ms=0 while
+    // status_code=200, which combined with the
+    // synthesis-on-status_code>0 path caused the row to show
+    // "completed / 0ms" while a live latency counter kept running
+    // — see HALLAZGO 1 + NUEVO BUG A.
+    if (typeof event.elapsed_ms === "number") (existing as any).total_ms = event.elapsed_ms;
+    if (event.connect_ms != null) existing.connect_ms = event.connect_ms;
+    if (event.ttft_ms != null) existing.ttft_ms = event.ttft_ms;
+    if (event.error) existing.error_message = event.error;
+    if (event.stop_reason) (existing as any).stop_reason = event.stop_reason;
+    if (event.compression_savings_pct != null) (existing as any).compression_savings_pct = event.compression_savings_pct;
+    if (event.compression_techniques) (existing as any).compression_techniques = event.compression_techniques;
+    if (event.stage === "completed" || event.stage === "failed" || event.stage === "cancelled") {
+      existing.is_streaming = false;
+      (existing as any).stream_complete = true;
+    }
   } else if (!traceId && !state.logs.inflightByRequestId.has(requestId)) {
     // Trace_id-less event: fall back to the request_id-keyed
     // inflight map (and the request_id-keyed stage map, handled
@@ -658,9 +693,24 @@ function handleStageEvent(event: StageEvent): void {
     if (event.provider_id) existing.provider_id = event.provider_id;
     if (event.stage === "streaming") existing.is_streaming = true;
     if (event.status_code > 0) existing.status_code = event.status_code;
+    // Same propagation as the trace_id branch above: keep the
+    // inflight placeholder in sync with the stage event so
+    // renderLogRow has accurate data before the terminal `row`
+    // event arrives (see HALLAZGO 1 + NUEVO BUG A).
+    if (typeof event.elapsed_ms === "number") (existing as any).total_ms = event.elapsed_ms;
+    if (event.connect_ms != null) existing.connect_ms = event.connect_ms;
+    if (event.ttft_ms != null) existing.ttft_ms = event.ttft_ms;
+    if (event.error) existing.error_message = event.error;
+    if (event.stop_reason) (existing as any).stop_reason = event.stop_reason;
+    if (event.compression_savings_pct != null) (existing as any).compression_savings_pct = event.compression_savings_pct;
+    if (event.compression_techniques) (existing as any).compression_techniques = event.compression_techniques;
+    if (event.stage === "completed" || event.stage === "failed" || event.stage === "cancelled") {
+      existing.is_streaming = false;
+      (existing as any).stream_complete = true;
+    }
   }
   if (state.logs.followTail) state.logs.page = 1;
-  // Rendering handled by the 250ms render interval in mountLogs — no requestUpdate() here.
+  if (state.currentView?.name === "logs") requestUpdate();
 }
 
 // Mirror the stage event into the two stage maps keyed by
@@ -806,13 +856,30 @@ function reapStaleInflight(): void {
       // modal showed "200" (from the placeholder's status_code).
       placeholder.status_code = 499;
       placeholder.error_message = "Stream stalled — no response from upstream for 120s. The request was cancelled by the stale-inflight reaper.";
+      // Compute total_ms from created_at so the latency cell freezes
+      // instead of continuing to count after stale-reap (NUEVO BUG B).
+      const startedAt = Date.parse(placeholder.created_at || "");
+      if (isFinite(startedAt)) {
+        (placeholder as { total_ms: number }).total_ms = Math.max(0, Date.now() - startedAt);
+      }
+      // Push the mutation to the open modal if it's showing this row.
+      // Without this, the modal's snapshot (taken when the modal was
+      // opened) stays frozen at the OLD status_code/error_message, while
+      // the table shows the reaper's mutation — modal-vs-table
+      // inconsistency (the user-reported "modal se bugea" symptom,
+      // NUEVO BUG A). The pinned check inside updateOpenLogDetail
+      // handles the case where the modal is closed or showing a
+      // different row.
+      if (state.currentView?.name === "logs") {
+        updateOpenLogDetail(placeholder as unknown as LogDetailLog);
+      }
     }
   };
   scan(state.logs.inflightByTraceId, true);
   scan(state.logs.inflightByRequestId, false);
   // Only re-render when something actually changed — avoids a full
   // table re-render every tick while ordinary inflight entries exist.
-  // Rendering handled by the 250ms render interval in mountLogs.
+  if (state.currentView?.name === "logs") requestUpdate();
 }
 
 export function startStaleInflightReaper(): void {
@@ -856,7 +923,7 @@ async function resyncUsageRows(sinceId: number): Promise<void> {
         synthesizeTerminalEvent(r);
       }
       if (state.logs.followTail) state.logs.page = 1;
-      // Rendering handled by the 250ms render interval in mountLogs — no requestUpdate() here.
+      if (state.currentView?.name === "logs") requestUpdate();
     }
   } catch (e: unknown) {
     const err = e instanceof Error ? e : null;
@@ -913,7 +980,7 @@ function handleLogsMessage(raw: MessageEvent): void {
       synthesizeTerminalEvent(r);
     }
     state.logs.page = 1; state.logs.followTail = true;
-    // Rendering handled by the 250ms render interval in mountLogs.
+    if (state.currentView?.name === "logs") requestUpdate();
   } else if (msg.type === "row") {
     const candidate = msg.data ?? msg.row ?? msg;
     if (!isRecentUsageRowShape(candidate)) return;
@@ -947,7 +1014,7 @@ function handleLogsMessage(raw: MessageEvent): void {
       reapRaceLosers(row);
     }
     if (state.logs.followTail) state.logs.page = 1;
-    // Rendering handled by the 250ms render interval in mountLogs.
+    if (state.currentView?.name === "logs") requestUpdate();
     if (isLogsViewActive) updateOpenLogDetail(row as unknown as LogDetailLog);
   } else if (msg.type === "stage") {
     const candidate = msg.data ?? msg;
