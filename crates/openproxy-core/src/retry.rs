@@ -291,4 +291,22 @@ mod tests {
         };
         assert!(RetryPolicy::is_retryable(&err, false));
     }
+
+    #[test]
+    fn from_config_mapping() {
+        let cfg = RetriesConfig {
+            max_attempts: 4,
+            combo_max_attempts: 5,
+            backoff_base_ms: 150,
+            backoff_factor: 3,
+            backoff_jitter_pct: 20,
+            idle_chunk_retryable: true,
+        };
+        let p = RetryPolicy::from_config(&cfg);
+        assert_eq!(p.max_attempts, 4);
+        assert_eq!(p.backoff_base, Duration::from_millis(150));
+        assert_eq!(p.backoff_factor, 3);
+        assert_eq!(p.backoff_jitter_pct, 20);
+        assert!(p.idle_chunk_retryable);
+    }
 }

@@ -610,6 +610,52 @@ mod tests {
     }
 
     #[test]
+    fn test_index_for_combo() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute(
+            "CREATE TABLE target_cooldowns (
+                combo_target_id INTEGER PRIMARY KEY,
+                cooldown_until TEXT NOT NULL,
+                reason TEXT,
+                failure_count INTEGER NOT NULL
+            )",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "CREATE TABLE combo_targets (
+                id INTEGER PRIMARY KEY,
+                combo_id INTEGER NOT NULL
+            )",
+            [],
+        )
+        .unwrap();
+
+        let combo_id = ComboId(1);
+        let target_id = ComboTargetId(10);
+        conn.execute(
+            "INSERT INTO combo_targets (id, combo_id) VALUES (?1, ?2)",
+            params![target_id.0, combo_id.0],
+        )
+        .unwrap();
+
+        let until = Utc::now() + chrono::Duration::try_minutes(5).unwrap();
+        conn.execute(
+            "INSERT INTO target_cooldowns (combo_target_id, cooldown_until, reason, failure_count)
+             VALUES (?1, ?2, ?3, ?4)",
+            params![target_id.0, until.to_rfc3339(), "test error", 1],
+        )
+        .unwrap();
+
+        let idx = index_for_combo(&conn, combo_id).unwrap();
+        assert_eq!(idx.len(), 1);
+        let cd = idx.get(&target_id).unwrap();
+        assert_eq!(cd.combo_target_id, target_id);
+        assert_eq!(cd.reason, Some("test error".to_string()));
+        assert_eq!(cd.failure_count, 1);
+    }
+
+    #[test]
     fn account_id_imported_path() {
         // Smoke: ensure the AccountId re-export is reachable (it is used
         // by callers that mix target and account scoping). This keeps

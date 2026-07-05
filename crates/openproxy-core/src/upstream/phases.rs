@@ -59,6 +59,55 @@ impl UpstreamPhase {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::upstream::profile::ResolvedTimeouts;
+
+    #[test]
+    fn test_upstream_phase_as_str() {
+        assert_eq!(UpstreamPhase::Dns.as_str(), "dns");
+        assert_eq!(UpstreamPhase::Dial.as_str(), "dial");
+        assert_eq!(UpstreamPhase::Tls.as_str(), "tls");
+        assert_eq!(UpstreamPhase::Write.as_str(), "write");
+        assert_eq!(UpstreamPhase::Headers.as_str(), "headers");
+        assert_eq!(UpstreamPhase::Body.as_str(), "body");
+        assert_eq!(UpstreamPhase::Total.as_str(), "total");
+    }
+
+    #[test]
+    fn test_upstream_phase_display() {
+        assert_eq!(format!("{}", UpstreamPhase::Dns), "dns");
+    }
+
+    #[test]
+    fn test_resolved_phase_deadlines() {
+        let start = Instant::now();
+        let timeouts = ResolvedTimeouts {
+            dns_ms: 100,
+            dial_ms: 200,
+            tls_ms: 300,
+            write_ms: 400,
+            headers_ms: 500,
+            body_chunk_ms: 600,
+            total_ms: 700,
+        };
+
+        let deadlines = ResolvedPhaseDeadlines::from_profile(start, &timeouts);
+        assert_eq!(deadlines.start, start);
+        assert_eq!(deadlines.dns_deadline, start + Duration::from_millis(100));
+        assert_eq!(deadlines.dial_deadline, start + Duration::from_millis(200));
+        assert_eq!(deadlines.tls_deadline, start + Duration::from_millis(300));
+        assert_eq!(deadlines.write_deadline, start + Duration::from_millis(400));
+        assert_eq!(deadlines.headers_deadline, start + Duration::from_millis(500));
+        assert_eq!(deadlines.body_chunk_deadline, start + Duration::from_millis(600));
+        assert_eq!(deadlines.total_deadline, start + Duration::from_millis(700));
+
+        assert_eq!(deadlines.deadline_for(UpstreamPhase::Dns), deadlines.dns_deadline);
+        assert_eq!(deadlines.deadline_for(UpstreamPhase::Total), deadlines.total_deadline);
+    }
+}
+
 impl fmt::Display for UpstreamPhase {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(self.as_str())

@@ -541,9 +541,7 @@ pub fn upsert_many(
             let provider_str = provider.as_str().to_string();
             let mut bound: Vec<&dyn rusqlite::ToSql> = Vec::with_capacity(discovered_ids.len() + 1);
             bound.push(&provider_str);
-            for id in &discovered_ids {
-                bound.push(id);
-            }
+            bound.extend(discovered_ids.iter().map(|id| id as &dyn rusqlite::ToSql));
             tx.execute(&sql, rusqlite::params_from_iter(bound.iter().copied()))
                 .map_err(|e| CoreError::Database {
                     message: format!("execute upsert_many delete-disappeared: {}", e),

@@ -36,6 +36,67 @@ impl EndpointKind {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn test_endpoint_kind_as_str() {
+        assert_eq!(EndpointKind::Chat.as_str(), "chat");
+        assert_eq!(EndpointKind::Audio.as_str(), "audio");
+    }
+
+    #[test]
+    fn test_endpoint_kind_display() {
+        assert_eq!(format!("{}", EndpointKind::Chat), "chat");
+    }
+
+    #[test]
+    fn test_endpoint_kind_serialization() {
+        assert_eq!(serde_json::to_string(&EndpointKind::Chat).unwrap(), "\"chat\"");
+        assert_eq!(serde_json::to_string(&EndpointKind::Audio).unwrap(), "\"audio\"");
+    }
+
+    #[test]
+    fn test_endpoint_kind_deserialization() {
+        let kind: EndpointKind = serde_json::from_str("\"chat\"").unwrap();
+        assert_eq!(kind, EndpointKind::Chat);
+    }
+
+    #[test]
+    fn test_endpoint_request_kind() {
+        let chat_req = EndpointRequest::Chat(crate::translation::OpenAIRequest {
+            model: "gpt-4".to_string(),
+            ..Default::default()
+        });
+        assert_eq!(chat_req.kind(), EndpointKind::Chat);
+        assert_eq!(chat_req.model(), "gpt-4");
+
+        let audio_req = EndpointRequest::Audio {
+            model: "whisper-1".to_string(),
+            file_bytes: bytes::Bytes::new(),
+            file_name: "test.mp3".to_string(),
+            file_content_type: "audio/mpeg".to_string(),
+            form_fields: vec![],
+        };
+        assert_eq!(audio_req.kind(), EndpointKind::Audio);
+        assert_eq!(audio_req.model(), "whisper-1");
+    }
+
+    #[test]
+    fn test_endpoint_request_model_json() {
+        let emb_req = EndpointRequest::Embedding(json!({"model": "text-embedding-3"}));
+        assert_eq!(emb_req.model(), "text-embedding-3");
+
+        let img_req = EndpointRequest::Image(json!({"model": "dall-e-3"}));
+        assert_eq!(img_req.model(), "dall-e-3");
+
+        let vid_req = EndpointRequest::Video(json!({"model": "sora"}));
+        assert_eq!(vid_req.model(), "sora");
+    }
+}
+
 impl std::fmt::Display for EndpointKind {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(self.as_str())

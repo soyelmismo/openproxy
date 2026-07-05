@@ -10,7 +10,7 @@ use serde_json::{Value, json};
 // OpenAI Chat Completions types (input/output)
 // =====================
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct OpenAIRequest {
     pub model: String,
     pub messages: Vec<OpenAIMessage>,

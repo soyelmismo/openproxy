@@ -588,6 +588,46 @@ mod tests {
         assert_eq!(v["choices"][0]["finish_reason"], "stop");
     }
 
+    #[test]
+    fn partial_flag_sets_marker_in_extra() {
+        let mut acc = ResponseAccumulator::new();
+        acc.append_openai_raw(r#"{"choices":[{"delta":{"content":"hi"}}]}"#);
+        acc.mark_partial();
+        assert!(acc.is_partial());
+        let v = acc.finish("id", 0, "m");
+        assert_eq!(v["choices"][0]["message"]["partial"], Value::Bool(true));
+        assert_eq!(v["choices"][0]["message"]["content"], "hi");
+    }
+
+    #[test]
+    fn content_text_accessor() {
+        let mut acc = ResponseAccumulator::new();
+        acc.append_openai_raw(r#"{"choices":[{"delta":{"content":"part1"}}]}"#);
+        acc.append_openai_raw(r#"{"choices":[{"delta":{"content":" part2"}}]}"#);
+        assert_eq!(acc.content_text(), "part1 part2");
+    }
+
+    #[test]
+    fn append_reasoning_accumulates_correctly() {
+        let mut acc = ResponseAccumulator::new();
+        acc.append_reasoning("thought 1");
+        acc.append_reasoning(" thought 2");
+        let v = acc.finish("id", 0, "m");
+        assert_eq!(v["choices"][0]["message"]["reasoning_content"], "thought 1 thought 2");
+    }
+
+    #[test]
+    fn append_openai_tool_call_accumulates() {
+        let mut acc = ResponseAccumulator::new();
+        acc.append_openai_tool_call(Some("call_1".into()), "get_time".into(), r#"{"zone":"UTC"}"#.into());
+        let v = acc.finish("id", 0, "m");
+        let tool_calls = v["choices"][0]["message"]["tool_calls"].as_array().unwrap();
+        assert_eq!(tool_calls.len(), 1);
+        assert_eq!(tool_calls[0]["id"], "call_1");
+        assert_eq!(tool_calls[0]["function"]["name"], "get_time");
+        assert_eq!(tool_calls[0]["function"]["arguments"], r#"{"zone":"UTC"}"#);
+    }
+
     // ---- Non-standard reasoning normalization ----
 
     #[test]

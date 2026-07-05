@@ -163,397 +163,57 @@ impl AppState {
     /// 4. Construct the shared HTTP client for upstream calls.
     /// 5. Materialize the registry of built-in provider adapters.
     pub async fn new(config: AppConfig) -> anyhow::Result<Self> {
-        // 1. Open DB and run migrations.
-        let path = config.expanded_database_path();
-        if let Some(parent) = path.parent()
-            && !parent.as_os_str().is_empty()
-        {
-            std::fs::create_dir_all(parent)?;
-        }
-        let db_pool = Arc::new(db::DbPool::open(&path)?);
+        let db_pool = Arc::new(init_database(&config)?);
         let mut config = config;
         let mut recording_ttl_secs = db::app_config::RECORDING_TTL_DEFAULT_SECS;
         let mut idle_chunk_retryable = db::app_config::IDLE_CHUNK_RETRYABLE_DEFAULT;
         let mut compression_mode = openproxy_core::compression::CompressionMode::Off;
-        {
-            let mut w = db_pool.writer();
-            db::migrations::run(&mut w)?;
-            // 1b. (spec §4) If a previous run persisted a `timeouts`
-            //     override via the admin PUT endpoint, load it now
-            //     and overwrite the TOML-derived value. The TOML
-            //     value remains the fallback if the row is missing
-            //     or the JSON is corrupt.
-            if let Some(override_cfg) = db::app_config::load_timeouts_override_from_db(&w)? {
-                tracing::info!(
-                    connect_ms = override_cfg.connect_ms,
-                    request_send_ms = override_cfg.request_send_ms,
-                    ttft_ms = override_cfg.ttft_ms,
-                    idle_chunk_ms = override_cfg.idle_chunk_ms,
-                    total_ms = override_cfg.total_ms,
-                    "loaded persisted timeouts override from app_config"
-                );
-                config.timeouts = override_cfg;
-            }
-            // 1c. Load the persisted recording TTL override.
-            if let Some(ttl) = db::app_config::load_recording_ttl_from_db(&w)? {
-                recording_ttl_secs = ttl;
-            }
-            tracing::info!(
-                recording_ttl_secs,
-                "loaded recording TTL from app_config (default 300s)"
-            );
-            // 1d. Load the persisted idle_chunk_retryable override.
-            if let Some(val) = db::app_config::load_idle_chunk_retryable_from_db(&w)? {
-                idle_chunk_retryable = val;
-            }
-            tracing::info!(
-                idle_chunk_retryable,
-                "loaded idle_chunk_retryable from app_config (default false)"
-            );
-            // 1e. Load the persisted compression override. The
-            //     admin PUT endpoint for compression persists the
-            //     chosen mode here at runtime; if we don't load it
-            //     back at boot, the in-memory `compression_mode_cell`
-            //     silently defaults to `Off` and every subsequent
-            //     request runs uncompressed even though the operator
-            //     clearly enabled it via the dashboard. This was
-            //     the half of the compression bug that made the
-            //     feature invisible in the `usage` table on a
-            //     server restart (the other half — dropping the
-            //     stats before writing the row — lives in
-            //     `pipeline.rs`). Mirrors the timeouts /
-            //     recording_ttl / idle_chunk_retryable pattern
-            //     immediately above.
-            if let Some(mode) = db::app_config::load_compression_override_from_db(&w)? {
-                tracing::info!(
-                    ?mode,
-                    "loaded persisted compression override from app_config"
-                );
-                compression_mode = mode;
-            } else {
-                tracing::info!(
-                    ?compression_mode,
-                    "no persisted compression override; \
-                     using config default"
-                );
-            }
-            // Auto-seed the three built-in providers (OpenRouter, MiniMax
-            // Coding, OpenCode Zen) so the dashboard shows them on first
-            // run. The seed is idempotent: existing rows are skipped.
-            let seeded = openproxy_core::seed::seed_builtin_providers(&w)?;
-            if seeded > 0 {
-                tracing::info!(seeded, "auto-seeded built-in providers on first start");
-            }
-            // Seed the virtual "combo" provider row used as a placeholder
-            // `provider_id` on sub-combo (combo-in-combo) targets. Idempotent
-            // and decoupled from the built-in list because there is no
-            // adapter registered against this id; it exists in the
-            // `providers` table only to satisfy the combo_targets FK and
-            // the `p.active = 1` filter in `list_targets`.
-            if openproxy_core::seed::seed_virtual_combo_provider(&w)? {
-                tracing::info!("auto-seeded virtual 'combo' provider for sub-combo targets");
-            }
-            // Backfill model metadata (context_length, capabilities, …)
-            // for any rows that pre-date migration 000014. Idempotent:
-            // a second start touches zero rows. Logged so operators can
-            // see the migration happened.
-            let backfilled = openproxy_core::seed::backfill_model_metadata(&w)?;
-            if backfilled > 0 {
-                tracing::info!(
-                    backfilled,
-                    "backfilled model metadata from heuristics on first start"
-                );
-            }
-            // Backfill `model_id_normalized` for existing model rows.
-            // Migration 000033 added the column but left it NULL for
-            // pre-existing rows. The models.dev sync enrichment and the
-            // pricing lookup both depend on this column being populated.
-            // Running it at boot (unconditionally, even if sync is
-            // disabled) ensures the column is ready when the sync fires.
-            let normalized = openproxy_core::models_dev_sync::backfill_model_id_normalized(&w)?;
-            if normalized > 0 {
-                tracing::info!(
-                    normalized,
-                    "backfilled model_id_normalized for existing model rows on boot"
-                );
-            }
-            // Re-price historical usage rows that had no pricing at
-            // record time (cost_usd = 0 AND tokens > 0). This runs at
-            // boot so the operator sees correct costs immediately after
-            // restart, without having to manually trigger a models.dev
-            // sync. Uses whatever pricing data is already in the sync
-            // table (from a previous sync) plus the static PRICING_TABLE
-            // fallback. If the sync hasn't run yet, only the static
-            // table entries (11 models) will be re-priced; the rest
-            // will be re-priced when the sync runs and the operator
-            // hits the manual recompute endpoint.
-            let repriced = openproxy_core::models_dev_sync::recompute_costs(&w)?;
-            if repriced > 0 {
-                tracing::info!(
-                    repriced,
-                    "re-priced historical usage rows with missing pricing on boot"
-                );
-            }
-            // First-run bootstrap: if the api_keys table is empty,
-            // create a single `["manage", "chat"]` key and print the
-            // plaintext to the logs + stderr. The operator copies it
-            // out of the boot logs and uses it for everything (admin
-            // calls, chat calls) until they rotate to a per-client
-            // key. No-op on subsequent boots.
-            if let Some(b) = openproxy_core::bootstrap::ensure_bootstrap_key(&w, "bootstrap")? {
-                tracing::info!(
-                    id = b.id.0,
-                    prefix = ?b.key_prefix,
-                    "bootstrap key ready (see WARN log / stderr for plaintext)"
-                );
-            }
-        }
 
-        // 2. Master key from env.
+        run_database_maintenance(
+            &mut db_pool.writer(),
+            &mut config,
+            &mut recording_ttl_secs,
+            &mut idle_chunk_retryable,
+            &mut compression_mode,
+        )?;
+
         let master_key = Arc::new(MasterKey::from_env()?);
-
-        // 3. HTTP client for upstream calls.
-        //
-        // The `connect_timeout` is wired to `timeouts.connect_ms` at
-        // startup (and re-applied live by `set_timeouts` below). The
-        // default `timeouts.connect_ms` is 5 s; reqwest's own default
-        // is "no timeout" which leaves the TCP-connect arm of a
-        // request open indefinitely. The rest of the timeout budget
-        // (`request_send_ms`, `ttft_ms`, `total_ms`) is enforced
-        // elsewhere: per-request via `RequestBuilder::timeout(total)`
-        // in `pipeline.rs`, and `ttft` / `idle_chunk` are measured
-        // by the pipeline. See the comment block above
-        // `dispatch_upstream_streaming` in `pipeline.rs` for the
-        // full mapping.
-        let http_client = reqwest::Client::builder()
-            .user_agent("openproxy/1.0")
-            .connect_timeout(Duration::from_millis(config.timeouts.connect_ms))
-            // LEAK FIX: bound the connection pool. Without these,
-            // reqwest keeps idle connections open indefinitely (one
-            // per host, never closing). With many LLM providers and
-            // their CDN endpoints, this accumulates connections + their
-            // associated TLS state + read buffers over 24h. 20s idle
-            // timeout + max 8 idle per host matches the upstream
-            // client's config (see upstream/client.rs).
-            .pool_idle_timeout(Some(Duration::from_secs(20)))
-            .pool_max_idle_per_host(8)
-            .build()?;
-
-        // 4. Adapters — built-in + any custom providers stored in DB.
-        //    The in-memory registry is wrapped in a `RwLock` so the
-        //    admin handlers can hot-reload it (via `rebuild_adapters`)
-        //    after create / update / delete of a custom provider.
-        //    At startup we call `rebuild_adapters` once; subsequent
-        //    reloads happen in the admin handler path.
+        let http_client = Arc::new(RwLock::new(build_http_client(&config)?));
         let adapters = Arc::new(RwLock::new(adapters::builtin_adapters()));
-
-        // 5. Usage broadcast sender for admin live-log WebSockets.
         let usage_tx = usage::init_usage_broadcast();
-        // 5b. Stage broadcast sender for in-flight per-phase updates.
-        //     Lives in the same process but a separate channel so
-        //     the dashboard can map stages to a row by `request_id`
-        //     without re-deriving from a `RecentUsageRow`.
         let stage_tx = usage::init_stage_broadcast();
-        // 5c. Notifications broadcast sender for the dashboard's
-        //     notifications tray. Discovery events (model_new /
-        //     model_gone / model_auto_activated) and system events
-        //     (discovery_failed / account_key_decrypt_failed) are
-        //     pushed to this channel; the WS handler in handlers/admin.rs
-        //     subscribes and re-emits to connected dashboard clients.
-        //     The sender lives in a `OnceCell` inside
-        //     `openproxy_core::notifications`, so this call is
-        //     idempotent — repeat invocations (e.g. in tests that
-        //     also construct an AppState) are no-ops.
         openproxy_core::notifications::init_broadcast();
 
-        // 6. Background prune of expired cooldowns. The
-        //    `target_cooldowns` table is append-mostly (failures
-        //    insert, successes delete, the loop's own UPSERT on a
-        //    second failure just updates the existing row), but
-        //    abandoned rows — a target whose combo was deleted,
-        //    for example, or one that's been parked for hours —
-        //    would otherwise live forever. The 60-second cadence
-        //    is the same as the dashboard's poll interval, so the
-        //    "⏸ cooldown" badge can't visibly outlive its row by
-        //    more than a minute.
-        //
-        //    We spawn before returning `AppState` so the task is
-        //    anchored to the tokio runtime the caller is already
-        //    driving. The task holds only an `Arc<DbPool>`, so the
-        //    process can shut down without an explicit cancel
-        //    signal: dropping the last `DbPool` clone is enough.
-        let prune_pool = db_pool.clone();
-        tokio::spawn(async move {
-            let mut tick = tokio::time::interval(std::time::Duration::from_secs(60));
-            // First tick fires immediately; skip it so we don't
-            // double-prune on a fresh boot (migrations just ran,
-            // there are no expired rows yet).
-            tick.tick().await;
-            loop {
-                tick.tick().await;
-                let pruned = {
-                    let w = prune_pool.writer();
-                    openproxy_core::cooldown::prune_expired(&w)
-                };
-                match pruned {
-                    Ok(0) => {}
-                    Ok(n) => {
-                        tracing::info!(pruned = n, "pruned expired target cooldowns");
-                    }
-                    Err(e) => {
-                        tracing::warn!(error = %e, "cooldown prune tick failed");
-                    }
-                }
-            }
-        });
-
-        // 6b. Background prune of expired recorded request/response
-        //     bodies and headers. The metadata rows stay intact for
-        //     analytics, but the heavy live-log detail fields are
-        //     nullified after the configured TTL.
-        // 6c. Same tick: DELETE entire usage rows older than the TTL
-        //     so the live-logs table does not grow indefinitely. Both
-        //     prunes share the same TTL value and 60s cadence.
         let recording_ttl_secs_cell = Arc::new(RwLock::new(recording_ttl_secs));
-        // Maintenance config (auto_vacuum, interval, retention) —
-        // runtime-editable via the dashboard. Initialized from the
-        // config file; the dashboard can override via
-        // `PUT /admin/api/config/maintenance`.
-        let maintenance_config = config.storage.maintenance.clone();
-        let maintenance_cell = Arc::new(RwLock::new(maintenance_config));
-        let vacuum_status = Arc::new(RwLock::new(VacuumStatus {
-            last_run: None,
-            last_result: None,
-            in_progress: false,
-            next_scheduled: None,
-        }));
-        let recording_ttl_pool = db_pool.clone();
-        let recording_ttl_cell = Arc::clone(&recording_ttl_secs_cell);
-        tokio::spawn(async move {
-            let mut tick = tokio::time::interval(std::time::Duration::from_secs(60));
-            tick.tick().await;
-            loop {
-                tick.tick().await;
-                let ttl = *recording_ttl_cell.read();
-                let pruned = {
-                    let w = recording_ttl_pool.writer();
-                    openproxy_core::usage::prune_expired_recording_bodies(&w, ttl)
-                };
-                match pruned {
-                    Ok(0) => {}
-                    Ok(n) => {
-                        tracing::info!(
-                            pruned = n,
-                            ttl_secs = ttl,
-                            "pruned expired recording bodies"
-                        );
-                    }
-                    Err(e) => {
-                        tracing::warn!(error = %e, ttl_secs = ttl, "recording TTL prune tick failed");
-                    }
-                }
-            }
-        });
-
-        // 7. Background OAuth refresh scheduler. Walks the
-        //    `accounts` table every 60s looking for OAuth accounts
-        //    whose access token expires within the next 15 minutes
-        //    and proactively refreshes them. The 15-minute window
-        //    is large enough that the refreshed token is in place
-        //    before any in-flight chat call needs it, and small
-        //    enough that the scheduler is not constantly
-        //    thrashing on tokens that have years of validity
-        //    remaining. Like the cooldown pruner, the task
-        //    holds only an `Arc<DbPool>` and the shared
-        //    `UpstreamClient` (cloned out of the `Arc` we
-        //    build for `upstream_client` below).
-        //
-        //    Built once and shared with the discovery scheduler
-        //    (step 8) so both background paths talk to upstreams
-        //    through the same client. The `Arc<UpstreamClient>`
-        //    field is a cheap clone of the same handle.
+        let maintenance_cell = Arc::new(RwLock::new(config.storage.maintenance.clone()));
+        let vacuum_status = Arc::new(RwLock::new(VacuumStatus::default()));
         let upstream_client = UpstreamClient::new();
-        let refresh_pool = db_pool.clone();
-        let refresh_key = master_key.clone();
-        let refresh_upstream = upstream_client.clone();
-        // Build the OAuth provider registry — a single, shared
-        // registry used by the pipeline (for on-demand refresh
-        // during chat requests), the background scheduler, and
-        // the admin handlers. Built-in providers are registered
-        // here; custom providers can be added at runtime via
-        // `AppState::oauth_provider_registry().register()`.
-        let oauth_provider_registry: Arc<oauth::OAuthProviderRegistry> =
-            Arc::new(oauth::OAuthProviderRegistry::builtin());
-        let scheduler_registry = oauth_provider_registry.clone();
-        tokio::spawn(async move {
-            oauth::start_refresh_scheduler(
-                refresh_pool,
-                refresh_key,
-                refresh_upstream,
-                scheduler_registry,
-                60,  // check every 60s
-                900, // refresh tokens that expire in the next 15min
-            )
-            .await;
-        });
+        let oauth_provider_registry = Arc::new(oauth::OAuthProviderRegistry::builtin());
 
-        // 9. models.dev background sync (opt-in).
-        //    When `MODELS_DEV_SYNC_ENABLED=true`, spawns a background
-        //    task that periodically fetches model pricing, context
-        //    length, and capabilities from models.dev and enriches
-        //    the local `models` table + auto-creates cross-provider
-        //    combos. Default interval: 24h.
-        //
-        //    The sync is a no-op in `for_test` mode (no env var).
-        let sync_pool = db_pool.clone();
-        let sync_upstream = upstream_client.clone();
-        let models_dev_enabled = std::env::var("MODELS_DEV_SYNC_ENABLED")
-            .ok()
-            .map(|v| v == "1" || v == "true")
-            .unwrap_or(false);
-        if models_dev_enabled {
-            let interval_secs: u64 = std::env::var("MODELS_DEV_SYNC_INTERVAL_SECS")
-                .ok()
-                .and_then(|s| s.parse().ok())
-                .unwrap_or(86_400);
-            tracing::info!(interval_secs, "starting models.dev sync scheduler");
-            tokio::spawn(async move {
-                openproxy_core::models_dev_sync::start_sync_scheduler(
-                    sync_pool,
-                    sync_upstream,
-                    interval_secs,
-                )
-                .await;
-            });
-        }
+        spawn_background_tasks(
+            db_pool.clone(),
+            config.clone(),
+            recording_ttl_secs_cell.clone(),
+            maintenance_cell.clone(),
+            vacuum_status.clone(),
+            master_key.clone(),
+            upstream_client.clone(),
+            oauth_provider_registry.clone(),
+        ).await;
 
-        // 8. Background model discovery scheduler (Gate A).
-        //    Spawns one task per built-in provider that refreshes
-        //    the `models` table for that provider on a recurring
-        //    interval (default 1h, staggered uniformly in
-        //    [0, interval) on boot so providers don't all fire
-        //    at t=0). Tasks are fire-and-forget: dropping the
-        //    AppState at shutdown does NOT cancel them (they
-        //    hold their own `Arc<DbPool>` + `Arc<UpstreamClient>`
-        //    clones), and the spec does not require an explicit
-        //    shutdown path. The returned handle is stored on
-        //    AppState so a future `Drop` impl can call
-        //    `.cancel()` if needed.
-        let adapters_clone = Arc::new(adapters.read().clone());
-        let discovery_scheduler = discovery_scheduler::start(
+        let discovery_scheduler = Arc::new(start_discovery_scheduler(
             db_pool.clone(),
             master_key.clone(),
-            adapters_clone,
+            adapters.clone(),
             upstream_client.clone(),
-            discovery_scheduler::DiscoverySchedulerConfig::default(),
-        )
-        .await;
-        let discovery_scheduler = Arc::new(discovery_scheduler);
+        ).await);
 
-        let timeouts_initial = config.timeouts; // Copy, take it before moving config.
+        let timeouts_initial = config.timeouts;
         let rate_limiter = Arc::new(crate::rate_limit::RateLimiter::new(
             crate::rate_limit::RateLimitConfig::default(),
         ));
+        spawn_rate_limiter_cleanup(rate_limiter.clone());
+
         let selection_registry = Arc::new(openproxy_core::combos::SelectionRegistry::new());
         let circuit_breaker = openproxy_core::circuit_breaker::CircuitBreakerRegistry::new(
             &openproxy_core::config::CircuitBreakerConfig {
@@ -561,211 +221,7 @@ impl AppState {
                 unhealthy_duration_ms: 60_000,
             },
         );
-        // Spawn a periodic cleanup of the rate-limiter's per-key map.
-        // Without this sweep, entries for API keys / IPs that were used
-        // once and never again would accumulate forever (the lazy
-        // cleanup on `check()` only resets expired counters — it never
-        // removes the key). 5 minutes is short enough to bound the
-        // map size under key-rotation, long enough to avoid thrash.
-        {
-            let rl = Arc::clone(&rate_limiter);
-            tokio::spawn(async move {
-                let mut tick = tokio::time::interval(std::time::Duration::from_secs(300));
-                tick.tick().await; // skip the immediate first tick
-                loop {
-                    tick.tick().await;
-                    rl.cleanup();
-                }
-            });
-        }
-
-        // LEAK FIX: prune old usage rows + periodic VACUUM.
-        //
-        // The `usage` table grows by one row per request. Without
-        // pruning, it reaches 18,974 rows / 344MB in 24h of moderate
-        // load. This task:
-        //   1. Deletes entire usage rows older than `usage_retention_days`
-        //      (default 7 days, configurable via [storage.maintenance]).
-        //   2. Runs VACUUM every `vacuum_interval_hours` (default 6h)
-        //      IF `auto_vacuum` is true (default). When auto_vacuum is
-        //      false, VACUUM only runs when the operator triggers it
-        //      manually via the dashboard button or the
-        //      `POST /admin/api/debug/vacuum` endpoint.
-        //
-        // Both settings are runtime-editable via `PUT /admin/api/config/maintenance`
-        // and the dashboard's config view. The background task reads
-        // the current values on every tick so changes take effect
-        // immediately (no restart needed).
-        {
-            let prune_pool = db_pool.clone();
-            let maint_cell = Arc::clone(&maintenance_cell);
-            let vac_status = Arc::clone(&vacuum_status);
-            tokio::spawn(async move {
-                // Row prune: every 1 hour.
-                let mut prune_tick = tokio::time::interval(std::time::Duration::from_secs(3600));
-                prune_tick.tick().await; // skip immediate first tick
-                let mut vacuum_counter: u32 = 0;
-                loop {
-                    prune_tick.tick().await;
-                    // Read current maintenance config (may have been
-                    // changed via the dashboard since the last tick).
-                    let (auto_vacuum, interval_hours, retention_days) = {
-                        let m = maint_cell.read();
-                        (
-                            m.auto_vacuum,
-                            m.vacuum_interval_hours,
-                            m.usage_retention_days,
-                        )
-                    };
-                    let retention_secs: i64 = (retention_days as i64) * 24 * 3600;
-                    // Delete old usage rows (always runs, even if
-                    // auto_vacuum is false — pruning prevents the
-                    // table from growing without bound).
-                    if retention_secs > 0 {
-                        let pruned = {
-                            let w = prune_pool.writer();
-                            openproxy_core::usage::prune_expired_usage_rows(&w, retention_secs)
-                        };
-                        match pruned {
-                            Ok(0) => {}
-                            Ok(n) => {
-                                tracing::info!(
-                                    pruned_rows = n,
-                                    retention_secs = retention_secs,
-                                    "usage row prune: deleted old rows"
-                                );
-                            }
-                            Err(e) => {
-                                tracing::warn!(error = %e, "usage row prune failed");
-                            }
-                        }
-                    }
-                    // VACUUM: check if it's time to run. The interval
-                    // is in hours; we tick every 1h, so we run VACUUM
-                    // every `interval_hours` ticks.
-                    let interval_ticks = interval_hours.max(1);
-                    vacuum_counter = vacuum_counter.wrapping_add(1);
-                    if auto_vacuum && vacuum_counter >= interval_ticks {
-                        vacuum_counter = 0;
-                        // Mark VACUUM as in-progress for the dashboard.
-                        {
-                            let mut st = vac_status.write();
-                            st.in_progress = true;
-                        }
-                        let vacuum_result = {
-                            let w = prune_pool.writer();
-                            let _ = w.pragma_update(None, "auto_vacuum", "INCREMENTAL");
-                            let inc_result = w.execute_batch("PRAGMA incremental_vacuum(1000);");
-                            match inc_result {
-                                Ok(()) => Ok(()),
-                                Err(_) => w.execute_batch("VACUUM;"),
-                            }
-                        };
-                        let now = chrono::Utc::now().to_rfc3339();
-                        let result_str = match vacuum_result {
-                            Ok(()) => {
-                                tracing::info!("SQLite VACUUM: compacted freed pages");
-                                "ok".to_string()
-                            }
-                            Err(e) => {
-                                tracing::warn!(
-                                    error = %e,
-                                    "SQLite VACUUM failed (non-fatal — will retry next cycle)"
-                                );
-                                e.to_string()
-                            }
-                        };
-                        // Update status.
-                        {
-                            let mut st = vac_status.write();
-                            st.in_progress = false;
-                            st.last_run = Some(now);
-                            st.last_result = Some(result_str);
-                            // Schedule next run.
-                            if auto_vacuum {
-                                let next = chrono::Utc::now()
-                                    + chrono::Duration::hours(interval_hours as i64);
-                                st.next_scheduled = Some(next.to_rfc3339());
-                            } else {
-                                st.next_scheduled = None;
-                            }
-                        }
-                    }
-                }
-            });
-        }
-        // LEAK FIX: periodic sweep of in-memory collections + mimalloc
-        // arena trim.
-        //
-        // - `selection_registry`: per-target LKGP/least_used/p2c
-        //   tracking. Each `record_success` / `record_request` call
-        //   creates an entry via `entry().or_default()`; deleted
-        //   combo targets leave stale entries forever. Sweep every
-        //   10 min, evict entries with no success in the last hour.
-        //
-        // - `circuit_breaker`: per-account breaker map. Now that the
-        //   breaker is shared across requests (LEAK-HUNT-2 fix),
-        //   entries accumulate for every account_id seen. Sweep every
-        //   10 min, evict Healthy entries idle > 1 hour.
-        //
-        // - `mi_collect(false)`: tell mimalloc to return freed-but-
-        //   retained arenas to the OS NOW, rather than waiting for
-        //   its ~1s automatic decay. This is the primary fix for the
-        //   "instant 20MB jump" symptom: after a burst of allocations
-        //   (large SSE response, discovery refresh, models.dev sync),
-        //   mimalloc holds onto arenas for its decay window even
-        //   though the memory is logically free. `mi_collect(false)`
-        //   is cheap (~µs when nothing to trim) and safe from a tokio
-        //   task. NOT a GC — see the Cargo.toml comment on the
-        //   `mimalloc` dependency for the full rationale.
-        {
-            let sr = Arc::clone(&selection_registry);
-            let cb = circuit_breaker.clone();
-            tokio::spawn(async move {
-                // Fast tick (60s) for mi_collect; slow counter for
-                // the 10-min selection_registry prune.
-                let mut fast_tick = tokio::time::interval(std::time::Duration::from_secs(60));
-                let mut slow_counter: u32 = 0;
-                fast_tick.tick().await; // skip immediate first tick
-                loop {
-                    fast_tick.tick().await;
-                    // Force mimalloc to return freed arenas to the OS.
-                    // `false` = don't force-claim everything (which
-                    // would be expensive); just release what's already
-                    // abandoned. Equivalent to glibc's `malloc_trim(0)`
-                    // or jemalloc's `je_mallctl("arena.0.purge")`.
-                    //
-                    // SAFETY: `mi_collect` is thread-safe and
-                    // reentrant. The `false` argument is the `force`
-                    // bool. We call it from a tokio task — no
-                    // Rust-level locks held.
-                    unsafe {
-                        libmimalloc_sys::mi_collect(false);
-                    }
-
-                    // Every 10 ticks (10 min), prune selection_registry
-                    // and circuit_breaker.
-                    slow_counter = slow_counter.wrapping_add(1);
-                    if slow_counter.is_multiple_of(10) {
-                        let pruned = sr.prune_stale(std::time::Duration::from_secs(3600));
-                        if pruned > 0 {
-                            tracing::debug!(
-                                pruned,
-                                remaining = sr.len(),
-                                "selection_registry sweep: evicted stale target entries"
-                            );
-                        }
-                        let cb_pruned = cb.prune_idle(std::time::Duration::from_secs(3600));
-                        if cb_pruned > 0 {
-                            tracing::debug!(
-                                pruned = cb_pruned,
-                                "circuit_breaker sweep: evicted idle account entries"
-                            );
-                        }
-                    }
-                }
-            });
-        }
+        spawn_memory_cleanup(selection_registry.clone(), circuit_breaker.clone());
 
         let state = Self {
             config,
@@ -773,24 +229,23 @@ impl AppState {
             master_key,
             adapters,
             rate_limiter,
-            http_client: Arc::new(RwLock::new(http_client)),
+            http_client,
             upstream_client,
             usage_tx,
             stage_tx,
             record_bodies_and_headers: Arc::new(AtomicBool::new(false)),
             timeouts_cell: Arc::new(RwLock::new(timeouts_initial)),
             compression_mode_cell: Arc::new(RwLock::new(compression_mode)),
-            recording_ttl_secs_cell: Arc::clone(&recording_ttl_secs_cell),
+            recording_ttl_secs_cell,
             discovery_scheduler,
             oauth_provider_registry,
             idle_chunk_retryable_cell: Arc::new(AtomicBool::new(idle_chunk_retryable)),
-            selection_registry: Arc::clone(&selection_registry),
+            selection_registry,
             circuit_breaker,
             maintenance_cell,
             vacuum_status,
         };
-        // Hot-reload custom adapters from DB so the registry is
-        // complete before the first request arrives.
+
         state.rebuild_adapters()?;
         Ok(state)
     }
@@ -815,40 +270,42 @@ impl AppState {
         master_key: Arc<MasterKey>,
         adapters: Arc<RwLock<Vec<Arc<dyn adapters::ProviderAdapter>>>>,
     ) -> Self {
-        // 60-second prune cadence matches production; the spawned
-        // task holds only `Arc<DbPool>` so the test's drop of the
-        // AppState at the end of the test is enough to terminate
-        // it cleanly.
         let recording_ttl_secs_cell =
             Arc::new(RwLock::new(db::app_config::RECORDING_TTL_DEFAULT_SECS));
-        let prune_pool = db_pool.clone();
-        tokio::spawn(async move {
-            let mut tick = tokio::time::interval(std::time::Duration::from_secs(60));
-            tick.tick().await;
-            loop {
-                tick.tick().await;
-                let _ = openproxy_core::cooldown::prune_expired(&prune_pool.writer());
-            }
-        });
+        let maintenance_cell = Arc::new(RwLock::new(
+            openproxy_core::config::MaintenanceConfig::default(),
+        ));
+        let vacuum_status = Arc::new(RwLock::new(VacuumStatus::default()));
+        let upstream_client = UpstreamClient::new();
+        let oauth_provider_registry = Arc::new(oauth::OAuthProviderRegistry::builtin());
 
-        // Recording TTL prune for tests.
-        let recording_ttl_pool = db_pool.clone();
-        let recording_ttl_cell = Arc::clone(&recording_ttl_secs_cell);
-        tokio::spawn(async move {
-            let mut tick = tokio::time::interval(std::time::Duration::from_secs(60));
-            tick.tick().await;
-            loop {
-                tick.tick().await;
-                let ttl = *recording_ttl_cell.read();
-                let _ = openproxy_core::usage::prune_expired_recording_bodies(
-                    &recording_ttl_pool.writer(),
-                    ttl,
-                );
-            }
-        });
+        spawn_background_tasks(
+            db_pool.clone(),
+            config.clone(),
+            recording_ttl_secs_cell.clone(),
+            maintenance_cell.clone(),
+            vacuum_status.clone(),
+            master_key.clone(),
+            upstream_client.clone(),
+            oauth_provider_registry.clone(),
+        ).await;
 
-        // LEAK FIX: periodic sweep of in-memory collections + mimalloc
-        // arena trim. Mirrors the production sweep in `AppState::new`.
+        let discovery_scheduler = discovery_scheduler::start(
+            db_pool.clone(),
+            master_key.clone(),
+            Arc::new(adapters.read().clone()),
+            upstream_client.clone(),
+            openproxy_core::discovery_scheduler::DiscoverySchedulerConfig {
+                interval_secs: 3_600,
+                initial_stagger_secs: 0,
+            },
+        ).await;
+
+        let rate_limiter = Arc::new(crate::rate_limit::RateLimiter::new(
+            crate::rate_limit::RateLimitConfig::default(),
+        ));
+        spawn_rate_limiter_cleanup(rate_limiter.clone());
+
         let selection_registry = Arc::new(openproxy_core::combos::SelectionRegistry::new());
         let circuit_breaker = openproxy_core::circuit_breaker::CircuitBreakerRegistry::new(
             &openproxy_core::config::CircuitBreakerConfig {
@@ -856,91 +313,20 @@ impl AppState {
                 unhealthy_duration_ms: 60_000,
             },
         );
-        let maintenance_cell = Arc::new(RwLock::new(
-            openproxy_core::config::MaintenanceConfig::default(),
-        ));
-        let vacuum_status = Arc::new(RwLock::new(VacuumStatus::default()));
-        {
-            let sr = Arc::clone(&selection_registry);
-            let cb = circuit_breaker.clone();
-            tokio::spawn(async move {
-                let mut fast_tick = tokio::time::interval(std::time::Duration::from_secs(60));
-                let mut slow_counter: u32 = 0;
-                fast_tick.tick().await;
-                loop {
-                    fast_tick.tick().await;
-                    unsafe {
-                        libmimalloc_sys::mi_collect(false);
-                    }
-                    slow_counter = slow_counter.wrapping_add(1);
-                    if slow_counter.is_multiple_of(10) {
-                        let pruned = sr.prune_stale(std::time::Duration::from_secs(3600));
-                        if pruned > 0 {
-                            tracing::debug!(
-                                pruned,
-                                remaining = sr.len(),
-                                "selection_registry sweep: evicted stale target entries"
-                            );
-                        }
-                        let cb_pruned = cb.prune_idle(std::time::Duration::from_secs(3600));
-                        if cb_pruned > 0 {
-                            tracing::debug!(
-                                pruned = cb_pruned,
-                                "circuit_breaker sweep: evicted idle account entries"
-                            );
-                        }
-                    }
-                }
-            });
-        }
+        spawn_memory_cleanup(selection_registry.clone(), circuit_breaker.clone());
 
-        // Test-only discovery scheduler: the test path doesn't
-        // need a real `UpstreamClient` because the per-provider
-        // task body short-circuits on provider rows that don't
-        // exist or providers with no accounts. Spinning it up
-        // here keeps the field wired and matches the production
-        // shape so handler tests can hit the same code path.
-        let upstream_client = UpstreamClient::new();
-        let adapters_clone = Arc::new(adapters.read().clone());
-        let discovery_scheduler = discovery_scheduler::start(
-            db_pool.clone(),
-            master_key.clone(),
-            adapters_clone,
-            upstream_client.clone(),
-            discovery_scheduler::DiscoverySchedulerConfig {
-                // 1h cadence + 0 stagger = first tick is
-                // immediate, subsequent ticks are well outside
-                // the test's lifetime. The test never awaits
-                // the second tick.
-                interval_secs: 3_600,
-                initial_stagger_secs: 0,
-            },
-        )
-        .await;
-
-        let timeouts_initial = config.timeouts; // Copy, take it before moving config.
-        // Notifications broadcast is process-global (OnceCell);
-        // initialize it for test paths too so unit tests that
-        // exercise the notification broadcast don't silently get
-        // `try_get_tx() == None`. The call is idempotent.
         openproxy_core::notifications::init_broadcast();
+
         Self {
-            config,
+            config: config.clone(),
             db_pool,
             master_key,
             adapters,
-            rate_limiter: Arc::new(crate::rate_limit::RateLimiter::new(
-                crate::rate_limit::RateLimitConfig::default(),
-            )),
-            // Test path: still wire `connect_timeout` so unit tests
-            // that exercise the HTTP path (e.g. SSE drainers) see
-            // the same contract as production. We pull
-            // `timeouts.connect_ms` from the config the caller
-            // passed in — `TimeoutsConfig::default()` gives 5 s.
+            rate_limiter,
             http_client: Arc::new(RwLock::new(
                 reqwest::Client::builder()
                     .user_agent("openproxy-test/1.0")
-                    .connect_timeout(Duration::from_millis(timeouts_initial.connect_ms))
+                    .connect_timeout(Duration::from_millis(config.timeouts.connect_ms))
                     .pool_idle_timeout(Some(Duration::from_secs(20)))
                     .pool_max_idle_per_host(8)
                     .build()
@@ -950,17 +336,17 @@ impl AppState {
             usage_tx: usage::init_usage_broadcast(),
             stage_tx: usage::init_stage_broadcast(),
             record_bodies_and_headers: Arc::new(AtomicBool::new(false)),
-            timeouts_cell: Arc::new(RwLock::new(timeouts_initial)),
+            timeouts_cell: Arc::new(RwLock::new(config.timeouts)),
             compression_mode_cell: Arc::new(RwLock::new(
                 openproxy_core::compression::CompressionMode::Off,
             )),
-            recording_ttl_secs_cell: Arc::clone(&recording_ttl_secs_cell),
+            recording_ttl_secs_cell,
             discovery_scheduler: Arc::new(discovery_scheduler),
-            oauth_provider_registry: Arc::new(oauth::OAuthProviderRegistry::builtin()),
+            oauth_provider_registry,
             idle_chunk_retryable_cell: Arc::new(AtomicBool::new(
                 db::app_config::IDLE_CHUNK_RETRYABLE_DEFAULT,
             )),
-            selection_registry: Arc::clone(&selection_registry),
+            selection_registry,
             circuit_breaker,
             maintenance_cell,
             vacuum_status,
@@ -1266,6 +652,296 @@ impl AppState {
         st.last_run = Some(chrono::Utc::now().to_rfc3339());
         st.last_result = Some(result.to_string());
     }
+}
+
+// ── Private helpers for construction and background tasks ───────────
+
+fn init_database(config: &openproxy_core::AppConfig) -> anyhow::Result<openproxy_core::db::DbPool> {
+    let path = config.expanded_database_path();
+    if let Some(parent) = path.parent()
+        && !parent.as_os_str().is_empty()
+    {
+        std::fs::create_dir_all(parent)?;
+    }
+    Ok(openproxy_core::db::DbPool::open(&path)?)
+}
+
+fn run_database_maintenance(
+    w: &mut openproxy_core::db::conn::WriterGuard<'_>,
+    config: &mut openproxy_core::AppConfig,
+    recording_ttl_secs: &mut i64,
+    idle_chunk_retryable: &mut bool,
+    compression_mode: &mut openproxy_core::compression::CompressionMode,
+) -> anyhow::Result<()> {
+    openproxy_core::db::migrations::run(w)?;
+
+    if let Some(override_cfg) = openproxy_core::db::app_config::load_timeouts_override_from_db(w)? {
+        tracing::info!(
+            connect_ms = override_cfg.connect_ms,
+            request_send_ms = override_cfg.request_send_ms,
+            ttft_ms = override_cfg.ttft_ms,
+            idle_chunk_ms = override_cfg.idle_chunk_ms,
+            total_ms = override_cfg.total_ms,
+            "loaded persisted timeouts override from app_config"
+        );
+        config.timeouts = override_cfg;
+    }
+
+    if let Some(ttl) = openproxy_core::db::app_config::load_recording_ttl_from_db(w)? {
+        *recording_ttl_secs = ttl;
+    }
+    tracing::info!(
+        recording_ttl_secs,
+        "loaded recording TTL from app_config (default 300s)"
+    );
+
+    if let Some(val) = openproxy_core::db::app_config::load_idle_chunk_retryable_from_db(w)? {
+        *idle_chunk_retryable = val;
+    }
+    tracing::info!(
+        idle_chunk_retryable,
+        "loaded idle_chunk_retryable from app_config (default false)"
+    );
+
+    if let Some(mode) = openproxy_core::db::app_config::load_compression_override_from_db(w)? {
+        tracing::info!(
+            ?mode,
+            "loaded persisted compression override from app_config"
+        );
+        *compression_mode = mode;
+    } else {
+        tracing::info!(
+            ?compression_mode,
+            "no persisted compression override; using config default"
+        );
+    }
+
+    let seeded = openproxy_core::seed::seed_builtin_providers(w)?;
+    if seeded > 0 {
+        tracing::info!(seeded, "auto-seeded built-in providers on first start");
+    }
+
+    if openproxy_core::seed::seed_virtual_combo_provider(w)? {
+        tracing::info!("auto-seeded virtual 'combo' provider for sub-combo targets");
+    }
+
+    let backfilled = openproxy_core::seed::backfill_model_metadata(w)?;
+    if backfilled > 0 {
+        tracing::info!(
+            backfilled,
+            "backfilled model metadata from heuristics on first start"
+        );
+    }
+
+    let normalized = openproxy_core::models_dev_sync::backfill_model_id_normalized(w)?;
+    if normalized > 0 {
+        tracing::info!(
+            normalized,
+            "backfilled model_id_normalized for existing model rows on boot"
+        );
+    }
+
+    let repriced = openproxy_core::models_dev_sync::recompute_costs(w)?;
+    if repriced > 0 {
+        tracing::info!(
+            repriced,
+            "re-priced historical usage rows with missing pricing on boot"
+        );
+    }
+
+    if let Some(b) = openproxy_core::bootstrap::ensure_bootstrap_key(w, "bootstrap")? {
+        tracing::info!(
+            id = b.id.0,
+            prefix = ?b.key_prefix,
+            "bootstrap key ready (see WARN log / stderr for plaintext)"
+        );
+    }
+
+    Ok(())
+}
+
+fn build_http_client(config: &openproxy_core::AppConfig) -> anyhow::Result<reqwest::Client> {
+    Ok(reqwest::Client::builder()
+        .user_agent("openproxy/1.0")
+        .connect_timeout(Duration::from_millis(config.timeouts.connect_ms))
+        .pool_idle_timeout(Some(Duration::from_secs(20)))
+        .pool_max_idle_per_host(8)
+        .build()?)
+}
+
+async fn spawn_background_tasks(
+    db_pool: Arc<openproxy_core::db::DbPool>,
+    _config: openproxy_core::AppConfig,
+    recording_ttl_secs_cell: Arc<RwLock<i64>>,
+    maintenance_cell: Arc<RwLock<openproxy_core::config::MaintenanceConfig>>,
+    vacuum_status: Arc<RwLock<crate::state::VacuumStatus>>,
+    master_key: Arc<openproxy_core::secrets::MasterKey>,
+    upstream_client: Arc<openproxy_core::upstream::UpstreamClient>,
+    oauth_provider_registry: Arc<openproxy_core::oauth::OAuthProviderRegistry>,
+) {
+    let prune_pool = db_pool.clone();
+    tokio::spawn(async move {
+        let mut tick = tokio::time::interval(std::time::Duration::from_secs(60));
+        tick.tick().await;
+        loop {
+            tick.tick().await;
+            let _w = prune_pool.writer();
+            let _ = openproxy_core::cooldown::prune_expired(&_w);
+        }
+    });
+
+    let recording_ttl_pool = db_pool.clone();
+    let recording_ttl_cell = Arc::clone(&recording_ttl_secs_cell);
+    tokio::spawn(async move {
+        let mut tick = tokio::time::interval(std::time::Duration::from_secs(60));
+        tick.tick().await;
+        loop {
+            tick.tick().await;
+            let ttl = *recording_ttl_cell.read();
+            let _ = openproxy_core::usage::prune_expired_recording_bodies(&recording_ttl_pool.writer(), ttl);
+        }
+    });
+
+    let refresh_pool = db_pool.clone();
+    let refresh_key = master_key.clone();
+    let refresh_upstream = upstream_client.clone();
+    let scheduler_registry = oauth_provider_registry.clone();
+    tokio::spawn(async move {
+        openproxy_core::oauth::start_refresh_scheduler(
+            refresh_pool,
+            refresh_key,
+            refresh_upstream,
+            scheduler_registry,
+            60,
+        )
+        .await;
+    });
+
+    let sync_pool = db_pool.clone();
+    let sync_upstream = upstream_client.clone();
+    let models_dev_enabled = std::env::var("MODELS_DEV_SYNC_ENABLED")
+        .ok()
+        .map(|v| v == "1" || v == "true")
+        .unwrap_or(false);
+    if models_dev_enabled {
+        let interval_secs: u64 = std::env::var("MODELS_DEV_SYNC_INTERVAL_SECS")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(86_400);
+        tokio::spawn(async move {
+            openproxy_core::models_dev_sync::start_sync_scheduler(
+                sync_pool,
+                sync_upstream,
+                interval_secs,
+            )
+            .await;
+        });
+    }
+
+    let prune_pool = db_pool.clone();
+    let maint_cell = maintenance_cell.clone();
+    let vac_status = vacuum_status.clone();
+    tokio::spawn(async move {
+        let mut prune_tick = tokio::time::interval(std::time::Duration::from_secs(3600));
+        prune_tick.tick().await;
+        let mut vacuum_counter: u32 = 0;
+        loop {
+            prune_tick.tick().await;
+            let (auto_vacuum, interval_hours, retention_days) = {
+                let m = maint_cell.read();
+                (m.auto_vacuum, m.vacuum_interval_hours, m.usage_retention_days)
+            };
+            let retention_secs: i64 = (retention_days as i64) * 24 * 3600;
+            if retention_secs > 0 {
+                let _ = openproxy_core::usage::prune_expired_usage_rows(&prune_pool.writer(), retention_secs);
+            }
+            let interval_ticks = interval_hours.max(1);
+            vacuum_counter = vacuum_counter.wrapping_add(1);
+            if auto_vacuum && vacuum_counter >= interval_ticks {
+                vacuum_counter = 0;
+                {
+                    let mut st = vac_status.write();
+                    st.in_progress = true;
+                }
+                let vacuum_result = {
+                    let w = prune_pool.writer();
+                    let _ = w.pragma_update(None, "auto_vacuum", "INCREMENTAL");
+                    let inc_result = w.execute_batch("PRAGMA incremental_vacuum(1000);");
+                    match inc_result {
+                        Ok(()) => Ok(()),
+                        Err(_) => w.execute_batch("VACUUM;"),
+                    }
+                };
+                let now = chrono::Utc::now().to_rfc3339();
+                let result_str = match vacuum_result {
+                    Ok(()) => "ok".to_string(),
+                    Err(e) => e.to_string(),
+                };
+                {
+                    let mut st = vac_status.write();
+                    st.in_progress = false;
+                    st.last_run = Some(now);
+                    st.last_result = Some(result_str);
+                    if auto_vacuum {
+                        let next = chrono::Utc::now() + chrono::Duration::hours(interval_hours as i64);
+                        st.next_scheduled = Some(next.to_rfc3339());
+                    } else {
+                        st.next_scheduled = None;
+                    }
+                }
+            }
+        }
+    });
+}
+
+async fn start_discovery_scheduler(
+    db_pool: Arc<openproxy_core::db::DbPool>,
+    master_key: Arc<openproxy_core::secrets::MasterKey>,
+    adapters: Arc<RwLock<Vec<Arc<dyn openproxy_core::adapters::ProviderAdapter>>>>,
+    upstream_client: Arc<openproxy_core::upstream::UpstreamClient>,
+) -> openproxy_core::discovery_scheduler::DiscoveryScheduler {
+    let adapters_clone = Arc::new(adapters.read().clone());
+    openproxy_core::discovery_scheduler::start(
+        db_pool,
+        master_key,
+        adapters_clone,
+        upstream_client,
+        openproxy_core::discovery_scheduler::DiscoverySchedulerConfig::default(),
+    )
+    .await
+}
+
+fn spawn_rate_limiter_cleanup(rate_limiter: Arc<crate::rate_limit::RateLimiter>) {
+    tokio::spawn(async move {
+        let mut tick = tokio::time::interval(std::time::Duration::from_secs(300));
+        tick.tick().await;
+        loop {
+            tick.tick().await;
+            rate_limiter.cleanup();
+        }
+    });
+}
+
+fn spawn_memory_cleanup(
+    selection_registry: Arc<openproxy_core::combos::SelectionRegistry>,
+    circuit_breaker: openproxy_core::circuit_breaker::CircuitBreakerRegistry,
+) {
+    tokio::spawn(async move {
+        let mut fast_tick = tokio::time::interval(std::time::Duration::from_secs(60));
+        let mut slow_counter: u32 = 0;
+        fast_tick.tick().await;
+        loop {
+            fast_tick.tick().await;
+            unsafe {
+                libmimalloc_sys::mi_collect(false);
+            }
+            slow_counter = slow_counter.wrapping_add(1);
+            if slow_counter % 10 == 0 {
+                let _ = selection_registry.prune_stale(std::time::Duration::from_secs(3600));
+                let _ = circuit_breaker.prune_idle(std::time::Duration::from_secs(3600));
+            }
+        }
+    });
 }
 
 #[cfg(test)]

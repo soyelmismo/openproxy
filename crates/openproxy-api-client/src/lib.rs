@@ -638,6 +638,7 @@ fn hex_digit(n: u8) -> char {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
 
     #[test]
     fn trims_trailing_slash() {
@@ -722,5 +723,83 @@ mod tests {
             ClientError::Status(502, msg) => assert!(msg.contains("oops")),
             other => panic!("expected Status, got {:?}", other),
         }
+    }
+
+    #[test]
+    fn test_list_providers() {
+        let server = httpmock::MockServer::start();
+        let client = Client::new(server.base_url());
+
+        let providers = vec![
+            json!({
+                "id": "p1",
+                "name": "Provider 1",
+                "base_url": "http://p1",
+                "auth_type": "bearer",
+                "format": "openai",
+                "active": true,
+                "created_at": "2026-01-01T00:00:00Z"
+            })
+        ];
+
+        server.mock(|when, then| {
+            when.method(httpmock::Method::GET)
+                .path("/admin/providers");
+            then.status(200)
+                .json_body(json!(providers));
+        });
+
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let res = rt.block_on(client.list_providers()).unwrap();
+        assert_eq!(res.len(), 1);
+        assert_eq!(res[0].id.as_str(), "p1");
+    }
+
+    #[test]
+    fn test_refresh_models() {
+        let server = httpmock::MockServer::start();
+        let client = Client::new(server.base_url());
+
+        server.mock(|when, then| {
+            when.method(httpmock::Method::POST)
+                .path("/admin/models/1/refresh");
+            then.status(200)
+                .json_body(json!({ "touched": 5 }));
+        });
+
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let touched = rt.block_on(client.refresh_models(ModelRowId(1))).unwrap();
+        assert_eq!(touched, 5);
+    }
+
+    #[test]
+    fn test_list_combo_targets() {
+        let server = httpmock::MockServer::start();
+        let client = Client::new(server.base_url());
+
+        let targets = vec![
+            json!({
+                "id": 1,
+                "combo_id": 10,
+                "provider_id": "p1",
+                "account_id": 100,
+                "model_row_id": 1000,
+                "priority_order": 1,
+                "weight": 100,
+                "active": true
+            })
+        ];
+
+        server.mock(|when, then| {
+            when.method(httpmock::Method::GET)
+                .path("/admin/combos/10/targets");
+            then.status(200)
+                .json_body(json!(targets));
+        });
+
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let res = rt.block_on(client.list_combo_targets(ComboId(10))).unwrap();
+        assert_eq!(res.len(), 1);
+        assert_eq!(res[0].provider_id.as_str(), "p1");
     }
 }

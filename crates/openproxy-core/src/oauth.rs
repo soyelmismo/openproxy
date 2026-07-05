@@ -488,7 +488,6 @@ pub async fn start_refresh_scheduler(
     upstream_client: Arc<UpstreamClient>,
     registry: Arc<OAuthProviderRegistry>,
     check_interval_secs: u64,
-    _refresh_before_secs: i64, // Deprecated: now per-provider
 ) {
     // Per-provider mutex to serialize concurrent refreshes within the
     // same provider. This prevents Auth0 cascade revocation where
