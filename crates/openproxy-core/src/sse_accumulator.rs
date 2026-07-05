@@ -298,6 +298,27 @@ impl ResponseAccumulator {
             self.content.push_str(content);
             self.total_bytes += additional;
         }
+        if payload.contains("\"tool_calls\"") {
+            if let Ok(v) = serde_json::from_str::<Value>(payload) {
+                if let Some(tool_calls) = v.get("choices")
+                    .and_then(|c| c.as_array())
+                    .and_then(|arr| arr.first())
+                    .and_then(|choice| choice.get("delta"))
+                    .and_then(|delta| delta.get("tool_calls"))
+                    .and_then(|t| t.as_array())
+                {
+                    for tc in tool_calls {
+                        if let Some(tc_obj) = tc.as_object() {
+                            let index = tc_obj.get("index").and_then(|i| i.as_u64()).unwrap_or(0) as usize;
+                            let id = tc_obj.get("id").and_then(|i| i.as_str()).map(String::from);
+                            let name = tc_obj.get("function").and_then(|f| f.get("name")).and_then(|n| n.as_str()).map(String::from);
+                            let arguments = tc_obj.get("function").and_then(|f| f.get("arguments")).and_then(|a| a.as_str()).map(String::from);
+                            self.update_openai_tool_call_delta(index, id, name, arguments);
+                        }
+                    }
+                }
+            }
+        }
     }
 
     /// Append a string to the reasoning accumulator. Used for o1-style
@@ -338,16 +359,39 @@ impl ResponseAccumulator {
         }
     }
 
+    /// Append a tool call delta from OpenAI's `delta.tool_calls[]`.
+    pub fn update_openai_tool_call_delta(
+        &mut self,
+        index: usize,
+        id: Option<String>,
+        name: Option<String>,
+        arguments: Option<String>,
+    ) {
+        while self.tool_calls.len() <= index {
+            self.tool_calls.push(AccumulatedToolCall {
+                id: String::new(),
+                name: String::new(),
+                arguments: String::new(),
+            });
+        }
+        let tc = &mut self.tool_calls[index];
+        if let Some(id_val) = id {
+            tc.id = id_val;
+        }
+        if let Some(name_val) = name {
+            tc.name = name_val;
+        }
+        if let Some(args_val) = arguments {
+            tc.arguments.push_str(&args_val);
+        }
+    }
+
     /// Append a tool call from OpenAI's `delta.tool_calls[]`. The OpenAI
     /// wire format already gives the call as a single chunk; the only
     /// reason we accumulate is so the persisted `response_body_json`
     /// carries a clean tool_calls array (not the streaming deltas).
     pub fn append_openai_tool_call(&mut self, id: Option<String>, name: String, arguments: String) {
-        self.tool_calls.push(AccumulatedToolCall {
-            id: id.unwrap_or_default(),
-            name,
-            arguments,
-        });
+        self.update_openai_tool_call_delta(0, id, Some(name), Some(arguments));
     }
 
     /// Anthropic tool_use event handler. Called from the streaming loop

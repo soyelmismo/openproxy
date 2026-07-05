@@ -4475,27 +4475,7 @@ impl Pipeline {
                                     // upstream sent `reasoning_content`
                                     // natively.
                                     let _ = chunk.delta_reasoning.take();
-                                    for tc in chunk.delta_tool_calls.drain(..) {
-                                        let name = tc
-                                            .get("function")
-                                            .and_then(|f| f.get("name"))
-                                            .and_then(|n| n.as_str())
-                                            .map(String::from);
-                                        let args = tc
-                                            .get("function")
-                                            .and_then(|f| f.get("arguments"))
-                                            .map(|a| match a {
-                                                serde_json::Value::String(s) => s.clone(),
-                                                other => other.to_string(),
-                                            });
-                                        if let (Some(name), Some(args)) = (name, args) {
-                                            let id = tc
-                                                .get("id")
-                                                .and_then(|i| i.as_str())
-                                                .map(String::from);
-                                            a.append_openai_tool_call(id, name, args);
-                                        }
-                                    }
+                                    
                                 }
                                 // Build the SSE frame from the
                                 // (possibly normalized) payload rather
@@ -4854,7 +4834,7 @@ impl Pipeline {
                             // don't fit the OpenAI shape before
                             // consuming the chunk.
                             let delta_reasoning = chunk.delta_reasoning.take();
-                            let delta_tool_calls = std::mem::take(&mut chunk.delta_tool_calls);
+                            let _delta_tool_calls = std::mem::take(&mut chunk.delta_tool_calls);
                             // Capture has_content BEFORE consuming
                             // the chunk — `into_json_string()` takes
                             // `self` by value. We use this flag below
@@ -4886,49 +4866,7 @@ impl Pipeline {
                                 // `Ok(None)` upstream so we never see
                                 // a Close event here (the accumulator's
                                 // Close is a no-op anyway).
-                                for tc in delta_tool_calls {
-                                    let has_name = tc
-                                        .get("function")
-                                        .and_then(|f| f.get("name"))
-                                        .and_then(|n| n.as_str())
-                                        .is_some();
-                                    let has_id = tc.get("id").is_some();
-                                    if has_id && has_name {
-                                        let id = tc
-                                            .get("id")
-                                            .and_then(|i| i.as_str())
-                                            .unwrap_or("")
-                                            .to_string();
-                                        let name = tc
-                                            .get("function")
-                                            .and_then(|f| f.get("name"))
-                                            .and_then(|n| n.as_str())
-                                            .unwrap_or("")
-                                            .to_string();
-                                        a.update_anthropic_tool_use(
-                                            crate::sse_accumulator::AnthropicToolEvent::Open {
-                                                id,
-                                                name,
-                                            },
-                                        );
-                                    } else {
-                                        let partial = tc
-                                            .get("function")
-                                            .and_then(|f| f.get("arguments"))
-                                            .map(|a| match a {
-                                                serde_json::Value::String(s) => s.clone(),
-                                                other => other.to_string(),
-                                            })
-                                            .unwrap_or_default();
-                                        if !partial.is_empty() {
-                                            a.update_anthropic_tool_use(
-                                                crate::sse_accumulator::AnthropicToolEvent::Delta {
-                                                    partial_json: partial,
-                                                },
-                                            );
-                                        }
-                                    }
-                                }
+                                
                                 a.append_openai_raw(&json_str);
                             }
                             // Pre-format as SSE frame to avoid per-chunk String alloc + axum Event overhead.

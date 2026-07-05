@@ -407,11 +407,22 @@ async fn run_one_tick(
             // `auth_type` is a free-form `String` on the
             // `Account` row; "oauth" is the only value that
             // signals "no encrypted API key". For those we
-            // pass an empty string — the adapter will either
-            // work without auth (rare) or fail; the failure is
-            // logged at WARN and the next tick tries again.
+            // decrypt the access token from the database so the
+            // adapter can fetch account-specific models.
             if acc.auth_type == "oauth" {
-                (String::new(), label)
+                let w = db_pool.writer();
+                match accounts::decrypt_access_token(&w, acc.id, master_key.as_ref()) {
+                    Ok(k) => (k, label),
+                    Err(e) => {
+                        tracing::warn!(
+                            provider = %provider,
+                            account_id = acc.id.0,
+                            error = %e,
+                            "discovery tick: failed to decrypt oauth access token; skipping oauth model discovery",
+                        );
+                        (String::new(), label)
+                    }
+                }
             } else {
                 let w = db_pool.writer();
                 match accounts::decrypt_api_key(&w, acc.id, master_key.as_ref()) {

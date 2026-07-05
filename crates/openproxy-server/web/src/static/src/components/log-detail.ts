@@ -1693,9 +1693,26 @@ function summarizeRequestBody(body: unknown): string {
     const showCount = Math.min(arr.length, MAX_TOOLS);
     for (let i = 0; i < showCount; i++) {
       const tool = arr[i];
+      if (tool && typeof tool === "object" && !Array.isArray(tool)) {
+        const t = tool as Record<string, unknown>;
+        if (t["type"] === "function" && t["function"] && typeof t["function"] === "object") {
+          const f = t["function"] as Record<string, unknown>;
+          truncatedTools.push({
+            type: "function",
+            function: {
+              name: f["name"],
+              description: typeof f["description"] === "string" && f["description"].length > 100
+                ? f["description"].slice(0, 100) + "..."
+                : f["description"],
+              parameters: "… [schema omitted]"
+            }
+          });
+          continue;
+        }
+      }
       const toolStr = JSON.stringify(tool, null, 2);
       if (toolStr.length > MAX_TOOL_LEN) {
-        truncatedTools.push(JSON.parse(toolStr.slice(0, MAX_TOOL_LEN).replace(/[^{}[\],:"]*$/, "") + `"… [truncated, ${toolStr.length - MAX_TOOL_LEN} more chars]"`));
+        truncatedTools.push(`${toolStr.slice(0, MAX_TOOL_LEN)}… [truncated, ${toolStr.length - MAX_TOOL_LEN} more chars]`);
       } else {
         truncatedTools.push(tool);
       }
