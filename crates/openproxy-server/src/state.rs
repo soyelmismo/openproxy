@@ -105,6 +105,8 @@ pub struct AppState {
     /// treated as retryable (pipeline falls through to the next
     /// target). Default false. Persisted in `app_config` table.
     idle_chunk_retryable_cell: Arc<AtomicBool>,
+    /// Hot-swappable configuration for quota protection.
+    quota_protection_cell: Arc<parking_lot::RwLock<openproxy_core::config::QuotaProtectionConfig>>,
     /// In-memory selection registry for the LKGP / least_used /
     /// p2c priority modes (migration 000035). Tracks per-target
     /// recent success timestamps and request counts so the
@@ -223,6 +225,8 @@ impl AppState {
         );
         spawn_memory_cleanup(selection_registry.clone(), circuit_breaker.clone());
 
+        let quota_protection = config.quota_protection.clone();
+
         let state = Self {
             config,
             db_pool,
@@ -240,6 +244,7 @@ impl AppState {
             discovery_scheduler,
             oauth_provider_registry,
             idle_chunk_retryable_cell: Arc::new(AtomicBool::new(idle_chunk_retryable)),
+            quota_protection_cell: Arc::new(RwLock::new(quota_protection)),
             selection_registry,
             circuit_breaker,
             maintenance_cell,
@@ -346,6 +351,7 @@ impl AppState {
             idle_chunk_retryable_cell: Arc::new(AtomicBool::new(
                 db::app_config::IDLE_CHUNK_RETRYABLE_DEFAULT,
             )),
+            quota_protection_cell: Arc::new(RwLock::new(config.quota_protection.clone())),
             selection_registry,
             circuit_breaker,
             maintenance_cell,
@@ -603,6 +609,17 @@ impl AppState {
             .store(val, std::sync::atomic::Ordering::Relaxed);
     }
 
+    /// Read the current live `quota_protection` configuration.
+    pub fn quota_protection(&self) -> openproxy_core::config::QuotaProtectionConfig {
+        self.quota_protection_cell.read().clone()
+    }
+
+    /// Replace the live `quota_protection` configuration. Called by the
+    /// admin PUT endpoint after the DB UPSERT.
+    pub fn set_quota_protection(&self, config: openproxy_core::config::QuotaProtectionConfig) {
+        *self.quota_protection_cell.write() = config;
+    }
+
     /// Return a clone of the shared selection registry. The chat
     /// handler passes this into every `Pipeline` it builds via
     /// [`openproxy_core::pipeline::Pipeline::with_selection_registry`]
@@ -714,6 +731,15 @@ fn run_database_maintenance(
             ?compression_mode,
             "no persisted compression override; using config default"
         );
+    }
+
+    if let Some(quota_cfg) = openproxy_core::db::app_config::load_quota_protection_override_from_db(w)? {
+        tracing::info!(
+            enabled = quota_cfg.enabled,
+            threshold_percentage = quota_cfg.threshold_percentage,
+            "loaded persisted quota_protection override from app_config"
+        );
+        config.quota_protection = quota_cfg;
     }
 
     let seeded = openproxy_core::seed::seed_builtin_providers(w)?;

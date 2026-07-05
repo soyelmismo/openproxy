@@ -44,3 +44,13 @@ level = "info"
 #   rtk   → filtra output de comandos CLI (git, cargo, npm, docker, etc.),
 #            deduplica líneas repetidas, trunca inteligentemente (~60-90% en tool results)
 mode = "off"
+
+[quota_protection]
+# Enable dynamic quota protection and load balancing/rotation.
+# Default: true.
+enabled = true
+
+# Reserved quota threshold percentage (1-99). Accounts dropping below this
+# will have those models marked as protected and avoided if other accounts
+# have quota. Default: 10.
+threshold_percentage = 10

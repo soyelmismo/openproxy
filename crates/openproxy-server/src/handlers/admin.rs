@@ -375,6 +375,7 @@ pub struct RuntimeConfigResponse {
     /// When true, idle_chunk timeouts are treated as retryable
     /// (pipeline falls through to the next target).
     pub idle_chunk_retryable: bool,
+    pub quota_protection: openproxy_core::config::QuotaProtectionConfig,
 }
 
 /// `GET /admin/config` — return the currently-loaded runtime
@@ -403,6 +404,7 @@ pub async fn get_runtime_config(
             recording_ttl_secs: s.recording_ttl_secs(),
             compression: s.compression_mode(),
             idle_chunk_retryable: s.idle_chunk_retryable(),
+            quota_protection: s.quota_protection(),
         }))
     }
     .await;
@@ -530,6 +532,42 @@ pub async fn put_idle_chunk_retryable(
         );
         Ok(Json(serde_json::json!({
             "idle_chunk_retryable": val,
+            "applies_to": "next_requests",
+        })))
+    }
+    .await;
+    inner.into()
+}
+
+// =====================================================================
+// Quota protection
+// =====================================================================
+
+/// `PUT /admin/config/quota-protection` — hot-reload the `quota_protection`
+/// config. Body: `{"enabled": true, "threshold_percentage": 10}`.
+pub async fn put_runtime_quota_protection(
+    State(s): State<AppState>,
+    headers: HeaderMap,
+    Json(body): Json<openproxy_core::config::QuotaProtectionConfig>,
+) -> ApiResult<Json<serde_json::Value>> {
+    if let Err(e) = authenticate_admin_ws(&s, &headers, None) {
+        return e.into();
+    }
+    let inner: Result<Json<serde_json::Value>, ApiError> = async {
+        {
+            let w = s.db_pool().writer();
+            let now = chrono::Utc::now().timestamp();
+            openproxy_core::db::app_config::save_quota_protection_to_db(&w, &body, now)?;
+        }
+        s.set_quota_protection(body.clone());
+        tracing::info!(
+            enabled = body.enabled,
+            threshold_percentage = body.threshold_percentage,
+            "updated quota_protection via admin API"
+        );
+        Ok(Json(serde_json::json!({
+            "enabled": body.enabled,
+            "threshold_percentage": body.threshold_percentage,
             "applies_to": "next_requests",
         })))
     }

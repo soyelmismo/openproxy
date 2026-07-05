@@ -142,6 +142,10 @@ pub fn build_router(state: AppState) -> Router {
             axum::routing::put(handlers::admin::put_idle_chunk_retryable),
         )
         .route(
+            "/config/quota-protection",
+            axum::routing::put(handlers::admin::put_runtime_quota_protection),
+        )
+        .route(
             "/config/maintenance",
             get(handlers::admin::get_maintenance_config)
                 .put(handlers::admin::put_maintenance_config),

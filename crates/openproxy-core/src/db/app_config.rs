@@ -41,6 +41,9 @@ pub const RECORDING_TTL_DEFAULT_SECS: i64 = 300;
 /// Key under which the compression mode override is stored.
 pub const COMPRESSION_KEY: &str = "compression";
 
+/// Key under which the `quota_protection` config is stored.
+pub const QUOTA_PROTECTION_KEY: &str = "quota_protection";
+
 /// Key under which the `idle_chunk_retryable` flag is stored.
 pub const IDLE_CHUNK_RETRYABLE_KEY: &str = "idle_chunk_retryable";
 
@@ -319,6 +322,67 @@ pub fn save_recording_ttl_to_db(
     )
     .map_err(|e| CoreError::Database {
         message: format!("upsert app_config.recording_ttl_secs: {}", e),
+        source: Some(Box::new(e)),
+    })?;
+    Ok(())
+}
+
+/// Read the persisted quota protection configuration, if any.
+pub fn load_quota_protection_override_from_db(conn: &Connection) -> Result<Option<crate::config::QuotaProtectionConfig>> {
+    let mut stmt = conn
+        .prepare("SELECT value FROM app_config WHERE key = ?1")
+        .map_err(|e| CoreError::Database {
+            message: format!("prepare load_quota_protection: {}", e),
+            source: Some(Box::new(e)),
+        })?;
+    let mut rows = stmt
+        .query(params![QUOTA_PROTECTION_KEY])
+        .map_err(|e| CoreError::Database {
+            message: format!("query load_quota_protection: {}", e),
+            source: Some(Box::new(e)),
+        })?;
+    match rows.next() {
+        Ok(Some(row)) => {
+            let raw: String = row.get(0).map_err(|e| CoreError::Database {
+                message: format!("read app_config.value: {}", e),
+                source: Some(Box::new(e)),
+            })?;
+            match serde_json::from_str::<crate::config::QuotaProtectionConfig>(&raw) {
+                Ok(cfg) => Ok(Some(cfg)),
+                Err(e) => {
+                    tracing::warn!(
+                        error = %e,
+                        key = QUOTA_PROTECTION_KEY,
+                        "app_config row exists but JSON is corrupt; ignoring and falling back to default quota protection"
+                    );
+                    Ok(None)
+                }
+            }
+        }
+        Ok(None) => Ok(None),
+        Err(e) => Err(CoreError::Database {
+            message: format!("iterate load_quota_protection: {}", e),
+            source: Some(Box::new(e)),
+        }),
+    }
+}
+
+/// UPSERT the `quota_protection` config.
+pub fn save_quota_protection_to_db(
+    conn: &Connection,
+    cfg: &crate::config::QuotaProtectionConfig,
+    now_unix_secs: i64,
+) -> Result<()> {
+    let json = serde_json::to_string(cfg)
+        .map_err(|e| CoreError::Parse(format!("serialize quota_protection: {}", e)))?;
+    conn.execute(
+        "INSERT INTO app_config (key, value, updated_at) VALUES (?1, ?2, ?3)
+         ON CONFLICT(key) DO UPDATE SET value = excluded.value,
+                                         updated_at = excluded.updated_at",
+        params![QUOTA_PROTECTION_KEY, json, now_unix_secs],
+    )
+    .map_err(|e| CoreError::Database {
+        message: format!("upsert app_config.quota_protection: {}", e),
         source: Some(Box::new(e)),
     })?;
     Ok(())

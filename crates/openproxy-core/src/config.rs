@@ -321,6 +321,30 @@ impl Default for MaintenanceConfig {
     }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct QuotaProtectionConfig {
+    #[serde(default = "default_quota_protection_enabled")]
+    pub enabled: bool,
+    #[serde(default = "default_quota_protection_threshold")]
+    pub threshold_percentage: u32,
+}
+
+fn default_quota_protection_enabled() -> bool {
+    true
+}
+fn default_quota_protection_threshold() -> u32 {
+    10
+}
+
+impl Default for QuotaProtectionConfig {
+    fn default() -> Self {
+        Self {
+            enabled: default_quota_protection_enabled(),
+            threshold_percentage: default_quota_protection_threshold(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct AppConfig {
     #[serde(default)]
@@ -341,6 +365,8 @@ pub struct AppConfig {
     pub logging: LoggingConfig,
     #[serde(default)]
     pub compression: CompressionConfig,
+    #[serde(default)]
+    pub quota_protection: QuotaProtectionConfig,
 }
 
 impl AppConfig {

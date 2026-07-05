@@ -396,6 +396,7 @@ pub struct PipelineConfig {
     /// aborting the walk. Default false (current behavior:
     /// idle_chunk timeouts return an error immediately).
     pub idle_chunk_retryable: bool,
+    pub quota_protection: crate::config::QuotaProtectionConfig,
 }
 
 /// All the input needed to process a single chat completion.
@@ -559,6 +560,13 @@ pub struct Pipeline {
     /// and persist `None` for the compression columns (matching the
     /// pre-fix behavior — no compression was applied, so no metrics).
     compression_stats_cell: Arc<RwLock<Option<CompressionStats>>>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum QuotaStatus {
+    Available,
+    Protected,
+    Exhausted,
 }
 
 impl Pipeline {
@@ -828,6 +836,15 @@ impl Pipeline {
                 self.record_no_healthy_targets_row(&req, &combo, started);
                 return self.failure(err, attempt - 1, ErrorPhase::Route);
             }
+        }
+
+        // Apply dynamic quota routing and protection
+        eligible = self.apply_quota_routing(eligible, &req.openai_request.model);
+        if eligible.is_empty() {
+            let err = CoreError::NoHealthyTargets(combo.id.0);
+            let started = std::time::Instant::now();
+            self.record_no_healthy_targets_row(&req, &combo, started);
+            return self.failure(err, attempt - 1, ErrorPhase::Route);
         }
 
         // 5. Pick the dispatch window.
@@ -1412,6 +1429,190 @@ impl Pipeline {
         // is fanned out into one row per healthy account of its
         // provider.
         combos::expand_account_rotation(&conn, out)
+    }
+
+    fn evaluate_account_quota(
+        &self,
+        account: &crate::accounts::Account,
+        requested_model: &str,
+    ) -> QuotaStatus {
+        let quota_protection_enabled = self.config.quota_protection.enabled;
+        let threshold_percentage = self.config.quota_protection.threshold_percentage;
+
+        // 1. Check aggregate session quota
+        if let (Some(used), Some(limit)) = (account.quota_session_used, account.quota_session_limit) {
+            if used >= limit {
+                return QuotaStatus::Exhausted;
+            }
+        }
+        // 2. Check aggregate weekly quota
+        if let (Some(used), Some(limit)) = (account.quota_weekly_used, account.quota_weekly_limit) {
+            if used >= limit {
+                return QuotaStatus::Exhausted;
+            }
+        }
+
+        // 3. Check model-specific quota
+        if let Some(ref details_val) = account.quota_model_details {
+            if let Ok(details) = serde_json::from_value::<Vec<crate::quota::ModelQuotaDetail>>(details_val.clone()) {
+                let norm_req = crate::model_normalize::normalize_model_id(requested_model);
+
+                for detail in details {
+                    let norm_detail = crate::model_normalize::normalize_model_id(&detail.model_id);
+
+                    // Match condition: normalized names match or exact names match
+                    let is_match = norm_req.to_lowercase() == norm_detail.to_lowercase()
+                        || requested_model.to_lowercase() == detail.model_id.to_lowercase();
+
+                    if is_match {
+                        if detail.remaining_fraction <= 0.0 {
+                            return QuotaStatus::Exhausted;
+                        }
+                        if quota_protection_enabled {
+                            let threshold_fraction = (threshold_percentage as f64) / 100.0;
+                            if detail.remaining_fraction <= threshold_fraction {
+                                return QuotaStatus::Protected;
+                            }
+                        }
+                        break;
+                    }
+                }
+            }
+        }
+
+        QuotaStatus::Available
+    }
+
+    fn get_account_remaining_fraction(
+        &self,
+        account: &crate::accounts::Account,
+        requested_model: &str,
+    ) -> f64 {
+        // 1. Check model-specific quota first
+        if let Some(ref details_val) = account.quota_model_details {
+            if let Ok(details) = serde_json::from_value::<Vec<crate::quota::ModelQuotaDetail>>(details_val.clone()) {
+                let norm_req = crate::model_normalize::normalize_model_id(requested_model);
+
+                for detail in details {
+                    let norm_detail = crate::model_normalize::normalize_model_id(&detail.model_id);
+
+                    let is_match = norm_req.to_lowercase() == norm_detail.to_lowercase()
+                        || requested_model.to_lowercase() == detail.model_id.to_lowercase();
+
+                    if is_match {
+                        return detail.remaining_fraction;
+                    }
+                }
+            }
+        }
+
+        // 2. Fall back to aggregate session remaining fraction
+        if let (Some(used), Some(limit)) = (account.quota_session_used, account.quota_session_limit) {
+            if limit > 0 {
+                return (limit.saturating_sub(used) as f64) / (limit as f64);
+            }
+        }
+
+        // 3. Fall back to aggregate weekly remaining fraction
+        if let (Some(used), Some(limit)) = (account.quota_weekly_used, account.quota_weekly_limit) {
+            if limit > 0 {
+                return (limit.saturating_sub(used) as f64) / (limit as f64);
+            }
+        }
+
+        1.0 // Default to 1.0 (unlimited/unknown)
+    }
+
+    fn apply_quota_routing(
+        &self,
+        targets: Vec<ComboTarget>,
+        requested_model: &str,
+    ) -> Vec<ComboTarget> {
+        let conn = self.conn.lock();
+
+        // Struct to hold target, its quota status, remaining fraction, and account priority
+        struct TargetWithQuota {
+            target: ComboTarget,
+            status: QuotaStatus,
+            remaining_fraction: f64,
+            priority: i32,
+        }
+
+        let mut processed_targets = Vec::with_capacity(targets.len());
+
+        for t in targets {
+            let Some(aid) = t.account_id else {
+                processed_targets.push(TargetWithQuota {
+                    target: t,
+                    status: QuotaStatus::Available,
+                    remaining_fraction: 1.0,
+                    priority: 0,
+                });
+                continue;
+            };
+
+            match crate::accounts::get(&conn, aid) {
+                Ok(Some(account)) => {
+                    let status = self.evaluate_account_quota(&account, requested_model);
+                    let remaining_fraction = self.get_account_remaining_fraction(&account, requested_model);
+                    processed_targets.push(TargetWithQuota {
+                        target: t,
+                        status,
+                        remaining_fraction,
+                        priority: account.priority,
+                    });
+                }
+                _ => {
+                    // Account not found/DB error: treat as available
+                    processed_targets.push(TargetWithQuota {
+                        target: t,
+                        status: QuotaStatus::Available,
+                        remaining_fraction: 1.0,
+                        priority: 0,
+                    });
+                }
+            }
+        }
+
+        // Filter out Exhausted targets
+        let non_exhausted: Vec<TargetWithQuota> = processed_targets
+            .into_iter()
+            .filter(|t| t.status != QuotaStatus::Exhausted)
+            .collect();
+
+        // Check if we have any Available targets
+        let has_available = non_exhausted.iter().any(|t| t.status == QuotaStatus::Available);
+
+        // Filter: if we have Available targets, skip Protected targets to protect them.
+        // Otherwise, keep the Protected targets as fallback.
+        let mut final_targets: Vec<TargetWithQuota> = if has_available {
+            non_exhausted
+                .into_iter()
+                .filter(|t| t.status == QuotaStatus::Available)
+                .collect()
+        } else {
+            non_exhausted
+        };
+
+        // Sort:
+        // 1. Account priority in DB (lower priority number first, i.e., ASC)
+        // 2. Remaining quota fraction (higher fraction first, i.e., DESC)
+        // 3. Target original priority order as tie breaker (ASC)
+        final_targets.sort_by(|a, b| {
+            let pri_cmp = a.priority.cmp(&b.priority);
+            if pri_cmp != std::cmp::Ordering::Equal {
+                return pri_cmp;
+            }
+
+            let quota_cmp = b.remaining_fraction.partial_cmp(&a.remaining_fraction).unwrap_or(std::cmp::Ordering::Equal);
+            if quota_cmp != std::cmp::Ordering::Equal {
+                return quota_cmp;
+            }
+
+            a.target.priority_order.cmp(&b.target.priority_order)
+        });
+
+        final_targets.into_iter().map(|t| t.target).collect()
     }
 
     // ---------------------------------------------------------------------
@@ -6458,6 +6659,7 @@ mod tests {
             oauth_provider_registry: None,
             compression_mode: crate::compression::CompressionMode::Off,
             idle_chunk_retryable: false,
+            quota_protection: crate::config::QuotaProtectionConfig::default(),
         };
 
         let pipeline = Pipeline::new(pool.writer_arc(), config);
@@ -6554,6 +6756,7 @@ mod tests {
             // Default matches the production default in
             // state.rs; tests don't need to flip this.
             idle_chunk_retryable: true,
+            quota_protection: crate::config::QuotaProtectionConfig::default(),
         }
     }
 
@@ -7736,6 +7939,7 @@ mod tests {
             // Auto-added (test compile fix):
             compression_mode: crate::compression::CompressionMode::Off,
             idle_chunk_retryable: true,
+            quota_protection: crate::config::QuotaProtectionConfig::default(),
         };
         let p = Pipeline::new(conn, cfg);
 
@@ -7975,6 +8179,7 @@ mod tests {
             // Auto-added (test compile fix):
             compression_mode: crate::compression::CompressionMode::Off,
             idle_chunk_retryable: true,
+            quota_protection: crate::config::QuotaProtectionConfig::default(),
         };
         let p = Pipeline::new(conn, cfg);
 
@@ -8165,6 +8370,7 @@ mod tests {
             // Auto-added (test compile fix):
             compression_mode: crate::compression::CompressionMode::Off,
             idle_chunk_retryable: true,
+            quota_protection: crate::config::QuotaProtectionConfig::default(),
         };
         let p = Pipeline::new(conn, cfg);
 
@@ -8352,6 +8558,7 @@ data: [DONE]
             oauth_provider_registry: None,
             compression_mode: crate::compression::CompressionMode::Off,
             idle_chunk_retryable: true,
+            quota_protection: crate::config::QuotaProtectionConfig::default(),
         };
         let p = Pipeline::new(conn, cfg);
 
@@ -8557,6 +8764,7 @@ data: [DONE]
             oauth_provider_registry: None,
             compression_mode: crate::compression::CompressionMode::Off,
             idle_chunk_retryable: true,
+            quota_protection: crate::config::QuotaProtectionConfig::default(),
         };
         let p = Pipeline::new(conn, cfg);
 
@@ -8778,6 +8986,7 @@ data: [DONE]
             oauth_provider_registry: None,
             compression_mode: crate::compression::CompressionMode::Off,
             idle_chunk_retryable: true,
+            quota_protection: crate::config::QuotaProtectionConfig::default(),
         };
         let p = Pipeline::new(conn, cfg);
 
@@ -9054,6 +9263,7 @@ data: [DONE]
             // Auto-added (test compile fix):
             compression_mode: crate::compression::CompressionMode::Off,
             idle_chunk_retryable: true,
+            quota_protection: crate::config::QuotaProtectionConfig::default(),
         };
         let p = Pipeline::new(conn, cfg);
         let (req, _cancel_tx) = make_request(combo_id);
@@ -9261,6 +9471,7 @@ data: [DONE]
             // Auto-added (test compile fix):
             compression_mode: crate::compression::CompressionMode::Off,
             idle_chunk_retryable: true,
+            quota_protection: crate::config::QuotaProtectionConfig::default(),
         };
         let p = Pipeline::new(conn, cfg);
         let (req, _cancel_tx) = make_request(combo_id);
@@ -10068,6 +10279,7 @@ data: [DONE]
             // Auto-added (test compile fix):
             compression_mode: crate::compression::CompressionMode::Off,
             idle_chunk_retryable: true,
+            quota_protection: crate::config::QuotaProtectionConfig::default(),
         };
         let p = Pipeline::new(conn, cfg);
 
@@ -10211,6 +10423,7 @@ data: [DONE]
             // Auto-added (test compile fix):
             compression_mode: crate::compression::CompressionMode::Off,
             idle_chunk_retryable: true,
+            quota_protection: crate::config::QuotaProtectionConfig::default(),
         };
         let p = Pipeline::new(conn, cfg);
 
@@ -10448,6 +10661,7 @@ data: [DONE]
             // Auto-added (test compile fix):
             compression_mode: crate::compression::CompressionMode::Off,
             idle_chunk_retryable: true,
+            quota_protection: crate::config::QuotaProtectionConfig::default(),
         };
         let p = Pipeline::new(conn, cfg);
 
@@ -10755,6 +10969,7 @@ data: [DONE]
                 // Auto-added (test compile fix):
                 compression_mode: crate::compression::CompressionMode::Off,
                 idle_chunk_retryable: true,
+            quota_protection: crate::config::QuotaProtectionConfig::default(),
             }
         }
 
@@ -11173,6 +11388,7 @@ data: [DONE]
             // Auto-added (test compile fix):
             compression_mode: crate::compression::CompressionMode::Off,
             idle_chunk_retryable: true,
+            quota_protection: crate::config::QuotaProtectionConfig::default(),
         };
         let p = Pipeline::with_recording_flag(conn, cfg, recording_flag);
 
@@ -11721,6 +11937,7 @@ data: [DONE]\n\n";
             // Auto-added (test compile fix):
             compression_mode: crate::compression::CompressionMode::Off,
             idle_chunk_retryable: true,
+            quota_protection: crate::config::QuotaProtectionConfig::default(),
         };
         let p = Pipeline::with_recording_flag(conn, cfg, recording_flag);
 
@@ -12329,5 +12546,123 @@ data: [DONE]\n\n";
             content_len,
             max_bytes,
         );
+    }
+
+    #[test]
+    fn test_quota_routing_and_protection() {
+        let (_pool, conn, _db_path) = fresh_pool();
+        let master_key = Arc::new(MasterKey::generate());
+        let config = test_config(master_key);
+        let pipeline = Pipeline::new(conn.clone(), config);
+
+        seed_provider(&conn.lock(), "antigravity", AuthType::Bearer);
+
+        // Helper to insert an account with specific quota columns
+        let insert_mock_account = |id: i64, priority: i32, session_used: Option<i64>, session_limit: Option<i64>, model_details: Option<&str>| {
+            let conn = conn.lock();
+            conn.execute(
+                "INSERT INTO accounts (id, provider_id, auth_type, priority, health_status, \
+                 quota_session_used, quota_session_limit, quota_model_details) \
+                 VALUES (?1, 'antigravity', 'api_key', ?2, 'healthy', ?3, ?4, ?5)",
+                rusqlite::params![id, priority, session_used, session_limit, model_details],
+            )
+            .unwrap();
+        };
+
+        // 1. Test evaluate_account_quota - Aggregate session quota
+        insert_mock_account(1, 1, Some(100), Some(100), None); // Exhausted
+        insert_mock_account(2, 1, Some(50), Some(100), None);  // Available
+        insert_mock_account(3, 1, None, None, None);          // Available (no limit)
+
+        {
+            let conn = conn.lock();
+            let acc1 = crate::accounts::get(&conn, AccountId(1)).unwrap().unwrap();
+            let acc2 = crate::accounts::get(&conn, AccountId(2)).unwrap().unwrap();
+            let acc3 = crate::accounts::get(&conn, AccountId(3)).unwrap().unwrap();
+
+            assert_eq!(pipeline.evaluate_account_quota(&acc1, "gemini-3-flash"), QuotaStatus::Exhausted);
+            assert_eq!(pipeline.evaluate_account_quota(&acc2, "gemini-3-flash"), QuotaStatus::Available);
+            assert_eq!(pipeline.evaluate_account_quota(&acc3, "gemini-3-flash"), QuotaStatus::Available);
+        }
+
+        // 2. Test evaluate_account_quota - Model-specific quota with protection
+        // Account 4 has 5% remaining (Protected under default 10% threshold)
+        insert_mock_account(4, 1, None, None, Some(r#"[{"model_id":"gemini-3-flash","session_used":950,"session_limit":1000,"session_reset_at":null,"remaining_fraction":0.05}]"#));
+        // Account 5 has 20% remaining (Available)
+        insert_mock_account(5, 1, None, None, Some(r#"[{"model_id":"gemini-3-flash","session_used":800,"session_limit":1000,"session_reset_at":null,"remaining_fraction":0.20}]"#));
+        // Account 6 is strictly exhausted for flash (remaining_fraction <= 0.0)
+        insert_mock_account(6, 1, None, None, Some(r#"[{"model_id":"gemini-3-flash","session_used":1000,"session_limit":1000,"session_reset_at":null,"remaining_fraction":0.0}]"#));
+
+        {
+            let conn = conn.lock();
+            let acc4 = crate::accounts::get(&conn, AccountId(4)).unwrap().unwrap();
+            let acc5 = crate::accounts::get(&conn, AccountId(5)).unwrap().unwrap();
+            let acc6 = crate::accounts::get(&conn, AccountId(6)).unwrap().unwrap();
+
+            assert_eq!(pipeline.evaluate_account_quota(&acc4, "gemini-3-flash"), QuotaStatus::Protected);
+            assert_eq!(pipeline.evaluate_account_quota(&acc5, "gemini-3-flash"), QuotaStatus::Available);
+            assert_eq!(pipeline.evaluate_account_quota(&acc6, "gemini-3-flash"), QuotaStatus::Exhausted);
+            
+            // Unmonitored models should map to Available as long as remaining_fraction > 0
+            assert_eq!(pipeline.evaluate_account_quota(&acc4, "gpt-4o"), QuotaStatus::Available);
+        }
+
+        // 3. Test apply_quota_routing - Filtering and sorting
+        let make_target = |id: i64, account_id: i64| ComboTarget {
+            id: ComboTargetId(id),
+            combo_id: ComboId(1),
+            provider_id: ProviderId::new("antigravity"),
+            account_id: Some(AccountId(account_id)),
+            model_row_id: None,
+            sub_combo_id: None,
+            priority_order: id as i32,
+            weight: 1,
+        };
+
+        // Candidates: Account 1 (Exhausted), Account 4 (Protected), Account 5 (Available)
+        let targets = vec![
+            make_target(1, 1), // Account 1
+            make_target(2, 4), // Account 4
+            make_target(3, 5), // Account 5
+        ];
+
+        // Should filter out Account 1 (Exhausted) and Account 4 (Protected) because Account 5 is Available
+        let resolved = pipeline.apply_quota_routing(targets.clone(), "gemini-3-flash");
+        assert_eq!(resolved.len(), 1);
+        assert_eq!(resolved[0].account_id, Some(AccountId(5)));
+
+        // 4. Test apply_quota_routing - Fallback to Protected when no Available ones exist
+        // Candidates: Account 1 (Exhausted), Account 4 (Protected)
+        let targets_only_protected = vec![
+            make_target(1, 1),
+            make_target(2, 4),
+        ];
+
+        // Should fallback to keeping Account 4 (Protected)
+        let resolved_fallback = pipeline.apply_quota_routing(targets_only_protected, "gemini-3-flash");
+        assert_eq!(resolved_fallback.len(), 1);
+        assert_eq!(resolved_fallback[0].account_id, Some(AccountId(4)));
+
+        // 5. Test apply_quota_routing - Sorting based on remaining fraction
+        // Insert Account 7 with 50% remaining, priority 1
+        insert_mock_account(7, 1, None, None, Some(r#"[{"model_id":"gemini-3-flash","session_used":500,"session_limit":1000,"session_reset_at":null,"remaining_fraction":0.50}]"#));
+        // Insert Account 8 with 80% remaining, priority 2 (worse priority but better quota)
+        insert_mock_account(8, 2, None, None, Some(r#"[{"model_id":"gemini-3-flash","session_used":200,"session_limit":1000,"session_reset_at":null,"remaining_fraction":0.80}]"#));
+
+        let targets_sorting = vec![
+            make_target(1, 7), // Account 7 (Priority 1, 50% quota)
+            make_target(2, 5), // Account 5 (Priority 1, 20% quota)
+            make_target(3, 8), // Account 8 (Priority 2, 80% quota)
+        ];
+
+        let resolved_sorting = pipeline.apply_quota_routing(targets_sorting, "gemini-3-flash");
+        assert_eq!(resolved_sorting.len(), 3);
+        // Should sort by priority ASC first, then remaining fraction DESC:
+        // Index 0: Account 7 (Priority 1, 50%)
+        // Index 1: Account 5 (Priority 1, 20%)
+        // Index 2: Account 8 (Priority 2, 80%)
+        assert_eq!(resolved_sorting[0].account_id, Some(AccountId(7)));
+        assert_eq!(resolved_sorting[1].account_id, Some(AccountId(5)));
+        assert_eq!(resolved_sorting[2].account_id, Some(AccountId(8)));
     }
 }

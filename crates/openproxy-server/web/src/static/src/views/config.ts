@@ -63,6 +63,10 @@ interface ConfigPayload {
   compression?: string | null;
   /** When true, idle_chunk timeouts are treated as retryable. */
   idle_chunk_retryable?: boolean | null;
+  quota_protection?: {
+    enabled?: boolean | null;
+    threshold_percentage?: number | null;
+  } | null;
   /** Maintenance config (auto_vacuum, interval, retention). */
   maintenance?: {
     auto_vacuum?: boolean | null;
@@ -102,6 +106,8 @@ let liveTimeouts: Record<TimeoutKey, number> = { ...DEFAULT_TIMEOUTS };
 let liveRecordingTtl = 300;
 let liveCompression = "off";
 let liveIdleChunkRetryable = false;
+let liveQuotaProtectionEnabled = true;
+let liveQuotaProtectionThreshold = 10;
 // Maintenance / VACUUM state
 let liveAutoVacuum = true;
 let liveVacuumIntervalHours = 6;
@@ -204,6 +210,25 @@ async function patchIdleChunkRetryable(val: boolean): Promise<boolean> {
     return true;
   } catch (e: unknown) {
     liveIdleChunkRetryable = prev; // revert
+    showToast("Error: " + errStr(e), "error");
+    requestUpdate();
+    return false;
+  }
+}
+
+async function patchQuotaProtection(enabled: boolean, threshold: number): Promise<boolean> {
+  try {
+    await api("/config/quota-protection", {
+      method: "PUT",
+      body: JSON.stringify({ enabled, threshold_percentage: threshold }),
+    });
+    if (cfg) {
+      cfg.quota_protection = { enabled, threshold_percentage: threshold };
+    }
+    showToast("Quota protection updated", "success");
+    requestUpdate();
+    return true;
+  } catch (e: unknown) {
     showToast("Error: " + errStr(e), "error");
     requestUpdate();
     return false;
@@ -327,6 +352,31 @@ async function onCompressionChange(e: Event): Promise<void> {
 
 async function onToggleIdleChunkRetryable(): Promise<void> {
   await patchIdleChunkRetryable(!liveIdleChunkRetryable);
+}
+
+async function onToggleQuotaProtection(): Promise<void> {
+  const nextEnabled = !liveQuotaProtectionEnabled;
+  const ok = await patchQuotaProtection(nextEnabled, liveQuotaProtectionThreshold);
+  if (ok) liveQuotaProtectionEnabled = nextEnabled;
+}
+
+async function onQuotaThresholdChange(e: Event): Promise<void> {
+  if (e.type === "input") return;
+  const raw = (e.target as HTMLInputElement).value.trim();
+  const n = validateNonNegInt(raw, "threshold_percentage");
+  if (n == null) {
+    requestUpdate();
+    return;
+  }
+  if (n < 1 || n > 99) {
+    showToast("Threshold percentage must be between 1 and 99", "error");
+    requestUpdate();
+    return;
+  }
+  const prev = liveQuotaProtectionThreshold;
+  liveQuotaProtectionThreshold = n;
+  const ok = await patchQuotaProtection(liveQuotaProtectionEnabled, n);
+  if (!ok) liveQuotaProtectionThreshold = prev;
 }
 
 // ---------------------------------------------------------------------------
@@ -497,6 +547,29 @@ function renderConfig(): TemplateResult {
     </div>
   `);
 
+  const quotaCard = card("Quota Protection", html`
+    <p class="muted">Enable dynamic account quota rotation and protection. When active, accounts with exhausted or low quota (below the reserve threshold) are bypassed and rotated dynamically for the requested model.</p>
+    <div class="config-grid">
+      <label class="config-field">
+        <span class="config-label">Enabled</span>
+        <button type="button" role="switch" aria-checked=${liveQuotaProtectionEnabled ? "true" : "false"}
+                class="toggle-btn ${liveQuotaProtectionEnabled ? "on" : "off"}"
+                @click=${() => { void onToggleQuotaProtection(); }}>
+          <span class="toggle-thumb"></span>
+        </button>
+        <span class="config-help">${liveQuotaProtectionEnabled
+          ? "ON — Bypasses exhausted/protected accounts"
+          : "OFF — Quota-based routing disabled (default)"}</span>
+      </label>
+      <label class="config-field">
+        <span class="config-label">Reserve Threshold (%)</span>
+        <input type="number" min="1" max="99" name="quota_protection.threshold_percentage" .value=${String(liveQuotaProtectionThreshold)}
+               @change=${onQuotaThresholdChange} @input=${onQuotaThresholdChange}>
+        <span class="config-help">Accounts dropping below this remaining fraction percentage are protected and avoided if other candidate accounts have quota (1-99).</span>
+      </label>
+    </div>
+  `);
+
   const staticRegion = html`<details class="config-static-region">
     <summary>Server defaults (read-only — edit config.toml and restart)</summary>
     ${card("Retries", html`<div class="config-static-display">
@@ -574,6 +647,7 @@ function renderConfig(): TemplateResult {
       ${recordingTtlCard}
       ${compressionCard}
       ${idleChunkCard}
+      ${quotaCard}
       ${maintenanceCard}
     </div>
     ${staticRegion}
@@ -612,6 +686,8 @@ export async function mountConfig(): Promise<(() => void) | void> {
     liveRecordingTtl = cfg.recording_ttl_secs ?? 300;
     liveCompression = cfg.compression ?? "off";
     liveIdleChunkRetryable = cfg.idle_chunk_retryable ?? false;
+    liveQuotaProtectionEnabled = cfg.quota_protection?.enabled ?? true;
+    liveQuotaProtectionThreshold = cfg.quota_protection?.threshold_percentage ?? 10;
     // Load maintenance config + vacuum status
     try {
       const maint = await api("/config/maintenance") as {
