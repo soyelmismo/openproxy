@@ -413,6 +413,43 @@ async function onUpdateAutoActivate(providerId: string, e: Event | null): Promis
   }
 }
 
+async function onUpdateUseProxies(providerId: string, e: Event): Promise<void> {
+  const target = e.target instanceof HTMLInputElement ? e.target : null;
+  if (!target) return;
+  const value = target.checked;
+  const body = { use_proxies: value };
+  try {
+    await api(`/providers/${encodeURIComponent(providerId)}`, {
+      method: "PATCH",
+      body: JSON.stringify(body),
+    });
+    state.providers = await api("/providers") as typeof state.providers;
+    requestUpdate();
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    showToast("Error: " + msg, "error");
+  }
+}
+
+async function onUpdateProxyRotationErrors(providerId: string, e: Event): Promise<void> {
+  if (e.type === "input") return;
+  const target = e.target instanceof HTMLInputElement ? e.target : null;
+  if (!target) return;
+  const value = target.value.trim();
+  const body = { proxy_rotation_errors: value ? value : "429,connect_error,timeout" };
+  try {
+    await api(`/providers/${encodeURIComponent(providerId)}`, {
+      method: "PATCH",
+      body: JSON.stringify(body),
+    });
+    state.providers = await api("/providers") as typeof state.providers;
+    requestUpdate();
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    showToast("Error: " + msg, "error");
+  }
+}
+
 // Update the per-provider search/filter state and re-render via
 // requestUpdate(). lit-html diffs the tbody against the previous
 // render — the search input keeps focus because it lives outside
@@ -524,7 +561,16 @@ async function onBulkTestSelected(providerId: string): Promise<void> {
         btn.disabled = true;
         btn.textContent = "Testing...";
       }
-      const result = (await api(`/models/${rowId}/test`, { method: "POST" })) as { status: number; elapsed_ms: number; row_id?: number };
+
+      const accountSelect = document.getElementById(`test-account-${rowId}`) as HTMLSelectElement | null;
+      const proxySelect = document.getElementById(`test-proxy-${rowId}`) as HTMLSelectElement | null;
+      const accountId = accountSelect && accountSelect.value ? parseInt(accountSelect.value, 10) : null;
+      const proxyId = proxySelect && proxySelect.value ? proxySelect.value : null;
+
+      const result = (await api(`/models/${rowId}/test`, {
+        method: "POST",
+        body: JSON.stringify({ account_id: accountId, proxy_id: proxyId }),
+      })) as { status: number; elapsed_ms: number; row_id?: number };
       const m = (state.models || []).find((x) => x.row_id === rowId);
       if (m) {
         m.last_test_status = result.status;
@@ -592,8 +638,17 @@ async function onTestModel(rowId: number, e: Event | null): Promise<void> {
   const oldText = btn.textContent;
   btn.disabled = true;
   btn.textContent = "Testing...";
+
+  const accountSelect = document.getElementById(`test-account-${rowId}`) as HTMLSelectElement | null;
+  const proxySelect = document.getElementById(`test-proxy-${rowId}`) as HTMLSelectElement | null;
+  const accountId = accountSelect && accountSelect.value ? parseInt(accountSelect.value, 10) : null;
+  const proxyId = proxySelect && proxySelect.value ? proxySelect.value : null;
+
   try {
-    const result = (await api(`/models/${rowId}/test`, { method: "POST" })) as { status: number; elapsed_ms: number; row_id?: number };
+    const result = (await api(`/models/${rowId}/test`, {
+      method: "POST",
+      body: JSON.stringify({ account_id: accountId, proxy_id: proxyId }),
+    })) as { status: number; elapsed_ms: number; row_id?: number };
     const rid = result.row_id ?? rowId;
     const m = (state.models || []).find((x) => x.row_id === rid);
     if (m) {
@@ -863,6 +918,35 @@ function renderModelsSection(provider: Provider, providerModels: Model[], ui: Pr
         <small>Models whose ID contains this string are auto-enabled on refresh. Empty = enable all new models.</small>
       </div>
 
+      <div class="auto-activate-bar" style="margin-top: 1rem; display: flex; gap: 2rem; align-items: center; flex-wrap: wrap;">
+        <label style="display: flex; align-items: center; gap: 0.5rem; margin: 0; font-weight: normal; cursor: pointer;">
+          <input type="checkbox"
+                 .checked=${!!provider.use_proxies}
+                 @change=${(e: Event) => onUpdateUseProxies(provider.id, e)}>
+          Use proxies for this provider
+        </label>
+        ${provider.use_proxies ? html`
+          <label style="display: flex; align-items: center; gap: 0.5rem; margin: 0; font-weight: normal; flex: 1;">
+            Rotate proxy on errors:
+            <input type="text"
+                   style="flex: 1; max-width: 300px; padding: 0.25rem 0.5rem; font-size: var(--fs-sm); border: var(--border-w) var(--border-style) var(--color-border); border-radius: var(--radius-sm); background: var(--color-surface); color: var(--color-text);"
+                   placeholder="429,connect_error,timeout"
+                   .value=${provider.proxy_rotation_errors || "429,connect_error,timeout"}
+                   @change=${(e: Event) => onUpdateProxyRotationErrors(provider.id, e)}
+                   @input=${(e: Event) => onUpdateProxyRotationErrors(provider.id, e)}>
+          </label>
+          ${provider.current_proxy_id ? html`
+            <span style="font-size: var(--fs-sm); color: var(--color-text-muted); background: var(--color-surface-soft); padding: 0.25rem 0.5rem; border-radius: var(--radius-sm);">
+              Bound Proxy: <code>${provider.current_proxy_id}</code>
+            </span>
+          ` : html`
+            <span style="font-size: var(--fs-sm); color: var(--color-warn); background: var(--color-warn-soft); padding: 0.25rem 0.5rem; border-radius: var(--radius-sm);">
+              No active proxy bound
+            </span>
+          `}
+        ` : html``}
+      </div>
+
       <div class="filter-bar">
         <input type="text" placeholder="Search models..." .value=${ui.search || ""}
                @input=${(e: Event) => onUpdateProviderSearch(provider.id, e)}>
@@ -902,6 +986,10 @@ function renderModelRow(m: Model): TemplateResult {
   const lastTest: TemplateResult = m.last_test_status != null
     ? html`<span class=${"status-pill " + statusPillClass(m.last_test_status)}>${String(m.last_test_status)}</span> <small>${m.last_test_at || ""}</small>`
     : html`<span class="muted">never</span>`;
+
+  const providerAccounts = (state.accounts || []).filter((a) => a.provider_id === m.provider_id);
+  const aliveProxies = (state.proxies || []).filter((p) => p.status === "alive");
+
   return html`<tr id=${`model-row-${m.row_id}`} class=${(m.active ? "" : "inactive") + (isSelected ? " selected" : "")}>
     <td><input type="checkbox" ?checked=${isSelected} @change=${(e: Event) => onToggleModelSelection(m.row_id, e)}></td>
     <td><code>${m.model_id}</code>${m.custom ? html`<span class="badge custom">custom</span>` : html``}</td>
@@ -913,9 +1001,21 @@ function renderModelRow(m: Model): TemplateResult {
     <td><span class=${"status-pill " + (m.active ? "on" : "off")}>${m.active ? "active" : "inactive"}</span></td>
     <td class="last-test-cell">${lastTest}</td>
     <td>
-      <button class="small" id=${`test-btn-${m.row_id}`} @click=${(e: Event) => onTestModel(m.row_id, e)}>Test</button>
-      <button class="small" @click=${() => onToggleModel(m.row_id, !m.active)}>${m.active ? "Disable" : "Enable"}</button>
-      <button class="small danger" @click=${() => onDeleteModel(m.row_id)}>×</button>
+      <div style="display: flex; flex-direction: column; gap: 4px; margin-bottom: 6px;">
+        <select id=${`test-account-${m.row_id}`} style="padding: 2px 4px; font-size: 11px; background: var(--color-surface); color: var(--color-text); border: 1px solid var(--color-border); border-radius: 4px; max-width: 140px;">
+          <option value="">(Default Account)</option>
+          ${providerAccounts.map((a) => html`<option value=${a.id}>${a.label || `Account #${a.id}`}</option>`)}
+        </select>
+        <select id=${`test-proxy-${m.row_id}`} style="padding: 2px 4px; font-size: 11px; background: var(--color-surface); color: var(--color-text); border: 1px solid var(--color-border); border-radius: 4px; max-width: 140px;">
+          <option value="">(No Proxy)</option>
+          ${aliveProxies.map((p) => html`<option value=${p.id}>${p.host}:${p.port} (${p.latency_ms || '?'}ms)</option>`)}
+        </select>
+      </div>
+      <div style="display: flex; gap: 4px; align-items: center;">
+        <button class="small" id=${`test-btn-${m.row_id}`} @click=${(e: Event) => onTestModel(m.row_id, e)}>Test</button>
+        <button class="small" @click=${() => onToggleModel(m.row_id, !m.active)}>${m.active ? "Disable" : "Enable"}</button>
+        <button class="small danger" @click=${() => onDeleteModel(m.row_id)}>×</button>
+      </div>
     </td>
   </tr>`;
 }
@@ -981,15 +1081,20 @@ export async function mountProviders(opts: MountProvidersOpts = {}): Promise<(()
     try {
       // Cold paint: fetch providers/accounts/models. Warm re-render
       // (from cache after navigate()) skips the network.
+      const proxiesPromise = api("/proxies?status=alive") as Promise<any[]>;
       if (state.providers.length === 0) {
-        const [providers, accounts, models] = await Promise.all([
+        const [providers, accounts, models, proxies] = await Promise.all([
           api("/providers") as Promise<Provider[]>,
           api("/accounts") as Promise<Account[]>,
           api("/models") as Promise<Model[]>,
+          proxiesPromise,
         ]);
         state.providers = providers;
         state.accounts = accounts;
         state.models = models;
+        state.proxies = proxies;
+      } else {
+        state.proxies = await proxiesPromise;
       }
       requestUpdate();
     } catch (e: unknown) {
@@ -1004,14 +1109,16 @@ export async function mountProviders(opts: MountProvidersOpts = {}): Promise<(()
   loadError = null;
   const cleanup = mountView(main, renderProviderGrid);
   try {
-    const [providers, accounts, models] = await Promise.all([
+    const [providers, accounts, models, proxies] = await Promise.all([
       state.providers && state.providers.length ? Promise.resolve(state.providers) : api("/providers") as Promise<Provider[]>,
       state.accounts && state.accounts.length ? Promise.resolve(state.accounts) : api("/accounts") as Promise<Account[]>,
       state.models && state.models.length ? Promise.resolve(state.models) : api("/models") as Promise<Model[]>,
+      api("/proxies?status=alive") as Promise<any[]>,
     ]);
     state.providers = providers;
     state.accounts = accounts;
     state.models = models;
+    state.proxies = proxies;
     requestUpdate();
   } catch (e: unknown) {
     loadError = e instanceof Error ? e.message : String(e);

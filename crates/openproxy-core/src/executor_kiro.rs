@@ -399,6 +399,7 @@ pub async fn execute_kiro(
     profile_arn: Option<&str>,
     openai: &OpenAIRequest,
     client_disconnected: watch::Receiver<bool>,
+    proxy: Option<String>,
 ) -> Result<OpenAIResponse> {
     // 1. Build the request body.
     let req = build_kiro_request(openai, profile_arn);
@@ -410,6 +411,8 @@ pub async fn execute_kiro(
     let body_bytes = serde_json::to_vec(&req)
         .map_err(|e| CoreError::Parse(format!("kiro request serialize: {e}")))?;
     let mut upstream_request = UpstreamRequest::post_json(url, bytes::Bytes::from(body_bytes));
+    upstream_request.proxy = proxy;
+
     // `post_json` already sets `Content-Type: application/json`;
     // `Authorization` and `x-amz-user-agent` are added here as
     // they are caller-specific (not generic to all POSTs).

@@ -127,6 +127,16 @@ pub struct Provider {
     #[serde(default = "default_true")]
     pub active: bool,
     pub created_at: String,
+    #[serde(default)]
+    pub use_proxies: bool,
+    #[serde(default)]
+    pub current_proxy_id: Option<String>,
+    #[serde(default = "default_proxy_rotation_errors")]
+    pub proxy_rotation_errors: String,
+}
+
+fn default_proxy_rotation_errors() -> String {
+    "429,connect_error,timeout".to_string()
 }
 
 fn default_true() -> bool {
@@ -200,7 +210,7 @@ pub fn create(conn: &Connection, new: NewProvider<'_>) -> Result<()> {
 pub fn get(conn: &Connection, id: &ProviderId) -> Result<Option<Provider>> {
     let row = conn
         .query_row(
-            "SELECT id, name, base_url, auth_type, format, extra_headers_json, auto_activate_keyword, active, created_at \
+            "SELECT id, name, base_url, auth_type, format, extra_headers_json, auto_activate_keyword, active, created_at, use_proxies, current_proxy_id, proxy_rotation_errors \
              FROM providers WHERE id = ?1",
             params![id.as_str()],
             row_to_provider,
@@ -234,7 +244,7 @@ pub fn get(conn: &Connection, id: &ProviderId) -> Result<Option<Provider>> {
 pub fn list(conn: &Connection) -> Result<Vec<Provider>> {
     let mut stmt = conn
         .prepare(
-            "SELECT id, name, base_url, auth_type, format, extra_headers_json, auto_activate_keyword, active, created_at \
+            "SELECT id, name, base_url, auth_type, format, extra_headers_json, auto_activate_keyword, active, created_at, use_proxies, current_proxy_id, proxy_rotation_errors \
              FROM providers WHERE id != ?1 ORDER BY id",
         )
         .map_err(|e| CoreError::Database {
@@ -274,7 +284,7 @@ pub fn list(conn: &Connection) -> Result<Vec<Provider>> {
 pub fn list_active(conn: &Connection) -> Result<Vec<Provider>> {
     let mut stmt = conn
         .prepare(
-            "SELECT id, name, base_url, auth_type, format, extra_headers_json, auto_activate_keyword, active, created_at \
+            "SELECT id, name, base_url, auth_type, format, extra_headers_json, auto_activate_keyword, active, created_at, use_proxies, current_proxy_id, proxy_rotation_errors \
              FROM providers WHERE active = 1 AND id != ?1 ORDER BY id",
         )
         .map_err(|e| CoreError::Database {
@@ -345,6 +355,8 @@ pub fn update(
     base_url: Option<&str>,
     extra_headers_json: Option<&str>,
     auto_activate_keyword: Option<Option<&str>>,
+    use_proxies: Option<bool>,
+    proxy_rotation_errors: Option<&str>,
 ) -> Result<()> {
     // Build the SET clause dynamically so we only touch the supplied columns.
     // Each branch adds a fragment plus its bound value to `bound_values`.
@@ -366,6 +378,14 @@ pub fn update(
     if let Some(v) = auto_activate_keyword {
         sets.push("auto_activate_keyword = ?");
         bound_values.push(Box::new(v.map(|s| s.to_string())));
+    }
+    if let Some(v) = use_proxies {
+        sets.push("use_proxies = ?");
+        bound_values.push(Box::new(v as i64));
+    }
+    if let Some(v) = proxy_rotation_errors {
+        sets.push("proxy_rotation_errors = ?");
+        bound_values.push(Box::new(v.to_string()));
     }
 
     if sets.is_empty() {
@@ -401,6 +421,19 @@ pub fn update(
     Ok(())
 }
 
+/// Update the current proxy ID assigned to a provider.
+pub fn update_current_proxy(conn: &Connection, id: &ProviderId, proxy_id: Option<&str>) -> Result<()> {
+    conn.execute(
+        "UPDATE providers SET current_proxy_id = ?1 WHERE id = ?2",
+        params![proxy_id, id.as_str()],
+    )
+    .map_err(|e| CoreError::Database {
+        message: format!("update current proxy for provider {}: {}", id, e),
+        source: Some(Box::new(e)),
+    })?;
+    Ok(())
+}
+
 /// Map a single SELECT row into a `Provider`. Shared by `get`, `list`,
 /// and `list_active`. The expected column order is the SELECT in each
 /// of those three queries — column index `7` is the `active` flag.
@@ -414,6 +447,10 @@ fn row_to_provider(row: &rusqlite::Row<'_>) -> rusqlite::Result<Provider> {
     let auto_activate_keyword: Option<String> = row.get(6)?;
     let active: i64 = row.get(7)?;
     let created_at: String = row.get(8)?;
+
+    let use_proxies: i64 = row.get(9)?;
+    let current_proxy_id: Option<String> = row.get(10)?;
+    let proxy_rotation_errors: String = row.get(11)?;
 
     // The DB's CHECK constraints guarantee these parse, so a Validation
     // error here would indicate schema/data corruption, not a user mistake.
@@ -439,6 +476,7 @@ fn row_to_provider(row: &rusqlite::Row<'_>) -> rusqlite::Result<Provider> {
     // — the same mapping is used by `accounts::HealthStatus` and
     // `models::set_active`.
     let active = active != 0;
+    let use_proxies = use_proxies != 0;
 
     Ok(Provider {
         id: ProviderId::new(id),
@@ -450,6 +488,9 @@ fn row_to_provider(row: &rusqlite::Row<'_>) -> rusqlite::Result<Provider> {
         auto_activate_keyword,
         active,
         created_at,
+        use_proxies,
+        current_proxy_id,
+        proxy_rotation_errors,
     })
 }
 
@@ -668,7 +709,7 @@ mod tests {
         .expect("create");
 
         // Partial: only name.
-        update(&conn, &id, Some("Renamed"), None, None, None).expect("update name");
+        update(&conn, &id, Some("Renamed"), None, None, None, None, None).expect("update name");
         let p = get(&conn, &id).expect("get").expect("present");
         assert_eq!(p.name, "Renamed");
         assert_eq!(p.base_url, "https://original.example", "untouched");
@@ -687,6 +728,8 @@ mod tests {
             Some("https://new.example"),
             Some(r#"{"new":true}"#),
             Some(Some("claude")),
+            None,
+            None,
         )
         .expect("update url+headers+keyword");
         let p = get(&conn, &id).expect("get").expect("present");
@@ -696,18 +739,18 @@ mod tests {
         assert_eq!(p.auto_activate_keyword.as_deref(), Some("claude"));
 
         // Clear the keyword: Some(None) sets NULL.
-        update(&conn, &id, None, None, None, Some(None)).expect("clear keyword");
+        update(&conn, &id, None, None, None, Some(None), None, None).expect("clear keyword");
         let p = get(&conn, &id).expect("get").expect("present");
         assert_eq!(p.auto_activate_keyword, None);
 
         // No-op update on an existing id: should not error and not touch row.
-        update(&conn, &id, None, None, None, None).expect("no-op");
+        update(&conn, &id, None, None, None, None, None, None).expect("no-op");
         let p = get(&conn, &id).expect("get").expect("present");
         assert_eq!(p.base_url, "https://new.example");
 
         // Update on a missing id: ProviderNotFound.
         let missing = ProviderId::new("nope");
-        let err = update(&conn, &missing, Some("X"), None, None, None)
+        let err = update(&conn, &missing, Some("X"), None, None, None, None, None)
             .expect_err("missing id must error");
         assert!(matches!(err, CoreError::ProviderNotFound(_)));
     }

@@ -1114,6 +1114,7 @@ pub async fn test_combo_targets(
                     &s,
                     t.model_row_id.unwrap_or(ModelRowId(0)).0,
                     t.account_id,
+                    None,
                     TestOptions {
                         in_combo_fanout: true,
                     },
@@ -3130,6 +3131,7 @@ async fn run_test_for_model(
     s: &AppState,
     model_row_id: i64,
     account_id: Option<AccountId>,
+    proxy_url: Option<String>,
     opts: TestOptions,
     cancel_rx: Option<tokio::sync::watch::Receiver<bool>>,
 ) -> TestResult {
@@ -3395,6 +3397,7 @@ async fn run_test_for_model(
                     &openai_req,
                     final_cancel_rx,
                     None,
+                    proxy_url.clone(),
                 )
                 .await
             }
@@ -3429,6 +3432,7 @@ async fn run_test_for_model(
                     profile_arn.as_deref(),
                     &openai_req,
                     final_cancel_rx,
+                    proxy_url.clone(),
                 )
                 .await
             }
@@ -3546,8 +3550,20 @@ async fn run_test_for_model(
     //    clock cost — a hung upstream shouldn't pin a dashboard
     //    button indefinitely.
     let headers = adapter.build_headers(&api_key, model.target_format, &model.model_id);
-    let mut req = s
-        .http_client()
+    let client = if let Some(ref proxy_uri) = proxy_url {
+        match reqwest::Proxy::all(proxy_uri) {
+            Ok(p) => reqwest::Client::builder()
+                .user_agent("openproxy/1.0")
+                .connect_timeout(std::time::Duration::from_secs(15))
+                .proxy(p)
+                .build()
+                .unwrap_or_else(|_| s.http_client()),
+            Err(_) => s.http_client(),
+        }
+    } else {
+        s.http_client()
+    };
+    let mut req = client
         .post(&url)
         .timeout(std::time::Duration::from_secs(15));
     for (k, v) in &headers {
@@ -3637,13 +3653,38 @@ async fn run_test_for_model(
 /// compatibility with the dashboard's "Test" button on the model
 /// row, which expects the same `last_test_status` side-effect
 /// the original handler had.
+#[derive(serde::Deserialize, Default)]
+pub struct TestModelInput {
+    pub account_id: Option<i64>,
+    pub proxy_id: Option<String>,
+}
+
 pub async fn test_model(
     State(s): State<AppState>,
     Path(model_row_id): Path<i64>,
     cancel_watch: Option<axum::Extension<crate::disconnect::CancelWatch>>,
+    body: Option<Json<TestModelInput>>,
 ) -> ApiResult<Json<serde_json::Value>> {
     let cancel_rx = cancel_watch.map(|axum::Extension(cw)| cw.rx);
-    let r = run_test_for_model(&s, model_row_id, None, TestOptions::default(), cancel_rx).await;
+
+    let (account_id, proxy_url) = if let Some(Json(input)) = body {
+        let aid = input.account_id.map(AccountId::new);
+        let purl = if let Some(ref pid) = input.proxy_id {
+            let r = s.db_pool().reader();
+            if let Ok(Some(p)) = openproxy_core::free_proxies::get_proxy(&r, pid) {
+                Some(format!("{}://{}:{}", p.r#type.to_lowercase(), p.host, p.port))
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+        (aid, purl)
+    } else {
+        (None, None)
+    };
+
+    let r = run_test_for_model(&s, model_row_id, account_id, proxy_url, TestOptions::default(), cancel_rx).await;
     ApiResult::ok(Json(serde_json::json!({
         "row_id": r.row_id,
         "status": r.status,
@@ -6910,6 +6951,7 @@ mod tests {
         let r = run_test_for_model(
             &state,
             model_row_id,
+            None,
             None,
             TestOptions::default(),
             Some(rx),

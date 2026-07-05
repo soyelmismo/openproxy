@@ -94,6 +94,44 @@ pub fn list_proxies(
     Ok(list)
 }
 
+pub fn get_proxy(
+    conn: &Connection,
+    id: &str,
+) -> crate::error::Result<Option<FreeProxy>> {
+    let mut stmt = conn
+        .prepare("SELECT id, source, host, port, type, country_code, status, latency_ms, last_validated, created_at, updated_at FROM free_proxies WHERE id = ?1")
+        .map_err(|e| crate::error::CoreError::Database {
+            message: e.to_string(),
+            source: Some(Box::new(e)),
+        })?;
+        
+    let res = stmt.query_row(rusqlite::params![id], |row| {
+        Ok(FreeProxy {
+            id: row.get(0)?,
+            source: row.get(1)?,
+            host: row.get(2)?,
+            port: row.get(3)?,
+            r#type: row.get(4)?,
+            country_code: row.get(5)?,
+            status: row.get(6)?,
+            latency_ms: row.get(7)?,
+            last_validated: row.get(8)?,
+            created_at: row.get(9)?,
+            updated_at: row.get(10)?,
+        })
+    });
+    
+    match res {
+        Ok(p) => Ok(Some(p)),
+        Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+        Err(e) => Err(crate::error::CoreError::Database {
+            message: e.to_string(),
+            source: Some(Box::new(e)),
+        }.into()),
+    }
+}
+
+
 pub fn add_custom_proxy(
     conn: &Connection,
     host: String,
@@ -175,6 +213,68 @@ pub fn update_proxy_status(
         source: Some(Box::new(e)),
     })?;
     Ok(())
+}
+
+pub fn get_or_assign_provider_proxy(
+    conn: &Connection,
+    provider_id: &crate::ids::ProviderId,
+) -> crate::error::Result<Option<String>> {
+    use rusqlite::OptionalExtension;
+    
+    // 1. Fetch provider details to see use_proxies and current_proxy_id
+    let provider = match crate::providers::get(conn, provider_id)? {
+        Some(p) => p,
+        None => return Ok(None),
+    };
+
+    if !provider.use_proxies {
+        return Ok(None);
+    }
+
+    // 2. If current_proxy_id is set, verify it is still alive/valid
+    if let Some(ref proxy_id) = provider.current_proxy_id {
+        let exists_and_alive: Option<(String, i64, String)> = conn
+            .query_row(
+                "SELECT host, port, type FROM free_proxies WHERE id = ?1 AND status = 'alive'",
+                rusqlite::params![proxy_id],
+                |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?, row.get::<_, String>(2)?)),
+            )
+            .optional()
+            .map_err(|e| crate::error::CoreError::Database {
+                message: format!("query current proxy: {}", e),
+                source: Some(Box::new(e)),
+            })?;
+
+        if let Some((host, port, proto)) = exists_and_alive {
+            return Ok(Some(format!("{}://{}:{}", proto.to_lowercase(), host, port)));
+        }
+    }
+
+    // 3. If current_proxy_id is unset or dead, select a new one from the alive pool
+    // Order by latency_ms ascending so we pick the fastest one.
+    let new_proxy: Option<(String, String, i64, String)> = conn
+        .query_row(
+            "SELECT id, host, port, type FROM free_proxies WHERE status = 'alive' ORDER BY latency_ms ASC, random() LIMIT 1",
+            [],
+            |row| Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, i64>(2)?,
+                row.get::<_, String>(3)?,
+            )),
+        )
+        .optional()
+        .map_err(|e| crate::error::CoreError::Database {
+            message: format!("query new proxy: {}", e),
+            source: Some(Box::new(e)),
+        })?;
+
+    if let Some((id, host, port, proto)) = new_proxy {
+        crate::providers::update_current_proxy(conn, provider_id, Some(&id))?;
+        return Ok(Some(format!("{}://{}:{}", proto.to_lowercase(), host, port)));
+    }
+
+    Ok(None)
 }
 
 pub fn upsert_scraped_proxies(
@@ -587,6 +687,21 @@ mod tests {
               created_at TEXT NOT NULL DEFAULT (datetime('now')),
               updated_at TEXT NOT NULL DEFAULT (datetime('now')),
               UNIQUE(host, port)
+            );
+            CREATE TABLE providers (
+              id TEXT PRIMARY KEY,
+              name TEXT NOT NULL,
+              base_url TEXT NOT NULL,
+              auth_type TEXT NOT NULL,
+              format TEXT NOT NULL,
+              extra_headers_json TEXT,
+              auto_activate_keyword TEXT,
+              use_proxies INTEGER DEFAULT 0,
+              current_proxy_id TEXT,
+              proxy_rotation_errors TEXT DEFAULT '429,connect_error,timeout',
+              active INTEGER NOT NULL DEFAULT 1,
+              created_at TEXT NOT NULL DEFAULT (datetime('now')),
+              updated_at TEXT NOT NULL DEFAULT (datetime('now'))
             );"
         ).unwrap();
         conn
@@ -648,6 +763,61 @@ mod tests {
         upsert_scraped_proxies(&conn, &scraped).unwrap();
         let list2 = list_proxies(&conn, None, None).unwrap();
         assert_eq!(list2.len(), 2);
+    }
+
+    #[test]
+    fn test_get_or_assign_provider_proxy_flow() {
+        let conn = setup_test_db();
+        
+        let provider_id = crate::ids::ProviderId::new("test-provider");
+        
+        // 1. Insert a provider with use_proxies = 0 (default)
+        conn.execute(
+            "INSERT INTO providers (id, name, base_url, auth_type, format) VALUES (?1, 'Test', 'http://localhost', 'bearer', 'openai')",
+            rusqlite::params![provider_id.0],
+        ).unwrap();
+        
+        // No proxies in database yet. Since use_proxies = 0, should return Ok(None)
+        let proxy = get_or_assign_provider_proxy(&conn, &provider_id).unwrap();
+        assert_eq!(proxy, None);
+        
+        // 2. Enable use_proxies = 1
+        conn.execute(
+            "UPDATE providers SET use_proxies = 1 WHERE id = ?1",
+            rusqlite::params![provider_id.0],
+        ).unwrap();
+        
+        // Still no proxies in DB, so it should return Ok(None)
+        let proxy = get_or_assign_provider_proxy(&conn, &provider_id).unwrap();
+        assert_eq!(proxy, None);
+        
+        // 3. Add an alive proxy
+        let p = add_custom_proxy(&conn, "1.2.3.4".to_string(), 8080, "socks5".to_string(), None).unwrap();
+        update_proxy_status(&conn, &p.id, "alive", Some(100)).unwrap();
+        
+        // Now it should assign and return this socks5 proxy!
+        let proxy = get_or_assign_provider_proxy(&conn, &provider_id).unwrap();
+        assert_eq!(proxy, Some("socks5://1.2.3.4:8080".to_string()));
+        
+        // The provider's current_proxy_id should now be bound to p.id
+        let bound_id: Option<String> = conn.query_row(
+            "SELECT current_proxy_id FROM providers WHERE id = ?1",
+            rusqlite::params![provider_id.0],
+            |row| row.get(0),
+        ).unwrap();
+        assert_eq!(bound_id, Some(p.id.clone()));
+        
+        // Calling it again should return the same cached proxy
+        let proxy2 = get_or_assign_provider_proxy(&conn, &provider_id).unwrap();
+        assert_eq!(proxy2, Some("socks5://1.2.3.4:8080".to_string()));
+        
+        // 4. Mark the proxy as dead / inactive
+        update_proxy_status(&conn, &p.id, "dead", Some(9999)).unwrap();
+        
+        // Since it's dead, get_or_assign_provider_proxy should detect it as dead,
+        // search for a new one, find none, and return Ok(None).
+        let proxy3 = get_or_assign_provider_proxy(&conn, &provider_id).unwrap();
+        assert_eq!(proxy3, None);
     }
 }
 

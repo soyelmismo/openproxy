@@ -821,6 +821,7 @@ pub async fn execute_antigravity(
     openai: &OpenAIRequest,
     client_disconnected: watch::Receiver<bool>,
     stream_sink: Option<&crate::race_sink::StreamSink>,
+    proxy: Option<String>,
 ) -> Result<OpenAIResponse, CoreError> {
     // 1. Session ID and fingerprint derivation
     let session_id = extract_openai_session_id(openai);
@@ -835,8 +836,9 @@ pub async fn execute_antigravity(
     // 3. Build the upstream request
     let url = "https://daily-cloudcode-pa.googleapis.com/v1internal:streamGenerateContent?alt=sse";
 
-    let build_request = |access_token: &str, project_id: Option<&str>, body_bytes: &[u8]| -> Result<UpstreamRequest, CoreError> {
+    let build_request = |access_token: &str, project_id: Option<&str>, body_bytes: &[u8], proxy_opt: Option<String>| -> Result<UpstreamRequest, CoreError> {
         let mut req = UpstreamRequest::post_json(url.to_string(), bytes::Bytes::copy_from_slice(body_bytes));
+        req.proxy = proxy_opt;
         if let Ok(value) = http::HeaderValue::from_str(&format!("Bearer {access_token}")) {
             req.headers.insert(http::header::AUTHORIZATION, value);
         }
@@ -851,9 +853,10 @@ pub async fn execute_antigravity(
         Ok(req)
     };
 
-    let upstream_request = build_request(access_token, Some(project_id), &body_bytes)?;
+    let upstream_request = build_request(access_token, Some(project_id), &body_bytes, proxy.clone())?;
 
     let cancel = CancellationToken::from_watch(client_disconnected);
+
     let mut response = match upstream_client
         .call(upstream_request, TimeoutProfile::Chat, cancel.clone())
         .await
@@ -871,7 +874,7 @@ pub async fn execute_antigravity(
 
     if response.status == http::StatusCode::FORBIDDEN && !project_id.is_empty() {
         tracing::warn!("Antigravity request got 403 Forbidden with project ID, retrying WITHOUT project ID header...");
-        let retry_request = build_request(access_token, None, &body_bytes)?;
+        let retry_request = build_request(access_token, None, &body_bytes, proxy)?;
         if let Ok(retry_resp) = upstream_client.call(retry_request, TimeoutProfile::Chat, cancel).await {
             response = retry_resp;
         }

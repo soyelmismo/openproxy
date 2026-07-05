@@ -2718,7 +2718,7 @@ impl ProviderAdapter for CustomAdapter {
     ) -> Vec<(String, String)> {
         let (name, value) = self.build_auth_header(api_key);
         let mut headers = Vec::with_capacity(2 + self.config.extra_headers.len());
-        if !name.is_empty() {
+        if !name.is_empty() && !api_key.is_empty() {
             headers.push((name, value));
         }
         headers.push(("Content-Type".into(), "application/json".into()));
@@ -2745,11 +2745,15 @@ impl ProviderAdapter for CustomAdapter {
         })?;
 
         // Build auth header based on the provider's auth type.
-        let auth_headers: Vec<(&str, String)> = match self.config.auth_type {
-            AdapterAuthType::Bearer => vec![("Authorization", format!("Bearer {api_key}"))],
-            AdapterAuthType::XApiKey => vec![("x-api-key", api_key.to_string())],
-            AdapterAuthType::GoogApiKey => vec![("x-goog-api-key", api_key.to_string())],
-            AdapterAuthType::None => vec![],
+        let auth_headers: Vec<(&str, String)> = if api_key.is_empty() {
+            vec![]
+        } else {
+            match self.config.auth_type {
+                AdapterAuthType::Bearer => vec![("Authorization", format!("Bearer {api_key}"))],
+                AdapterAuthType::XApiKey => vec![("x-api-key", api_key.to_string())],
+                AdapterAuthType::GoogApiKey => vec![("x-goog-api-key", api_key.to_string())],
+                AdapterAuthType::None => vec![],
+            }
         };
 
         let body = upstream_get_json(upstream_client, &url, &auth_headers)
@@ -3389,6 +3393,9 @@ mod tests {
             auto_activate_keyword: None,
             active: true,
             created_at: "2026-01-01T00:00:00Z".into(),
+            use_proxies: false,
+            current_proxy_id: None,
+            proxy_rotation_errors: "429,connect_error,timeout".to_string(),
         }
     }
 

@@ -2368,6 +2368,7 @@ impl Pipeline {
                             profile_arn,
                             &req.openai_request,
                             req.client_disconnected.clone(),
+                            None,
                         )
                         .await
                     }
@@ -2385,6 +2386,7 @@ impl Pipeline {
                             &req.openai_request,
                             req.client_disconnected.clone(),
                             req.stream_sink.as_ref(),
+                            None,
                         )
                         .await
                     }
@@ -3010,6 +3012,31 @@ impl Pipeline {
         // `body_bytes` is pre-serialized by the caller (single pass
         // from the translated struct — no intermediate `Value`).
         let mut upstream_request = UpstreamRequest::post_json(url.to_string(), body_bytes);
+        // If the provider has proxy routing enabled, fetch/assign a proxy
+        let proxy_url = {
+            let conn = self.conn.lock();
+            match crate::free_proxies::get_or_assign_provider_proxy(&conn, &target.provider_id) {
+                Ok(url) => url,
+                Err(e) => {
+                    return self.record_and_fail(
+                        req,
+                        combo,
+                        target,
+                        FailureContext {
+                            attempt,
+                            race_size,
+                            err: &e,
+                            started,
+                            model: Some(model),
+                            connect_ms: None,
+                            ttft_ms: None,
+                            status_code: e.http_status(),
+                        },
+                    );
+                }
+            }
+        };
+        upstream_request.proxy = proxy_url;
         // is_streaming is always true because we force stream=true
         // to the upstream (see comment above). The body-chunk gap
         // timeout (idle_chunk_ms) applies normally — but only AFTER
@@ -3150,6 +3177,7 @@ impl Pipeline {
                     );
                 }
                 Err(UpstreamError::Timeout(phase)) => {
+                    self.check_and_trigger_proxy_rotation(&target.provider_id, None, true);
                     // Bug fix: attribute the timeout to the CORRECT phase
                     // instead of collapsing DNS/Dial/TLS/Write/Headers all
                     // into "connect". The user configures per-phase budgets
@@ -3203,6 +3231,7 @@ impl Pipeline {
                 | Err(UpstreamError::Http(msg))
                 | Err(UpstreamError::Decode(msg))
                 | Err(UpstreamError::Invalid(msg)) => {
+                    self.check_and_trigger_proxy_rotation(&target.provider_id, None, true);
                     let err = CoreError::UpstreamConnection(msg);
                     return self.record_and_fail(
                         req,
@@ -3372,6 +3401,7 @@ impl Pipeline {
                 );
             }
             Ok(Err(e)) => {
+                self.check_and_trigger_proxy_rotation(&target.provider_id, None, true);
                 let err = CoreError::UpstreamConnection(format!("read upstream body: {e}"));
                 return self.record_and_fail(
                     req,
@@ -3389,11 +3419,8 @@ impl Pipeline {
                     },
                 );
             }
-            // Bug fix: the `tokio::time::timeout` Elapsed arm — the
-            // non-streaming body read exceeded `total_ms`. This means
-            // the upstream took longer than the total budget to
-            // generate and return the full response.
             Err(_elapsed) => {
+                self.check_and_trigger_proxy_rotation(&target.provider_id, None, true);
                 let elapsed = started.elapsed().as_millis() as u64;
                 let err = CoreError::UpstreamTimeout {
                     phase: "total (config: total_ms)".to_string(),
@@ -3434,6 +3461,7 @@ impl Pipeline {
         // instead of using the fixed exponential backoff. The default
         // backoff is < 1 s; an upstream that asks for 30 s gets 30 s.
         if !(200..300).contains(&status_code) {
+            self.check_and_trigger_proxy_rotation(&target.provider_id, Some(status_code), false);
             let body_str = String::from_utf8_lossy(&body_bytes).to_string();
             // Parse `Retry-After` from response_headers (extracted at L1751
             // before the body was consumed). Accepts either an integer
@@ -3913,6 +3941,7 @@ impl Pipeline {
                     );
                 }
                 Err(UpstreamError::Timeout(phase)) => {
+                    self.check_and_trigger_proxy_rotation(&target.provider_id, None, true);
                     // Bug fix (PR #33): attribute the timeout to the
                     // CORRECT phase instead of collapsing all into
                     // "connect". Mirrors the non-streaming path's fix.
@@ -3958,6 +3987,7 @@ impl Pipeline {
                 | Err(UpstreamError::Http(msg))
                 | Err(UpstreamError::Decode(msg))
                 | Err(UpstreamError::Invalid(msg)) => {
+                    self.check_and_trigger_proxy_rotation(&target.provider_id, None, true);
                     let err = CoreError::UpstreamConnection(msg);
                     return self.record_and_fail(
                         req,
@@ -3992,6 +4022,7 @@ impl Pipeline {
 
         let status_code = response.status.as_u16();
         if !(200..300).contains(&status_code) {
+            self.check_and_trigger_proxy_rotation(&target.provider_id, Some(status_code), false);
             let body_str = match response.body.collect_all().await {
                 Ok(b) => String::from_utf8_lossy(&b).to_string(),
                 Err(_) => String::new(),
@@ -5600,6 +5631,9 @@ impl Pipeline {
                     Some(p) if matches!(p.auth_type, crate::providers::AuthType::None) => {
                         Ok(String::new())
                     }
+                    Some(p) if p.id.0 == "opencode-zen" => {
+                        Ok(String::new())
+                    }
                     _ => Err(CoreError::Auth(format!(
                         "combo_target {} has no account_id after expansion",
                         target.id.0
@@ -5640,6 +5674,9 @@ impl Pipeline {
                 let conn = self.conn.lock();
                 match crate::providers::get(&conn, &target.provider_id)? {
                     Some(p) if matches!(p.auth_type, crate::providers::AuthType::None) => {
+                        Ok((String::new(), None))
+                    }
+                    Some(p) if p.id.0 == "opencode-zen" => {
                         Ok((String::new(), None))
                     }
                     _ => Err(CoreError::Auth(format!(
@@ -5767,6 +5804,55 @@ impl Pipeline {
         // per-target boundary in `Pipeline::run` and the success
         // post-checks in the dispatch loop).
         *rx.borrow_and_update()
+    }
+
+    /// Check if the error or status code matches the provider's proxy rotation settings,
+    /// and if so, clear the provider's current proxy and mark it as dead.
+    fn check_and_trigger_proxy_rotation(
+        &self,
+        provider_id: &crate::ids::ProviderId,
+        status_code: Option<u16>,
+        is_connect_error: bool,
+    ) {
+        let conn = self.conn.lock();
+        if let Ok(Some(provider)) = crate::providers::get(&conn, provider_id) {
+            if provider.use_proxies {
+                let mut should_rotate = false;
+                
+                // Parse configured error triggers, e.g. "429,connect_error,timeout"
+                let errors_list: Vec<&str> = provider.proxy_rotation_errors
+                    .split(',')
+                    .map(|s| s.trim())
+                    .collect();
+
+                if let Some(sc) = status_code {
+                    let sc_str = sc.to_string();
+                    if errors_list.contains(&sc_str.as_str()) {
+                        should_rotate = true;
+                    }
+                }
+
+                if is_connect_error {
+                    if errors_list.contains(&"connect_error") || errors_list.contains(&"timeout") {
+                        should_rotate = true;
+                    }
+                }
+
+                if should_rotate {
+                    if let Some(ref bad_proxy_id) = provider.current_proxy_id {
+                        tracing::warn!(
+                            provider = %provider_id,
+                            proxy_id = %bad_proxy_id,
+                            "proxy rotation triggered: marking proxy as dead and clearing binding"
+                        );
+                        // Mark the proxy as dead in the catalog so we don't pick it again immediately
+                        let _ = crate::free_proxies::update_proxy_status(&conn, bad_proxy_id, "dead", None);
+                        // Reset current_proxy_id so next attempt gets a fresh one
+                        let _ = crate::providers::update_current_proxy(&conn, provider_id, None);
+                    }
+                }
+            }
+        }
     }
 
     /// Record a failed attempt and return a finished `PipelineResult`.
@@ -12664,5 +12750,82 @@ data: [DONE]\n\n";
         assert_eq!(resolved_sorting[0].account_id, Some(AccountId(7)));
         assert_eq!(resolved_sorting[1].account_id, Some(AccountId(5)));
         assert_eq!(resolved_sorting[2].account_id, Some(AccountId(8)));
+    }
+
+    #[test]
+    fn test_opencode_zen_no_account_proxy_rotation() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE providers (
+              id TEXT PRIMARY KEY,
+              name TEXT NOT NULL,
+              base_url TEXT NOT NULL,
+              auth_type TEXT NOT NULL,
+              format TEXT NOT NULL,
+              extra_headers_json TEXT,
+              auto_activate_keyword TEXT,
+              use_proxies INTEGER DEFAULT 0,
+              current_proxy_id TEXT,
+              proxy_rotation_errors TEXT DEFAULT '429,connect_error,timeout',
+              active INTEGER NOT NULL DEFAULT 1,
+              created_at TEXT NOT NULL DEFAULT (datetime('now')),
+              updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+            );
+            CREATE TABLE free_proxies (
+              id TEXT PRIMARY KEY,
+              source TEXT NOT NULL,
+              host TEXT NOT NULL,
+              port INTEGER NOT NULL,
+              type TEXT NOT NULL DEFAULT 'http',
+              country_code TEXT,
+              status TEXT NOT NULL DEFAULT 'unknown',
+              latency_ms INTEGER,
+              last_validated TEXT,
+              created_at TEXT NOT NULL DEFAULT (datetime('now')),
+              updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+              UNIQUE(host, port)
+            );"
+        ).unwrap();
+
+        // 1. Insert opencode-zen provider
+        conn.execute(
+            "INSERT INTO providers (id, name, base_url, auth_type, format) VALUES ('opencode-zen', 'OpenCode Zen', 'http://localhost', 'bearer', 'mixed')",
+            []
+        ).unwrap();
+
+        // 2. Test resolve_target_api_key_and_label with None account
+        let target = ComboTarget {
+            id: crate::ids::ComboTargetId(1),
+            combo_id: crate::ids::ComboId(1),
+            provider_id: crate::ids::ProviderId::new("opencode-zen"),
+            account_id: None,
+            model_row_id: None,
+            sub_combo_id: None,
+            priority_order: 1,
+            weight: 1,
+        };
+
+        // 3. Enable use_proxies on opencode-zen and insert an alive proxy
+        conn.execute("UPDATE providers SET use_proxies = 1 WHERE id = 'opencode-zen'", []).unwrap();
+        conn.execute(
+            "INSERT INTO free_proxies (id, source, host, port, type, status, latency_ms) VALUES ('p-ok', 'src', '1.1.1.1', 80, 'socks5', 'alive', 15)",
+            []
+        ).unwrap();
+
+        // Should return the assigned proxy
+        let proxy2 = crate::free_proxies::get_or_assign_provider_proxy(&conn, &target.provider_id).unwrap();
+        assert_eq!(proxy2, Some("socks5://1.1.1.1:80".to_string()));
+
+        // 4. Trigger rotation manually by resetting the proxy binding and marking it as dead
+        let provider = crate::providers::get(&conn, &target.provider_id).unwrap().unwrap();
+        assert_eq!(provider.current_proxy_id, Some("p-ok".to_string()));
+
+        // Mark it as dead and clear binding
+        crate::free_proxies::update_proxy_status(&conn, "p-ok", "dead", None).unwrap();
+        crate::providers::update_current_proxy(&conn, &target.provider_id, None).unwrap();
+
+        // Fetching again should yield None (as there are no other alive proxies)
+        let proxy3 = crate::free_proxies::get_or_assign_provider_proxy(&conn, &target.provider_id).unwrap();
+        assert_eq!(proxy3, None);
     }
 }

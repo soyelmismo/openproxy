@@ -129,6 +129,9 @@ export interface Provider {
   auto_activate_keyword: string | null;
   active: boolean;
   created_at: string;
+  use_proxies: boolean;
+  current_proxy_id: string | null;
+  proxy_rotation_errors: string;
 }
 
 // ----------------------------------------------------------------------------

@@ -20,7 +20,7 @@ use super::profile::TimeoutProfile;
 use super::response::{UpstreamBodyStream, UpstreamResponse};
 
 #[cfg(feature = "upstream-hyper")]
-use super::connector::{CALL_TIMEOUTS, PhasedConnector, PhasedTimeouts, phased_phase};
+use super::connector::{CALL_TIMEOUTS, CALL_PROXY, PhasedConnector, PhasedTimeouts, phased_phase};
 #[cfg(feature = "upstream-hyper")]
 use hyper_util::client::legacy::Client as HyperClient;
 #[cfg(feature = "upstream-hyper")]
@@ -47,6 +47,7 @@ pub struct UpstreamRequest {
     /// generates the full response server-side before sending anything.
     /// Default: `true` (streaming).
     pub is_streaming: bool,
+    pub proxy: Option<String>,
 }
 
 impl UpstreamRequest {
@@ -58,6 +59,7 @@ impl UpstreamRequest {
             headers: HeaderMap::new(),
             body: None,
             is_streaming: true,
+            proxy: None,
         }
     }
 
@@ -74,6 +76,7 @@ impl UpstreamRequest {
             headers,
             body: Some(body),
             is_streaming: true,
+            proxy: None,
         }
     }
 
@@ -106,6 +109,7 @@ impl UpstreamRequest {
             // body-chunk gap timeout keeps the (potentially long)
             // transcription from being killed by an idle-chunk watchdog.
             is_streaming: false,
+            proxy: None,
         }
     }
 }
@@ -502,6 +506,8 @@ impl UpstreamClient {
             }
             res
         };
+        let proxy_url = spec.proxy.clone();
+        let send_fut = CALL_PROXY.scope(proxy_url, send_fut);
         let send_fut = CALL_TIMEOUTS.scope(connector_timeouts, send_fut);
 
         // ---- Real per-phase race --------------------------------------
