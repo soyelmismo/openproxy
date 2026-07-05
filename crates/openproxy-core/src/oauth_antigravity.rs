@@ -305,6 +305,7 @@ impl OAuthProvider for AntigravityOAuthProvider {
         account_id: AccountId,
         db_pool: &std::sync::Arc<crate::db::DbPool>,
         master_key: &MasterKey,
+        upstream: &Arc<UpstreamClient>,
     ) -> Result<()> {
         // 1. Decrypt the access token we just stored. The writer
         //    guard is dropped at the end of the block so the next
@@ -317,23 +318,19 @@ impl OAuthProvider for AntigravityOAuthProvider {
         // 1b. Fetch user info from Google
         let email = {
             let user_info_url = "https://www.googleapis.com/oauth2/v1/userinfo?alt=json";
-            let http_client = reqwest::Client::builder()
-                .timeout(std::time::Duration::from_secs(10))
-                .build()
-                .map_err(|e| {
-                    CoreError::UpstreamConnection(format!("antigravity userinfo client: {e}"))
-                })?;
-            match http_client
-                .get(user_info_url)
-                .header("Authorization", format!("Bearer {access_token}"))
-                .send()
-                .await
-            {
-                Ok(resp) if resp.status().is_success() => resp
-                    .json::<serde_json::Value>()
-                    .await
-                    .ok()
-                    .and_then(|v| v.get("email").and_then(|e| e.as_str()).map(String::from)),
+            let mut req = UpstreamRequest::get(user_info_url);
+            if let Ok(v) = http::HeaderValue::from_str(&format!("Bearer {access_token}")) {
+                req.headers.insert(http::header::AUTHORIZATION, v);
+            }
+            req.is_streaming = false;
+            let cancel = CancellationToken::new();
+            match upstream.call(req, TimeoutProfile::OAuth, cancel).await {
+                Ok(resp) if resp.status.is_success() => {
+                    let body = resp.collect().await.unwrap_or_default();
+                    serde_json::from_slice::<serde_json::Value>(&body)
+                        .ok()
+                        .and_then(|v| v.get("email").and_then(|e| e.as_str()).map(String::from))
+                }
                 _ => None,
             }
         };
@@ -344,13 +341,13 @@ impl OAuthProvider for AntigravityOAuthProvider {
             "ideType": "ANTIGRAVITY",
         });
 
-        let project_id = match load_code_assist(&access_token, &metadata).await? {
+        let project_id = match load_code_assist(upstream, &access_token, &metadata).await? {
             Some(pid) => pid,
             None => {
                 // Retry onboardUser up to 10 times with 5s delays
                 let mut result = None;
                 for attempt in 0..10 {
-                    match onboard_user(&access_token, "", &metadata).await {
+                    match onboard_user(upstream, &access_token, "", &metadata).await {
                         Ok(Some(pid)) => {
                             result = Some(pid);
                             break;
@@ -418,53 +415,45 @@ impl OAuthProvider for AntigravityOAuthProvider {
 /// Call `loadCodeAssist` and extract `projectId` (or `None` when
 /// the user is not yet on-boarded).
 async fn load_code_assist(
+    upstream: &Arc<UpstreamClient>,
     access_token: &str,
     metadata: &serde_json::Value,
 ) -> Result<Option<String>> {
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(15))
-        .build()
-        .map_err(|e| CoreError::UpstreamConnection(format!("antigravity load client: {e}")))?;
-
     let body = serde_json::json!({ "metadata": metadata });
+    let body_bytes = serde_json::to_vec(&body)
+        .map_err(|e| CoreError::Parse(format!("antigravity loadCodeAssist serialize: {e}")))?;
 
-    // Build the request with Antigravity client-identity headers.
-    // Without these, the API may reject the loadCodeAssist call.
-    let mut req_builder = client
-        .post(LOAD_CODE_ASSIST_URL)
-        .bearer_auth(access_token)
-        .header("Content-Type", "application/json");
-
-    // Inject the Antigravity identity headers using a temporary
-    // HeaderMap, then copy onto the reqwest builder.
-    {
-        let mut h = http::HeaderMap::new();
-        crate::antigravity_headers::inject_antigravity_headers(&mut h, None);
-        for (name, value) in h.iter() {
-            req_builder = req_builder.header(name, value);
-        }
+    // Build the request with Antigravity client-identity headers using UpstreamRequest
+    let mut req = UpstreamRequest::post_json(LOAD_CODE_ASSIST_URL, bytes::Bytes::from(body_bytes));
+    if let Ok(v) = http::HeaderValue::from_str(&format!("Bearer {access_token}")) {
+        req.headers.insert(http::header::AUTHORIZATION, v);
     }
+    crate::antigravity_headers::inject_antigravity_headers(&mut req.headers, None);
+    req.is_streaming = false;
 
-    let resp = req_builder
-        .json(&body)
-        .send()
+    let cancel = CancellationToken::new();
+    let resp = upstream
+        .call(req, TimeoutProfile::OAuth, cancel)
         .await
         .map_err(|e| CoreError::UpstreamConnection(format!("antigravity loadCodeAssist: {e}")))?;
 
-    if !resp.status().is_success() {
-        let status = resp.status().as_u16();
-        let body = resp.text().await.unwrap_or_default();
+    if !resp.status.is_success() {
+        let status = resp.status.as_u16();
+        let body_str = String::from_utf8_lossy(&resp.collect().await.unwrap_or_default()).to_string();
         return Err(CoreError::UpstreamError {
             status,
             provider: "antigravity".into(),
             model: "<post_exchange>".into(),
-            body,
+            body: body_str,
         });
     }
 
-    let value: serde_json::Value = resp
-        .json()
+    let body_bytes = resp
+        .collect()
         .await
+        .map_err(|e| CoreError::UpstreamConnection(format!("antigravity loadCodeAssist read: {e}")))?;
+
+    let value: serde_json::Value = serde_json::from_slice(&body_bytes)
         .map_err(|e| CoreError::Parse(format!("antigravity loadCodeAssist parse: {e}")))?;
 
     // `cloudaicompanionProject` may be a string or an object with
@@ -487,44 +476,49 @@ async fn load_code_assist(
 /// Call `onboardUser` and return `Ok(Some(project_id))` on success,
 /// or `Ok(None)` when the server has not finished onboarding yet.
 async fn onboard_user(
+    upstream: &Arc<UpstreamClient>,
     access_token: &str,
     project_id: &str,
     metadata: &serde_json::Value,
 ) -> Result<Option<String>> {
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(15))
-        .build()
-        .map_err(|e| CoreError::UpstreamConnection(format!("antigravity onboard client: {e}")))?;
-
     let body = serde_json::json!({
         "projectId": project_id,
         "metadata": metadata,
         "tier": "free-tier",
     });
+    let body_bytes = serde_json::to_vec(&body)
+        .map_err(|e| CoreError::Parse(format!("antigravity onboardUser serialize: {e}")))?;
 
-    let resp = client
-        .post(ONBOARD_USER_URL)
-        .bearer_auth(access_token)
-        .header("Content-Type", "application/json")
-        .json(&body)
-        .send()
+    let mut req = UpstreamRequest::post_json(ONBOARD_USER_URL, bytes::Bytes::from(body_bytes));
+    if let Ok(v) = http::HeaderValue::from_str(&format!("Bearer {access_token}")) {
+        req.headers.insert(http::header::AUTHORIZATION, v);
+    }
+    crate::antigravity_headers::inject_antigravity_headers(&mut req.headers, None);
+    req.is_streaming = false;
+
+    let cancel = CancellationToken::new();
+    let resp = upstream
+        .call(req, TimeoutProfile::OAuth, cancel)
         .await
         .map_err(|e| CoreError::UpstreamConnection(format!("antigravity onboardUser: {e}")))?;
 
-    if !resp.status().is_success() {
-        let status = resp.status().as_u16();
-        let body = resp.text().await.unwrap_or_default();
+    if !resp.status.is_success() {
+        let status = resp.status.as_u16();
+        let body_str = String::from_utf8_lossy(&resp.collect().await.unwrap_or_default()).to_string();
         return Err(CoreError::UpstreamError {
             status,
             provider: "antigravity".into(),
             model: "<post_exchange>".into(),
-            body,
+            body: body_str,
         });
     }
 
-    let value: serde_json::Value = resp
-        .json()
+    let body_bytes = resp
+        .collect()
         .await
+        .map_err(|e| CoreError::UpstreamConnection(format!("antigravity onboardUser read: {e}")))?;
+
+    let value: serde_json::Value = serde_json::from_slice(&body_bytes)
         .map_err(|e| CoreError::Parse(format!("antigravity onboardUser parse: {e}")))?;
 
     let project_id = value
@@ -543,11 +537,11 @@ async fn onboard_user(
 /// `oauth_provider_specific` JSON, or the JSON does not contain a
 /// `projectId`. Returns `Ok(Some(_))` when one is present.
 pub fn read_project_id(conn: &Connection, account_id: AccountId) -> Result<Option<String>> {
-    let raw: Option<String> = conn
+    let raw: Option<Option<String>> = conn
         .query_row(
             "SELECT oauth_provider_specific FROM accounts WHERE id = ?1",
             rusqlite::params![account_id.0],
-            |r| r.get(0),
+            |r| r.get::<_, Option<String>>(0),
         )
         .optional()
         .map_err(|e| CoreError::Database {
@@ -555,7 +549,7 @@ pub fn read_project_id(conn: &Connection, account_id: AccountId) -> Result<Optio
             source: Some(Box::new(e)),
         })?;
 
-    let Some(raw) = raw else { return Ok(None) };
+    let Some(raw) = raw.flatten() else { return Ok(None) };
     let meta: AntigravityProviderMeta = serde_json::from_str(&raw)
         .map_err(|e| CoreError::Parse(format!("antigravity meta parse: {e}")))?;
     Ok(meta.project_id)

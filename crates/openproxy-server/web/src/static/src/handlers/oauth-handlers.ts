@@ -28,6 +28,7 @@ interface AuthData {
 
 interface OAuthLoginShape {
   _currentAuth: AuthData | null;
+  _devicePollInterval?: any;
   startPKCE(provider: string): Promise<void>;
   pkcePopup(provider: string, authData: AuthData): Promise<void>;
   showManualPasteForm(provider: string, authData: AuthData): void;
@@ -37,6 +38,7 @@ interface OAuthLoginShape {
 
 export const OAuthLogin: OAuthLoginShape = {
   _currentAuth: null,
+  _devicePollInterval: null,
   async startPKCE(provider: string): Promise<void> {
     try {
       const resp = (await api(`/oauth/${provider}/authorize`)) as { error?: string; authorization_url?: string } & AuthData;
@@ -122,6 +124,10 @@ export const OAuthLogin: OAuthLoginShape = {
     requestUpdate();
   },
   async startDeviceCode(provider: string): Promise<void> {
+    if (this._devicePollInterval) {
+      clearInterval(this._devicePollInterval);
+      this._devicePollInterval = null;
+    }
     try {
       const resp = (await api(`/oauth/${provider}/device-code`, { method: "POST" })) as {
         error?: string;
@@ -146,17 +152,23 @@ export const OAuthLogin: OAuthLoginShape = {
         `, deviceInfo);
         deviceInfo.style.display = "block";
       }
-      const pollInterval = setInterval(async () => {
+      this._devicePollInterval = setInterval(async () => {
         try {
           const pollResp = (await api(`/oauth/${provider}/device-poll`, { method: "POST", body: JSON.stringify({ device_code: resp.device_code }) })) as { status?: string };
-          if (pollResp.status === "complete") {
-            clearInterval(pollInterval);
+          if (pollResp.status === "complete" || pollResp.status === "ok") {
+            if (this._devicePollInterval) {
+              clearInterval(this._devicePollInterval);
+              this._devicePollInterval = null;
+            }
             if (deviceInfo) deviceInfo.style.display = "none";
             showToast(`Logged in with ${provider}`, "success");
             state.accounts = await api("/accounts") as typeof state.accounts;
             requestUpdate();
           } else if (pollResp.status === "expired") {
-            clearInterval(pollInterval);
+            if (this._devicePollInterval) {
+              clearInterval(this._devicePollInterval);
+              this._devicePollInterval = null;
+            }
             if (deviceInfo) deviceInfo.style.display = "none";
             showToast("Device code expired", "error");
           }

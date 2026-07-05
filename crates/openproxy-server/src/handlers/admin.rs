@@ -3765,7 +3765,7 @@ pub async fn refresh_account_quota(
         // The capability check happens *before* the decrypt so we never
         // touch the master key for a provider whose quota we'll never
         // fetch.
-        let (provider_id_str, api_key, access_token) = {
+        let (provider_id_str, api_key, access_token, provider_specific) = {
             tracing::debug!(account_id = account_id.0, "refresh_account_quota: acquiring writer");
             let w = s_clone.db_pool().writer();
             tracing::debug!(account_id = account_id.0, "refresh_account_quota: writer acquired");
@@ -3782,6 +3782,7 @@ pub async fn refresh_account_quota(
             }
             let provider_str = acc.provider_id.to_string();
             let is_oauth = acc.auth_type == "oauth";
+            let provider_specific = acc.oauth_provider_specific.clone();
 
             // OAuth providers (antigravity) need the access token, not
             // an API key. API-key providers need the key. We decrypt
@@ -3801,7 +3802,7 @@ pub async fn refresh_account_quota(
                 )?;
                 (k, None)
             };
-            (provider_str, k, token)
+            (provider_str, k, token, provider_specific)
         };
         // writer guard dropped here.
 
@@ -3815,6 +3816,7 @@ pub async fn refresh_account_quota(
             upstream_client,
             &api_key,
             access_token.as_deref(),
+            provider_specific.as_deref(),
         )
         .await;
         tracing::info!(account_id = account_id.0, provider = %provider_id_str, fetch_error = ?q.fetch_error, "refresh_account_quota: upstream done");
@@ -3874,6 +3876,7 @@ pub async fn refresh_account_quota(
                                 upstream_client,
                                 &api_key,
                                 Some(&new_tokens.access_token),
+                                provider_specific.as_deref(),
                             )
                             .await
                         }
@@ -4798,7 +4801,7 @@ pub async fn oauth_exchange(
         // account is still usable for token refresh; the project
         // bootstrap can be retried later.
         if let Err(e) = provider_impl
-            .post_exchange(account_id, s.db_pool(), s.master_key())
+            .post_exchange(account_id, s.db_pool(), s.master_key(), s.upstream_client())
             .await
         {
             tracing::warn!(
@@ -5014,7 +5017,7 @@ pub async fn oauth_device_poll(
                 // `oauth_provider_specific`. Errors are logged
                 // but do not abort the request.
                 if let Err(e) = provider_impl
-                    .post_exchange(account_id, s.db_pool(), s.master_key())
+                    .post_exchange(account_id, s.db_pool(), s.master_key(), s.upstream_client())
                     .await
                 {
                     tracing::warn!(

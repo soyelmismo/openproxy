@@ -71,7 +71,7 @@ struct RegisterClientResponse {
 /// the user's CodeWhisperer profile (added by `post_exchange`).
 /// `region` is the AWS region the chat executor should target
 /// (default: us-east-1).
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct KiroProviderMeta {
     pub client_id: String,
     pub client_secret: String,
@@ -79,6 +79,17 @@ pub struct KiroProviderMeta {
     pub profile_arn: Option<String>,
     #[serde(default = "default_region")]
     pub region: String,
+}
+
+impl Default for KiroProviderMeta {
+    fn default() -> Self {
+        Self {
+            client_id: String::new(),
+            client_secret: String::new(),
+            profile_arn: None,
+            region: default_region(),
+        }
+    }
 }
 
 fn default_region() -> String {
@@ -89,15 +100,16 @@ fn default_region() -> String {
 /// this back from `oauth_kiro::take_last_client` after
 /// `request_device_code` returns and stashes the credentials on
 /// the account row.
+use std::sync::Mutex;
+use once_cell::sync::Lazy;
+
 struct LastKiroClient {
     client_id: String,
     client_secret: String,
     stored_at: std::time::Instant,
 }
 
-thread_local! {
-    static LAST_KIRO_CLIENT: std::cell::RefCell<Option<LastKiroClient>> = const { std::cell::RefCell::new(None) };
-}
+static LAST_KIRO_CLIENT: Lazy<Mutex<Option<LastKiroClient>>> = Lazy::new(|| Mutex::new(None));
 
 /// Staleness window for the OIDC-credentials cache. After this
 /// many seconds a `take_last_client` call returns `None` so an
@@ -112,28 +124,24 @@ const LAST_KIRO_CLIENT_TTL: std::time::Duration = std::time::Duration::from_secs
 /// if it was registered within `LAST_KIRO_CLIENT_TTL`. Returns
 /// `None` when no client was registered or the entry is stale.
 pub fn take_last_client() -> Option<(String, String)> {
-    LAST_KIRO_CLIENT.with(|cell| {
-        let mut slot = cell.borrow_mut();
-        let entry = slot.take()?;
-        if entry.stored_at.elapsed() > LAST_KIRO_CLIENT_TTL {
-            return None;
-        }
-        Some((entry.client_id, entry.client_secret))
-    })
+    let mut slot = LAST_KIRO_CLIENT.lock().ok()?;
+    let entry = slot.take()?;
+    if entry.stored_at.elapsed() > LAST_KIRO_CLIENT_TTL {
+        return None;
+    }
+    Some((entry.client_id, entry.client_secret))
 }
 
 /// Read (without clearing) the most recently registered Kiro OIDC client,
 /// if it was registered within `LAST_KIRO_CLIENT_TTL`. Returns
 /// `None` when no client was registered or the entry is stale.
 pub fn peek_last_client() -> Option<(String, String)> {
-    LAST_KIRO_CLIENT.with(|cell| {
-        let slot = cell.borrow();
-        let entry = slot.as_ref()?;
-        if entry.stored_at.elapsed() > LAST_KIRO_CLIENT_TTL {
-            return None;
-        }
-        Some((entry.client_id.clone(), entry.client_secret.clone()))
-    })
+    let slot = LAST_KIRO_CLIENT.lock().ok()?;
+    let entry = slot.as_ref()?;
+    if entry.stored_at.elapsed() > LAST_KIRO_CLIENT_TTL {
+        return None;
+    }
+    Some((entry.client_id.clone(), entry.client_secret.clone()))
 }
 
 
@@ -348,13 +356,13 @@ impl OAuthProvider for KiroOAuthProvider {
         // 60-second TTL means a stale entry from an abandoned
         // browser tab cannot be picked up by a different user's
         // poll.
-        LAST_KIRO_CLIENT.with(|cell| {
-            *cell.borrow_mut() = Some(LastKiroClient {
+        if let Ok(mut slot) = LAST_KIRO_CLIENT.lock() {
+            *slot = Some(LastKiroClient {
                 client_id: client.client_id,
                 client_secret: client.client_secret,
                 stored_at: std::time::Instant::now(),
             });
-        });
+        }
 
         Ok(dar)
     }
@@ -575,6 +583,7 @@ impl OAuthProvider for KiroOAuthProvider {
         account_id: AccountId,
         db_pool: &std::sync::Arc<crate::db::DbPool>,
         master_key: &MasterKey,
+        upstream: &Arc<UpstreamClient>,
     ) -> Result<()> {
         // 1. Decrypt the access token we just stored + read the
         //    existing OIDC meta in a single critical section. The
@@ -590,11 +599,11 @@ impl OAuthProvider for KiroOAuthProvider {
             // stashed in `oauth_provider_specific`. They are
             // required for the `x-amz-user-agent` header and the
             // chat executor's eventual request envelope.
-            let raw: Option<String> = conn
+            let raw: Option<Option<String>> = conn
                 .query_row(
                     "SELECT oauth_provider_specific FROM accounts WHERE id = ?1",
                     params![account_id.0],
-                    |r| r.get(0),
+                    |r| r.get::<_, Option<String>>(0),
                 )
                 .optional()
                 .map_err(|e| CoreError::Database {
@@ -604,6 +613,7 @@ impl OAuthProvider for KiroOAuthProvider {
                     ),
                     source: Some(Box::new(e)),
                 })?;
+            let raw = raw.flatten();
 
             let meta: KiroProviderMeta = match raw {
                 Some(s) => serde_json::from_str(&s)
@@ -626,7 +636,7 @@ impl OAuthProvider for KiroOAuthProvider {
         //    first one in the array). If the list is empty we keep
         //    the row as-is — the user can re-link later from the
         //    dashboard.
-        match list_available_profiles(&access_token, &meta.region).await? {
+        match list_available_profiles(upstream, &access_token, &meta.region).await? {
             Some(arn) => {
                 meta.profile_arn = Some(arn);
             }
@@ -662,13 +672,12 @@ impl OAuthProvider for KiroOAuthProvider {
 
 /// Call `ListAvailableProfiles` and return the first `arn` (or `None`
 /// when the user owns zero profiles).
-async fn list_available_profiles(access_token: &str, region: &str) -> Result<Option<String>> {
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(15))
-        .build()
-        .map_err(|e| CoreError::UpstreamConnection(format!("kiro profiles client: {e}")))?;
-
-    let host = if region == "us-east-1" {
+async fn list_available_profiles(
+    upstream: &Arc<UpstreamClient>,
+    access_token: &str,
+    region: &str,
+) -> Result<Option<String>> {
+    let host = if region == "us-east-1" || region.is_empty() {
         "https://codewhisperer.us-east-1.amazonaws.com".to_string()
     } else {
         format!("https://q.{region}.amazonaws.com")
@@ -676,33 +685,58 @@ async fn list_available_profiles(access_token: &str, region: &str) -> Result<Opt
     let url = format!("{host}/");
 
     let body = serde_json::json!({ "maxResults": 10 });
+    let body_bytes = serde_json::to_vec(&body)
+        .map_err(|e| CoreError::Parse(format!("kiro listAvailableProfiles serialize: {e}")))?;
 
-    let resp = client
-        .post(&url)
-        .bearer_auth(access_token)
-        .header("Content-Type", "application/x-amz-json-1.0")
-        .header("Accept", "application/json")
-        .header("x-amz-target", "AmazonCodeWhispererService.ListAvailableProfiles")
-        .header("x-amz-user-agent", "aws-sdk-js/3.0.0 kiro/0.1")
-        .json(&body)
-        .send()
+    let mut req = UpstreamRequest::post_json(&url, bytes::Bytes::from(body_bytes));
+    if let Ok(v) = http::HeaderValue::from_str(&format!("Bearer {access_token}")) {
+        req.headers.insert(http::header::AUTHORIZATION, v);
+    }
+    req.headers.insert(
+        http::header::HeaderName::from_static("content-type"),
+        http::HeaderValue::from_static("application/x-amz-json-1.0"),
+    );
+    req.headers.insert(
+        http::header::HeaderName::from_static("accept"),
+        http::HeaderValue::from_static("application/json"),
+    );
+    req.headers.insert(
+        http::header::HeaderName::from_static("x-amz-target"),
+        http::HeaderValue::from_static("AmazonCodeWhispererService.ListAvailableProfiles"),
+    );
+    req.headers.insert(
+        http::header::HeaderName::from_static("x-amz-user-agent"),
+        http::HeaderValue::from_static("aws-sdk-js/3.0.0 kiro/0.1"),
+    );
+    req.is_streaming = false;
+
+    let cancel = CancellationToken::new();
+    let resp = upstream
+        .call(req, TimeoutProfile::OAuth, cancel)
         .await
         .map_err(|e| CoreError::UpstreamConnection(format!("kiro listAvailableProfiles: {e}")))?;
 
-    if !resp.status().is_success() {
-        let status = resp.status().as_u16();
-        let let_body = resp.text().await.unwrap_or_default();
+    if !resp.status.is_success() {
+        let status = resp.status.as_u16();
+        let body_str = String::from_utf8_lossy(&resp.collect().await.unwrap_or_default()).to_string();
+        if status == 403 || body_str.contains("Builder ID") || body_str.contains("AccessDeniedException") {
+            tracing::info!("Kiro profile ARN discovery returned AccessDenied (likely Builder ID account); proceeding without profile ARN");
+            return Ok(None);
+        }
         return Err(CoreError::UpstreamError {
             status,
             provider: "kiro".into(),
             model: "<post_exchange>".into(),
-            body: let_body,
+            body: body_str,
         });
     }
 
-    let value: serde_json::Value = resp
-        .json()
+    let body_bytes = resp
+        .collect()
         .await
+        .map_err(|e| CoreError::UpstreamConnection(format!("kiro listAvailableProfiles read: {e}")))?;
+
+    let value: serde_json::Value = serde_json::from_slice(&body_bytes)
         .map_err(|e| CoreError::Parse(format!("kiro listAvailableProfiles parse: {e}")))?;
 
     // Upstream returns `{"profiles": [{"arn": "...", ...}, ...]}`.

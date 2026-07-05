@@ -707,6 +707,224 @@ fn parse_antigravity_user_quota_summary(body: &serde_json::Value) -> Result<Acco
 }
 
 // =====================================================================
+// Kiro AI (AWS CodeWhisperer)
+// =====================================================================
+
+/// Fetch quota for Kiro (AWS CodeWhisperer) using GetUsageLimits API.
+pub async fn fetch_kiro_quota(
+    upstream: &Arc<UpstreamClient>,
+    access_token: &str,
+    provider_specific: Option<&str>,
+) -> Result<AccountQuota> {
+    // 1. Resolve region and profile_arn from provider_specific metadata.
+    let mut region = "us-east-1".to_string();
+    let mut profile_arn = None;
+
+    if let Some(json_str) = provider_specific {
+        if let Ok(meta) = serde_json::from_str::<serde_json::Value>(json_str) {
+            if let Some(r) = meta.get("region").and_then(|v| v.as_str()) {
+                if !r.is_empty() {
+                    region = r.to_string();
+                }
+            }
+            if let Some(arn) = meta.get("profileArn").and_then(|v| v.as_str()) {
+                profile_arn = Some(arn.to_string());
+            } else if let Some(arn) = meta.get("profile_arn").and_then(|v| v.as_str()) {
+                profile_arn = Some(arn.to_string());
+            }
+        }
+    }
+
+    let base_url = if region == "us-east-1" || region.is_empty() {
+        "https://codewhisperer.us-east-1.amazonaws.com".to_string()
+    } else {
+        format!("https://q.{region}.amazonaws.com")
+    };
+
+    // 2. Discover profile_arn if missing
+    let profile_arn = match profile_arn {
+        Some(arn) => Some(arn),
+        None => {
+            // Call ListAvailableProfiles
+            let url = format!("{base_url}/");
+            let mut req = UpstreamRequest::post_json(&url, bytes::Bytes::from(r#"{"maxResults":10}"#));
+            if let Ok(v) = http::HeaderValue::from_str(&format!("Bearer {access_token}")) {
+                req.headers.insert(http::header::AUTHORIZATION, v);
+            }
+            req.headers.insert(
+                http::header::HeaderName::from_static("x-amz-target"),
+                http::HeaderValue::from_static("AmazonCodeWhispererService.ListAvailableProfiles"),
+            );
+            req.headers.insert(
+                http::header::HeaderName::from_static("x-amz-user-agent"),
+                http::HeaderValue::from_static("aws-sdk-js/3.0.0 kiro/0.1"),
+            );
+
+            let cancel = CancellationToken::new();
+            let resp = upstream.call(req, TimeoutProfile::OAuth, cancel).await
+                .map_err(|e| CoreError::UpstreamConnection(format!("kiro listAvailableProfiles: {e}")))?;
+
+            let mut discovered_arn = None;
+            if resp.status.is_success() {
+                let body_bytes = resp.collect().await
+                    .map_err(|e| CoreError::UpstreamConnection(format!("kiro listAvailableProfiles read: {e}")))?;
+                let value: serde_json::Value = serde_json::from_slice(&body_bytes)
+                    .map_err(|e| CoreError::Parse(format!("kiro listAvailableProfiles parse: {e}")))?;
+
+                discovered_arn = value
+                    .get("profiles")
+                    .and_then(|v| v.as_array())
+                    .and_then(|arr| {
+                        arr.iter()
+                            .find(|p| {
+                                p.get("arn")
+                                    .or_else(|| p.get("profileArn"))
+                                    .and_then(|v| v.as_str())
+                                    .map(|s| s.contains(&format!(":{region}:")))
+                                    .unwrap_or(false)
+                            })
+                            .or_else(|| arr.first())
+                    })
+                    .and_then(|p| {
+                        p.get("arn")
+                            .or_else(|| p.get("profileArn"))
+                            .and_then(|v| v.as_str())
+                    })
+                    .map(|s| s.to_string());
+            } else {
+                let status_code = resp.status;
+                let body_str = String::from_utf8_lossy(&resp.collect().await.unwrap_or_default()).to_string();
+                if status_code.as_u16() == 403 || body_str.contains("Builder ID") || body_str.contains("AccessDeniedException") {
+                    tracing::info!("Kiro profile ARN discovery returned AccessDenied (likely Builder ID account); proceeding without profile ARN");
+                } else {
+                    return Err(CoreError::UpstreamError {
+                        status: status_code.as_u16(),
+                        provider: "kiro".into(),
+                        model: "<quota_list_profiles>".into(),
+                        body: body_str,
+                    });
+                }
+            }
+            discovered_arn
+        }
+    };
+
+    // 3. Fetch GetUsageLimits
+    let url = format!("{base_url}/");
+    let mut payload = serde_json::json!({
+        "origin": "AI_EDITOR",
+        "resourceType": "AGENTIC_REQUEST"
+    });
+    if let Some(ref arn) = profile_arn {
+        payload["profileArn"] = serde_json::json!(arn);
+    }
+    let body_bytes = serde_json::to_vec(&payload)
+        .map_err(|e| CoreError::Parse(format!("kiro GetUsageLimits serialize: {e}")))?;
+
+    let mut req = UpstreamRequest::post_json(&url, bytes::Bytes::from(body_bytes));
+    if let Ok(v) = http::HeaderValue::from_str(&format!("Bearer {access_token}")) {
+        req.headers.insert(http::header::AUTHORIZATION, v);
+    }
+    req.headers.insert(
+        http::header::HeaderName::from_static("x-amz-target"),
+        http::HeaderValue::from_static("AmazonCodeWhispererService.GetUsageLimits"),
+    );
+    req.headers.insert(
+        http::header::HeaderName::from_static("x-amz-user-agent"),
+        http::HeaderValue::from_static("aws-sdk-js/3.0.0 kiro/0.1"),
+    );
+
+    let cancel = CancellationToken::new();
+    let resp = upstream.call(req, TimeoutProfile::OAuth, cancel).await
+        .map_err(|e| CoreError::UpstreamConnection(format!("kiro GetUsageLimits: {e}")))?;
+
+    if !resp.status.is_success() {
+        let status = resp.status.as_u16();
+        let body_str = String::from_utf8_lossy(&resp.collect().await.unwrap_or_default()).to_string();
+        return Err(CoreError::UpstreamError {
+            status,
+            provider: "kiro".into(),
+            model: "<quota_limits>".into(),
+            body: body_str,
+        });
+    }
+
+    let resp_bytes = resp.collect().await
+        .map_err(|e| CoreError::UpstreamConnection(format!("kiro GetUsageLimits read: {e}")))?;
+    let data: serde_json::Value = serde_json::from_slice(&resp_bytes)
+        .map_err(|e| CoreError::Parse(format!("kiro GetUsageLimits parse: {e}")))?;
+
+    // 4. Parse response into AccountQuota
+    let reset_at = data.get("nextDateReset")
+        .or_else(|| data.get("resetDate"))
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+
+    let _overage_enabled = is_kiro_overage_enabled(&data);
+
+    let usage_list = data.get("usageBreakdownList")
+        .and_then(|v| v.as_array());
+
+    let mut session_used = None;
+    let mut session_limit = None;
+
+    if let Some(arr) = usage_list {
+        for breakdown in arr {
+            let resource_type = breakdown.get("resourceType").and_then(|v| v.as_str()).unwrap_or("");
+            if resource_type.to_lowercase() == "agentic_request" {
+                let current = breakdown.get("currentUsageWithPrecision")
+                    .and_then(|v| v.as_f64())
+                    .or_else(|| breakdown.get("currentUsage").and_then(|v| v.as_f64()))
+                    .map(|v| v.round() as i64);
+                let limit = breakdown.get("usageLimitWithPrecision")
+                    .and_then(|v| v.as_f64())
+                    .or_else(|| breakdown.get("usageLimit").and_then(|v| v.as_f64()))
+                    .map(|v| v.round() as i64);
+
+                session_used = current;
+                session_limit = limit;
+                break;
+            }
+        }
+    }
+
+    let plan_name = data.get("subscriptionInfo")
+        .and_then(|v| v.get("subscriptionTitle"))
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string())
+        .or_else(|| Some("Kiro".to_string()));
+
+    Ok(AccountQuota {
+        session_used,
+        session_limit,
+        session_reset_at: reset_at,
+        weekly_used: None,
+        weekly_limit: None,
+        weekly_reset_at: None,
+        plan_name,
+        last_fetched_at: now_unix_secs_str(),
+        fetch_error: None,
+        model_details: None,
+    })
+}
+
+fn is_kiro_overage_enabled(data: &serde_json::Value) -> bool {
+    let overage_status = data.get("overageConfiguration")
+        .and_then(|v| v.get("overageStatus"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_uppercase();
+
+    let overage_enabled_direct = data.get("overageEnabled").and_then(|v| v.as_bool()).unwrap_or(false);
+    let overage_enabled_config = data.get("overageConfiguration")
+        .and_then(|v| v.get("overageEnabled"))
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+
+    overage_status == "ENABLED" || overage_enabled_direct || overage_enabled_config
+}
+
+// =====================================================================
 // Provider capability registry
 // =====================================================================
 
@@ -726,6 +944,7 @@ pub fn quota_capable_providers() -> &'static [&'static str] {
         "openrouter",
         "antigravity",
         "agy",
+        "kiro",
     ]
 }
 
@@ -1587,5 +1806,40 @@ mod tests {
     fn supports_quota_matches_antigravity() {
         assert!(supports_quota("antigravity"));
         assert!(supports_quota("agy"));
+    }
+
+    #[test]
+    fn test_is_kiro_overage_enabled() {
+        let body = json!({
+            "overageConfiguration": {
+                "overageStatus": "ENABLED"
+            }
+        });
+        assert!(is_kiro_overage_enabled(&body));
+
+        let body2 = json!({
+            "overageEnabled": true
+        });
+        assert!(is_kiro_overage_enabled(&body2));
+
+        let body3 = json!({
+            "overageConfiguration": {
+                "overageEnabled": true
+            }
+        });
+        assert!(is_kiro_overage_enabled(&body3));
+
+        let body_disabled = json!({
+            "overageConfiguration": {
+                "overageStatus": "DISABLED"
+            }
+        });
+        assert!(!is_kiro_overage_enabled(&body_disabled));
+    }
+
+    #[test]
+    fn quota_capable_providers_includes_kiro() {
+        assert!(quota_capable_providers().contains(&"kiro"));
+        assert!(supports_quota("kiro"));
     }
 }

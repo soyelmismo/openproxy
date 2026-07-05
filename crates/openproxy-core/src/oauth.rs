@@ -217,6 +217,7 @@ pub trait OAuthProvider: Send + Sync {
         _account_id: AccountId,
         _db_pool: &std::sync::Arc<crate::db::DbPool>,
         _master_key: &MasterKey,
+        _upstream: &Arc<UpstreamClient>,
     ) -> Result<()> {
         Ok(())
     }

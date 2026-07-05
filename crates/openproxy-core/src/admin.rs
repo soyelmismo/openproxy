@@ -356,6 +356,7 @@ pub async fn fetch_account_quota(
     upstream: &Arc<UpstreamClient>,
     api_key: &str,
     access_token: Option<&str>,
+    provider_specific: Option<&str>,
 ) -> AccountQuota {
     match provider_id {
         "minimax" | "minimax-cn" => match quota::fetch_minimax_quota(upstream, api_key).await {
@@ -413,6 +414,40 @@ pub async fn fetch_account_quota(
                 }
             };
             match quota::fetch_antigravity_quota(upstream, token).await {
+                Ok(q) => q,
+                Err(e) => AccountQuota {
+                    session_used: None,
+                    session_limit: None,
+                    session_reset_at: None,
+                    weekly_used: None,
+                    weekly_limit: None,
+                    weekly_reset_at: None,
+                    plan_name: None,
+                    last_fetched_at: now_unix_secs_str(),
+                    fetch_error: Some(e.to_string()),
+                    model_details: None,
+                },
+            }
+        }
+        "kiro" => {
+            let token = match access_token {
+                Some(t) => t,
+                None => {
+                    return AccountQuota {
+                        session_used: None,
+                        session_limit: None,
+                        session_reset_at: None,
+                        weekly_used: None,
+                        weekly_limit: None,
+                        weekly_reset_at: None,
+                        plan_name: None,
+                        last_fetched_at: now_unix_secs_str(),
+                        fetch_error: Some("kiro requires OAuth access token".into()),
+                        model_details: None,
+                    };
+                }
+            };
+            match quota::fetch_kiro_quota(upstream, token, provider_specific).await {
                 Ok(q) => q,
                 Err(e) => AccountQuota {
                     session_used: None,
