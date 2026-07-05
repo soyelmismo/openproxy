@@ -70,26 +70,25 @@ pub fn build_router(state: AppState) -> Router {
     // per-request cancel tracking, and the liveness probe would
     // pay the wrapper cost on every health check.
     //
-    // NOTE: client_disconnect_middleware was REMOVED from the chat
-    // path because it caused false-positive "client disconnected"
-    // errors. The middleware's DisconnectBody wraps both the request
-    // and response body, sharing the same watch sender. After axum
-    // consumes the request body, hyper can still poll the wrapped
-    // body in the background and detect residual socket errors (RST,
-    // half-close) that are NOT real client disconnects — causing the
-    // pipeline to abort with HTTP 499 while the upstream was still
-    // generating.
+    // NOTE: client_disconnect_middleware is applied to the chat
+    // path. It previously caused false-positive "client disconnected"
+    // errors because the request body was also wrapped, meaning
+    // hyper could poll the socket after the request body had been
+    // fully read, encountering TCP read half-closes/RSTs and firing
+    // the cancellation watch.
     //
-    // The chat handler now creates its own fresh watch pair (driven
-    // only by the watchdog timer) and does NOT use the middleware's
-    // watch. The middleware is kept for the audio endpoint (which
-    // needs multipart body disconnect detection) but is NOT applied
-    // to chat/completions.
+    // By modifying client_disconnect_middleware to ONLY wrap the
+    // response body, we safely avoid these false-positives while
+    // still reliably detecting actual client disconnects (write
+    // failures) during sync response writing or active SSE stream
+    // generation.
+
     let public_api_routes = Router::new()
         .route("/v1/models", get(handlers::models::list_models))
         .route(
             "/v1/chat/completions",
-            post(handlers::chat::chat_completions),
+            post(handlers::chat::chat_completions)
+                .route_layer(middleware::from_fn(crate::disconnect::client_disconnect_middleware)),
         )
         .route(
             "/v1/audio/transcriptions",
@@ -196,7 +195,8 @@ pub fn build_router(state: AppState) -> Router {
         )
         .route(
             "/combos/{id}/test-all",
-            post(handlers::admin::test_combo_targets),
+            post(handlers::admin::test_combo_targets)
+                .route_layer(middleware::from_fn(crate::disconnect::client_disconnect_middleware)),
         )
         .route(
             "/combos/{id}/targets",
@@ -278,7 +278,11 @@ pub fn build_router(state: AppState) -> Router {
         )
         .route("/models", get(handlers::admin::list_models_admin))
         .route("/models/custom", post(handlers::admin::create_custom_model))
-        .route("/models/{id}/test", post(handlers::admin::test_model))
+        .route(
+            "/models/{id}/test",
+            post(handlers::admin::test_model)
+                .route_layer(middleware::from_fn(crate::disconnect::client_disconnect_middleware)),
+        )
         .route(
             "/providers/{id}/refresh",
             post(handlers::admin::refresh_provider_models),

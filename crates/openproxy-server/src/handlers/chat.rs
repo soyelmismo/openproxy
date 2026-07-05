@@ -124,11 +124,12 @@ pub async fn chat_completions(
     State(state): State<AppState>,
     ConnectInfo(addr): ConnectInfo<std::net::SocketAddr>,
     headers: HeaderMap,
+    cancel_watch: Option<axum::Extension<crate::disconnect::CancelWatch>>,
     axum::Json(body): axum::Json<serde_json::Value>,
 ) -> Result<axum::response::Response, ApiError> {
-    // Create a dummy CancelWatch — the middleware is no longer
-    // applied to this route, so we create our own fresh watch pair.
-    let cancel = crate::disconnect::CancelWatch::new();
+    let cancel = cancel_watch
+        .map(|axum::Extension(cw)| cw)
+        .unwrap_or_else(crate::disconnect::CancelWatch::new);
     run_pipeline(state, addr, cancel, headers, body).await
 }
 

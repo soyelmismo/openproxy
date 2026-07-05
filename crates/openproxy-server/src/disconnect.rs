@@ -23,20 +23,20 @@
 //!    `tokio::sync::watch::channel(false)` for every request and
 //!    stuffs the receiver into the request's extension bag under
 //!    the [`CANCEL_WATCH_KEY`] constant.
-//! 2. The request body is wrapped in [`DisconnectBody`], a newtype
-//!    over any `http_body::Body`. When the underlying body's
-//!    `poll_frame` yields an error — which hyper surfaces when the
-//!    client closes the connection while bytes are being read — the
-//!    wrapper fires the watch (idempotently) and propagates the
-//!    error. This covers the case where the client closes the
-//!    connection *while uploading* the JSON body (the most common
-//!    form of "client gave up before even getting a request in
-//!    flight").
+//! 2. The response body is wrapped in [`DisconnectBody`], a newtype
+//!    over any `http_body::Body`. When hyper tries to write a
+//!    chunk of the streaming response into a half-closed socket,
+//!    `poll_frame` returns an error and the wrapper fires the watch
+//!    (idempotently) and propagates the error. This covers the
+//!    "client cancelled mid-stream" case. We intentionally do NOT
+//!    wrap the request body: once the request body has been fully
+//!    read by axum extractors, any subsequent TCP read half-closes or
+//!    RSTs are not real client disconnects and wrapping it caused
+//!    false-positive cancellations.
 //! 3. The handler runs. The chat handler pulls the watch receiver
 //!    out of extensions and threads it into the pipeline as
 //!    `PipelineRequest::client_disconnected`. When the watch flips,
-//!    the pipeline aborts upstream work on the next checkpoint and
-//!    records a `ClientDisconnected` (HTTP 499) usage row.
+//!    the pipeline aborts upstream work on the next checkpoint.
 //! 4. The response body is ALSO wrapped in [`DisconnectBody`],
 //!    pointing at the same watch. When hyper tries to write a
 //!    chunk of the streaming response into a half-closed socket,
@@ -51,17 +51,12 @@
 //!
 //! Trade-offs
 //! ----------
-//! - The middleware cannot detect "client sent the full body and
-//!   closed the connection *before* the handler starts running" —
-//!   hyper doesn't surface a TCP-close event distinct from "body
-//!   fully received". That is acceptable: in that case the client
-//!   never expected a response, and the request is already done as
-//!   far as the HTTP layer is concerned. If the upstream is fast
-//!   enough to produce a result before any retries, we still record
-//!   a usage row (the dispatcher has no other choice); if the
-//!   pipeline is slow, the `x-request-deadline-ms` header
-//!   (preserved by the chat handler) acts as a backup ceiling so
-//!   we don't burn upstream budget forever.
+//! - The middleware does not wrap the request body, which means it
+//!   cannot detect disconnects during the initial body upload.
+//!   However, since axum extractors fully consume the request body
+//!   before executing the handler, a disconnect during upload will
+//!   abort the request naturally before any upstream calls are made,
+//!   wasting no resources.
 //! - The middleware is route-scoped (mounted on
 //!   `/v1/chat/completions` only). The admin surface and the
 //!   `/v1/health` liveness probe don't need TCP-cancel tracking.
@@ -137,16 +132,10 @@ pub async fn client_disconnect_middleware(mut req: Request, next: Next) -> Respo
     req.extensions_mut()
         .insert(CancelWatch { tx: tx.clone(), rx });
 
-    // 2. Wrap the request body so an upload-time disconnect is
-    //    observable to the handler / pipeline.
-    let (parts, body) = req.into_parts();
-    let req_body = DisconnectBody::new(body, tx.clone(), Arc::clone(&fired));
-    let req = Request::from_parts(parts, Body::new(req_body));
-
-    // 3. Run the handler.
+    // 2. Run the handler.
     let mut response = next.run(req).await;
 
-    // 4. Wrap the response body so a stream-time disconnect is
+    // 3. Wrap the response body so a stream-time disconnect is
     //    observable. We do this regardless of HTTP status — a 4xx
     //    response on a closed connection is still a disconnect.
     let resp_body = std::mem::replace(response.body_mut(), Body::empty());
@@ -175,20 +164,13 @@ pub async fn client_disconnect_middleware(mut req: Request, next: Next) -> Respo
 /// connection is still being written to.
 ///
 /// # Idempotency
-/// The first error or first `None` flips the watch to `true`; all
-/// subsequent calls are no-ops. The shared `fired` flag makes the
-/// wrapper safe to use on both the request and response body of the
-/// same request (only one will see the error, but if both do, only
-/// the first flip is recorded).
+/// The first error flips the watch to `true`; all subsequent calls
+/// are no-ops.
 ///
-/// # Why we also fire on the final `None`
+/// # Why we do not fire on `None`
 /// The `http_body` contract says that `poll_frame` returning
 /// `Poll::Ready(None)` means the body is *done* — for the response
 /// body that's the natural end of the stream, NOT a disconnect.
-/// We don't fire on `None` for the response-body wrapper because
-/// the body finished normally. We don't fire on `None` for the
-/// request-body wrapper either: a complete body means the client
-/// sent everything, which is the success case.
 ///
 /// Disconnect is only signalled by the explicit `Err` arm.
 #[derive(Debug)]

@@ -1013,8 +1013,11 @@ pub async fn get_combo(
 pub async fn test_combo_targets(
     State(s): State<AppState>,
     Path(id): Path<i64>,
+    cancel_watch: Option<axum::Extension<crate::disconnect::CancelWatch>>,
 ) -> ApiResult<Json<Vec<serde_json::Value>>> {
     use serde_json::json;
+
+    let cancel_rx = cancel_watch.map(|axum::Extension(cw)| cw.rx);
 
     // Cancellation note: the previous implementation spawned a
     // disconnect-watcher task that drained `request.into_parts().1`
@@ -1036,6 +1039,7 @@ pub async fn test_combo_targets(
     // observe the drop. The 180s `tokio::time::timeout` below
     // remains the upper bound for the happy path.
     let body: Result<Json<Vec<serde_json::Value>>, ApiError> = async {
+        let cancel_rx = cancel_rx.clone();
         // Snapshot the targets up-front and drop the writer guard.
         // The per-target test below does its own short DB
         // transactions (writer lock + drop), so the long-running
@@ -1096,6 +1100,12 @@ pub async fn test_combo_targets(
                     }));
                     continue;
                 }
+                if let Some(ref rx) = cancel_rx {
+                    if *rx.borrow() {
+                        tracing::info!("test_combo_targets: client disconnected, aborting fan-out");
+                        break;
+                    }
+                }
                 // Flat, active, not in cooldown: actually fire
                 // upstream. The helper handles the model-not-active
                 // short-circuit itself (skipped row with
@@ -1107,6 +1117,7 @@ pub async fn test_combo_targets(
                     TestOptions {
                         in_combo_fanout: true,
                     },
+                    cancel_rx.clone(),
                 )
                 .await;
                 // Use the per-target metadata from the snapshot
@@ -3120,6 +3131,7 @@ async fn run_test_for_model(
     model_row_id: i64,
     account_id: Option<AccountId>,
     opts: TestOptions,
+    cancel_rx: Option<tokio::sync::watch::Receiver<bool>>,
 ) -> TestResult {
     use openproxy_core::translation::{
         OpenAIMessage, OpenAIRequest, openai_to_anthropic, openai_to_gemini,
@@ -3374,13 +3386,14 @@ async fn run_test_for_model(
                 // No client connection of its own on the admin
                 // test path (it runs against a synthetic request);
                 // see the symmetric note on the kiro branch below.
-                let (_cancel_tx, cancel_rx) = tokio::sync::watch::channel(false);
+                let (_cancel_tx, dummy_cancel_rx) = tokio::sync::watch::channel(false);
+                let final_cancel_rx = cancel_rx.clone().unwrap_or(dummy_cancel_rx);
                 openproxy_core::executor_antigravity::execute_antigravity(
                     http_client,
                     &access_token,
                     &project_id,
                     &openai_req,
-                    cancel_rx,
+                    final_cancel_rx,
                     None,
                 )
                 .await
@@ -3407,14 +3420,15 @@ async fn run_test_for_model(
                 // request is bounded by the executor's
                 // `TimeoutProfile::Chat` envelope (see
                 // `executor_kiro.rs:438-445`).
-                let (_cancel_tx, cancel_rx) = tokio::sync::watch::channel(false);
+                let (_cancel_tx, dummy_cancel_rx) = tokio::sync::watch::channel(false);
+                let final_cancel_rx = cancel_rx.clone().unwrap_or(dummy_cancel_rx);
                 openproxy_core::executor_kiro::execute_kiro(
                     http_client,
                     &access_token,
                     &region,
                     profile_arn.as_deref(),
                     &openai_req,
-                    cancel_rx,
+                    final_cancel_rx,
                 )
                 .await
             }
@@ -3545,7 +3559,25 @@ async fn run_test_for_model(
     //    and a truncated error body so the dashboard can show
     //    something useful when the upstream is unhappy.
     let start = std::time::Instant::now();
-    let result = req.send().await;
+    let result = if let Some(mut rx) = cancel_rx.clone() {
+        tokio::select! {
+            res = req.send() => res.map_err(|e| e.to_string()),
+            _ = async {
+                if *rx.borrow() {
+                    return;
+                }
+                while rx.changed().await.is_ok() {
+                    if *rx.borrow() {
+                        return;
+                    }
+                }
+            } => {
+                Err("cancellation requested".to_string())
+            }
+        }
+    } else {
+        req.send().await.map_err(|e| e.to_string())
+    };
     let elapsed_ms = start.elapsed().as_millis() as u64;
 
     let (status, error_msg) = match result {
@@ -3564,7 +3596,7 @@ async fn run_test_for_model(
             // / timeout). The schema doesn't constrain this — `0` is a
             // distinct sentinel that the dashboard renders as a network
             // error.
-            (0, Some(e.to_string()))
+            (0, Some(e))
         }
     };
 
@@ -3608,8 +3640,10 @@ async fn run_test_for_model(
 pub async fn test_model(
     State(s): State<AppState>,
     Path(model_row_id): Path<i64>,
+    cancel_watch: Option<axum::Extension<crate::disconnect::CancelWatch>>,
 ) -> ApiResult<Json<serde_json::Value>> {
-    let r = run_test_for_model(&s, model_row_id, None, TestOptions::default()).await;
+    let cancel_rx = cancel_watch.map(|axum::Extension(cw)| cw.rx);
+    let r = run_test_for_model(&s, model_row_id, None, TestOptions::default(), cancel_rx).await;
     ApiResult::ok(Json(serde_json::json!({
         "row_id": r.row_id,
         "status": r.status,
@@ -6732,5 +6766,44 @@ mod tests {
         // Helper returns Some — the caller's `fetch_error.is_none()`
         // gate is what suppresses the notification in the error case.
         assert!(compute_low_quota_signal(&quota).is_some());
+    }
+
+    #[tokio::test]
+    async fn test_run_test_for_model_cancellation() {
+        let dir = tempdir();
+        let (state, _plaintext) = make_state_with_key(&dir).await;
+
+        // Seed the built-in providers so openrouter exists
+        {
+            let w = state.db_pool().writer();
+            seed::seed_builtin_providers(&w).expect("seed");
+        }
+
+        // Create a model in the DB to test against.
+        let model_row_id = {
+            let w = state.db_pool().writer();
+            w.execute(
+                "INSERT INTO models (provider_id, model_id, target_format, active) VALUES (?, ?, ?, ?)",
+                ("openrouter", "gpt-4o", "openai", 1),
+            )
+            .expect("insert model");
+            w.last_insert_rowid()
+        };
+
+        // Create a pre-cancelled watch receiver
+        let (tx, rx) = tokio::sync::watch::channel(false);
+        tx.send(true).unwrap();
+
+        let r = run_test_for_model(
+            &state,
+            model_row_id,
+            None,
+            TestOptions::default(),
+            Some(rx),
+        )
+        .await;
+
+        assert_eq!(r.status, 0);
+        assert_eq!(r.error_msg.as_deref(), Some("cancellation requested"));
     }
 }
