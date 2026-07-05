@@ -329,28 +329,31 @@ pub async fn execute_antigravity(
     // 2. Build the upstream request. POST to the streamGenerateContent
     //    endpoint with JSON body, bearer auth, and SSE accept.
     let url = "https://daily-cloudcode-pa.googleapis.com/v1internal:streamGenerateContent?alt=sse";
-    let mut upstream_request =
-        UpstreamRequest::post_json(url.to_string(), bytes::Bytes::from(body_bytes));
-    if let Ok(value) = http::HeaderValue::from_str(&format!("Bearer {access_token}")) {
-        upstream_request
-            .headers
-            .insert(http::header::AUTHORIZATION, value);
-    }
-    upstream_request.headers.insert(
-        http::header::ACCEPT,
-        http::HeaderValue::from_static("text/event-stream"),
-    );
-    // CRITICAL: inject Antigravity client-identity headers. Without
-    // these, the cloudcode-pa.googleapis.com API may reject the
-    // request or return errors. The headers mimic the official
-    // Antigravity client (x-client-name, x-client-version,
-    // x-machine-id, x-vscode-sessionid, x-goog-user-project, and the
-    // Antigravity User-Agent). See `antigravity_headers` module for
-    // the full rationale.
-    crate::antigravity_headers::inject_antigravity_headers(
-        &mut upstream_request.headers,
-        Some(project_id),
-    );
+
+    let build_request = |access_token: &str, project_id: Option<&str>, body_bytes: &[u8]| -> Result<UpstreamRequest, CoreError> {
+        let mut req = UpstreamRequest::post_json(url.to_string(), bytes::Bytes::copy_from_slice(body_bytes));
+        if let Ok(value) = http::HeaderValue::from_str(&format!("Bearer {access_token}")) {
+            req.headers.insert(http::header::AUTHORIZATION, value);
+        }
+        req.headers.insert(
+            http::header::ACCEPT,
+            http::HeaderValue::from_static("text/event-stream"),
+        );
+        // CRITICAL: inject Antigravity client-identity headers. Without
+        // these, the cloudcode-pa.googleapis.com API may reject the
+        // request or return errors. The headers mimic the official
+        // Antigravity client (x-client-name, x-client-version,
+        // x-machine-id, x-vscode-sessionid, x-goog-user-project, and the
+        // Antigravity User-Agent). See `antigravity_headers` module for
+        // the full rationale.
+        crate::antigravity_headers::inject_antigravity_headers(
+            &mut req.headers,
+            project_id,
+        );
+        Ok(req)
+    };
+
+    let upstream_request = build_request(access_token, Some(project_id), &body_bytes)?;
 
     // 3. Fire the request. Same rationale as the kiro executor: use
     //    `TimeoutProfile::Chat` (no per-call `Timeouts` is plumbed
@@ -363,8 +366,8 @@ pub async fn execute_antigravity(
     //    streaming reads via `tokio::select!`. See the function
     //    docstring for the C3 audit context.
     let cancel = CancellationToken::from_watch(client_disconnected);
-    let response = match upstream_client
-        .call(upstream_request, TimeoutProfile::Chat, cancel)
+    let mut response = match upstream_client
+        .call(upstream_request, TimeoutProfile::Chat, cancel.clone())
         .await
     {
         Ok(r) => r,
@@ -377,6 +380,17 @@ pub async fn execute_antigravity(
             });
         }
     };
+
+    // If the request fails with 403 Forbidden and we sent a project ID,
+    // retry the request without the project ID (omitting x-goog-user-project).
+    // This allows fallback to the default client project.
+    if response.status == http::StatusCode::FORBIDDEN && !project_id.is_empty() {
+        tracing::warn!("Antigravity request got 403 Forbidden with project ID, retrying WITHOUT project ID header...");
+        let retry_request = build_request(access_token, None, &body_bytes)?;
+        if let Ok(retry_resp) = upstream_client.call(retry_request, TimeoutProfile::Chat, cancel).await {
+            response = retry_resp;
+        }
+    }
 
     let status = response.status.as_u16();
     // 4. Collect the full body. The pre-migration code used
