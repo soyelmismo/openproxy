@@ -3343,6 +3343,7 @@ async fn run_test_for_model(
                     &project_id,
                     &openai_req,
                     cancel_rx,
+                    None,
                 )
                 .await
             }
@@ -3765,7 +3766,12 @@ pub async fn refresh_account_quota(
                 if let Some(provider) = provider {
                     let upstream_client = s_clone.upstream_client();
                     match provider
-                        .refresh_token(&refresh_token, upstream_client)
+                        .refresh_token(
+                            &refresh_token,
+                            upstream_client,
+                            account_id,
+                            openproxy_core::oauth::DbRef::Pool(s_clone.db_pool().as_ref()),
+                        )
                         .await
                     {
                         Ok(new_tokens) => {
@@ -4087,7 +4093,12 @@ async fn refresh_oauth_if_needed(
 
     let upstream_client = s.upstream_client();
     match provider
-        .refresh_token(&refresh_token, upstream_client)
+        .refresh_token(
+            &refresh_token,
+            upstream_client,
+            account.id,
+            openproxy_core::oauth::DbRef::Pool(s.db_pool().as_ref()),
+        )
         .await
     {
         Ok(token) => {

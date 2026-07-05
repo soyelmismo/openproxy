@@ -2100,7 +2100,12 @@ impl Pipeline {
                         "pipeline: proactive OAuth token refresh"
                     );
                     match provider
-                        .refresh_token(&refresh_token, &self.config.upstream_client)
+                        .refresh_token(
+                            &refresh_token,
+                            &self.config.upstream_client,
+                            account_id,
+                            crate::oauth::DbRef::Connection(&self.conn),
+                        )
                         .await
                     {
                         Ok(token) => {
@@ -2178,6 +2183,7 @@ impl Pipeline {
                             project_id,
                             &req.openai_request,
                             req.client_disconnected.clone(),
+                            req.stream_sink.as_ref(),
                         )
                         .await
                     }

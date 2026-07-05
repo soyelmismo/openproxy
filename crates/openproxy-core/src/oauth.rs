@@ -22,6 +22,12 @@ pub use crate::accounts::{
     decrypt_access_token, decrypt_refresh_token, list_expiring_oauth_accounts, store_oauth_tokens,
 };
 
+/// A reference to either a `DbPool` or a locked/lockable database `Connection`.
+pub enum DbRef<'a> {
+    Pool(&'a crate::db::DbPool),
+    Connection(&'a parking_lot::Mutex<rusqlite::Connection>),
+}
+
 /// The OAuth flow used by a provider.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -49,12 +55,13 @@ impl OAuthFlow {
 /// Standard OAuth2 token response from the token endpoint.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TokenResponse {
+    #[serde(rename = "access_token", alias = "accessToken")]
     pub access_token: String,
-    #[serde(default)]
+    #[serde(default, rename = "token_type", alias = "tokenType")]
     pub token_type: String,
-    #[serde(default)]
+    #[serde(default, rename = "expires_in", alias = "expiresIn")]
     pub expires_in: Option<u64>,
-    #[serde(default)]
+    #[serde(default, rename = "refresh_token", alias = "refreshToken")]
     pub refresh_token: Option<String>,
     #[serde(default)]
     pub scope: Option<String>,
@@ -63,15 +70,15 @@ pub struct TokenResponse {
 /// Device Authorization Response (RFC 8628 §3).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DeviceAuthorizationResponse {
-    #[serde(rename = "deviceCode")]
+    #[serde(rename = "deviceCode", alias = "device_code")]
     pub device_code: String,
-    #[serde(rename = "userCode")]
+    #[serde(rename = "userCode", alias = "user_code")]
     pub user_code: String,
-    #[serde(rename = "verificationUri")]
+    #[serde(rename = "verificationUri", alias = "verification_uri")]
     pub verification_uri: String,
-    #[serde(default, rename = "verificationUriComplete")]
+    #[serde(default, rename = "verificationUriComplete", alias = "verification_uri_complete")]
     pub verification_uri_complete: Option<String>,
-    #[serde(default, rename = "expiresIn")]
+    #[serde(default, rename = "expiresIn", alias = "expires_in")]
     pub expires_in: Option<u64>,
     #[serde(default)]
     pub interval: Option<u64>,
@@ -191,6 +198,8 @@ pub trait OAuthProvider: Send + Sync {
         &self,
         refresh_token: &str,
         upstream_client: &Arc<UpstreamClient>,
+        account_id: AccountId,
+        db: DbRef<'_>,
     ) -> Result<TokenResponse>;
 
     /// Post-exchange hook. Called after tokens are stored. Providers can
@@ -352,7 +361,7 @@ pub async fn resolve_oauth_token(
 
     // 5. Refresh (async, no connection held).
     let token = provider
-        .refresh_token(&refresh_token, upstream_client)
+        .refresh_token(&refresh_token, upstream_client, account.id, DbRef::Pool(db_pool))
         .await?;
 
     // 6. Compute new expiry.
@@ -604,7 +613,7 @@ pub async fn start_refresh_scheduler(
             last_refresh_attempts.insert(account_id, chrono::Utc::now());
 
             match provider
-                .refresh_token(&refresh_token, &upstream_client)
+                .refresh_token(&refresh_token, &upstream_client, account.id, DbRef::Pool(&*db_pool))
                 .await
             {
                 Ok(token) => {
