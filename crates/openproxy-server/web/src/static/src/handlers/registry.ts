@@ -69,6 +69,7 @@ import { OAuthLogin } from "./oauth-handlers.js";
 import { logsPrevPage, logsNextPage, logsGoPage, logsSetFollow, toggleColumnsMenu, toggleColumn } from "../views/logs.js";
 import { configSaveTimeouts, configSaveRecordingTtl, configSaveIdleChunkRetryable, configSaveCompression } from "../views/config.js";
 import { closeLogDetailModal, copyDebugBundle } from "../components/log-detail.js";
+import { syncProxies, testProxy, testAllProxies, deleteProxy, showAddCustomProxy } from "./proxy-handlers.js";
 
 // ---- Action registry ----
 // Keys are the data-action values. Each value is the function to
@@ -309,6 +310,13 @@ export const HANDLERS: Record<string, ActionHandler> = {
   // Toast — not strictly needed as a data-action, but useful for
   // ad-hoc debugging from the console.
   showToast,
+
+  // Free Proxies
+  syncProxies,
+  testProxy,
+  testAllProxies,
+  deleteProxy,
+  showAddCustomProxy,
 };
 
 // Collect positional data-arg-N attrs from an element. Skips the

@@ -2277,3 +2277,41 @@ abbr {
     height: 180px;
   }
 }
+
+/* ----- Free Proxies view ----- */
+.latency-low {
+  color: var(--color-success) !important;
+  font-weight: bold;
+}
+.latency-medium {
+  color: var(--color-warning) !important;
+}
+.latency-high {
+  color: var(--color-error) !important;
+}
+.glow-green {
+  text-shadow: 0 0 10px rgba(74, 222, 128, 0.4);
+  color: var(--color-success);
+}
+.chip-protocol {
+  background: var(--color-border);
+  color: var(--color-text);
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-size: 10px;
+  font-weight: bold;
+}
+.spinner {
+  display: inline-block;
+  width: 12px;
+  height: 12px;
+  border: 2px solid rgba(255,255,255,0.3);
+  border-radius: 50%;
+  border-top-color: #fff;
+  animation: spin 1s ease-in-out infinite;
+  margin-right: 6px;
+}
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+

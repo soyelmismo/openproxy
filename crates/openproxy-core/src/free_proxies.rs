@@ -1,0 +1,653 @@
+//! staging table of free scraped/custom proxies + validation.
+
+use crate::db::DbPool;
+use rusqlite::Connection;
+use std::sync::Arc;
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct FreeProxy {
+    pub id: String,
+    pub source: String,
+    pub host: String,
+    pub port: u16,
+    pub r#type: String,
+    pub country_code: Option<String>,
+    pub status: String,
+    pub latency_ms: Option<i64>,
+    pub last_validated: Option<String>,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct ScrapedProxy {
+    pub source: String,
+    pub host: String,
+    pub port: u16,
+    pub r#type: String,
+    pub country_code: Option<String>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct SyncSummary {
+    pub fetched: usize,
+    pub added: usize,
+    pub errors: Vec<String>,
+}
+
+pub fn list_proxies(
+    conn: &Connection,
+    source: Option<&str>,
+    status: Option<&str>,
+) -> crate::error::Result<Vec<FreeProxy>> {
+    let mut sql = "SELECT id, source, host, port, type, country_code, status, latency_ms, last_validated, created_at, updated_at FROM free_proxies WHERE 1=1".to_string();
+    let mut params: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
+    
+    if let Some(src) = source {
+        sql.push_str(" AND source = ?");
+        params.push(Box::new(src.to_string()));
+    }
+    
+    if let Some(st) = status {
+        sql.push_str(" AND status = ?");
+        params.push(Box::new(st.to_string()));
+    }
+    
+    sql.push_str(" ORDER BY status = 'alive' DESC, latency_ms ASC, updated_at DESC");
+    
+    let mut stmt = conn.prepare(&sql).map_err(|e| crate::error::CoreError::Database {
+        message: e.to_string(),
+        source: Some(Box::new(e)),
+    })?;
+    
+    let rows = stmt
+        .query_map(
+            rusqlite::params_from_iter(params.iter().map(|p| p.as_ref())),
+            |row| {
+                Ok(FreeProxy {
+                    id: row.get(0)?,
+                    source: row.get(1)?,
+                    host: row.get(2)?,
+                    port: row.get(3)?,
+                    r#type: row.get(4)?,
+                    country_code: row.get(5)?,
+                    status: row.get(6)?,
+                    latency_ms: row.get(7)?,
+                    last_validated: row.get(8)?,
+                    created_at: row.get(9)?,
+                    updated_at: row.get(10)?,
+                })
+            },
+        )
+        .map_err(|e| crate::error::CoreError::Database {
+            message: e.to_string(),
+            source: Some(Box::new(e)),
+        })?;
+        
+    let mut list = Vec::new();
+    for r in rows {
+        list.push(r.map_err(|e| crate::error::CoreError::Database {
+            message: e.to_string(),
+            source: Some(Box::new(e)),
+        })?);
+    }
+    Ok(list)
+}
+
+pub fn add_custom_proxy(
+    conn: &Connection,
+    host: String,
+    port: u16,
+    r#type: String,
+    country_code: Option<String>,
+) -> crate::error::Result<FreeProxy> {
+    let id = uuid::Uuid::new_v4().to_string();
+    let now = chrono::Utc::now().to_rfc3339();
+    
+    conn.execute(
+        "INSERT INTO free_proxies (id, source, host, port, type, country_code, status, latency_ms, last_validated, created_at, updated_at) \
+         VALUES (?1, 'custom', ?2, ?3, ?4, ?5, 'unknown', NULL, NULL, ?6, ?7) \
+         ON CONFLICT(host, port) DO UPDATE SET \
+           source = 'custom', \
+           type = excluded.type, \
+           country_code = COALESCE(excluded.country_code, free_proxies.country_code), \
+           updated_at = excluded.updated_at",
+        rusqlite::params![id, host, port, r#type.to_lowercase(), country_code, now, now],
+    )
+    .map_err(|e| crate::error::CoreError::Database {
+        message: e.to_string(),
+        source: Some(Box::new(e)),
+    })?;
+    
+    let mut stmt = conn
+        .prepare("SELECT id, source, host, port, type, country_code, status, latency_ms, last_validated, created_at, updated_at FROM free_proxies WHERE host = ?1 AND port = ?2")
+        .map_err(|e| crate::error::CoreError::Database {
+            message: e.to_string(),
+            source: Some(Box::new(e)),
+        })?;
+        
+    let p = stmt
+        .query_row(rusqlite::params![host, port], |row| {
+            Ok(FreeProxy {
+                id: row.get(0)?,
+                source: row.get(1)?,
+                host: row.get(2)?,
+                port: row.get(3)?,
+                r#type: row.get(4)?,
+                country_code: row.get(5)?,
+                status: row.get(6)?,
+                latency_ms: row.get(7)?,
+                last_validated: row.get(8)?,
+                created_at: row.get(9)?,
+                updated_at: row.get(10)?,
+            })
+        })
+        .map_err(|e| crate::error::CoreError::Database {
+            message: e.to_string(),
+            source: Some(Box::new(e)),
+        })?;
+        
+    Ok(p)
+}
+
+pub fn delete_proxy(conn: &Connection, id: &str) -> crate::error::Result<()> {
+    conn.execute("DELETE FROM free_proxies WHERE id = ?1", rusqlite::params![id])
+        .map_err(|e| crate::error::CoreError::Database {
+            message: e.to_string(),
+            source: Some(Box::new(e)),
+        })?;
+    Ok(())
+}
+
+pub fn update_proxy_status(
+    conn: &Connection,
+    id: &str,
+    status: &str,
+    latency_ms: Option<i64>,
+) -> crate::error::Result<()> {
+    let now = chrono::Utc::now().to_rfc3339();
+    conn.execute(
+        "UPDATE free_proxies SET status = ?1, latency_ms = ?2, last_validated = ?3, updated_at = ?4 WHERE id = ?5",
+        rusqlite::params![status, latency_ms, now, now, id],
+    )
+    .map_err(|e| crate::error::CoreError::Database {
+        message: e.to_string(),
+        source: Some(Box::new(e)),
+    })?;
+    Ok(())
+}
+
+pub fn upsert_scraped_proxies(
+    conn: &Connection,
+    proxies: &[ScrapedProxy],
+) -> crate::error::Result<()> {
+    let now = chrono::Utc::now().to_rfc3339();
+    for p in proxies {
+        let id = uuid::Uuid::new_v4().to_string();
+        conn.execute(
+            "INSERT INTO free_proxies (id, source, host, port, type, country_code, status, latency_ms, last_validated, created_at, updated_at) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'unknown', NULL, NULL, ?7, ?8) \
+             ON CONFLICT(host, port) DO UPDATE SET \
+               source = CASE WHEN free_proxies.source = 'custom' THEN 'custom' ELSE excluded.source END, \
+               type = excluded.type, \
+               country_code = COALESCE(excluded.country_code, free_proxies.country_code), \
+               updated_at = excluded.updated_at",
+            rusqlite::params![id, p.source, p.host, p.port, p.r#type, p.country_code, now, now],
+        )
+        .map_err(|e| crate::error::CoreError::Database {
+            message: e.to_string(),
+            source: Some(Box::new(e)),
+        })?;
+    }
+    Ok(())
+}
+
+// Scraper integrations
+#[derive(serde::Deserialize)]
+struct ProxiflyGeo {
+    country: Option<String>,
+}
+
+#[derive(serde::Deserialize)]
+struct ProxiflyItem {
+    ip: String,
+    port: u16,
+    protocol: String,
+    geolocation: Option<ProxiflyGeo>,
+}
+
+async fn sync_proxifly() -> crate::error::Result<Vec<ScrapedProxy>> {
+    let client = reqwest::Client::new();
+    let res = client
+        .get("https://api.proxifly.dev/proxy?format=json&quantity=100")
+        .send()
+        .await
+        .map_err(|e| crate::error::CoreError::Internal(format!("Proxifly HTTP error: {}", e)))?;
+        
+    if !res.status().is_success() {
+        return Err(crate::error::CoreError::Internal(format!(
+            "Proxifly HTTP status: {}",
+            res.status()
+        )));
+    }
+    
+    let items: Vec<ProxiflyItem> = res
+        .json()
+        .await
+        .map_err(|e| crate::error::CoreError::Internal(format!("Proxifly JSON error: {}", e)))?;
+        
+    let list = items
+        .into_iter()
+        .map(|item| {
+            let country_code = item
+                .geolocation
+                .and_then(|g| g.country)
+                .filter(|c| !c.is_empty());
+            ScrapedProxy {
+                source: "proxifly".to_string(),
+                host: item.ip,
+                port: item.port,
+                r#type: item.protocol.to_lowercase(),
+                country_code,
+            }
+        })
+        .collect();
+    Ok(list)
+}
+
+async fn sync_iplocate() -> crate::error::Result<Vec<ScrapedProxy>> {
+    let client = reqwest::Client::new();
+    let mut list = Vec::new();
+    let protocols = vec!["http", "https", "socks4", "socks5"];
+    
+    for proto in protocols {
+        let url = format!(
+            "https://raw.githubusercontent.com/iplocate/free-proxy-list/main/protocols/{}.txt",
+            proto
+        );
+        let res = match client.get(&url).send().await {
+            Ok(r) => r,
+            Err(e) => {
+                tracing::warn!("iplocate fetch error for {}: {}", proto, e);
+                continue;
+            }
+        };
+        if !res.status().is_success() {
+            tracing::warn!("iplocate status error for {}: {}", proto, res.status());
+            continue;
+        }
+        let text = match res.text().await {
+            Ok(t) => t,
+            Err(e) => {
+                tracing::warn!("iplocate read error for {}: {}", proto, e);
+                continue;
+            }
+        };
+        for line in text.lines() {
+            let trimmed = line.trim();
+            if trimmed.is_empty() || trimmed.starts_with('#') {
+                continue;
+            }
+            if let Some(pos) = trimmed.rfind(':') {
+                let host = trimmed[..pos].trim().to_string();
+                if let Ok(port) = trimmed[pos + 1..].trim().parse::<u16>() {
+                    if !host.is_empty() && port > 0 {
+                        list.push(ScrapedProxy {
+                            source: "iplocate".to_string(),
+                            host,
+                            port,
+                            r#type: proto.to_string(),
+                            country_code: None,
+                        });
+                    }
+                }
+            }
+        }
+    }
+    Ok(list)
+}
+
+#[derive(serde::Deserialize)]
+struct OneProxyApiProxy {
+    ip: String,
+    port: u16,
+    protocol: Option<String>,
+    country_code: Option<String>,
+}
+
+#[derive(serde::Deserialize)]
+struct OneProxyApiResponse {
+    proxies: Option<Vec<OneProxyApiProxy>>,
+}
+
+async fn sync_oneproxy() -> crate::error::Result<Vec<ScrapedProxy>> {
+    let client = reqwest::Client::new();
+    let res = client
+        .get("https://1proxy-api.aitradepulse.com/api/v1/proxies/advanced")
+        .send()
+        .await
+        .map_err(|e| crate::error::CoreError::Internal(format!("1proxy HTTP error: {}", e)))?;
+        
+    if !res.status().is_success() {
+        return Err(crate::error::CoreError::Internal(format!(
+            "1proxy HTTP status: {}",
+            res.status()
+        )));
+    }
+    
+    let body: OneProxyApiResponse = res
+        .json()
+        .await
+        .map_err(|e| crate::error::CoreError::Internal(format!("1proxy JSON error: {}", e)))?;
+        
+    let proxies = body.proxies.unwrap_or_default();
+    let list = proxies
+        .into_iter()
+        .map(|p| ScrapedProxy {
+            source: "1proxy".to_string(),
+            host: p.ip,
+            port: p.port,
+            r#type: p
+                .protocol
+                .unwrap_or_else(|| "http".to_string())
+                .to_lowercase(),
+            country_code: p.country_code.filter(|c| !c.is_empty()),
+        })
+        .collect();
+    Ok(list)
+}
+
+pub async fn sync_all_providers(db_pool: Arc<DbPool>) -> crate::error::Result<SyncSummary> {
+    let mut errors = Vec::new();
+    let mut fetched = 0;
+    let mut scraped = Vec::new();
+    
+    // 1. Proxifly
+    match sync_proxifly().await {
+        Ok(mut list) => {
+            fetched += list.len();
+            scraped.append(&mut list);
+        }
+        Err(e) => {
+            errors.push(format!("Proxifly sync failed: {}", e));
+        }
+    }
+    
+    // 2. IPLocate
+    match sync_iplocate().await {
+        Ok(mut list) => {
+            fetched += list.len();
+            scraped.append(&mut list);
+        }
+        Err(e) => {
+            errors.push(format!("IPLocate sync failed: {}", e));
+        }
+    }
+    
+    // 3. 1proxy
+    match sync_oneproxy().await {
+        Ok(mut list) => {
+            fetched += list.len();
+            scraped.append(&mut list);
+        }
+        Err(e) => {
+            errors.push(format!("1proxy sync failed: {}", e));
+        }
+    }
+    
+    let mut added = 0;
+    if !scraped.is_empty() {
+        let w = db_pool.writer();
+        let before_count: i64 = w
+            .query_row("SELECT COUNT(*) FROM free_proxies", [], |r| r.get(0))
+            .unwrap_or(0);
+        upsert_scraped_proxies(&w, &scraped)?;
+        let after_count: i64 = w
+            .query_row("SELECT COUNT(*) FROM free_proxies", [], |r| r.get(0))
+            .unwrap_or(0);
+        added = (after_count - before_count) as usize;
+    }
+    
+    Ok(SyncSummary {
+        fetched,
+        added,
+        errors,
+    })
+}
+
+// Proxy validation logic
+pub async fn test_proxy_connection(r#type: &str, host: &str, port: u16) -> Result<i64, String> {
+    let proxy_url = format!("{}://{}:{}", r#type, host, port);
+    let proxy = reqwest::Proxy::all(&proxy_url).map_err(|e| format!("Invalid proxy URL: {}", e))?;
+    
+    let client = reqwest::Client::builder()
+        .proxy(proxy)
+        .timeout(std::time::Duration::from_secs(5))
+        .build()
+        .map_err(|e| format!("Failed to build HTTP client: {}", e))?;
+        
+    let start = std::time::Instant::now();
+    let res = client
+        .get("http://clients3.google.com/generate_204")
+        .send()
+        .await;
+        
+    match res {
+        Ok(r) => {
+            if r.status().is_success() || r.status().is_redirection() {
+                let latency = start.elapsed().as_millis() as i64;
+                Ok(latency)
+            } else {
+                Err(format!("Status check failed: HTTP {}", r.status()))
+            }
+        }
+        Err(e) => Err(format!("Connection probe failed: {}", e)),
+    }
+}
+
+pub async fn test_single_proxy(db_pool: Arc<DbPool>, id: &str) -> crate::error::Result<FreeProxy> {
+    let (r#type, host, port) = {
+        let r = db_pool.reader();
+        let mut stmt = r
+            .prepare("SELECT type, host, port FROM free_proxies WHERE id = ?1")
+            .map_err(|e| crate::error::CoreError::Database {
+                message: e.to_string(),
+                source: Some(Box::new(e)),
+            })?;
+        stmt.query_row(rusqlite::params![id], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?, row.get::<_, u16>(2)?))
+        })
+        .map_err(|e| crate::error::CoreError::Database {
+            message: e.to_string(),
+            source: Some(Box::new(e)),
+        })?
+    };
+    
+    let res = test_proxy_connection(&r#type, &host, port).await;
+    
+    let w = db_pool.writer();
+    match res {
+        Ok(latency) => {
+            update_proxy_status(&w, id, "alive", Some(latency))?;
+        }
+        Err(_) => {
+            update_proxy_status(&w, id, "dead", None)?;
+        }
+    }
+    
+    let r = db_pool.reader();
+    let mut stmt = r
+        .prepare("SELECT id, source, host, port, type, country_code, status, latency_ms, last_validated, created_at, updated_at FROM free_proxies WHERE id = ?1")
+        .map_err(|e| crate::error::CoreError::Database {
+            message: e.to_string(),
+            source: Some(Box::new(e)),
+        })?;
+        
+    let p = stmt
+        .query_row(rusqlite::params![id], |row| {
+            Ok(FreeProxy {
+                id: row.get(0)?,
+                source: row.get(1)?,
+                host: row.get(2)?,
+                port: row.get(3)?,
+                r#type: row.get(4)?,
+                country_code: row.get(5)?,
+                status: row.get(6)?,
+                latency_ms: row.get(7)?,
+                last_validated: row.get(8)?,
+                created_at: row.get(9)?,
+                updated_at: row.get(10)?,
+            })
+        })
+        .map_err(|e| crate::error::CoreError::Database {
+            message: e.to_string(),
+            source: Some(Box::new(e)),
+        })?;
+        
+    Ok(p)
+}
+
+pub fn test_all_proxies_background(db_pool: Arc<DbPool>) {
+    tokio::spawn(async move {
+        let proxies = {
+            let r = db_pool.reader();
+            let mut stmt = match r.prepare("SELECT id, type, host, port FROM free_proxies") {
+                Ok(s) => s,
+                Err(e) => {
+                    tracing::error!("Failed to prepare list query in background test: {}", e);
+                    return;
+                }
+            };
+            let rows = match stmt.query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, u16>(3)?,
+                ))
+            }) {
+                Ok(r) => r,
+                Err(e) => {
+                    tracing::error!("Failed to query list in background test: {}", e);
+                    return;
+                }
+            };
+            let mut list = Vec::new();
+            for row in rows {
+                if let Ok(item) = row {
+                    list.push(item);
+                }
+            }
+            list
+        };
+        
+        use futures::StreamExt;
+        let pool_clone = db_pool.clone();
+        
+        futures::stream::iter(proxies)
+            .map(move |(id, r#type, host, port)| {
+                let pool = pool_clone.clone();
+                async move {
+                    let test_res = test_proxy_connection(&r#type, &host, port).await;
+                    let w = pool.writer();
+                    match test_res {
+                        Ok(latency) => {
+                            let _ = update_proxy_status(&w, &id, "alive", Some(latency));
+                        }
+                        Err(_) => {
+                            let _ = update_proxy_status(&w, &id, "dead", None);
+                        }
+                    }
+                }
+            })
+            .buffer_unordered(20)
+            .collect::<Vec<()>>()
+            .await;
+    });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rusqlite::Connection;
+
+    fn setup_test_db() -> Connection {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE free_proxies (
+              id TEXT PRIMARY KEY,
+              source TEXT NOT NULL,
+              host TEXT NOT NULL,
+              port INTEGER NOT NULL,
+              type TEXT NOT NULL DEFAULT 'http',
+              country_code TEXT,
+              status TEXT NOT NULL DEFAULT 'unknown',
+              latency_ms INTEGER,
+              last_validated TEXT,
+              created_at TEXT NOT NULL DEFAULT (datetime('now')),
+              updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+              UNIQUE(host, port)
+            );"
+        ).unwrap();
+        conn
+    }
+
+    #[test]
+    fn test_crud_custom_proxy() {
+        let conn = setup_test_db();
+        
+        let p = add_custom_proxy(&conn, "1.2.3.4".to_string(), 8080, "http".to_string(), Some("US".to_string())).unwrap();
+        assert_eq!(p.host, "1.2.3.4");
+        assert_eq!(p.port, 8080);
+        assert_eq!(p.r#type, "http");
+        assert_eq!(p.country_code.as_deref(), Some("US"));
+        assert_eq!(p.status, "unknown");
+        
+        let list = list_proxies(&conn, None, None).unwrap();
+        assert_eq!(list.len(), 1);
+        assert_eq!(list[0].id, p.id);
+        
+        update_proxy_status(&conn, &p.id, "alive", Some(150)).unwrap();
+        
+        let list2 = list_proxies(&conn, None, Some("alive")).unwrap();
+        assert_eq!(list2.len(), 1);
+        assert_eq!(list2[0].status, "alive");
+        assert_eq!(list2[0].latency_ms, Some(150));
+        
+        delete_proxy(&conn, &p.id).unwrap();
+        let list3 = list_proxies(&conn, None, None).unwrap();
+        assert_eq!(list3.len(), 0);
+    }
+
+    #[test]
+    fn test_upsert_scraped_proxies() {
+        let conn = setup_test_db();
+        
+        let scraped = vec![
+            ScrapedProxy {
+                source: "proxifly".to_string(),
+                host: "10.0.0.1".to_string(),
+                port: 3128,
+                r#type: "https".to_string(),
+                country_code: Some("FR".to_string()),
+            },
+            ScrapedProxy {
+                source: "iplocate".to_string(),
+                host: "10.0.0.2".to_string(),
+                port: 1080,
+                r#type: "socks5".to_string(),
+                country_code: None,
+            },
+        ];
+        
+        upsert_scraped_proxies(&conn, &scraped).unwrap();
+        
+        let list = list_proxies(&conn, None, None).unwrap();
+        assert_eq!(list.len(), 2);
+        
+        upsert_scraped_proxies(&conn, &scraped).unwrap();
+        let list2 = list_proxies(&conn, None, None).unwrap();
+        assert_eq!(list2.len(), 2);
+    }
+}
+

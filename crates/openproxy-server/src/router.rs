@@ -37,7 +37,7 @@
 
 use axum::{
     Json, Router, middleware,
-    routing::{get, post, put},
+    routing::{get, post, put, delete},
 };
 use serde_json::json;
 
@@ -307,6 +307,27 @@ pub fn build_router(state: AppState) -> Router {
             post(handlers::admin::regenerate_api_key),
         )
         .route("/keys/{id}/usage", get(handlers::admin::api_key_usage))
+        // Free proxies endpoints
+        .route(
+            "/proxies",
+            get(handlers::admin::list_proxies).post(handlers::admin::create_custom_proxy),
+        )
+        .route(
+            "/proxies/sync",
+            post(handlers::admin::sync_proxies),
+        )
+        .route(
+            "/proxies/test-all",
+            post(handlers::admin::test_all_proxies),
+        )
+        .route(
+            "/proxies/{id}",
+            delete(handlers::admin::delete_proxy),
+        )
+        .route(
+            "/proxies/{id}/test",
+            post(handlers::admin::test_proxy),
+        )
         // OAuth endpoints
         // models.dev sync
         .route(

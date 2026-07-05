@@ -39,7 +39,8 @@ export type RouteName =
   | "debug-logs"
   | "config"
   | "notifications"
-  | "login";
+  | "login"
+  | "proxies";
 
 /** Live-logs WebSocket connection status. Mirrors the `setLogsStatus`
  *  labels in `state/ws.ts`. */
@@ -165,6 +166,7 @@ export interface DashboardState {
   accounts: Account[];
   models: Model[];
   combos: Combo[];
+  proxies: any[];
   /** Cached API key rows. The shape is provider-specific; the
    *  dashboard views hydrate it from `/admin/api-keys`. Kept
    *  loose here (out of G3 scope — G4 will narrow it). */
@@ -227,6 +229,7 @@ export const state: DashboardState = {
   accounts: [],
   models: [],
   combos: [],
+  proxies: [],
   apiKeys: [],
   health: null,
   // The view currently displayed. Used by `rerenderCurrentView` so

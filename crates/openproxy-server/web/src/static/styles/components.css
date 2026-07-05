@@ -232,6 +232,8 @@ tr.selected { background: var(--color-primary-soft); }
 .toast-success { background: var(--color-success-soft); color: var(--color-success); border-color: var(--color-success); }
 .toast-error   { background: var(--color-error-soft);   color: var(--color-error);   border-color: var(--color-error);   }
 .toast-info    { background: var(--color-info-soft);    color: var(--color-info);    border-color: var(--color-info);    }
+.toast-warning { background: var(--color-warn-soft);    color: var(--color-warn);    border-color: var(--color-warn);    }
+.toast-warn    { background: var(--color-warn-soft);    color: var(--color-warn);    border-color: var(--color-warn);    }
 
 /* ----- Banner ----- */
 .banner {

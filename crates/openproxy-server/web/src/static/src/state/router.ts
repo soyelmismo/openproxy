@@ -33,6 +33,7 @@ import { mountConfig } from "../views/config.js";
 import { mountDebugLogs } from "../views/debug-logs.js";
 import { mountNotifications } from "../views/notifications.js";
 import { mountLogin } from "../views/login.js";
+import { mountProxies } from "../views/proxies.js";
 
 export type RouteName =
   | "home"
@@ -47,7 +48,8 @@ export type RouteName =
   | "debug-logs"
   | "config"
   | "notifications"
-  | "login";
+  | "login"
+  | "proxies";
 
 export type ViewMount = (ctx: string) => unknown;
 
@@ -90,6 +92,7 @@ const ROUTES: readonly Route[] = [
     return mountDebugLogs(main);
   }) as ViewMount },
   { name: "config", pattern: /^#?\/config$/, mount: mountConfig as ViewMount },
+  { name: "proxies", pattern: /^#?\/proxies$/, mount: mountProxies as ViewMount },
   // Notifications tray (F4). The view mounts at `#/notifications` and
   // manages its own state (list, filter, DnD overlay, WS subscription
   // via the notifications store). It returns a cleanup function that

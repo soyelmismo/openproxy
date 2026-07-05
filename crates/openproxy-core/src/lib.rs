@@ -20,6 +20,7 @@ pub mod compression;
 pub mod cooldown;
 pub mod cost;
 pub mod db;
+pub mod free_proxies;
 pub mod discovery_scheduler;
 pub mod endpoint;
 pub mod antigravity_headers;

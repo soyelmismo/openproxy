@@ -217,6 +217,11 @@ const MIGRATIONS: &[Migration] = &[
         name: "000041_add_quota_model_details",
         sql: include_str!("../../migrations/000041_add_quota_model_details.sql"),
     },
+    Migration {
+        version: 42,
+        name: "000042_free_proxies",
+        sql: include_str!("../../migrations/000042_free_proxies.sql"),
+    },
 ];
 
 /// Apply pending migrations on `conn`. Idempotent: skips versions already in

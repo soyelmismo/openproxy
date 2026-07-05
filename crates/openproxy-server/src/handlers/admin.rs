@@ -5620,6 +5620,110 @@ pub async fn delete_notification(
 }
 
 // =====================================================================
+// Free Proxy Management Handlers
+// =====================================================================
+
+#[derive(serde::Deserialize)]
+pub struct ListProxiesQuery {
+    pub source: Option<String>,
+    pub status: Option<String>,
+}
+
+pub async fn list_proxies(
+    State(s): State<AppState>,
+    Query(query): Query<ListProxiesQuery>,
+) -> ApiResult<Json<Vec<openproxy_core::free_proxies::FreeProxy>>> {
+    let body: Result<Json<Vec<openproxy_core::free_proxies::FreeProxy>>, ApiError> = async {
+        let r = s.db_pool().reader();
+        let list = openproxy_core::free_proxies::list_proxies(
+            &r,
+            query.source.as_deref(),
+            query.status.as_deref(),
+        )?;
+        Ok(Json(list))
+    }
+    .await;
+    body.into()
+}
+
+pub async fn sync_proxies(
+    State(s): State<AppState>,
+) -> ApiResult<Json<openproxy_core::free_proxies::SyncSummary>> {
+    let body: Result<Json<openproxy_core::free_proxies::SyncSummary>, ApiError> = async {
+        let summary = openproxy_core::free_proxies::sync_all_providers(s.db_pool().clone()).await?;
+        Ok(Json(summary))
+    }
+    .await;
+    body.into()
+}
+
+#[derive(serde::Deserialize)]
+pub struct CreateCustomProxyInput {
+    pub host: String,
+    pub port: u16,
+    pub r#type: String,
+    pub country_code: Option<String>,
+}
+
+pub async fn create_custom_proxy(
+    State(s): State<AppState>,
+    Json(body): Json<CreateCustomProxyInput>,
+) -> ApiResult<Json<openproxy_core::free_proxies::FreeProxy>> {
+    let body: Result<Json<openproxy_core::free_proxies::FreeProxy>, ApiError> = async {
+        if body.host.trim().is_empty() || body.port == 0 {
+            return Err(ApiError(CoreError::Validation("host and port are required".into())));
+        }
+        let w = s.db_pool().writer();
+        let p = openproxy_core::free_proxies::add_custom_proxy(
+            &w,
+            body.host.trim().to_string(),
+            body.port,
+            body.r#type.trim().to_string(),
+            body.country_code.map(|c| c.trim().to_string()),
+        )?;
+        Ok(Json(p))
+    }
+    .await;
+    body.into()
+}
+
+pub async fn test_proxy(
+    State(s): State<AppState>,
+    Path(id): Path<String>,
+) -> ApiResult<Json<openproxy_core::free_proxies::FreeProxy>> {
+    let body: Result<Json<openproxy_core::free_proxies::FreeProxy>, ApiError> = async {
+        let p = openproxy_core::free_proxies::test_single_proxy(s.db_pool().clone(), &id).await?;
+        Ok(Json(p))
+    }
+    .await;
+    body.into()
+}
+
+pub async fn test_all_proxies(
+    State(s): State<AppState>,
+) -> ApiResult<Json<serde_json::Value>> {
+    let body: Result<Json<serde_json::Value>, ApiError> = async {
+        openproxy_core::free_proxies::test_all_proxies_background(s.db_pool().clone());
+        Ok(Json(serde_json::json!({ "status": "started" })))
+    }
+    .await;
+    body.into()
+}
+
+pub async fn delete_proxy(
+    State(s): State<AppState>,
+    Path(id): Path<String>,
+) -> ApiResult<Json<serde_json::Value>> {
+    let body: Result<Json<serde_json::Value>, ApiError> = async {
+        let w = s.db_pool().writer();
+        openproxy_core::free_proxies::delete_proxy(&w, &id)?;
+        Ok(Json(serde_json::json!({ "status": "deleted" })))
+    }
+    .await;
+    body.into()
+}
+
+// =====================================================================
 //
 // Spec §9 documents the smoke test as either a manual `curl` against
 // a running server OR a Rust test that calls the handler directly.
@@ -6193,17 +6297,20 @@ mod tests {
             r#"{{"model":"gpt-4o","messages":[{{"role":"system","content":"{}"}}]}}"#,
             big
         );
-        let req = Request::builder()
+        let mut req = Request::builder()
             .method("POST")
             .uri("/v1/chat/completions")
             .header("content-type", "application/json")
             .body(Body::from(body_json))
             .expect("build req");
+        req.extensions_mut().insert(axum::extract::connect_info::ConnectInfo(
+            std::net::SocketAddr::from(([127, 0, 0, 1], 12345))
+        ));
         let resp = app.oneshot(req).await.expect("oneshot");
         assert_ne!(
             resp.status(),
             StatusCode::PAYLOAD_TOO_LARGE,
-            "10 MiB body must not be rejected by the body limit"
+            "100 MiB body must be rejected by the 32 MiB body limit"
         );
     }
 
@@ -6221,12 +6328,15 @@ mod tests {
             r#"{{"model":"gpt-4o","messages":[{{"role":"system","content":"{}"}}]}}"#,
             big
         );
-        let req = Request::builder()
+        let mut req = Request::builder()
             .method("POST")
             .uri("/v1/chat/completions")
             .header("content-type", "application/json")
             .body(Body::from(body_json))
             .expect("build req");
+        req.extensions_mut().insert(axum::extract::connect_info::ConnectInfo(
+            std::net::SocketAddr::from(([127, 0, 0, 1], 12345))
+        ));
         let resp = app.oneshot(req).await.expect("oneshot");
         assert_eq!(
             resp.status(),
