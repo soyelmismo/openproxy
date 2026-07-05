@@ -712,9 +712,7 @@ pub fn quota_capable_providers() -> &'static [&'static str] {
         "minimax-cn",
         "openrouter",
         "antigravity",
-        "antigravity-cli",
         "agy",
-        "gemini-cli",
     ]
 }
 
@@ -1569,14 +1567,12 @@ mod tests {
     fn quota_capable_providers_includes_antigravity() {
         let list = quota_capable_providers();
         assert!(list.contains(&"antigravity"));
-        assert!(list.contains(&"antigravity-cli"));
         assert!(list.contains(&"agy"));
     }
 
     #[test]
     fn supports_quota_matches_antigravity() {
         assert!(supports_quota("antigravity"));
-        assert!(supports_quota("antigravity-cli"));
         assert!(supports_quota("agy"));
     }
 }

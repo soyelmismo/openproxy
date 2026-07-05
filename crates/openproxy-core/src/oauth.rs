@@ -250,11 +250,7 @@ impl OAuthProviderRegistry {
         // and `antigravity-cli` since they share the same OAuth flow.
         let antigravity =
             std::sync::Arc::new(crate::oauth_antigravity::AntigravityOAuthProvider::new());
-        reg.register_arc_with_name("antigravity", antigravity.clone());
-        reg.register_arc_with_name("antigravity-cli", antigravity);
-        reg.register_arc(std::sync::Arc::new(
-            crate::oauth_gemini::GeminiCliOAuthProvider::new(),
-        ));
+        reg.register_arc_with_name("antigravity", antigravity);
         reg.register_arc(std::sync::Arc::new(
             crate::oauth_kiro::KiroOAuthProvider::new(),
         ));
@@ -424,9 +420,7 @@ pub fn pipeline_token_needs_refresh(db_expires_at: Option<&str>, provider_id: &s
 /// - **Special cases** (e.g. iflow): 24 hours before expiry.
 pub(crate) fn refresh_lead_seconds(provider_id: &str) -> u64 {
     match provider_id {
-        // Rotating token providers (Auth0-backed) — refresh 5 min
-        // before expiry to avoid cascade revocation.
-        "kiro" | "antigravity" | "antigravity-cli" | "gemini-cli" => 300, // 5 minutes
+        "kiro" | "antigravity" => 300, // 5 minutes
 
         // Non-rotating providers — refresh 15 min before expiry.
         _ => 900, // 15 minutes
@@ -894,7 +888,6 @@ mod tests {
         // Auth0-backed rotating token providers: 5 minutes
         assert_eq!(refresh_lead_seconds("kiro"), 300);
         assert_eq!(refresh_lead_seconds("antigravity"), 300);
-        assert_eq!(refresh_lead_seconds("antigravity-cli"), 300);
     }
 
     #[test]

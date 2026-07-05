@@ -394,7 +394,7 @@ pub async fn fetch_account_quota(
                 model_details: None,
             },
         },
-        "antigravity" | "antigravity-cli" | "agy" | "gemini-cli" => {
+        "antigravity" | "agy" => {
             let token = match access_token {
                 Some(t) => t,
                 None => {

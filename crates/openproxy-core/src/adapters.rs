@@ -2154,300 +2154,6 @@ impl ProviderAdapter for AntigravityAdapter {
 }
 
 // =====================================================================
-// Antigravity CLI
-// =====================================================================
-
-/// Adapter for Google's Antigravity CLI (Cloud Code Assist).
-///
-/// Same backend as Antigravity but with a different (larger) model catalog.
-/// Uses the same Cloud Code envelope and OAuth Bearer auth.
-pub struct AntigravityCliAdapter {
-    config: ProviderAdapterConfig,
-}
-
-impl AntigravityCliAdapter {
-    pub fn new() -> Self {
-        Self {
-            config: ProviderAdapterConfig {
-                id: ProviderId::new("antigravity-cli"),
-                base_url: "https://daily-cloudcode-pa.googleapis.com".into(),
-                auth_type: AdapterAuthType::Bearer,
-                format: AdapterFormat::Gemini,
-                extra_headers: vec![],
-            },
-        }
-    }
-
-    /// Remap Antigravity upstream model IDs to client-facing IDs.
-    fn remap_antigravity_model_id(upstream_id: &str) -> String {
-        match upstream_id {
-            "gemini-3.5-flash-extra-low" => "gemini-3.5-flash-low",
-            "gemini-3.5-flash-low" => "gemini-3.5-flash-medium",
-            "gemini-3.5-flash-medium" => "gemini-3.5-flash-high",
-            "gemini-3.5-flash-high" => "gemini-3.5-flash-high",
-            "gemini-3-flash-agent" => "gemini-3.5-flash-high",
-            _ => upstream_id,
-        }
-        .to_string()
-    }
-
-    /// Parse fetchAvailableModels response into DiscoveredModel list.
-    fn parse_models_response(&self, body: &serde_json::Value) -> Option<Vec<DiscoveredModel>> {
-        let models_obj = body.get("models")?.as_object()?;
-
-        let mut models = Vec::new();
-        for (model_id, model_data) in models_obj {
-            let upstream_id = model_id.clone();
-            let client_id = Self::remap_antigravity_model_id(&upstream_id);
-
-            let display_name = model_data
-                .get("displayName")
-                .and_then(|d| d.as_str())
-                .map(|s| s.to_string());
-
-            // Read maxTokens as context_length (fallback to contextLength)
-            let context_length = model_data
-                .get("maxTokens")
-                .and_then(|c| c.as_u64())
-                .or_else(|| model_data.get("contextLength").and_then(|c| c.as_u64()))
-                .map(|v| v as i64);
-
-            // Read maxOutputTokens as max_output_tokens
-            let max_output_tokens = model_data
-                .get("maxOutputTokens")
-                .and_then(|c| c.as_u64())
-                .map(|v| v as i64)
-                .or(Some(8192));
-
-            let target_format = if client_id.starts_with("claude") {
-                TargetFormat::Anthropic
-            } else if client_id.starts_with("gemini") || client_id.starts_with("gpt-oss") {
-                TargetFormat::Gemini
-            } else {
-                TargetFormat::Openai
-            };
-
-            // Infer capabilities from upstream fields
-            let supports_thinking = model_data
-                .get("supportsThinking")
-                .and_then(|v| v.as_bool())
-                .unwrap_or(false);
-            let supports_images = model_data
-                .get("supportsImages")
-                .and_then(|v| v.as_bool())
-                .unwrap_or(false);
-            let tool_formatter_type = model_data
-                .get("toolFormatterType")
-                .and_then(|v| v.as_str())
-                .is_some();
-            let supports_cumulative_context = model_data
-                .get("supportsCumulativeContext")
-                .and_then(|v| v.as_bool())
-                .unwrap_or(false);
-
-            let capabilities = crate::capabilities::ModelCapabilities {
-                vision: Some(supports_images),
-                tool_calling: Some(tool_formatter_type || supports_cumulative_context),
-                reasoning: Some(supports_thinking),
-                thinking: Some(supports_thinking),
-                attachment: Some(supports_images),
-                structured_output: None,
-                temperature: None,
-            };
-
-            models.push(DiscoveredModel {
-                model_id: ModelId::new(client_id),
-                display_name,
-                target_format,
-                context_length,
-                max_output_tokens,
-                input_modalities: None,
-                output_modalities: None,
-                model_type: Some("chat".to_string()),
-                family: None,
-                capabilities: Some(capabilities),
-            });
-        }
-
-        if models.is_empty() {
-            None
-        } else {
-            Some(models)
-        }
-    }
-
-    /// Hardcoded model catalog for when no OAuth token is available.
-    fn hardcoded_models(&self) -> Vec<DiscoveredModel> {
-        vec![
-            DiscoveredModel {
-                model_id: ModelId::new("gemini-2.5-pro"),
-                display_name: Some("Gemini 2.5 Pro".to_string()),
-                target_format: TargetFormat::Gemini,
-                context_length: Some(1_048_576),
-                max_output_tokens: Some(8192),
-                input_modalities: None,
-                output_modalities: None,
-                model_type: Some("chat".to_string()),
-                family: None,
-                capabilities: Some(crate::capabilities::ModelCapabilities {
-                    vision: Some(true),
-                    tool_calling: Some(true),
-                    reasoning: None,
-                    thinking: None,
-                    attachment: None,
-                    structured_output: None,
-                    temperature: None,
-                }),
-            },
-            DiscoveredModel {
-                model_id: ModelId::new("gemini-2.5-flash"),
-                display_name: Some("Gemini 2.5 Flash".to_string()),
-                target_format: TargetFormat::Gemini,
-                context_length: Some(1_048_576),
-                max_output_tokens: Some(8192),
-                input_modalities: None,
-                output_modalities: None,
-                model_type: Some("chat".to_string()),
-                family: None,
-                capabilities: Some(crate::capabilities::ModelCapabilities {
-                    vision: Some(true),
-                    tool_calling: Some(true),
-                    reasoning: None,
-                    thinking: None,
-                    attachment: None,
-                    structured_output: None,
-                    temperature: None,
-                }),
-            },
-            DiscoveredModel {
-                model_id: ModelId::new("claude-sonnet-4-6"),
-                display_name: Some("Claude Sonnet 4.6".to_string()),
-                target_format: TargetFormat::Anthropic,
-                context_length: Some(200_000),
-                max_output_tokens: Some(8192),
-                input_modalities: None,
-                output_modalities: None,
-                model_type: Some("chat".to_string()),
-                family: None,
-                capabilities: Some(crate::capabilities::ModelCapabilities {
-                    vision: Some(true),
-                    tool_calling: Some(true),
-                    reasoning: None,
-                    thinking: None,
-                    attachment: None,
-                    structured_output: None,
-                    temperature: None,
-                }),
-            },
-            DiscoveredModel {
-                model_id: ModelId::new("claude-opus-4-6-thinking"),
-                display_name: Some("Claude Opus 4.6 (Thinking)".to_string()),
-                target_format: TargetFormat::Anthropic,
-                context_length: Some(200_000),
-                max_output_tokens: Some(8192),
-                input_modalities: None,
-                output_modalities: None,
-                model_type: Some("chat".to_string()),
-                family: None,
-                capabilities: Some(crate::capabilities::ModelCapabilities {
-                    vision: Some(true),
-                    tool_calling: Some(true),
-                    reasoning: None,
-                    thinking: None,
-                    attachment: None,
-                    structured_output: None,
-                    temperature: None,
-                }),
-            },
-        ]
-    }
-}
-
-impl Default for AntigravityCliAdapter {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-#[async_trait]
-impl ProviderAdapter for AntigravityCliAdapter {
-    fn id(&self) -> &ProviderId {
-        &self.config.id
-    }
-
-    fn config(&self) -> &ProviderAdapterConfig {
-        &self.config
-    }
-
-    fn build_chat_url(&self, _target_format: TargetFormat, _model: &ModelId) -> String {
-        format!("{}/v1internal:generateContent", self.config.base_url)
-    }
-
-    fn build_auth_header(&self, api_key: &str) -> (String, String) {
-        ("Authorization".into(), format!("Bearer {}", api_key))
-    }
-
-    fn build_headers(
-        &self,
-        api_key: &str,
-        _target_format: TargetFormat,
-        _model: &ModelId,
-    ) -> Vec<(String, String)> {
-        let (name, value) = self.build_auth_header(api_key);
-        vec![
-            (name, value),
-            ("Content-Type".into(), "application/json".into()),
-        ]
-    }
-
-    fn models_url(&self) -> Option<String> {
-        None
-    }
-
-    async fn fetch_models(
-        &self,
-        upstream_client: &Arc<UpstreamClient>,
-        api_key: &str,
-    ) -> Result<Vec<DiscoveredModel>> {
-        if api_key.is_empty() {
-            return Ok(self.hardcoded_models());
-        }
-
-        let endpoints = [
-            "https://daily-cloudcode-pa.googleapis.com/v1internal:fetchAvailableModels",
-            "https://cloudcode-pa.googleapis.com/v1internal:fetchAvailableModels",
-        ];
-
-        for endpoint in &endpoints {
-            let mut req = UpstreamRequest::post_json(*endpoint, Bytes::from_static(b"{}"));
-            if let Ok(v) = HeaderValue::from_str(&format!("Bearer {api_key}")) {
-                req.headers.insert(http::header::AUTHORIZATION, v);
-            }
-            req.headers.insert(
-                http::header::CONTENT_TYPE,
-                HeaderValue::from_static("application/json"),
-            );
-            crate::antigravity_headers::inject_antigravity_headers(&mut req.headers, None);
-
-            let cancel = CancellationToken::new();
-            if let Ok(resp) = upstream_client.call(req, TimeoutProfile::ModelDiscovery, cancel).await {
-                if resp.status.is_success() {
-                    if let Ok(body_bytes) = resp.collect().await {
-                        if let Ok(json) = serde_json::from_slice::<serde_json::Value>(&body_bytes) {
-                            if let Some(models) = self.parse_models_response(&json) {
-                                return Ok(models);
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        Ok(self.hardcoded_models())
-    }
-}
-
-// =====================================================================
 // Custom (user-defined) adapter
 // =====================================================================
 
@@ -2694,7 +2400,6 @@ pub fn builtin_adapters() -> Vec<Arc<dyn ProviderAdapter>> {
         Arc::new(CloudflareWorkersAIAdapter::new()),
         Arc::new(GeminiAdapter::new()),
         Arc::new(AntigravityAdapter::new()),
-        Arc::new(AntigravityCliAdapter::new()),
     ]
 }
 
@@ -2900,9 +2605,9 @@ mod tests {
     // ---- Factory -----------------------------------------------------
 
     #[test]
-    fn builtin_adapters_returns_eleven() {
+    fn builtin_adapters_returns_ten() {
         let v = builtin_adapters();
-        assert_eq!(v.len(), 11);
+        assert_eq!(v.len(), 10);
         let ids: Vec<&str> = v.iter().map(|a| a.id().as_str()).collect();
         assert!(ids.contains(&"openrouter"));
         assert!(ids.contains(&"minimax"));
@@ -2914,7 +2619,6 @@ mod tests {
         assert!(ids.contains(&"cloudflare-workers-ai"));
         assert!(ids.contains(&"gemini"));
         assert!(ids.contains(&"antigravity"));
-        assert!(ids.contains(&"antigravity-cli"));
     }
 
     // ---- Cloudflare Workers AI ---------------------------------------
@@ -3209,31 +2913,6 @@ mod tests {
         assert!(a.models_url().is_none());
     }
 
-    // ---- Antigravity CLI -----------------------------------------------
-
-    #[test]
-    fn antigravity_cli_builds_correct_url() {
-        let a = AntigravityCliAdapter::new();
-        let url = a.build_chat_url(TargetFormat::Gemini, &ModelId::new("gemini-3.5-flash"));
-        assert_eq!(
-            url,
-            "https://daily-cloudcode-pa.googleapis.com/v1internal:generateContent"
-        );
-    }
-
-    #[test]
-    fn antigravity_cli_builds_bearer_auth() {
-        let a = AntigravityCliAdapter::new();
-        let (name, value) = a.build_auth_header("ya29.cli-token");
-        assert_eq!(name, "Authorization");
-        assert_eq!(value, "Bearer ya29.cli-token");
-    }
-
-    #[test]
-    fn antigravity_cli_has_no_models_url() {
-        let a = AntigravityCliAdapter::new();
-        assert!(a.models_url().is_none());
-    }
 
     // ---- CustomAdapter ---------------------------------------------------
 

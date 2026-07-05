@@ -36,7 +36,7 @@ const MODELS_DEV_URL: &str = "https://models.dev/api.json";
 const PROVIDER_MAP: &[(&str, &[&str])] = &[
     ("openai", &["openrouter"]),
     ("anthropic", &["openrouter"]),
-    ("google", &["gemini", "gemini-cli"]),
+    ("google", &["gemini"]),
     ("meta", &["openrouter"]),
     ("mistral", &["openrouter"]),
     ("deepseek", &["openrouter"]),
@@ -994,12 +994,12 @@ mod tests {
         let count = upsert_models_dev(TEST_JSON.as_bytes(), &conn).unwrap();
         // opencode → mapped to opencode-zen locally + inserted under
         //   its own ext_id "opencode": 2 models × 2 ids = 4 rows.
-        // google → mapped to gemini + gemini-cli locally + inserted
-        //   under its own ext_id "google": 1 model × 3 ids = 3 rows.
-        // total = 7
+        // google → mapped to gemini locally + inserted
+        //   under its own ext_id "google": 1 model × 2 ids = 2 rows.
+        // total = 6
         assert_eq!(
-            count, 7,
-            "should upsert 7 rows (4 opencode+opencode-zen, 3 google+gemini+gemini-cli)"
+            count, 6,
+            "should upsert 6 rows (4 opencode+opencode-zen, 2 google+gemini)"
         );
     }
 

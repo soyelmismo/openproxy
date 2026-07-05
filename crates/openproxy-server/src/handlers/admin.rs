@@ -3277,7 +3277,7 @@ async fn run_test_for_model(
     //    that expects a different wire shape.
     let is_custom_provider = matches!(
         model.provider_id.as_str(),
-        "kiro" | "antigravity" | "antigravity-cli"
+        "kiro" | "antigravity"
     );
 
     if is_custom_provider && !is_anonymous {
@@ -3326,7 +3326,7 @@ async fn run_test_for_model(
 
         // Read provider-specific metadata and fire the executor.
         let executor_result = match model.provider_id.as_str() {
-            "antigravity" | "antigravity-cli" => {
+            "antigravity" => {
                 let project_id = {
                     let w = s.db_pool().writer();
                     openproxy_core::executor_antigravity::read_project_id(&w, test_account_id)

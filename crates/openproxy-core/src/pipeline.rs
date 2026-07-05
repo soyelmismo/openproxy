@@ -1984,7 +1984,7 @@ impl Pipeline {
         if let Some(account_id) = target.account_id {
             let is_custom = matches!(
                 target.provider_id.as_str(),
-                "kiro" | "antigravity" | "antigravity-cli" | "gemini-cli"
+                "kiro" | "antigravity"
             );
             if is_custom {
                 // Read access token + provider-specific metadata +
@@ -2059,7 +2059,7 @@ impl Pipeline {
                                 .unwrap_or(None);
                             (access_token, m, None)
                         }
-                        "antigravity" | "antigravity-cli" | "gemini-cli" => {
+                        "antigravity" => {
                             let p = crate::executor_antigravity::read_project_id(&conn, account_id);
                             match p {
                                 Ok(p) => (access_token, None, Some(p)),
@@ -2165,7 +2165,7 @@ impl Pipeline {
                         )
                         .await
                     }
-                    "antigravity" | "antigravity-cli" | "gemini-cli" => {
+                    "antigravity" => {
                         let project_id = antigravity_project.as_deref().unwrap_or("");
                         // Gate 3: the antigravity executor now takes
                         // `&Arc<UpstreamClient>` instead of

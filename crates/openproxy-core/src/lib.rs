@@ -31,7 +31,7 @@ pub mod models_dev_sync;
 pub mod notifications;
 pub mod oauth;
 pub mod oauth_antigravity;
-pub mod oauth_gemini;
+
 pub mod oauth_kiro;
 pub mod oauth_tickets;
 pub mod pipeline;
