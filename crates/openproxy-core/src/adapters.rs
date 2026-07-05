@@ -335,56 +335,6 @@ fn header_name(name: &str) -> Option<http::header::HeaderName> {
     }
 }
 
-/// POST `url` via the [`UpstreamClient`] with the given `(header, value)`
-/// pairs and a JSON body, then collect and parse the response body as
-/// a JSON value. Used by the Antigravity adapters (and any other
-/// provider whose `/models` endpoint takes a POST + small JSON body).
-async fn upstream_post_json(
-    upstream_client: &Arc<UpstreamClient>,
-    url: &str,
-    headers: &[(&str, String)],
-    body: &[u8],
-) -> std::result::Result<serde_json::Value, String> {
-    let mut req = UpstreamRequest::post_json(url, Bytes::copy_from_slice(body));
-    for (k, v) in headers {
-        if let Ok(hv) = HeaderValue::from_str(v) {
-            if let Some(name) = header_name(k) {
-                req.headers.insert(name, hv);
-            } else {
-                req.headers.insert(
-                    http::header::HeaderName::from_bytes(k.as_bytes())
-                        .map_err(|e| format!("invalid header name '{}': {}", k, e))?,
-                    hv,
-                );
-            }
-        }
-    }
-    let cancel = CancellationToken::new();
-    let response = upstream_client
-        .call(req, TimeoutProfile::ModelDiscovery, cancel)
-        .await
-        .map_err(|e| format!("{}: {}", url, e))?;
-
-    if !response.status.is_success() {
-        let status = response.status.as_u16();
-        let body = response
-            .collect()
-            .await
-            .map_err(|e| format!("{}: failed to read error body: {}", url, e))?;
-        return Err(format!(
-            "{}: status {}: {}",
-            url,
-            status,
-            String::from_utf8_lossy(&body)
-        ));
-    }
-
-    let bytes = response
-        .collect()
-        .await
-        .map_err(|e| format!("{}: {}", url, e))?;
-    serde_json::from_slice(&bytes).map_err(|e| format!("{}: parse: {}", url, e))
-}
 
 // =====================================================================
 // OpenRouter
@@ -1946,14 +1896,6 @@ impl AntigravityAdapter {
 
         let mut models = Vec::new();
         for (model_id, model_data) in models_obj {
-            if model_data
-                .get("isInternal")
-                .and_then(|v| v.as_bool())
-                .unwrap_or(false)
-            {
-                continue;
-            }
-
             let upstream_id = model_id.clone();
             let client_id = Self::remap_antigravity_model_id(&upstream_id);
 
@@ -2177,38 +2119,27 @@ impl ProviderAdapter for AntigravityAdapter {
             "https://cloudcode-pa.googleapis.com/v1internal:fetchAvailableModels",
         ];
 
-        let ua = "Antigravity/4.2.0 (X11; Linux x86_64) Chrome/132.0.6834.160 Electron/39.2.3";
-
         for endpoint in &endpoints {
-            // Cloud Code's `:fetchAvailableModels` endpoint expects a
-            // POST with a small JSON body (the empty object works in
-            // practice) and a Chromium-flavored User-Agent. We
-            // propagate transient transport / non-2xx errors via the
-            // helper's `Err` return; on success we hand the body to
-            // `parse_models_response`. If the parser decides the
-            // response is empty (e.g. an `isInternal` filter strips
-            // every model), we try the next endpoint before falling
-            // back to the hardcoded list.
-            match upstream_post_json(
-                upstream_client,
-                endpoint,
-                &[
-                    ("Authorization", format!("Bearer {api_key}")),
-                    ("User-Agent", ua.to_string()),
-                    ("X-Goog-Api-Client", "gl-node/22.21.1".to_string()),
-                ],
-                b"{}",
-            )
-            .await
-            {
-                Ok(body) => {
-                    if let Some(models) = self.parse_models_response(&body) {
-                        return Ok(models);
+            let mut req = UpstreamRequest::post_json(*endpoint, Bytes::from_static(b"{}"));
+            if let Ok(v) = HeaderValue::from_str(&format!("Bearer {api_key}")) {
+                req.headers.insert(http::header::AUTHORIZATION, v);
+            }
+            req.headers.insert(
+                http::header::CONTENT_TYPE,
+                HeaderValue::from_static("application/json"),
+            );
+            crate::antigravity_headers::inject_antigravity_headers(&mut req.headers, None);
+
+            let cancel = CancellationToken::new();
+            if let Ok(resp) = upstream_client.call(req, TimeoutProfile::ModelDiscovery, cancel).await {
+                if resp.status.is_success() {
+                    if let Ok(body_bytes) = resp.collect().await {
+                        if let Ok(json) = serde_json::from_slice::<serde_json::Value>(&body_bytes) {
+                            if let Some(models) = self.parse_models_response(&json) {
+                                return Ok(models);
+                            }
+                        }
                     }
-                }
-                Err(_) => {
-                    // Try the next endpoint; the final fallback is
-                    // the hardcoded list.
                 }
             }
         }
@@ -2261,14 +2192,6 @@ impl AntigravityCliAdapter {
 
         let mut models = Vec::new();
         for (model_id, model_data) in models_obj {
-            if model_data
-                .get("isInternal")
-                .and_then(|v| v.as_bool())
-                .unwrap_or(false)
-            {
-                continue;
-            }
-
             let upstream_id = model_id.clone();
             let client_id = Self::remap_antigravity_model_id(&upstream_id);
 
@@ -2490,38 +2413,27 @@ impl ProviderAdapter for AntigravityCliAdapter {
             "https://cloudcode-pa.googleapis.com/v1internal:fetchAvailableModels",
         ];
 
-        let ua = "Antigravity/4.2.0 (X11; Linux x86_64) Chrome/132.0.6834.160 Electron/39.2.3";
-
         for endpoint in &endpoints {
-            // Cloud Code's `:fetchAvailableModels` endpoint expects a
-            // POST with a small JSON body (the empty object works in
-            // practice) and a Chromium-flavored User-Agent. We
-            // propagate transient transport / non-2xx errors via the
-            // helper's `Err` return; on success we hand the body to
-            // `parse_models_response`. If the parser decides the
-            // response is empty (e.g. an `isInternal` filter strips
-            // every model), we try the next endpoint before falling
-            // back to the hardcoded list.
-            match upstream_post_json(
-                upstream_client,
-                endpoint,
-                &[
-                    ("Authorization", format!("Bearer {api_key}")),
-                    ("User-Agent", ua.to_string()),
-                    ("X-Goog-Api-Client", "gl-node/22.21.1".to_string()),
-                ],
-                b"{}",
-            )
-            .await
-            {
-                Ok(body) => {
-                    if let Some(models) = self.parse_models_response(&body) {
-                        return Ok(models);
+            let mut req = UpstreamRequest::post_json(*endpoint, Bytes::from_static(b"{}"));
+            if let Ok(v) = HeaderValue::from_str(&format!("Bearer {api_key}")) {
+                req.headers.insert(http::header::AUTHORIZATION, v);
+            }
+            req.headers.insert(
+                http::header::CONTENT_TYPE,
+                HeaderValue::from_static("application/json"),
+            );
+            crate::antigravity_headers::inject_antigravity_headers(&mut req.headers, None);
+
+            let cancel = CancellationToken::new();
+            if let Ok(resp) = upstream_client.call(req, TimeoutProfile::ModelDiscovery, cancel).await {
+                if resp.status.is_success() {
+                    if let Ok(body_bytes) = resp.collect().await {
+                        if let Ok(json) = serde_json::from_slice::<serde_json::Value>(&body_bytes) {
+                            if let Some(models) = self.parse_models_response(&json) {
+                                return Ok(models);
+                            }
+                        }
                     }
-                }
-                Err(_) => {
-                    // Try the next endpoint; the final fallback is
-                    // the hardcoded list.
                 }
             }
         }

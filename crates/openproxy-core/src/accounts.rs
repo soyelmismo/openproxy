@@ -511,12 +511,12 @@ pub fn store_oauth_tokens(
             "UPDATE accounts SET \
                 auth_type = 'oauth', \
                 access_token_encrypted = ?1, \
-                refresh_token_encrypted = ?2, \
+                refresh_token_encrypted = COALESCE(?2, refresh_token_encrypted), \
                 token_type = ?3, \
                 expires_at = ?4, \
-                oauth_scope = ?5, \
-                oauth_provider_specific = ?6, \
-                email = ?7 \
+                oauth_scope = COALESCE(?5, oauth_scope), \
+                oauth_provider_specific = COALESCE(?6, oauth_provider_specific), \
+                email = COALESCE(?7, email) \
              WHERE id = ?8",
             params![
                 access_blob,
@@ -1795,5 +1795,70 @@ mod tests {
             target_account_id.is_none(),
             "combo_target.account_id should be NULL after account delete"
         );
+    }
+
+    #[test]
+    fn oauth_store_preserves_existing_refresh_token_when_none() {
+        let (pool, _path) = fresh_pool();
+        let conn = pool.writer();
+        seed_provider(&conn, "openrouter");
+
+        let mk = MasterKey::generate();
+        let id = create(
+            &conn,
+            &ProviderId::new("openrouter"),
+            None,
+            &mk,
+            None,
+            10,
+            None,
+        )
+        .expect("create");
+
+        // 1. Initial store with a refresh token.
+        let access1 = "access-1";
+        let refresh1 = "refresh-1";
+        store_oauth_tokens(
+            &conn,
+            id,
+            access1,
+            Some(refresh1),
+            &mk,
+            "Bearer",
+            None,
+            None,
+            Some("initial-provider-spec"),
+            Some("user@domain.com"),
+        )
+        .expect("store initial");
+
+        // 2. Perform a refresh passing None for refresh_token and other fields.
+        let access2 = "access-2";
+        store_oauth_tokens(
+            &conn,
+            id,
+            access2,
+            None,
+            &mk,
+            "Bearer",
+            None,
+            None,
+            None,
+            None,
+        )
+        .expect("store refresh");
+
+        // 3. Verify access_token is updated.
+        let decrypted_at = decrypt_access_token(&conn, id, &mk).expect("decrypt access");
+        assert_eq!(decrypted_at, access2);
+
+        // 4. Verify refresh_token is preserved.
+        let decrypted_rt = decrypt_refresh_token(&conn, id, &mk).expect("decrypt refresh");
+        assert_eq!(decrypted_rt.as_deref(), Some(refresh1));
+
+        // 5. Verify email and provider specific metadata are preserved.
+        let acc = get(&conn, id).expect("get").expect("present");
+        assert_eq!(acc.email.as_deref(), Some("user@domain.com"));
+        assert_eq!(acc.oauth_provider_specific.as_deref(), Some("initial-provider-spec"));
     }
 }
