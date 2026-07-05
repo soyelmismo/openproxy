@@ -1766,8 +1766,13 @@ impl ProviderAdapter for GeminiAdapter {
 
     fn build_chat_url(&self, _target_format: TargetFormat, model: &ModelId) -> String {
         // Gemini puts the model in the URL path.
+        // Since openproxy always uses streaming to the upstream (dispatch_upstream
+        // forces is_streaming = true and expects SSE chunks), we must use the
+        // streamGenerateContent?alt=sse endpoint. Calling generateContent would
+        // return a non-streaming JSON body, which blocks headers until completion
+        // and causes timeouts.
         format!(
-            "{}/models/{}:generateContent",
+            "{}/models/{}:streamGenerateContent?alt=sse",
             self.config.base_url,
             model.as_str()
         )
@@ -2522,7 +2527,7 @@ impl ProviderAdapter for CustomAdapter {
             AdapterFormat::Anthropic => format!("{}/messages", self.config.base_url),
             AdapterFormat::Gemini => {
                 format!(
-                    "{}/models/{}:generateContent",
+                    "{}/models/{}:streamGenerateContent?alt=sse",
                     self.config.base_url,
                     model.as_str()
                 )
@@ -3146,7 +3151,7 @@ mod tests {
         let url = a.build_chat_url(TargetFormat::Gemini, &ModelId::new("gemini-2.5-flash"));
         assert_eq!(
             url,
-            "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent"
+            "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:streamGenerateContent?alt=sse"
         );
     }
 
@@ -3289,7 +3294,7 @@ mod tests {
         let url = a.build_chat_url(TargetFormat::Gemini, &ModelId::new("gemini-2.5-pro"));
         assert_eq!(
             url,
-            "https://gemini.example.com/v1beta/models/gemini-2.5-pro:generateContent"
+            "https://gemini.example.com/v1beta/models/gemini-2.5-pro:streamGenerateContent?alt=sse"
         );
     }
 
