@@ -239,6 +239,9 @@ pub struct ResponseAccumulator {
     /// `extra` map. The dashboard reads this to show a "Partial
     /// response — stream was interrupted" banner in the Response tab.
     partial: bool,
+    /// Raw response stream lines (including non-JSON content or error responses)
+    /// captured incrementally up to a max size (e.g. 32 KiB) for debugging.
+    raw_response_body: String,
 }
 
 impl ResponseAccumulator {
@@ -259,6 +262,22 @@ impl ResponseAccumulator {
             total_bytes: 0,
             truncated: false,
             partial: false,
+            raw_response_body: String::new(),
+        }
+    }
+
+    /// Append a raw stream line as read from the upstream connection (for debugging
+    /// empty/interrupted streams). Caps at 32 KiB to limit memory overhead.
+    pub fn append_raw_line(&mut self, line: &str) {
+        if self.raw_response_body.len() < 32768 {
+            let limit = 32768 - self.raw_response_body.len();
+            let to_add = &line[..line.len().min(limit)];
+            self.raw_response_body.push_str(to_add);
+            if to_add.len() < line.len() {
+                self.raw_response_body.push_str("... [truncated]");
+            } else {
+                self.raw_response_body.push('\n');
+            }
         }
     }
 
@@ -278,6 +297,14 @@ impl ResponseAccumulator {
     /// stream. Equivalent to checking the `partial` field directly.
     pub fn is_partial(&self) -> bool {
         self.partial
+    }
+
+    /// Checks if all accumulated fields (including raw stream logs) are empty.
+    pub fn is_completely_empty(&self) -> bool {
+        self.content.is_empty()
+            && self.reasoning.is_none()
+            && self.tool_calls.is_empty()
+            && self.raw_response_body.is_empty()
     }
 
     /// Append an OpenAI-format raw payload string (e.g. the JSON inside
@@ -484,6 +511,12 @@ impl ResponseAccumulator {
             // disconnect, race lost, sink error, etc.) before
             // calling `finish()`.
             extra.insert("partial".to_string(), Value::Bool(true));
+        }
+        if !self.raw_response_body.is_empty() {
+            extra.insert(
+                "raw_response_body".to_string(),
+                Value::String(self.raw_response_body.clone()),
+            );
         }
 
         let mut choice = Map::new();
@@ -775,5 +808,20 @@ mod tests {
             v["choices"][0]["delta"].get("reasoning_details").is_none(),
             "reasoning_details should be stripped even when reasoning is present"
         );
+    }
+
+    #[test]
+    fn raw_response_body_captured() {
+        let mut acc = ResponseAccumulator::new();
+        assert!(acc.is_completely_empty());
+        acc.append_raw_line("data: {\"choices\":[{\"delta\":{\"content\":\"hello\"}}]}");
+        acc.append_raw_line("some raw non-json line");
+        assert!(!acc.is_completely_empty());
+        let finished = acc.finish("test_chunk_id", 12345, "test_model");
+        let raw_body = finished["choices"][0]["message"]["raw_response_body"]
+            .as_str()
+            .unwrap();
+        assert!(raw_body.contains("some raw non-json line"));
+        assert!(raw_body.contains("hello"));
     }
 }

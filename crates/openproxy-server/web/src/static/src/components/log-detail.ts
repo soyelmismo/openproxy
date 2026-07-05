@@ -443,6 +443,14 @@ function renderRawResponseBlock(response: unknown): TemplateResult {
   </details>`;
 }
 
+/** Render the raw response stream body block (always open by default for debugging interrupted / empty streams). */
+function renderRawResponseBodyBlock(rawBody: string): TemplateResult {
+  return html`<div class="log-detail-raw-stream-captured" style="margin-bottom: var(--space-md);">
+    <h5 style="margin: 0 0 var(--space-xs) 0; font-size: var(--font-sm); color: var(--text-muted); font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em;">Captured Raw Upstream Stream (Interrupted / Empty)</h5>
+    <pre class="json-viewer" style="white-space: pre-wrap; word-break: break-all; max-height: 400px; overflow-y: auto; background: var(--bg-surface-2); font-family: var(--font-mono); font-size: var(--font-xs); padding: var(--space-sm); border-radius: var(--radius-sm); border: 1px solid var(--border-color);">${rawBody}</pre>
+  </div>`;
+}
+
 /** Render the Response tab. Handles null, string, and object inputs.
  *
  *  Layout (top to bottom):
@@ -521,6 +529,33 @@ function renderResponseTab(
     ? html`<div class="log-detail-partial-banner">⚠ Partial response — stream was interrupted before completion. The content below is what was received up to the point of failure.</div>`
     : null;
 
+  let rawResponseBody: string | null = null;
+  if (typeof response === "object" && response !== null && !Array.isArray(response)) {
+    const r = response as Record<string, unknown>;
+    if (typeof r["raw_response_body"] === "string") {
+      rawResponseBody = r["raw_response_body"];
+    } else {
+      const choices = r["choices"];
+      if (Array.isArray(choices) && choices.length > 0) {
+        const c0 = choices[0];
+        if (c0 && typeof c0 === "object" && !Array.isArray(c0)) {
+          const choice = c0 as Record<string, unknown>;
+          const msg = choice["message"] ?? choice["delta"] ?? null;
+          if (msg && typeof msg === "object" && !Array.isArray(msg)) {
+            const m = msg as Record<string, unknown>;
+            if (typeof m["raw_response_body"] === "string") {
+              rawResponseBody = m["raw_response_body"];
+            }
+          }
+        }
+      }
+    }
+  }
+
+  const rawResponseBodyBlock: TemplateResult | null = rawResponseBody
+    ? renderRawResponseBodyBlock(rawResponseBody)
+    : null;
+
   // String: try to parse as JSON; on success, recurse with parsed
   // value; on failure, show the raw string in a collapsible.
   if (typeof response === "string") {
@@ -534,6 +569,7 @@ function renderResponseTab(
     return html`<section class="log-detail-section" data-log-tab="response">
       <h4>Response</h4>
       ${partialBanner}
+      ${rawResponseBodyBlock}
       ${renderRawResponseBlock(response)}
     </section>`;
   }
@@ -570,6 +606,7 @@ function renderResponseTab(
     return html`<section class="log-detail-section" data-log-tab="response">
       <h4>Response</h4>
       ${partialBanner}
+      ${rawResponseBodyBlock}
       ${blocks}
     </section>`;
   }
@@ -664,6 +701,7 @@ function renderResponseTab(
   return html`<section class="log-detail-section" data-log-tab="response">
     <h4>Response</h4>
     ${partialBanner}
+    ${rawResponseBodyBlock}
     ${blocks}
   </section>`;
 }

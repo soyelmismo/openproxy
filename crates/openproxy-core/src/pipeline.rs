@@ -4261,6 +4261,9 @@ impl Pipeline {
                 if line.is_empty() || line.starts_with(':') {
                     continue;
                 }
+                if let Some(a) = acc.as_mut() {
+                    a.append_raw_line(line);
+                }
 
                 // Record TTFT on the first data-bearing line.
                 if ttft_ms.is_none() {
@@ -5597,7 +5600,7 @@ impl Pipeline {
         // the streaming failure helpers, so `finish()` will include
         // `"partial": true` in the JSON's `extra` map.
         let response_body_json: Option<serde_json::Value> =
-            acc.filter(|a| !a.is_empty()).map(|a| {
+            acc.filter(|a| !a.is_completely_empty()).map(|a| {
                 let chunk_id_str = chunk_id.unwrap_or("partial");
                 a.finish(chunk_id_str, created, model_name)
             });
