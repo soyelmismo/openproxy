@@ -10,8 +10,10 @@
 
 use std::sync::Arc;
 
+#[cfg(not(feature = "upstream-hyper"))]
 pub struct UpstreamClient;
 
+#[cfg(not(feature = "upstream-hyper"))]
 impl UpstreamClient {
     pub fn new() -> Arc<Self> {
         Arc::new(Self)

@@ -453,7 +453,7 @@ pub fn read_project_id(
     conn: &rusqlite::Connection,
     account_id: AccountId,
 ) -> Result<Option<String>> {
-    let raw: Option<String> = conn
+    let raw: Option<Option<String>> = conn
         .query_row(
             "SELECT oauth_provider_specific FROM accounts WHERE id = ?1",
             rusqlite::params![account_id.0],
@@ -468,7 +468,7 @@ pub fn read_project_id(
             source: Some(Box::new(e)),
         })?;
 
-    let Some(raw) = raw else { return Ok(None) };
+    let Some(Some(raw)) = raw else { return Ok(None) };
     let meta: GeminiCliProviderMeta = serde_json::from_str(&raw)
         .map_err(|e| CoreError::Parse(format!("gemini meta parse: {e}")))?;
     Ok(meta.project_id)
@@ -504,5 +504,57 @@ mod tests {
         // Non-PKCE: verifier and challenge are empty.
         assert_eq!(verifier, "");
         assert_eq!(challenge, "");
+    }
+
+    #[test]
+    fn test_urlencoded_body() {
+        let params = [("key", "val"), ("a", "b c")];
+        let body = urlencoded_body(&params);
+        assert_eq!(body, "key=val&a=b%20c");
+    }
+
+    #[test]
+    fn test_read_project_id() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute(
+            "CREATE TABLE accounts (id INTEGER PRIMARY KEY, oauth_provider_specific TEXT)",
+            [],
+        )
+        .unwrap();
+
+        let account_id = AccountId(1);
+        let meta = GeminiCliProviderMeta {
+            project_id: Some("test-project".to_string()),
+        };
+        let meta_json = serde_json::to_string(&meta).unwrap();
+
+        conn.execute(
+            "INSERT INTO accounts (id, oauth_provider_specific) VALUES (?1, ?2)",
+            rusqlite::params![account_id.0, meta_json],
+        )
+        .unwrap();
+
+        let project_id = read_project_id(&conn, account_id).unwrap();
+        assert_eq!(project_id, Some("test-project".to_string()));
+    }
+
+    #[test]
+    fn test_read_project_id_none() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute(
+            "CREATE TABLE accounts (id INTEGER PRIMARY KEY, oauth_provider_specific TEXT)",
+            [],
+        )
+        .unwrap();
+
+        let account_id = AccountId(1);
+        conn.execute(
+            "INSERT INTO accounts (id, oauth_provider_specific) VALUES (?1, NULL)",
+            rusqlite::params![account_id.0],
+        )
+        .unwrap();
+
+        let project_id = read_project_id(&conn, account_id).unwrap();
+        assert_eq!(project_id, None);
     }
 }

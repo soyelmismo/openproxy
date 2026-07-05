@@ -135,6 +135,35 @@ pub fn upsert_models_dev(body: &[u8], conn: &Connection) -> Result<usize> {
             continue;
         };
 
+        let mut stmt = conn.prepare(
+            "INSERT INTO model_capabilities_sync \
+             (provider_id, model_id, context_length, max_output_tokens, \
+              pricing_input_per_1m, pricing_output_per_1m, pricing_cached_per_1m, \
+              tool_call, reasoning, vision, structured_output, \
+              modalities_input, modalities_output, family, status, \
+              model_id_normalized) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16) \
+             ON CONFLICT(provider_id, model_id) DO UPDATE SET \
+              context_length       = coalesce(excluded.context_length,       model_capabilities_sync.context_length),
+              max_output_tokens    = coalesce(excluded.max_output_tokens,    model_capabilities_sync.max_output_tokens),
+              pricing_input_per_1m = coalesce(excluded.pricing_input_per_1m, model_capabilities_sync.pricing_input_per_1m),
+              pricing_output_per_1m= coalesce(excluded.pricing_output_per_1m,model_capabilities_sync.pricing_output_per_1m),
+              pricing_cached_per_1m= coalesce(excluded.pricing_cached_per_1m,model_capabilities_sync.pricing_cached_per_1m),
+              tool_call     = coalesce(excluded.tool_call,     model_capabilities_sync.tool_call),
+              reasoning     = coalesce(excluded.reasoning,     model_capabilities_sync.reasoning),
+              vision        = coalesce(excluded.vision,        model_capabilities_sync.vision),
+              structured_output = coalesce(excluded.structured_output, model_capabilities_sync.structured_output),
+              modalities_input  = coalesce(excluded.modalities_input,  model_capabilities_sync.modalities_input),
+              modalities_output = coalesce(excluded.modalities_output, model_capabilities_sync.modalities_output),
+              family        = coalesce(excluded.family,        model_capabilities_sync.family),
+              status        = coalesce(excluded.status,        model_capabilities_sync.status),
+              model_id_normalized = coalesce(excluded.model_id_normalized, model_capabilities_sync.model_id_normalized),
+              fetched_at    = strftime('%Y-%m-%dT%H:%M:%SZ','now')"
+        ).map_err(|e| CoreError::Database {
+            message: format!("models.dev upsert prepare: {e}"),
+            source: Some(Box::new(e)),
+        })?;
+
         for model_val in models_obj.values() {
             let model: ModelsDevModel = match serde_json::from_value(model_val.clone()) {
                 Ok(m) => m,
@@ -162,30 +191,7 @@ pub fn upsert_models_dev(body: &[u8], conn: &Connection) -> Result<usize> {
             let normalized = crate::model_normalize::normalize_model_id(&model.id);
 
             for our_id in &all_ids {
-                conn.execute(
-                    "INSERT INTO model_capabilities_sync \
-                     (provider_id, model_id, context_length, max_output_tokens, \
-                      pricing_input_per_1m, pricing_output_per_1m, pricing_cached_per_1m, \
-                      tool_call, reasoning, vision, structured_output, \
-                      modalities_input, modalities_output, family, status, \
-                      model_id_normalized) \
-                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16) \
-                     ON CONFLICT(provider_id, model_id) DO UPDATE SET \
-                      context_length       = coalesce(excluded.context_length,       model_capabilities_sync.context_length),
-                      max_output_tokens    = coalesce(excluded.max_output_tokens,    model_capabilities_sync.max_output_tokens),
-                      pricing_input_per_1m = coalesce(excluded.pricing_input_per_1m, model_capabilities_sync.pricing_input_per_1m),
-                      pricing_output_per_1m= coalesce(excluded.pricing_output_per_1m,model_capabilities_sync.pricing_output_per_1m),
-                      pricing_cached_per_1m= coalesce(excluded.pricing_cached_per_1m,model_capabilities_sync.pricing_cached_per_1m),
-                      tool_call     = coalesce(excluded.tool_call,     model_capabilities_sync.tool_call),
-                      reasoning     = coalesce(excluded.reasoning,     model_capabilities_sync.reasoning),
-                      vision        = coalesce(excluded.vision,        model_capabilities_sync.vision),
-                      structured_output = coalesce(excluded.structured_output, model_capabilities_sync.structured_output),
-                      modalities_input  = coalesce(excluded.modalities_input,  model_capabilities_sync.modalities_input),
-                      modalities_output = coalesce(excluded.modalities_output, model_capabilities_sync.modalities_output),
-                      family        = coalesce(excluded.family,        model_capabilities_sync.family),
-                      status        = coalesce(excluded.status,        model_capabilities_sync.status),
-                      model_id_normalized = coalesce(excluded.model_id_normalized, model_capabilities_sync.model_id_normalized),
-                      fetched_at    = strftime('%Y-%m-%dT%H:%M:%SZ','now')",
+                stmt.execute(
                     rusqlite::params![
                         our_id,
                         &model.id,
@@ -205,7 +211,7 @@ pub fn upsert_models_dev(body: &[u8], conn: &Connection) -> Result<usize> {
                         &normalized,
                     ],
                 ).map_err(|e| CoreError::Database {
-                    message: format!("models.dev upsert: {e}"),
+                    message: format!("models.dev upsert execute: {e}"),
                     source: Some(Box::new(e)),
                 })?;
                 total += 1;
@@ -338,18 +344,25 @@ pub fn backfill_model_id_normalized(conn: &Connection) -> Result<usize> {
             })?;
         rows.filter_map(|r| r.ok()).collect()
     };
-    for (provider_id, model_id) in &model_rows {
-        let normalized = crate::model_normalize::normalize_model_id(model_id);
-        conn.execute(
-            "UPDATE models SET model_id_normalized = ?1 \
-             WHERE provider_id = ?2 AND model_id = ?3",
-            rusqlite::params![&normalized, provider_id, model_id],
-        )
-        .map_err(|e| CoreError::Database {
-            message: format!("backfill update models: {e}"),
-            source: Some(Box::new(e)),
-        })?;
-        total += 1;
+    {
+        let mut stmt = conn
+            .prepare(
+                "UPDATE models SET model_id_normalized = ?1 \
+                 WHERE provider_id = ?2 AND model_id = ?3",
+            )
+            .map_err(|e| CoreError::Database {
+                message: format!("backfill prepare models update: {e}"),
+                source: Some(Box::new(e)),
+            })?;
+        for (provider_id, model_id) in &model_rows {
+            let normalized = crate::model_normalize::normalize_model_id(model_id);
+            stmt.execute(rusqlite::params![&normalized, provider_id, model_id])
+                .map_err(|e| CoreError::Database {
+                    message: format!("backfill execute models update: {e}"),
+                    source: Some(Box::new(e)),
+                })?;
+            total += 1;
+        }
     }
 
     // ── Backfill `model_capabilities_sync` table ─────────────────────
@@ -377,18 +390,25 @@ pub fn backfill_model_id_normalized(conn: &Connection) -> Result<usize> {
             })?;
         rows.filter_map(|r| r.ok()).collect()
     };
-    for (provider_id, model_id) in &sync_rows {
-        let normalized = crate::model_normalize::normalize_model_id(model_id);
-        conn.execute(
-            "UPDATE model_capabilities_sync SET model_id_normalized = ?1 \
-             WHERE provider_id = ?2 AND model_id = ?3",
-            rusqlite::params![&normalized, provider_id, model_id],
-        )
-        .map_err(|e| CoreError::Database {
-            message: format!("backfill update sync: {e}"),
-            source: Some(Box::new(e)),
-        })?;
-        total += 1;
+    {
+        let mut stmt = conn
+            .prepare(
+                "UPDATE model_capabilities_sync SET model_id_normalized = ?1 \
+                 WHERE provider_id = ?2 AND model_id = ?3",
+            )
+            .map_err(|e| CoreError::Database {
+                message: format!("backfill prepare sync update: {e}"),
+                source: Some(Box::new(e)),
+            })?;
+        for (provider_id, model_id) in &sync_rows {
+            let normalized = crate::model_normalize::normalize_model_id(model_id);
+            stmt.execute(rusqlite::params![&normalized, provider_id, model_id])
+                .map_err(|e| CoreError::Database {
+                    message: format!("backfill execute sync update: {e}"),
+                    source: Some(Box::new(e)),
+                })?;
+            total += 1;
+        }
     }
 
     if total > 0 {
@@ -444,40 +464,45 @@ pub fn recompute_costs(conn: &Connection) -> Result<usize> {
     };
 
     let mut updated = 0usize;
-    for (id, provider_id, model_id, prompt_tokens, completion_tokens) in &rows {
-        let price = crate::pricing::lookup_with_db(conn, provider_id, model_id);
-        // If the model is a "free" variant (suffix `:free`, `-free`,
-        // `-free-trial`) and the sync table returned a $0 price (the
-        // free tier), try to find the PAID model's price instead. This
-        // makes the analytics show the "cost saved" — what the request
-        // WOULD have cost if the operator weren't using the free tier.
-        // The operator can still see it's a free model by the model_id
-        // in the row.
-        let price = match price {
-            Some(p) if p.input_per_1m == 0.0 && p.output_per_1m == 0.0 => {
-                // Free-tier price found; try the paid variant.
-                let base_model = crate::model_normalize::normalize_model_id(model_id);
-                let paid = crate::pricing::lookup_by_normalized(conn, &base_model)
-                    .filter(|p| p.input_per_1m > 0.0 || p.output_per_1m > 0.0);
-                paid.or(Some(p))
-            }
-            other => other,
-        };
-        if let Some(p) = price {
-            let prompt = prompt_tokens.unwrap_or(0) as f64;
-            let completion = completion_tokens.unwrap_or(0) as f64;
-            let cost =
-                p.input_per_1m * prompt / 1_000_000.0 + p.output_per_1m * completion / 1_000_000.0;
-            if cost > 0.0 {
-                conn.execute(
-                    "UPDATE usage SET cost_usd = ?1 WHERE id = ?2",
-                    rusqlite::params![cost, id],
-                )
-                .map_err(|e| CoreError::Database {
-                    message: format!("recompute update: {e}"),
-                    source: Some(Box::new(e)),
-                })?;
-                updated += 1;
+    {
+        let mut stmt = conn
+            .prepare("UPDATE usage SET cost_usd = ?1 WHERE id = ?2")
+            .map_err(|e| CoreError::Database {
+                message: format!("recompute prepare update: {e}"),
+                source: Some(Box::new(e)),
+            })?;
+        for (id, provider_id, model_id, prompt_tokens, completion_tokens) in &rows {
+            let price = crate::pricing::lookup_with_db(conn, provider_id, model_id);
+            // If the model is a "free" variant (suffix `:free`, `-free`,
+            // `-free-trial`) and the sync table returned a $0 price (the
+            // free tier), try to find the PAID model's price instead. This
+            // makes the analytics show the "cost saved" — what the request
+            // WOULD have cost if the operator weren't using the free tier.
+            // The operator can still see it's a free model by the model_id
+            // in the row.
+            let price = match price {
+                Some(p) if p.input_per_1m == 0.0 && p.output_per_1m == 0.0 => {
+                    // Free-tier price found; try the paid variant.
+                    let base_model = crate::model_normalize::normalize_model_id(model_id);
+                    let paid = crate::pricing::lookup_by_normalized(conn, &base_model)
+                        .filter(|p| p.input_per_1m > 0.0 || p.output_per_1m > 0.0);
+                    paid.or(Some(p))
+                }
+                other => other,
+            };
+            if let Some(p) = price {
+                let prompt = prompt_tokens.unwrap_or(0) as f64;
+                let completion = completion_tokens.unwrap_or(0) as f64;
+                let cost = p.input_per_1m * prompt / 1_000_000.0
+                    + p.output_per_1m * completion / 1_000_000.0;
+                if cost > 0.0 {
+                    stmt.execute(rusqlite::params![cost, id])
+                        .map_err(|e| CoreError::Database {
+                            message: format!("recompute execute update: {e}"),
+                            source: Some(Box::new(e)),
+                        })?;
+                    updated += 1;
+                }
             }
         }
     }
@@ -734,15 +759,30 @@ pub fn auto_create_combos(conn: &Connection) -> Result<usize> {
         let combo_id: i64 = conn.last_insert_rowid();
 
         // Insert targets.
-        for (order, (row_id, provider_id, account_id)) in targets.iter().enumerate() {
-            conn.execute(
-                "INSERT INTO combo_targets (combo_id, provider_id, account_id, model_row_id, priority_order) \
-                 VALUES (?1, ?2, ?3, ?4, ?5)",
-                rusqlite::params![combo_id, provider_id, account_id, row_id, order as i32],
-            ).map_err(|e| CoreError::Database {
-                message: format!("auto-combo target insert: {e}"),
-                source: Some(Box::new(e)),
-            })?;
+        {
+            let mut target_stmt = conn
+                .prepare(
+                    "INSERT INTO combo_targets (combo_id, provider_id, account_id, model_row_id, priority_order) \
+                     VALUES (?1, ?2, ?3, ?4, ?5)",
+                )
+                .map_err(|e| CoreError::Database {
+                    message: format!("auto-combo target prepare: {e}"),
+                    source: Some(Box::new(e)),
+                })?;
+            for (order, (row_id, provider_id, account_id)) in targets.iter().enumerate() {
+                target_stmt
+                    .execute(rusqlite::params![
+                        combo_id,
+                        provider_id,
+                        account_id,
+                        row_id,
+                        order as i32
+                    ])
+                    .map_err(|e| CoreError::Database {
+                        message: format!("auto-combo target execute: {e}"),
+                        source: Some(Box::new(e)),
+                    })?;
+            }
         }
 
         created += 1;

@@ -21,7 +21,7 @@
 
 use axum::{
     Json,
-    extract::State,
+    extract::{ConnectInfo, State},
     http::{HeaderMap, StatusCode},
     response::IntoResponse,
 };
@@ -122,13 +122,14 @@ impl Stream for SseBytesStream {
 /// The fresh watch is driven only by the watchdog timer (total_ms).
 pub async fn chat_completions(
     State(state): State<AppState>,
+    ConnectInfo(addr): ConnectInfo<std::net::SocketAddr>,
     headers: HeaderMap,
     axum::Json(body): axum::Json<serde_json::Value>,
 ) -> Result<axum::response::Response, ApiError> {
     // Create a dummy CancelWatch — the middleware is no longer
     // applied to this route, so we create our own fresh watch pair.
     let cancel = crate::disconnect::CancelWatch::new();
-    run_pipeline(state, cancel, headers, body).await
+    run_pipeline(state, addr, cancel, headers, body).await
 }
 
 /// Drive one chat-completion request through the pipeline.
@@ -144,51 +145,24 @@ pub async fn chat_completions(
 /// SSE `stream.next()` `tokio::select!` all observe it.
 async fn run_pipeline(
     state: AppState,
-    cancel: CancelWatch,
+    client_addr: std::net::SocketAddr,
+    _cancel: CancelWatch,
     headers: HeaderMap,
     body: serde_json::Value,
 ) -> Result<axum::response::Response, ApiError> {
-    // 1. Parse the OpenAI request. Clone `body` FIRST so we can
-    //    thread the raw JSON through to the recording path — the
-    //    typed `OpenAIRequest` struct drops unknown fields (provider
-    //    extensions, custom metadata), which makes debugging harder
-    //    when a client sends an unexpected field that causes the
-    //    upstream to behave differently.
+    // 1. Parse the OpenAI request.
     let raw_request_body = body.clone();
     let openai_req: OpenAIRequest =
         serde_json::from_value(body).map_err(|e| ApiError(CoreError::Parse(e.to_string())))?;
 
-    // 2. Authenticate (backward-compatible: no header = anonymous).
-    //
-    // The MVP keeps the chat endpoint open to anonymous traffic so
-    // local development and the in-cluster dashboard can hit
-    // /v1/chat/completions without a key. If the caller sends a
-    // `Bearer` token we *do* enforce it: an unknown / revoked /
-    // expired / scope-insufficient / model-disallowed key is a 401.
-    //
-    // The model-allowlist check uses the *proxy-level* id the client
-    // sent (which carries the `<provider>/` prefix returned by
-    // /v1/models). We strip the prefix further down before talking
-    // to the upstream; the allowlist match stays prefix-aware so
-    // a client that only knows the full id is still gated correctly.
+    // 2. Authenticate and rate limit.
     let auth_result = authenticate(&state, &headers, &openai_req.model)?;
     let api_key_id: Option<ApiKeyId> = auth_result.as_ref().map(|r| r.key_id);
 
-    // HIGH-3 fix: per-key rate limiting. Default: 60 req/min per key.
-    // Anonymous requests (no key) are rate-limited by client IP.
     let rl_key = if let Some(id) = api_key_id {
         format!("key:{}", id.0)
     } else {
-        // Use the connection's remote addr as the rate-limit key for
-        // anonymous requests. If unavailable, fall back to a shared
-        // "anon" bucket.
-        format!(
-            "ip:{}",
-            headers
-                .get("x-forwarded-for")
-                .and_then(|v| v.to_str().ok())
-                .unwrap_or("anon")
-        )
+        format!("ip:{}", client_addr.ip())
     };
     if !state.rate_limiter().check(&rl_key) {
         return Err(ApiError(CoreError::RateLimited {
@@ -197,19 +171,64 @@ async fn run_pipeline(
         }));
     }
 
-    // 3. Resolve the routing plan.
-    //
-    // Two paths:
-    //   a) Legacy override: `x-openproxy-combo: <name>` forces a
-    //      specific combo, bypassing model resolution. This is the
-    //      back-compat shim the previous header-driven routing
-    //      depended on; we keep it so existing clients keep working.
-    //   b) Model-driven (default): the `model` field is run through
-    //      `routing::resolve` which returns one of
-    //      `Direct` / `Combo` / `NotFound`.
-    //
-    // We hold the writer for the duration of the resolution so the
-    // combo/account lookups see a consistent view of the DB.
+    // 3. Resolve routing.
+    let plan = resolve_routing_plan(&state, &headers, &openai_req, &auth_result)?;
+
+    // 4. Translate plan to pipeline targets.
+    let (combo_id, combo_override, targets_override) =
+        translate_plan_to_targets(&state, &plan, api_key_id)?;
+
+    // 5. Build pipeline.
+    let pipeline = build_pipeline(&state);
+
+    // 6. Per-request IDs.
+    let request_id = RequestId::new();
+    let trace_id = TraceId::new();
+
+    // 7. Watchdog handling.
+    let watchdog_budget_ms = calculate_watchdog_budget(&state, &headers);
+    let (tx, rx) = tokio::sync::mpsc::channel(64);
+    let (client_disconnected, watchdog_tx) = create_watchdog_channels(openai_req.stream);
+    let stream_sink = if openai_req.stream {
+        Some(openproxy_core::race_sink::StreamSink::Direct(tx))
+    } else {
+        Some(openproxy_core::race_sink::StreamSink::Discard)
+    };
+
+    let (done_tx, done_rx) = tokio::sync::oneshot::channel::<()>();
+    spawn_watchdog(done_rx, watchdog_tx, watchdog_budget_ms);
+
+    // 8. Build request and run.
+    let req = PipelineRequest {
+        request_id,
+        trace_id,
+        combo_id,
+        openai_request: openai_req.clone(),
+        client_disconnected,
+        stream_sink,
+        api_key_id,
+        combo_override,
+        targets_override,
+        request_headers: redact_sensitive_headers(&headers),
+        request_body_json: Some(raw_request_body),
+        race_cancelled: false,
+        race_cancel: None,
+        endpoint_kind: openproxy_core::endpoint::EndpointKind::Chat,
+    };
+
+    if openai_req.stream {
+        return handle_streaming_response(pipeline, req, done_tx, rx).await;
+    }
+
+    handle_sync_response(pipeline, req, done_tx).await
+}
+
+fn resolve_routing_plan(
+    state: &AppState,
+    headers: &HeaderMap,
+    openai_req: &OpenAIRequest,
+    auth_result: &Option<AuthResult>,
+) -> Result<RoutingPlan, ApiError> {
     let legacy_combo_name = headers
         .get("x-openproxy-combo")
         .and_then(|v| v.to_str().ok())
@@ -218,8 +237,6 @@ async fn run_pipeline(
     let plan = {
         let w = state.db_pool().writer();
         if let Some(name) = legacy_combo_name.as_deref() {
-            // Legacy override path. Bypass model resolution and
-            // build a Combo plan by name.
             match openproxy_core::combos::get_combo_by_name(&w, name)? {
                 Some(combo) => {
                     let targets = openproxy_core::combos::list_targets(&w, combo.id)?;
@@ -231,26 +248,15 @@ async fn run_pipeline(
                         targets,
                     }
                 }
-                None => {
-                    return Err(ApiError(CoreError::ComboNotFound(0)));
-                }
+                None => return Err(ApiError(CoreError::ComboNotFound(0))),
             }
         } else {
             routing::resolve(&w, &openai_req.model)?
         }
     };
 
-    // 4. Translate the plan into a `PipelineRequest`. The `Direct`
-    //    branch builds a synthetic in-memory combo so the rest of
-    //    the pipeline is reused unchanged.
-    //
-    //    MEDIUM-1 fix: enforce `allowed_combos` here. The field was
-    //    stored on the API key but never checked — a key with
-    //    `allowed_combos=[5]` could still hit any combo via the
-    //    `x-openproxy-combo` header or the `combo:<name>` model alias.
-    //    Now we check after routing resolves the combo_id.
     if let RoutingPlan::Combo { combo_id, .. } = &plan
-        && let Some(auth) = &auth_result
+        && let Some(auth) = auth_result
         && let Some(allowed) = &auth.allowed_combos
         && !allowed.is_empty()
         && !allowed.contains(&combo_id.0)
@@ -260,7 +266,15 @@ async fn run_pipeline(
         )));
     }
 
-    let (combo_id, combo_override, targets_override) = match &plan {
+    Ok(plan)
+}
+
+fn translate_plan_to_targets(
+    state: &AppState,
+    plan: &RoutingPlan,
+    api_key_id: Option<ApiKeyId>,
+) -> Result<(ComboId, Option<openproxy_core::combos::Combo>, Option<Vec<openproxy_core::combos::ComboTarget>>), ApiError> {
+    match plan {
         RoutingPlan::Direct {
             provider_id,
             account_id,
@@ -269,32 +283,28 @@ async fn run_pipeline(
         } => {
             let (synthetic_combo, synthetic_targets) =
                 build_synthetic_combo(provider_id.clone(), *account_id, *model_row_id);
-            // The pipeline carries the synthetic combo + targets in
-            // its override slots; `combo_id` is the sentinel so
-            // usage rows can be grepped for synthetic dispatch.
-            (
+            Ok((
                 ComboId(SYNTHETIC_COMBO_ID),
                 Some(synthetic_combo),
                 Some(synthetic_targets),
-            )
+            ))
         }
-        RoutingPlan::Combo { combo_id, .. } => (*combo_id, None, None),
+        RoutingPlan::Combo { combo_id, .. } => Ok((*combo_id, None, None)),
         RoutingPlan::NotFound { model, hint } => {
-            // Write a usage row so the dashboard's Live Logs tail
-            // shows the misroute.
-            let _ = record_model_not_found_usage_row(&state, RequestId::new(), api_key_id, model);
+            let _ = record_model_not_found_usage_row(state, RequestId::new(), api_key_id, model);
             let mut msg = format!("model not found: {}", model);
             if let Some(h) = hint {
                 msg.push_str(&format!(" (hint: {})", h));
             }
-            return Err(ApiError(CoreError::ModelNotFound {
+            Err(ApiError(CoreError::ModelNotFound {
                 provider: "<unknown>".into(),
                 model: msg,
-            }));
+            }))
         }
-    };
+    }
+}
 
-    // 5. Build the pipeline config from the app config.
+fn build_pipeline(state: &AppState) -> Pipeline {
     let config = PipelineConfig {
         defaults: openproxy_core::timeouts::Timeouts::from_config(&state.timeouts()),
         racing: state.config().racing.clone(),
@@ -303,92 +313,31 @@ async fn run_pipeline(
         master_key: state.master_key().clone(),
         adapters: Arc::new(state.adapters()),
         http_client: state.http_client().clone(),
-        // Read from `[cooldown].cooldown_secs` / `OPENPROXY_COOLDOWN_SECS`.
-        // Default 60s when neither is set; the loader fills in
-        // `CooldownConfig::default()` for the TOML case.
-        //
-        // `cooldown_max_secs` and `cooldown_factor` are the global
-        // fallbacks for combos whose per-combo overrides are NULL
-        // (migration 000035). They are read here once per request
-        // and threaded into `PipelineConfig`; the pipeline's
-        // `record_failure_with_mode` call site does the final
-        // "combo override or global default?" resolution.
         cooldown_secs: state.config().cooldown.cooldown_secs,
         cooldown_max_secs: state.config().cooldown.max_secs,
         cooldown_factor: state.config().cooldown.factor,
-        // Use the shared `UpstreamClient` from `AppState` (created once
-        // at startup). Sharing it means the underlying hyper client's
-        // per-host connection pool is reused across all in-flight
-        // requests, eliminating the per-request TCP+TLS handshake
-        // (~50-200ms on WAN) that a fresh `UpstreamClient::new()` would
-        // pay. `state.upstream_client()` returns `&Arc<UpstreamClient>`;
-        // the cheap `Arc` clone here is all that's needed.
         upstream_client: state.upstream_client().clone(),
         oauth_provider_registry: Some(state.oauth_provider_registry()),
         compression_mode: state.compression_mode(),
         idle_chunk_retryable: state.idle_chunk_retryable(),
     };
-    let pipeline = Pipeline::with_selection_registry(
+    Pipeline::with_selection_registry(
         state.db_pool().writer_arc(),
         config,
         state.record_bodies_and_flags(),
         state.selection_registry(),
         state.circuit_breaker(),
-    );
+    )
+}
 
-    // 6. Per-request IDs. The middleware already stamped a
-    //    `RequestId` in the request extensions; we use a fresh one
-    //    here so the pipeline output and the usage row share the
-    //    same value.
-    let request_id = RequestId::new();
-    let trace_id = TraceId::new();
-
-    // 7. Watch channel for client-disconnect signal.
-    //
-    // The pipeline's dispatch loop checks `client_disconnected` at
-    // each target boundary (pipeline.rs:475-478) and aborts with
-    // `CoreError::ClientDisconnected` (HTTP 499) when it fires. It
-    // ALSO short-circuits the upstream `reqwest::send()` and SSE
-    // stream reads via `tokio::select!` (see pipeline.rs, the
-    // `cancellation_during_send_aborts_upstream_request` /
-    // `cancellation_during_streaming_aborts_response_stream` /
-    // `cancellation_mid_sse_stream_aborts_immediately` regression
-    // tests).
-    //
-    // The watch is allocated by the `client_disconnect_middleware`
-    // mounted in router.rs on the chat routes. That middleware
-    // wraps both the *request* and *response* body in a
-    // `DisconnectBody` that fires the watch on any body-level error
-    // — so a real TCP-level cancel (RST, half-close, hangup) flips
-    // the watch within milliseconds of the kernel noticing.
-    //
-    // The deadline-based watchdog below is a *fallback* for the
-    // case where the client doesn't close the TCP connection but
-    // simply stops reading the streaming response (a "soft"
-    // cancel). The kernel won't fire a body error in that case, so
-    // we use a timer as the second source of truth. The client can
-    // shrink the deadline with `x-request-deadline-ms`; we cap it
-    // at `timeouts.total` so a misbehaving client cannot drag the
-    // watchdog past the upstream call's own timeout.
-    // The middleware's cancel watch is no longer passed to the pipeline
-    // (see the comment below for why). We still clone it here for
-    // documentation purposes — the middleware's DisconnectBody still
-    // fires it on real TCP-level disconnects, but the pipeline ignores it.
-    let _cancel_tx = cancel.tx.clone();
-    let _cancel_rx = cancel.rx.clone();
-
-    // Determine the deadline for the watchdog. The client may
-    // override it via `x-request-deadline-ms` (a millisecond
-    // budget they want the proxy to honor); we cap it at
-    // `timeouts.total` so a misbehaving client cannot drag the
-    // watchdog past the upstream call's own timeout.
+fn calculate_watchdog_budget(state: &AppState, headers: &HeaderMap) -> u64 {
     let client_deadline_ms: Option<u64> = headers
         .get("x-request-deadline-ms")
         .and_then(|v| v.to_str().ok())
         .and_then(|s| s.trim().parse::<u64>().ok())
         .filter(|ms| *ms > 0);
     let total_ms = state.timeouts().total_ms;
-    let watchdog_budget_ms = match client_deadline_ms {
+    match client_deadline_ms {
         Some(client_ms) if client_ms < total_ms => {
             tracing::debug!(
                 client_ms,
@@ -398,182 +347,97 @@ async fn run_pipeline(
             client_ms
         }
         _ => total_ms,
-    };
-
-    // 8. Build and run the pipeline request.
-    //
-    // For BOTH streaming and non-streaming, we create a FRESH watch
-    // pair that is ONLY driven by the watchdog timer. The middleware's
-    // disconnect watch is NOT passed to the pipeline.
-    //
-    // Why: the middleware wraps both the request body and response
-    // body in DisconnectBody, sharing the same watch sender. For
-    // streaming, the response body wrapper CAN detect real client
-    // disconnects (when hyper fails to write a chunk). But the
-    // request body wrapper can ALSO fire the watch — after the body
-    // was already consumed by axum's JSON extractor, hyper may
-    // poll the wrapped body in the background and detect residual
-    // socket errors (RST, half-close) that are NOT real client
-    // disconnects. This causes false-positive "client disconnected"
-    // errors that abort the pipeline while the upstream is still
-    // generating.
-    //
-    // The watchdog timer (total_ms, default 5 min) is the sole
-    // cancel source for the pipeline. This means a real client
-    // disconnect won't be detected until the pipeline finishes or
-    // the watchdog fires — but the upstream connection is still
-    // cancelled by hyper when the response future is dropped (which
-    // happens when the SseBytesStream ends or errors).
-    let (tx, rx) = tokio::sync::mpsc::channel(64);
-    let (stream_sink, client_disconnected, watchdog_tx) = {
-        let (fresh_tx, fresh_rx) = tokio::sync::watch::channel(false);
-        let sink = if openai_req.stream {
-            Some(openproxy_core::race_sink::StreamSink::Direct(tx))
-        } else {
-            Some(openproxy_core::race_sink::StreamSink::Discard)
-        };
-        (sink, fresh_rx, fresh_tx)
-    };
-
-    // Spawn the watchdog. It races the pipeline completion (done_rx)
-    // against the watchdog_budget_ms timer. If the timer wins, it
-    // fires the watchdog_tx (which is the fresh_tx for non-streaming
-    // or the middleware's cancel_tx for streaming).
-    //
-    // LEAK FIX: the watchdog used to sleep unconditionally — even
-    // after the pipeline finished. Now it exits immediately on
-    // done_rx (pipeline finished) or on timeout (soft cancel).
-    let (done_tx, done_rx) = tokio::sync::oneshot::channel::<()>();
-    {
-        tokio::spawn(async move {
-            tokio::select! {
-                _ = done_rx => {
-                    // Pipeline done — no need to fire the cancel.
-                }
-                _ = tokio::time::sleep(std::time::Duration::from_millis(watchdog_budget_ms)) => {
-                    tracing::warn!(
-                        watchdog_budget_ms,
-                        "watchdog timer fired — cancelling pipeline (this is a total-budget timeout, NOT a client disconnect)"
-                    );
-                    let _ = watchdog_tx.send(true);
-                }
-            }
-        });
     }
+}
 
-    let req = PipelineRequest {
-        request_id,
-        trace_id,
-        combo_id,
-        openai_request: openai_req.clone(),
-        client_disconnected,
-        stream_sink,
-        api_key_id,
-        combo_override,
-        targets_override,
-        // Strip the secret-bearing headers BEFORE the BTreeMap
-        // crosses into the pipeline. The full HeaderMap would
-        // persist verbatim into `usage.request_headers` whenever
-        // recording is on, which would leak the caller's
-        // `Authorization: Bearer *** ` `Cookie: ...`, etc. The
-        // helper is the single source of truth for what counts as
-        // "sensitive" (see `openproxy_core::redact`).
-        request_headers: redact_sensitive_headers(&headers),
-        // The raw request body, captured BEFORE parsing into
-        // `OpenAIRequest`. Preserves unknown fields (provider
-        // extensions, custom metadata) that the typed struct would
-        // drop. The recording path uses this preferentially to
-        // persist exactly what the client sent.
-        request_body_json: Some(raw_request_body),
-        race_cancelled: false,
-        race_cancel: None,
-        endpoint_kind: openproxy_core::endpoint::EndpointKind::Chat,
+fn create_watchdog_channels(_is_streaming: bool) -> (tokio::sync::watch::Receiver<bool>, tokio::sync::watch::Sender<bool>) {
+    let (fresh_tx, fresh_rx) = tokio::sync::watch::channel(false);
+    (fresh_rx, fresh_tx)
+}
+
+fn spawn_watchdog(
+    done_rx: tokio::sync::oneshot::Receiver<()>,
+    watchdog_tx: tokio::sync::watch::Sender<bool>,
+    budget_ms: u64,
+) {
+    tokio::spawn(async move {
+        tokio::select! {
+            _ = done_rx => {}
+            _ = tokio::time::sleep(std::time::Duration::from_millis(budget_ms)) => {
+                tracing::warn!(
+                    budget_ms,
+                    "watchdog timer fired — cancelling pipeline (this is a total-budget timeout, NOT a client disconnect)"
+                );
+                let _ = watchdog_tx.send(true);
+            }
+        }
+    });
+}
+
+async fn handle_streaming_response(
+    pipeline: Pipeline,
+    req: PipelineRequest,
+    done_tx: tokio::sync::oneshot::Sender<()>,
+    rx: tokio::sync::mpsc::Receiver<Bytes>,
+) -> Result<axum::response::Response, ApiError> {
+    let (error_tx, error_rx) = tokio::sync::mpsc::channel::<bytes::Bytes>(1);
+
+    tokio::spawn(async move {
+        let result = pipeline.run(req).await;
+        let _ = done_tx.send(());
+
+        if let Some(err) = result.error {
+            let error_json = serde_json::json!({
+                "error": {
+                    "message": err.to_string(),
+                    "type": err.code(),
+                    "code": err.http_status(),
+                }
+            });
+            let error_str = serde_json::to_string(&error_json).unwrap_or_default();
+            let mut frame = bytes::BytesMut::with_capacity(error_str.len() + 16);
+            frame.extend_from_slice(b"data: ");
+            frame.extend_from_slice(error_str.as_bytes());
+            frame.extend_from_slice(b"\n\n");
+            let _ = error_tx.send(frame.freeze()).await;
+        }
+    });
+
+    let main_stream = ReceiverStream::new(rx);
+    let error_stream = ReceiverStream::new(error_rx);
+    let mut merged = futures::stream::SelectAll::new();
+    merged.push(main_stream);
+    merged.push(error_stream);
+
+    let sse_stream = SseBytesStream {
+        inner: merged,
+        keepalive: tokio::time::interval_at(
+            tokio::time::Instant::now() + SSE_KEEPALIVE_INTERVAL,
+            SSE_KEEPALIVE_INTERVAL,
+        ),
     };
 
-    if openai_req.stream {
-        // Streaming path: spawn the pipeline in a background task
-        // and return an SSE stream that reads from the channel.
-        //
-        // Errors are propagated through a separate channel so the
-        // client receives a structured error event instead of a
-        // silent disconnect.
-        let (error_tx, error_rx) = tokio::sync::mpsc::channel::<bytes::Bytes>(1);
+    let body = axum::body::Body::from_stream(sse_stream);
+    Ok((
+        [(
+            axum::http::header::CONTENT_TYPE,
+            "text/event-stream; charset=utf-8",
+        )],
+        body,
+    )
+        .into_response())
+}
 
-        tokio::spawn(async move {
-            let result = pipeline.run(req).await;
-
-            // LEAK FIX: signal the watchdog that the pipeline
-            // finished so it cancels its sleep and drops the
-            // cancel_tx Arc immediately (instead of lingering for
-            // up to 5 minutes).
-            let _ = done_tx.send(());
-
-            if let Some(err) = result.error {
-                let error_json = serde_json::json!({
-                    "error": {
-                        "message": err.to_string(),
-                        "type": err.code(),
-                        "code": err.http_status(),
-                    }
-                });
-                let error_str = serde_json::to_string(&error_json).unwrap_or_default();
-                // Pre-format error as SSE frame so the response write
-                // path sees the same `data: {json}\n\n` shape as normal
-                // chunks — no special-casing needed.
-                let mut frame = bytes::BytesMut::with_capacity(error_str.len() + 16);
-                frame.extend_from_slice(b"data: ");
-                frame.extend_from_slice(error_str.as_bytes());
-                frame.extend_from_slice(b"\n\n");
-                let _ = error_tx.send(frame.freeze()).await;
-            }
-            // error_tx drops here → error channel closes
-        });
-
-        // Merge both SSE channels into one stream with keepalive.
-        let main_stream = ReceiverStream::new(rx);
-        let error_stream = ReceiverStream::new(error_rx);
-        let mut merged = futures::stream::SelectAll::new();
-        merged.push(main_stream);
-        merged.push(error_stream);
-
-        let sse_stream = SseBytesStream {
-            inner: merged,
-            // Use `interval_at` with a delayed start so the first
-            // keepalive fires AFTER `SSE_KEEPALIVE_INTERVAL`, not
-            // immediately. `tokio::time::interval` fires on the first
-            // tick (t=0), which sends `: keep-alive\n\n` as the very
-            // first bytes of the response — before any `data: {...}`
-            // frame. Some SSE clients don't handle a leading comment
-            // and close the connection.
-            keepalive: tokio::time::interval_at(
-                tokio::time::Instant::now() + SSE_KEEPALIVE_INTERVAL,
-                SSE_KEEPALIVE_INTERVAL,
-            ),
-        };
-
-        // Use `Body::from_stream` to write the pre-formatted SSE
-        // frames directly to the HTTP response, bypassing axum's
-        // `Sse` wrapper (which would re-wrap our already-formatted
-        // `data: {...}\n\n` frames).
-        let body = axum::body::Body::from_stream(sse_stream);
-        return Ok((
-            [(
-                axum::http::header::CONTENT_TYPE,
-                "text/event-stream; charset=utf-8",
-            )],
-            body,
-        )
-            .into_response());
-    }
-
-    // Non-streaming path: run the pipeline synchronously.
+async fn handle_sync_response(
+    pipeline: Pipeline,
+    req: PipelineRequest,
+    done_tx: tokio::sync::oneshot::Sender<()>,
+) -> Result<axum::response::Response, ApiError> {
     let started = Instant::now();
     let result = pipeline.run(req).await;
-    // LEAK FIX: signal the watchdog that the pipeline finished.
     let _ = done_tx.send(());
     let elapsed_ms = started.elapsed().as_millis();
 
-    // 9. Translate the pipeline result into an HTTP response.
     if let Some(err) = result.error {
         let status =
             StatusCode::from_u16(err.http_status()).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);

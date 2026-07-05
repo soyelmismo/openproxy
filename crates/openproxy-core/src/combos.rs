@@ -1113,21 +1113,26 @@ pub fn reorder_targets(
     // Assign priority_order = 1, 2, 3, ... in the order received. The
     // `combo_id = ?3` guard is what closes the cross-combo rename
     // hole even if the validation above is ever loosened.
-    for (idx, tid) in ordered_ids.iter().enumerate() {
-        tx.execute(
-            "UPDATE combo_targets SET priority_order = ?1 WHERE id = ?2 AND combo_id = ?3",
-            params![(idx as i32) + 1, tid.0, combo_id.0],
-        )
-        .map_err(|e| CoreError::Database {
-            message: format!(
-                "reorder step {} (target={}, combo={}): {}",
-                idx + 1,
-                tid.0,
-                combo_id.0,
-                e
-            ),
-            source: Some(Box::new(e)),
-        })?;
+    {
+        let mut stmt = tx
+            .prepare("UPDATE combo_targets SET priority_order = ?1 WHERE id = ?2 AND combo_id = ?3")
+            .map_err(|e| CoreError::Database {
+                message: format!("prepare reorder stmt: {e}"),
+                source: Some(Box::new(e)),
+            })?;
+        for (idx, tid) in ordered_ids.iter().enumerate() {
+            stmt.execute(params![(idx as i32) + 1, tid.0, combo_id.0])
+                .map_err(|e| CoreError::Database {
+                    message: format!(
+                        "reorder step {} (target={}, combo={}): {}",
+                        idx + 1,
+                        tid.0,
+                        combo_id.0,
+                        e
+                    ),
+                    source: Some(Box::new(e)),
+                })?;
+        }
     }
     tx.commit().map_err(|e| CoreError::Database {
         message: format!("commit reorder_targets tx: {}", e),
@@ -2220,24 +2225,31 @@ fn combos_insert_targets_for_active_models(
         })?;
 
     let mut added = 0usize;
-    for (row_id, _model_id) in &rows {
-        // Ignore UNIQUE collisions: this helper is reused by a code path
-        // that may run after a manual add. Better to keep the existing
-        // row than to bubble an error up.
-        let res = conn.execute(
-            "INSERT OR IGNORE INTO combo_targets(\
+    {
+        let mut stmt = conn
+            .prepare(
+                "INSERT OR IGNORE INTO combo_targets(\
                  combo_id, provider_id, account_id, model_row_id, priority_order\
              ) VALUES (?1, ?2, NULL, ?3, ?4)",
-            params![combo_id.0, provider_id.as_str(), row_id, row_id],
-        );
-        match res {
-            Ok(n) if n > 0 => added += 1,
-            Ok(_) => {} // UNIQUE collision, no-op
-            Err(e) => {
-                return Err(CoreError::Database {
-                    message: format!("insert auto target: {}", e),
-                    source: Some(Box::new(e)),
-                });
+            )
+            .map_err(|e| CoreError::Database {
+                message: format!("prepare auto target insert: {e}"),
+                source: Some(Box::new(e)),
+            })?;
+        for (row_id, _model_id) in &rows {
+            // Ignore UNIQUE collisions: this helper is reused by a code path
+            // that may run after a manual add. Better to keep the existing
+            // row than to bubble an error up.
+            let res = stmt.execute(params![combo_id.0, provider_id.as_str(), row_id, row_id]);
+            match res {
+                Ok(n) if n > 0 => added += 1,
+                Ok(_) => {} // UNIQUE collision, no-op
+                Err(e) => {
+                    return Err(CoreError::Database {
+                        message: format!("insert auto target execute: {}", e),
+                        source: Some(Box::new(e)),
+                    });
+                }
             }
         }
     }

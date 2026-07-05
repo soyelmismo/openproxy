@@ -697,4 +697,47 @@ mod tests {
         assert!(content.contains("unparsed EventStream body"));
         assert!(content.contains("16 bytes"));
     }
+
+    #[test]
+    fn parse_response_extracts_output_message_content() {
+        let body = serde_json::to_vec(&json!({
+            "output": { "message": { "content": "hi from output" } }
+        }))
+        .unwrap();
+        let r = parse_kiro_response(&body, "auto").expect("parse");
+        assert_eq!(
+            r.choices[0]
+                .message
+                .content
+                .as_ref()
+                .and_then(serde_json::Value::as_str),
+            Some("hi from output")
+        );
+    }
+
+    #[test]
+    fn parse_response_handles_invalid_json_gracefully() {
+        let body = b"{ invalid json }";
+        let r = parse_kiro_response(body, "auto").expect("parse");
+        let content = r.choices[0]
+            .message
+            .content
+            .as_ref()
+            .and_then(serde_json::Value::as_str)
+            .unwrap();
+        assert!(content.contains("unparsed EventStream body"));
+    }
+
+    #[test]
+    fn parse_response_handles_valid_json_without_known_content_keys() {
+        let body = serde_json::to_vec(&json!({ "foo": "bar" })).unwrap();
+        let r = parse_kiro_response(&body, "auto").expect("parse");
+        let content = r.choices[0]
+            .message
+            .content
+            .as_ref()
+            .and_then(serde_json::Value::as_str)
+            .unwrap();
+        assert!(content.contains("unparsed EventStream body"));
+    }
 }

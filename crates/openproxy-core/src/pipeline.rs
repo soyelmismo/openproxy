@@ -6285,6 +6285,39 @@ mod tests {
     // and HTTP-date forms, applies the 5-minute cap to malicious values,
     // and returns None for empty/unparseable input.
     #[test]
+    fn test_circuit_breaker_len() {
+        let db_path = std::env::temp_dir().join(format!("pipeline-test-{}.db", RequestId::new().0));
+        let pool = DbPool::open(&db_path).unwrap();
+        {
+            let mut w = pool.writer();
+            migrations::run(&mut w).unwrap();
+        }
+
+        let config = PipelineConfig {
+            defaults: crate::timeouts::Timeouts::from_config(&TimeoutsConfig::default()),
+            racing: crate::config::RacingConfig::default(),
+            retries: crate::config::RetriesConfig::default(),
+            max_attempts: 1,
+            master_key: Arc::new(MasterKey::generate()),
+            adapters: Arc::new(vec![]),
+            http_client: reqwest::Client::new(),
+            cooldown_secs: 60,
+            cooldown_max_secs: 3600,
+            cooldown_factor: 2,
+            upstream_client: crate::upstream::UpstreamClient::new(),
+            oauth_provider_registry: None,
+            compression_mode: crate::compression::CompressionMode::Off,
+            idle_chunk_retryable: false,
+        };
+
+        let pipeline = Pipeline::new(pool.writer_arc(), config);
+        // Initially empty.
+        assert_eq!(pipeline.circuit_breaker_len(), 0);
+
+        // We can't easily push into the breaker without running a request, but we can verify the accessor works.
+    }
+
+    #[test]
     fn parse_retry_after_ms_integer_seconds() {
         assert_eq!(parse_retry_after_ms("30"), Some(30_000));
         assert_eq!(parse_retry_after_ms("0"), Some(0));
@@ -10440,11 +10473,10 @@ data: [DONE]
             ),
         }
 
-        // TODO(follow-up): see `cancellation_mid_sse_stream_aborts_immediately`
-        // below — that test exercises the real stream-side
-        // `tokio::select!` by binding a localhost TcpListener that
-        // answers 200 OK + a slow SSE stream and then cancels
-        // mid-stream.
+        // The follow-up test `cancellation_mid_sse_stream_aborts_immediately`
+        // below exercises the real stream-side `tokio::select!` by binding
+        // a localhost TcpListener that answers 200 OK + a slow SSE stream
+        // and then cancels mid-stream.
     }
 
     /// Mid-stream cancellation: the client disconnects *while the

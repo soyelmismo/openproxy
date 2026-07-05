@@ -44,12 +44,13 @@ use axum::{
     response::Response,
 };
 use openproxy_core::{
-    accounts, cost,
+    accounts, adapters, cost,
     ids::{AccountId, ApiKeyId, ComboId, ModelRowId, ProviderId, RequestId, TraceId},
     models, providers,
     routing::{self, RoutingPlan},
     CoreError,
 };
+use std::sync::Arc;
 use std::time::Instant;
 
 use crate::{
@@ -71,20 +72,117 @@ use crate::{
 pub async fn transcribe(
     State(state): State<AppState>,
     headers: HeaderMap,
-    mut multipart: Multipart,
+    multipart: Multipart,
 ) -> Result<Response, ApiError> {
     let started = Instant::now();
 
-    // 1. Parse the multipart body. Whisper accepts:
-    //   - `file` (binary, required): the audio file.
-    //   - `model` (text, required): the model name (e.g. `whisper-1`).
-    //   - `language`, `prompt`, `response_format`, `temperature`,
-    //     `timestamp_granularities[]`, `stream`: optional form fields.
-    //
-    // The `timestamp_granularities[]` field can repeat, so we keep the
-    // generic form-fields list as a `Vec<(String, String)>` and forward
-    // every entry to the upstream — reqwest's `multipart::Form::text`
-    // appends a new part for each call, so repeated field names survive.
+    // 1. Parse the multipart body.
+    let parsed_body = parse_multipart_body(multipart).await?;
+
+    // 2. Authenticate (chat scope).
+    let auth_result = authenticate(&state, &headers, &parsed_body.model_name)?;
+    let api_key_id: Option<ApiKeyId> = auth_result.as_ref().map(|r| r.key_id);
+
+    // 3. Resolve routing.
+    let routing_plan = {
+        let w = state.db_pool().writer();
+        routing::resolve(&w, &parsed_body.model_name)?
+    };
+
+    if let RoutingPlan::Combo { combo_id, .. } = &routing_plan
+        && let Some(auth) = &auth_result
+        && let Some(allowed) = &auth.allowed_combos
+        && !allowed.is_empty()
+        && !allowed.contains(&combo_id.0)
+    {
+        return Err(ApiError(CoreError::Auth(
+            "combo not allowed for this key".into(),
+        )));
+    }
+
+    // 4. Translate routing plan.
+    let targets = match translate_audio_routing_plan(&state, routing_plan, api_key_id, started)? {
+        Some(t) => t,
+        None => {
+            // Already handled by error or 404 in translate helper.
+            unreachable!()
+        }
+    };
+
+    // 5. Look up the adapter and build URL.
+    let adapter = state
+        .adapters()
+        .into_iter()
+        .find(|a| a.id() == &targets.provider_id)
+        .ok_or_else(|| {
+            ApiError(CoreError::Internal(format!(
+                "no adapter registered for provider '{}'",
+                targets.provider_id
+            )))
+        })?;
+    let upstream_url = adapter.build_transcription_url();
+
+    // 6. Resolve the API key.
+    let api_key = resolve_api_key(&state, targets.account_id, &targets.provider_id)?;
+
+    // 7. Build and dispatch.
+    let response = dispatch_audio_request(
+        &state,
+        adapter,
+        &upstream_url,
+        &api_key,
+        &targets.upstream_model_id,
+        parsed_body,
+    )
+    .await?;
+
+    let status_code = response.status().as_u16();
+    let content_type = response
+        .headers()
+        .get(reqwest::header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("application/json")
+        .to_string();
+    let body_bytes = response
+        .bytes()
+        .await
+        .map_err(|e| ApiError(CoreError::UpstreamConnection(format!("read body: {}", e))))?;
+
+    let total_ms = started.elapsed().as_millis() as u64;
+    let error_msg = if status_code < 400 {
+        None
+    } else {
+        Some(format!("upstream status {}", status_code))
+    };
+
+    // 9. Record usage.
+    let _ = record_audio_usage_row(
+        &state,
+        RequestId::new(),
+        api_key_id,
+        &targets.provider_id,
+        targets.account_id,
+        targets.combo_id,
+        targets.model_row_id,
+        &targets.upstream_model_id,
+        status_code,
+        error_msg,
+        total_ms,
+    );
+
+    // 10. Return response.
+    build_audio_response(status_code, &content_type, body_bytes)
+}
+
+struct ParsedAudioBody {
+    model_name: String,
+    file_bytes: Vec<u8>,
+    file_name: String,
+    file_content_type: String,
+    form_fields: Vec<(String, String)>,
+}
+
+async fn parse_multipart_body(mut multipart: Multipart) -> Result<ParsedAudioBody, ApiError> {
     let mut model_name = String::new();
     let mut file_bytes: Option<Vec<u8>> = None;
     let mut file_name = String::from("audio");
@@ -132,157 +230,124 @@ pub async fn transcribe(
         )));
     }
 
-    // 2. Authenticate (chat scope). The MVP keeps the chat endpoint
-    //    open to anonymous traffic when no API keys are configured
-    //    (local-dev); the same gate applies here.
-    let auth_result = authenticate(&state, &headers, &model_name)?;
-    let api_key_id: Option<ApiKeyId> = auth_result.as_ref().map(|r| r.key_id);
+    Ok(ParsedAudioBody {
+        model_name,
+        file_bytes,
+        file_name,
+        file_content_type,
+        form_fields,
+    })
+}
 
-    // 3. Resolve routing. We hold the writer for the duration of the
-    //    resolution so the combo/account lookups see a consistent view
-    //    of the DB (same pattern as the chat handler).
-    let routing_plan = {
-        let w = state.db_pool().writer();
-        routing::resolve(&w, &model_name)?
-    };
+struct AudioTargets {
+    provider_id: ProviderId,
+    account_id: Option<AccountId>,
+    model_row_id: Option<ModelRowId>,
+    upstream_model_id: String,
+    combo_id: Option<ComboId>,
+}
 
-    // Enforce `allowed_combos` for combo routing, mirroring the chat
-    // handler's MEDIUM-1 fix.
-    if let RoutingPlan::Combo { combo_id, .. } = &routing_plan
-        && let Some(auth) = &auth_result
-        && let Some(allowed) = &auth.allowed_combos
-        && !allowed.is_empty()
-        && !allowed.contains(&combo_id.0)
-    {
-        return Err(ApiError(CoreError::Auth(
-            "combo not allowed for this key".into(),
-        )));
-    }
-
-    // 4. Translate the routing plan into (provider_id, account_id,
-    //    model_row_id, upstream_model_id, combo_id). For a Combo plan
-    //    we pick the first model target in priority order — a combo for
-    //    transcription is unusual but supported: the operator can wire
-    //    up fallback whisper endpoints and we'll use the first healthy
-    //    one. (We don't walk the combo here; that's the pipeline's job
-    //    for chat. For audio we send a single request to the first
-    //    target and surface the upstream's response.)
-    let (provider_id, account_id, model_row_id, upstream_model_id, combo_id) =
-        match routing_plan {
-            RoutingPlan::Direct {
-                provider_id,
-                account_id,
-                model_row_id,
-                model_id,
-            } => (
-                provider_id,
-                account_id,
-                Some(model_row_id),
-                model_id,
-                None,
-            ),
-            RoutingPlan::Combo {
-                combo_id,
-                targets,
-                ..
-            } => {
-                let target = targets
-                    .into_iter()
-                    .find(|t| t.model_row_id.is_some())
+fn translate_audio_routing_plan(
+    state: &AppState,
+    routing_plan: RoutingPlan,
+    api_key_id: Option<ApiKeyId>,
+    started: Instant,
+) -> Result<Option<AudioTargets>, ApiError> {
+    match routing_plan {
+        RoutingPlan::Direct {
+            provider_id,
+            account_id,
+            model_row_id,
+            model_id,
+        } => Ok(Some(AudioTargets {
+            provider_id,
+            account_id,
+            model_row_id: Some(model_row_id),
+            upstream_model_id: model_id,
+            combo_id: None,
+        })),
+        RoutingPlan::Combo {
+            combo_id,
+            targets,
+            ..
+        } => {
+            let target = targets
+                .into_iter()
+                .find(|t| t.model_row_id.is_some())
+                .ok_or_else(|| {
+                    ApiError(CoreError::Validation(
+                        "combo has no model target suitable for transcription".into(),
+                    ))
+                })?;
+            let model_row_id = target.model_row_id.expect("checked above");
+            let (provider_id, upstream_model_id) = {
+                let r = state.db_pool().reader();
+                let model = models::get_by_row_id(&r, model_row_id)
+                    .map_err(ApiError)?
                     .ok_or_else(|| {
-                        ApiError(CoreError::Validation(
-                            "combo has no model target suitable for transcription".into(),
-                        ))
+                        ApiError(CoreError::ModelNotFound {
+                            provider: target.provider_id.to_string(),
+                            model: format!("row_id={}", model_row_id.0),
+                        })
                     })?;
-                let model_row_id = target.model_row_id.expect("checked above");
-                // Use the reader for the model-row lookup — it's a
-                // pure SELECT (no writes), and the writer is no longer
-                // held after the routing block above released it.
-                let (provider_id, upstream_model_id) = {
-                    let r = state.db_pool().reader();
-                    let model = models::get_by_row_id(&r, model_row_id)
-                        .map_err(ApiError)?
-                        .ok_or_else(|| {
-                            ApiError(CoreError::ModelNotFound {
-                                provider: target.provider_id.to_string(),
-                                model: format!("row_id={}", model_row_id.0),
-                            })
-                        })?;
-                    (model.provider_id, model.model_id.as_str().to_string())
-                };
-                (
-                    provider_id,
-                    target.account_id,
-                    Some(model_row_id),
-                    upstream_model_id,
-                    Some(combo_id),
-                )
+                (model.provider_id, model.model_id.as_str().to_string())
+            };
+            Ok(Some(AudioTargets {
+                provider_id,
+                account_id: target.account_id,
+                model_row_id: Some(model_row_id),
+                upstream_model_id,
+                combo_id: Some(combo_id),
+            }))
+        }
+        RoutingPlan::NotFound { model, hint } => {
+            let _ = record_audio_usage_row(
+                state,
+                RequestId::new(),
+                api_key_id,
+                &ProviderId::new(""),
+                None,
+                None,
+                None,
+                &model,
+                404,
+                Some("model_not_found".to_string()),
+                started.elapsed().as_millis() as u64,
+            );
+            let mut msg = format!("model not found: {}", model);
+            if let Some(h) = hint {
+                msg.push_str(&format!(" (hint: {})", h));
             }
-            RoutingPlan::NotFound { model, hint } => {
-                // Record a usage row so the dashboard's Live Logs tail
-                // shows the misroute (same UX as the chat handler).
-                let _ = record_audio_usage_row(
-                    &state,
-                    RequestId::new(),
-                    api_key_id,
-                    &ProviderId::new(""),
-                    None,
-                    None,
-                    None,
-                    &model,
-                    404,
-                    Some("model_not_found".to_string()),
-                    started.elapsed().as_millis() as u64,
-                );
-                let mut msg = format!("model not found: {}", model);
-                if let Some(h) = hint {
-                    msg.push_str(&format!(" (hint: {})", h));
-                }
-                return Err(ApiError(CoreError::ModelNotFound {
-                    provider: "<unknown>".into(),
-                    model: msg,
-                }));
-            }
-        };
+            Err(ApiError(CoreError::ModelNotFound {
+                provider: "<unknown>".into(),
+                model: msg,
+            }))
+        }
+    }
+}
 
-    // 5. Look up the adapter and build the upstream URL.
-    let adapter = state
-        .adapters()
-        .into_iter()
-        .find(|a| a.id() == &provider_id)
-        .ok_or_else(|| {
-            ApiError(CoreError::Internal(format!(
-                "no adapter registered for provider '{}'",
-                provider_id
-            )))
-        })?;
-    let upstream_url = adapter.build_transcription_url();
-
-    // 6. Resolve the API key. Decrypt the stored key for the account,
-    //    or use an empty string for `AuthType::None` providers.
-    let api_key = resolve_api_key(&state, account_id, &provider_id)?;
-
-    // 7. Build the upstream multipart form. We rebuild it (rather than
-    //    forwarding the raw bytes) so we control the boundary and can
-    //    attach the auth header separately. The `model` field is set to
-    //    the *upstream* model id (the value the resolver picked); the
-    //    client may have sent `<provider>/whisper-1` which the
-    //    upstream won't recognise.
-    let (auth_name, auth_value) = adapter.build_auth_header(&api_key);
+async fn dispatch_audio_request(
+    state: &AppState,
+    adapter: Arc<dyn adapters::ProviderAdapter>,
+    upstream_url: &str,
+    api_key: &str,
+    upstream_model_id: &str,
+    body: ParsedAudioBody,
+) -> Result<reqwest::Response, ApiError> {
+    let (auth_name, auth_value) = adapter.build_auth_header(api_key);
     let client = state.http_client();
 
-    let mut form = reqwest::multipart::Form::new()
-        .text("model", upstream_model_id.clone());
-    for (k, v) in &form_fields {
+    let mut form = reqwest::multipart::Form::new().text("model", upstream_model_id.to_string());
+    for (k, v) in &body.form_fields {
         form = form.text(k.clone(), v.clone());
     }
-    let file_part = reqwest::multipart::Part::bytes(file_bytes)
-        .file_name(file_name)
-        .mime_str(&file_content_type)
+    let file_part = reqwest::multipart::Part::bytes(body.file_bytes)
+        .file_name(body.file_name)
+        .mime_str(&body.file_content_type)
         .map_err(|e| ApiError(CoreError::Internal(format!("mime_str: {e}"))))?;
     form = form.part("file", file_part);
 
-    let mut req = client.post(&upstream_url).multipart(form);
+    let mut req = client.post(upstream_url).multipart(form);
     if !auth_name.is_empty() {
         req = req.header(auth_name, auth_value);
     }
@@ -290,68 +355,23 @@ pub async fn transcribe(
         req = req.header(k, v);
     }
 
-    // 8. Dispatch. reqwest's `send` honours the client's
-    //    `connect_timeout` and `request_timeout` (set by `set_timeouts`
-    //    via the AppState). The total budget is bounded by
-    //    `timeouts.total_ms` indirectly via the disconnect watchdog,
-    //    but the upstream call itself is bounded by reqwest's
-    //    `request_timeout` (which the AppState defaults to None — the
-    //    chat pipeline enforces total_ms separately; for audio we rely
-    //    on reqwest's default no-timeout and the TCP-level disconnect
-    //    middleware).
-    let response = req
-        .send()
-        .await
-        .map_err(|e| {
-            ApiError(CoreError::UpstreamConnection(format!(
-                "{}: {}",
-                upstream_url, e
-            )))
-        })?;
-    let status = response.status();
-    let content_type = response
-        .headers()
-        .get(reqwest::header::CONTENT_TYPE)
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or("application/json")
-        .to_string();
-    let body = response
-        .bytes()
-        .await
-        .map_err(|e| ApiError(CoreError::UpstreamConnection(format!("read body: {}", e))))?;
+    req.send().await.map_err(|e| {
+        ApiError(CoreError::UpstreamConnection(format!(
+            "{}: {}",
+            upstream_url, e
+        )))
+    })
+}
 
-    let total_ms = started.elapsed().as_millis() as u64;
-    let status_code = status.as_u16();
-    let error_msg = if status.is_success() {
-        None
-    } else {
-        Some(format!("upstream status {}", status_code))
-    };
-
-    // 9. Record a usage row (best-effort). Whisper bills by audio
-    //    seconds, not tokens, so we record prompt_tokens=None,
-    //    completion_tokens=None, cost=0 (the pricing layer returns 0
-    //    for None+None inputs).
-    let _ = record_audio_usage_row(
-        &state,
-        RequestId::new(),
-        api_key_id,
-        &provider_id,
-        account_id,
-        combo_id,
-        model_row_id,
-        &upstream_model_id,
-        status_code,
-        error_msg,
-        total_ms,
+fn build_audio_response(
+    status_code: u16,
+    content_type: &str,
+    body: bytes::Bytes,
+) -> Result<Response, ApiError> {
+    let mut builder = Response::builder().status(
+        StatusCode::from_u16(status_code).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR),
     );
-
-    // 10. Return the upstream response verbatim. We pass through the
-    //     body bytes, the upstream's status code, and the upstream's
-    //     Content-Type so JSON / text / srt / vtt response formats all
-    //     work transparently.
-    let mut builder = Response::builder().status(StatusCode::from_u16(status_code).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR));
-    if let Ok(v) = HeaderValue::from_str(&content_type) {
+    if let Ok(v) = HeaderValue::from_str(content_type) {
         builder = builder.header(axum::http::header::CONTENT_TYPE, v);
     }
     Ok(builder
