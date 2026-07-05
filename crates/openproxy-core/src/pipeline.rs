@@ -4390,6 +4390,90 @@ impl Pipeline {
                         done_sent = true;
                         break;
                     }
+                    // Inline upstream error detection: some providers
+                    // (notably OpenRouter) send errors INSIDE an SSE
+                    // `data:` chunk with `"choices":[]` and an `"error":{}`
+                    // object, rather than returning a non-2xx HTTP status.
+                    // Without this check, the error chunk is forwarded
+                    // verbatim to the client, the upstream closes the
+                    // stream, and the post-loop code misattributes the
+                    // failure as "client disconnected".
+                    //
+                    // PERF: two fast `contains()` guards (~100ns each)
+                    // skip JSON parsing on the normal path. Only chunks
+                    // containing BOTH markers are parsed.
+                    if json_payload.contains("\"error\":")
+                        && json_payload.contains("\"choices\":[]")
+                    {
+                        if let Ok(v) = serde_json::from_str::<serde_json::Value>(json_payload) {
+                            let has_empty_choices = v
+                                .get("choices")
+                                .and_then(|c| c.as_array())
+                                .is_some_and(|arr| arr.is_empty());
+                            if has_empty_choices {
+                                if let Some(error_obj) = v.get("error") {
+                                    let code = error_obj
+                                        .get("code")
+                                        .and_then(|c| c.as_u64())
+                                        .unwrap_or(502) as u16;
+                                    let message = error_obj
+                                        .get("message")
+                                        .and_then(|m| m.as_str())
+                                        .unwrap_or("unknown upstream error in SSE stream");
+                                    let provider_name = v
+                                        .get("provider")
+                                        .and_then(|p| p.as_str())
+                                        .unwrap_or(target.provider_id.as_str());
+                                    tracing::warn!(
+                                        combo_id = combo.id.0,
+                                        target_id = target.id.0,
+                                        provider = %target.provider_id,
+                                        model = %model.model_id.as_str(),
+                                        inline_error_code = code,
+                                        inline_error_message = %message,
+                                        "upstream sent inline error in SSE stream chunk \
+                                         (choices=[], error={{code={}, ...}}); \
+                                         aborting stream as UpstreamError",
+                                        code,
+                                    );
+                                    let err = CoreError::UpstreamError {
+                                        status: code,
+                                        provider: provider_name.to_string(),
+                                        model: model_name.clone(),
+                                        body: message.to_string(),
+                                    };
+                                    let acc_ref: Option<&crate::sse_accumulator::ResponseAccumulator> =
+                                        match &mut acc {
+                                            Some(a) => {
+                                                a.mark_partial();
+                                                Some(&*a)
+                                            }
+                                            None => None,
+                                        };
+                                    return self.record_and_fail_with_trace_id_and_partial(
+                                        req,
+                                        combo,
+                                        target,
+                                        FailureContext {
+                                            attempt,
+                                            race_size,
+                                            err: &err,
+                                            started,
+                                            model: Some(model),
+                                            connect_ms: Some(connect_and_send_ms),
+                                            ttft_ms,
+                                            status_code: code,
+                                        },
+                                        trace_id,
+                                        acc_ref,
+                                        Some(&chunk_id),
+                                        created,
+                                        &model_name,
+                                    );
+                                }
+                            }
+                        }
+                    }
                     // Only parse when the chunk carries metadata worth
                     // extracting. `"usage"` appears in the final chunk;
                     // a non-null `"finish_reason"` marks stream end.
@@ -5698,6 +5782,62 @@ impl Pipeline {
         let has_partial_content = acc
             .as_ref()
             .is_some_and(|a| !a.is_empty());
+        // Check the accumulator for an inline upstream error before
+        // attributing the failure to "client disconnected". Some
+        // providers (OpenRouter) send 502/provider_unavailable as an
+        // SSE data chunk with choices:[] and an error:{} object —
+        // the upstream then closes the connection, which triggers
+        // the client disconnect path. Without this check, the real
+        // error is lost and the operator sees a misleading
+        // "client disconnected" or "stream interrupted" message.
+        if let Some(ref a) = acc {
+            if let Some((code, message)) = a.extract_upstream_error_from_raw() {
+                tracing::warn!(
+                    combo_id = combo.id.0,
+                    target_id = target.id.0,
+                    provider = %target.provider_id,
+                    model = %model.model_id.as_str(),
+                    inline_error_code = code,
+                    inline_error_message = %message,
+                    "client disconnected but upstream had sent inline SSE error \
+                     (code={}); attributing to upstream error, not client disconnect",
+                    code,
+                );
+                let err = CoreError::UpstreamError {
+                    status: code,
+                    provider: target.provider_id.to_string(),
+                    model: model_name.to_string(),
+                    body: message,
+                };
+                let acc_ref: Option<&crate::sse_accumulator::ResponseAccumulator> = match acc {
+                    Some(a) => {
+                        a.mark_partial();
+                        Some(&*a)
+                    }
+                    None => None,
+                };
+                return self.record_and_fail_with_trace_id_and_partial(
+                    req,
+                    combo,
+                    target,
+                    FailureContext {
+                        attempt,
+                        race_size,
+                        err: &err,
+                        started,
+                        model: Some(model),
+                        connect_ms: Some(connect_ms),
+                        ttft_ms,
+                        status_code: code,
+                    },
+                    trace_id,
+                    acc_ref,
+                    Some(chunk_id),
+                    created,
+                    model_name,
+                );
+            }
+        }
         let acc_ref: Option<&crate::sse_accumulator::ResponseAccumulator> = match acc {
             Some(a) => {
                 a.mark_partial();
@@ -5791,10 +5931,73 @@ impl Pipeline {
                 //    closed the connection (e.g. a leading `: keep-alive`
                 //    comment before any `data: {...}` frame — fixed by
                 //    delaying the first keepalive tick)
+                // 5. The upstream sent an inline error in the SSE stream
+                //    (e.g. OpenRouter 502/provider_unavailable) and then
+                //    closed the connection — the client saw the error
+                //    chunk and disconnected.
                 let elapsed = started.elapsed().as_millis() as u64;
                 // Diagnostic: check if the watchdog fired (which would
                 // indicate a timeout rather than a real client disconnect).
                 let watchdog_fired = *req.client_disconnected.borrow();
+                // Check the accumulator for an inline upstream error
+                // before attributing the failure to "client disconnected".
+                // Some providers (OpenRouter) send 502/provider_unavailable
+                // as an SSE data chunk — without this check, the error
+                // is lost and the operator sees a misleading "client
+                // disconnected" message.
+                if let Some(ref a) = acc {
+                    if let Some((code, message)) = a.extract_upstream_error_from_raw() {
+                        tracing::warn!(
+                            combo_id = combo.id.0,
+                            target_id = target.id.0,
+                            provider = %target.provider_id,
+                            model = %model.model_id.as_str(),
+                            elapsed_ms = elapsed,
+                            inline_error_code = code,
+                            inline_error_message = %message,
+                            "sink closed after upstream sent inline SSE error \
+                             (code={}, elapsed={}ms); attributing to upstream, \
+                             not client disconnect",
+                            code, elapsed
+                        );
+                        return {
+                            let err = CoreError::UpstreamError {
+                                status: code,
+                                provider: target.provider_id.to_string(),
+                                model: model_name.to_string(),
+                                body: message,
+                            };
+                            let acc_ref: Option<&crate::sse_accumulator::ResponseAccumulator> =
+                                match acc {
+                                    Some(a) => {
+                                        a.mark_partial();
+                                        Some(&*a)
+                                    }
+                                    None => None,
+                                };
+                            self.record_and_fail_with_trace_id_and_partial(
+                                req,
+                                combo,
+                                target,
+                                FailureContext {
+                                    attempt,
+                                    race_size,
+                                    err: &err,
+                                    started,
+                                    model: Some(model),
+                                    connect_ms: Some(connect_ms),
+                                    ttft_ms,
+                                    status_code: code,
+                                },
+                                trace_id,
+                                acc_ref,
+                                Some(chunk_id),
+                                created,
+                                model_name,
+                            )
+                        };
+                    }
+                }
                 tracing::warn!(
                     combo_id = combo.id.0,
                     target_id = target.id.0,

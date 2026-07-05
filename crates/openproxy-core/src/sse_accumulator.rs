@@ -307,6 +307,79 @@ impl ResponseAccumulator {
             && self.raw_response_body.is_empty()
     }
 
+    /// Public accessor for the accumulated raw response body. Used by
+    /// the pipeline's failure handlers to inspect whether the upstream
+    /// sent an inline error (e.g. OpenRouter's 502/provider_unavailable
+    /// inside an SSE data chunk) so the error message can reflect the
+    /// actual upstream error instead of a generic "client disconnected".
+    pub fn raw_response_body(&self) -> &str {
+        &self.raw_response_body
+    }
+
+    /// Attempt to extract an upstream error message from the accumulated
+    /// `raw_response_body`. Some providers (notably OpenRouter) send
+    /// errors inline in an SSE `data:` chunk with `"choices":[]` and an
+    /// `"error":{...}` object instead of returning a non-2xx HTTP status.
+    ///
+    /// Returns `Some((status_code, message))` if an inline error was
+    /// found, `None` otherwise. This is intentionally cheap: it does a
+    /// quick `contains()` guard before any JSON parsing, so the cost on
+    /// the happy path (no inline error) is a single memchr scan.
+    ///
+    /// Example upstream error chunk:
+    /// ```json
+    /// {"id":"gen-...","choices":[],"error":{"code":502,
+    ///   "message":"Upstream error from Nvidia: ResourceExhausted"}}
+    /// ```
+    pub fn extract_upstream_error_from_raw(&self) -> Option<(u16, String)> {
+        // Fast guard: skip JSON parsing unless the raw body looks like
+        // it contains an inline error. This keeps the cost at ~100ns
+        // on the normal path (no error).
+        if !self.raw_response_body.contains("\"error\":")
+            || !self.raw_response_body.contains("\"choices\":[]")
+        {
+            return None;
+        }
+
+        // The raw_response_body may contain multiple lines (each a
+        // raw SSE line). Scan each line for a JSON object with an
+        // error field.
+        for line in self.raw_response_body.lines() {
+            // Strip `data: ` prefix if present.
+            let json_str = line
+                .strip_prefix("data: ")
+                .or_else(|| line.strip_prefix("data:"))
+                .unwrap_or(line)
+                .trim();
+            if !json_str.starts_with('{') {
+                continue;
+            }
+            if let Ok(v) = serde_json::from_str::<serde_json::Value>(json_str) {
+                // Check for empty choices + error object.
+                let has_empty_choices = v
+                    .get("choices")
+                    .and_then(|c| c.as_array())
+                    .is_some_and(|arr| arr.is_empty());
+                if !has_empty_choices {
+                    continue;
+                }
+                if let Some(error_obj) = v.get("error") {
+                    let code = error_obj
+                        .get("code")
+                        .and_then(|c| c.as_u64())
+                        .unwrap_or(502) as u16;
+                    let message = error_obj
+                        .get("message")
+                        .and_then(|m| m.as_str())
+                        .unwrap_or("unknown upstream error in SSE stream")
+                        .to_string();
+                    return Some((code, message));
+                }
+            }
+        }
+        None
+    }
+
     /// Append an OpenAI-format raw payload string (e.g. the JSON inside
     /// `data: {...}`). Extracts `delta.content` incrementally using a
     /// lightweight string scan (~50-100x faster than a full JSON parse).
@@ -823,5 +896,61 @@ mod tests {
             .unwrap();
         assert!(raw_body.contains("some raw non-json line"));
         assert!(raw_body.contains("hello"));
+    }
+
+    #[test]
+    fn raw_response_body_accessor() {
+        let mut acc = ResponseAccumulator::new();
+        assert!(acc.raw_response_body().is_empty());
+        acc.append_raw_line("data: test line");
+        assert!(acc.raw_response_body().contains("test line"));
+    }
+
+    #[test]
+    fn extract_upstream_error_openrouter_502() {
+        let mut acc = ResponseAccumulator::new();
+        acc.append_raw_line(
+            r#"data: {"id":"gen-123","object":"chat.completion.chunk","created":1783260233,"model":"nvidia/nemotron-3-ultra:free","provider":"Nvidia","choices":[],"error":{"code":502,"message":"Upstream error from Nvidia: ResourceExhausted: Worker local total request limit reached (32/32)","metadata":{"error_type":"provider_unavailable"}}}"#,
+        );
+        let result = acc.extract_upstream_error_from_raw();
+        assert!(result.is_some(), "should detect OpenRouter inline error");
+        let (code, message) = result.unwrap();
+        assert_eq!(code, 502);
+        assert!(message.contains("ResourceExhausted"));
+        assert!(message.contains("Worker local total request limit"));
+    }
+
+    #[test]
+    fn extract_upstream_error_no_false_positive_on_normal_chunks() {
+        let mut acc = ResponseAccumulator::new();
+        // Normal chunk with content — should NOT trigger.
+        acc.append_raw_line(
+            r#"data: {"id":"x","choices":[{"delta":{"content":"hello"}}]}"#,
+        );
+        // Another normal chunk with reasoning.
+        acc.append_raw_line(
+            r#"data: {"id":"x","choices":[{"delta":{"reasoning":"think"}}]}"#,
+        );
+        let result = acc.extract_upstream_error_from_raw();
+        assert!(result.is_none(), "should not trigger on normal chunks");
+    }
+
+    #[test]
+    fn extract_upstream_error_empty_accumulator() {
+        let acc = ResponseAccumulator::new();
+        assert!(acc.extract_upstream_error_from_raw().is_none());
+    }
+
+    #[test]
+    fn extract_upstream_error_missing_code_defaults_502() {
+        let mut acc = ResponseAccumulator::new();
+        acc.append_raw_line(
+            r#"data: {"choices":[],"error":{"message":"Something went wrong"}}"#,
+        );
+        let result = acc.extract_upstream_error_from_raw();
+        assert!(result.is_some());
+        let (code, message) = result.unwrap();
+        assert_eq!(code, 502, "should default to 502 when code is missing");
+        assert_eq!(message, "Something went wrong");
     }
 }
