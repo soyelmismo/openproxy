@@ -472,15 +472,21 @@ fn parse_antigravity_models_response(body: &serde_json::Value) -> Result<Account
         let Some(quota_info) = model_data.get("quotaInfo") else {
             continue;
         };
-        let remaining_fraction = quota_info
-            .get("remainingFraction")
-            .and_then(|f| f.as_f64())
-            .unwrap_or(1.0);
-
         let reset_time = quota_info
             .get("resetTime")
             .and_then(|r| r.as_str())
             .map(String::from);
+
+        let remaining_fraction = quota_info
+            .get("remainingFraction")
+            .and_then(|f| f.as_f64())
+            .unwrap_or_else(|| {
+                if reset_time.is_some() {
+                    0.0
+                } else {
+                    1.0
+                }
+            });
 
         let is_unlimited = reset_time.is_none() && remaining_fraction >= 1.0;
         let remaining = (NORMALIZED_BASE as f64 * remaining_fraction) as i64;
@@ -636,10 +642,6 @@ fn parse_antigravity_user_quota_summary(body: &serde_json::Value) -> Result<Acco
         };
 
         for bucket in buckets {
-            let remaining_fraction = bucket
-                .get("remainingFraction")
-                .and_then(|f| f.as_f64())
-                .unwrap_or(1.0);
             let reset_time = bucket
                 .get("resetTime")
                 .and_then(|r| r.as_str())
@@ -648,6 +650,17 @@ fn parse_antigravity_user_quota_summary(body: &serde_json::Value) -> Result<Acco
                 .get("window")
                 .and_then(|w| w.as_str())
                 .unwrap_or("");
+
+            let remaining_fraction = bucket
+                .get("remainingFraction")
+                .and_then(|f| f.as_f64())
+                .unwrap_or_else(|| {
+                    if reset_time.is_some() {
+                        0.0
+                    } else {
+                        1.0
+                    }
+                });
 
             let is_unlimited = reset_time.is_none() && remaining_fraction >= 1.0;
             let remaining = (NORMALIZED_BASE as f64 * remaining_fraction) as i64;

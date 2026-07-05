@@ -511,7 +511,7 @@ function accountsForProviderTemplate(providerId: string): TemplateResult {
   const matches = (state.accounts || []).filter((a) => a.provider_id === providerId);
   return html`
     <option value="">— rotate —</option>
-    ${matches.map((a) => html`<option value=${String(a.id)}>${a.provider_id}/${a.label || String(a.id)}</option>`)}
+    ${matches.map((a) => html`<option value=${String(a.id)}>${a.provider_id}/${a.label || a.email || String(a.id)}</option>`)}
   `;
 }
 

@@ -197,6 +197,21 @@
 .quota-cell.error { color: var(--color-error); }
 .quota-cell .quota-plan { color: var(--color-text-muted); font-size: 0.7rem; }
 
+.quota-bar-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: var(--space-2);
+  font-size: var(--fs-xs);
+}
+.quota-bar-label-left {
+  font-weight: 500;
+  color: var(--color-text);
+}
+.quota-bar-label-right {
+  color: var(--color-text-muted);
+}
+
 /* Per-model quota styles */
 .quota-model-details {
   margin-top: var(--space-2);

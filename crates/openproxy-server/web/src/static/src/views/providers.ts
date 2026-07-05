@@ -783,7 +783,7 @@ function renderConnectionsSection(provider: Provider, accounts: Account[]): Temp
             ? html`<td>${renderQuotaCell(a)}</td>`
             : html`<td><div class="quota-cell muted"><small>not supported by this provider</small></div></td>`;
           return html`<tr>
-            <td>${a.label || "—"}</td>
+            <td>${a.label || a.email || "—"}</td>
             <td>${a.priority}</td>
             <td>
               <select class=${"health-select " + (a.health_status || "unknown")} @change=${(e: Event) => onSetHealth(a.id, e)}>
