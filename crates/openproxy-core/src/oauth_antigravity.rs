@@ -221,6 +221,8 @@ impl OAuthProvider for AntigravityOAuthProvider {
         &self,
         refresh_token: &str,
         upstream_client: &Arc<UpstreamClient>,
+        _account_id: AccountId,
+        _db: crate::oauth::DbRef<'_>,
     ) -> Result<TokenResponse> {
         // Google's token endpoint requires client_secret for the
         // refresh_token grant on confidential clients — without it

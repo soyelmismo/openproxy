@@ -192,7 +192,8 @@ pub fn build_router(state: AppState) -> Router {
         )
         .route(
             "/combos/{id}/test-all",
-            post(handlers::admin::test_combo_targets),
+            post(handlers::admin::test_combo_targets)
+                .route_layer(middleware::from_fn(crate::disconnect::client_disconnect_middleware)),
         )
         .route(
             "/combos/{id}/targets",
