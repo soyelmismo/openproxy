@@ -2353,6 +2353,7 @@ impl Pipeline {
                         let region = kiro_meta
                             .as_ref()
                             .map(|m| m.region.as_str())
+                            .filter(|r| !r.is_empty())
                             .unwrap_or(crate::executor_kiro::KIRO_DEFAULT_REGION);
                         let profile_arn = kiro_meta.as_ref().and_then(|m| m.profile_arn.as_deref());
                         // Gate 3: the kiro executor now takes

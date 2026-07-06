@@ -800,7 +800,9 @@ pub fn phased_phase(err: &(dyn std::error::Error + 'static)) -> Option<UpstreamP
     let mut current: Option<&(dyn std::error::Error + 'static)> = Some(err);
     while let Some(e) = current {
         if let Some(p) = e.downcast_ref::<PhasedConnectorError>() {
-            return Some(p.phase);
+            if matches!(p.kind, PhasedErrorKind::Timeout) {
+                return Some(p.phase);
+            }
         }
         current = e.source();
     }

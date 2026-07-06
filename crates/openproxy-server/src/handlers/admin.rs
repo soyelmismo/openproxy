@@ -3140,6 +3140,7 @@ async fn run_test_for_model(
     };
 
     let row_id = ModelRowId(model_row_id);
+    let start = std::time::Instant::now();
 
     // 1. Load the model row.
     let model = match (|| -> Result<models::Model, ApiError> {
@@ -3228,9 +3229,18 @@ async fn run_test_for_model(
                 let w = s.db_pool().writer();
                 accounts::get(&w, id).ok().flatten()
             }
-            None => accounts_list
-                .into_iter()
-                .find(|a| a.health_status == accounts::HealthStatus::Healthy),
+            None => {
+                let healthy = accounts_list
+                    .iter()
+                    .find(|a| a.health_status == accounts::HealthStatus::Healthy);
+                let degraded = || accounts_list
+                    .iter()
+                    .find(|a| a.health_status == accounts::HealthStatus::Degraded);
+                healthy
+                    .or_else(degraded)
+                    .or_else(|| accounts_list.first())
+                    .cloned()
+            }
         };
 
         let account_id = selected.as_ref().map(|a| a.id);
@@ -3246,21 +3256,54 @@ async fn run_test_for_model(
         //    primary decrypt fails (e.g. NULL column).
         let api_key = match account_id {
             Some(aid) => {
-                let w = s.db_pool().writer();
-                match accounts::decrypt_api_key(&w, aid, s.master_key().as_ref())
-                    .or_else(|_| accounts::decrypt_access_token(&w, aid, s.master_key().as_ref()))
-                    .map_err(ApiError)
+                let account = {
+                    let w = s.db_pool().writer();
+                    accounts::get(&w, aid).ok().flatten()
+                };
+                if let Some(ref acc) = account
+                    && acc.auth_type == "oauth"
                 {
-                    Ok(k) => k,
-                    Err(ApiError(e)) => {
-                        return TestResult {
-                            row_id: model_row_id,
-                            status: e.http_status(),
-                            elapsed_ms: 0,
-                            error_msg: Some(e.to_string()),
-                            skipped: true,
-                            skip_reason: Some(e.to_string()),
-                        };
+                    match oauth::resolve_oauth_token(
+                        s.db_pool().as_ref(),
+                        acc,
+                        model.provider_id.as_str(),
+                        s.oauth_provider_registry().as_ref(),
+                        s.upstream_client(),
+                        s.master_key().as_ref(),
+                    )
+                    .await
+                    {
+                        Ok(token) => token,
+                        Err(e) => {
+                            let elapsed_ms = start.elapsed().as_millis() as u64;
+                            let err_msg = format!("resolve oauth token: {}", e);
+                            return TestResult {
+                                row_id: model_row_id,
+                                status: e.http_status(),
+                                elapsed_ms,
+                                error_msg: Some(err_msg),
+                                skipped: false,
+                                skip_reason: None,
+                            };
+                        }
+                    }
+                } else {
+                    let w = s.db_pool().writer();
+                    match accounts::decrypt_api_key(&w, aid, s.master_key().as_ref())
+                        .or_else(|_| accounts::decrypt_access_token(&w, aid, s.master_key().as_ref()))
+                        .map_err(ApiError)
+                    {
+                        Ok(k) => k,
+                        Err(ApiError(e)) => {
+                            return TestResult {
+                                row_id: model_row_id,
+                                status: e.http_status(),
+                                elapsed_ms: 0,
+                                error_msg: Some(e.to_string()),
+                                skipped: true,
+                                skip_reason: Some(e.to_string()),
+                            };
+                        }
                     }
                 }
             }
@@ -3336,7 +3379,6 @@ async fn run_test_for_model(
         // Delegate to the provider-specific executor, same as the
         // pipeline's `execute_single`. We need the access token and
         // provider-specific metadata.
-        let start = std::time::Instant::now();
 
         // Resolve the account for this test. The combo path already
         // pinned one; the per-row path picks the first healthy one.
@@ -3349,29 +3391,67 @@ async fn run_test_for_model(
             accounts::list(&w, Some(&model.provider_id))
                 .ok()
                 .and_then(|l| {
-                    l.into_iter()
+                    l.iter()
                         .find(|a| a.health_status == accounts::HealthStatus::Healthy)
+                        .or_else(|| {
+                            l.iter()
+                                .find(|a| a.health_status == accounts::HealthStatus::Degraded)
+                        })
+                        .or_else(|| l.first())
                         .map(|a| a.id)
                 })
                 .unwrap_or(AccountId(0))
         });
 
-        // Decrypt the access token.
+        // Decrypt the access token, resolving/refreshing it if it's an OAuth account.
         let access_token = {
-            let w = s.db_pool().writer();
-            match accounts::decrypt_access_token(&w, test_account_id, s.master_key().as_ref()) {
-                Ok(t) => t,
-                Err(e) => {
-                    let elapsed_ms = start.elapsed().as_millis() as u64;
-                    let err_msg = format!("decrypt access token: {}", e);
-                    return TestResult {
-                        row_id: model_row_id,
-                        status: e.http_status(),
-                        elapsed_ms,
-                        error_msg: Some(err_msg),
-                        skipped: false,
-                        skip_reason: None,
-                    };
+            let account = {
+                let w = s.db_pool().writer();
+                accounts::get(&w, test_account_id).ok().flatten()
+            };
+            if let Some(ref acc) = account
+                && acc.auth_type == "oauth"
+            {
+                match oauth::resolve_oauth_token(
+                    s.db_pool().as_ref(),
+                    acc,
+                    model.provider_id.as_str(),
+                    s.oauth_provider_registry().as_ref(),
+                    s.upstream_client(),
+                    s.master_key().as_ref(),
+                )
+                .await
+                {
+                    Ok(t) => t,
+                    Err(e) => {
+                        let elapsed_ms = start.elapsed().as_millis() as u64;
+                        let err_msg = format!("resolve oauth token: {}", e);
+                        return TestResult {
+                            row_id: model_row_id,
+                            status: e.http_status(),
+                            elapsed_ms,
+                            error_msg: Some(err_msg),
+                            skipped: false,
+                            skip_reason: None,
+                        };
+                    }
+                }
+            } else {
+                let w = s.db_pool().writer();
+                match accounts::decrypt_access_token(&w, test_account_id, s.master_key().as_ref()) {
+                    Ok(t) => t,
+                    Err(e) => {
+                        let elapsed_ms = start.elapsed().as_millis() as u64;
+                        let err_msg = format!("decrypt access token: {}", e);
+                        return TestResult {
+                            row_id: model_row_id,
+                            status: e.http_status(),
+                            elapsed_ms,
+                            error_msg: Some(err_msg),
+                            skipped: false,
+                            skip_reason: None,
+                        };
+                    }
                 }
             }
         };
@@ -3408,9 +3488,12 @@ async fn run_test_for_model(
                         openproxy_core::executor_kiro::read_account_meta(&w, test_account_id)
                             .unwrap_or(None);
                     (
-                        meta.as_ref().map(|m| m.region.clone()).unwrap_or_else(|| {
-                            openproxy_core::executor_kiro::KIRO_DEFAULT_REGION.to_string()
-                        }),
+                        meta.as_ref()
+                            .map(|m| m.region.clone())
+                            .filter(|r| !r.is_empty())
+                            .unwrap_or_else(|| {
+                                openproxy_core::executor_kiro::KIRO_DEFAULT_REGION.to_string()
+                            }),
                         meta.as_ref().and_then(|m| m.profile_arn.clone()),
                     )
                 };

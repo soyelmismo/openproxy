@@ -761,50 +761,48 @@ pub async fn fetch_kiro_quota(
             );
 
             let cancel = CancellationToken::new();
-            let resp = upstream.call(req, TimeoutProfile::OAuth, cancel).await
-                .map_err(|e| CoreError::UpstreamConnection(format!("kiro listAvailableProfiles: {e}")))?;
-
-            let mut discovered_arn = None;
-            if resp.status.is_success() {
-                let body_bytes = resp.collect().await
-                    .map_err(|e| CoreError::UpstreamConnection(format!("kiro listAvailableProfiles read: {e}")))?;
-                let value: serde_json::Value = serde_json::from_slice(&body_bytes)
-                    .map_err(|e| CoreError::Parse(format!("kiro listAvailableProfiles parse: {e}")))?;
-
-                discovered_arn = value
-                    .get("profiles")
-                    .and_then(|v| v.as_array())
-                    .and_then(|arr| {
-                        arr.iter()
-                            .find(|p| {
-                                p.get("arn")
-                                    .or_else(|| p.get("profileArn"))
-                                    .and_then(|v| v.as_str())
-                                    .map(|s| s.contains(&format!(":{region}:")))
-                                    .unwrap_or(false)
-                            })
-                            .or_else(|| arr.first())
-                    })
-                    .and_then(|p| {
-                        p.get("arn")
-                            .or_else(|| p.get("profileArn"))
-                            .and_then(|v| v.as_str())
-                    })
-                    .map(|s| s.to_string());
-            } else {
-                let status_code = resp.status;
-                let body_str = String::from_utf8_lossy(&resp.collect().await.unwrap_or_default()).to_string();
-                if status_code.as_u16() == 403 || body_str.contains("Builder ID") || body_str.contains("AccessDeniedException") {
-                    tracing::info!("Kiro profile ARN discovery returned AccessDenied (likely Builder ID account); proceeding without profile ARN");
-                } else {
-                    return Err(CoreError::UpstreamError {
-                        status: status_code.as_u16(),
-                        provider: "kiro".into(),
-                        model: "<quota_list_profiles>".into(),
-                        body: body_str,
-                    });
+            let discovered_arn = match upstream.call(req, TimeoutProfile::OAuth, cancel).await {
+                Ok(resp) if resp.status.is_success() => {
+                    if let Ok(body_bytes) = resp.collect().await {
+                        if let Ok(value) = serde_json::from_slice::<serde_json::Value>(&body_bytes) {
+                            value
+                                .get("profiles")
+                                .and_then(|v| v.as_array())
+                                .and_then(|arr| {
+                                    arr.iter()
+                                        .find(|p| {
+                                            p.get("arn")
+                                                .or_else(|| p.get("profileArn"))
+                                                .and_then(|v| v.as_str())
+                                                .map(|s| s.contains(&format!(":{region}:")))
+                                                .unwrap_or(false)
+                                        })
+                                        .or_else(|| arr.first())
+                                })
+                                .and_then(|p| {
+                                    p.get("arn")
+                                        .or_else(|| p.get("profileArn"))
+                                        .and_then(|v| v.as_str())
+                                })
+                                .map(|s| s.to_string())
+                        } else {
+                            None
+                        }
+                    } else {
+                        None
+                    }
                 }
-            }
+                Ok(resp) => {
+                    let status_code = resp.status;
+                    let body_str = String::from_utf8_lossy(&resp.collect().await.unwrap_or_default()).to_string();
+                    tracing::info!(status = %status_code, body = %body_str, "Kiro profile ARN discovery returned non-success; proceeding without profile ARN");
+                    None
+                }
+                Err(e) => {
+                    tracing::info!(error = %e, "kiro listAvailableProfiles network call failed; proceeding without profile ARN");
+                    None
+                }
+            };
             discovered_arn
         }
     };
@@ -818,8 +816,24 @@ pub async fn fetch_kiro_quota(
     if let Some(ref arn) = profile_arn {
         payload["profileArn"] = serde_json::json!(arn);
     }
-    let body_bytes = serde_json::to_vec(&payload)
-        .map_err(|e| CoreError::Parse(format!("kiro GetUsageLimits serialize: {e}")))?;
+    let body_bytes = match serde_json::to_vec(&payload) {
+        Ok(b) => b,
+        Err(e) => {
+            tracing::info!(error = %e, "kiro GetUsageLimits serialize payload failed; returning empty quota");
+            return Ok(AccountQuota {
+                session_used: None,
+                session_limit: None,
+                session_reset_at: None,
+                weekly_used: None,
+                weekly_limit: None,
+                weekly_reset_at: None,
+                plan_name: Some("Kiro".to_string()),
+                last_fetched_at: now_unix_secs_str(),
+                fetch_error: None,
+                model_details: None,
+            });
+        }
+    };
 
     let mut req = UpstreamRequest::post_json(&url, bytes::Bytes::from(body_bytes));
     if let Ok(v) = http::HeaderValue::from_str(&format!("Bearer {access_token}")) {
@@ -835,17 +849,40 @@ pub async fn fetch_kiro_quota(
     );
 
     let cancel = CancellationToken::new();
-    let resp = upstream.call(req, TimeoutProfile::OAuth, cancel).await
-        .map_err(|e| CoreError::UpstreamConnection(format!("kiro GetUsageLimits: {e}")))?;
+    let resp = match upstream.call(req, TimeoutProfile::OAuth, cancel).await {
+        Ok(r) => r,
+        Err(e) => {
+            tracing::info!(error = %e, "kiro GetUsageLimits network call failed; returning empty quota without error");
+            return Ok(AccountQuota {
+                session_used: None,
+                session_limit: None,
+                session_reset_at: None,
+                weekly_used: None,
+                weekly_limit: None,
+                weekly_reset_at: None,
+                plan_name: Some("Kiro".to_string()),
+                last_fetched_at: now_unix_secs_str(),
+                fetch_error: None,
+                model_details: None,
+            });
+        }
+    };
 
     if !resp.status.is_success() {
         let status = resp.status.as_u16();
         let body_str = String::from_utf8_lossy(&resp.collect().await.unwrap_or_default()).to_string();
-        return Err(CoreError::UpstreamError {
-            status,
-            provider: "kiro".into(),
-            model: "<quota_limits>".into(),
-            body: body_str,
+        tracing::info!(status = status, body = %body_str, "Kiro GetUsageLimits returned non-success (likely restricted quota access); returning empty quota without error");
+        return Ok(AccountQuota {
+            session_used: None,
+            session_limit: None,
+            session_reset_at: None,
+            weekly_used: None,
+            weekly_limit: None,
+            weekly_reset_at: None,
+            plan_name: Some("Kiro".to_string()),
+            last_fetched_at: now_unix_secs_str(),
+            fetch_error: None,
+            model_details: None,
         });
     }
 

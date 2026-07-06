@@ -229,7 +229,7 @@ impl UpstreamClient {
             // don't keep a separate reference in `HyperDispatch::Production`.
             let connector = PhasedConnector::with_defaults();
             let hyper: HyperClient<PhasedConnector, Full<Bytes>> =
-                HyperClient::builder(TokioExecutor::new())
+                HyperClient::builder(TaskLocalExecutor)
                     // RAM optimization: keep up to 8 idle connections
                     // per host (was 32). Each idle connection holds
                     // ~50-100 KB of TLS state + kernel buffers; with
@@ -700,14 +700,10 @@ impl HyperDispatchDyn for ProductionDispatch {
         let inner = self.inner.clone();
         Box::pin(async move {
             inner.request(req).await.map_err(|e| {
+                if let Some(up_err) = hyper_source_connector_error(&e) {
+                    return up_err;
+                }
                 let phase = hyper_source_phase(&e);
-                // Bug fix: include the `source()` chain in the
-                // error message so the operator can see WHY the
-                // request failed (e.g. "connection closed before
-                // message completed", "broken pipe", etc.). The
-                // previous `e.to_string()` only gave
-                // "client error (SendRequest)" which is useless
-                // for debugging.
                 let msg = format_hyper_error(&e);
                 match phase {
                     Some(p) => UpstreamError::Timeout(p),
@@ -744,14 +740,40 @@ fn format_hyper_error(e: &hyper_util::client::legacy::Error) -> String {
 }
 
 /// Walk the `source()` chain of a hyper `Error` looking for a
+/// `PhasedConnectorError` and map it to an `UpstreamError`.
+#[cfg(feature = "upstream-hyper")]
+fn hyper_source_connector_error(e: &hyper_util::client::legacy::Error) -> Option<UpstreamError> {
+    use std::error::Error as _;
+    let mut current: Option<&(dyn std::error::Error + 'static)> = e.source();
+    while let Some(c) = current {
+        if let Some(p) = c.downcast_ref::<super::connector::PhasedConnectorError>() {
+            match &p.kind {
+                super::connector::PhasedErrorKind::Timeout => {
+                    return Some(UpstreamError::Timeout(p.phase));
+                }
+                super::connector::PhasedErrorKind::InvalidUri(s) => {
+                    return Some(UpstreamError::Invalid(format!("in phase `{}`: {}", p.phase, s)));
+                }
+                super::connector::PhasedErrorKind::Io(io_err) => {
+                    if p.phase == super::UpstreamPhase::Tls {
+                        return Some(UpstreamError::Tls(format!("in phase `{}`: {}", p.phase, io_err)));
+                    } else {
+                        return Some(UpstreamError::Connection(format!("in phase `{}`: {}", p.phase, io_err)));
+                    }
+                }
+            }
+        }
+        current = c.source();
+    }
+    None
+}
+
+/// Walk the `source()` chain of a hyper `Error` looking for a
 /// `PhasedConnectorError` and return its phase. Returns `None` if
 /// the chain does not contain one (e.g. a non-phased test connector).
 #[cfg(feature = "upstream-hyper")]
 fn hyper_source_phase(e: &hyper_util::client::legacy::Error) -> Option<UpstreamPhase> {
     use std::error::Error as _;
-    // The `source()` of hyper's legacy `Error` is the connector
-    // error (a `Box<dyn Error + Send + Sync>` wrapping our
-    // `PhasedConnectorError`). Walk the chain until we find one.
     let mut current: Option<&(dyn std::error::Error + 'static)> = e.source();
     while let Some(c) = current {
         if let Some(p) = phased_phase(c) {
@@ -848,5 +870,39 @@ where
 
     fn phase_hint(&self) -> Option<UpstreamPhase> {
         self.phase_hint
+    }
+}
+
+#[cfg(feature = "upstream-hyper")]
+#[derive(Clone)]
+struct TaskLocalExecutor;
+
+#[cfg(feature = "upstream-hyper")]
+impl<F> hyper::rt::Executor<F> for TaskLocalExecutor
+where
+    F: std::future::Future + Send + 'static,
+    F::Output: Send + 'static,
+{
+    fn execute(&self, future: F) {
+        let timeouts = CALL_TIMEOUTS.try_with(|t| *t).ok();
+        let proxy = CALL_PROXY.try_with(|p| p.clone()).ok().flatten();
+
+        let fut = async move {
+            match (timeouts, proxy) {
+                (Some(t), Some(p)) => {
+                    CALL_TIMEOUTS.scope(t, CALL_PROXY.scope(Some(p), future)).await
+                }
+                (Some(t), None) => {
+                    CALL_TIMEOUTS.scope(t, future).await
+                }
+                (None, Some(p)) => {
+                    CALL_PROXY.scope(Some(p), future).await
+                }
+                (None, None) => {
+                    future.await
+                }
+            }
+        };
+        tokio::spawn(fut);
     }
 }

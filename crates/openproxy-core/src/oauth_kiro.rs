@@ -118,7 +118,7 @@ static LAST_KIRO_CLIENT: Lazy<Mutex<Option<LastKiroClient>>> = Lazy::new(|| Mute
 /// 60s is conservative enough to cover the round-trip from the
 /// user completing the browser-side auth back to the device-poll
 /// landing on the same process.
-const LAST_KIRO_CLIENT_TTL: std::time::Duration = std::time::Duration::from_secs(60);
+const LAST_KIRO_CLIENT_TTL: std::time::Duration = std::time::Duration::from_secs(600);
 
 /// Read-and-clear the most recently registered Kiro OIDC client,
 /// if it was registered within `LAST_KIRO_CLIENT_TTL`. Returns
@@ -439,7 +439,7 @@ impl OAuthProvider for KiroOAuthProvider {
         account_id: AccountId,
         db: crate::oauth::DbRef<'_>,
     ) -> Result<TokenResponse> {
-        let meta = match db {
+        let mut meta = match db {
             crate::oauth::DbRef::Pool(pool) => {
                 let conn = pool.writer();
                 crate::oauth_kiro::read_profile_meta(&conn, account_id)?
@@ -449,19 +449,49 @@ impl OAuthProvider for KiroOAuthProvider {
                 crate::oauth_kiro::read_profile_meta(&conn, account_id)?
             }
         }
-        .ok_or_else(|| {
-            CoreError::Validation(format!(
-                "no Kiro metadata found for account {}",
-                account_id.0
-            ))
-        })?;
+        .unwrap_or_else(KiroProviderMeta::default);
 
-        let region = if meta.region.is_empty() {
-            DEFAULT_REGION
+        let region_str = if meta.region.is_empty() {
+            DEFAULT_REGION.to_string()
         } else {
-            &meta.region
+            meta.region.clone()
         };
+        let region = region_str.as_str();
         let token_url = format!("https://oidc.{region}.amazonaws.com/token");
+
+        if meta.client_id.is_empty() || meta.client_secret.is_empty() {
+            tracing::info!(
+                account = account_id.0,
+                "kiro token refresh: missing client credentials; attempting proactive OIDC client registration..."
+            );
+            if let Ok((new_cid, new_csec)) = register_oidc_client(upstream_client, region).await {
+                meta.client_id = new_cid;
+                meta.client_secret = new_csec;
+                let meta_json = serde_json::to_string(&meta)
+                    .map_err(|e| CoreError::Internal(format!("kiro meta serialize: {e}")))?;
+                match db {
+                    crate::oauth::DbRef::Pool(pool) => {
+                        let conn = pool.writer();
+                        let _ = conn.execute(
+                            "UPDATE accounts SET oauth_provider_specific = ?1 WHERE id = ?2",
+                            rusqlite::params![meta_json, account_id.0],
+                        );
+                    }
+                    crate::oauth::DbRef::Connection(mutex) => {
+                        let conn = mutex.lock();
+                        let _ = conn.execute(
+                            "UPDATE accounts SET oauth_provider_specific = ?1 WHERE id = ?2",
+                            rusqlite::params![meta_json, account_id.0],
+                        );
+                    }
+                }
+            } else {
+                return Err(CoreError::Validation(format!(
+                    "no valid Kiro client credentials for account {} and dynamic registration failed",
+                    account_id.0
+                )));
+            }
+        }
 
         // Attempt 1: Refresh using current stored client credentials
         let body = serde_json::json!({
@@ -636,14 +666,21 @@ impl OAuthProvider for KiroOAuthProvider {
         //    first one in the array). If the list is empty we keep
         //    the row as-is — the user can re-link later from the
         //    dashboard.
-        match list_available_profiles(upstream, &access_token, &meta.region).await? {
-            Some(arn) => {
+        match list_available_profiles(upstream, &access_token, &meta.region).await {
+            Ok(Some(arn)) => {
                 meta.profile_arn = Some(arn);
             }
-            None => {
+            Ok(None) => {
                 tracing::info!(
                     account = account_id.0,
                     "kiro post_exchange: no profiles available; profileArn left empty"
+                );
+            }
+            Err(e) => {
+                tracing::warn!(
+                    account = account_id.0,
+                    error = %e,
+                    "kiro post_exchange: list_available_profiles failed (likely restricted account access); proceeding without profileArn"
                 );
             }
         }
@@ -677,7 +714,8 @@ async fn list_available_profiles(
     access_token: &str,
     region: &str,
 ) -> Result<Option<String>> {
-    let host = if region == "us-east-1" || region.is_empty() {
+    let region = if region.is_empty() { "us-east-1" } else { region };
+    let host = if region == "us-east-1" {
         "https://codewhisperer.us-east-1.amazonaws.com".to_string()
     } else {
         format!("https://q.{region}.amazonaws.com")
@@ -770,11 +808,11 @@ pub fn read_profile_meta(
     conn: &Connection,
     account_id: AccountId,
 ) -> Result<Option<KiroProviderMeta>> {
-    let raw: Option<String> = conn
+    let raw: Option<Option<String>> = conn
         .query_row(
             "SELECT oauth_provider_specific FROM accounts WHERE id = ?1",
             params![account_id.0],
-            |r| r.get(0),
+            |r| r.get::<_, Option<String>>(0),
         )
         .optional()
         .map_err(|e| CoreError::Database {
@@ -782,9 +820,17 @@ pub fn read_profile_meta(
             source: Some(Box::new(e)),
         })?;
 
-    let Some(raw) = raw else { return Ok(None) };
-    let meta: KiroProviderMeta = serde_json::from_str(&raw)
+    let Some(raw) = raw.flatten() else {
+        return Ok(Some(KiroProviderMeta::default()));
+    };
+    if raw.is_empty() {
+        return Ok(Some(KiroProviderMeta::default()));
+    }
+    let mut meta: KiroProviderMeta = serde_json::from_str(&raw)
         .map_err(|e| CoreError::Parse(format!("kiro meta parse: {e}")))?;
+    if meta.region.is_empty() {
+        meta.region = DEFAULT_REGION.to_string();
+    }
     Ok(Some(meta))
 }
 
@@ -827,5 +873,23 @@ mod tests {
         let meta: KiroProviderMeta = serde_json::from_str(raw).unwrap();
         assert_eq!(meta.region, "us-east-1");
         assert!(meta.profile_arn.is_none());
+    }
+
+    #[test]
+    fn test_read_profile_meta_null() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute(
+            "CREATE TABLE accounts (id INTEGER PRIMARY KEY, oauth_provider_specific TEXT)",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO accounts (id, oauth_provider_specific) VALUES (1, NULL)",
+            [],
+        )
+        .unwrap();
+        let meta = read_profile_meta(&conn, AccountId(1)).unwrap().unwrap();
+        assert_eq!(meta.region, "us-east-1");
+        assert!(meta.client_id.is_empty());
     }
 }
