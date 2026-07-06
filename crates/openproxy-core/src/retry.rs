@@ -199,6 +199,7 @@ mod tests {
         let err = CoreError::RateLimited {
             provider: "p".into(),
             retry_after_ms: 1000,
+            is_proxy_rotated: false,
         };
         assert!(RetryPolicy::is_retryable(&err, false));
     }

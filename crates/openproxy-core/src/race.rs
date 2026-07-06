@@ -508,6 +508,7 @@ mod tests {
         let rate = CoreError::RateLimited {
             provider: "p".into(),
             retry_after_ms: 100,
+            is_proxy_rotated: false,
         };
         let s4xx = CoreError::UpstreamError {
             status: 404,

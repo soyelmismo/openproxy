@@ -81,6 +81,7 @@ pub enum CoreError {
     RateLimited {
         provider: String,
         retry_after_ms: u64,
+        is_proxy_rotated: bool,
     },
 
     #[error("parse error: {0}")]
@@ -163,12 +164,14 @@ impl CoreError {
             },
             CoreError::UpstreamConnection(s) => CoreError::UpstreamConnection(s.clone()),
             CoreError::RateLimited {
-                provider,
-                retry_after_ms,
-            } => CoreError::RateLimited {
-                provider: provider.clone(),
-                retry_after_ms: *retry_after_ms,
-            },
+        provider,
+        retry_after_ms,
+        is_proxy_rotated,
+    } => CoreError::RateLimited {
+        provider: provider.clone(),
+        retry_after_ms: *retry_after_ms,
+        is_proxy_rotated: *is_proxy_rotated,
+    },
             CoreError::Parse(s) => CoreError::Parse(s.clone()),
             CoreError::ClientDisconnected => CoreError::ClientDisconnected,
             CoreError::RaceLost => CoreError::RaceLost,
@@ -251,7 +254,8 @@ mod tests {
         assert_eq!(
             CoreError::RateLimited {
                 provider: "p".into(),
-                retry_after_ms: 1000
+                retry_after_ms: 1000,
+                is_proxy_rotated: false,
             }
             .http_status(),
             429

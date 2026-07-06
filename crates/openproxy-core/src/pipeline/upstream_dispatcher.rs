@@ -70,7 +70,7 @@ impl UpstreamDispatcher {
         provider_id: &crate::ids::ProviderId,
         status_code: Option<u16>,
         is_connect_error: bool,
-    ) {
+    ) -> bool {
         let conn = self.conn.lock();
         if let Ok(Some(provider)) = crate::providers::get(&conn, provider_id)
             && provider.use_proxies {
@@ -101,8 +101,10 @@ impl UpstreamDispatcher {
                         );
                         let _ = crate::free_proxies::update_proxy_status(&conn, bad_proxy_id, "dead", None);
                         let _ = crate::providers::update_current_proxy(&conn, provider_id, None);
+                        return true;
                     }
             }
+        false
     }
 
 
@@ -625,7 +627,7 @@ impl UpstreamDispatcher {
         // instead of using the fixed exponential backoff. The default
         // backoff is < 1 s; an upstream that asks for 30 s gets 30 s.
         if !(200..300).contains(&status_code) {
-            self.check_and_trigger_proxy_rotation(&target.provider_id, Some(status_code), false);
+            let is_proxy_rotated = self.check_and_trigger_proxy_rotation(&target.provider_id, Some(status_code), false);
             let body_str = String::from_utf8_lossy(&body_bytes).to_string();
             // Parse `Retry-After` from response_headers (extracted at L1751
             // before the body was consumed). Accepts either an integer
@@ -640,6 +642,7 @@ impl UpstreamDispatcher {
                 let err = CoreError::RateLimited {
                     provider: target.provider_id.to_string(),
                     retry_after_ms: retry_ms,
+                    is_proxy_rotated,
                 };
                 return self.record_and_fail(
                     req,
@@ -1409,7 +1412,7 @@ impl UpstreamDispatcher {
 
         let status_code = response.status.as_u16();
         if !(200..300).contains(&status_code) {
-            self.check_and_trigger_proxy_rotation(&target.provider_id, Some(status_code), false);
+            let is_proxy_rotated = self.check_and_trigger_proxy_rotation(&target.provider_id, Some(status_code), false);
             let body_str = match response.body.collect_all().await {
                 Ok(b) => String::from_utf8_lossy(&b).to_string(),
                 Err(_) => String::new(),
@@ -1470,6 +1473,7 @@ impl UpstreamDispatcher {
                 CoreError::RateLimited {
                     provider: target.provider_id.to_string(),
                     retry_after_ms: retry_ms,
+                    is_proxy_rotated,
                 }
             } else {
                 // Diagnostic: when MiniMax returns a 400 with error

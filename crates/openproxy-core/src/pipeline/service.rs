@@ -451,9 +451,13 @@ impl tower::Service<PipelineState> for RoutingService {
                         Some(d) => d,
                         None => break,
                     };
-                    let delay = if let CoreError::RateLimited { retry_after_ms, .. } = e {
-                        let upstream = std::time::Duration::from_millis(*retry_after_ms);
-                        if upstream > delay { upstream } else { delay }
+                    let delay = if let CoreError::RateLimited { retry_after_ms, is_proxy_rotated, .. } = e {
+                        if *is_proxy_rotated {
+                            std::time::Duration::from_millis(0)
+                        } else {
+                            let upstream = std::time::Duration::from_millis(*retry_after_ms);
+                            if upstream > delay { upstream } else { delay }
+                        }
                     } else {
                         delay
                     };

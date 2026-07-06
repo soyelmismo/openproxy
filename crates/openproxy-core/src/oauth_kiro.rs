@@ -941,6 +941,7 @@ mod tests {
             client_secret: "test-client-secret".into(),
             profile_arn: Some("arn:aws:codewhisperer:us-east-1:123:profile/abc".into()),
             region: "us-east-1".into(),
+            auth_method: None,
         };
         let json = serde_json::to_string(&meta).unwrap();
         let back: KiroProviderMeta = serde_json::from_str(&json).unwrap();
