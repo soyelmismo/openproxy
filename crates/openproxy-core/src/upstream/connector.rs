@@ -598,7 +598,7 @@ async fn run_phased_connect(
             Ok(Err(e)) => {
                 return Err(Box::new(PhasedConnectorError {
                     phase: UpstreamPhase::Dial,
-                    kind: PhasedErrorKind::Io(io::Error::new(io::ErrorKind::Other, format!("Proxy handshake failed: {}", e))),
+                    kind: PhasedErrorKind::Io(io::Error::other(format!("Proxy handshake failed: {}", e))),
                 }));
             }
             Err(_) => {
@@ -799,11 +799,10 @@ pub fn phased_phase(err: &(dyn std::error::Error + 'static)) -> Option<UpstreamP
     // `Connect` wrapping our boxed error) are also detected.
     let mut current: Option<&(dyn std::error::Error + 'static)> = Some(err);
     while let Some(e) = current {
-        if let Some(p) = e.downcast_ref::<PhasedConnectorError>() {
-            if matches!(p.kind, PhasedErrorKind::Timeout) {
+        if let Some(p) = e.downcast_ref::<PhasedConnectorError>()
+            && matches!(p.kind, PhasedErrorKind::Timeout) {
                 return Some(p.phase);
             }
-        }
         current = e.source();
     }
     None
@@ -856,7 +855,7 @@ async fn run_proxy_tunnel(
             let mut greeting_resp = [0u8; 2];
             stream.read_exact(&mut greeting_resp).await?;
             if greeting_resp[0] != 0x05 || greeting_resp[1] != 0x00 {
-                return Err(io::Error::new(io::ErrorKind::Other, "SOCKS5 authentication required or unsupported").into());
+                return Err(io::Error::other("SOCKS5 authentication required or unsupported").into());
             }
 
             // 2. Connect request
@@ -885,7 +884,7 @@ async fn run_proxy_tunnel(
             let mut resp_header = [0u8; 4];
             stream.read_exact(&mut resp_header).await?;
             if resp_header[0] != 0x05 || resp_header[1] != 0x00 {
-                return Err(io::Error::new(io::ErrorKind::Other, format!("SOCKS5 connection failed: status={}", resp_header[1])).into());
+                return Err(io::Error::other(format!("SOCKS5 connection failed: status={}", resp_header[1])).into());
             }
 
             // Read address part of the response
@@ -903,12 +902,12 @@ async fn run_proxy_tunnel(
                     let mut buf = vec![0u8; len as usize + 2];
                     stream.read_exact(&mut buf).await?;
                 }
-                _ => return Err(io::Error::new(io::ErrorKind::Other, "Invalid SOCKS5 address type").into()),
+                _ => return Err(io::Error::other("Invalid SOCKS5 address type").into()),
             }
         }
         "socks4" => {
             let ip = dest_host.parse::<std::net::Ipv4Addr>().map_err(|_| {
-                io::Error::new(io::ErrorKind::Other, "SOCKS4 only supports literal IPv4 destination hosts (use SOCKS5 for hostname resolution)")
+                io::Error::other("SOCKS4 only supports literal IPv4 destination hosts (use SOCKS5 for hostname resolution)")
             })?;
             
             let mut req = Vec::with_capacity(9);
@@ -921,7 +920,7 @@ async fn run_proxy_tunnel(
             let mut resp = [0u8; 8];
             stream.read_exact(&mut resp).await?;
             if resp[0] != 0x00 || resp[1] != 0x5a {
-                return Err(io::Error::new(io::ErrorKind::Other, format!("SOCKS4 connection rejected: code={}", resp[1])).into());
+                return Err(io::Error::other(format!("SOCKS4 connection rejected: code={}", resp[1])).into());
             }
         }
         "http" | "https" => {
@@ -940,18 +939,18 @@ async fn run_proxy_tunnel(
                     break;
                 }
                 if headers_buf.len() > 8192 {
-                    return Err(io::Error::new(io::ErrorKind::Other, "HTTP CONNECT response headers too long").into());
+                    return Err(io::Error::other("HTTP CONNECT response headers too long").into());
                 }
             }
 
             let resp_str = String::from_utf8_lossy(&headers_buf);
             let first_line = resp_str.split("\r\n").next().unwrap_or("");
             if !first_line.contains(" 200 ") {
-                return Err(io::Error::new(io::ErrorKind::Other, format!("HTTP CONNECT proxy returned error: {}", first_line)).into());
+                return Err(io::Error::other(format!("HTTP CONNECT proxy returned error: {}", first_line)).into());
             }
         }
         _ => {
-            return Err(io::Error::new(io::ErrorKind::Other, format!("Unsupported proxy scheme: {}", proxy.scheme)).into());
+            return Err(io::Error::other(format!("Unsupported proxy scheme: {}", proxy.scheme)).into());
         }
     }
 

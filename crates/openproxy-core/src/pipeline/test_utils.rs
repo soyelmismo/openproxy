@@ -1,5 +1,5 @@
 use crate::adapters::{AdapterAuthType, AdapterFormat, ProviderAdapter, ProviderAdapterConfig};
-use crate::combos::{self, ComboTarget};
+use crate::combos;
 use crate::config::{RacingConfig, RetriesConfig, TimeoutsConfig};
 use crate::db::conn::DbPool;
 use crate::db::migrations;
@@ -138,7 +138,7 @@ pub fn make_request(combo_id: ComboId) -> (PipelineRequest, watch::Sender<bool>)
         request_id: RequestId::new(),
         trace_id: TraceId::new(),
         combo_id,
-        openai_request: OpenAIRequest {
+        openai_request: std::sync::Arc::new(OpenAIRequest {
             model: "any".into(),
             messages: vec![OpenAIMessage {
                 role: "user".into(),
@@ -158,7 +158,7 @@ pub fn make_request(combo_id: ComboId) -> (PipelineRequest, watch::Sender<bool>)
             top_k: None,
             user: None,
             extra: serde_json::Map::new(),
-        },
+        }),
         client_disconnected: dis_rx,
         // Use Discard sink for non-streaming test requests. The
         // pipeline forces stream=true to the upstream, but SSE

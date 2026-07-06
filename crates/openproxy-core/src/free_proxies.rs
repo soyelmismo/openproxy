@@ -127,7 +127,7 @@ pub fn get_proxy(
         Err(e) => Err(crate::error::CoreError::Database {
             message: e.to_string(),
             source: Some(Box::new(e)),
-        }.into()),
+        }),
     }
 }
 
@@ -390,8 +390,8 @@ async fn sync_iplocate() -> crate::error::Result<Vec<ScrapedProxy>> {
             }
             if let Some(pos) = trimmed.rfind(':') {
                 let host = trimmed[..pos].trim().to_string();
-                if let Ok(port) = trimmed[pos + 1..].trim().parse::<u16>() {
-                    if !host.is_empty() && port > 0 {
+                if let Ok(port) = trimmed[pos + 1..].trim().parse::<u16>()
+                    && !host.is_empty() && port > 0 {
                         list.push(ScrapedProxy {
                             source: "iplocate".to_string(),
                             host,
@@ -400,7 +400,6 @@ async fn sync_iplocate() -> crate::error::Result<Vec<ScrapedProxy>> {
                             country_code: None,
                         });
                     }
-                }
             }
         }
     }
@@ -633,10 +632,8 @@ pub fn test_all_proxies_background(db_pool: Arc<DbPool>) {
                 }
             };
             let mut list = Vec::new();
-            for row in rows {
-                if let Ok(item) = row {
-                    list.push(item);
-                }
+            for item in rows.flatten() {
+                list.push(item);
             }
             list
         };

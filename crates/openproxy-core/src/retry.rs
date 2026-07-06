@@ -115,11 +115,7 @@ impl RetryPolicy {
                 // is closed — retrying is pointless. Return false to
                 // abort the combo walk immediately.
                 let msg = err.to_string();
-                if msg.starts_with("client disconnected") {
-                    false
-                } else {
-                    true
-                }
+                !msg.starts_with("client disconnected")
             }
             RateLimited { .. } => true,
             // 4xx is retryable: a provider-specific validation error

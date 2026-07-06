@@ -2,11 +2,11 @@ use crate::pipeline::test_utils::*;
 use crate::pipeline::*;
 use crate::combos::{self, Strategy, AddTargetInput, list_targets_with_model};
 use crate::providers::{self, AuthType, ProviderFormat};
-use crate::ids::{AccountId, ComboId, ModelRowId, ProviderId, RequestId};
+use crate::ids::{AccountId, ModelRowId, ProviderId, RequestId};
 use crate::secrets::MasterKey;
 use crate::error::CoreError;
 use std::sync::Arc;
-use rusqlite::Connection;
+
 
 #[test]
 fn test_circuit_breaker_len() {
@@ -43,7 +43,7 @@ fn resolve_targets_with_empty_combo_returns_empty() {
 #[test]
 fn resolve_targets_with_healthy_account_expands_to_one() {
     let (pool, conn, _path) = fresh_pool();
-    let (model, combo_id, mk) = {
+    let (_model, combo_id, mk) = {
         let writer = pool.writer();
         let model = seed_provider_and_model(&writer, "p", "m", crate::models::TargetFormat::Openai);
         let combo_id =
@@ -354,7 +354,7 @@ fn circuit_breaker_unhealthy_filter_drops_target_before_cooldown_snapshot() {
         .enable_all()
         .build()
         .unwrap();
-    let result = runtime.block_on(p.run(req));
+    let result = runtime.block_on(p.run(std::sync::Arc::new(req)));
 
     match &result.error {
         Some(CoreError::NoHealthyTargets(id)) => {

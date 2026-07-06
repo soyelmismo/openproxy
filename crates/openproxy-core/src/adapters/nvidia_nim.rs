@@ -1,0 +1,84 @@
+use super::*;
+
+// =====================================================================
+// NVIDIA NIM
+// =====================================================================
+
+/// Adapter for <https://integrate.api.nvidia.com>.
+///
+/// NVIDIA NIM speaks OpenAI-compatible `/v1/chat/completions` with
+/// Bearer auth. Free tier offers 70+ models at ~40 RPM.
+pub struct NvidiaNimAdapter {
+    config: ProviderAdapterConfig,
+}
+
+impl NvidiaNimAdapter {
+    pub fn new() -> Self {
+        Self {
+            config: ProviderAdapterConfig {
+                id: ProviderId::new("nvidia-nim"),
+                base_url: "https://integrate.api.nvidia.com/v1".into(),
+                auth_type: AdapterAuthType::Bearer,
+                format: AdapterFormat::Openai,
+                extra_headers: vec![],
+            },
+        }
+    }
+}
+
+impl Default for NvidiaNimAdapter {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[async_trait]
+impl ProviderAdapter for NvidiaNimAdapter {
+    fn id(&self) -> &ProviderId {
+        &self.config.id
+    }
+
+    fn config(&self) -> &ProviderAdapterConfig {
+        &self.config
+    }
+
+    fn build_chat_url(&self, _target_format: TargetFormat, _model: &ModelId) -> String {
+        format!("{}/chat/completions", self.config.base_url)
+    }
+
+    fn build_auth_header(&self, api_key: &str) -> (String, String) {
+        ("Authorization".into(), format!("Bearer {}", api_key))
+    }
+
+    fn build_headers(
+        &self,
+        api_key: &str,
+        _target_format: TargetFormat,
+        _model: &ModelId,
+    ) -> Vec<(String, String)> {
+        let (name, value) = self.build_auth_header(api_key);
+        vec![
+            (name, value),
+            ("Content-Type".into(), "application/json".into()),
+        ]
+    }
+
+    fn models_url(&self) -> Option<String> {
+        Some(format!("{}/models", self.config.base_url))
+    }
+
+    async fn fetch_models(
+        &self,
+        upstream_client: &Arc<UpstreamClient>,
+        api_key: &str,
+    ) -> Result<Vec<DiscoveredModel>> {
+        fetch_openai_models(
+            &self.models_url().expect("always Some"),
+            upstream_client,
+            api_key,
+            "nvidia-nim",
+        )
+        .await
+    }
+}
+

@@ -1,3 +1,5 @@
+#![allow(clippy::too_many_arguments, clippy::needless_range_loop, clippy::ptr_arg)]
+#![allow(clippy::vec_init_then_push, clippy::items_after_test_module, clippy::manual_range_contains, clippy::op_ref, clippy::needless_borrow, clippy::doc_overindented_list_items, clippy::match_single_binding)]
 //! openproxy-core: headless LLM proxy library.
 //!
 //! See docs/architecture.md and docs/mvp-spec.md for the full spec.

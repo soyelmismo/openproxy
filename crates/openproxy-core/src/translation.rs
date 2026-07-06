@@ -516,24 +516,21 @@ pub fn openai_to_anthropic(req: &OpenAIRequest) -> AnthropicRequest {
             if m.role == "assistant" {
                 if let Some(arr) = m.content.as_array() {
                     for block in arr {
-                        if block.get("type").and_then(|t| t.as_str()) == Some("tool_use") {
-                            if let Some(id) = block.get("id").and_then(|v| v.as_str()) {
+                        if block.get("type").and_then(|t| t.as_str()) == Some("tool_use")
+                            && let Some(id) = block.get("id").and_then(|v| v.as_str()) {
                                 tool_use_ids.push(id.to_string());
                             }
-                        }
                     }
                 }
-            } else if m.role == "user" {
-                if let Some(arr) = m.content.as_array() {
+            } else if m.role == "user"
+                && let Some(arr) = m.content.as_array() {
                     for block in arr {
-                        if block.get("type").and_then(|t| t.as_str()) == Some("tool_result") {
-                            if let Some(id) = block.get("tool_use_id").and_then(|v| v.as_str()) {
+                        if block.get("type").and_then(|t| t.as_str()) == Some("tool_result")
+                            && let Some(id) = block.get("tool_use_id").and_then(|v| v.as_str()) {
                                 tool_result_ids.push(id.to_string());
                             }
-                        }
                     }
                 }
-            }
         }
         let use_set: std::collections::HashSet<&str> = tool_use_ids.iter().map(|s| s.as_str()).collect();
         let result_set: std::collections::HashSet<&str> = tool_result_ids.iter().map(|s| s.as_str()).collect();

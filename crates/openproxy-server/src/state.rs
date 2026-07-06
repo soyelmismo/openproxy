@@ -295,10 +295,11 @@ impl AppState {
             oauth_provider_registry.clone(),
         ).await;
 
+        let adapters_snapshot = Arc::new(adapters.read().clone());
         let discovery_scheduler = discovery_scheduler::start(
             db_pool.clone(),
             master_key.clone(),
-            Arc::new(adapters.read().clone()),
+            adapters_snapshot,
             upstream_client.clone(),
             openproxy_core::discovery_scheduler::DiscoverySchedulerConfig {
                 interval_secs: 3_600,
@@ -795,6 +796,7 @@ fn build_http_client(config: &openproxy_core::AppConfig) -> anyhow::Result<reqwe
         .build()?)
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn spawn_background_tasks(
     db_pool: Arc<openproxy_core::db::DbPool>,
     _config: openproxy_core::AppConfig,
@@ -962,7 +964,7 @@ fn spawn_memory_cleanup(
                 libmimalloc_sys::mi_collect(false);
             }
             slow_counter = slow_counter.wrapping_add(1);
-            if slow_counter % 10 == 0 {
+            if slow_counter.is_multiple_of(10) {
                 let _ = selection_registry.prune_stale(std::time::Duration::from_secs(3600));
                 let _ = circuit_breaker.prune_idle(std::time::Duration::from_secs(3600));
             }

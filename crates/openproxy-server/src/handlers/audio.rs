@@ -7,7 +7,7 @@
 //! multipart Whisper flow. Instead, the handler reuses:
 //!
 //! - **Auth**: the chat scope (any chat API key can transcribe), via
-//!   [`crate::handlers::chat::authenticate`].
+//!   [`crate::crate::middleware::auth::authenticate`].
 //! - **Routing**: [`openproxy_core::routing::resolve`] to find the
 //!   model. A model that matches a row in the `models` table goes
 //!   direct; a `combo:<name>` matches a combo (the first model target
@@ -55,7 +55,7 @@ use std::time::Instant;
 
 use crate::{
     error::ApiError,
-    handlers::chat::authenticate,
+    middleware::auth::authenticate,
     state::AppState,
 };
 
@@ -435,6 +435,7 @@ fn resolve_api_key(
 /// stall the audio response — if the writer lock can't be acquired in
 /// 100ms, the row is dropped (logged at WARN) and the request still
 /// returns successfully. This matches the chat handler's MEDIUM-5 fix.
+#[allow(clippy::too_many_arguments)]
 fn record_audio_usage_row(
     state: &AppState,
     request_id: RequestId,

@@ -122,7 +122,7 @@ fn ceil_div_times(total: usize, num: usize, den: usize) -> usize {
     if total == 0 {
         return 0;
     }
-    (total * num + den - 1) / den
+    (total * num).div_ceil(den)
 }
 
 /// Sorted union of all field names across all items.

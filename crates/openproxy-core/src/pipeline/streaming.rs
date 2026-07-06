@@ -1,16 +1,13 @@
-use crate::adapters::{AdapterFormat, ProviderAdapter};
+
 use crate::combos::{Combo, ComboTarget};
-use crate::error::{CoreError, Result};
-use crate::ids::{AccountId, ComboId, ComboTargetId, ModelRowId, RequestId, TraceId, UsageId};
-use crate::models::{Model, TargetFormat};
-use crate::pipeline::{FailureContext, ErrorPhase, Pipeline, PipelineRequest, PipelineResult, parse_retry_after_ms};
+use crate::error::CoreError;
+use crate::models::Model;
+use crate::pipeline::{FailureContext, Pipeline, PipelineRequest, PipelineResult, parse_retry_after_ms};
 use crate::timeouts::Timeouts;
-use crate::translation::{OpenAIResponse, OpenAIRequest};
-use crate::upstream::{CancellationToken, UpstreamClient, UpstreamError, UpstreamPhase, UpstreamRequest};
-use bytes::Bytes;
+use crate::translation::OpenAIResponse;
+use crate::upstream::{CancellationToken, UpstreamError, UpstreamPhase, UpstreamRequest};
 use std::sync::Arc;
 use std::time::Instant;
-use tokio::sync::watch;
 
 use crate::think_extractor::extract_think_from_response;
 use crate::pipeline::SSE_DONE_BYTES;
@@ -146,6 +143,7 @@ fn apply_reasoning_normalizations(
 }
 
 impl Pipeline {
+    #[allow(clippy::too_many_arguments)]
     pub(crate) async fn dispatch_upstream(
         &self,
         target: &ComboTarget,
@@ -985,7 +983,6 @@ impl Pipeline {
     /// the upstream response and forwards each translated chunk through
     /// the stream_sink channel in real-time.
     #[allow(clippy::too_many_arguments)]
-
     async fn dispatch_upstream_streaming(
         &self,
         target: &ComboTarget,
@@ -1233,7 +1230,7 @@ impl Pipeline {
                 .get("retry-after")
                 .or_else(|| response.headers.get("Retry-After"))
                 .and_then(|v| v.to_str().ok())
-                .and_then(|s| parse_retry_after_ms(s));
+                .and_then(parse_retry_after_ms);
             let is_rate_limited_status =
                 status_code == 429 || status_code == 408 || status_code == 503;
             let err = if let Some(retry_ms) =
@@ -1407,12 +1404,7 @@ impl Pipeline {
         // recording is off, we need the accumulated content text to
         // estimate completion tokens when the upstream doesn't report
         // usage.
-        let needs_accumulator = self.is_recording()
-            || matches!(
-                req.stream_sink.as_ref(),
-                Some(crate::race_sink::StreamSink::Discard)
-            )
-            || true; // always: needed for token estimation
+        let needs_accumulator = true; // always: needed for token estimation
         let mut acc: Option<crate::sse_accumulator::ResponseAccumulator> = if needs_accumulator {
             Some(crate::sse_accumulator::ResponseAccumulator::new())
         } else {
@@ -1743,14 +1735,13 @@ impl Pipeline {
                     // containing BOTH markers are parsed.
                     if json_payload.contains("\"error\":")
                         && json_payload.contains("\"choices\":[]")
-                    {
-                        if let Ok(v) = serde_json::from_str::<serde_json::Value>(json_payload) {
+                        && let Ok(v) = serde_json::from_str::<serde_json::Value>(json_payload) {
                             let has_empty_choices = v
                                 .get("choices")
                                 .and_then(|c| c.as_array())
                                 .is_some_and(|arr| arr.is_empty());
-                            if has_empty_choices {
-                                if let Some(error_obj) = v.get("error") {
+                            if has_empty_choices
+                                && let Some(error_obj) = v.get("error") {
                                     let code = error_obj
                                         .get("code")
                                         .and_then(|c| c.as_u64())
@@ -1810,9 +1801,7 @@ impl Pipeline {
                                         &model_name,
                                     );
                                 }
-                            }
                         }
-                    }
                     // Only parse when the chunk carries metadata worth
                     // extracting. `"usage"` appears in the final chunk;
                     // a non-null `"finish_reason"` marks stream end.

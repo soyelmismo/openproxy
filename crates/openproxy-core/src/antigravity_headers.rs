@@ -90,16 +90,14 @@ fn hostname() -> Option<String> {
             return Some(trimmed.to_string());
         }
     }
-    if let Ok(s) = std::env::var("HOSTNAME") {
-        if !s.is_empty() {
+    if let Ok(s) = std::env::var("HOSTNAME")
+        && !s.is_empty() {
             return Some(s);
         }
-    }
-    if let Ok(s) = std::env::var("COMPUTERNAME") {
-        if !s.is_empty() {
+    if let Ok(s) = std::env::var("COMPUTERNAME")
+        && !s.is_empty() {
             return Some(s);
         }
-    }
     None
 }
 
@@ -167,13 +165,11 @@ pub fn inject_antigravity_headers(
     }
 
     // x-goog-user-project (when project_id is known and non-empty)
-    if let Some(pid) = project_id {
-        if !pid.is_empty() && pid != "test-project" && pid != "project-id" {
-            if let Ok(v) = HeaderValue::from_str(pid) {
+    if let Some(pid) = project_id
+        && !pid.is_empty() && pid != "test-project" && pid != "project-id"
+            && let Ok(v) = HeaderValue::from_str(pid) {
                 headers.insert("x-goog-user-project", v);
             }
-        }
-    }
 }
 
 /// Get the current Antigravity version string (for logging / diagnostics).

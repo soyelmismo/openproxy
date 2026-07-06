@@ -9,7 +9,7 @@ use crate::circuit_breaker::CircuitBreakerRegistry;
 use crate::combos::{Combo, SelectionRegistry};
 use crate::compression::stats::CompressionStats;
 use crate::config::{RacingConfig, RetriesConfig};
-use crate::error::{CoreError, Result};
+use crate::error::CoreError;
 use crate::ids::{ApiKeyId, ComboId, RequestId, TraceId, UsageId};
 use crate::secrets::MasterKey;
 use crate::timeouts::Timeouts;
@@ -23,6 +23,11 @@ use std::sync::atomic::AtomicBool;
 
 pub mod repository;
 pub mod service;
+pub mod context;
+pub mod stage;
+pub mod quotas;
+pub mod racing;
+pub mod stages;
 mod execution;
 mod streaming;
 
@@ -171,13 +176,6 @@ impl Pipeline {
         self.record_bodies_and_headers
             .store(enabled, std::sync::atomic::Ordering::Relaxed);
     }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum QuotaStatus {
-    Available,
-    Protected,
-    Exhausted,
 }
 
 /// Phase label for tracing/debug.

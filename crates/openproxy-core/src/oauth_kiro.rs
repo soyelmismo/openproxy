@@ -554,8 +554,8 @@ impl OAuthProvider for KiroOAuthProvider {
                 let retry_cancel = CancellationToken::new();
                 if let Ok(retry_resp) = upstream_client.call(retry_req, TimeoutProfile::OAuth, retry_cancel).await {
                     let retry_status = retry_resp.status;
-                    if let Ok(retry_bytes) = retry_resp.collect().await {
-                        if retry_status.is_success() {
+                    if let Ok(retry_bytes) = retry_resp.collect().await
+                        && retry_status.is_success() {
                             // Update dynamic client credentials back to the database!
                             let mut updated_meta = meta.clone();
                             updated_meta.client_id = new_cid;
@@ -586,7 +586,6 @@ impl OAuthProvider for KiroOAuthProvider {
                             }
                             success_body = Some(retry_bytes);
                         }
-                    }
                 }
             }
         }

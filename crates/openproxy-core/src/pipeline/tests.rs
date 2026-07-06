@@ -1,3 +1,5 @@
+use crate::error::Result;
+use crate::pipeline::quotas::QuotaStatus;
     use super::*;
     use crate::combos::{self, Strategy, ComboTarget};
     use crate::adapters::{AdapterAuthType, ProviderAdapterConfig, AdapterFormat, ProviderAdapter};
@@ -129,6 +131,7 @@
     }
 
     /// Seed a provider and a single model row, returning the model's row id.
+    #[allow(dead_code)]
     fn seed_provider_and_model(
         conn: &Connection,
         provider_id: &str,
@@ -170,7 +173,7 @@
             request_id: RequestId::new(),
             trace_id: TraceId::new(),
             combo_id,
-            openai_request: OpenAIRequest {
+            openai_request: std::sync::Arc::new(OpenAIRequest {
                 model: "any".into(),
                 messages: vec![OpenAIMessage {
                     role: "user".into(),
@@ -190,7 +193,7 @@
                 top_k: None,
                 user: None,
                 extra: serde_json::Map::new(),
-            },
+            }),
             client_disconnected: dis_rx,
             // Use Discard sink for non-streaming test requests. The
             // pipeline forces stream=true to the upstream, but SSE
@@ -309,7 +312,7 @@
         let p = Pipeline::new(conn, cfg);
 
         let (req, _dis_tx) = make_request(combo_id);
-        let result = p.run(req).await;
+        let result = p.run(std::sync::Arc::new(req)).await;
 
         // NoHealthyTargets is the failure path: 502 per `http_status()`.
         assert_eq!(result.status_code, 502, "no eligible targets → 502");
@@ -349,7 +352,7 @@
         let p = Pipeline::new(conn, cfg);
 
         let (req, _dis_tx) = make_request(combo_id);
-        let _ = p.run(req).await;
+        let _ = p.run(std::sync::Arc::new(req)).await;
 
         // A usage row should now exist. The dashboard reads this via
         // /admin/usage/recent.
@@ -418,7 +421,7 @@
         let p = Pipeline::new(conn, cfg);
 
         let (req, _dis_tx) = make_request(combo_id);
-        let result = p.run(req).await;
+        let result = p.run(std::sync::Arc::new(req)).await;
 
         // The combo was auto-populated. The pipeline's `execute_single`
         // would normally dispatch to a real adapter; with an empty
@@ -638,7 +641,7 @@
         let p = Pipeline::new(conn, cfg);
 
         let (req, _dis_tx) = make_request(combo_id);
-        let result = p.run(req).await;
+        let result = p.run(std::sync::Arc::new(req)).await;
 
         // (a) + (b) The pipeline must NOT surface NoHealthyTargets;
         // the dispatch loop walked the parked target and recorded
@@ -774,7 +777,7 @@
         let p = Pipeline::new(conn, cfg);
 
         let (req, _dis_tx) = make_request(combo_id);
-        let result = p.run(req).await;
+        let result = p.run(std::sync::Arc::new(req)).await;
 
         // (a) + (b) The result must NOT be a NoHealthyTargets
         // 502 short-circuit. The dispatch loop walked the full
@@ -1059,7 +1062,7 @@
         let p = Pipeline::new(conn, cfg);
 
         let (req, _cancel_tx) = make_request(combo_id);
-        let result = tokio::time::timeout(Duration::from_secs(15), p.run(req))
+        let result = tokio::time::timeout(Duration::from_secs(15), p.run(std::sync::Arc::new(req)))
             .await
             .expect("pipeline.run timed out");
 
@@ -1299,7 +1302,7 @@
         let p = Pipeline::new(conn, cfg);
 
         let (req, _cancel_tx) = make_request(combo_id);
-        let result = tokio::time::timeout(Duration::from_secs(15), p.run(req))
+        let result = tokio::time::timeout(Duration::from_secs(15), p.run(std::sync::Arc::new(req)))
             .await
             .expect("pipeline.run timed out");
 
@@ -1490,7 +1493,7 @@
         let p = Pipeline::new(conn, cfg);
 
         let (req, _cancel_tx) = make_request(combo_id);
-        let result = tokio::time::timeout(Duration::from_secs(15), p.run(req))
+        let result = tokio::time::timeout(Duration::from_secs(15), p.run(std::sync::Arc::new(req)))
             .await
             .expect("pipeline.run timed out");
 
@@ -1678,7 +1681,7 @@ data: [DONE]
         let p = Pipeline::new(conn, cfg);
 
         let (req, _cancel_tx) = make_request(combo_id);
-        let result = tokio::time::timeout(Duration::from_secs(15), p.run(req))
+        let result = tokio::time::timeout(Duration::from_secs(15), p.run(std::sync::Arc::new(req)))
             .await
             .expect("pipeline.run timed out");
 
@@ -1884,7 +1887,7 @@ data: [DONE]
         let p = Pipeline::new(conn, cfg);
 
         let (req, _cancel_tx) = make_request(parent_combo_id);
-        let result = tokio::time::timeout(Duration::from_secs(15), p.run(req))
+        let result = tokio::time::timeout(Duration::from_secs(15), p.run(std::sync::Arc::new(req)))
             .await
             .expect("pipeline.run timed out");
 
@@ -2109,7 +2112,7 @@ data: [DONE]
         let p = Pipeline::new(conn, cfg);
 
         let (req, _cancel_tx) = make_request(combo_id);
-        let result = tokio::time::timeout(Duration::from_secs(15), p.run(req))
+        let result = tokio::time::timeout(Duration::from_secs(15), p.run(std::sync::Arc::new(req)))
             .await
             .expect("pipeline.run timed out");
 
@@ -2226,7 +2229,7 @@ data: [DONE]
         let (req, _dis_tx) = make_request(combo_id);
         let t0 = Instant::now();
         // Bounded: 10s is plenty for a 3-target row to fail fast.
-        let result = tokio::time::timeout(Duration::from_secs(10), p.run(req))
+        let result = tokio::time::timeout(Duration::from_secs(10), p.run(std::sync::Arc::new(req)))
             .await
             .expect("pipeline.run timed out — the priority walk is hanging on the parked targets");
         let elapsed = t0.elapsed();
@@ -2385,7 +2388,7 @@ data: [DONE]
         };
         let p = Pipeline::new(conn, cfg);
         let (req, _cancel_tx) = make_request(combo_id);
-        let result = tokio::time::timeout(Duration::from_secs(15), p.run(req))
+        let result = tokio::time::timeout(Duration::from_secs(15), p.run(std::sync::Arc::new(req)))
             .await
             .expect("pipeline.run timed out");
 
@@ -2593,7 +2596,7 @@ data: [DONE]
         };
         let p = Pipeline::new(conn, cfg);
         let (req, _cancel_tx) = make_request(combo_id);
-        let result = tokio::time::timeout(Duration::from_secs(15), p.run(req))
+        let result = tokio::time::timeout(Duration::from_secs(15), p.run(std::sync::Arc::new(req)))
             .await
             .expect("pipeline.run timed out");
 
@@ -2823,7 +2826,7 @@ data: [DONE]
         }
 
         let (req, _dis_tx) = make_request(combo_id);
-        let result = p.run(req).await;
+        let result = p.run(std::sync::Arc::new(req)).await;
 
         // The current code (with only the cooldown-table fix in
         // place) returns `NoHealthyTargets` here because:
@@ -3034,7 +3037,7 @@ data: [DONE]
         let (req, cancel_tx) = make_request(combo_id);
         cancel_tx.send(true).expect("send cancel");
 
-        let result = tokio::time::timeout(Duration::from_secs(3), p.run(req))
+        let result = tokio::time::timeout(Duration::from_secs(3), p.run(std::sync::Arc::new(req)))
             .await
             .expect("pipeline.run did not abort within 3s — cancellation is broken");
 
@@ -3077,7 +3080,7 @@ data: [DONE]
         // incrementing the CB.
         cancel_tx.send(true).expect("send cancel");
 
-        p.run(req).await;
+        p.run(std::sync::Arc::new(req)).await;
 
         // 1. target_cooldowns is empty. The schema is keyed by
         //    `combo_target_id` (not `target_id`); see
@@ -3245,7 +3248,7 @@ data: [DONE]
         let (req, _cancel_tx) = make_request(combo_id);
 
         // ----- 4. Run the pipeline and assert success -----
-        let result = tokio::time::timeout(Duration::from_secs(15), p.run(req))
+        let result = tokio::time::timeout(Duration::from_secs(15), p.run(std::sync::Arc::new(req)))
             .await
             .expect("pipeline.run timed out — non-streaming dispatch did not return");
 
@@ -3388,7 +3391,7 @@ data: [DONE]
 
         let (req, _cancel_tx) = make_request(combo_id);
 
-        let result = tokio::time::timeout(Duration::from_secs(15), p.run(req))
+        let result = tokio::time::timeout(Duration::from_secs(15), p.run(std::sync::Arc::new(req)))
             .await
             .expect("pipeline.run timed out — body-reaches-upstream did not return");
 
@@ -3629,7 +3632,7 @@ data: [DONE]
         //         (we never send `true`, so the watch stays
         //         false for the whole run). -----
         let (mut req, _cancel_tx) = make_request(combo_id);
-        req.openai_request.stream = true;
+        std::sync::Arc::make_mut(&mut req.openai_request).stream = true;
         let (sink_tx, mut sink_rx) = mpsc::channel::<bytes::Bytes>(32);
         req.stream_sink = Some(crate::race_sink::StreamSink::Direct(sink_tx));
 
@@ -3637,7 +3640,7 @@ data: [DONE]
         //         can report it in the panic message; the
         //         streaming dispatch populates the sink as a
         //         side effect. -----
-        let result = tokio::time::timeout(Duration::from_secs(15), p.run(req))
+        let result = tokio::time::timeout(Duration::from_secs(15), p.run(std::sync::Arc::new(req)))
             .await
             .expect("streaming pipeline.run timed out — next_chunk() did not return");
 
@@ -3777,10 +3780,10 @@ data: [DONE]
         let p = Pipeline::new(conn, cfg);
 
         let (mut req, cancel_tx) = make_request(combo_id);
-        req.openai_request.stream = true;
+        std::sync::Arc::make_mut(&mut req.openai_request).stream = true;
         cancel_tx.send(true).expect("send cancel");
 
-        let result = tokio::time::timeout(Duration::from_secs(3), p.run(req))
+        let result = tokio::time::timeout(Duration::from_secs(3), p.run(std::sync::Arc::new(req)))
             .await
             .expect(
                 "streaming pipeline.run did not abort within 3s of cancel — \
@@ -4123,7 +4126,7 @@ data: [DONE]
         let p = Pipeline::new(conn, cfg);
 
         let (mut req, cancel_tx) = make_request(combo_id);
-        req.openai_request.stream = true;
+        std::sync::Arc::make_mut(&mut req.openai_request).stream = true;
 
         // Drive the cancel ~300ms after the run starts. That's
         // enough time for reqwest to finish the POST, get the
@@ -4135,7 +4138,7 @@ data: [DONE]
             let _ = cancel_tx_clone.send(true);
         });
 
-        let result = tokio::time::timeout(Duration::from_secs(3), p.run(req))
+        let result = tokio::time::timeout(Duration::from_secs(3), p.run(std::sync::Arc::new(req)))
             .await
             .expect(
                 "mid-stream cancellation: pipeline.run did not abort within 3s of \
@@ -4356,7 +4359,7 @@ data: [DONE]
         let _ = usage::init_stage_broadcast();
         let mut rx = usage::stage_broadcast().subscribe();
         let (mut req, _cancel_tx) = make_request(combo_id);
-        req.openai_request.stream = streaming;
+        std::sync::Arc::make_mut(&mut req.openai_request).stream = streaming;
         // The default `make_request` helper drops the stream_sink
         // receiver as soon as the function returns, which would
         // cause the pipeline's `sink.send(...)` calls to return
@@ -4383,7 +4386,7 @@ data: [DONE]
         let request_id_str = request_id.to_string();
 
         // 5. Run the pipeline.
-        let result = tokio::time::timeout(Duration::from_secs(15), p.run(req))
+        let result = tokio::time::timeout(Duration::from_secs(15), p.run(std::sync::Arc::new(req)))
             .await
             .expect("pipeline.run timed out");
         // Keep the sink receiver alive until after the pipeline
@@ -4902,11 +4905,11 @@ data: [DONE]\n\n";
 
         // Build a streaming request with a real sink channel.
         let (mut req, _cancel_tx) = make_request(combo_id);
-        req.openai_request.stream = true;
+        std::sync::Arc::make_mut(&mut req.openai_request).stream = true;
         let (sink_tx, mut sink_rx) = mpsc::channel::<bytes::Bytes>(32);
         req.stream_sink = Some(crate::race_sink::StreamSink::Direct(sink_tx));
 
-        let result = tokio::time::timeout(Duration::from_secs(15), p.run(req))
+        let result = tokio::time::timeout(Duration::from_secs(15), p.run(std::sync::Arc::new(req)))
             .await
             .expect("pipeline.run timed out — streaming response body did not complete");
         // Drain the sink so the channel can close cleanly.
@@ -5539,9 +5542,9 @@ data: [DONE]\n\n";
             let acc2 = crate::accounts::get(&conn, AccountId(2)).unwrap().unwrap();
             let acc3 = crate::accounts::get(&conn, AccountId(3)).unwrap().unwrap();
 
-            assert_eq!(pipeline.evaluate_account_quota(&acc1, "gemini-3-flash"), QuotaStatus::Exhausted);
-            assert_eq!(pipeline.evaluate_account_quota(&acc2, "gemini-3-flash"), QuotaStatus::Available);
-            assert_eq!(pipeline.evaluate_account_quota(&acc3, "gemini-3-flash"), QuotaStatus::Available);
+            assert_eq!(crate::pipeline::quotas::evaluate_account_quota(pipeline.config.quota_protection.enabled, pipeline.config.quota_protection.threshold_percentage, &acc1, "gemini-3-flash"), QuotaStatus::Exhausted);
+            assert_eq!(crate::pipeline::quotas::evaluate_account_quota(pipeline.config.quota_protection.enabled, pipeline.config.quota_protection.threshold_percentage, &acc2, "gemini-3-flash"), QuotaStatus::Available);
+            assert_eq!(crate::pipeline::quotas::evaluate_account_quota(pipeline.config.quota_protection.enabled, pipeline.config.quota_protection.threshold_percentage, &acc3, "gemini-3-flash"), QuotaStatus::Available);
         }
 
         // 2. Test evaluate_account_quota - Model-specific quota with protection
@@ -5558,12 +5561,12 @@ data: [DONE]\n\n";
             let acc5 = crate::accounts::get(&conn, AccountId(5)).unwrap().unwrap();
             let acc6 = crate::accounts::get(&conn, AccountId(6)).unwrap().unwrap();
 
-            assert_eq!(pipeline.evaluate_account_quota(&acc4, "gemini-3-flash"), QuotaStatus::Protected);
-            assert_eq!(pipeline.evaluate_account_quota(&acc5, "gemini-3-flash"), QuotaStatus::Available);
-            assert_eq!(pipeline.evaluate_account_quota(&acc6, "gemini-3-flash"), QuotaStatus::Exhausted);
+            assert_eq!(crate::pipeline::quotas::evaluate_account_quota(pipeline.config.quota_protection.enabled, pipeline.config.quota_protection.threshold_percentage, &acc4, "gemini-3-flash"), QuotaStatus::Protected);
+            assert_eq!(crate::pipeline::quotas::evaluate_account_quota(pipeline.config.quota_protection.enabled, pipeline.config.quota_protection.threshold_percentage, &acc5, "gemini-3-flash"), QuotaStatus::Available);
+            assert_eq!(crate::pipeline::quotas::evaluate_account_quota(pipeline.config.quota_protection.enabled, pipeline.config.quota_protection.threshold_percentage, &acc6, "gemini-3-flash"), QuotaStatus::Exhausted);
             
             // Unmonitored models should map to Available as long as remaining_fraction > 0
-            assert_eq!(pipeline.evaluate_account_quota(&acc4, "gpt-4o"), QuotaStatus::Available);
+            assert_eq!(crate::pipeline::quotas::evaluate_account_quota(pipeline.config.quota_protection.enabled, pipeline.config.quota_protection.threshold_percentage, &acc4, "gpt-4o"), QuotaStatus::Available);
         }
 
         // 3. Test apply_quota_routing - Filtering and sorting
@@ -5578,29 +5581,57 @@ data: [DONE]\n\n";
             weight: 1,
         };
 
+        let to_resolved = |t: ComboTarget| crate::pipeline::context::ResolvedTarget {
+            target: t,
+            model: crate::models::Model {
+                row_id: crate::ids::ModelRowId(1),
+                provider_id: crate::ids::ProviderId::new("test"),
+                model_id: crate::ids::ModelId::new("test"),
+                display_name: None,
+                target_format: crate::models::TargetFormat::Openai,
+                discovered_at: String::new(),
+                expires_at: None,
+                timeout_overrides_json: None,
+                active: true,
+                last_test_status: None,
+                last_test_at: None,
+                custom: false,
+                context_length: None,
+                max_output_tokens: None,
+                capabilities_json: None,
+                family: None,
+                model_type: "chat".to_string(),
+                input_modalities_json: None,
+                output_modalities_json: None,
+            },
+            api_key: String::new(),
+            api_key_label: None,
+            custom_meta: None,
+        };
+
         // Candidates: Account 1 (Exhausted), Account 4 (Protected), Account 5 (Available)
-        let targets = vec![
+        let targets: Vec<_> = vec![
             make_target(1, 1), // Account 1
             make_target(2, 4), // Account 4
             make_target(3, 5), // Account 5
-        ];
+        ].into_iter().map(to_resolved).collect();
 
         // Should filter out Account 1 (Exhausted) and Account 4 (Protected) because Account 5 is Available
-        let resolved = pipeline.apply_quota_routing(targets.clone(), "gemini-3-flash");
+        let resolved = crate::pipeline::quotas::apply_quota_routing(pipeline.config.quota_protection.enabled, pipeline.config.quota_protection.threshold_percentage, &pipeline.conn.lock(), targets.clone(), "gemini-3-flash");
         assert_eq!(resolved.len(), 1);
-        assert_eq!(resolved[0].account_id, Some(AccountId(5)));
+        assert_eq!(resolved[0].target.account_id, Some(AccountId(5)));
 
         // 4. Test apply_quota_routing - Fallback to Protected when no Available ones exist
         // Candidates: Account 1 (Exhausted), Account 4 (Protected)
-        let targets_only_protected = vec![
+        let targets_only_protected: Vec<_> = vec![
             make_target(1, 1),
             make_target(2, 4),
-        ];
+        ].into_iter().map(to_resolved).collect();
 
         // Should fallback to keeping Account 4 (Protected)
-        let resolved_fallback = pipeline.apply_quota_routing(targets_only_protected, "gemini-3-flash");
+        let resolved_fallback = crate::pipeline::quotas::apply_quota_routing(pipeline.config.quota_protection.enabled, pipeline.config.quota_protection.threshold_percentage, &pipeline.conn.lock(), targets_only_protected, "gemini-3-flash");
         assert_eq!(resolved_fallback.len(), 1);
-        assert_eq!(resolved_fallback[0].account_id, Some(AccountId(4)));
+        assert_eq!(resolved_fallback[0].target.account_id, Some(AccountId(4)));
 
         // 5. Test apply_quota_routing - Sorting based on remaining fraction
         // Insert Account 7 with 50% remaining, priority 1
@@ -5608,21 +5639,21 @@ data: [DONE]\n\n";
         // Insert Account 8 with 80% remaining, priority 2 (worse priority but better quota)
         insert_mock_account(8, 2, None, None, Some(r#"[{"model_id":"gemini-3-flash","session_used":200,"session_limit":1000,"session_reset_at":null,"remaining_fraction":0.80}]"#));
 
-        let targets_sorting = vec![
+        let targets_sorting: Vec<_> = vec![
             make_target(1, 7), // Account 7 (Priority 1, 50% quota)
             make_target(2, 5), // Account 5 (Priority 1, 20% quota)
             make_target(3, 8), // Account 8 (Priority 2, 80% quota)
-        ];
+        ].into_iter().map(to_resolved).collect();
 
-        let resolved_sorting = pipeline.apply_quota_routing(targets_sorting, "gemini-3-flash");
+        let resolved_sorting = crate::pipeline::quotas::apply_quota_routing(pipeline.config.quota_protection.enabled, pipeline.config.quota_protection.threshold_percentage, &pipeline.conn.lock(), targets_sorting, "gemini-3-flash");
         assert_eq!(resolved_sorting.len(), 3);
         // Should sort by priority ASC first, then remaining fraction DESC:
         // Index 0: Account 7 (Priority 1, 50%)
         // Index 1: Account 5 (Priority 1, 20%)
         // Index 2: Account 8 (Priority 2, 80%)
-        assert_eq!(resolved_sorting[0].account_id, Some(AccountId(7)));
-        assert_eq!(resolved_sorting[1].account_id, Some(AccountId(5)));
-        assert_eq!(resolved_sorting[2].account_id, Some(AccountId(8)));
+        assert_eq!(resolved_sorting[0].target.account_id, Some(AccountId(7)));
+        assert_eq!(resolved_sorting[1].target.account_id, Some(AccountId(5)));
+        assert_eq!(resolved_sorting[2].target.account_id, Some(AccountId(8)));
     }
 
     #[test]

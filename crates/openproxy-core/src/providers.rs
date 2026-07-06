@@ -348,6 +348,7 @@ pub fn delete(conn: &Connection, id: &ProviderId) -> Result<()> {
 /// * `None` — column is not part of this update (no-op).
 /// * `Some(None)` — set the column to `NULL` (clears any existing keyword).
 /// * `Some(Some(s))` — set the column to the literal string `s`.
+#[allow(clippy::too_many_arguments)]
 pub fn update(
     conn: &Connection,
     id: &ProviderId,

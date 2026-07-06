@@ -154,13 +154,11 @@ impl SignatureCache {
     }
 
     pub fn get_session_signature(&self, session_id: &str) -> Option<String> {
-        if let Ok(cache) = self.session_signatures.lock() {
-            if let Some(entry) = cache.get(session_id) {
-                if !entry.is_expired() {
+        if let Ok(cache) = self.session_signatures.lock()
+            && let Some(entry) = cache.get(session_id)
+                && !entry.is_expired() {
                     return Some(entry.data.signature.clone());
                 }
-            }
-        }
         None
     }
 
@@ -199,16 +197,14 @@ impl SignatureCache {
     }
 
     pub fn get_session_reasoning(&self, session_id: &str, turn_index: usize) -> Option<String> {
-        if let Ok(cache) = self.session_reasonings.lock() {
-            if let Some(entry) = cache.get(session_id) {
-                if !entry.is_expired() && turn_index < entry.data.len() {
+        if let Ok(cache) = self.session_reasonings.lock()
+            && let Some(entry) = cache.get(session_id)
+                && !entry.is_expired() && turn_index < entry.data.len() {
                     let text = &entry.data[turn_index];
                     if !text.trim().is_empty() {
                         return Some(text.clone());
                     }
                 }
-            }
-        }
         None
     }
 
@@ -268,11 +264,10 @@ pub fn extract_openai_session_id(request: &OpenAIRequest) -> String {
         }
     }
 
-    if !content_found {
-        if let Some(last_msg) = request.messages.last() {
+    if !content_found
+        && let Some(last_msg) = request.messages.last() {
             hasher.update(format!("{:?}", last_msg.content).as_bytes());
         }
-    }
 
     let result = hasher.finalize();
     let hash = result.iter().map(|b| format!("{:02x}", b)).collect::<String>();
@@ -473,12 +468,11 @@ fn openai_to_gemini_antigravity(
                 .and_then(|v| v.as_str())
                 .map(|s| !s.is_empty() && s != "[undefined]")
                 .unwrap_or(false);
-            if !has_reasoning {
-                if let Some(cached_reasoning) = SignatureCache::global().get_session_reasoning(session_id, assistant_turn_index) {
+            if !has_reasoning
+                && let Some(cached_reasoning) = SignatureCache::global().get_session_reasoning(session_id, assistant_turn_index) {
                     tracing::debug!("[Antigravity] Restored reasoning for assistant turn {} (len: {})", assistant_turn_index, cached_reasoning.len());
                     msg.extra.insert("reasoning_content".to_string(), serde_json::json!(cached_reasoning));
                 }
-            }
             assistant_turn_index += 1;
         }
     }
@@ -528,16 +522,14 @@ fn openai_to_gemini_antigravity(
             }));
         } else {
             // Check for assistant's reasoning_content and prepend it as a thinking part
-            if msg.role == "assistant" {
-                if let Some(reasoning) = msg.extra.get("reasoning_content").and_then(|v| v.as_str()) {
-                    if !reasoning.is_empty() {
+            if msg.role == "assistant"
+                && let Some(reasoning) = msg.extra.get("reasoning_content").and_then(|v| v.as_str())
+                    && !reasoning.is_empty() {
                         parts.push(serde_json::json!({
                             "text": reasoning,
                             "thought": true
                         }));
                     }
-                }
-            }
 
             // Normal text content part
             if let Some(content_val) = &msg.content {
@@ -564,8 +556,8 @@ fn openai_to_gemini_antigravity(
             }
 
             // Assistant tool calls (functionCall)
-            if msg.role == "assistant" {
-                if let Some(tool_calls) = &msg.tool_calls {
+            if msg.role == "assistant"
+                && let Some(tool_calls) = &msg.tool_calls {
                     for tc in tool_calls {
                         let id = tc.get("id").and_then(|v| v.as_str()).unwrap_or("");
                         let name = tc.get("function").and_then(|f| f.get("name")).and_then(|v| v.as_str()).unwrap_or("");
@@ -595,7 +587,6 @@ fn openai_to_gemini_antigravity(
                         parts.push(func_call_part);
                     }
                 }
-            }
         }
 
         if parts.is_empty() {
@@ -603,12 +594,11 @@ fn openai_to_gemini_antigravity(
         }
 
         // Merge consecutive messages of the same role
-        if let Some((prev_role, prev_parts)) = grouped_messages.last_mut() {
-            if prev_role == gemini_role {
+        if let Some((prev_role, prev_parts)) = grouped_messages.last_mut()
+            && prev_role == gemini_role {
                 prev_parts.extend(parts);
                 continue;
             }
-        }
 
         grouped_messages.push((gemini_role.to_string(), parts));
     }

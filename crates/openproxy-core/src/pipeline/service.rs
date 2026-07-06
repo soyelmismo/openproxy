@@ -13,7 +13,7 @@ use crate::pipeline::repository::PipelineRepository;
 pub struct PipelineState {
     pub req: Arc<PipelineRequest>,
     pub combo: Option<Combo>,
-    pub eligible_targets: Option<Vec<ComboTarget>>,
+    pub eligible_targets: Option<Vec<crate::pipeline::context::ResolvedTarget>>,
     pub race_size: Option<usize>,
 }
 
@@ -87,7 +87,7 @@ where
                     parked = pre_cb_snapshot.len(),
                     "all targets' accounts unhealthy in circuit_breaker; falling through to pre-CB dispatch"
                 );
-                eligible = pre_cb_snapshot;
+                eligible = pre_cb_snapshot.clone();
             }
 
             if eligible.is_empty() {
@@ -149,8 +149,37 @@ where
                 }
             }
 
+            let resolved = pipeline.resolve_combo_targets_full(eligible);
+            
+            if resolved.is_empty() && !pre_cb_snapshot.is_empty() {
+                let err = CoreError::NoHealthyTargets(combo.id.0);
+                let started = std::time::Instant::now();
+                let _ = pipeline.repo().record_no_healthy_targets_row(
+                    &state.req.request_id.to_string(),
+                    &state.req.trace_id.to_string(),
+                    &combo,
+                    started.elapsed().as_millis() as u64,
+                    &chrono::Utc::now().naive_utc().to_string(),
+                    "No healthy targets available"
+                );
+                return Ok(pipeline.failure(err, attempt - 1, ErrorPhase::Route));
+            } else if resolved.is_empty() {
+                let err = CoreError::NoHealthyTargets(combo.id.0);
+                let started = std::time::Instant::now();
+                let _ = pipeline.repo().record_no_healthy_targets_row(
+                    &state.req.request_id.to_string(),
+                    &state.req.trace_id.to_string(),
+                    &combo,
+                    started.elapsed().as_millis() as u64,
+                    &chrono::Utc::now().naive_utc().to_string(),
+                    "No healthy targets available"
+                );
+                return Ok(pipeline.failure(err, attempt - 1, ErrorPhase::Route));
+            }
+
             state.combo = Some(combo);
-            state.eligible_targets = Some(eligible);
+            state.eligible_targets = Some(resolved);
+
 
             inner.call(state).await
         })
@@ -214,7 +243,16 @@ where
             let attempt: u8 = 1;
 
             // Apply dynamic quota routing and protection.
-            eligible = pipeline.apply_quota_routing(eligible, &state.req.openai_request.model);
+            eligible = {
+                let conn = pipeline.conn.lock();
+                crate::pipeline::quotas::apply_quota_routing(
+                    pipeline.config.quota_protection.enabled,
+                    pipeline.config.quota_protection.threshold_percentage,
+                    &conn,
+                    eligible,
+                    &state.req.openai_request.model
+                )
+            };
             if eligible.is_empty() {
                 let err = CoreError::NoHealthyTargets(combo.id.0);
                 let started = std::time::Instant::now();
@@ -298,7 +336,7 @@ impl tower::Service<PipelineState> for RoutingService {
                 let race_n = (combo.race_size as usize)
                     .min(to_run.len())
                     .min(pipeline.config.racing.max_race_size as usize);
-                let race_result = pipeline.run_race(Arc::clone(&state.req), &combo, to_run.clone(), race_n as u8).await;
+                let race_result = crate::pipeline::racing::run_race(&pipeline, Arc::clone(&state.req), &combo, to_run.clone(), race_n as u8).await;
 
                 if race_result.error.is_none() {
                     if let Some(row_id) = race_result.usage_row_id {
@@ -321,7 +359,7 @@ impl tower::Service<PipelineState> for RoutingService {
             let attempt: u8 = 1;
             let mut combo_walk_log: Vec<String> = Vec::new();
 
-            for target in to_run.iter() {
+            for (idx, target) in to_run.iter().enumerate() {
                 let client_disconnected = {
                     let mut rx = state.req.client_disconnected.clone();
                     pipeline.is_client_disconnected(&mut rx)
@@ -329,8 +367,8 @@ impl tower::Service<PipelineState> for RoutingService {
                 if client_disconnected {
                     tracing::warn!(
                         combo_id = combo.id.0,
-                        target_id = target.id.0,
-                        provider = %target.provider_id,
+                        target_id = target.target.id.0,
+                        provider = %target.target.provider_id,
                         attempt,
                         "client cancelled between targets; aborting pipeline"
                     );
@@ -376,8 +414,8 @@ impl tower::Service<PipelineState> for RoutingService {
                     };
                     tracing::debug!(
                         combo_id = combo.id.0,
-                        target_id = target.id.0,
-                        provider = %target.provider_id,
+                        target_id = target.target.id.0,
+                        provider = %target.target.provider_id,
                         target_attempt,
                         next_attempt = target_attempt + 1,
                         delay_ms = delay.as_millis() as u64,
@@ -405,19 +443,19 @@ impl tower::Service<PipelineState> for RoutingService {
                 };
 
                 {
-                    pipeline.selection_registry.record_request(target.id);
+                    pipeline.selection_registry.record_request(target.target.id);
                     if result.error.is_none() {
-                        pipeline.selection_registry.record_success(target.id);
+                        pipeline.selection_registry.record_success(target.target.id);
                     }
                 }
 
                 if let Some(op) = cooldown_op {
                     match op {
                         "clear" => {
-                            if let Err(e) = pipeline.repo().clear_cooldown(target.id) {
+                            if let Err(e) = pipeline.repo().clear_cooldown(target.target.id) {
                                 tracing::warn!(
                                     combo_id = combo.id.0,
-                                    target_id = target.id.0,
+                                    target_id = target.target.id.0,
                                     error = %e,
                                     "cooldown::clear failed; non-fatal"
                                 );
@@ -438,7 +476,7 @@ impl tower::Service<PipelineState> for RoutingService {
                                 .unwrap_or(pipeline.config.cooldown_max_secs);
                             let factor = combo.cooldown_factor.unwrap_or(pipeline.config.cooldown_factor);
                             if let Err(e) = pipeline.repo().record_cooldown(
-                                target.id,
+                                target.target.id,
                                 &reason,
                                 mode,
                                 base_secs,
@@ -447,7 +485,7 @@ impl tower::Service<PipelineState> for RoutingService {
                             ) {
                                 tracing::warn!(
                                     combo_id = combo.id.0,
-                                    target_id = target.id.0,
+                                    target_id = target.target.id.0,
                                     error = %e,
                                     "cooldown::record failed; non-fatal"
                                 );
@@ -457,20 +495,17 @@ impl tower::Service<PipelineState> for RoutingService {
                     }
                 }
 
-                let model_name = match target.model_row_id {
-                    Some(row_id) => match pipeline.repo().load_model(row_id) {
-                        Ok(m) => m.model_id.as_str().to_string(),
-                        Err(_) => format!("row_id={}", row_id.0),
-                    },
-                    None => "sub_combo".to_string(),
-                };
-                let outcome = match &result.error {
-                    None => "OK".to_string(),
-                    Some(err) => format!("ERR({})", err.http_status()),
+                let model_name = target.target.model_row_id.map(|_| "unresolved").unwrap_or("unknown");
+                let outcome = if result.error.is_none() {
+                    "success"
+                } else if crate::retry::RetryPolicy::is_retryable(result.error.as_ref().unwrap(), pipeline.config.idle_chunk_retryable) {
+                    "retryable_failure"
+                } else {
+                    "fatal_failure"
                 };
                 combo_walk_log.push(format!(
-                    "{}:{}/{}={}",
-                    target.provider_id, model_name, target.id.0, outcome
+                    "  [{}] {} (model: {}, id: {}): {} (attempts: {})",
+                    idx + 1, target.target.provider_id, model_name, target.target.id.0, outcome, target_attempt
                 ));
 
                 if result.error.is_none() {

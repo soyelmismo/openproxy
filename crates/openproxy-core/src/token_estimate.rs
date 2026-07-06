@@ -185,8 +185,8 @@ fn estimate_tokens_heuristic(text: &str) -> u32 {
     }
 
     // CJK: ~2 chars/token; Latin/other: ~4 chars/token
-    let cjk_tokens = (cjk_count + 1) / 2; // ceiling div
-    let other_tokens = (other_count + 3) / 4; // ceiling div
+    let cjk_tokens = cjk_count.div_ceil(2); // ceiling div
+    let other_tokens = other_count.div_ceil(4); // ceiling div
 
     (cjk_tokens + other_tokens).max(1) as u32
 }

@@ -398,9 +398,9 @@ impl ResponseAccumulator {
             self.content.push_str(content);
             self.total_bytes += additional;
         }
-        if payload.contains("\"tool_calls\"") {
-            if let Ok(v) = serde_json::from_str::<Value>(payload) {
-                if let Some(tool_calls) = v.get("choices")
+        if payload.contains("\"tool_calls\"")
+            && let Ok(v) = serde_json::from_str::<Value>(payload)
+                && let Some(tool_calls) = v.get("choices")
                     .and_then(|c| c.as_array())
                     .and_then(|arr| arr.first())
                     .and_then(|choice| choice.get("delta"))
@@ -417,8 +417,6 @@ impl ResponseAccumulator {
                         }
                     }
                 }
-            }
-        }
     }
 
     /// Append a string to the reasoning accumulator. Used for o1-style

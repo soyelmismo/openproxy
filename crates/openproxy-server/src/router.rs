@@ -44,7 +44,6 @@ use serde_json::json;
 use crate::{
     admin_ui,
     handlers::{self, admin::admin_auth_middleware},
-    middleware::request_id,
     state::AppState,
 };
 
@@ -91,11 +90,15 @@ pub fn build_router(state: AppState) -> Router {
                 .route_layer(middleware::from_fn(crate::disconnect::client_disconnect_middleware))
                 .route_layer(middleware::from_fn_with_state(
                     state.clone(),
-                    handlers::chat::rate_limit_middleware,
+                    crate::middleware::rate_limit::rate_limit_middleware,
                 ))
                 .route_layer(middleware::from_fn_with_state(
                     state.clone(),
-                    handlers::chat::auth_middleware,
+                    crate::middleware::routing::routing_middleware,
+                ))
+                .route_layer(middleware::from_fn_with_state(
+                    state.clone(),
+                    crate::middleware::auth::auth_middleware,
                 )),
         )
         .route(
@@ -486,7 +489,7 @@ pub fn build_router(state: AppState) -> Router {
         .route("/v1/health", get(health))
         .merge(public_api_routes)
         .nest("/admin", admin_routes)
-        .layer(middleware::from_fn(request_id))
+        .layer(middleware::from_fn(crate::middleware::request_id::request_id))
         // MEDIUM fix (audit finding #8): axum's default body limit is
         // 2 MiB, which is too small for a single legitimate prompt (some
         // long-context requests attach tens of KiB of system prompt +

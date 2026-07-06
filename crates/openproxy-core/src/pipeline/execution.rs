@@ -1,21 +1,15 @@
 use crate::adapters::{AdapterFormat, ProviderAdapter};
-use crate::circuit_breaker::Health;
-use crate::combos::{self, Combo, ComboTarget, Strategy};
+use crate::combos::{self, Combo, ComboTarget};
 use crate::compression::{CompressionMode, stats::CompressionStats};
 use crate::error::{CoreError, Result};
 use crate::cost::{self, UsageInput};
-use crate::ids::{AccountId, ApiKeyId, ComboId, ModelRowId, TraceId, UsageId};
-use crate::models::{self, Model};
-use crate::pipeline::{FailureContext, ErrorPhase, Pipeline, PipelineRequest, PipelineResult, QuotaStatus, parse_retry_after_ms, is_upstream_health_issue};
+use crate::ids::{ComboId, UsageId};
+use crate::models::Model;
+use crate::pipeline::{FailureContext, ErrorPhase, Pipeline, PipelineRequest, PipelineResult, is_upstream_health_issue};
 use crate::retry::RetryPolicy;
-use crate::think_extractor::extract_think_from_response;
-use crate::timeouts::{self, ModelTimeoutOverrides, Timeouts};
-use crate::translation::OpenAIResponse;
-use crate::upstream::{
-    CancellationToken, UpstreamError, UpstreamPhase, UpstreamRequest,
-};
-use rusqlite::{params, Connection};
-use std::collections::HashMap;
+use crate::timeouts::{self, ModelTimeoutOverrides};
+use crate::upstream::CancellationToken;
+use rusqlite::params;
 use std::sync::Arc;
 use std::time::Instant;
 use tokio::sync::watch;
@@ -23,286 +17,30 @@ use tokio::sync::watch;
 impl Pipeline {
     /// Drive one chat-completion request to completion.
     pub async fn run(&self, req: Arc<PipelineRequest>) -> PipelineResult {
-        let combo = match self.load_combo(&req) {
-            Ok(c) => c,
-            Err(e) => return self.failure(e, 0, ErrorPhase::Resolve),
+        use crate::pipeline::stage::PipelineChain;
+        use crate::pipeline::context::PipelineContext;
+        use crate::pipeline::stages::{
+            telemetry::TelemetryRecorderStage,
+            router::RouterStage,
+            quota::QuotaEnforcerStage,
+            executor::UpstreamExecutorStage,
         };
 
-        let attempt: u8 = 1;
-        let targets = match self.resolve_targets(&combo, req.targets_override.as_deref()) {
-            Ok(t) => t,
-            Err(e) => return self.failure(e, attempt - 1, ErrorPhase::Resolve),
-        };
+        let ctx = PipelineContext::new(req, self.clone());
+        let chain = PipelineChain::new(vec![
+            Arc::new(TelemetryRecorderStage),
+            Arc::new(RouterStage),
+            Arc::new(QuotaEnforcerStage),
+            Arc::new(UpstreamExecutorStage),
+        ]);
 
-        let flat_targets = match self.flatten_targets(&combo.id, targets.clone()) {
-            Ok(t) => t,
-            Err(e) => return self.failure(e, attempt - 1, ErrorPhase::Resolve),
-        };
-
-        let pre_cb_snapshot: Vec<ComboTarget> = flat_targets.clone();
-        let mut eligible: Vec<ComboTarget> = flat_targets
-            .into_iter()
-            .filter(|t| match t.account_id {
-                Some(aid) => self.circuit_breaker.is_healthy(aid) == Health::Healthy,
-                None => true,
-            })
-            .collect();
-
-        if eligible.is_empty() && !pre_cb_snapshot.is_empty() {
-            tracing::warn!(
-                combo_id = combo.id.0,
-                parked = pre_cb_snapshot.len(),
-                "all targets' accounts unhealthy in circuit_breaker; falling through to pre-CB dispatch"
-            );
-            eligible = pre_cb_snapshot;
-        }
-
-        if eligible.is_empty() {
-            if attempt == 1 {
-                let repopulated = match self.auto_populate_if_empty(&combo) {
-                    Ok(n) => n,
-                    Err(e) => {
-                        tracing::warn!(
-                            combo_id = combo.id.0,
-                            combo_name = %combo.name,
-                            error = %e,
-                            "auto_populate on NoHealthyTargets failed; recording failure"
-                        );
-                        let started = std::time::Instant::now();
-                        self.record_no_healthy_targets_row(Arc::clone(&req), &combo, started);
-                        return self.failure(e, attempt - 1, ErrorPhase::Route);
-                    }
-                };
-                if repopulated > 0 {
-                    let targets =
-                        match self.resolve_targets(&combo, req.targets_override.as_deref()) {
-                            Ok(t) => t,
-                            Err(e) => return self.failure(e, attempt - 1, ErrorPhase::Resolve),
-                        };
-                    let flat_targets = match self.flatten_targets(&combo.id, targets) {
-                        Ok(t) => t,
-                        Err(e) => return self.failure(e, attempt - 1, ErrorPhase::Resolve),
-                    };
-                    let re_eligible: Vec<ComboTarget> = flat_targets
-                        .into_iter()
-                        .filter(|t| match t.account_id {
-                            Some(aid) => self.circuit_breaker.is_healthy(aid) == Health::Healthy,
-                            None => true,
-                        })
-                        .collect();
-                    if !re_eligible.is_empty() {
-                        eligible = re_eligible;
-                    }
-                }
-            }
-            if eligible.is_empty() {
-                let err = CoreError::NoHealthyTargets(combo.id.0);
-                let started = std::time::Instant::now();
-                self.record_no_healthy_targets_row(Arc::clone(&req), &combo, started);
-                return self.failure(err, attempt - 1, ErrorPhase::Route);
+        match chain.execute(ctx).await {
+            Ok(result) => result,
+            Err(e) => {
+                // Fallback if the chain entirely fails without catching
+                self.failure(e, 1, ErrorPhase::Route)
             }
         }
-
-        eligible = self.apply_quota_routing(eligible, &req.openai_request.model);
-        if eligible.is_empty() {
-            let err = CoreError::NoHealthyTargets(combo.id.0);
-            let started = std::time::Instant::now();
-            self.record_no_healthy_targets_row(Arc::clone(&req), &combo, started);
-            return self.failure(err, attempt - 1, ErrorPhase::Route);
-        }
-
-        let race_size: usize = match combo.strategy {
-            Strategy::Priority => eligible.len(),
-            Strategy::RoundRobin | Strategy::Shuffle => (combo.race_size as usize)
-                .min(eligible.len())
-                .min(self.config.racing.max_race_size as usize),
-        };
-        let to_run: Vec<ComboTarget> = eligible;
-        let to_run_unfiltered_snapshot: Vec<ComboTarget> = to_run.clone();
-        let mut to_run: Vec<ComboTarget> = to_run;
-        let to_run_unfiltered: Vec<ComboTarget> = to_run_unfiltered_snapshot;
-
-        if to_run.is_empty() {
-            if to_run_unfiltered.is_empty() {
-                let err = CoreError::NoHealthyTargets(combo.id.0);
-                let started = std::time::Instant::now();
-                self.record_no_healthy_targets_row(Arc::clone(&req), &combo, started);
-                return self.failure(err, attempt - 1, ErrorPhase::Route);
-            }
-            tracing::warn!(
-                combo_id = combo.id.0,
-                parked = to_run_unfiltered.len(),
-                "all targets in cooldown for this request; falling through to unfiltered dispatch"
-            );
-            to_run = to_run_unfiltered;
-        }
-
-        let mut last_result: Option<PipelineResult> = None;
-
-        if combo.race_size > 1 && to_run.len() >= 2 {
-            let race_n = (combo.race_size as usize)
-                .min(to_run.len())
-                .min(self.config.racing.max_race_size as usize);
-            let race_result = self.run_race(Arc::clone(&req), &combo, to_run.clone(), race_n as u8).await;
-
-            if race_result.error.is_none() {
-                self.mark_client_response(race_result.usage_row_id);
-                return race_result;
-            }
-
-            tracing::warn!(
-                combo_id = combo.id.0,
-                race_size = race_n,
-                total_targets = to_run.len(),
-                last_error = ?race_result.error,
-                "race exhausted all lanes; falling through to sequential targets"
-            );
-            last_result = Some(race_result);
-        }
-
-        let mut combo_walk_log: Vec<String> = Vec::new();
-
-        for target in to_run.iter() {
-            let client_disconnected = {
-                let mut rx = req.client_disconnected.clone();
-                self.is_client_disconnected(&mut rx)
-            };
-            if client_disconnected {
-                tracing::warn!(
-                    combo_id = combo.id.0,
-                    target_id = target.id.0,
-                    provider = %target.provider_id,
-                    attempt,
-                    "client cancelled between targets; aborting pipeline"
-                );
-                return self.client_disconnected_result(attempt);
-            }
-
-            let policy = RetryPolicy::from_config(&self.config.retries);
-            let mut target_attempt: u8 = 1;
-            let mut result = self
-                .execute_single(
-                    Arc::clone(&req),
-                    &combo,
-                    target,
-                    target_attempt,
-                    race_size as u8,
-                    &CancellationToken::new(),
-                )
-                .await;
-
-            while let Some(e) = &result.error {
-                if !RetryPolicy::is_retryable(e, self.config.idle_chunk_retryable) {
-                    break;
-                }
-                if target_attempt >= policy.max_attempts {
-                    break;
-                }
-                let client_disconnected = {
-                    let mut rx = req.client_disconnected.clone();
-                    self.is_client_disconnected(&mut rx)
-                };
-                if client_disconnected {
-                    break;
-                }
-                let delay = match policy.delay_after_attempt(target_attempt) {
-                    Some(d) => d,
-                    None => break,
-                };
-                let delay = if let CoreError::RateLimited { retry_after_ms, .. } = e {
-                    let upstream = std::time::Duration::from_millis(*retry_after_ms);
-                    if upstream > delay { upstream } else { delay }
-                } else {
-                    delay
-                };
-                tracing::debug!(
-                    combo_id = combo.id.0,
-                    target_id = target.id.0,
-                    provider = %target.provider_id,
-                    target_attempt,
-                    next_attempt = target_attempt + 1,
-                    delay_ms = delay.as_millis() as u64,
-                    error = %e,
-                    "target failed retryably; retrying same target"
-                );
-                tokio::time::sleep(delay).await;
-                target_attempt = target_attempt.saturating_add(1);
-                result = self
-                    .execute_single(
-                        Arc::clone(&req),
-                        &combo,
-                        target,
-                        target_attempt,
-                        race_size as u8,
-                        &CancellationToken::new(),
-                    )
-                    .await;
-            }
-
-            match &result.error {
-                None => {
-                    self.mark_client_response(result.usage_row_id);
-                    return result;
-                }
-                Some(e) => {
-                    let is_rate_limit = matches!(e, CoreError::RateLimited { .. })
-                        || (matches!(e, CoreError::UpstreamError { status, .. } if *status == 429));
-                    if is_rate_limit {
-                        tracing::warn!(
-                            combo_id = combo.id.0,
-                            target_id = target.id.0,
-                            provider = %target.provider_id,
-                            model_row_id = ?target.model_row_id,
-                            attempt = target_attempt,
-                            retryable = RetryPolicy::is_retryable(e, self.config.idle_chunk_retryable),
-                            error = %e,
-                            remaining_targets = to_run.len(),
-                            "target rate-limited; trying next target in combo"
-                        );
-                    } else {
-                        tracing::debug!(
-                            combo_id = combo.id.0,
-                            target_id = target.id.0,
-                            provider = %target.provider_id,
-                            strategy = ?combo.strategy,
-                            retryable = RetryPolicy::is_retryable(e, self.config.idle_chunk_retryable),
-                            error = %e,
-                            "target failed; trying next target"
-                        );
-                    }
-                    combo_walk_log.push(format!(
-                        "  target_id={} provider={} attempts={} error={}",
-                        target.id.0,
-                        target.provider_id,
-                        target_attempt,
-                        e
-                    ));
-                    last_result = Some(result);
-                }
-            }
-        }
-
-        if let Some(ref r) = last_result
-            && r.error.is_some()
-        {
-            tracing::warn!(
-                combo_id = combo.id.0,
-                total_targets = to_run.len(),
-                targets_tried = combo_walk_log.len(),
-                last_error = ?r.error,
-                "combo exhausted: all {} target(s) failed, returning last error to client.\nCombo walk summary:\n{}",
-                combo_walk_log.len(),
-                combo_walk_log.join("\n")
-            );
-            self.mark_client_response(r.usage_row_id);
-        }
-        last_result.unwrap_or_else(|| {
-            self.failure(
-                CoreError::NoHealthyTargets(combo.id.0),
-                attempt,
-                ErrorPhase::Route,
-            )
-        })
     }
 
     pub(crate) fn flatten_targets(
@@ -328,174 +66,7 @@ impl Pipeline {
         Ok(expanded)
     }
 
-    pub(crate) fn evaluate_account_quota(
-        &self,
-        account: &crate::accounts::Account,
-        requested_model: &str,
-    ) -> QuotaStatus {
-        let quota_protection_enabled = self.config.quota_protection.enabled;
-        let threshold_percentage = self.config.quota_protection.threshold_percentage;
-
-        if let (Some(used), Some(limit)) = (account.quota_session_used, account.quota_session_limit) {
-            if used >= limit {
-                return QuotaStatus::Exhausted;
-            }
-        }
-        if let (Some(used), Some(limit)) = (account.quota_weekly_used, account.quota_weekly_limit) {
-            if used >= limit {
-                return QuotaStatus::Exhausted;
-            }
-        }
-
-        if let Some(ref details_val) = account.quota_model_details {
-            if let Ok(details) = serde_json::from_value::<Vec<crate::quota::ModelQuotaDetail>>(details_val.clone()) {
-                let norm_req = crate::model_normalize::normalize_model_id(requested_model);
-
-                for detail in details {
-                    let norm_detail = crate::model_normalize::normalize_model_id(&detail.model_id);
-
-                    let is_match = norm_req.to_lowercase() == norm_detail.to_lowercase()
-                        || requested_model.to_lowercase() == detail.model_id.to_lowercase();
-
-                    if is_match {
-                        if detail.remaining_fraction <= 0.0 {
-                            return QuotaStatus::Exhausted;
-                        }
-                        if quota_protection_enabled {
-                            let threshold_fraction = (threshold_percentage as f64) / 100.0;
-                            if detail.remaining_fraction <= threshold_fraction {
-                                return QuotaStatus::Protected;
-                            }
-                        }
-                        break;
-                    }
-                }
-            }
-        }
-
-        QuotaStatus::Available
-    }
-
-    pub(crate) fn get_account_remaining_fraction(
-        &self,
-        account: &crate::accounts::Account,
-        requested_model: &str,
-    ) -> f64 {
-        if let Some(ref details_val) = account.quota_model_details {
-            if let Ok(details) = serde_json::from_value::<Vec<crate::quota::ModelQuotaDetail>>(details_val.clone()) {
-                let norm_req = crate::model_normalize::normalize_model_id(requested_model);
-
-                for detail in details {
-                    let norm_detail = crate::model_normalize::normalize_model_id(&detail.model_id);
-
-                    let is_match = norm_req.to_lowercase() == norm_detail.to_lowercase()
-                        || requested_model.to_lowercase() == detail.model_id.to_lowercase();
-
-                    if is_match {
-                        return detail.remaining_fraction;
-                    }
-                }
-            }
-        }
-
-        if let (Some(used), Some(limit)) = (account.quota_session_used, account.quota_session_limit) {
-            if limit > 0 {
-                return (limit.saturating_sub(used) as f64) / (limit as f64);
-            }
-        }
-
-        if let (Some(used), Some(limit)) = (account.quota_weekly_used, account.quota_weekly_limit) {
-            if limit > 0 {
-                return (limit.saturating_sub(used) as f64) / (limit as f64);
-            }
-        }
-
-        1.0
-    }
-
-    pub(crate) fn apply_quota_routing(
-        &self,
-        targets: Vec<ComboTarget>,
-        requested_model: &str,
-    ) -> Vec<ComboTarget> {
-        let conn = self.conn.lock();
-
-        struct TargetWithQuota {
-            target: ComboTarget,
-            status: QuotaStatus,
-            remaining_fraction: f64,
-            priority: i32,
-        }
-
-        let mut processed_targets = Vec::with_capacity(targets.len());
-
-        for t in targets {
-            let Some(aid) = t.account_id else {
-                processed_targets.push(TargetWithQuota {
-                    target: t,
-                    status: QuotaStatus::Available,
-                    remaining_fraction: 1.0,
-                    priority: 0,
-                });
-                continue;
-            };
-
-            match crate::accounts::get(&conn, aid) {
-                Ok(Some(account)) => {
-                    let status = self.evaluate_account_quota(&account, requested_model);
-                    let remaining_fraction = self.get_account_remaining_fraction(&account, requested_model);
-                    processed_targets.push(TargetWithQuota {
-                        target: t,
-                        status,
-                        remaining_fraction,
-                        priority: account.priority,
-                    });
-                }
-                _ => {
-                    processed_targets.push(TargetWithQuota {
-                        target: t,
-                        status: QuotaStatus::Available,
-                        remaining_fraction: 1.0,
-                        priority: 0,
-                    });
-                }
-            }
-        }
-
-        let non_exhausted: Vec<TargetWithQuota> = processed_targets
-            .into_iter()
-            .filter(|t| t.status != QuotaStatus::Exhausted)
-            .collect();
-
-        let has_available = non_exhausted.iter().any(|t| t.status == QuotaStatus::Available);
-
-        let mut final_targets: Vec<TargetWithQuota> = if has_available {
-            non_exhausted
-                .into_iter()
-                .filter(|t| t.status == QuotaStatus::Available)
-                .collect()
-        } else {
-            non_exhausted
-        };
-
-        final_targets.sort_by(|a, b| {
-            let pri_cmp = a.priority.cmp(&b.priority);
-            if pri_cmp != std::cmp::Ordering::Equal {
-                return pri_cmp;
-            }
-
-            let quota_cmp = b.remaining_fraction.partial_cmp(&a.remaining_fraction).unwrap_or(std::cmp::Ordering::Equal);
-            if quota_cmp != std::cmp::Ordering::Equal {
-                return quota_cmp;
-            }
-
-            a.target.priority_order.cmp(&b.target.priority_order)
-        });
-
-        final_targets.into_iter().map(|t| t.target).collect()
-    }
-
-    fn auto_populate_if_empty(&self, combo: &Combo) -> Result<usize> {
+    pub(crate) fn auto_populate_if_empty(&self, combo: &Combo) -> Result<usize> {
         {
             let conn = self.conn.lock();
             if !combos::list_targets(&conn, combo.id)?.is_empty() {
@@ -519,7 +90,7 @@ impl Pipeline {
         Ok(added)
     }
 
-    fn record_no_healthy_targets_row(
+    pub(crate) fn record_no_healthy_targets_row(
         &self,
         req: Arc<PipelineRequest>,
         combo: &Combo,
@@ -565,167 +136,7 @@ impl Pipeline {
         let _ = crate::cost::record(&conn, &input);
     }
 
-    pub(crate) async fn run_race(
-        &self,
-        req: Arc<PipelineRequest>,
-        combo: &Combo,
-        to_run: Vec<ComboTarget>,
-        race_size: u8,
-    ) -> PipelineResult {
-        use std::collections::VecDeque;
-        use std::sync::atomic::{AtomicUsize, Ordering};
-        use tokio::sync::Notify;
-
-        let num_workers = race_size.min(to_run.len() as u8);
-        if num_workers == 0 {
-            return PipelineResult {
-                status_code: 502,
-                error: Some(CoreError::NoHealthyTargets(combo.id.0)),
-                final_response: None,
-                attempts: 0,
-                usage_row_id: None,
-            };
-        }
-
-        let queue: Arc<parking_lot::Mutex<VecDeque<ComboTarget>>> =
-            Arc::new(parking_lot::Mutex::new(VecDeque::from(to_run)));
-        let last_err: Arc<parking_lot::Mutex<Option<CoreError>>> =
-            Arc::new(parking_lot::Mutex::new(None));
-        let running = Arc::new(AtomicUsize::new(num_workers as usize));
-        let all_done = Arc::new(Notify::new());
-        let winner: Arc<parking_lot::Mutex<Option<PipelineResult>>> =
-            Arc::new(parking_lot::Mutex::new(None));
-
-        let mut set: tokio::task::JoinSet<()> = tokio::task::JoinSet::new();
-
-        let original_tx = match req.stream_sink.as_ref() {
-            Some(crate::race_sink::StreamSink::Direct(tx)) => tx.clone(),
-            _ => {
-                tracing::error!("run_race: expected StreamSink::Direct for original sink");
-                return PipelineResult {
-                    status_code: 502,
-                    error: Some(CoreError::Internal(
-                        "run_race: missing direct stream sink".into(),
-                    )),
-                    final_response: None,
-                    attempts: 0,
-                    usage_row_id: None,
-                };
-            }
-        };
-
-        let (race_sink, worker_tokens) =
-            crate::race_sink::RaceSink::new(original_tx, num_workers as usize);
-
-        for worker_idx in 0..num_workers as usize {
-            let p = self.clone();
-            let mut req = (*req).clone();
-
-            let handle = race_sink.handle(worker_idx);
-            req.stream_sink = Some(crate::race_sink::StreamSink::Race(handle));
-            req.race_cancel = Some(worker_tokens[worker_idx].clone());
-
-            let combo = combo.clone();
-            let queue = queue.clone();
-            let winner = winner.clone();
-            let last_err = last_err.clone();
-            let running = running.clone();
-            let all_done = all_done.clone();
-
-            set.spawn(async move {
-                loop {
-                    let worker_token = req
-                        .race_cancel
-                        .as_ref()
-                        .expect("run_race: worker must have race_cancel")
-                        .clone();
-                    if worker_token.is_cancelled() {
-                        if running.fetch_sub(1, Ordering::AcqRel) == 1 {
-                            all_done.notify_one();
-                        }
-                        return;
-                    }
-
-                    let target = queue.lock().pop_front();
-                    let Some(target) = target else {
-                        if running.fetch_sub(1, Ordering::AcqRel) == 1 {
-                            all_done.notify_one();
-                        }
-                        return;
-                    };
-
-                    req.trace_id = TraceId::new();
-                    req.race_cancelled = true;
-
-                    if worker_token.is_cancelled() {
-                        if running.fetch_sub(1, Ordering::AcqRel) == 1 {
-                            all_done.notify_one();
-                        }
-                        return;
-                    }
-
-                    let req_arc = Arc::new(req.clone());
-                    let result = p
-                        .execute_single(req_arc, &combo, &target, 1, race_size, &worker_token)
-                        .await;
-
-                    if result.error.is_none() {
-                        if winner.lock().is_none() {
-                            *winner.lock() = Some(result);
-                        }
-                        if running.fetch_sub(1, Ordering::AcqRel) == 1 {
-                            all_done.notify_one();
-                        }
-                        return;
-                    }
-
-                    if let Some(e) = &result.error {
-                        *last_err.lock() = Some(e.clone_for_result());
-                    }
-                }
-            });
-        }
-
-        loop {
-            {
-                let mut w = winner.lock();
-                if let Some(result) = w.take() {
-                    for token in &worker_tokens {
-                        token.cancel();
-                    }
-                    let grace =
-                        std::time::Duration::from_millis(self.config.racing.abort_grace_ms.max(50));
-                    let mut set = set;
-                    tokio::spawn(async move {
-                        let _ = tokio::time::timeout(grace, async {
-                            while set.join_next().await.is_some() {}
-                        })
-                        .await;
-                        set.abort_all();
-                    });
-                    return result;
-                }
-            }
-            if running.load(Ordering::Acquire) == 0 {
-                for token in &worker_tokens {
-                    token.cancel();
-                }
-                let err = last_err
-                    .lock()
-                    .take()
-                    .unwrap_or(CoreError::NoHealthyTargets(combo.id.0));
-                return PipelineResult {
-                    status_code: err.http_status(),
-                    error: Some(err),
-                    final_response: None,
-                    attempts: race_size,
-                    usage_row_id: None,
-                };
-            }
-            all_done.notified().await;
-        }
-    }
-
+    #[allow(clippy::too_many_arguments, clippy::result_large_err)]
     fn normalize_and_serialize(
         &self,
         value: &impl serde::Serialize,
@@ -808,201 +219,42 @@ impl Pipeline {
         }
     }
 
-    pub(crate) async fn execute_single(
+    async fn execute_custom_provider(
         &self,
         req: Arc<PipelineRequest>,
         combo: &Combo,
-        target: &ComboTarget,
+        resolved_target: &crate::pipeline::context::ResolvedTarget,
+        account_id: crate::ids::AccountId,
         attempt: u8,
         race_size: u8,
-        race_cancel: &CancellationToken,
+        started: std::time::Instant,
+        trace_id: String,
     ) -> PipelineResult {
-        let started = Instant::now();
-        let trace_id = if attempt > 1 {
-            format!("{}:retry{}", req.trace_id, attempt - 1)
-        } else {
-            req.trace_id.to_string()
-        };
-
-        if race_cancel.is_cancelled() {
-            return self.record_and_fail_with_trace_id(
+        let target = &resolved_target.target;
+        let model = &resolved_target.model;
+        let custom_meta = match &resolved_target.custom_meta {
+            Some(m) => m,
+            None => return self.record_and_fail(
                 req,
                 combo,
                 target,
                 FailureContext {
                     attempt,
                     race_size,
-                    err: &CoreError::RaceLost,
+                    err: &CoreError::Internal("missing custom_meta for custom provider".to_string()),
                     started,
-                    model: None,
+                    model: Some(model),
                     connect_ms: None,
                     ttft_ms: None,
-                    status_code: CoreError::RaceLost.http_status(),
+                    status_code: 500,
                 },
-                trace_id,
-            );
-        }
-
-        let model_row_id = match target.model_row_id {
-            Some(m) => m,
-            None => {
-                let err = CoreError::Internal(format!(
-                    "execute_single called on a sub-combo target (id={})",
-                    target.id.0
-                ));
-                return self.record_and_fail(
-                    req,
-                    combo,
-                    target,
-                    FailureContext {
-                        attempt,
-                        race_size,
-                        err: &err,
-                        started,
-                        model: None,
-                        connect_ms: None,
-                        ttft_ms: None,
-                        status_code: 0,
-                    },
-                );
-            }
+            ),
         };
-        let model = match self.load_model(model_row_id) {
-            Ok(m) => m,
-            Err(e) => {
-                return self.record_and_fail(
-                    req,
-                    combo,
-                    target,
-                    FailureContext {
-                        attempt,
-                        race_size,
-                        err: &e,
-                        started,
-                        model: None,
-                        connect_ms: None,
-                        ttft_ms: None,
-                        status_code: 0,
-                    },
-                );
-            }
-        };
-
-        crate::usage::publish_stage_event(crate::usage::StageEvent {
-            request_id: req.request_id.to_string(),
-            trace_id: trace_id.to_string(),
-            provider_id: target.provider_id.to_string(),
-            upstream_model_id: model.model_id.as_str().to_string(),
-            stage: "started".into(),
-            elapsed_ms: 0,
-            connect_ms: None,
-            ttft_ms: None,
-            status_code: 0,
-            error: None,
-            stop_reason: None,
-            compression_savings_pct: None,
-            compression_techniques: None,
-            timestamp: String::new(),
-            endpoint_kind: crate::endpoint::EndpointKind::Chat,
-        });
-
-        if let Some(account_id) = target.account_id {
-            let is_custom = matches!(
-                target.provider_id.as_str(),
-                "kiro" | "antigravity"
-            );
-            if is_custom {
-                let (mut access_token, kiro_meta, antigravity_project, maybe_refresh) = {
-                    let conn = self.conn.lock();
-                    let access_token = match crate::accounts::decrypt_access_token(
-                        &conn,
-                        account_id,
-                        &self.config.master_key,
-                    ) {
-                        Ok(t) => t,
-                        Err(e) => {
-                            drop(conn);
-                            return self.record_and_fail(
-                                req,
-                                combo,
-                                target,
-                                FailureContext {
-                                    attempt,
-                                    race_size,
-                                    err: &e,
-                                    started,
-                                    model: Some(&model),
-                                    connect_ms: None,
-                                    ttft_ms: None,
-                                    status_code: e.http_status(),
-                                },
-                            );
-                        }
-                    };
-
-                    let maybe_refresh: Option<String> =
-                        if self.config.oauth_provider_registry.is_some() {
-                            let expires_at: Option<String> = conn
-                                .query_row(
-                                    "SELECT expires_at FROM accounts WHERE id = ?1",
-                                    rusqlite::params![account_id.0],
-                                    |row| row.get(0),
-                                )
-                                .ok()
-                                .flatten();
-                            if crate::oauth::pipeline_token_needs_refresh(
-                                expires_at.as_deref(),
-                                target.provider_id.as_str(),
-                            ) {
-                                match crate::accounts::decrypt_refresh_token(
-                                    &conn,
-                                    account_id,
-                                    &self.config.master_key,
-                                ) {
-                                    Ok(Some(rt)) => Some(rt),
-                                    _ => None,
-                                }
-                            } else {
-                                None
-                            }
-                        } else {
-                            None
-                        };
-
-                    let (token, meta, pid) = match target.provider_id.as_str() {
-                        "kiro" => {
-                            let m = crate::executor_kiro::read_account_meta(&conn, account_id)
-                                .unwrap_or(None);
-                            (access_token, m, None)
-                        }
-                        "antigravity" => {
-                            let p = crate::executor_antigravity::read_project_id(&conn, account_id);
-                            match p {
-                                Ok(p) => (access_token, None, Some(p)),
-                                Err(e) => {
-                                    drop(conn);
-                                    return self.record_and_fail(
-                                        req,
-                                        combo,
-                                        target,
-                                        FailureContext {
-                                            attempt,
-                                            race_size,
-                                            err: &e,
-                                            started,
-                                            model: Some(&model),
-                                            connect_ms: None,
-                                            ttft_ms: None,
-                                            status_code: e.http_status(),
-                                        },
-                                    );
-                                }
-                            }
-                        }
-                        _ => unreachable!(),
-                    };
-                    (token, meta, pid, maybe_refresh)
-                };
+        let mut access_token = custom_meta.access_token.clone();
+        let maybe_refresh = custom_meta.maybe_refresh.clone();
+        let kiro_region = custom_meta.kiro_region.clone();
+        let kiro_profile_arn = custom_meta.kiro_profile_arn.clone();
+        let antigravity_project = custom_meta.antigravity_project.clone();
 
                 if let Some(refresh_token) = maybe_refresh
                     && let Some(registry) = self.config.oauth_provider_registry.as_ref()
@@ -1063,12 +315,11 @@ impl Pipeline {
 
                 let executor_result = match target.provider_id.as_str() {
                     "kiro" => {
-                        let region = kiro_meta
-                            .as_ref()
-                            .map(|m| m.region.as_str())
+                        let region = kiro_region
+                            .as_deref()
                             .filter(|r| !r.is_empty())
                             .unwrap_or(crate::executor_kiro::KIRO_DEFAULT_REGION);
-                        let profile_arn = kiro_meta.as_ref().and_then(|m| m.profile_arn.as_deref());
+                        let profile_arn = kiro_profile_arn.as_deref();
                         crate::executor_kiro::execute_kiro(
                             &self.config.upstream_client,
                             &access_token,
@@ -1183,6 +434,175 @@ impl Pipeline {
                         )
                     }
                 };
+            }
+
+    pub fn resolve_combo_targets_full(&self, eligible: Vec<ComboTarget>) -> Vec<crate::pipeline::context::ResolvedTarget> {
+        let mut resolved = Vec::with_capacity(eligible.len());
+        let conn = self.conn.lock();
+        for t in eligible {
+            let model_row_id = match t.model_row_id {
+                Some(m) => m,
+                None => {
+                    let err = CoreError::Internal(format!("execute_single called on a sub-combo target (id={})", t.id.0));
+                    tracing::error!(error=%err);
+                    continue;
+                }
+            };
+            let model = match crate::models::get_by_row_id(&conn, model_row_id) {
+                Ok(Some(m)) => m,
+                Ok(None) => {
+                    let err = CoreError::ModelNotFound { provider: "<unknown>".into(), model: format!("row_id={}", model_row_id.0) };
+                    tracing::error!(error=%err);
+                    continue;
+                }
+                Err(e) => {
+                    tracing::error!(error=%e, "failed to load model");
+                    continue;
+                }
+            };
+            let (api_key, api_key_label, custom_meta) = match t.account_id {
+                Some(account_id) => {
+                    let (key, label) = match crate::accounts::decrypt_api_key_and_label(&conn, account_id, &self.config.master_key) {
+                        Ok(res) => res,
+                        Err(e) => {
+                            tracing::error!(error=%e, "failed to decrypt api key");
+                            continue;
+                        }
+                    };
+                    
+                    let custom_meta = if t.provider_id.as_str() == "kiro" || t.provider_id.as_str() == "antigravity" {
+                        let access_token = match crate::accounts::decrypt_access_token(&conn, account_id, &self.config.master_key) {
+                            Ok(t) => t,
+                            Err(e) => {
+                                tracing::error!(error=%e, "failed to decrypt access token");
+                                continue;
+                            }
+                        };
+                        let maybe_refresh: Option<String> = if self.config.oauth_provider_registry.is_some() {
+                            let expires_at: Option<String> = conn.query_row("SELECT expires_at FROM accounts WHERE id = ?1", rusqlite::params![account_id.0], |row| row.get(0)).ok().flatten();
+                            if crate::oauth::pipeline_token_needs_refresh(expires_at.as_deref(), t.provider_id.as_str()) {
+                                match crate::accounts::decrypt_refresh_token(&conn, account_id, &self.config.master_key) {
+                                    Ok(Some(rt)) => Some(rt),
+                                    _ => None,
+                                }
+                            } else {
+                                None
+                            }
+                        } else {
+                            None
+                        };
+                        
+                        let (kiro_region, kiro_profile_arn, antigravity_project) = match t.provider_id.as_str() {
+                            "kiro" => {
+                                let m = crate::executor_kiro::read_account_meta(&conn, account_id).unwrap_or(None);
+                                let region = m.as_ref().map(|x| x.region.clone());
+                                let profile_arn = m.as_ref().and_then(|x| x.profile_arn.clone());
+                                (region, profile_arn, None)
+                            }
+                            "antigravity" => {
+                                match crate::executor_antigravity::read_project_id(&conn, account_id) {
+                                    Ok(p) => (None, None, Some(p)),
+                                    Err(e) => {
+                                        tracing::error!(error=%e, "failed to read antigravity project");
+                                        continue;
+                                    }
+                                }
+                            }
+                            _ => (None, None, None),
+                        };
+                        Some(crate::pipeline::context::CustomProviderMeta {
+                            access_token,
+                            maybe_refresh,
+                            kiro_region,
+                            kiro_profile_arn,
+                            antigravity_project,
+                        })
+                    } else {
+                        None
+                    };
+                    
+                    (key, label, custom_meta)
+                }
+                None => {
+                    match crate::providers::get(&conn, &t.provider_id) {
+                        Ok(Some(p)) if matches!(p.auth_type, crate::providers::AuthType::None) => (String::new(), None, None),
+                        Ok(Some(p)) if p.id.0 == "opencode-zen" => (String::new(), None, None),
+                        _ => {
+                            tracing::error!("combo_target {} has no account_id after expansion", t.id.0);
+                            continue;
+                        }
+                    }
+                }
+            };
+            resolved.push(crate::pipeline::context::ResolvedTarget { target: t, model, api_key, api_key_label, custom_meta });
+        }
+        resolved
+    }
+
+    pub(crate) async fn execute_single(
+        &self,
+        req: Arc<PipelineRequest>,
+        combo: &Combo,
+        resolved_target: &crate::pipeline::context::ResolvedTarget,
+        attempt: u8,
+        race_size: u8,
+        race_cancel: &CancellationToken,
+    ) -> PipelineResult {
+        let target = &resolved_target.target;
+        let model = &resolved_target.model;
+        let started = Instant::now();
+        let trace_id = if attempt > 1 {
+            format!("{}:retry{}", req.trace_id, attempt - 1)
+        } else {
+            req.trace_id.to_string()
+        };
+
+        if race_cancel.is_cancelled() {
+            return self.record_and_fail_with_trace_id(
+                req,
+                combo,
+                target,
+                FailureContext {
+                    attempt,
+                    race_size,
+                    err: &CoreError::RaceLost,
+                    started,
+                    model: None,
+                    connect_ms: None,
+                    ttft_ms: None,
+                    status_code: CoreError::RaceLost.http_status(),
+                },
+                trace_id,
+            );
+        }
+
+        crate::usage::publish_stage_event(crate::usage::StageEvent {
+            request_id: req.request_id.to_string(),
+            trace_id: trace_id.to_string(),
+            provider_id: target.provider_id.to_string(),
+            upstream_model_id: model.model_id.as_str().to_string(),
+            stage: "started".into(),
+            elapsed_ms: 0,
+            connect_ms: None,
+            ttft_ms: None,
+            status_code: 0,
+            error: None,
+            stop_reason: None,
+            compression_savings_pct: None,
+            compression_techniques: None,
+            timestamp: String::new(),
+            endpoint_kind: crate::endpoint::EndpointKind::Chat,
+        });
+
+        if let Some(account_id) = target.account_id {
+            let is_custom = matches!(
+                target.provider_id.as_str(),
+                "kiro" | "antigravity"
+            );
+            if is_custom {
+                return self.execute_custom_provider(
+                    Arc::clone(&req), combo, resolved_target, account_id, attempt, race_size, started, trace_id.clone()
+                ).await;
             }
         }
 
@@ -1502,14 +922,6 @@ impl Pipeline {
             .cloned()
     }
 
-    fn load_model(&self, row_id: crate::ids::ModelRowId) -> Result<Model> {
-        let conn = self.conn.lock();
-        models::get_by_row_id(&conn, row_id)?.ok_or(CoreError::ModelNotFound {
-            provider: "<unknown>".into(),
-            model: format!("row_id={}", row_id.0),
-        })
-    }
-
     #[cfg(test)]
     pub(crate) fn decrypt_account_key(&self, account_id: crate::ids::AccountId) -> Result<String> {
         let conn = self.conn.lock();
@@ -1635,8 +1047,8 @@ impl Pipeline {
         is_connect_error: bool,
     ) {
         let conn = self.conn.lock();
-        if let Ok(Some(provider)) = crate::providers::get(&conn, provider_id) {
-            if provider.use_proxies {
+        if let Ok(Some(provider)) = crate::providers::get(&conn, provider_id)
+            && provider.use_proxies {
                 let mut should_rotate = false;
                 let errors_list: Vec<&str> = provider.proxy_rotation_errors
                     .split(',')
@@ -1650,14 +1062,13 @@ impl Pipeline {
                     }
                 }
 
-                if is_connect_error {
-                    if errors_list.contains(&"connect_error") || errors_list.contains(&"timeout") {
+                if is_connect_error
+                    && (errors_list.contains(&"connect_error") || errors_list.contains(&"timeout")) {
                         should_rotate = true;
                     }
-                }
 
-                if should_rotate {
-                    if let Some(ref bad_proxy_id) = provider.current_proxy_id {
+                if should_rotate
+                    && let Some(ref bad_proxy_id) = provider.current_proxy_id {
                         tracing::warn!(
                             provider = %provider_id,
                             proxy_id = %bad_proxy_id,
@@ -1666,9 +1077,7 @@ impl Pipeline {
                         let _ = crate::free_proxies::update_proxy_status(&conn, bad_proxy_id, "dead", None);
                         let _ = crate::providers::update_current_proxy(&conn, provider_id, None);
                     }
-                }
             }
-        }
     }
 
     pub(crate) fn record_and_fail(
@@ -1793,8 +1202,8 @@ impl Pipeline {
         let has_partial_content = acc
             .as_ref()
             .is_some_and(|a| !a.is_empty());
-        if let Some(ref a) = acc {
-            if let Some((code, message)) = a.extract_upstream_error_from_raw() {
+        if let Some(ref a) = acc
+            && let Some((code, message)) = a.extract_upstream_error_from_raw() {
                 tracing::warn!(
                     combo_id = combo.id.0,
                     target_id = target.id.0,
@@ -1840,7 +1249,6 @@ impl Pipeline {
                     model_name,
                 );
             }
-        }
         let acc_ref: Option<&crate::sse_accumulator::ResponseAccumulator> = match acc {
             Some(a) => {
                 a.mark_partial();
@@ -1908,8 +1316,8 @@ impl Pipeline {
             crate::race_sink::StreamSinkError::Closed => {
                 let elapsed = started.elapsed().as_millis() as u64;
                 let watchdog_fired = *req.client_disconnected.borrow();
-                if let Some(ref a) = acc {
-                    if let Some((code, message)) = a.extract_upstream_error_from_raw() {
+                if let Some(ref a) = acc
+                    && let Some((code, message)) = a.extract_upstream_error_from_raw() {
                         tracing::warn!(
                             combo_id = combo.id.0,
                             target_id = target.id.0,
@@ -1960,7 +1368,6 @@ impl Pipeline {
                             )
                         };
                     }
-                }
                 tracing::warn!(
                     combo_id = combo.id.0,
                     target_id = target.id.0,
@@ -2009,7 +1416,7 @@ impl Pipeline {
             model_name,
         )
     }
-
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn record_attempt_raw_with_tokens(
         &self,
         req: Arc<PipelineRequest>,

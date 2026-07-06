@@ -1100,12 +1100,11 @@ pub async fn test_combo_targets(
                     }));
                     continue;
                 }
-                if let Some(ref rx) = cancel_rx {
-                    if *rx.borrow() {
+                if let Some(ref rx) = cancel_rx
+                    && *rx.borrow() {
                         tracing::info!("test_combo_targets: client disconnected, aborting fan-out");
                         break;
                     }
-                }
                 // Flat, active, not in cooldown: actually fire
                 // upstream. The helper handles the model-not-active
                 // short-circuit itself (skipped row with

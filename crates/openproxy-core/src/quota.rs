@@ -720,20 +720,18 @@ pub async fn fetch_kiro_quota(
     let mut region = "us-east-1".to_string();
     let mut profile_arn = None;
 
-    if let Some(json_str) = provider_specific {
-        if let Ok(meta) = serde_json::from_str::<serde_json::Value>(json_str) {
-            if let Some(r) = meta.get("region").and_then(|v| v.as_str()) {
-                if !r.is_empty() {
+    if let Some(json_str) = provider_specific
+        && let Ok(meta) = serde_json::from_str::<serde_json::Value>(json_str) {
+            if let Some(r) = meta.get("region").and_then(|v| v.as_str())
+                && !r.is_empty() {
                     region = r.to_string();
                 }
-            }
             if let Some(arn) = meta.get("profileArn").and_then(|v| v.as_str()) {
                 profile_arn = Some(arn.to_string());
             } else if let Some(arn) = meta.get("profile_arn").and_then(|v| v.as_str()) {
                 profile_arn = Some(arn.to_string());
             }
         }
-    }
 
     let base_url = if region == "us-east-1" || region.is_empty() {
         "https://codewhisperer.us-east-1.amazonaws.com".to_string()
@@ -761,7 +759,8 @@ pub async fn fetch_kiro_quota(
             );
 
             let cancel = CancellationToken::new();
-            let discovered_arn = match upstream.call(req, TimeoutProfile::OAuth, cancel).await {
+            
+            match upstream.call(req, TimeoutProfile::OAuth, cancel).await {
                 Ok(resp) if resp.status.is_success() => {
                     if let Ok(body_bytes) = resp.collect().await {
                         if let Ok(value) = serde_json::from_slice::<serde_json::Value>(&body_bytes) {
@@ -802,8 +801,7 @@ pub async fn fetch_kiro_quota(
                     tracing::info!(error = %e, "kiro listAvailableProfiles network call failed; proceeding without profile ARN");
                     None
                 }
-            };
-            discovered_arn
+            }
         }
     };
 

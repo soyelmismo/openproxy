@@ -242,11 +242,10 @@ fn classify_line(line: &str) -> LineKind {
             return LineKind::StackTrace;
         }
         // #NN pattern: '#' followed by at least one digit.
-        if let Some(rest) = trimmed_start.strip_prefix('#') {
-            if rest.chars().next().map(|c| c.is_ascii_digit()).unwrap_or(false) {
+        if let Some(rest) = trimmed_start.strip_prefix('#')
+            && rest.chars().next().map(|c| c.is_ascii_digit()).unwrap_or(false) {
                 return LineKind::StackTrace;
             }
-        }
     }
 
     let low = line.to_lowercase();

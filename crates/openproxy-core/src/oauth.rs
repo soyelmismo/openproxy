@@ -614,7 +614,7 @@ pub async fn start_refresh_scheduler(
             last_refresh_attempts.insert(account_id, chrono::Utc::now());
 
             match provider
-                .refresh_token(&refresh_token, &upstream_client, account.id, DbRef::Pool(&*db_pool))
+                .refresh_token(&refresh_token, &upstream_client, account.id, DbRef::Pool(&db_pool))
                 .await
             {
                 Ok(token) => {

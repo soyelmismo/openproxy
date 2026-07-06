@@ -21,19 +21,16 @@
 
 use axum::{
     Json,
-    extract::{ConnectInfo, State},
+    extract::State,
     http::{HeaderMap, StatusCode},
     response::IntoResponse,
 };
 use bytes::Bytes;
 use futures::stream::Stream;
 use openproxy_core::{
-    CoreError, api_keys as core_api_keys,
-    ids::{ApiKeyId, ComboId, RequestId, TraceId},
+    ids::{ApiKeyId, RequestId, TraceId},
     pipeline::{Pipeline, PipelineConfig, PipelineRequest},
     redact::redact_sensitive_headers,
-    routing::{self, RoutingPlan, SYNTHETIC_COMBO_ID, build_synthetic_combo},
-    translation::OpenAIRequest,
 };
 use serde_json::json;
 use std::convert::Infallible;
@@ -44,7 +41,7 @@ use std::time::Duration;
 use std::time::Instant;
 use tokio_stream::wrappers::ReceiverStream;
 
-use crate::{disconnect::CancelWatch, error::ApiError, state::AppState};
+use crate::{disconnect::CancelWatch, error::ApiError, state::AppState, middleware::auth::{ParsedChatRequest, ValidatedApiToken}};
 
 /// SSE keepalive interval. Sends `: keep-alive\n\n` (an SSE comment)
 /// periodically to keep the connection alive while the upstream is
@@ -99,91 +96,19 @@ impl Stream for SseBytesStream {
     }
 }
 
-/// `POST /v1/chat/completions`.
-///
-/// The full body is parsed as an `OpenAIRequest`; on parse failure we
-/// return 400 with the standard error envelope. On success we hand
-/// the request to the pipeline, which returns a [`PipelineResult`]
-/// we translate into a `(status, body)` response.
-///
-/// The `CancelWatch` extension is injected by the
-/// [`crate::disconnect::client_disconnect_middleware`]; it carries a
-/// `watch::Receiver<bool>` that flips to `true` the moment the client
-/// closes the TCP connection (request-body read error OR
-/// response-body write error). We thread it into the pipeline as
-/// `PipelineRequest::client_disconnected` so the dispatch loop, the
-/// `reqwest::send()` `tokio::select!`, and the SSE `stream.next()`
-/// `tokio::select!` all observe the real cancel — no time-based
-/// watchdog needed.
-/// `POST /v1/chat/completions`.
-///
-/// The handler creates its own fresh cancel watch (NOT from the
-/// middleware — see router.rs for why the middleware was removed).
-/// The fresh watch is driven only by the watchdog timer (total_ms).
-pub async fn auth_middleware(
-    State(state): State<AppState>,
-    req: axum::extract::Request,
-    next: axum::middleware::Next,
-) -> Result<axum::response::Response, ApiError> {
-    let (mut parts, body) = req.into_parts();
-    let bytes = axum::body::to_bytes(body, usize::MAX)
-        .await
-        .map_err(|e| ApiError(CoreError::Parse(e.to_string())))?;
-
-    let parsed: serde_json::Value = serde_json::from_slice(&bytes)
-        .map_err(|e| ApiError(CoreError::Parse(e.to_string())))?;
-
-    let requested_model = parsed
-        .get("model")
-        .and_then(|v| v.as_str())
-        .unwrap_or("");
-
-    let auth_result = authenticate(&state, &parts.headers, requested_model)?;
-
-    parts.extensions.insert(ParsedChatRequest(parsed));
-    if let Some(res) = auth_result {
-        parts.extensions.insert(res);
-    }
-
-    let req = axum::extract::Request::from_parts(parts, axum::body::Body::from(bytes));
-    Ok(next.run(req).await)
-}
-
-pub async fn rate_limit_middleware(
-    State(state): State<AppState>,
-    ConnectInfo(addr): ConnectInfo<std::net::SocketAddr>,
-    req: axum::extract::Request,
-    next: axum::middleware::Next,
-) -> Result<axum::response::Response, ApiError> {
-    let auth_result = req.extensions().get::<ValidatedApiToken>();
-    let rl_key = if let Some(t) = auth_result {
-        format!("key:{}", t.key_id.0)
-    } else {
-        format!("ip:{}", addr.ip())
-    };
-
-    if !state.rate_limiter().check(&rl_key) {
-        return Err(ApiError(CoreError::RateLimited {
-            provider: "rate_limiter".into(),
-            retry_after_ms: 60_000,
-        }));
-    }
-
-    Ok(next.run(req).await)
-}
-
 pub async fn chat_completions(
     State(state): State<AppState>,
     headers: HeaderMap,
     cancel_watch: Option<axum::Extension<crate::disconnect::CancelWatch>>,
     axum::Extension(parsed_req): axum::Extension<ParsedChatRequest>,
     auth_token: Option<axum::Extension<ValidatedApiToken>>,
+    axum::Extension(resolved_route): axum::Extension<crate::middleware::routing::ResolvedRoute>,
 ) -> Result<axum::response::Response, ApiError> {
     let cancel = cancel_watch
         .map(|axum::Extension(cw)| cw)
-        .unwrap_or_else(crate::disconnect::CancelWatch::new);
+        .unwrap_or_default();
     let token_inner = auth_token.map(|axum::Extension(t)| t);
-    run_pipeline(state, cancel, headers, parsed_req.0, token_inner).await
+    run_pipeline(state, cancel, headers, parsed_req.0, token_inner, resolved_route).await
 }
 
 /// Drive one chat-completion request through the pipeline.
@@ -203,20 +128,15 @@ async fn run_pipeline(
     headers: HeaderMap,
     body: serde_json::Value,
     auth_result: Option<ValidatedApiToken>,
+    resolved_route: crate::middleware::routing::ResolvedRoute,
 ) -> Result<axum::response::Response, ApiError> {
-    // 1. Parse the OpenAI request.
-    let raw_request_body = body.clone();
-    let openai_req: OpenAIRequest =
-        serde_json::from_value(body).map_err(|e| ApiError(CoreError::Parse(e.to_string())))?;
-
+    let raw_request_body = body;
     let api_key_id: Option<ApiKeyId> = auth_result.as_ref().map(|r| r.key_id);
 
-    // 2. Resolve routing.
-    let plan = resolve_routing_plan(&state, &headers, &openai_req, &auth_result)?;
-
-    // 3. Translate plan to pipeline targets.
-    let (combo_id, combo_override, targets_override) =
-        translate_plan_to_targets(&state, &plan, api_key_id)?;
+    let combo_id = resolved_route.combo_id;
+    let combo_override = resolved_route.combo_override;
+    let targets_override = resolved_route.targets_override;
+    let openai_req = resolved_route.openai_req;
 
     // 5. Build pipeline.
     let pipeline = build_pipeline(&state);
@@ -243,7 +163,7 @@ async fn run_pipeline(
         request_id,
         trace_id,
         combo_id,
-        openai_request: Arc::new(openai_req.clone()),
+        openai_request: openai_req.clone(),
         client_disconnected,
         stream_sink,
         api_key_id,
@@ -261,87 +181,6 @@ async fn run_pipeline(
     }
 
     handle_sync_response(pipeline, req, done_tx).await
-}
-
-fn resolve_routing_plan(
-    state: &AppState,
-    headers: &HeaderMap,
-    openai_req: &OpenAIRequest,
-    auth_result: &Option<ValidatedApiToken>,
-) -> Result<RoutingPlan, ApiError> {
-    let legacy_combo_name = headers
-        .get("x-openproxy-combo")
-        .and_then(|v| v.to_str().ok())
-        .map(str::to_owned);
-
-    let plan = {
-        let w = state.db_pool().writer();
-        if let Some(name) = legacy_combo_name.as_deref() {
-            match openproxy_core::combos::get_combo_by_name(&w, name)? {
-                Some(combo) => {
-                    let targets = openproxy_core::combos::list_targets(&w, combo.id)?;
-                    RoutingPlan::Combo {
-                        combo_id: combo.id,
-                        combo_name: combo.name,
-                        strategy: combo.strategy,
-                        race_size: combo.race_size,
-                        targets,
-                    }
-                }
-                None => return Err(ApiError(CoreError::ComboNotFound(0))),
-            }
-        } else {
-            routing::resolve(&w, &openai_req.model)?
-        }
-    };
-
-    if let RoutingPlan::Combo { combo_id, .. } = &plan
-        && let Some(auth) = auth_result
-        && let Some(allowed) = &auth.allowed_combos
-        && !allowed.is_empty()
-        && !allowed.contains(&combo_id.0)
-    {
-        return Err(ApiError(CoreError::Auth(
-            "combo not allowed for this key".to_string(),
-        )));
-    }
-
-    Ok(plan)
-}
-
-fn translate_plan_to_targets(
-    state: &AppState,
-    plan: &RoutingPlan,
-    api_key_id: Option<ApiKeyId>,
-) -> Result<(ComboId, Option<openproxy_core::combos::Combo>, Option<Vec<openproxy_core::combos::ComboTarget>>), ApiError> {
-    match plan {
-        RoutingPlan::Direct {
-            provider_id,
-            account_id,
-            model_row_id,
-            ..
-        } => {
-            let (synthetic_combo, synthetic_targets) =
-                build_synthetic_combo(provider_id.clone(), *account_id, *model_row_id);
-            Ok((
-                ComboId(SYNTHETIC_COMBO_ID),
-                Some(synthetic_combo),
-                Some(synthetic_targets),
-            ))
-        }
-        RoutingPlan::Combo { combo_id, .. } => Ok((*combo_id, None, None)),
-        RoutingPlan::NotFound { model, hint } => {
-            let _ = record_model_not_found_usage_row(state, RequestId::new(), api_key_id, model);
-            let mut msg = format!("model not found: {}", model);
-            if let Some(h) = hint {
-                msg.push_str(&format!(" (hint: {})", h));
-            }
-            Err(ApiError(CoreError::ModelNotFound {
-                provider: "<unknown>".into(),
-                model: msg,
-            }))
-        }
-    }
 }
 
 fn build_pipeline(state: &AppState) -> Pipeline {
@@ -516,215 +355,4 @@ async fn handle_sync_response(
     Ok(Json(body_value).into_response())
 }
 
-/// Resolve the caller from the `Authorization` header.
-///
-/// Behaviour matrix:
-///
-/// | Header state                          | Result    |
-/// | ------------------------------------- | --------- |
-/// | absent, no active keys configured     | `Ok(None)` — anonymous OK (local-dev). |
-/// | absent, ≥1 active key configured      | 401 `missing api key`. |
-/// | `Authorization: <other-scheme> ...`   | treated as missing → falls into the two rows above. |
-/// | `Authorization: Bearer *** | look up by SHA-256, enforce active+unexpired+scope+allowlist. |
-/// | `Bearer <key>` not in the table        | 401 `invalid api key`. |
-/// | key is revoked / inactive              | 401 `api key revoked or inactive`. |
-/// | key has expired                       | 401 `api key expired`. |
-/// | key lacks the `chat` scope            | 403 `api key lacks 'chat' scope`. |
-/// | key's model allowlist excludes request | 403 `model '...' not allowed for this key`. |
-pub(crate) fn authenticate(
-    state: &AppState,
-    headers: &HeaderMap,
-    requested_model: &str,
-) -> Result<Option<ValidatedApiToken>, ApiError> {
-    let token = match headers
-        .get("authorization")
-        .and_then(|v| v.to_str().ok())
-        .and_then(|s| s.strip_prefix("Bearer "))
-    {
-        Some(t) => t.trim(),
-        None => {
-            // MEDIUM fix (audit finding #5): the previous behaviour
-            // silently admitted anonymous traffic, so an open proxy
-            // on the public internet would forward any client's
-            // prompts to paid upstreams — the operator would foot
-            // the bill with no visibility or per-key rate limits.
-            //
-            // Backward-compat path: if NO active API keys are
-            // configured, this is a fresh install (local-dev /
-            // docker / first run) and anonymous traffic is fine.
-            // As soon as the operator creates the first key, the
-            // chat endpoint requires that key. The transition is
-            // automatic — no config knob needed.
-            //
-            // `count_active` is a SELECT COUNT(*) — use the READER so
-            // the anonymous-fallback check doesn't serialize through
-            // the writer mutex (see `db::conn::DbPool::reader`).
-            let active =
-                core_api_keys::count_active(&state.db_pool().reader()).map_err(ApiError)?;
-            if active == 0 {
-                tracing::debug!(
-                    target: "openproxy::auth",
-                    "anonymous request admitted (no active api keys configured)"
-                );
-                return Ok(None);
-            }
-            return Err(ApiError(CoreError::Auth("missing api key".into())));
-        }
-    };
-    if token.is_empty() {
-        // Same gate: a bare `Authorization: Bearer ` (empty
-        // token) is treated as "no header".
-        let active = core_api_keys::count_active(&state.db_pool().reader()).map_err(ApiError)?;
-        if active == 0 {
-            return Ok(None);
-        }
-        return Err(ApiError(CoreError::Auth("missing api key".into())));
-    }
 
-    let key_hash = core_api_keys::hash_key(token);
-    // Auth is a SELECT by hash — use the READER so chat requests don't
-    // serialize through the writer mutex (same fix as the admin path).
-    let r = state.db_pool().reader();
-    let key = match core_api_keys::get_by_hash(&r, &key_hash).map_err(ApiError)? {
-        Some(k) => k,
-        None => {
-            return Err(ApiError(CoreError::Auth("invalid api key".into())));
-        }
-    };
-
-    if !key.is_active {
-        return Err(ApiError(CoreError::Auth(
-            "api key revoked or inactive".into(),
-        )));
-    }
-
-    if let Some(exp) = &key.expires_at {
-        // LOW fix (#15): same parser-based check as in admin.rs —
-        // see api_keys.rs::is_expired for the rationale.
-        if core_api_keys::is_expired(Some(exp), chrono::Utc::now())
-            .map_err(|e| ApiError(CoreError::Internal(format!("expires_at check: {e}"))))?
-        {
-            return Err(ApiError(CoreError::Auth("api key expired".into())));
-        }
-    }
-
-    if !key.scopes.iter().any(|s| s == "chat") {
-        return Err(ApiError(CoreError::Auth(
-            "api key lacks required scope".into(),
-        )));
-    }
-
-    if let Some(allowed) = &key.allowed_models
-        && !allowed.is_empty()
-        && !allowed.iter().any(|m| m == requested_model)
-    {
-        return Err(ApiError(CoreError::Auth(format!(
-            "model '{}' not allowed for this key",
-            requested_model
-        ))));
-    }
-
-    // Fire-and-forget the `last_used_at` UPDATE on a blocking thread.
-    // The chat hot path no longer blocks on acquiring the writer mutex.
-    // `touch_last_used` already throttles itself to 5-minute writes
-    // (see `LAST_USED_THROTTLE_SECS` in `api_keys.rs`), so the extra
-    // writer acquisition only happens once per key per five minutes.
-    let pool = Arc::clone(state.db_pool());
-    let key_id = key.id;
-    tokio::task::spawn_blocking(move || {
-        let w = pool.writer();
-        let _ = core_api_keys::touch_last_used(&w, key_id);
-    });
-
-    Ok(Some(ValidatedApiToken {
-        key_id: key.id,
-        allowed_combos: key.allowed_combos.clone(),
-    }))
-}
-
-/// Result of a successful chat authentication — the key id plus any
-/// per-key restrictions that need to be enforced after routing.
-#[derive(Clone)]
-pub struct ValidatedApiToken {
-    pub(crate) key_id: ApiKeyId,
-    pub(crate) allowed_combos: Option<Vec<i64>>,
-}
-
-/// Extracted parsed JSON payload for the chat endpoint.
-#[derive(Clone)]
-pub struct ParsedChatRequest(pub serde_json::Value);
-
-/// Record a single `usage` row for the `RoutingPlan::NotFound` path.
-///
-/// Mirrors the `record_no_healthy_targets_row` helper in the pipeline:
-/// zero tokens, zero cost, `race_total=1`, `race_lost=false`,
-/// `error_msg="model_not_found"`, and `status_code=404`. Without this
-/// row a misconfigured client (or a typo in the model name) would
-/// never appear in the dashboard's Live Logs tail — a confusing UX
-/// since the operator would see the same "No recent requests yet"
-/// message whether the system is healthy or completely empty.
-fn record_model_not_found_usage_row(
-    state: &AppState,
-    request_id: RequestId,
-    api_key_id: Option<ApiKeyId>,
-    upstream_model: &str,
-) -> std::result::Result<(), ApiError> {
-    use openproxy_core::{
-        cost::{self, UsageInput},
-        ids::{ProviderId, TraceId},
-    };
-    let input = UsageInput {
-        request_id,
-        trace_id: TraceId::new().to_string(),
-        attempt: 1,
-        provider_id: ProviderId::new(""),
-        account_id: None,
-        combo_id: None,
-        combo_target_id: None,
-        model_row_id: None,
-        upstream_model_id: upstream_model.to_string(),
-        prompt_tokens: None,
-        completion_tokens: None,
-        connect_ms: None,
-        ttft_ms: None,
-        total_ms: 0,
-        status_code: 404,
-        error_msg: Some("model_not_found".to_string()),
-        race_total: 1,
-        race_lost: false,
-        api_key_id,
-        request_body_json: None,
-        response_body_json: None,
-        request_headers: None,
-        response_headers: None,
-        error_message: Some("model_not_found".to_string()),
-        race_attempts: 1,
-        is_streaming: false,
-        stream_complete: false,
-        stop_reason: None,
-        compression_savings_pct: None,
-        compression_techniques: None,
-        // model_not_found is a terminal 404 — the client sees this error.
-        client_response: true,
-        // model_not_found: tokens are not estimated (no request was sent)
-        prompt_tokens_estimated: false,
-        completion_tokens_estimated: false,
-        endpoint_kind: openproxy_core::endpoint::EndpointKind::Chat,
-    };
-    // MEDIUM-5 fix: use try_writer_for with the hot-path timeout so
-    // this write doesn't block indefinitely under admin lock contention.
-    // If the lock can't be acquired in 100ms, log and drop the row —
-    // a missing usage row is preferable to a 5xx on the 404 path.
-    let w = match state
-        .db_pool()
-        .try_writer_for(std::time::Duration::from_millis(100))
-    {
-        Some(w) => w,
-        None => {
-            tracing::warn!("hot-path writer lock timeout on model_not_found usage row; dropping");
-            return Ok(());
-        }
-    };
-    let _ = cost::record(&w, &input).map_err(ApiError);
-    Ok(())
-}
