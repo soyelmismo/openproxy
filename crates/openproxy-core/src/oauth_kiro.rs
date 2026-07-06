@@ -79,6 +79,8 @@ pub struct KiroProviderMeta {
     pub profile_arn: Option<String>,
     #[serde(default = "default_region")]
     pub region: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auth_method: Option<String>,
 }
 
 impl Default for KiroProviderMeta {
@@ -88,6 +90,7 @@ impl Default for KiroProviderMeta {
             client_secret: String::new(),
             profile_arn: None,
             region: default_region(),
+            auth_method: None,
         }
     }
 }
@@ -439,7 +442,7 @@ impl OAuthProvider for KiroOAuthProvider {
         account_id: AccountId,
         db: crate::oauth::DbRef<'_>,
     ) -> Result<TokenResponse> {
-        let mut meta = match db {
+        let meta = match db {
             crate::oauth::DbRef::Pool(pool) => {
                 let conn = pool.writer();
                 crate::oauth_kiro::read_profile_meta(&conn, account_id)?
@@ -459,39 +462,90 @@ impl OAuthProvider for KiroOAuthProvider {
         let region = region_str.as_str();
         let token_url = format!("https://oidc.{region}.amazonaws.com/token");
 
-        if meta.client_id.is_empty() || meta.client_secret.is_empty() {
-            tracing::info!(
-                account = account_id.0,
-                "kiro token refresh: missing client credentials; attempting proactive OIDC client registration..."
-            );
-            if let Ok((new_cid, new_csec)) = register_oidc_client(upstream_client, region).await {
-                meta.client_id = new_cid;
-                meta.client_secret = new_csec;
-                let meta_json = serde_json::to_string(&meta)
-                    .map_err(|e| CoreError::Internal(format!("kiro meta serialize: {e}")))?;
-                match db {
-                    crate::oauth::DbRef::Pool(pool) => {
-                        let conn = pool.writer();
-                        let _ = conn.execute(
-                            "UPDATE accounts SET oauth_provider_specific = ?1 WHERE id = ?2",
-                            rusqlite::params![meta_json, account_id.0],
-                        );
-                    }
-                    crate::oauth::DbRef::Connection(mutex) => {
-                        let conn = mutex.lock();
-                        let _ = conn.execute(
-                            "UPDATE accounts SET oauth_provider_specific = ?1 WHERE id = ?2",
-                            rusqlite::params![meta_json, account_id.0],
-                        );
-                    }
+        if meta.auth_method.as_deref() == Some("imported") || (meta.client_id.is_empty() && meta.client_secret.is_empty()) {
+            // Social Auth Refresh (Google/GitHub)
+            let social_token_url = "https://prod.us-east-1.auth.desktop.kiro.dev/refreshToken";
+            let body = serde_json::json!({
+                "refreshToken": refresh_token,
+            });
+            let body_bytes = serde_json::to_vec(&body)
+                .map_err(|e| CoreError::Parse(format!("kiro social token refresh serialize: {e}")))?;
+            let req = UpstreamRequest::post_json(social_token_url, bytes::Bytes::from(body_bytes));
+
+            let cancel = CancellationToken::new();
+            let response = match upstream_client.call(req, TimeoutProfile::OAuth, cancel).await {
+                Ok(r) => r,
+                Err(e) => {
+                    return Err(match e {
+                        UpstreamError::Cancel => CoreError::ClientDisconnected,
+                        other => CoreError::UpstreamConnection(format!("kiro social token refresh: {other}")),
+                    });
                 }
-            } else {
-                return Err(CoreError::Validation(format!(
-                    "no valid Kiro client credentials for account {} and dynamic registration failed",
-                    account_id.0
-                )));
+            };
+
+            let status = response.status;
+            let body_bytes = match response.collect().await {
+                Ok(b) => b,
+                Err(e) => {
+                    return Err(match e {
+                        UpstreamError::Cancel => CoreError::ClientDisconnected,
+                        other => CoreError::UpstreamConnection(format!("kiro social token refresh body read: {other}")),
+                    });
+                }
+            };
+
+            if !status.is_success() {
+                let body_str = String::from_utf8_lossy(&body_bytes).to_string();
+                return Err(CoreError::UpstreamError {
+                    status: status.as_u16(),
+                    provider: "kiro".into(),
+                    model: "<oauth_social>".into(),
+                    body: body_str,
+                });
             }
+
+            let mut data: serde_json::Value = serde_json::from_slice(&body_bytes)
+                .map_err(|e| CoreError::Parse(format!("kiro social token refresh parse: {e}")))?;
+            
+            // The JSON format matches TokenResponse, but we must preserve refreshToken if it's absent
+            if data.get("refreshToken").is_none() && data.get("refresh_token").is_none() {
+                if let Some(obj) = data.as_object_mut() {
+                    obj.insert("refresh_token".to_string(), serde_json::json!(refresh_token));
+                }
+            }
+            // Ensure token_type exists for TokenResponse parser
+            if data.get("token_type").is_none() && data.get("tokenType").is_none() {
+                if let Some(obj) = data.as_object_mut() {
+                    obj.insert("token_type".to_string(), serde_json::json!("Bearer"));
+                }
+            }
+            if data.get("expiresIn").is_none() && data.get("expires_in").is_none() {
+                if let Some(obj) = data.as_object_mut() {
+                    obj.insert("expires_in".to_string(), serde_json::json!(3600));
+                }
+            }
+            // If the upstream returned camelCase `accessToken`, `refreshToken`, `expiresIn`, map them to snake_case for TokenResponse
+            if let Some(access) = data.get("accessToken").cloned() {
+                if let Some(obj) = data.as_object_mut() {
+                    obj.insert("access_token".to_string(), access);
+                }
+            }
+            if let Some(refresh) = data.get("refreshToken").cloned() {
+                if let Some(obj) = data.as_object_mut() {
+                    obj.insert("refresh_token".to_string(), refresh);
+                }
+            }
+            if let Some(expires) = data.get("expiresIn").cloned() {
+                if let Some(obj) = data.as_object_mut() {
+                    obj.insert("expires_in".to_string(), expires);
+                }
+            }
+            
+            return serde_json::from_value::<TokenResponse>(data)
+                .map_err(|e| CoreError::Parse(format!("kiro social token refresh map: {e}")));
         }
+
+        // AWS SSO OIDC Refresh (Builder ID or IDC)
 
         // Attempt 1: Refresh using current stored client credentials
         let body = serde_json::json!({
@@ -534,11 +588,12 @@ impl OAuthProvider for KiroOAuthProvider {
         let mut success_body = None;
         if status.is_success() {
             success_body = Some(body_bytes.clone());
-        } else if status.as_u16() == 400 {
+        } else {
             // Client credentials may be expired or invalid. Attempt dynamic client re-registration fallback!
             tracing::warn!(
                 account = account_id.0,
-                "kiro token refresh failed with 400; attempting dynamic client re-registration..."
+                status = status.as_u16(),
+                "kiro token refresh failed; attempting dynamic client re-registration..."
             );
             if let Ok((new_cid, new_csec)) = register_oidc_client(upstream_client, region).await {
                 // Retry token refresh with new client credentials
@@ -567,7 +622,7 @@ impl OAuthProvider for KiroOAuthProvider {
                                     let conn = pool.writer();
                                     conn.execute(
                                         "UPDATE accounts SET oauth_provider_specific = ?1 WHERE id = ?2",
-                                        params![meta_json, account_id.0],
+                                        rusqlite::params![meta_json, account_id.0],
                                     ).map_err(|e| CoreError::Database {
                                         message: format!("kiro update refreshed meta: {e}"),
                                         source: Some(Box::new(e)),
@@ -577,7 +632,7 @@ impl OAuthProvider for KiroOAuthProvider {
                                     let conn = mutex.lock();
                                     conn.execute(
                                         "UPDATE accounts SET oauth_provider_specific = ?1 WHERE id = ?2",
-                                        params![meta_json, account_id.0],
+                                        rusqlite::params![meta_json, account_id.0],
                                     ).map_err(|e| CoreError::Database {
                                         message: format!("kiro update refreshed meta: {e}"),
                                         source: Some(Box::new(e)),
@@ -603,8 +658,43 @@ impl OAuthProvider for KiroOAuthProvider {
             }
         };
 
-        serde_json::from_slice::<TokenResponse>(&final_body)
-            .map_err(|e| CoreError::Parse(format!("kiro token refresh parse: {e}")))
+        let mut data: serde_json::Value = serde_json::from_slice(&final_body)
+            .map_err(|e| CoreError::Parse(format!("kiro token refresh parse: {e}")))?;
+        // If upstream omits refresh_token, we reuse the old one
+        if data.get("refresh_token").is_none() && data.get("refreshToken").is_none() {
+            if let Some(obj) = data.as_object_mut() {
+                obj.insert("refresh_token".to_string(), serde_json::json!(refresh_token));
+            }
+        }
+        if data.get("expires_in").is_none() && data.get("expiresIn").is_none() {
+            if let Some(obj) = data.as_object_mut() {
+                obj.insert("expires_in".to_string(), serde_json::json!(3600));
+            }
+        }
+        if data.get("token_type").is_none() && data.get("tokenType").is_none() {
+            if let Some(obj) = data.as_object_mut() {
+                obj.insert("token_type".to_string(), serde_json::json!("Bearer"));
+            }
+        }
+        // Normalize camelCase to snake_case if present
+        if let Some(access) = data.get("accessToken").cloned() {
+            if let Some(obj) = data.as_object_mut() {
+                obj.insert("access_token".to_string(), access);
+            }
+        }
+        if let Some(refresh) = data.get("refreshToken").cloned() {
+            if let Some(obj) = data.as_object_mut() {
+                obj.insert("refresh_token".to_string(), refresh);
+            }
+        }
+        if let Some(expires) = data.get("expiresIn").cloned() {
+            if let Some(obj) = data.as_object_mut() {
+                obj.insert("expires_in".to_string(), expires);
+            }
+        }
+        
+        serde_json::from_value::<TokenResponse>(data)
+            .map_err(|e| CoreError::Parse(format!("kiro token refresh map: {e}")))
     }
 
     async fn post_exchange(
