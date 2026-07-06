@@ -5,7 +5,12 @@ use crate::models::Model;
 use crate::secrets::MasterKey;
 use crate::cost::UsageInput;
 use rusqlite::{params, Connection};
+use std::collections::HashMap;
 use std::sync::Arc;
+
+pub mod account;
+pub mod model;
+pub mod provider;
 
 fn map_db_error<E: std::error::Error + Send + Sync + 'static>(e: E) -> CoreError {
     CoreError::Database {
@@ -69,6 +74,15 @@ pub trait PipelineRepository: Send + Sync {
         max_secs: u64,
         factor: u32,
     ) -> Result<()>;
+    
+    // Batch Loading
+    fn get_models_by_row_ids(&self, model_row_ids: &[crate::ids::ModelRowId]) -> Result<HashMap<i64, Model>>;
+    fn get_accounts_meta(&self, account_ids: &[crate::ids::AccountId]) -> Result<(
+        HashMap<i64, account::RawAccount>,
+        HashMap<i64, account::KiroMeta>,
+        HashMap<i64, String>,
+    )>;
+    fn get_providers_auth_type(&self, provider_ids: &[crate::ids::ProviderId]) -> Result<HashMap<String, String>>;
 }
 
 #[derive(Clone)]
@@ -261,6 +275,25 @@ impl PipelineRepository for SqlitePipelineRepository {
             factor,
         )?;
         Ok(())
+    }
+    
+    fn get_models_by_row_ids(&self, model_row_ids: &[crate::ids::ModelRowId]) -> Result<HashMap<i64, Model>> {
+        let conn = self.conn.lock();
+        model::get_models_by_row_ids(&conn, model_row_ids)
+    }
+
+    fn get_accounts_meta(&self, account_ids: &[crate::ids::AccountId]) -> Result<(
+        HashMap<i64, account::RawAccount>,
+        HashMap<i64, account::KiroMeta>,
+        HashMap<i64, String>,
+    )> {
+        let conn = self.conn.lock();
+        account::get_accounts_meta(&conn, account_ids)
+    }
+
+    fn get_providers_auth_type(&self, provider_ids: &[crate::ids::ProviderId]) -> Result<HashMap<String, String>> {
+        let conn = self.conn.lock();
+        provider::get_providers_auth_type(&conn, provider_ids)
     }
 }
 

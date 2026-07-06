@@ -18,6 +18,89 @@ pub struct PipelineState {
 }
 
 // =====================================================================
+// Error Telemetry Service
+// =====================================================================
+
+#[derive(Clone)]
+pub struct ErrorTelemetryService<S> {
+    pub pipeline: Pipeline,
+    pub inner: S,
+}
+
+impl<S> ErrorTelemetryService<S> {
+    pub fn new(pipeline: Pipeline, inner: S) -> Self {
+        Self { pipeline, inner }
+    }
+}
+
+impl<S> tower::Service<PipelineState> for ErrorTelemetryService<S>
+where
+    S: tower::Service<PipelineState, Response = PipelineResult, Error = std::convert::Infallible> + Clone + Send + 'static,
+    S::Future: Send + 'static,
+{
+    type Response = PipelineResult;
+    type Error = std::convert::Infallible;
+    type Future = Pin<Box<dyn Future<Output = Result<Self::Response, Self::Error>> + Send>>;
+
+    fn poll_ready(&mut self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+        self.inner.poll_ready(cx)
+    }
+
+    fn call(&mut self, state: PipelineState) -> Self::Future {
+        let pipeline = self.pipeline.clone();
+        let mut inner = self.inner.clone();
+        
+        let request_id = state.req.request_id.to_string();
+        let trace_id = state.req.trace_id.to_string();
+        // Since state is moved, we keep a cloned combo if available.
+        let combo = state.combo.clone();
+        
+        let started = std::time::Instant::now();
+
+        Box::pin(async move {
+            let res = inner.call(state).await?;
+            
+            if let Some(err) = &res.error {
+                if matches!(err, CoreError::NoHealthyTargets(_)) {
+                    if let Some(c) = combo {
+                        let _ = pipeline.repo().record_no_healthy_targets_row(
+                            &request_id,
+                            &trace_id,
+                            &c,
+                            started.elapsed().as_millis() as u64,
+                            &chrono::Utc::now().naive_utc().to_string(),
+                            "No healthy targets available"
+                        );
+                    } else {
+                        // If combo wasn't populated yet, we can't record it identically,
+                        // but NoHealthyTargets only occurs after combo is resolved.
+                    }
+                }
+            }
+            Ok(res)
+        })
+    }
+}
+
+pub struct ErrorTelemetryLayer {
+    pub pipeline: Pipeline,
+}
+
+impl ErrorTelemetryLayer {
+    pub fn new(pipeline: Pipeline) -> Self {
+        Self { pipeline }
+    }
+}
+
+impl<S> tower::Layer<S> for ErrorTelemetryLayer {
+    type Service = ErrorTelemetryService<S>;
+
+    fn layer(&self, inner: S) -> Self::Service {
+        ErrorTelemetryService::new(self.pipeline.clone(), inner)
+    }
+}
+
+// =====================================================================
 // Resolve Service
 // =====================================================================
 
@@ -101,15 +184,6 @@ where
                                 error = %e,
                                 "auto_populate on NoHealthyTargets failed; recording failure"
                             );
-                            let started = std::time::Instant::now();
-                            let _ = pipeline.repo().record_no_healthy_targets_row(
-                                &state.req.request_id.to_string(),
-                                &state.req.trace_id.to_string(),
-                                &combo,
-                                started.elapsed().as_millis() as u64,
-                                &chrono::Utc::now().naive_utc().to_string(),
-                                "No healthy targets available"
-                            );
                             return Ok(pipeline.failure(e, attempt - 1, ErrorPhase::Route));
                         }
                     };
@@ -136,15 +210,6 @@ where
                 }
                 if eligible.is_empty() {
                     let err = CoreError::NoHealthyTargets(combo.id.0);
-                    let started = std::time::Instant::now();
-                    let _ = pipeline.repo().record_no_healthy_targets_row(
-                        &state.req.request_id.to_string(),
-                        &state.req.trace_id.to_string(),
-                        &combo,
-                        started.elapsed().as_millis() as u64,
-                        &chrono::Utc::now().naive_utc().to_string(),
-                        "No healthy targets available"
-                    );
                     return Ok(pipeline.failure(err, attempt - 1, ErrorPhase::Route));
                 }
             }
@@ -153,27 +218,9 @@ where
             
             if resolved.is_empty() && !pre_cb_snapshot.is_empty() {
                 let err = CoreError::NoHealthyTargets(combo.id.0);
-                let started = std::time::Instant::now();
-                let _ = pipeline.repo().record_no_healthy_targets_row(
-                    &state.req.request_id.to_string(),
-                    &state.req.trace_id.to_string(),
-                    &combo,
-                    started.elapsed().as_millis() as u64,
-                    &chrono::Utc::now().naive_utc().to_string(),
-                    "No healthy targets available"
-                );
                 return Ok(pipeline.failure(err, attempt - 1, ErrorPhase::Route));
             } else if resolved.is_empty() {
                 let err = CoreError::NoHealthyTargets(combo.id.0);
-                let started = std::time::Instant::now();
-                let _ = pipeline.repo().record_no_healthy_targets_row(
-                    &state.req.request_id.to_string(),
-                    &state.req.trace_id.to_string(),
-                    &combo,
-                    started.elapsed().as_millis() as u64,
-                    &chrono::Utc::now().naive_utc().to_string(),
-                    "No healthy targets available"
-                );
                 return Ok(pipeline.failure(err, attempt - 1, ErrorPhase::Route));
             }
 
@@ -255,15 +302,6 @@ where
             };
             if eligible.is_empty() {
                 let err = CoreError::NoHealthyTargets(combo.id.0);
-                let started = std::time::Instant::now();
-                let _ = pipeline.repo().record_no_healthy_targets_row(
-                    &state.req.request_id.to_string(),
-                    &state.req.trace_id.to_string(),
-                    combo,
-                    started.elapsed().as_millis() as u64,
-                    &chrono::Utc::now().naive_utc().to_string(),
-                    "No healthy targets available"
-                );
                 return Ok(pipeline.failure(err, attempt - 1, ErrorPhase::Route));
             }
 

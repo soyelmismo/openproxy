@@ -12,6 +12,7 @@ use crate::upstream::CancellationToken;
 use std::sync::Arc;
 use std::time::Instant;
 use tokio::sync::watch;
+use crate::pipeline::repository::PipelineRepository;
 
 impl Pipeline {
     /// Drive one chat-completion request to completion.
@@ -135,42 +136,6 @@ impl Pipeline {
         let _ = crate::cost::record(&conn, &input);
     }
 
-    #[allow(clippy::too_many_arguments, clippy::result_large_err)]
-    fn serialize_request(
-        &self,
-        value: &impl serde::Serialize,
-        label: &str,
-        req: Arc<PipelineRequest>,
-        combo: &Combo,
-        target: &ComboTarget,
-        attempt: u8,
-        race_size: u8,
-        started: Instant,
-        model: &Model,
-    ) -> std::result::Result<bytes::Bytes, PipelineResult> {
-        match serde_json::to_vec(value) {
-            Ok(v) => Ok(bytes::Bytes::from(v)),
-            Err(e) => {
-                let err = CoreError::Parse(format!("serialize {label}: {e}"));
-                Err(self.record_and_fail(
-                    req,
-                    combo,
-                    target,
-                    FailureContext {
-                        attempt,
-                        race_size,
-                        err: &err,
-                        started,
-                        model: Some(model),
-                        connect_ms: None,
-                        ttft_ms: None,
-                        status_code: 0,
-                    },
-                ))
-            }
-        }
-    }
-
 
 
     pub async fn resolve_combo_targets_full(&self, eligible: Vec<ComboTarget>) -> Vec<crate::pipeline::context::ResolvedTarget> {
@@ -178,251 +143,46 @@ impl Pipeline {
             return Vec::new();
         }
 
-        let conn_arc = self.conn.clone();
+        let mut model_row_ids = Vec::new();
+        let mut account_ids = Vec::new();
+        let mut provider_ids_no_account = Vec::new();
+
+        for t in &eligible {
+            if let Some(m) = t.model_row_id {
+                model_row_ids.push(m);
+            }
+            if let Some(a) = t.account_id {
+                account_ids.push(a);
+            } else {
+                provider_ids_no_account.push(t.provider_id.clone());
+            }
+        }
+
+        model_row_ids.sort_unstable_by_key(|id| id.0);
+        model_row_ids.dedup_by_key(|id| id.0);
+        account_ids.sort_unstable_by_key(|id| id.0);
+        account_ids.dedup_by_key(|id| id.0);
+        provider_ids_no_account.sort_unstable_by_key(|id| id.0.clone());
+        provider_ids_no_account.dedup_by_key(|id| id.0.clone());
+
+        let models_map = self.repo().get_models_by_row_ids(&model_row_ids).unwrap_or_default();
+        let (accounts_map, kiro_map, antigravity_map) = self.repo().get_accounts_meta(&account_ids).unwrap_or_default();
+        let providers_map = self.repo().get_providers_auth_type(&provider_ids_no_account).unwrap_or_default();
+
         let master_key = self.config.master_key.clone();
         let oauth_registry = self.config.oauth_provider_registry.clone();
-        
+
         tokio::task::spawn_blocking(move || {
-            let mut model_row_ids = Vec::new();
-            let mut account_ids = Vec::new();
-            let mut provider_ids_no_account = Vec::new();
-
-            for t in &eligible {
-                if let Some(m) = t.model_row_id {
-                    model_row_ids.push(m);
-                }
-                if let Some(a) = t.account_id {
-                    account_ids.push(a);
-                } else {
-                    provider_ids_no_account.push(t.provider_id.clone());
-                }
-            }
-
-            model_row_ids.sort_unstable_by_key(|id| id.0);
-            model_row_ids.dedup_by_key(|id| id.0);
-            account_ids.sort_unstable_by_key(|id| id.0);
-            account_ids.dedup_by_key(|id| id.0);
-            provider_ids_no_account.sort_unstable_by_key(|id| id.0.clone());
-            provider_ids_no_account.dedup_by_key(|id| id.0.clone());
-
-            struct RawAccount {
-                api_key_encrypted: Option<Vec<u8>>,
-                label: Option<String>,
-                access_token_encrypted: Option<Vec<u8>>,
-                refresh_token_encrypted: Option<Vec<u8>>,
-                expires_at: Option<String>,
-            }
-            struct KiroMeta { region: Option<String>, profile_arn: Option<String> }
-            
-            let mut models_map = std::collections::HashMap::new();
-            let mut accounts_map = std::collections::HashMap::new();
-            let mut providers_map = std::collections::HashMap::new();
-            let mut kiro_map = std::collections::HashMap::new();
-            let mut antigravity_map = std::collections::HashMap::new();
-
-            // Minimal lock section
-            {
-                let conn = conn_arc.lock();
-                
-                if !model_row_ids.is_empty() {
-                    if let Ok(models) = crate::models::crud::get_by_row_ids(&conn, &model_row_ids) {
-                        for m in models {
-                            models_map.insert(m.row_id.0, m);
-                        }
-                    }
-                }
-
-                if !account_ids.is_empty() {
-                    let placeholders = std::iter::repeat("?").take(account_ids.len()).collect::<Vec<_>>().join(",");
-                    let query = format!("SELECT id, api_key_encrypted, label, access_token_encrypted, refresh_token_encrypted, expires_at FROM accounts WHERE id IN ({})", placeholders);
-                    if let Ok(mut stmt) = conn.prepare_cached(&query) {
-                        let ids: Vec<&dyn rusqlite::ToSql> = account_ids.iter().map(|id| &id.0 as &dyn rusqlite::ToSql).collect();
-                        if let Ok(rows) = stmt.query_map(&*ids, |r| {
-                            Ok((
-                                r.get::<_, i64>(0)?,
-                                r.get::<_, Option<Vec<u8>>>(1)?,
-                                r.get::<_, Option<String>>(2)?,
-                                r.get::<_, Option<Vec<u8>>>(3)?,
-                                r.get::<_, Option<Vec<u8>>>(4)?,
-                                r.get::<_, Option<String>>(5)?
-                            ))
-                        }) {
-                            for row in rows.flatten() {
-                                accounts_map.insert(row.0, RawAccount {
-                                    api_key_encrypted: row.1,
-                                    label: row.2,
-                                    access_token_encrypted: row.3,
-                                    refresh_token_encrypted: row.4,
-                                    expires_at: row.5,
-                                });
-                            }
-                        }
-                    }
-
-                    // Kiro
-                    let kiro_query = format!("SELECT account_id, region, profile_arn FROM executor_kiro WHERE account_id IN ({})", placeholders);
-                    if let Ok(mut stmt) = conn.prepare_cached(&kiro_query) {
-                        let ids: Vec<&dyn rusqlite::ToSql> = account_ids.iter().map(|id| &id.0 as &dyn rusqlite::ToSql).collect();
-                        if let Ok(rows) = stmt.query_map(&*ids, |r| {
-                            Ok((r.get::<_, i64>(0)?, r.get::<_, Option<String>>(1)?, r.get::<_, Option<String>>(2)?))
-                        }) {
-                            for row in rows.flatten() {
-                                kiro_map.insert(row.0, KiroMeta { region: row.1, profile_arn: row.2 });
-                            }
-                        }
-                    }
-
-                    // Antigravity
-                    let ag_query = format!("SELECT account_id, project_id FROM executor_antigravity WHERE account_id IN ({})", placeholders);
-                    if let Ok(mut stmt) = conn.prepare_cached(&ag_query) {
-                        let ids: Vec<&dyn rusqlite::ToSql> = account_ids.iter().map(|id| &id.0 as &dyn rusqlite::ToSql).collect();
-                        if let Ok(rows) = stmt.query_map(&*ids, |r| {
-                            Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?))
-                        }) {
-                            for row in rows.flatten() {
-                                antigravity_map.insert(row.0, row.1);
-                            }
-                        }
-                    }
-                }
-
-                if !provider_ids_no_account.is_empty() {
-                    let placeholders = std::iter::repeat("?").take(provider_ids_no_account.len()).collect::<Vec<_>>().join(",");
-                    let query = format!("SELECT id, auth_type FROM providers WHERE id IN ({})", placeholders);
-                    if let Ok(mut stmt) = conn.prepare_cached(&query) {
-                        let ids: Vec<&dyn rusqlite::ToSql> = provider_ids_no_account.iter().map(|id| &id.0 as &dyn rusqlite::ToSql).collect();
-                        if let Ok(rows) = stmt.query_map(&*ids, |r| {
-                            let id: String = r.get(0)?;
-                            let auth_type_str: String = r.get(1)?;
-                            Ok((id, auth_type_str))
-                        }) {
-                            for row in rows.flatten() {
-                                providers_map.insert(row.0, row.1);
-                            }
-                        }
-                    }
-                }
-            } // DB Mutex is dropped here!
-
-            // Decryption phase outside DB lock
-            let mut resolved = Vec::with_capacity(eligible.len());
-            for t in eligible {
-                let model_row_id = match t.model_row_id {
-                    Some(m) => m,
-                    None => {
-                        let err = CoreError::Internal(format!("execute_single called on a sub-combo target (id={})", t.id.0));
-                        tracing::error!(error=%err);
-                        continue;
-                    }
-                };
-
-                let model = match models_map.get(&model_row_id.0) {
-                    Some(m) => m.clone(),
-                    None => {
-                        let err = CoreError::ModelNotFound { provider: "<unknown>".into(), model: format!("row_id={}", model_row_id.0) };
-                        tracing::error!(error=%err);
-                        continue;
-                    }
-                };
-
-                let (api_key, api_key_label, custom_meta) = match t.account_id {
-                    Some(account_id) => {
-                        let raw_account = match accounts_map.get(&account_id.0) {
-                            Some(r) => r,
-                            None => {
-                                tracing::error!("account {} not found during decryption phase", account_id.0);
-                                continue;
-                            }
-                        };
-
-                        let blob = match &raw_account.api_key_encrypted {
-                            Some(b) => b,
-                            None => {
-                                tracing::error!("account {} has no API key (OAuth account?)", account_id.0);
-                                continue;
-                            }
-                        };
-
-                        let key = match master_key.decrypt(blob) {
-                            Ok(k) => k,
-                            Err(e) => {
-                                tracing::error!(error=%e, "failed to decrypt api key");
-                                continue;
-                            }
-                        };
-                        let label = raw_account.label.clone();
-                        
-                        let custom_meta = if t.provider_id.as_str() == "kiro" || t.provider_id.as_str() == "antigravity" {
-                            let access_token = match &raw_account.access_token_encrypted {
-                                Some(b) => match master_key.decrypt(b) {
-                                    Ok(k) => k,
-                                    Err(e) => {
-                                        tracing::error!(error=%e, "failed to decrypt access token");
-                                        continue;
-                                    }
-                                },
-                                None => {
-                                    tracing::error!("no access token found for account {}", account_id.0);
-                                    continue;
-                                }
-                            };
-
-                            let maybe_refresh: Option<String> = if oauth_registry.is_some() {
-                                if crate::oauth::pipeline_token_needs_refresh(raw_account.expires_at.as_deref(), t.provider_id.as_str()) {
-                                    if let Some(rt_enc) = &raw_account.refresh_token_encrypted {
-                                        master_key.decrypt(rt_enc).ok()
-                                    } else {
-                                        None
-                                    }
-                                } else {
-                                    None
-                                }
-                            } else {
-                                None
-                            };
-                            
-                            let (kiro_region, kiro_profile_arn, antigravity_project) = match t.provider_id.as_str() {
-                                "kiro" => {
-                                    let meta = kiro_map.get(&account_id.0);
-                                    (meta.and_then(|m| m.region.clone()), meta.and_then(|m| m.profile_arn.clone()), None)
-                                }
-                                "antigravity" => {
-                                    let proj = antigravity_map.get(&account_id.0).cloned();
-                                    if proj.is_none() {
-                                        tracing::error!("failed to read antigravity project");
-                                        continue;
-                                    }
-                                    (None, None, proj)
-                                }
-                                _ => (None, None, None),
-                            };
-                            
-                            Some(crate::pipeline::context::CustomProviderMeta {
-                                access_token,
-                                maybe_refresh,
-                                kiro_region,
-                                kiro_profile_arn,
-                                antigravity_project,
-                            })
-                        } else {
-                            None
-                        };
-                        
-                        (key, label, custom_meta)
-                    }
-                    None => {
-                        let auth_type = providers_map.get(&t.provider_id.0).map(|s| s.as_str());
-                        if auth_type == Some("none") || t.provider_id.0 == "opencode-zen" {
-                            (String::new(), None, None)
-                        } else {
-                            tracing::error!("combo_target {} has no account_id after expansion", t.id.0);
-                            continue;
-                        }
-                    }
-                };
-                resolved.push(crate::pipeline::context::ResolvedTarget { target: t, model, api_key, api_key_label, custom_meta });
-            }
-            resolved
+            crate::pipeline::credentials::CredentialManager::resolve_credentials(
+                eligible,
+                models_map,
+                accounts_map,
+                kiro_map,
+                antigravity_map,
+                providers_map,
+                master_key,
+                oauth_registry,
+            )
         }).await.unwrap()
     }
 
@@ -652,63 +412,25 @@ impl Pipeline {
 
         let messages_ref = cloned_messages.as_deref().unwrap_or(&req.openai_request.messages);
 
-        let body_bytes: bytes::Bytes = match target_format {
-            crate::models::TargetFormat::Openai => {
-                let mut view = crate::translation::OpenAIRequestView::new(
-                    &req.openai_request,
-                    model.model_id.as_str(),
-                    messages_ref,
-                    stream,
+        let formatter = crate::pipeline::formatting::get_formatter(target_format);
+        let body_bytes = match formatter.format_request(&req, &model, messages_ref, stream, adapter.as_ref()) {
+            Ok(b) => b,
+            Err(e) => {
+                return self.record_and_fail(
+                    req,
+                    combo,
+                    target,
+                    FailureContext {
+                        attempt,
+                        race_size,
+                        err: &e,
+                        started,
+                        model: Some(&model),
+                        connect_ms: None,
+                        ttft_ms: None,
+                        status_code: 0,
+                    },
                 );
-                adapter.normalize_openai_request(&mut view);
-                match self.serialize_request(
-                    &view,
-                    "openai request",
-                    Arc::clone(&req),
-                    combo,
-                    target,
-                    attempt,
-                    race_size,
-                    started,
-                    &model,
-                ) {
-                    Ok(b) => b,
-                    Err(r) => return r,
-                }
-            }
-            crate::models::TargetFormat::Anthropic => {
-                let anthro = crate::translation::openai_to_anthropic(&req.openai_request, model.model_id.as_str(), messages_ref, stream);
-                match self.serialize_request(
-                    &anthro,
-                    "anthropic request",
-                    Arc::clone(&req),
-                    combo,
-                    target,
-                    attempt,
-                    race_size,
-                    started,
-                    &model,
-                ) {
-                    Ok(b) => b,
-                    Err(r) => return r,
-                }
-            }
-            crate::models::TargetFormat::Gemini => {
-                let gemini = crate::translation::openai_to_gemini(&req.openai_request, messages_ref);
-                match self.serialize_request(
-                    &gemini,
-                    "gemini request",
-                    Arc::clone(&req),
-                    combo,
-                    target,
-                    attempt,
-                    race_size,
-                    started,
-                    &model,
-                ) {
-                    Ok(b) => b,
-                    Err(r) => return r,
-                }
             }
         };
 

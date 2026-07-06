@@ -24,6 +24,8 @@ use std::sync::atomic::AtomicBool;
 pub mod repository;
 pub mod service;
 pub mod context;
+pub mod credentials;
+pub mod formatting;
 pub mod stage;
 pub mod quotas;
 pub mod racing;
