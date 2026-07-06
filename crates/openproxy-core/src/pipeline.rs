@@ -4621,7 +4621,7 @@ impl Pipeline {
                             );
                         }
                         done_sent = true;
-                        break;
+                        break 'stream_loop;
                     }
                     // Inline upstream error detection: some providers
                     // (notably OpenRouter) send errors INSIDE an SSE
