@@ -262,3 +262,6 @@ impl PipelineRepository for SqlitePipelineRepository {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests;

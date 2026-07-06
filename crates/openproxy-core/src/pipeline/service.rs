@@ -523,3 +523,6 @@ impl<S> tower::Layer<S> for RoutingLayer {
         RoutingService::new(self.pipeline.clone())
     }
 }
+
+#[cfg(test)]
+mod tests;
