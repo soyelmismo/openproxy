@@ -23,6 +23,7 @@ pub async fn rate_limit_middleware(
         return Err(ApiError(CoreError::RateLimited {
             provider: "rate_limiter".into(),
             retry_after_ms: 60_000,
+            is_proxy_rotated: false,
         }));
     }
 

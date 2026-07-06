@@ -544,6 +544,7 @@ fn core_error_from_code(code: &str, message: &str) -> Option<CoreError> {
         "rate_limited" => Some(CoreError::RateLimited {
             provider: "<see message>".to_string(),
             retry_after_ms: 0,
+            is_proxy_rotated: false,
         }),
         "parse_error" => Some(CoreError::Parse(message.to_string())),
         "client_disconnected" => Some(CoreError::ClientDisconnected),
