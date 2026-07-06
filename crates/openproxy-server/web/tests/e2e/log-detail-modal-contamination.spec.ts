@@ -120,7 +120,7 @@ test.beforeEach(async ({ page }: { page: Page }) => {
  *  false positives from the Raw log section's JSON dump. */
 function makeFinalizedRow(overrides: Partial<RecentUsageRow> = {}): RecentUsageRow {
   return {
-    id: 5001,
+    id: 999999,
     request_id: 'req-A',
     trace_id: 'tid-A',
     provider_id: 'openrouter',
@@ -512,7 +512,7 @@ test.describe('Log detail modal — contamination regression (Fixes 4-b + 5-b)',
     // Since "" != null is TRUE, the overlay HAPPENS: the snapshot's
     // upstream_model_id becomes "".
     await injectUpdateLogDetail(page, {
-      id: 5001,
+      id: 999999,
       request_id: 'req-A-contam-3',
       trace_id: 'tid-A-contam-3',
       upstream_model_id: '',
@@ -599,7 +599,7 @@ test.describe('Log detail modal — contamination regression (Fixes 4-b + 5-b)',
     await setupLogsView(page);
 
     const rowA = makeFinalizedRow({
-      id: 5001,
+      id: 999999,
       request_id: 'req-A-contam-5',
       trace_id: 'tid-A-contam-5',
       upstream_model_id: 'claude-3-5-sonnet',
@@ -607,7 +607,7 @@ test.describe('Log detail modal — contamination regression (Fixes 4-b + 5-b)',
       total_ms: 1234,
     });
     const rowB = makeFinalizedRow({
-      id: 5002,
+      id: 999998,
       request_id: 'req-B-contam-5',
       trace_id: 'tid-B-contam-5',
       upstream_model_id: 'gpt-4o-mini',
@@ -669,7 +669,7 @@ test.describe('Log detail modal — contamination regression (Fixes 4-b + 5-b)',
     // pinned identity is now B (req-B-contam-5 / tid-B-contam-5), so
     // the update for A MUST be rejected.
     await injectUpdateLogDetail(page, {
-      id: 5001,
+      id: 999999,
       request_id: 'req-A-contam-5',
       trace_id: 'tid-A-contam-5',
       upstream_model_id: 'claude-3-5-sonnet-LATE',

@@ -374,7 +374,7 @@ test('Live Logs: finalized row freezes ticker at the row total_ms', async ({ pag
   // Finalized row: total_ms is set, status_code is 200, and the
   // row is NOT in-flight (is_streaming=false, stream_complete=true).
   const finalizedRow: RecentUsageRow = {
-    id: 1001,
+    id: 999999,
     request_id: requestId,
     trace_id: traceId,
     provider_id: 'openrouter',

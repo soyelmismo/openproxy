@@ -189,12 +189,20 @@ pub const DEFAULT_GEMINI_MAX_OUTPUT_TOKENS: u32 = 8192;
 // =====================
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GeminiSafetySetting {
+    pub category: String,
+    pub threshold: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GeminiRequest {
     pub contents: Vec<GeminiContent>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub system_instruction: Option<GeminiContent>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub generation_config: Option<GeminiGenerationConfig>,
+    #[serde(default, rename = "safetySettings", skip_serializing_if = "Option::is_none")]
+    pub safety_settings: Option<Vec<GeminiSafetySetting>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -802,10 +810,34 @@ pub fn openai_to_gemini(req: &OpenAIRequest) -> GeminiRequest {
         stop_sequences: req.stop.clone(),
     };
 
+    let safety_settings = Some(vec![
+        GeminiSafetySetting {
+            category: "HARM_CATEGORY_HARASSMENT".to_string(),
+            threshold: "BLOCK_NONE".to_string(),
+        },
+        GeminiSafetySetting {
+            category: "HARM_CATEGORY_HATE_SPEECH".to_string(),
+            threshold: "BLOCK_NONE".to_string(),
+        },
+        GeminiSafetySetting {
+            category: "HARM_CATEGORY_SEXUALLY_EXPLICIT".to_string(),
+            threshold: "BLOCK_NONE".to_string(),
+        },
+        GeminiSafetySetting {
+            category: "HARM_CATEGORY_DANGEROUS_CONTENT".to_string(),
+            threshold: "BLOCK_NONE".to_string(),
+        },
+        GeminiSafetySetting {
+            category: "HARM_CATEGORY_CIVIC_INTEGRITY".to_string(),
+            threshold: "BLOCK_NONE".to_string(),
+        },
+    ]);
+
     GeminiRequest {
         contents,
         system_instruction,
         generation_config: Some(generation_config),
+        safety_settings,
     }
 }
 

@@ -106,13 +106,16 @@ export function renderLogRowHtml(
   total_ms?: number | null,
 ): TemplateResult {
   const inflight: boolean = !!(row as unknown as Record<string, unknown>)["__inflight"];
+  const isTerminal = stage && (stage.stage === "completed" || stage.stage === "failed" || stage.stage === "cancelled");
+  const processing = inflight && !isTerminal;
   const streaming: boolean = !!row.is_streaming && !row.stream_complete;
-  const hasError: boolean = !!(row.error_message && row.error_message.length > 0);
-  const statusErr: boolean = !inflight && (row.status_code >= 400 || row.status_code === 0 || hasError);
+  const hasError: boolean = !!(row.error_message && row.error_message.length > 0) || (stage?.stage === "failed" && !!stage.error);
+  const isErrorState = row.status_code >= 400 || row.status_code === 0 || hasError || stage?.stage === "failed" || stage?.stage === "cancelled";
+  const statusErr: boolean = !processing && isErrorState;
   const cls: string = [
     "log-row",
-    inflight ? "processing" : (statusErr ? "error" : "ok"),
-    row.race_lost ? "loser" : "",
+    processing ? "processing" : (statusErr ? "error" : "ok"),
+    row.race_lost || stage?.stage === "cancelled" ? "loser" : "",
     streaming ? "streaming" : "",
   ].filter(Boolean).join(" ");
   const cells = buildLogRowCells(row, stage, visibleColumns, total_ms);

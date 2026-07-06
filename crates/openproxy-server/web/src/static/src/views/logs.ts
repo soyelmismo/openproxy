@@ -861,14 +861,43 @@ function reapStaleInflight(): void {
   const now = Date.now();
   const isTerminal = (s: string | undefined): boolean =>
     !!s && (s === "completed" || s === "failed" || s === "cancelled");
+
+  // Reconcile and prune finalized items that are present in state.logs.rows
+  const finalizedTraceIds = new Set<string>();
+  const finalizedRequestIds = new Set<string>();
+  for (const r of state.logs.rows) {
+    if (r.trace_id) finalizedTraceIds.add(r.trace_id);
+    if (r.request_id) finalizedRequestIds.add(r.request_id);
+  }
+
   const scan = (map: Map<string, RecentUsageRow>, byTrace: boolean): void => {
     for (const [key, placeholder] of map) {
+      // Check if it's already in the finalized list
+      const isFinalized = byTrace
+        ? (placeholder.trace_id && finalizedTraceIds.has(placeholder.trace_id))
+        : (placeholder.request_id && finalizedRequestIds.has(placeholder.request_id));
+
+      if (isFinalized) {
+        map.delete(key);
+        continue;
+      }
+
       const stage = byTrace
         ? state.logs.stagesByTraceId.get(key)
         : state.logs.stagesByRequestId.get(key);
-      if (stage && isTerminal(stage.stage)) continue;
+      const isFinished = stage && isTerminal(stage.stage);
       const t = Date.parse(placeholder.created_at || "");
+
+      if (isFinished) {
+        // If it's already terminal (but has no finalized DB row yet), prune it after 10 seconds
+        if (isFinite(t) && now - t > 10_000) {
+          map.delete(key);
+        }
+        continue;
+      }
+
       if (!isFinite(t) || now - t < STALE_INFLIGHT_MS) continue;
+
       const synth: StageEvent = {
         request_id: placeholder.request_id,
         trace_id: byTrace ? key : "",
@@ -888,26 +917,13 @@ function reapStaleInflight(): void {
       setStage(synth, placeholder.request_id);
       // Bug fix: also update the placeholder's status_code and
       // error_message so the table and modal show consistent state.
-      // Previously the placeholder kept its old status_code (200 from
-      // the "streaming" stage) while the stage map said "cancelled /
-      // 499" — the table showed "FALLÓ" (from the stage) but the
-      // modal showed "200" (from the placeholder's status_code).
       placeholder.status_code = 499;
       placeholder.error_message = "Stream stalled — no response from upstream for 120s. The request was cancelled by the stale-inflight reaper.";
       // Compute total_ms from created_at so the latency cell freezes
-      // instead of continuing to count after stale-reap (NUEVO BUG B).
       const startedAt = Date.parse(placeholder.created_at || "");
       if (isFinite(startedAt)) {
         (placeholder as { total_ms: number }).total_ms = Math.max(0, Date.now() - startedAt);
       }
-      // Push the mutation to the open modal if it's showing this row.
-      // Without this, the modal's snapshot (taken when the modal was
-      // opened) stays frozen at the OLD status_code/error_message, while
-      // the table shows the reaper's mutation — modal-vs-table
-      // inconsistency (the user-reported "modal se bugea" symptom,
-      // NUEVO BUG A). The pinned check inside updateOpenLogDetail
-      // handles the case where the modal is closed or showing a
-      // different row.
       if (state.currentView?.name === "logs") {
         updateOpenLogDetail(placeholder as unknown as LogDetailLog);
       }
@@ -915,8 +931,7 @@ function reapStaleInflight(): void {
   };
   scan(state.logs.inflightByTraceId, true);
   scan(state.logs.inflightByRequestId, false);
-  // Only re-render when something actually changed — avoids a full
-  // table re-render every tick while ordinary inflight entries exist.
+
   if (state.currentView?.name === "logs") requestUpdate();
 }
 
