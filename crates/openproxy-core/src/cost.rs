@@ -3,7 +3,7 @@
 
 use crate::error::{CoreError, Result};
 use crate::ids::{
-    AccountId, ApiKeyId, ComboId, ComboTargetId, ModelRowId, ProviderId, RequestId, TraceId,
+    AccountId, ApiKeyId, ComboId, ComboTargetId, ModelRowId, ProviderId, RequestId,
     UsageId,
 };
 use crate::pricing;
@@ -14,7 +14,7 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UsageInput {
     pub request_id: RequestId,
-    pub trace_id: TraceId,
+    pub trace_id: String,
     pub attempt: u8,
     pub provider_id: ProviderId,
     pub account_id: Option<AccountId>,
@@ -153,7 +153,7 @@ pub fn record(conn: &Connection, input: &UsageInput) -> Result<UsageId> {
     };
 
     let request_id = input.request_id.to_string();
-    let trace_id = input.trace_id.to_string();
+    let trace_id = input.trace_id.clone();
 
     conn.execute(
         "INSERT INTO usage (\
@@ -286,11 +286,12 @@ pub fn record(conn: &Connection, input: &UsageInput) -> Result<UsageId> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ids::TraceId;
 
     fn make_input() -> UsageInput {
         UsageInput {
             request_id: RequestId::new(),
-            trace_id: TraceId::new(),
+            trace_id: TraceId::new().to_string(),
             attempt: 1,
             provider_id: ProviderId::new("openrouter"),
             account_id: None,

@@ -1727,7 +1727,7 @@ impl Pipeline {
             // dashboard correlates every row from a single
             // logical request by trace_id, so a fresh uuid here
             // would orphan the no-healthy-targets row.
-            trace_id: req.trace_id,
+            trace_id: req.trace_id.to_string(),
             attempt: 1,
             // No target existed to extract a provider from; record an
             // empty string so the row still parses.
@@ -2097,18 +2097,11 @@ impl Pipeline {
         race_cancel: &CancellationToken,
     ) -> PipelineResult {
         let started = Instant::now();
-        // H3 fix: this used to be a fresh `TraceId::new()`,
-        // shadowing the `req.trace_id` set by the chat handler
-        // (chat.rs:235,310). The chat handler's trace_id was
-        // therefore dead code and every row's trace_id was a
-        // fresh uuid that did not match the StageEvent trace_id
-        // published during streaming. The per-attempt retries
-        // inside `execute_single` (e.g. the per-target max_attempts
-        // loop) derive a deterministic
-        // `format!("{req.trace_id}:retry{n}")` suffix so the
-        // dashboard can correlate multiple rows from the same
-        // logical request.
-        let trace_id = req.trace_id;
+        let trace_id = if attempt > 1 {
+            format!("{}:retry{}", req.trace_id, attempt - 1)
+        } else {
+            req.trace_id.to_string()
+        };
 
         // Synchronous race_cancel check before publishing any stage
         // events. The atomic load (SeqCst) is nanoseconds — no
@@ -3003,7 +2996,7 @@ impl Pipeline {
         started: Instant,
         attempt: u8,
         race_size: u8,
-        trace_id: TraceId,
+        trace_id: String,
     ) -> PipelineResult {
         // Gate 2: both the non-streaming path AND the streaming path
         // now go through the hyper-based `UpstreamClient`
@@ -3840,7 +3833,7 @@ impl Pipeline {
         started: Instant,
         attempt: u8,
         race_size: u8,
-        trace_id: TraceId,
+        trace_id: String,
         upstream_request: UpstreamRequest,
     ) -> PipelineResult {
         // Cancellation: the `client_disconnected` watch is the
@@ -5865,7 +5858,7 @@ impl Pipeline {
         // uuid here, which silently orphaned the
         // chat-handler-assigned trace_id and broke
         // dashboard-side correlation.
-        self.record_and_fail_with_trace_id(req, combo, target, ctx, req.trace_id)
+        self.record_and_fail_with_trace_id(req, combo, target, ctx, req.trace_id.to_string())
     }
 
     /// Same as [`Self::record_and_fail`] but lets the caller supply
@@ -5887,7 +5880,7 @@ impl Pipeline {
         combo: &Combo,
         target: &ComboTarget,
         ctx: FailureContext<'_>,
-        trace_id: TraceId,
+        trace_id: String,
     ) -> PipelineResult {
         self.record_and_fail_with_trace_id_and_partial(
             req, combo, target, ctx, trace_id, None, None, 0, "",
@@ -5915,7 +5908,7 @@ impl Pipeline {
         combo: &Combo,
         target: &ComboTarget,
         ctx: FailureContext<'_>,
-        trace_id: TraceId,
+        trace_id: String,
         // For partial-response capture (streaming failures):
         acc: Option<&crate::sse_accumulator::ResponseAccumulator>,
         chunk_id: Option<&str>,
@@ -6053,7 +6046,7 @@ impl Pipeline {
         model: &Model,
         connect_ms: u64,
         ttft_ms: Option<u64>,
-        trace_id: TraceId,
+        trace_id: String,
         acc: Option<&mut crate::sse_accumulator::ResponseAccumulator>,
         chunk_id: &str,
         created: u64,
@@ -6187,7 +6180,7 @@ impl Pipeline {
         model: &Model,
         connect_ms: u64,
         ttft_ms: Option<u64>,
-        trace_id: TraceId,
+        trace_id: String,
         acc: Option<&mut crate::sse_accumulator::ResponseAccumulator>,
         chunk_id: &str,
         created: u64,
@@ -6378,7 +6371,7 @@ impl Pipeline {
         status_code: u16,
         attempt: u8,
         race_size: u8,
-        trace_id: TraceId,
+        trace_id: String,
         prompt_tokens: Option<u32>,
         completion_tokens: Option<u32>,
         request_body_json: Option<serde_json::Value>,
@@ -6464,7 +6457,7 @@ impl Pipeline {
         // cannot derive that on its own.
         let input = UsageInput {
             request_id: req.request_id,
-            trace_id,
+            trace_id: trace_id.clone(),
             attempt,
             provider_id: target.provider_id.clone(),
             account_id: target.account_id,

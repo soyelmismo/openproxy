@@ -631,7 +631,7 @@ fn record_model_not_found_usage_row(
     };
     let input = UsageInput {
         request_id,
-        trace_id: TraceId::new(),
+        trace_id: TraceId::new().to_string(),
         attempt: 1,
         provider_id: ProviderId::new(""),
         account_id: None,

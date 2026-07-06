@@ -48,7 +48,6 @@ import { mountView, requestUpdate } from "../state/reactive.js";
 import {
   showLogDetail,
   updateOpenLogDetail,
-  hasCompleteLogDetail,
   bumpOpenLogDetailGeneration,
   isCurrentOpenLogDetailGeneration,
 } from "../components/log-detail.js";
@@ -1246,17 +1245,17 @@ async function openLogDetail(id: string, requestId: string, traceId?: string): P
     return;
   }
 
-  // Fetch detail FIRST if the row is incomplete (broadcast rows have
-  // request_body_json / response_body_json redacted). Then render
-  // the modal with complete data — avoids the "flash of not recorded".
-  // Skip the fetch for synthetic IDs (inflight/ghost entries) — they
-  // don't exist in the DB and the fetch would 500.
-  if (!hasCompleteLogDetail(row as unknown as LogDetailLog)
-      && Number.isFinite(numericId)
+  // Always fetch detail from the server for finalized rows to avoid table dependencies
+  // and guarantee we show the exact clicked attempt. Skip only for synthetic / in-flight IDs.
+  if (Number.isFinite(numericId)
       && numericId > 0
+      // If traceId is not set, we can fall back to id, but if numericId is 0 or synthetic, skip.
       && !isSyntheticId) {
     try {
-      const detail = await api(`/usage/detail?id=${encodeURIComponent(id)}`) as { row?: RecentUsageRow; detail?: RecentUsageRow } | RecentUsageRow | null;
+      const queryParam = traceId
+        ? `trace_id=${encodeURIComponent(traceId)}`
+        : `id=${encodeURIComponent(id)}`;
+      const detail = await api(`/usage/detail?${queryParam}`) as { row?: RecentUsageRow; detail?: RecentUsageRow } | RecentUsageRow | null;
       // RACE-CONDITION GUARD: if the user clicked another row while
       // this fetch was in flight, `gen` is no longer current. Discard
       // the result — the user is now looking at a different row's
@@ -1269,22 +1268,8 @@ async function openLogDetail(id: string, requestId: string, traceId?: string): P
         ? (detail.row ?? detail.detail ?? null)
         : (detail as RecentUsageRow | null);
       if (fetched) {
-        const merged: Record<string, unknown> = { ...row } as unknown as Record<string, unknown>;
-        for (const [k, v] of Object.entries(fetched as unknown as Record<string, unknown>)) {
-          if (v != null) merged[k] = v;
-        }
-        row = merged as unknown as RecentUsageRow;
+        row = fetched;
         state.logs.rowById.set(Number(row.id || id), row);
-        // CRITICAL FIX: do NOT set `state.logs.selectedRow` here. The
-        // previous code (`state.logs.selectedRow = { ...row }`) ran
-        // BEFORE `showLogDetail` at the end of this function. That
-        // created the same race-condition window as the removed assignment
-        // at line ~1076: `selectedRow` would point to the NEW row while
-        // `pinnedRequestId` still pointed to the OLD row.
-        //
-        // `selectedRow` is set ONLY by `showLogDetail` (called at the
-        // end of this function), which also sets the pinned identity
-        // atomically. This guarantees they're always in sync.
       }
     } catch (e: unknown) {
       // RACE-CONDITION GUARD: same check on the error path — if the

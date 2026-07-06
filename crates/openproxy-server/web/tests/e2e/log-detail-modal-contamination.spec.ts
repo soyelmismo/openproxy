@@ -72,6 +72,41 @@ test.beforeEach(async ({ page }: { page: Page }) => {
       // later with a clearer error.
     }
   }, { key: ADMIN_TOKEN_STORAGE_KEY, token: DUMMY_ADMIN_TOKEN });
+
+  // Intercept the API detail calls, lookup in the window state
+  await page.route('**/admin/api/usage/detail*', async (route) => {
+    const url = new URL(route.request().url());
+    const id = url.searchParams.get('id');
+    const traceId = url.searchParams.get('trace_id');
+
+    // Retrieve the row from state
+    const row = await page.evaluate((args: { id: string | null, traceId: string | null }) => {
+      const w = window as any;
+      if (!w.__openproxyState?.logs) return null;
+      const logs = w.__openproxyState.logs;
+      if (args.id) {
+        return logs.rowById.get(Number(args.id)) || logs.rows.find((r: any) => r.id === Number(args.id)) || null;
+      }
+      if (args.traceId) {
+        return logs.rows.find((r: any) => r.trace_id === args.traceId) || null;
+      }
+      return null;
+    }, { id, traceId });
+
+    if (row) {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({ row }),
+      });
+    } else {
+      await route.fulfill({
+        status: 404,
+        contentType: 'application/json',
+        body: JSON.stringify({ error: 'Not found in test mock state' }),
+      });
+    }
+  });
 });
 
 // ---------------------------------------------------------------------------

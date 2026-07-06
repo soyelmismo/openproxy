@@ -451,7 +451,7 @@ fn record_audio_usage_row(
     use openproxy_core::cost::UsageInput;
     let input = UsageInput {
         request_id,
-        trace_id: TraceId::new(),
+        trace_id: TraceId::new().to_string(),
         attempt: 1,
         provider_id: provider_id.clone(),
         account_id,

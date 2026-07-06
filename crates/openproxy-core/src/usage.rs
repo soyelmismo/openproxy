@@ -1852,6 +1852,157 @@ pub fn detail_by_id(conn: &Connection, id: i64) -> Result<Option<UsageDetailRow>
     Ok(row)
 }
 
+/// Return one full `usage` row by trace_id.
+pub fn detail_by_trace_id(conn: &Connection, trace_id: &str) -> Result<Option<UsageDetailRow>> {
+    let mut stmt = conn
+        .prepare(
+            "SELECT id, request_id, trace_id, attempt, provider_id, account_id, \
+                    combo_id, combo_target_id, model_row_id, upstream_model_id, \
+                    prompt_tokens, completion_tokens, connect_ms, ttft_ms, \
+                    total_ms, tokens_per_sec, status_code, error_msg, \
+                    error_msg_redacted, race_total, race_attempts, race_lost, \
+                    api_key_id, created_at, is_streaming, stream_complete, \
+                    request_body_json, response_body_json, request_headers, \
+                    response_headers, error_message, client_response, \
+                    prompt_tokens_estimated, completion_tokens_estimated, \
+                    endpoint_kind \
+             FROM usage \
+             WHERE trace_id = ?1",
+        )
+        .map_err(|e| CoreError::Database {
+            message: format!("prepare usage detail_by_trace_id: {}", e),
+            source: Some(Box::new(e)),
+        })?;
+
+    let row = stmt
+        .query_row(params![trace_id], |row| {
+            let id: i64 = row.get(0)?;
+            let request_id: String = row.get(1)?;
+            let trace_id: String = row.get(2)?;
+            let attempt: i64 = row.get(3)?;
+            let provider_id: String = row.get(4)?;
+            let account_id: Option<i64> = row.get(5)?;
+            let combo_id: Option<i64> = row.get(6)?;
+            let combo_target_id: Option<i64> = row.get(7)?;
+            let model_row_id: Option<i64> = row.get(8)?;
+            let upstream_model_id: String = row.get(9)?;
+            let prompt_tokens: Option<i64> = row.get(10)?;
+            let completion_tokens: Option<i64> = row.get(11)?;
+            let connect_ms: Option<i64> = row.get(12)?;
+            let ttft_ms: Option<i64> = row.get(13)?;
+            let total_ms: i64 = row.get(14)?;
+            let tokens_per_sec: Option<f64> = row.get(15)?;
+            let status_code: i64 = row.get(16)?;
+            let error_msg: Option<String> = row.get(17)?;
+            let error_msg_redacted: Option<String> = row.get(18)?;
+            let race_total: i64 = row.get(19)?;
+            let race_attempts: i64 = row.get(20)?;
+            let race_lost: i64 = row.get(21)?;
+            let api_key_id: Option<i64> = row.get(22)?;
+            let created_at: String = row.get(23)?;
+            let is_streaming: i64 = row.get(24)?;
+            let stream_complete: i64 = row.get(25)?;
+            let mut col_idx = 26;
+            let request_body_json: Option<serde_json::Value> = row
+                .get::<_, Option<String>>(col_idx)?
+                .and_then(|s| serde_json::from_str(&s).ok());
+            col_idx += 1;
+            let response_body_json: Option<serde_json::Value> = row
+                .get::<_, Option<String>>(col_idx)?
+                .and_then(|s| serde_json::from_str(&s).ok());
+            col_idx += 1;
+            let request_headers: Option<String> = row.get(col_idx)?;
+            col_idx += 1;
+            let response_headers: Option<String> = row.get(col_idx)?;
+            col_idx += 1;
+            let error_message: Option<String> = row.get(col_idx)?;
+            col_idx += 1;
+            let client_response: i64 = row.get(col_idx)?;
+            col_idx += 1;
+            let prompt_tokens_estimated: i64 = row.get(col_idx)?;
+            col_idx += 1;
+            let completion_tokens_estimated: i64 = row.get(col_idx)?;
+            col_idx += 1;
+            let endpoint_kind_str: String = row.get(col_idx)?;
+
+            if !(0..=u16::MAX as i64).contains(&status_code) {
+                return Err(rusqlite::Error::FromSqlConversionFailure(
+                    16,
+                    rusqlite::types::Type::Integer,
+                    Box::new(SimpleErr(format!(
+                        "status_code out of u16 range: {}",
+                        status_code
+                    ))),
+                ));
+            }
+            if total_ms < 0 {
+                return Err(rusqlite::Error::FromSqlConversionFailure(
+                    14,
+                    rusqlite::types::Type::Integer,
+                    Box::new(SimpleErr(format!(
+                        "total_ms unexpectedly negative: {}",
+                        total_ms
+                    ))),
+                ));
+            }
+            let request_headers = request_headers.and_then(|s| serde_json::from_str(&s).ok());
+            let response_headers = response_headers.and_then(|s| serde_json::from_str(&s).ok());
+            let endpoint_kind = match endpoint_kind_str.as_str() {
+                "chat" => crate::endpoint::EndpointKind::Chat,
+                "audio" => crate::endpoint::EndpointKind::Audio,
+                "image" => crate::endpoint::EndpointKind::Image,
+                "embedding" => crate::endpoint::EndpointKind::Embedding,
+                "video" => crate::endpoint::EndpointKind::Video,
+                _ => crate::endpoint::EndpointKind::Chat,
+            };
+
+            Ok(UsageDetailRow {
+                id: UsageId(id),
+                request_id,
+                trace_id,
+                attempt,
+                provider_id: ProviderId::new(provider_id),
+                account_id: account_id.map(AccountId),
+                combo_id: combo_id.map(ComboId),
+                combo_target_id: combo_target_id.map(ComboTargetId),
+                model_row_id: model_row_id.map(ModelRowId),
+                upstream_model_id,
+                prompt_tokens,
+                completion_tokens,
+                connect_ms,
+                ttft_ms,
+                total_ms,
+                tokens_per_sec,
+                status_code: status_code as u16,
+                error_msg,
+                error_msg_redacted,
+                request_body_json,
+                response_body_json,
+                request_headers,
+                response_headers,
+                race_total,
+                race_attempts,
+                race_lost: race_lost != 0,
+                is_streaming: is_streaming != 0,
+                stream_complete: stream_complete != 0,
+                created_at,
+                api_key_id: api_key_id.map(ApiKeyId),
+                error_message,
+                client_response: client_response != 0,
+                prompt_tokens_estimated: prompt_tokens_estimated != 0,
+                completion_tokens_estimated: completion_tokens_estimated != 0,
+                endpoint_kind,
+            })
+        })
+        .optional()
+        .map_err(|e| CoreError::Database {
+            message: format!("query usage detail_by_trace_id: {}", e),
+            source: Some(Box::new(e)),
+        })?;
+
+    Ok(row)
+}
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------

@@ -2467,7 +2467,7 @@ pub async fn usage_stream(
     }
 }
 
-/// `GET /admin/usage/detail?id=<usage_id>` — full detail for a single usage row.
+/// `GET /admin/usage/detail?id=<usage_id>&trace_id=<trace_id>` — full detail for a single usage row.
 pub async fn usage_detail(
     State(s): State<AppState>,
     headers: HeaderMap,
@@ -2479,12 +2479,20 @@ pub async fn usage_detail(
     let body: Result<Json<UsageDetailResponse>, ApiError> = async {
         // Read-only SELECT — use the READER.
         let r = s.db_pool().reader();
-        let row = usage::detail_by_id(&r, q.id)?;
+        let row = if let Some(trace_id) = &q.trace_id {
+            usage::detail_by_trace_id(&r, trace_id)?
+        } else if let Some(id) = q.id {
+            usage::detail_by_id(&r, id)?
+        } else {
+            return Err(ApiError(CoreError::Validation(
+                "Either 'id' or 'trace_id' query parameter must be provided".into()
+            )));
+        };
         match row {
             Some(r) => Ok(Json(UsageDetailResponse { row: r })),
             None => Err(ApiError(CoreError::Internal(format!(
-                "usage row {} not found",
-                q.id
+                "usage row not found for query {:?}",
+                q
             )))),
         }
     }
@@ -2495,7 +2503,8 @@ pub async fn usage_detail(
 /// Query for `GET /admin/usage/detail`.
 #[derive(Debug, Default, Deserialize)]
 pub struct DetailQuery {
-    pub id: i64,
+    pub id: Option<i64>,
+    pub trace_id: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
