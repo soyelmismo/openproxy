@@ -250,6 +250,11 @@ pub trait ProviderAdapter: Send + Sync {
     /// the upstream rejects (e.g. CloudFlare rejects `null` temperature
     /// and multipart `content` arrays). Default: pass through unchanged.
     fn normalize_request_body(&self, _body: &mut serde_json::Value) {}
+
+    /// Returns true if this adapter requires request body normalization.
+    fn needs_normalization(&self) -> bool {
+        false
+    }
 }
 
 // =====================================================================
@@ -1628,6 +1633,10 @@ impl ProviderAdapter for CloudflareWorkersAIAdapter {
             .collect();
 
         Ok(models)
+    }
+
+    fn needs_normalization(&self) -> bool {
+        true
     }
 
     fn normalize_request_body(&self, body: &mut serde_json::Value) {

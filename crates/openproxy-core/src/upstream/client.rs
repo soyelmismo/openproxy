@@ -4,7 +4,6 @@
 //! See the module-level docs in `mod.rs` for the full architecture;
 //! this file is the implementation.
 
-use std::pin::Pin;
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -125,70 +124,13 @@ impl UpstreamRequest {
 /// `new()`. Internally we keep the hyper `Client` and the per-host
 /// pool (which is just the observability layer over the hyper
 /// client's own internal pool).
-pub struct UpstreamClient {
-    pool: Pool,
-    /// The hyper client used for the production path. Its type
-    /// parameter is the connector, so swapping the connector at
-    /// runtime would require a second client. We use an enum:
-    /// either the production client (no test override) or a
-    /// test-supplied client (any connector). See `dispatch` below.
-    #[cfg(feature = "upstream-hyper")]
-    dispatch: HyperDispatch,
-}
-
-/// Tagged union of the possible hyper clients. The production case is
-/// the `PhasedConnector`; the test case is any `C` that satisfies the
-/// `Service<Uri>` shape required by hyper-util.
-#[cfg(feature = "upstream-hyper")]
-enum HyperDispatch {
-    /// Production: real `HyperClient` with the `PhasedConnector`.
-    /// The connector is owned by the `HyperClient` internally (it
-    /// was cloned into the builder at construction time). We no
-    /// longer keep a separate connector clone here because HIGH-5
-    /// replaced the `set_timeouts` shared-atomics pattern with a
-    /// task-local — there is no per-call state to push into the
-    /// connector anymore.
-    Production {
-        hyper: Box<HyperClient<PhasedConnector, Full<Bytes>>>,
-    },
-    /// Test: any `C` that satisfies the hyper-util connect shape.
-    /// Wrapped in `Arc<dyn HyperDispatchDyn>` so the `HyperDispatch`
-    /// enum stays a fixed size regardless of `C`.
-    Test(Arc<dyn HyperDispatchDyn>),
-    /// Stub for non-hyper builds (the dispatch field exists but is
-    /// never used; `call_inner` short-circuits to a stub response).
-    #[cfg(not(feature = "upstream-hyper"))]
-    Stub,
-}
-
-#[cfg(feature = "upstream-hyper")]
-impl std::fmt::Debug for HyperDispatch {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            HyperDispatch::Production { .. } => f.debug_tuple("Production").finish(),
-            HyperDispatch::Test(_) => f.debug_tuple("Test").finish(),
-        }
-    }
-}
-
-/// Trait object that can dispatch a hyper `Request<Full<Bytes>>` and
-/// return a `Response`. This is the test-time equivalent of the
-/// production hyper client.
-///
-/// HIGH-6 fix: the signature takes `Request<Full<Bytes>>` directly
-/// (NOT `Request<Pin<Box<dyn Body>>>`). The caller (`call_inner`)
-/// already has the body as `Option<Bytes>` and builds a `Full<Bytes>`
-/// from it — wrapping that in a `dyn Body` only to drain it back to
-/// `Bytes` via `body.collect().await` inside the dispatch was pure
-/// waste (one `HeaderMap::clone()` + one `Bytes` round-trip per
-/// request). With `Full<Bytes>` in the signature, the production
-/// dispatch hands the request straight to hyper with zero copying.
-#[cfg(feature = "upstream-hyper")]
-trait HyperDispatchDyn: Send + Sync + 'static {
-    fn dispatch(
+pub trait UpstreamTransport: Send + Sync + std::fmt::Debug {
+    fn send_request(
         &self,
         req: Request<Full<Bytes>>,
-    ) -> Pin<
+        connector_timeouts: PhasedTimeouts,
+        proxy_url: Option<String>,
+    ) -> std::pin::Pin<
         Box<
             dyn std::future::Future<
                     Output = Result<http::Response<hyper::body::Incoming>, UpstreamError>,
@@ -196,7 +138,152 @@ trait HyperDispatchDyn: Send + Sync + 'static {
                 + '_,
         >,
     >;
+
     fn phase_hint(&self) -> Option<UpstreamPhase>;
+}
+
+/// A hyper-based HTTP client with per-phase timeouts and a per-host
+/// connection pool.
+///
+/// The struct is private; users get an `Arc<UpstreamClient>` from
+/// `new()`. Internally we keep the hyper `Client` and the per-host
+/// pool (which is just the observability layer over the hyper
+/// client's own internal pool).
+pub struct UpstreamClient {
+    pool: Pool,
+    #[cfg(feature = "upstream-hyper")]
+    transport: Arc<dyn UpstreamTransport>,
+}
+
+#[derive(Debug)]
+struct ProductionTransport {
+    hyper: HyperClient<PhasedConnector, Full<Bytes>>,
+}
+
+impl UpstreamTransport for ProductionTransport {
+    fn send_request(
+        &self,
+        req: Request<Full<Bytes>>,
+        connector_timeouts: PhasedTimeouts,
+        proxy_url: Option<String>,
+    ) -> std::pin::Pin<
+        Box<
+            dyn std::future::Future<
+                    Output = Result<http::Response<hyper::body::Incoming>, UpstreamError>,
+                > + Send
+                + '_,
+        >,
+    > {
+        let inner = self.hyper.clone();
+        Box::pin(async move {
+            let fut = async move {
+                inner.request(req).await.map_err(|e| {
+                    if let Some(up_err) = hyper_source_connector_error(&e) {
+                        return up_err;
+                    }
+                    let phase = hyper_source_phase(&e);
+                    let msg = format_hyper_error(&e);
+                    match phase {
+                        Some(p) => UpstreamError::Timeout(p),
+                        None => UpstreamError::Http(msg),
+                    }
+                })
+            };
+            let fut = CALL_PROXY.scope(proxy_url, fut);
+            let fut = CALL_TIMEOUTS.scope(connector_timeouts, fut);
+            fut.await
+        })
+    }
+
+    fn phase_hint(&self) -> Option<UpstreamPhase> {
+        None
+    }
+}
+
+struct TestTransport<C, T>
+where
+    C: tower_service::Service<
+            Uri,
+            Response = T,
+            Error = Box<dyn std::error::Error + Send + Sync>,
+            Future: Send + Unpin + 'static,
+        > + Send
+        + Sync
+        + 'static,
+    T: hyper::rt::Read + hyper::rt::Write + HyperConnection + Unpin + Send + 'static,
+{
+    hyper: HyperClient<C, Full<Bytes>>,
+    phase_hint: Option<UpstreamPhase>,
+}
+
+impl<C, T> std::fmt::Debug for TestTransport<C, T>
+where
+    C: tower_service::Service<
+            Uri,
+            Response = T,
+            Error = Box<dyn std::error::Error + Send + Sync>,
+            Future: Send + Unpin + 'static,
+        > + Send
+        + Sync
+        + 'static,
+    T: hyper::rt::Read + hyper::rt::Write + HyperConnection + Unpin + Send + 'static,
+{
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("TestTransport")
+            .field("phase_hint", &self.phase_hint)
+            .finish()
+    }
+}
+
+impl<C, T> UpstreamTransport for TestTransport<C, T>
+where
+    C: tower_service::Service<
+            Uri,
+            Response = T,
+            Error = Box<dyn std::error::Error + Send + Sync>,
+            Future: Send + Unpin + 'static,
+        > + Send
+        + Sync
+        + Clone
+        + 'static,
+    T: hyper::rt::Read + hyper::rt::Write + HyperConnection + Unpin + Send + 'static,
+{
+    fn send_request(
+        &self,
+        req: Request<Full<Bytes>>,
+        connector_timeouts: PhasedTimeouts,
+        proxy_url: Option<String>,
+    ) -> std::pin::Pin<
+        Box<
+            dyn std::future::Future<
+                    Output = Result<http::Response<hyper::body::Incoming>, UpstreamError>,
+                > + Send
+                + '_,
+        >,
+    > {
+        let inner = self.hyper.clone();
+        Box::pin(async move {
+            let fut = async move {
+                inner.request(req).await.map_err(|e| {
+                    if let Some(phase) = hyper_source_phase(&e) {
+                        return UpstreamError::Timeout(phase);
+                    }
+                    if e.is_connect() {
+                        UpstreamError::Connection(e.to_string())
+                    } else {
+                        UpstreamError::Http(e.to_string())
+                    }
+                })
+            };
+            let fut = CALL_PROXY.scope(proxy_url, fut);
+            let fut = CALL_TIMEOUTS.scope(connector_timeouts, fut);
+            fut.await
+        })
+    }
+
+    fn phase_hint(&self) -> Option<UpstreamPhase> {
+        self.phase_hint
+    }
 }
 
 impl UpstreamClient {
@@ -206,65 +293,17 @@ impl UpstreamClient {
     pub fn new() -> Arc<Self> {
         #[cfg(feature = "upstream-hyper")]
         {
-            // Bug 2b/2c fix: the production connector is the
-            // real-per-phase `PhasedConnector` (see `connector.rs`).
-            // It enforces DNS / Dial / TLS with independent
-            // `tokio::time::timeout` and reports the stalled phase
-            // via `PhasedConnectorError`. The hyper-util `Connect`
-            // blanket impl accepts it because its `Response` is
-            // `TokioIo<TcpStream>`, the same wire type the legacy
-            // `HttpConnector` returns.
-            //
-            // We keep a clone of the connector OUTSIDE the
-            // HyperClient so we can call `set_timeouts` per call.
-            // The clone shares the same `Arc<AtomicU64>` fields, so
-            // the updates are visible to the cloned connector held
-            // inside the HyperClient.
-            //
-            // HIGH-5 fix: the above comment is now HISTORICAL. We no
-            // longer call `set_timeouts` — the per-call timeouts are
-            // passed via the `CALL_TIMEOUTS` task-local. The
-            // connector clone is still passed to `HyperClient::builder`
-            // (hyper-util clones it internally per request), but we
-            // don't keep a separate reference in `HyperDispatch::Production`.
             let connector = PhasedConnector::with_defaults();
             let hyper: HyperClient<PhasedConnector, Full<Bytes>> =
                 HyperClient::builder(TaskLocalExecutor)
-                    // RAM optimization: keep up to 8 idle connections
-                    // per host (was 32). Each idle connection holds
-                    // ~50-100 KB of TLS state + kernel buffers; with
-                    // 10+ providers × 32 = 320 potential idle
-                    // connections = ~32 MB just for the pool.
-                    // 8 per host × 10 providers = 80 connections =
-                    // ~8 MB, a 4x reduction with negligible latency
-                    // impact (connections are re-established in
-                    // ~50-200ms, and most providers only have 1-2
-                    // active accounts).
                     .pool_max_idle_per_host(8)
-                    // Bug fix (SendRequest at 6-9ms): the default
-                    // `pool_idle_timeout` is 90s. Many upstreams
-                    // (Sambanova, ollama-cloud, etc.) close idle
-                    // connections after 30-60s without sending a
-                    // visible FIN/RST to the client. When hyper
-                    // reuses such a stale connection, the request
-                    // fails immediately with `SendRequest` (the
-                    // body was partially written before the kernel
-                    // noticed the broken socket). Setting
-                    // `pool_idle_timeout(20s)` makes hyper close
-                    // idle connections BEFORE the upstream does,
-                    // forcing a fresh dial on the next request. The
-                    // fresh dial costs ~50-200ms but is 100%
-                    // reliable, vs the 6-9ms `SendRequest` failure
-                    // which produces a 502 for the user.
                     .pool_idle_timeout(std::time::Duration::from_secs(20))
                     .build(connector);
             let pool = Pool::new();
             spawn_eviction_loop(pool.clone());
             Arc::new(Self {
                 pool,
-                dispatch: HyperDispatch::Production {
-                    hyper: Box::new(hyper),
-                },
+                transport: Arc::new(ProductionTransport { hyper }),
             })
         }
         #[cfg(not(feature = "upstream-hyper"))]
@@ -273,7 +312,6 @@ impl UpstreamClient {
             spawn_eviction_loop(pool.clone());
             Arc::new(Self {
                 pool,
-                dispatch: HyperDispatch::Stub,
             })
         }
     }
@@ -305,10 +343,10 @@ impl UpstreamClient {
         let hyper: HyperClient<C, Full<Bytes>> = HyperClient::builder(TokioExecutor::new())
             .pool_max_idle_per_host(0)
             .build(connector.clone());
-        let arc: Arc<dyn HyperDispatchDyn> = Arc::new(TestDispatch { hyper, phase_hint });
+        let transport = Arc::new(TestTransport { hyper, phase_hint });
         Arc::new(Self {
             pool: Pool::new(),
-            dispatch: HyperDispatch::Test(arc),
+            transport,
         })
     }
 
@@ -454,43 +492,12 @@ impl UpstreamClient {
         let cancel_for_send = cancel.clone();
         let host_key_for_send = host_key.clone();
         let host_for_log = host.clone();
-        let dispatch = match &self.dispatch {
-            HyperDispatch::Production { hyper } => {
-                // HIGH-5 fix: the per-call timeouts are now passed via
-                // the `CALL_TIMEOUTS` task-local (see `connector.rs`).
-                // The old `connector.set_timeouts(...)` call is GONE —
-                // it was a race between concurrent requests sharing the
-                // same `Arc<AtomicU64>` fields. The task-local is set
-                // below by wrapping `send_fut` in `CALL_TIMEOUTS.scope(...)`,
-                // which guarantees the connector reads the correct
-                // per-call timeouts when its `call()` is polled.
-                let prod: Arc<dyn HyperDispatchDyn> = Arc::new(ProductionDispatch {
-                    inner: (**hyper).clone(),
-                });
-                prod
-            }
-            HyperDispatch::Test(t) => t.clone(),
-        };
-        // Bug 2 fix: read the dispatch's own `phase_hint()` BEFORE
-        // we move `dispatch` into the `send_fut` async block below.
-        // For test dispatches that inject a `phase_hint` (e.g.
-        // `Some(Dns)` with `dns_ms = 50`), this is what lets
-        // `call_inner` surface `Timeout(Dns)` instead of the
-        // generic `Timeout(Write)` mask from the write_sleep
-        // ceiling. In production, `phase_hint()` returns `None` and
-        // the `phase_hint_sleep` future never resolves, so the
-        // per-phase race below is unchanged.
-        let phase_hint = dispatch.phase_hint();
-        // HIGH-5 fix: wrap the send_fut in `CALL_TIMEOUTS.scope(...)`
-        // so the `PhasedConnector::call` (polled deep inside hyper's
-        // legacy client) reads the per-call timeouts from the task-local
-        // instead of from shared `Arc<AtomicU64>` fields. This eliminates
-        // the race where another request's `call_inner` could clobber
-        // the atomics between `set_timeouts` and the first poll of
-        // `send_fut`.
+        let transport = self.transport.clone();
+        let phase_hint = transport.phase_hint();
         let connector_timeouts = PhasedTimeouts::from_resolved(&timeouts);
+        let proxy_url = spec.proxy.clone();
         let send_fut = async move {
-            let res = dispatch.dispatch(request).await;
+            let res = transport.send_request(request, connector_timeouts, proxy_url).await;
             // Bump the pool counter. We treat the very first request
             // to a host as a "dial" and subsequent ones as a "reuse".
             // (The hyper client pools per-host internally; we
@@ -506,9 +513,6 @@ impl UpstreamClient {
             }
             res
         };
-        let proxy_url = spec.proxy.clone();
-        let send_fut = CALL_PROXY.scope(proxy_url, send_fut);
-        let send_fut = CALL_TIMEOUTS.scope(connector_timeouts, send_fut);
 
         // ---- Real per-phase race --------------------------------------
         // Three nested ceilings (outer -> inner):
@@ -667,57 +671,6 @@ fn spawn_eviction_loop(pool: Pool) {
         }
     });
 }
-
-// -----------------------------------------------------------------------
-// Test-time dispatch shims
-// -----------------------------------------------------------------------
-
-/// Production dispatch shim: wraps a real `HyperClient<PhasedConnector>`.
-#[cfg(feature = "upstream-hyper")]
-struct ProductionDispatch {
-    inner: HyperClient<PhasedConnector, Full<Bytes>>,
-}
-
-#[cfg(feature = "upstream-hyper")]
-impl HyperDispatchDyn for ProductionDispatch {
-    fn dispatch(
-        &self,
-        req: Request<Full<Bytes>>,
-    ) -> Pin<
-        Box<
-            dyn std::future::Future<
-                    Output = Result<http::Response<hyper::body::Incoming>, UpstreamError>,
-                > + Send
-                + '_,
-        >,
-    > {
-        // HIGH-6 fix: NO body drain, NO HeaderMap clone. The caller
-        // (`call_inner`) builds `Request<Full<Bytes>>` directly from
-        // the `Option<Bytes>` body; we hand it straight to hyper's
-        // legacy client. The previous dyn-Body trait forced a
-        // `body.collect().await` + `HeaderMap::clone()` round-trip
-        // here — pure waste on every request.
-        let inner = self.inner.clone();
-        Box::pin(async move {
-            inner.request(req).await.map_err(|e| {
-                if let Some(up_err) = hyper_source_connector_error(&e) {
-                    return up_err;
-                }
-                let phase = hyper_source_phase(&e);
-                let msg = format_hyper_error(&e);
-                match phase {
-                    Some(p) => UpstreamError::Timeout(p),
-                    None => UpstreamError::Http(msg),
-                }
-            })
-        })
-    }
-
-    fn phase_hint(&self) -> Option<UpstreamPhase> {
-        None
-    }
-}
-
 /// Format a hyper-util legacy `Error` with its full `source()` chain
 /// so the operator can see the root cause (e.g. "connection closed
 /// before message completed", "broken pipe", "tls handshake eof").
@@ -802,75 +755,6 @@ fn recover_phased_phase(e: &UpstreamError) -> Option<UpstreamPhase> {
         current = c.source();
     }
     None
-}
-
-/// Test dispatch shim: wraps any `HyperClient<C>` and exposes a
-/// configurable `phase_hint`.
-#[cfg(feature = "upstream-hyper")]
-struct TestDispatch<C, T>
-where
-    C: tower_service::Service<
-            Uri,
-            Response = T,
-            Error = Box<dyn std::error::Error + Send + Sync>,
-            Future: Send + Unpin + 'static,
-        > + Send
-        + Sync
-        + 'static,
-    T: hyper::rt::Read + hyper::rt::Write + HyperConnection + Unpin + Send + 'static,
-{
-    hyper: HyperClient<C, Full<Bytes>>,
-    phase_hint: Option<UpstreamPhase>,
-}
-
-#[cfg(feature = "upstream-hyper")]
-impl<C, T> HyperDispatchDyn for TestDispatch<C, T>
-where
-    C: tower_service::Service<
-            Uri,
-            Response = T,
-            Error = Box<dyn std::error::Error + Send + Sync>,
-            Future: Send + Unpin + 'static,
-        > + Send
-        + Sync
-        + Clone
-        + 'static,
-    T: hyper::rt::Read + hyper::rt::Write + HyperConnection + Unpin + Send + 'static,
-{
-    fn dispatch(
-        &self,
-        req: Request<Full<Bytes>>,
-    ) -> Pin<
-        Box<
-            dyn std::future::Future<
-                    Output = Result<http::Response<hyper::body::Incoming>, UpstreamError>,
-                > + Send
-                + '_,
-        >,
-    > {
-        // HIGH-6 fix: same as production — no body drain, no
-        // HeaderMap clone. The request is handed straight to hyper.
-        let inner = self.hyper.clone();
-        Box::pin(async move {
-            inner.request(req).await.map_err(|e| {
-                // Bug 2b/2c fix: same downcast as the production
-                // dispatch. The test connector also surfaces
-                // `PhasedConnectorError` via hyper's `source()`.
-                if let Some(phase) = hyper_source_phase(&e) {
-                    return UpstreamError::Timeout(phase);
-                }
-                if e.is_connect() {
-                    UpstreamError::Connection(e.to_string())
-                } else {
-                    UpstreamError::Http(e.to_string())
-                }
-            })
-        })
-    }
-
-    fn phase_hint(&self) -> Option<UpstreamPhase> {
-        self.phase_hint
-    }
 }
 
 #[cfg(feature = "upstream-hyper")]

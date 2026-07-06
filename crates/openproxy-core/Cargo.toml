@@ -13,7 +13,7 @@ authors.workspace = true
 # Call sites that still use reqwest are NOT touched in this gate; the
 # feature flag is only a compile-time switch for the new module.
 default = ["upstream-hyper"]
-upstream-hyper = ["dep:hyper", "dep:hyper-util", "dep:http", "dep:http-body", "dep:http-body-util", "dep:tower", "dep:tower-service", "dep:futures-util", "dep:tokio-rustls", "dep:rustls", "dep:rustls-pki-types", "dep:webpki-roots", "dep:socket2"]
+upstream-hyper = ["dep:hyper", "dep:hyper-util", "dep:http", "dep:http-body", "dep:http-body-util", "dep:futures-util", "dep:tokio-rustls", "dep:rustls", "dep:rustls-pki-types", "dep:webpki-roots", "dep:socket2"]
 # Stub gate for callers that want to disable just this client (e.g.
 # downstream consumers building with `default-features = false`).
 upstream-stub = []
@@ -78,8 +78,8 @@ http = { version = "1", optional = true }
 http-body = { version = "1", optional = true }
 http-body-util = { version = "0.1", default-features = false, features = ["channel"], optional = true }
 bytes = "1"
-tower = { version = "0.5", default-features = false, features = ["util"], optional = true }
-tower-service = { version = "0.3", optional = true }
+tower = { version = "0.5", default-features = false, features = ["util"] }
+tower-service = { version = "0.3" }
 futures-util = { version = "0.3", default-features = false, features = ["std"], optional = true }
 # TCP keepalive support for the upstream connector. Used to set
 # SO_KEEPALIVE on upstream sockets so stale connections are detected

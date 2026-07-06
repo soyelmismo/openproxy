@@ -10,6 +10,9 @@
 //! SSE plumbing lives in a follow-up.
 
 use crate::adapters::{AdapterFormat, ProviderAdapter};
+
+pub mod repository;
+pub mod service;
 use crate::circuit_breaker::{CircuitBreakerRegistry, Health};
 use crate::combos::{self, Combo, ComboTarget, SelectionRegistry, Strategy};
 use crate::compression::{CompressionMode, stats::CompressionStats};
@@ -26,7 +29,6 @@ use crate::translation::{OpenAIRequest, OpenAIResponse};
 use crate::upstream::{
     CancellationToken, UpstreamClient, UpstreamError, UpstreamPhase, UpstreamRequest,
 };
-use bytes::Buf;
 use parking_lot::RwLock;
 use rusqlite::{params, Connection};
 use std::collections::HashMap;
@@ -36,102 +38,7 @@ use std::time::Instant;
 use tokio::sync::watch;
 use tracing;
 
-/// H6 fix: cap the in-flight SSE line buffer at 1 MiB.
-/// An upstream that streams a 1+ MiB line without a
-/// terminator (malicious or buggy) used to OOM the proxy
-/// because we kept `buffer.push_str`ing forever. 1 MiB is
-/// far above the largest legitimate SSE line (typical
-/// SSE data lines are < 16 KiB even for very large
-/// completions), so 1 MiB is a safe upper bound that
-/// still keeps streaming happy.
-const MAX_SSE_LINE_BYTES: usize = 1_048_576;
-
-/// Pre-formatted SSE `[DONE]` sentinel as a static `Bytes` slice.
-/// `Bytes::clone()` is atomic ref-count increment — no heap alloc.
 pub const SSE_DONE_BYTES: bytes::Bytes = bytes::Bytes::from_static(b"data: [DONE]\n\n");
-
-/// PERF: skip leading spaces in a byte slice. Equivalent to
-/// `str::trim_start()` but works on raw bytes and avoids the
-/// UTF-8 scan that `trim_start` does (even though we know it's
-/// ASCII spaces).
-fn skip_leading_spaces(bytes: &[u8]) -> &[u8] {
-    let mut i = 0;
-    while i < bytes.len() && bytes[i] == b' ' {
-        i += 1;
-    }
-    &bytes[i..]
-}
-
-/// PERF: single-pass check for whether an OpenAI SSE payload needs
-/// full JSON parsing. Replaces 2-3 separate `contains()` calls (each
-/// a full memchr scan) with a single byte-level scan that checks for
-/// all patterns simultaneously.
-///
-/// Returns `true` if the payload contains `"usage"` OR a non-null
-/// `"finish_reason"`. These are the only metadata fields worth
-/// parsing; everything else is forwarded raw on the fast path.
-fn sse_payload_needs_parse(payload: &str) -> bool {
-    let bytes = payload.as_bytes();
-    let mut has_usage = false;
-    let mut has_finish_reason = false;
-    let mut has_finish_reason_null = false;
-
-    // Single pass looking for " (quote) as a fast anchor, then
-    // checking the following bytes for our target patterns.
-    // Pattern lengths: "usage":{ = 9 bytes, "finish_reason = 14 bytes.
-    let mut i = 0;
-    while i < bytes.len() {
-        if bytes[i] == b'"' {
-            // Check for "usage":{ (9 bytes) — this is the NON-NULL form.
-            //
-            // Many providers (MiniMax, OpenRouter passthroughs, etc.)
-            // include `"usage":null` on EVERY streaming chunk. The
-            // previous check matched just `"usage` (6 bytes) and so
-            // routed every one of those chunks through the slow path,
-            // which (a) wasted CPU on a full serde deserialize for
-            // chunks that carry no metadata, and (b) more importantly
-            // skipped the fast-path's normalize_nonstandard_reasoning_fields
-            // + think_extractor pass — leaking `<think>` tags in content
-            // and duplicate `reasoning` fields to the client. Checking
-            // for the opening brace of a usage OBJECT means we only
-            // route to the slow path when there are real usage numbers
-            // to extract (typically only the final chunk of a stream).
-            //
-            // We don't bother tolerating whitespace between `:` and `{`
-            // because serde_json (the only producer we forward to
-            // clients) serializes without a space, and upstream
-            // providers that emit `"usage": null` consistently use
-            // the same compact shape for `"usage": {...}`.
-            if !has_usage && i + 9 <= bytes.len() && &bytes[i..i + 9] == b"\"usage\":{" {
-                has_usage = true;
-            }
-            // Check for "finish_reason (14 bytes)
-            if !has_finish_reason
-                && i + 14 <= bytes.len()
-                && &bytes[i..i + 14] == b"\"finish_reason"
-            {
-                has_finish_reason = true;
-                // The closing quote of the key is at i+14.
-                // Check for ":null after it (6 bytes).
-                if i + 20 <= bytes.len() && &bytes[i + 14..i + 20] == b"\":null" {
-                    has_finish_reason_null = true;
-                }
-            }
-            // Early exit if we have everything we need
-            if has_usage || (has_finish_reason && !has_finish_reason_null) {
-                return true;
-            }
-            // Skip past this quoted string to avoid re-checking
-            i += 1;
-            while i < bytes.len() && bytes[i] != b'"' {
-                i += 1;
-            }
-        }
-        i += 1;
-    }
-
-    has_usage || (has_finish_reason && !has_finish_reason_null)
-}
 
 /// Accumulator for OpenAI-format streaming tool_calls. Tracks the
 /// running total of `arguments` for each tool_call by `index`, so we
@@ -570,6 +477,9 @@ enum QuotaStatus {
 }
 
 impl Pipeline {
+    pub fn repo(&self) -> repository::SqlitePipelineRepository {
+        repository::SqlitePipelineRepository::new(self.conn.clone())
+    }
     /// Build a new `Pipeline`. The circuit breaker is constructed with a
     /// hardcoded 5-failures / 60-second-unhealthy policy — it lives in this
     /// module rather than `AppConfig` because the spec (§5.2) treats it as
@@ -1400,7 +1310,7 @@ impl Pipeline {
     ///
     /// Cycle detection and max-depth are delegated to
     /// [`combos::resolve_combo_to_targets`].
-    fn flatten_targets(
+    pub(crate) fn flatten_targets(
         &self,
         root_combo_id: &ComboId,
         targets: Vec<ComboTarget>,
@@ -1619,7 +1529,7 @@ impl Pipeline {
     // Target resolution
     // ---------------------------------------------------------------------
 
-    fn load_combo(&self, req: &PipelineRequest) -> Result<Combo> {
+    pub(crate) fn load_combo(&self, req: &PipelineRequest) -> Result<Combo> {
         // The routing layer may inject a synthetic combo for a direct-
         // model request. The synthetic combo is built in memory (no
         // `combos` row exists for it) and we trust the caller to
@@ -1634,7 +1544,7 @@ impl Pipeline {
     /// Look up the combo's targets, apply its strategy (priority or
     /// round-robin), and expand `account_id = None` into one row per
     /// healthy account of that provider.
-    fn resolve_targets(
+    pub(crate) fn resolve_targets(
         &self,
         combo: &Combo,
         targets_override: Option<&[ComboTarget]>,
@@ -1806,7 +1716,7 @@ impl Pipeline {
     /// usage row with `race_lost: false` and stage `"cancelled"`, so
     /// the frontend has a real entry to display and its inflight
     /// cleanup (`inflightByTraceId.delete`) can fire.
-    async fn run_race(
+    pub(crate) async fn run_race(
         &self,
         req: &PipelineRequest,
         combo: &Combo,
@@ -2042,52 +1952,76 @@ impl Pipeline {
         started: Instant,
         model: &Model,
     ) -> std::result::Result<bytes::Bytes, PipelineResult> {
-        let mut body_value = match serde_json::to_value(value) {
-            Ok(v) => v,
-            Err(e) => {
-                let err = CoreError::Parse(format!("serialize {label} to value: {e}"));
-                return Err(self.record_and_fail(
-                    req,
-                    combo,
-                    target,
-                    FailureContext {
-                        attempt,
-                        race_size,
-                        err: &err,
-                        started,
-                        model: Some(model),
-                        connect_ms: None,
-                        ttft_ms: None,
-                        status_code: 0,
-                    },
-                ));
+        if adapter.needs_normalization() {
+            let mut body_value = match serde_json::to_value(value) {
+                Ok(v) => v,
+                Err(e) => {
+                    let err = CoreError::Parse(format!("serialize {label} to value: {e}"));
+                    return Err(self.record_and_fail(
+                        req,
+                        combo,
+                        target,
+                        FailureContext {
+                            attempt,
+                            race_size,
+                            err: &err,
+                            started,
+                            model: Some(model),
+                            connect_ms: None,
+                            ttft_ms: None,
+                            status_code: 0,
+                        },
+                    ));
+                }
+            };
+            adapter.normalize_request_body(&mut body_value);
+            match serde_json::to_vec(&body_value) {
+                Ok(v) => Ok(bytes::Bytes::from(v)),
+                Err(e) => {
+                    let err = CoreError::Parse(format!("serialize {label}: {e}"));
+                    Err(self.record_and_fail(
+                        req,
+                        combo,
+                        target,
+                        FailureContext {
+                            attempt,
+                            race_size,
+                            err: &err,
+                            started,
+                            model: Some(model),
+                            connect_ms: None,
+                            ttft_ms: None,
+                            status_code: 0,
+                        },
+                    ))
+                }
             }
-        };
-        adapter.normalize_request_body(&mut body_value);
-        match serde_json::to_vec(&body_value) {
-            Ok(v) => Ok(bytes::Bytes::from(v)),
-            Err(e) => {
-                let err = CoreError::Parse(format!("serialize {label}: {e}"));
-                Err(self.record_and_fail(
-                    req,
-                    combo,
-                    target,
-                    FailureContext {
-                        attempt,
-                        race_size,
-                        err: &err,
-                        started,
-                        model: Some(model),
-                        connect_ms: None,
-                        ttft_ms: None,
-                        status_code: 0,
-                    },
-                ))
+        } else {
+            match serde_json::to_vec(value) {
+                Ok(v) => Ok(bytes::Bytes::from(v)),
+                Err(e) => {
+                    let err = CoreError::Parse(format!("serialize {label}: {e}"));
+                    Err(self.record_and_fail(
+                        req,
+                        combo,
+                        target,
+                        FailureContext {
+                            attempt,
+                            race_size,
+                            err: &err,
+                            started,
+                            model: Some(model),
+                            connect_ms: None,
+                            ttft_ms: None,
+                            status_code: 0,
+                        },
+                    ))
+                }
             }
         }
     }
 
-    async fn execute_single(
+    pub(crate) async fn execute_single(
         &self,
         req: &PipelineRequest,
         combo: &Combo,
@@ -4187,7 +4121,7 @@ impl Pipeline {
         // typically <2 KB; 4 KB is enough for most chunks and halves
         // the per-stream buffer reservation. The buffer grows
         // dynamically via `reserve` below if a line exceeds it.
-        let mut buffer = bytes::BytesMut::with_capacity(4096);
+        let mut sse_parser = crate::sse::SseParser::new(crate::sse::MAX_SSE_LINE_BYTES);
         let mut usage: Option<crate::translation::OpenAIUsage> = None;
         let mut ttft_ms: Option<u64> = None;
         let mut stop_reason: Option<String> = None;
@@ -4420,30 +4354,7 @@ impl Pipeline {
                 tokio::task::yield_now().await;
             }
 
-            buffer.extend_from_slice(&bytes);
-
-            // Pre-reserve buffer space to avoid repeated reallocations.
-            // A typical SSE chunk is 1-4 KiB; we keep 8 KiB of runway so
-            // the next few `extend_from_slice` calls don't trigger a
-            // grow-and-copy each time.
-            if buffer.capacity() - buffer.len() < 4096 {
-                buffer.reserve(16384);
-            }
-
-            // H6 fix: bound the in-progress SSE line buffer so a
-            // malicious (or buggy) upstream cannot OOM the proxy
-            // with an unterminated single line. The SSE spec
-            // splits events on blank lines (`\n\n`), so a single
-            // buffer overflow means a single line overflow. We
-            // check before and after the byte append; the post-append
-            // check covers the case where one read produces a
-            // pathological line, while the pre-append check covers
-            // the case where each individual read is small but the
-            // buffer grew across many reads.
-            if buffer.len() > MAX_SSE_LINE_BYTES {
-                // H6 fix: convert the buffer overflow to a typed
-                // upstream error so the per-chunk failure path
-                // records a usage row and the client gets a 502.
+            if let Err(e) = sse_parser.push(&bytes) {
                 return self.record_and_fail_with_trace_id(
                     req,
                     combo,
@@ -4451,10 +4362,7 @@ impl Pipeline {
                     FailureContext {
                         attempt,
                         race_size,
-                        err: &CoreError::UpstreamConnection(format!(
-                            "SSE line buffer exceeded {} bytes (memory-DoS guard)",
-                            MAX_SSE_LINE_BYTES
-                        )),
+                        err: &e,
                         started,
                         model: Some(model),
                         connect_ms: Some(connect_and_send_ms),
@@ -4466,33 +4374,7 @@ impl Pipeline {
             }
 
             // Process complete lines.
-            // Uses `memchr` for SIMD-accelerated newline scanning instead
-            // of a byte-by-byte `position()` closure — ~5-10x faster on
-            // large buffers and still ~2x faster on small ones.
-            while let Some(pos) = memchr::memchr(b'\n', &buffer) {
-                let line_bytes = buffer.split_to(pos);
-                buffer.advance(1); // skip '\n'
-
-                // PERF: use from_utf8_unchecked instead of from_utf8.
-                // The upstream sends SSE text/event-stream which is
-                // always valid UTF-8 (JSON payloads are UTF-8 by
-                // spec, and hyper validates Content-Type). The UTF-8
-                // validation was a full O(n) scan per line — the
-                // single most expensive per-line operation after the
-                // memcpy. Skipping it saves ~30-50% of the per-line
-                // CPU on the fast path.
-                //
-                // SAFETY: `line_bytes` comes from the hyper body
-                // stream, which delivers bytes from an HTTP response
-                // with Content-Type: text/event-stream. SSE is a
-                // text protocol and the upstream's JSON is UTF-8 by
-                // definition. If the upstream sends invalid UTF-8
-                // (malicious or buggy), the worst case is that
-                // downstream string operations (strip_prefix, contains)
-                // may produce unexpected results — but they won't
-                // cause UB because Rust's &str is just a &[u8] with
-                // a UTF-8 invariant that's only enforced at the
-                // type-system level, not at the hardware level.
+            while let Some(line_bytes) = sse_parser.next_line() {
                 let line = unsafe { std::str::from_utf8_unchecked(&line_bytes) };
                 let line = line.trim_end_matches('\r');
                 if line.is_empty() || line.starts_with(':') {
@@ -4572,7 +4454,7 @@ impl Pipeline {
                         continue;
                     }
                     let payload_bytes = &line_bytes[5..]; // skip "data:"
-                    let json_payload_bytes = skip_leading_spaces(payload_bytes);
+                    let json_payload_bytes = crate::sse::skip_leading_spaces(payload_bytes);
                     // Use unchecked — we already know it's UTF-8
                     // (from_utf8_unchecked was called on line_bytes above).
                     let json_payload = unsafe { std::str::from_utf8_unchecked(json_payload_bytes) };
@@ -4716,7 +4598,7 @@ impl Pipeline {
                     // scan does both checks in a single pass, halving
                     // the scan cost. For a 500-chunk response, this
                     // saves ~50µs of pure scanning CPU.
-                    let needs_parse = sse_payload_needs_parse(json_payload);
+                    let needs_parse = crate::sse::sse_payload_needs_parse(json_payload);
                     if needs_parse {
                         // Pass the full SSE line (with "data:" prefix)
                         // because parse_openai_sse_line expects it.
@@ -5262,7 +5144,7 @@ impl Pipeline {
         // that arrived after the end-of-stream marker is either
         // the trailing `\n` from `\n\n` or stray upstream data
         // that would corrupt the client's view if forwarded.
-        if !done_sent && !buffer.is_empty() {
+        if !done_sent && !sse_parser.is_empty() {
             // Also guard against race cancellation — if another
             // target already won, discard residual buffer data
             // to prevent chunk interleaving.
@@ -5284,7 +5166,7 @@ impl Pipeline {
                     &model_name,
                 );
             }
-            if let Ok(line) = std::str::from_utf8(&buffer) {
+            if let Ok(line) = std::str::from_utf8(sse_parser.remaining_bytes()) {
                 let line = line.trim();
                 if !line.is_empty() && !line.starts_with(':') {
                     let parsed = match target_format {
@@ -5775,7 +5657,7 @@ impl Pipeline {
     /// and by the `tokio::select!` wrappers around the upstream
     /// HTTP send and the SSE byte stream (see TAREA 2 / 3 of the
     /// cancellation wire-up).
-    fn client_disconnected_result(&self, attempts: u8) -> PipelineResult {
+    pub(crate) fn client_disconnected_result(&self, attempts: u8) -> PipelineResult {
         self.failure(CoreError::ClientDisconnected, attempts, ErrorPhase::Retry)
     }
 
@@ -5784,7 +5666,7 @@ impl Pipeline {
     /// `borrow_and_update` on an internally-`Arc`-backed watch
     /// channel. Cloning the `watch::Receiver` itself is also cheap,
     /// which is what we do at every `tokio::select!` checkpoint.
-    fn is_client_disconnected(&self, rx: &mut watch::Receiver<bool>) -> bool {
+    pub(crate) fn is_client_disconnected(&self, rx: &mut watch::Receiver<bool>) -> bool {
         // `borrow_and_update` is the non-blocking form: it marks
         // the current value as "seen" and returns whether it is
         // `true`. We don't need the `changed()` future here because
@@ -8937,6 +8819,9 @@ data: [DONE]
                 _api_key: &str,
             ) -> Result<Vec<crate::models::DiscoveredModel>> {
                 Ok(Vec::new())
+            }
+            fn needs_normalization(&self) -> bool {
+                true
             }
             fn normalize_request_body(&self, body: &mut serde_json::Value) {
                 self.hook_called.store(true, AtomicOrdering::SeqCst);
