@@ -658,6 +658,36 @@ pub fn add_target(conn: &Connection, input: AddTargetInput) -> Result<ComboTarge
         None
     };
 
+    // Programmatic duplicate check to prevent duplicate targets (since SQLite's UNIQUE
+    // constraint does not prevent duplicates when account_id is NULL).
+    let target_exists: bool = conn
+        .query_row(
+            "SELECT EXISTS( \
+             SELECT 1 FROM combo_targets \
+             WHERE combo_id = ?1 \
+               AND provider_id = ?2 \
+               AND COALESCE(account_id, -1) = COALESCE(?3, -1) \
+               AND COALESCE(model_row_id, -1) = COALESCE(?4, -1) \
+               AND COALESCE(sub_combo_id, -1) = COALESCE(?5, -1))",
+            params![
+                combo_id.0,
+                provider_id.as_str(),
+                account_id.map(|a| a.0),
+                model_row_id.map(|m| m.0),
+                sub_combo_id.map(|c| c.0),
+            ],
+            |r| r.get::<_, i64>(0),
+        )
+        .map(|v| v != 0)
+        .unwrap_or(false);
+
+    if target_exists {
+        return Err(CoreError::Validation(format!(
+            "duplicate target for combo {} (provider={}, account={:?}, model={:?}, sub_combo={:?})",
+            combo_id.0, provider_id, account_id, model_row_id, sub_combo_id
+        )));
+    }
+
     let result = conn.execute(
         "INSERT INTO combo_targets(combo_id, provider_id, account_id, model_row_id, sub_combo_id, upstream_model_id, priority_order) \
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
@@ -3418,7 +3448,9 @@ mod tests {
         let (pool, _path) = fresh_pool();
         let mut conn = pool.writer();
         seed_provider(&conn, "p");
-        let m = seed_model(&conn, "p", "m");
+        let m1 = seed_model(&conn, "p", "m1");
+        let m2 = seed_model(&conn, "p", "m2");
+        let m3 = seed_model(&conn, "p", "m3");
         let cid = create_combo(&conn, "reorder", Strategy::Priority, 1).expect("create");
         let t1 = add_target(
             &conn,
@@ -3426,7 +3458,7 @@ mod tests {
                 combo_id: cid,
                 provider_id: ProviderId::new("p"),
                 account_id: None,
-                model_row_id: Some(m),
+                model_row_id: Some(m1),
                 sub_combo_id: None,
                 priority_order: 10,
             },
@@ -3438,7 +3470,7 @@ mod tests {
                 combo_id: cid,
                 provider_id: ProviderId::new("p"),
                 account_id: None,
-                model_row_id: Some(m),
+                model_row_id: Some(m2),
                 sub_combo_id: None,
                 priority_order: 20,
             },
@@ -3450,7 +3482,7 @@ mod tests {
                 combo_id: cid,
                 provider_id: ProviderId::new("p"),
                 account_id: None,
-                model_row_id: Some(m),
+                model_row_id: Some(m3),
                 sub_combo_id: None,
                 priority_order: 30,
             },
@@ -3481,7 +3513,8 @@ mod tests {
         let (pool, _path) = fresh_pool();
         let mut conn = pool.writer();
         seed_provider(&conn, "p");
-        let m = seed_model(&conn, "p", "m");
+        let m1 = seed_model(&conn, "p", "m1");
+        let m2 = seed_model(&conn, "p", "m2");
         let cid = create_combo(&conn, "r", Strategy::Priority, 1).expect("create");
         let t1 = add_target(
             &conn,
@@ -3489,7 +3522,7 @@ mod tests {
                 combo_id: cid,
                 provider_id: ProviderId::new("p"),
                 account_id: None,
-                model_row_id: Some(m),
+                model_row_id: Some(m1),
                 sub_combo_id: None,
                 priority_order: 10,
             },
@@ -3503,7 +3536,7 @@ mod tests {
                 combo_id: cid,
                 provider_id: ProviderId::new("p"),
                 account_id: None,
-                model_row_id: Some(m),
+                model_row_id: Some(m2),
                 sub_combo_id: None,
                 priority_order: 20,
             },
@@ -3538,7 +3571,9 @@ mod tests {
         let (pool, _path) = fresh_pool();
         let mut conn = pool.writer();
         seed_provider(&conn, "p");
-        let m = seed_model(&conn, "p", "m");
+        let m1 = seed_model(&conn, "p", "m1");
+        let m2 = seed_model(&conn, "p", "m2");
+        let m3 = seed_model(&conn, "p", "m3");
         let cid1 = create_combo(&conn, "c1", Strategy::Priority, 1).expect("create");
         let cid2 = create_combo(&conn, "c2", Strategy::Priority, 1).expect("create");
         let t1a = add_target(
@@ -3547,7 +3582,7 @@ mod tests {
                 combo_id: cid1,
                 provider_id: ProviderId::new("p"),
                 account_id: None,
-                model_row_id: Some(m),
+                model_row_id: Some(m1),
                 sub_combo_id: None,
                 priority_order: 10,
             },
@@ -3559,7 +3594,7 @@ mod tests {
                 combo_id: cid1,
                 provider_id: ProviderId::new("p"),
                 account_id: None,
-                model_row_id: Some(m),
+                model_row_id: Some(m2),
                 sub_combo_id: None,
                 priority_order: 20,
             },
@@ -3571,7 +3606,7 @@ mod tests {
                 combo_id: cid2,
                 provider_id: ProviderId::new("p"),
                 account_id: None,
-                model_row_id: Some(m),
+                model_row_id: Some(m3),
                 sub_combo_id: None,
                 priority_order: 30,
             },
@@ -3581,6 +3616,45 @@ mod tests {
         // Try to insert t2a into cid1's reorder.
         let err = reorder_targets(&mut conn, cid1, &[t1a, t1b, t2a])
             .expect_err("cross-combo id must be rejected");
+        assert!(matches!(err, CoreError::Validation(_)));
+    }
+
+    #[test]
+    fn add_target_rejects_duplicate_targets() {
+        let (pool, _path) = fresh_pool();
+        let conn = pool.writer();
+        seed_provider(&conn, "p");
+        let m = seed_model(&conn, "p", "m");
+        let cid = create_combo(&conn, "dupecheck", Strategy::Priority, 1).expect("create");
+
+        // First add should succeed
+        add_target(
+            &conn,
+            AddTargetInput {
+                combo_id: cid,
+                provider_id: ProviderId::new("p"),
+                account_id: None,
+                model_row_id: Some(m),
+                sub_combo_id: None,
+                priority_order: 10,
+            },
+        )
+        .expect("first add succeeds");
+
+        // Second add (duplicate with account_id = None) should fail with Validation error
+        let err = add_target(
+            &conn,
+            AddTargetInput {
+                combo_id: cid,
+                provider_id: ProviderId::new("p"),
+                account_id: None,
+                model_row_id: Some(m),
+                sub_combo_id: None,
+                priority_order: 20,
+            },
+        )
+        .expect_err("duplicate add must be rejected");
+
         assert!(matches!(err, CoreError::Validation(_)));
     }
 
