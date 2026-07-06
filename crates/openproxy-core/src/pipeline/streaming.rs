@@ -936,7 +936,7 @@ impl Pipeline {
         // that don't go through `chat.rs`.
         let request_headers_btm: std::collections::BTreeMap<String, String> =
             crate::redact::redact_btreemap_sensitive(headers.iter().cloned().collect());
-        let usage_row_id = match self.record_attempt_raw_with_tokens(
+        let usage_tuple = match self.record_attempt_raw_with_tokens(
             req,
             combo,
             target,
@@ -971,7 +971,7 @@ impl Pipeline {
             error: None,
             final_response: Some(openai_response),
             attempts: attempt,
-            usage_row_id,
+            usage_tuple,
         }
     }
 
@@ -2617,7 +2617,7 @@ impl Pipeline {
             .request_body_json
             .clone()
             .or_else(|| serde_json::to_value(&*req.openai_request).ok().map(Arc::new));
-        let usage_row_id = match self.record_attempt_raw_with_tokens(
+        let usage_tuple = match self.record_attempt_raw_with_tokens(
             Arc::clone(&req),
             combo,
             target,
@@ -2666,7 +2666,7 @@ impl Pipeline {
                 None
             },
             attempts: attempt,
-            usage_row_id,
+            usage_tuple,
         }
     }
 }

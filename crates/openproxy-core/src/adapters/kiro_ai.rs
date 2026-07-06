@@ -444,5 +444,44 @@ impl ProviderAdapter for KiroAdapter {
 
         Ok(self.hardcoded_models())
     }
+
+    async fn execute_custom(
+        &self,
+        upstream_client: &Arc<UpstreamClient>,
+        req: Arc<crate::pipeline::PipelineRequest>,
+        resolved_target: &crate::pipeline::context::ResolvedTarget,
+    ) -> Option<std::result::Result<crate::translation::OpenAIResponse, CoreError>> {
+        let custom_meta = resolved_target.custom_meta.as_ref()?;
+        
+        let region = custom_meta.kiro_region
+            .as_deref()
+            .filter(|r| !r.is_empty())
+            .unwrap_or(crate::executor_kiro::KIRO_DEFAULT_REGION);
+            
+        let profile_arn = custom_meta.kiro_profile_arn.as_deref();
+        
+        // Use Cow or a quick clone? Wait, Phase 2 wants to remove clone on openai_request.
+        // For now, let's just create a modified clone since custom executors might need an owned OpenAIRequest, or maybe executor takes a reference.
+        // Wait, execute_kiro takes `req: &crate::translation::OpenAIRequest`!
+        // We can create a modified request or the executor itself could take the model name!
+        // Let's check `execute_kiro` signature.
+        // Assuming it's `(&Arc<UpstreamClient>, &str, &str, Option<&str>, &OpenAIRequest, ...)`
+        // I will just use a cloned request for now or modify `execute_kiro` later.
+        let mut custom_req = (*req.openai_request).clone();
+        custom_req.model = resolved_target.model.model_id.as_str().to_string();
+
+        Some(
+            crate::executor_kiro::execute_kiro(
+                upstream_client,
+                &custom_meta.access_token,
+                region,
+                profile_arn,
+                &custom_req,
+                req.client_disconnected.clone(),
+                None, // What was here?
+            )
+            .await
+        )
+    }
 }
 

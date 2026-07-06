@@ -3566,9 +3566,9 @@ async fn run_test_for_model(
     //    (OpenAI-compatible, Anthropic, Gemini).
     //    `serde_json::to_value` cannot fail for these struct shapes in
     //    practice, but we still want a typed error if it ever does.
-    let (url, mut body_value): (String, serde_json::Value) =
+    let (url, body_value): (String, serde_json::Value) =
         if model.target_format == openproxy_core::models::TargetFormat::Anthropic {
-            let anthropic_req = openai_to_anthropic(&openai_req);
+            let anthropic_req = openai_to_anthropic(&openai_req, model.model_id.as_str(), &openai_req.messages, openai_req.stream);
             let url = adapter.build_chat_url_for_account(
                 openproxy_core::models::TargetFormat::Anthropic,
                 &model.model_id,
@@ -3589,7 +3589,7 @@ async fn run_test_for_model(
                 }
             }
         } else if model.target_format == openproxy_core::models::TargetFormat::Gemini {
-            let gemini_req = openai_to_gemini(&openai_req);
+            let gemini_req = openai_to_gemini(&openai_req, &openai_req.messages);
             let url = adapter.build_chat_url_for_account(
                 openproxy_core::models::TargetFormat::Gemini,
                 &model.model_id,
@@ -3630,12 +3630,6 @@ async fn run_test_for_model(
                 }
             }
         };
-
-    // 7b. Let the adapter normalize the request body (e.g. CloudFlare
-    //     strips `temperature`, flattens content arrays to strings).
-    //     The pipeline does this in dispatch_upstream_request; the
-    //     test path must do it explicitly.
-    adapter.normalize_request_body(&mut body_value);
 
     // 8. Build the HTTP request. The 15s timeout caps the test wall-
     //    clock cost — a hung upstream shouldn't pin a dashboard

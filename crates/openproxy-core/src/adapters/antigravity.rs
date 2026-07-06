@@ -292,6 +292,33 @@ impl ProviderAdapter for AntigravityAdapter {
 
         Ok(self.hardcoded_models())
     }
+
+    async fn execute_custom(
+        &self,
+        upstream_client: &Arc<UpstreamClient>,
+        req: Arc<crate::pipeline::PipelineRequest>,
+        resolved_target: &crate::pipeline::context::ResolvedTarget,
+    ) -> Option<std::result::Result<crate::translation::OpenAIResponse, CoreError>> {
+        let custom_meta = resolved_target.custom_meta.as_ref()?;
+        
+        let project_id = custom_meta.antigravity_project.as_deref().unwrap_or("");
+        
+        let mut custom_req = (*req.openai_request).clone();
+        custom_req.model = resolved_target.model.model_id.as_str().to_string();
+
+        Some(
+            crate::executor_antigravity::execute_antigravity(
+                upstream_client,
+                &custom_meta.access_token,
+                project_id,
+                &custom_req,
+                req.client_disconnected.clone(),
+                req.stream_sink.as_ref(),
+                None,
+            )
+            .await
+        )
+    }
 }
 
 

@@ -149,7 +149,7 @@ where
                 }
             }
 
-            let resolved = pipeline.resolve_combo_targets_full(eligible);
+            let resolved = pipeline.resolve_combo_targets_full(eligible).await;
             
             if resolved.is_empty() && !pre_cb_snapshot.is_empty() {
                 let err = CoreError::NoHealthyTargets(combo.id.0);
@@ -339,8 +339,15 @@ impl tower::Service<PipelineState> for RoutingService {
                 let race_result = crate::pipeline::racing::run_race(&pipeline, Arc::clone(&state.req), &combo, to_run.clone(), race_n as u8).await;
 
                 if race_result.error.is_none() {
-                    if let Some(row_id) = race_result.usage_row_id {
-                        let _ = pipeline.repo().mark_client_response(row_id);
+                    if let Some((request_id, attempt, target_id)) = race_result.usage_tuple.clone() {
+                        let job = crate::pipeline::worker::BackgroundJob::MarkClientResponse { request_id, attempt, target_id };
+                        if let Err(e) = pipeline.config.background_tx.try_send(job) {
+                            if matches!(e, tokio::sync::mpsc::error::TrySendError::Closed(_)) {
+                                let job = e.into_inner();
+                                let conn = pipeline.conn.clone();
+                                crate::pipeline::worker::process_job(&conn, job);
+                            }
+                        }
                     }
                     return Ok(race_result);
                 }
@@ -509,8 +516,15 @@ impl tower::Service<PipelineState> for RoutingService {
                 ));
 
                 if result.error.is_none() {
-                    if let Some(row_id) = result.usage_row_id {
-                        let _ = pipeline.repo().mark_client_response(row_id);
+                    if let Some((request_id, attempt, target_id)) = result.usage_tuple.clone() {
+                        let job = crate::pipeline::worker::BackgroundJob::MarkClientResponse { request_id, attempt, target_id };
+                        if let Err(e) = pipeline.config.background_tx.try_send(job) {
+                            if matches!(e, tokio::sync::mpsc::error::TrySendError::Closed(_)) {
+                                let job = e.into_inner();
+                                let conn = pipeline.conn.clone();
+                                crate::pipeline::worker::process_job(&conn, job);
+                            }
+                        }
                     }
                     tracing::info!(
                         combo_id = combo.id.0,

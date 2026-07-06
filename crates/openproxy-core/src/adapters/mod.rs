@@ -245,15 +245,20 @@ pub trait ProviderAdapter: Send + Sync {
         self.fetch_models(upstream_client, api_key).await
     }
 
-    /// Normalize the request body JSON before sending it upstream.
-    /// The adapter can mutate the `serde_json::Value` to strip fields
-    /// the upstream rejects (e.g. CloudFlare rejects `null` temperature
-    /// and multipart `content` arrays). Default: pass through unchanged.
-    fn normalize_request_body(&self, _body: &mut serde_json::Value) {}
+    /// Normalize an OpenAI request view before serialization.
+    /// Default: pass through unchanged.
+    fn normalize_openai_request(&self, _view: &mut crate::translation::OpenAIRequestView) {}
 
-    /// Returns true if this adapter requires request body normalization.
-    fn needs_normalization(&self) -> bool {
-        false
+    /// Execute the request completely within the adapter.
+    /// If this returns `Some(...)`, the standard pipeline dispatch is skipped.
+    /// Default implementation returns `None`.
+    async fn execute_custom(
+        &self,
+        _upstream_client: &Arc<crate::upstream::UpstreamClient>,
+        _req: Arc<crate::pipeline::PipelineRequest>,
+        _resolved_target: &crate::pipeline::context::ResolvedTarget,
+    ) -> Option<std::result::Result<crate::translation::OpenAIResponse, crate::error::CoreError>> {
+        None
     }
 }
 

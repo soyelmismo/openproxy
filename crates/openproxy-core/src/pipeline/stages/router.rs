@@ -79,7 +79,7 @@ impl PipelineStage for RouterStage {
             }
         }
 
-        let resolved = ctx.pipeline.resolve_combo_targets_full(eligible);
+        let resolved = ctx.pipeline.resolve_combo_targets_full(eligible).await;
 
         if resolved.is_empty() && !pre_cb_snapshot.is_empty() {
             return Err(CoreError::NoHealthyTargets(combo.id.0));

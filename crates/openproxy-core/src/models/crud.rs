@@ -380,6 +380,41 @@ pub fn get_by_row_id(conn: &Connection, row_id: ModelRowId) -> Result<Option<Mod
     Ok(res)
 }
 
+/// Fetch multiple models by their primary keys.
+pub fn get_by_row_ids(conn: &Connection, row_ids: &[ModelRowId]) -> Result<Vec<Model>> {
+    if row_ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    let placeholders = std::iter::repeat("?").take(row_ids.len()).collect::<Vec<_>>().join(",");
+    let query = format!(
+        "SELECT id, provider_id, model_id, display_name, target_format, \
+                discovered_at, expires_at, timeout_overrides_json, active, \
+                last_test_status, last_test_at, custom, \
+                context_length, max_output_tokens, capabilities_json, \
+                family, model_type, input_modalities_json, \
+                output_modalities_json \
+         FROM models WHERE id IN ({})",
+        placeholders
+    );
+    let mut stmt = conn.prepare_cached(&query).map_err(|e| CoreError::Database {
+        message: format!("prepare get_by_row_ids: {}", e),
+        source: Some(Box::new(e)),
+    })?;
+    let ids: Vec<&dyn rusqlite::ToSql> = row_ids.iter().map(|id| &id.0 as &dyn rusqlite::ToSql).collect();
+    let rows = stmt.query_map(&*ids, map_row).map_err(|e| CoreError::Database {
+        message: format!("query get_by_row_ids: {}", e),
+        source: Some(Box::new(e)),
+    })?;
+    let mut models = Vec::with_capacity(row_ids.len());
+    for row in rows {
+        models.push(row.map_err(|e| CoreError::Database {
+            message: format!("map row get_by_row_ids: {}", e),
+            source: Some(Box::new(e)),
+        })?);
+    }
+    Ok(models)
+}
+
 /// Find an active model by its (exact, case-sensitive) `model_id`.
 ///
 /// "Active" means `active = 1`. The match is exact because upstream

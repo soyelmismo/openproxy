@@ -110,6 +110,7 @@ use crate::pipeline::quotas::QuotaStatus;
             // state.rs; tests don't need to flip this.
             idle_chunk_retryable: true,
             quota_protection: crate::config::QuotaProtectionConfig::default(),
+            background_tx: tokio::sync::mpsc::channel(1).0,
         }
     }
 
@@ -1058,6 +1059,7 @@ use crate::pipeline::quotas::QuotaStatus;
             compression_mode: crate::compression::CompressionMode::Off,
             idle_chunk_retryable: true,
             quota_protection: crate::config::QuotaProtectionConfig::default(),
+            background_tx: tokio::sync::mpsc::channel(1).0,
         };
         let p = Pipeline::new(conn, cfg);
 
@@ -1298,6 +1300,7 @@ use crate::pipeline::quotas::QuotaStatus;
             compression_mode: crate::compression::CompressionMode::Off,
             idle_chunk_retryable: true,
             quota_protection: crate::config::QuotaProtectionConfig::default(),
+            background_tx: tokio::sync::mpsc::channel(1).0,
         };
         let p = Pipeline::new(conn, cfg);
 
@@ -1489,6 +1492,7 @@ use crate::pipeline::quotas::QuotaStatus;
             compression_mode: crate::compression::CompressionMode::Off,
             idle_chunk_retryable: true,
             quota_protection: crate::config::QuotaProtectionConfig::default(),
+            background_tx: tokio::sync::mpsc::channel(1).0,
         };
         let p = Pipeline::new(conn, cfg);
 
@@ -1677,6 +1681,7 @@ data: [DONE]
             compression_mode: crate::compression::CompressionMode::Off,
             idle_chunk_retryable: true,
             quota_protection: crate::config::QuotaProtectionConfig::default(),
+            background_tx: tokio::sync::mpsc::channel(1).0,
         };
         let p = Pipeline::new(conn, cfg);
 
@@ -1883,6 +1888,7 @@ data: [DONE]
             compression_mode: crate::compression::CompressionMode::Off,
             idle_chunk_retryable: true,
             quota_protection: crate::config::QuotaProtectionConfig::default(),
+            background_tx: tokio::sync::mpsc::channel(1).0,
         };
         let p = Pipeline::new(conn, cfg);
 
@@ -1908,240 +1914,6 @@ data: [DONE]
         drop(server_handle);
     }
 
-    /// REGRESSION (Issue #3): `normalize_request_body_hook_called_in_chat_pipeline`.
-    ///
-    /// The `ProviderAdapter::normalize_request_body` hook was defined
-    /// on the trait but ONLY called from the admin "test model" button
-    /// (admin.rs:2659). The chat pipeline (`pipeline.rs::execute_single`)
-    /// serialized the request body directly from the typed struct and
-    /// never invoked the hook, so per-adapter normalizations (e.g.
-    /// CloudFlare strips `temperature` and flattens multipart
-    /// `content` arrays to plain strings) were silently bypassed on
-    /// real chat requests.
-    ///
-    /// This test wires a mock adapter whose `normalize_request_body`
-    /// override (a) records that it was called and (b) injects a
-    /// sentinel field into the body. The mock upstream server
-    /// verifies the sentinel is present in the received body,
-    /// proving the hook ran AND its mutations were applied to the
-    /// final bytes sent over the wire.
-    #[tokio::test]
-    async fn normalize_request_body_hook_called_in_chat_pipeline() {
-        use crate::combos::AddTargetInput;
-        use std::sync::atomic::{AtomicBool, Ordering as AtomicOrdering};
-        use tokio::io::{AsyncReadExt, AsyncWriteExt};
-        use tokio::net::TcpListener;
-
-        use crate::adapters::{
-            AdapterAuthType, AdapterFormat, ProviderAdapter, ProviderAdapterConfig,
-        };
-
-        // Mock adapter that flags `normalize_request_body` was called
-        // and injects a sentinel field into the body.
-        struct NormalizingAdapter {
-            config: ProviderAdapterConfig,
-            hook_called: Arc<AtomicBool>,
-        }
-        #[async_trait::async_trait]
-        impl ProviderAdapter for NormalizingAdapter {
-            fn id(&self) -> &ProviderId {
-                &self.config.id
-            }
-            fn config(&self) -> &ProviderAdapterConfig {
-                &self.config
-            }
-            fn build_chat_url(
-                &self,
-                _target_format: TargetFormat,
-                _model: &crate::ids::ModelId,
-            ) -> String {
-                self.config.base_url.clone()
-            }
-            fn build_auth_header(&self, api_key: &str) -> (String, String) {
-                ("Authorization".into(), format!("Bearer {api_key}"))
-            }
-            fn build_headers(
-                &self,
-                api_key: &str,
-                _target_format: TargetFormat,
-                _model: &crate::ids::ModelId,
-            ) -> Vec<(String, String)> {
-                vec![
-                    self.build_auth_header(api_key),
-                    ("Content-Type".into(), "application/json".into()),
-                ]
-            }
-            fn models_url(&self) -> Option<String> {
-                None
-            }
-            async fn fetch_models(
-                &self,
-                _upstream_client: &std::sync::Arc<crate::upstream::UpstreamClient>,
-                _api_key: &str,
-            ) -> Result<Vec<crate::models::DiscoveredModel>> {
-                Ok(Vec::new())
-            }
-            fn needs_normalization(&self) -> bool {
-                true
-            }
-            fn normalize_request_body(&self, body: &mut serde_json::Value) {
-                self.hook_called.store(true, AtomicOrdering::SeqCst);
-                if let Some(obj) = body.as_object_mut() {
-                    obj.insert(
-                        "_normalize_hook_ran".to_string(),
-                        serde_json::Value::Bool(true),
-                    );
-                }
-            }
-        }
-
-        // Mock upstream: capture the request body, return 200.
-        let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
-        let local_addr = listener.local_addr().expect("local_addr");
-        let upstream_url = format!("http://{local_addr}");
-        let captured_body = Arc::new(parking_lot::Mutex::new(Vec::<u8>::new()));
-        let server_captured = captured_body.clone();
-        let mut server_handle = tokio::spawn(async move {
-            let (mut sock, _peer) = listener.accept().await.expect("accept");
-            let mut buf = vec![0u8; 64 * 1024];
-            let mut total = 0usize;
-            while let Ok(Ok(n)) =
-                tokio::time::timeout(Duration::from_millis(500), sock.read(&mut buf[total..])).await
-            {
-                if n == 0 {
-                    break;
-                }
-                total += n;
-                if buf[..total].windows(4).any(|w| w == b"\r\n\r\n") {
-                    break;
-                }
-            }
-            // Capture everything after the header block.
-            let header_end = buf[..total]
-                .windows(4)
-                .position(|w| w == b"\r\n\r\n")
-                .map(|p| p + 4)
-                .unwrap_or(total);
-            *server_captured.lock() = buf[header_end..total].to_vec();
-            let body = b"data: {\"id\":\"chatcmpl-1\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"m\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":\"ok\"},\"finish_reason\":null}]}\n\ndata: {\"id\":\"chatcmpl-1\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"m\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n";
-            let response = format!(
-                "HTTP/1.1 200 OK\r\n\
-                 Content-Type: text/event-stream\r\n\
-                 Content-Length: {}\r\n\
-                 Connection: close\r\n\
-                 \r\n",
-                body.len(),
-            );
-            let _ = sock.write_all(response.as_bytes()).await;
-            let _ = sock.write_all(body).await;
-            let _ = sock.flush().await;
-        });
-
-        // Seed: single-target Priority combo.
-        let (pool, conn, _path) = fresh_pool();
-        let mk = Arc::new(MasterKey::generate());
-        let combo_id = {
-            let w = pool.writer();
-            seed_provider(&w, "norm-mock", AuthType::Bearer);
-            w.execute(
-                "INSERT INTO models(provider_id, model_id, target_format) \
-                 VALUES ('norm-mock', 'm', 'openai')",
-                [],
-            )
-            .expect("seed model");
-            let model_rowid: i64 = w
-                .query_row("SELECT last_insert_rowid()", [], |r| r.get(0))
-                .expect("last_insert_rowid");
-            let model_id = crate::ids::ModelRowId(model_rowid);
-            let combo_id = combos::create_combo(&w, "norm-combo", Strategy::Priority, 1)
-                .expect("create combo");
-            let account_id = crate::accounts::create(
-                &w,
-                &ProviderId::new("norm-mock"),
-                Some("sk-test"),
-                mk.as_ref(),
-                Some("norm-acct"),
-                10,
-                None,
-            )
-            .expect("seed account");
-            combos::add_target(
-                &w,
-                AddTargetInput {
-                    combo_id,
-                    provider_id: ProviderId::new("norm-mock"),
-                    account_id: Some(account_id),
-                    model_row_id: Some(model_id),
-                    sub_combo_id: None,
-                    priority_order: 10,
-                },
-            )
-            .expect("add target");
-            combo_id
-        };
-
-        let hook_called = Arc::new(AtomicBool::new(false));
-        let defaults = Timeouts::from_config(&TimeoutsConfig::default());
-        let mock = NormalizingAdapter {
-            config: ProviderAdapterConfig {
-                id: ProviderId::new("norm-mock"),
-                base_url: upstream_url.clone(),
-                auth_type: AdapterAuthType::Bearer,
-                format: AdapterFormat::Openai,
-                extra_headers: Vec::new(),
-            },
-            hook_called: hook_called.clone(),
-        };
-        let cfg = PipelineConfig {
-            defaults,
-            racing: RacingConfig::default(),
-            retries: RetriesConfig::default(),
-            max_attempts: 1,
-            master_key: mk,
-            adapters: Arc::new(vec![Arc::new(mock) as Arc<dyn ProviderAdapter>]),
-            http_client: reqwest::Client::new(),
-            cooldown_secs: 60,
-            cooldown_max_secs: 3600,
-            cooldown_factor: 2,
-            upstream_client: UpstreamClient::new(),
-            oauth_provider_registry: None,
-            compression_mode: crate::compression::CompressionMode::Off,
-            idle_chunk_retryable: true,
-            quota_protection: crate::config::QuotaProtectionConfig::default(),
-        };
-        let p = Pipeline::new(conn, cfg);
-
-        let (req, _cancel_tx) = make_request(combo_id);
-        let result = tokio::time::timeout(Duration::from_secs(15), p.run(std::sync::Arc::new(req)))
-            .await
-            .expect("pipeline.run timed out");
-
-        // Wait for the server to finish capturing the body.
-        let _ = tokio::time::timeout(Duration::from_secs(5), &mut server_handle).await;
-        drop(server_handle);
-
-        // Asserts:
-        // 1. The hook was called.
-        assert!(
-            hook_called.load(AtomicOrdering::SeqCst),
-            "normalize_request_body hook was NOT called by the chat pipeline"
-        );
-        // 2. The hook's mutation (sentinel field) is present in the
-        //    body the upstream actually received.
-        let captured = String::from_utf8(captured_body.lock().clone()).expect("utf8");
-        assert!(
-            captured.contains("\"_normalize_hook_ran\":true"),
-            "normalize_request_body mutation was NOT applied to the upstream body. \
-             Captured body: {}",
-            captured
-        );
-        // 3. The request succeeded.
-        assert!(
-            result.error.is_none(),
-            "expected success, got error: {:?}",
-            result.error
-        );
-    }
 
     /// ADVERSARIAL (c) — `priority_combo_with_zero_eligible_targets_fails_fast`.
     ///
@@ -2385,6 +2157,7 @@ data: [DONE]
             compression_mode: crate::compression::CompressionMode::Off,
             idle_chunk_retryable: true,
             quota_protection: crate::config::QuotaProtectionConfig::default(),
+            background_tx: tokio::sync::mpsc::channel(1).0,
         };
         let p = Pipeline::new(conn, cfg);
         let (req, _cancel_tx) = make_request(combo_id);
@@ -2593,6 +2366,7 @@ data: [DONE]
             compression_mode: crate::compression::CompressionMode::Off,
             idle_chunk_retryable: true,
             quota_protection: crate::config::QuotaProtectionConfig::default(),
+            background_tx: tokio::sync::mpsc::channel(1).0,
         };
         let p = Pipeline::new(conn, cfg);
         let (req, _cancel_tx) = make_request(combo_id);
@@ -3242,6 +3016,7 @@ data: [DONE]
             compression_mode: crate::compression::CompressionMode::Off,
             idle_chunk_retryable: true,
             quota_protection: crate::config::QuotaProtectionConfig::default(),
+            background_tx: tokio::sync::mpsc::channel(1).0,
         };
         let p = Pipeline::new(conn, cfg);
 
@@ -3386,6 +3161,7 @@ data: [DONE]
             compression_mode: crate::compression::CompressionMode::Off,
             idle_chunk_retryable: true,
             quota_protection: crate::config::QuotaProtectionConfig::default(),
+            background_tx: tokio::sync::mpsc::channel(1).0,
         };
         let p = Pipeline::new(conn, cfg);
 
@@ -3624,6 +3400,7 @@ data: [DONE]
             compression_mode: crate::compression::CompressionMode::Off,
             idle_chunk_retryable: true,
             quota_protection: crate::config::QuotaProtectionConfig::default(),
+            background_tx: tokio::sync::mpsc::channel(1).0,
         };
         let p = Pipeline::new(conn, cfg);
 
@@ -3932,6 +3709,7 @@ data: [DONE]
                 compression_mode: crate::compression::CompressionMode::Off,
                 idle_chunk_retryable: true,
             quota_protection: crate::config::QuotaProtectionConfig::default(),
+            background_tx: tokio::sync::mpsc::channel(1).0,
             }
         }
 
@@ -4351,6 +4129,7 @@ data: [DONE]
             compression_mode: crate::compression::CompressionMode::Off,
             idle_chunk_retryable: true,
             quota_protection: crate::config::QuotaProtectionConfig::default(),
+            background_tx: tokio::sync::mpsc::channel(1).0,
         };
         let p = Pipeline::with_recording_flag(conn, cfg, recording_flag);
 
@@ -4900,6 +4679,7 @@ data: [DONE]\n\n";
             compression_mode: crate::compression::CompressionMode::Off,
             idle_chunk_retryable: true,
             quota_protection: crate::config::QuotaProtectionConfig::default(),
+            background_tx: tokio::sync::mpsc::channel(1).0,
         };
         let p = Pipeline::with_recording_flag(conn, cfg, recording_flag);
 

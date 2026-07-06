@@ -40,7 +40,7 @@ async fn test_resolve_service_resolves_combo() {
                 error: None,
                 final_response: None,
                 attempts: 1,
-                usage_row_id: None,
+                usage_tuple: None,
             }))
         }
     }

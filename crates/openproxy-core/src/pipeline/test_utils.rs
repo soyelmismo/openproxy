@@ -76,6 +76,7 @@ pub fn test_config(master_key: Arc<MasterKey>) -> PipelineConfig {
         // state.rs; tests don't need to flip this.
         idle_chunk_retryable: true,
         quota_protection: crate::config::QuotaProtectionConfig::default(),
+            background_tx: tokio::sync::mpsc::channel(1).0,
     }
 }
 
@@ -350,6 +351,7 @@ pub fn test_config_with_mock(master_key: Arc<MasterKey>, base_url: String) -> Pi
         compression_mode: crate::compression::CompressionMode::Off,
         idle_chunk_retryable: true,
         quota_protection: crate::config::QuotaProtectionConfig::default(),
+            background_tx: tokio::sync::mpsc::channel(1).0,
     }
 }
 

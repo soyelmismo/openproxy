@@ -22,7 +22,7 @@ pub(crate) async fn run_race(
             error: Some(CoreError::NoHealthyTargets(combo.id.0)),
             final_response: None,
             attempts: 0,
-            usage_row_id: None,
+            usage_tuple: None,
         };
     }
 
@@ -48,7 +48,7 @@ pub(crate) async fn run_race(
                 )),
                 final_response: None,
                 attempts: 0,
-                usage_row_id: None,
+                usage_tuple: None,
             };
         }
     };
@@ -159,7 +159,7 @@ pub(crate) async fn run_race(
                 error: Some(err),
                 final_response: None,
                 attempts: race_size,
-                usage_row_id: None,
+                usage_tuple: None,
             };
         }
         all_done.notified().await;

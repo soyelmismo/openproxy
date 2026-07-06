@@ -10,7 +10,7 @@ use crate::combos::{Combo, SelectionRegistry};
 use crate::compression::stats::CompressionStats;
 use crate::config::{RacingConfig, RetriesConfig};
 use crate::error::CoreError;
-use crate::ids::{ApiKeyId, ComboId, RequestId, TraceId, UsageId};
+use crate::ids::{ApiKeyId, ComboId, RequestId, TraceId};
 use crate::secrets::MasterKey;
 use crate::timeouts::Timeouts;
 use crate::translation::OpenAIResponse;
@@ -28,6 +28,7 @@ pub mod stage;
 pub mod quotas;
 pub mod racing;
 pub mod stages;
+pub mod worker;
 mod execution;
 mod streaming;
 
@@ -56,6 +57,7 @@ pub struct PipelineConfig {
     pub compression_mode: crate::compression::CompressionMode,
     pub idle_chunk_retryable: bool,
     pub quota_protection: crate::config::QuotaProtectionConfig,
+    pub background_tx: tokio::sync::mpsc::Sender<crate::pipeline::worker::BackgroundJob>,
 }
 
 /// All the input needed to process a single chat completion.
@@ -84,7 +86,7 @@ pub struct PipelineResult {
     pub error: Option<CoreError>,
     pub final_response: Option<OpenAIResponse>,
     pub attempts: u8,
-    pub usage_row_id: Option<UsageId>,
+    pub usage_tuple: Option<(String, u8, crate::ids::ComboTargetId)>,
 }
 
 /// Bundle of "what kind of failure" inputs for [`Pipeline::record_and_fail`]

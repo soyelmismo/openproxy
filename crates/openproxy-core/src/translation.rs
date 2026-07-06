@@ -55,6 +55,52 @@ where
     Value::deserialize(deserializer).map(Some)
 }
 
+/// A view over an `OpenAIRequest` allowing overriding of certain fields
+/// (like `model`, `stream`, and `messages`) without deep-cloning the entire struct.
+#[derive(Serialize)]
+pub struct OpenAIRequestView<'a> {
+    pub model: &'a str,
+    pub messages: std::borrow::Cow<'a, [OpenAIMessage]>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub temperature: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_tokens: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub top_p: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stop: &'a Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tools: &'a Option<Vec<serde_json::Value>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tool_choice: &'a Option<serde_json::Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub top_k: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub user: &'a Option<String>,
+    #[serde(flatten)]
+    pub extra: std::borrow::Cow<'a, serde_json::Map<String, serde_json::Value>>,
+    pub stream: bool,
+}
+
+impl<'a> OpenAIRequestView<'a> {
+    pub fn new(req: &'a OpenAIRequest, model: &'a str, messages: &'a [OpenAIMessage], stream: bool) -> Self {
+        Self {
+            model,
+            messages: std::borrow::Cow::Borrowed(messages),
+            temperature: req.temperature,
+            max_tokens: req.max_tokens,
+            top_p: req.top_p,
+            stop: &req.stop,
+            tools: &req.tools,
+            tool_choice: &req.tool_choice,
+            top_k: req.top_k,
+            user: &req.user,
+            extra: std::borrow::Cow::Borrowed(&req.extra),
+            stream,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OpenAIMessage {
     /// "system" | "user" | "assistant" | "tool" | "function" | "developer"
@@ -336,9 +382,9 @@ fn message_content_to_gemini_parts(content: &Option<serde_json::Value>) -> Vec<G
 /// - `tool_choice` (OpenAI shape: `"auto"/"none"/"required"` or
 ///   `{type:"function",function:{name}}`) is translated to Anthropic shape
 ///   (`{type:"auto"/"none"/"any"/"tool",name?}`).
-pub fn openai_to_anthropic(req: &OpenAIRequest) -> AnthropicRequest {
+pub fn openai_to_anthropic(req: &OpenAIRequest, override_model: &str, override_messages: &[OpenAIMessage], override_stream: bool) -> AnthropicRequest {
     let mut system_parts: Vec<String> = Vec::new();
-    let mut conversation: Vec<AnthropicMessage> = Vec::with_capacity(req.messages.len());
+    let mut conversation: Vec<AnthropicMessage> = Vec::with_capacity(override_messages.len());
 
     // Anthropic requires strictly alternating user/assistant messages.
     // OpenAI's format allows consecutive same-role messages (e.g. a
@@ -383,7 +429,7 @@ pub fn openai_to_anthropic(req: &OpenAIRequest) -> AnthropicRequest {
         }
     };
 
-    for m in &req.messages {
+    for m in override_messages {
         let role = m.role.as_str();
 
         // On role transitions, flush pending buffers for the previous
@@ -574,7 +620,7 @@ pub fn openai_to_anthropic(req: &OpenAIRequest) -> AnthropicRequest {
     };
 
     AnthropicRequest {
-        model: req.model.clone(),
+        model: override_model.to_string(),
         messages: conversation,
         max_tokens: req.max_tokens.unwrap_or(DEFAULT_MAX_TOKENS),
         system,
@@ -612,7 +658,7 @@ pub fn openai_to_anthropic(req: &OpenAIRequest) -> AnthropicRequest {
             .user
             .as_ref()
             .map(|u| serde_json::json!({ "user_id": u })),
-        stream: req.stream,
+        stream: override_stream,
     }
 }
 
@@ -765,11 +811,11 @@ fn map_finish_reason(stop_reason: &str) -> String {
 /// - `temperature` → `generation_config.temperature`.
 /// - `top_p` → `generation_config.top_p`.
 /// - `stop` → `generation_config.stop_sequences`.
-pub fn openai_to_gemini(req: &OpenAIRequest) -> GeminiRequest {
+pub fn openai_to_gemini(req: &OpenAIRequest, override_messages: &[OpenAIMessage]) -> GeminiRequest {
     let mut system_parts: Vec<String> = Vec::new();
-    let mut contents: Vec<GeminiContent> = Vec::with_capacity(req.messages.len());
+    let mut contents: Vec<GeminiContent> = Vec::with_capacity(override_messages.len());
 
-    for m in &req.messages {
+    for m in override_messages {
         match m.role.as_str() {
             "system" => system_parts.push(message_content_to_text(&m.content)),
             "user" => {
@@ -1132,7 +1178,7 @@ mod tests {
             ("assistant", "Hello!"),
         ]);
 
-        let out = openai_to_anthropic(&req);
+        let out = openai_to_anthropic(&req, "claude-3-opus-20240229", &req.messages, req.stream);
         assert_eq!(
             out.system.as_deref(),
             Some("You are helpful.\n\nBe concise.")
@@ -1147,7 +1193,7 @@ mod tests {
     #[test]
     fn openai_to_anthropic_no_system() {
         let req = openai_req_with(vec![("user", "Hi"), ("assistant", "Hello!")]);
-        let out = openai_to_anthropic(&req);
+        let out = openai_to_anthropic(&req, "claude-3-opus-20240229", &req.messages, req.stream);
         assert!(out.system.is_none());
         assert_eq!(out.messages.len(), 2);
     }
@@ -1156,13 +1202,13 @@ mod tests {
     fn openai_to_anthropic_default_max_tokens() {
         let mut req = openai_req_with(vec![("user", "Hi")]);
         req.max_tokens = None;
-        let out = openai_to_anthropic(&req);
+        let out = openai_to_anthropic(&req, "claude-3-opus-20240229", &req.messages, req.stream);
         assert_eq!(out.max_tokens, DEFAULT_MAX_TOKENS);
 
         // When the client does provide max_tokens, it's preserved.
         let mut req = openai_req_with(vec![("user", "Hi")]);
         req.max_tokens = Some(123);
-        let out = openai_to_anthropic(&req);
+        let out = openai_to_anthropic(&req, "claude-3-opus-20240229", &req.messages, req.stream);
         assert_eq!(out.max_tokens, 123);
     }
 
@@ -1329,7 +1375,7 @@ mod tests {
             ("assistant", "Hello!"),
         ]);
 
-        let out = openai_to_gemini(&req);
+        let out = openai_to_gemini(&req, &req.messages);
         let sys = out.system_instruction.as_ref().unwrap();
         assert_eq!(sys.role, "system");
         let text = sys.parts[0].text.as_ref().unwrap();
@@ -1342,7 +1388,7 @@ mod tests {
     #[test]
     fn openai_to_gemini_no_system() {
         let req = openai_req_with(vec![("user", "Hi"), ("assistant", "Hello!")]);
-        let out = openai_to_gemini(&req);
+        let out = openai_to_gemini(&req, &req.messages);
         assert!(out.system_instruction.is_none());
         assert_eq!(out.contents.len(), 2);
     }
@@ -1351,7 +1397,7 @@ mod tests {
     fn openai_to_gemini_default_max_output_tokens() {
         let mut req = openai_req_with(vec![("user", "Hi")]);
         req.max_tokens = None;
-        let out = openai_to_gemini(&req);
+        let out = openai_to_gemini(&req, &req.messages);
         let gen_cfg = out.generation_config.as_ref().unwrap();
         assert_eq!(
             gen_cfg.max_output_tokens,
@@ -1361,7 +1407,7 @@ mod tests {
         // When the client does provide max_tokens, it's preserved.
         let mut req = openai_req_with(vec![("user", "Hi")]);
         req.max_tokens = Some(123);
-        let out = openai_to_gemini(&req);
+        let out = openai_to_gemini(&req, &req.messages);
         let gen_cfg = out.generation_config.as_ref().unwrap();
         assert_eq!(gen_cfg.max_output_tokens, Some(123));
     }
@@ -1371,7 +1417,7 @@ mod tests {
         let mut req = openai_req_with(vec![("user", "Hi")]);
         req.temperature = Some(0.7);
         req.top_p = Some(0.9);
-        let out = openai_to_gemini(&req);
+        let out = openai_to_gemini(&req, &req.messages);
         let gen_cfg = out.generation_config.as_ref().unwrap();
         assert_eq!(gen_cfg.temperature, Some(0.7));
         assert_eq!(gen_cfg.top_p, Some(0.9));
@@ -1519,7 +1565,7 @@ mod tests {
                 }
             }
         })]);
-        let out = openai_to_anthropic(&req);
+        let out = openai_to_anthropic(&req, "claude-3-opus-20240229", &req.messages, req.stream);
         let tools = out.tools.as_ref().expect("tools should be translated");
         assert_eq!(tools.len(), 1);
         // Top-level keys are Anthropic shape, NOT OpenAI shape.
@@ -1538,17 +1584,17 @@ mod tests {
 
         // String "auto" → {"type":"auto"}
         req.tool_choice = Some(json!("auto"));
-        let out = openai_to_anthropic(&req);
+        let out = openai_to_anthropic(&req, "claude-3-opus-20240229", &req.messages, req.stream);
         assert_eq!(out.tool_choice.as_ref().unwrap(), &json!({"type": "auto"}));
 
         // String "none" → {"type":"none"}
         req.tool_choice = Some(json!("none"));
-        let out = openai_to_anthropic(&req);
+        let out = openai_to_anthropic(&req, "claude-3-opus-20240229", &req.messages, req.stream);
         assert_eq!(out.tool_choice.as_ref().unwrap(), &json!({"type": "none"}));
 
         // String "required" → {"type":"any"} (Anthropic's name for "force a tool call")
         req.tool_choice = Some(json!("required"));
-        let out = openai_to_anthropic(&req);
+        let out = openai_to_anthropic(&req, "claude-3-opus-20240229", &req.messages, req.stream);
         assert_eq!(out.tool_choice.as_ref().unwrap(), &json!({"type": "any"}));
 
         // Object form {type:"function", function:{name:"X"}}
@@ -1557,7 +1603,7 @@ mod tests {
             "type": "function",
             "function": {"name": "search"}
         }));
-        let out = openai_to_anthropic(&req);
+        let out = openai_to_anthropic(&req, "claude-3-opus-20240229", &req.messages, req.stream);
         let tc = out.tool_choice.as_ref().unwrap();
         assert_eq!(tc["type"], "tool");
         assert_eq!(tc["name"], "search");
@@ -1595,7 +1641,7 @@ mod tests {
                 }
             }),
         ]);
-        let out = openai_to_anthropic(&req);
+        let out = openai_to_anthropic(&req, "claude-3-opus-20240229", &req.messages, req.stream);
         let tools = out.tools.as_ref().expect("tools should be present");
         assert_eq!(
             tools.len(),
@@ -1636,7 +1682,7 @@ mod tests {
                 extra: serde_json::Map::new(),
             },
         ];
-        let out = openai_to_anthropic(&req);
+        let out = openai_to_anthropic(&req, "claude-3-opus-20240229", &req.messages, req.stream);
         assert_eq!(out.messages.len(), 2);
         // The assistant message should have an array content with a tool_use block.
         let assistant_msg = &out.messages[1];
@@ -1688,7 +1734,7 @@ mod tests {
                 extra: serde_json::Map::new(),
             },
         ];
-        let out = openai_to_anthropic(&req);
+        let out = openai_to_anthropic(&req, "claude-3-opus-20240229", &req.messages, req.stream);
         assert_eq!(out.messages.len(), 3);
         // The third message (OpenAI `tool`-role) should become a
         // `user`-role message with a `tool_result` content block.
@@ -1738,7 +1784,7 @@ mod tests {
                 extra: serde_json::Map::new(),
             },
         ];
-        let out = openai_to_anthropic(&req);
+        let out = openai_to_anthropic(&req, "claude-3-opus-20240229", &req.messages, req.stream);
         let assistant_msg = &out.messages[1];
         let blocks = assistant_msg
             .content
@@ -1769,7 +1815,7 @@ mod tests {
             })]),
             extra: serde_json::Map::new(),
         }];
-        let out = openai_to_anthropic(&req);
+        let out = openai_to_anthropic(&req, "claude-3-opus-20240229", &req.messages, req.stream);
         let assistant_msg = &out.messages[0];
         let blocks = assistant_msg
             .content
@@ -1829,7 +1875,7 @@ mod tests {
                 extra: serde_json::Map::new(),
             },
         ];
-        let out = openai_to_anthropic(&req);
+        let out = openai_to_anthropic(&req, "claude-3-opus-20240229", &req.messages, req.stream);
 
         // Tools: Anthropic shape with name/description/input_schema.
         let tools = out.tools.as_ref().expect("tools present");
@@ -1874,7 +1920,7 @@ mod tests {
     fn h4_top_k_passes_through_to_anthropic() {
         let mut req = openai_req_with(vec![("user", "go")]);
         req.top_k = Some(40);
-        let out = openai_to_anthropic(&req);
+        let out = openai_to_anthropic(&req, "claude-3-opus-20240229", &req.messages, req.stream);
         assert_eq!(out.top_k, Some(40));
     }
 
@@ -2020,7 +2066,7 @@ mod tests {
                 extra: serde_json::Map::new(),
             },
         ];
-        let out = openai_to_anthropic(&req);
+        let out = openai_to_anthropic(&req, "claude-3-opus-20240229", &req.messages, req.stream);
 
         // Expected Anthropic message sequence (after merging):
         //   [0] user("que falta?")
@@ -2085,7 +2131,7 @@ mod tests {
         // purpose. The translator should produce exactly that shape.
         let mut req = openai_req_with(vec![("user", "go")]);
         req.user = Some("user-abc-123".to_string());
-        let out = openai_to_anthropic(&req);
+        let out = openai_to_anthropic(&req, "claude-3-opus-20240229", &req.messages, req.stream);
         let metadata = out
             .metadata
             .as_ref()
@@ -2100,7 +2146,7 @@ mod tests {
         // still serialise to a valid Anthropic request with those
         // fields absent (serde skip_serializing_if = "Option::is_none").
         let req = openai_req_with(vec![("user", "hi")]);
-        let out = openai_to_anthropic(&req);
+        let out = openai_to_anthropic(&req, "claude-3-opus-20240229", &req.messages, req.stream);
         assert!(out.tools.is_none());
         assert!(out.tool_choice.is_none());
         assert!(out.top_k.is_none());

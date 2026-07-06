@@ -187,46 +187,38 @@ impl ProviderAdapter for CloudflareWorkersAIAdapter {
         Ok(models)
     }
 
-    fn needs_normalization(&self) -> bool {
-        true
-    }
-
-    fn normalize_request_body(&self, body: &mut serde_json::Value) {
+    fn normalize_openai_request(&self, view: &mut crate::translation::OpenAIRequestView) {
         // CloudFlare Workers AI OpenAI-compatible endpoint is stricter
         // than OpenAI: it rejects null optional fields, rejects
         // unsupported fields like `temperature` (even as a number),
         // and requires `content` to be a plain string, not a
         // multipart array.
-        if let Some(obj) = body.as_object_mut() {
-            // Remove fields CloudFlare rejects outright (temperature,
-            // etc.) regardless of value, plus any null optional fields.
-            let remove_keys: Vec<String> = obj
-                .iter()
-                .filter(|(k, v)| matches!(k.as_str(), "temperature") || v.is_null())
-                .map(|(k, _)| k.clone())
-                .collect();
-            for k in remove_keys {
-                obj.remove(&k);
-            }
-            // Flatten multipart content arrays to plain strings
-            if let Some(messages) = obj.get_mut("messages").and_then(|v| v.as_array_mut()) {
-                for msg in messages {
-                    if let Some(content) = msg.get("content").and_then(|v| v.as_array()) {
-                        // Extract text before mutating
-                        let text = content
-                            .iter()
-                            .find_map(|part| {
-                                part.get("text")
-                                    .and_then(|t| t.as_str())
-                                    .or_else(|| part.get("content").and_then(|c| c.as_str()))
-                            })
-                            .unwrap_or("")
-                            .to_string();
-                        // Replace the array with the plain string
-                        if let Some(msg_obj) = msg.as_object_mut() {
-                            msg_obj.insert("content".to_string(), serde_json::Value::String(text));
-                        }
-                    }
+        
+        view.temperature = None;
+
+        // Remove null fields from extra
+        let has_nulls = view.extra.values().any(|v| v.is_null());
+        if has_nulls {
+            let extra_mut = view.extra.to_mut();
+            extra_mut.retain(|_, v| !v.is_null());
+        }
+
+        // Flatten multipart content arrays to plain strings
+        let needs_flattening = view.messages.iter().any(|msg| matches!(msg.content, Some(serde_json::Value::Array(_))));
+        if needs_flattening {
+            let messages_mut = view.messages.to_mut();
+            for msg in messages_mut.iter_mut() {
+                if let Some(serde_json::Value::Array(parts)) = &msg.content {
+                    let text = parts
+                        .iter()
+                        .find_map(|part| {
+                            part.get("text")
+                                .and_then(|t| t.as_str())
+                                .or_else(|| part.get("content").and_then(|c| c.as_str()))
+                        })
+                        .unwrap_or("")
+                        .to_string();
+                    msg.content = Some(serde_json::Value::String(text));
                 }
             }
         }

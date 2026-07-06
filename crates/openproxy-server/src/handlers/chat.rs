@@ -200,6 +200,7 @@ fn build_pipeline(state: &AppState) -> Pipeline {
         compression_mode: state.compression_mode(),
         idle_chunk_retryable: state.idle_chunk_retryable(),
         quota_protection: state.quota_protection(),
+        background_tx: state.background_tx(),
     };
     Pipeline::with_selection_registry(
         state.db_pool().writer_arc(),

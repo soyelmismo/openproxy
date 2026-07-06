@@ -133,6 +133,8 @@ pub struct AppState {
     /// a VACUUM is currently in progress. Read by the dashboard's
     /// config view to show the button state.
     vacuum_status: Arc<RwLock<VacuumStatus>>,
+    /// Sender for background worker jobs (usage insertion, cooldowns)
+    background_tx: tokio::sync::mpsc::Sender<openproxy_core::pipeline::worker::BackgroundJob>,
 }
 
 /// VACUUM status reported to the dashboard. Updated by the background
@@ -227,6 +229,13 @@ impl AppState {
 
         let quota_protection = config.quota_protection.clone();
 
+        let (background_tx, background_rx) = tokio::sync::mpsc::channel(1024);
+        openproxy_core::pipeline::worker::spawn_worker(
+            db_pool.writer_arc(),
+            background_rx,
+            selection_registry.clone(),
+        );
+
         let state = Self {
             config,
             db_pool,
@@ -249,6 +258,7 @@ impl AppState {
             circuit_breaker,
             maintenance_cell,
             vacuum_status,
+            background_tx,
         };
 
         state.rebuild_adapters()?;
@@ -323,6 +333,8 @@ impl AppState {
 
         openproxy_core::notifications::init_broadcast();
 
+        let (background_tx, _) = tokio::sync::mpsc::channel(1);
+
         Self {
             config: config.clone(),
             db_pool,
@@ -357,6 +369,7 @@ impl AppState {
             circuit_breaker,
             maintenance_cell,
             vacuum_status,
+            background_tx,
         }
     }
 
@@ -636,6 +649,10 @@ impl AppState {
     /// the clone shares the same underlying map.
     pub fn circuit_breaker(&self) -> openproxy_core::circuit_breaker::CircuitBreakerRegistry {
         self.circuit_breaker.clone()
+    }
+
+    pub fn background_tx(&self) -> tokio::sync::mpsc::Sender<openproxy_core::pipeline::worker::BackgroundJob> {
+        self.background_tx.clone()
     }
 
     /// Read the current maintenance config (auto_vacuum, interval,
