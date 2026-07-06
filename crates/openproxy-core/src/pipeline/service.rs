@@ -1,6 +1,7 @@
 use std::future::Future;
 use std::pin::Pin;
 use std::task::{Context, Poll};
+use std::sync::Arc;
 use crate::circuit_breaker::Health;
 use crate::combos::{Combo, ComboTarget, Strategy};
 use crate::error::CoreError;
@@ -10,7 +11,7 @@ use crate::pipeline::repository::PipelineRepository;
 
 /// Request state passed down the middleware chain.
 pub struct PipelineState {
-    pub req: PipelineRequest,
+    pub req: Arc<PipelineRequest>,
     pub combo: Option<Combo>,
     pub eligible_targets: Option<Vec<ComboTarget>>,
     pub race_size: Option<usize>,
@@ -297,7 +298,7 @@ impl tower::Service<PipelineState> for RoutingService {
                 let race_n = (combo.race_size as usize)
                     .min(to_run.len())
                     .min(pipeline.config.racing.max_race_size as usize);
-                let race_result = pipeline.run_race(&state.req, &combo, to_run.clone(), race_n as u8).await;
+                let race_result = pipeline.run_race(Arc::clone(&state.req), &combo, to_run.clone(), race_n as u8).await;
 
                 if race_result.error.is_none() {
                     if let Some(row_id) = race_result.usage_row_id {
@@ -340,7 +341,7 @@ impl tower::Service<PipelineState> for RoutingService {
                 let mut target_attempt: u8 = 1;
                 let mut result = pipeline
                     .execute_single(
-                        &state.req,
+                        Arc::clone(&state.req),
                         &combo,
                         target,
                         target_attempt,
@@ -387,7 +388,7 @@ impl tower::Service<PipelineState> for RoutingService {
                     target_attempt = target_attempt.saturating_add(1);
                     result = pipeline
                         .execute_single(
-                            &state.req,
+                            Arc::clone(&state.req),
                             &combo,
                             target,
                             target_attempt,

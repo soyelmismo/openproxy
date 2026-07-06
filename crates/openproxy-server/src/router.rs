@@ -88,7 +88,15 @@ pub fn build_router(state: AppState) -> Router {
         .route(
             "/v1/chat/completions",
             post(handlers::chat::chat_completions)
-                .route_layer(middleware::from_fn(crate::disconnect::client_disconnect_middleware)),
+                .route_layer(middleware::from_fn(crate::disconnect::client_disconnect_middleware))
+                .route_layer(middleware::from_fn_with_state(
+                    state.clone(),
+                    handlers::chat::rate_limit_middleware,
+                ))
+                .route_layer(middleware::from_fn_with_state(
+                    state.clone(),
+                    handlers::chat::auth_middleware,
+                )),
         )
         .route(
             "/v1/audio/transcriptions",

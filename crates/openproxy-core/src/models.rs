@@ -386,8 +386,8 @@ pub fn upsert_many(
         }
         out
     };
-    let existing: std::collections::HashSet<String> =
-        existing_rows.iter().map(|(m, _, _)| m.clone()).collect();
+    let existing: std::collections::HashSet<&str> =
+        existing_rows.iter().map(|(m, _, _)| m.as_str()).collect();
     // Models that are in `existing` but NOT in `discovered` are about
     // to be hard-deleted by the DELETE branch below. We capture their
     // display_name (from the snapshot) so the `model_gone`
@@ -397,10 +397,10 @@ pub fn upsert_many(
     // memory.
     let discovered_set: std::collections::HashSet<&str> =
         discovered.iter().map(|d| d.model_id.as_str()).collect();
-    let deleted_models: Vec<(String, Option<String>)> = existing_rows
+    let deleted_models: Vec<(&str, Option<&str>)> = existing_rows
         .iter()
         .filter(|(m, _, _)| !discovered_set.contains(m.as_str()))
-        .map(|(m, _, dn)| (m.clone(), dn.clone()))
+        .map(|(m, _, dn)| (m.as_str(), dn.as_deref()))
         .collect();
     // Tracks the upstream model_ids that were JUST INSERTED this
     // call (i.e. not present in `existing` before the INSERT). They
@@ -534,14 +534,16 @@ pub fn upsert_many(
             // Vec outlives the temporaries `discovered` iterates over,
             // so we hoist the model_id strings into a local Vec<String>
             // and borrow from there.
-            let discovered_ids: Vec<String> = discovered
+            let discovered_ids: Vec<&str> = discovered
                 .iter()
-                .map(|d| d.model_id.as_str().to_string())
+                .map(|d| d.model_id.as_str())
                 .collect();
-            let provider_str = provider.as_str().to_string();
+            let provider_str = provider.as_str();
             let mut bound: Vec<&dyn rusqlite::ToSql> = Vec::with_capacity(discovered_ids.len() + 1);
-            bound.push(&provider_str);
-            bound.extend(discovered_ids.iter().map(|id| id as &dyn rusqlite::ToSql));
+            bound.push(&provider_str as &dyn rusqlite::ToSql);
+            for id in &discovered_ids {
+                bound.push(id as &dyn rusqlite::ToSql);
+            }
             tx.execute(&sql, rusqlite::params_from_iter(bound.iter().copied()))
                 .map_err(|e| CoreError::Database {
                     message: format!("execute upsert_many delete-disappeared: {}", e),

@@ -22,7 +22,7 @@ use tokio::sync::watch;
 
 impl Pipeline {
     /// Drive one chat-completion request to completion.
-    pub async fn run(&self, req: PipelineRequest) -> PipelineResult {
+    pub async fn run(&self, req: Arc<PipelineRequest>) -> PipelineResult {
         let combo = match self.load_combo(&req) {
             Ok(c) => c,
             Err(e) => return self.failure(e, 0, ErrorPhase::Resolve),
@@ -69,7 +69,7 @@ impl Pipeline {
                             "auto_populate on NoHealthyTargets failed; recording failure"
                         );
                         let started = std::time::Instant::now();
-                        self.record_no_healthy_targets_row(&req, &combo, started);
+                        self.record_no_healthy_targets_row(Arc::clone(&req), &combo, started);
                         return self.failure(e, attempt - 1, ErrorPhase::Route);
                     }
                 };
@@ -98,7 +98,7 @@ impl Pipeline {
             if eligible.is_empty() {
                 let err = CoreError::NoHealthyTargets(combo.id.0);
                 let started = std::time::Instant::now();
-                self.record_no_healthy_targets_row(&req, &combo, started);
+                self.record_no_healthy_targets_row(Arc::clone(&req), &combo, started);
                 return self.failure(err, attempt - 1, ErrorPhase::Route);
             }
         }
@@ -107,7 +107,7 @@ impl Pipeline {
         if eligible.is_empty() {
             let err = CoreError::NoHealthyTargets(combo.id.0);
             let started = std::time::Instant::now();
-            self.record_no_healthy_targets_row(&req, &combo, started);
+            self.record_no_healthy_targets_row(Arc::clone(&req), &combo, started);
             return self.failure(err, attempt - 1, ErrorPhase::Route);
         }
 
@@ -126,7 +126,7 @@ impl Pipeline {
             if to_run_unfiltered.is_empty() {
                 let err = CoreError::NoHealthyTargets(combo.id.0);
                 let started = std::time::Instant::now();
-                self.record_no_healthy_targets_row(&req, &combo, started);
+                self.record_no_healthy_targets_row(Arc::clone(&req), &combo, started);
                 return self.failure(err, attempt - 1, ErrorPhase::Route);
             }
             tracing::warn!(
@@ -143,7 +143,7 @@ impl Pipeline {
             let race_n = (combo.race_size as usize)
                 .min(to_run.len())
                 .min(self.config.racing.max_race_size as usize);
-            let race_result = self.run_race(&req, &combo, to_run.clone(), race_n as u8).await;
+            let race_result = self.run_race(Arc::clone(&req), &combo, to_run.clone(), race_n as u8).await;
 
             if race_result.error.is_none() {
                 self.mark_client_response(race_result.usage_row_id);
@@ -182,7 +182,7 @@ impl Pipeline {
             let mut target_attempt: u8 = 1;
             let mut result = self
                 .execute_single(
-                    &req,
+                    Arc::clone(&req),
                     &combo,
                     target,
                     target_attempt,
@@ -229,7 +229,7 @@ impl Pipeline {
                 target_attempt = target_attempt.saturating_add(1);
                 result = self
                     .execute_single(
-                        &req,
+                        Arc::clone(&req),
                         &combo,
                         target,
                         target_attempt,
@@ -239,65 +239,6 @@ impl Pipeline {
                     .await;
             }
 
-            let cooldown_op = match &result.error {
-                None => Some("clear"),
-                Some(e) if is_upstream_health_issue(e) => Some("record"),
-                Some(_) => None,
-            };
-
-            {
-                self.selection_registry.record_request(target.id);
-                if result.error.is_none() {
-                    self.selection_registry.record_success(target.id);
-                }
-            }
-            if cooldown_op.is_some() {
-                let cooldown_conn = self.conn.lock();
-                match cooldown_op {
-                    Some("clear") => {
-                        if let Err(e) = crate::cooldown::clear(&cooldown_conn, target.id) {
-                            tracing::warn!(
-                                combo_id = combo.id.0,
-                                target_id = target.id.0,
-                                error = %e,
-                                "cooldown::clear failed; non-fatal"
-                            );
-                        }
-                    }
-                    Some("record") => {
-                        let reason = result
-                            .error
-                            .as_ref()
-                            .map(|e| e.to_string())
-                            .unwrap_or_else(|| "retryable failure".to_string());
-                        let mode = combo.cooldown_mode;
-                        let base_secs = combo
-                            .cooldown_base_secs
-                            .unwrap_or(self.config.cooldown_secs);
-                        let max_secs = combo
-                            .cooldown_max_secs
-                            .unwrap_or(self.config.cooldown_max_secs);
-                        let factor = combo.cooldown_factor.unwrap_or(self.config.cooldown_factor);
-                        if let Err(e) = crate::cooldown::record_failure_with_mode(
-                            &cooldown_conn,
-                            target.id,
-                            &reason,
-                            mode,
-                            base_secs,
-                            max_secs,
-                            factor,
-                        ) {
-                            tracing::warn!(
-                                combo_id = combo.id.0,
-                                target_id = target.id.0,
-                                error = %e,
-                                "cooldown::record_failure_with_mode failed; non-fatal"
-                            );
-                        }
-                    }
-                    _ => unreachable!(),
-                }
-            }
             match &result.error {
                 None => {
                     self.mark_client_response(result.usage_row_id);
@@ -580,7 +521,7 @@ impl Pipeline {
 
     fn record_no_healthy_targets_row(
         &self,
-        req: &PipelineRequest,
+        req: Arc<PipelineRequest>,
         combo: &Combo,
         started: Instant,
     ) {
@@ -626,7 +567,7 @@ impl Pipeline {
 
     pub(crate) async fn run_race(
         &self,
-        req: &PipelineRequest,
+        req: Arc<PipelineRequest>,
         combo: &Combo,
         to_run: Vec<ComboTarget>,
         race_size: u8,
@@ -678,7 +619,7 @@ impl Pipeline {
 
         for worker_idx in 0..num_workers as usize {
             let p = self.clone();
-            let mut req = req.clone();
+            let mut req = (*req).clone();
 
             let handle = race_sink.handle(worker_idx);
             req.stream_sink = Some(crate::race_sink::StreamSink::Race(handle));
@@ -696,7 +637,8 @@ impl Pipeline {
                     let worker_token = req
                         .race_cancel
                         .as_ref()
-                        .expect("run_race: worker must have race_cancel");
+                        .expect("run_race: worker must have race_cancel")
+                        .clone();
                     if worker_token.is_cancelled() {
                         if running.fetch_sub(1, Ordering::AcqRel) == 1 {
                             all_done.notify_one();
@@ -722,8 +664,9 @@ impl Pipeline {
                         return;
                     }
 
+                    let req_arc = Arc::new(req.clone());
                     let result = p
-                        .execute_single(&req, &combo, &target, 1, race_size, worker_token)
+                        .execute_single(req_arc, &combo, &target, 1, race_size, &worker_token)
                         .await;
 
                     if result.error.is_none() {
@@ -788,7 +731,7 @@ impl Pipeline {
         value: &impl serde::Serialize,
         adapter: &dyn crate::adapters::ProviderAdapter,
         label: &str,
-        req: &PipelineRequest,
+        req: Arc<PipelineRequest>,
         combo: &Combo,
         target: &ComboTarget,
         attempt: u8,
@@ -867,7 +810,7 @@ impl Pipeline {
 
     pub(crate) async fn execute_single(
         &self,
-        req: &PipelineRequest,
+        req: Arc<PipelineRequest>,
         combo: &Combo,
         target: &ComboTarget,
         attempt: u8,
@@ -1115,7 +1058,7 @@ impl Pipeline {
                     }
                 }
 
-                let mut custom_req = req.openai_request.clone();
+                let mut custom_req = (*req.openai_request).clone();
                 custom_req.model = model.model_id.as_str().to_string();
 
                 let executor_result = match target.provider_id.as_str() {
@@ -1309,7 +1252,7 @@ impl Pipeline {
             AdapterFormat::Gemini => crate::models::TargetFormat::Gemini,
         };
 
-        let mut upstream_req = req.openai_request.clone();
+        let mut upstream_req = (*req.openai_request).clone();
         upstream_req.model = model.model_id.as_str().to_string();
         if !req.openai_request.stream && req.stream_sink.is_some() {
             upstream_req.stream = true;
@@ -1331,7 +1274,7 @@ impl Pipeline {
                     &upstream_req,
                     adapter.as_ref(),
                     "openai request",
-                    req,
+                    Arc::clone(&req),
                     combo,
                     target,
                     attempt,
@@ -1349,7 +1292,7 @@ impl Pipeline {
                     &anthro,
                     adapter.as_ref(),
                     "anthropic request",
-                    req,
+                    Arc::clone(&req),
                     combo,
                     target,
                     attempt,
@@ -1367,7 +1310,7 @@ impl Pipeline {
                     &gemini,
                     adapter.as_ref(),
                     "gemini request",
-                    req,
+                    Arc::clone(&req),
                     combo,
                     target,
                     attempt,
@@ -1453,7 +1396,7 @@ impl Pipeline {
             .dispatch_upstream(
                 target,
                 combo,
-                req,
+                Arc::clone(&req),
                 &model,
                 target_format,
                 &url,
@@ -1730,17 +1673,17 @@ impl Pipeline {
 
     pub(crate) fn record_and_fail(
         &self,
-        req: &PipelineRequest,
+        req: Arc<PipelineRequest>,
         combo: &Combo,
         target: &ComboTarget,
         ctx: FailureContext<'_>,
     ) -> PipelineResult {
-        self.record_and_fail_with_trace_id(req, combo, target, ctx, req.trace_id.to_string())
+        self.record_and_fail_with_trace_id(Arc::clone(&req), combo, target, ctx, req.trace_id.to_string())
     }
 
     pub(crate) fn record_and_fail_with_trace_id(
         &self,
-        req: &PipelineRequest,
+        req: Arc<PipelineRequest>,
         combo: &Combo,
         target: &ComboTarget,
         ctx: FailureContext<'_>,
@@ -1754,7 +1697,7 @@ impl Pipeline {
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn record_and_fail_with_trace_id_and_partial(
         &self,
-        req: &PipelineRequest,
+        req: Arc<PipelineRequest>,
         combo: &Combo,
         target: &ComboTarget,
         ctx: FailureContext<'_>,
@@ -1778,7 +1721,7 @@ impl Pipeline {
         let request_body_json = req
             .request_body_json
             .clone()
-            .or_else(|| serde_json::to_value(&req.openai_request).ok());
+            .or_else(|| serde_json::to_value(&*req.openai_request).ok().map(Arc::new));
         let request_headers = crate::redact::redact_btreemap_sensitive(req.request_headers.clone());
         let response_body_json: Option<serde_json::Value> =
             acc.filter(|a| !a.is_completely_empty()).map(|a| {
@@ -1792,7 +1735,7 @@ impl Pipeline {
             (was_streaming, false)
         };
         let usage_row_id = match self.record_attempt_raw_with_tokens(
-            req,
+            Arc::clone(&req),
             combo,
             target,
             model,
@@ -1806,7 +1749,7 @@ impl Pipeline {
             trace_id,
             None,
             None,
-            request_body_json,
+            request_body_json.clone(),
             response_body_json,
             Some(request_headers),
             None,
@@ -1832,7 +1775,7 @@ impl Pipeline {
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn fail_stream_client_disconnected(
         &self,
-        req: &PipelineRequest,
+        req: Arc<PipelineRequest>,
         combo: &Combo,
         target: &ComboTarget,
         attempt: u8,
@@ -1938,7 +1881,7 @@ impl Pipeline {
     pub(crate) fn fail_on_sink_send_error(
         &self,
         e: crate::race_sink::StreamSinkError,
-        req: &PipelineRequest,
+        req: Arc<PipelineRequest>,
         combo: &Combo,
         target: &ComboTarget,
         attempt: u8,
@@ -2069,7 +2012,7 @@ impl Pipeline {
 
     pub(crate) fn record_attempt_raw_with_tokens(
         &self,
-        req: &PipelineRequest,
+        req: Arc<PipelineRequest>,
         combo: &Combo,
         target: &ComboTarget,
         model: Option<&Model>,
@@ -2083,7 +2026,7 @@ impl Pipeline {
         trace_id: String,
         prompt_tokens: Option<u32>,
         completion_tokens: Option<u32>,
-        request_body_json: Option<serde_json::Value>,
+        request_body_json: Option<Arc<serde_json::Value>>,
         response_body_json: Option<serde_json::Value>,
         request_headers: Option<std::collections::BTreeMap<String, String>>,
         response_headers: Option<std::collections::BTreeMap<String, String>>,
@@ -2166,7 +2109,7 @@ impl Pipeline {
             race_total: race_size,
             race_lost: err.is_some() && req.race_cancelled,
             api_key_id: req.api_key_id,
-            request_body_json: if recording { request_body_json } else { None },
+            request_body_json: if recording { request_body_json.map(|v| (*v).clone()) } else { None },
             response_body_json: if recording { response_body_json } else { None },
             request_headers: if recording { request_headers } else { None },
             response_headers: if recording { response_headers } else { None },
@@ -2231,6 +2174,56 @@ impl Pipeline {
             }
         };
         let usage_id = cost::record(&conn, &input)?;
+
+        self.selection_registry.record_request(target.id);
+        if err.is_none() {
+            self.selection_registry.record_success(target.id);
+        }
+
+        let cooldown_op = match err {
+            None => Some("clear"),
+            Some(e) if is_upstream_health_issue(e) => Some("record"),
+            Some(_) => None,
+        };
+        if let Some(op) = cooldown_op {
+            match op {
+                "clear" => {
+                    if let Err(e) = crate::cooldown::clear(&conn, target.id) {
+                        tracing::warn!(
+                            combo_id = combo.id.0,
+                            target_id = target.id.0,
+                            error = %e,
+                            "cooldown::clear failed; non-fatal"
+                        );
+                    }
+                }
+                "record" => {
+                    let reason = err
+                        .map(|e| e.to_string())
+                        .unwrap_or_else(|| "retryable failure".to_string());
+                    let mode = combo.cooldown_mode;
+                    let base_secs = combo
+                        .cooldown_base_secs
+                        .unwrap_or(self.config.cooldown_secs);
+                    let max_secs = combo
+                        .cooldown_max_secs
+                        .unwrap_or(self.config.cooldown_max_secs);
+                    let factor = combo.cooldown_factor.unwrap_or(self.config.cooldown_factor);
+                    if let Err(e) = crate::cooldown::record_failure_with_mode(
+                        &conn, target.id, &reason, mode, base_secs, max_secs, factor,
+                    ) {
+                        tracing::warn!(
+                            combo_id = combo.id.0,
+                            target_id = target.id.0,
+                            error = %e,
+                            "cooldown::record_failure_with_mode failed; non-fatal"
+                        );
+                    }
+                }
+                _ => unreachable!(),
+            }
+        }
+
         Ok(Some(usage_id))
     }
 }

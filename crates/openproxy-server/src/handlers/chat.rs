@@ -120,17 +120,70 @@ impl Stream for SseBytesStream {
 /// The handler creates its own fresh cancel watch (NOT from the
 /// middleware — see router.rs for why the middleware was removed).
 /// The fresh watch is driven only by the watchdog timer (total_ms).
-pub async fn chat_completions(
+pub async fn auth_middleware(
+    State(state): State<AppState>,
+    req: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> Result<axum::response::Response, ApiError> {
+    let (mut parts, body) = req.into_parts();
+    let bytes = axum::body::to_bytes(body, usize::MAX)
+        .await
+        .map_err(|e| ApiError(CoreError::Parse(e.to_string())))?;
+
+    let parsed: serde_json::Value = serde_json::from_slice(&bytes)
+        .map_err(|e| ApiError(CoreError::Parse(e.to_string())))?;
+
+    let requested_model = parsed
+        .get("model")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+
+    let auth_result = authenticate(&state, &parts.headers, requested_model)?;
+
+    parts.extensions.insert(ParsedChatRequest(parsed));
+    if let Some(res) = auth_result {
+        parts.extensions.insert(res);
+    }
+
+    let req = axum::extract::Request::from_parts(parts, axum::body::Body::from(bytes));
+    Ok(next.run(req).await)
+}
+
+pub async fn rate_limit_middleware(
     State(state): State<AppState>,
     ConnectInfo(addr): ConnectInfo<std::net::SocketAddr>,
+    req: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> Result<axum::response::Response, ApiError> {
+    let auth_result = req.extensions().get::<ValidatedApiToken>();
+    let rl_key = if let Some(t) = auth_result {
+        format!("key:{}", t.key_id.0)
+    } else {
+        format!("ip:{}", addr.ip())
+    };
+
+    if !state.rate_limiter().check(&rl_key) {
+        return Err(ApiError(CoreError::RateLimited {
+            provider: "rate_limiter".into(),
+            retry_after_ms: 60_000,
+        }));
+    }
+
+    Ok(next.run(req).await)
+}
+
+pub async fn chat_completions(
+    State(state): State<AppState>,
     headers: HeaderMap,
     cancel_watch: Option<axum::Extension<crate::disconnect::CancelWatch>>,
-    axum::Json(body): axum::Json<serde_json::Value>,
+    axum::Extension(parsed_req): axum::Extension<ParsedChatRequest>,
+    auth_token: Option<axum::Extension<ValidatedApiToken>>,
 ) -> Result<axum::response::Response, ApiError> {
     let cancel = cancel_watch
         .map(|axum::Extension(cw)| cw)
         .unwrap_or_else(crate::disconnect::CancelWatch::new);
-    run_pipeline(state, addr, cancel, headers, body).await
+    let token_inner = auth_token.map(|axum::Extension(t)| t);
+    run_pipeline(state, cancel, headers, parsed_req.0, token_inner).await
 }
 
 /// Drive one chat-completion request through the pipeline.
@@ -146,36 +199,22 @@ pub async fn chat_completions(
 /// SSE `stream.next()` `tokio::select!` all observe it.
 async fn run_pipeline(
     state: AppState,
-    client_addr: std::net::SocketAddr,
     _cancel: CancelWatch,
     headers: HeaderMap,
     body: serde_json::Value,
+    auth_result: Option<ValidatedApiToken>,
 ) -> Result<axum::response::Response, ApiError> {
     // 1. Parse the OpenAI request.
     let raw_request_body = body.clone();
     let openai_req: OpenAIRequest =
         serde_json::from_value(body).map_err(|e| ApiError(CoreError::Parse(e.to_string())))?;
 
-    // 2. Authenticate and rate limit.
-    let auth_result = authenticate(&state, &headers, &openai_req.model)?;
     let api_key_id: Option<ApiKeyId> = auth_result.as_ref().map(|r| r.key_id);
 
-    let rl_key = if let Some(id) = api_key_id {
-        format!("key:{}", id.0)
-    } else {
-        format!("ip:{}", client_addr.ip())
-    };
-    if !state.rate_limiter().check(&rl_key) {
-        return Err(ApiError(CoreError::RateLimited {
-            provider: "rate_limiter".into(),
-            retry_after_ms: 60_000,
-        }));
-    }
-
-    // 3. Resolve routing.
+    // 2. Resolve routing.
     let plan = resolve_routing_plan(&state, &headers, &openai_req, &auth_result)?;
 
-    // 4. Translate plan to pipeline targets.
+    // 3. Translate plan to pipeline targets.
     let (combo_id, combo_override, targets_override) =
         translate_plan_to_targets(&state, &plan, api_key_id)?;
 
@@ -204,14 +243,14 @@ async fn run_pipeline(
         request_id,
         trace_id,
         combo_id,
-        openai_request: openai_req.clone(),
+        openai_request: Arc::new(openai_req.clone()),
         client_disconnected,
         stream_sink,
         api_key_id,
         combo_override,
         targets_override,
         request_headers: redact_sensitive_headers(&headers),
-        request_body_json: Some(raw_request_body),
+        request_body_json: Some(Arc::new(raw_request_body)),
         race_cancelled: false,
         race_cancel: None,
         endpoint_kind: openproxy_core::endpoint::EndpointKind::Chat,
@@ -228,7 +267,7 @@ fn resolve_routing_plan(
     state: &AppState,
     headers: &HeaderMap,
     openai_req: &OpenAIRequest,
-    auth_result: &Option<AuthResult>,
+    auth_result: &Option<ValidatedApiToken>,
 ) -> Result<RoutingPlan, ApiError> {
     let legacy_combo_name = headers
         .get("x-openproxy-combo")
@@ -385,7 +424,7 @@ async fn handle_streaming_response(
     let (error_tx, error_rx) = tokio::sync::mpsc::channel::<bytes::Bytes>(1);
 
     tokio::spawn(async move {
-        let result = pipeline.run(req).await;
+        let result = pipeline.run(Arc::new(req)).await;
         let _ = done_tx.send(());
 
         if let Some(err) = result.error {
@@ -436,7 +475,7 @@ async fn handle_sync_response(
     done_tx: tokio::sync::oneshot::Sender<()>,
 ) -> Result<axum::response::Response, ApiError> {
     let started = Instant::now();
-    let result = pipeline.run(req).await;
+    let result = pipeline.run(Arc::new(req)).await;
     let _ = done_tx.send(());
     let elapsed_ms = started.elapsed().as_millis();
 
@@ -496,7 +535,7 @@ pub(crate) fn authenticate(
     state: &AppState,
     headers: &HeaderMap,
     requested_model: &str,
-) -> Result<Option<AuthResult>, ApiError> {
+) -> Result<Option<ValidatedApiToken>, ApiError> {
     let token = match headers
         .get("authorization")
         .and_then(|v| v.to_str().ok())
@@ -597,7 +636,7 @@ pub(crate) fn authenticate(
         let _ = core_api_keys::touch_last_used(&w, key_id);
     });
 
-    Ok(Some(AuthResult {
+    Ok(Some(ValidatedApiToken {
         key_id: key.id,
         allowed_combos: key.allowed_combos.clone(),
     }))
@@ -605,10 +644,15 @@ pub(crate) fn authenticate(
 
 /// Result of a successful chat authentication — the key id plus any
 /// per-key restrictions that need to be enforced after routing.
-pub(crate) struct AuthResult {
+#[derive(Clone)]
+pub struct ValidatedApiToken {
     pub(crate) key_id: ApiKeyId,
     pub(crate) allowed_combos: Option<Vec<i64>>,
 }
+
+/// Extracted parsed JSON payload for the chat endpoint.
+#[derive(Clone)]
+pub struct ParsedChatRequest(pub serde_json::Value);
 
 /// Record a single `usage` row for the `RoutingPlan::NotFound` path.
 ///

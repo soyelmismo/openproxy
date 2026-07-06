@@ -150,7 +150,7 @@ impl Pipeline {
         &self,
         target: &ComboTarget,
         combo: &Combo,
-        req: &PipelineRequest,
+        req: Arc<PipelineRequest>,
         model: &Model,
         target_format: crate::models::TargetFormat,
         url: &str,
@@ -242,7 +242,7 @@ impl Pipeline {
                 .dispatch_upstream_streaming(
                     target,
                     combo,
-                    req,
+                    Arc::clone(&req),
                     model,
                     target_format,
                     sink,
@@ -953,7 +953,7 @@ impl Pipeline {
             trace_id,
             prompt_tokens,
             completion_tokens,
-            Some(serde_json::from_slice(&body_bytes).unwrap_or(serde_json::Value::Null)),
+            Some(Arc::new(serde_json::from_slice(&body_bytes).unwrap_or(serde_json::Value::Null))),
             Some(response_body_value), // response body: snapshot captured before the parse consumed body_value
             Some(request_headers_btm), // request headers
             response_headers,          // response headers (captured before body was read)
@@ -990,7 +990,7 @@ impl Pipeline {
         &self,
         target: &ComboTarget,
         combo: &Combo,
-        req: &PipelineRequest,
+        req: Arc<PipelineRequest>,
         model: &Model,
         target_format: crate::models::TargetFormat,
         sink: &crate::race_sink::StreamSink,
@@ -2627,9 +2627,9 @@ impl Pipeline {
         let request_body_json = req
             .request_body_json
             .clone()
-            .or_else(|| serde_json::to_value(&req.openai_request).ok());
+            .or_else(|| serde_json::to_value(&*req.openai_request).ok().map(Arc::new));
         let usage_row_id = match self.record_attempt_raw_with_tokens(
-            req,
+            Arc::clone(&req),
             combo,
             target,
             Some(model),
