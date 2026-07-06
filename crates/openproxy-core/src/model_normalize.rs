@@ -37,11 +37,14 @@ pub fn normalize_model_id(id: &str) -> String {
         .trim_end_matches("-free")
         .trim_end_matches(":free");
 
+    // Replace colon with dash (converts tags/versions to canonical model id form)
+    let s = s.replace(":", "-");
+
     // 3. Strip date suffixes: -YYYY-MM-DD (dashed form) or -YYYYMMDD
     //    (compact form). The compact form is only stripped when the
     //    4-digit year prefix looks like a real year (19xx or 20xx) so
     //    that legitimate 8-digit version numbers are left alone.
-    let s: String = DATE_SUFFIX_RE.replace_all(s, "").into_owned();
+    let s: String = DATE_SUFFIX_RE.replace_all(&s, "").into_owned();
     let s: String = strip_compact_yyyymmdd(&s).unwrap_or_else(|| s.clone());
 
     // 4. Strip YYYYMM version suffixes: -2407
@@ -197,5 +200,12 @@ mod tests {
             normalize_model_id("qwen/qwen2.5-72b-instruct"),
             "qwen2.5-72b-instruct"
         );
+    }
+
+    #[test]
+    fn normalizes_colons_to_dashes() {
+        assert_eq!(normalize_model_id("gpt-oss:120b"), "gpt-oss-120b");
+        assert_eq!(normalize_model_id("gpt-oss:120b:free"), "gpt-oss-120b");
+        assert_eq!(normalize_model_id("llama3:8b"), "llama3-8b");
     }
 }

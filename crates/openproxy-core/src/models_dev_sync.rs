@@ -648,25 +648,29 @@ pub fn enrich_models_from_sync(conn: &Connection) -> Result<usize> {
 /// provider+account combo (first account per provider).
 /// Returns the number of combos created.
 pub fn auto_create_combos(conn: &Connection) -> Result<usize> {
-    // Find model_ids that are active in ≥2 different providers with
+    use rusqlite::OptionalExtension;
+
+    // Find model_id_normalized values that are active in ≥2 different providers with
     // healthy accounts. We use the `models` table joined with accounts.
     let mut stmt = conn
         .prepare(
-            "SELECT m.model_id
-         FROM models m
-         JOIN accounts a ON a.provider_id = m.provider_id
-         WHERE m.active = 1
-           AND a.health_status = 'healthy'
-         GROUP BY m.model_id
-         HAVING COUNT(DISTINCT m.provider_id) >= 2
-         ORDER BY m.model_id",
+            "SELECT m.model_id_normalized
+             FROM models m
+             JOIN accounts a ON a.provider_id = m.provider_id
+             WHERE m.active = 1
+               AND a.health_status = 'healthy'
+               AND m.model_id_normalized IS NOT NULL
+               AND m.model_id_normalized != ''
+             GROUP BY m.model_id_normalized
+             HAVING COUNT(DISTINCT m.provider_id) >= 2
+             ORDER BY m.model_id_normalized",
         )
         .map_err(|e| CoreError::Database {
             message: format!("auto-combo query: {e}"),
             source: Some(Box::new(e)),
         })?;
 
-    let model_ids: Vec<String> = {
+    let normalized_ids: Vec<String> = {
         let rows = stmt
             .query_map([], |row| row.get::<_, String>(0))
             .map_err(|e| CoreError::Database {
@@ -685,31 +689,31 @@ pub fn auto_create_combos(conn: &Connection) -> Result<usize> {
 
     let mut created = 0usize;
 
-    for model_id in &model_ids {
-        // Check if a combo for this model already exists.
-        let exists: bool =
-            conn.query_row(
-                "SELECT COUNT(*) FROM combos WHERE name = ?1",
-                rusqlite::params![format!("auto:{}", model_id)],
+    for norm_id in &normalized_ids {
+        let combo_name = format!("auto:{}", norm_id);
+
+        // Check if a combo for this normalized model name already exists.
+        // We query the ID if it exists, so we can append to it.
+        let combo_id: Option<i64> = conn
+            .query_row(
+                "SELECT id FROM combos WHERE name = ?1",
+                rusqlite::params![&combo_name],
                 |row| row.get::<_, i64>(0),
             )
+            .optional()
             .map_err(|e| CoreError::Database {
-                message: format!("auto-combo exists check: {e}"),
+                message: format!("auto-combo get id: {e}"),
                 source: Some(Box::new(e)),
-            })? > 0;
+            })?;
 
-        if exists {
-            continue;
-        }
-
-        // Get all (provider_id, model_row_id, account_id) combos for this model.
+        // Get all (provider_id, model_row_id, account_id) combos for this normalized model.
         let mut target_stmt = conn
             .prepare(
                 "SELECT m.rowid, m.provider_id, a.id
-             FROM models m
-             JOIN accounts a ON a.provider_id = m.provider_id AND a.health_status = 'healthy'
-             WHERE m.model_id = ?1 AND m.active = 1
-             ORDER BY m.provider_id",
+                 FROM models m
+                 JOIN accounts a ON a.provider_id = m.provider_id AND a.health_status = 'healthy'
+                 WHERE m.model_id_normalized = ?1 AND m.active = 1
+                 ORDER BY m.provider_id",
             )
             .map_err(|e| CoreError::Database {
                 message: format!("auto-combo targets prepare: {e}"),
@@ -718,7 +722,7 @@ pub fn auto_create_combos(conn: &Connection) -> Result<usize> {
 
         let targets: Vec<(i64, String, i64)> = {
             let rows = target_stmt
-                .query_map(rusqlite::params![model_id], |row| {
+                .query_map(rusqlite::params![norm_id], |row| {
                     Ok((
                         row.get::<_, i64>(0)?,
                         row.get::<_, String>(1)?,
@@ -743,49 +747,79 @@ pub fn auto_create_combos(conn: &Connection) -> Result<usize> {
             continue;
         }
 
-        // Create the combo. Use race_size = min(targets, 3) so
-        // parallel race fires across available providers.
-        let race_size = (targets.len() as u8).min(3);
-        let combo_name = format!("auto:{}", model_id);
-        conn.execute(
-            "INSERT INTO combos (name, strategy, race_size) VALUES (?1, 'priority', ?2)",
-            rusqlite::params![&combo_name, race_size],
-        )
-        .map_err(|e| CoreError::Database {
-            message: format!("auto-combo insert: {e}"),
-            source: Some(Box::new(e)),
-        })?;
+        let combo_id = match combo_id {
+            Some(id) => id,
+            None => {
+                // Create the combo. Use race_size = min(targets, 3) so
+                // parallel race fires across available providers.
+                let race_size = (targets.len() as u8).min(3);
+                conn.execute(
+                    "INSERT INTO combos (name, strategy, race_size) VALUES (?1, 'priority', ?2)",
+                    rusqlite::params![&combo_name, race_size],
+                )
+                .map_err(|e| CoreError::Database {
+                    message: format!("auto-combo insert: {e}"),
+                    source: Some(Box::new(e)),
+                })?;
 
-        let combo_id: i64 = conn.last_insert_rowid();
+                created += 1;
+                conn.last_insert_rowid()
+            }
+        };
 
-        // Insert targets.
+        // Insert new targets (append-only logic).
         {
-            let mut target_stmt = conn
+            let mut insert_stmt = conn
                 .prepare(
-                    "INSERT INTO combo_targets (combo_id, provider_id, account_id, model_row_id, priority_order) \
-                     VALUES (?1, ?2, ?3, ?4, ?5)",
+                    "INSERT INTO combo_targets (combo_id, provider_id, account_id, model_row_id, priority_order)                      VALUES (?1, ?2, ?3, ?4, ?5)",
                 )
                 .map_err(|e| CoreError::Database {
                     message: format!("auto-combo target prepare: {e}"),
                     source: Some(Box::new(e)),
                 })?;
-            for (order, (row_id, provider_id, account_id)) in targets.iter().enumerate() {
-                target_stmt
-                    .execute(rusqlite::params![
-                        combo_id,
-                        provider_id,
-                        account_id,
-                        row_id,
-                        order as i32
-                    ])
-                    .map_err(|e| CoreError::Database {
-                        message: format!("auto-combo target execute: {e}"),
-                        source: Some(Box::new(e)),
-                    })?;
+
+            for &(row_id, ref provider_id, account_id) in &targets {
+                // Check if target already exists in the combo.
+                let target_exists: bool = conn
+                    .query_row(
+                        "SELECT EXISTS(                          SELECT 1 FROM combo_targets                          WHERE combo_id = ?1                            AND provider_id = ?2                            AND COALESCE(account_id, -1) = COALESCE(?3, -1)                            AND model_row_id = ?4)",
+                        rusqlite::params![
+                            combo_id,
+                            provider_id,
+                            account_id,
+                            row_id
+                        ],
+                        |row| row.get::<_, i64>(0),
+                    )
+                    .map(|v| v != 0)
+                    .unwrap_or(false);
+
+                if !target_exists {
+                    // Get next priority order (max + 1)
+                    let max_order: i32 = conn
+                        .query_row(
+                            "SELECT COALESCE(MAX(priority_order), -1) FROM combo_targets WHERE combo_id = ?1",
+                            rusqlite::params![combo_id],
+                            |row| row.get(0),
+                        )
+                        .unwrap_or(-1);
+                    let next_order = max_order + 1;
+
+                    insert_stmt
+                        .execute(rusqlite::params![
+                            combo_id,
+                            provider_id,
+                            account_id,
+                            row_id,
+                            next_order
+                        ])
+                        .map_err(|e| CoreError::Database {
+                            message: format!("auto-combo target execute: {e}"),
+                            source: Some(Box::new(e)),
+                        })?;
+                }
             }
         }
-
-        created += 1;
     }
 
     Ok(created)
@@ -1211,5 +1245,106 @@ mod tests {
             "context_length should be refreshed to models.dev's 200000, got {}",
             ctx
         );
+    }
+
+    #[test]
+    fn auto_create_combos_appends_new_targets() {
+        let conn = Connection::open_in_memory().unwrap();
+        
+        // Create models, combos, combo_targets, and accounts tables.
+        conn.execute_batch(
+            "CREATE TABLE models (
+                 id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+                 provider_id         TEXT NOT NULL,
+                 model_id            TEXT NOT NULL,
+                 context_length      INTEGER,
+                 active              INTEGER NOT NULL DEFAULT 1,
+                 custom              INTEGER NOT NULL DEFAULT 0,
+                 model_id_normalized TEXT,
+                 UNIQUE(provider_id, model_id)
+             );
+             CREATE TABLE accounts (
+                 id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+                 provider_id         TEXT NOT NULL,
+                 health_status       TEXT NOT NULL DEFAULT 'healthy'
+             );
+             CREATE TABLE combos (
+                 id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+                 name                TEXT NOT NULL UNIQUE,
+                 strategy            TEXT NOT NULL,
+                 race_size           INTEGER NOT NULL
+             );
+             CREATE TABLE combo_targets (
+                 id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+                 combo_id            INTEGER NOT NULL REFERENCES combos(id) ON DELETE CASCADE,
+                 provider_id         TEXT NOT NULL,
+                 account_id          INTEGER REFERENCES accounts(id),
+                 model_row_id        INTEGER REFERENCES models(id) ON DELETE CASCADE,
+                 priority_order      INTEGER NOT NULL,
+                 UNIQUE(combo_id, account_id, model_row_id)
+             );"
+        )
+        .unwrap();
+
+        // 1. Insert models with different naming conventions that normalize to "gpt-oss-120b"
+        conn.execute(
+            "INSERT INTO models (provider_id, model_id, model_id_normalized) VALUES ('nvidia-nim', 'openai/gpt-oss-120b', 'gpt-oss-120b')",
+            []
+        ).unwrap();
+        conn.execute(
+            "INSERT INTO models (provider_id, model_id, model_id_normalized) VALUES ('groq', 'openai/gpt-oss-120b', 'gpt-oss-120b')",
+            []
+        ).unwrap();
+        conn.execute(
+            "INSERT INTO models (provider_id, model_id, model_id_normalized) VALUES ('ollama-cloud', 'gpt-oss:120b', 'gpt-oss-120b')",
+            []
+        ).unwrap();
+
+        // Insert accounts for these providers (to make them healthy/active)
+        conn.execute("INSERT INTO accounts (id, provider_id, health_status) VALUES (1, 'nvidia-nim', 'healthy')", []).unwrap();
+        conn.execute("INSERT INTO accounts (id, provider_id, health_status) VALUES (2, 'groq', 'healthy')", []).unwrap();
+        conn.execute("INSERT INTO accounts (id, provider_id, health_status) VALUES (3, 'ollama-cloud', 'healthy')", []).unwrap();
+
+        // 2. Run auto_create_combos.
+        // It should group all three and create one combo "auto:gpt-oss-120b"
+        let count = auto_create_combos(&conn).unwrap();
+        assert_eq!(count, 1, "Should create 1 auto combo");
+
+        // Verify the combo name and targets
+        let combo_id: i64 = conn.query_row("SELECT id FROM combos WHERE name = 'auto:gpt-oss-120b'", [], |r| r.get(0)).unwrap();
+        let targets_count: i64 = conn.query_row("SELECT COUNT(*) FROM combo_targets WHERE combo_id = ?1", rusqlite::params![combo_id], |r| r.get(0)).unwrap();
+        assert_eq!(targets_count, 3, "Should have 3 targets in the combo");
+
+        // Verify priority orders are 0, 1, 2
+        let orders: Vec<i32> = {
+            let mut stmt = conn.prepare("SELECT priority_order FROM combo_targets WHERE combo_id = ?1 ORDER BY priority_order").unwrap();
+            let rows = stmt.query_map(rusqlite::params![combo_id], |r| r.get::<_, i32>(0)).unwrap();
+            rows.map(|r| r.unwrap()).collect()
+        };
+        assert_eq!(orders, vec![0, 1, 2]);
+
+        // 3. Insert another model that normalizes to "gpt-oss-120b"
+        conn.execute(
+            "INSERT INTO models (provider_id, model_id, model_id_normalized) VALUES ('cerebras', 'gpt-oss-120b', 'gpt-oss-120b')",
+            []
+        ).unwrap();
+        conn.execute("INSERT INTO accounts (id, provider_id, health_status) VALUES (4, 'cerebras', 'healthy')", []).unwrap();
+
+        // 4. Run auto_create_combos again.
+        // Since the combo already exists, it should not be "created" again (count = 0).
+        // But it should append the new cerebras target to the existing combo.
+        let count2 = auto_create_combos(&conn).unwrap();
+        assert_eq!(count2, 0, "No new combos should be created");
+
+        let targets_count2: i64 = conn.query_row("SELECT COUNT(*) FROM combo_targets WHERE combo_id = ?1", rusqlite::params![combo_id], |r| r.get(0)).unwrap();
+        assert_eq!(targets_count2, 4, "Should now have 4 targets in the combo");
+
+        // Verify the new target has priority_order = 3
+        let orders2: Vec<i32> = {
+            let mut stmt = conn.prepare("SELECT priority_order FROM combo_targets WHERE combo_id = ?1 ORDER BY priority_order").unwrap();
+            let rows = stmt.query_map(rusqlite::params![combo_id], |r| r.get::<_, i32>(0)).unwrap();
+            rows.map(|r| r.unwrap()).collect()
+        };
+        assert_eq!(orders2, vec![0, 1, 2, 3]);
     }
 }

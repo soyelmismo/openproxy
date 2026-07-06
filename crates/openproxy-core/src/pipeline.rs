@@ -2140,6 +2140,56 @@ impl Pipeline {
             );
         }
 
+        // Load the model row. Sub-combo targets (`model_row_id =
+        // None`) reach this point only via a programming error
+        // (the resolver is supposed to flatten them away before
+        // they land in `execute_single`); the explicit error
+        // surface is just defense in depth.
+        let model_row_id = match target.model_row_id {
+            Some(m) => m,
+            None => {
+                let err = CoreError::Internal(format!(
+                    "execute_single called on a sub-combo target (id={})",
+                    target.id.0
+                ));
+                return self.record_and_fail(
+                    req,
+                    combo,
+                    target,
+                    FailureContext {
+                        attempt,
+                        race_size,
+                        err: &err,
+                        started,
+                        model: None,
+                        connect_ms: None,
+                        ttft_ms: None,
+                        status_code: 0,
+                    },
+                );
+            }
+        };
+        let model = match self.load_model(model_row_id) {
+            Ok(m) => m,
+            Err(e) => {
+                return self.record_and_fail(
+                    req,
+                    combo,
+                    target,
+                    FailureContext {
+                        attempt,
+                        race_size,
+                        err: &e,
+                        started,
+                        model: None,
+                        connect_ms: None,
+                        ttft_ms: None,
+                        status_code: 0,
+                    },
+                );
+            }
+        };
+
         // Live-log stage event: request accepted by the pipeline.
         // Stage events are always emitted (not gated on recording)
         // so the dashboard can show real-time inflight entries with
@@ -2149,7 +2199,7 @@ impl Pipeline {
             request_id: req.request_id.to_string(),
             trace_id: trace_id.to_string(),
             provider_id: target.provider_id.to_string(),
-            upstream_model_id: String::new(),
+            upstream_model_id: model.model_id.as_str().to_string(),
             stage: "started".into(),
             elapsed_ms: 0,
             connect_ms: None,
@@ -2203,7 +2253,7 @@ impl Pipeline {
                                     race_size,
                                     err: &e,
                                     started,
-                                    model: None,
+                                    model: Some(&model),
                                     connect_ms: None,
                                     ttft_ms: None,
                                     status_code: e.http_status(),
@@ -2268,7 +2318,7 @@ impl Pipeline {
                                             race_size,
                                             err: &e,
                                             started,
-                                            model: None,
+                                            model: Some(&model),
                                             connect_ms: None,
                                             ttft_ms: None,
                                             status_code: e.http_status(),
@@ -2341,6 +2391,9 @@ impl Pipeline {
                     }
                 }
 
+                let mut custom_req = req.openai_request.clone();
+                custom_req.model = model.model_id.as_str().to_string();
+
                 let executor_result = match target.provider_id.as_str() {
                     "kiro" => {
                         let region = kiro_meta
@@ -2360,7 +2413,7 @@ impl Pipeline {
                             &access_token,
                             region,
                             profile_arn,
-                            &req.openai_request,
+                            &custom_req,
                             req.client_disconnected.clone(),
                             None,
                         )
@@ -2377,7 +2430,7 @@ impl Pipeline {
                             &self.config.upstream_client,
                             &access_token,
                             project_id,
-                            &req.openai_request,
+                            &custom_req,
                             req.client_disconnected.clone(),
                             req.stream_sink.as_ref(),
                             None,
@@ -2400,7 +2453,7 @@ impl Pipeline {
                             req,
                             combo,
                             target,
-                            None,
+                            Some(&model),
                             None,
                             None,
                             None,
@@ -2490,7 +2543,7 @@ impl Pipeline {
                                 race_size,
                                 err: &e,
                                 started,
-                                model: None,
+                                model: Some(&model),
                                 connect_ms: None,
                                 ttft_ms: None,
                                 status_code: e.http_status(),
@@ -2524,55 +2577,7 @@ impl Pipeline {
             }
         };
 
-        // 2. Load the model row. Sub-combo targets (`model_row_id =
-        //    None`) reach this point only via a programming error
-        //    (the resolver is supposed to flatten them away before
-        //    they land in `execute_single`); the explicit error
-        //    surface is just defense in depth.
-        let model_row_id = match target.model_row_id {
-            Some(m) => m,
-            None => {
-                let err = CoreError::Internal(format!(
-                    "execute_single called on a sub-combo target (id={})",
-                    target.id.0
-                ));
-                return self.record_and_fail(
-                    req,
-                    combo,
-                    target,
-                    FailureContext {
-                        attempt,
-                        race_size,
-                        err: &err,
-                        started,
-                        model: None,
-                        connect_ms: None,
-                        ttft_ms: None,
-                        status_code: 0,
-                    },
-                );
-            }
-        };
-        let model = match self.load_model(model_row_id) {
-            Ok(m) => m,
-            Err(e) => {
-                return self.record_and_fail(
-                    req,
-                    combo,
-                    target,
-                    FailureContext {
-                        attempt,
-                        race_size,
-                        err: &e,
-                        started,
-                        model: None,
-                        connect_ms: None,
-                        ttft_ms: None,
-                        status_code: 0,
-                    },
-                );
-            }
-        };
+        // 2. Model row is already loaded at the start of the function.
 
         // 3. Resolve timeouts via the 2-level precedence rule.
         //    Scope the lock guard into its own block so clippy can
