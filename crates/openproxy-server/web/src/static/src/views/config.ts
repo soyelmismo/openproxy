@@ -511,6 +511,9 @@ function renderConfig(): TemplateResult {
     <div class="config-grid">
       ${renderField("recording_ttl_secs", "recording_ttl_secs", liveRecordingTtl, "TTL in seconds. Use 0 to clear bodies on the next prune tick.", (e) => { void onRecordingTtlChange(e); }, { editable: true, step: 1 })}
     </div>
+    <div class="config-actions" style="margin-top: 1rem;">
+      <button class="primary" data-action="configSaveRecordingTtl" @click=${configSaveRecordingTtl}>Save Recording TTL</button>
+    </div>
   `);
 
   const compressionCard = card("Compression", html`

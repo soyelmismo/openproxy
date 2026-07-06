@@ -15,16 +15,31 @@
 //   - Empty request body renders the "No request body recorded."
 //     fallback instead of crashing or showing `{}`.
 //
-// @see tsconfig.test.json for type settings.
-
 import { test, expect, type Page } from '@playwright/test';
 
-// Helper: wait for the log detail modal to be open and a log row to
-// be present, then click a row. Returns the request_id of the row
-// that was clicked.
+const DUMMY_ADMIN_TOKEN = 'op_live_test_dummy_token_for_e2e';
+const ADMIN_TOKEN_STORAGE_KEY = 'openproxy_admin_token';
+
+test.beforeEach(async ({ page }: { page: Page }) => {
+  await page.addInitScript((args: { key: string; token: string }) => {
+    try {
+      localStorage.setItem(args.key, args.token);
+    } catch (_e: unknown) {
+      // Ignore
+    }
+  }, { key: ADMIN_TOKEN_STORAGE_KEY, token: DUMMY_ADMIN_TOKEN });
+});
+
 async function openFirstLogRow(page: Page): Promise<string | null> {
+  page.on('console', msg => console.log('LOG-DETAIL PAGE LOG:', msg.text()));
+  page.on('pageerror', err => console.error('LOG-DETAIL PAGE ERROR:', err.message));
+  page.on('response', response => {
+    if (response.status() >= 400) {
+      console.log(`LOG-DETAIL PAGE RESOURCE ERROR ${response.status()}: ${response.url()}`);
+    }
+  });
   await page.goto('http://localhost:8788/');
-  await page.click('text=Live Logs');
+  await page.click('a[href="#/logs"]');
   await expect(page.locator('#main')).toBeVisible();
   // Wait for the WebSocket + first row.
   const row = page.locator('#logs .log-row[data-id]').first();

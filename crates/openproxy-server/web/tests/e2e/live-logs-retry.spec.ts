@@ -105,8 +105,8 @@ async function snapshotAfterRetry(
   eventNew: SyntheticStage,
 ): Promise<StateSnapshot> {
   return page.evaluate(
-    (args: { eventOld: SyntheticStage; eventNew: SyntheticStage }): StateSnapshot => {
-      const w = window as Window & {
+    async (args: { eventOld: SyntheticStage; eventNew: SyntheticStage }): Promise<StateSnapshot> => {
+      const w = window as unknown as {
         __openproxyState: {
           logs: {
             stagesByTraceId?: Map<string, SyntheticStage>;
@@ -179,6 +179,9 @@ async function snapshotAfterRetry(
       // e2e suite; calling it always re-runs the private
       // `renderLogsRows()` symbol inside the bundle.
       w.__openproxyLogsGoPage(1);
+
+      // Wait for the scheduled microtask rendering to execute.
+      await new Promise(resolve => queueMicrotask(resolve));
 
       // Read what the renderer shows. The `.log-row` elements
       // carry `data-trace-id` (set by `renderLogRowHtml` in

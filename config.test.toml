@@ -1,0 +1,36 @@
+[server]
+bind = "127.0.0.1:8788"
+request_max_body_bytes = 10485760
+
+[storage]
+database_path = "/root/.openproxy/data.db"
+encryption_key_source = "env"
+
+[racing]
+default_race_size = 1
+max_race_size = 8
+abort_grace_ms = 500
+
+[timeouts]
+connect_ms = 5000
+request_send_ms = 10000
+ttft_ms = 30000
+idle_chunk_ms = 120000
+total_ms = 300000
+
+[retries]
+max_attempts = 3
+backoff_base_ms = 200
+backoff_factor = 2
+backoff_jitter_pct = 50
+
+[circuit_breaker]
+failure_threshold = 5
+unhealthy_duration_ms = 60000
+
+[logging]
+format = "json"
+level = "info"
+
+[compression]
+mode = "off"

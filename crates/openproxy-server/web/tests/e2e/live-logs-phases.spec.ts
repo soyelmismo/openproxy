@@ -114,7 +114,7 @@ async function injectAndSnapshot(
   stages: SyntheticStagePhases[],
 ): Promise<RenderSnapshot> {
   return page.evaluate(
-    (args: { stages: SyntheticStagePhases[] }): RenderSnapshot => {
+    async (args: { stages: SyntheticStagePhases[] }): Promise<RenderSnapshot> => {
       const w = window as unknown as {
         __openproxyState: {
           logs: {
@@ -169,6 +169,9 @@ async function injectAndSnapshot(
 
       // Force a re-render.
       w.__openproxyLogsGoPage(1);
+
+      // Wait for the scheduled microtask rendering to execute.
+      await new Promise(resolve => queueMicrotask(resolve));
 
       // Read what the renderer shows. The `.log-row` elements carry
       // `data-trace-id` (set by `renderLogRowHtml` in

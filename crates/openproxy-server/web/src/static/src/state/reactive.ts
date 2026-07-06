@@ -12,7 +12,7 @@
 // - The router calls `mountView` for each route and captures the
 //   returned cleanup function.
 
-import { render, nothing, type TemplateResult } from 'lit-html';
+import { render, type TemplateResult } from 'lit-html';
 
 let currentContainer: HTMLElement | null = null;
 let currentRenderFn: (() => TemplateResult) | null = null;
@@ -61,9 +61,9 @@ export function requestUpdate(): void {
     try {
       if (renderBroken) {
         // Previous render crashed — lit-html's internal state is
-        // corrupted. Reset by clearing the container, then do a
-        // fresh render from scratch.
-        render(nothing, currentContainer);
+        // corrupted. Reset by clearing the container and deleting its
+        // lit-html part reference, then do a fresh render from scratch.
+        delete (currentContainer as any)._$litPart$;
         currentContainer.innerHTML = '';
         renderBroken = false;
       }
@@ -77,7 +77,7 @@ export function requestUpdate(): void {
         updateScheduled = false;
         if (currentContainer && currentRenderFn && currentContainer.isConnected) {
           try {
-            render(nothing, currentContainer);
+            delete (currentContainer as any)._$litPart$;
             currentContainer.innerHTML = '';
             render(currentRenderFn(), currentContainer);
             renderBroken = false;
@@ -104,7 +104,7 @@ export function forceUpdate(): void {
   }
   try {
     if (renderBroken) {
-      render(nothing, currentContainer);
+      delete (currentContainer as any)._$litPart$;
       currentContainer.innerHTML = '';
       renderBroken = false;
     }

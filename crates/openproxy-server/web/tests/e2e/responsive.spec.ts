@@ -8,13 +8,30 @@
 // The project uses Playwright; the spec mentioned "puppeteer-core"
 // as the concept, not the library name.
 //
-// @see tsconfig.test.json for type settings.
-
 import { test, expect, type Page } from '@playwright/test';
 
+const DUMMY_ADMIN_TOKEN = 'op_live_test_dummy_token_for_e2e';
+const ADMIN_TOKEN_STORAGE_KEY = 'openproxy_admin_token';
 const NAV_LINKS: readonly string[] = ['Home', 'Providers', 'Combos', 'API Keys', 'Analytics', 'Live Logs', 'Config'];
 
+test.beforeEach(async ({ page }: { page: Page }) => {
+  await page.addInitScript((args: { key: string; token: string }) => {
+    try {
+      localStorage.setItem(args.key, args.token);
+    } catch (_e: unknown) {
+      // Ignore
+    }
+  }, { key: ADMIN_TOKEN_STORAGE_KEY, token: DUMMY_ADMIN_TOKEN });
+});
+
 async function gotoHome(page: Page): Promise<void> {
+  page.on('console', msg => console.log('PAGE LOG:', msg.text()));
+  page.on('pageerror', err => console.error('PAGE ERROR:', err.message));
+  page.on('response', response => {
+    if (response.status() === 404) {
+      console.log(`PAGE RESOURCE 404: ${response.url()}`);
+    }
+  });
   await page.goto('http://localhost:8788/');
   // Wait for the shell to mount: sidebar + main must exist.
   await page.waitForSelector('.sidebar', { timeout: 10000 });

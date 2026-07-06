@@ -7,7 +7,7 @@ test('Live Logs WebSocket connection', async ({ page }: { page: Page }) => {
   await page.goto('http://localhost:8788/');
 
   // Click on the "Live Logs" link to navigate to the logs section
-  await page.click('text=Live Logs');
+  await page.click('a[href="#/logs"]');
 
   // Wait for the main content area to be ready
   await expect(page.locator('#main')).toBeVisible();

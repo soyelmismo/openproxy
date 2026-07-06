@@ -16,7 +16,11 @@ module.exports = defineConfig({
   timeout: 30 * 1000,
   expect: { timeout: 10 * 1000 },
   reporter: 'list',
-  use: { headless: true, baseURL: 'http://localhost:8788' },
+  use: {
+    headless: true,
+    baseURL: 'http://localhost:8788',
+    storageState: './playwright-state.json',
+  },
   // Single worker to avoid fighting the WebSocket / shared DB.
   workers: 1,
 });

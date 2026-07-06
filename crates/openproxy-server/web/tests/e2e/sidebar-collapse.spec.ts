@@ -102,6 +102,7 @@ test('nav link click + active class works in both collapsed and expanded modes',
   // Expanded: click Providers → active class on Providers, route updates.
   await page.click('a[href="#/providers"]');
   await expect(page).toHaveURL(/#\/providers$/);
+  await expect(page.locator('a[href="#/providers"]')).toHaveClass(/active/);
   const activeExpanded = await page.locator('.sidebar nav a.active').first().getAttribute('data-nav');
   expect(activeExpanded).toBe('#/providers');
 
@@ -114,6 +115,7 @@ test('nav link click + active class works in both collapsed and expanded modes',
   // Navigate to Combos via collapsed sidebar.
   await page.click('a[href="#/combos"]');
   await expect(page).toHaveURL(/#\/combos$/);
+  await expect(page.locator('a[href="#/combos"]')).toHaveClass(/active/);
   const activeCombosCollapsed = await page.locator('.sidebar nav a.active').first().getAttribute('data-nav');
   expect(activeCombosCollapsed).toBe('#/combos');
 });

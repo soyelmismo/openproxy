@@ -9,7 +9,7 @@ import { test, expect, type Page } from '@playwright/test';
 test('Config Recording TTL save action posts the configured TTL', async ({ page }: { page: Page }) => {
   let putSeen = false;
 
-  await page.route('**/web/api/config/recording-ttl', async (route) => {
+  await page.route('**/admin/api/config/recording-ttl', async (route) => {
     putSeen = true;
     expect(route.request().method()).toBe('PUT');
     expect(route.request().headers()['content-type']).toContain('application/json');
@@ -22,7 +22,7 @@ test('Config Recording TTL save action posts the configured TTL', async ({ page 
   });
 
   await page.goto('http://localhost:8788/');
-  await page.click('text=Config');
+  await page.click('a[href="#/config"]');
   await expect(page.locator('#main')).toBeVisible();
 
   const input = page.locator('input[name="recording_ttl_secs"]');
@@ -31,5 +31,5 @@ test('Config Recording TTL save action posts the configured TTL', async ({ page 
   await page.click('button[data-action="configSaveRecordingTtl"]');
 
   await expect.poll(() => putSeen).toBe(true);
-  await expect(page.locator('text=Recording TTL set to 123s')).toBeVisible();
+  await expect(page.locator('text=Recording TTL set to 123s').first()).toBeVisible();
 });

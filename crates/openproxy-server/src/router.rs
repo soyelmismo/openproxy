@@ -473,6 +473,8 @@ pub fn build_router(state: AppState) -> Router {
         .fallback(admin_ui::serve_asset);
 
     Router::new()
+        .route("/", get(|| async { axum::response::Redirect::temporary("/admin") }))
+        .route("/admin/", get(|| async { axum::response::Redirect::temporary("/admin") }))
         .route("/v1/health", get(health))
         .merge(public_api_routes)
         .nest("/admin", admin_routes)

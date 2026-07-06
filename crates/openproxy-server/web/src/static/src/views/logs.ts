@@ -31,6 +31,7 @@
 
 import { html, type TemplateResult } from "lit-html";
 import { repeat } from "lit-html/directives/repeat.js";
+import { live } from "lit-html/directives/live.js";
 // unsafeHTML import removed — log-row.ts now returns TemplateResult directly.
 import { state } from "../state/index.js";
 import { api } from "../state/api.js";
@@ -177,6 +178,9 @@ function saveVisibleColumns(): void {
   } catch (_e) { /* localStorage may be disabled — non-fatal */ }
 }
 
+const logKeyMap = new WeakMap<RecentUsageRow, string>();
+let logKeyCounter = 0;
+
 function mergeLogsByDescId(existing: RecentUsageRow[], incoming: RecentUsageRow[]): RecentUsageRow[] {
   // Key strategy: each attempt is a SEPARATE row, keyed by its unique
   // `trace_id` (per-attempt). Retries of the same `request_id` have
@@ -201,7 +205,13 @@ function mergeLogsByDescId(existing: RecentUsageRow[], incoming: RecentUsageRow[
     if (r.id && r.id > 0) return `id:${r.id}`;
     if (r.trace_id) return `tid:${r.trace_id}`;
     if (r.request_id) return `rid:${r.request_id}`;
-    return `fallback:${Math.random()}`;
+    let fallback = logKeyMap.get(r);
+    if (!fallback) {
+      logKeyCounter++;
+      fallback = `fallback:${logKeyCounter}`;
+      logKeyMap.set(r, fallback);
+    }
+    return fallback;
   };
   for (const row of existing) {
     merged.set(rowKey(row), row);
@@ -364,7 +374,7 @@ function renderPagination(totalRows: number, totalP: number): TemplateResult {
 
 function renderColumnsMenu(): TemplateResult {
   const visible = state.logs.visibleColumns || new Set(LOG_COLUMNS.map((c) => c.key));
-  return html`<div class="columns-menu ${columnsMenuOpen ? "open" : ""}" role="menu">${LOG_COLUMNS.map((c) => html`<label class="columns-menu-item"><input type="checkbox" ?checked=${visible.has(c.key)} @change=${(e: Event) => onColumnToggle(c.key, e)}><span>${c.label}</span></label>`)}</div>`;
+  return html`<div class="columns-menu ${columnsMenuOpen ? "open" : ""}" role="menu">${LOG_COLUMNS.map((c) => html`<label class="columns-menu-item"><input type="checkbox" data-arg1="${c.key}" .checked=${live(visible.has(c.key))} @change=${(e: Event) => onColumnToggle(c.key, e)}><span>${c.label}</span></label>`)}</div>`;
 }
 
 function renderLogsView(): TemplateResult {
@@ -401,7 +411,36 @@ function renderLogsView(): TemplateResult {
   const start = (state.logs.page - 1) * rpp;
   const end = Math.min(start + rpp, totalRows);
   const pageRows = rows.slice(start, end);
+  for (const r of pageRows) {
+    if (!r.__inflight && r.status_code > 0) {
+      synthesizeTerminalEvent(r);
+    }
+  }
   const visibleColKeys = state.logs.visibleColumns || new Set(LOG_COLUMNS.map((c) => c.key));
+
+  const seenKeys = new Set<string>();
+  const passKeys = new WeakMap<RecentUsageRow, string>();
+  for (const r of pageRows) {
+    let key = r.trace_id ? `tid:${r.trace_id}` : (r.id && r.id > 0 ? `id:${r.id}` : (r.request_id ? `req:${r.request_id}` : ""));
+    if (!key) {
+      let fallback = logKeyMap.get(r);
+      if (!fallback) {
+        logKeyCounter++;
+        fallback = `fallback:${logKeyCounter}`;
+        logKeyMap.set(r, fallback);
+      }
+      key = fallback;
+    }
+    if (seenKeys.has(key)) {
+      let suffix = 1;
+      while (seenKeys.has(`${key}_dup${suffix}`)) {
+        suffix++;
+      }
+      key = `${key}_dup${suffix}`;
+    }
+    seenKeys.add(key);
+    passKeys.set(r, key);
+  }
 
   // The connection-status badge and the recording-toggle button are
   // rendered with STATIC class/text content. Their dynamic state is
@@ -437,8 +476,8 @@ function renderLogsView(): TemplateResult {
           ? html`<div class="empty" style="padding:2rem;">No recent requests yet. Use the API to see logs appear here in real time.</div>`
           : repeat(
               pageRows,
-              (r: RecentUsageRow) => r.trace_id || (r.id && r.id > 0 ? `id:${r.id}` : `req:${r.request_id || Math.random()}`),
-              (r: RecentUsageRow) => html`<div data-key=${r.trace_id || (r.id && r.id > 0 ? `id:${r.id}` : `req:${r.request_id || Math.random()}`)}>${renderLogRow(r, visibleColKeys)}</div>`,
+              (r: RecentUsageRow) => passKeys.get(r)!,
+              (r: RecentUsageRow) => html`<div data-key=${passKeys.get(r)!}>${renderLogRow(r, visibleColKeys)}</div>`,
             )}
       </div>
       ${renderPagination(totalRows, totalP)}
@@ -1288,20 +1327,22 @@ export async function mountLogs(): Promise<(() => void) | void> {
   if (!state.logs.visibleColumns) {
     state.logs.visibleColumns = loadVisibleColumns();
   }
-  state.logs.rows = [];
-  state.logs.rowById = new Map();
-  state.logs.lastSeenId = 0;
-  state.logs.liveTokens = new Map();
-  state.logs.reconnectAttempt = 0;
-  state.logs.page = 1;
-  state.logs.followTail = true;
-  // Clear stale inflight/stage state from previous sessions so
-  // old ghost entries (left by aborted race losers before the
-  // grace-period fix) don't survive across view navigations.
-  state.logs.inflightByTraceId = new Map();
-  state.logs.inflightByRequestId = new Map();
-  state.logs.stagesByTraceId = new Map();
-  state.logs.stagesByRequestId = new Map();
+  if (!state.logs.ws || state.logs.ws.readyState !== WebSocket.OPEN) {
+    state.logs.rows = [];
+    state.logs.rowById = new Map();
+    state.logs.lastSeenId = 0;
+    state.logs.liveTokens = new Map();
+    state.logs.reconnectAttempt = 0;
+    state.logs.page = 1;
+    state.logs.followTail = true;
+    // Clear stale inflight/stage state from previous sessions so
+    // old ghost entries (left by aborted race losers before the
+    // grace-period fix) don't survive across view navigations.
+    state.logs.inflightByTraceId = new Map();
+    state.logs.inflightByRequestId = new Map();
+    state.logs.stagesByTraceId = new Map();
+    state.logs.stagesByRequestId = new Map();
+  }
 
   // Mount the lit-html view. `mountView` registers the render
   // function with the reactive system so `requestUpdate()` (called
