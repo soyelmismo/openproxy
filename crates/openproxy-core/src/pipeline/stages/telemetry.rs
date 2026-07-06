@@ -27,7 +27,7 @@ impl PipelineStage for TelemetryRecorderStage {
                 // If routing failed with NoHealthyTargets, record it explicitly
                 if let CoreError::NoHealthyTargets(_) = e
                     && let Some(ref combo) = ctx.combo {
-                        ctx.pipeline.record_no_healthy_targets_row(
+                        ctx.pipeline.tracker.record_no_healthy_targets_row(
                             Arc::clone(&ctx.req),
                             combo,
                             started,

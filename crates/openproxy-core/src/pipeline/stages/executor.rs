@@ -39,7 +39,7 @@ impl PipelineStage for UpstreamExecutorStage {
             let race_result = crate::pipeline::racing::run_race(&ctx.pipeline, Arc::clone(&ctx.req), combo, to_run.clone(), race_n as u8).await;
 
             if race_result.error.is_none() {
-                ctx.pipeline.mark_client_response(race_result.usage_tuple.clone());
+                ctx.pipeline.tracker.mark_client_response(race_result.usage_tuple.clone());
                 return Ok(race_result);
             }
 
@@ -132,7 +132,7 @@ impl PipelineStage for UpstreamExecutorStage {
 
             match result.error.as_ref() {
                 None => {
-                    ctx.pipeline.mark_client_response(result.usage_tuple.clone());
+                    ctx.pipeline.tracker.mark_client_response(result.usage_tuple.clone());
                     return Ok(result);
                 }
                 Some(e) => {
@@ -184,7 +184,7 @@ impl PipelineStage for UpstreamExecutorStage {
                     ctx.combo_walk_log.len(),
                     ctx.combo_walk_log.join("\n")
                 );
-                ctx.pipeline.mark_client_response(r.usage_tuple.clone());
+                ctx.pipeline.tracker.mark_client_response(r.usage_tuple.clone());
                 return Ok(r);
             }
 

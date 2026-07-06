@@ -41,7 +41,7 @@
 //!
 //! - `crates/openproxy-server/src/handlers/chat.rs` calls it
 //!   when building `PipelineRequest::request_headers`.
-//! - The pipeline's `record_attempt_raw_with_tokens` does NOT
+//! - The pipeline's `UsageRecordBuilder` does NOT
 //!   call it (the chat handler is the only path that injects
 //!   client headers into the BTreeMap, so the redaction at the
 //!   ingress point is sufficient).

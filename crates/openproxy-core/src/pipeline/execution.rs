@@ -2,10 +2,8 @@ use crate::adapters::{AdapterFormat, ProviderAdapter};
 use crate::combos::{self, Combo, ComboTarget};
 use crate::compression::{CompressionMode, stats::CompressionStats};
 use crate::error::{CoreError, Result};
-use crate::cost::UsageInput;
 use crate::ids::ComboId;
-use crate::models::Model;
-use crate::pipeline::{FailureContext, ErrorPhase, Pipeline, PipelineRequest, PipelineResult, is_upstream_health_issue};
+use crate::pipeline::{FailureContext, ErrorPhase, Pipeline, PipelineRequest, PipelineResult};
 use crate::retry::RetryPolicy;
 use crate::timeouts::{self, ModelTimeoutOverrides};
 use crate::upstream::CancellationToken;
@@ -13,6 +11,7 @@ use std::sync::Arc;
 use std::time::Instant;
 use tokio::sync::watch;
 use crate::pipeline::repository::PipelineRepository;
+
 
 impl Pipeline {
     /// Drive one chat-completion request to completion.
@@ -89,53 +88,6 @@ impl Pipeline {
         }
         Ok(added)
     }
-
-    pub(crate) fn record_no_healthy_targets_row(
-        &self,
-        req: Arc<PipelineRequest>,
-        combo: &Combo,
-        started: Instant,
-    ) {
-        let input = UsageInput {
-            request_id: req.request_id,
-            trace_id: req.trace_id.to_string(),
-            attempt: 1,
-            provider_id: crate::ids::ProviderId::new(""),
-            account_id: None,
-            combo_id: Some(combo.id),
-            combo_target_id: None,
-            model_row_id: None,
-            upstream_model_id: req.openai_request.model.clone(),
-            prompt_tokens: None,
-            completion_tokens: None,
-            connect_ms: None,
-            ttft_ms: None,
-            total_ms: started.elapsed().as_millis() as u64,
-            status_code: 502,
-            error_msg: Some("no_healthy_targets".to_string()),
-            race_total: 1,
-            race_lost: false,
-            api_key_id: req.api_key_id,
-            request_body_json: None,
-            response_body_json: None,
-            request_headers: None,
-            response_headers: None,
-            error_message: Some("no_healthy_targets".to_string()),
-            race_attempts: 1,
-            is_streaming: false,
-            stream_complete: false,
-            stop_reason: None,
-            compression_savings_pct: None,
-            compression_techniques: None,
-            client_response: true,
-            prompt_tokens_estimated: false,
-            completion_tokens_estimated: false,
-            endpoint_kind: crate::endpoint::EndpointKind::Chat,
-        };
-        let conn = self.conn.lock();
-        let _ = crate::cost::record(&conn, &input);
-    }
-
 
 
     pub async fn resolve_combo_targets_full(&self, eligible: Vec<ComboTarget>) -> Vec<crate::pipeline::context::ResolvedTarget> {
@@ -297,15 +249,35 @@ impl Pipeline {
             return match result {
                 Ok(response) => {
                     let total_ms = started.elapsed().as_millis() as u64;
-                    let usage_tuple = match self.record_attempt_raw_with_tokens(
-                        Arc::clone(&req), combo, target, Some(&model), None, None, None, total_ms, 200, attempt, race_size, trace_id.clone(),
-                        response.usage.as_ref().map(|u| u.prompt_tokens),
-                        response.usage.as_ref().map(|u| u.completion_tokens),
-                        None, None, None, None, false, true, None,
-                    ) {
+                    let usage_tuple = match crate::pipeline::usage_tracker::UsageRecordBuilder::new(
+                        &self.tracker,
+                        Arc::clone(&req),
+                        combo,
+                        target,
+                    )
+                    .model_opt(Some(&model))
+                    .err_opt(None)
+                    .connect_ms_opt(None)
+                    .ttft_ms_opt(None)
+                    .total_ms(total_ms)
+                    .status_code(200)
+                    .attempt(attempt)
+                    .race_size(race_size)
+                    .trace_id(trace_id.clone())
+                    .prompt_tokens_opt(response.usage.as_ref().map(|u| u.prompt_tokens))
+                    .completion_tokens_opt(response.usage.as_ref().map(|u| u.completion_tokens))
+                    .request_body_json(None)
+                    .response_body_json(None)
+                    .request_headers(None)
+                    .response_headers(None)
+                    .is_streaming(false)
+                    .stream_complete(true)
+                    .stop_reason(None)
+                    .record()
+                    {
                         Ok(id) => id,
                         Err(e) => {
-                            tracing::warn!(error = %e, "record_attempt_raw_with_tokens failed; non-fatal");
+                            tracing::warn!(error = %e, "UsageRecordBuilder failed; non-fatal");
                             None
                         }
                     };
@@ -503,7 +475,7 @@ impl Pipeline {
         });
 
         let result = self
-            .dispatch_upstream(
+            .dispatcher.dispatch_upstream(
                 target,
                 combo,
                 Arc::clone(&req),
@@ -670,19 +642,6 @@ impl Pipeline {
             }
         }
     }
-    pub(crate) fn mark_client_response(&self, usage_tuple: Option<(String, u8, crate::ids::ComboTargetId)>) {
-        let Some((request_id, attempt, target_id)) = usage_tuple else { return };
-        let job = crate::pipeline::worker::BackgroundJob::MarkClientResponse { request_id, attempt, target_id };
-        if let Err(e) = self.config.background_tx.try_send(job) {
-            if matches!(e, tokio::sync::mpsc::error::TrySendError::Closed(_)) {
-                let job = e.into_inner();
-                let conn = self.conn.clone();
-                crate::pipeline::worker::process_job(&conn, job);
-            } else {
-                tracing::warn!("failed to send RecordAttempt to background worker: {}", e);
-            }
-        }
-    }
 
     pub(crate) fn failure(&self, err: CoreError, attempts: u8, _phase: ErrorPhase) -> PipelineResult {
         PipelineResult {
@@ -702,45 +661,6 @@ impl Pipeline {
         *rx.borrow_and_update()
     }
 
-    pub(crate) fn check_and_trigger_proxy_rotation(
-        &self,
-        provider_id: &crate::ids::ProviderId,
-        status_code: Option<u16>,
-        is_connect_error: bool,
-    ) {
-        let conn = self.conn.lock();
-        if let Ok(Some(provider)) = crate::providers::get(&conn, provider_id)
-            && provider.use_proxies {
-                let mut should_rotate = false;
-                let errors_list: Vec<&str> = provider.proxy_rotation_errors
-                    .split(',')
-                    .map(|s| s.trim())
-                    .collect();
-
-                if let Some(sc) = status_code {
-                    let sc_str = sc.to_string();
-                    if errors_list.contains(&sc_str.as_str()) {
-                        should_rotate = true;
-                    }
-                }
-
-                if is_connect_error
-                    && (errors_list.contains(&"connect_error") || errors_list.contains(&"timeout")) {
-                        should_rotate = true;
-                    }
-
-                if should_rotate
-                    && let Some(ref bad_proxy_id) = provider.current_proxy_id {
-                        tracing::warn!(
-                            provider = %provider_id,
-                            proxy_id = %bad_proxy_id,
-                            "proxy rotation triggered: marking proxy as dead and clearing binding"
-                        );
-                        let _ = crate::free_proxies::update_proxy_status(&conn, bad_proxy_id, "dead", None);
-                        let _ = crate::providers::update_current_proxy(&conn, provider_id, None);
-                    }
-            }
-    }
 
     pub(crate) fn record_and_fail(
         &self,
@@ -765,7 +685,8 @@ impl Pipeline {
         )
     }
 
-    #[allow(clippy::too_many_arguments)]
+
+        #[allow(clippy::too_many_arguments)]
     pub(crate) fn record_and_fail_with_trace_id_and_partial(
         &self,
         req: Arc<PipelineRequest>,
@@ -778,487 +699,10 @@ impl Pipeline {
         created: u64,
         model_name: &str,
     ) -> PipelineResult {
-        let FailureContext {
-            attempt,
-            race_size,
-            err,
-            started,
-            model,
-            connect_ms,
-            ttft_ms,
-            status_code,
-        } = ctx;
-        let total_ms = started.elapsed().as_millis() as u64;
-        let request_body_json = req
-            .request_body_json
-            .clone()
-            .or_else(|| serde_json::to_value(&*req.openai_request).ok().map(Arc::new));
-        let request_headers = crate::redact::redact_btreemap_sensitive(req.request_headers.clone());
-        let response_body_json: Option<serde_json::Value> =
-            acc.filter(|a| !a.is_completely_empty()).map(|a| {
-                let chunk_id_str = chunk_id.unwrap_or("partial");
-                a.finish(chunk_id_str, created, model_name)
-            });
-        let was_streaming = req.stream_sink.is_some();
-        let (is_streaming, stream_complete) = if response_body_json.is_some() {
-            (true, false)
-        } else {
-            (was_streaming, false)
-        };
-        let usage_tuple = match self.record_attempt_raw_with_tokens(
-            Arc::clone(&req),
-            combo,
-            target,
-            model,
-            Some(err),
-            connect_ms,
-            ttft_ms,
-            total_ms,
-            status_code,
-            attempt,
-            race_size,
-            trace_id,
-            None,
-            None,
-            request_body_json.clone(),
-            response_body_json,
-            Some(request_headers),
-            None,
-            is_streaming,
-            stream_complete,
-            None,
-        ) {
-            Ok(id) => id,
-            Err(e) => {
-                tracing::warn!(error = %e, "record_attempt_raw_with_tokens failed; non-fatal");
-                None
-            }
-        };
-        PipelineResult {
-            status_code: err.http_status(),
-            error: Some(err.clone_for_result()),
-            final_response: None,
-            attempts: attempt,
-            usage_tuple,
-        }
+        self.tracker.record_and_fail_with_trace_id_and_partial(req, combo, target, ctx, trace_id, acc, chunk_id, created, model_name)
     }
 
-    #[allow(clippy::too_many_arguments)]
-    pub(crate) fn fail_stream_client_disconnected(
-        &self,
-        req: Arc<PipelineRequest>,
-        combo: &Combo,
-        target: &ComboTarget,
-        attempt: u8,
-        race_size: u8,
-        started: Instant,
-        model: &Model,
-        connect_ms: u64,
-        ttft_ms: Option<u64>,
-        trace_id: String,
-        acc: Option<&mut crate::sse_accumulator::ResponseAccumulator>,
-        chunk_id: &str,
-        created: u64,
-        model_name: &str,
-    ) -> PipelineResult {
-        let has_partial_content = acc
-            .as_ref()
-            .is_some_and(|a| !a.is_empty());
-        if let Some(ref a) = acc
-            && let Some((code, message)) = a.extract_upstream_error_from_raw() {
-                tracing::warn!(
-                    combo_id = combo.id.0,
-                    target_id = target.id.0,
-                    provider = %target.provider_id,
-                    model = %model.model_id.as_str(),
-                    inline_error_code = code,
-                    inline_error_message = %message,
-                    "client disconnected but upstream had sent inline SSE error \
-                     (code={}); attributing to upstream error, not client disconnect",
-                    code,
-                );
-                let err = CoreError::UpstreamError {
-                    status: code,
-                    provider: target.provider_id.to_string(),
-                    model: model_name.to_string(),
-                    body: message,
-                };
-                let acc_ref: Option<&crate::sse_accumulator::ResponseAccumulator> = match acc {
-                    Some(a) => {
-                        a.mark_partial();
-                        Some(&*a)
-                    }
-                    None => None,
-                };
-                return self.record_and_fail_with_trace_id_and_partial(
-                    req,
-                    combo,
-                    target,
-                    FailureContext {
-                        attempt,
-                        race_size,
-                        err: &err,
-                        started,
-                        model: Some(model),
-                        connect_ms: Some(connect_ms),
-                        ttft_ms,
-                        status_code: code,
-                    },
-                    trace_id,
-                    acc_ref,
-                    Some(chunk_id),
-                    created,
-                    model_name,
-                );
-            }
-        let acc_ref: Option<&crate::sse_accumulator::ResponseAccumulator> = match acc {
-            Some(a) => {
-                a.mark_partial();
-                Some(&*a)
-            }
-            None => None,
-        };
-        let err: CoreError = if has_partial_content {
-            CoreError::UpstreamConnection(
-                "stream interrupted — client disconnected after receiving partial content".into()
-            )
-        } else {
-            CoreError::ClientDisconnected
-        };
-        self.record_and_fail_with_trace_id_and_partial(
-            req,
-            combo,
-            target,
-            FailureContext {
-                attempt,
-                race_size,
-                err: &err,
-                started,
-                model: Some(model),
-                connect_ms: Some(connect_ms),
-                ttft_ms,
-                status_code: 499,
-            },
-            trace_id,
-            acc_ref,
-            Some(chunk_id),
-            created,
-            model_name,
-        )
-    }
 
-    #[allow(clippy::too_many_arguments)]
-    pub(crate) fn fail_on_sink_send_error(
-        &self,
-        e: crate::race_sink::StreamSinkError,
-        req: Arc<PipelineRequest>,
-        combo: &Combo,
-        target: &ComboTarget,
-        attempt: u8,
-        race_size: u8,
-        started: Instant,
-        model: &Model,
-        connect_ms: u64,
-        ttft_ms: Option<u64>,
-        trace_id: String,
-        acc: Option<&mut crate::sse_accumulator::ResponseAccumulator>,
-        chunk_id: &str,
-        created: u64,
-        model_name: &str,
-    ) -> PipelineResult {
-        let err = match e {
-            crate::race_sink::StreamSinkError::Lost => {
-                tracing::debug!(
-                    combo_id = combo.id.0,
-                    target_id = target.id.0,
-                    "sink send failed: Lost (another race lane won)"
-                );
-                CoreError::RaceLost
-            }
-            crate::race_sink::StreamSinkError::Closed => {
-                let elapsed = started.elapsed().as_millis() as u64;
-                let watchdog_fired = *req.client_disconnected.borrow();
-                if let Some(ref a) = acc
-                    && let Some((code, message)) = a.extract_upstream_error_from_raw() {
-                        tracing::warn!(
-                            combo_id = combo.id.0,
-                            target_id = target.id.0,
-                            provider = %target.provider_id,
-                            model = %model.model_id.as_str(),
-                            elapsed_ms = elapsed,
-                            inline_error_code = code,
-                            inline_error_message = %message,
-                            "sink closed after upstream sent inline SSE error \
-                             (code={}, elapsed={}ms); attributing to upstream, \
-                             not client disconnect",
-                            code, elapsed
-                        );
-                        return {
-                            let err = CoreError::UpstreamError {
-                                status: code,
-                                provider: target.provider_id.to_string(),
-                                model: model_name.to_string(),
-                                body: message,
-                            };
-                            let acc_ref: Option<&crate::sse_accumulator::ResponseAccumulator> =
-                                match acc {
-                                    Some(a) => {
-                                        a.mark_partial();
-                                        Some(&*a)
-                                    }
-                                    None => None,
-                                };
-                            self.record_and_fail_with_trace_id_and_partial(
-                                req,
-                                combo,
-                                target,
-                                FailureContext {
-                                    attempt,
-                                    race_size,
-                                    err: &err,
-                                    started,
-                                    model: Some(model),
-                                    connect_ms: Some(connect_ms),
-                                    ttft_ms: None,
-                                    status_code: code,
-                                },
-                                trace_id,
-                                acc_ref,
-                                Some(chunk_id),
-                                created,
-                                model_name,
-                            )
-                        };
-                    }
-                tracing::warn!(
-                    combo_id = combo.id.0,
-                    target_id = target.id.0,
-                    provider = %target.provider_id,
-                    model = %model.model_id.as_str(),
-                    elapsed_ms = elapsed,
-                    connect_ms = connect_ms,
-                    ttft_ms = ?ttft_ms,
-                    watchdog_fired,
-                    "sink send failed: Closed — client/proxy disconnected \
-                     (elapsed={}ms, connect={}ms, ttft={:?}, watchdog_fired={})",
-                    elapsed, connect_ms, ttft_ms, watchdog_fired
-                );
-                CoreError::UpstreamConnection(format!(
-                    "client disconnected (elapsed={}ms, connect={}ms, ttft={:?}) — \
-                     likely proxy idle timeout or client HTTP library timeout",
-                    elapsed, connect_ms, ttft_ms
-                ))
-            }
-        };
-        let acc_ref: Option<&crate::sse_accumulator::ResponseAccumulator> = match acc {
-            Some(a) => {
-                a.mark_partial();
-                Some(&*a)
-            }
-            None => None,
-        };
-        self.record_and_fail_with_trace_id_and_partial(
-            req,
-            combo,
-            target,
-            FailureContext {
-                attempt,
-                race_size,
-                err: &err,
-                started,
-                model: Some(model),
-                connect_ms: Some(connect_ms),
-                ttft_ms,
-                status_code: err.http_status(),
-            },
-            trace_id,
-            acc_ref,
-            Some(chunk_id),
-            created,
-            model_name,
-        )
-    }
-    #[allow(clippy::too_many_arguments)]
-    pub(crate) fn record_attempt_raw_with_tokens(
-        &self,
-        req: Arc<PipelineRequest>,
-        combo: &Combo,
-        target: &ComboTarget,
-        model: Option<&Model>,
-        err: Option<&CoreError>,
-        connect_ms: Option<u64>,
-        ttft_ms: Option<u64>,
-        total_ms: u64,
-        status_code: u16,
-        attempt: u8,
-        race_size: u8,
-        trace_id: String,
-        prompt_tokens: Option<u32>,
-        completion_tokens: Option<u32>,
-        request_body_json: Option<Arc<serde_json::Value>>,
-        response_body_json: Option<serde_json::Value>,
-        request_headers: Option<std::collections::BTreeMap<String, String>>,
-        response_headers: Option<std::collections::BTreeMap<String, String>>,
-        is_streaming: bool,
-        stream_complete: bool,
-        stop_reason: Option<String>,
-    ) -> Result<Option<(String, u8, crate::ids::ComboTargetId)>> {
-        let recording = self.is_recording();
-        let compression_stats_snapshot = self.compression_stats_cell.read().clone();
-        let compression_savings_pct = compression_stats_snapshot
-            .as_ref()
-            .and_then(|s| s.savings_pct_opt());
-        let compression_techniques = compression_stats_snapshot
-            .as_ref()
-            .and_then(|s| s.techniques_csv());
 
-        let (prompt_tokens, prompt_tokens_estimated) = match prompt_tokens {
-            Some(t) if t > 0 => (Some(t), false),
-            _ => {
-                let est = crate::token_estimate::estimate_prompt_tokens(&req.openai_request.messages);
-                if est > 0 {
-                    tracing::debug!(
-                        request_id = %req.request_id,
-                        estimated_prompt_tokens = est,
-                        "upstream did not report usage; estimated prompt tokens from request messages"
-                    );
-                    (Some(est), true)
-                } else {
-                    (None, false)
-                }
-            }
-        };
-
-        let (completion_tokens, completion_tokens_estimated) = match completion_tokens {
-            Some(t) if t > 0 => (Some(t), false),
-            _ => {
-                let completion_text = response_body_json
-                    .as_ref()
-                    .and_then(|v| {
-                        v.get("choices")
-                            .and_then(|c| c.get(0))
-                            .and_then(|c| c.get("message"))
-                            .and_then(|m| m.get("content"))
-                            .and_then(|c| c.as_str())
-                    })
-                    .unwrap_or("");
-                if !completion_text.is_empty() {
-                    let est = crate::token_estimate::estimate_completion_tokens(completion_text);
-                    tracing::debug!(
-                        request_id = %req.request_id,
-                        estimated_completion_tokens = est,
-                        "upstream did not report usage; estimated completion tokens from response body"
-                    );
-                    (Some(est), true)
-                } else {
-                    (None, false)
-                }
-            }
-        };
-
-        let input = UsageInput {
-            request_id: req.request_id,
-            trace_id: trace_id.clone(),
-            attempt,
-            provider_id: target.provider_id.clone(),
-            account_id: target.account_id,
-            combo_id: Some(combo.id),
-            combo_target_id: Some(target.id),
-            model_row_id: model.map(|m| m.row_id),
-            upstream_model_id: model
-                .map(|m| m.model_id.as_str().to_string())
-                .unwrap_or_default(),
-            prompt_tokens,
-            completion_tokens,
-            connect_ms,
-            ttft_ms,
-            total_ms,
-            status_code,
-            error_msg: err.map(|e| format!("{}", e)),
-            race_total: race_size,
-            race_lost: err.is_some() && req.race_cancelled,
-            api_key_id: req.api_key_id,
-            request_body_json: if recording { request_body_json.map(|v| (*v).clone()) } else { None },
-            response_body_json: if recording { response_body_json } else { None },
-            request_headers: if recording { request_headers } else { None },
-            response_headers: if recording { response_headers } else { None },
-            error_message: err.map(|e| format!("{}", e)),
-            race_attempts: race_size,
-            is_streaming,
-            stream_complete,
-            stop_reason: stop_reason.clone(),
-            compression_savings_pct,
-            compression_techniques,
-            client_response: false,
-            prompt_tokens_estimated,
-            completion_tokens_estimated,
-            endpoint_kind: crate::endpoint::EndpointKind::Chat,
-        };
-
-        {
-            let stage_label: &str = if err.is_none() {
-                "completed"
-            } else if req.race_cancelled {
-                "cancelled"
-            } else {
-                "failed"
-            };
-            let error_str: Option<String> =
-                err.map(|e| crate::cost::redact_error_msg(&e.to_string()).0);
-            let terminal_snapshot = self.compression_stats_cell.read().clone();
-            crate::usage::publish_stage_event(crate::usage::StageEvent {
-                request_id: req.request_id.to_string(),
-                trace_id: trace_id.to_string(),
-                provider_id: target.provider_id.to_string(),
-                upstream_model_id: model
-                    .map(|m| m.model_id.as_str().to_string())
-                    .unwrap_or_default(),
-                stage: stage_label.into(),
-                elapsed_ms: total_ms,
-                connect_ms,
-                ttft_ms,
-                status_code,
-                error: error_str,
-                stop_reason: stop_reason.clone(),
-                compression_savings_pct: terminal_snapshot
-                    .as_ref()
-                    .and_then(|s| s.savings_pct_opt()),
-                compression_techniques: terminal_snapshot.as_ref().and_then(|s| s.techniques_csv()),
-                timestamp: String::new(),
-                endpoint_kind: crate::endpoint::EndpointKind::Chat,
-            });
-        }
-
-        let err_msg = err.map(|e| e.to_string());
-        let is_health_issue = err.is_some_and(|e| is_upstream_health_issue(e));
-
-        let job = crate::pipeline::worker::BackgroundJob::RecordAttempt {
-            usage_input: input,
-            target_id: target.id,
-            combo_id: combo.id,
-            error_msg: err_msg,
-            is_upstream_health_issue: is_health_issue,
-            cooldown_mode: combo.cooldown_mode,
-            cooldown_base_secs: combo.cooldown_base_secs.unwrap_or(self.config.cooldown_secs),
-            cooldown_max_secs: combo.cooldown_max_secs.unwrap_or(self.config.cooldown_max_secs),
-            cooldown_factor: combo.cooldown_factor.unwrap_or(self.config.cooldown_factor),
-        };
-
-        if let Err(e) = self.config.background_tx.try_send(job) {
-            if matches!(e, tokio::sync::mpsc::error::TrySendError::Closed(_)) {
-                let job = e.into_inner();
-                let conn = self.conn.clone();
-                crate::pipeline::worker::process_job(&conn, job);
-            } else {
-                tracing::warn!("failed to send MarkClientResponse to background worker: {}", e);
-            }
-        }
-
-        self.selection_registry.record_request(target.id);
-        if err.is_none() {
-            self.selection_registry.record_success(target.id);
-        }
-
-        Ok(Some((req.request_id.to_string(), attempt, target.id)))
-    }
 }
+

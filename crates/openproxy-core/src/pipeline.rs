@@ -31,8 +31,11 @@ pub mod quotas;
 pub mod racing;
 pub mod stages;
 pub mod worker;
+pub mod upstream_dispatcher;
+pub mod usage_tracker;
+pub mod streaming_state;
 mod execution;
-mod streaming;
+pub mod streaming;
 
 #[cfg(test)]
 pub mod test_utils;
@@ -114,6 +117,8 @@ pub struct Pipeline {
     pub(crate) selection_registry: Arc<SelectionRegistry>,
     pub(crate) record_bodies_and_headers: Arc<AtomicBool>,
     pub(crate) compression_stats_cell: Arc<RwLock<Option<CompressionStats>>>,
+    pub tracker: usage_tracker::UsageTracker,
+    pub dispatcher: upstream_dispatcher::UpstreamDispatcher,
 }
 
 impl Pipeline {
@@ -149,6 +154,24 @@ impl Pipeline {
         selection_registry: Arc<SelectionRegistry>,
         circuit_breaker: CircuitBreakerRegistry,
     ) -> Self {
+        let compression_stats_cell = Arc::new(RwLock::new(None));
+        let tracker = usage_tracker::UsageTracker {
+            conn: conn.clone(),
+            background_tx: config.background_tx.clone(),
+            record_bodies_and_headers: record_bodies_and_headers.clone(),
+            compression_stats_cell: compression_stats_cell.clone(),
+            selection_registry: selection_registry.clone(),
+            cooldown_secs: config.cooldown_secs,
+            cooldown_max_secs: config.cooldown_max_secs,
+            cooldown_factor: config.cooldown_factor,
+        };
+        let dispatcher = upstream_dispatcher::UpstreamDispatcher::new(
+            conn.clone(),
+            config.clone(),
+            compression_stats_cell.clone(),
+            tracker.clone(),
+            record_bodies_and_headers.clone(),
+        );
         Self {
             conn,
             config,
@@ -156,7 +179,9 @@ impl Pipeline {
             rr_counters: Arc::new(parking_lot::Mutex::new(HashMap::new())),
             selection_registry,
             record_bodies_and_headers,
-            compression_stats_cell: Arc::new(RwLock::new(None)),
+            compression_stats_cell,
+            tracker,
+            dispatcher,
         }
     }
 

@@ -4144,7 +4144,7 @@ data: [DONE]
         // cause the pipeline's `sink.send(...)` calls to return
         // `Err` and the streaming path to early-return from
         // `dispatch_upstream_streaming` *before* reaching the
-        // `record_attempt_raw_with_tokens` call that publishes
+        // `UsageRecordBuilder` call that publishes
         // the terminal `completed` event. To exercise the full
         // success path we need a real receiver that stays alive
         // for the duration of the pipeline run. For the
@@ -4424,7 +4424,7 @@ data: [DONE]\n\n";
     /// exactly ONE `failed` event. This guards against the
     /// post-§3.2 dedup regression where `record_and_fail` would
     /// re-emit a `failed` in addition to the centralized emit in
-    /// `record_attempt_raw_with_tokens`.
+    /// `UsageRecordBuilder`.
     #[tokio::test]
     async fn phase_robustness_failure_emits_exactly_one_failed() {
         let body = r#"{"error":{"message":"upstream boom","type":"server_error"}}"#;
