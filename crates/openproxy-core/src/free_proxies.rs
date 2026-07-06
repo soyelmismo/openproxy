@@ -527,7 +527,7 @@ pub async fn test_proxy_connection(r#type: &str, host: &str, port: u16) -> Resul
         
     let start = std::time::Instant::now();
     let res = client
-        .get("http://clients3.google.com/generate_204")
+        .get("https://clients3.google.com/generate_204")
         .send()
         .await;
         
