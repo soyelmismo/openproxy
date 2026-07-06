@@ -4578,8 +4578,9 @@ impl Pipeline {
                     // Use unchecked — we already know it's UTF-8
                     // (from_utf8_unchecked was called on line_bytes above).
                     let json_payload = unsafe { std::str::from_utf8_unchecked(json_payload_bytes) };
-                    // Fast [DONE] check: compare first 6 bytes.
-                    if json_payload.len() == 6 && json_payload.as_bytes() == b"[DONE]" {
+                    let json_payload = json_payload.trim_end_matches(['\r', '\n', ' ']);
+                    // Fast [DONE] check.
+                    if json_payload == "[DONE]" {
                         // Race cancellation guard: if another target
                         // already won, discard this chunk instantly.
                         if req.race_cancel.as_ref().is_some_and(|rc| rc.is_cancelled()) {
