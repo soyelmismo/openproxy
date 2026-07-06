@@ -4601,16 +4601,9 @@ impl Pipeline {
                                 &model_name,
                             );
                         }
-                        if let Err(e) = sink.send(SSE_DONE_BYTES.clone()).await {
-                            // Bug fix: handle BOTH `Lost` (race winner
-                            // already chosen) and `Closed` (client
-                            // disconnected) — previously only `Lost`
-                            // was matched, so a client disconnect
-                            // here fell through and recorded a
-                            // SUCCESS row instead of a
-                            // ClientDisconnected failure row.
+                        if let Err(crate::race_sink::StreamSinkError::Lost) = sink.send(SSE_DONE_BYTES.clone()).await {
                             return self.fail_on_sink_send_error(
-                                e,
+                                crate::race_sink::StreamSinkError::Lost,
                                 req,
                                 combo,
                                 target,
@@ -5107,12 +5100,9 @@ impl Pipeline {
                                     &model_name,
                                 );
                             }
-                            if let Err(e) = sink.send(SSE_DONE_BYTES.clone()).await {
-                                // Bug fix: handle BOTH `Lost` and `Closed`
-                                // — see the matching fix at the OpenAI
-                                // fast-path [DONE] send above.
+                            if let Err(crate::race_sink::StreamSinkError::Lost) = sink.send(SSE_DONE_BYTES.clone()).await {
                                 return self.fail_on_sink_send_error(
-                                    e,
+                                    crate::race_sink::StreamSinkError::Lost,
                                     req,
                                     combo,
                                     target,
@@ -5438,10 +5428,9 @@ impl Pipeline {
                     &model_name,
                 );
             }
-            if let Err(e) = sink.send(SSE_DONE_BYTES.clone()).await {
-                // Bug fix: handle BOTH `Lost` and `Closed`.
+            if let Err(crate::race_sink::StreamSinkError::Lost) = sink.send(SSE_DONE_BYTES.clone()).await {
                 return self.fail_on_sink_send_error(
-                    e,
+                    crate::race_sink::StreamSinkError::Lost,
                     req,
                     combo,
                     target,
