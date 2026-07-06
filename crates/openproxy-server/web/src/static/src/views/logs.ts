@@ -255,26 +255,16 @@ function mergeLogsByDescId(existing: RecentUsageRow[], incoming: RecentUsageRow[
   const limit = state.logs.maxRows;
   if (result.length > limit) {
     const finalResult = result.slice(0, limit);
-    // Rebuild `rowById` as a NUMBER-keyed map so `rowById.get(numericId)`
-    // lookups work correctly. The previous code cast the STRING-keyed
-    // `merged` map to `Map<number>` — a type lie that meant every
-    // `.get(number)` lookup returned `undefined`, forcing the caller to
-    // fall back to `rows.find()` (a linear scan). This is the WARNING-K
-    // fix from the debugger audit.
     const trimmed = new Map<number, RecentUsageRow>();
     for (const r of finalResult) {
-      if (r.id && r.id > 0) trimmed.set(r.id, r);
+      if (r.id && r.id > 0) trimmed.set(Number(r.id), r);
     }
     state.logs.rowById = trimmed;
     return finalResult;
   }
-  // Build a proper NUMBER-keyed map for `rowById` (not a cast of the
-  // string-keyed `merged` map). Only finalized rows (id > 0) are
-  // indexed — inflight rows (id = 0) are looked up via the inflight
-  // maps, not `rowById`.
   const byId = new Map<number, RecentUsageRow>();
   for (const r of result) {
-    if (r.id && r.id > 0) byId.set(r.id, r);
+    if (r.id && r.id > 0) byId.set(Number(r.id), r);
   }
   state.logs.rowById = byId;
   return result;
@@ -1124,46 +1114,36 @@ function handleLogsMessage(raw: MessageEvent): void {
 }
 
 async function openLogDetail(id: string, requestId: string, traceId?: string): Promise<void> {
-  // RACE-CONDITION GUARD: bump the generation counter at the very start.
-  // Each `openLogDetail` call captures the current generation; after the
-  // async `/usage/detail` fetch completes, we check whether this call is
-  // still the most recent. If the user clicked another row in the
-  // meantime (which bumps the generation again), the stale fetch's result
-  // is discarded — it doesn't overwrite the modal the user is now looking
-  // at. This prevents the "I clicked row A then row B, but the modal
-  // flipped back to A when A's slower fetch finished" race.
   const gen: number = bumpOpenLogDetailGeneration();
   const numericId = Number(id);
-  // Prefer the inflight placeholder (by trace_id) when this is an
-  // in-flight / ghost entry — its real `id` is 0 and there is no DB
-  // row to fetch. Synthetic ids (Number.MAX_SAFE_INTEGER - ts) are
-  // huge; real DB ids are small auto-increments, so a large numericId
-  // also signals an inflight/ghost entry.
-  const inflight: RecentUsageRow | undefined =
-    (traceId ? state.logs.inflightByTraceId.get(traceId) : undefined) ||
-    (requestId ? state.logs.inflightByRequestId.get(requestId) : undefined);
   const isSyntheticId: boolean =
     Number.isFinite(numericId) && numericId > 1_000_000_000;
-  // CRITICAL: find the row by BOTH request_id AND trace_id (when trace_id
-  // is available). The previous code used `state.logs.rows.find((r) =>
-  // r.request_id === requestId)` which returns the FIRST row with a
-  // matching request_id — in a combo with retries, multiple rows share
-  // the same request_id but have different trace_ids (and potentially
-  // different upstream_model_ids). The `.find()` returned the WRONG
-  // attempt, causing the modal to show a different model's data than the
-  // row the user clicked. This was the root cause of the "model name
-  // changes while I'm debugging" bug.
-  //
-  // Also try `rowById.get(numericId)` first (for finalized rows with real
-  // DB ids). Note: `rowById` is rebuilt by `mergeLogsByDescId` and may
-  // have inconsistent key types (number vs string), so the lookup may
-  // fail — the `rows.find()` fallback below handles this.
-  let row: RecentUsageRow = (Number.isFinite(numericId) ? state.logs.rowById.get(numericId) : undefined)
-    || (traceId
-      ? state.logs.rows.find((r) => r.request_id === requestId && r.trace_id === traceId)
-      : state.logs.rows.find((r) => r.request_id === requestId))
-    || inflight
-    || {
+    
+  let row: RecentUsageRow | undefined;
+
+  // 1. Exact DB id match
+  if (Number.isFinite(numericId) && numericId > 0 && !isSyntheticId) {
+    row = state.logs.rowById.get(numericId) || state.logs.rows.find((r) => Number(r.id) === numericId);
+  }
+  // 2. Exact trace_id match
+  if (!row && traceId) {
+    row = state.logs.rows.find((r) => r.request_id === requestId && r.trace_id === traceId)
+       || state.logs.inflightByTraceId.get(traceId);
+  }
+  // 3. Fallback request_id match
+  if (!row) {
+    if (isSyntheticId || numericId === 0) {
+      row = state.logs.inflightByRequestId.get(requestId);
+    }
+    if (!row) {
+      row = state.logs.rows.find((r) => r.request_id === requestId && (!r.trace_id))
+         || state.logs.rows.find((r) => r.request_id === requestId)
+         || state.logs.inflightByRequestId.get(requestId);
+    }
+  }
+  // 4. Ghost stub
+  if (!row) {
+    row = {
       id: numericId || 0, request_id: requestId, provider_id: "", upstream_model_id: "",
       created_at: new Date().toISOString(), status_code: 0, total_ms: 0,
       prompt_tokens: null, completion_tokens: null, cost_usd: 0,
@@ -1180,22 +1160,19 @@ async function openLogDetail(id: string, requestId: string, traceId?: string): P
       prompt_tokens_estimated: false,
       completion_tokens_estimated: false,
     };
-  // In-flight / ghost entries have no DB row (id === 0 / synthetic id
-  // / status_code === 0). Skip the /usage/detail fetch — it would
-  // 404/500 with "not found in database" — and surface a clear reason
-  // in the modal instead. This covers race-loser ghosts whose terminal
-  // event arrived but whose usage row was dropped (DB lock timeout).
-  // ALSO: any row with a synthetic ID (Number.MAX_SAFE_INTEGER - ts,
-  // which is > 1_000_000_000) is an inflight/ghost regardless of
-  // status_code — the real DB row hasn't arrived yet. Without this
-  // check, clicking a completed-but-still-inflight row sends the
-  // synthetic ID to /usage/detail and gets a 500.
+  }
+
+  const inflight: RecentUsageRow | undefined =
+    (traceId ? state.logs.inflightByTraceId.get(traceId) : undefined) ||
+    (requestId ? state.logs.inflightByRequestId.get(requestId) : undefined);
+    
   const isInflight: boolean = !!inflight || isSyntheticId || (row.status_code === 0);
+  const finalRow = row;
   // Do not merge inflight/ghost rows into `state.logs.rows` — they
   // have id 0 / synthetic ids and would duplicate the inflight
   // placeholder already rendered from the inflight maps.
-  if (!isInflight && !state.logs.rows.find((r) => r.id === row.id)) {
-    state.logs.rows = mergeLogsByDescId(state.logs.rows, [row]);
+  if (!isInflight && !state.logs.rows.find((r) => r.id === finalRow.id)) {
+    state.logs.rows = mergeLogsByDescId(state.logs.rows, [finalRow]);
   }
   // CRITICAL FIX: do NOT set `state.logs.selectedRow` here. The previous
   // code (`state.logs.selectedRow = { ...row }`) ran BEFORE the async
