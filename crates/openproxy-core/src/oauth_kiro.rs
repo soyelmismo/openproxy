@@ -510,6 +510,7 @@ impl OAuthProvider for KiroOAuthProvider {
             // The JSON format matches TokenResponse, but we must preserve refreshToken if it's absent
             if data.get("refreshToken").is_none() && data.get("refresh_token").is_none() {
                 if let Some(obj) = data.as_object_mut() {
+                    // Note: TokenResponse has `alias = "refreshToken"`, so we can insert either.
                     obj.insert("refresh_token".to_string(), serde_json::json!(refresh_token));
                 }
             }
@@ -522,22 +523,6 @@ impl OAuthProvider for KiroOAuthProvider {
             if data.get("expiresIn").is_none() && data.get("expires_in").is_none() {
                 if let Some(obj) = data.as_object_mut() {
                     obj.insert("expires_in".to_string(), serde_json::json!(3600));
-                }
-            }
-            // If the upstream returned camelCase `accessToken`, `refreshToken`, `expiresIn`, map them to snake_case for TokenResponse
-            if let Some(access) = data.get("accessToken").cloned() {
-                if let Some(obj) = data.as_object_mut() {
-                    obj.insert("access_token".to_string(), access);
-                }
-            }
-            if let Some(refresh) = data.get("refreshToken").cloned() {
-                if let Some(obj) = data.as_object_mut() {
-                    obj.insert("refresh_token".to_string(), refresh);
-                }
-            }
-            if let Some(expires) = data.get("expiresIn").cloned() {
-                if let Some(obj) = data.as_object_mut() {
-                    obj.insert("expires_in".to_string(), expires);
                 }
             }
             
@@ -674,22 +659,6 @@ impl OAuthProvider for KiroOAuthProvider {
         if data.get("token_type").is_none() && data.get("tokenType").is_none() {
             if let Some(obj) = data.as_object_mut() {
                 obj.insert("token_type".to_string(), serde_json::json!("Bearer"));
-            }
-        }
-        // Normalize camelCase to snake_case if present
-        if let Some(access) = data.get("accessToken").cloned() {
-            if let Some(obj) = data.as_object_mut() {
-                obj.insert("access_token".to_string(), access);
-            }
-        }
-        if let Some(refresh) = data.get("refreshToken").cloned() {
-            if let Some(obj) = data.as_object_mut() {
-                obj.insert("refresh_token".to_string(), refresh);
-            }
-        }
-        if let Some(expires) = data.get("expiresIn").cloned() {
-            if let Some(obj) = data.as_object_mut() {
-                obj.insert("expires_in".to_string(), expires);
             }
         }
         
