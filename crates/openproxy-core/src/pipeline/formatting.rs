@@ -182,9 +182,10 @@ impl TargetFormatter for ResponsesFormatter {
         let mut hasher = Sha256::new();
         hasher.update(instructions_str.as_bytes());
         if let Some(tools) = &req.openai_request.tools
-            && let Ok(tools_str) = serde_json::to_string(tools) {
-                hasher.update(tools_str.as_bytes());
-            }
+            && let Ok(tools_str) = serde_json::to_string(tools)
+        {
+            hasher.update(tools_str.as_bytes());
+        }
         let hash_hex = hex::encode(hasher.finalize());
         obj.insert(
             "prompt_cache_key".to_string(),
@@ -255,18 +256,19 @@ fn messages_to_responses_input(messages: &[&OpenAIMessage]) -> Value {
                             }
                         }
                     } else if item_type == "image"
-                        && let Some(source) = item.get("source").and_then(|v| v.as_object()) {
-                            let data = source.get("data").and_then(|v| v.as_str()).unwrap_or("");
-                            let media_type = source
-                                .get("media_type")
-                                .and_then(|v| v.as_str())
-                                .unwrap_or("image/jpeg");
-                            parts.push(json!({
-                                "type": "input_image",
-                                "image": data,
-                                "mime_type": media_type
-                            }));
-                        }
+                        && let Some(source) = item.get("source").and_then(|v| v.as_object())
+                    {
+                        let data = source.get("data").and_then(|v| v.as_str()).unwrap_or("");
+                        let media_type = source
+                            .get("media_type")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("image/jpeg");
+                        parts.push(json!({
+                            "type": "input_image",
+                            "image": data,
+                            "mime_type": media_type
+                        }));
+                    }
                 }
             }
             Some(value) => {

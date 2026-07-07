@@ -1940,6 +1940,4 @@ mod tests {
         });
         assert!(!is_kiro_overage_enabled(&body_disabled));
     }
-
-
 }

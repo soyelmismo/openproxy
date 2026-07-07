@@ -12,7 +12,9 @@ use crate::error::{CoreError, Result};
 use crate::ids::AccountId;
 use crate::oauth::{DbRef, DeviceAuthorizationResponse, OAuthFlow, OAuthProvider, TokenResponse};
 use crate::oauth_generic::{GenericOAuthProvider, OAuthRequestEncoding, OAuthSpec};
-use crate::upstream::{CancellationToken, TimeoutProfile, UpstreamClient, UpstreamError, UpstreamRequest};
+use crate::upstream::{
+    CancellationToken, TimeoutProfile, UpstreamClient, UpstreamError, UpstreamRequest,
+};
 
 const CLIENT_ID: &str = "app_EMoamEEZ73f0CkXaXp7hrann";
 const TOKEN_URL: &str = "https://auth.openai.com/oauth/token";
@@ -75,7 +77,9 @@ impl OAuthProvider for CodexOAuthProvider {
     }
 
     async fn build_auth_url(&self, _redirect_uri: &str) -> Result<(String, String, String)> {
-        Err(CoreError::Validation("codex uses device code flow, not PKCE".into()))
+        Err(CoreError::Validation(
+            "codex uses device code flow, not PKCE".into(),
+        ))
     }
 
     async fn exchange_code(
@@ -85,7 +89,9 @@ impl OAuthProvider for CodexOAuthProvider {
         _upstream_client: &Arc<UpstreamClient>,
         _redirect_uri: &str,
     ) -> Result<TokenResponse> {
-        Err(CoreError::Validation("codex uses device code flow, not authorization code".into()))
+        Err(CoreError::Validation(
+            "codex uses device code flow, not authorization code".into(),
+        ))
     }
 
     async fn request_device_code(
@@ -94,7 +100,8 @@ impl OAuthProvider for CodexOAuthProvider {
     ) -> Result<DeviceAuthorizationResponse> {
         let body = serde_json::json!({ "client_id": CLIENT_ID });
         let body_bytes = serde_json::to_vec(&body).unwrap();
-        let mut req = UpstreamRequest::post_json(DEVICE_USERCODE_URL, bytes::Bytes::from(body_bytes));
+        let mut req =
+            UpstreamRequest::post_json(DEVICE_USERCODE_URL, bytes::Bytes::from(body_bytes));
         req.headers.insert(
             http::header::CONTENT_TYPE,
             http::HeaderValue::from_static("application/json"),
@@ -145,21 +152,25 @@ impl OAuthProvider for CodexOAuthProvider {
         let resp: UserCodeResp = serde_json::from_slice(&body)
             .map_err(|e| CoreError::Parse(format!("codex usercode parse: {e}")))?;
 
-        let user_code = resp.user_code.or(resp.usercode).ok_or_else(|| {
-            CoreError::Parse("codex usercode missing user_code".into())
-        })?;
+        let user_code = resp
+            .user_code
+            .or(resp.usercode)
+            .ok_or_else(|| CoreError::Parse("codex usercode missing user_code".into()))?;
 
         let combined_code = format!("{}|{}", resp.device_auth_id, user_code);
 
-        let interval = resp.interval.and_then(|v| {
-            if let Some(i) = v.as_u64() {
-                Some(i)
-            } else if let Some(s) = v.as_str() {
-                s.parse::<u64>().ok()
-            } else {
-                None
-            }
-        }).unwrap_or(5);
+        let interval = resp
+            .interval
+            .and_then(|v| {
+                if let Some(i) = v.as_u64() {
+                    Some(i)
+                } else if let Some(s) = v.as_str() {
+                    s.parse::<u64>().ok()
+                } else {
+                    None
+                }
+            })
+            .unwrap_or(5);
 
         Ok(DeviceAuthorizationResponse {
             device_code: combined_code,
@@ -178,7 +189,9 @@ impl OAuthProvider for CodexOAuthProvider {
     ) -> Result<Option<TokenResponse>> {
         let parts: Vec<&str> = device_code.splitn(2, '|').collect();
         if parts.len() != 2 {
-            return Err(CoreError::Validation("Invalid codex composite device code".into()));
+            return Err(CoreError::Validation(
+                "Invalid codex composite device code".into(),
+            ));
         }
         let device_auth_id = parts[0];
         let user_code = parts[1];
@@ -351,4 +364,3 @@ mod tests {
         assert_eq!(extract_workspace_id(&claims).as_deref(), Some("acc_123"));
     }
 }
-
