@@ -3695,12 +3695,14 @@ async fn run_test_for_model(
                 &model.model_id,
                 &_account_label,
             );
+            let mut responses_req = openai_req.clone();
+            responses_req.max_tokens = None;
             let (_cancel_tx, client_disconnected) = tokio::sync::watch::channel(false);
             let pipeline_req = openproxy_core::pipeline::PipelineRequest {
                 request_id: RequestId::new(),
                 trace_id: TraceId::new(),
                 combo_id: ComboId(0),
-                openai_request: Arc::new(openai_req.clone()),
+                openai_request: Arc::new(responses_req),
                 client_disconnected,
                 stream_sink: None,
                 api_key_id: None,
