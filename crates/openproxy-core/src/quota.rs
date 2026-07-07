@@ -395,6 +395,13 @@ pub async fn fetch_antigravity_quota(
                 models_quota.session_limit = summary_quota.session_limit;
                 models_quota.session_reset_at = summary_quota.session_reset_at;
             }
+            
+            if let Some(summary_plan) = summary_quota.plan_name 
+                && summary_plan != "Antigravity" 
+            {
+                models_quota.plan_name = Some(summary_plan);
+            }
+            
             Ok(models_quota)
         }
         (Ok(models_quota), Err(_)) => Ok(models_quota),
@@ -516,7 +523,7 @@ fn parse_antigravity_models_response(body: &serde_json::Value) -> Result<Account
         .unwrap();
 
     Ok(AccountQuota {
-        plan_name: Some(format!("Antigravity ({})", worst.model_id)),
+        plan_name: Some("Antigravity".to_string()),
         session_used: Some(worst.session_used),
         session_limit: Some(worst.session_limit),
         session_reset_at: worst.session_reset_at.clone(),
@@ -630,8 +637,11 @@ fn parse_antigravity_user_quota_summary(body: &serde_json::Value) -> Result<Acco
     let mut session_used: Option<i64> = None;
     let mut session_limit: Option<i64> = None;
     let mut session_reset_at: Option<String> = None;
+    let mut plan_name: Option<String> = None;
 
     for group in groups {
+        let group_plan = group.get("displayName").and_then(|n| n.as_str());
+
         let buckets = match group.get("buckets").and_then(|b| b.as_array()) {
             Some(b) => b,
             None => continue,
@@ -664,11 +674,17 @@ fn parse_antigravity_user_quota_summary(body: &serde_json::Value) -> Result<Acco
                 weekly_used = Some(used);
                 weekly_limit = Some(NORMALIZED_BASE);
                 weekly_reset_at = reset_time;
+                if plan_name.is_none() {
+                    plan_name = group_plan.map(|s| s.to_string());
+                }
             } else if !is_weekly && session_used.is_none() {
                 // First non-weekly bucket (typically 5h) → session.
                 session_used = Some(used);
                 session_limit = Some(NORMALIZED_BASE);
                 session_reset_at = reset_time;
+                if plan_name.is_none() {
+                    plan_name = group_plan.map(|s| s.to_string());
+                }
             }
         }
     }
@@ -686,7 +702,7 @@ fn parse_antigravity_user_quota_summary(body: &serde_json::Value) -> Result<Acco
         weekly_used,
         weekly_limit,
         weekly_reset_at,
-        plan_name: Some("Antigravity".to_string()),
+        plan_name: Some(plan_name.unwrap_or_else(|| "Antigravity".to_string())),
         last_fetched_at: now_unix_secs_str(),
         fetch_error: None,
         model_details: None,
