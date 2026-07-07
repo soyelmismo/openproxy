@@ -231,10 +231,7 @@ where
 
             let resolved = pipeline.resolve_combo_targets_full(eligible).await;
 
-            if resolved.is_empty() && !pre_cb_snapshot.is_empty() {
-                let err = CoreError::NoHealthyTargets(combo.id.0);
-                return Ok(pipeline.failure(err, attempt - 1, ErrorPhase::Route));
-            } else if resolved.is_empty() {
+            if resolved.is_empty() {
                 let err = CoreError::NoHealthyTargets(combo.id.0);
                 return Ok(pipeline.failure(err, attempt - 1, ErrorPhase::Route));
             }
@@ -588,15 +585,17 @@ impl tower::Service<PipelineState> for RoutingService {
                     .model_row_id
                     .map(|_| "unresolved")
                     .unwrap_or("unknown");
-                let outcome = if result.error.is_none() {
-                    "success"
-                } else if crate::retry::RetryPolicy::is_retryable(
-                    result.error.as_ref().unwrap(),
-                    pipeline.config.idle_chunk_retryable,
-                ) {
-                    "retryable_failure"
+                let outcome = if let Some(err) = &result.error {
+                    if crate::retry::RetryPolicy::is_retryable(
+                        err,
+                        pipeline.config.idle_chunk_retryable,
+                    ) {
+                        "retryable_failure"
+                    } else {
+                        "fatal_failure"
+                    }
                 } else {
-                    "fatal_failure"
+                    "success"
                 };
                 combo_walk_log.push(format!(
                     "  [{}] {} (model: {}, id: {}): {} (attempts: {})",

@@ -81,6 +81,7 @@ pub trait PipelineRepository: Send + Sync {
         &self,
         model_row_ids: &[crate::ids::ModelRowId],
     ) -> Result<HashMap<i64, Model>>;
+    #[allow(clippy::type_complexity)]
     fn get_accounts_meta(
         &self,
         account_ids: &[crate::ids::AccountId],

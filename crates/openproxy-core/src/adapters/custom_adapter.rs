@@ -37,6 +37,7 @@ impl CustomAdapter {
             crate::providers::ProviderFormat::Anthropic => AdapterFormat::Anthropic,
             crate::providers::ProviderFormat::Mixed => AdapterFormat::Mixed,
             crate::providers::ProviderFormat::Gemini => AdapterFormat::Gemini,
+            crate::providers::ProviderFormat::Responses => AdapterFormat::Responses,
         };
 
         let extra_headers: Vec<(String, String)> = provider

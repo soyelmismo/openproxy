@@ -192,6 +192,7 @@ pub(crate) struct StreamContext<'a> {
     pub resolved_timeouts: &'a crate::pipeline::Timeouts,
 }
 
+#[allow(clippy::large_enum_variant)]
 pub(crate) enum ChunkResult {
     Break,
     Return(PipelineResult),

@@ -721,7 +721,8 @@ mod tests {
               proxy_rotation_errors TEXT DEFAULT '429,connect_error,timeout',
               active INTEGER NOT NULL DEFAULT 1,
               created_at TEXT NOT NULL DEFAULT (datetime('now')),
-              updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+              updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+              CHECK (format IN ('openai', 'anthropic', 'mixed', 'gemini', 'responses'))
             );",
         )
         .unwrap();

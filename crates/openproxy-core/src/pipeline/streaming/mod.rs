@@ -4,6 +4,7 @@ use crate::error::CoreError;
 use bytes::Bytes;
 
 /// Represents an event in the streaming pipeline.
+#[allow(clippy::large_enum_variant)]
 pub(crate) enum ChunkEvent {
     /// A data chunk, typically representing an SSE payload or raw bytes.
     Data(Bytes),

@@ -33,6 +33,7 @@ pub enum ProviderFormat {
     Anthropic,
     Mixed,
     Gemini,
+    Responses,
 }
 
 impl ProviderFormat {
@@ -42,6 +43,7 @@ impl ProviderFormat {
             ProviderFormat::Anthropic => "anthropic",
             ProviderFormat::Mixed => "mixed",
             ProviderFormat::Gemini => "gemini",
+            ProviderFormat::Responses => "responses",
         }
     }
 
@@ -51,6 +53,7 @@ impl ProviderFormat {
             "anthropic" => Ok(ProviderFormat::Anthropic),
             "mixed" => Ok(ProviderFormat::Mixed),
             "gemini" => Ok(ProviderFormat::Gemini),
+            "responses" => Ok(ProviderFormat::Responses),
             other => Err(CoreError::Validation(format!(
                 "invalid provider format: {}",
                 other

@@ -514,7 +514,7 @@ mod tests {
             .expect("get")
             .unwrap();
         assert_eq!(codex.auth_type, AuthType::OAuth);
-        assert_eq!(codex.format, ProviderFormat::Openai);
+        assert_eq!(codex.format, ProviderFormat::Responses);
         let kiro = providers::get(&conn, &ProviderId::new("kiro"))
             .expect("get")
             .unwrap();

@@ -1286,18 +1286,21 @@ pub async fn fetch_codex_quota(
     let mut req = UpstreamRequest::get(url);
     req.headers.insert(
         http::header::AUTHORIZATION,
-        http::HeaderValue::from_str(&format!("Bearer {}", access_token)).unwrap_or_else(|_| http::HeaderValue::from_static("")),
+        http::HeaderValue::from_str(&format!("Bearer {}", access_token))
+            .unwrap_or_else(|_| http::HeaderValue::from_static("")),
     );
-    if let Some(ws) = workspace_id {
-        if let Ok(val) = http::HeaderValue::from_str(ws) {
-            req.headers.insert(http::HeaderName::from_static("chatgpt-account-id"), val);
+    if let Some(ws) = workspace_id
+        && let Ok(val) = http::HeaderValue::from_str(ws) {
+            req.headers
+                .insert(http::HeaderName::from_static("chatgpt-account-id"), val);
         }
-    }
 
     let cancel = CancellationToken::new();
-    let response = upstream.call(req, TimeoutProfile::Chat, cancel).await
+    let response = upstream
+        .call(req, TimeoutProfile::Chat, cancel)
+        .await
         .map_err(|e| CoreError::UpstreamConnection(e.to_string()))?;
-        
+
     let status = response.status.as_u16();
     if !(200..300).contains(&status) {
         return Ok(AccountQuota {

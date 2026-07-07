@@ -274,9 +274,7 @@ impl Pipeline {
                     cooldown_max_secs: combo
                         .cooldown_max_secs
                         .unwrap_or(self.config.cooldown_max_secs),
-                    cooldown_factor: combo
-                        .cooldown_factor
-                        .unwrap_or(self.config.cooldown_factor),
+                    cooldown_factor: combo.cooldown_factor.unwrap_or(self.config.cooldown_factor),
                 }),
             )
             .await

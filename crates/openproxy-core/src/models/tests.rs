@@ -46,7 +46,7 @@ fn fresh_db() -> Connection {
                  output_modalities_json TEXT,
                  model_id_normalized    TEXT,
                  UNIQUE(provider_id, model_id),
-                 CHECK (target_format IN ('openai', 'anthropic', 'gemini'))
+                 CHECK (target_format IN ('openai', 'anthropic', 'gemini', 'responses'))
              );
              INSERT INTO providers (id, display_name, base_url, auth_kind)
              VALUES ('provA', 'Provider A', 'https://example.test', 'none');",

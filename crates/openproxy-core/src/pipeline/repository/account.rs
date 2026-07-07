@@ -16,6 +16,7 @@ pub struct KiroMeta {
     pub profile_arn: Option<String>,
 }
 
+#[allow(clippy::type_complexity)]
 pub fn get_accounts_meta(
     conn: &Connection,
     account_ids: &[crate::ids::AccountId],

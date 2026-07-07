@@ -291,7 +291,8 @@ pub trait ProviderAdapter: Send + Sync {
         _req: Arc<crate::pipeline::PipelineRequest>,
         _resolved_target: &crate::pipeline::context::ResolvedTarget,
         _ctx: Option<CustomExecutionContext>,
-    ) -> Option<std::result::Result<crate::translation::OpenAIResponse, crate::error::CoreError>> {
+    ) -> Option<std::result::Result<crate::translation::OpenAIResponse, crate::error::CoreError>>
+    {
         None
     }
 }
@@ -309,6 +310,7 @@ pub(crate) use derive_default_from_new;
 
 pub mod antigravity;
 pub mod cloudflare_workers_ai;
+pub mod codex;
 pub mod custom_adapter;
 pub mod gemini;
 pub mod kilocode;
@@ -316,13 +318,13 @@ pub mod kiro_ai;
 pub mod minimax;
 pub mod nous_research;
 pub mod nvidia_nim;
-pub mod codex;
 pub mod ollama_cloud;
 pub mod opencode_zen;
 pub mod openrouter;
 
 pub use antigravity::AntigravityAdapter;
 pub use cloudflare_workers_ai::CloudflareWorkersAIAdapter;
+pub use codex::CodexAdapter;
 pub use custom_adapter::CustomAdapter;
 pub use gemini::GeminiAdapter;
 pub use kilocode::KilocodeAdapter;
@@ -330,7 +332,6 @@ pub use kiro_ai::KiroAdapter;
 pub use minimax::MiniMaxAdapter;
 pub use nous_research::NousResearchAdapter;
 pub use nvidia_nim::NvidiaNimAdapter;
-pub use codex::CodexAdapter;
 pub use ollama_cloud::OllamaCloudAdapter;
 pub use opencode_zen::OpenCodeZenAdapter;
 pub use openrouter::OpenRouterAdapter;

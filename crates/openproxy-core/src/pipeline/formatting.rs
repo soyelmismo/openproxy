@@ -104,7 +104,8 @@ impl TargetFormatter for ResponsesFormatter {
         stream: bool,
         _adapter: &dyn ProviderAdapter,
     ) -> Result<bytes::Bytes, CoreError> {
-        let (resolved_model, effort_from_model) = normalize_model_and_effort(model.model_id.as_str());
+        let (resolved_model, effort_from_model) =
+            normalize_model_and_effort(model.model_id.as_str());
         let mut obj = req.openai_request.extra.clone();
         obj.insert("model".to_string(), Value::String(resolved_model));
 
@@ -118,14 +119,17 @@ impl TargetFormatter for ResponsesFormatter {
             }
         }
 
-        obj.insert("input".to_string(), messages_to_responses_input(&messages_without_system));
+        obj.insert(
+            "input".to_string(),
+            messages_to_responses_input(&messages_without_system),
+        );
         obj.insert("stream".to_string(), Value::Bool(stream));
         obj.insert("store".to_string(), Value::Bool(false));
 
-        let default_instructions = "Follow the developer instructions in the conversation.".to_string();
-        obj.entry("instructions".to_string()).or_insert_with(|| {
-            Value::String(system_instructions.unwrap_or(default_instructions))
-        });
+        let default_instructions =
+            "Follow the developer instructions in the conversation.".to_string();
+        obj.entry("instructions".to_string())
+            .or_insert_with(|| Value::String(system_instructions.unwrap_or(default_instructions)));
 
         if let Some(max_tokens) = req.openai_request.max_tokens {
             obj.insert("max_output_tokens".to_string(), json!(max_tokens));
@@ -143,7 +147,8 @@ impl TargetFormatter for ResponsesFormatter {
             obj.insert("tool_choice".to_string(), tool_choice.clone());
         }
 
-        let effort = req.openai_request
+        let effort = req
+            .openai_request
             .extra
             .get("reasoning_effort")
             .and_then(|v| v.as_str())
@@ -173,23 +178,25 @@ impl TargetFormatter for ResponsesFormatter {
             .and_then(|v| v.as_str())
             .unwrap_or("Follow the developer instructions in the conversation.");
 
-        use sha2::{Sha256, Digest};
+        use sha2::{Digest, Sha256};
         let mut hasher = Sha256::new();
         hasher.update(instructions_str.as_bytes());
-        if let Some(tools) = &req.openai_request.tools {
-            if let Ok(tools_str) = serde_json::to_string(tools) {
+        if let Some(tools) = &req.openai_request.tools
+            && let Ok(tools_str) = serde_json::to_string(tools) {
                 hasher.update(tools_str.as_bytes());
             }
-        }
         let hash_hex = hex::encode(hasher.finalize());
         obj.insert(
             "prompt_cache_key".to_string(),
-            Value::String(format!("pck_{}", &hash_hex[..24]))
+            Value::String(format!("pck_{}", &hash_hex[..24])),
         );
 
         match serde_json::to_vec(&Value::Object(obj)) {
             Ok(v) => Ok(bytes::Bytes::from(v)),
-            Err(e) => Err(CoreError::Parse(format!("serialize responses request: {}", e))),
+            Err(e) => Err(CoreError::Parse(format!(
+                "serialize responses request: {}",
+                e
+            ))),
         }
     }
 }
@@ -199,7 +206,10 @@ fn messages_to_responses_input(messages: &[&OpenAIMessage]) -> Value {
 
     for msg in messages {
         if msg.role == "tool" {
-            let call_id = msg.tool_call_id.clone().unwrap_or_else(|| "call_xyz".to_string());
+            let call_id = msg
+                .tool_call_id
+                .clone()
+                .unwrap_or_else(|| "call_xyz".to_string());
             let content_str = content_to_text(msg.content.as_ref());
             input_items.push(json!({
                 "type": "item",
@@ -209,7 +219,7 @@ fn messages_to_responses_input(messages: &[&OpenAIMessage]) -> Value {
             }));
             continue;
         }
-        
+
         let mut parts = Vec::new();
         match &msg.content {
             Some(Value::String(text)) => {
@@ -227,7 +237,10 @@ fn messages_to_responses_input(messages: &[&OpenAIMessage]) -> Value {
                             if url.starts_with("data:image/") {
                                 let parts_url: Vec<&str> = url.splitn(2, ',').collect();
                                 if parts_url.len() == 2 {
-                                    let mime = parts_url[0].strip_prefix("data:").and_then(|s| s.strip_suffix(";base64")).unwrap_or("image/jpeg");
+                                    let mime = parts_url[0]
+                                        .strip_prefix("data:")
+                                        .and_then(|s| s.strip_suffix(";base64"))
+                                        .unwrap_or("image/jpeg");
                                     parts.push(json!({
                                         "type": "input_image",
                                         "image": parts_url[1],
@@ -241,17 +254,19 @@ fn messages_to_responses_input(messages: &[&OpenAIMessage]) -> Value {
                                 }));
                             }
                         }
-                    } else if item_type == "image" {
-                        if let Some(source) = item.get("source").and_then(|v| v.as_object()) {
+                    } else if item_type == "image"
+                        && let Some(source) = item.get("source").and_then(|v| v.as_object()) {
                             let data = source.get("data").and_then(|v| v.as_str()).unwrap_or("");
-                            let media_type = source.get("media_type").and_then(|v| v.as_str()).unwrap_or("image/jpeg");
+                            let media_type = source
+                                .get("media_type")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("image/jpeg");
                             parts.push(json!({
                                 "type": "input_image",
                                 "image": data,
                                 "mime_type": media_type
                             }));
                         }
-                    }
                 }
             }
             Some(value) => {
@@ -264,17 +279,31 @@ fn messages_to_responses_input(messages: &[&OpenAIMessage]) -> Value {
 
         if let Some(tool_calls) = &msg.tool_calls {
             for call in tool_calls {
-                    let call_id = call.get("id").and_then(|v| v.as_str()).unwrap_or("call_xyz").to_string();
-                    let func_name = call.get("function").and_then(|v| v.get("name")).and_then(|v| v.as_str()).unwrap_or("").to_string();
-                    let func_args = call.get("function").and_then(|v| v.get("arguments")).and_then(|v| v.as_str()).unwrap_or("{}").to_string();
-                    
-                    parts.push(json!({
-                        "type": "function_call",
-                        "id": call_id,
-                        "name": func_name,
-                        "arguments": func_args
-                    }));
-                }
+                let call_id = call
+                    .get("id")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("call_xyz")
+                    .to_string();
+                let func_name = call
+                    .get("function")
+                    .and_then(|v| v.get("name"))
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                let func_args = call
+                    .get("function")
+                    .and_then(|v| v.get("arguments"))
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("{}")
+                    .to_string();
+
+                parts.push(json!({
+                    "type": "function_call",
+                    "id": call_id,
+                    "name": func_name,
+                    "arguments": func_args
+                }));
+            }
         }
 
         input_items.push(json!({

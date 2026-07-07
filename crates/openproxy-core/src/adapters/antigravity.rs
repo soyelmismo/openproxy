@@ -299,4 +299,3 @@ impl ProviderAdapter for AntigravityAdapter {
         )
     }
 }
-

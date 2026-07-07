@@ -743,9 +743,7 @@ fn enrich_provider_with_oauth(
 }
 
 /// `GET /admin/providers` — list all providers.
-pub async fn list_providers(
-    State(s): State<AppState>,
-) -> ApiResult<Json<Vec<ProviderWithOAuth>>> {
+pub async fn list_providers(State(s): State<AppState>) -> ApiResult<Json<Vec<ProviderWithOAuth>>> {
     let body: Result<Json<Vec<ProviderWithOAuth>>, ApiError> = async {
         // Read-only SELECT — use the READER so the dashboard's catalog
         // polling doesn't serialize through the writer mutex.
