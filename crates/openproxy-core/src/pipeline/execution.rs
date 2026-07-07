@@ -224,15 +224,18 @@ impl Pipeline {
                         if let Some(provider) = registry.get(target.provider_id.as_str()) {
                             let provider_id_str = target.provider_id.as_str();
                             tracing::info!(account = account_id.0, provider = provider_id_str, "pipeline: proactive OAuth token refresh");
-                            match provider.refresh_token(refresh_token, &self.config.upstream_client, account_id, crate::oauth::DbRef::Connection(&self.conn)).await {
+                            match crate::oauth::TokenRefreshCoordinator::global()
+                                .refresh_and_store(
+                                    provider_id_str,
+                                    provider,
+                                    refresh_token,
+                                    &self.config.upstream_client,
+                                    account_id,
+                                    crate::oauth::DbRef::Connection(&self.conn),
+                                    &self.config.master_key,
+                                )
+                                .await {
                                 Ok(token) => {
-                                    let expires_at = token.expires_in.map(|secs| {
-                                        (chrono::Utc::now() + chrono::Duration::seconds(secs as i64)).format("%Y-%m-%dT%H:%M:%SZ").to_string()
-                                    });
-                                    {
-                                        let conn = self.conn.lock();
-                                        let _ = crate::accounts::store_oauth_tokens(&conn, account_id, &token.access_token, token.refresh_token.as_deref(), &self.config.master_key, &token.token_type, expires_at.as_deref(), token.scope.as_deref(), None, None);
-                                    }
                                     custom_meta.access_token = token.access_token;
                                 }
                                 Err(e) => {
@@ -705,4 +708,3 @@ impl Pipeline {
 
 
 }
-

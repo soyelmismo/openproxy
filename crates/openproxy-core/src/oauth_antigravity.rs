@@ -11,19 +11,15 @@
 //! field and embeds it in the upstream request envelope.
 
 use async_trait::async_trait;
-use base64::Engine;
-use rand::Rng;
 use rusqlite::{Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
 
 use crate::error::{CoreError, Result};
 use crate::ids::AccountId;
 use crate::oauth::{OAuthFlow, OAuthProvider, TokenResponse};
+use crate::oauth_generic::{GenericOAuthProvider, OAuthRequestEncoding, OAuthSpec};
 use crate::secrets::MasterKey;
-use crate::upstream::{
-    CancellationToken, TimeoutProfile, UpstreamClient, UpstreamError, UpstreamRequest,
-};
+use crate::upstream::{CancellationToken, TimeoutProfile, UpstreamClient, UpstreamRequest};
 use std::sync::Arc;
 
 /// Google OAuth client_id for Cloud Code (Antigravity).
@@ -67,11 +63,32 @@ pub struct AntigravityProviderMeta {
     pub project_id: Option<String>,
 }
 
-pub struct AntigravityOAuthProvider;
+fn antigravity_oauth_spec() -> OAuthSpec {
+    OAuthSpec {
+        id: "antigravity",
+        flow: OAuthFlow::AuthorizationCodePkce,
+        authorize_url: Some(AUTH_URL),
+        token_url: TOKEN_URL,
+        device_authorization_url: None,
+        client_id: CLIENT_ID,
+        client_secret_env: Some("OPENPROXY_ANTIGRAVITY_CLIENT_SECRET"),
+        client_secret_default: Some(DEFAULT_CLIENT_SECRET),
+        scopes: SCOPES,
+        auth_extra_params: &[("access_type", "offline"), ("prompt", "consent")],
+        request_encoding: OAuthRequestEncoding::FormUrlEncoded,
+        user_agent: Some(crate::antigravity_headers::oauth_user_agent),
+    }
+}
+
+pub struct AntigravityOAuthProvider {
+    generic: GenericOAuthProvider,
+}
 
 impl AntigravityOAuthProvider {
     pub fn new() -> Self {
-        Self
+        Self {
+            generic: GenericOAuthProvider::new(antigravity_oauth_spec()),
+        }
     }
 }
 
@@ -84,28 +101,15 @@ impl Default for AntigravityOAuthProvider {
 #[async_trait]
 impl OAuthProvider for AntigravityOAuthProvider {
     fn name(&self) -> &str {
-        "antigravity"
+        self.generic.name()
     }
 
     fn flow(&self) -> OAuthFlow {
-        OAuthFlow::AuthorizationCodePkce
+        self.generic.flow()
     }
 
     async fn build_auth_url(&self, redirect_uri: &str) -> Result<(String, String, String)> {
-        let code_verifier = generate_code_verifier();
-        let code_challenge = code_challenge_s256(&code_verifier);
-
-        let scope = SCOPES.join(" ");
-        let auth_url = format!(
-            "{}?response_type=code&client_id={}&redirect_uri={}&scope={}&code_challenge={}&code_challenge_method=S256&access_type=offline&prompt=consent",
-            AUTH_URL,
-            urlencoding::encode(CLIENT_ID),
-            urlencoding::encode(redirect_uri),
-            urlencoding::encode(&scope),
-            urlencoding::encode(&code_challenge),
-        );
-
-        Ok((auth_url, code_verifier, code_challenge))
+        self.generic.build_auth_url(redirect_uri).await
     }
 
     async fn exchange_code(
@@ -115,189 +119,38 @@ impl OAuthProvider for AntigravityOAuthProvider {
         upstream_client: &Arc<UpstreamClient>,
         redirect_uri: &str,
     ) -> Result<TokenResponse> {
-        // Add client_secret if available (from config or env)
-        let client_secret = std::env::var("OPENPROXY_ANTIGRAVITY_CLIENT_SECRET")
-            .unwrap_or_else(|_| DEFAULT_CLIENT_SECRET.to_string());
-
-        let mut params = vec![
-            ("grant_type", "authorization_code"),
-            ("code", code),
-            ("client_id", CLIENT_ID),
-            ("redirect_uri", redirect_uri),
-        ];
-
-        if !code_verifier.is_empty() {
-            params.push(("code_verifier", code_verifier));
-        }
-
-        if !client_secret.is_empty() {
-            params.push(("client_secret", &client_secret));
-        }
-
-        // Build the form-encoded body. UpstreamRequest takes a
-        // `Bytes` body, so we serialize the params into
-        // `application/x-www-form-urlencoded` by hand.
-        let body = urlencoded_body(&params);
-        let mut req = UpstreamRequest::post_json(TOKEN_URL, body);
-        // Replace the default `application/json` content-type with
-        // the form-urlencoded one Google expects.
-        req.headers.insert(
-            http::header::CONTENT_TYPE,
-            http::HeaderValue::from_static("application/x-www-form-urlencoded"),
-        );
-        // Use the native Antigravity OAuth User-Agent (matches the
-        // Antigravity-Manager: `vscode/1.X.X (Antigravity/{version})`).
-        req.headers.insert(
-            http::header::USER_AGENT,
-            http::HeaderValue::from_str(&crate::antigravity_headers::oauth_user_agent())
-                .unwrap_or_else(|_| {
-                    http::HeaderValue::from_static("vscode/1.X.X (Antigravity/4.3.0)")
-                }),
-        );
-
-        let cancel = CancellationToken::new();
-        let response = match upstream_client
-            .call(req, TimeoutProfile::OAuth, cancel)
+        self.generic
+            .exchange_code(code, code_verifier, upstream_client, redirect_uri)
             .await
-        {
-            Ok(r) => r,
-            Err(e) => {
-                return Err(match e {
-                    UpstreamError::Cancel => CoreError::ClientDisconnected,
-                    other => {
-                        CoreError::UpstreamConnection(format!("google token exchange: {other}"))
-                    }
-                });
-            }
-        };
-
-        let status = response.status;
-        let body = match response.collect().await {
-            Ok(b) => b,
-            Err(e) => {
-                return Err(match e {
-                    UpstreamError::Cancel => CoreError::ClientDisconnected,
-                    other => CoreError::UpstreamConnection(format!(
-                        "google token exchange body read: {other}"
-                    )),
-                });
-            }
-        };
-
-        if !status.is_success() {
-            let body_str = String::from_utf8_lossy(&body).to_string();
-            return Err(CoreError::UpstreamError {
-                status: status.as_u16(),
-                provider: "antigravity".into(),
-                model: "<oauth>".into(),
-                body: body_str,
-            });
-        }
-
-        serde_json::from_slice::<TokenResponse>(&body)
-            .map_err(|e| CoreError::Parse(format!("google token response parse: {e}")))
     }
 
     async fn request_device_code(
         &self,
-        _upstream_client: &Arc<UpstreamClient>,
+        upstream_client: &Arc<UpstreamClient>,
     ) -> Result<crate::oauth::DeviceAuthorizationResponse> {
-        Err(CoreError::Validation(
-            "antigravity uses PKCE flow, not device code".into(),
-        ))
+        self.generic.request_device_code(upstream_client).await
     }
 
     async fn poll_device_token(
         &self,
-        _device_code: &str,
-        _upstream_client: &Arc<UpstreamClient>,
+        device_code: &str,
+        upstream_client: &Arc<UpstreamClient>,
     ) -> Result<Option<TokenResponse>> {
-        Err(CoreError::Validation(
-            "antigravity uses PKCE flow, not device code".into(),
-        ))
+        self.generic
+            .poll_device_token(device_code, upstream_client)
+            .await
     }
 
     async fn refresh_token(
         &self,
         refresh_token: &str,
         upstream_client: &Arc<UpstreamClient>,
-        _account_id: AccountId,
-        _db: crate::oauth::DbRef<'_>,
+        account_id: AccountId,
+        db: crate::oauth::DbRef<'_>,
     ) -> Result<TokenResponse> {
-        // Google's token endpoint requires client_secret for the
-        // refresh_token grant on confidential clients — without it
-        // the refresh is rejected with a 401/400, and the account
-        // stays stuck with an expired access_token.
-        let client_secret = std::env::var("OPENPROXY_ANTIGRAVITY_CLIENT_SECRET")
-            .unwrap_or_else(|_| DEFAULT_CLIENT_SECRET.to_string());
-
-        let mut params = vec![
-            ("grant_type", "refresh_token"),
-            ("client_id", CLIENT_ID),
-            ("refresh_token", refresh_token),
-        ];
-        if !client_secret.is_empty() {
-            params.push(("client_secret", &client_secret));
-        }
-
-        let body = urlencoded_body(&params);
-        let mut req = UpstreamRequest::post_json(TOKEN_URL, body);
-        req.headers.insert(
-            http::header::CONTENT_TYPE,
-            http::HeaderValue::from_static("application/x-www-form-urlencoded"),
-        );
-        // Use the native Antigravity OAuth User-Agent for refresh too
-        // (Google's token endpoint may reject requests with a
-        // mismatched User-Agent).
-        req.headers.insert(
-            http::header::USER_AGENT,
-            http::HeaderValue::from_str(&crate::antigravity_headers::oauth_user_agent())
-                .unwrap_or_else(|_| {
-                    http::HeaderValue::from_static("vscode/1.X.X (Antigravity/4.3.0)")
-                }),
-        );
-
-        let cancel = CancellationToken::new();
-        let response = match upstream_client
-            .call(req, TimeoutProfile::OAuth, cancel)
+        self.generic
+            .refresh_token(refresh_token, upstream_client, account_id, db)
             .await
-        {
-            Ok(r) => r,
-            Err(e) => {
-                return Err(match e {
-                    UpstreamError::Cancel => CoreError::ClientDisconnected,
-                    other => {
-                        CoreError::UpstreamConnection(format!("google token refresh: {other}"))
-                    }
-                });
-            }
-        };
-
-        let status = response.status;
-        let body = match response.collect().await {
-            Ok(b) => b,
-            Err(e) => {
-                return Err(match e {
-                    UpstreamError::Cancel => CoreError::ClientDisconnected,
-                    other => CoreError::UpstreamConnection(format!(
-                        "google token refresh body read: {other}"
-                    )),
-                });
-            }
-        };
-
-        if !status.is_success() {
-            let body_str = String::from_utf8_lossy(&body).to_string();
-            return Err(CoreError::UpstreamError {
-                status: status.as_u16(),
-                provider: "antigravity".into(),
-                model: "<oauth>".into(),
-                body: body_str,
-            });
-        }
-
-        serde_json::from_slice::<TokenResponse>(&body)
-            .map_err(|e| CoreError::Parse(format!("google token refresh parse: {e}")))
     }
 
     async fn post_exchange(
@@ -439,7 +292,8 @@ async fn load_code_assist(
 
     if !resp.status.is_success() {
         let status = resp.status.as_u16();
-        let body_str = String::from_utf8_lossy(&resp.collect().await.unwrap_or_default()).to_string();
+        let body_str =
+            String::from_utf8_lossy(&resp.collect().await.unwrap_or_default()).to_string();
         return Err(CoreError::UpstreamError {
             status,
             provider: "antigravity".into(),
@@ -448,10 +302,9 @@ async fn load_code_assist(
         });
     }
 
-    let body_bytes = resp
-        .collect()
-        .await
-        .map_err(|e| CoreError::UpstreamConnection(format!("antigravity loadCodeAssist read: {e}")))?;
+    let body_bytes = resp.collect().await.map_err(|e| {
+        CoreError::UpstreamConnection(format!("antigravity loadCodeAssist read: {e}"))
+    })?;
 
     let value: serde_json::Value = serde_json::from_slice(&body_bytes)
         .map_err(|e| CoreError::Parse(format!("antigravity loadCodeAssist parse: {e}")))?;
@@ -504,7 +357,8 @@ async fn onboard_user(
 
     if !resp.status.is_success() {
         let status = resp.status.as_u16();
-        let body_str = String::from_utf8_lossy(&resp.collect().await.unwrap_or_default()).to_string();
+        let body_str =
+            String::from_utf8_lossy(&resp.collect().await.unwrap_or_default()).to_string();
         return Err(CoreError::UpstreamError {
             status,
             provider: "antigravity".into(),
@@ -549,40 +403,12 @@ pub fn read_project_id(conn: &Connection, account_id: AccountId) -> Result<Optio
             source: Some(Box::new(e)),
         })?;
 
-    let Some(raw) = raw.flatten() else { return Ok(None) };
+    let Some(raw) = raw.flatten() else {
+        return Ok(None);
+    };
     let meta: AntigravityProviderMeta = serde_json::from_str(&raw)
         .map_err(|e| CoreError::Parse(format!("antigravity meta parse: {e}")))?;
     Ok(meta.project_id)
-}
-
-/// Generate a cryptographically random PKCE code verifier (43-128 chars).
-fn generate_code_verifier() -> String {
-    let mut buf = [0u8; 32];
-    rand::rng().fill_bytes(&mut buf);
-    base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(buf)
-}
-
-/// Compute the S256 code challenge from a verifier.
-fn code_challenge_s256(verifier: &str) -> String {
-    let digest = Sha256::digest(verifier.as_bytes());
-    base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(digest)
-}
-
-/// Build an `application/x-www-form-urlencoded` body from a list of
-/// `(name, value)` pairs. The values are URL-encoded with
-/// `urlencoding::encode` so they round-trip through the same parser
-/// Google's token endpoint uses.
-fn urlencoded_body(params: &[(&str, &str)]) -> bytes::Bytes {
-    let mut s = String::new();
-    for (i, (k, v)) in params.iter().enumerate() {
-        if i > 0 {
-            s.push('&');
-        }
-        s.push_str(&urlencoding::encode(k));
-        s.push('=');
-        s.push_str(&urlencoding::encode(v));
-    }
-    bytes::Bytes::from(s)
 }
 
 #[cfg(test)]
@@ -591,7 +417,7 @@ mod tests {
 
     #[test]
     fn code_verifier_is_url_safe() {
-        let v = generate_code_verifier();
+        let v = crate::oauth_generic::generate_code_verifier();
         assert!(v.len() >= 43);
         assert!(v.len() <= 128);
         // Must be base64url-safe characters only.
@@ -604,15 +430,15 @@ mod tests {
     #[test]
     fn code_challenge_deterministic() {
         let verifier = "test-verifier-string";
-        let a = code_challenge_s256(verifier);
-        let b = code_challenge_s256(verifier);
+        let a = crate::oauth_generic::code_challenge_s256(verifier);
+        let b = crate::oauth_generic::code_challenge_s256(verifier);
         assert_eq!(a, b);
     }
 
     #[test]
     fn code_challenge_differs_per_verifier() {
-        let a = code_challenge_s256("verifier-a");
-        let b = code_challenge_s256("verifier-b");
+        let a = crate::oauth_generic::code_challenge_s256("verifier-a");
+        let b = crate::oauth_generic::code_challenge_s256("verifier-b");
         assert_ne!(a, b);
     }
 
@@ -621,6 +447,26 @@ mod tests {
         let p = AntigravityOAuthProvider::new();
         assert_eq!(p.name(), "antigravity");
         assert_eq!(p.flow(), OAuthFlow::AuthorizationCodePkce);
+    }
+
+    #[tokio::test]
+    async fn antigravity_authorize_url_comes_from_generic_spec() {
+        let p = AntigravityOAuthProvider::new();
+        let (url, verifier, challenge) = p
+            .build_auth_url("http://localhost:8788/admin/callback.html")
+            .await
+            .unwrap();
+
+        assert!(!verifier.is_empty());
+        assert_eq!(
+            challenge,
+            crate::oauth_generic::code_challenge_s256(&verifier)
+        );
+        assert!(url.starts_with(AUTH_URL));
+        assert!(url.contains("client_id=1071006060591-tmhssin2h21lcre235vtolojh4g403ep"));
+        assert!(url.contains("access_type=offline"));
+        assert!(url.contains("prompt=consent"));
+        assert!(url.contains("code_challenge_method=S256"));
     }
 
     #[test]

@@ -12,6 +12,7 @@ use crate::ids::AccountId;
 use crate::secrets::MasterKey;
 use crate::upstream::UpstreamClient;
 use async_trait::async_trait;
+use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -76,7 +77,11 @@ pub struct DeviceAuthorizationResponse {
     pub user_code: String,
     #[serde(rename = "verificationUri", alias = "verification_uri")]
     pub verification_uri: String,
-    #[serde(default, rename = "verificationUriComplete", alias = "verification_uri_complete")]
+    #[serde(
+        default,
+        rename = "verificationUriComplete",
+        alias = "verification_uri_complete"
+    )]
     pub verification_uri_complete: Option<String>,
     #[serde(default, rename = "expiresIn", alias = "expires_in")]
     pub expires_in: Option<u64>,
@@ -304,6 +309,110 @@ impl OAuthProviderRegistry {
     }
 }
 
+/// Coordinates OAuth refresh calls so every runtime path uses the same
+/// serialization and persistence behavior.
+///
+/// The lock is provider-scoped. That is intentionally conservative: several
+/// OAuth backends rotate refresh tokens and can react badly to bursty parallel
+/// refreshes for sibling accounts under the same public client.
+#[derive(Default)]
+pub struct TokenRefreshCoordinator {
+    provider_mutexes: Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
+}
+
+impl TokenRefreshCoordinator {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn global() -> &'static Self {
+        static COORDINATOR: Lazy<TokenRefreshCoordinator> = Lazy::new(TokenRefreshCoordinator::new);
+        &COORDINATOR
+    }
+
+    async fn mutex_for_provider(&self, provider_id: &str) -> Arc<tokio::sync::Mutex<()>> {
+        let mut map = self.provider_mutexes.lock().await;
+        map.entry(provider_id.to_string())
+            .or_insert_with(|| Arc::new(tokio::sync::Mutex::new(())))
+            .clone()
+    }
+
+    pub async fn refresh_and_store(
+        &self,
+        provider_id: &str,
+        provider: Arc<dyn OAuthProvider + Send + Sync>,
+        refresh_token: &str,
+        upstream_client: &Arc<UpstreamClient>,
+        account_id: AccountId,
+        db: DbRef<'_>,
+        master_key: &MasterKey,
+    ) -> Result<TokenResponse> {
+        let mutex = self.mutex_for_provider(provider_id).await;
+        let _guard = mutex.lock().await;
+
+        match db {
+            DbRef::Pool(pool) => {
+                let token = provider
+                    .refresh_token(
+                        refresh_token,
+                        upstream_client,
+                        account_id,
+                        DbRef::Pool(pool),
+                    )
+                    .await?;
+                let expires_at = token_expires_at(token.expires_in);
+                let conn = pool.writer();
+                store_oauth_tokens(
+                    &conn,
+                    account_id,
+                    &token.access_token,
+                    token.refresh_token.as_deref(),
+                    master_key,
+                    &token.token_type,
+                    expires_at.as_deref(),
+                    token.scope.as_deref(),
+                    None,
+                    None,
+                )?;
+                Ok(token)
+            }
+            DbRef::Connection(conn_mutex) => {
+                let token = provider
+                    .refresh_token(
+                        refresh_token,
+                        upstream_client,
+                        account_id,
+                        DbRef::Connection(conn_mutex),
+                    )
+                    .await?;
+                let expires_at = token_expires_at(token.expires_in);
+                let conn = conn_mutex.lock();
+                store_oauth_tokens(
+                    &conn,
+                    account_id,
+                    &token.access_token,
+                    token.refresh_token.as_deref(),
+                    master_key,
+                    &token.token_type,
+                    expires_at.as_deref(),
+                    token.scope.as_deref(),
+                    None,
+                    None,
+                )?;
+                Ok(token)
+            }
+        }
+    }
+}
+
+pub fn token_expires_at(expires_in: Option<u64>) -> Option<String> {
+    expires_in.map(|secs| {
+        (chrono::Utc::now() + chrono::Duration::seconds(secs as i64))
+            .format("%Y-%m-%dT%H:%M:%SZ")
+            .to_string()
+    })
+}
+
 /// Resolve an OAuth access token for an account, refreshing it if
 /// it is expiring soon.
 ///
@@ -325,7 +434,7 @@ pub async fn resolve_oauth_token(
     upstream_client: &std::sync::Arc<crate::upstream::UpstreamClient>,
     master_key: &MasterKey,
 ) -> Result<String> {
-    use crate::accounts::{decrypt_access_token, decrypt_refresh_token, store_oauth_tokens};
+    use crate::accounts::{decrypt_access_token, decrypt_refresh_token};
 
     // 1. Decrypt current access token.
     let access_token = {
@@ -360,34 +469,20 @@ pub async fn resolve_oauth_token(
         "oauth on-demand refresh: refreshing expiring token"
     );
 
-    // 5. Refresh (async, no connection held).
-    let token = provider
-        .refresh_token(&refresh_token, upstream_client, account.id, DbRef::Pool(db_pool))
-        .await?;
-
-    // 6. Compute new expiry.
-    let expires_at = token.expires_in.map(|secs| {
-        (chrono::Utc::now() + chrono::Duration::seconds(secs as i64))
-            .format("%Y-%m-%dT%H:%M:%SZ")
-            .to_string()
-    });
-
-    // 7. Store new tokens under a fresh connection.
-    {
-        let conn = db_pool.writer();
-        store_oauth_tokens(
-            &conn,
+    // 5. Refresh and store through the shared coordinator. It serializes
+    // provider refreshes and applies the same persistence behavior used by
+    // the scheduler and pipeline.
+    let token = TokenRefreshCoordinator::global()
+        .refresh_and_store(
+            provider_id,
+            provider,
+            &refresh_token,
+            upstream_client,
             account.id,
-            &token.access_token,
-            token.refresh_token.as_deref(),
+            DbRef::Pool(db_pool),
             master_key,
-            &token.token_type,
-            expires_at.as_deref(),
-            token.scope.as_deref(),
-            account.oauth_provider_specific.as_deref(),
-            account.email.as_deref(),
-        )?;
-    }
+        )
+        .await?;
 
     tracing::info!(
         account = account.id.0,
@@ -483,9 +578,6 @@ const MAX_BACKOFF_SECS: u64 = 3600;
 /// Base backoff interval in seconds (doubles each failure).
 const BASE_BACKOFF_SECS: u64 = 60;
 
-/// Type alias for the per-provider mutex map.
-type ProviderMutexMap = Arc<Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>>;
-
 pub async fn start_refresh_scheduler(
     db_pool: std::sync::Arc<crate::db::DbPool>,
     master_key: std::sync::Arc<MasterKey>,
@@ -493,12 +585,6 @@ pub async fn start_refresh_scheduler(
     registry: Arc<OAuthProviderRegistry>,
     check_interval_secs: u64,
 ) {
-    // Per-provider mutex to serialize concurrent refreshes within the
-    // same provider. This prevents Auth0 cascade revocation where
-    // multiple simultaneous refreshes for the same provider cause the
-    // old refresh tokens to be invalidated.
-    let provider_mutexes: ProviderMutexMap = Arc::new(Mutex::new(HashMap::new()));
-
     let mut tick = tokio::time::interval(std::time::Duration::from_secs(check_interval_secs));
     // Skip the first immediate tick.
     tick.tick().await;
@@ -601,20 +687,18 @@ pub async fn start_refresh_scheduler(
                 }
             };
 
-            // Serialize per-provider: only one refresh per provider at
-            // a time to prevent Auth0 cascade revocation.
-            let mutex = {
-                let mut map = provider_mutexes.lock().await;
-                map.entry(account.provider_id.0.clone())
-                    .or_insert_with(|| Arc::new(tokio::sync::Mutex::new(())))
-                    .clone()
-            };
-            let _guard = mutex.lock().await;
-
             last_refresh_attempts.insert(account_id, chrono::Utc::now());
 
-            match provider
-                .refresh_token(&refresh_token, &upstream_client, account.id, DbRef::Pool(&db_pool))
+            match TokenRefreshCoordinator::global()
+                .refresh_and_store(
+                    account.provider_id.as_str(),
+                    provider,
+                    &refresh_token,
+                    &upstream_client,
+                    account.id,
+                    DbRef::Pool(&db_pool),
+                    &master_key,
+                )
                 .await
             {
                 Ok(token) => {
@@ -635,35 +719,12 @@ pub async fn start_refresh_scheduler(
                         );
                     }
 
-                    let expires_at = token.expires_in.map(|secs| {
-                        (chrono::Utc::now() + chrono::Duration::seconds(secs as i64))
-                            .format("%Y-%m-%dT%H:%M:%SZ")
-                            .to_string()
-                    });
-                    if let Err(e) = crate::accounts::store_oauth_tokens(
-                        &conn,
-                        account.id,
-                        &token.access_token,
-                        token.refresh_token.as_deref(),
-                        &master_key,
-                        &token.token_type,
-                        expires_at.as_deref(),
-                        token.scope.as_deref(),
-                        account.oauth_provider_specific.as_deref(),
-                        account.email.as_deref(),
-                    ) {
-                        tracing::warn!(
-                            account = account_id,
-                            error = %e,
-                            "oauth refresh: failed to store refreshed tokens"
-                        );
-                    } else {
-                        tracing::info!(
-                            account = account_id,
-                            provider = %account.provider_id,
-                            "oauth refresh: tokens refreshed successfully"
-                        );
-                    }
+                    tracing::info!(
+                        account = account_id,
+                        provider = %account.provider_id,
+                        token_type = %token.token_type,
+                        "oauth refresh: tokens refreshed successfully"
+                    );
                 }
                 Err(e) => {
                     // Increment failure counter and update health status.
@@ -752,12 +813,7 @@ pub async fn start_refresh_scheduler(
         // LEAK FIX: prune `failure_counts` / `last_refresh_attempts`
         // entries for accounts that no longer exist in the DB.
         // Without this, deleting an OAuth account leaves its failure
-        // tracking entries in memory forever (~80 bytes each). The
-        // `provider_mutexes` map is cleaned separately below.
-        //
-        // We also prune `provider_mutexes` for providers that no
-        // longer have any OAuth accounts — a deleted provider's
-        // mutex is dead weight.
+        // tracking entries in memory forever (~80 bytes each).
         {
             let live_account_ids: std::collections::HashSet<i64> = {
                 let conn = db_pool.writer();
@@ -785,27 +841,6 @@ pub async fn start_refresh_scheduler(
                     pruned_failure_counts = pruned_fc,
                     pruned_last_refresh_attempts = pruned_lra,
                     "oauth refresh: pruned stale account tracking entries"
-                );
-            }
-
-            // Prune provider_mutexes: collect live provider ids from
-            // the live account set, then drop mutexes for providers
-            // that have zero live accounts.
-            let live_provider_ids: std::collections::HashSet<String> = {
-                let conn = db_pool.writer();
-                match crate::accounts::list_oauth_provider_ids(&conn) {
-                    Ok(ids) => ids.into_iter().collect(),
-                    Err(_) => std::collections::HashSet::new(),
-                }
-            };
-            let mut pm = provider_mutexes.lock().await;
-            let before_pm = pm.len();
-            pm.retain(|pid, _| live_provider_ids.contains(pid));
-            let pruned_pm = before_pm - pm.len();
-            if pruned_pm > 0 {
-                tracing::debug!(
-                    pruned_provider_mutexes = pruned_pm,
-                    "oauth refresh: pruned stale provider mutexes"
                 );
             }
         }
