@@ -364,7 +364,10 @@ fn default_smart_warmup_interval() -> u64 {
 }
 
 fn default_smart_warmup_models() -> Vec<String> {
-    vec!["gemini-2.5-flash-lite".to_string(), "gpt-oss-120b-medium".to_string()]
+    vec![
+        "gemini-2.5-flash-lite".to_string(),
+        "gpt-oss-120b-medium".to_string(),
+    ]
 }
 
 impl Default for SmartWarmupConfig {

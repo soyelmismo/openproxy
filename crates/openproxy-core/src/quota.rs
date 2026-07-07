@@ -394,58 +394,82 @@ async fn fetch_antigravity_subscription_plan(
         let cancel = CancellationToken::new();
         let response = upstream.call(req, TimeoutProfile::Quota, cancel).await;
 
-        if let Ok(resp) = response 
-            && resp.status.is_success() 
+        if let Ok(resp) = response
+            && resp.status.is_success()
         {
             let body = match resp.collect().await {
-                    Ok(b) => b,
-                    Err(_) => continue,
-                };
-                if let Ok(json) = serde_json::from_slice::<serde_json::Value>(&body) {
-                    let paid_name = json.pointer("/paidTier/name").and_then(|v| v.as_str());
-                    let paid_id = json.pointer("/paidTier/id").and_then(|v| v.as_str());
-                    
-                    let mut tier = paid_name.or(paid_id);
-                    
-                    if tier.is_none() {
-                        let is_ineligible = json.pointer("/ineligibleTiers")
-                            .and_then(|v| v.as_array())
-                            .is_some_and(|a| !a.is_empty());
-                            
-                        if !is_ineligible {
-                            let current_name = json.pointer("/currentTier/name").and_then(|v| v.as_str());
-                            let current_id = json.pointer("/currentTier/id").and_then(|v| v.as_str());
-                            tier = current_name.or(current_id);
-                        } else if let Some(allowed) = json.pointer("/allowedTiers").and_then(|v| v.as_array()) {
-                            for t in allowed {
-                                if t.get("isDefault").and_then(|v| v.as_bool()).unwrap_or(false) {
-                                    let name = t.get("name").and_then(|v| v.as_str());
-                                    let id = t.get("id").and_then(|v| v.as_str());
-                                    tier = name.or(id);
-                                    break;
-                                }
+                Ok(b) => b,
+                Err(_) => continue,
+            };
+            if let Ok(json) = serde_json::from_slice::<serde_json::Value>(&body) {
+                let paid_name = json.pointer("/paidTier/name").and_then(|v| v.as_str());
+                let paid_id = json.pointer("/paidTier/id").and_then(|v| v.as_str());
+
+                let mut tier = paid_name.or(paid_id);
+
+                if tier.is_none() {
+                    let is_ineligible = json
+                        .pointer("/ineligibleTiers")
+                        .and_then(|v| v.as_array())
+                        .is_some_and(|a| !a.is_empty());
+
+                    if !is_ineligible {
+                        let current_name =
+                            json.pointer("/currentTier/name").and_then(|v| v.as_str());
+                        let current_id = json.pointer("/currentTier/id").and_then(|v| v.as_str());
+                        tier = current_name.or(current_id);
+                    } else if let Some(allowed) =
+                        json.pointer("/allowedTiers").and_then(|v| v.as_array())
+                    {
+                        for t in allowed {
+                            if t.get("isDefault")
+                                .and_then(|v| v.as_bool())
+                                .unwrap_or(false)
+                            {
+                                let name = t.get("name").and_then(|v| v.as_str());
+                                let id = t.get("id").and_then(|v| v.as_str());
+                                tier = name.or(id);
+                                break;
                             }
                         }
                     }
-                    
-                    if let Some(t) = tier {
-                        let upper = t.to_uppercase();
-                        let plan_name = if upper.contains("ULTRA") { "Ultra".to_string() }
-                        else if upper.contains("PRO") || upper.contains("PREMIUM") || upper.contains("GOOGLE_ONE") || upper.contains("ONE_AI") || upper.contains("GOOGLE ONE") { "Pro".to_string() }
-                        else if upper.contains("ENTERPRISE") { "Enterprise".to_string() }
-                        else if upper.contains("BUSINESS") || upper.contains("STANDARD") { "Business".to_string() }
-                        else if upper.contains("PLUS") { "Plus".to_string() }
-                        else if upper.contains("LITE") || upper.contains("LIGHT") { "Lite".to_string() }
-                        else if upper.contains("FREE") || upper.contains("INDIVIDUAL") || upper.contains("LEGACY") { "Free".to_string() }
-                        else { t.to_string() };
-                        
-                        PLAN_CACHE.insert(access_token.to_string(), plan_name.clone());
-                        return Some(plan_name);
-                    }
+                }
+
+                if let Some(t) = tier {
+                    let upper = t.to_uppercase();
+                    let plan_name = if upper.contains("ULTRA") {
+                        "Ultra".to_string()
+                    } else if upper.contains("PRO")
+                        || upper.contains("PREMIUM")
+                        || upper.contains("GOOGLE_ONE")
+                        || upper.contains("ONE_AI")
+                        || upper.contains("GOOGLE ONE")
+                    {
+                        "Pro".to_string()
+                    } else if upper.contains("ENTERPRISE") {
+                        "Enterprise".to_string()
+                    } else if upper.contains("BUSINESS") || upper.contains("STANDARD") {
+                        "Business".to_string()
+                    } else if upper.contains("PLUS") {
+                        "Plus".to_string()
+                    } else if upper.contains("LITE") || upper.contains("LIGHT") {
+                        "Lite".to_string()
+                    } else if upper.contains("FREE")
+                        || upper.contains("INDIVIDUAL")
+                        || upper.contains("LEGACY")
+                    {
+                        "Free".to_string()
+                    } else {
+                        t.to_string()
+                    };
+
+                    PLAN_CACHE.insert(access_token.to_string(), plan_name.clone());
+                    return Some(plan_name);
                 }
             }
         }
-    
+    }
+
     None
 }
 
@@ -488,13 +512,15 @@ pub async fn fetch_antigravity_quota(
                     models_quota.session_reset_at = summary_quota.session_reset_at.clone();
                 }
             }
-            
+
             if let Some(plan) = plan_result {
                 models_quota.plan_name = Some(plan);
-            } else if models_quota.plan_name.is_none() || models_quota.plan_name.as_deref() == Some("Antigravity") {
+            } else if models_quota.plan_name.is_none()
+                || models_quota.plan_name.as_deref() == Some("Antigravity")
+            {
                 if let Ok(ref summary_quota) = summary_res {
-                    if let Some(summary_plan) = &summary_quota.plan_name 
-                        && summary_plan != "Antigravity" 
+                    if let Some(summary_plan) = &summary_quota.plan_name
+                        && summary_plan != "Antigravity"
                     {
                         models_quota.plan_name = Some(summary_plan.clone());
                     } else {
@@ -504,17 +530,19 @@ pub async fn fetch_antigravity_quota(
                     models_quota.plan_name = Some("Free".to_string());
                 }
             }
-            
+
             Ok(models_quota)
         }
         (Err(_models_err), Ok(mut summary_quota)) => {
             if let Some(plan) = plan_result {
                 summary_quota.plan_name = Some(plan);
-            } else if summary_quota.plan_name.is_none() || summary_quota.plan_name.as_deref() == Some("Antigravity") {
+            } else if summary_quota.plan_name.is_none()
+                || summary_quota.plan_name.as_deref() == Some("Antigravity")
+            {
                 summary_quota.plan_name = Some("Free".to_string());
             }
             Ok(summary_quota)
-        },
+        }
         (Err(models_err), Err(_)) => Err(models_err),
     }
 }

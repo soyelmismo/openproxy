@@ -33,6 +33,7 @@ use crate::ids::AccountId;
 use crate::translation::{OpenAIChoice, OpenAIMessage, OpenAIRequest, OpenAIResponse, OpenAIUsage};
 use crate::upstream::{
     CancellationToken, TimeoutProfile, UpstreamClient, UpstreamError, UpstreamRequest,
+    UpstreamResponse,
 };
 use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
@@ -708,6 +709,64 @@ fn build_antigravity_request(
     })
 }
 
+pub(crate) fn build_antigravity_envelope_value(
+    openai: &OpenAIRequest,
+    project_id: &str,
+    session_id: &str,
+) -> Result<serde_json::Value, CoreError> {
+    let envelope = build_antigravity_request(openai, project_id, session_id)?;
+    serde_json::to_value(envelope)
+        .map_err(|e| CoreError::Internal(format!("failed to serialize envelope: {e}")))
+}
+
+pub(crate) async fn call_antigravity_v1internal(
+    upstream_client: &Arc<UpstreamClient>,
+    url: &str,
+    access_token: &str,
+    project_id: &str,
+    body_bytes: bytes::Bytes,
+    timeout: TimeoutProfile,
+    cancel: CancellationToken,
+    accept_sse: bool,
+    proxy: Option<String>,
+    log_context: &str,
+) -> std::result::Result<UpstreamResponse, UpstreamError> {
+    let build_request = |project_id: Option<&str>| {
+        let mut req = UpstreamRequest::post_json(url.to_string(), body_bytes.clone());
+        req.proxy = proxy.clone();
+        if let Ok(value) = http::HeaderValue::from_str(&format!("Bearer {access_token}")) {
+            req.headers.insert(http::header::AUTHORIZATION, value);
+        }
+        if accept_sse {
+            req.headers.insert(
+                http::header::ACCEPT,
+                http::HeaderValue::from_static("text/event-stream"),
+            );
+        }
+        crate::antigravity_headers::inject_antigravity_headers(&mut req.headers, project_id);
+        req
+    };
+
+    let mut response = upstream_client
+        .call(build_request(Some(project_id)), timeout, cancel.clone())
+        .await?;
+
+    if response.status == http::StatusCode::FORBIDDEN && !project_id.is_empty() {
+        tracing::warn!(
+            "{} got 403 with project header; retrying without x-goog-user-project",
+            log_context
+        );
+        if let Ok(retry_resp) = upstream_client
+            .call(build_request(None), timeout, cancel)
+            .await
+        {
+            response = retry_resp;
+        }
+    }
+
+    Ok(response)
+}
+
 // ---------------------------------------------------------------------------
 // SSE parsing
 // ---------------------------------------------------------------------------
@@ -847,40 +906,28 @@ pub async fn execute_antigravity(
         .count();
 
     // 2. Build Cloud Code envelope
-    let envelope = build_antigravity_request(openai, project_id, &session_id)?;
-    let body_bytes = serde_json::to_vec(&envelope)
+    let body = build_antigravity_envelope_value(openai, project_id, &session_id)?;
+    let body_bytes = serde_json::to_vec(&body)
         .map_err(|e| CoreError::Internal(format!("failed to serialize envelope: {e}")))?;
 
     // 3. Build the upstream request
     let url = "https://daily-cloudcode-pa.googleapis.com/v1internal:streamGenerateContent?alt=sse";
 
-    let build_request = |access_token: &str,
-                         project_id: Option<&str>,
-                         body_bytes: &[u8],
-                         proxy_opt: Option<String>|
-     -> Result<UpstreamRequest, CoreError> {
-        let mut req =
-            UpstreamRequest::post_json(url.to_string(), bytes::Bytes::copy_from_slice(body_bytes));
-        req.proxy = proxy_opt;
-        if let Ok(value) = http::HeaderValue::from_str(&format!("Bearer {access_token}")) {
-            req.headers.insert(http::header::AUTHORIZATION, value);
-        }
-        req.headers.insert(
-            http::header::ACCEPT,
-            http::HeaderValue::from_static("text/event-stream"),
-        );
-        crate::antigravity_headers::inject_antigravity_headers(&mut req.headers, project_id);
-        Ok(req)
-    };
-
-    let upstream_request =
-        build_request(access_token, Some(project_id), &body_bytes, proxy.clone())?;
-
     let cancel = CancellationToken::from_watch(client_disconnected);
 
-    let mut response = match upstream_client
-        .call(upstream_request, TimeoutProfile::Chat, cancel.clone())
-        .await
+    let response = match call_antigravity_v1internal(
+        upstream_client,
+        url,
+        access_token,
+        project_id,
+        bytes::Bytes::from(body_bytes),
+        TimeoutProfile::Chat,
+        cancel,
+        true,
+        proxy,
+        "Antigravity request",
+    )
+    .await
     {
         Ok(r) => r,
         Err(e) => {
@@ -892,19 +939,6 @@ pub async fn execute_antigravity(
             });
         }
     };
-
-    if response.status == http::StatusCode::FORBIDDEN && !project_id.is_empty() {
-        tracing::warn!(
-            "Antigravity request got 403 Forbidden with project ID, retrying WITHOUT project ID header..."
-        );
-        let retry_request = build_request(access_token, None, &body_bytes, proxy)?;
-        if let Ok(retry_resp) = upstream_client
-            .call(retry_request, TimeoutProfile::Chat, cancel)
-            .await
-        {
-            response = retry_resp;
-        }
-    }
 
     let status = response.status.as_u16();
     if !(200..300).contains(&status) {
