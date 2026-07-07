@@ -1,7 +1,7 @@
-use std::sync::Arc;
-use crate::pipeline::{Pipeline, PipelineRequest};
 use crate::combos::{Combo, ComboTarget};
 use crate::models::Model;
+use crate::pipeline::{Pipeline, PipelineRequest};
+use std::sync::Arc;
 
 #[derive(Clone, Debug)]
 pub struct CustomProviderMeta {
@@ -25,7 +25,7 @@ pub struct ResolvedTarget {
 pub struct PipelineContext {
     pub req: Arc<PipelineRequest>,
     pub pipeline: Pipeline,
-    
+
     // State populated by stages
     pub combo: Option<Combo>,
     pub targets: Vec<ResolvedTarget>,

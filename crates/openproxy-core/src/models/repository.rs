@@ -9,10 +9,10 @@
 //! opens its own connection internally, so callers don't manage
 //! connection lifetimes.
 
+use super::{DiscoveredModel, Model, TargetFormat, UpsertResult};
 use crate::db::DbPool;
 use crate::error::Result;
 use crate::ids::{ModelId, ModelRowId, ProviderId};
-use super::{DiscoveredModel, Model, TargetFormat, UpsertResult};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -85,11 +85,7 @@ pub trait ModelRepository: Send + Sync {
     ) -> Result<UpsertResult>;
 
     /// Re-apply auto-activation rules after a discovery refresh.
-    fn apply_auto_activation(
-        &self,
-        provider: &ProviderId,
-        keyword: Option<&str>,
-    ) -> Result<u64>;
+    fn apply_auto_activation(&self, provider: &ProviderId, keyword: Option<&str>) -> Result<u64>;
 }
 
 // ─── SQLite implementation ──────────────────────────────────────────
@@ -172,7 +168,14 @@ impl ModelRepository for SqliteModelRepository {
         ttl_seconds: i64,
     ) -> Result<ModelRowId> {
         let conn = self.pool.open_connection()?;
-        super::crud::create_custom(&conn, provider_id, model_id, display_name, target_format, ttl_seconds)
+        super::crud::create_custom(
+            &conn,
+            provider_id,
+            model_id,
+            display_name,
+            target_format,
+            ttl_seconds,
+        )
     }
 
     fn mark_expired(&self) -> Result<usize> {
@@ -190,11 +193,7 @@ impl ModelRepository for SqliteModelRepository {
         super::crud::upsert_many(&conn, provider, discovered, ttl)
     }
 
-    fn apply_auto_activation(
-        &self,
-        provider: &ProviderId,
-        keyword: Option<&str>,
-    ) -> Result<u64> {
+    fn apply_auto_activation(&self, provider: &ProviderId, keyword: Option<&str>) -> Result<u64> {
         let conn = self.pool.open_connection()?;
         super::crud::apply_auto_activation(&conn, provider, keyword)
     }

@@ -44,20 +44,15 @@ use axum::{
     response::Response,
 };
 use openproxy_core::{
-    accounts, adapters, cost,
+    CoreError, accounts, adapters, cost,
     ids::{AccountId, ApiKeyId, ComboId, ModelRowId, ProviderId, RequestId, TraceId},
     models, providers,
     routing::{self, RoutingPlan},
-    CoreError,
 };
 use std::sync::Arc;
 use std::time::Instant;
 
-use crate::{
-    error::ApiError,
-    middleware::auth::authenticate,
-    state::AppState,
-};
+use crate::{error::ApiError, middleware::auth::authenticate, state::AppState};
 
 /// `POST /v1/audio/transcriptions`.
 ///
@@ -267,9 +262,7 @@ fn translate_audio_routing_plan(
             combo_id: None,
         })),
         RoutingPlan::Combo {
-            combo_id,
-            targets,
-            ..
+            combo_id, targets, ..
         } => {
             let target = targets
                 .into_iter()
@@ -368,9 +361,8 @@ fn build_audio_response(
     content_type: &str,
     body: bytes::Bytes,
 ) -> Result<Response, ApiError> {
-    let mut builder = Response::builder().status(
-        StatusCode::from_u16(status_code).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR),
-    );
+    let mut builder = Response::builder()
+        .status(StatusCode::from_u16(status_code).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR));
     if let Ok(v) = HeaderValue::from_str(content_type) {
         builder = builder.header(axum::http::header::CONTENT_TYPE, v);
     }
@@ -497,9 +489,7 @@ fn record_audio_usage_row(
     {
         Some(w) => w,
         None => {
-            tracing::warn!(
-                "hot-path writer lock timeout on audio usage row; dropping"
-            );
+            tracing::warn!("hot-path writer lock timeout on audio usage row; dropping");
             return Ok(());
         }
     };

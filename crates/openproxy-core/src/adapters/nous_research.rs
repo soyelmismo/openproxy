@@ -77,4 +77,3 @@ impl ProviderAdapter for NousResearchAdapter {
         .await
     }
 }
-

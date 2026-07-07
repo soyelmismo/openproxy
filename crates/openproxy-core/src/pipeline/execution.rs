@@ -3,26 +3,23 @@ use crate::combos::{self, Combo, ComboTarget};
 use crate::compression::{CompressionMode, stats::CompressionStats};
 use crate::error::{CoreError, Result};
 use crate::ids::ComboId;
-use crate::pipeline::{FailureContext, ErrorPhase, Pipeline, PipelineRequest, PipelineResult};
+use crate::pipeline::repository::PipelineRepository;
+use crate::pipeline::{ErrorPhase, FailureContext, Pipeline, PipelineRequest, PipelineResult};
 use crate::retry::RetryPolicy;
 use crate::timeouts::{self, ModelTimeoutOverrides};
 use crate::upstream::CancellationToken;
 use std::sync::Arc;
 use std::time::Instant;
 use tokio::sync::watch;
-use crate::pipeline::repository::PipelineRepository;
-
 
 impl Pipeline {
     /// Drive one chat-completion request to completion.
     pub async fn run(&self, req: Arc<PipelineRequest>) -> PipelineResult {
-        use crate::pipeline::stage::PipelineChain;
         use crate::pipeline::context::PipelineContext;
+        use crate::pipeline::stage::PipelineChain;
         use crate::pipeline::stages::{
+            executor::UpstreamExecutorStage, quota::QuotaEnforcerStage, router::RouterStage,
             telemetry::TelemetryRecorderStage,
-            router::RouterStage,
-            quota::QuotaEnforcerStage,
-            executor::UpstreamExecutorStage,
         };
 
         let ctx = PipelineContext::new(req, self.clone());
@@ -89,8 +86,10 @@ impl Pipeline {
         Ok(added)
     }
 
-
-    pub async fn resolve_combo_targets_full(&self, eligible: Vec<ComboTarget>) -> Vec<crate::pipeline::context::ResolvedTarget> {
+    pub async fn resolve_combo_targets_full(
+        &self,
+        eligible: Vec<ComboTarget>,
+    ) -> Vec<crate::pipeline::context::ResolvedTarget> {
         if eligible.is_empty() {
             return Vec::new();
         }
@@ -117,9 +116,18 @@ impl Pipeline {
         provider_ids_no_account.sort_unstable_by_key(|id| id.0.clone());
         provider_ids_no_account.dedup_by_key(|id| id.0.clone());
 
-        let models_map = self.repo().get_models_by_row_ids(&model_row_ids).unwrap_or_default();
-        let (accounts_map, kiro_map, antigravity_map) = self.repo().get_accounts_meta(&account_ids).unwrap_or_default();
-        let providers_map = self.repo().get_providers_auth_type(&provider_ids_no_account).unwrap_or_default();
+        let models_map = self
+            .repo()
+            .get_models_by_row_ids(&model_row_ids)
+            .unwrap_or_default();
+        let (accounts_map, kiro_map, antigravity_map) = self
+            .repo()
+            .get_accounts_meta(&account_ids)
+            .unwrap_or_default();
+        let providers_map = self
+            .repo()
+            .get_providers_auth_type(&provider_ids_no_account)
+            .unwrap_or_default();
 
         let master_key = self.config.master_key.clone();
         let oauth_registry = self.config.oauth_provider_registry.clone();
@@ -135,7 +143,9 @@ impl Pipeline {
                 master_key,
                 oauth_registry,
             )
-        }).await.unwrap()
+        })
+        .await
+        .unwrap()
     }
 
     pub(crate) async fn execute_single(
@@ -216,22 +226,48 @@ impl Pipeline {
         };
 
         let mut resolved_target_clone = resolved_target.clone();
-        
+
         if let Some(account_id) = target.account_id {
             if let Some(custom_meta) = &mut resolved_target_clone.custom_meta {
                 if let Some(refresh_token) = &custom_meta.maybe_refresh {
                     if let Some(registry) = self.config.oauth_provider_registry.as_ref() {
                         if let Some(provider) = registry.get(target.provider_id.as_str()) {
                             let provider_id_str = target.provider_id.as_str();
-                            tracing::info!(account = account_id.0, provider = provider_id_str, "pipeline: proactive OAuth token refresh");
-                            match provider.refresh_token(refresh_token, &self.config.upstream_client, account_id, crate::oauth::DbRef::Connection(&self.conn)).await {
+                            tracing::info!(
+                                account = account_id.0,
+                                provider = provider_id_str,
+                                "pipeline: proactive OAuth token refresh"
+                            );
+                            match provider
+                                .refresh_token(
+                                    refresh_token,
+                                    &self.config.upstream_client,
+                                    account_id,
+                                    crate::oauth::DbRef::Connection(&self.conn),
+                                )
+                                .await
+                            {
                                 Ok(token) => {
                                     let expires_at = token.expires_in.map(|secs| {
-                                        (chrono::Utc::now() + chrono::Duration::seconds(secs as i64)).format("%Y-%m-%dT%H:%M:%SZ").to_string()
+                                        (chrono::Utc::now()
+                                            + chrono::Duration::seconds(secs as i64))
+                                        .format("%Y-%m-%dT%H:%M:%SZ")
+                                        .to_string()
                                     });
                                     {
                                         let conn = self.conn.lock();
-                                        let _ = crate::accounts::store_oauth_tokens(&conn, account_id, &token.access_token, token.refresh_token.as_deref(), &self.config.master_key, &token.token_type, expires_at.as_deref(), token.scope.as_deref(), None, None);
+                                        let _ = crate::accounts::store_oauth_tokens(
+                                            &conn,
+                                            account_id,
+                                            &token.access_token,
+                                            token.refresh_token.as_deref(),
+                                            &self.config.master_key,
+                                            &token.token_type,
+                                            expires_at.as_deref(),
+                                            token.scope.as_deref(),
+                                            None,
+                                            None,
+                                        );
                                     }
                                     custom_meta.access_token = token.access_token;
                                 }
@@ -245,7 +281,14 @@ impl Pipeline {
             }
         }
 
-        if let Some(result) = adapter.execute_custom(&self.config.upstream_client, Arc::clone(&req), &resolved_target_clone).await {
+        if let Some(result) = adapter
+            .execute_custom(
+                &self.config.upstream_client,
+                Arc::clone(&req),
+                &resolved_target_clone,
+            )
+            .await
+        {
             return match result {
                 Ok(response) => {
                     let total_ms = started.elapsed().as_millis() as u64;
@@ -293,7 +336,11 @@ impl Pipeline {
                     if let CoreError::UpstreamError { status: 401, .. } = &e {
                         if let Some(account_id) = target.account_id {
                             let provider_id_str = target.provider_id.to_string();
-                            let dedup_key = format!("{}:{}", crate::notifications::CODE_OAUTH_EXPIRED, account_id.0);
+                            let dedup_key = format!(
+                                "{}:{}",
+                                crate::notifications::CODE_OAUTH_EXPIRED,
+                                account_id.0
+                            );
                             let payload = serde_json::json!({
                                 "code": crate::notifications::CODE_OAUTH_EXPIRED,
                                 "message": format!("OAuth token for account {} on {} rejected by upstream (HTTP 401)", account_id.0, provider_id_str),
@@ -305,13 +352,30 @@ impl Pipeline {
                                 },
                             });
                             let conn = self.conn.lock();
-                            let _ = crate::notifications::insert_and_broadcast(&conn, crate::notifications::KIND_SYSTEM, &payload, Some(&dedup_key), Some(&provider_id_str));
+                            let _ = crate::notifications::insert_and_broadcast(
+                                &conn,
+                                crate::notifications::KIND_SYSTEM,
+                                &payload,
+                                Some(&dedup_key),
+                                Some(&provider_id_str),
+                            );
                         }
                     }
                     self.record_and_fail_with_trace_id(
-                        req, combo, target, FailureContext {
-                            attempt, race_size, err: &e, started, model: Some(&model), connect_ms: None, ttft_ms: None, status_code: e.http_status(),
-                        }, trace_id
+                        req,
+                        combo,
+                        target,
+                        FailureContext {
+                            attempt,
+                            race_size,
+                            err: &e,
+                            started,
+                            model: Some(&model),
+                            connect_ms: None,
+                            ttft_ms: None,
+                            status_code: e.http_status(),
+                        },
+                        trace_id,
                     )
                 }
             };
@@ -371,10 +435,8 @@ impl Pipeline {
         let mut cloned_messages: Option<Vec<crate::translation::OpenAIMessage>> = None;
         let compression_stats = if self.config.compression_mode != CompressionMode::Off {
             let mut msgs = req.openai_request.messages.clone();
-            let stats = crate::compression::apply_compression(
-                &mut msgs,
-                self.config.compression_mode,
-            );
+            let stats =
+                crate::compression::apply_compression(&mut msgs, self.config.compression_mode);
             cloned_messages = Some(msgs);
             stats
         } else {
@@ -382,29 +444,32 @@ impl Pipeline {
         };
         *self.compression_stats_cell.write() = Some(compression_stats);
 
-        let messages_ref = cloned_messages.as_deref().unwrap_or(&req.openai_request.messages);
+        let messages_ref = cloned_messages
+            .as_deref()
+            .unwrap_or(&req.openai_request.messages);
 
         let formatter = crate::pipeline::formatting::get_formatter(target_format);
-        let body_bytes = match formatter.format_request(&req, &model, messages_ref, stream, adapter.as_ref()) {
-            Ok(b) => b,
-            Err(e) => {
-                return self.record_and_fail(
-                    req,
-                    combo,
-                    target,
-                    FailureContext {
-                        attempt,
-                        race_size,
-                        err: &e,
-                        started,
-                        model: Some(&model),
-                        connect_ms: None,
-                        ttft_ms: None,
-                        status_code: 0,
-                    },
-                );
-            }
-        };
+        let body_bytes =
+            match formatter.format_request(&req, &model, messages_ref, stream, adapter.as_ref()) {
+                Ok(b) => b,
+                Err(e) => {
+                    return self.record_and_fail(
+                        req,
+                        combo,
+                        target,
+                        FailureContext {
+                            attempt,
+                            race_size,
+                            err: &e,
+                            started,
+                            model: Some(&model),
+                            connect_ms: None,
+                            ttft_ms: None,
+                            status_code: 0,
+                        },
+                    );
+                }
+            };
 
         let (api_key, account_label) = match self.resolve_target_api_key_and_label(target) {
             Ok(v) => v,
@@ -475,7 +540,8 @@ impl Pipeline {
         });
 
         let result = self
-            .dispatcher.dispatch_upstream(
+            .dispatcher
+            .dispatch_upstream(
                 target,
                 combo,
                 Arc::clone(&req),
@@ -600,9 +666,7 @@ impl Pipeline {
                     Some(p) if matches!(p.auth_type, crate::providers::AuthType::None) => {
                         Ok(String::new())
                     }
-                    Some(p) if p.id.0 == "opencode-zen" => {
-                        Ok(String::new())
-                    }
+                    Some(p) if p.id.0 == "opencode-zen" => Ok(String::new()),
                     _ => Err(CoreError::Auth(format!(
                         "combo_target {} has no account_id after expansion",
                         target.id.0
@@ -631,9 +695,7 @@ impl Pipeline {
                     Some(p) if matches!(p.auth_type, crate::providers::AuthType::None) => {
                         Ok((String::new(), None))
                     }
-                    Some(p) if p.id.0 == "opencode-zen" => {
-                        Ok((String::new(), None))
-                    }
+                    Some(p) if p.id.0 == "opencode-zen" => Ok((String::new(), None)),
                     _ => Err(CoreError::Auth(format!(
                         "combo_target {} has no account_id after expansion",
                         target.id.0
@@ -643,7 +705,12 @@ impl Pipeline {
         }
     }
 
-    pub(crate) fn failure(&self, err: CoreError, attempts: u8, _phase: ErrorPhase) -> PipelineResult {
+    pub(crate) fn failure(
+        &self,
+        err: CoreError,
+        attempts: u8,
+        _phase: ErrorPhase,
+    ) -> PipelineResult {
         PipelineResult {
             status_code: err.http_status(),
             error: Some(err),
@@ -661,7 +728,6 @@ impl Pipeline {
         *rx.borrow_and_update()
     }
 
-
     pub(crate) fn record_and_fail(
         &self,
         req: Arc<PipelineRequest>,
@@ -669,7 +735,13 @@ impl Pipeline {
         target: &ComboTarget,
         ctx: FailureContext<'_>,
     ) -> PipelineResult {
-        self.record_and_fail_with_trace_id(Arc::clone(&req), combo, target, ctx, req.trace_id.to_string())
+        self.record_and_fail_with_trace_id(
+            Arc::clone(&req),
+            combo,
+            target,
+            ctx,
+            req.trace_id.to_string(),
+        )
     }
 
     pub(crate) fn record_and_fail_with_trace_id(
@@ -685,8 +757,7 @@ impl Pipeline {
         )
     }
 
-
-        #[allow(clippy::too_many_arguments)]
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn record_and_fail_with_trace_id_and_partial(
         &self,
         req: Arc<PipelineRequest>,
@@ -699,10 +770,8 @@ impl Pipeline {
         created: u64,
         model_name: &str,
     ) -> PipelineResult {
-        self.tracker.record_and_fail_with_trace_id_and_partial(req, combo, target, ctx, trace_id, acc, chunk_id, created, model_name)
+        self.tracker.record_and_fail_with_trace_id_and_partial(
+            req, combo, target, ctx, trace_id, acc, chunk_id, created, model_name,
+        )
     }
-
-
-
 }
-

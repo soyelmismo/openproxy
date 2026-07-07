@@ -33,23 +33,21 @@
 
 use crate::translation::OpenAIMessage;
 use once_cell::sync::Lazy;
-use tiktoken_rs::{cl100k_base, CoreBPE};
+use tiktoken_rs::{CoreBPE, cl100k_base};
 
 /// Thread-safe singleton BPE encoder. Loaded once at first use.
 /// The cl100k_base vocab is ~50K tokens, embedded in the binary.
-static ENCODER: Lazy<Option<CoreBPE>> = Lazy::new(|| {
-    match cl100k_base() {
-        Ok(bpe) => {
-            tracing::info!("tiktoken cl100k_base BPE encoder initialized");
-            Some(bpe)
-        }
-        Err(e) => {
-            tracing::error!(
-                error = %e,
-                "failed to initialize tiktoken cl100k_base encoder; token estimation will fall back to char heuristic"
-            );
-            None
-        }
+static ENCODER: Lazy<Option<CoreBPE>> = Lazy::new(|| match cl100k_base() {
+    Ok(bpe) => {
+        tracing::info!("tiktoken cl100k_base BPE encoder initialized");
+        Some(bpe)
+    }
+    Err(e) => {
+        tracing::error!(
+            error = %e,
+            "failed to initialize tiktoken cl100k_base encoder; token estimation will fall back to char heuristic"
+        );
+        None
     }
 });
 
@@ -223,7 +221,11 @@ mod tests {
     fn test_estimate_english_text() {
         // "Hello world" in cl100k_base is 2 tokens
         let tokens = estimate_completion_tokens("Hello world");
-        assert!(tokens >= 1 && tokens <= 5, "expected 1-5 tokens, got {}", tokens);
+        assert!(
+            tokens >= 1 && tokens <= 5,
+            "expected 1-5 tokens, got {}",
+            tokens
+        );
     }
 
     #[test]
@@ -236,7 +238,11 @@ mod tests {
         // CJK chars are ~1 token each in cl100k_base (not 0.5 like the
         // heuristic assumed). "你好世界" should be ~4 tokens.
         let tokens = estimate_completion_tokens("你好世界");
-        assert!(tokens >= 2 && tokens <= 6, "expected 2-6 tokens, got {}", tokens);
+        assert!(
+            tokens >= 2 && tokens <= 6,
+            "expected 2-6 tokens, got {}",
+            tokens
+        );
     }
 
     #[test]
@@ -245,19 +251,24 @@ mod tests {
         let tokens = estimate_completion_tokens(code);
         // cl100k_base tokenizes code differently than prose — verify
         // we get a reasonable count (not 0, not absurdly high).
-        assert!(tokens >= 5 && tokens <= 30, "expected 5-30 tokens, got {}", tokens);
+        assert!(
+            tokens >= 5 && tokens <= 30,
+            "expected 5-30 tokens, got {}",
+            tokens
+        );
     }
 
     #[test]
     fn test_estimate_prompt_tokens_with_string_content() {
-        let messages = vec![
-            msg("user", "Hello"),
-            msg("assistant", "Hi there!"),
-        ];
+        let messages = vec![msg("user", "Hello"), msg("assistant", "Hi there!")];
         let tokens = estimate_prompt_tokens(&messages);
         // 2 messages × 4 overhead = 8, plus content tokens.
         // "Hello" ≈ 1 token, "Hi there!" ≈ 2 tokens → total ≈ 11.
-        assert!(tokens >= 10 && tokens <= 20, "expected 10-20 tokens, got {}", tokens);
+        assert!(
+            tokens >= 10 && tokens <= 20,
+            "expected 10-20 tokens, got {}",
+            tokens
+        );
     }
 
     #[test]
@@ -297,20 +308,24 @@ mod tests {
         }];
         let tokens = estimate_prompt_tokens(&messages);
         // Should include both the text content AND the tool_call arguments
-        assert!(tokens >= 8, "expected at least 8 tokens (4 overhead + content + args), got {}", tokens);
+        assert!(
+            tokens >= 8,
+            "expected at least 8 tokens (4 overhead + content + args), got {}",
+            tokens
+        );
     }
 
     #[test]
     fn test_estimate_prompt_tokens_message_overhead() {
         // Empty content messages should still count the 4-token overhead
-        let messages = vec![
-            msg("system", ""),
-            msg("user", ""),
-            msg("assistant", ""),
-        ];
+        let messages = vec![msg("system", ""), msg("user", ""), msg("assistant", "")];
         let tokens = estimate_prompt_tokens(&messages);
         // 3 messages × 4 overhead = 12 (empty strings produce 0 content tokens)
-        assert!(tokens >= 12, "expected at least 12 tokens (3×4 overhead), got {}", tokens);
+        assert!(
+            tokens >= 12,
+            "expected at least 12 tokens (3×4 overhead), got {}",
+            tokens
+        );
     }
 
     #[test]
@@ -320,7 +335,11 @@ mod tests {
         let tokens = estimate_completion_tokens(&text);
         // cl100k_base merges whitespace runs efficiently — 100 spaces
         // should be ~5-15 tokens, not 25+.
-        assert!(tokens <= 30, "expected ≤30 tokens for whitespace-heavy text, got {}", tokens);
+        assert!(
+            tokens <= 30,
+            "expected ≤30 tokens for whitespace-heavy text, got {}",
+            tokens
+        );
     }
 
     #[test]
@@ -337,7 +356,11 @@ mod tests {
         assert!(bpe_tokens > 0, "BPE should produce > 0 tokens");
         // The BPE count for "hello     world     test" is typically
         // 3-5 tokens (the spaces merge into the adjacent word tokens).
-        assert!(bpe_tokens <= 10, "BPE should be efficient with whitespace, got {}", bpe_tokens);
+        assert!(
+            bpe_tokens <= 10,
+            "BPE should be efficient with whitespace, got {}",
+            bpe_tokens
+        );
         // The heuristic might give a different number — that's fine,
         // the point is they CAN differ (proving BPE is real).
         let _ = heuristic_tokens; // used for documentation
@@ -353,7 +376,11 @@ mod tests {
         // cl100k_base tokenizes JSON with special handling for braces
         // and quotes — the count should be reasonable but NOT simply
         // len/4.
-        assert!(tokens >= 5 && tokens <= 30, "expected 5-30 tokens for JSON, got {}", tokens);
+        assert!(
+            tokens >= 5 && tokens <= 30,
+            "expected 5-30 tokens for JSON, got {}",
+            tokens
+        );
     }
 
     #[test]
@@ -364,7 +391,11 @@ mod tests {
         let start = std::time::Instant::now();
         let tokens = estimate_completion_tokens(&large_text);
         let elapsed = start.elapsed();
-        assert!(tokens > 1000, "expected >1000 tokens for 110KB text, got {}", tokens);
+        assert!(
+            tokens > 1000,
+            "expected >1000 tokens for 110KB text, got {}",
+            tokens
+        );
         assert!(
             elapsed.as_millis() < 2000,
             "tokenization took {:?} — should be < 2s for 110KB",

@@ -78,8 +78,7 @@ static HUNK_HEADER_RE: Lazy<Regex> =
     Lazy::new(|| Regex::new(r"^@@ -\d+,\d+ \+\d+,\d+ @@").unwrap());
 
 /// `^path:line:` pattern from grep / ripgrep output.
-static SEARCH_RESULT_RE: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r"^[\w/.\-]+:\d+:").unwrap());
+static SEARCH_RESULT_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"^[\w/.\-]+:\d+:").unwrap());
 
 /// Source-code structural keywords: `fn `, `func `, `def `, `class `, etc.
 static SOURCE_KEYWORD_RE: Lazy<Regex> = Lazy::new(|| {
@@ -89,22 +88,19 @@ static SOURCE_KEYWORD_RE: Lazy<Regex> = Lazy::new(|| {
 
 /// Source-code import-like first line: `import `, `from `, `use `,
 /// `package `, `#include `, `require(`.
-static SOURCE_IMPORT_RE: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(r"^(import |from |use |package |#include |require\()").unwrap()
-});
+static SOURCE_IMPORT_RE: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"^(import |from |use |package |#include |require\()").unwrap());
 
 /// Generic error/warn/etc. token (case-insensitive) used by the
 /// "≥5 matching lines" sub-rule of BuildOutput detection.
-static GENERIC_ERROR_RE: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(r"(?i)(error|fail|warn|traceback|panic|exception)").unwrap()
-});
+static GENERIC_ERROR_RE: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"(?i)(error|fail|warn|traceback|panic|exception)").unwrap());
 
 /// `^make[N]:` (N is digits).
 static MAKE_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"^make\[\d+\]:").unwrap());
 
 /// `^running N tests` (cargo).
-static CARGO_RUNNING_RE: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r"^running \d+ tests").unwrap());
+static CARGO_RUNNING_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"^running \d+ tests").unwrap());
 
 /// Maximum number of lines to scan for detection. The spec says "first 100
 /// lines" for the overall scan; sub-scans (git diff, build output, tabular)
@@ -193,9 +189,10 @@ fn is_json_array(content: &str) -> bool {
 /// `GitDiff`: first 10 lines contain `diff --git` OR a strict
 /// `@@ -\d+,\d+ \+\d+,\d+ @@` hunk header.
 fn is_git_diff(lines: &[&str]) -> bool {
-    lines.iter().take(10).any(|l| {
-        l.starts_with("diff --git ") || HUNK_HEADER_RE.is_match(l)
-    })
+    lines
+        .iter()
+        .take(10)
+        .any(|l| l.starts_with("diff --git ") || HUNK_HEADER_RE.is_match(l))
 }
 
 /// `BuildOutput`: first 50 lines match ≥2 of these patterns:
@@ -227,9 +224,10 @@ fn is_build_output(lines: &[&str]) -> bool {
         matches += 1;
     }
     // jest
-    if head.iter().any(|l| {
-        l.starts_with("PASS ") || l.starts_with("FAIL ") || l.contains("Test Suites:")
-    }) {
+    if head
+        .iter()
+        .any(|l| l.starts_with("PASS ") || l.starts_with("FAIL ") || l.contains("Test Suites:"))
+    {
         matches += 1;
     }
     // make
@@ -355,8 +353,7 @@ index abc..def 100644\n\
         // pattern) = ≥2 patterns → BuildOutput.
         let mut lines: Vec<String> = Vec::new();
         lines.push(
-            "========================= test session starts ========================="
-                .to_string(),
+            "========================= test session starts =========================".to_string(),
         );
         for i in 1..=5 {
             lines.push(format!("test_module.py::test_{} PASSED [ 50%]", i));
@@ -387,10 +384,7 @@ index abc..def 100644\n\
         for i in 6..=10 {
             lines.push(format!("test test_{} ... FAILED", i));
         }
-        lines.push(
-            "test result: FAILED. 5 passed; 5 failed; 0 ignored; 0 measured"
-                .to_string(),
-        );
+        lines.push("test result: FAILED. 5 passed; 5 failed; 0 ignored; 0 measured".to_string());
         let content = lines.join("\n");
         assert_eq!(detect(&content), ContentType::BuildOutput);
     }
@@ -407,8 +401,7 @@ src/utils.rs:25:    let x = 5;\n";
 
     #[test]
     fn test_detect_plain_text() {
-        let content =
-            "Hello world. This is a plain text message. It has no special structure.";
+        let content = "Hello world. This is a plain text message. It has no special structure.";
         assert_eq!(detect(content), ContentType::PlainText);
     }
 
@@ -489,8 +482,7 @@ src/utils.rs:25:    let x = 5;\n";
         // ≥ MIN_LOG_LINES=30 and compressible by log_compressor.
         let mut lines: Vec<String> = Vec::new();
         lines.push(
-            "========================= test session starts ========================="
-                .to_string(),
+            "========================= test session starts =========================".to_string(),
         );
         for i in 0..25 {
             lines.push(format!("test_module.py::test_{} PASSED [ 50%]", i));
@@ -517,8 +509,7 @@ src/utils.rs:25:    let x = 5;\n";
 
     #[test]
     fn test_route_plain_text_returns_none() {
-        let content =
-            "Hello world. This is a plain text message. It has no special structure.";
+        let content = "Hello world. This is a plain text message. It has no special structure.";
         assert_eq!(
             route_content(content),
             None,

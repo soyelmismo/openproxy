@@ -76,7 +76,11 @@ pub struct DeviceAuthorizationResponse {
     pub user_code: String,
     #[serde(rename = "verificationUri", alias = "verification_uri")]
     pub verification_uri: String,
-    #[serde(default, rename = "verificationUriComplete", alias = "verification_uri_complete")]
+    #[serde(
+        default,
+        rename = "verificationUriComplete",
+        alias = "verification_uri_complete"
+    )]
     pub verification_uri_complete: Option<String>,
     #[serde(default, rename = "expiresIn", alias = "expires_in")]
     pub expires_in: Option<u64>,
@@ -362,7 +366,12 @@ pub async fn resolve_oauth_token(
 
     // 5. Refresh (async, no connection held).
     let token = provider
-        .refresh_token(&refresh_token, upstream_client, account.id, DbRef::Pool(db_pool))
+        .refresh_token(
+            &refresh_token,
+            upstream_client,
+            account.id,
+            DbRef::Pool(db_pool),
+        )
         .await?;
 
     // 6. Compute new expiry.
@@ -614,7 +623,12 @@ pub async fn start_refresh_scheduler(
             last_refresh_attempts.insert(account_id, chrono::Utc::now());
 
             match provider
-                .refresh_token(&refresh_token, &upstream_client, account.id, DbRef::Pool(&db_pool))
+                .refresh_token(
+                    &refresh_token,
+                    &upstream_client,
+                    account.id,
+                    DbRef::Pool(&db_pool),
+                )
                 .await
             {
                 Ok(token) => {

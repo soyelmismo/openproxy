@@ -203,14 +203,18 @@ impl AppState {
             master_key.clone(),
             upstream_client.clone(),
             oauth_provider_registry.clone(),
-        ).await;
+        )
+        .await;
 
-        let discovery_scheduler = Arc::new(start_discovery_scheduler(
-            db_pool.clone(),
-            master_key.clone(),
-            adapters.clone(),
-            upstream_client.clone(),
-        ).await);
+        let discovery_scheduler = Arc::new(
+            start_discovery_scheduler(
+                db_pool.clone(),
+                master_key.clone(),
+                adapters.clone(),
+                upstream_client.clone(),
+            )
+            .await,
+        );
 
         let timeouts_initial = config.timeouts;
         let rate_limiter = Arc::new(crate::rate_limit::RateLimiter::new(
@@ -303,7 +307,8 @@ impl AppState {
             master_key.clone(),
             upstream_client.clone(),
             oauth_provider_registry.clone(),
-        ).await;
+        )
+        .await;
 
         let adapters_snapshot = Arc::new(adapters.read().clone());
         let discovery_scheduler = discovery_scheduler::start(
@@ -315,7 +320,8 @@ impl AppState {
                 interval_secs: 3_600,
                 initial_stagger_secs: 0,
             },
-        ).await;
+        )
+        .await;
 
         let rate_limiter = Arc::new(crate::rate_limit::RateLimiter::new(
             crate::rate_limit::RateLimitConfig::default(),
@@ -651,7 +657,9 @@ impl AppState {
         self.circuit_breaker.clone()
     }
 
-    pub fn background_tx(&self) -> tokio::sync::mpsc::Sender<openproxy_core::pipeline::worker::BackgroundJob> {
+    pub fn background_tx(
+        &self,
+    ) -> tokio::sync::mpsc::Sender<openproxy_core::pipeline::worker::BackgroundJob> {
         self.background_tx.clone()
     }
 
@@ -751,7 +759,9 @@ fn run_database_maintenance(
         );
     }
 
-    if let Some(quota_cfg) = openproxy_core::db::app_config::load_quota_protection_override_from_db(w)? {
+    if let Some(quota_cfg) =
+        openproxy_core::db::app_config::load_quota_protection_override_from_db(w)?
+    {
         tracing::info!(
             enabled = quota_cfg.enabled,
             threshold_percentage = quota_cfg.threshold_percentage,
@@ -843,7 +853,10 @@ async fn spawn_background_tasks(
         loop {
             tick.tick().await;
             let ttl = *recording_ttl_cell.read();
-            let _ = openproxy_core::usage::prune_expired_recording_bodies(&recording_ttl_pool.writer(), ttl);
+            let _ = openproxy_core::usage::prune_expired_recording_bodies(
+                &recording_ttl_pool.writer(),
+                ttl,
+            );
         }
     });
 
@@ -894,11 +907,18 @@ async fn spawn_background_tasks(
             prune_tick.tick().await;
             let (auto_vacuum, interval_hours, retention_days) = {
                 let m = maint_cell.read();
-                (m.auto_vacuum, m.vacuum_interval_hours, m.usage_retention_days)
+                (
+                    m.auto_vacuum,
+                    m.vacuum_interval_hours,
+                    m.usage_retention_days,
+                )
             };
             let retention_secs: i64 = (retention_days as i64) * 24 * 3600;
             if retention_secs > 0 {
-                let _ = openproxy_core::usage::prune_expired_usage_rows(&prune_pool.writer(), retention_secs);
+                let _ = openproxy_core::usage::prune_expired_usage_rows(
+                    &prune_pool.writer(),
+                    retention_secs,
+                );
             }
             let interval_ticks = interval_hours.max(1);
             vacuum_counter = vacuum_counter.wrapping_add(1);
@@ -928,7 +948,8 @@ async fn spawn_background_tasks(
                     st.last_run = Some(now);
                     st.last_result = Some(result_str);
                     if auto_vacuum {
-                        let next = chrono::Utc::now() + chrono::Duration::hours(interval_hours as i64);
+                        let next =
+                            chrono::Utc::now() + chrono::Duration::hours(interval_hours as i64);
                         st.next_scheduled = Some(next.to_rfc3339());
                     } else {
                         st.next_scheduled = None;

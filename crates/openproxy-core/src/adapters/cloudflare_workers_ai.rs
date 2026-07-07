@@ -168,7 +168,7 @@ impl ProviderAdapter for CloudflareWorkersAIAdapter {
         // unsupported fields like `temperature` (even as a number),
         // and requires `content` to be a plain string, not a
         // multipart array.
-        
+
         view.temperature = None;
 
         // Remove null fields from extra
@@ -179,7 +179,10 @@ impl ProviderAdapter for CloudflareWorkersAIAdapter {
         }
 
         // Flatten multipart content arrays to plain strings
-        let needs_flattening = view.messages.iter().any(|msg| matches!(msg.content, Some(serde_json::Value::Array(_))));
+        let needs_flattening = view
+            .messages
+            .iter()
+            .any(|msg| matches!(msg.content, Some(serde_json::Value::Array(_))));
         if needs_flattening {
             let messages_mut = view.messages.to_mut();
             for msg in messages_mut.iter_mut() {
@@ -199,4 +202,3 @@ impl ProviderAdapter for CloudflareWorkersAIAdapter {
         }
     }
 }
-

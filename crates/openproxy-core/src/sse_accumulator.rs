@@ -400,23 +400,32 @@ impl ResponseAccumulator {
         }
         if payload.contains("\"tool_calls\"")
             && let Ok(v) = serde_json::from_str::<Value>(payload)
-                && let Some(tool_calls) = v.get("choices")
-                    .and_then(|c| c.as_array())
-                    .and_then(|arr| arr.first())
-                    .and_then(|choice| choice.get("delta"))
-                    .and_then(|delta| delta.get("tool_calls"))
-                    .and_then(|t| t.as_array())
-                {
-                    for tc in tool_calls {
-                        if let Some(tc_obj) = tc.as_object() {
-                            let index = tc_obj.get("index").and_then(|i| i.as_u64()).unwrap_or(0) as usize;
-                            let id = tc_obj.get("id").and_then(|i| i.as_str()).map(String::from);
-                            let name = tc_obj.get("function").and_then(|f| f.get("name")).and_then(|n| n.as_str()).map(String::from);
-                            let arguments = tc_obj.get("function").and_then(|f| f.get("arguments")).and_then(|a| a.as_str()).map(String::from);
-                            self.update_openai_tool_call_delta(index, id, name, arguments);
-                        }
-                    }
+            && let Some(tool_calls) = v
+                .get("choices")
+                .and_then(|c| c.as_array())
+                .and_then(|arr| arr.first())
+                .and_then(|choice| choice.get("delta"))
+                .and_then(|delta| delta.get("tool_calls"))
+                .and_then(|t| t.as_array())
+        {
+            for tc in tool_calls {
+                if let Some(tc_obj) = tc.as_object() {
+                    let index = tc_obj.get("index").and_then(|i| i.as_u64()).unwrap_or(0) as usize;
+                    let id = tc_obj.get("id").and_then(|i| i.as_str()).map(String::from);
+                    let name = tc_obj
+                        .get("function")
+                        .and_then(|f| f.get("name"))
+                        .and_then(|n| n.as_str())
+                        .map(String::from);
+                    let arguments = tc_obj
+                        .get("function")
+                        .and_then(|f| f.get("arguments"))
+                        .and_then(|a| a.as_str())
+                        .map(String::from);
+                    self.update_openai_tool_call_delta(index, id, name, arguments);
                 }
+            }
+        }
     }
 
     /// Append a string to the reasoning accumulator. Used for o1-style
@@ -761,13 +770,20 @@ mod tests {
         acc.append_reasoning("thought 1");
         acc.append_reasoning(" thought 2");
         let v = acc.finish("id", 0, "m");
-        assert_eq!(v["choices"][0]["message"]["reasoning_content"], "thought 1 thought 2");
+        assert_eq!(
+            v["choices"][0]["message"]["reasoning_content"],
+            "thought 1 thought 2"
+        );
     }
 
     #[test]
     fn append_openai_tool_call_accumulates() {
         let mut acc = ResponseAccumulator::new();
-        acc.append_openai_tool_call(Some("call_1".into()), "get_time".into(), r#"{"zone":"UTC"}"#.into());
+        acc.append_openai_tool_call(
+            Some("call_1".into()),
+            "get_time".into(),
+            r#"{"zone":"UTC"}"#.into(),
+        );
         let v = acc.finish("id", 0, "m");
         let tool_calls = v["choices"][0]["message"]["tool_calls"].as_array().unwrap();
         assert_eq!(tool_calls.len(), 1);
@@ -922,13 +938,9 @@ mod tests {
     fn extract_upstream_error_no_false_positive_on_normal_chunks() {
         let mut acc = ResponseAccumulator::new();
         // Normal chunk with content — should NOT trigger.
-        acc.append_raw_line(
-            r#"data: {"id":"x","choices":[{"delta":{"content":"hello"}}]}"#,
-        );
+        acc.append_raw_line(r#"data: {"id":"x","choices":[{"delta":{"content":"hello"}}]}"#);
         // Another normal chunk with reasoning.
-        acc.append_raw_line(
-            r#"data: {"id":"x","choices":[{"delta":{"reasoning":"think"}}]}"#,
-        );
+        acc.append_raw_line(r#"data: {"id":"x","choices":[{"delta":{"reasoning":"think"}}]}"#);
         let result = acc.extract_upstream_error_from_raw();
         assert!(result.is_none(), "should not trigger on normal chunks");
     }
@@ -942,9 +954,7 @@ mod tests {
     #[test]
     fn extract_upstream_error_missing_code_defaults_502() {
         let mut acc = ResponseAccumulator::new();
-        acc.append_raw_line(
-            r#"data: {"choices":[],"error":{"message":"Something went wrong"}}"#,
-        );
+        acc.append_raw_line(r#"data: {"choices":[],"error":{"message":"Something went wrong"}}"#);
         let result = acc.extract_upstream_error_from_raw();
         assert!(result.is_some());
         let (code, message) = result.unwrap();

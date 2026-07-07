@@ -480,13 +480,7 @@ fn parse_antigravity_models_response(body: &serde_json::Value) -> Result<Account
         let remaining_fraction = quota_info
             .get("remainingFraction")
             .and_then(|f| f.as_f64())
-            .unwrap_or_else(|| {
-                if reset_time.is_some() {
-                    0.0
-                } else {
-                    1.0
-                }
-            });
+            .unwrap_or_else(|| if reset_time.is_some() { 0.0 } else { 1.0 });
 
         let is_unlimited = reset_time.is_none() && remaining_fraction >= 1.0;
         let remaining = (NORMALIZED_BASE as f64 * remaining_fraction) as i64;
@@ -626,7 +620,9 @@ fn parse_antigravity_user_quota_summary(body: &serde_json::Value) -> Result<Acco
     let groups = body
         .get("groups")
         .and_then(|g| g.as_array())
-        .ok_or_else(|| CoreError::Internal("missing 'groups' in retrieveUserQuotaSummary".into()))?;
+        .ok_or_else(|| {
+            CoreError::Internal("missing 'groups' in retrieveUserQuotaSummary".into())
+        })?;
 
     let mut weekly_used: Option<i64> = None;
     let mut weekly_limit: Option<i64> = None;
@@ -646,21 +642,12 @@ fn parse_antigravity_user_quota_summary(body: &serde_json::Value) -> Result<Acco
                 .get("resetTime")
                 .and_then(|r| r.as_str())
                 .map(String::from);
-            let window = bucket
-                .get("window")
-                .and_then(|w| w.as_str())
-                .unwrap_or("");
+            let window = bucket.get("window").and_then(|w| w.as_str()).unwrap_or("");
 
             let remaining_fraction = bucket
                 .get("remainingFraction")
                 .and_then(|f| f.as_f64())
-                .unwrap_or_else(|| {
-                    if reset_time.is_some() {
-                        0.0
-                    } else {
-                        1.0
-                    }
-                });
+                .unwrap_or_else(|| if reset_time.is_some() { 0.0 } else { 1.0 });
 
             let is_unlimited = reset_time.is_none() && remaining_fraction >= 1.0;
             let remaining = (NORMALIZED_BASE as f64 * remaining_fraction) as i64;
@@ -671,8 +658,8 @@ fn parse_antigravity_user_quota_summary(body: &serde_json::Value) -> Result<Acco
             };
 
             // Route to weekly or session (5h) based on the window label.
-            let is_weekly = window.to_uppercase().contains("WEEK")
-                || window.eq_ignore_ascii_case("WEEKLY");
+            let is_weekly =
+                window.to_uppercase().contains("WEEK") || window.eq_ignore_ascii_case("WEEKLY");
             if is_weekly && weekly_used.is_none() {
                 weekly_used = Some(used);
                 weekly_limit = Some(NORMALIZED_BASE);
@@ -721,17 +708,19 @@ pub async fn fetch_kiro_quota(
     let mut profile_arn = None;
 
     if let Some(json_str) = provider_specific
-        && let Ok(meta) = serde_json::from_str::<serde_json::Value>(json_str) {
-            if let Some(r) = meta.get("region").and_then(|v| v.as_str())
-                && !r.is_empty() {
-                    region = r.to_string();
-                }
-            if let Some(arn) = meta.get("profileArn").and_then(|v| v.as_str()) {
-                profile_arn = Some(arn.to_string());
-            } else if let Some(arn) = meta.get("profile_arn").and_then(|v| v.as_str()) {
-                profile_arn = Some(arn.to_string());
-            }
+        && let Ok(meta) = serde_json::from_str::<serde_json::Value>(json_str)
+    {
+        if let Some(r) = meta.get("region").and_then(|v| v.as_str())
+            && !r.is_empty()
+        {
+            region = r.to_string();
         }
+        if let Some(arn) = meta.get("profileArn").and_then(|v| v.as_str()) {
+            profile_arn = Some(arn.to_string());
+        } else if let Some(arn) = meta.get("profile_arn").and_then(|v| v.as_str()) {
+            profile_arn = Some(arn.to_string());
+        }
+    }
 
     let base_url = if region == "us-east-1" || region.is_empty() {
         "https://codewhisperer.us-east-1.amazonaws.com".to_string()
@@ -745,7 +734,8 @@ pub async fn fetch_kiro_quota(
         None => {
             // Call ListAvailableProfiles
             let url = format!("{base_url}/");
-            let mut req = UpstreamRequest::post_json(&url, bytes::Bytes::from(r#"{"maxResults":10}"#));
+            let mut req =
+                UpstreamRequest::post_json(&url, bytes::Bytes::from(r#"{"maxResults":10}"#));
             if let Ok(v) = http::HeaderValue::from_str(&format!("Bearer {access_token}")) {
                 req.headers.insert(http::header::AUTHORIZATION, v);
             }
@@ -759,11 +749,12 @@ pub async fn fetch_kiro_quota(
             );
 
             let cancel = CancellationToken::new();
-            
+
             match upstream.call(req, TimeoutProfile::OAuth, cancel).await {
                 Ok(resp) if resp.status.is_success() => {
                     if let Ok(body_bytes) = resp.collect().await {
-                        if let Ok(value) = serde_json::from_slice::<serde_json::Value>(&body_bytes) {
+                        if let Ok(value) = serde_json::from_slice::<serde_json::Value>(&body_bytes)
+                        {
                             value
                                 .get("profiles")
                                 .and_then(|v| v.as_array())
@@ -793,7 +784,9 @@ pub async fn fetch_kiro_quota(
                 }
                 Ok(resp) => {
                     let status_code = resp.status;
-                    let body_str = String::from_utf8_lossy(&resp.collect().await.unwrap_or_default()).to_string();
+                    let body_str =
+                        String::from_utf8_lossy(&resp.collect().await.unwrap_or_default())
+                            .to_string();
                     tracing::info!(status = %status_code, body = %body_str, "Kiro profile ARN discovery returned non-success; proceeding without profile ARN");
                     None
                 }
@@ -868,7 +861,8 @@ pub async fn fetch_kiro_quota(
 
     if !resp.status.is_success() {
         let status = resp.status.as_u16();
-        let body_str = String::from_utf8_lossy(&resp.collect().await.unwrap_or_default()).to_string();
+        let body_str =
+            String::from_utf8_lossy(&resp.collect().await.unwrap_or_default()).to_string();
         tracing::info!(status = status, body = %body_str, "Kiro GetUsageLimits returned non-success (likely restricted quota access); returning empty quota without error");
         return Ok(AccountQuota {
             session_used: None,
@@ -884,34 +878,41 @@ pub async fn fetch_kiro_quota(
         });
     }
 
-    let resp_bytes = resp.collect().await
+    let resp_bytes = resp
+        .collect()
+        .await
         .map_err(|e| CoreError::UpstreamConnection(format!("kiro GetUsageLimits read: {e}")))?;
     let data: serde_json::Value = serde_json::from_slice(&resp_bytes)
         .map_err(|e| CoreError::Parse(format!("kiro GetUsageLimits parse: {e}")))?;
 
     // 4. Parse response into AccountQuota
-    let reset_at = data.get("nextDateReset")
+    let reset_at = data
+        .get("nextDateReset")
         .or_else(|| data.get("resetDate"))
         .and_then(|v| v.as_str())
         .map(|s| s.to_string());
 
     let _overage_enabled = is_kiro_overage_enabled(&data);
 
-    let usage_list = data.get("usageBreakdownList")
-        .and_then(|v| v.as_array());
+    let usage_list = data.get("usageBreakdownList").and_then(|v| v.as_array());
 
     let mut session_used = None;
     let mut session_limit = None;
 
     if let Some(arr) = usage_list {
         for breakdown in arr {
-            let resource_type = breakdown.get("resourceType").and_then(|v| v.as_str()).unwrap_or("");
+            let resource_type = breakdown
+                .get("resourceType")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
             if resource_type.to_lowercase() == "agentic_request" {
-                let current = breakdown.get("currentUsageWithPrecision")
+                let current = breakdown
+                    .get("currentUsageWithPrecision")
                     .and_then(|v| v.as_f64())
                     .or_else(|| breakdown.get("currentUsage").and_then(|v| v.as_f64()))
                     .map(|v| v.round() as i64);
-                let limit = breakdown.get("usageLimitWithPrecision")
+                let limit = breakdown
+                    .get("usageLimitWithPrecision")
                     .and_then(|v| v.as_f64())
                     .or_else(|| breakdown.get("usageLimit").and_then(|v| v.as_f64()))
                     .map(|v| v.round() as i64);
@@ -923,7 +924,8 @@ pub async fn fetch_kiro_quota(
         }
     }
 
-    let plan_name = data.get("subscriptionInfo")
+    let plan_name = data
+        .get("subscriptionInfo")
         .and_then(|v| v.get("subscriptionTitle"))
         .and_then(|v| v.as_str())
         .map(|s| s.to_string())
@@ -944,14 +946,19 @@ pub async fn fetch_kiro_quota(
 }
 
 fn is_kiro_overage_enabled(data: &serde_json::Value) -> bool {
-    let overage_status = data.get("overageConfiguration")
+    let overage_status = data
+        .get("overageConfiguration")
         .and_then(|v| v.get("overageStatus"))
         .and_then(|v| v.as_str())
         .unwrap_or("")
         .to_uppercase();
 
-    let overage_enabled_direct = data.get("overageEnabled").and_then(|v| v.as_bool()).unwrap_or(false);
-    let overage_enabled_config = data.get("overageConfiguration")
+    let overage_enabled_direct = data
+        .get("overageEnabled")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    let overage_enabled_config = data
+        .get("overageConfiguration")
         .and_then(|v| v.get("overageEnabled"))
         .and_then(|v| v.as_bool())
         .unwrap_or(false);

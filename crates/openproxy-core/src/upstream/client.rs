@@ -19,7 +19,7 @@ use super::profile::TimeoutProfile;
 use super::response::{UpstreamBodyStream, UpstreamResponse};
 
 #[cfg(feature = "upstream-hyper")]
-use super::connector::{CALL_TIMEOUTS, CALL_PROXY, PhasedConnector, PhasedTimeouts, phased_phase};
+use super::connector::{CALL_PROXY, CALL_TIMEOUTS, PhasedConnector, PhasedTimeouts, phased_phase};
 #[cfg(feature = "upstream-hyper")]
 use hyper_util::client::legacy::Client as HyperClient;
 #[cfg(feature = "upstream-hyper")]
@@ -310,9 +310,7 @@ impl UpstreamClient {
         {
             let pool = Pool::new();
             spawn_eviction_loop(pool.clone());
-            Arc::new(Self {
-                pool,
-            })
+            Arc::new(Self { pool })
         }
     }
 
@@ -497,7 +495,9 @@ impl UpstreamClient {
         let connector_timeouts = PhasedTimeouts::from_resolved(&timeouts);
         let proxy_url = spec.proxy.clone();
         let send_fut = async move {
-            let res = transport.send_request(request, connector_timeouts, proxy_url).await;
+            let res = transport
+                .send_request(request, connector_timeouts, proxy_url)
+                .await;
             // Bump the pool counter. We treat the very first request
             // to a host as a "dial" and subsequent ones as a "reuse".
             // (The hyper client pools per-host internally; we
@@ -705,13 +705,22 @@ fn hyper_source_connector_error(e: &hyper_util::client::legacy::Error) -> Option
                     return Some(UpstreamError::Timeout(p.phase));
                 }
                 super::connector::PhasedErrorKind::InvalidUri(s) => {
-                    return Some(UpstreamError::Invalid(format!("in phase `{}`: {}", p.phase, s)));
+                    return Some(UpstreamError::Invalid(format!(
+                        "in phase `{}`: {}",
+                        p.phase, s
+                    )));
                 }
                 super::connector::PhasedErrorKind::Io(io_err) => {
                     if p.phase == super::UpstreamPhase::Tls {
-                        return Some(UpstreamError::Tls(format!("in phase `{}`: {}", p.phase, io_err)));
+                        return Some(UpstreamError::Tls(format!(
+                            "in phase `{}`: {}",
+                            p.phase, io_err
+                        )));
                     } else {
-                        return Some(UpstreamError::Connection(format!("in phase `{}`: {}", p.phase, io_err)));
+                        return Some(UpstreamError::Connection(format!(
+                            "in phase `{}`: {}",
+                            p.phase, io_err
+                        )));
                     }
                 }
             }
@@ -774,17 +783,13 @@ where
         let fut = async move {
             match (timeouts, proxy) {
                 (Some(t), Some(p)) => {
-                    CALL_TIMEOUTS.scope(t, CALL_PROXY.scope(Some(p), future)).await
+                    CALL_TIMEOUTS
+                        .scope(t, CALL_PROXY.scope(Some(p), future))
+                        .await
                 }
-                (Some(t), None) => {
-                    CALL_TIMEOUTS.scope(t, future).await
-                }
-                (None, Some(p)) => {
-                    CALL_PROXY.scope(Some(p), future).await
-                }
-                (None, None) => {
-                    future.await
-                }
+                (Some(t), None) => CALL_TIMEOUTS.scope(t, future).await,
+                (None, Some(p)) => CALL_PROXY.scope(Some(p), future).await,
+                (None, None) => future.await,
             }
         };
         tokio::spawn(fut);

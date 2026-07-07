@@ -590,15 +590,23 @@ async fn run_phased_connect(
                 kind: PhasedErrorKind::Timeout,
             }));
         }
-        
-        match tokio::time::timeout(dial_remaining, run_proxy_tunnel(stream, proxy_config, &host, port)).await {
+
+        match tokio::time::timeout(
+            dial_remaining,
+            run_proxy_tunnel(stream, proxy_config, &host, port),
+        )
+        .await
+        {
             Ok(Ok(s)) => {
                 stream = s;
             }
             Ok(Err(e)) => {
                 return Err(Box::new(PhasedConnectorError {
                     phase: UpstreamPhase::Dial,
-                    kind: PhasedErrorKind::Io(io::Error::other(format!("Proxy handshake failed: {}", e))),
+                    kind: PhasedErrorKind::Io(io::Error::other(format!(
+                        "Proxy handshake failed: {}",
+                        e
+                    ))),
                 }));
             }
             Err(_) => {
@@ -800,9 +808,10 @@ pub fn phased_phase(err: &(dyn std::error::Error + 'static)) -> Option<UpstreamP
     let mut current: Option<&(dyn std::error::Error + 'static)> = Some(err);
     while let Some(e) = current {
         if let Some(p) = e.downcast_ref::<PhasedConnectorError>()
-            && matches!(p.kind, PhasedErrorKind::Timeout) {
-                return Some(p.phase);
-            }
+            && matches!(p.kind, PhasedErrorKind::Timeout)
+        {
+            return Some(p.phase);
+        }
         current = e.source();
     }
     None
@@ -833,10 +842,20 @@ struct ProxyConfig {
 }
 
 fn parse_proxy_url(url: &str) -> Result<ProxyConfig, String> {
-    let uri: http::Uri = url.parse().map_err(|e: http::uri::InvalidUri| format!("Invalid proxy URL: {}", e))?;
-    let scheme = uri.scheme_str().ok_or_else(|| "Missing proxy scheme".to_string())?.to_lowercase();
-    let host = uri.host().ok_or_else(|| "Missing proxy host".to_string())?.to_string();
-    let port = uri.port_u16().ok_or_else(|| "Missing proxy port".to_string())?;
+    let uri: http::Uri = url
+        .parse()
+        .map_err(|e: http::uri::InvalidUri| format!("Invalid proxy URL: {}", e))?;
+    let scheme = uri
+        .scheme_str()
+        .ok_or_else(|| "Missing proxy scheme".to_string())?
+        .to_lowercase();
+    let host = uri
+        .host()
+        .ok_or_else(|| "Missing proxy host".to_string())?
+        .to_string();
+    let port = uri
+        .port_u16()
+        .ok_or_else(|| "Missing proxy port".to_string())?;
     Ok(ProxyConfig { scheme, host, port })
 }
 
@@ -855,7 +874,9 @@ async fn run_proxy_tunnel(
             let mut greeting_resp = [0u8; 2];
             stream.read_exact(&mut greeting_resp).await?;
             if greeting_resp[0] != 0x05 || greeting_resp[1] != 0x00 {
-                return Err(io::Error::other("SOCKS5 authentication required or unsupported").into());
+                return Err(
+                    io::Error::other("SOCKS5 authentication required or unsupported").into(),
+                );
             }
 
             // 2. Connect request
@@ -884,20 +905,27 @@ async fn run_proxy_tunnel(
             let mut resp_header = [0u8; 4];
             stream.read_exact(&mut resp_header).await?;
             if resp_header[0] != 0x05 || resp_header[1] != 0x00 {
-                return Err(io::Error::other(format!("SOCKS5 connection failed: status={}", resp_header[1])).into());
+                return Err(io::Error::other(format!(
+                    "SOCKS5 connection failed: status={}",
+                    resp_header[1]
+                ))
+                .into());
             }
 
             // Read address part of the response
             match resp_header[3] {
-                0x01 => { // IPv4
+                0x01 => {
+                    // IPv4
                     let mut buf = [0u8; 6];
                     stream.read_exact(&mut buf).await?;
                 }
-                0x04 => { // IPv6
+                0x04 => {
+                    // IPv6
                     let mut buf = [0u8; 18];
                     stream.read_exact(&mut buf).await?;
                 }
-                0x03 => { // Domain
+                0x03 => {
+                    // Domain
                     let len = stream.read_u8().await?;
                     let mut buf = vec![0u8; len as usize + 2];
                     stream.read_exact(&mut buf).await?;
@@ -909,7 +937,7 @@ async fn run_proxy_tunnel(
             let ip = dest_host.parse::<std::net::Ipv4Addr>().map_err(|_| {
                 io::Error::other("SOCKS4 only supports literal IPv4 destination hosts (use SOCKS5 for hostname resolution)")
             })?;
-            
+
             let mut req = Vec::with_capacity(9);
             req.extend_from_slice(&[0x04, 0x01]);
             req.extend_from_slice(&dest_port.to_be_bytes());
@@ -920,7 +948,11 @@ async fn run_proxy_tunnel(
             let mut resp = [0u8; 8];
             stream.read_exact(&mut resp).await?;
             if resp[0] != 0x00 || resp[1] != 0x5a {
-                return Err(io::Error::other(format!("SOCKS4 connection rejected: code={}", resp[1])).into());
+                return Err(io::Error::other(format!(
+                    "SOCKS4 connection rejected: code={}",
+                    resp[1]
+                ))
+                .into());
             }
         }
         "http" | "https" => {
@@ -946,11 +978,17 @@ async fn run_proxy_tunnel(
             let resp_str = String::from_utf8_lossy(&headers_buf);
             let first_line = resp_str.split("\r\n").next().unwrap_or("");
             if !first_line.contains(" 200 ") {
-                return Err(io::Error::other(format!("HTTP CONNECT proxy returned error: {}", first_line)).into());
+                return Err(io::Error::other(format!(
+                    "HTTP CONNECT proxy returned error: {}",
+                    first_line
+                ))
+                .into());
             }
         }
         _ => {
-            return Err(io::Error::other(format!("Unsupported proxy scheme: {}", proxy.scheme)).into());
+            return Err(
+                io::Error::other(format!("Unsupported proxy scheme: {}", proxy.scheme)).into(),
+            );
         }
     }
 

@@ -153,6 +153,3 @@ pub(crate) fn classify_zen_target_format(id: &str) -> TargetFormat {
         TargetFormat::Openai
     }
 }
-
-
-

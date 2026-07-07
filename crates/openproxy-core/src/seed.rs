@@ -499,7 +499,6 @@ mod tests {
         assert_eq!(antigravity.auth_type, AuthType::OAuth);
         assert_eq!(antigravity.format, ProviderFormat::Gemini);
 
-
         let kiro = providers::get(&conn, &ProviderId::new("kiro"))
             .expect("get")
             .unwrap();

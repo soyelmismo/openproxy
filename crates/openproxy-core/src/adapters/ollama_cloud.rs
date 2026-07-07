@@ -149,4 +149,3 @@ fn derive_ollama_family(id: &str) -> Option<String> {
     }
     None
 }
-

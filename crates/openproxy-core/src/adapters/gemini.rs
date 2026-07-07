@@ -109,4 +109,3 @@ impl ProviderAdapter for GeminiAdapter {
         Ok(out)
     }
 }
-

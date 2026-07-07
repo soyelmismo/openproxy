@@ -115,4 +115,3 @@ impl ProviderAdapter for MiniMaxAdapter {
         Ok(out)
     }
 }
-

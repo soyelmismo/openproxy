@@ -1101,10 +1101,11 @@ pub async fn test_combo_targets(
                     continue;
                 }
                 if let Some(ref rx) = cancel_rx
-                    && *rx.borrow() {
-                        tracing::info!("test_combo_targets: client disconnected, aborting fan-out");
-                        break;
-                    }
+                    && *rx.borrow()
+                {
+                    tracing::info!("test_combo_targets: client disconnected, aborting fan-out");
+                    break;
+                }
                 // Flat, active, not in cooldown: actually fire
                 // upstream. The helper handles the model-not-active
                 // short-circuit itself (skipped row with
@@ -2484,7 +2485,7 @@ pub async fn usage_detail(
             usage::detail_by_id(&r, id)?
         } else {
             return Err(ApiError(CoreError::Validation(
-                "Either 'id' or 'trace_id' query parameter must be provided".into()
+                "Either 'id' or 'trace_id' query parameter must be provided".into(),
             )));
         };
         match row {
@@ -3241,9 +3242,11 @@ async fn run_test_for_model(
                 let healthy = accounts_list
                     .iter()
                     .find(|a| a.health_status == accounts::HealthStatus::Healthy);
-                let degraded = || accounts_list
-                    .iter()
-                    .find(|a| a.health_status == accounts::HealthStatus::Degraded);
+                let degraded = || {
+                    accounts_list
+                        .iter()
+                        .find(|a| a.health_status == accounts::HealthStatus::Degraded)
+                };
                 healthy
                     .or_else(degraded)
                     .or_else(|| accounts_list.first())
@@ -3298,7 +3301,9 @@ async fn run_test_for_model(
                 } else {
                     let w = s.db_pool().writer();
                     match accounts::decrypt_api_key(&w, aid, s.master_key().as_ref())
-                        .or_else(|_| accounts::decrypt_access_token(&w, aid, s.master_key().as_ref()))
+                        .or_else(|_| {
+                            accounts::decrypt_access_token(&w, aid, s.master_key().as_ref())
+                        })
                         .map_err(ApiError)
                     {
                         Ok(k) => k,
@@ -3378,10 +3383,7 @@ async fn run_test_for_model(
     //    and parse the non-standard response. The standard adapter
     //    path below would send raw Gemini/OpenAI format to an endpoint
     //    that expects a different wire shape.
-    let is_custom_provider = matches!(
-        model.provider_id.as_str(),
-        "kiro" | "antigravity"
-    );
+    let is_custom_provider = matches!(model.provider_id.as_str(), "kiro" | "antigravity");
 
     if is_custom_provider && !is_anonymous {
         // Delegate to the provider-specific executor, same as the
@@ -3568,7 +3570,12 @@ async fn run_test_for_model(
     //    practice, but we still want a typed error if it ever does.
     let (url, body_value): (String, serde_json::Value) =
         if model.target_format == openproxy_core::models::TargetFormat::Anthropic {
-            let anthropic_req = openai_to_anthropic(&openai_req, model.model_id.as_str(), &openai_req.messages, openai_req.stream);
+            let anthropic_req = openai_to_anthropic(
+                &openai_req,
+                model.model_id.as_str(),
+                &openai_req.messages,
+                openai_req.stream,
+            );
             let url = adapter.build_chat_url_for_account(
                 openproxy_core::models::TargetFormat::Anthropic,
                 &model.model_id,
@@ -3757,7 +3764,12 @@ pub async fn test_model(
         let purl = if let Some(ref pid) = input.proxy_id {
             let r = s.db_pool().reader();
             if let Ok(Some(p)) = openproxy_core::free_proxies::get_proxy(&r, pid) {
-                Some(format!("{}://{}:{}", p.r#type.to_lowercase(), p.host, p.port))
+                Some(format!(
+                    "{}://{}:{}",
+                    p.r#type.to_lowercase(),
+                    p.host,
+                    p.port
+                ))
             } else {
                 None
             }
@@ -3769,7 +3781,15 @@ pub async fn test_model(
         (None, None)
     };
 
-    let r = run_test_for_model(&s, model_row_id, account_id, proxy_url, TestOptions::default(), cancel_rx).await;
+    let r = run_test_for_model(
+        &s,
+        model_row_id,
+        account_id,
+        proxy_url,
+        TestOptions::default(),
+        cancel_rx,
+    )
+    .await;
     ApiResult::ok(Json(serde_json::json!({
         "row_id": r.row_id,
         "status": r.status,
@@ -5797,7 +5817,9 @@ pub async fn create_custom_proxy(
 ) -> ApiResult<Json<openproxy_core::free_proxies::FreeProxy>> {
     let body: Result<Json<openproxy_core::free_proxies::FreeProxy>, ApiError> = async {
         if body.host.trim().is_empty() || body.port == 0 {
-            return Err(ApiError(CoreError::Validation("host and port are required".into())));
+            return Err(ApiError(CoreError::Validation(
+                "host and port are required".into(),
+            )));
         }
         let w = s.db_pool().writer();
         let p = openproxy_core::free_proxies::add_custom_proxy(
@@ -5825,9 +5847,7 @@ pub async fn test_proxy(
     body.into()
 }
 
-pub async fn test_all_proxies(
-    State(s): State<AppState>,
-) -> ApiResult<Json<serde_json::Value>> {
+pub async fn test_all_proxies(State(s): State<AppState>) -> ApiResult<Json<serde_json::Value>> {
     let body: Result<Json<serde_json::Value>, ApiError> = async {
         openproxy_core::free_proxies::test_all_proxies_background(s.db_pool().clone());
         Ok(Json(serde_json::json!({ "status": "started" })))
@@ -6429,9 +6449,10 @@ mod tests {
             .header("content-type", "application/json")
             .body(Body::from(body_json))
             .expect("build req");
-        req.extensions_mut().insert(axum::extract::connect_info::ConnectInfo(
-            std::net::SocketAddr::from(([127, 0, 0, 1], 12345))
-        ));
+        req.extensions_mut()
+            .insert(axum::extract::connect_info::ConnectInfo(
+                std::net::SocketAddr::from(([127, 0, 0, 1], 12345)),
+            ));
         let resp = app.oneshot(req).await.expect("oneshot");
         assert_ne!(
             resp.status(),
@@ -6460,9 +6481,10 @@ mod tests {
             .header("content-type", "application/json")
             .body(Body::from(body_json))
             .expect("build req");
-        req.extensions_mut().insert(axum::extract::connect_info::ConnectInfo(
-            std::net::SocketAddr::from(([127, 0, 0, 1], 12345))
-        ));
+        req.extensions_mut()
+            .insert(axum::extract::connect_info::ConnectInfo(
+                std::net::SocketAddr::from(([127, 0, 0, 1], 12345)),
+            ));
         let resp = app.oneshot(req).await.expect("oneshot");
         assert_eq!(
             resp.status(),

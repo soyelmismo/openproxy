@@ -11,10 +11,6 @@ use tokio::sync::watch;
 
 use crate::think_extractor::extract_think_from_response;
 
-
-
-
-
 /// Bundles the parameters shared by streaming failure methods
 /// (`fail_stream_client_disconnected`, `fail_on_sink_send_error`).
 /// Eliminates the 14-15 positional-argument anti-pattern.
@@ -39,7 +35,8 @@ pub(crate) struct StreamFailureContext<'a> {
 pub struct UpstreamDispatcher {
     pub conn: Arc<parking_lot::Mutex<rusqlite::Connection>>,
     pub config: crate::pipeline::PipelineConfig,
-    pub compression_stats_cell: Arc<parking_lot::RwLock<Option<crate::compression::stats::CompressionStats>>>,
+    pub compression_stats_cell:
+        Arc<parking_lot::RwLock<Option<crate::compression::stats::CompressionStats>>>,
     pub tracker: crate::pipeline::usage_tracker::UsageTracker,
     pub record_bodies_and_headers: Arc<std::sync::atomic::AtomicBool>,
 }
@@ -54,7 +51,9 @@ impl UpstreamDispatcher {
     pub fn new(
         conn: Arc<parking_lot::Mutex<rusqlite::Connection>>,
         config: crate::pipeline::PipelineConfig,
-        compression_stats_cell: Arc<parking_lot::RwLock<Option<crate::compression::stats::CompressionStats>>>,
+        compression_stats_cell: Arc<
+            parking_lot::RwLock<Option<crate::compression::stats::CompressionStats>>,
+        >,
         tracker: crate::pipeline::usage_tracker::UsageTracker,
         record_bodies_and_headers: Arc<std::sync::atomic::AtomicBool>,
     ) -> Self {
@@ -68,7 +67,8 @@ impl UpstreamDispatcher {
     }
 
     pub fn is_recording(&self) -> bool {
-        self.record_bodies_and_headers.load(std::sync::atomic::Ordering::Relaxed)
+        self.record_bodies_and_headers
+            .load(std::sync::atomic::Ordering::Relaxed)
     }
 
     pub(crate) fn check_and_trigger_proxy_rotation(
@@ -78,47 +78,45 @@ impl UpstreamDispatcher {
     ) -> bool {
         let conn = self.conn.lock();
         if let Ok(Some(provider)) = crate::providers::get(&conn, provider_id)
-            && provider.use_proxies {
-                let should_rotate = match trigger {
-                    crate::pipeline::upstream_dispatcher::ProxyRotationTrigger::RateLimited => true,
-                    crate::pipeline::upstream_dispatcher::ProxyRotationTrigger::Status(sc) => {
-                        let errors_list: Vec<&str> = provider.proxy_rotation_errors
-                            .split(',')
-                            .map(|s| s.trim())
-                            .collect();
-                        errors_list.contains(&sc.to_string().as_str())
-                    },
-                    crate::pipeline::upstream_dispatcher::ProxyRotationTrigger::ConnectError => {
-                        let errors_list: Vec<&str> = provider.proxy_rotation_errors
-                            .split(',')
-                            .map(|s| s.trim())
-                            .collect();
-                        errors_list.contains(&"connect_error") || errors_list.contains(&"timeout")
-                    },
-                };
+            && provider.use_proxies
+        {
+            let should_rotate = match trigger {
+                crate::pipeline::upstream_dispatcher::ProxyRotationTrigger::RateLimited => true,
+                crate::pipeline::upstream_dispatcher::ProxyRotationTrigger::Status(sc) => {
+                    let errors_list: Vec<&str> = provider
+                        .proxy_rotation_errors
+                        .split(',')
+                        .map(|s| s.trim())
+                        .collect();
+                    errors_list.contains(&sc.to_string().as_str())
+                }
+                crate::pipeline::upstream_dispatcher::ProxyRotationTrigger::ConnectError => {
+                    let errors_list: Vec<&str> = provider
+                        .proxy_rotation_errors
+                        .split(',')
+                        .map(|s| s.trim())
+                        .collect();
+                    errors_list.contains(&"connect_error") || errors_list.contains(&"timeout")
+                }
+            };
 
-                if should_rotate
-                    && let Some(ref bad_proxy_id) = provider.current_proxy_id {
-                        tracing::warn!(
-                            provider = %provider_id,
-                            proxy_id = %bad_proxy_id,
-                            "proxy rotation triggered: marking proxy as dead and clearing binding"
-                        );
-                        let _ = crate::free_proxies::update_proxy_status(&conn, bad_proxy_id, "dead", None);
-                        let _ = crate::providers::update_current_proxy(&conn, provider_id, None);
-                        return true;
-                    }
+            if should_rotate && let Some(ref bad_proxy_id) = provider.current_proxy_id {
+                tracing::warn!(
+                    provider = %provider_id,
+                    proxy_id = %bad_proxy_id,
+                    "proxy rotation triggered: marking proxy as dead and clearing binding"
+                );
+                let _ = crate::free_proxies::update_proxy_status(&conn, bad_proxy_id, "dead", None);
+                let _ = crate::providers::update_current_proxy(&conn, provider_id, None);
+                return true;
             }
+        }
         false
     }
-
 
     pub(crate) fn is_client_disconnected(&self, rx: &mut watch::Receiver<bool>) -> bool {
         *rx.borrow_and_update()
     }
-
-
-    
 
     pub(crate) fn record_and_fail(
         &self,
@@ -127,7 +125,13 @@ impl UpstreamDispatcher {
         target: &ComboTarget,
         ctx: FailureContext<'_>,
     ) -> PipelineResult {
-        self.record_and_fail_with_trace_id(Arc::clone(&req), combo, target, ctx, req.trace_id.to_string())
+        self.record_and_fail_with_trace_id(
+            Arc::clone(&req),
+            combo,
+            target,
+            ctx,
+            req.trace_id.to_string(),
+        )
     }
 
     pub(crate) fn record_and_fail_with_trace_id(
@@ -155,7 +159,9 @@ impl UpstreamDispatcher {
         created: u64,
         model_name: &str,
     ) -> PipelineResult {
-        self.tracker.record_and_fail_with_trace_id_and_partial(req, combo, target, ctx, trace_id, acc, chunk_id, created, model_name)
+        self.tracker.record_and_fail_with_trace_id_and_partial(
+            req, combo, target, ctx, trace_id, acc, chunk_id, created, model_name,
+        )
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -348,7 +354,10 @@ impl UpstreamDispatcher {
                     );
                 }
                 Err(UpstreamError::Timeout(phase)) => {
-                    self.check_and_trigger_proxy_rotation(&target.provider_id, crate::pipeline::upstream_dispatcher::ProxyRotationTrigger::ConnectError);
+                    self.check_and_trigger_proxy_rotation(
+                        &target.provider_id,
+                        crate::pipeline::upstream_dispatcher::ProxyRotationTrigger::ConnectError,
+                    );
                     // Bug fix: attribute the timeout to the CORRECT phase
                     // instead of collapsing DNS/Dial/TLS/Write/Headers all
                     // into "connect". The user configures per-phase budgets
@@ -402,7 +411,10 @@ impl UpstreamDispatcher {
                 | Err(UpstreamError::Http(msg))
                 | Err(UpstreamError::Decode(msg))
                 | Err(UpstreamError::Invalid(msg)) => {
-                    self.check_and_trigger_proxy_rotation(&target.provider_id, crate::pipeline::upstream_dispatcher::ProxyRotationTrigger::ConnectError);
+                    self.check_and_trigger_proxy_rotation(
+                        &target.provider_id,
+                        crate::pipeline::upstream_dispatcher::ProxyRotationTrigger::ConnectError,
+                    );
                     let err = CoreError::UpstreamConnection(msg);
                     return self.record_and_fail(
                         req,
@@ -572,7 +584,10 @@ impl UpstreamDispatcher {
                 );
             }
             Ok(Err(e)) => {
-                self.check_and_trigger_proxy_rotation(&target.provider_id, crate::pipeline::upstream_dispatcher::ProxyRotationTrigger::ConnectError);
+                self.check_and_trigger_proxy_rotation(
+                    &target.provider_id,
+                    crate::pipeline::upstream_dispatcher::ProxyRotationTrigger::ConnectError,
+                );
                 let err = CoreError::UpstreamConnection(format!("read upstream body: {e}"));
                 return self.record_and_fail(
                     req,
@@ -591,7 +606,10 @@ impl UpstreamDispatcher {
                 );
             }
             Err(_elapsed) => {
-                self.check_and_trigger_proxy_rotation(&target.provider_id, crate::pipeline::upstream_dispatcher::ProxyRotationTrigger::ConnectError);
+                self.check_and_trigger_proxy_rotation(
+                    &target.provider_id,
+                    crate::pipeline::upstream_dispatcher::ProxyRotationTrigger::ConnectError,
+                );
                 let elapsed = started.elapsed().as_millis() as u64;
                 let err = CoreError::UpstreamTimeout {
                     phase: "total (config: total_ms)".to_string(),
@@ -632,7 +650,10 @@ impl UpstreamDispatcher {
         // instead of using the fixed exponential backoff. The default
         // backoff is < 1 s; an upstream that asks for 30 s gets 30 s.
         if !(200..300).contains(&status_code) {
-            let mut is_proxy_rotated = self.check_and_trigger_proxy_rotation(&target.provider_id, crate::pipeline::upstream_dispatcher::ProxyRotationTrigger::Status(status_code));
+            let mut is_proxy_rotated = self.check_and_trigger_proxy_rotation(
+                &target.provider_id,
+                crate::pipeline::upstream_dispatcher::ProxyRotationTrigger::Status(status_code),
+            );
             let body_str = String::from_utf8_lossy(&body_bytes).to_string();
             // Parse `Retry-After` from response_headers (extracted at L1751
             // before the body was consumed). Accepts either an integer
@@ -645,7 +666,10 @@ impl UpstreamDispatcher {
                 status_code == 429 || status_code == 408 || status_code == 503;
             if let Some(retry_ms) = retry_after_ms.filter(|_| is_rate_limited_status) {
                 if !is_proxy_rotated {
-                    is_proxy_rotated = self.check_and_trigger_proxy_rotation(&target.provider_id, crate::pipeline::upstream_dispatcher::ProxyRotationTrigger::RateLimited);
+                    is_proxy_rotated = self.check_and_trigger_proxy_rotation(
+                        &target.provider_id,
+                        crate::pipeline::upstream_dispatcher::ProxyRotationTrigger::RateLimited,
+                    );
                 }
                 let err = CoreError::RateLimited {
                     provider: target.provider_id.to_string(),
@@ -972,7 +996,9 @@ impl UpstreamDispatcher {
         .trace_id(trace_id)
         .prompt_tokens_opt(prompt_tokens)
         .completion_tokens_opt(completion_tokens)
-        .request_body_json(Some(Arc::new(serde_json::from_slice(&body_bytes).unwrap_or(serde_json::Value::Null))))
+        .request_body_json(Some(Arc::new(
+            serde_json::from_slice(&body_bytes).unwrap_or(serde_json::Value::Null),
+        )))
         .response_body_json(Some(response_body_value))
         .request_headers(Some(request_headers_btm))
         .response_headers(response_headers)
@@ -995,7 +1021,6 @@ impl UpstreamDispatcher {
             attempts: attempt,
             usage_tuple,
         }
-    
     }
 
     pub(crate) fn fail_stream_client_disconnected(
@@ -1003,60 +1028,70 @@ impl UpstreamDispatcher {
         fctx: StreamFailureContext<'_>,
     ) -> PipelineResult {
         let StreamFailureContext {
-            req, combo, target, attempt, race_size, started,
-            model, connect_ms, ttft_ms, trace_id, acc,
-            chunk_id, created, model_name,
+            req,
+            combo,
+            target,
+            attempt,
+            race_size,
+            started,
+            model,
+            connect_ms,
+            ttft_ms,
+            trace_id,
+            acc,
+            chunk_id,
+            created,
+            model_name,
         } = fctx;
-        let has_partial_content = acc
-            .as_ref()
-            .is_some_and(|a| !a.is_empty());
+        let has_partial_content = acc.as_ref().is_some_and(|a| !a.is_empty());
         if let Some(ref a) = acc
-            && let Some((code, message)) = a.extract_upstream_error_from_raw() {
-                tracing::warn!(
-                    combo_id = combo.id.0,
-                    target_id = target.id.0,
-                    provider = %target.provider_id,
-                    model = %model.model_id.as_str(),
-                    inline_error_code = code,
-                    inline_error_message = %message,
-                    "client disconnected but upstream had sent inline SSE error \
-                     (code={}); attributing to upstream error, not client disconnect",
-                    code,
-                );
-                let err = CoreError::UpstreamError {
-                    status: code,
-                    provider: target.provider_id.to_string(),
-                    model: model_name.to_string(),
-                    body: message,
-                };
-                let acc_ref: Option<&crate::sse_accumulator::ResponseAccumulator> = match acc {
-                    Some(a) => {
-                        a.mark_partial();
-                        Some(&*a)
-                    }
-                    None => None,
-                };
-                return self.record_and_fail_with_trace_id_and_partial(
-                    req,
-                    combo,
-                    target,
-                    FailureContext {
-                        attempt,
-                        race_size,
-                        err: &err,
-                        started,
-                        model: Some(model),
-                        connect_ms: Some(connect_ms),
-                        ttft_ms,
-                        status_code: code,
-                    },
-                    trace_id,
-                    acc_ref,
-                    Some(chunk_id),
-                    created,
-                    model_name,
-                );
-            }
+            && let Some((code, message)) = a.extract_upstream_error_from_raw()
+        {
+            tracing::warn!(
+                combo_id = combo.id.0,
+                target_id = target.id.0,
+                provider = %target.provider_id,
+                model = %model.model_id.as_str(),
+                inline_error_code = code,
+                inline_error_message = %message,
+                "client disconnected but upstream had sent inline SSE error \
+                 (code={}); attributing to upstream error, not client disconnect",
+                code,
+            );
+            let err = CoreError::UpstreamError {
+                status: code,
+                provider: target.provider_id.to_string(),
+                model: model_name.to_string(),
+                body: message,
+            };
+            let acc_ref: Option<&crate::sse_accumulator::ResponseAccumulator> = match acc {
+                Some(a) => {
+                    a.mark_partial();
+                    Some(&*a)
+                }
+                None => None,
+            };
+            return self.record_and_fail_with_trace_id_and_partial(
+                req,
+                combo,
+                target,
+                FailureContext {
+                    attempt,
+                    race_size,
+                    err: &err,
+                    started,
+                    model: Some(model),
+                    connect_ms: Some(connect_ms),
+                    ttft_ms,
+                    status_code: code,
+                },
+                trace_id,
+                acc_ref,
+                Some(chunk_id),
+                created,
+                model_name,
+            );
+        }
         let acc_ref: Option<&crate::sse_accumulator::ResponseAccumulator> = match acc {
             Some(a) => {
                 a.mark_partial();
@@ -1066,7 +1101,7 @@ impl UpstreamDispatcher {
         };
         let err: CoreError = if has_partial_content {
             CoreError::UpstreamConnection(
-                "stream interrupted — client disconnected after receiving partial content".into()
+                "stream interrupted — client disconnected after receiving partial content".into(),
             )
         } else {
             CoreError::ClientDisconnected
@@ -1099,9 +1134,20 @@ impl UpstreamDispatcher {
         fctx: StreamFailureContext<'_>,
     ) -> PipelineResult {
         let StreamFailureContext {
-            req, combo, target, attempt, race_size, started,
-            model, connect_ms, ttft_ms, trace_id, acc,
-            chunk_id, created, model_name,
+            req,
+            combo,
+            target,
+            attempt,
+            race_size,
+            started,
+            model,
+            connect_ms,
+            ttft_ms,
+            trace_id,
+            acc,
+            chunk_id,
+            created,
+            model_name,
         } = fctx;
         let err = match e {
             crate::race_sink::StreamSinkError::Lost => {
@@ -1116,57 +1162,58 @@ impl UpstreamDispatcher {
                 let elapsed = started.elapsed().as_millis() as u64;
                 let watchdog_fired = *req.client_disconnected.borrow();
                 if let Some(ref a) = acc
-                    && let Some((code, message)) = a.extract_upstream_error_from_raw() {
-                        tracing::warn!(
-                            combo_id = combo.id.0,
-                            target_id = target.id.0,
-                            provider = %target.provider_id,
-                            model = %model.model_id.as_str(),
-                            elapsed_ms = elapsed,
-                            inline_error_code = code,
-                            inline_error_message = %message,
-                            "sink closed after upstream sent inline SSE error \
-                             (code={}, elapsed={}ms); attributing to upstream, \
-                             not client disconnect",
-                            code, elapsed
-                        );
-                        return {
-                            let err = CoreError::UpstreamError {
-                                status: code,
-                                provider: target.provider_id.to_string(),
-                                model: model_name.to_string(),
-                                body: message,
-                            };
-                            let acc_ref: Option<&crate::sse_accumulator::ResponseAccumulator> =
-                                match acc {
-                                    Some(a) => {
-                                        a.mark_partial();
-                                        Some(&*a)
-                                    }
-                                    None => None,
-                                };
-                            self.record_and_fail_with_trace_id_and_partial(
-                                req,
-                                combo,
-                                target,
-                                FailureContext {
-                                    attempt,
-                                    race_size,
-                                    err: &err,
-                                    started,
-                                    model: Some(model),
-                                    connect_ms: Some(connect_ms),
-                                    ttft_ms: None,
-                                    status_code: code,
-                                },
-                                trace_id,
-                                acc_ref,
-                                Some(chunk_id),
-                                created,
-                                model_name,
-                            )
+                    && let Some((code, message)) = a.extract_upstream_error_from_raw()
+                {
+                    tracing::warn!(
+                        combo_id = combo.id.0,
+                        target_id = target.id.0,
+                        provider = %target.provider_id,
+                        model = %model.model_id.as_str(),
+                        elapsed_ms = elapsed,
+                        inline_error_code = code,
+                        inline_error_message = %message,
+                        "sink closed after upstream sent inline SSE error \
+                         (code={}, elapsed={}ms); attributing to upstream, \
+                         not client disconnect",
+                        code, elapsed
+                    );
+                    return {
+                        let err = CoreError::UpstreamError {
+                            status: code,
+                            provider: target.provider_id.to_string(),
+                            model: model_name.to_string(),
+                            body: message,
                         };
-                    }
+                        let acc_ref: Option<&crate::sse_accumulator::ResponseAccumulator> =
+                            match acc {
+                                Some(a) => {
+                                    a.mark_partial();
+                                    Some(&*a)
+                                }
+                                None => None,
+                            };
+                        self.record_and_fail_with_trace_id_and_partial(
+                            req,
+                            combo,
+                            target,
+                            FailureContext {
+                                attempt,
+                                race_size,
+                                err: &err,
+                                started,
+                                model: Some(model),
+                                connect_ms: Some(connect_ms),
+                                ttft_ms: None,
+                                status_code: code,
+                            },
+                            trace_id,
+                            acc_ref,
+                            Some(chunk_id),
+                            created,
+                            model_name,
+                        )
+                    };
+                }
                 tracing::warn!(
                     combo_id = combo.id.0,
                     target_id = target.id.0,
@@ -1215,7 +1262,6 @@ impl UpstreamDispatcher {
             model_name,
         )
     }
-
 
     // ---------------------------------------------------------------------
     // Streaming upstream dispatch
@@ -1339,7 +1385,10 @@ impl UpstreamDispatcher {
                     );
                 }
                 Err(UpstreamError::Timeout(phase)) => {
-                    self.check_and_trigger_proxy_rotation(&target.provider_id, crate::pipeline::upstream_dispatcher::ProxyRotationTrigger::ConnectError);
+                    self.check_and_trigger_proxy_rotation(
+                        &target.provider_id,
+                        crate::pipeline::upstream_dispatcher::ProxyRotationTrigger::ConnectError,
+                    );
                     // Bug fix (PR #33): attribute the timeout to the
                     // CORRECT phase instead of collapsing all into
                     // "connect". Mirrors the non-streaming path's fix.
@@ -1385,7 +1434,10 @@ impl UpstreamDispatcher {
                 | Err(UpstreamError::Http(msg))
                 | Err(UpstreamError::Decode(msg))
                 | Err(UpstreamError::Invalid(msg)) => {
-                    self.check_and_trigger_proxy_rotation(&target.provider_id, crate::pipeline::upstream_dispatcher::ProxyRotationTrigger::ConnectError);
+                    self.check_and_trigger_proxy_rotation(
+                        &target.provider_id,
+                        crate::pipeline::upstream_dispatcher::ProxyRotationTrigger::ConnectError,
+                    );
                     let err = CoreError::UpstreamConnection(msg);
                     return self.record_and_fail(
                         req,
@@ -1420,7 +1472,10 @@ impl UpstreamDispatcher {
 
         let status_code = response.status.as_u16();
         if !(200..300).contains(&status_code) {
-            let mut is_proxy_rotated = self.check_and_trigger_proxy_rotation(&target.provider_id, crate::pipeline::upstream_dispatcher::ProxyRotationTrigger::Status(status_code));
+            let mut is_proxy_rotated = self.check_and_trigger_proxy_rotation(
+                &target.provider_id,
+                crate::pipeline::upstream_dispatcher::ProxyRotationTrigger::Status(status_code),
+            );
             let body_str = match response.body.collect_all().await {
                 Ok(b) => String::from_utf8_lossy(&b).to_string(),
                 Err(_) => String::new(),
@@ -1475,11 +1530,12 @@ impl UpstreamDispatcher {
                 .and_then(parse_retry_after_ms);
             let is_rate_limited_status =
                 status_code == 429 || status_code == 408 || status_code == 503;
-            let err = if let Some(retry_ms) =
-                retry_after_ms.filter(|_| is_rate_limited_status)
-            {
+            let err = if let Some(retry_ms) = retry_after_ms.filter(|_| is_rate_limited_status) {
                 if !is_proxy_rotated {
-                    is_proxy_rotated = self.check_and_trigger_proxy_rotation(&target.provider_id, crate::pipeline::upstream_dispatcher::ProxyRotationTrigger::RateLimited);
+                    is_proxy_rotated = self.check_and_trigger_proxy_rotation(
+                        &target.provider_id,
+                        crate::pipeline::upstream_dispatcher::ProxyRotationTrigger::RateLimited,
+                    );
                 }
                 CoreError::RateLimited {
                     provider: target.provider_id.to_string(),
@@ -1641,7 +1697,7 @@ impl UpstreamDispatcher {
             let mut rx = req.client_disconnected.clone();
             self.is_client_disconnected(&mut rx)
         };
-        
+
         if client_disconnected {
             tracing::warn!(
                 combo_id = combo.id.0,
@@ -1649,24 +1705,22 @@ impl UpstreamDispatcher {
                 provider = %target.provider_id,
                 "client cancelled during SSE stream; aborting attempt"
             );
-            return self.fail_stream_client_disconnected(
-                StreamFailureContext {
-                    req: Arc::clone(&req),
-                    combo,
-                    target,
-                    attempt,
-                    race_size,
-                    started,
-                    model,
-                    connect_ms: connect_and_send_ms,
-                    ttft_ms: state.ttft_ms,
-                    trace_id: trace_id.to_string(),
-                    acc: state.acc.as_mut(),
-                    chunk_id: &chunk_id,
-                    created,
-                    model_name: &model_name,
-                },
-            );
+            return self.fail_stream_client_disconnected(StreamFailureContext {
+                req: Arc::clone(&req),
+                combo,
+                target,
+                attempt,
+                race_size,
+                started,
+                model,
+                connect_ms: connect_and_send_ms,
+                ttft_ms: state.ttft_ms,
+                trace_id: trace_id.to_string(),
+                acc: state.acc.as_mut(),
+                chunk_id: &chunk_id,
+                created,
+                model_name: &model_name,
+            });
         }
 
         let usage = state.usage;
@@ -1744,10 +1798,11 @@ impl UpstreamDispatcher {
         // re-serializing the typed struct when the raw body wasn't
         // captured (e.g., requests constructed internally without
         // going through the HTTP handler).
-        let request_body_json = req
-            .request_body_json
-            .clone()
-            .or_else(|| serde_json::to_value(&*req.openai_request).ok().map(Arc::new));
+        let request_body_json = req.request_body_json.clone().or_else(|| {
+            serde_json::to_value(&*req.openai_request)
+                .ok()
+                .map(Arc::new)
+        });
         let usage_tuple = match crate::pipeline::usage_tracker::UsageRecordBuilder::new(
             &self.tracker,
             Arc::clone(&req),

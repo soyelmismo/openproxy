@@ -80,4 +80,3 @@ impl ProviderAdapter for KilocodeAdapter {
         .await
     }
 }
-

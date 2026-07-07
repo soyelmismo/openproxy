@@ -731,23 +731,19 @@ mod tests {
         let server = httpmock::MockServer::start();
         let client = Client::new(server.base_url());
 
-        let providers = vec![
-            json!({
-                "id": "p1",
-                "name": "Provider 1",
-                "base_url": "http://p1",
-                "auth_type": "bearer",
-                "format": "openai",
-                "active": true,
-                "created_at": "2026-01-01T00:00:00Z"
-            })
-        ];
+        let providers = vec![json!({
+            "id": "p1",
+            "name": "Provider 1",
+            "base_url": "http://p1",
+            "auth_type": "bearer",
+            "format": "openai",
+            "active": true,
+            "created_at": "2026-01-01T00:00:00Z"
+        })];
 
         server.mock(|when, then| {
-            when.method(httpmock::Method::GET)
-                .path("/admin/providers");
-            then.status(200)
-                .json_body(json!(providers));
+            when.method(httpmock::Method::GET).path("/admin/providers");
+            then.status(200).json_body(json!(providers));
         });
 
         let rt = tokio::runtime::Runtime::new().unwrap();
@@ -764,8 +760,7 @@ mod tests {
         server.mock(|when, then| {
             when.method(httpmock::Method::POST)
                 .path("/admin/models/1/refresh");
-            then.status(200)
-                .json_body(json!({ "touched": 5 }));
+            then.status(200).json_body(json!({ "touched": 5 }));
         });
 
         let rt = tokio::runtime::Runtime::new().unwrap();
@@ -778,24 +773,21 @@ mod tests {
         let server = httpmock::MockServer::start();
         let client = Client::new(server.base_url());
 
-        let targets = vec![
-            json!({
-                "id": 1,
-                "combo_id": 10,
-                "provider_id": "p1",
-                "account_id": 100,
-                "model_row_id": 1000,
-                "priority_order": 1,
-                "weight": 100,
-                "active": true
-            })
-        ];
+        let targets = vec![json!({
+            "id": 1,
+            "combo_id": 10,
+            "provider_id": "p1",
+            "account_id": 100,
+            "model_row_id": 1000,
+            "priority_order": 1,
+            "weight": 100,
+            "active": true
+        })];
 
         server.mock(|when, then| {
             when.method(httpmock::Method::GET)
                 .path("/admin/combos/10/targets");
-            then.status(200)
-                .json_body(json!(targets));
+            then.status(200).json_body(json!(targets));
         });
 
         let rt = tokio::runtime::Runtime::new().unwrap();

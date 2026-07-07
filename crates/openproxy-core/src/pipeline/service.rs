@@ -1,13 +1,13 @@
-use std::future::Future;
-use std::pin::Pin;
-use std::task::{Context, Poll};
-use std::sync::Arc;
 use crate::circuit_breaker::Health;
 use crate::combos::{Combo, ComboTarget, Strategy};
 use crate::error::CoreError;
 use crate::pipeline::ErrorPhase;
-use crate::pipeline::{Pipeline, PipelineRequest, PipelineResult};
 use crate::pipeline::repository::PipelineRepository;
+use crate::pipeline::{Pipeline, PipelineRequest, PipelineResult};
+use std::future::Future;
+use std::pin::Pin;
+use std::sync::Arc;
+use std::task::{Context, Poll};
 
 /// Request state passed down the middleware chain.
 pub struct PipelineState {
@@ -35,7 +35,10 @@ impl<S> ErrorTelemetryService<S> {
 
 impl<S> tower::Service<PipelineState> for ErrorTelemetryService<S>
 where
-    S: tower::Service<PipelineState, Response = PipelineResult, Error = std::convert::Infallible> + Clone + Send + 'static,
+    S: tower::Service<PipelineState, Response = PipelineResult, Error = std::convert::Infallible>
+        + Clone
+        + Send
+        + 'static,
     S::Future: Send + 'static,
 {
     type Response = PipelineResult;
@@ -49,17 +52,17 @@ where
     fn call(&mut self, state: PipelineState) -> Self::Future {
         let pipeline = self.pipeline.clone();
         let mut inner = self.inner.clone();
-        
+
         let request_id = state.req.request_id.to_string();
         let trace_id = state.req.trace_id.to_string();
         // Since state is moved, we keep a cloned combo if available.
         let combo = state.combo.clone();
-        
+
         let started = std::time::Instant::now();
 
         Box::pin(async move {
             let res = inner.call(state).await?;
-            
+
             if let Some(err) = &res.error {
                 if matches!(err, CoreError::NoHealthyTargets(_)) {
                     if let Some(c) = combo {
@@ -69,7 +72,7 @@ where
                             &c,
                             started.elapsed().as_millis() as u64,
                             &chrono::Utc::now().naive_utc().to_string(),
-                            "No healthy targets available"
+                            "No healthy targets available",
                         );
                     } else {
                         // If combo wasn't populated yet, we can't record it identically,
@@ -118,7 +121,10 @@ impl<S> ResolveService<S> {
 
 impl<S> tower::Service<PipelineState> for ResolveService<S>
 where
-    S: tower::Service<PipelineState, Response = PipelineResult, Error = std::convert::Infallible> + Clone + Send + 'static,
+    S: tower::Service<PipelineState, Response = PipelineResult, Error = std::convert::Infallible>
+        + Clone
+        + Send
+        + 'static,
     S::Future: Send + 'static,
 {
     type Response = PipelineResult;
@@ -143,10 +149,11 @@ where
             let attempt: u8 = 1;
 
             // 2. Resolve and expand targets.
-            let targets = match pipeline.resolve_targets(&combo, state.req.targets_override.as_deref()) {
-                Ok(t) => t,
-                Err(e) => return Ok(pipeline.failure(e, attempt - 1, ErrorPhase::Resolve)),
-            };
+            let targets =
+                match pipeline.resolve_targets(&combo, state.req.targets_override.as_deref()) {
+                    Ok(t) => t,
+                    Err(e) => return Ok(pipeline.failure(e, attempt - 1, ErrorPhase::Resolve)),
+                };
 
             // 3. Flatten sub-combos.
             let flat_targets = match pipeline.flatten_targets(&combo.id, targets.clone()) {
@@ -188,18 +195,26 @@ where
                         }
                     };
                     if repopulated > 0 {
-                        let targets = match pipeline.resolve_targets(&combo, state.req.targets_override.as_deref()) {
+                        let targets = match pipeline
+                            .resolve_targets(&combo, state.req.targets_override.as_deref())
+                        {
                             Ok(t) => t,
-                            Err(e) => return Ok(pipeline.failure(e, attempt - 1, ErrorPhase::Resolve)),
+                            Err(e) => {
+                                return Ok(pipeline.failure(e, attempt - 1, ErrorPhase::Resolve));
+                            }
                         };
                         let flat_targets = match pipeline.flatten_targets(&combo.id, targets) {
                             Ok(t) => t,
-                            Err(e) => return Ok(pipeline.failure(e, attempt - 1, ErrorPhase::Resolve)),
+                            Err(e) => {
+                                return Ok(pipeline.failure(e, attempt - 1, ErrorPhase::Resolve));
+                            }
                         };
                         let re_eligible: Vec<ComboTarget> = flat_targets
                             .into_iter()
                             .filter(|t| match t.account_id {
-                                Some(aid) => pipeline.circuit_breaker.is_healthy(aid) == Health::Healthy,
+                                Some(aid) => {
+                                    pipeline.circuit_breaker.is_healthy(aid) == Health::Healthy
+                                }
                                 None => true,
                             })
                             .collect();
@@ -215,7 +230,7 @@ where
             }
 
             let resolved = pipeline.resolve_combo_targets_full(eligible).await;
-            
+
             if resolved.is_empty() && !pre_cb_snapshot.is_empty() {
                 let err = CoreError::NoHealthyTargets(combo.id.0);
                 return Ok(pipeline.failure(err, attempt - 1, ErrorPhase::Route));
@@ -226,7 +241,6 @@ where
 
             state.combo = Some(combo);
             state.eligible_targets = Some(resolved);
-
 
             inner.call(state).await
         })
@@ -269,7 +283,10 @@ impl<S> QuotaService<S> {
 
 impl<S> tower::Service<PipelineState> for QuotaService<S>
 where
-    S: tower::Service<PipelineState, Response = PipelineResult, Error = std::convert::Infallible> + Clone + Send + 'static,
+    S: tower::Service<PipelineState, Response = PipelineResult, Error = std::convert::Infallible>
+        + Clone
+        + Send
+        + 'static,
     S::Future: Send + 'static,
 {
     type Response = PipelineResult;
@@ -297,7 +314,7 @@ where
                     pipeline.config.quota_protection.threshold_percentage,
                     &conn,
                     eligible,
-                    &state.req.openai_request.model
+                    &state.req.openai_request.model,
                 )
             };
             if eligible.is_empty() {
@@ -374,11 +391,23 @@ impl tower::Service<PipelineState> for RoutingService {
                 let race_n = (combo.race_size as usize)
                     .min(to_run.len())
                     .min(pipeline.config.racing.max_race_size as usize);
-                let race_result = crate::pipeline::racing::run_race(&pipeline, Arc::clone(&state.req), &combo, to_run.clone(), race_n as u8).await;
+                let race_result = crate::pipeline::racing::run_race(
+                    &pipeline,
+                    Arc::clone(&state.req),
+                    &combo,
+                    to_run.clone(),
+                    race_n as u8,
+                )
+                .await;
 
                 if race_result.error.is_none() {
-                    if let Some((request_id, attempt, target_id)) = race_result.usage_tuple.clone() {
-                        let job = crate::pipeline::worker::BackgroundJob::MarkClientResponse { request_id, attempt, target_id };
+                    if let Some((request_id, attempt, target_id)) = race_result.usage_tuple.clone()
+                    {
+                        let job = crate::pipeline::worker::BackgroundJob::MarkClientResponse {
+                            request_id,
+                            attempt,
+                            target_id,
+                        };
                         if let Err(e) = pipeline.config.background_tx.try_send(job) {
                             if matches!(e, tokio::sync::mpsc::error::TrySendError::Closed(_)) {
                                 let job = e.into_inner();
@@ -434,7 +463,10 @@ impl tower::Service<PipelineState> for RoutingService {
                     .await;
 
                 while let Some(e) = &result.error {
-                    if !crate::retry::RetryPolicy::is_retryable(e, pipeline.config.idle_chunk_retryable) {
+                    if !crate::retry::RetryPolicy::is_retryable(
+                        e,
+                        pipeline.config.idle_chunk_retryable,
+                    ) {
                         break;
                     }
                     if target_attempt >= policy.max_attempts {
@@ -451,7 +483,12 @@ impl tower::Service<PipelineState> for RoutingService {
                         Some(d) => d,
                         None => break,
                     };
-                    let delay = if let CoreError::RateLimited { retry_after_ms, is_proxy_rotated, .. } = e {
+                    let delay = if let CoreError::RateLimited {
+                        retry_after_ms,
+                        is_proxy_rotated,
+                        ..
+                    } = e
+                    {
                         if *is_proxy_rotated {
                             std::time::Duration::from_millis(0)
                         } else {
@@ -523,7 +560,9 @@ impl tower::Service<PipelineState> for RoutingService {
                             let max_secs = combo
                                 .cooldown_max_secs
                                 .unwrap_or(pipeline.config.cooldown_max_secs);
-                            let factor = combo.cooldown_factor.unwrap_or(pipeline.config.cooldown_factor);
+                            let factor = combo
+                                .cooldown_factor
+                                .unwrap_or(pipeline.config.cooldown_factor);
                             if let Err(e) = pipeline.repo().record_cooldown(
                                 target.target.id,
                                 &reason,
@@ -544,22 +583,38 @@ impl tower::Service<PipelineState> for RoutingService {
                     }
                 }
 
-                let model_name = target.target.model_row_id.map(|_| "unresolved").unwrap_or("unknown");
+                let model_name = target
+                    .target
+                    .model_row_id
+                    .map(|_| "unresolved")
+                    .unwrap_or("unknown");
                 let outcome = if result.error.is_none() {
                     "success"
-                } else if crate::retry::RetryPolicy::is_retryable(result.error.as_ref().unwrap(), pipeline.config.idle_chunk_retryable) {
+                } else if crate::retry::RetryPolicy::is_retryable(
+                    result.error.as_ref().unwrap(),
+                    pipeline.config.idle_chunk_retryable,
+                ) {
                     "retryable_failure"
                 } else {
                     "fatal_failure"
                 };
                 combo_walk_log.push(format!(
                     "  [{}] {} (model: {}, id: {}): {} (attempts: {})",
-                    idx + 1, target.target.provider_id, model_name, target.target.id.0, outcome, target_attempt
+                    idx + 1,
+                    target.target.provider_id,
+                    model_name,
+                    target.target.id.0,
+                    outcome,
+                    target_attempt
                 ));
 
                 if result.error.is_none() {
                     if let Some((request_id, attempt, target_id)) = result.usage_tuple.clone() {
-                        let job = crate::pipeline::worker::BackgroundJob::MarkClientResponse { request_id, attempt, target_id };
+                        let job = crate::pipeline::worker::BackgroundJob::MarkClientResponse {
+                            request_id,
+                            attempt,
+                            target_id,
+                        };
                         if let Err(e) = pipeline.config.background_tx.try_send(job) {
                             if matches!(e, tokio::sync::mpsc::error::TrySendError::Closed(_)) {
                                 let job = e.into_inner();

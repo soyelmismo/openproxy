@@ -1835,16 +1835,7 @@ mod tests {
         // 2. Perform a refresh passing None for refresh_token and other fields.
         let access2 = "access-2";
         store_oauth_tokens(
-            &conn,
-            id,
-            access2,
-            None,
-            &mk,
-            "Bearer",
-            None,
-            None,
-            None,
-            None,
+            &conn, id, access2, None, &mk, "Bearer", None, None, None, None,
         )
         .expect("store refresh");
 
@@ -1859,6 +1850,9 @@ mod tests {
         // 5. Verify email and provider specific metadata are preserved.
         let acc = get(&conn, id).expect("get").expect("present");
         assert_eq!(acc.email.as_deref(), Some("user@domain.com"));
-        assert_eq!(acc.oauth_provider_specific.as_deref(), Some("initial-provider-spec"));
+        assert_eq!(
+            acc.oauth_provider_specific.as_deref(),
+            Some("initial-provider-spec")
+        );
     }
 }

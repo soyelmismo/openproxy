@@ -605,10 +605,22 @@ mod tests {
             applied
         );
         let compressed = msgs[0].content.as_ref().unwrap().as_str().unwrap();
-        assert!(compressed.contains("-del1"), "deletion del1 should be preserved");
-        assert!(compressed.contains("+add1"), "addition add1 should be preserved");
-        assert!(compressed.contains("-del2"), "deletion del2 should be preserved");
-        assert!(compressed.contains("+add2"), "addition add2 should be preserved");
+        assert!(
+            compressed.contains("-del1"),
+            "deletion del1 should be preserved"
+        );
+        assert!(
+            compressed.contains("+add1"),
+            "addition add1 should be preserved"
+        );
+        assert!(
+            compressed.contains("-del2"),
+            "deletion del2 should be preserved"
+        );
+        assert!(
+            compressed.contains("+add2"),
+            "addition add2 should be preserved"
+        );
     }
 
     #[test]
@@ -686,10 +698,7 @@ index abc..def 100644\n\
     fn test_compress_diff_skips_system_and_user_messages() {
         // Even with a valid diff, system/user messages should not be touched.
         let content = make_basic_diff();
-        let mut msgs = vec![
-            msg("system", &content),
-            msg("user", &content),
-        ];
+        let mut msgs = vec![msg("system", &content), msg("user", &content)];
         let applied = compress_diffs(&mut msgs);
         assert!(
             applied.is_empty(),
