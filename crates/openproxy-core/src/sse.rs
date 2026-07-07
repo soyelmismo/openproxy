@@ -2308,7 +2308,9 @@ pub fn parse_responses_sse_stream_line(
 
     let event_type = value.get("type").and_then(|v| v.as_str()).unwrap_or("");
     let mut usage = None;
-    if let Some(u) = value.get("usage")
+    if let Some(u) = value
+        .get("usage")
+        .or_else(|| value.get("response").and_then(|r| r.get("usage")))
         && let Ok(u) = serde_json::from_value::<OpenAIUsage>(u.clone())
     {
         usage = Some(u);
@@ -2461,7 +2463,10 @@ pub fn parse_responses_sse_stream_line(
         }
     }
 
-    if event_type == "response.text.delta" || event_type == "response.audio.delta" {
+    if matches!(
+        event_type,
+        "response.output_text.delta" | "response.text.delta" | "response.audio.delta"
+    ) {
         let delta = value.get("delta").and_then(|v| v.as_str()).unwrap_or("");
         if !delta.is_empty() {
             return Ok(Some(UpstreamSseChunk {
@@ -2488,7 +2493,7 @@ pub fn parse_responses_sse_stream_line(
         }
     }
 
-    if event_type == "response.done" {
+    if event_type == "response.done" || event_type == "response.completed" {
         let mut stop_reason = Some("stop".to_string());
         if !state.tool_calls.is_empty() {
             stop_reason = Some("tool_calls".to_string());
@@ -2517,4 +2522,43 @@ pub fn parse_responses_sse_stream_line(
     }
 
     Ok(None)
+}
+
+#[cfg(test)]
+mod responses_sse_tests {
+    use super::*;
+
+    #[test]
+    fn responses_output_text_delta_translates_to_chat_delta() {
+        let mut state = ResponsesSseState::default();
+        let line = r#"data: {"type":"response.output_text.delta","delta":"pong"}"#;
+
+        let chunk =
+            parse_responses_sse_stream_line(line, "chatcmpl_1", 123, "gpt-test", &mut state)
+                .expect("parse")
+                .expect("chunk");
+
+        assert_eq!(
+            chunk.payload["choices"][0]["delta"]["content"].as_str(),
+            Some("pong")
+        );
+        assert!(chunk.has_content);
+    }
+
+    #[test]
+    fn responses_completed_uses_nested_usage() {
+        let mut state = ResponsesSseState::default();
+        let line = r#"data: {"type":"response.completed","response":{"usage":{"prompt_tokens":2,"completion_tokens":3,"total_tokens":5}}}"#;
+
+        let chunk =
+            parse_responses_sse_stream_line(line, "chatcmpl_1", 123, "gpt-test", &mut state)
+                .expect("parse")
+                .expect("chunk");
+
+        assert_eq!(
+            chunk.payload["choices"][0]["finish_reason"].as_str(),
+            Some("stop")
+        );
+        assert_eq!(chunk.usage.as_ref().map(|u| u.total_tokens), Some(5));
+    }
 }
