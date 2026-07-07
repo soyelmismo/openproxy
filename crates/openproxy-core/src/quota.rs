@@ -1256,13 +1256,36 @@ pub async fn fetch_codex_quota(
     access_token: &str,
     workspace_id: Option<&str>,
 ) -> Result<AccountQuota> {
-    let url = "https://chatgpt.com/backend-api/accounts/check/v4-2023-04-27";
+    let url = "https://chatgpt.com/backend-api/wham/usage";
     let mut req = UpstreamRequest::get(url);
     req.headers.insert(
         http::header::AUTHORIZATION,
         http::HeaderValue::from_str(&format!("Bearer {}", access_token))
             .unwrap_or_else(|_| http::HeaderValue::from_static("")),
     );
+    req.headers.insert(
+        http::header::ACCEPT,
+        http::HeaderValue::from_static("application/json"),
+    );
+    req.headers.insert(
+        http::header::CONTENT_TYPE,
+        http::HeaderValue::from_static("application/json"),
+    );
+    req.headers.insert(
+        http::header::HeaderName::from_static("origin"),
+        http::HeaderValue::from_static("https://chatgpt.com"),
+    );
+    req.headers.insert(
+        http::header::HeaderName::from_static("originator"),
+        http::HeaderValue::from_static("codex_cli_rs"),
+    );
+    if let Ok(v) = http::HeaderValue::from_str(&crate::adapters::codex::codex_client_version()) {
+        req.headers
+            .insert(http::HeaderName::from_static("version"), v);
+    }
+    if let Ok(v) = http::HeaderValue::from_str(&crate::adapters::codex::codex_user_agent()) {
+        req.headers.insert(http::header::USER_AGENT, v);
+    }
     let workspace_header = workspace_id.and_then(codex_workspace_header);
     if let Some(ws) = workspace_header.as_deref()
         && let Ok(val) = http::HeaderValue::from_str(ws)
@@ -1279,6 +1302,11 @@ pub async fn fetch_codex_quota(
 
     let status = response.status.as_u16();
     if !(200..300).contains(&status) {
+        let body = response.collect().await.unwrap_or_default();
+        let snippet = String::from_utf8_lossy(&body)
+            .chars()
+            .take(200)
+            .collect::<String>();
         return Ok(AccountQuota {
             session_used: None,
             session_limit: None,
@@ -1288,24 +1316,22 @@ pub async fn fetch_codex_quota(
             weekly_reset_at: None,
             plan_name: None,
             last_fetched_at: now_unix_secs_str(),
-            fetch_error: Some(format!("Codex quota check failed: HTTP {}", status)),
+            fetch_error: Some(if snippet.is_empty() {
+                format!("Codex quota check failed: HTTP {}", status)
+            } else {
+                format!("Codex quota check failed: HTTP {}: {}", status, snippet)
+            }),
             model_details: None,
         });
     }
 
-    let _ = response.collect().await; // consume body
-    Ok(AccountQuota {
-        session_used: None,
-        session_limit: None,
-        session_reset_at: None,
-        weekly_used: None,
-        weekly_limit: None,
-        weekly_reset_at: None,
-        plan_name: Some("Codex / ChatGPT".into()),
-        last_fetched_at: now_unix_secs_str(),
-        fetch_error: None,
-        model_details: None,
-    })
+    let body = response
+        .collect()
+        .await
+        .map_err(|e| CoreError::UpstreamConnection(format!("codex quota read: {e}")))?;
+    let json: serde_json::Value = serde_json::from_slice(&body)
+        .map_err(|e| CoreError::Parse(format!("codex quota parse: {e}")))?;
+    parse_codex_usage_quota(&json)
 }
 
 fn codex_workspace_header(provider_specific: &str) -> Option<String> {
@@ -1325,6 +1351,74 @@ fn codex_workspace_header(provider_specific: &str) -> Option<String> {
                 .filter(|s| !s.is_empty())
                 .map(ToString::to_string)
         })
+}
+
+fn parse_codex_usage_quota(body: &serde_json::Value) -> Result<AccountQuota> {
+    let rate_limit = body
+        .get("rate_limit")
+        .or_else(|| body.get("rateLimit"))
+        .and_then(|v| v.as_object())
+        .ok_or_else(|| CoreError::Parse("codex quota missing rate_limit".into()))?;
+
+    let primary = rate_limit
+        .get("primary_window")
+        .or_else(|| rate_limit.get("primaryWindow"));
+    let secondary = rate_limit
+        .get("secondary_window")
+        .or_else(|| rate_limit.get("secondaryWindow"));
+    let (session_used, session_reset_at) = parse_codex_usage_window(primary);
+    let (weekly_used, weekly_reset_at) = parse_codex_usage_window(secondary);
+
+    Ok(AccountQuota {
+        session_used,
+        session_limit: session_used.map(|_| 100),
+        session_reset_at,
+        weekly_used,
+        weekly_limit: weekly_used.map(|_| 100),
+        weekly_reset_at,
+        plan_name: Some("Codex / ChatGPT".into()),
+        last_fetched_at: now_unix_secs_str(),
+        fetch_error: None,
+        model_details: None,
+    })
+}
+
+fn parse_codex_usage_window(window: Option<&serde_json::Value>) -> (Option<i64>, Option<String>) {
+    let Some(window) = window.and_then(|v| v.as_object()) else {
+        return (None, None);
+    };
+    let used = window
+        .get("used_percent")
+        .or_else(|| window.get("usedPercent"))
+        .and_then(json_f64)
+        .map(|v| v.round().clamp(0.0, 100.0) as i64);
+    let reset_at = window
+        .get("reset_at")
+        .or_else(|| window.get("resetAt"))
+        .and_then(json_f64)
+        .filter(|v| *v > 0.0)
+        .map(|v| (v.ceil() as u64).to_string())
+        .or_else(|| {
+            window
+                .get("reset_after_seconds")
+                .or_else(|| window.get("resetAfterSeconds"))
+                .and_then(json_f64)
+                .filter(|v| *v > 0.0)
+                .map(|v| {
+                    let now = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .map(|d| d.as_secs())
+                        .unwrap_or(0);
+                    (now + v.ceil() as u64).to_string()
+                })
+        });
+    (used, reset_at)
+}
+
+fn json_f64(value: &serde_json::Value) -> Option<f64> {
+    value
+        .as_f64()
+        .or_else(|| value.as_str().and_then(|s| s.parse::<f64>().ok()))
 }
 
 #[cfg(test)]
@@ -1910,6 +2004,30 @@ mod tests {
             Some("acc_snake")
         );
         assert_eq!(codex_workspace_header("{}"), None);
+    }
+
+    #[test]
+    fn parse_codex_usage_quota_maps_windows() {
+        let body = json!({
+            "rate_limit": {
+                "primary_window": {
+                    "used_percent": 17.4,
+                    "reset_at": 1783434000
+                },
+                "secondary_window": {
+                    "used_percent": "48.6",
+                    "reset_at": "1784038800"
+                }
+            }
+        });
+        let q = parse_codex_usage_quota(&body).expect("parse");
+        assert_eq!(q.session_used, Some(17));
+        assert_eq!(q.session_limit, Some(100));
+        assert_eq!(q.session_reset_at.as_deref(), Some("1783434000"));
+        assert_eq!(q.weekly_used, Some(49));
+        assert_eq!(q.weekly_limit, Some(100));
+        assert_eq!(q.weekly_reset_at.as_deref(), Some("1784038800"));
+        assert_eq!(q.plan_name.as_deref(), Some("Codex / ChatGPT"));
     }
 
     #[test]

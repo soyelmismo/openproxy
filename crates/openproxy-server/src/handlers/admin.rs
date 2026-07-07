@@ -3719,7 +3719,7 @@ async fn run_test_for_model(
                 &pipeline_req,
                 &model,
                 &openai_req.messages,
-                openai_req.stream,
+                true,
                 adapter.as_ref(),
             ) {
                 Ok(bytes) => match serde_json::from_slice::<serde_json::Value>(&bytes) {
