@@ -1263,11 +1263,13 @@ pub async fn fetch_codex_quota(
         http::HeaderValue::from_str(&format!("Bearer {}", access_token))
             .unwrap_or_else(|_| http::HeaderValue::from_static("")),
     );
-    if let Some(ws) = workspace_id
-        && let Ok(val) = http::HeaderValue::from_str(ws) {
-            req.headers
-                .insert(http::HeaderName::from_static("chatgpt-account-id"), val);
-        }
+    let workspace_header = workspace_id.and_then(codex_workspace_header);
+    if let Some(ws) = workspace_header.as_deref()
+        && let Ok(val) = http::HeaderValue::from_str(ws)
+    {
+        req.headers
+            .insert(http::HeaderName::from_static("chatgpt-account-id"), val);
+    }
 
     let cancel = CancellationToken::new();
     let response = upstream
@@ -1304,6 +1306,25 @@ pub async fn fetch_codex_quota(
         fetch_error: None,
         model_details: None,
     })
+}
+
+fn codex_workspace_header(provider_specific: &str) -> Option<String> {
+    let raw = provider_specific.trim();
+    if raw.is_empty() {
+        return None;
+    }
+    if !raw.starts_with('{') {
+        return Some(raw.to_string());
+    }
+    serde_json::from_str::<serde_json::Value>(raw)
+        .ok()
+        .and_then(|v| {
+            v.get("workspaceId")
+                .or_else(|| v.get("workspace_id"))
+                .and_then(|v| v.as_str())
+                .filter(|s| !s.is_empty())
+                .map(ToString::to_string)
+        })
 }
 
 #[cfg(test)]
@@ -1874,7 +1895,22 @@ mod tests {
         assert!(matches!(err, CoreError::Internal(_)));
     }
 
-
+    #[test]
+    fn codex_workspace_header_accepts_raw_and_json() {
+        assert_eq!(
+            codex_workspace_header("acc_raw").as_deref(),
+            Some("acc_raw")
+        );
+        assert_eq!(
+            codex_workspace_header(r#"{"workspaceId":"acc_json"}"#).as_deref(),
+            Some("acc_json")
+        );
+        assert_eq!(
+            codex_workspace_header(r#"{"workspace_id":"acc_snake"}"#).as_deref(),
+            Some("acc_snake")
+        );
+        assert_eq!(codex_workspace_header("{}"), None);
+    }
 
     #[test]
     fn test_is_kiro_overage_enabled() {

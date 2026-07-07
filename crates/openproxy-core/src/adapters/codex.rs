@@ -101,7 +101,7 @@ impl ProviderAdapter for CodexAdapter {
             built_in: crate::providers::is_builtin(self.id().as_str()),
             deletable: !crate::providers::is_builtin(self.id().as_str()),
             supports_quota: true,
-            quota_refresh_supported: false,
+            quota_refresh_supported: true,
         }
     }
 
