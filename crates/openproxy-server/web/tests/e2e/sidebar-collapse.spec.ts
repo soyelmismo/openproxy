@@ -16,7 +16,7 @@
 
 import { test, expect, type Page } from '@playwright/test';
 
-const BASE = 'http://127.0.0.1:8788/';
+const BASE = 'http://localhost:8790/';
 const STORAGE_KEY = 'openproxy:sidebarCollapsed';
 
 async function sidebarWidth(page: Page): Promise<number | null> {

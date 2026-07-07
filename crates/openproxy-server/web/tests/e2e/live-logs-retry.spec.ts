@@ -225,7 +225,7 @@ async function snapshotAfterRetry(
 }
 
 test('Live Logs retry: previous attempt keeps its own stage (no cross-attempt bleed)', async ({ page }: { page: Page }) => {
-  await page.goto('http://localhost:8788/#/logs');
+  await page.goto('http://localhost:8790/#/logs');
   await expect(page.locator('#logs')).toBeVisible();
   // Wait for the view to fully render: the "Phase" header is
   // always present once the logs view is mounted. The first

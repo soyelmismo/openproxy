@@ -223,7 +223,7 @@ function makeStageEvent(overrides: Partial<StageEvent> = {}): StageEvent {
 /** Navigate to /#/logs and wait for the view to mount (the "Phase"
  *  header is always present once the logs view is mounted). */
 async function setupLogsView(page: Page): Promise<void> {
-  await page.goto('http://localhost:8788/#/logs');
+  await page.goto('http://localhost:8790/#/logs');
   await expect(page.locator('#logs')).toBeVisible();
   await expect(page.locator('#logs >> text=Phase').first()).toBeVisible({ timeout: 5000 });
 }

@@ -9,7 +9,7 @@
     "typecheck:all": "tsc --noEmit && tsc --noEmit -p tsconfig.test.json",
     "build": "node build.mjs && tsc --emitDeclarationOnly",
     "build:watch": "node build.mjs --watch",
-    "test:e2e": "echo 'e2e tests live in tests/e2e/ — handled in a later gate' && exit 0"
+    "test:e2e": "cp tests/e2e/data-test.seed.db tests/e2e/data-test.db && playwright test"
   },
   "devDependencies": {
     "@playwright/test": "^1.60.0",

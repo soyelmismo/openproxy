@@ -38,7 +38,7 @@ async function openFirstLogRow(page: Page): Promise<string | null> {
       console.log(`LOG-DETAIL PAGE RESOURCE ERROR ${response.status()}: ${response.url()}`);
     }
   });
-  await page.goto('http://localhost:8788/');
+  await page.goto('http://localhost:8790/');
   await page.click('a[href="#/logs"]');
   await expect(page.locator('#main')).toBeVisible();
   // Wait for the WebSocket + first row.

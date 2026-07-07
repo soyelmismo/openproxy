@@ -164,7 +164,7 @@ test.beforeEach(async ({ page }: { page: Page }) => {
 });
 
 test('Live Logs: stale streaming stage freezes the latency ticker', async ({ page }: { page: Page }) => {
-  await page.goto('http://localhost:8788/#/logs');
+  await page.goto('http://localhost:8790/#/logs');
   await expect(page.locator('#logs')).toBeVisible();
   // Wait for the view to be fully mounted.
   await expect(page.locator('#logs >> text=Phase').first()).toBeVisible({ timeout: 5000 });
@@ -345,7 +345,7 @@ test('Live Logs: stale streaming stage freezes the latency ticker', async ({ pag
 });
 
 test('Live Logs: finalized row freezes ticker at the row total_ms', async ({ page }: { page: Page }) => {
-  await page.goto('http://localhost:8788/#/logs');
+  await page.goto('http://localhost:8790/#/logs');
   await expect(page.locator('#logs')).toBeVisible();
   await expect(page.locator('#logs >> text=Phase').first()).toBeVisible({ timeout: 5000 });
 

@@ -17,7 +17,7 @@ const ALL_COLUMNS: readonly string[] = ['time', 'phase', 'client', 'status', 'pr
 const HEADER_LABELS: readonly string[] = ['Time', 'Phase', 'Client', 'Status', 'Provider', 'Model', 'Tokens', 'Latency', 'Cost', 'Compress'];
 
 async function gotoLogs(page: Page): Promise<void> {
-  await page.goto('http://localhost:8788/#/logs');
+  await page.goto('http://localhost:8790/#/logs');
   // Wait for the logs view to render the header row. Once a header
   // span with `data-col` exists, the view has fully mounted.
   await page.waitForSelector('#logs .log-row [data-col="time"]', { timeout: 10000 });
@@ -35,7 +35,7 @@ test.beforeEach(async ({ page }: { page: Page }) => {
   // proceed to /logs. The clear query string is a no-op in the
   // app code, it just gives us a hook to run code before the
   // test's real navigation.
-  await page.goto('http://localhost:8788/');
+  await page.goto('http://localhost:8790/');
   await page.evaluate((key: string) => {
     try { localStorage.removeItem(key); } catch (_e) { void _e; }
   }, STORAGE_KEY);

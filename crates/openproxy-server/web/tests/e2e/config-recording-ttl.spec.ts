@@ -21,7 +21,7 @@ test('Config Recording TTL save action posts the configured TTL', async ({ page 
     });
   });
 
-  await page.goto('http://localhost:8788/');
+  await page.goto('http://localhost:8790/');
   await page.click('a[href="#/config"]');
   await expect(page.locator('#main')).toBeVisible();
 

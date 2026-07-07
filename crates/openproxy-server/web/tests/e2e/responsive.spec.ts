@@ -32,7 +32,7 @@ async function gotoHome(page: Page): Promise<void> {
       console.log(`PAGE RESOURCE 404: ${response.url()}`);
     }
   });
-  await page.goto('http://localhost:8788/');
+  await page.goto('http://localhost:8790/');
   // Wait for the shell to mount: sidebar + main must exist.
   await page.waitForSelector('.sidebar', { timeout: 10000 });
   await page.waitForSelector('#main', { timeout: 10000 });
@@ -81,7 +81,7 @@ test.describe('Responsive — mobile (375x667)', () => {
 
   test('logs: table is horizontally scrollable inside main, not on body', async ({ page }: { page: Page }) => {
     await gotoHome(page);
-    await page.goto('http://localhost:8788/#/logs');
+    await page.goto('http://localhost:8790/#/logs');
     // Wait for logs view to render its header row.
     await page.waitForSelector('#logs .log-row [data-col="time"]', { timeout: 10000 });
 
@@ -151,7 +151,7 @@ test.describe('Responsive — desktop (1280x800)', () => {
   test('desktop: sidebar collapse toggle still works (regression check)', async ({ page }: { page: Page }) => {
     // Start from a clean state — make sure the user hasn't left
     // the sidebar collapsed from a previous test.
-    await page.goto('http://localhost:8788/');
+    await page.goto('http://localhost:8790/');
     await page.evaluate(() => {
       try { localStorage.removeItem('openproxy:sidebarCollapsed'); } catch (_e) { void _e; }
     });

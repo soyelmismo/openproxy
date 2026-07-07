@@ -4,7 +4,7 @@ import { test, expect, type Page } from '@playwright/test';
 
 test('Live Logs WebSocket connection', async ({ page }: { page: Page }) => {
   // Navigate to the dashboard
-  await page.goto('http://localhost:8788/');
+  await page.goto('http://localhost:8790/');
 
   // Click on the "Live Logs" link to navigate to the logs section
   await page.click('a[href="#/logs"]');
