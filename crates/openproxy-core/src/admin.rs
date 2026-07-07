@@ -1077,8 +1077,8 @@ mod tests {
     #[test]
     fn test_quota_capability_anti_drift() {
         let adapters = crate::adapters::builtin_adapters();
-        let providers_with_quota = vec!["minimax", "minimax-cn", "openrouter", "antigravity", "agy", "codex", "kiro"];
-        let providers_with_fetcher = vec!["minimax", "minimax-cn", "openrouter", "antigravity", "agy", "kiro"];
+        let providers_with_quota = ["minimax", "minimax-cn", "openrouter", "antigravity", "agy", "codex", "kiro"];
+        let providers_with_fetcher = ["minimax", "minimax-cn", "openrouter", "antigravity", "agy", "kiro"];
         for adapter in adapters {
             let id = adapter.id().as_str();
             let metadata = adapter.metadata();
