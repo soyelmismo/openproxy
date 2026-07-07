@@ -513,23 +513,29 @@ impl OAuthProvider for KiroOAuthProvider {
                 .map_err(|e| CoreError::Parse(format!("kiro social token refresh parse: {e}")))?;
 
             // The JSON format matches TokenResponse, but we must preserve refreshToken if it's absent
-            if data.get("refreshToken").is_none() && data.get("refresh_token").is_none()
-                && let Some(obj) = data.as_object_mut() {
-                    // Note: TokenResponse has `alias = "refreshToken"`, so we can insert either.
-                    obj.insert(
-                        "refresh_token".to_string(),
-                        serde_json::json!(refresh_token),
-                    );
-                }
+            if data.get("refreshToken").is_none()
+                && data.get("refresh_token").is_none()
+                && let Some(obj) = data.as_object_mut()
+            {
+                // Note: TokenResponse has `alias = "refreshToken"`, so we can insert either.
+                obj.insert(
+                    "refresh_token".to_string(),
+                    serde_json::json!(refresh_token),
+                );
+            }
             // Ensure token_type exists for TokenResponse parser
-            if data.get("token_type").is_none() && data.get("tokenType").is_none()
-                && let Some(obj) = data.as_object_mut() {
-                    obj.insert("token_type".to_string(), serde_json::json!("Bearer"));
-                }
-            if data.get("expiresIn").is_none() && data.get("expires_in").is_none()
-                && let Some(obj) = data.as_object_mut() {
-                    obj.insert("expires_in".to_string(), serde_json::json!(3600));
-                }
+            if data.get("token_type").is_none()
+                && data.get("tokenType").is_none()
+                && let Some(obj) = data.as_object_mut()
+            {
+                obj.insert("token_type".to_string(), serde_json::json!("Bearer"));
+            }
+            if data.get("expiresIn").is_none()
+                && data.get("expires_in").is_none()
+                && let Some(obj) = data.as_object_mut()
+            {
+                obj.insert("expires_in".to_string(), serde_json::json!(3600));
+            }
 
             return serde_json::from_value::<TokenResponse>(data)
                 .map_err(|e| CoreError::Parse(format!("kiro social token refresh map: {e}")));
@@ -658,21 +664,27 @@ impl OAuthProvider for KiroOAuthProvider {
         let mut data: serde_json::Value = serde_json::from_slice(&final_body)
             .map_err(|e| CoreError::Parse(format!("kiro token refresh parse: {e}")))?;
         // If upstream omits refresh_token, we reuse the old one
-        if data.get("refresh_token").is_none() && data.get("refreshToken").is_none()
-            && let Some(obj) = data.as_object_mut() {
-                obj.insert(
-                    "refresh_token".to_string(),
-                    serde_json::json!(refresh_token),
-                );
-            }
-        if data.get("expires_in").is_none() && data.get("expiresIn").is_none()
-            && let Some(obj) = data.as_object_mut() {
-                obj.insert("expires_in".to_string(), serde_json::json!(3600));
-            }
-        if data.get("token_type").is_none() && data.get("tokenType").is_none()
-            && let Some(obj) = data.as_object_mut() {
-                obj.insert("token_type".to_string(), serde_json::json!("Bearer"));
-            }
+        if data.get("refresh_token").is_none()
+            && data.get("refreshToken").is_none()
+            && let Some(obj) = data.as_object_mut()
+        {
+            obj.insert(
+                "refresh_token".to_string(),
+                serde_json::json!(refresh_token),
+            );
+        }
+        if data.get("expires_in").is_none()
+            && data.get("expiresIn").is_none()
+            && let Some(obj) = data.as_object_mut()
+        {
+            obj.insert("expires_in".to_string(), serde_json::json!(3600));
+        }
+        if data.get("token_type").is_none()
+            && data.get("tokenType").is_none()
+            && let Some(obj) = data.as_object_mut()
+        {
+            obj.insert("token_type".to_string(), serde_json::json!("Bearer"));
+        }
 
         serde_json::from_value::<TokenResponse>(data)
             .map_err(|e| CoreError::Parse(format!("kiro token refresh map: {e}")))

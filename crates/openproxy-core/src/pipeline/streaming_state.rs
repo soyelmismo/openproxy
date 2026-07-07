@@ -117,38 +117,38 @@ pub(crate) fn apply_reasoning_normalizations(
 
         if let Some(choices) = &mut fc.choices
             && let Some(choice) = choices.first_mut()
-                && let Some(delta) = &mut choice.delta {
-                    if let Some(content) = delta.content.as_ref() {
-                        let (clean_content, extracted_reasoning) = think_extractor.process(content);
-                        if clean_content != *content {
-                            delta.content = Some(std::borrow::Cow::Owned(clean_content));
-                            modified = true;
-                        }
+            && let Some(delta) = &mut choice.delta
+        {
+            if let Some(content) = delta.content.as_ref() {
+                let (clean_content, extracted_reasoning) = think_extractor.process(content);
+                if clean_content != *content {
+                    delta.content = Some(std::borrow::Cow::Owned(clean_content));
+                    modified = true;
+                }
 
-                        let has_native_reasoning = delta.reasoning_content.is_some()
-                            || delta.extra.contains_key("reasoning_content");
-                        if !extracted_reasoning.is_empty() && !has_native_reasoning {
-                            delta.reasoning_content =
-                                Some(std::borrow::Cow::Owned(extracted_reasoning));
-                            modified = true;
-                        }
-                    }
+                let has_native_reasoning = delta.reasoning_content.is_some()
+                    || delta.extra.contains_key("reasoning_content");
+                if !extracted_reasoning.is_empty() && !has_native_reasoning {
+                    delta.reasoning_content = Some(std::borrow::Cow::Owned(extracted_reasoning));
+                    modified = true;
+                }
+            }
 
-                    if let Some(tool_calls) = &mut delta.tool_calls {
-                        for tc in tool_calls {
-                            if let Some(func) = &mut tc.function
-                                && let Some(arguments) = func.arguments.as_ref() {
-                                    let index = tc.index.unwrap_or(0);
-                                    let new_fragment = tool_call_acc.process(index, arguments);
-                                    if new_fragment != *arguments {
-                                        func.arguments =
-                                            Some(std::borrow::Cow::Owned(new_fragment));
-                                        modified = true;
-                                    }
-                                }
+            if let Some(tool_calls) = &mut delta.tool_calls {
+                for tc in tool_calls {
+                    if let Some(func) = &mut tc.function
+                        && let Some(arguments) = func.arguments.as_ref()
+                    {
+                        let index = tc.index.unwrap_or(0);
+                        let new_fragment = tool_call_acc.process(index, arguments);
+                        if new_fragment != *arguments {
+                            func.arguments = Some(std::borrow::Cow::Owned(new_fragment));
+                            modified = true;
                         }
                     }
                 }
+            }
+        }
 
         if modified {
             return serde_json::to_string(&fc).ok().or(normalized);

@@ -64,21 +64,22 @@ where
             let res = inner.call(state).await?;
 
             if let Some(err) = &res.error
-                && matches!(err, CoreError::NoHealthyTargets(_)) {
-                    if let Some(c) = combo {
-                        let _ = pipeline.repo().record_no_healthy_targets_row(
-                            &request_id,
-                            &trace_id,
-                            &c,
-                            started.elapsed().as_millis() as u64,
-                            &chrono::Utc::now().naive_utc().to_string(),
-                            "No healthy targets available",
-                        );
-                    } else {
-                        // If combo wasn't populated yet, we can't record it identically,
-                        // but NoHealthyTargets only occurs after combo is resolved.
-                    }
+                && matches!(err, CoreError::NoHealthyTargets(_))
+            {
+                if let Some(c) = combo {
+                    let _ = pipeline.repo().record_no_healthy_targets_row(
+                        &request_id,
+                        &trace_id,
+                        &c,
+                        started.elapsed().as_millis() as u64,
+                        &chrono::Utc::now().naive_utc().to_string(),
+                        "No healthy targets available",
+                    );
+                } else {
+                    // If combo wasn't populated yet, we can't record it identically,
+                    // but NoHealthyTargets only occurs after combo is resolved.
                 }
+            }
             Ok(res)
         })
     }
@@ -408,11 +409,12 @@ impl tower::Service<PipelineState> for RoutingService {
                             target_id,
                         };
                         if let Err(e) = pipeline.config.background_tx.try_send(job)
-                            && matches!(e, tokio::sync::mpsc::error::TrySendError::Closed(_)) {
-                                let job = e.into_inner();
-                                let conn = pipeline.conn.clone();
-                                crate::pipeline::worker::process_job(&conn, job);
-                            }
+                            && matches!(e, tokio::sync::mpsc::error::TrySendError::Closed(_))
+                        {
+                            let job = e.into_inner();
+                            let conn = pipeline.conn.clone();
+                            crate::pipeline::worker::process_job(&conn, job);
+                        }
                     }
                     return Ok(race_result);
                 }
@@ -614,11 +616,12 @@ impl tower::Service<PipelineState> for RoutingService {
                             target_id,
                         };
                         if let Err(e) = pipeline.config.background_tx.try_send(job)
-                            && matches!(e, tokio::sync::mpsc::error::TrySendError::Closed(_)) {
-                                let job = e.into_inner();
-                                let conn = pipeline.conn.clone();
-                                crate::pipeline::worker::process_job(&conn, job);
-                            }
+                            && matches!(e, tokio::sync::mpsc::error::TrySendError::Closed(_))
+                        {
+                            let job = e.into_inner();
+                            let conn = pipeline.conn.clone();
+                            crate::pipeline::worker::process_job(&conn, job);
+                        }
                     }
                     tracing::info!(
                         combo_id = combo.id.0,
