@@ -1653,7 +1653,7 @@ impl UpstreamDispatcher {
             combo,
             target,
             model,
-            target_format: target_format.clone(),
+            target_format,
             sink,
             trace_id: &trace_id,
             chunk_id: &chunk_id,

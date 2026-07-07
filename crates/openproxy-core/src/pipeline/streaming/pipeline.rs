@@ -49,9 +49,7 @@ pub(crate) async fn run_pipeline(
             }
         };
 
-        if let Err(e) = sse_parser.push(&bytes) {
-            return Err(e);
-        }
+        sse_parser.push(&bytes)?;
 
         while let Some(line_bytes) = sse_parser.next_line() {
             let mut event = ChunkEvent::Data(line_bytes.into());

@@ -227,11 +227,11 @@ impl Pipeline {
 
         let mut resolved_target_clone = resolved_target.clone();
 
-        if let Some(account_id) = target.account_id {
-            if let Some(custom_meta) = &mut resolved_target_clone.custom_meta {
-                if let Some(refresh_token) = &custom_meta.maybe_refresh {
-                    if let Some(registry) = self.config.oauth_provider_registry.as_ref() {
-                        if let Some(provider) = registry.get(target.provider_id.as_str()) {
+        if let Some(account_id) = target.account_id
+            && let Some(custom_meta) = &mut resolved_target_clone.custom_meta
+                && let Some(refresh_token) = &custom_meta.maybe_refresh
+                    && let Some(registry) = self.config.oauth_provider_registry.as_ref()
+                        && let Some(provider) = registry.get(target.provider_id.as_str()) {
                             let provider_id_str = target.provider_id.as_str();
                             tracing::info!(
                                 account = account_id.0,
@@ -276,10 +276,6 @@ impl Pipeline {
                                 }
                             }
                         }
-                    }
-                }
-            }
-        }
 
         if let Some(result) = adapter
             .execute_custom(
@@ -333,8 +329,8 @@ impl Pipeline {
                     }
                 }
                 Err(e) => {
-                    if let CoreError::UpstreamError { status: 401, .. } = &e {
-                        if let Some(account_id) = target.account_id {
+                    if let CoreError::UpstreamError { status: 401, .. } = &e
+                        && let Some(account_id) = target.account_id {
                             let provider_id_str = target.provider_id.to_string();
                             let dedup_key = format!(
                                 "{}:{}",
@@ -360,7 +356,6 @@ impl Pipeline {
                                 Some(&provider_id_str),
                             );
                         }
-                    }
                     self.record_and_fail_with_trace_id(
                         req,
                         combo,

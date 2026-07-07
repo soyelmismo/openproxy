@@ -115,9 +115,9 @@ pub(crate) fn apply_reasoning_normalizations(
     if let Ok(mut fc) = serde_json::from_str::<FastChunk>(p) {
         let mut modified = false;
 
-        if let Some(choices) = &mut fc.choices {
-            if let Some(choice) = choices.first_mut() {
-                if let Some(delta) = &mut choice.delta {
+        if let Some(choices) = &mut fc.choices
+            && let Some(choice) = choices.first_mut()
+                && let Some(delta) = &mut choice.delta {
                     if let Some(content) = delta.content.as_ref() {
                         let (clean_content, extracted_reasoning) = think_extractor.process(content);
                         if clean_content != *content {
@@ -136,8 +136,8 @@ pub(crate) fn apply_reasoning_normalizations(
 
                     if let Some(tool_calls) = &mut delta.tool_calls {
                         for tc in tool_calls {
-                            if let Some(func) = &mut tc.function {
-                                if let Some(arguments) = func.arguments.as_ref() {
+                            if let Some(func) = &mut tc.function
+                                && let Some(arguments) = func.arguments.as_ref() {
                                     let index = tc.index.unwrap_or(0);
                                     let new_fragment = tool_call_acc.process(index, arguments);
                                     if new_fragment != *arguments {
@@ -146,12 +146,9 @@ pub(crate) fn apply_reasoning_normalizations(
                                         modified = true;
                                     }
                                 }
-                            }
                         }
                     }
                 }
-            }
-        }
 
         if modified {
             return serde_json::to_string(&fc).ok().or(normalized);
@@ -884,7 +881,7 @@ impl<'a> ChunkProcessor<'a> {
                 ));
             }
         }
-        return Ok(crate::pipeline::streaming::ChunkEvent::Skip);
+        Ok(crate::pipeline::streaming::ChunkEvent::Skip)
     }
 
     /// Gemini / Anthropic SSE handler — translates to OpenAI shape, then forwards.

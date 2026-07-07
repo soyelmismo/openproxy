@@ -385,8 +385,7 @@ pub fn get_by_row_ids(conn: &Connection, row_ids: &[ModelRowId]) -> Result<Vec<M
     if row_ids.is_empty() {
         return Ok(Vec::new());
     }
-    let placeholders = std::iter::repeat("?")
-        .take(row_ids.len())
+    let placeholders = std::iter::repeat_n("?", row_ids.len())
         .collect::<Vec<_>>()
         .join(",");
     let query = format!(

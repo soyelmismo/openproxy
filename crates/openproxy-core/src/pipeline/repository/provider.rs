@@ -11,8 +11,7 @@ pub fn get_providers_auth_type(
         return Ok(providers_map);
     }
 
-    let placeholders = std::iter::repeat("?")
-        .take(provider_ids.len())
+    let placeholders = std::iter::repeat_n("?", provider_ids.len())
         .collect::<Vec<_>>()
         .join(",");
 
