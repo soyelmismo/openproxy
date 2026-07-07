@@ -342,16 +342,6 @@ pub fn account_for_quota_refresh(conn: &Connection, id: AccountId) -> Result<acc
 /// Return the set of provider ids that have a quota fetcher
 /// implemented today. The HTTP handler uses this list to short-circuit
 /// a quota refresh with a friendly `supported: false` response when
-/// the caller asks about an unsupported provider.
-///
-/// Thin re-export of [`quota::quota_capable_providers`] so the HTTP
-/// layer doesn't have to import the `quota` module's internals just
-/// for the membership check. Adding a new provider here means
-/// extending both this list and the dispatch in [`fetch_account_quota`].
-pub fn quota_capable_providers() -> &'static [&'static str] {
-    quota::quota_capable_providers()
-}
-
 /// Fetch quota for a single account using the right provider-specific
 /// fetcher. Today MiniMax (and its CN sibling), OpenRouter, and
 /// Antigravity have fetchers; any other provider id returns an
@@ -1082,6 +1072,29 @@ mod tests {
         )
         .expect_err("invalid auth_type");
         assert!(matches!(err, CoreError::Validation(_)));
+    }
+
+    #[test]
+    fn test_quota_capability_anti_drift() {
+        let adapters = crate::adapters::builtin_adapters();
+        let providers_with_quota = vec!["minimax", "minimax-cn", "openrouter", "antigravity", "agy", "codex", "kiro"];
+        let providers_with_fetcher = vec!["minimax", "minimax-cn", "openrouter", "antigravity", "agy", "kiro"];
+        for adapter in adapters {
+            let id = adapter.id().as_str();
+            let metadata = adapter.metadata();
+            let has_quota = providers_with_quota.contains(&id);
+            let has_fetcher = providers_with_fetcher.contains(&id);
+            assert_eq!(
+                metadata.supports_quota, has_quota,
+                "provider {} supports_quota mismatch: expected {}",
+                id, has_quota
+            );
+            assert_eq!(
+                metadata.quota_refresh_supported, has_fetcher,
+                "provider {} quota_refresh_supported mismatch: expected {}",
+                id, has_fetcher
+            );
+        }
     }
 
     #[test]

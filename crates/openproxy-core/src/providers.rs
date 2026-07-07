@@ -138,6 +138,25 @@ pub struct Provider {
     pub proxy_rotation_errors: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProviderMetadata {
+    pub built_in: bool,
+    pub deletable: bool,
+    pub supports_quota: bool,
+    pub quota_refresh_supported: bool,
+}
+
+impl ProviderMetadata {
+    pub fn custom_default() -> Self {
+        Self {
+            built_in: false,
+            deletable: true,
+            supports_quota: false,
+            quota_refresh_supported: false,
+        }
+    }
+}
+
 fn default_proxy_rotation_errors() -> String {
     "429,connect_error,timeout".to_string()
 }

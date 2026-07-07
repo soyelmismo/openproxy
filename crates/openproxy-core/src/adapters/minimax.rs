@@ -38,6 +38,21 @@ impl ProviderAdapter for MiniMaxAdapter {
         &self.config
     }
 
+    fn metadata(&self) -> crate::providers::ProviderMetadata {
+        let mut meta = crate::providers::ProviderMetadata {
+            built_in: crate::providers::is_builtin(self.id().as_str()),
+            deletable: !crate::providers::is_builtin(self.id().as_str()),
+            supports_quota: true,
+            quota_refresh_supported: false,
+        };
+        // Some legacy providers like 'minimax' might not be in seed but are built-ins
+        if self.id().as_str() == "minimax" || self.id().as_str() == "minimax-cn" {
+            meta.supports_quota = true;
+            meta.quota_refresh_supported = true;
+        }
+        meta
+    }
+
     fn build_chat_url(&self, _target_format: TargetFormat, _model: &ModelId) -> String {
         // MiniMax exposes the Anthropic Messages API at /anthropic/v1/messages.
         // The `?beta=true` query parameter is required to enable the relevant

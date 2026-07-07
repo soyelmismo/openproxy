@@ -42,6 +42,15 @@ impl ProviderAdapter for OpenRouterAdapter {
         &self.config
     }
 
+    fn metadata(&self) -> crate::providers::ProviderMetadata {
+        crate::providers::ProviderMetadata {
+            built_in: crate::providers::is_builtin(self.id().as_str()),
+            deletable: !crate::providers::is_builtin(self.id().as_str()),
+            supports_quota: true,
+            quota_refresh_supported: true,
+        }
+    }
+
     fn build_chat_url(&self, _target_format: TargetFormat, _model: &ModelId) -> String {
         // OpenRouter is OpenAI-only; the target_format arg is ignored.
         format!("{}/chat/completions", self.config.base_url)

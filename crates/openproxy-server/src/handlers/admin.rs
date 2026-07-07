@@ -709,11 +709,13 @@ pub struct ProviderWithOAuth {
     #[serde(flatten)]
     pub provider: providers::Provider,
     pub oauth_flows: Option<Vec<String>>,
+    pub metadata: openproxy_core::providers::ProviderMetadata,
 }
 
 fn enrich_provider_with_oauth(
     p: providers::Provider,
     registry: &openproxy_core::oauth::OAuthProviderRegistry,
+    adapters: &[std::sync::Arc<dyn openproxy_core::adapters::ProviderAdapter>],
 ) -> ProviderWithOAuth {
     let flows = if p.auth_type == openproxy_core::providers::AuthType::OAuth {
         if let Some(oauth_impl) = registry.get(p.id.as_str()) {
@@ -736,9 +738,26 @@ fn enrich_provider_with_oauth(
     } else {
         None
     };
+
+    let metadata = adapters
+        .iter()
+        .find(|a| a.id() == &p.id)
+        .map(|a| a.metadata())
+        .unwrap_or_else(|| {
+            // Fallback for custom providers that aren't loaded in the adapter registry yet
+            let built_in = openproxy_core::providers::is_builtin(p.id.as_str());
+            openproxy_core::providers::ProviderMetadata {
+                built_in,
+                deletable: !built_in,
+                supports_quota: false,
+                quota_refresh_supported: false,
+            }
+        });
+
     ProviderWithOAuth {
         provider: p,
         oauth_flows: flows,
+        metadata,
     }
 }
 
@@ -750,9 +769,10 @@ pub async fn list_providers(State(s): State<AppState>) -> ApiResult<Json<Vec<Pro
         let r = s.db_pool().reader();
         let list = admin::list_providers(&r)?;
         let registry = s.oauth_provider_registry();
+        let adapters = s.adapters();
         let enriched = list
             .into_iter()
-            .map(|p| enrich_provider_with_oauth(p, registry.as_ref()))
+            .map(|p| enrich_provider_with_oauth(p, registry.as_ref(), &adapters))
             .collect();
         Ok(Json(enriched))
     }
@@ -813,7 +833,8 @@ pub async fn get_provider(
         let provider =
             providers::get(&r, &id)?.ok_or_else(|| CoreError::ProviderNotFound(id.to_string()))?;
         let registry = s.oauth_provider_registry();
-        let enriched = enrich_provider_with_oauth(provider, registry.as_ref());
+        let adapters = s.adapters();
+        let enriched = enrich_provider_with_oauth(provider, registry.as_ref(), &adapters);
         Ok(Json(enriched))
     }
     .await;
@@ -3959,7 +3980,14 @@ pub async fn refresh_account_quota(
             let w = s_clone.db_pool().writer();
             tracing::debug!(account_id = account_id.0, "refresh_account_quota: writer acquired");
             let acc = admin::account_for_quota_refresh(&w, account_id)?;
-            if !admin::quota_capable_providers().contains(&acc.provider_id.as_str()) {
+            let adapters = s_clone.adapters();
+            let supports_quota = adapters
+                .iter()
+                .find(|a| a.id() == &acc.provider_id)
+                .map(|a| a.metadata().quota_refresh_supported)
+                .unwrap_or(false);
+
+            if !supports_quota {
                 return Ok(Json(serde_json::json!({
                     "account_id": account_id.0,
                     "supported": false,

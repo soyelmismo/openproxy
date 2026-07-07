@@ -347,6 +347,21 @@ impl ProviderAdapter for KiroAdapter {
         &self.config
     }
 
+    fn metadata(&self) -> crate::providers::ProviderMetadata {
+        let mut meta = crate::providers::ProviderMetadata {
+            built_in: crate::providers::is_builtin(self.id().as_str()),
+            deletable: !crate::providers::is_builtin(self.id().as_str()),
+            supports_quota: true,
+            quota_refresh_supported: true,
+        };
+        // Ensure legacy alias 'kiro' supports quota
+        if self.id().as_str() == "kiro" {
+            meta.supports_quota = true;
+            meta.quota_refresh_supported = true;
+        }
+        meta
+    }
+
     fn build_chat_url(&self, _target_format: TargetFormat, _model: &ModelId) -> String {
         format!("{}/generateAssistantResponse", self.config.base_url)
     }

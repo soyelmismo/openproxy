@@ -28,11 +28,7 @@ import { showCreateAccount, showUpdateAccountKey } from "../handlers/account-han
 import { showCustomModelForm } from "../components/model-custom-form.js";
 import { OAuthLogin } from "../handlers/oauth-handlers.js";
 import { renderQuotaCell } from "./quota-cell.js";
-import {
-  BUILTIN_PROVIDER_IDS,
-  providerHasQuota,
-  statusPillClass,
-} from "../lib/constants.js";
+import { statusPillClass } from "../lib/constants.js";
 import {
   applySort,
   SORTABLE_COLUMNS,
@@ -322,7 +318,10 @@ async function onRefreshAccountQuota(accountId: number, e: Event | null): Promis
 
 async function onRefreshAllQuotas(providerId: string): Promise<void> {
   const accounts = (state.accounts || []).filter((a) => a.provider_id === providerId);
-  const supported = accounts.filter((a) => providerHasQuota(a.provider_id));
+  const supported = accounts.filter((a) => {
+    const p = state.providers.find((p) => p.id === a.provider_id);
+    return p?.metadata?.supports_quota === true;
+  });
   if (supported.length === 0) {
     showToast(`No accounts with quota support for ${providerId}.`, "info");
     return;
@@ -762,7 +761,7 @@ function renderProviderGrid(): TemplateResult {
 // ---- Templates: detail ----
 
 function renderDetailHeader(provider: Provider): TemplateResult {
-  const isBuiltin = BUILTIN_PROVIDER_IDS.includes(provider.id);
+  const isDeletable = provider.metadata?.deletable ?? true;
   return html`
     <div class="provider-detail-header${provider.active ? "" : " inactive"}">
       <div class="provider-icon icon-large" data-format=${provider.format}>${providerGlyph(provider.id)}</div>
@@ -784,9 +783,9 @@ function renderDetailHeader(provider: Provider): TemplateResult {
         <button class="primary" @click=${() => onToggleProviderActive(provider.id, !provider.active)}>
           ${provider.active ? "Deactivate" : "Activate"}
         </button>
-        ${isBuiltin
-          ? html`<button class="locked" disabled title="Built-in providers cannot be deleted. Deactivate them instead.">🔒 Delete (built-in)</button>`
-          : html`<button class="danger small" @click=${() => onConfirmDeleteProvider(provider.id)}>Delete</button>`}
+          ${!isDeletable
+            ? html`<button class="locked" disabled title="Built-in providers cannot be deleted. Deactivate them instead.">🔒 Delete (built-in)</button>`
+            : html`<button class="danger small" @click=${() => onConfirmDeleteProvider(provider.id)}>Delete</button>`}
       </div>
     </div>
   `;
@@ -825,7 +824,7 @@ function renderOAuthSection(provider: Provider): TemplateResult {
 }
 
 function renderConnectionsSection(provider: Provider, accounts: Account[]): TemplateResult {
-  const hasQuota = providerHasQuota(provider.id);
+  const hasQuota = provider.metadata?.supports_quota ?? false;
   const body: TemplateResult = accounts.length === 0
     ? html`<table><tbody><tr><td colspan="6" class="empty-row">No accounts. Add an API key to start using this provider.</td></tr></tbody></table>`
     : html`<table>

@@ -220,6 +220,21 @@ impl ProviderAdapter for AntigravityAdapter {
         &self.config
     }
 
+    fn metadata(&self) -> crate::providers::ProviderMetadata {
+        let mut meta = crate::providers::ProviderMetadata {
+            built_in: crate::providers::is_builtin(self.id().as_str()),
+            deletable: !crate::providers::is_builtin(self.id().as_str()),
+            supports_quota: true,
+            quota_refresh_supported: true,
+        };
+        // Ensure aliases like 'agy' support quota
+        if self.id().as_str() == "antigravity" || self.id().as_str() == "agy" {
+            meta.supports_quota = true;
+            meta.quota_refresh_supported = true;
+        }
+        meta
+    }
+
     fn build_chat_url(&self, _target_format: TargetFormat, _model: &ModelId) -> String {
         // Antigravity uses the Cloud Code endpoint; model goes in the body.
         format!("{}/v1internal:generateContent", self.config.base_url)

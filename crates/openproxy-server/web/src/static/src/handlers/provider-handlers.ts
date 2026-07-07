@@ -16,7 +16,6 @@ import { state } from "../state/index.js";
 import { api } from "../state/api.js";
 import { html, render, type TemplateResult } from "lit-html";
 import { extractApiErrorMessage } from "../lib/escape.js";
-import { QUOTA_CAPABLE_PROVIDERS } from "../lib/constants.js";
 import { syncModelRowActive, updateFilterTabCounts } from "../components/model-table.js";
 import { requestUpdate } from "../state/reactive.js";
 import { showToast } from "../components/toast.js";
@@ -454,9 +453,12 @@ export async function refreshAccountQuota(accountId: number, e: Event | null): P
 // actually nothing to refresh.
 export async function refreshAllQuotas(providerId: string): Promise<void> {
   const accounts = (state.accounts || []).filter((a) => a.provider_id === providerId);
-  const supported = accounts.filter((a) => QUOTA_CAPABLE_PROVIDERS.includes(a.provider_id));
+  const supported = accounts.filter((a) => {
+    const p = state.providers.find((p) => p.id === a.provider_id);
+    return p?.metadata?.supports_quota === true;
+  });
   if (supported.length === 0) {
-    showToast("No accounts with quota support (only " + QUOTA_CAPABLE_PROVIDERS.join(", ") + ").", "info");
+    showToast("No accounts with quota support for " + providerId + ".", "info");
     return;
   }
   if (!confirm(`Refresh quota for ${supported.length} accounts?`)) return;

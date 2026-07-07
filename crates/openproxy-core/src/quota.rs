@@ -967,34 +967,8 @@ fn is_kiro_overage_enabled(data: &serde_json::Value) -> bool {
 }
 
 // =====================================================================
-// Provider capability registry
-// =====================================================================
-
-/// The list of provider ids that have a quota endpoint we know how to
-/// call today. The HTTP handler uses this list to short-circuit a quota
-/// refresh with a `{"supported": false}` body when the caller asks
-/// about an unsupported provider.
-///
-/// This is a static list (not a DB table) because the set is extremely
-/// stable — it only changes when a new fetcher lands, and that always
-/// coincides with a code change. See `fetch_account_quota` in the
-/// `admin` module for the dispatch that pairs with this list.
-pub fn quota_capable_providers() -> &'static [&'static str] {
-    &[
-        "minimax",
-        "minimax-cn",
-        "openrouter",
-        "antigravity",
-        "agy",
-        "kiro",
-    ]
-}
-
-/// Convenience wrapper used by the HTTP handler and the front-end
-/// mirror: is `provider_id` in the supported set?
-pub fn supports_quota(provider_id: &str) -> bool {
-    quota_capable_providers().contains(&provider_id)
-}
+// Provider capabilities have moved to `ProviderAdapter::metadata()` and
+// `ProviderMetadata`. The `quota_capable_providers` static list was removed.
 
 // =====================================================================
 // OpenRouter
@@ -1526,26 +1500,6 @@ mod tests {
         assert_eq!(q.weekly_used, Some(0));
     }
 
-    // ---- capability registry ----
-
-    #[test]
-    fn quota_capable_providers_includes_openrouter() {
-        let list = quota_capable_providers();
-        assert!(list.contains(&"minimax"));
-        assert!(list.contains(&"minimax-cn"));
-        assert!(list.contains(&"openrouter"));
-    }
-
-    #[test]
-    fn supports_quota_matches_registry() {
-        assert!(supports_quota("minimax"));
-        assert!(supports_quota("minimax-cn"));
-        assert!(supports_quota("openrouter"));
-        assert!(!supports_quota("opencode-zen"));
-        assert!(!supports_quota("custom-provider"));
-        assert!(!supports_quota(""));
-    }
-
     // ---- OpenRouter parser ----
 
     #[test]
@@ -1920,18 +1874,7 @@ mod tests {
         assert!(matches!(err, CoreError::Internal(_)));
     }
 
-    #[test]
-    fn quota_capable_providers_includes_antigravity() {
-        let list = quota_capable_providers();
-        assert!(list.contains(&"antigravity"));
-        assert!(list.contains(&"agy"));
-    }
 
-    #[test]
-    fn supports_quota_matches_antigravity() {
-        assert!(supports_quota("antigravity"));
-        assert!(supports_quota("agy"));
-    }
 
     #[test]
     fn test_is_kiro_overage_enabled() {
@@ -1962,9 +1905,5 @@ mod tests {
         assert!(!is_kiro_overage_enabled(&body_disabled));
     }
 
-    #[test]
-    fn quota_capable_providers_includes_kiro() {
-        assert!(quota_capable_providers().contains(&"kiro"));
-        assert!(supports_quota("kiro"));
-    }
+
 }
