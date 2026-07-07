@@ -83,5 +83,5 @@ export const BUILTIN_PROVIDER_IDS: readonly string[] = ["openrouter", "minimax",
 // but we mirror the list client-side so the confirm dialog and the
 // "not supported by this provider" hint only appear when there is
 // actually something to refresh.
-export const QUOTA_CAPABLE_PROVIDERS: readonly string[] = ["minimax", "minimax-cn", "openrouter", "antigravity", "agy", "kiro"];
+export const QUOTA_CAPABLE_PROVIDERS: readonly string[] = ["minimax", "minimax-cn", "openrouter", "antigravity", "agy", "kiro", "codex"];
 export const providerHasQuota = (providerId: string): boolean => QUOTA_CAPABLE_PROVIDERS.includes(providerId);
