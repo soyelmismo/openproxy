@@ -127,7 +127,7 @@ const BUILTINS: &[Builtin<'static>] = &[
         name: "Codex (ChatGPT)",
         base_url: "https://chatgpt.com/backend-api/codex",
         auth_type: "oauth",
-        format: "openai",
+        format: "responses",
         extra_headers_json: None,
         auto_activate_keyword: None,
     },
