@@ -18,6 +18,8 @@ use crate::error::{CoreError, Result};
 use crate::upstream::{
     CancellationToken, TimeoutProfile, UpstreamClient, UpstreamError, UpstreamRequest,
 };
+use dashmap::DashMap;
+use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
@@ -361,6 +363,92 @@ fn now_unix_secs_str() -> String {
 // Antigravity (Google Cloud Code)
 // =====================================================================
 
+static PLAN_CACHE: Lazy<DashMap<String, String>> = Lazy::new(DashMap::new);
+
+async fn fetch_antigravity_subscription_plan(
+    upstream: &Arc<UpstreamClient>,
+    access_token: &str,
+) -> Option<String> {
+    if let Some(plan) = PLAN_CACHE.get(access_token) {
+        return Some(plan.value().clone());
+    }
+
+    let endpoints = [
+        "https://daily-cloudcode-pa.sandbox.googleapis.com/v1internal:loadCodeAssist",
+        "https://cloudcode-pa.googleapis.com/v1internal:loadCodeAssist",
+    ];
+
+    let payload = bytes::Bytes::from_static(b"{\"metadata\": {\"ideType\": \"ANTIGRAVITY\"}}");
+
+    for endpoint in &endpoints {
+        let mut req = UpstreamRequest::post_json(*endpoint, payload.clone());
+        if let Ok(v) = http::HeaderValue::from_str(&format!("Bearer {access_token}")) {
+            req.headers.insert(http::header::AUTHORIZATION, v);
+        }
+        req.headers.insert(
+            http::header::CONTENT_TYPE,
+            http::HeaderValue::from_static("application/json"),
+        );
+        crate::antigravity_headers::inject_antigravity_headers(&mut req.headers, None);
+
+        let cancel = CancellationToken::new();
+        let response = upstream.call(req, TimeoutProfile::Quota, cancel).await;
+
+        if let Ok(resp) = response 
+            && resp.status.is_success() 
+        {
+            let body = match resp.collect().await {
+                    Ok(b) => b,
+                    Err(_) => continue,
+                };
+                if let Ok(json) = serde_json::from_slice::<serde_json::Value>(&body) {
+                    let paid_name = json.pointer("/paidTier/name").and_then(|v| v.as_str());
+                    let paid_id = json.pointer("/paidTier/id").and_then(|v| v.as_str());
+                    
+                    let mut tier = paid_name.or(paid_id);
+                    
+                    if tier.is_none() {
+                        let is_ineligible = json.pointer("/ineligibleTiers")
+                            .and_then(|v| v.as_array())
+                            .is_some_and(|a| !a.is_empty());
+                            
+                        if !is_ineligible {
+                            let current_name = json.pointer("/currentTier/name").and_then(|v| v.as_str());
+                            let current_id = json.pointer("/currentTier/id").and_then(|v| v.as_str());
+                            tier = current_name.or(current_id);
+                        } else if let Some(allowed) = json.pointer("/allowedTiers").and_then(|v| v.as_array()) {
+                            for t in allowed {
+                                if t.get("isDefault").and_then(|v| v.as_bool()).unwrap_or(false) {
+                                    let name = t.get("name").and_then(|v| v.as_str());
+                                    let id = t.get("id").and_then(|v| v.as_str());
+                                    tier = name.or(id);
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                    
+                    if let Some(t) = tier {
+                        let upper = t.to_uppercase();
+                        let plan_name = if upper.contains("ULTRA") { "Ultra".to_string() }
+                        else if upper.contains("PRO") || upper.contains("PREMIUM") || upper.contains("GOOGLE_ONE") || upper.contains("ONE_AI") || upper.contains("GOOGLE ONE") { "Pro".to_string() }
+                        else if upper.contains("ENTERPRISE") { "Enterprise".to_string() }
+                        else if upper.contains("BUSINESS") || upper.contains("STANDARD") { "Business".to_string() }
+                        else if upper.contains("PLUS") { "Plus".to_string() }
+                        else if upper.contains("LITE") || upper.contains("LIGHT") { "Lite".to_string() }
+                        else if upper.contains("FREE") || upper.contains("INDIVIDUAL") || upper.contains("LEGACY") { "Free".to_string() }
+                        else { t.to_string() };
+                        
+                        PLAN_CACHE.insert(access_token.to_string(), plan_name.clone());
+                        return Some(plan_name);
+                    }
+                }
+            }
+        }
+    
+    None
+}
+
 /// Fetch quota for Antigravity (Google Cloud Code) using an OAuth access
 /// token. Calls BOTH endpoints and merges the results:
 ///   - `fetchAvailableModels` → per-model quota (`model_details`)
@@ -375,37 +463,58 @@ pub async fn fetch_antigravity_quota(
     upstream: &Arc<UpstreamClient>,
     access_token: &str,
 ) -> Result<AccountQuota> {
-    let models_result = fetch_antigravity_models_quota(upstream, access_token).await;
-    let summary_result = fetch_antigravity_user_quota(upstream, access_token).await;
+    let (models_result, summary_result, plan_result) = tokio::join!(
+        fetch_antigravity_models_quota(upstream, access_token),
+        fetch_antigravity_user_quota(upstream, access_token),
+        fetch_antigravity_subscription_plan(upstream, access_token),
+    );
 
     match (models_result, summary_result) {
-        (Ok(mut models_quota), Ok(summary_quota)) => {
+        (Ok(mut models_quota), summary_res) => {
             // Merge: models_quota has per-model details; summary_quota
             // has weekly + 5h grouped quota. Overlay the summary's
             // weekly fields onto the models quota.
-            if summary_quota.weekly_used.is_some() {
-                models_quota.weekly_used = summary_quota.weekly_used;
-                models_quota.weekly_limit = summary_quota.weekly_limit;
-                models_quota.weekly_reset_at = summary_quota.weekly_reset_at;
-            }
-            // If models_quota has no session data, use the summary's
-            // 5h (session) data as a fallback.
-            if models_quota.session_used.is_none() && summary_quota.session_used.is_some() {
-                models_quota.session_used = summary_quota.session_used;
-                models_quota.session_limit = summary_quota.session_limit;
-                models_quota.session_reset_at = summary_quota.session_reset_at;
+            if let Ok(ref summary_quota) = summary_res {
+                if summary_quota.weekly_used.is_some() {
+                    models_quota.weekly_used = summary_quota.weekly_used;
+                    models_quota.weekly_limit = summary_quota.weekly_limit;
+                    models_quota.weekly_reset_at = summary_quota.weekly_reset_at.clone();
+                }
+                // If models_quota has no session data, use the summary's
+                // 5h (session) data as a fallback.
+                if models_quota.session_used.is_none() && summary_quota.session_used.is_some() {
+                    models_quota.session_used = summary_quota.session_used;
+                    models_quota.session_limit = summary_quota.session_limit;
+                    models_quota.session_reset_at = summary_quota.session_reset_at.clone();
+                }
             }
             
-            if let Some(summary_plan) = summary_quota.plan_name 
-                && summary_plan != "Antigravity" 
-            {
-                models_quota.plan_name = Some(summary_plan);
+            if let Some(plan) = plan_result {
+                models_quota.plan_name = Some(plan);
+            } else if models_quota.plan_name.is_none() || models_quota.plan_name.as_deref() == Some("Antigravity") {
+                if let Ok(ref summary_quota) = summary_res {
+                    if let Some(summary_plan) = &summary_quota.plan_name 
+                        && summary_plan != "Antigravity" 
+                    {
+                        models_quota.plan_name = Some(summary_plan.clone());
+                    } else {
+                        models_quota.plan_name = Some("Free".to_string());
+                    }
+                } else {
+                    models_quota.plan_name = Some("Free".to_string());
+                }
             }
             
             Ok(models_quota)
         }
-        (Ok(models_quota), Err(_)) => Ok(models_quota),
-        (Err(_), Ok(summary_quota)) => Ok(summary_quota),
+        (Err(_models_err), Ok(mut summary_quota)) => {
+            if let Some(plan) = plan_result {
+                summary_quota.plan_name = Some(plan);
+            } else if summary_quota.plan_name.is_none() || summary_quota.plan_name.as_deref() == Some("Antigravity") {
+                summary_quota.plan_name = Some("Free".to_string());
+            }
+            Ok(summary_quota)
+        },
         (Err(models_err), Err(_)) => Err(models_err),
     }
 }
