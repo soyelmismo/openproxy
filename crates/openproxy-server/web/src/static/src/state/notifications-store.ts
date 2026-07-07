@@ -329,7 +329,11 @@ function systemBody(p: Record<string, unknown>, message: string): string {
 export function formatRelativeAgo(iso: string, nowMs: number = Date.now()): string {
   let createdMs: number;
   try {
-    createdMs = Date.parse(iso);
+    let normalizedIso = iso;
+    if (normalizedIso.length === 19 && normalizedIso.charAt(10) === ' ') {
+      normalizedIso = normalizedIso.replace(' ', 'T') + 'Z';
+    }
+    createdMs = Date.parse(normalizedIso);
     if (!Number.isFinite(createdMs)) return "";
   } catch (_e: unknown) {
     return "";
