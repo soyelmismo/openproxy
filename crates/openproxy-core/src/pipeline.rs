@@ -21,21 +21,21 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 
-pub mod repository;
-pub mod service;
 pub mod context;
 pub mod credentials;
+mod execution;
 pub mod formatting;
-pub mod stage;
 pub mod quotas;
 pub mod racing;
+pub mod repository;
+pub mod service;
+pub mod stage;
 pub mod stages;
-pub mod worker;
+pub mod streaming;
+pub mod streaming_state;
 pub mod upstream_dispatcher;
 pub mod usage_tracker;
-pub mod streaming_state;
-mod execution;
-pub mod streaming;
+pub mod worker;
 
 #[cfg(test)]
 pub mod test_utils;
@@ -190,7 +190,8 @@ impl Pipeline {
     }
 
     pub fn is_recording(&self) -> bool {
-        self.record_bodies_and_headers.load(std::sync::atomic::Ordering::Relaxed)
+        self.record_bodies_and_headers
+            .load(std::sync::atomic::Ordering::Relaxed)
     }
 
     pub fn prune_circuit_breaker_idle(&self, max_idle: std::time::Duration) -> usize {

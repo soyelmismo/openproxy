@@ -99,12 +99,24 @@ mod tests {
         assert_eq!(deadlines.dial_deadline, start + Duration::from_millis(200));
         assert_eq!(deadlines.tls_deadline, start + Duration::from_millis(300));
         assert_eq!(deadlines.write_deadline, start + Duration::from_millis(400));
-        assert_eq!(deadlines.headers_deadline, start + Duration::from_millis(500));
-        assert_eq!(deadlines.body_chunk_deadline, start + Duration::from_millis(600));
+        assert_eq!(
+            deadlines.headers_deadline,
+            start + Duration::from_millis(500)
+        );
+        assert_eq!(
+            deadlines.body_chunk_deadline,
+            start + Duration::from_millis(600)
+        );
         assert_eq!(deadlines.total_deadline, start + Duration::from_millis(700));
 
-        assert_eq!(deadlines.deadline_for(UpstreamPhase::Dns), deadlines.dns_deadline);
-        assert_eq!(deadlines.deadline_for(UpstreamPhase::Total), deadlines.total_deadline);
+        assert_eq!(
+            deadlines.deadline_for(UpstreamPhase::Dns),
+            deadlines.dns_deadline
+        );
+        assert_eq!(
+            deadlines.deadline_for(UpstreamPhase::Total),
+            deadlines.total_deadline
+        );
     }
 }
 

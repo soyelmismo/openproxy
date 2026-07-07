@@ -1,7 +1,7 @@
-use crate::pipeline::test_utils::*;
-use crate::pipeline::service::*;
-use crate::pipeline::*;
 use crate::combos::{self, Strategy};
+use crate::pipeline::service::*;
+use crate::pipeline::test_utils::*;
+use crate::pipeline::*;
 use crate::secrets::MasterKey;
 use std::sync::Arc;
 use tower::Service;
@@ -12,7 +12,8 @@ async fn test_resolve_service_resolves_combo() {
     let mk = Arc::new(MasterKey::generate());
     let combo_id = {
         let writer = pool.writer();
-        let combo_id = combos::create_combo(&writer, "c", Strategy::Priority, 1).expect("create combo");
+        let combo_id =
+            combos::create_combo(&writer, "c", Strategy::Priority, 1).expect("create combo");
         seed_target_with_account(&writer, combo_id, "p", "m", Some("sk-test"), &mk, 1);
         combo_id
     };
@@ -28,7 +29,10 @@ async fn test_resolve_service_resolves_combo() {
         type Error = std::convert::Infallible;
         type Future = std::future::Ready<std::result::Result<Self::Response, Self::Error>>;
 
-        fn poll_ready(&mut self, _cx: &mut std::task::Context<'_>) -> std::task::Poll<std::result::Result<(), Self::Error>> {
+        fn poll_ready(
+            &mut self,
+            _cx: &mut std::task::Context<'_>,
+        ) -> std::task::Poll<std::result::Result<(), Self::Error>> {
             std::task::Poll::Ready(Ok(()))
         }
 

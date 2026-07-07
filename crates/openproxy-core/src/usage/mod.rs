@@ -23,12 +23,12 @@ pub use recording::*;
 
 #[cfg(test)]
 mod tests {
-    use crate::usage::*;
     use crate::ids::*;
-    
+    use crate::usage::*;
+
     use crate::db::migrations;
-    
-    use rusqlite::{params, Connection};
+
+    use rusqlite::{Connection, params};
     use std::path::PathBuf;
     use std::time::{SystemTime, UNIX_EPOCH};
 

@@ -3,8 +3,7 @@
 
 use crate::error::{CoreError, Result};
 use crate::ids::{
-    AccountId, ApiKeyId, ComboId, ComboTargetId, ModelRowId, ProviderId, RequestId,
-    UsageId,
+    AccountId, ApiKeyId, ComboId, ComboTargetId, ModelRowId, ProviderId, RequestId, UsageId,
 };
 use crate::pricing;
 use once_cell::sync::Lazy;

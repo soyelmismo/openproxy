@@ -1,7 +1,7 @@
 use super::*;
 use crate::error::*;
 use once_cell::sync::OnceCell;
-use rusqlite::{params, Connection};
+use rusqlite::{Connection, params};
 use serde::{Deserialize, Serialize};
 use tokio::sync::broadcast;
 // ---------------------------------------------------------------------------
@@ -325,4 +325,3 @@ pub fn prune_expired_usage_rows(conn: &Connection, ttl_secs: i64) -> Result<usiz
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
-

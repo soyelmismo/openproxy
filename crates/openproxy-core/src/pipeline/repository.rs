@@ -1,10 +1,10 @@
 use crate::combos::{Combo, ComboTarget};
+use crate::cost::UsageInput;
 use crate::error::{CoreError, Result};
 use crate::ids::{AccountId, ComboId, ModelRowId, UsageId};
 use crate::models::Model;
 use crate::secrets::MasterKey;
-use crate::cost::UsageInput;
-use rusqlite::{params, Connection};
+use rusqlite::{Connection, params};
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -32,7 +32,8 @@ pub trait PipelineRepository: Send + Sync {
     fn auto_populate_empty_combo(&self, combo_id: ComboId) -> Result<usize>;
     fn get_account(&self, account_id: AccountId) -> Result<Option<crate::accounts::Account>>;
     fn decrypt_account_key(&self, account_id: AccountId, master_key: &MasterKey) -> Result<String>;
-    fn decrypt_access_token(&self, account_id: AccountId, master_key: &MasterKey) -> Result<String>;
+    fn decrypt_access_token(&self, account_id: AccountId, master_key: &MasterKey)
+    -> Result<String>;
     #[allow(clippy::too_many_arguments)]
     fn store_oauth_tokens(
         &self,
@@ -74,15 +75,24 @@ pub trait PipelineRepository: Send + Sync {
         max_secs: u64,
         factor: u32,
     ) -> Result<()>;
-    
+
     // Batch Loading
-    fn get_models_by_row_ids(&self, model_row_ids: &[crate::ids::ModelRowId]) -> Result<HashMap<i64, Model>>;
-    fn get_accounts_meta(&self, account_ids: &[crate::ids::AccountId]) -> Result<(
+    fn get_models_by_row_ids(
+        &self,
+        model_row_ids: &[crate::ids::ModelRowId],
+    ) -> Result<HashMap<i64, Model>>;
+    fn get_accounts_meta(
+        &self,
+        account_ids: &[crate::ids::AccountId],
+    ) -> Result<(
         HashMap<i64, account::RawAccount>,
         HashMap<i64, account::KiroMeta>,
         HashMap<i64, String>,
     )>;
-    fn get_providers_auth_type(&self, provider_ids: &[crate::ids::ProviderId]) -> Result<HashMap<String, String>>;
+    fn get_providers_auth_type(
+        &self,
+        provider_ids: &[crate::ids::ProviderId],
+    ) -> Result<HashMap<String, String>>;
 }
 
 #[derive(Clone)]
@@ -122,7 +132,11 @@ impl PipelineRepository for SqlitePipelineRepository {
         crate::accounts::decrypt_api_key(&conn, account_id, master_key)
     }
 
-    fn decrypt_access_token(&self, account_id: AccountId, master_key: &MasterKey) -> Result<String> {
+    fn decrypt_access_token(
+        &self,
+        account_id: AccountId,
+        master_key: &MasterKey,
+    ) -> Result<String> {
         let conn = self.conn.lock();
         crate::accounts::decrypt_access_token(&conn, account_id, master_key)
     }
@@ -161,13 +175,8 @@ impl PipelineRepository for SqlitePipelineRepository {
         provider_id: Option<&str>,
     ) -> Result<()> {
         let conn = self.conn.lock();
-        crate::notifications::insert_and_broadcast(
-            &conn,
-            kind,
-            payload,
-            dedup_key,
-            provider_id,
-        ).map_err(map_anyhow_error)?;
+        crate::notifications::insert_and_broadcast(&conn, kind, payload, dedup_key, provider_id)
+            .map_err(map_anyhow_error)?;
         Ok(())
     }
 
@@ -185,7 +194,10 @@ impl PipelineRepository for SqlitePipelineRepository {
     }
 
     fn record_usage_row(&self, input: &UsageInput) -> Result<Option<UsageId>> {
-        let conn = match self.conn.try_lock_for(crate::db::conn::HOT_PATH_LOCK_TIMEOUT) {
+        let conn = match self
+            .conn
+            .try_lock_for(crate::db::conn::HOT_PATH_LOCK_TIMEOUT)
+        {
             Some(g) => g,
             None => {
                 tracing::warn!("writer lock unavailable within 100ms; dropping usage row");
@@ -197,14 +209,21 @@ impl PipelineRepository for SqlitePipelineRepository {
     }
 
     fn mark_client_response(&self, row_id: UsageId) -> Result<()> {
-        let conn = match self.conn.try_lock_for(crate::db::conn::HOT_PATH_LOCK_TIMEOUT) {
+        let conn = match self
+            .conn
+            .try_lock_for(crate::db::conn::HOT_PATH_LOCK_TIMEOUT)
+        {
             Some(g) => g,
             None => {
                 tracing::error!("failed to acquire lock to update usage row (lock timed out)");
                 return Ok(());
             }
         };
-        conn.execute("UPDATE usage SET was_winner = 1 WHERE id = ?", params![row_id.0]).map_err(map_db_error)?;
+        conn.execute(
+            "UPDATE usage SET was_winner = 1 WHERE id = ?",
+            params![row_id.0],
+        )
+        .map_err(map_db_error)?;
         Ok(())
     }
 
@@ -217,7 +236,10 @@ impl PipelineRepository for SqlitePipelineRepository {
         created_str: &str,
         error_msg: &str,
     ) -> Result<()> {
-        let conn = match self.conn.try_lock_for(crate::db::conn::HOT_PATH_LOCK_TIMEOUT) {
+        let conn = match self
+            .conn
+            .try_lock_for(crate::db::conn::HOT_PATH_LOCK_TIMEOUT)
+        {
             Some(c) => c,
             None => {
                 tracing::error!("failed to acquire lock to write usage row (lock timed out)");
@@ -246,7 +268,8 @@ impl PipelineRepository for SqlitePipelineRepository {
                 created_str,
                 error_msg
             ],
-        ).map_err(map_db_error)?;
+        )
+        .map_err(map_db_error)?;
         Ok(())
     }
 
@@ -266,23 +289,23 @@ impl PipelineRepository for SqlitePipelineRepository {
     ) -> Result<()> {
         let conn = self.conn.lock();
         crate::cooldown::record_failure_with_mode(
-            &conn,
-            target_id,
-            reason,
-            mode,
-            base_secs,
-            max_secs,
-            factor,
+            &conn, target_id, reason, mode, base_secs, max_secs, factor,
         )?;
         Ok(())
     }
-    
-    fn get_models_by_row_ids(&self, model_row_ids: &[crate::ids::ModelRowId]) -> Result<HashMap<i64, Model>> {
+
+    fn get_models_by_row_ids(
+        &self,
+        model_row_ids: &[crate::ids::ModelRowId],
+    ) -> Result<HashMap<i64, Model>> {
         let conn = self.conn.lock();
         model::get_models_by_row_ids(&conn, model_row_ids)
     }
 
-    fn get_accounts_meta(&self, account_ids: &[crate::ids::AccountId]) -> Result<(
+    fn get_accounts_meta(
+        &self,
+        account_ids: &[crate::ids::AccountId],
+    ) -> Result<(
         HashMap<i64, account::RawAccount>,
         HashMap<i64, account::KiroMeta>,
         HashMap<i64, String>,
@@ -291,7 +314,10 @@ impl PipelineRepository for SqlitePipelineRepository {
         account::get_accounts_meta(&conn, account_ids)
     }
 
-    fn get_providers_auth_type(&self, provider_ids: &[crate::ids::ProviderId]) -> Result<HashMap<String, String>> {
+    fn get_providers_auth_type(
+        &self,
+        provider_ids: &[crate::ids::ProviderId],
+    ) -> Result<HashMap<String, String>> {
         let conn = self.conn.lock();
         provider::get_providers_auth_type(&conn, provider_ids)
     }

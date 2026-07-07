@@ -328,7 +328,9 @@ pub fn save_recording_ttl_to_db(
 }
 
 /// Read the persisted quota protection configuration, if any.
-pub fn load_quota_protection_override_from_db(conn: &Connection) -> Result<Option<crate::config::QuotaProtectionConfig>> {
+pub fn load_quota_protection_override_from_db(
+    conn: &Connection,
+) -> Result<Option<crate::config::QuotaProtectionConfig>> {
     let mut stmt = conn
         .prepare("SELECT value FROM app_config WHERE key = ?1")
         .map_err(|e| CoreError::Database {

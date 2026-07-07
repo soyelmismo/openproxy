@@ -28,18 +28,10 @@ impl GeminiAdapter {
     }
 }
 
-impl Default for GeminiAdapter {
-    fn default() -> Self {
-        Self::new()
-    }
-}
+crate::adapters::derive_default_from_new!(GeminiAdapter);
 
 #[async_trait]
 impl ProviderAdapter for GeminiAdapter {
-    fn id(&self) -> &ProviderId {
-        &self.config.id
-    }
-
     fn config(&self) -> &ProviderAdapterConfig {
         &self.config
     }
@@ -56,23 +48,6 @@ impl ProviderAdapter for GeminiAdapter {
             self.config.base_url,
             model.as_str()
         )
-    }
-
-    fn build_auth_header(&self, api_key: &str) -> (String, String) {
-        ("x-goog-api-key".into(), api_key.to_string())
-    }
-
-    fn build_headers(
-        &self,
-        api_key: &str,
-        _target_format: TargetFormat,
-        _model: &ModelId,
-    ) -> Vec<(String, String)> {
-        let (name, value) = self.build_auth_header(api_key);
-        vec![
-            (name, value),
-            ("Content-Type".into(), "application/json".into()),
-        ]
     }
 
     fn models_url(&self) -> Option<String> {
@@ -134,4 +109,3 @@ impl ProviderAdapter for GeminiAdapter {
         Ok(out)
     }
 }
-

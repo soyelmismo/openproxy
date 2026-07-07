@@ -164,14 +164,14 @@ impl CoreError {
             },
             CoreError::UpstreamConnection(s) => CoreError::UpstreamConnection(s.clone()),
             CoreError::RateLimited {
-        provider,
-        retry_after_ms,
-        is_proxy_rotated,
-    } => CoreError::RateLimited {
-        provider: provider.clone(),
-        retry_after_ms: *retry_after_ms,
-        is_proxy_rotated: *is_proxy_rotated,
-    },
+                provider,
+                retry_after_ms,
+                is_proxy_rotated,
+            } => CoreError::RateLimited {
+                provider: provider.clone(),
+                retry_after_ms: *retry_after_ms,
+                is_proxy_rotated: *is_proxy_rotated,
+            },
             CoreError::Parse(s) => CoreError::Parse(s.clone()),
             CoreError::ClientDisconnected => CoreError::ClientDisconnected,
             CoreError::RaceLost => CoreError::RaceLost,

@@ -41,7 +41,12 @@ use std::time::Duration;
 use std::time::Instant;
 use tokio_stream::wrappers::ReceiverStream;
 
-use crate::{disconnect::CancelWatch, error::ApiError, state::AppState, middleware::auth::{ParsedChatRequest, ValidatedApiToken}};
+use crate::{
+    disconnect::CancelWatch,
+    error::ApiError,
+    middleware::auth::{ParsedChatRequest, ValidatedApiToken},
+    state::AppState,
+};
 
 /// SSE keepalive interval. Sends `: keep-alive\n\n` (an SSE comment)
 /// periodically to keep the connection alive while the upstream is
@@ -108,7 +113,15 @@ pub async fn chat_completions(
         .map(|axum::Extension(cw)| cw)
         .unwrap_or_default();
     let token_inner = auth_token.map(|axum::Extension(t)| t);
-    run_pipeline(state, cancel, headers, parsed_req.0, token_inner, resolved_route).await
+    run_pipeline(
+        state,
+        cancel,
+        headers,
+        parsed_req.0,
+        token_inner,
+        resolved_route,
+    )
+    .await
 }
 
 /// Drive one chat-completion request through the pipeline.
@@ -231,7 +244,12 @@ fn calculate_watchdog_budget(state: &AppState, headers: &HeaderMap) -> u64 {
     }
 }
 
-fn create_watchdog_channels(_is_streaming: bool) -> (tokio::sync::watch::Receiver<bool>, tokio::sync::watch::Sender<bool>) {
+fn create_watchdog_channels(
+    _is_streaming: bool,
+) -> (
+    tokio::sync::watch::Receiver<bool>,
+    tokio::sync::watch::Sender<bool>,
+) {
     let (fresh_tx, fresh_rx) = tokio::sync::watch::channel(false);
     (fresh_rx, fresh_tx)
 }
@@ -355,5 +373,3 @@ async fn handle_sync_response(
 
     Ok(Json(body_value).into_response())
 }
-
-

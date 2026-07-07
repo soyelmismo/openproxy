@@ -54,8 +54,14 @@ mod tests {
 
     #[test]
     fn test_endpoint_kind_serialization() {
-        assert_eq!(serde_json::to_string(&EndpointKind::Chat).unwrap(), "\"chat\"");
-        assert_eq!(serde_json::to_string(&EndpointKind::Audio).unwrap(), "\"audio\"");
+        assert_eq!(
+            serde_json::to_string(&EndpointKind::Chat).unwrap(),
+            "\"chat\""
+        );
+        assert_eq!(
+            serde_json::to_string(&EndpointKind::Audio).unwrap(),
+            "\"audio\""
+        );
     }
 
     #[test]

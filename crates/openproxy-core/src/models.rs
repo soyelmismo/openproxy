@@ -59,9 +59,9 @@ use serde::{Deserialize, Serialize};
 
 // ── Submodules ──────────────────────────────────────────────────────
 pub mod crud;
-pub mod sync;
-pub mod repository;
 pub mod discovery;
+pub mod repository;
+pub mod sync;
 
 #[cfg(test)]
 mod tests;
@@ -70,24 +70,13 @@ mod tests;
 // Keep the `models::function_name` call sites working across the
 // crate without requiring callers to change to `models::crud::*`.
 pub use crud::{
-    apply_auto_activation,
-    create_custom,
-    delete,
-    find_active_by_name,
-    find_active_by_provider_and_name,
-    get_by_row_id,
-    list_active,
-    list_active_all,
-    list_all,
-    mark_expired,
-    set_active,
-    set_active_bulk,
-    set_test_status,
-    upsert_many,
+    apply_auto_activation, create_custom, delete, find_active_by_name,
+    find_active_by_provider_and_name, get_by_row_id, list_active, list_active_all, list_all,
+    mark_expired, set_active, set_active_bulk, set_test_status, upsert_many,
 };
 
-pub use repository::{ModelRepository, SqliteModelRepository};
 pub use discovery::DiscoveryService;
+pub use repository::{ModelRepository, SqliteModelRepository};
 
 // ── Domain types ────────────────────────────────────────────────────
 

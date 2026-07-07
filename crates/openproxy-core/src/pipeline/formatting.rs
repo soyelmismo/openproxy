@@ -1,9 +1,8 @@
-
+use crate::adapters::ProviderAdapter;
 use crate::error::CoreError;
 use crate::models::{Model, TargetFormat};
 use crate::pipeline::PipelineRequest;
 use crate::translation::OpenAIMessage;
-use crate::adapters::ProviderAdapter;
 
 pub trait TargetFormatter: Send + Sync {
     fn format_request(
@@ -58,7 +57,10 @@ impl TargetFormatter for AnthropicFormatter {
         );
         match serde_json::to_vec(&anthro) {
             Ok(v) => Ok(bytes::Bytes::from(v)),
-            Err(e) => Err(CoreError::Parse(format!("serialize anthropic request: {}", e))),
+            Err(e) => Err(CoreError::Parse(format!(
+                "serialize anthropic request: {}",
+                e
+            ))),
         }
     }
 }

@@ -417,7 +417,8 @@ mod tests {
         // {b:y},{b:y} (dedup → 1). Total kept = 2, dropped = 8.
         assert!(
             out.contains("[{\"a\":\"x\"},{\"b\":\"y\"}]"),
-            "got: {}", out
+            "got: {}",
+            out
         );
         assert!(out.contains("\"_dropped\":8"), "got: {}", out);
     }
@@ -440,7 +441,11 @@ mod tests {
         let original = content.clone();
         let mut msgs = vec![msg("tool", &content)];
         let applied = smart_crush_tool_results(&mut msgs);
-        assert!(applied.is_empty(), "expected no technique, got: {:?}", applied);
+        assert!(
+            applied.is_empty(),
+            "expected no technique, got: {:?}",
+            applied
+        );
         assert_eq!(
             msgs[0].content.as_ref().and_then(|c| c.as_str()).unwrap(),
             original

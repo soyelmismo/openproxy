@@ -1,7 +1,7 @@
-use crate::pipeline::{PipelineRequest, PipelineResult};
 use crate::combos::Combo;
 use crate::error::CoreError;
 use crate::ids::TraceId;
+use crate::pipeline::{PipelineRequest, PipelineResult};
 use std::sync::Arc;
 
 pub(crate) async fn run_race(
@@ -165,4 +165,3 @@ pub(crate) async fn run_race(
         all_done.notified().await;
     }
 }
-

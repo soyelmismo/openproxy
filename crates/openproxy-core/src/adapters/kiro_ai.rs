@@ -288,14 +288,20 @@ impl KiroAdapter {
     }
 
     fn parse_models_response(&self, json: &serde_json::Value) -> Option<Vec<DiscoveredModel>> {
-        let models_arr = json.get("models").and_then(|v| v.as_array())
+        let models_arr = json
+            .get("models")
+            .and_then(|v| v.as_array())
             .or_else(|| json.get("availableModels").and_then(|v| v.as_array()))?;
 
         let mut discovered = Vec::new();
         for item in models_arr {
-            let model_id_str = item.get("modelId").and_then(|v| v.as_str())
+            let model_id_str = item
+                .get("modelId")
+                .and_then(|v| v.as_str())
                 .or_else(|| item.get("id").and_then(|v| v.as_str()))?;
-            let display_name_str = item.get("modelName").and_then(|v| v.as_str())
+            let display_name_str = item
+                .get("modelName")
+                .and_then(|v| v.as_str())
                 .or_else(|| item.get("name").and_then(|v| v.as_str()))
                 .unwrap_or(model_id_str);
 
@@ -329,11 +335,7 @@ impl KiroAdapter {
     }
 }
 
-impl Default for KiroAdapter {
-    fn default() -> Self {
-        Self::new()
-    }
-}
+crate::adapters::derive_default_from_new!(KiroAdapter);
 
 #[async_trait]
 impl ProviderAdapter for KiroAdapter {
@@ -358,9 +360,10 @@ impl ProviderAdapter for KiroAdapter {
         let mut region = "us-east-1".to_string();
         if !account_label.is_empty()
             && let Ok(re) = regex::Regex::new(r"[a-z]{2}-[a-z]+-[0-9]")
-                && let Some(m) = re.find(account_label) {
-                    region = m.as_str().to_string();
-                }
+            && let Some(m) = re.find(account_label)
+        {
+            region = m.as_str().to_string();
+        }
         crate::executor_kiro::kiro_runtime_url(&region)
     }
 
@@ -390,7 +393,8 @@ impl ProviderAdapter for KiroAdapter {
         upstream_client: &Arc<UpstreamClient>,
         api_key: &str,
     ) -> Result<Vec<DiscoveredModel>> {
-        self.fetch_models_for_account(upstream_client, api_key, "").await
+        self.fetch_models_for_account(upstream_client, api_key, "")
+            .await
     }
 
     async fn fetch_models_for_account(
@@ -406,9 +410,10 @@ impl ProviderAdapter for KiroAdapter {
         let mut region = "us-east-1".to_string();
         if !account_label.is_empty()
             && let Ok(re) = regex::Regex::new(r"[a-z]{2}-[a-z]+-[0-9]")
-                && let Some(m) = re.find(account_label) {
-                    region = m.as_str().to_string();
-                }
+            && let Some(m) = re.find(account_label)
+        {
+            region = m.as_str().to_string();
+        }
 
         let endpoints = if region == "us-east-1" {
             vec![
@@ -418,7 +423,8 @@ impl ProviderAdapter for KiroAdapter {
         } else {
             vec![
                 format!("https://q.{region}.amazonaws.com/ListAvailableModels?origin=AI_EDITOR"),
-                "https://q.us-east-1.amazonaws.com/ListAvailableModels?origin=AI_EDITOR".to_string(),
+                "https://q.us-east-1.amazonaws.com/ListAvailableModels?origin=AI_EDITOR"
+                    .to_string(),
             ]
         };
 
@@ -433,13 +439,16 @@ impl ProviderAdapter for KiroAdapter {
             );
 
             let cancel = CancellationToken::new();
-            if let Ok(resp) = upstream_client.call(req, TimeoutProfile::ModelDiscovery, cancel).await
+            if let Ok(resp) = upstream_client
+                .call(req, TimeoutProfile::ModelDiscovery, cancel)
+                .await
                 && resp.status.is_success()
-                    && let Ok(body_bytes) = resp.collect().await
-                        && let Ok(json) = serde_json::from_slice::<serde_json::Value>(&body_bytes)
-                            && let Some(models) = self.parse_models_response(&json) {
-                                return Ok(models);
-                            }
+                && let Ok(body_bytes) = resp.collect().await
+                && let Ok(json) = serde_json::from_slice::<serde_json::Value>(&body_bytes)
+                && let Some(models) = self.parse_models_response(&json)
+            {
+                return Ok(models);
+            }
         }
 
         Ok(self.hardcoded_models())
@@ -452,14 +461,15 @@ impl ProviderAdapter for KiroAdapter {
         resolved_target: &crate::pipeline::context::ResolvedTarget,
     ) -> Option<std::result::Result<crate::translation::OpenAIResponse, CoreError>> {
         let custom_meta = resolved_target.custom_meta.as_ref()?;
-        
-        let region = custom_meta.kiro_region
+
+        let region = custom_meta
+            .kiro_region
             .as_deref()
             .filter(|r| !r.is_empty())
             .unwrap_or(crate::executor_kiro::KIRO_DEFAULT_REGION);
-            
+
         let profile_arn = custom_meta.kiro_profile_arn.as_deref();
-        
+
         // Use Cow or a quick clone? Wait, Phase 2 wants to remove clone on openai_request.
         // For now, let's just create a modified clone since custom executors might need an owned OpenAIRequest, or maybe executor takes a reference.
         // Wait, execute_kiro takes `req: &crate::translation::OpenAIRequest`!
@@ -480,8 +490,7 @@ impl ProviderAdapter for KiroAdapter {
                 req.client_disconnected.clone(),
                 None, // What was here?
             )
-            .await
+            .await,
         )
     }
 }
-

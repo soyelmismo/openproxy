@@ -1,6 +1,6 @@
 use crate::error::*;
 use crate::ids::*;
-use rusqlite::{params, params_from_iter, Connection, OptionalExtension, ToSql};
+use rusqlite::{Connection, OptionalExtension, ToSql, params, params_from_iter};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::BTreeMap;
@@ -1756,4 +1756,3 @@ impl std::error::Error for SimpleErr {}
 // ---------------------------------------------------------------------------
 // Recording TTL cleanup
 // ---------------------------------------------------------------------------
-

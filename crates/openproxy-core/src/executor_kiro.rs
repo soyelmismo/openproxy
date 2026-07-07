@@ -66,7 +66,11 @@ pub const KIRO_USER_AGENT: &str = "aws-sdk-js/3.0.0 kiro/0.1";
 /// regions (Amazon Q uses `q.{region}.amazonaws.com` outside
 /// us-east-1).
 pub fn kiro_runtime_url(region: &str) -> String {
-    let region = if region.is_empty() { KIRO_DEFAULT_REGION } else { region };
+    let region = if region.is_empty() {
+        KIRO_DEFAULT_REGION
+    } else {
+        region
+    };
     let host = if region == KIRO_DEFAULT_REGION {
         format!("https://codewhisperer.{}.amazonaws.com", region)
     } else {

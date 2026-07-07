@@ -27,11 +27,7 @@ impl KilocodeAdapter {
     }
 }
 
-impl Default for KilocodeAdapter {
-    fn default() -> Self {
-        Self::new()
-    }
-}
+crate::adapters::derive_default_from_new!(KilocodeAdapter);
 
 #[async_trait]
 impl ProviderAdapter for KilocodeAdapter {
@@ -84,4 +80,3 @@ impl ProviderAdapter for KilocodeAdapter {
         .await
     }
 }
-

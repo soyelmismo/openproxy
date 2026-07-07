@@ -1,18 +1,22 @@
-use async_trait::async_trait;
-use std::sync::Arc;
+use crate::combos::Strategy;
 use crate::error::CoreError;
 use crate::pipeline::PipelineResult;
-use crate::pipeline::stage::PipelineStage;
 use crate::pipeline::context::PipelineContext;
+use crate::pipeline::stage::PipelineStage;
 use crate::retry::RetryPolicy;
 use crate::upstream::CancellationToken;
-use crate::combos::Strategy;
+use async_trait::async_trait;
+use std::sync::Arc;
 
 pub struct UpstreamExecutorStage;
 
 #[async_trait]
 impl PipelineStage for UpstreamExecutorStage {
-    async fn execute(&self, ctx: &mut PipelineContext, _next: crate::pipeline::stage::PipelineNext<'_>) -> Result<PipelineResult, CoreError> {
+    async fn execute(
+        &self,
+        ctx: &mut PipelineContext,
+        _next: crate::pipeline::stage::PipelineNext<'_>,
+    ) -> Result<PipelineResult, CoreError> {
         let combo = match &ctx.combo {
             Some(c) => c,
             None => return Err(CoreError::Validation("No combo resolved".to_string())),
@@ -36,10 +40,19 @@ impl PipelineStage for UpstreamExecutorStage {
             let race_n = (combo.race_size as usize)
                 .min(to_run.len())
                 .min(ctx.pipeline.config.racing.max_race_size as usize);
-            let race_result = crate::pipeline::racing::run_race(&ctx.pipeline, Arc::clone(&ctx.req), combo, to_run.clone(), race_n as u8).await;
+            let race_result = crate::pipeline::racing::run_race(
+                &ctx.pipeline,
+                Arc::clone(&ctx.req),
+                combo,
+                to_run.clone(),
+                race_n as u8,
+            )
+            .await;
 
             if race_result.error.is_none() {
-                ctx.pipeline.tracker.mark_client_response(race_result.usage_tuple.clone());
+                ctx.pipeline
+                    .tracker
+                    .mark_client_response(race_result.usage_tuple.clone());
                 return Ok(race_result);
             }
 
@@ -71,7 +84,8 @@ impl PipelineStage for UpstreamExecutorStage {
 
             let policy = RetryPolicy::from_config(&ctx.pipeline.config.retries);
             let mut target_attempt: u8 = 1;
-            let mut result = ctx.pipeline
+            let mut result = ctx
+                .pipeline
                 .execute_single(
                     Arc::clone(&ctx.req),
                     combo,
@@ -100,7 +114,12 @@ impl PipelineStage for UpstreamExecutorStage {
                     Some(d) => d,
                     None => break,
                 };
-                let delay = if let CoreError::RateLimited { retry_after_ms, is_proxy_rotated, .. } = e {
+                let delay = if let CoreError::RateLimited {
+                    retry_after_ms,
+                    is_proxy_rotated,
+                    ..
+                } = e
+                {
                     if *is_proxy_rotated {
                         std::time::Duration::from_millis(0)
                     } else {
@@ -122,7 +141,8 @@ impl PipelineStage for UpstreamExecutorStage {
                 );
                 tokio::time::sleep(delay).await;
                 target_attempt = target_attempt.saturating_add(1);
-                result = ctx.pipeline
+                result = ctx
+                    .pipeline
                     .execute_single(
                         Arc::clone(&ctx.req),
                         combo,
@@ -136,7 +156,9 @@ impl PipelineStage for UpstreamExecutorStage {
 
             match result.error.as_ref() {
                 None => {
-                    ctx.pipeline.tracker.mark_client_response(result.usage_tuple.clone());
+                    ctx.pipeline
+                        .tracker
+                        .mark_client_response(result.usage_tuple.clone());
                     return Ok(result);
                 }
                 Some(e) => {
@@ -167,10 +189,7 @@ impl PipelineStage for UpstreamExecutorStage {
                     }
                     ctx.combo_walk_log.push(format!(
                         "  target_id={} provider={} attempts={} error={}",
-                        target.target.id.0,
-                        target.target.provider_id,
-                        target_attempt,
-                        e
+                        target.target.id.0, target.target.provider_id, target_attempt, e
                     ));
                     last_result = Some(result);
                 }
@@ -178,19 +197,22 @@ impl PipelineStage for UpstreamExecutorStage {
         }
 
         if let Some(r) = last_result
-            && r.error.is_some() {
-                tracing::warn!(
-                    combo_id = combo.id.0,
-                    total_targets = to_run.len(),
-                    targets_tried = ctx.combo_walk_log.len(),
-                    last_error = ?r.error,
-                    "combo exhausted: all {} target(s) failed, returning last error to client.\nCombo walk summary:\n{}",
-                    ctx.combo_walk_log.len(),
-                    ctx.combo_walk_log.join("\n")
-                );
-                ctx.pipeline.tracker.mark_client_response(r.usage_tuple.clone());
-                return Ok(r);
-            }
+            && r.error.is_some()
+        {
+            tracing::warn!(
+                combo_id = combo.id.0,
+                total_targets = to_run.len(),
+                targets_tried = ctx.combo_walk_log.len(),
+                last_error = ?r.error,
+                "combo exhausted: all {} target(s) failed, returning last error to client.\nCombo walk summary:\n{}",
+                ctx.combo_walk_log.len(),
+                ctx.combo_walk_log.join("\n")
+            );
+            ctx.pipeline
+                .tracker
+                .mark_client_response(r.usage_tuple.clone());
+            return Ok(r);
+        }
 
         Err(CoreError::NoHealthyTargets(combo.id.0))
     }

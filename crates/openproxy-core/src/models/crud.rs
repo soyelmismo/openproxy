@@ -6,12 +6,11 @@
 //! `pub(crate)` so internal callers keep compiling while the codebase
 //! migrates to the `ModelRepository` trait.
 
+use super::{DiscoveredModel, Model, TargetFormat, UpsertResult};
 use crate::error::{CoreError, Result};
 use crate::ids::{ModelId, ModelRowId, ProviderId};
-use super::{DiscoveredModel, Model, TargetFormat, UpsertResult};
 use rusqlite::{Connection, OptionalExtension, Row, params};
 use std::time::Duration;
-
 
 fn map_row(row: &Row<'_>) -> rusqlite::Result<Model> {
     let target_format_str: String = row.get("target_format")?;
@@ -137,7 +136,8 @@ pub fn upsert_many(
     ttl: Duration,
 ) -> Result<UpsertResult> {
     let diff = super::sync::compute_diff(conn, provider, discovered)?;
-    let (upsert_result, events) = super::sync::execute_sync_transaction(conn, provider, discovered, &diff, ttl)?;
+    let (upsert_result, events) =
+        super::sync::execute_sync_transaction(conn, provider, discovered, &diff, ttl)?;
     super::sync::broadcast_notifications(conn, &events);
     Ok(upsert_result)
 }
@@ -385,7 +385,9 @@ pub fn get_by_row_ids(conn: &Connection, row_ids: &[ModelRowId]) -> Result<Vec<M
     if row_ids.is_empty() {
         return Ok(Vec::new());
     }
-    let placeholders = std::iter::repeat("?").take(row_ids.len()).collect::<Vec<_>>().join(",");
+    let placeholders = std::iter::repeat_n("?", row_ids.len())
+        .collect::<Vec<_>>()
+        .join(",");
     let query = format!(
         "SELECT id, provider_id, model_id, display_name, target_format, \
                 discovered_at, expires_at, timeout_overrides_json, active, \
@@ -396,15 +398,22 @@ pub fn get_by_row_ids(conn: &Connection, row_ids: &[ModelRowId]) -> Result<Vec<M
          FROM models WHERE id IN ({})",
         placeholders
     );
-    let mut stmt = conn.prepare_cached(&query).map_err(|e| CoreError::Database {
-        message: format!("prepare get_by_row_ids: {}", e),
-        source: Some(Box::new(e)),
-    })?;
-    let ids: Vec<&dyn rusqlite::ToSql> = row_ids.iter().map(|id| &id.0 as &dyn rusqlite::ToSql).collect();
-    let rows = stmt.query_map(&*ids, map_row).map_err(|e| CoreError::Database {
-        message: format!("query get_by_row_ids: {}", e),
-        source: Some(Box::new(e)),
-    })?;
+    let mut stmt = conn
+        .prepare_cached(&query)
+        .map_err(|e| CoreError::Database {
+            message: format!("prepare get_by_row_ids: {}", e),
+            source: Some(Box::new(e)),
+        })?;
+    let ids: Vec<&dyn rusqlite::ToSql> = row_ids
+        .iter()
+        .map(|id| &id.0 as &dyn rusqlite::ToSql)
+        .collect();
+    let rows = stmt
+        .query_map(&*ids, map_row)
+        .map_err(|e| CoreError::Database {
+            message: format!("query get_by_row_ids: {}", e),
+            source: Some(Box::new(e)),
+        })?;
     let mut models = Vec::with_capacity(row_ids.len());
     for row in rows {
         models.push(row.map_err(|e| CoreError::Database {

@@ -243,9 +243,14 @@ fn classify_line(line: &str) -> LineKind {
         }
         // #NN pattern: '#' followed by at least one digit.
         if let Some(rest) = trimmed_start.strip_prefix('#')
-            && rest.chars().next().map(|c| c.is_ascii_digit()).unwrap_or(false) {
-                return LineKind::StackTrace;
-            }
+            && rest
+                .chars()
+                .next()
+                .map(|c| c.is_ascii_digit())
+                .unwrap_or(false)
+        {
+            return LineKind::StackTrace;
+        }
     }
 
     let low = line.to_lowercase();
@@ -488,8 +493,7 @@ mod tests {
         // 100-line pytest output: 1 header + 95 PASSED + 3 FAILED + 1 summary.
         let mut lines: Vec<String> = Vec::new();
         lines.push(
-            "========================= test session starts ========================="
-                .to_string(),
+            "========================= test session starts =========================".to_string(),
         );
         for i in 0..95 {
             lines.push(format!("test_module.py::test_pass_{} PASSED [ 50%]", i));
@@ -650,8 +654,7 @@ mod tests {
         // 32-line output: 1 header + 25 PASSED + Python traceback (6 lines).
         let mut lines: Vec<String> = Vec::new();
         lines.push(
-            "========================= test session starts ========================="
-                .to_string(),
+            "========================= test session starts =========================".to_string(),
         );
         for i in 0..25 {
             lines.push(format!("test_module.py::test_{} PASSED [ 50%]", i));
@@ -745,7 +748,10 @@ mod tests {
     fn test_classify_line_error() {
         assert_eq!(classify_line("error: foo"), LineKind::Error);
         assert_eq!(classify_line("FAILED"), LineKind::Error);
-        assert_eq!(classify_line("Traceback (most recent call last):"), LineKind::Error);
+        assert_eq!(
+            classify_line("Traceback (most recent call last):"),
+            LineKind::Error
+        );
         assert_eq!(classify_line("panic: runtime error"), LineKind::Error);
         assert_eq!(classify_line("ValueError: oops"), LineKind::Error);
     }
@@ -760,7 +766,10 @@ mod tests {
     fn test_classify_line_summary() {
         // Note: lines containing "fail"/"error" substrings classify as Error
         // first (e.g. "1 failed" → Error via "fail"), so we use clean inputs.
-        assert_eq!(classify_line("test result: ok. 5 passed;"), LineKind::Summary);
+        assert_eq!(
+            classify_line("test result: ok. 5 passed;"),
+            LineKind::Summary
+        );
         assert_eq!(classify_line("Tests: 5 passed"), LineKind::Summary);
         assert_eq!(classify_line("95 passed in 5.0s"), LineKind::Summary);
     }
@@ -778,7 +787,10 @@ mod tests {
     #[test]
     fn test_classify_line_stack_trace() {
         assert_eq!(classify_line("  at foo (bar.js:1:2)"), LineKind::StackTrace);
-        assert_eq!(classify_line("  File \"test.py\", line 5"), LineKind::StackTrace);
+        assert_eq!(
+            classify_line("  File \"test.py\", line 5"),
+            LineKind::StackTrace
+        );
         assert_eq!(classify_line("  frame #0: 0x0001"), LineKind::StackTrace);
         assert_eq!(classify_line("  #0 0x0001 in foo()"), LineKind::StackTrace);
     }
@@ -830,10 +842,7 @@ mod tests {
             lines.push("warning: unused variable: x".to_string());
         }
         let content = lines.join("\n");
-        let mut msgs = vec![
-            msg("system", &content),
-            msg("user", &content),
-        ];
+        let mut msgs = vec![msg("system", &content), msg("user", &content)];
         let applied = compress_logs(&mut msgs);
         assert!(applied.is_empty(), "should not touch system/user messages");
         for m in &msgs {

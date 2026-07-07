@@ -212,18 +212,10 @@ impl AntigravityAdapter {
     }
 }
 
-impl Default for AntigravityAdapter {
-    fn default() -> Self {
-        Self::new()
-    }
-}
+crate::adapters::derive_default_from_new!(AntigravityAdapter);
 
 #[async_trait]
 impl ProviderAdapter for AntigravityAdapter {
-    fn id(&self) -> &ProviderId {
-        &self.config.id
-    }
-
     fn config(&self) -> &ProviderAdapterConfig {
         &self.config
     }
@@ -231,23 +223,6 @@ impl ProviderAdapter for AntigravityAdapter {
     fn build_chat_url(&self, _target_format: TargetFormat, _model: &ModelId) -> String {
         // Antigravity uses the Cloud Code endpoint; model goes in the body.
         format!("{}/v1internal:generateContent", self.config.base_url)
-    }
-
-    fn build_auth_header(&self, api_key: &str) -> (String, String) {
-        ("Authorization".into(), format!("Bearer {}", api_key))
-    }
-
-    fn build_headers(
-        &self,
-        api_key: &str,
-        _target_format: TargetFormat,
-        _model: &ModelId,
-    ) -> Vec<(String, String)> {
-        let (name, value) = self.build_auth_header(api_key);
-        vec![
-            (name, value),
-            ("Content-Type".into(), "application/json".into()),
-        ]
     }
 
     fn models_url(&self) -> Option<String> {
@@ -281,13 +256,16 @@ impl ProviderAdapter for AntigravityAdapter {
             crate::antigravity_headers::inject_antigravity_headers(&mut req.headers, None);
 
             let cancel = CancellationToken::new();
-            if let Ok(resp) = upstream_client.call(req, TimeoutProfile::ModelDiscovery, cancel).await
+            if let Ok(resp) = upstream_client
+                .call(req, TimeoutProfile::ModelDiscovery, cancel)
+                .await
                 && resp.status.is_success()
-                    && let Ok(body_bytes) = resp.collect().await
-                        && let Ok(json) = serde_json::from_slice::<serde_json::Value>(&body_bytes)
-                            && let Some(models) = self.parse_models_response(&json) {
-                                return Ok(models);
-                            }
+                && let Ok(body_bytes) = resp.collect().await
+                && let Ok(json) = serde_json::from_slice::<serde_json::Value>(&body_bytes)
+                && let Some(models) = self.parse_models_response(&json)
+            {
+                return Ok(models);
+            }
         }
 
         Ok(self.hardcoded_models())
@@ -300,9 +278,9 @@ impl ProviderAdapter for AntigravityAdapter {
         resolved_target: &crate::pipeline::context::ResolvedTarget,
     ) -> Option<std::result::Result<crate::translation::OpenAIResponse, CoreError>> {
         let custom_meta = resolved_target.custom_meta.as_ref()?;
-        
+
         let project_id = custom_meta.antigravity_project.as_deref().unwrap_or("");
-        
+
         let mut custom_req = (*req.openai_request).clone();
         custom_req.model = resolved_target.model.model_id.as_str().to_string();
 
@@ -316,9 +294,7 @@ impl ProviderAdapter for AntigravityAdapter {
                 req.stream_sink.as_ref(),
                 None,
             )
-            .await
+            .await,
         )
     }
 }
-
-

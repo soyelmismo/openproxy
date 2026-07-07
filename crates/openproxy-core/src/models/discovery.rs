@@ -6,10 +6,10 @@
 //! delegate to [`DiscoveryService::refresh_and_activate`] for the
 //! full lifecycle.
 
-use crate::error::Result;
-use crate::ids::ProviderId;
 use super::repository::ModelRepository;
 use super::{DiscoveredModel, UpsertResult};
+use crate::error::Result;
+use crate::ids::ProviderId;
 use std::time::Duration;
 
 /// Orchestrates the model-discovery lifecycle.

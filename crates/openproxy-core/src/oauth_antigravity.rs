@@ -439,7 +439,8 @@ async fn load_code_assist(
 
     if !resp.status.is_success() {
         let status = resp.status.as_u16();
-        let body_str = String::from_utf8_lossy(&resp.collect().await.unwrap_or_default()).to_string();
+        let body_str =
+            String::from_utf8_lossy(&resp.collect().await.unwrap_or_default()).to_string();
         return Err(CoreError::UpstreamError {
             status,
             provider: "antigravity".into(),
@@ -448,10 +449,9 @@ async fn load_code_assist(
         });
     }
 
-    let body_bytes = resp
-        .collect()
-        .await
-        .map_err(|e| CoreError::UpstreamConnection(format!("antigravity loadCodeAssist read: {e}")))?;
+    let body_bytes = resp.collect().await.map_err(|e| {
+        CoreError::UpstreamConnection(format!("antigravity loadCodeAssist read: {e}"))
+    })?;
 
     let value: serde_json::Value = serde_json::from_slice(&body_bytes)
         .map_err(|e| CoreError::Parse(format!("antigravity loadCodeAssist parse: {e}")))?;
@@ -504,7 +504,8 @@ async fn onboard_user(
 
     if !resp.status.is_success() {
         let status = resp.status.as_u16();
-        let body_str = String::from_utf8_lossy(&resp.collect().await.unwrap_or_default()).to_string();
+        let body_str =
+            String::from_utf8_lossy(&resp.collect().await.unwrap_or_default()).to_string();
         return Err(CoreError::UpstreamError {
             status,
             provider: "antigravity".into(),
@@ -549,7 +550,9 @@ pub fn read_project_id(conn: &Connection, account_id: AccountId) -> Result<Optio
             source: Some(Box::new(e)),
         })?;
 
-    let Some(raw) = raw.flatten() else { return Ok(None) };
+    let Some(raw) = raw.flatten() else {
+        return Ok(None);
+    };
     let meta: AntigravityProviderMeta = serde_json::from_str(&raw)
         .map_err(|e| CoreError::Parse(format!("antigravity meta parse: {e}")))?;
     Ok(meta.project_id)
