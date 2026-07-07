@@ -270,7 +270,7 @@ class LiveLogsStore {
     }
 
     // Legacy conversions
-    const now = Date.now();
+    const now = Date.now() - this.clockOffsetMs;
     if (env.type === "stage" && env.data) {
       const s = env.data as StageEvent;
       const attempt_key = s.trace_id || `${s.request_id}:unknown`;
@@ -319,7 +319,8 @@ class LiveLogsStore {
     }
 
     if (env.type === "pong") {
-      return { type: "pong", server_time: now };
+      const st = typeof env.server_time === "string" ? Date.parse(env.server_time) : (env.server_time || Date.now());
+      return { type: "pong", server_time: st };
     }
 
     if (env.type === "error" && env.message) {

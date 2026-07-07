@@ -133,7 +133,8 @@ export function renderLogRowHtml(
   
   const cells = buildLogRowCells(attempt, visibleColumns);
   
-  const identityAttr = attempt.rowId ? `data-id="${attempt.rowId}"` : `data-attempt-key="${attempt.attemptKey}"`;
+  const dataId = attempt.rowId || "";
+  const dataAttemptKey = attempt.attemptKey || "";
   
-  return html`<button class="${cls}" ${identityAttr} data-request-id="${attempt.requestId || ""}" data-trace-id="${attempt.traceId || ""}" aria-label="Open usage detail">${cells}</button>`;
+  return html`<button class="${cls}" data-id=${dataId} data-attempt-key=${dataAttemptKey} data-request-id=${attempt.requestId || ""} data-trace-id=${attempt.traceId || ""} aria-label="Open usage detail">${cells}</button>`;
 }
