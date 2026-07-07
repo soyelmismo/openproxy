@@ -704,16 +704,59 @@ pub async fn put_recording_ttl(
 // Providers
 // =====================================================================
 
+#[derive(serde::Serialize)]
+pub struct ProviderWithOAuth {
+    #[serde(flatten)]
+    pub provider: providers::Provider,
+    pub oauth_flows: Option<Vec<String>>,
+}
+
+fn enrich_provider_with_oauth(
+    p: providers::Provider,
+    registry: &openproxy_core::oauth::OAuthProviderRegistry,
+) -> ProviderWithOAuth {
+    let flows = if p.auth_type == openproxy_core::providers::AuthType::OAuth {
+        if let Some(oauth_impl) = registry.get(p.id.as_str()) {
+            let mut f = Vec::new();
+            match oauth_impl.flow() {
+                openproxy_core::oauth::OAuthFlow::AuthorizationCodePkce => {
+                    f.push("pkce".to_string());
+                }
+                openproxy_core::oauth::OAuthFlow::DeviceCode => {
+                    f.push("device".to_string());
+                }
+                openproxy_core::oauth::OAuthFlow::AuthorizationCode => {
+                    f.push("auth_code".to_string());
+                }
+            }
+            Some(f)
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+    ProviderWithOAuth {
+        provider: p,
+        oauth_flows: flows,
+    }
+}
+
 /// `GET /admin/providers` — list all providers.
 pub async fn list_providers(
     State(s): State<AppState>,
-) -> ApiResult<Json<Vec<providers::Provider>>> {
-    let body: Result<Json<Vec<providers::Provider>>, ApiError> = async {
+) -> ApiResult<Json<Vec<ProviderWithOAuth>>> {
+    let body: Result<Json<Vec<ProviderWithOAuth>>, ApiError> = async {
         // Read-only SELECT — use the READER so the dashboard's catalog
         // polling doesn't serialize through the writer mutex.
         let r = s.db_pool().reader();
         let list = admin::list_providers(&r)?;
-        Ok(Json(list))
+        let registry = s.oauth_provider_registry();
+        let enriched = list
+            .into_iter()
+            .map(|p| enrich_provider_with_oauth(p, registry.as_ref()))
+            .collect();
+        Ok(Json(enriched))
     }
     .await;
     body.into()
@@ -764,14 +807,16 @@ pub async fn create_provider(
 pub async fn get_provider(
     State(s): State<AppState>,
     Path(id): Path<String>,
-) -> ApiResult<Json<providers::Provider>> {
-    let body: Result<Json<providers::Provider>, ApiError> = async {
+) -> ApiResult<Json<ProviderWithOAuth>> {
+    let body: Result<Json<ProviderWithOAuth>, ApiError> = async {
         // Read-only SELECT — use the READER.
         let r = s.db_pool().reader();
         let id = ProviderId::new(id);
         let provider =
             providers::get(&r, &id)?.ok_or_else(|| CoreError::ProviderNotFound(id.to_string()))?;
-        Ok(Json(provider))
+        let registry = s.oauth_provider_registry();
+        let enriched = enrich_provider_with_oauth(provider, registry.as_ref());
+        Ok(Json(enriched))
     }
     .await;
     body.into()

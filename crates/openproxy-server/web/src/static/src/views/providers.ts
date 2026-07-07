@@ -30,9 +30,6 @@ import { OAuthLogin } from "../handlers/oauth-handlers.js";
 import { renderQuotaCell } from "./quota-cell.js";
 import {
   BUILTIN_PROVIDER_IDS,
-  OAUTH_PROVIDER_IDS,
-  OAUTH_PKCE_PROVIDERS,
-  OAUTH_DEVICE_CODE_PROVIDERS,
   providerHasQuota,
   statusPillClass,
 } from "../lib/constants.js";
@@ -796,12 +793,12 @@ function renderDetailHeader(provider: Provider): TemplateResult {
 }
 
 function renderOAuthSection(provider: Provider): TemplateResult {
-  if (!OAUTH_PROVIDER_IDS.includes(provider.id)) return html``;
+  if (provider.auth_type !== "oauth") return html``;
   const buttons: TemplateResult[] = [];
-  if (OAUTH_PKCE_PROVIDERS.includes(provider.id)) {
+  if (provider.oauth_flows?.includes("pkce")) {
     buttons.push(html`<button class="primary" @click=${() => onOAuthStartPKCE(provider.id)}>Log in with ${provider.name || provider.id}</button>`);
   }
-  if (OAUTH_DEVICE_CODE_PROVIDERS.includes(provider.id)) {
+  if (provider.oauth_flows?.includes("device")) {
     buttons.push(html`<button class="primary" @click=${() => onOAuthStartDeviceCode(provider.id)}>Log in with ${provider.name || provider.id}</button>`);
   }
   return html`

@@ -1,16 +1,6 @@
 // lib/constants.ts — app-wide constants. Kept here so the views
 // and handlers do not litter the codebase with magic strings/numbers.
 
-// OAuth-capable provider ids. The provider-detail view uses these
-// to decide when to show the login section.
-const OAUTH_ALL = ["antigravity", "kiro"] as const;
-const OAUTH_PKCE = ["antigravity"] as const;
-const OAUTH_DEVICE = ["kiro"] as const;
-
-export const OAUTH_PROVIDER_IDS: readonly string[] = OAUTH_ALL;
-export const OAUTH_PKCE_PROVIDERS: readonly string[] = OAUTH_PKCE;
-export const OAUTH_DEVICE_CODE_PROVIDERS: readonly string[] = OAUTH_DEVICE;
-
 // Human-readable label for each server-side stage. The server keys
 // are kept in the data-stage attribute (and CSS) so styling can
 // target them directly; the cell body shows the friendlier label.
