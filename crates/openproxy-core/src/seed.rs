@@ -1,6 +1,6 @@
 //! Auto-seed built-in providers on first run.
 //!
-//! The three providers in this list correspond 1:1 to the built-in adapters
+//! The providers in this list correspond 1:1 to the built-in adapters
 //! registered in [`crate::adapters::builtin_adapters`]. Inserting a row for
 //! each one on startup means the user can immediately see them in the
 //! dashboard (and reference them by id in API calls) without having to
@@ -123,6 +123,15 @@ const BUILTINS: &[Builtin<'static>] = &[
         auto_activate_keyword: None,
     },
     Builtin {
+        id: "codex",
+        name: "Codex (ChatGPT)",
+        base_url: "https://chatgpt.com/backend-api/codex",
+        auth_type: "oauth",
+        format: "openai",
+        extra_headers_json: None,
+        auto_activate_keyword: None,
+    },
+    Builtin {
         id: "kiro",
         name: "Kiro AI",
         base_url: "https://codewhisperer.us-east-1.amazonaws.com",
@@ -170,6 +179,7 @@ pub fn builtin_provider_ids() -> &'static [&'static str] {
         "kilocode",
         "gemini",
         "antigravity",
+        "codex",
         "kiro",
         "cloudflare-workers-ai",
     ]
@@ -390,9 +400,9 @@ mod tests {
         let (pool, _path) = fresh_pool();
         let conn = pool.writer();
         let n = seed_builtin_providers(&conn).expect("seed");
-        assert_eq!(n, 11, "first call inserts all eleven");
+        assert_eq!(n, 12, "first call inserts all twelve");
 
-        // All eleven are present and reachable by id.
+        // All twelve are present and reachable by id.
         for id in [
             "openrouter",
             "minimax",
@@ -403,6 +413,7 @@ mod tests {
             "kilocode",
             "gemini",
             "antigravity",
+            "codex",
             "kiro",
             "cloudflare-workers-ai",
         ] {
@@ -418,14 +429,14 @@ mod tests {
         let (pool, _path) = fresh_pool();
         let conn = pool.writer();
         let first = seed_builtin_providers(&conn).expect("first");
-        assert_eq!(first, 11);
+        assert_eq!(first, 12);
 
         // Idempotent: running again must not insert more rows.
         let second = seed_builtin_providers(&conn).expect("second");
         assert_eq!(second, 0, "no new rows on second call");
 
         let count = providers::list(&conn).expect("list").len();
-        assert_eq!(count, 11, "still exactly eleven rows");
+        assert_eq!(count, 12, "still exactly twelve rows");
     }
 
     #[test]
@@ -448,7 +459,7 @@ mod tests {
         .expect("pre-seed");
 
         let n = seed_builtin_providers(&conn).expect("seed");
-        assert_eq!(n, 10, "only the ten missing ones");
+        assert_eq!(n, 11, "only the eleven missing ones");
 
         // The pre-seeded row's name was *not* overwritten.
         let p = providers::get(&conn, &ProviderId::new("openrouter"))
@@ -499,6 +510,11 @@ mod tests {
         assert_eq!(antigravity.auth_type, AuthType::OAuth);
         assert_eq!(antigravity.format, ProviderFormat::Gemini);
 
+        let codex = providers::get(&conn, &ProviderId::new("codex"))
+            .expect("get")
+            .unwrap();
+        assert_eq!(codex.auth_type, AuthType::OAuth);
+        assert_eq!(codex.format, ProviderFormat::Openai);
 
         let kiro = providers::get(&conn, &ProviderId::new("kiro"))
             .expect("get")
@@ -508,13 +524,13 @@ mod tests {
     }
 
     #[test]
-    fn builtin_provider_ids_lists_eleven() {
+    fn builtin_provider_ids_lists_twelve() {
         // The list is the source of truth for "is this provider
         // protected from delete?" — guard it with a test so a future
         // addition to `BUILTINS` (e.g. a new seeded provider) gets
         // remembered here.
         let ids = builtin_provider_ids();
-        assert_eq!(ids.len(), 11);
+        assert_eq!(ids.len(), 12);
         assert!(ids.contains(&"openrouter"));
         assert!(ids.contains(&"minimax"));
         assert!(ids.contains(&"opencode-zen"));
@@ -524,6 +540,7 @@ mod tests {
         assert!(ids.contains(&"kilocode"));
         assert!(ids.contains(&"gemini"));
         assert!(ids.contains(&"antigravity"));
+        assert!(ids.contains(&"codex"));
         assert!(ids.contains(&"kiro"));
         assert!(ids.contains(&"cloudflare-workers-ai"));
     }

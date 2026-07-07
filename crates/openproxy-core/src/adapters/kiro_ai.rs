@@ -450,6 +450,7 @@ impl ProviderAdapter for KiroAdapter {
         upstream_client: &Arc<UpstreamClient>,
         req: Arc<crate::pipeline::PipelineRequest>,
         resolved_target: &crate::pipeline::context::ResolvedTarget,
+        _ctx: Option<crate::adapters::CustomExecutionContext>,
     ) -> Option<std::result::Result<crate::translation::OpenAIResponse, CoreError>> {
         let custom_meta = resolved_target.custom_meta.as_ref()?;
         
@@ -484,4 +485,3 @@ impl ProviderAdapter for KiroAdapter {
         )
     }
 }
-

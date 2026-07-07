@@ -1242,6 +1242,86 @@ fn format_rate_limit_suffix(rl: &serde_json::Value) -> Option<String> {
     Some(format!("{} req/{}", reqs, unit))
 }
 
+pub fn parse_reset_time(s: &str) -> Option<u64> {
+    let s = s.trim();
+    if let Ok(secs) = s.parse::<u64>() {
+        return Some(secs);
+    }
+    if let Ok(secs_f) = s.parse::<f64>() {
+        return Some(secs_f.ceil() as u64);
+    }
+    let mut total_secs = 0.0;
+    let mut num_str = String::new();
+    for c in s.chars() {
+        if c.is_ascii_digit() || c == '.' {
+            num_str.push(c);
+        } else if matches!(c, 'h' | 'm' | 's') {
+            let val = num_str.parse::<f64>().unwrap_or(0.0);
+            match c {
+                'h' => total_secs += val * 3600.0,
+                'm' => total_secs += val * 60.0,
+                's' => total_secs += val,
+                _ => {}
+            }
+            num_str.clear();
+        }
+    }
+    let total = total_secs.ceil() as u64;
+    if total > 0 { Some(total) } else { None }
+}
+
+pub async fn fetch_codex_quota(
+    upstream: &Arc<UpstreamClient>,
+    access_token: &str,
+    workspace_id: Option<&str>,
+) -> Result<AccountQuota> {
+    let url = "https://chatgpt.com/backend-api/accounts/check/v4-2023-04-27";
+    let mut req = UpstreamRequest::get(url);
+    req.headers.insert(
+        http::header::AUTHORIZATION,
+        http::HeaderValue::from_str(&format!("Bearer {}", access_token)).unwrap_or_else(|_| http::HeaderValue::from_static("")),
+    );
+    if let Some(ws) = workspace_id {
+        if let Ok(val) = http::HeaderValue::from_str(ws) {
+            req.headers.insert(http::HeaderName::from_static("chatgpt-account-id"), val);
+        }
+    }
+
+    let cancel = CancellationToken::new();
+    let response = upstream.call(req, TimeoutProfile::Chat, cancel).await
+        .map_err(|e| CoreError::UpstreamConnection(e.to_string()))?;
+        
+    let status = response.status.as_u16();
+    if !(200..300).contains(&status) {
+        return Ok(AccountQuota {
+            session_used: None,
+            session_limit: None,
+            session_reset_at: None,
+            weekly_used: None,
+            weekly_limit: None,
+            weekly_reset_at: None,
+            plan_name: None,
+            last_fetched_at: now_unix_secs_str(),
+            fetch_error: Some(format!("Codex quota check failed: HTTP {}", status)),
+            model_details: None,
+        });
+    }
+
+    let _ = response.collect().await; // consume body
+    Ok(AccountQuota {
+        session_used: None,
+        session_limit: None,
+        session_reset_at: None,
+        weekly_used: None,
+        weekly_limit: None,
+        weekly_reset_at: None,
+        plan_name: Some("Codex / ChatGPT".into()),
+        last_fetched_at: now_unix_secs_str(),
+        fetch_error: None,
+        model_details: None,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

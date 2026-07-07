@@ -22,6 +22,20 @@ use http::HeaderValue;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
+/// Extra state available to provider-specific executors.
+///
+/// Standard upstream dispatch persists cooldowns and usage centrally.
+/// Custom executors bypass that path, so providers that learn quota state
+/// from proprietary response headers need this small persistence hook.
+#[derive(Clone)]
+pub struct CustomExecutionContext {
+    pub conn: Arc<parking_lot::Mutex<rusqlite::Connection>>,
+    pub cooldown_mode: crate::combos::CooldownMode,
+    pub cooldown_base_secs: u64,
+    pub cooldown_max_secs: u64,
+    pub cooldown_factor: u32,
+}
+
 /// Static configuration for a single provider adapter.
 ///
 /// `id`, `base_url`, `auth_type`, and `format` describe a fixed upstream; the
@@ -257,6 +271,7 @@ pub trait ProviderAdapter: Send + Sync {
         _upstream_client: &Arc<crate::upstream::UpstreamClient>,
         _req: Arc<crate::pipeline::PipelineRequest>,
         _resolved_target: &crate::pipeline::context::ResolvedTarget,
+        _ctx: Option<CustomExecutionContext>,
     ) -> Option<std::result::Result<crate::translation::OpenAIResponse, crate::error::CoreError>> {
         None
     }
@@ -273,6 +288,7 @@ pub mod kilocode;
 pub mod cloudflare_workers_ai;
 pub mod gemini;
 pub mod antigravity;
+pub mod codex;
 pub mod kiro_ai;
 pub mod custom_adapter;
 
@@ -286,6 +302,7 @@ pub use kilocode::KilocodeAdapter;
 pub use cloudflare_workers_ai::CloudflareWorkersAIAdapter;
 pub use gemini::GeminiAdapter;
 pub use antigravity::AntigravityAdapter;
+pub use codex::CodexAdapter;
 pub use kiro_ai::KiroAdapter;
 pub use custom_adapter::CustomAdapter;
 
@@ -458,6 +475,7 @@ pub fn builtin_adapters() -> Vec<Arc<dyn ProviderAdapter>> {
         Arc::new(CloudflareWorkersAIAdapter::new()),
         Arc::new(GeminiAdapter::new()),
         Arc::new(AntigravityAdapter::new()),
+        Arc::new(CodexAdapter::new()),
         Arc::new(KiroAdapter::new()),
     ]
 }
@@ -666,9 +684,9 @@ mod tests {
     // ---- Factory -----------------------------------------------------
 
     #[test]
-    fn builtin_adapters_returns_eleven() {
+    fn builtin_adapters_returns_twelve() {
         let v = builtin_adapters();
-        assert_eq!(v.len(), 11);
+        assert_eq!(v.len(), 12);
         let ids: Vec<&str> = v.iter().map(|a| a.id().as_str()).collect();
         assert!(ids.contains(&"openrouter"));
         assert!(ids.contains(&"minimax"));
@@ -680,6 +698,7 @@ mod tests {
         assert!(ids.contains(&"cloudflare-workers-ai"));
         assert!(ids.contains(&"gemini"));
         assert!(ids.contains(&"antigravity"));
+        assert!(ids.contains(&"codex"));
         assert!(ids.contains(&"kiro"));
     }
 

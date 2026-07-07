@@ -33,7 +33,8 @@ pub struct OAuthSpec {
     pub authorize_url: Option<&'static str>,
     pub token_url: &'static str,
     pub device_authorization_url: Option<&'static str>,
-    pub client_id: &'static str,
+    pub client_id_env: Option<&'static str>,
+    pub client_id_default: &'static str,
     pub client_secret_env: Option<&'static str>,
     pub client_secret_default: Option<&'static str>,
     pub scopes: &'static [&'static str],
@@ -43,6 +44,23 @@ pub struct OAuthSpec {
 }
 
 impl OAuthSpec {
+    fn client_id(&self) -> Result<String> {
+        if let Some(env) = self.client_id_env
+            && let Ok(value) = std::env::var(env)
+            && !value.is_empty()
+        {
+            return Ok(value);
+        }
+        if !self.client_id_default.is_empty() {
+            return Ok(self.client_id_default.to_string());
+        }
+        Err(CoreError::Validation(format!(
+            "provider '{}' has no OAuth client_id; set {}",
+            self.id,
+            self.client_id_env.unwrap_or("<provider client_id env>")
+        )))
+    }
+
     fn client_secret(&self) -> Option<String> {
         if let Some(env) = self.client_secret_env
             && let Ok(value) = std::env::var(env)
@@ -144,10 +162,11 @@ impl OAuthProvider for GenericOAuthProvider {
         } else {
             code_challenge_s256(&code_verifier)
         };
+        let client_id = self.spec.client_id()?;
 
         let mut params = vec![
             ("response_type", "code".to_string()),
-            ("client_id", self.spec.client_id.to_string()),
+            ("client_id", client_id),
             ("redirect_uri", redirect_uri.to_string()),
         ];
         if !self.spec.scopes.is_empty() {
@@ -175,10 +194,11 @@ impl OAuthProvider for GenericOAuthProvider {
         upstream_client: &Arc<UpstreamClient>,
         redirect_uri: &str,
     ) -> Result<TokenResponse> {
+        let client_id = self.spec.client_id()?;
         let mut params = vec![
             ("grant_type", "authorization_code".to_string()),
             ("code", code.to_string()),
-            ("client_id", self.spec.client_id.to_string()),
+            ("client_id", client_id),
             ("redirect_uri", redirect_uri.to_string()),
         ];
         if !code_verifier.is_empty() {
@@ -208,7 +228,7 @@ impl OAuthProvider for GenericOAuthProvider {
             )));
         }
 
-        let mut params = vec![("client_id", self.spec.client_id.to_string())];
+        let mut params = vec![("client_id", self.spec.client_id()?)];
         if !self.spec.scopes.is_empty() {
             params.push(("scope", self.spec.scopes.join(" ")));
         }
@@ -250,7 +270,7 @@ impl OAuthProvider for GenericOAuthProvider {
                 "urn:ietf:params:oauth:grant-type:device_code".to_string(),
             ),
             ("device_code", device_code.to_string()),
-            ("client_id", self.spec.client_id.to_string()),
+            ("client_id", self.spec.client_id()?),
         ];
         if let Some(secret) = self.spec.client_secret() {
             params.push(("client_secret", secret));
@@ -277,7 +297,7 @@ impl OAuthProvider for GenericOAuthProvider {
     ) -> Result<TokenResponse> {
         let mut params = vec![
             ("grant_type", "refresh_token".to_string()),
-            ("client_id", self.spec.client_id.to_string()),
+            ("client_id", self.spec.client_id()?),
             ("refresh_token", refresh_token.to_string()),
         ];
         if let Some(secret) = self.spec.client_secret() {
@@ -405,7 +425,8 @@ mod tests {
             authorize_url: Some("https://auth.example/authorize"),
             token_url: "https://auth.example/token",
             device_authorization_url: None,
-            client_id: "client-1",
+            client_id_env: None,
+            client_id_default: "client-1",
             client_secret_env: None,
             client_secret_default: None,
             scopes: &["openid", "email"],

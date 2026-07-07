@@ -66,6 +66,8 @@ pub struct TokenResponse {
     pub refresh_token: Option<String>,
     #[serde(default)]
     pub scope: Option<String>,
+    #[serde(default, rename = "id_token", alias = "idToken")]
+    pub id_token: Option<String>,
 }
 
 /// Device Authorization Response (RFC 8628 §3).
@@ -207,6 +209,20 @@ pub trait OAuthProvider: Send + Sync {
         db: DbRef<'_>,
     ) -> Result<TokenResponse>;
 
+    /// Optional metadata extracted directly from a token response.
+    ///
+    /// Providers that receive useful non-secret claims in `id_token` can
+    /// persist them here before `post_exchange` runs. The value is stored as
+    /// plaintext JSON in `accounts.oauth_provider_specific`.
+    fn provider_specific_from_token(&self, _token: &TokenResponse) -> Option<String> {
+        None
+    }
+
+    /// Optional email extracted directly from a token response.
+    fn email_from_token(&self, _token: &TokenResponse) -> Option<String> {
+        None
+    }
+
     /// Post-exchange hook. Called after tokens are stored. Providers can
     /// use this for additional setup (e.g. fetching user info).
     ///
@@ -266,6 +282,9 @@ impl OAuthProviderRegistry {
         let antigravity =
             std::sync::Arc::new(crate::oauth_antigravity::AntigravityOAuthProvider::new());
         reg.register_arc_with_name("antigravity", antigravity);
+        reg.register_arc(std::sync::Arc::new(
+            crate::oauth_codex::CodexOAuthProvider::new(),
+        ));
         reg.register_arc(std::sync::Arc::new(
             crate::oauth_kiro::KiroOAuthProvider::new(),
         ));
@@ -371,8 +390,8 @@ impl TokenRefreshCoordinator {
                     &token.token_type,
                     expires_at.as_deref(),
                     token.scope.as_deref(),
-                    None,
-                    None,
+                    provider.provider_specific_from_token(&token).as_deref(),
+                    provider.email_from_token(&token).as_deref(),
                 )?;
                 Ok(token)
             }
@@ -396,8 +415,8 @@ impl TokenRefreshCoordinator {
                     &token.token_type,
                     expires_at.as_deref(),
                     token.scope.as_deref(),
-                    None,
-                    None,
+                    provider.provider_specific_from_token(&token).as_deref(),
+                    provider.email_from_token(&token).as_deref(),
                 )?;
                 Ok(token)
             }
@@ -525,7 +544,7 @@ pub fn pipeline_token_needs_refresh(db_expires_at: Option<&str>, provider_id: &s
 /// - **Special cases** (e.g. iflow): 24 hours before expiry.
 pub(crate) fn refresh_lead_seconds(provider_id: &str) -> u64 {
     match provider_id {
-        "kiro" | "antigravity" => 300, // 5 minutes
+        "kiro" | "antigravity" | "codex" => 300, // 5 minutes
 
         // Non-rotating providers — refresh 15 min before expiry.
         _ => 900, // 15 minutes
