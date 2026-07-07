@@ -4,3 +4,4 @@ node_modules/
 # TypeScript output
 src/static/dist/
 tests/e2e/.tsbuild/
+data-test.db*
