@@ -44,7 +44,7 @@ fn codex_oauth_spec() -> OAuthSpec {
             ("prompt", "login"),
         ],
         request_encoding: OAuthRequestEncoding::FormUrlEncoded,
-        user_agent: Some(crate::executor_codex::codex_user_agent),
+        user_agent: Some(crate::adapters::codex::codex_user_agent),
     }
 }
 

@@ -2263,3 +2263,246 @@ pub fn sse_payload_needs_parse(payload: &str) -> bool {
 
     has_usage || (has_finish_reason && !has_finish_reason_null)
 }
+
+#[derive(Default, Debug)]
+pub struct ResponsesSseState {
+    pub tool_calls: Vec<serde_json::Value>,
+}
+
+pub fn parse_responses_sse_stream_line(
+    line: &str,
+    chunk_id: &str,
+    created: u64,
+    model_name: &str,
+    state: &mut ResponsesSseState,
+) -> Result<Option<UpstreamSseChunk>> {
+    let line = line.trim();
+    if !line.starts_with("data:") {
+        return Ok(None);
+    }
+    let data = line.trim_start_matches("data:").trim();
+    if data.is_empty() || data == "[DONE]" {
+        return Ok(Some(UpstreamSseChunk {
+            raw_payload: None,
+            payload: serde_json::json!({}),
+            done: true,
+            usage: None,
+            stop_reason: None,
+            delta_reasoning: None,
+            delta_tool_calls: Vec::new(),
+            has_content: false,
+        }));
+    }
+
+    let value: Value = serde_json::from_str(data)
+        .map_err(|e| CoreError::Parse(format!("responses SSE JSON parse: {e}")))?;
+
+    if let Some(error) = value.get("error") {
+        return Err(CoreError::UpstreamError {
+            status: 500,
+            provider: "responses".into(),
+            model: model_name.to_string(),
+            body: error.to_string(),
+        });
+    }
+
+    let event_type = value.get("type").and_then(|v| v.as_str()).unwrap_or("");
+    let mut usage = None;
+    if let Some(u) = value.get("usage") {
+        if let Ok(u) = serde_json::from_value::<OpenAIUsage>(u.clone()) {
+            usage = Some(u);
+        }
+    }
+
+    if event_type == "response.output_item.added" {
+        if let Some(item) = value.get("item") {
+            let item_type = item.get("type").and_then(|v| v.as_str()).unwrap_or("");
+            if item_type == "function_call" {
+                let call_id = item.get("call_id").or_else(|| item.get("id")).and_then(|v| v.as_str()).unwrap_or("call_xyz").to_string();
+                let name = item.get("name").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                
+                state.tool_calls.push(serde_json::json!({
+                    "id": call_id,
+                    "type": "function",
+                    "function": { "name": name.clone(), "arguments": "" }
+                }));
+
+                return Ok(Some(UpstreamSseChunk {
+                    raw_payload: None,
+                    payload: serde_json::json!({
+                        "id": chunk_id,
+                        "object": "chat.completion.chunk",
+                        "created": created,
+                        "model": model_name,
+                        "choices": [{
+                            "index": 0,
+                            "delta": {
+                                "tool_calls": [{
+                                    "index": state.tool_calls.len() - 1,
+                                    "id": call_id,
+                                    "type": "function",
+                                    "function": {
+                                        "name": name,
+                                        "arguments": ""
+                                    }
+                                }]
+                            }
+                        }]
+                    }),
+                    done: false,
+                    usage: None,
+                    stop_reason: None,
+                    delta_reasoning: None,
+                    delta_tool_calls: vec![serde_json::json!({
+                        "index": state.tool_calls.len() - 1,
+                        "id": call_id,
+                        "type": "function",
+                        "function": { "name": name, "arguments": "" }
+                    })],
+                    has_content: false,
+                }));
+            }
+        }
+    }
+
+    if event_type == "response.function_call_arguments.delta" {
+        if let Some(delta) = value.get("delta").and_then(|v| v.as_str()) {
+            let call_id = value.get("call_id").or_else(|| value.get("id")).and_then(|v| v.as_str()).unwrap_or("");
+            let mut index = state.tool_calls.len().saturating_sub(1);
+            
+            for (i, tc) in state.tool_calls.iter_mut().enumerate().rev() {
+                if let Some(id) = tc.get("id").and_then(|v| v.as_str()) {
+                    if id == call_id || call_id.is_empty() {
+                        if let Some(func) = tc.get_mut("function").and_then(|v| v.as_object_mut()) {
+                            if let Some(args) = func.get_mut("arguments") {
+                                if let Some(args_str) = args.as_str() {
+                                    let mut new_args = args_str.to_string();
+                                    new_args.push_str(delta);
+                                    *args = serde_json::Value::String(new_args);
+                                }
+                            }
+                        }
+                        index = i;
+                        break;
+                    }
+                }
+            }
+
+            return Ok(Some(UpstreamSseChunk {
+                raw_payload: None,
+                payload: serde_json::json!({
+                    "id": chunk_id,
+                    "object": "chat.completion.chunk",
+                    "created": created,
+                    "model": model_name,
+                    "choices": [{
+                        "index": 0,
+                        "delta": {
+                            "tool_calls": [{
+                                "index": index,
+                                "function": {
+                                    "arguments": delta
+                                }
+                            }]
+                        }
+                    }]
+                }),
+                done: false,
+                usage: None,
+                stop_reason: None,
+                delta_reasoning: None,
+                delta_tool_calls: vec![serde_json::json!({
+                    "index": index,
+                    "function": { "arguments": delta }
+                })],
+                has_content: true,
+            }));
+        }
+    }
+
+    if event_type == "response.content_part.added" {
+        if let Some(part) = value.get("part") {
+            let text = part.get("text").and_then(|v| v.as_str()).unwrap_or("");
+            if !text.is_empty() {
+                return Ok(Some(UpstreamSseChunk {
+                    raw_payload: None,
+                    payload: serde_json::json!({
+                        "id": chunk_id,
+                        "object": "chat.completion.chunk",
+                        "created": created,
+                        "model": model_name,
+                        "choices": [{
+                            "index": 0,
+                            "delta": {
+                                "content": text
+                            }
+                        }]
+                    }),
+                    done: false,
+                    usage: None,
+                    stop_reason: None,
+                    delta_reasoning: None,
+                    delta_tool_calls: Vec::new(),
+                    has_content: true,
+                }));
+            }
+        }
+    }
+
+    if event_type == "response.text.delta" || event_type == "response.audio.delta" {
+        let delta = value.get("delta").and_then(|v| v.as_str()).unwrap_or("");
+        if !delta.is_empty() {
+            return Ok(Some(UpstreamSseChunk {
+                raw_payload: None,
+                payload: serde_json::json!({
+                    "id": chunk_id,
+                    "object": "chat.completion.chunk",
+                    "created": created,
+                    "model": model_name,
+                    "choices": [{
+                        "index": 0,
+                        "delta": {
+                            "content": delta
+                        }
+                    }]
+                }),
+                done: false,
+                usage: None,
+                stop_reason: None,
+                delta_reasoning: None,
+                delta_tool_calls: Vec::new(),
+                has_content: true,
+            }));
+        }
+    }
+
+    if event_type == "response.done" {
+        let mut stop_reason = Some("stop".to_string());
+        if !state.tool_calls.is_empty() {
+            stop_reason = Some("tool_calls".to_string());
+        }
+        return Ok(Some(UpstreamSseChunk {
+            raw_payload: None,
+            payload: serde_json::json!({
+                "id": chunk_id,
+                "object": "chat.completion.chunk",
+                "created": created,
+                "model": model_name,
+                "choices": [{
+                    "index": 0,
+                    "delta": {},
+                    "finish_reason": stop_reason
+                }],
+                "usage": usage
+            }),
+            done: false,
+            usage,
+            stop_reason,
+            delta_reasoning: None,
+            delta_tool_calls: Vec::new(),
+            has_content: false,
+        }));
+    }
+
+    Ok(None)
+}

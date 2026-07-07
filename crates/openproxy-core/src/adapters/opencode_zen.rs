@@ -50,6 +50,7 @@ impl ProviderAdapter for OpenCodeZenAdapter {
             TargetFormat::Openai => format!("{}/chat/completions", self.config.base_url),
             TargetFormat::Anthropic => format!("{}/messages", self.config.base_url),
             TargetFormat::Gemini => format!("{}/chat/completions", self.config.base_url),
+            TargetFormat::Responses => unreachable!("Responses format handled natively"),
         }
     }
 
@@ -81,6 +82,7 @@ impl ProviderAdapter for OpenCodeZenAdapter {
                 TargetFormat::Openai | TargetFormat::Gemini => {
                     headers.push(("Authorization".into(), format!("Bearer {}", api_key)));
                 }
+                TargetFormat::Responses => unreachable!("Responses format handled natively"),
             }
         }
 

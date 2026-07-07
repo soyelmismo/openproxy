@@ -85,10 +85,12 @@ impl ProviderAdapter for CustomAdapter {
                     model.as_str()
                 )
             }
+            AdapterFormat::Responses => format!("{}/responses", self.config.base_url),
             AdapterFormat::Mixed => match target_format {
                 TargetFormat::Openai => format!("{}/chat/completions", self.config.base_url),
                 TargetFormat::Anthropic => format!("{}/messages", self.config.base_url),
                 TargetFormat::Gemini => format!("{}/chat/completions", self.config.base_url),
+                TargetFormat::Responses => format!("{}/responses", self.config.base_url),
             },
         }
     }
@@ -160,6 +162,7 @@ impl ProviderAdapter for CustomAdapter {
                 AdapterFormat::Openai => TargetFormat::Openai,
                 AdapterFormat::Anthropic => TargetFormat::Anthropic,
                 AdapterFormat::Gemini => TargetFormat::Gemini,
+                AdapterFormat::Responses => TargetFormat::Responses,
                 // For Mixed providers, default to Openai; the model's
                 // stored target_format in the DB will be used at routing
                 // time.

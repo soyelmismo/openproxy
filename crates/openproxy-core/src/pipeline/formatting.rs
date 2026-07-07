@@ -4,6 +4,7 @@ use crate::models::{Model, TargetFormat};
 use crate::pipeline::PipelineRequest;
 use crate::translation::OpenAIMessage;
 use crate::adapters::ProviderAdapter;
+use serde_json::{Value, json};
 
 pub trait TargetFormatter: Send + Sync {
     fn format_request(
@@ -86,5 +87,234 @@ pub fn get_formatter(target_format: TargetFormat) -> Box<dyn TargetFormatter> {
         TargetFormat::Openai => Box::new(OpenaiFormatter),
         TargetFormat::Anthropic => Box::new(AnthropicFormatter),
         TargetFormat::Gemini => Box::new(GeminiFormatter),
+        TargetFormat::Responses => Box::new(ResponsesFormatter),
+    }
+}
+
+pub struct ResponsesFormatter;
+
+impl TargetFormatter for ResponsesFormatter {
+    fn format_request(
+        &self,
+        req: &PipelineRequest,
+        model: &Model,
+        messages_ref: &[OpenAIMessage],
+        stream: bool,
+        _adapter: &dyn ProviderAdapter,
+    ) -> Result<bytes::Bytes, CoreError> {
+        let (resolved_model, effort_from_model) = normalize_model_and_effort(model.model_id.as_str());
+        let mut obj = req.openai_request.extra.clone();
+        obj.insert("model".to_string(), Value::String(resolved_model));
+
+        let mut system_instructions = None;
+        let mut messages_without_system = Vec::new();
+        for msg in messages_ref {
+            if msg.role == "system" && system_instructions.is_none() {
+                system_instructions = Some(content_to_text(msg.content.as_ref()));
+            } else {
+                messages_without_system.push(msg);
+            }
+        }
+
+        obj.insert("input".to_string(), messages_to_responses_input(&messages_without_system));
+        obj.insert("stream".to_string(), Value::Bool(stream));
+        obj.insert("store".to_string(), Value::Bool(false));
+
+        let default_instructions = "Follow the developer instructions in the conversation.".to_string();
+        obj.entry("instructions".to_string()).or_insert_with(|| {
+            Value::String(system_instructions.unwrap_or(default_instructions))
+        });
+
+        if let Some(max_tokens) = req.openai_request.max_tokens {
+            obj.insert("max_output_tokens".to_string(), json!(max_tokens));
+        }
+        if let Some(temperature) = req.openai_request.temperature {
+            obj.insert("temperature".to_string(), json!(temperature));
+        }
+        if let Some(top_p) = req.openai_request.top_p {
+            obj.insert("top_p".to_string(), json!(top_p));
+        }
+        if let Some(tools) = &req.openai_request.tools {
+            obj.insert("tools".to_string(), Value::Array(tools.clone()));
+        }
+        if let Some(tool_choice) = &req.openai_request.tool_choice {
+            obj.insert("tool_choice".to_string(), tool_choice.clone());
+        }
+
+        let effort = req.openai_request
+            .extra
+            .get("reasoning_effort")
+            .and_then(|v| v.as_str())
+            .map(normalize_effort)
+            .or(effort_from_model);
+        if let Some(effort) = effort.filter(|v| *v != "none") {
+            obj.insert(
+                "reasoning".to_string(),
+                json!({
+                    "effort": effort,
+                    "summary": "auto"
+                }),
+            );
+        }
+        if matches!(
+            obj.get("service_tier").and_then(|v| v.as_str()),
+            Some("fast")
+        ) {
+            obj.insert(
+                "service_tier".to_string(),
+                Value::String("priority".to_string()),
+            );
+        }
+
+        let instructions_str = obj
+            .get("instructions")
+            .and_then(|v| v.as_str())
+            .unwrap_or("Follow the developer instructions in the conversation.");
+
+        use sha2::{Sha256, Digest};
+        let mut hasher = Sha256::new();
+        hasher.update(instructions_str.as_bytes());
+        if let Some(tools) = &req.openai_request.tools {
+            if let Ok(tools_str) = serde_json::to_string(tools) {
+                hasher.update(tools_str.as_bytes());
+            }
+        }
+        let hash_hex = hex::encode(hasher.finalize());
+        obj.insert(
+            "prompt_cache_key".to_string(),
+            Value::String(format!("pck_{}", &hash_hex[..24]))
+        );
+
+        match serde_json::to_vec(&Value::Object(obj)) {
+            Ok(v) => Ok(bytes::Bytes::from(v)),
+            Err(e) => Err(CoreError::Parse(format!("serialize responses request: {}", e))),
+        }
+    }
+}
+
+fn messages_to_responses_input(messages: &[&OpenAIMessage]) -> Value {
+    let mut input_items = Vec::new();
+
+    for msg in messages {
+        if msg.role == "tool" {
+            let call_id = msg.tool_call_id.clone().unwrap_or_else(|| "call_xyz".to_string());
+            let content_str = content_to_text(msg.content.as_ref());
+            input_items.push(json!({
+                "type": "item",
+                "role": "tool",
+                "call_id": call_id,
+                "content": [{ "type": "text", "text": content_str }]
+            }));
+            continue;
+        }
+        
+        let mut parts = Vec::new();
+        match &msg.content {
+            Some(Value::String(text)) => {
+                parts.push(json!({ "type": "input_text", "text": text }));
+            }
+            Some(Value::Array(arr)) => {
+                for item in arr {
+                    let item_type = item.get("type").and_then(|v| v.as_str()).unwrap_or("text");
+                    if item_type == "text" {
+                        let text = item.get("text").and_then(|v| v.as_str()).unwrap_or("");
+                        parts.push(json!({ "type": "input_text", "text": text }));
+                    } else if item_type == "image_url" {
+                        if let Some(url_obj) = item.get("image_url").and_then(|v| v.as_object()) {
+                            let url = url_obj.get("url").and_then(|v| v.as_str()).unwrap_or("");
+                            if url.starts_with("data:image/") {
+                                let parts_url: Vec<&str> = url.splitn(2, ',').collect();
+                                if parts_url.len() == 2 {
+                                    let mime = parts_url[0].strip_prefix("data:").and_then(|s| s.strip_suffix(";base64")).unwrap_or("image/jpeg");
+                                    parts.push(json!({
+                                        "type": "input_image",
+                                        "image": parts_url[1],
+                                        "mime_type": mime
+                                    }));
+                                }
+                            } else {
+                                parts.push(json!({
+                                    "type": "input_image",
+                                    "image_url": url
+                                }));
+                            }
+                        }
+                    } else if item_type == "image" {
+                        if let Some(source) = item.get("source").and_then(|v| v.as_object()) {
+                            let data = source.get("data").and_then(|v| v.as_str()).unwrap_or("");
+                            let media_type = source.get("media_type").and_then(|v| v.as_str()).unwrap_or("image/jpeg");
+                            parts.push(json!({
+                                "type": "input_image",
+                                "image": data,
+                                "mime_type": media_type
+                            }));
+                        }
+                    }
+                }
+            }
+            Some(value) => {
+                parts.push(json!({ "type": "input_text", "text": value.to_string() }));
+            }
+            None => {
+                parts.push(json!({ "type": "input_text", "text": "" }));
+            }
+        }
+
+        if let Some(tool_calls) = &msg.tool_calls {
+            for call in tool_calls {
+                    let call_id = call.get("id").and_then(|v| v.as_str()).unwrap_or("call_xyz").to_string();
+                    let func_name = call.get("function").and_then(|v| v.get("name")).and_then(|v| v.as_str()).unwrap_or("").to_string();
+                    let func_args = call.get("function").and_then(|v| v.get("arguments")).and_then(|v| v.as_str()).unwrap_or("{}").to_string();
+                    
+                    parts.push(json!({
+                        "type": "function_call",
+                        "id": call_id,
+                        "name": func_name,
+                        "arguments": func_args
+                    }));
+                }
+        }
+
+        input_items.push(json!({
+            "type": "item",
+            "role": msg.role,
+            "content": parts
+        }));
+    }
+
+    Value::Array(input_items)
+}
+
+fn content_to_text(content: Option<&Value>) -> String {
+    match content {
+        Some(Value::String(text)) => text.clone(),
+        Some(value) => value.to_string(),
+        None => String::new(),
+    }
+}
+
+fn normalize_model_and_effort(model: &str) -> (String, Option<&'static str>) {
+    for (suffix, effort) in [
+        ("-xhigh", "xhigh"),
+        ("-high", "high"),
+        ("-medium", "medium"),
+        ("-low", "low"),
+        ("-none", "none"),
+    ] {
+        if let Some(base) = model.strip_suffix(suffix) {
+            return (base.to_string(), Some(effort));
+        }
+    }
+    (model.to_string(), None)
+}
+
+fn normalize_effort(value: &str) -> &'static str {
+    match value {
+        "max" | "xhigh" => "xhigh",
+        "high" => "high",
+        "medium" => "medium",
+        "low" => "low",
+        "none" => "none",
+        _ => "medium",
     }
 }

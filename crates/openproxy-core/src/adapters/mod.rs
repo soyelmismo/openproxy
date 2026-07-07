@@ -76,6 +76,7 @@ pub enum AdapterFormat {
     Anthropic,
     Mixed,
     Gemini,
+    Responses,
 }
 
 /// Per-provider adapter. One concrete impl per upstream.

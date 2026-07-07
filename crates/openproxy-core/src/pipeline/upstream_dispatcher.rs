@@ -817,6 +817,7 @@ impl UpstreamDispatcher {
         let response_body_value = response_body_raw.clone();
 
         let openai_response = match target_format {
+            crate::models::TargetFormat::Responses => unreachable!("Responses format is handled natively before dispatcher"),
             crate::models::TargetFormat::Openai => {
                 match serde_json::from_value::<OpenAIResponse>(response_body_raw) {
                     Ok(r) => r,

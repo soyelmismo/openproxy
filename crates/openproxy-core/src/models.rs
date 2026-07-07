@@ -101,6 +101,7 @@ pub enum TargetFormat {
     Openai,
     Anthropic,
     Gemini,
+    Responses,
 }
 
 impl TargetFormat {
@@ -109,6 +110,7 @@ impl TargetFormat {
             TargetFormat::Openai => "openai",
             TargetFormat::Anthropic => "anthropic",
             TargetFormat::Gemini => "gemini",
+            TargetFormat::Responses => "responses",
         }
     }
 
@@ -117,6 +119,7 @@ impl TargetFormat {
             "openai" => Ok(TargetFormat::Openai),
             "anthropic" => Ok(TargetFormat::Anthropic),
             "gemini" => Ok(TargetFormat::Gemini),
+            "responses" => Ok(TargetFormat::Responses),
             other => Err(CoreError::Validation(format!(
                 "invalid target_format: {}",
                 other

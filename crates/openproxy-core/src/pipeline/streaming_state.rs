@@ -176,6 +176,7 @@ pub(crate) struct StreamingState {
     pub current_event_type: Option<String>,
     pub done_sent: bool,
     pub acc: Option<ResponseAccumulator>,
+    pub responses_sse_state: crate::sse::ResponsesSseState,
 }
 
 
@@ -223,6 +224,7 @@ impl StreamingState {
             } else {
                 None
             },
+            responses_sse_state: crate::sse::ResponsesSseState::default(),
         }
     }
 
@@ -875,6 +877,7 @@ impl<'a> ChunkProcessor<'a> {
         let connect_and_send_ms = ctx.connect_and_send_ms;
 
                         let parsed = match target_format {
+                            crate::models::TargetFormat::Responses => crate::sse::parse_responses_sse_stream_line(line, &chunk_id, created, &model_name, &mut state.responses_sse_state),
                             crate::models::TargetFormat::Openai => crate::sse::parse_openai_sse_line(line),
                             crate::models::TargetFormat::Gemini => {
                                 crate::sse::parse_gemini_sse_line(line, &chunk_id, created, &model_name)

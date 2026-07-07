@@ -1,5 +1,27 @@
 use super::*;
 
+const DEFAULT_CODEX_CLIENT_VERSION: &str = "0.142.0";
+
+fn safe_env_value(key: &str) -> Option<String> {
+    std::env::var(key).ok().filter(|v| !v.trim().is_empty())
+}
+
+pub fn codex_client_version() -> String {
+    safe_env_value("OPENPROXY_CODEX_CLIENT_VERSION")
+        .or_else(|| safe_env_value("CODEX_CLIENT_VERSION"))
+        .unwrap_or_else(|| DEFAULT_CODEX_CLIENT_VERSION.to_string())
+}
+
+pub fn codex_user_agent() -> String {
+    safe_env_value("OPENPROXY_CODEX_USER_AGENT")
+        .or_else(|| safe_env_value("CODEX_USER_AGENT"))
+        .unwrap_or_else(|| {
+            format!(
+                "codex-cli/{} (Windows 10.0.26200; x64)",
+                codex_client_version()
+            )
+        })
+}
 pub struct CodexAdapter {
     config: ProviderAdapterConfig,
 }
@@ -11,7 +33,7 @@ impl CodexAdapter {
                 id: ProviderId::new("codex"),
                 base_url: "https://chatgpt.com/backend-api/codex".into(),
                 auth_type: AdapterAuthType::Bearer,
-                format: AdapterFormat::Openai,
+                format: AdapterFormat::Responses,
                 extra_headers: vec![],
             },
         }
@@ -37,7 +59,7 @@ impl CodexAdapter {
         .map(|(id, name)| DiscoveredModel {
             model_id: ModelId::new(id),
             display_name: Some(name.to_string()),
-            target_format: TargetFormat::Openai,
+            target_format: TargetFormat::Responses,
             context_length: Some(400_000),
             max_output_tokens: Some(32_768),
             input_modalities: None,
@@ -96,11 +118,11 @@ impl ProviderAdapter for CodexAdapter {
             ("originator".into(), "codex_cli_rs".into()),
             (
                 "Version".into(),
-                crate::executor_codex::codex_client_version(),
+                crate::adapters::codex::codex_client_version(),
             ),
             (
                 "User-Agent".into(),
-                crate::executor_codex::codex_user_agent(),
+                crate::adapters::codex::codex_user_agent(),
             ),
         ]
     }
@@ -115,32 +137,5 @@ impl ProviderAdapter for CodexAdapter {
         _api_key: &str,
     ) -> Result<Vec<DiscoveredModel>> {
         Ok(self.hardcoded_models())
-    }
-
-    async fn execute_custom(
-        &self,
-        upstream_client: &Arc<UpstreamClient>,
-        req: Arc<crate::pipeline::PipelineRequest>,
-        resolved_target: &crate::pipeline::context::ResolvedTarget,
-        ctx: Option<crate::adapters::CustomExecutionContext>,
-    ) -> Option<std::result::Result<crate::translation::OpenAIResponse, CoreError>> {
-        let custom_meta = resolved_target.custom_meta.as_ref()?;
-        let mut custom_req = (*req.openai_request).clone();
-        custom_req.model = resolved_target.model.model_id.as_str().to_string();
-
-        Some(
-            crate::executor_codex::execute_codex(
-                upstream_client,
-                &custom_meta.access_token,
-                custom_meta.codex_workspace_id.as_deref(),
-                &custom_req,
-                req.client_disconnected.clone(),
-                req.stream_sink.as_ref(),
-                None,
-                ctx,
-                resolved_target.target.account_id,
-            )
-            .await,
-        )
     }
 }

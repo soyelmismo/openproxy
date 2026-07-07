@@ -263,7 +263,7 @@ impl Pipeline {
             }
         }
 
-        if let Some(result) = adapter
+        let custom_result = adapter
             .execute_custom(
                 &self.config.upstream_client,
                 Arc::clone(&req),
@@ -282,8 +282,9 @@ impl Pipeline {
                         .unwrap_or(self.config.cooldown_factor),
                 }),
             )
-            .await
-        {
+            .await;
+
+        if let Some(result) = custom_result {
             return match result {
                 Ok(response) => {
                     let total_ms = started.elapsed().as_millis() as u64;
@@ -418,6 +419,7 @@ impl Pipeline {
             AdapterFormat::Anthropic => crate::models::TargetFormat::Anthropic,
             AdapterFormat::Mixed => model.target_format,
             AdapterFormat::Gemini => crate::models::TargetFormat::Gemini,
+            AdapterFormat::Responses => crate::models::TargetFormat::Responses,
         };
 
         let stream = if !req.openai_request.stream && req.stream_sink.is_some() {

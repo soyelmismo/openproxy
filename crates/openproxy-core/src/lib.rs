@@ -27,7 +27,7 @@ pub mod discovery_scheduler;
 pub mod endpoint;
 pub mod antigravity_headers;
 pub mod executor_antigravity;
-pub mod executor_codex;
+
 pub mod executor_kiro;
 pub mod model_normalize;
 pub mod models;
