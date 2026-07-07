@@ -212,18 +212,10 @@ impl AntigravityAdapter {
     }
 }
 
-impl Default for AntigravityAdapter {
-    fn default() -> Self {
-        Self::new()
-    }
-}
+crate::adapters::derive_default_from_new!(AntigravityAdapter);
 
 #[async_trait]
 impl ProviderAdapter for AntigravityAdapter {
-    fn id(&self) -> &ProviderId {
-        &self.config.id
-    }
-
     fn config(&self) -> &ProviderAdapterConfig {
         &self.config
     }
@@ -231,23 +223,6 @@ impl ProviderAdapter for AntigravityAdapter {
     fn build_chat_url(&self, _target_format: TargetFormat, _model: &ModelId) -> String {
         // Antigravity uses the Cloud Code endpoint; model goes in the body.
         format!("{}/v1internal:generateContent", self.config.base_url)
-    }
-
-    fn build_auth_header(&self, api_key: &str) -> (String, String) {
-        ("Authorization".into(), format!("Bearer {}", api_key))
-    }
-
-    fn build_headers(
-        &self,
-        api_key: &str,
-        _target_format: TargetFormat,
-        _model: &ModelId,
-    ) -> Vec<(String, String)> {
-        let (name, value) = self.build_auth_header(api_key);
-        vec![
-            (name, value),
-            ("Content-Type".into(), "application/json".into()),
-        ]
     }
 
     fn models_url(&self) -> Option<String> {

@@ -26,11 +26,7 @@ impl NvidiaNimAdapter {
     }
 }
 
-impl Default for NvidiaNimAdapter {
-    fn default() -> Self {
-        Self::new()
-    }
-}
+crate::adapters::derive_default_from_new!(NvidiaNimAdapter);
 
 #[async_trait]
 impl ProviderAdapter for NvidiaNimAdapter {

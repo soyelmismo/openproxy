@@ -26,11 +26,7 @@ impl NousResearchAdapter {
     }
 }
 
-impl Default for NousResearchAdapter {
-    fn default() -> Self {
-        Self::new()
-    }
-}
+crate::adapters::derive_default_from_new!(NousResearchAdapter);
 
 #[async_trait]
 impl ProviderAdapter for NousResearchAdapter {

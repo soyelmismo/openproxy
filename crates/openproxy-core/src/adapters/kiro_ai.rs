@@ -329,11 +329,7 @@ impl KiroAdapter {
     }
 }
 
-impl Default for KiroAdapter {
-    fn default() -> Self {
-        Self::new()
-    }
-}
+crate::adapters::derive_default_from_new!(KiroAdapter);
 
 #[async_trait]
 impl ProviderAdapter for KiroAdapter {

@@ -105,7 +105,9 @@ pub enum AdapterFormat {
 #[async_trait]
 pub trait ProviderAdapter: Send + Sync {
     /// Stable identifier of this provider (e.g. `"openrouter"`).
-    fn id(&self) -> &ProviderId;
+    fn id(&self) -> &ProviderId {
+        &self.config().id
+    }
 
     /// Static configuration snapshot.
     fn config(&self) -> &ProviderAdapterConfig;
@@ -193,7 +195,14 @@ pub trait ProviderAdapter: Send + Sync {
 
     /// Build the auth header pair `(header_name, header_value)` for the given
     /// API key.
-    fn build_auth_header(&self, api_key: &str) -> (String, String);
+    fn build_auth_header(&self, api_key: &str) -> (String, String) {
+        match self.config().auth_type {
+            AdapterAuthType::Bearer => ("Authorization".into(), format!("Bearer {}", api_key)),
+            AdapterAuthType::GoogApiKey => ("x-goog-api-key".into(), api_key.to_string()),
+            // Expandir según existan otros
+            _ => unimplemented!(),
+        }
+    }
 
     /// Build the full set of request headers for a chat completion call.
     ///
@@ -204,9 +213,18 @@ pub trait ProviderAdapter: Send + Sync {
     fn build_headers(
         &self,
         api_key: &str,
-        target_format: TargetFormat,
-        model: &ModelId,
-    ) -> Vec<(String, String)>;
+        _target_format: TargetFormat,
+        _model: &ModelId,
+    ) -> Vec<(String, String)> {
+        let (name, value) = self.build_auth_header(api_key);
+        let mut headers = Vec::with_capacity(2 + self.config().extra_headers.len());
+        headers.push((name, value));
+        headers.push(("Content-Type".into(), "application/json".into()));
+        for (k, v) in &self.config().extra_headers {
+            headers.push((k.clone(), v.clone()));
+        }
+        headers
+    }
 
     /// URL of the provider's `/models` endpoint for live discovery, or `None`
     /// if the provider does not expose a model list (e.g. MiniMax).
@@ -262,6 +280,17 @@ pub trait ProviderAdapter: Send + Sync {
     }
 }
 
+
+macro_rules! derive_default_from_new {
+    ($name:ident) => {
+        impl Default for $name {
+            fn default() -> Self {
+                Self::new()
+            }
+        }
+    };
+}
+pub(crate) use derive_default_from_new;
 
 pub mod openrouter;
 pub mod minimax;
