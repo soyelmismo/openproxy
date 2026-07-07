@@ -133,8 +133,22 @@ export interface WsEnvelope {
 // close the menu when the user clicks elsewhere.
 let columnsMenuOpen: boolean = false;
 
+type RenderableLogRow = RecentUsageRow & { __inflight?: boolean };
+
+const SYNTHETIC_LOG_ID_THRESHOLD = 1_000_000_000;
+const renderedLogRowsByKey = new Map<string, RenderableLogRow>();
+let logsRenderScheduled = false;
+
+function isSyntheticLogId(id: number): boolean {
+  return Number.isFinite(id) && id > SYNTHETIC_LOG_ID_THRESHOLD;
+}
+
+function isInflightLogRow(row: RecentUsageRow & { __inflight?: boolean }): boolean {
+  return !!row.__inflight || !row.id || row.id <= 0 || isSyntheticLogId(row.id);
+}
+
 function totalPages(): number {
-  return Math.max(1, Math.ceil(state.logs.rows.length / state.logs.rowsPerPage));
+  return Math.max(1, Math.ceil(getRenderableLogRows().length / state.logs.rowsPerPage));
 }
 
 // ---- Visible-columns state ---------------------------------------------
@@ -180,6 +194,91 @@ function saveVisibleColumns(): void {
 const logKeyMap = new WeakMap<RecentUsageRow, string>();
 let logKeyCounter = 0;
 
+function fallbackLogRowKey(row: RecentUsageRow): string {
+  let fallback = logKeyMap.get(row);
+  if (!fallback) {
+    logKeyCounter++;
+    fallback = `fallback:${logKeyCounter}`;
+    logKeyMap.set(row, fallback);
+  }
+  return fallback;
+}
+
+function stableLogRowKey(row: RenderableLogRow): string {
+  if (isInflightLogRow(row)) {
+    if (row.trace_id) return `inflight:tid:${row.trace_id}`;
+    if (row.request_id) return `inflight:rid:${row.request_id}`;
+    return fallbackLogRowKey(row);
+  }
+  if (row.id && row.id > 0 && !isSyntheticLogId(row.id)) return `id:${row.id}`;
+  if (row.trace_id) return `tid:${row.trace_id}`;
+  if (row.request_id) return `rid:${row.request_id}`;
+  return fallbackLogRowKey(row);
+}
+
+function ensureUniqueRenderKeys(rows: RenderableLogRow[]): WeakMap<RecentUsageRow, string> {
+  const seen = new Set<string>();
+  const keys = new WeakMap<RecentUsageRow, string>();
+  for (const row of rows) {
+    const baseKey = stableLogRowKey(row);
+    let key = baseKey;
+    if (seen.has(key)) {
+      let suffix = 1;
+      while (seen.has(`${baseKey}:dup:${suffix}`)) suffix++;
+      key = `${baseKey}:dup:${suffix}`;
+    }
+    seen.add(key);
+    keys.set(row, key);
+  }
+  return keys;
+}
+
+function compareRenderableLogRows(a: RenderableLogRow, b: RenderableLogRow): number {
+  const aInflight = isInflightLogRow(a);
+  const bInflight = isInflightLogRow(b);
+  if (aInflight !== bInflight) return aInflight ? -1 : 1;
+
+  const aTime = Date.parse(a.created_at || "") || 0;
+  const bTime = Date.parse(b.created_at || "") || 0;
+  if (aInflight && bInflight) {
+    const byTime = bTime - aTime;
+    if (byTime !== 0) return byTime;
+    return stableLogRowKey(a).localeCompare(stableLogRowKey(b));
+  }
+
+  const byId = (b.id || 0) - (a.id || 0);
+  if (byId !== 0) return byId;
+  const byTime = bTime - aTime;
+  if (byTime !== 0) return byTime;
+  return stableLogRowKey(a).localeCompare(stableLogRowKey(b));
+}
+
+function getRenderableLogRows(): RenderableLogRow[] {
+  const inflightRows: RenderableLogRow[] = [
+    ...Array.from(state.logs.inflightByTraceId.values()),
+    ...Array.from(state.logs.inflightByRequestId.values()),
+  ].map((p) => Object.assign({}, p, { id: 0, __inflight: true }));
+
+  return (state.logs.rows as RenderableLogRow[])
+    .concat(inflightRows)
+    .sort(compareRenderableLogRows);
+}
+
+function scheduleLogsViewUpdate(): void {
+  if (state.currentView?.name !== "logs") return;
+  if (logsRenderScheduled) return;
+  logsRenderScheduled = true;
+  const flush = (): void => {
+    logsRenderScheduled = false;
+    if (state.currentView?.name === "logs") requestUpdate();
+  };
+  if (typeof requestAnimationFrame === "function") {
+    requestAnimationFrame(flush);
+  } else {
+    setTimeout(flush, 16);
+  }
+}
+
 function mergeLogsByDescId(existing: RecentUsageRow[], incoming: RecentUsageRow[]): RecentUsageRow[] {
   // Key strategy: each attempt is a SEPARATE row, keyed by its unique
   // `trace_id` (per-attempt). Retries of the same `request_id` have
@@ -204,13 +303,7 @@ function mergeLogsByDescId(existing: RecentUsageRow[], incoming: RecentUsageRow[
     if (r.id && r.id > 0) return `id:${r.id}`;
     if (r.trace_id) return `tid:${r.trace_id}`;
     if (r.request_id) return `rid:${r.request_id}`;
-    let fallback = logKeyMap.get(r);
-    if (!fallback) {
-      logKeyCounter++;
-      fallback = `fallback:${logKeyCounter}`;
-      logKeyMap.set(r, fallback);
-    }
-    return fallback;
+    return fallbackLogRowKey(r);
   };
   for (const row of existing) {
     merged.set(rowKey(row), row);
@@ -291,6 +384,7 @@ function renderHeaderRow(visibleColKeys: Set<string>): TemplateResult {
 function renderLogRow(
   r: RecentUsageRow & { __inflight?: boolean },
   visibleColKeys: Set<string>,
+  rowKey: string,
 ): TemplateResult {
   // Resolve the live stage for this row. Primary key is
   // `trace_id` so each attempt of a multi-attempt request
@@ -313,8 +407,7 @@ function renderLogRow(
   // terminal), so synthesizing a terminal stage from
   // status_code>0 would render "completed / 0ms" while the
   // request is still streaming (see HALLAZGO 1 + NUEVO BUG A).
-  const isInflight: boolean =
-    !!r.__inflight || !r.id || r.id <= 0 || r.id > 1_000_000_000;
+  const isInflight: boolean = isInflightLogRow(r);
   let stage: StageEvent | undefined;
   if (!isInflight && r.status_code > 0) {
     const hasError = !!(r.error_message && r.error_message.length > 0);
@@ -340,7 +433,7 @@ function renderLogRow(
       (r.request_id && state.logs.stagesByRequestId.get(r.request_id)) ||
       undefined;
   }
-  return html`${renderLogRowHtml(r, stage, visibleColKeys, r.total_ms)}`;
+  return html`${renderLogRowHtml(r, stage, visibleColKeys, r.total_ms, rowKey)}`;
 }
 
 function renderPagination(totalRows: number, totalP: number): TemplateResult {
@@ -367,31 +460,12 @@ function renderColumnsMenu(): TemplateResult {
 }
 
 function renderLogsView(): TemplateResult {
-  // Build the merged row list: historical rows + in-flight
-  // placeholders. The inflight rows get a synthetic id
-  // (MAX_SAFE_INTEGER - (now - created_at_ms)) so they sort to the
-  // top of the descending-id list (newest first) without colliding
-  // with real DB ids, AND so newer inflights render above older
-  // ones (see HALLAZGO 2).
-  const inflightRows: (RecentUsageRow & { __inflight: boolean })[] = [
-    ...Array.from(state.logs.inflightByTraceId.values()),
-    ...Array.from(state.logs.inflightByRequestId.values()),
-  ].map((p) => {
-    const t = Date.parse(p.created_at);
-    const now = Date.now();
-    // Older inflight → larger (now - t) → smaller syntheticId → renders BELOW newer ones.
-    // Newer inflight → smaller (now - t) → syntheticId near MAX_SAFE_INTEGER → renders at TOP.
-    // This preserves newest-first ordering consistent with finalized rows
-    // (sorted by DB id DESC). Previously syntheticId = MAX_SAFE_INTEGER - t
-    // caused newer inflight to render BELOW older ones (HALLAZGO 2).
-    const syntheticId = isFinite(t)
-      ? Number.MAX_SAFE_INTEGER - Math.max(0, now - t)
-      : Number.MAX_SAFE_INTEGER;
-    return Object.assign({}, p, { id: syntheticId, __inflight: true });
-  });
-  const rows = (state.logs.rows as (RecentUsageRow & { __inflight?: boolean })[])
-    .concat(inflightRows)
-    .sort((a, b) => (b.id || 0) - (a.id || 0));
+  // Build the merged row list: historical rows + in-flight placeholders.
+  // In-flight rows intentionally keep `id=0`; their render identity and
+  // click lookup are keyed by `trace_id`/`request_id`. Older code used
+  // time-varying synthetic ids, which made the visible row identity
+  // unstable during bursts.
+  const rows = getRenderableLogRows();
   const totalRows = rows.length;
   const rpp = state.logs.rowsPerPage;
   const totalP = Math.max(1, Math.ceil(totalRows / rpp));
@@ -407,28 +481,11 @@ function renderLogsView(): TemplateResult {
   }
   const visibleColKeys = state.logs.visibleColumns || new Set(LOG_COLUMNS.map((c) => c.key));
 
-  const seenKeys = new Set<string>();
-  const passKeys = new WeakMap<RecentUsageRow, string>();
+  const passKeys = ensureUniqueRenderKeys(pageRows);
+  renderedLogRowsByKey.clear();
   for (const r of pageRows) {
-    let key = r.trace_id ? `tid:${r.trace_id}` : (r.id && r.id > 0 ? `id:${r.id}` : (r.request_id ? `req:${r.request_id}` : ""));
-    if (!key) {
-      let fallback = logKeyMap.get(r);
-      if (!fallback) {
-        logKeyCounter++;
-        fallback = `fallback:${logKeyCounter}`;
-        logKeyMap.set(r, fallback);
-      }
-      key = fallback;
-    }
-    if (seenKeys.has(key)) {
-      let suffix = 1;
-      while (seenKeys.has(`${key}_dup${suffix}`)) {
-        suffix++;
-      }
-      key = `${key}_dup${suffix}`;
-    }
-    seenKeys.add(key);
-    passKeys.set(r, key);
+    const key = passKeys.get(r);
+    if (key) renderedLogRowsByKey.set(key, r);
   }
 
   // The connection-status badge and the recording-toggle button are
@@ -466,7 +523,10 @@ function renderLogsView(): TemplateResult {
           : repeat(
               pageRows,
               (r: RecentUsageRow) => passKeys.get(r)!,
-              (r: RecentUsageRow) => html`<div data-key=${passKeys.get(r)!}>${renderLogRow(r, visibleColKeys)}</div>`,
+              (r: RecentUsageRow) => {
+                const rowKey = passKeys.get(r)!;
+                return html`<div data-key=${rowKey}>${renderLogRow(r, visibleColKeys, rowKey)}</div>`;
+              },
             )}
       </div>
       ${renderPagination(totalRows, totalP)}
@@ -492,8 +552,10 @@ function onLogsClick(e: Event): void {
   const id = el.dataset["id"] || "";
   const requestId = el.dataset["requestId"] || "";
   const traceId = el.dataset["traceId"] || "";
+  const rowKey = el.dataset["rowKey"] || "";
   if (!id && !requestId) return;
-  void openLogDetail(id, requestId, traceId);
+  const clickedRow = rowKey ? renderedLogRowsByKey.get(rowKey) : undefined;
+  void openLogDetail(id, requestId, traceId, clickedRow);
 }
 
 function onToggleColumnsMenu(): void {
@@ -600,7 +662,7 @@ function handleStageEvent(event: StageEvent): void {
   // rare case where the event has no `trace_id` (we keep both
   // maps in sync via `setStage`, but only `stagesByTraceId` is
   // read by the renderer).
-  setStage(event, requestId);
+  const stageAccepted = setStage(event, requestId);
   // Find an existing row in the rendered list that matches this
   // event's `(request_id, trace_id)`. A matching row is either:
   //   * a row whose `trace_id` equals the event's — the normal
@@ -619,8 +681,12 @@ function handleStageEvent(event: StageEvent): void {
   if (exactRow) {
     if (exactRow.id != null) state.logs.rowById.set(exactRow.id, exactRow);
     if (state.logs.followTail) state.logs.page = 1;
-    if (state.currentView?.name === "logs") requestUpdate();
+    scheduleLogsViewUpdate();
     if (state.currentView?.name === "logs") updateOpenLogDetail(exactRow as unknown as LogDetailLog);
+    return;
+  }
+  if (!stageAccepted) {
+    scheduleLogsViewUpdate();
     return;
   }
   // A row exists for this `request_id` but with a different
@@ -658,6 +724,10 @@ function handleStageEvent(event: StageEvent): void {
       completion_tokens_estimated: false,
     });
   } else if (traceId && state.logs.inflightByTraceId.has(traceId)) {
+    if (!stageAccepted) {
+      scheduleLogsViewUpdate();
+      return;
+    }
     // Update existing inflight placeholder with new stage event
     // data (model, provider, streaming status). The `started`
     // event arrives with an empty upstream_model_id; later
@@ -716,6 +786,10 @@ function handleStageEvent(event: StageEvent): void {
       completion_tokens_estimated: false,
     });
   } else if (!traceId && state.logs.inflightByRequestId.has(requestId)) {
+    if (!stageAccepted) {
+      scheduleLogsViewUpdate();
+      return;
+    }
     const existing = state.logs.inflightByRequestId.get(requestId)!;
     if (event.upstream_model_id) existing.upstream_model_id = event.upstream_model_id;
     if (event.provider_id) existing.provider_id = event.provider_id;
@@ -738,14 +812,14 @@ function handleStageEvent(event: StageEvent): void {
     }
   }
   if (state.logs.followTail) state.logs.page = 1;
-  if (state.currentView?.name === "logs") requestUpdate();
+  scheduleLogsViewUpdate();
 }
 
 // Mirror the stage event into the two stage maps keyed by
 // `trace_id` (primary) and `request_id` (fallback for events
 // with an empty `trace_id`). Centralized so callers can't forget
 // to update one of the two.
-function setStage(event: StageEvent, requestId: string): void {
+function setStage(event: StageEvent, requestId: string): boolean {
   const traceId = event.trace_id || "";
   // Terminal events ("completed" / "failed" / "cancelled") are sticky — a late
   // non-terminal event (e.g. a reordered "streaming" broadcast, or a "connecting"
@@ -753,13 +827,45 @@ function setStage(event: StageEvent, requestId: string): void {
   // terminal that's already in the map.
   const isTerminal = (s: string): boolean =>
     s === "completed" || s === "failed" || s === "cancelled";
+  const stageRank = (s: string): number => {
+    switch (s) {
+      case "started": return 1;
+      case "connecting": return 2;
+      case "waiting_ttft": return 3;
+      case "streaming": return 4;
+      case "completed":
+      case "failed":
+      case "cancelled":
+        return 5;
+      default:
+        return 0;
+    }
+  };
+  const isOlderNonTerminal = (incoming: StageEvent, current: StageEvent): boolean => {
+    if (isTerminal(incoming.stage)) return false;
+    const incomingElapsed = typeof incoming.elapsed_ms === "number" ? incoming.elapsed_ms : -1;
+    const currentElapsed = typeof current.elapsed_ms === "number" ? current.elapsed_ms : -1;
+    if (incomingElapsed < currentElapsed) return true;
+    if (incomingElapsed > currentElapsed) return false;
+
+    const incomingTime = Date.parse(incoming.timestamp || "") || 0;
+    const currentTime = Date.parse(current.timestamp || "") || 0;
+    if (incomingTime < currentTime) return true;
+    if (incomingTime > currentTime) return false;
+
+    return stageRank(incoming.stage) < stageRank(current.stage);
+  };
   const map = traceId ? state.logs.stagesByTraceId : state.logs.stagesByRequestId;
   const key = traceId || requestId;
   const existing = map.get(key);
   if (existing && isTerminal(existing.stage) && !isTerminal(event.stage)) {
-    return;
+    return false;
+  }
+  if (existing && isOlderNonTerminal(event, existing)) {
+    return false;
   }
   map.set(key, event);
+  return true;
 }
 
 // Synthesize a terminal stage event from a finalized usage row
@@ -922,7 +1028,7 @@ function reapStaleInflight(): void {
   scan(state.logs.inflightByTraceId, true);
   scan(state.logs.inflightByRequestId, false);
 
-  if (state.currentView?.name === "logs") requestUpdate();
+  scheduleLogsViewUpdate();
 }
 
 export function startStaleInflightReaper(): void {
@@ -966,7 +1072,7 @@ async function resyncUsageRows(sinceId: number): Promise<void> {
         synthesizeTerminalEvent(r);
       }
       if (state.logs.followTail) state.logs.page = 1;
-      if (state.currentView?.name === "logs") requestUpdate();
+      scheduleLogsViewUpdate();
     }
   } catch (e: unknown) {
     const err = e instanceof Error ? e : null;
@@ -1023,7 +1129,7 @@ function handleLogsMessage(raw: MessageEvent): void {
       synthesizeTerminalEvent(r);
     }
     state.logs.page = 1; state.logs.followTail = true;
-    if (state.currentView?.name === "logs") requestUpdate();
+    scheduleLogsViewUpdate();
   } else if (msg.type === "row") {
     const candidate = msg.data ?? msg.row ?? msg;
     if (!isRecentUsageRowShape(candidate)) return;
@@ -1057,7 +1163,7 @@ function handleLogsMessage(raw: MessageEvent): void {
       reapRaceLosers(row);
     }
     if (state.logs.followTail) state.logs.page = 1;
-    if (state.currentView?.name === "logs") requestUpdate();
+    scheduleLogsViewUpdate();
     if (isLogsViewActive) updateOpenLogDetail(row as unknown as LogDetailLog);
   } else if (msg.type === "stage") {
     const candidate = msg.data ?? msg;
@@ -1113,16 +1219,26 @@ function handleLogsMessage(raw: MessageEvent): void {
   }
 }
 
-async function openLogDetail(id: string, requestId: string, traceId?: string): Promise<void> {
+async function openLogDetail(
+  id: string,
+  requestId: string,
+  traceId?: string,
+  clickedRow?: RenderableLogRow,
+): Promise<void> {
   const gen: number = bumpOpenLogDetailGeneration();
   const numericId = Number(id);
-  const isSyntheticId: boolean =
-    Number.isFinite(numericId) && numericId > 1_000_000_000;
+  const isSyntheticId: boolean = isSyntheticLogId(numericId);
     
   let row: RecentUsageRow | undefined;
+  if (clickedRow) {
+    const exactFinalRow = clickedRow.trace_id
+      ? state.logs.rows.find((r) => r.request_id === requestId && r.trace_id === clickedRow.trace_id)
+      : state.logs.rows.find((r) => r.request_id === requestId && !r.trace_id);
+    row = exactFinalRow || clickedRow;
+  }
 
   // 1. Exact DB id match
-  if (Number.isFinite(numericId) && numericId > 0 && !isSyntheticId) {
+  if (!row && Number.isFinite(numericId) && numericId > 0 && !isSyntheticId) {
     row = state.logs.rowById.get(numericId) || state.logs.rows.find((r) => Number(r.id) === numericId);
   }
   // 2. Exact trace_id match
@@ -1166,7 +1282,7 @@ async function openLogDetail(id: string, requestId: string, traceId?: string): P
     (traceId ? state.logs.inflightByTraceId.get(traceId) : undefined) ||
     (requestId ? state.logs.inflightByRequestId.get(requestId) : undefined);
     
-  const isInflight: boolean = !!inflight || isSyntheticId || (row.status_code === 0);
+  const isInflight: boolean = !!inflight || isSyntheticId || isInflightLogRow(row as RenderableLogRow);
   const finalRow = row;
   // Do not merge inflight/ghost rows into `state.logs.rows` — they
   // have id 0 / synthetic ids and would duplicate the inflight

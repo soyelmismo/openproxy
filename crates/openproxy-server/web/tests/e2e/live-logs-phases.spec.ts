@@ -171,7 +171,7 @@ async function injectAndSnapshot(
       w.__openproxyLogsGoPage(1);
 
       // Wait for the scheduled microtask rendering to execute.
-      await new Promise(resolve => queueMicrotask(resolve));
+      await new Promise<void>((resolve) => queueMicrotask(resolve));
 
       // Read what the renderer shows. The `.log-row` elements carry
       // `data-trace-id` (set by `renderLogRowHtml` in

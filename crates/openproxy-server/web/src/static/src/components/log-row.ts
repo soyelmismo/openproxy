@@ -104,6 +104,7 @@ export function renderLogRowHtml(
   stage: StageEvent | undefined,
   visibleColumns: Set<string> | null,
   total_ms?: number | null,
+  rowKey?: string,
 ): TemplateResult {
   const inflight: boolean = !!(row as unknown as Record<string, unknown>)["__inflight"];
   const isTerminal = stage && (stage.stage === "completed" || stage.stage === "failed" || stage.stage === "cancelled");
@@ -119,5 +120,5 @@ export function renderLogRowHtml(
     streaming ? "streaming" : "",
   ].filter(Boolean).join(" ");
   const cells = buildLogRowCells(row, stage, visibleColumns, total_ms);
-  return html`<button class="${cls}" data-id="${String(row.id)}" data-request-id="${row.request_id || ""}" data-trace-id="${row.trace_id || ""}" aria-label="Open usage detail for ${row.request_id || String(row.id) || ""}">${cells}</button>`;
+  return html`<button class="${cls}" data-id="${String(row.id)}" data-request-id="${row.request_id || ""}" data-trace-id="${row.trace_id || ""}" data-row-key="${rowKey || ""}" aria-label="Open usage detail for ${row.request_id || String(row.id) || ""}">${cells}</button>`;
 }
