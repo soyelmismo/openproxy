@@ -6,6 +6,7 @@ import { state } from "./index.js";
 import { LOGS_WS_RECONNECT_DELAYS } from "../lib/constants.js";
 import type { StageEvent } from "../lib/types/api.js";
 import { dispatchWs } from "./ws-bus.js";
+import { liveLogsStore } from "./live-logs-store.js";
 import type { WsEnvelope } from "../views/logs.js";
 import { getToken } from "./auth.js";
 
@@ -146,8 +147,8 @@ export function connectLogsWebSocket(): void {
     state.logs.reconnectAttempt = 0;
     lastPong = Date.now();
     setLogsStatus("connected");
-    if (state.logs.lastSeenId > 0) {
-      ws.send(JSON.stringify({ type: "subscribe", since_id: state.logs.lastSeenId }));
+    if (liveLogsStore.lastAppliedCursor > 0) {
+      ws.send(JSON.stringify({ type: "subscribe", cursor: liveLogsStore.lastAppliedCursor }));
     }
   });
   ws.addEventListener("message", (event: MessageEvent) => {
