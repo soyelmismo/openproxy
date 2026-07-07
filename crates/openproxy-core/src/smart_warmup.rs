@@ -51,14 +51,15 @@ pub async fn start_smart_warmup_scheduler(
 
     tokio::spawn(async move {
         loop {
-            sleep(Duration::from_secs(interval)).await;
             run_warmup_cycle(&db_pool, &config, &upstream, &master_key).await;
+            sleep(Duration::from_secs(interval)).await;
         }
     });
 }
 
 async fn run_warmup_cycle(db_pool: &Arc<DbPool>, config: &AppConfig, upstream: &Arc<UpstreamClient>, master_key: &Arc<MasterKey>) {
-    let account_list: Vec<(String, String)> = {
+    // Extract necessary data so we can drop the DB lock before the network call
+    let account_list: Vec<(i64, String, String)> = {
         let conn = db_pool.writer();
 
         let provider_id = ProviderId::new("antigravity");
@@ -76,7 +77,7 @@ async fn run_warmup_cycle(db_pool: &Arc<DbPool>, config: &AppConfig, upstream: &
             .filter_map(|a| {
                 accounts::decrypt_access_token(&conn, a.id, master_key)
                     .ok()
-                    .map(|token| (a.id.0.to_string(), token))
+                    .map(|token| (a.id.0, a.id.0.to_string(), token))
             })
             .collect()
     };
@@ -84,7 +85,7 @@ async fn run_warmup_cycle(db_pool: &Arc<DbPool>, config: &AppConfig, upstream: &
     let now = chrono::Utc::now().timestamp();
     let models_to_ping = &config.smart_warmup.models;
 
-    for (account_id_str, access_token) in account_list {
+    for (account_id_i64, account_id_str, access_token) in account_list {
 
         // Fetch fresh quota
         let quota = match fetch_antigravity_quota(upstream, &access_token).await {
@@ -98,6 +99,12 @@ async fn run_warmup_cycle(db_pool: &Arc<DbPool>, config: &AppConfig, upstream: &
                 continue;
             }
         };
+
+        // Persist the fresh quota so the UI / frontend sees it
+        {
+            let conn = db_pool.writer();
+            let _ = crate::accounts::set_quota(&conn, crate::ids::AccountId(account_id_i64), &quota);
+        }
 
         // Check if 100% capacity
         let is_100_percent = matches!(
@@ -131,7 +138,13 @@ async fn run_warmup_cycle(db_pool: &Arc<DbPool>, config: &AppConfig, upstream: &
             if success {
                 WARMUP_HISTORY.insert(history_key, now);
             }
+            
+            // Pequeña pausa entre modelos para no acribillar la API
+            tokio::time::sleep(Duration::from_millis(6000)).await;
         }
+
+        // Pausa entre cuentas para ser sigilosos (anti-DDoS/bot detection)
+        tokio::time::sleep(Duration::from_secs(15)).await;
     }
 
     // Cleanup history older than 24h to prevent memory leak
