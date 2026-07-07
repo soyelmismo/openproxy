@@ -216,6 +216,14 @@ impl AppState {
             .await,
         );
 
+        openproxy_core::smart_warmup::start_smart_warmup_scheduler(
+            db_pool.clone(),
+            config.clone(),
+            upstream_client.clone(),
+            master_key.clone(),
+        )
+        .await;
+
         let timeouts_initial = config.timeouts;
         let rate_limiter = Arc::new(crate::rate_limit::RateLimiter::new(
             crate::rate_limit::RateLimitConfig::default(),
