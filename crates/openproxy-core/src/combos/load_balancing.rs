@@ -504,4 +504,3 @@ pub fn resolve_target_order(
     let registry = SelectionRegistry::default();
     resolve_target_order_with_mode(conn, &combo, rr_counters, &registry)
 }
-

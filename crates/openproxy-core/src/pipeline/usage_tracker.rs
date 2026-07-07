@@ -1,7 +1,7 @@
-use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
 use parking_lot::{Mutex, RwLock};
 use rusqlite::Connection;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use crate::combos::{Combo, ComboTarget, SelectionRegistry};
 use crate::compression::stats::CompressionStats;
@@ -28,19 +28,32 @@ impl UsageTracker {
     }
 
     pub fn set_recording(&self, enabled: bool) {
-        self.record_bodies_and_headers.store(enabled, Ordering::Relaxed);
+        self.record_bodies_and_headers
+            .store(enabled, Ordering::Relaxed);
     }
 
-    pub(crate) fn mark_client_response(&self, usage_tuple: Option<(String, u8, crate::ids::ComboTargetId)>) {
-        let Some((request_id, attempt, target_id)) = usage_tuple else { return };
-        let job = crate::pipeline::worker::BackgroundJob::MarkClientResponse { request_id, attempt, target_id };
+    pub(crate) fn mark_client_response(
+        &self,
+        usage_tuple: Option<(String, u8, crate::ids::ComboTargetId)>,
+    ) {
+        let Some((request_id, attempt, target_id)) = usage_tuple else {
+            return;
+        };
+        let job = crate::pipeline::worker::BackgroundJob::MarkClientResponse {
+            request_id,
+            attempt,
+            target_id,
+        };
         if let Err(e) = self.background_tx.try_send(job) {
             if matches!(e, tokio::sync::mpsc::error::TrySendError::Closed(_)) {
                 let job = e.into_inner();
                 let conn = self.conn.clone();
                 crate::pipeline::worker::process_job(&conn, job);
             } else {
-                tracing::warn!("failed to send MarkClientResponse to background worker: {}", e);
+                tracing::warn!(
+                    "failed to send MarkClientResponse to background worker: {}",
+                    e
+                );
             }
         }
     }
@@ -91,8 +104,6 @@ impl UsageTracker {
         let _ = crate::cost::record(&conn, &input);
     }
 
-
-
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn record_and_fail_with_trace_id_and_partial(
         &self,
@@ -117,17 +128,18 @@ impl UsageTracker {
             status_code,
         } = ctx;
         let total_ms = started.elapsed().as_millis() as u64;
-        let request_body_json = req
-            .request_body_json
-            .clone()
-            .or_else(|| serde_json::to_value(&*req.openai_request).ok().map(Arc::new));
+        let request_body_json = req.request_body_json.clone().or_else(|| {
+            serde_json::to_value(&*req.openai_request)
+                .ok()
+                .map(Arc::new)
+        });
         let request_headers = crate::redact::redact_btreemap_sensitive(req.request_headers.clone());
         let response_body_json: Option<serde_json::Value> =
             acc.filter(|a| !a.is_completely_empty()).map(|a| {
                 let chunk_id_str = chunk_id.unwrap_or("partial");
                 a.finish(chunk_id_str, created, model_name)
             });
-        
+
         let is_streaming = req.stream_sink.is_some() || req.openai_request.stream;
         let stream_complete = false;
 
@@ -223,25 +235,88 @@ impl<'a> UsageRecordBuilder<'a> {
         }
     }
 
-    pub fn model_opt(mut self, model: Option<&'a Model>) -> Self { self.model = model; self }
-    pub fn err(mut self, err: &'a CoreError) -> Self { self.err = Some(err); self }
-    pub fn err_opt(mut self, err: Option<&'a CoreError>) -> Self { self.err = err; self }
-    pub fn connect_ms_opt(mut self, connect_ms: Option<u64>) -> Self { self.connect_ms = connect_ms; self }
-    pub fn ttft_ms_opt(mut self, ttft_ms: Option<u64>) -> Self { self.ttft_ms = ttft_ms; self }
-    pub fn total_ms(mut self, total_ms: u64) -> Self { self.total_ms = total_ms; self }
-    pub fn status_code(mut self, status_code: u16) -> Self { self.status_code = status_code; self }
-    pub fn attempt(mut self, attempt: u8) -> Self { self.attempt = attempt; self }
-    pub fn race_size(mut self, race_size: u8) -> Self { self.race_size = race_size; self }
-    pub fn trace_id(mut self, trace_id: String) -> Self { self.trace_id = trace_id; self }
-    pub fn prompt_tokens_opt(mut self, prompt_tokens: Option<u32>) -> Self { self.prompt_tokens = prompt_tokens; self }
-    pub fn completion_tokens_opt(mut self, completion_tokens: Option<u32>) -> Self { self.completion_tokens = completion_tokens; self }
-    pub fn request_body_json(mut self, request_body_json: Option<Arc<serde_json::Value>>) -> Self { self.request_body_json = request_body_json; self }
-    pub fn response_body_json(mut self, response_body_json: Option<serde_json::Value>) -> Self { self.response_body_json = response_body_json; self }
-    pub fn request_headers(mut self, request_headers: Option<std::collections::BTreeMap<String, String>>) -> Self { self.request_headers = request_headers; self }
-    pub fn response_headers(mut self, response_headers: Option<std::collections::BTreeMap<String, String>>) -> Self { self.response_headers = response_headers; self }
-    pub fn is_streaming(mut self, is_streaming: bool) -> Self { self.is_streaming = is_streaming; self }
-    pub fn stream_complete(mut self, stream_complete: bool) -> Self { self.stream_complete = stream_complete; self }
-    pub fn stop_reason(mut self, stop_reason: Option<String>) -> Self { self.stop_reason = stop_reason; self }
+    pub fn model_opt(mut self, model: Option<&'a Model>) -> Self {
+        self.model = model;
+        self
+    }
+    pub fn err(mut self, err: &'a CoreError) -> Self {
+        self.err = Some(err);
+        self
+    }
+    pub fn err_opt(mut self, err: Option<&'a CoreError>) -> Self {
+        self.err = err;
+        self
+    }
+    pub fn connect_ms_opt(mut self, connect_ms: Option<u64>) -> Self {
+        self.connect_ms = connect_ms;
+        self
+    }
+    pub fn ttft_ms_opt(mut self, ttft_ms: Option<u64>) -> Self {
+        self.ttft_ms = ttft_ms;
+        self
+    }
+    pub fn total_ms(mut self, total_ms: u64) -> Self {
+        self.total_ms = total_ms;
+        self
+    }
+    pub fn status_code(mut self, status_code: u16) -> Self {
+        self.status_code = status_code;
+        self
+    }
+    pub fn attempt(mut self, attempt: u8) -> Self {
+        self.attempt = attempt;
+        self
+    }
+    pub fn race_size(mut self, race_size: u8) -> Self {
+        self.race_size = race_size;
+        self
+    }
+    pub fn trace_id(mut self, trace_id: String) -> Self {
+        self.trace_id = trace_id;
+        self
+    }
+    pub fn prompt_tokens_opt(mut self, prompt_tokens: Option<u32>) -> Self {
+        self.prompt_tokens = prompt_tokens;
+        self
+    }
+    pub fn completion_tokens_opt(mut self, completion_tokens: Option<u32>) -> Self {
+        self.completion_tokens = completion_tokens;
+        self
+    }
+    pub fn request_body_json(mut self, request_body_json: Option<Arc<serde_json::Value>>) -> Self {
+        self.request_body_json = request_body_json;
+        self
+    }
+    pub fn response_body_json(mut self, response_body_json: Option<serde_json::Value>) -> Self {
+        self.response_body_json = response_body_json;
+        self
+    }
+    pub fn request_headers(
+        mut self,
+        request_headers: Option<std::collections::BTreeMap<String, String>>,
+    ) -> Self {
+        self.request_headers = request_headers;
+        self
+    }
+    pub fn response_headers(
+        mut self,
+        response_headers: Option<std::collections::BTreeMap<String, String>>,
+    ) -> Self {
+        self.response_headers = response_headers;
+        self
+    }
+    pub fn is_streaming(mut self, is_streaming: bool) -> Self {
+        self.is_streaming = is_streaming;
+        self
+    }
+    pub fn stream_complete(mut self, stream_complete: bool) -> Self {
+        self.stream_complete = stream_complete;
+        self
+    }
+    pub fn stop_reason(mut self, stop_reason: Option<String>) -> Self {
+        self.stop_reason = stop_reason;
+        self
+    }
 
     pub fn record(self) -> Result<Option<(String, u8, crate::ids::ComboTargetId)>> {
         let recording = self.tracker.is_recording();
@@ -256,7 +331,9 @@ impl<'a> UsageRecordBuilder<'a> {
         let (prompt_tokens, prompt_tokens_estimated) = match self.prompt_tokens {
             Some(t) if t > 0 => (Some(t), false),
             _ => {
-                let est = crate::token_estimate::estimate_prompt_tokens(&self.req.openai_request.messages);
+                let est = crate::token_estimate::estimate_prompt_tokens(
+                    &self.req.openai_request.messages,
+                );
                 if est > 0 {
                     tracing::debug!(
                         request_id = %self.req.request_id,
@@ -273,7 +350,8 @@ impl<'a> UsageRecordBuilder<'a> {
         let (completion_tokens, completion_tokens_estimated) = match self.completion_tokens {
             Some(t) if t > 0 => (Some(t), false),
             _ => {
-                let completion_text = self.response_body_json
+                let completion_text = self
+                    .response_body_json
                     .as_ref()
                     .and_then(|v| {
                         v.get("choices")
@@ -306,7 +384,8 @@ impl<'a> UsageRecordBuilder<'a> {
             combo_id: Some(self.combo.id),
             combo_target_id: Some(self.target.id),
             model_row_id: self.model.map(|m| m.row_id),
-            upstream_model_id: self.model
+            upstream_model_id: self
+                .model
                 .map(|m| m.model_id.as_str().to_string())
                 .unwrap_or_default(),
             prompt_tokens,
@@ -319,10 +398,26 @@ impl<'a> UsageRecordBuilder<'a> {
             race_total: self.race_size,
             race_lost: self.err.is_some() && self.req.race_cancelled,
             api_key_id: self.req.api_key_id,
-            request_body_json: if recording { self.request_body_json.clone().map(|v| (*v).clone()) } else { None },
-            response_body_json: if recording { self.response_body_json.clone() } else { None },
-            request_headers: if recording { self.request_headers.clone() } else { None },
-            response_headers: if recording { self.response_headers.clone() } else { None },
+            request_body_json: if recording {
+                self.request_body_json.clone().map(|v| (*v).clone())
+            } else {
+                None
+            },
+            response_body_json: if recording {
+                self.response_body_json.clone()
+            } else {
+                None
+            },
+            request_headers: if recording {
+                self.request_headers.clone()
+            } else {
+                None
+            },
+            response_headers: if recording {
+                self.response_headers.clone()
+            } else {
+                None
+            },
             error_message: self.err.map(|e| format!("{}", e)),
             race_attempts: self.race_size,
             is_streaming: self.is_streaming,
@@ -344,14 +439,16 @@ impl<'a> UsageRecordBuilder<'a> {
             } else {
                 "failed"
             };
-            let error_str: Option<String> =
-                self.err.map(|e| crate::cost::redact_error_msg(&e.to_string()).0);
+            let error_str: Option<String> = self
+                .err
+                .map(|e| crate::cost::redact_error_msg(&e.to_string()).0);
             let terminal_snapshot = self.tracker.compression_stats_cell.read().clone();
             crate::usage::publish_stage_event(crate::usage::StageEvent {
                 request_id: self.req.request_id.to_string(),
                 trace_id: self.trace_id.to_string(),
                 provider_id: self.target.provider_id.to_string(),
-                upstream_model_id: self.model
+                upstream_model_id: self
+                    .model
                     .map(|m| m.model_id.as_str().to_string())
                     .unwrap_or_default(),
                 stage: stage_label.into(),
@@ -385,9 +482,18 @@ impl<'a> UsageRecordBuilder<'a> {
             error_msg: err_msg,
             is_upstream_health_issue: is_health_issue,
             cooldown_mode: self.combo.cooldown_mode,
-            cooldown_base_secs: self.combo.cooldown_base_secs.unwrap_or(self.tracker.cooldown_secs),
-            cooldown_max_secs: self.combo.cooldown_max_secs.unwrap_or(self.tracker.cooldown_max_secs),
-            cooldown_factor: self.combo.cooldown_factor.unwrap_or(self.tracker.cooldown_factor),
+            cooldown_base_secs: self
+                .combo
+                .cooldown_base_secs
+                .unwrap_or(self.tracker.cooldown_secs),
+            cooldown_max_secs: self
+                .combo
+                .cooldown_max_secs
+                .unwrap_or(self.tracker.cooldown_max_secs),
+            cooldown_factor: self
+                .combo
+                .cooldown_factor
+                .unwrap_or(self.tracker.cooldown_factor),
         };
 
         if let Err(e) = self.tracker.background_tx.try_send(job) {
@@ -400,11 +506,19 @@ impl<'a> UsageRecordBuilder<'a> {
             }
         }
 
-        self.tracker.selection_registry.record_request(self.target.id);
+        self.tracker
+            .selection_registry
+            .record_request(self.target.id);
         if self.err.is_none() {
-            self.tracker.selection_registry.record_success(self.target.id);
+            self.tracker
+                .selection_registry
+                .record_success(self.target.id);
         }
 
-        Ok(Some((self.req.request_id.to_string(), self.attempt, self.target.id)))
+        Ok(Some((
+            self.req.request_id.to_string(),
+            self.attempt,
+            self.target.id,
+        )))
     }
 }

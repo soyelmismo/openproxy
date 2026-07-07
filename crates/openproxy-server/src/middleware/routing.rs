@@ -32,18 +32,25 @@ pub async fn routing_middleware(
     mut req: Request,
     next: Next,
 ) -> Result<Response, ApiError> {
-    let parsed_chat_req = req.extensions().get::<ParsedChatRequest>().cloned().ok_or_else(|| {
-        ApiError(CoreError::Internal("missing ParsedChatRequest in extensions".into()))
-    })?;
+    let parsed_chat_req = req
+        .extensions()
+        .get::<ParsedChatRequest>()
+        .cloned()
+        .ok_or_else(|| {
+            ApiError(CoreError::Internal(
+                "missing ParsedChatRequest in extensions".into(),
+            ))
+        })?;
 
     let auth_token = req.extensions().get::<ValidatedApiToken>().cloned();
     let api_key_id = auth_token.as_ref().map(|t| t.key_id);
 
-    let openai_req: OpenAIRequest = serde_json::from_value(parsed_chat_req.0.clone())
+    let openai_req: OpenAIRequest = serde_json::from_slice(&parsed_chat_req.bytes)
         .map_err(|e| ApiError(CoreError::Parse(e.to_string())))?;
 
     let plan = resolve_routing_plan(&state, req.headers(), &openai_req, &auth_token)?;
-    let (combo_id, combo_override, targets_override) = translate_plan_to_targets(&state, &plan, api_key_id)?;
+    let (combo_id, combo_override, targets_override) =
+        translate_plan_to_targets(&state, &plan, api_key_id)?;
 
     let resolved = ResolvedRoute {
         openai_req: Arc::new(openai_req),
@@ -108,7 +115,14 @@ fn translate_plan_to_targets(
     state: &AppState,
     plan: &RoutingPlan,
     api_key_id: Option<ApiKeyId>,
-) -> Result<(ComboId, Option<openproxy_core::combos::Combo>, Option<Vec<openproxy_core::combos::ComboTarget>>), ApiError> {
+) -> Result<
+    (
+        ComboId,
+        Option<openproxy_core::combos::Combo>,
+        Option<Vec<openproxy_core::combos::ComboTarget>>,
+    ),
+    ApiError,
+> {
     match plan {
         RoutingPlan::Direct {
             provider_id,

@@ -37,7 +37,7 @@
 
 use axum::{
     Json, Router, middleware,
-    routing::{get, post, put, delete},
+    routing::{delete, get, post, put},
 };
 use serde_json::json;
 
@@ -87,7 +87,9 @@ pub fn build_router(state: AppState) -> Router {
         .route(
             "/v1/chat/completions",
             post(handlers::chat::chat_completions)
-                .route_layer(middleware::from_fn(crate::disconnect::client_disconnect_middleware))
+                .route_layer(middleware::from_fn(
+                    crate::disconnect::client_disconnect_middleware,
+                ))
                 .route_layer(middleware::from_fn_with_state(
                     state.clone(),
                     crate::middleware::rate_limit::rate_limit_middleware,
@@ -104,8 +106,7 @@ pub fn build_router(state: AppState) -> Router {
         .route(
             "/v1/audio/transcriptions",
             post(handlers::audio::transcribe),
-        )
-        ;
+        );
 
     // Admin REST API. Every route here is mounted under `/admin/api/*`
     // (see `admin_routes` below). The auth middleware
@@ -206,8 +207,9 @@ pub fn build_router(state: AppState) -> Router {
         )
         .route(
             "/combos/{id}/test-all",
-            post(handlers::admin::test_combo_targets)
-                .route_layer(middleware::from_fn(crate::disconnect::client_disconnect_middleware)),
+            post(handlers::admin::test_combo_targets).route_layer(middleware::from_fn(
+                crate::disconnect::client_disconnect_middleware,
+            )),
         )
         .route(
             "/combos/{id}/targets",
@@ -291,8 +293,9 @@ pub fn build_router(state: AppState) -> Router {
         .route("/models/custom", post(handlers::admin::create_custom_model))
         .route(
             "/models/{id}/test",
-            post(handlers::admin::test_model)
-                .route_layer(middleware::from_fn(crate::disconnect::client_disconnect_middleware)),
+            post(handlers::admin::test_model).route_layer(middleware::from_fn(
+                crate::disconnect::client_disconnect_middleware,
+            )),
         )
         .route(
             "/providers/{id}/refresh",
@@ -323,22 +326,10 @@ pub fn build_router(state: AppState) -> Router {
             "/proxies",
             get(handlers::admin::list_proxies).post(handlers::admin::create_custom_proxy),
         )
-        .route(
-            "/proxies/sync",
-            post(handlers::admin::sync_proxies),
-        )
-        .route(
-            "/proxies/test-all",
-            post(handlers::admin::test_all_proxies),
-        )
-        .route(
-            "/proxies/{id}",
-            delete(handlers::admin::delete_proxy),
-        )
-        .route(
-            "/proxies/{id}/test",
-            post(handlers::admin::test_proxy),
-        )
+        .route("/proxies/sync", post(handlers::admin::sync_proxies))
+        .route("/proxies/test-all", post(handlers::admin::test_all_proxies))
+        .route("/proxies/{id}", delete(handlers::admin::delete_proxy))
+        .route("/proxies/{id}/test", post(handlers::admin::test_proxy))
         // OAuth endpoints
         // models.dev sync
         .route(
@@ -484,12 +475,20 @@ pub fn build_router(state: AppState) -> Router {
         .fallback(admin_ui::serve_asset);
 
     Router::new()
-        .route("/", get(|| async { axum::response::Redirect::temporary("/admin") }))
-        .route("/admin/", get(|| async { axum::response::Redirect::temporary("/admin") }))
+        .route(
+            "/",
+            get(|| async { axum::response::Redirect::temporary("/admin") }),
+        )
+        .route(
+            "/admin/",
+            get(|| async { axum::response::Redirect::temporary("/admin") }),
+        )
         .route("/v1/health", get(health))
         .merge(public_api_routes)
         .nest("/admin", admin_routes)
-        .layer(middleware::from_fn(crate::middleware::request_id::request_id))
+        .layer(middleware::from_fn(
+            crate::middleware::request_id::request_id,
+        ))
         // MEDIUM fix (audit finding #8): axum's default body limit is
         // 2 MiB, which is too small for a single legitimate prompt (some
         // long-context requests attach tens of KiB of system prompt +

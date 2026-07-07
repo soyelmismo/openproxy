@@ -137,7 +137,8 @@ async fn phase_timeout_tls() {
         // (Dns or Dial). NOT Headers (the pre-fix soft-accumulation
         // attribution).
         UpstreamError::Timeout(UpstreamPhase::Dns)
-        | UpstreamError::Timeout(UpstreamPhase::Dial) | UpstreamError::Timeout(UpstreamPhase::Write) => {}
+        | UpstreamError::Timeout(UpstreamPhase::Dial)
+        | UpstreamError::Timeout(UpstreamPhase::Write) => {}
         // On some CI environments the DNS resolution may be cached
         // and the dial will time out instead. Both are valid
         // per-phase attributions.
@@ -147,12 +148,12 @@ async fn phase_timeout_tls() {
     // after a 5s default. The dial timeout of 10ms is the
     // tightest ceiling here, so we should see at most ~500ms
     // (10ms + small slack for OS dispatch).
-//    assert!(
-//        elapsed < Duration::from_millis(500),
-//        "elapsed = {elapsed:?} suggests soft-accumulation: the \
-//         dispatch future waited the full per-phase budget instead \
-//         of reporting the real stalled phase"
-//    );
+    //    assert!(
+    //        elapsed < Duration::from_millis(500),
+    //        "elapsed = {elapsed:?} suggests soft-accumulation: the \
+    //         dispatch future waited the full per-phase budget instead \
+    //         of reporting the real stalled phase"
+    //    );
 }
 
 // -----------------------------------------------------------------------
@@ -736,18 +737,19 @@ async fn phase_timeout_dial_real() {
     match res.unwrap_err() {
         // The connector reported `Dial` as the stalled phase. NOT
         // `Headers` (the pre-fix soft-accumulation attribution).
-        UpstreamError::Timeout(UpstreamPhase::Dial) | UpstreamError::Timeout(UpstreamPhase::Write) => {}
+        UpstreamError::Timeout(UpstreamPhase::Dial)
+        | UpstreamError::Timeout(UpstreamPhase::Write) => {}
         other => panic!("expected Timeout(Dial|Write), got {other:?}"),
     }
     // Sanity: the dial timeout fired at ~50ms, not the headers
     // budget (~5000ms) — proving the connector's internal
     // `tokio::time::timeout` is the dominant ceiling.
-//    assert!(
-//        elapsed < Duration::from_secs(2),
-//        "elapsed = {elapsed:?}: the connector's internal dial \
-//         timeout was NOT honored; the outer write_ms=5000ms race \
-//         fired instead (soft-accumulation regression)"
-//    );
+    //    assert!(
+    //        elapsed < Duration::from_secs(2),
+    //        "elapsed = {elapsed:?}: the connector's internal dial \
+    //         timeout was NOT honored; the outer write_ms=5000ms race \
+    //         fired instead (soft-accumulation regression)"
+    //    );
 }
 
 // -------------------------------------------------------------------
@@ -1198,4 +1200,3 @@ async fn headers_timeout_fires_on_silent_http_server() {
          request hung (the 'keep-alive' bug)"
     );
 }
-

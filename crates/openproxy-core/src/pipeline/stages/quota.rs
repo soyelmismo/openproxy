@@ -1,14 +1,18 @@
-use async_trait::async_trait;
 use crate::error::CoreError;
 use crate::pipeline::PipelineResult;
-use crate::pipeline::stage::PipelineStage;
 use crate::pipeline::context::PipelineContext;
+use crate::pipeline::stage::PipelineStage;
+use async_trait::async_trait;
 
 pub struct QuotaEnforcerStage;
 
 #[async_trait]
 impl PipelineStage for QuotaEnforcerStage {
-    async fn execute(&self, ctx: &mut PipelineContext, next: crate::pipeline::stage::PipelineNext<'_>) -> Result<PipelineResult, CoreError> {
+    async fn execute(
+        &self,
+        ctx: &mut PipelineContext,
+        next: crate::pipeline::stage::PipelineNext<'_>,
+    ) -> Result<PipelineResult, CoreError> {
         let eligible = ctx.targets.clone();
         if eligible.is_empty() {
             return next.execute(ctx).await;
@@ -25,9 +29,10 @@ impl PipelineStage for QuotaEnforcerStage {
             )
         };
         if filtered.is_empty()
-            && let Some(ref combo) = ctx.combo {
-                return Err(CoreError::NoHealthyTargets(combo.id.0));
-            }
+            && let Some(ref combo) = ctx.combo
+        {
+            return Err(CoreError::NoHealthyTargets(combo.id.0));
+        }
 
         ctx.targets = filtered;
         next.execute(ctx).await

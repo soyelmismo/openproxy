@@ -30,18 +30,10 @@ impl MiniMaxAdapter {
     }
 }
 
-impl Default for MiniMaxAdapter {
-    fn default() -> Self {
-        Self::new()
-    }
-}
+crate::adapters::derive_default_from_new!(MiniMaxAdapter);
 
 #[async_trait]
 impl ProviderAdapter for MiniMaxAdapter {
-    fn id(&self) -> &ProviderId {
-        &self.config.id
-    }
-
     fn config(&self) -> &ProviderAdapterConfig {
         &self.config
     }
@@ -51,26 +43,6 @@ impl ProviderAdapter for MiniMaxAdapter {
         // The `?beta=true` query parameter is required to enable the relevant
         // beta features (tool use, prompt caching, etc.).
         format!("{}/anthropic/v1/messages?beta=true", self.config.base_url)
-    }
-
-    fn build_auth_header(&self, api_key: &str) -> (String, String) {
-        ("Authorization".into(), format!("Bearer {}", api_key))
-    }
-
-    fn build_headers(
-        &self,
-        api_key: &str,
-        _target_format: TargetFormat,
-        _model: &ModelId,
-    ) -> Vec<(String, String)> {
-        let (name, value) = self.build_auth_header(api_key);
-        let mut headers = Vec::with_capacity(2 + self.config.extra_headers.len());
-        headers.push((name, value));
-        headers.push(("Content-Type".into(), "application/json".into()));
-        for (k, v) in &self.config.extra_headers {
-            headers.push((k.clone(), v.clone()));
-        }
-        headers
     }
 
     fn models_url(&self) -> Option<String> {
@@ -143,4 +115,3 @@ impl ProviderAdapter for MiniMaxAdapter {
         Ok(out)
     }
 }
-

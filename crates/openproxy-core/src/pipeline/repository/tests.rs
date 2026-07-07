@@ -1,12 +1,11 @@
+use crate::combos::{self, AddTargetInput, Strategy, list_targets_with_model};
+use crate::error::CoreError;
+use crate::ids::{AccountId, ModelRowId, ProviderId, RequestId};
 use crate::pipeline::test_utils::*;
 use crate::pipeline::*;
-use crate::combos::{self, Strategy, AddTargetInput, list_targets_with_model};
 use crate::providers::{self, AuthType, ProviderFormat};
-use crate::ids::{AccountId, ModelRowId, ProviderId, RequestId};
 use crate::secrets::MasterKey;
-use crate::error::CoreError;
 use std::sync::Arc;
-
 
 #[test]
 fn test_circuit_breaker_len() {
@@ -46,8 +45,7 @@ fn resolve_targets_with_healthy_account_expands_to_one() {
     let (_model, combo_id, mk) = {
         let writer = pool.writer();
         let model = seed_provider_and_model(&writer, "p", "m", crate::models::TargetFormat::Openai);
-        let combo_id =
-            combos::create_combo(&writer, "c", Strategy::Priority, 1).expect("create");
+        let combo_id = combos::create_combo(&writer, "c", Strategy::Priority, 1).expect("create");
         combos::add_target(
             &writer,
             combos::AddTargetInput {
@@ -92,8 +90,7 @@ fn resolve_targets_with_no_healthy_accounts_drops_target() {
     let combo_id = {
         let writer = pool.writer();
         let model = seed_provider_and_model(&writer, "p", "m", crate::models::TargetFormat::Openai);
-        let combo_id =
-            combos::create_combo(&writer, "c", Strategy::Priority, 1).expect("create");
+        let combo_id = combos::create_combo(&writer, "c", Strategy::Priority, 1).expect("create");
         combos::add_target(
             &writer,
             combos::AddTargetInput {
@@ -146,8 +143,7 @@ fn resolve_target_api_key_account_id_returns_decrypted_key() {
             None,
         )
         .expect("seed account");
-        let combo_id =
-            combos::create_combo(&writer, "c", Strategy::Priority, 1).expect("combo");
+        let combo_id = combos::create_combo(&writer, "c", Strategy::Priority, 1).expect("combo");
         let target_id = combos::add_target(
             &writer,
             combos::AddTargetInput {
@@ -186,8 +182,7 @@ fn resolve_target_api_key_none_auth_type_returns_empty() {
         let model_rowid: i64 = writer
             .query_row("SELECT last_insert_rowid()", [], |r| r.get(0))
             .expect("last_insert_rowid");
-        let combo_id =
-            combos::create_combo(&writer, "c", Strategy::Priority, 1).expect("combo");
+        let combo_id = combos::create_combo(&writer, "c", Strategy::Priority, 1).expect("combo");
         let target_id = combos::add_target(
             &writer,
             combos::AddTargetInput {
@@ -226,8 +221,7 @@ fn resolve_target_api_key_none_bearer_returns_auth_error() {
         let model_rowid: i64 = writer
             .query_row("SELECT last_insert_rowid()", [], |r| r.get(0))
             .expect("last_insert_rowid");
-        let combo_id =
-            combos::create_combo(&writer, "c", Strategy::Priority, 1).expect("combo");
+        let combo_id = combos::create_combo(&writer, "c", Strategy::Priority, 1).expect("combo");
         let target_id = combos::add_target(
             &writer,
             combos::AddTargetInput {
@@ -260,7 +254,15 @@ async fn list_targets_with_model_includes_cooldown_fields() {
     let mk = MasterKey::generate();
     let (combo_id, target_id, _account_id, _model_id) = {
         let w = pool.writer();
-        seed_target_with_account(&w, combos::create_combo(&w, "c", Strategy::Priority, 1).unwrap(), "p", "m", Some("sk-test"), &mk, 10)
+        seed_target_with_account(
+            &w,
+            combos::create_combo(&w, "c", Strategy::Priority, 1).unwrap(),
+            "p",
+            "m",
+            Some("sk-test"),
+            &mk,
+            10,
+        )
     };
     {
         let w = pool.writer();
@@ -272,7 +274,16 @@ async fn list_targets_with_model_includes_cooldown_fields() {
     }
     {
         let w = pool.writer();
-        crate::cooldown::record_failure_with_mode(&w, target_id, "test_err", combos::CooldownMode::Flat, 60, 3600, 2).expect("cooldown");
+        crate::cooldown::record_failure_with_mode(
+            &w,
+            target_id,
+            "test_err",
+            combos::CooldownMode::Flat,
+            60,
+            3600,
+            2,
+        )
+        .expect("cooldown");
         let ts = list_targets_with_model(&w, combo_id).expect("list");
         assert_eq!(ts.len(), 1);
         assert!(ts[0].in_cooldown);
@@ -311,8 +322,7 @@ fn circuit_breaker_unhealthy_filter_drops_target_before_cooldown_snapshot() {
             .query_row("SELECT last_insert_rowid()", [], |r| r.get(0))
             .expect("last_insert_rowid");
         let model_id = ModelRowId(model_rowid);
-        let combo_id =
-            combos::create_combo(&w, "c", Strategy::Priority, 1).expect("create combo");
+        let combo_id = combos::create_combo(&w, "c", Strategy::Priority, 1).expect("create combo");
         let mut aids = Vec::new();
         for (label, prio) in [("a1", 10_i32), ("a2", 20_i32), ("a3", 30_i32)] {
             let account_id = crate::accounts::create(

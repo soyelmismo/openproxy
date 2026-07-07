@@ -231,4 +231,3 @@ impl ProviderAdapter for CustomAdapter {
         Ok(vec![])
     }
 }
-

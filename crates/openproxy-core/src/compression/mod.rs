@@ -55,7 +55,8 @@ pub fn apply_compression(
                     .collect::<Vec<_>>(),
             );
             let compressed_chars = count_content_chars(messages);
-            let compressed_tokens = crate::token_estimate::estimate_prompt_tokens(messages) as usize;
+            let compressed_tokens =
+                crate::token_estimate::estimate_prompt_tokens(messages) as usize;
             CompressionStats::new(
                 original_chars,
                 compressed_chars,
@@ -69,7 +70,8 @@ pub fn apply_compression(
             let original_tokens = crate::token_estimate::estimate_prompt_tokens(messages) as usize;
             let techniques = rtk::apply_rtk(messages);
             let compressed_chars = count_content_chars(messages);
-            let compressed_tokens = crate::token_estimate::estimate_prompt_tokens(messages) as usize;
+            let compressed_tokens =
+                crate::token_estimate::estimate_prompt_tokens(messages) as usize;
             CompressionStats::new(
                 original_chars,
                 compressed_chars,
@@ -93,7 +95,8 @@ pub fn apply_compression(
             );
             techniques.extend(rtk::apply_rtk(messages));
             let compressed_chars = count_content_chars(messages);
-            let compressed_tokens = crate::token_estimate::estimate_prompt_tokens(messages) as usize;
+            let compressed_tokens =
+                crate::token_estimate::estimate_prompt_tokens(messages) as usize;
             CompressionStats::new(
                 original_chars,
                 compressed_chars,
@@ -227,11 +230,18 @@ mod tests {
         }];
         let stats = apply_compression(&mut messages, CompressionMode::Lite);
         assert!(
-            stats.techniques.iter().any(|t| t == "lite::smart_crusher_lossless"),
+            stats
+                .techniques
+                .iter()
+                .any(|t| t == "lite::smart_crusher_lossless"),
             "expected smart_crusher_lossless technique, got: {:?}",
             stats.techniques
         );
-        let compressed = messages[0].content.as_ref().and_then(|c| c.as_str()).unwrap();
+        let compressed = messages[0]
+            .content
+            .as_ref()
+            .and_then(|c| c.as_str())
+            .unwrap();
         assert!(
             compressed.len() < original_len,
             "compressed ({}) should be smaller than original ({})",
@@ -239,7 +249,10 @@ mod tests {
             original_len
         );
         // CSV schema marker should be present
-        assert!(compressed.contains("#schema:"), "expected CSV schema header");
+        assert!(
+            compressed.contains("#schema:"),
+            "expected CSV schema header"
+        );
     }
 
     #[test]
@@ -269,11 +282,18 @@ mod tests {
         }];
         let stats = apply_compression(&mut messages, CompressionMode::Lite);
         assert!(
-            stats.techniques.iter().any(|t| t == "lite::diff_compressor"),
+            stats
+                .techniques
+                .iter()
+                .any(|t| t == "lite::diff_compressor"),
             "expected diff_compressor technique, got: {:?}",
             stats.techniques
         );
-        let compressed = messages[0].content.as_ref().and_then(|c| c.as_str()).unwrap();
+        let compressed = messages[0]
+            .content
+            .as_ref()
+            .and_then(|c| c.as_str())
+            .unwrap();
         assert!(
             compressed.len() < original_len,
             "compressed ({}) should be smaller than original ({})",
@@ -313,7 +333,11 @@ mod tests {
             "expected log_compressor technique, got: {:?}",
             stats.techniques
         );
-        let compressed = messages[0].content.as_ref().and_then(|c| c.as_str()).unwrap();
+        let compressed = messages[0]
+            .content
+            .as_ref()
+            .and_then(|c| c.as_str())
+            .unwrap();
         assert!(
             compressed.len() < original_len,
             "compressed ({}) should be smaller than original ({})",
@@ -329,10 +353,9 @@ mod tests {
         let mut messages = vec![msg("tool", "{\"a\":1}")];
         let stats = apply_compression(&mut messages, CompressionMode::Lite);
         assert!(
-            !stats
-                .techniques
-                .iter()
-                .any(|t| t.contains("smart_crusher") || t.contains("log_compressor") || t.contains("diff_compressor")),
+            !stats.techniques.iter().any(|t| t.contains("smart_crusher")
+                || t.contains("log_compressor")
+                || t.contains("diff_compressor")),
             "small content should not trigger content routing, got: {:?}",
             stats.techniques
         );

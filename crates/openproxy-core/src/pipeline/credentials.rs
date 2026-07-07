@@ -169,6 +169,7 @@ impl CredentialManager {
                             None
                         };
 
+
                     (key, label, custom_meta)
                 }
                 None => {

@@ -1,6 +1,6 @@
 use super::*;
-use crate::ids::*;
 use crate::error::*;
+use crate::ids::*;
 use rusqlite::Connection;
 pub fn compute_effective_context_window(
     conn: &Connection,
@@ -357,4 +357,3 @@ pub fn expand_account_rotation(
     }
     Ok(out)
 }
-

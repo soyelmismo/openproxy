@@ -21,5 +21,10 @@ use crate::pipeline::streaming_state::StreamContext;
 pub(crate) trait ChunkInterceptor: Send + Sync {
     /// Processes a chunk event, optionally mutating it or emitting a new event.
     /// Returning an Error will abort the pipeline.
-    async fn process_chunk(&mut self, ctx: &StreamContext<'_>, stream: &mut crate::upstream::UpstreamBodyStream, event: ChunkEvent) -> Result<ChunkEvent, CoreError>;
+    async fn process_chunk(
+        &mut self,
+        ctx: &StreamContext<'_>,
+        stream: &mut crate::upstream::UpstreamBodyStream,
+        event: ChunkEvent,
+    ) -> Result<ChunkEvent, CoreError>;
 }

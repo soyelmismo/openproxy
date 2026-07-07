@@ -29,11 +29,7 @@ impl OpenCodeZenAdapter {
     }
 }
 
-impl Default for OpenCodeZenAdapter {
-    fn default() -> Self {
-        Self::new()
-    }
-}
+crate::adapters::derive_default_from_new!(OpenCodeZenAdapter);
 
 #[async_trait]
 impl ProviderAdapter for OpenCodeZenAdapter {
@@ -159,6 +155,3 @@ pub(crate) fn classify_zen_target_format(id: &str) -> TargetFormat {
         TargetFormat::Openai
     }
 }
-
-
-

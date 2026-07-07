@@ -28,18 +28,10 @@ impl CloudflareWorkersAIAdapter {
     }
 }
 
-impl Default for CloudflareWorkersAIAdapter {
-    fn default() -> Self {
-        Self::new()
-    }
-}
+crate::adapters::derive_default_from_new!(CloudflareWorkersAIAdapter);
 
 #[async_trait]
 impl ProviderAdapter for CloudflareWorkersAIAdapter {
-    fn id(&self) -> &ProviderId {
-        &self.config.id
-    }
-
     fn config(&self) -> &ProviderAdapterConfig {
         &self.config
     }
@@ -74,23 +66,6 @@ impl ProviderAdapter for CloudflareWorkersAIAdapter {
             "{}/{}/ai/v1/chat/completions",
             self.config.base_url, account_label
         )
-    }
-
-    fn build_auth_header(&self, api_key: &str) -> (String, String) {
-        ("Authorization".into(), format!("Bearer {}", api_key))
-    }
-
-    fn build_headers(
-        &self,
-        api_key: &str,
-        _target_format: TargetFormat,
-        _model: &ModelId,
-    ) -> Vec<(String, String)> {
-        let (name, value) = self.build_auth_header(api_key);
-        vec![
-            (name, value),
-            ("Content-Type".into(), "application/json".into()),
-        ]
     }
 
     fn models_url(&self) -> Option<String> {
@@ -193,7 +168,7 @@ impl ProviderAdapter for CloudflareWorkersAIAdapter {
         // unsupported fields like `temperature` (even as a number),
         // and requires `content` to be a plain string, not a
         // multipart array.
-        
+
         view.temperature = None;
 
         // Remove null fields from extra
@@ -204,7 +179,10 @@ impl ProviderAdapter for CloudflareWorkersAIAdapter {
         }
 
         // Flatten multipart content arrays to plain strings
-        let needs_flattening = view.messages.iter().any(|msg| matches!(msg.content, Some(serde_json::Value::Array(_))));
+        let needs_flattening = view
+            .messages
+            .iter()
+            .any(|msg| matches!(msg.content, Some(serde_json::Value::Array(_))));
         if needs_flattening {
             let messages_mut = view.messages.to_mut();
             for msg in messages_mut.iter_mut() {
@@ -224,4 +202,3 @@ impl ProviderAdapter for CloudflareWorkersAIAdapter {
         }
     }
 }
-

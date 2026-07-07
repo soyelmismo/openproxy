@@ -1,25 +1,32 @@
-use async_trait::async_trait;
-use crate::error::CoreError;
-use crate::pipeline::PipelineResult;
-use crate::pipeline::stage::PipelineStage;
-use crate::pipeline::context::PipelineContext;
 use crate::circuit_breaker::Health;
 use crate::combos::ComboTarget;
+use crate::error::CoreError;
+use crate::pipeline::PipelineResult;
+use crate::pipeline::context::PipelineContext;
+use crate::pipeline::stage::PipelineStage;
+use async_trait::async_trait;
 
 pub struct RouterStage;
 
 #[async_trait]
 impl PipelineStage for RouterStage {
-    async fn execute(&self, ctx: &mut PipelineContext, next: crate::pipeline::stage::PipelineNext<'_>) -> Result<PipelineResult, CoreError> {
+    async fn execute(
+        &self,
+        ctx: &mut PipelineContext,
+        next: crate::pipeline::stage::PipelineNext<'_>,
+    ) -> Result<PipelineResult, CoreError> {
         let combo = match ctx.pipeline.load_combo(&ctx.req) {
             Ok(c) => c,
             Err(e) => return Err(e),
         };
-        
+
         ctx.combo = Some(combo.clone());
-        
+
         let attempt = ctx.attempt;
-        let targets = match ctx.pipeline.resolve_targets(&combo, ctx.req.targets_override.as_deref()) {
+        let targets = match ctx
+            .pipeline
+            .resolve_targets(&combo, ctx.req.targets_override.as_deref())
+        {
             Ok(t) => t,
             Err(e) => return Err(e),
         };
@@ -54,7 +61,10 @@ impl PipelineStage for RouterStage {
                     Err(e) => return Err(e),
                 };
                 if repopulated > 0 {
-                    let targets = match ctx.pipeline.resolve_targets(&combo, ctx.req.targets_override.as_deref()) {
+                    let targets = match ctx
+                        .pipeline
+                        .resolve_targets(&combo, ctx.req.targets_override.as_deref())
+                    {
                         Ok(t) => t,
                         Err(e) => return Err(e),
                     };
@@ -65,7 +75,9 @@ impl PipelineStage for RouterStage {
                     let re_eligible: Vec<ComboTarget> = flat_targets
                         .into_iter()
                         .filter(|t| match t.account_id {
-                            Some(aid) => ctx.pipeline.circuit_breaker.is_healthy(aid) == Health::Healthy,
+                            Some(aid) => {
+                                ctx.pipeline.circuit_breaker.is_healthy(aid) == Health::Healthy
+                            }
                             None => true,
                         })
                         .collect();
@@ -88,7 +100,7 @@ impl PipelineStage for RouterStage {
         }
 
         ctx.targets = resolved;
-        
+
         next.execute(ctx).await
     }
 }

@@ -32,8 +32,7 @@ pub fn get_accounts_meta(
         return Ok((accounts_map, kiro_map, antigravity_map));
     }
 
-    let placeholders = std::iter::repeat("?")
-        .take(account_ids.len())
+    let placeholders = std::iter::repeat_n("?", account_ids.len())
         .collect::<Vec<_>>()
         .join(",");
 

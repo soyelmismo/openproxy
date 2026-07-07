@@ -191,26 +191,25 @@ pub fn upsert_models_dev(body: &[u8], conn: &Connection) -> Result<usize> {
             let normalized = crate::model_normalize::normalize_model_id(&model.id);
 
             for our_id in &all_ids {
-                stmt.execute(
-                    rusqlite::params![
-                        our_id,
-                        &model.id,
-                        context,
-                        max_output,
-                        input_price,
-                        output_price,
-                        cached_price,
-                        model.tool_call.map(|b| b as i64),
-                        model.reasoning.map(|b| b as i64),
-                        None::<i64>, // vision not present in API
-                        model.structured_output.map(|b| b as i64),
-                        mod_in,
-                        mod_out,
-                        model.family.as_deref(),
-                        model.status.as_deref(),
-                        &normalized,
-                    ],
-                ).map_err(|e| CoreError::Database {
+                stmt.execute(rusqlite::params![
+                    our_id,
+                    &model.id,
+                    context,
+                    max_output,
+                    input_price,
+                    output_price,
+                    cached_price,
+                    model.tool_call.map(|b| b as i64),
+                    model.reasoning.map(|b| b as i64),
+                    None::<i64>, // vision not present in API
+                    model.structured_output.map(|b| b as i64),
+                    mod_in,
+                    mod_out,
+                    model.family.as_deref(),
+                    model.status.as_deref(),
+                    &normalized,
+                ])
+                .map_err(|e| CoreError::Database {
                     message: format!("models.dev upsert execute: {e}"),
                     source: Some(Box::new(e)),
                 })?;
@@ -1250,7 +1249,7 @@ mod tests {
     #[test]
     fn auto_create_combos_appends_new_targets() {
         let conn = Connection::open_in_memory().unwrap();
-        
+
         // Create models, combos, combo_targets, and accounts tables.
         conn.execute_batch(
             "CREATE TABLE models (
@@ -1282,7 +1281,7 @@ mod tests {
                  model_row_id        INTEGER REFERENCES models(id) ON DELETE CASCADE,
                  priority_order      INTEGER NOT NULL,
                  UNIQUE(combo_id, account_id, model_row_id)
-             );"
+             );",
         )
         .unwrap();
 
@@ -1302,7 +1301,11 @@ mod tests {
 
         // Insert accounts for these providers (to make them healthy/active)
         conn.execute("INSERT INTO accounts (id, provider_id, health_status) VALUES (1, 'nvidia-nim', 'healthy')", []).unwrap();
-        conn.execute("INSERT INTO accounts (id, provider_id, health_status) VALUES (2, 'groq', 'healthy')", []).unwrap();
+        conn.execute(
+            "INSERT INTO accounts (id, provider_id, health_status) VALUES (2, 'groq', 'healthy')",
+            [],
+        )
+        .unwrap();
         conn.execute("INSERT INTO accounts (id, provider_id, health_status) VALUES (3, 'ollama-cloud', 'healthy')", []).unwrap();
 
         // 2. Run auto_create_combos.
@@ -1311,14 +1314,28 @@ mod tests {
         assert_eq!(count, 1, "Should create 1 auto combo");
 
         // Verify the combo name and targets
-        let combo_id: i64 = conn.query_row("SELECT id FROM combos WHERE name = 'auto:gpt-oss-120b'", [], |r| r.get(0)).unwrap();
-        let targets_count: i64 = conn.query_row("SELECT COUNT(*) FROM combo_targets WHERE combo_id = ?1", rusqlite::params![combo_id], |r| r.get(0)).unwrap();
+        let combo_id: i64 = conn
+            .query_row(
+                "SELECT id FROM combos WHERE name = 'auto:gpt-oss-120b'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        let targets_count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM combo_targets WHERE combo_id = ?1",
+                rusqlite::params![combo_id],
+                |r| r.get(0),
+            )
+            .unwrap();
         assert_eq!(targets_count, 3, "Should have 3 targets in the combo");
 
         // Verify priority orders are 0, 1, 2
         let orders: Vec<i32> = {
             let mut stmt = conn.prepare("SELECT priority_order FROM combo_targets WHERE combo_id = ?1 ORDER BY priority_order").unwrap();
-            let rows = stmt.query_map(rusqlite::params![combo_id], |r| r.get::<_, i32>(0)).unwrap();
+            let rows = stmt
+                .query_map(rusqlite::params![combo_id], |r| r.get::<_, i32>(0))
+                .unwrap();
             rows.map(|r| r.unwrap()).collect()
         };
         assert_eq!(orders, vec![0, 1, 2]);
@@ -1336,13 +1353,21 @@ mod tests {
         let count2 = auto_create_combos(&conn).unwrap();
         assert_eq!(count2, 0, "No new combos should be created");
 
-        let targets_count2: i64 = conn.query_row("SELECT COUNT(*) FROM combo_targets WHERE combo_id = ?1", rusqlite::params![combo_id], |r| r.get(0)).unwrap();
+        let targets_count2: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM combo_targets WHERE combo_id = ?1",
+                rusqlite::params![combo_id],
+                |r| r.get(0),
+            )
+            .unwrap();
         assert_eq!(targets_count2, 4, "Should now have 4 targets in the combo");
 
         // Verify the new target has priority_order = 3
         let orders2: Vec<i32> = {
             let mut stmt = conn.prepare("SELECT priority_order FROM combo_targets WHERE combo_id = ?1 ORDER BY priority_order").unwrap();
-            let rows = stmt.query_map(rusqlite::params![combo_id], |r| r.get::<_, i32>(0)).unwrap();
+            let rows = stmt
+                .query_map(rusqlite::params![combo_id], |r| r.get::<_, i32>(0))
+                .unwrap();
             rows.map(|r| r.unwrap()).collect()
         };
         assert_eq!(orders2, vec![0, 1, 2, 3]);

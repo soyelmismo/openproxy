@@ -106,10 +106,7 @@ impl ModelTimeoutOverrides {
 ///                        `TimeoutsConfig` is the single source of truth for
 ///                        `connect`, `request_send`, and `total`.
 /// 2. `model_overrides` — per-model overrides for `ttft`, `idle_chunk` only.
-pub fn resolve(
-    defaults: &Timeouts,
-    model_overrides: Option<&ModelTimeoutOverrides>,
-) -> Timeouts {
+pub fn resolve(defaults: &Timeouts, model_overrides: Option<&ModelTimeoutOverrides>) -> Timeouts {
     let mut t = *defaults;
     if let Some(m) = model_overrides {
         if let Some(ms) = m.ttft_ms {

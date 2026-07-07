@@ -30,11 +30,7 @@ impl OpenRouterAdapter {
     }
 }
 
-impl Default for OpenRouterAdapter {
-    fn default() -> Self {
-        Self::new()
-    }
-}
+crate::adapters::derive_default_from_new!(OpenRouterAdapter);
 
 #[async_trait]
 impl ProviderAdapter for OpenRouterAdapter {
@@ -390,4 +386,3 @@ fn derive_family_from_id(id: &str) -> Option<String> {
     }
     None
 }
-

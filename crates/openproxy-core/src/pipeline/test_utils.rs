@@ -3,20 +3,20 @@ use crate::combos;
 use crate::config::{RacingConfig, RetriesConfig, TimeoutsConfig};
 use crate::db::conn::DbPool;
 use crate::db::migrations;
-use crate::ids::{AccountId, ModelRowId, ProviderId, RequestId, TraceId, ComboId};
+use crate::error::Result;
+use crate::ids::{AccountId, ComboId, ModelRowId, ProviderId, RequestId, TraceId};
 use crate::models::TargetFormat;
 use crate::pipeline::{PipelineConfig, PipelineRequest};
 use crate::providers::{self, AuthType, ProviderFormat};
 use crate::secrets::MasterKey;
-use crate::translation::{OpenAIMessage, OpenAIRequest};
 use crate::timeouts::Timeouts;
+use crate::translation::{OpenAIMessage, OpenAIRequest};
 use crate::upstream::UpstreamClient;
-use std::path::PathBuf;
-use std::sync::atomic::AtomicU64;
-use std::sync::Arc;
-use tokio::sync::watch;
 use rusqlite::Connection;
-use crate::error::Result;
+use std::path::PathBuf;
+use std::sync::Arc;
+use std::sync::atomic::AtomicU64;
+use tokio::sync::watch;
 
 pub fn fresh_pool() -> (DbPool, Arc<parking_lot::Mutex<Connection>>, PathBuf) {
     static SEQ: AtomicU64 = AtomicU64::new(0);
@@ -26,8 +26,7 @@ pub fn fresh_pool() -> (DbPool, Arc<parking_lot::Mutex<Connection>>, PathBuf) {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_nanos())
         .unwrap_or(0);
-    let dir =
-        std::env::temp_dir().join(format!("openproxy-pipeline-test-{}-{}-{}", pid, nanos, n));
+    let dir = std::env::temp_dir().join(format!("openproxy-pipeline-test-{}-{}-{}", pid, nanos, n));
     std::fs::create_dir_all(&dir).expect("mkdir tempdir");
     let path = dir.join("pipeline.db");
     let pool = DbPool::open(&path).expect("open pool");
@@ -76,7 +75,7 @@ pub fn test_config(master_key: Arc<MasterKey>) -> PipelineConfig {
         // state.rs; tests don't need to flip this.
         idle_chunk_retryable: true,
         quota_protection: crate::config::QuotaProtectionConfig::default(),
-            background_tx: tokio::sync::mpsc::channel(1).0,
+        background_tx: tokio::sync::mpsc::channel(1).0,
     }
 }
 
@@ -230,11 +229,7 @@ impl ProviderAdapter for MockAdapter {
     fn config(&self) -> &ProviderAdapterConfig {
         &self.config
     }
-    fn build_chat_url(
-        &self,
-        _target_format: TargetFormat,
-        _model: &crate::ids::ModelId,
-    ) -> String {
+    fn build_chat_url(&self, _target_format: TargetFormat, _model: &crate::ids::ModelId) -> String {
         self.config.base_url.clone()
     }
     fn build_auth_header(&self, api_key: &str) -> (String, String) {
@@ -351,7 +346,7 @@ pub fn test_config_with_mock(master_key: Arc<MasterKey>, base_url: String) -> Pi
         compression_mode: crate::compression::CompressionMode::Off,
         idle_chunk_retryable: true,
         quota_protection: crate::config::QuotaProtectionConfig::default(),
-            background_tx: tokio::sync::mpsc::channel(1).0,
+        background_tx: tokio::sync::mpsc::channel(1).0,
     }
 }
 

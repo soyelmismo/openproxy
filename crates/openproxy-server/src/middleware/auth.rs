@@ -1,21 +1,14 @@
-use axum::{
-    extract::State,
-    http::HeaderMap,
-};
-use openproxy_core::{
-    CoreError,
-    ids::ApiKeyId,
-    api_keys as core_api_keys,
-};
 use crate::{error::ApiError, state::AppState};
+use axum::{extract::State, http::HeaderMap};
+use openproxy_core::{CoreError, api_keys as core_api_keys, ids::ApiKeyId};
 use std::sync::Arc;
 
 /// Extracted parsed JSON payload for the chat endpoint.
 #[derive(Clone)]
-pub struct ParsedChatRequest(pub serde_json::Value);
-
-
-
+pub struct ParsedChatRequest {
+    pub raw: serde_json::Value,
+    pub bytes: bytes::Bytes,
+}
 
 /// Result of a successful chat authentication — the key id plus any
 /// per-key restrictions that need to be enforced after routing.
@@ -24,7 +17,6 @@ pub struct ValidatedApiToken {
     pub(crate) key_id: ApiKeyId,
     pub(crate) allowed_combos: Option<Vec<i64>>,
 }
-
 
 /// Resolve the caller from the `Authorization` header.
 ///
@@ -152,7 +144,6 @@ pub(crate) fn authenticate(
     }))
 }
 
-
 /// `POST /v1/chat/completions`.
 ///
 /// The full body is parsed as an `OpenAIRequest`; on parse failure we
@@ -180,15 +171,19 @@ pub async fn auth_middleware(
     next: axum::middleware::Next,
 ) -> Result<axum::response::Response, crate::error::ApiError> {
     let (mut parts, body) = req.into_parts();
-    
+
     // Enforce 32 MiB limit directly, matching DefaultBodyLimit
     let bytes = match axum::body::to_bytes(body, 32 * 1024 * 1024).await {
         Ok(b) => b,
         Err(e) => {
             if e.to_string().contains("length limit exceeded") {
-                return Ok(axum::response::IntoResponse::into_response(axum::http::StatusCode::PAYLOAD_TOO_LARGE));
+                return Ok(axum::response::IntoResponse::into_response(
+                    axum::http::StatusCode::PAYLOAD_TOO_LARGE,
+                ));
             } else {
-                return Err(crate::error::ApiError(openproxy_core::CoreError::Parse(e.to_string())));
+                return Err(crate::error::ApiError(openproxy_core::CoreError::Parse(
+                    e.to_string(),
+                )));
             }
         }
     };
@@ -196,14 +191,14 @@ pub async fn auth_middleware(
     let parsed: serde_json::Value = serde_json::from_slice(&bytes)
         .map_err(|e| crate::error::ApiError(openproxy_core::CoreError::Parse(e.to_string())))?;
 
-    let requested_model = parsed
-        .get("model")
-        .and_then(|v| v.as_str())
-        .unwrap_or("");
+    let requested_model = parsed.get("model").and_then(|v| v.as_str()).unwrap_or("");
 
     let auth_result = authenticate(&state, &parts.headers, requested_model)?;
 
-    parts.extensions.insert(ParsedChatRequest(parsed));
+    parts.extensions.insert(ParsedChatRequest {
+        raw: parsed,
+        bytes: bytes.clone(),
+    });
     if let Some(res) = auth_result {
         parts.extensions.insert(res);
     }

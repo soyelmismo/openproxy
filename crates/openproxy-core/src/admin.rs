@@ -176,7 +176,9 @@ impl<'de> Deserialize<'de> for UpdateProviderInput {
                         Field::BaseUrl => out.base_url = Some(map.next_value()?),
                         Field::ExtraHeadersJson => out.extra_headers_json = Some(map.next_value()?),
                         Field::UseProxies => out.use_proxies = Some(map.next_value()?),
-                        Field::ProxyRotationErrors => out.proxy_rotation_errors = Some(map.next_value()?),
+                        Field::ProxyRotationErrors => {
+                            out.proxy_rotation_errors = Some(map.next_value()?)
+                        }
                         Field::AutoActivateKeyword => {
                             // The whole point of this custom deserialize:
                             // pull the raw value, then branch on whether

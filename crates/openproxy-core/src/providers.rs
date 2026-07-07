@@ -423,7 +423,11 @@ pub fn update(
 }
 
 /// Update the current proxy ID assigned to a provider.
-pub fn update_current_proxy(conn: &Connection, id: &ProviderId, proxy_id: Option<&str>) -> Result<()> {
+pub fn update_current_proxy(
+    conn: &Connection,
+    id: &ProviderId,
+    proxy_id: Option<&str>,
+) -> Result<()> {
     conn.execute(
         "UPDATE providers SET current_proxy_id = ?1 WHERE id = ?2",
         params![proxy_id, id.as_str()],

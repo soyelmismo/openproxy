@@ -1,7 +1,7 @@
 use crate::error::{CoreError, Result};
-use crate::ids::{ProviderId, ModelRowId};
+use crate::ids::{ModelRowId, ProviderId};
 use crate::models::{DiscoveredModel, UpsertResult};
-use rusqlite::{params, Connection};
+use rusqlite::{Connection, params};
 use std::time::Duration;
 
 pub struct SyncDiff<'a> {
@@ -176,11 +176,9 @@ pub fn execute_sync_transaction(
             source: Some(Box::new(e)),
         })?;
     } else {
-        let discovered_ids: Vec<&str> = discovered
-            .iter()
-            .map(|d| d.model_id.as_str())
-            .collect();
-        let discovered_json = serde_json::to_string(&discovered_ids).unwrap_or_else(|_| "[]".to_string());
+        let discovered_ids: Vec<&str> = discovered.iter().map(|d| d.model_id.as_str()).collect();
+        let discovered_json =
+            serde_json::to_string(&discovered_ids).unwrap_or_else(|_| "[]".to_string());
         let sql = "DELETE FROM models \
              WHERE provider_id = ? AND custom = 0 \
                AND model_id NOT IN (SELECT value FROM json_each(?))";
@@ -194,7 +192,8 @@ pub fn execute_sync_transaction(
     let events = generate_events(&tx, provider, diff)?;
 
     if !inserted_model_ids.is_empty() {
-        let inserted_json = serde_json::to_string(&inserted_model_ids).unwrap_or_else(|_| "[]".to_string());
+        let inserted_json =
+            serde_json::to_string(&inserted_model_ids).unwrap_or_else(|_| "[]".to_string());
         let sql = "SELECT id, model_id FROM models \
              WHERE provider_id = ? AND model_id IN (SELECT value FROM json_each(?))";
         let mut stmt = tx.prepare(sql).map_err(|e| CoreError::Database {
@@ -230,8 +229,12 @@ pub fn execute_sync_transaction(
 
         if combo_targets_present {
             for (new_id, upstream) in &new_rows {
-                let updated =
-                    crate::combos::reconnect_orphan_targets(&tx, provider, upstream, ModelRowId(*new_id))?;
+                let updated = crate::combos::reconnect_orphan_targets(
+                    &tx,
+                    provider,
+                    upstream,
+                    ModelRowId(*new_id),
+                )?;
                 if updated > 0 {
                     tracing::info!(
                         target: "openproxy.core.models",

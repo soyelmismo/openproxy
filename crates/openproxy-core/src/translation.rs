@@ -83,7 +83,12 @@ pub struct OpenAIRequestView<'a> {
 }
 
 impl<'a> OpenAIRequestView<'a> {
-    pub fn new(req: &'a OpenAIRequest, model: &'a str, messages: &'a [OpenAIMessage], stream: bool) -> Self {
+    pub fn new(
+        req: &'a OpenAIRequest,
+        model: &'a str,
+        messages: &'a [OpenAIMessage],
+        stream: bool,
+    ) -> Self {
         Self {
             model,
             messages: std::borrow::Cow::Borrowed(messages),
@@ -247,7 +252,11 @@ pub struct GeminiRequest {
     pub system_instruction: Option<GeminiContent>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub generation_config: Option<GeminiGenerationConfig>,
-    #[serde(default, rename = "safetySettings", skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        rename = "safetySettings",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub safety_settings: Option<Vec<GeminiSafetySetting>>,
 }
 
@@ -382,7 +391,12 @@ fn message_content_to_gemini_parts(content: &Option<serde_json::Value>) -> Vec<G
 /// - `tool_choice` (OpenAI shape: `"auto"/"none"/"required"` or
 ///   `{type:"function",function:{name}}`) is translated to Anthropic shape
 ///   (`{type:"auto"/"none"/"any"/"tool",name?}`).
-pub fn openai_to_anthropic(req: &OpenAIRequest, override_model: &str, override_messages: &[OpenAIMessage], override_stream: bool) -> AnthropicRequest {
+pub fn openai_to_anthropic(
+    req: &OpenAIRequest,
+    override_model: &str,
+    override_messages: &[OpenAIMessage],
+    override_stream: bool,
+) -> AnthropicRequest {
     let mut system_parts: Vec<String> = Vec::new();
     let mut conversation: Vec<AnthropicMessage> = Vec::with_capacity(override_messages.len());
 
@@ -420,7 +434,8 @@ pub fn openai_to_anthropic(req: &OpenAIRequest, override_model: &str, override_m
 
     // Helper: flush pending tool results as a single user message.
     // Called when a non-tool, non-user message arrives.
-    let flush_tool_results = |conv: &mut Vec<AnthropicMessage>, pending: &mut Vec<serde_json::Value>| {
+    let flush_tool_results = |conv: &mut Vec<AnthropicMessage>,
+                              pending: &mut Vec<serde_json::Value>| {
         if !pending.is_empty() {
             conv.push(AnthropicMessage {
                 role: "user".to_string(),
@@ -520,7 +535,9 @@ pub fn openai_to_anthropic(req: &OpenAIRequest, override_model: &str, override_m
                     pending_tool_results.push(json!({"type": "text", "text": text}));
                     conversation.push(AnthropicMessage {
                         role: "user".to_string(),
-                        content: serde_json::Value::Array(std::mem::take(&mut pending_tool_results)),
+                        content: serde_json::Value::Array(std::mem::take(
+                            &mut pending_tool_results,
+                        )),
                     });
                 } else {
                     conversation.push(AnthropicMessage {
@@ -563,23 +580,28 @@ pub fn openai_to_anthropic(req: &OpenAIRequest, override_model: &str, override_m
                 if let Some(arr) = m.content.as_array() {
                     for block in arr {
                         if block.get("type").and_then(|t| t.as_str()) == Some("tool_use")
-                            && let Some(id) = block.get("id").and_then(|v| v.as_str()) {
-                                tool_use_ids.push(id.to_string());
-                            }
+                            && let Some(id) = block.get("id").and_then(|v| v.as_str())
+                        {
+                            tool_use_ids.push(id.to_string());
+                        }
                     }
                 }
             } else if m.role == "user"
-                && let Some(arr) = m.content.as_array() {
-                    for block in arr {
-                        if block.get("type").and_then(|t| t.as_str()) == Some("tool_result")
-                            && let Some(id) = block.get("tool_use_id").and_then(|v| v.as_str()) {
-                                tool_result_ids.push(id.to_string());
-                            }
+                && let Some(arr) = m.content.as_array()
+            {
+                for block in arr {
+                    if block.get("type").and_then(|t| t.as_str()) == Some("tool_result")
+                        && let Some(id) = block.get("tool_use_id").and_then(|v| v.as_str())
+                    {
+                        tool_result_ids.push(id.to_string());
                     }
                 }
+            }
         }
-        let use_set: std::collections::HashSet<&str> = tool_use_ids.iter().map(|s| s.as_str()).collect();
-        let result_set: std::collections::HashSet<&str> = tool_result_ids.iter().map(|s| s.as_str()).collect();
+        let use_set: std::collections::HashSet<&str> =
+            tool_use_ids.iter().map(|s| s.as_str()).collect();
+        let result_set: std::collections::HashSet<&str> =
+            tool_result_ids.iter().map(|s| s.as_str()).collect();
         let missing_results: Vec<&str> = use_set.difference(&result_set).copied().collect();
         let orphan_results: Vec<&str> = result_set.difference(&use_set).copied().collect();
         tracing::debug!(
@@ -1961,7 +1983,9 @@ mod tests {
             OpenAIMessage {
                 role: "user".to_string(),
                 content: Some(json!("que falta?")),
-                name: None, tool_call_id: None, tool_calls: None,
+                name: None,
+                tool_call_id: None,
+                tool_calls: None,
                 extra: serde_json::Map::new(),
             },
             // 3 consecutive assistant text messages (simulating the
@@ -1969,53 +1993,70 @@ mod tests {
             OpenAIMessage {
                 role: "assistant".to_string(),
                 content: Some(json!("Veo cómo se renderiza:")),
-                name: None, tool_call_id: None, tool_calls: None,
+                name: None,
+                tool_call_id: None,
+                tool_calls: None,
                 extra: serde_json::Map::new(),
             },
             OpenAIMessage {
                 role: "assistant".to_string(),
                 content: Some(json!("Eso no es el render del bloque...")),
-                name: None, tool_call_id: None, tool_calls: None,
+                name: None,
+                tool_call_id: None,
+                tool_calls: None,
                 extra: serde_json::Map::new(),
             },
             OpenAIMessage {
                 role: "assistant".to_string(),
                 content: Some(json!("El bloque core/html no tiene render_callback...")),
-                name: None, tool_call_id: None, tool_calls: None,
+                name: None,
+                tool_call_id: None,
+                tool_calls: None,
                 extra: serde_json::Map::new(),
             },
             // user message after consecutive assistants
             OpenAIMessage {
                 role: "user".to_string(),
-                content: Some(json!("You've reached the maximum number of tool-calling iterations.")),
-                name: None, tool_call_id: None, tool_calls: None,
+                content: Some(json!(
+                    "You've reached the maximum number of tool-calling iterations."
+                )),
+                name: None,
+                tool_call_id: None,
+                tool_calls: None,
                 extra: serde_json::Map::new(),
             },
             // 2 consecutive assistant text messages
             OpenAIMessage {
                 role: "assistant".to_string(),
                 content: Some(json!("**0 placeholders sin reemplazar.**")),
-                name: None, tool_call_id: None, tool_calls: None,
+                name: None,
+                tool_call_id: None,
+                tool_calls: None,
                 extra: serde_json::Map::new(),
             },
             OpenAIMessage {
                 role: "assistant".to_string(),
                 content: Some(json!("Falta muy poco. Repaso el checklist.")),
-                name: None, tool_call_id: None, tool_calls: None,
+                name: None,
+                tool_call_id: None,
+                tool_calls: None,
                 extra: serde_json::Map::new(),
             },
             // user
             OpenAIMessage {
                 role: "user".to_string(),
                 content: Some(json!("Seleccionar reporte_mensual...")),
-                name: None, tool_call_id: None, tool_calls: None,
+                name: None,
+                tool_call_id: None,
+                tool_calls: None,
                 extra: serde_json::Map::new(),
             },
             // assistant with 2 tool_calls
             OpenAIMessage {
                 role: "assistant".to_string(),
                 content: Some(json!("Diagnóstico")),
-                name: None, tool_call_id: None,
+                name: None,
+                tool_call_id: None,
                 tool_calls: Some(vec![
                     json!({"id":"call_A","type":"function","function":{"name":"search_files","arguments":"{}"}}),
                     json!({"id":"call_B","type":"function","function":{"name":"search_files","arguments":"{}"}}),
@@ -2043,7 +2084,8 @@ mod tests {
             OpenAIMessage {
                 role: "assistant".to_string(),
                 content: Some(serde_json::Value::Null),
-                name: None, tool_call_id: None,
+                name: None,
+                tool_call_id: None,
                 tool_calls: Some(vec![
                     json!({"id":"call_C","type":"function","function":{"name":"search_files","arguments":"{}"}}),
                 ]),
@@ -2062,7 +2104,9 @@ mod tests {
             OpenAIMessage {
                 role: "user".to_string(),
                 content: Some(json!("no se que mecanismo es...")),
-                name: None, tool_call_id: None, tool_calls: None,
+                name: None,
+                tool_call_id: None,
+                tool_calls: None,
                 extra: serde_json::Map::new(),
             },
         ];
@@ -2088,10 +2132,13 @@ mod tests {
         // CRITICAL: verify NO two consecutive messages have the same role.
         for i in 1..out.messages.len() {
             assert_ne!(
-                out.messages[i].role, out.messages[i - 1].role,
+                out.messages[i].role,
+                out.messages[i - 1].role,
                 "consecutive messages [{}] and [{}] both have role '{}' — \
                  Anthropic/MiniMax rejects this with (2013)",
-                i - 1, i, out.messages[i].role
+                i - 1,
+                i,
+                out.messages[i].role
             );
         }
 

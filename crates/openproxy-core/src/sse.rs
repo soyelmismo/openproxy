@@ -2201,7 +2201,7 @@ impl SseParser {
         if let Some(pos) = memchr::memchr(b'\n', &self.buffer) {
             let line_bytes = self.buffer.split_to(pos);
             self.buffer.advance(1); // skip '\n'
-            
+
             // Pre-reserve buffer space to avoid repeated reallocations
             if self.buffer.capacity() - self.buffer.len() < 4096 {
                 self.buffer.reserve(16384);

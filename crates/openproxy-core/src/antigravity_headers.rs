@@ -91,22 +91,22 @@ fn hostname() -> Option<String> {
         }
     }
     if let Ok(s) = std::env::var("HOSTNAME")
-        && !s.is_empty() {
-            return Some(s);
-        }
+        && !s.is_empty()
+    {
+        return Some(s);
+    }
     if let Ok(s) = std::env::var("COMPUTERNAME")
-        && !s.is_empty() {
-            return Some(s);
-        }
+        && !s.is_empty()
+    {
+        return Some(s);
+    }
     None
 }
 
 /// Per-launch session ID. Generated once per process lifetime.
 fn session_id() -> String {
     static CACHE: OnceLock<String> = OnceLock::new();
-    CACHE
-        .get_or_init(|| Uuid::new_v4().to_string())
-        .clone()
+    CACHE.get_or_init(|| Uuid::new_v4().to_string()).clone()
 }
 
 /// The full User-Agent string:
@@ -134,20 +134,14 @@ pub fn oauth_user_agent() -> String {
 /// `project_id` is optional — when present, `x-goog-user-project` is
 /// set to the project ID (required for the API to route the request
 /// to the correct Cloud Code project).
-pub fn inject_antigravity_headers(
-    headers: &mut http::HeaderMap,
-    project_id: Option<&str>,
-) {
+pub fn inject_antigravity_headers(headers: &mut http::HeaderMap, project_id: Option<&str>) {
     // User-Agent
     if let Ok(v) = HeaderValue::from_str(&user_agent()) {
         headers.insert(http::header::USER_AGENT, v);
     }
 
     // x-client-name
-    headers.insert(
-        "x-client-name",
-        HeaderValue::from_static("antigravity"),
-    );
+    headers.insert("x-client-name", HeaderValue::from_static("antigravity"));
 
     // x-client-version
     if let Ok(v) = HeaderValue::from_str(&version()) {
@@ -166,10 +160,13 @@ pub fn inject_antigravity_headers(
 
     // x-goog-user-project (when project_id is known and non-empty)
     if let Some(pid) = project_id
-        && !pid.is_empty() && pid != "test-project" && pid != "project-id"
-            && let Ok(v) = HeaderValue::from_str(pid) {
-                headers.insert("x-goog-user-project", v);
-            }
+        && !pid.is_empty()
+        && pid != "test-project"
+        && pid != "project-id"
+        && let Ok(v) = HeaderValue::from_str(pid)
+    {
+        headers.insert("x-goog-user-project", v);
+    }
 }
 
 /// Get the current Antigravity version string (for logging / diagnostics).
@@ -212,7 +209,10 @@ mod tests {
         assert!(headers.get("x-client-version").is_some());
         assert!(headers.get("x-machine-id").is_some());
         assert!(headers.get("x-vscode-sessionid").is_some());
-        assert_eq!(headers.get("x-goog-user-project").unwrap(), "my-project-123");
+        assert_eq!(
+            headers.get("x-goog-user-project").unwrap(),
+            "my-project-123"
+        );
         assert!(headers.get(http::header::USER_AGENT).is_some());
     }
 

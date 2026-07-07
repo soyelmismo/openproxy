@@ -227,43 +227,40 @@ impl Pipeline {
 
         let mut resolved_target_clone = resolved_target.clone();
 
-        if let Some(account_id) = target.account_id {
-            if let Some(custom_meta) = &mut resolved_target_clone.custom_meta {
-                if let Some(refresh_token) = &custom_meta.maybe_refresh {
-                    if let Some(registry) = self.config.oauth_provider_registry.as_ref() {
-                        if let Some(provider) = registry.get(target.provider_id.as_str()) {
-                            let provider_id_str = target.provider_id.as_str();
-                            tracing::info!(
-                                account = account_id.0,
-                                provider = provider_id_str,
-                                "pipeline: proactive OAuth token refresh"
-                            );
-                            match crate::oauth::TokenRefreshCoordinator::global()
-                                .refresh_and_store(
-                                    provider_id_str,
-                                    provider,
-                                    refresh_token,
-                                    &self.config.upstream_client,
-                                    account_id,
-                                    crate::oauth::DbRef::Connection(&self.conn),
-                                    &self.config.master_key,
-                                )
-                                .await
-                            {
-                                Ok(token) => {
-                                    custom_meta.access_token = token.access_token;
-                                }
-                                Err(e) => {
-                                    tracing::warn!(account = account_id.0, provider = provider_id_str, error = %e, "pipeline: proactive OAuth refresh failed, continuing with existing token");
-                                }
-                            }
-                        }
-                    }
+        if let Some(account_id) = target.account_id
+            && let Some(custom_meta) = &mut resolved_target_clone.custom_meta
+            && let Some(refresh_token) = &custom_meta.maybe_refresh
+            && let Some(registry) = self.config.oauth_provider_registry.as_ref()
+            && let Some(provider) = registry.get(target.provider_id.as_str())
+        {
+            let provider_id_str = target.provider_id.as_str();
+            tracing::info!(
+                account = account_id.0,
+                provider = provider_id_str,
+                "pipeline: proactive OAuth token refresh"
+            );
+            match crate::oauth::TokenRefreshCoordinator::global()
+                .refresh_and_store(
+                    provider_id_str,
+                    provider,
+                    refresh_token,
+                    &self.config.upstream_client,
+                    account_id,
+                    crate::oauth::DbRef::Connection(&self.conn),
+                    &self.config.master_key,
+                )
+                .await
+            {
+                Ok(token) => {
+                    custom_meta.access_token = token.access_token;
+                }
+                Err(e) => {
+                    tracing::warn!(account = account_id.0, provider = provider_id_str, error = %e, "pipeline: proactive OAuth refresh failed, continuing with existing token");
                 }
             }
         }
 
-        let custom_result = adapter
+        if let Some(result) = adapter
             .execute_custom(
                 &self.config.upstream_client,
                 Arc::clone(&req),
@@ -282,9 +279,8 @@ impl Pipeline {
                         .unwrap_or(self.config.cooldown_factor),
                 }),
             )
-            .await;
-
-        if let Some(result) = custom_result {
+            .await
+        {
             return match result {
                 Ok(response) => {
                     let total_ms = started.elapsed().as_millis() as u64;
@@ -329,33 +325,33 @@ impl Pipeline {
                     }
                 }
                 Err(e) => {
-                    if let CoreError::UpstreamError { status: 401, .. } = &e {
-                        if let Some(account_id) = target.account_id {
-                            let provider_id_str = target.provider_id.to_string();
-                            let dedup_key = format!(
-                                "{}:{}",
-                                crate::notifications::CODE_OAUTH_EXPIRED,
-                                account_id.0
-                            );
-                            let payload = serde_json::json!({
-                                "code": crate::notifications::CODE_OAUTH_EXPIRED,
-                                "message": format!("OAuth token for account {} on {} rejected by upstream (HTTP 401)", account_id.0, provider_id_str),
+                    if let CoreError::UpstreamError { status: 401, .. } = &e
+                        && let Some(account_id) = target.account_id
+                    {
+                        let provider_id_str = target.provider_id.to_string();
+                        let dedup_key = format!(
+                            "{}:{}",
+                            crate::notifications::CODE_OAUTH_EXPIRED,
+                            account_id.0
+                        );
+                        let payload = serde_json::json!({
+                            "code": crate::notifications::CODE_OAUTH_EXPIRED,
+                            "message": format!("OAuth token for account {} on {} rejected by upstream (HTTP 401)", account_id.0, provider_id_str),
+                            "provider_id": &provider_id_str,
+                            "details": {
+                                "account_id": account_id.0,
                                 "provider_id": &provider_id_str,
-                                "details": {
-                                    "account_id": account_id.0,
-                                    "provider_id": &provider_id_str,
-                                    "reason": "upstream_401",
-                                },
-                            });
-                            let conn = self.conn.lock();
-                            let _ = crate::notifications::insert_and_broadcast(
-                                &conn,
-                                crate::notifications::KIND_SYSTEM,
-                                &payload,
-                                Some(&dedup_key),
-                                Some(&provider_id_str),
-                            );
-                        }
+                                "reason": "upstream_401",
+                            },
+                        });
+                        let conn = self.conn.lock();
+                        let _ = crate::notifications::insert_and_broadcast(
+                            &conn,
+                            crate::notifications::KIND_SYSTEM,
+                            &payload,
+                            Some(&dedup_key),
+                            Some(&provider_id_str),
+                        );
                     }
                     self.record_and_fail_with_trace_id(
                         req,

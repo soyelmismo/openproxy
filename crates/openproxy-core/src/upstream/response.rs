@@ -211,8 +211,7 @@ impl UpstreamBodyStream {
         let min_deadline = if self.is_streaming {
             if let Some(last) = self.last_chunk_at {
                 // Subsequent chunk: gap = last_chunk + body_chunk_ms
-                let chunk_gap_deadline =
-                    last + Duration::from_millis(self.body_chunk_ms);
+                let chunk_gap_deadline = last + Duration::from_millis(self.body_chunk_ms);
                 std::cmp::min(chunk_gap_deadline, self.total_deadline)
             } else {
                 // First chunk: no gap, only total_deadline
