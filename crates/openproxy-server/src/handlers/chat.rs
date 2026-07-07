@@ -117,7 +117,7 @@ pub async fn chat_completions(
         state,
         cancel,
         headers,
-        parsed_req.0,
+        parsed_req.raw,
         token_inner,
         resolved_route,
     )
