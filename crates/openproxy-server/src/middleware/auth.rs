@@ -195,7 +195,10 @@ pub async fn auth_middleware(
 
     let auth_result = authenticate(&state, &parts.headers, requested_model)?;
 
-    parts.extensions.insert(ParsedChatRequest { raw: parsed, bytes: bytes.clone() });
+    parts.extensions.insert(ParsedChatRequest {
+        raw: parsed,
+        bytes: bytes.clone(),
+    });
     if let Some(res) = auth_result {
         parts.extensions.insert(res);
     }
