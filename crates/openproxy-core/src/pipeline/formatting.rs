@@ -213,10 +213,9 @@ fn messages_to_responses_input(messages: &[&OpenAIMessage]) -> Value {
                 .unwrap_or_else(|| "call_xyz".to_string());
             let content_str = content_to_text(msg.content.as_ref());
             input_items.push(json!({
-                "type": "item",
-                "role": "tool",
+                "type": "function_call_output",
                 "call_id": call_id,
-                "content": [{ "type": "text", "text": content_str }]
+                "output": content_str
             }));
             continue;
         }
@@ -309,7 +308,6 @@ fn messages_to_responses_input(messages: &[&OpenAIMessage]) -> Value {
         }
 
         input_items.push(json!({
-            "type": "item",
             "role": msg.role,
             "content": parts
         }));
@@ -339,6 +337,40 @@ fn normalize_model_and_effort(model: &str) -> (String, Option<&'static str>) {
         }
     }
     (model.to_string(), None)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::translation::OpenAIMessage;
+
+    #[test]
+    fn responses_input_does_not_emit_legacy_item_type() {
+        let user = OpenAIMessage {
+            role: "user".to_string(),
+            content: Some(Value::String("ping".to_string())),
+            name: None,
+            tool_call_id: None,
+            tool_calls: None,
+            extra: serde_json::Map::new(),
+        };
+        let tool = OpenAIMessage {
+            role: "tool".to_string(),
+            content: Some(Value::String("pong".to_string())),
+            name: None,
+            tool_call_id: Some("call_1".to_string()),
+            tool_calls: None,
+            extra: serde_json::Map::new(),
+        };
+        let input = messages_to_responses_input(&[&user, &tool]);
+        let items = input.as_array().expect("input array");
+
+        assert_eq!(items[0].get("type"), None);
+        assert_eq!(
+            items[1].get("type").and_then(Value::as_str),
+            Some("function_call_output")
+        );
+    }
 }
 
 fn normalize_effort(value: &str) -> &'static str {
