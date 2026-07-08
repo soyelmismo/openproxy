@@ -970,7 +970,7 @@ pub struct ListModelsQuery {
 /// arithmetic — the actual comparison doesn't reference a float
 /// constant (floats would just add rounding noise for no benefit at
 /// this scale).
-const QUOTA_LOW_ABSOLUTE_FLOOR: i64 = 1_000;
+
 
 // Inspect a freshly-fetched [`AccountQuota`] and decide whether to
 // fire a `quota_low` notification. Returns `(scope, remaining, limit)`

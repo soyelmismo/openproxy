@@ -380,6 +380,38 @@ impl Default for SmartWarmupConfig {
     }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct QuotaSyncConfig {
+    #[serde(default = "default_quota_sync_enabled")]
+    pub enabled: bool,
+    #[serde(default = "default_quota_sync_interval")]
+    pub interval_secs: u64,
+    #[serde(default = "default_quota_sync_delay")]
+    pub delay_between_accounts_ms: u64,
+}
+
+fn default_quota_sync_enabled() -> bool {
+    true
+}
+
+fn default_quota_sync_interval() -> u64 {
+    3600
+}
+
+fn default_quota_sync_delay() -> u64 {
+    5000
+}
+
+impl Default for QuotaSyncConfig {
+    fn default() -> Self {
+        Self {
+            enabled: default_quota_sync_enabled(),
+            interval_secs: default_quota_sync_interval(),
+            delay_between_accounts_ms: default_quota_sync_delay(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct AppConfig {
     #[serde(default)]
@@ -404,6 +436,8 @@ pub struct AppConfig {
     pub quota_protection: QuotaProtectionConfig,
     #[serde(default)]
     pub smart_warmup: SmartWarmupConfig,
+    #[serde(default)]
+    pub quota_sync: QuotaSyncConfig,
 }
 
 impl AppConfig {

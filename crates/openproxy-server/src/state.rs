@@ -187,6 +187,7 @@ impl AppState {
             maintenance_cell: maintenance_cell.clone(),
             vacuum_status: vacuum_status.clone(),
             master_key: master_key.clone(),
+            adapters: adapters.clone(),
             upstream_client: upstream_client.clone(),
             oauth_provider_registry: oauth_provider_registry.clone(),
         })
@@ -298,6 +299,7 @@ impl AppState {
             maintenance_cell: maintenance_cell.clone(),
             vacuum_status: vacuum_status.clone(),
             master_key: master_key.clone(),
+            adapters: adapters.clone(),
             upstream_client: upstream_client.clone(),
             oauth_provider_registry: oauth_provider_registry.clone(),
         })
@@ -759,6 +761,7 @@ struct SpawnBackgroundTasksArgs {
     maintenance_cell: Arc<RwLock<openproxy_core::config::MaintenanceConfig>>,
     vacuum_status: Arc<RwLock<crate::state::VacuumStatus>>,
     master_key: Arc<openproxy_core::secrets::MasterKey>,
+    adapters: Arc<RwLock<Vec<openproxy_core::adapters::ProviderAdapterEnum>>>,
     upstream_client: Arc<openproxy_core::upstream::UpstreamClient>,
     oauth_provider_registry: Arc<openproxy_core::oauth::OAuthProviderRegistry>,
 }
@@ -771,6 +774,7 @@ async fn spawn_background_tasks(args: SpawnBackgroundTasksArgs) {
         maintenance_cell,
         vacuum_status,
         master_key,
+        adapters,
         upstream_client,
         oauth_provider_registry,
     } = args;
@@ -835,6 +839,24 @@ async fn spawn_background_tasks(args: SpawnBackgroundTasksArgs) {
             .await;
         });
     }
+
+    let qs_pool = db_pool.clone();
+    let qs_config = _config.clone();
+    let qs_upstream = upstream_client.clone();
+    let qs_key = master_key.clone();
+    let qs_adapters = adapters.clone();
+    let qs_registry = oauth_provider_registry.clone();
+    tokio::spawn(async move {
+        openproxy_core::quota_sync::start_quota_sync_scheduler(
+            qs_pool,
+            qs_config,
+            qs_upstream,
+            qs_key,
+            qs_adapters,
+            qs_registry,
+        )
+        .await;
+    });
 
     let prune_pool = db_pool.clone();
     let maint_cell = maintenance_cell.clone();

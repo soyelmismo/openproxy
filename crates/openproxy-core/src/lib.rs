@@ -56,6 +56,7 @@ pub mod pipeline;
 pub mod pricing;
 pub mod providers;
 pub mod quota;
+pub mod quota_sync;
 pub mod race;
 pub mod race_sink;
 pub mod redact;
