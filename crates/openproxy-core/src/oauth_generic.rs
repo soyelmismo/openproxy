@@ -307,6 +307,78 @@ impl OAuthProvider for GenericOAuthProvider {
     }
 }
 
+#[macro_export]
+macro_rules! delegate_oauth_to_generic {
+    (name) => {
+        fn name(&self) -> &str {
+            self.generic.name()
+        }
+    };
+    (flow) => {
+        fn flow(&self) -> crate::oauth::OAuthFlow {
+            self.generic.flow()
+        }
+    };
+    (build_auth_url) => {
+        async fn build_auth_url(
+            &self,
+            redirect_uri: &str,
+        ) -> crate::error::Result<(String, String, String)> {
+            self.generic.build_auth_url(redirect_uri).await
+        }
+    };
+    (exchange_code) => {
+        async fn exchange_code(
+            &self,
+            code: &str,
+            code_verifier: &str,
+            upstream_client: &std::sync::Arc<crate::upstream::UpstreamClient>,
+            redirect_uri: &str,
+        ) -> crate::error::Result<crate::oauth::TokenResponse> {
+            self.generic
+                .exchange_code(code, code_verifier, upstream_client, redirect_uri)
+                .await
+        }
+    };
+    (request_device_code) => {
+        async fn request_device_code(
+            &self,
+            upstream_client: &std::sync::Arc<crate::upstream::UpstreamClient>,
+        ) -> crate::error::Result<crate::oauth::DeviceAuthorizationResponse> {
+            self.generic.request_device_code(upstream_client).await
+        }
+    };
+    (poll_device_token) => {
+        async fn poll_device_token(
+            &self,
+            device_code: &str,
+            upstream_client: &std::sync::Arc<crate::upstream::UpstreamClient>,
+        ) -> crate::error::Result<Option<crate::oauth::TokenResponse>> {
+            self.generic
+                .poll_device_token(device_code, upstream_client)
+                .await
+        }
+    };
+    (refresh_token) => {
+        async fn refresh_token(
+            &self,
+            refresh_token: &str,
+            upstream_client: &std::sync::Arc<crate::upstream::UpstreamClient>,
+            account_id: crate::ids::AccountId,
+            db: crate::oauth::DbRef<'_>,
+        ) -> crate::error::Result<crate::oauth::TokenResponse> {
+            self.generic
+                .refresh_token(refresh_token, upstream_client, account_id, db)
+                .await
+        }
+    };
+    ( $($method:ident),+ $(,)? ) => {
+        $(
+            crate::delegate_oauth_to_generic!($method);
+        )+
+    };
+}
+
 async fn call_oauth_endpoint(
     upstream_client: &Arc<UpstreamClient>,
     spec: &OAuthSpec,

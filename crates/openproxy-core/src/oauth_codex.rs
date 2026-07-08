@@ -8,8 +8,7 @@ use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
 use crate::error::{CoreError, Result};
-use crate::ids::AccountId;
-use crate::oauth::{DbRef, DeviceAuthorizationResponse, OAuthFlow, OAuthProvider, TokenResponse};
+use crate::oauth::{DeviceAuthorizationResponse, OAuthFlow, OAuthProvider, TokenResponse};
 use crate::oauth_generic::{GenericOAuthProvider, OAuthRequestEncoding, OAuthSpec};
 use crate::upstream::{
     CancellationToken, TimeoutProfile, UpstreamClient, UpstreamError, UpstreamRequest,
@@ -67,13 +66,7 @@ impl Default for CodexOAuthProvider {
 }
 
 impl OAuthProvider for CodexOAuthProvider {
-    fn name(&self) -> &str {
-        self.generic.name()
-    }
-
-    fn flow(&self) -> OAuthFlow {
-        self.generic.flow()
-    }
+    crate::delegate_oauth_to_generic!(name, flow);
 
     async fn build_auth_url(&self, _redirect_uri: &str) -> Result<(String, String, String)> {
         Err(CoreError::Validation(
@@ -291,17 +284,7 @@ impl OAuthProvider for CodexOAuthProvider {
         Ok(Some(token))
     }
 
-    async fn refresh_token(
-        &self,
-        refresh_token: &str,
-        upstream_client: &Arc<UpstreamClient>,
-        account_id: AccountId,
-        db: DbRef<'_>,
-    ) -> Result<TokenResponse> {
-        self.generic
-            .refresh_token(refresh_token, upstream_client, account_id, db)
-            .await
-    }
+    crate::delegate_oauth_to_generic!(refresh_token);
 
     fn provider_specific_from_token(&self, token: &TokenResponse) -> Option<String> {
         let claims = token.id_token.as_deref().and_then(decode_jwt_payload)?;

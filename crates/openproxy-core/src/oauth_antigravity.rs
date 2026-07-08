@@ -15,7 +15,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::{CoreError, Result};
 use crate::ids::AccountId;
-use crate::oauth::{OAuthFlow, OAuthProvider, TokenResponse};
+use crate::oauth::{OAuthFlow, OAuthProvider};
 use crate::oauth_generic::{GenericOAuthProvider, OAuthRequestEncoding, OAuthSpec};
 use crate::secrets::MasterKey;
 use crate::upstream::{CancellationToken, TimeoutProfile, UpstreamClient, UpstreamRequest};
@@ -100,58 +100,15 @@ impl Default for AntigravityOAuthProvider {
 }
 
 impl OAuthProvider for AntigravityOAuthProvider {
-    fn name(&self) -> &str {
-        self.generic.name()
-    }
-
-    fn flow(&self) -> OAuthFlow {
-        self.generic.flow()
-    }
-
-    async fn build_auth_url(&self, redirect_uri: &str) -> Result<(String, String, String)> {
-        self.generic.build_auth_url(redirect_uri).await
-    }
-
-    async fn exchange_code(
-        &self,
-        code: &str,
-        code_verifier: &str,
-        upstream_client: &Arc<UpstreamClient>,
-        redirect_uri: &str,
-    ) -> Result<TokenResponse> {
-        self.generic
-            .exchange_code(code, code_verifier, upstream_client, redirect_uri)
-            .await
-    }
-
-    async fn request_device_code(
-        &self,
-        upstream_client: &Arc<UpstreamClient>,
-    ) -> Result<crate::oauth::DeviceAuthorizationResponse> {
-        self.generic.request_device_code(upstream_client).await
-    }
-
-    async fn poll_device_token(
-        &self,
-        device_code: &str,
-        upstream_client: &Arc<UpstreamClient>,
-    ) -> Result<Option<TokenResponse>> {
-        self.generic
-            .poll_device_token(device_code, upstream_client)
-            .await
-    }
-
-    async fn refresh_token(
-        &self,
-        refresh_token: &str,
-        upstream_client: &Arc<UpstreamClient>,
-        account_id: AccountId,
-        db: crate::oauth::DbRef<'_>,
-    ) -> Result<TokenResponse> {
-        self.generic
-            .refresh_token(refresh_token, upstream_client, account_id, db)
-            .await
-    }
+    crate::delegate_oauth_to_generic!(
+        name,
+        flow,
+        build_auth_url,
+        exchange_code,
+        request_device_code,
+        poll_device_token,
+        refresh_token
+    );
 
     async fn post_exchange(
         &self,
