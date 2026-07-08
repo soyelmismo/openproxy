@@ -11,7 +11,7 @@ pub async fn oauth_authorize(
     State(s): State<AppState>,
     Path(provider): Path<String>,
 ) -> ApiResult<Json<serde_json::Value>> {
-    let body: Result<Json<serde_json::Value>, ApiError> = async {
+    crate::api_try! {
         let registry = s.oauth_provider_registry();
         let provider_impl = registry.get(&provider).ok_or_else(|| {
             ApiError(CoreError::Validation(format!(
@@ -54,8 +54,6 @@ pub async fn oauth_authorize(
             "redirect_uri": redirect_uri,
         })))
     }
-    .await;
-    body.into()
 }
 
 pub async fn oauth_exchange(
@@ -63,7 +61,7 @@ pub async fn oauth_exchange(
     Path(provider): Path<String>,
     Json(input): Json<serde_json::Value>,
 ) -> ApiResult<Json<serde_json::Value>> {
-    let body: Result<Json<serde_json::Value>, ApiError> = async {
+    crate::api_try! {
         let code = input
             .get("code")
             .and_then(|v| v.as_str())
@@ -155,15 +153,13 @@ pub async fn oauth_exchange(
             "token_type": token.token_type,
         })))
     }
-    .await;
-    body.into()
 }
 
 pub async fn oauth_device_code(
     State(s): State<AppState>,
     Path(provider): Path<String>,
 ) -> ApiResult<Json<serde_json::Value>> {
-    let body: Result<Json<serde_json::Value>, ApiError> = async {
+    crate::api_try! {
         let registry = s.oauth_provider_registry();
         let provider_impl = registry.get(&provider).ok_or_else(|| {
             ApiError(CoreError::Validation(format!(
@@ -196,8 +192,6 @@ pub async fn oauth_device_code(
             "interval": dar.interval,
         })))
     }
-    .await;
-    body.into()
 }
 
 pub async fn oauth_device_poll(
@@ -205,7 +199,7 @@ pub async fn oauth_device_poll(
     Path(provider): Path<String>,
     Json(input): Json<serde_json::Value>,
 ) -> ApiResult<Json<serde_json::Value>> {
-    let body: Result<Json<serde_json::Value>, ApiError> = async {
+    crate::api_try! {
         let device_code = input
             .get("device_code")
             .and_then(|v| v.as_str())
@@ -367,8 +361,6 @@ pub async fn oauth_device_poll(
             }))),
         }
     }
-    .await;
-    body.into()
 }
 
 pub async fn oauth_callback(

@@ -11,7 +11,7 @@ pub async fn toggle_model(
     Path(id): Path<i64>,
     Json(body): Json<serde_json::Value>,
 ) -> ApiResult<Json<serde_json::Value>> {
-    let body: Result<Json<serde_json::Value>, ApiError> = async {
+    crate::api_try! {
         let active = body
             .get("active")
             .and_then(|v| v.as_bool())
@@ -20,49 +20,41 @@ pub async fn toggle_model(
         core_models::set_active(&w, ModelRowId(id), active)?;
         Ok(Json(serde_json::json!({ "id": id, "active": active })))
     }
-    .await;
-    body.into()
 }
 
 pub async fn bulk_toggle_models(
     State(s): State<AppState>,
     Json(body): Json<core_admin::BulkToggleInput>,
 ) -> ApiResult<Json<serde_json::Value>> {
-    let body: Result<Json<serde_json::Value>, ApiError> = async {
+    crate::api_try! {
         let w = s.db_pool().writer();
         let updated = core_admin::set_active_bulk(&w, body)?;
         Ok(Json(serde_json::json!({
             "updated": updated,
         })))
     }
-    .await;
-    body.into()
 }
 
 pub async fn delete_model(
     State(s): State<AppState>,
     Path(id): Path<i64>,
 ) -> ApiResult<Json<serde_json::Value>> {
-    let body: Result<Json<serde_json::Value>, ApiError> = async {
+    crate::api_try! {
         let w = s.db_pool().writer();
         let removed = core_models::delete(&w, ModelRowId(id))?;
         Ok(Json(serde_json::json!({ "id": id, "deleted": removed })))
     }
-    .await;
-    body.into()
 }
 
 pub async fn create_custom_model(
     State(s): State<AppState>,
     Json(input): Json<core_admin::CreateCustomModelInput>,
 ) -> ApiResult<Json<serde_json::Value>> {
-    let body: Result<Json<serde_json::Value>, ApiError> = async {
+    crate::api_try! {
         let w = s.db_pool().writer();
         let row_id = core_admin::create_custom_model(&w, input)?;
         Ok(Json(serde_json::json!({ "row_id": row_id.0 })))
     }
-    .await;
-    body.into()
 }
 
 pub async fn test_model(
@@ -116,7 +108,7 @@ pub async fn list_models_admin(
     State(s): State<AppState>,
     axum::extract::Query(q): axum::extract::Query<ListModelsQuery>,
 ) -> ApiResult<Json<Vec<core_models::Model>>> {
-    let body: Result<Json<Vec<core_models::Model>>, ApiError> = async {
+    crate::api_try! {
         // Read-only SELECT — use the READER.
         let r = s.db_pool().reader();
         let mut list = core_models::list_all(&r)?;
@@ -125,8 +117,6 @@ pub async fn list_models_admin(
         }
         Ok(Json(list))
     }
-    .await;
-    body.into()
 }
 
 pub async fn sync_models_dev(State(s): State<AppState>) -> ApiResult<Json<serde_json::Value>> {

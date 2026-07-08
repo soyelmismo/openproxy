@@ -60,7 +60,7 @@ pub async fn list_models(
 
     // Use try_writer_for to avoid blocking under admin lock contention.
     // The model list is bounded (typically <1000 rows) so 5s is plenty.
-    let body: Result<Json<serde_json::Value>, ApiError> = async {
+    crate::api_try! {
         let w = state
             .db_pool()
             .try_writer_for(std::time::Duration::from_secs(5))
@@ -91,8 +91,6 @@ pub async fn list_models(
             "data": data,
         })))
     }
-    .await;
-    body.into()
 }
 
 /// Authenticate with a chat-scope key, OR allow anonymous when zero

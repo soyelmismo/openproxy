@@ -7,21 +7,19 @@ use axum::{
 pub async fn list_api_keys(
     State(s): State<AppState>,
 ) -> ApiResult<Json<Vec<core_api_keys::ApiKey>>> {
-    let body: Result<Json<Vec<core_api_keys::ApiKey>>, ApiError> = async {
+    crate::api_try! {
         // Read-only SELECT — use the READER.
         let r = s.db_pool().reader();
         let list = core_api_keys::list(&r)?;
         Ok(Json(list))
     }
-    .await;
-    body.into()
 }
 
 pub async fn create_api_key(
     State(s): State<AppState>,
     Json(body): Json<core_api_keys::CreateApiKeyInput>,
 ) -> ApiResult<Json<serde_json::Value>> {
-    let body: Result<Json<serde_json::Value>, ApiError> = async {
+    crate::api_try! {
         let w = s.db_pool().writer();
         let (key, plaintext) = core_api_keys::create(&w, body, "admin")?;
         Ok(Json(serde_json::json!({
@@ -29,23 +27,19 @@ pub async fn create_api_key(
             "plaintext": plaintext,
         })))
     }
-    .await;
-    body.into()
 }
 
 pub async fn get_api_key(
     State(s): State<AppState>,
     Path(id): Path<i64>,
 ) -> ApiResult<Json<core_api_keys::ApiKey>> {
-    let body: Result<Json<core_api_keys::ApiKey>, ApiError> = async {
+    crate::api_try! {
         // Read-only SELECT — use the READER.
         let r = s.db_pool().reader();
         let key = core_api_keys::get_by_id(&r, ApiKeyId(id))?
             .ok_or_else(|| CoreError::Internal(format!("api_key {id} not found")))?;
         Ok(Json(key))
     }
-    .await;
-    body.into()
 }
 
 pub async fn update_api_key(
@@ -53,7 +47,7 @@ pub async fn update_api_key(
     Path(id): Path<i64>,
     Json(body): Json<serde_json::Value>,
 ) -> ApiResult<Json<serde_json::Value>> {
-    let body: Result<Json<serde_json::Value>, ApiError> = async {
+    crate::api_try! {
         let label = body.get("label").and_then(|v| v.as_str());
 
         let scopes_owned: Option<Vec<String>> =
@@ -113,41 +107,35 @@ pub async fn update_api_key(
         )?;
         Ok(Json(serde_json::json!({ "id": id })))
     }
-    .await;
-    body.into()
 }
 
 pub async fn revoke_api_key(
     State(s): State<AppState>,
     Path(id): Path<i64>,
 ) -> ApiResult<Json<serde_json::Value>> {
-    let body: Result<Json<serde_json::Value>, ApiError> = async {
+    crate::api_try! {
         let w = s.db_pool().writer();
         core_api_keys::revoke(&w, ApiKeyId(id))?;
         Ok(Json(serde_json::json!({ "id": id, "revoked": true })))
     }
-    .await;
-    body.into()
 }
 
 pub async fn delete_api_key(
     State(s): State<AppState>,
     Path(id): Path<i64>,
 ) -> ApiResult<Json<serde_json::Value>> {
-    let body: Result<Json<serde_json::Value>, ApiError> = async {
+    crate::api_try! {
         let w = s.db_pool().writer();
         core_api_keys::hard_delete(&w, ApiKeyId(id))?;
         Ok(Json(serde_json::json!({ "id": id, "deleted": true })))
     }
-    .await;
-    body.into()
 }
 
 pub async fn regenerate_api_key(
     State(s): State<AppState>,
     Path(id): Path<i64>,
 ) -> ApiResult<Json<serde_json::Value>> {
-    let body: Result<Json<serde_json::Value>, ApiError> = async {
+    crate::api_try! {
         let w = s.db_pool().writer();
         let (key, plaintext) = core_api_keys::regenerate(&w, ApiKeyId(id))?;
         Ok(Json(serde_json::json!({
@@ -155,15 +143,13 @@ pub async fn regenerate_api_key(
             "plaintext": plaintext,
         })))
     }
-    .await;
-    body.into()
 }
 
 pub async fn api_key_usage(
     State(s): State<AppState>,
     Path(id): Path<i64>,
 ) -> ApiResult<Json<serde_json::Value>> {
-    let body: Result<Json<serde_json::Value>, ApiError> = async {
+    crate::api_try! {
         // Read-only SELECTs (get_by_id, usage_summary, core_usage::summary) —
         // use the READER.
         let r = s.db_pool().reader();
@@ -187,6 +173,4 @@ pub async fn api_key_usage(
             "summary": detailed,
         })))
     }
-    .await;
-    body.into()
 }

@@ -194,3 +194,14 @@ impl<T> From<ApiError> for ApiResult<T> {
         Self(Err(err))
     }
 }
+
+/// Helper macro to reduce boilerplate in admin handlers
+#[macro_export]
+macro_rules! api_try {
+    ($($body:tt)*) => {{
+        let res: Result<_, $crate::error::ApiError> = async {
+            $($body)*
+        }.await;
+        res.into()
+    }};
+}

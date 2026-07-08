@@ -11,42 +11,36 @@ pub async fn list_accounts(
     State(s): State<AppState>,
     Query(q): Query<AccountListQuery>,
 ) -> ApiResult<Json<Vec<core_accounts::Account>>> {
-    let body: Result<Json<Vec<core_accounts::Account>>, ApiError> = async {
+    crate::api_try! {
         // Read-only SELECT — use the READER.
         let r = s.db_pool().reader();
         let provider = q.provider_id.map(ProviderId::new);
         let list = core_admin::list_accounts(&r, provider.as_ref())?;
         Ok(Json(list))
     }
-    .await;
-    body.into()
 }
 
 pub async fn create_account(
     State(s): State<AppState>,
     Json(input): Json<core_admin::CreateAccountInput>,
 ) -> ApiResult<Json<serde_json::Value>> {
-    let body: Result<Json<serde_json::Value>, ApiError> = async {
+    crate::api_try! {
         let w = s.db_pool().writer();
         let id = core_admin::create_account(&w, s.master_key().as_ref(), input)?;
         Ok(Json(serde_json::json!({ "id": id.0 })))
     }
-    .await;
-    body.into()
 }
 
 pub async fn delete_account(
     State(s): State<AppState>,
     Path(id): Path<i64>,
 ) -> ApiResult<Json<serde_json::Value>> {
-    let body: Result<Json<serde_json::Value>, ApiError> = async {
+    crate::api_try! {
         let w = s.db_pool().writer();
         let id = AccountId::new(id);
         core_admin::delete_account(&w, id)?;
         Ok(Json(serde_json::json!({ "deleted": id.0 })))
     }
-    .await;
-    body.into()
 }
 
 pub async fn set_account_health(
@@ -54,7 +48,7 @@ pub async fn set_account_health(
     Path(id): Path<i64>,
     Json(body): Json<serde_json::Value>,
 ) -> ApiResult<Json<serde_json::Value>> {
-    let body: Result<Json<serde_json::Value>, ApiError> = async {
+    crate::api_try! {
         let health_str = body
             .get("health")
             .and_then(|v| v.as_str())
@@ -67,8 +61,6 @@ pub async fn set_account_health(
             "health": health_str,
         })))
     }
-    .await;
-    body.into()
 }
 
 pub async fn update_account_api_key(
@@ -76,13 +68,11 @@ pub async fn update_account_api_key(
     Path(id): Path<i64>,
     Json(body): Json<core_admin::UpdateAccountApiKeyInput>,
 ) -> ApiResult<Json<serde_json::Value>> {
-    let body: Result<Json<serde_json::Value>, ApiError> = async {
+    crate::api_try! {
         let w = s.db_pool().writer();
         core_admin::update_account_api_key(&w, s.master_key().as_ref(), AccountId::new(id), body)?;
         Ok(Json(serde_json::json!({ "id": id })))
     }
-    .await;
-    body.into()
 }
 pub async fn refresh_account_quota(
     State(s): State<AppState>,

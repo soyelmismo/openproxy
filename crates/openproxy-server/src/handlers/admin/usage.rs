@@ -11,17 +11,12 @@ pub async fn usage_summary(
     State(s): State<AppState>,
     Query(q): Query<UsageQuery>,
 ) -> ApiResult<Json<core_usage::UsageSummary>> {
-    let body: Result<Json<core_usage::UsageSummary>, ApiError> = async {
+    crate::api_try! {
         let f = q.into_filter()?;
         let result = run_analytics_query_with_filter(&s, &f, "summary", |conn, fl| {
             core_usage::summary(conn, fl)
         })?;
         Ok(Json(result))
-    }
-    .await;
-    match body {
-        Ok(v) => ApiResult::ok(v),
-        Err(e) => ApiResult::err(e),
     }
 }
 
@@ -29,17 +24,12 @@ pub async fn usage_by_model(
     State(s): State<AppState>,
     Query(q): Query<UsageQuery>,
 ) -> ApiResult<Json<Vec<core_usage::ByModelRow>>> {
-    let body: Result<Json<Vec<core_usage::ByModelRow>>, ApiError> = async {
+    crate::api_try! {
         let f = q.into_filter()?;
         let result = run_analytics_query_with_filter(&s, &f, "by_model", |conn, fl| {
             core_usage::by_model(conn, fl)
         })?;
         Ok(Json(result))
-    }
-    .await;
-    match body {
-        Ok(v) => ApiResult::ok(v),
-        Err(e) => ApiResult::err(e),
     }
 }
 
@@ -47,17 +37,12 @@ pub async fn usage_by_provider(
     State(s): State<AppState>,
     Query(q): Query<UsageQuery>,
 ) -> ApiResult<Json<Vec<core_usage::ByProviderRow>>> {
-    let body: Result<Json<Vec<core_usage::ByProviderRow>>, ApiError> = async {
+    crate::api_try! {
         let f = q.into_filter()?;
         let result = run_analytics_query_with_filter(&s, &f, "by_provider", |conn, fl| {
             core_usage::by_provider(conn, fl)
         })?;
         Ok(Json(result))
-    }
-    .await;
-    match body {
-        Ok(v) => ApiResult::ok(v),
-        Err(e) => ApiResult::err(e),
     }
 }
 
@@ -65,17 +50,12 @@ pub async fn usage_monthly_by_provider(
     State(s): State<AppState>,
     Query(q): Query<UsageQuery>,
 ) -> ApiResult<Json<Vec<core_usage::MonthlyByProviderRow>>> {
-    let body: Result<Json<Vec<core_usage::MonthlyByProviderRow>>, ApiError> = async {
+    crate::api_try! {
         let f = q.into_filter()?;
         let result = run_analytics_query_with_filter(&s, &f, "monthly_by_provider", |conn, fl| {
             core_usage::monthly_by_provider(conn, fl)
         })?;
         Ok(Json(result))
-    }
-    .await;
-    match body {
-        Ok(v) => ApiResult::ok(v),
-        Err(e) => ApiResult::err(e),
     }
 }
 
@@ -83,17 +63,12 @@ pub async fn usage_by_day(
     State(s): State<AppState>,
     Query(q): Query<UsageQuery>,
 ) -> ApiResult<Json<Vec<core_usage::ByDayRow>>> {
-    let body: Result<Json<Vec<core_usage::ByDayRow>>, ApiError> = async {
+    crate::api_try! {
         let f = q.into_filter()?;
         let result = run_analytics_query_with_filter(&s, &f, "by_day", |conn, fl| {
             core_usage::by_day(conn, fl)
         })?;
         Ok(Json(result))
-    }
-    .await;
-    match body {
-        Ok(v) => ApiResult::ok(v),
-        Err(e) => ApiResult::err(e),
     }
 }
 
@@ -101,17 +76,12 @@ pub async fn usage_by_account(
     State(s): State<AppState>,
     Query(q): Query<UsageQuery>,
 ) -> ApiResult<Json<Vec<core_usage::ByAccountRow>>> {
-    let body: Result<Json<Vec<core_usage::ByAccountRow>>, ApiError> = async {
+    crate::api_try! {
         let f = q.into_filter()?;
         let result = run_analytics_query_with_filter(&s, &f, "by_account", |conn, fl| {
             core_usage::by_account(conn, fl)
         })?;
         Ok(Json(result))
-    }
-    .await;
-    match body {
-        Ok(v) => ApiResult::ok(v),
-        Err(e) => ApiResult::err(e),
     }
 }
 
@@ -119,17 +89,12 @@ pub async fn usage_by_status(
     State(s): State<AppState>,
     Query(q): Query<UsageQuery>,
 ) -> ApiResult<Json<Vec<core_usage::ByStatusRow>>> {
-    let body: Result<Json<Vec<core_usage::ByStatusRow>>, ApiError> = async {
+    crate::api_try! {
         let f = q.into_filter()?;
         let result = run_analytics_query_with_filter(&s, &f, "by_status", |conn, fl| {
             core_usage::by_status(conn, fl)
         })?;
         Ok(Json(result))
-    }
-    .await;
-    match body {
-        Ok(v) => ApiResult::ok(v),
-        Err(e) => ApiResult::err(e),
     }
 }
 
@@ -137,17 +102,12 @@ pub async fn usage_errors(
     State(s): State<AppState>,
     Query(q): Query<UsageQuery>,
 ) -> ApiResult<Json<Vec<core_usage::ErrorRow>>> {
-    let body: Result<Json<Vec<core_usage::ErrorRow>>, ApiError> = async {
+    crate::api_try! {
         let f = q.into_filter()?;
         let result = run_analytics_query_with_filter(&s, &f, "errors", |conn, fl| {
             core_usage::errors(conn, fl, ERRORS_DEFAULT_LIMIT)
         })?;
         Ok(Json(result))
-    }
-    .await;
-    match body {
-        Ok(v) => ApiResult::ok(v),
-        Err(e) => ApiResult::err(e),
     }
 }
 
@@ -155,17 +115,12 @@ pub async fn usage_latency(
     State(s): State<AppState>,
     Query(q): Query<UsageQuery>,
 ) -> ApiResult<Json<analytics::LatencyPercentiles>> {
-    let body: Result<Json<analytics::LatencyPercentiles>, ApiError> = async {
+    crate::api_try! {
         let f = q.into_filter()?;
         let result = run_analytics_query_with_filter(&s, &f, "latency", |conn, fl| {
             analytics::latency_percentiles(conn, fl)
         })?;
         Ok(Json(result))
-    }
-    .await;
-    match body {
-        Ok(v) => ApiResult::ok(v),
-        Err(e) => ApiResult::err(e),
     }
 }
 
@@ -173,17 +128,12 @@ pub async fn usage_races(
     State(s): State<AppState>,
     Query(q): Query<UsageQuery>,
 ) -> ApiResult<Json<analytics::RaceStats>> {
-    let body: Result<Json<analytics::RaceStats>, ApiError> = async {
+    crate::api_try! {
         let f = q.into_filter()?;
         let result = run_analytics_query_with_filter(&s, &f, "races", |conn, fl| {
             analytics::race_stats(conn, fl)
         })?;
         Ok(Json(result))
-    }
-    .await;
-    match body {
-        Ok(v) => ApiResult::ok(v),
-        Err(e) => ApiResult::err(e),
     }
 }
 
@@ -207,7 +157,7 @@ pub async fn usage_recent(
     State(s): State<AppState>,
     Query(q): Query<RecentQuery>,
 ) -> ApiResult<Json<Vec<core_usage::RecentUsageRow>>> {
-    let body: Result<Json<Vec<core_usage::RecentUsageRow>>, ApiError> = async {
+    crate::api_try! {
         let since_id = q.since_id.unwrap_or(0).clamp(0, USAGE_RECENT_MAX_SINCE_ID);
         let limit = q
             .limit
@@ -227,8 +177,6 @@ pub async fn usage_recent(
             .collect();
         Ok(Json(rows))
     }
-    .await;
-    body.into()
 }
 
 pub async fn usage_stream(
@@ -291,7 +239,7 @@ pub async fn usage_detail(
     if let Err(e) = authenticate_admin_ws(&s, &headers, None) {
         return e.into();
     }
-    let body: Result<Json<UsageDetailResponse>, ApiError> = async {
+    crate::api_try! {
         // Read-only SELECT — use the READER.
         let r = s.db_pool().reader();
         let row = if let Some(trace_id) = &q.trace_id {
@@ -311,8 +259,6 @@ pub async fn usage_detail(
             )))),
         }
     }
-    .await;
-    body.into()
 }
 
 pub(crate) async fn stream_usage_rows(socket: WebSocket, state: AppState) {

@@ -57,7 +57,8 @@ pub async fn debug_logs_clear(State(_s): State<AppState>) -> ApiResult<Json<serd
 
 pub async fn debug_vacuum(State(s): State<AppState>) -> ApiResult<Json<serde_json::Value>> {
     s.set_vacuum_in_progress(true);
-    let body: Result<Json<serde_json::Value>, ApiError> = async {
+    let res: Result<Json<serde_json::Value>, ApiError> = async {
+
         // Step 0: Reopen both connections BEFORE attempting VACUUM.
         // The long-lived writer + reader connections hold stale page
         // caches that reference pages from the pre-repair DB file.
@@ -189,18 +190,16 @@ pub async fn debug_vacuum(State(s): State<AppState>) -> ApiResult<Json<serde_jso
                 }
             }
         }
-    }
-    .await;
+
+    }.await;
     s.set_vacuum_in_progress(false);
-    match body {
-        Ok(v) => ApiResult::ok(v),
-        Err(e) => ApiResult::err(e),
-    }
+    res.into()
 }
 
 pub async fn debug_recover(State(s): State<AppState>) -> ApiResult<Json<serde_json::Value>> {
     s.set_vacuum_in_progress(true);
-    let body: Result<Json<serde_json::Value>, ApiError> = async {
+    let res: Result<Json<serde_json::Value>, ApiError> = async {
+
         // We need exclusive access to the DB for the entire repair.
         // Take the writer lock and hold it.
         let w = s
@@ -337,13 +336,10 @@ pub async fn debug_recover(State(s): State<AppState>) -> ApiResult<Json<serde_js
                 db_path.display()
             )
         })))
-    }
-    .await;
+
+    }.await;
     s.set_vacuum_in_progress(false);
-    match body {
-        Ok(v) => ApiResult::ok(v),
-        Err(e) => ApiResult::err(e),
-    }
+    res.into()
 }
 
 pub async fn get_recording(
@@ -353,9 +349,7 @@ pub async fn get_recording(
     if let Err(e) = authenticate_admin_ws(&s, &headers, None) {
         return e.into();
     }
-    let body: Result<Json<serde_json::Value>, ApiError> =
-        async { Ok(Json(serde_json::json!({ "recording": s.is_recording() }))) }.await;
-    body.into()
+    crate::api_try! { Ok(Json(serde_json::json!({ "recording": s.is_recording() }))) }
 }
 
 pub async fn set_recording(
@@ -366,7 +360,7 @@ pub async fn set_recording(
     if let Err(e) = authenticate_admin_ws(&s, &headers, None) {
         return e.into();
     }
-    let body: Result<Json<serde_json::Value>, ApiError> = async {
+    crate::api_try! {
         let enabled = body
             .get("enabled")
             .and_then(|v| v.as_bool())
@@ -374,8 +368,6 @@ pub async fn set_recording(
         s.set_recording(enabled);
         Ok(Json(serde_json::json!({ "recording": enabled })))
     }
-    .await;
-    body.into()
 }
 
 pub(crate) fn json_text(value: serde_json::Value) -> Result<String, ApiError> {

@@ -15,7 +15,7 @@ pub async fn get_runtime_config(
     if let Err(e) = authenticate_admin_ws(&s, &headers, None) {
         return e.into();
     }
-    let body: Result<Json<RuntimeConfigResponse>, ApiError> = async {
+    crate::api_try! {
         let cfg = s.config();
         Ok(Json(RuntimeConfigResponse {
             timeouts: s.timeouts(),
@@ -30,8 +30,6 @@ pub async fn get_runtime_config(
             quota_protection: s.quota_protection(),
         }))
     }
-    .await;
-    body.into()
 }
 
 pub async fn put_runtime_timeouts(
@@ -224,13 +222,11 @@ pub async fn get_recording_ttl(
     if let Err(e) = authenticate_admin_ws(&s, &headers, None) {
         return e.into();
     }
-    let body: Result<Json<serde_json::Value>, ApiError> = async {
+    crate::api_try! {
         Ok(Json(serde_json::json!({
             "recording_ttl_secs": s.recording_ttl_secs(),
         })))
     }
-    .await;
-    body.into()
 }
 
 pub async fn put_recording_ttl(

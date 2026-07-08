@@ -9,7 +9,7 @@ use openproxy_core::oauth::OAuthProvider;
 use openproxy_core::providers as core_providers;
 
 pub async fn list_providers(State(s): State<AppState>) -> ApiResult<Json<Vec<ProviderWithOAuth>>> {
-    let body: Result<Json<Vec<ProviderWithOAuth>>, ApiError> = async {
+    crate::api_try! {
         // Read-only SELECT — use the READER so the dashboard's catalog
         // polling doesn't serialize through the writer mutex.
         let r = s.db_pool().reader();
@@ -22,15 +22,13 @@ pub async fn list_providers(State(s): State<AppState>) -> ApiResult<Json<Vec<Pro
             .collect();
         Ok(Json(enriched))
     }
-    .await;
-    body.into()
 }
 
 pub async fn create_provider(
     State(s): State<AppState>,
     Json(input): Json<core_admin::CreateProviderInput>,
 ) -> ApiResult<Json<serde_json::Value>> {
-    let body: Result<Json<serde_json::Value>, ApiError> = async {
+    crate::api_try! {
         // Scope the writer guard so it is dropped BEFORE
         // rebuild_adapters re-acquires the same non-reentrant
         // parking_lot::Mutex. Holding the guard across
@@ -62,15 +60,13 @@ pub async fn create_provider(
         }
         Ok(Json(serde_json::json!({ "id": id.as_str() })))
     }
-    .await;
-    body.into()
 }
 
 pub async fn get_provider(
     State(s): State<AppState>,
     Path(id): Path<String>,
 ) -> ApiResult<Json<ProviderWithOAuth>> {
-    let body: Result<Json<ProviderWithOAuth>, ApiError> = async {
+    crate::api_try! {
         // Read-only SELECT — use the READER.
         let r = s.db_pool().reader();
         let id = ProviderId::new(id);
@@ -81,15 +77,13 @@ pub async fn get_provider(
         let enriched = enrich_provider_with_oauth(provider, registry.as_ref(), &adapters, &r);
         Ok(Json(enriched))
     }
-    .await;
-    body.into()
 }
 
 pub async fn delete_provider(
     State(s): State<AppState>,
     Path(id): Path<String>,
 ) -> ApiResult<Json<serde_json::Value>> {
-    let body: Result<Json<serde_json::Value>, ApiError> = async {
+    crate::api_try! {
         // Fast-fail on built-in ids before opening a writer. The
         // message is the same one the service layer would produce
         // so the dashboard's error toast is consistent regardless
@@ -132,8 +126,6 @@ pub async fn delete_provider(
         }
         Ok(Json(serde_json::json!({ "deleted": pid.as_str() })))
     }
-    .await;
-    body.into()
 }
 
 pub async fn set_provider_active(
@@ -141,7 +133,7 @@ pub async fn set_provider_active(
     Path(id): Path<String>,
     Json(body): Json<serde_json::Value>,
 ) -> ApiResult<Json<serde_json::Value>> {
-    let body: Result<Json<serde_json::Value>, ApiError> = async {
+    crate::api_try! {
         let active = body
             .get("active")
             .and_then(|v| v.as_bool())
@@ -151,8 +143,6 @@ pub async fn set_provider_active(
         core_admin::set_provider_active(&w, &provider_id, active)?;
         Ok(Json(serde_json::json!({ "id": id, "active": active })))
     }
-    .await;
-    body.into()
 }
 
 pub async fn update_provider(
@@ -160,7 +150,7 @@ pub async fn update_provider(
     Path(id): Path<String>,
     Json(body): Json<core_admin::UpdateProviderInput>,
 ) -> ApiResult<Json<serde_json::Value>> {
-    let body: Result<Json<serde_json::Value>, ApiError> = async {
+    crate::api_try! {
         // Scope the writer guard so it is dropped BEFORE
         // rebuild_adapters re-acquires the same non-reentrant
         // parking_lot::Mutex. Holding the guard across
@@ -189,8 +179,6 @@ pub async fn update_provider(
         }
         Ok(Json(serde_json::json!({ "id": id })))
     }
-    .await;
-    body.into()
 }
 
 async fn run_provider_refresh(

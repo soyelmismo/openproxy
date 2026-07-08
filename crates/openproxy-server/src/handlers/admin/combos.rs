@@ -7,34 +7,30 @@ use axum::{
 use openproxy_core::admin as core_admin;
 
 pub async fn list_combos(State(s): State<AppState>) -> ApiResult<Json<Vec<core_combos::Combo>>> {
-    let body: Result<Json<Vec<core_combos::Combo>>, ApiError> = async {
+    crate::api_try! {
         // Read-only SELECT — use the READER.
         let r = s.db_pool().reader();
         let list = core_admin::list_combos(&r)?;
         Ok(Json(list))
     }
-    .await;
-    body.into()
 }
 
 pub async fn create_combo(
     State(s): State<AppState>,
     Json(input): Json<core_admin::CreateComboInput>,
 ) -> ApiResult<Json<serde_json::Value>> {
-    let body: Result<Json<serde_json::Value>, ApiError> = async {
+    crate::api_try! {
         let w = s.db_pool().writer();
         let id = core_admin::create_combo(&w, input)?;
         Ok(Json(serde_json::json!({ "id": id.0 })))
     }
-    .await;
-    body.into()
 }
 
 pub async fn get_combo(
     State(s): State<AppState>,
     Path(id): Path<i64>,
 ) -> ApiResult<Json<core_combos::Combo>> {
-    let body: Result<Json<core_combos::Combo>, ApiError> = async {
+    crate::api_try! {
         // Read-only SELECT — use the READER.
         let r = s.db_pool().reader();
         let id = ComboId(id);
@@ -42,8 +38,6 @@ pub async fn get_combo(
             core_combos::get_combo(&r, id)?.ok_or_else(|| CoreError::ComboNotFound(id.0))?;
         Ok(Json(combo))
     }
-    .await;
-    body.into()
 }
 
 pub async fn test_combo_targets(
@@ -74,7 +68,7 @@ pub async fn test_combo_targets(
     // productive* because it would outlive the handler and never
     // observe the drop. The 180s `tokio::time::timeout` below
     // remains the upper bound for the happy path.
-    let body: Result<Json<Vec<serde_json::Value>>, ApiError> = async {
+    crate::api_try! {
         let cancel_rx = cancel_rx.clone();
         // Snapshot the targets up-front and drop the writer guard.
         // The per-target test below does its own short DB
@@ -202,37 +196,31 @@ pub async fn test_combo_targets(
 
         Ok(Json(results))
     }
-    .await;
-    body.into()
 }
 
 pub async fn delete_combo(
     State(s): State<AppState>,
     Path(id): Path<i64>,
 ) -> ApiResult<Json<serde_json::Value>> {
-    let body: Result<Json<serde_json::Value>, ApiError> = async {
+    crate::api_try! {
         let w = s.db_pool().writer();
         let id = ComboId(id);
         core_admin::delete_combo(&w, id)?;
         Ok(Json(serde_json::json!({ "deleted": id.0 })))
     }
-    .await;
-    body.into()
 }
 
 pub async fn list_combo_targets(
     State(s): State<AppState>,
     Path(id): Path<i64>,
 ) -> ApiResult<Json<Vec<core_combos::ComboTargetWithModel>>> {
-    let body: Result<Json<Vec<core_combos::ComboTargetWithModel>>, ApiError> = async {
+    crate::api_try! {
         // Read-only SELECT — use the READER.
         let r = s.db_pool().reader();
         let id = ComboId(id);
         let targets = core_admin::list_combo_targets_with_model(&r, id)?;
         Ok(Json(targets))
     }
-    .await;
-    body.into()
 }
 
 pub async fn add_target(
@@ -240,29 +228,25 @@ pub async fn add_target(
     Path(id): Path<i64>,
     Json(input): Json<core_admin::AddTargetInput>,
 ) -> ApiResult<Json<serde_json::Value>> {
-    let body: Result<Json<serde_json::Value>, ApiError> = async {
+    crate::api_try! {
         let w = s.db_pool().writer();
         let combo_id = ComboId(id);
         let new_id = core_admin::add_target_to_combo(&w, combo_id, input)?;
         Ok(Json(serde_json::json!({ "id": new_id.0 })))
     }
-    .await;
-    body.into()
 }
 
 pub async fn list_valid_sub_combos(
     State(s): State<AppState>,
     Path(id): Path<i64>,
 ) -> ApiResult<Json<Vec<core_admin::ComboSummary>>> {
-    let body: Result<Json<Vec<core_admin::ComboSummary>>, ApiError> = async {
+    crate::api_try! {
         // Read-only SELECT — use the READER.
         let r = s.db_pool().reader();
         let id = ComboId(id);
         let list = core_admin::list_valid_sub_combos(&r, id)?;
         Ok(Json(list))
     }
-    .await;
-    body.into()
 }
 
 pub async fn update_combo(
@@ -270,7 +254,7 @@ pub async fn update_combo(
     Path(id): Path<i64>,
     Json(body): Json<serde_json::Value>,
 ) -> ApiResult<Json<serde_json::Value>> {
-    let body: Result<Json<serde_json::Value>, ApiError> = async {
+    crate::api_try! {
         let w = s.db_pool().writer();
         // Optional race_size update.
         if let Some(n) = body.get("race_size").and_then(|v| v.as_u64()) {
@@ -393,8 +377,6 @@ pub async fn update_combo(
         }
         Ok(Json(serde_json::json!({ "id": id })))
     }
-    .await;
-    body.into()
 }
 
 pub async fn update_combo_target(
@@ -402,7 +384,7 @@ pub async fn update_combo_target(
     Path((combo_id, target_id)): Path<(i64, i64)>,
     Json(body): Json<serde_json::Value>,
 ) -> ApiResult<Json<serde_json::Value>> {
-    let body: Result<Json<serde_json::Value>, ApiError> = async {
+    crate::api_try! {
         // Optional `priority_order` — the historical primary field.
         // Kept optional so a future dashboard that only wants to
         // PATCH `weight` can do so without round-tripping the order.
@@ -466,36 +448,30 @@ pub async fn update_combo_target(
             "weight": body.get("weight").and_then(|v| v.as_i64()),
         })))
     }
-    .await;
-    body.into()
 }
 
 pub async fn delete_combo_target(
     State(s): State<AppState>,
     Path((combo_id, target_id)): Path<(i64, i64)>,
 ) -> ApiResult<Json<serde_json::Value>> {
-    let body: Result<Json<serde_json::Value>, ApiError> = async {
+    crate::api_try! {
         let w = s.db_pool().writer();
         core_admin::delete_combo_target(&w, ComboId(combo_id), ComboTargetId(target_id))?;
         Ok(Json(serde_json::json!({ "deleted": target_id })))
     }
-    .await;
-    body.into()
 }
 
 pub async fn clear_combo_target_cooldown(
     State(s): State<AppState>,
     Path((combo_id, target_id)): Path<(i64, i64)>,
 ) -> ApiResult<Json<serde_json::Value>> {
-    let body: Result<Json<serde_json::Value>, ApiError> = async {
+    crate::api_try! {
         let w = s.db_pool().writer();
         core_admin::clear_combo_target_cooldown(&w, ComboId(combo_id), ComboTargetId(target_id))?;
         Ok(Json(
             serde_json::json!({ "ok": true, "cleared": target_id }),
         ))
     }
-    .await;
-    body.into()
 }
 
 pub async fn reorder_combo_targets(
@@ -503,7 +479,7 @@ pub async fn reorder_combo_targets(
     Path(combo_id): Path<i64>,
     Json(body): Json<ReorderComboTargetsInput>,
 ) -> ApiResult<Json<serde_json::Value>> {
-    let body: Result<Json<serde_json::Value>, ApiError> = async {
+    crate::api_try! {
         let mut w = s.db_pool().writer();
         let ordered: Vec<ComboTargetId> = body.target_ids.into_iter().map(ComboTargetId).collect();
         core_admin::reorder_combo_targets(&mut w, ComboId(combo_id), &ordered)?;
@@ -512,6 +488,4 @@ pub async fn reorder_combo_targets(
             "count": ordered.len(),
         })))
     }
-    .await;
-    body.into()
 }
