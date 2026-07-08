@@ -1,4 +1,3 @@
-use crate::adapters::ProviderAdapter;
 use crate::combos::{self, Combo, ComboTarget};
 use crate::error::{CoreError, Result};
 use crate::ids::ComboId;

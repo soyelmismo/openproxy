@@ -18,7 +18,6 @@
 //!   an error.
 
 use crate::accounts;
-use crate::adapters::ProviderAdapter;
 use crate::combos;
 use crate::cooldown;
 use crate::error::{CoreError, Result};

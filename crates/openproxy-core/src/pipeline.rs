@@ -5,7 +5,6 @@
 //! rotation, executes the first eligible target with bounded timeouts, and
 //! records a usage row.
 
-use crate::adapters::ProviderAdapter;
 use crate::circuit_breaker::CircuitBreakerRegistry;
 use crate::combos::{Combo, SelectionRegistry};
 use crate::compression::stats::CompressionStats;
