@@ -13,15 +13,9 @@ use crate::quota::fetch_antigravity_quota;
 use crate::secrets::MasterKey;
 use crate::translation::{OpenAIMessage, OpenAIRequest};
 use crate::upstream::UpstreamClient;
-use dashmap::DashMap;
-use once_cell::sync::Lazy;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::time::sleep;
-
-/// History of when an account+model was last warmed up.
-/// Key: "account_id:model_name", Value: Unix timestamp (seconds).
-static WARMUP_HISTORY: Lazy<DashMap<String, i64>> = Lazy::new(DashMap::new);
 
 /// 4-hour cooldown (since Pro quota resets every 5h).
 const COOLDOWN_SECS: i64 = 14_400;
@@ -153,8 +147,20 @@ async fn run_warmup_cycle(
             let history_key = format!("{}:{}", account_id_str, true_model_id);
 
             // Check cooldown
-            if let Some(last_ts) = WARMUP_HISTORY.get(&history_key)
-                && now - *last_ts < COOLDOWN_SECS
+            let last_ts = {
+                let conn = db_pool.reader();
+                match conn.query_row(
+                    "SELECT last_ts FROM smart_warmup_history WHERE history_key = ?1",
+                    rusqlite::params![history_key],
+                    |r| r.get::<_, i64>(0),
+                ) {
+                    Ok(ts) => Some(ts),
+                    Err(_) => None,
+                }
+            };
+
+            if let Some(ts) = last_ts
+                && now - ts < COOLDOWN_SECS
             {
                 continue; // Skip, still in cooldown
             }
@@ -176,7 +182,12 @@ async fn run_warmup_cycle(
             .await;
 
             if success {
-                WARMUP_HISTORY.insert(history_key, now);
+                let conn = db_pool.writer();
+                let _ = conn.execute(
+                    "INSERT INTO smart_warmup_history (history_key, last_ts) VALUES (?1, ?2) \
+                     ON CONFLICT(history_key) DO UPDATE SET last_ts = excluded.last_ts",
+                    rusqlite::params![history_key, now],
+                );
             }
 
             // Pequeña pausa entre modelos para no acribillar la API
@@ -187,9 +198,15 @@ async fn run_warmup_cycle(
         tokio::time::sleep(Duration::from_secs(15)).await;
     }
 
-    // Cleanup history older than 24h to prevent memory leak
+    // Cleanup history older than 24h to prevent table growth
     let cutoff = now - 86_400;
-    WARMUP_HISTORY.retain(|_, v| *v > cutoff);
+    {
+        let conn = db_pool.writer();
+        let _ = conn.execute(
+            "DELETE FROM smart_warmup_history WHERE last_ts <= ?1",
+            rusqlite::params![cutoff],
+        );
+    }
 }
 
 async fn ping_antigravity_model(
@@ -227,7 +244,7 @@ async fn ping_antigravity_model(
 }
 
 /// Helper: maps a config string (like "gpt-oss-120b-medium") into the true provider model_id
-/// (like "gemini-1.5-pro") by resolving it against the `combos` and `models` tables.
+/// (like "gemini-3.1-pro-low") by resolving it against the `combos` and `models` tables.
 /// If it can't find a combo or model, it assumes the string itself is the target.
 fn resolve_model_alias(conn: &rusqlite::Connection, alias: &str) -> String {
     use crate::ids::ProviderId;
