@@ -24,28 +24,6 @@ pub(crate) struct DispatchContext<'a> {
 
 impl<'a> DispatchContext<'a> {
     #[inline]
-    pub(crate) fn fail_ctx<'e>(
-        &self,
-        err: &'e CoreError,
-        connect_ms: Option<u64>,
-        ttft_ms: Option<u64>,
-    ) -> crate::pipeline::FailureContext<'e>
-    where
-        'a: 'e,
-    {
-        crate::pipeline::FailureContext {
-            attempt: self.attempt,
-            race_size: self.race_size,
-            err,
-            started: self.started,
-            model: Some(self.model),
-            connect_ms,
-            ttft_ms,
-            status_code: err.http_status(),
-        }
-    }
-
-    #[inline]
     pub(crate) fn fail_ctx_code<'e>(
         &self,
         err: &'e CoreError,
@@ -1026,7 +1004,7 @@ impl UpstreamDispatcher {
             started,
             model,
             connect_ms,
-            ttft_ms,
+            ttft_ms: _,
             trace_id,
             acc,
             chunk_id,

@@ -20,7 +20,7 @@
 //! pushed to the chat handler, which is the only caller.
 
 use crate::combos::{self, Combo, ComboTarget, Strategy};
-use crate::error::{CoreError, Result};
+use crate::error::Result;
 use crate::ids::{AccountId, ComboId, ComboTargetId, ModelRowId, ProviderId};
 use crate::models::{self, Model};
 use rusqlite::{Connection, OptionalExtension};
