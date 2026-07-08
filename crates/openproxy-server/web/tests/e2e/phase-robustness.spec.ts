@@ -33,6 +33,9 @@
 import { test, expect, type Page } from '@playwright/test';
 import type { StageEvent, RecentUsageRow } from '../../src/static/src/lib/types/api.js';
 
+const ADMIN_TOKEN_STORAGE_KEY = 'openproxy_admin_token';
+const DUMMY_ADMIN_TOKEN = 'test_token_123';
+
 // NOTE: we deliberately do NOT redeclare `Window.__openproxyState`
 // here. The `live-logs-retry.spec.ts` spec already declares it
 // with a permissive shape (synthetic stage + inflight info) that
@@ -128,13 +131,13 @@ async function readFreezeObservation(
         // is frozen, the two reads must be identical.
         setTimeout(() => {
           const second = firstRead();
-          const stageMap: Map<string, SyntheticStage> | undefined = logs.stagesByTraceId;
-          const stageReqMap: Map<string, SyntheticStage> = logs.stagesByRequestId;
-          const stage: SyntheticStage | undefined = stageMap?.get(args.traceId)
-            ?? stageReqMap.get(args.requestId);
-          const row: RecentUsageRow | undefined = (logs.rows as RecentUsageRow[]).find(
-            (r: RecentUsageRow) => r.request_id === args.requestId && r.trace_id === args.traceId,
-          );
+          const store = (w as any).__liveLogsStore;
+          const attemptKey = args.traceId ? (store?.requestGroups?.get(args.requestId) ? Array.from((store.requestGroups.get(args.requestId) as Set<string>)).find((k: string) => store.attemptsByKey.get(k)?.traceId === args.traceId) : undefined) : undefined;
+          const attempt = attemptKey ? store.attemptsByKey.get(attemptKey) : undefined;
+          const stageStr = attempt ? attempt.stage : null;
+          const row = Array.from(store?.rowsById?.values() || []).find(
+            (r: any) => r.request_id === args.requestId && r.trace_id === args.traceId,
+          ) as RecentUsageRow | undefined;
           resolve({
             stateExposed: true,
             rowFound: first.rowFound,
@@ -143,7 +146,7 @@ async function readFreezeObservation(
             sublabelText: second.sublabel,
             phaseText: second.phase,
             tickingClassPresent: second.tickingClass,
-            stageInMap: stage?.stage ?? null,
+            stageInMap: stageStr ?? null,
             totalMsInRow: row?.total_ms ?? null,
           });
         }, args.settleMs);
@@ -163,6 +166,28 @@ test.beforeEach(async ({ page }: { page: Page }) => {
   });
 });
 
+test.describe('Phase robustness', () => {
+
+test.beforeEach(async ({ page }: { page: Page }) => {
+  // Surface any page-side error in the test log so a 500/404 from
+  // the dev server doesn't masquerade as a "ticker didn't freeze"
+  // failure.
+  page.on('pageerror', (e: Error) => {
+    // eslint-disable-next-line no-console
+    console.error('[phase-robustness] pageerror:', e.message);
+  });
+
+  // Add an authorization header stub to localStorage so the app doesn't
+  // bounce us to the login screen.
+  await page.addInitScript((args: { key: string; token: string }) => {
+    try {
+      localStorage.setItem(args.key, args.token);
+    } catch (_e: unknown) {
+      // Ignore
+    }
+  }, { key: ADMIN_TOKEN_STORAGE_KEY, token: DUMMY_ADMIN_TOKEN });
+});
+
 test('Live Logs: stale streaming stage freezes the latency ticker', async ({ page }: { page: Page }) => {
   await page.goto('http://localhost:8790/#/logs');
   await expect(page.locator('#logs')).toBeVisible();
@@ -172,53 +197,33 @@ test('Live Logs: stale streaming stage freezes the latency ticker', async ({ pag
   const requestId = 'req-stale-test-1';
   const traceId = 'tr-stale-1';
 
-  // 5 seconds ago — well past the 2 s stale cap from §4.1.
-  const fiveSecondsAgo = new Date(Date.now() - 5_000).toISOString();
-  const streamingEvent: StageEvent = {
+  const now = Date.now();
+  const fiveSecondsAgo = now - 5_000;
+  const streamingEvent = {
+    attempt_key: traceId,
     request_id: requestId,
     trace_id: traceId,
     stage: 'streaming',
-    elapsed_ms: 5_000,
+    started_at: fiveSecondsAgo,
+    event_time: now,
+    terminal: false,
+    stage_seq: 1,
+    stage_rank: 1,
     connect_ms: 30,
     ttft_ms: 120,
-    status_code: 200,
     error: null,
-    timestamp: fiveSecondsAgo,
     provider_id: 'openrouter',
     upstream_model_id: 'gpt-4o-mini',
-    stop_reason: null,
-    compression_savings_pct: null,
-    compression_techniques: null,
   };
 
   // Inject the streaming event and a matching row, then trigger
   // a re-render via the page-changer hook (same pattern as
   // `live-logs-retry.spec.ts`).
   await page.evaluate(
-    (args: { event: StageEvent; requestId: string; traceId: string }) => {
-      // The `__openproxyState` type is declared in
-      // `live-logs-retry.spec.ts`. We re-cast locally with the
-      // shape we actually need to keep the call site strict
-      // (the imported `StageEvent` / `RecentUsageRow` types
-      // are the source of truth for the dashboard's state).
-      interface SyntheticStage {
-        request_id: string;
-        trace_id: string;
-        stage: string;
-        elapsed_ms: number;
-        connect_ms: number | null;
-        ttft_ms: number | null;
-        status_code: number;
-        error: string | null;
-        timestamp: string;
-        provider_id: string;
-        upstream_model_id: string;
-      }
+    (args: { event: any; requestId: string; traceId: string }) => {
       const w = window as unknown as {
         __openproxyState: {
           logs: {
-            stagesByTraceId?: Map<string, SyntheticStage>;
-            stagesByRequestId: Map<string, SyntheticStage>;
             inflightByTraceId?: Map<string, RecentUsageRow>;
             inflightByRequestId: Map<string, RecentUsageRow>;
             rows: RecentUsageRow[];
@@ -234,28 +239,21 @@ test('Live Logs: stale streaming stage freezes the latency ticker', async ({ pag
 
       // Isolate the test: the live dashboard may have other
       // rows/stages streaming in from the WS feed.
-      logs.rows = [];
-      logs.stagesByTraceId?.clear();
-      logs.stagesByRequestId.clear();
-      logs.inflightByTraceId?.clear();
-      logs.inflightByRequestId.clear();
-      logs.page = 1;
-      logs.rowsPerPage = 50;
-      logs.followTail = false;
+      const store = (w as any).__liveLogsStore;
+      store.rowsById.clear();
+      store.attemptsByKey.clear();
+      store.requestGroups.clear();
+      store.attemptKeyByRowId.clear();
 
-      // Seed an inflight placeholder so the row is rendered even
-      // though no `row` envelope has arrived yet — the §4.1
-      // "stale `streaming`" path operates on the in-flight row
-      // without a finalized row.
-      logs.inflightByTraceId?.set(args.traceId, {
+      (store as any).applyUsageRow({
         id: 0,
         request_id: args.requestId,
         trace_id: args.traceId,
         provider_id: 'openrouter',
         upstream_model_id: 'gpt-4o-mini',
-        created_at: new Date().toISOString(),
+        created_at: new Date(args.event.started_at).toISOString(),
         status_code: 0,
-        total_ms: 0,
+        total_ms: null,
         prompt_tokens: null,
         completion_tokens: null,
         cost_usd: 0,
@@ -278,7 +276,12 @@ test('Live Logs: stale streaming stage freezes the latency ticker', async ({ pag
         prompt_tokens_estimated: false,
         completion_tokens_estimated: false,
       });
-      logs.stagesByTraceId?.set(args.traceId, args.event);
+
+      (store as any).dispatch({
+        type: 'attempt_event',
+        cursor: 0,
+        event: args.event
+      });
 
       w.__openproxyLogsGoPage(1);
     },
@@ -441,11 +444,12 @@ test('Live Logs: finalized row freezes ticker at the row total_ms', async ({ pag
       };
       const logs = w.__openproxyState.logs;
 
-      logs.rows = [];
-      logs.stagesByTraceId?.clear();
-      logs.stagesByRequestId.clear();
-      logs.inflightByTraceId?.clear();
-      logs.inflightByRequestId.clear();
+      const store = (w as any).__liveLogsStore;
+      store.rowsById.clear();
+      store.attemptsByKey.clear();
+      store.requestGroups.clear();
+      store.attemptKeyByRowId.clear();
+
       logs.page = 1;
       logs.rowsPerPage = 50;
       logs.followTail = false;
@@ -455,11 +459,13 @@ test('Live Logs: finalized row freezes ticker at the row total_ms', async ({ pag
       // the row envelope — that's the defense-in-depth we are
       // exercising. The row arrives via the `row` message path
       // in production, but in the e2e harness we mutate
-      // `logs.rows` directly and let the next render pick it
+      // `store.rowsById` directly and let the next render pick it
       // up.
-      logs.stagesByTraceId?.set(args.traceId, args.event);
-      logs.rows.push(args.row);
-      logs.rowById.set(args.row.id, args.row);
+      (store as any).dispatch({
+        type: 'stage',
+        data: args.event
+      });
+      (store as any).applyUsageRow(args.row);
 
       w.__openproxyLogsGoPage(1);
     },
@@ -502,4 +508,6 @@ test('Live Logs: finalized row freezes ticker at the row total_ms', async ({ pag
   // `completado` (the `STAGE_LABELS.completed` mapping in
   // `lib/constants.ts:22`).
   expect((obs.phaseText ?? '').toLowerCase()).toContain('completado');
+});
+
 });

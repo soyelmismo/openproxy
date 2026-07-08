@@ -17,6 +17,7 @@ import { HANDLERS, collectArgs } from "./handlers/registry.js";
 import { state } from "./state/index.js";
 import { logsGoPage } from "./views/logs.js";
 import { loadLang } from "./i18n/index.js";
+import { liveLogsStore } from "./state/live-logs-store.js";
 
 // Expose the global `state` for the e2e suite (and operator
 // debugging in the browser console). The dashboard is an internal
@@ -31,10 +32,12 @@ declare global {
   interface Window {
     __openproxyState: typeof state;
     __openproxyLogsGoPage: typeof logsGoPage;
+    __liveLogsStore: typeof liveLogsStore;
   }
 }
 window.__openproxyState = state;
 window.__openproxyLogsGoPage = logsGoPage;
+window.__liveLogsStore = liveLogsStore;
 
 // Click / change / submit shim. Looks for the closest ancestor
 // carrying `data-action` and dispatches to HANDLERS[action]

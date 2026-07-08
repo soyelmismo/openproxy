@@ -72,6 +72,7 @@ class LiveLogsStore {
   public rowsById = new Map<number, RecentUsageRow>();
   public attemptKeyByRowId = new Map<number, string>();
   public requestGroups = new Map<string, Set<string>>(); // request_id -> Set<attempt_key>
+  public attemptKeyRedirects = new Map<string, string>();
   
   public lastAppliedCursor = 0;
   public connectionStatus: "connecting" | "connected" | "recovering" | "recovering_failed" | "disconnected" = "disconnected";
@@ -133,6 +134,7 @@ class LiveLogsStore {
     this.rowsById.clear();
     this.attemptKeyByRowId.clear();
     this.requestGroups.clear();
+    this.attemptKeyRedirects.clear();
 
     for (const attempt of snapshot.attempts) {
       this.attemptsByKey.set(attempt.attemptKey, attempt);
@@ -252,6 +254,8 @@ class LiveLogsStore {
       }
     }
 
+    const isTerminal = !(row.is_streaming && !row.stream_complete);
+
     let attempt = this.attemptsByKey.get(attemptKey);
     if (!attempt) {
       const startedAt = Date.parse(row.created_at.endsWith("Z") ? row.created_at : row.created_at + "Z");
@@ -263,15 +267,15 @@ class LiveLogsStore {
         upstreamModelId: row.upstream_model_id,
         startedAtMs: startedAt,
         updatedAtMs: startedAt + row.total_ms,
-        stage: (row.status_code >= 400 ? "failed" : "completed") as StageName,
-        stageSeq: 9999, // Terminal row wins over phases
-        stageRank: 4,
+        stage: isTerminal ? (row.status_code >= 400 ? "failed" : "completed") as StageName : "started" as StageName,
+        stageSeq: isTerminal ? 9999 : 0,
+        stageRank: isTerminal ? 4 : 0,
         elapsedMsAtEvent: row.total_ms,
         connectMs: row.connect_ms,
         ttftMs: row.ttft_ms,
         statusCode: row.status_code,
-        terminal: true,
-        terminalKind: row.status_code >= 400 ? "failed" : "completed",
+        terminal: isTerminal,
+        terminalKind: isTerminal ? (row.status_code >= 400 ? "failed" : "completed") : null,
         error: row.error_message,
         rowId: row.id,
         row: row,
@@ -280,18 +284,23 @@ class LiveLogsStore {
     } else {
       attempt.rowId = row.id;
       attempt.row = row;
-      attempt.terminal = true;
-      attempt.terminalKind = row.status_code >= 400 ? "failed" : "completed";
-      attempt.stage = (row.status_code >= 400 ? "failed" : "completed") as StageName;
-      attempt.stageSeq = 9999;
-      attempt.stageRank = 4;
+      if (isTerminal) {
+        attempt.terminal = true;
+        attempt.terminalKind = row.status_code >= 400 ? "failed" : "completed";
+        attempt.stage = (row.status_code >= 400 ? "failed" : "completed") as StageName;
+        attempt.stageSeq = 9999;
+        attempt.stageRank = 4;
+      }
       attempt.updatedAtMs = attempt.startedAtMs + row.total_ms;
       attempt.elapsedMsAtEvent = row.total_ms;
       attempt.source = "db";
-      if (row.connect_ms != null) attempt.connectMs = row.connect_ms;
-      if (row.ttft_ms != null) attempt.ttftMs = row.ttft_ms;
-      if (row.status_code != null) attempt.statusCode = row.status_code;
-      if (row.error_message != null) attempt.error = row.error_message;
+      if (row.upstream_model_id !== undefined) attempt.upstreamModelId = row.upstream_model_id || "";
+      if (row.provider_id !== undefined) attempt.providerId = row.provider_id || "";
+      if (row.trace_id !== undefined) attempt.traceId = row.trace_id || "";
+      if (row.connect_ms !== undefined) attempt.connectMs = row.connect_ms;
+      if (row.ttft_ms !== undefined) attempt.ttftMs = row.ttft_ms;
+      if (row.status_code !== undefined) attempt.statusCode = row.status_code;
+      if (row.error_message !== undefined) attempt.error = row.error_message;
     }
 
     this.attemptsByKey.set(attemptKey, attempt);
@@ -413,6 +422,14 @@ class LiveLogsStore {
     if (attempt) {
       attempt.detail = detail;
     }
+  }
+
+  public clearForTest() {
+    this.attemptsByKey.clear();
+    this.rowsById.clear();
+    this.attemptKeyByRowId.clear();
+    this.requestGroups.clear();
+    this.attemptKeyRedirects.clear();
   }
 }
 

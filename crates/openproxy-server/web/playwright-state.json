@@ -2,7 +2,7 @@
   "cookies": [],
   "origins": [
     {
-      "origin": "http://localhost:8788",
+      "origin": "http://localhost:8790",
       "localStorage": [
         {
           "name": "openproxy_admin_token",
@@ -11,7 +11,7 @@
       ]
     },
     {
-      "origin": "http://127.0.0.1:8788",
+      "origin": "http://127.0.0.1:8790",
       "localStorage": [
         {
           "name": "openproxy_admin_token",

@@ -82,13 +82,13 @@ test.beforeEach(async ({ page }: { page: Page }) => {
     // Retrieve the row from state
     const row = await page.evaluate((args: { id: string | null, traceId: string | null }) => {
       const w = window as any;
-      if (!w.__openproxyState?.logs) return null;
-      const logs = w.__openproxyState.logs;
+      if (!w.__liveLogsStore) return null;
+      const store = w.__liveLogsStore;
       if (args.id) {
-        return logs.rowById.get(Number(args.id)) || logs.rows.find((r: any) => r.id === Number(args.id)) || null;
+        return store.rowsById.get(Number(args.id)) || Array.from(store.rowsById.values()).find((r: any) => r.id === Number(args.id)) || null;
       }
       if (args.traceId) {
-        return logs.rows.find((r: any) => r.trace_id === args.traceId) || null;
+        return Array.from(store.rowsById.values()).find((r: any) => r.trace_id === args.traceId) || null;
       }
       return null;
     }, { id, traceId });
@@ -241,27 +241,22 @@ async function injectRowAndOpenModal(
     const w = window as unknown as {
       __openproxyState: {
         logs: {
-          rows: RecentUsageRow[];
-          rowById: Map<number, RecentUsageRow>;
-          stagesByTraceId: Map<string, StageEvent>;
-          stagesByRequestId: Map<string, StageEvent>;
-          inflightByTraceId: Map<string, RecentUsageRow>;
-          inflightByRequestId: Map<string, RecentUsageRow>;
           page: number;
           rowsPerPage: number;
           followTail: boolean;
         };
       };
+      __liveLogsStore: any;
       __openproxyLogsGoPage: (page: number) => void;
     };
+    const store = w.__liveLogsStore;
+    store.rowsById.clear();
+    store.attemptsByKey.clear();
+    store.requestGroups.clear();
+    store.attemptKeyByRowId.clear();
+    (store as any).applyUsageRow(r);
+
     const logs = w.__openproxyState.logs;
-    logs.rows = [r];
-    logs.rowById.clear();
-    logs.rowById.set(r.id, r);
-    logs.stagesByTraceId.clear();
-    logs.stagesByRequestId.clear();
-    logs.inflightByTraceId.clear();
-    logs.inflightByRequestId.clear();
     logs.page = 1;
     logs.rowsPerPage = 50;
     logs.followTail = false;
@@ -289,36 +284,30 @@ async function injectInflightAndOpenModal(
       const w = window as unknown as {
         __openproxyState: {
           logs: {
-            rows: RecentUsageRow[];
-            rowById: Map<number, RecentUsageRow>;
-            stagesByTraceId: Map<string, StageEvent>;
-            stagesByRequestId: Map<string, StageEvent>;
-            inflightByTraceId: Map<string, RecentUsageRow>;
-            inflightByRequestId: Map<string, RecentUsageRow>;
             page: number;
             rowsPerPage: number;
             followTail: boolean;
           };
         };
+        __liveLogsStore: any;
         __openproxyLogsGoPage: (page: number) => void;
       };
+      const store = w.__liveLogsStore;
+      store.rowsById.clear();
+      store.attemptsByKey.clear();
+      store.requestGroups.clear();
+      store.attemptKeyByRowId.clear();
+
+      (store as any).applyUsageRow(args.inflight);
+      (store as any).dispatch({
+        type: 'stage',
+        data: args.stage
+      });
+
       const logs = w.__openproxyState.logs;
-      logs.rows = [];
-      logs.rowById.clear();
-      logs.stagesByTraceId.clear();
-      logs.stagesByRequestId.clear();
-      logs.inflightByTraceId.clear();
-      logs.inflightByRequestId.clear();
       logs.page = 1;
       logs.rowsPerPage = 50;
       logs.followTail = false;
-      if (args.inflight.trace_id) {
-        logs.inflightByTraceId.set(args.inflight.trace_id, args.inflight);
-        logs.stagesByTraceId.set(args.inflight.trace_id, args.stage);
-      } else {
-        logs.inflightByRequestId.set(args.inflight.request_id, args.inflight);
-        logs.stagesByRequestId.set(args.inflight.request_id, args.stage);
-      }
       w.__openproxyLogsGoPage(1);
     },
     { inflight, stage },
@@ -333,21 +322,14 @@ async function injectInflightAndOpenModal(
 /** Simulate a WS `row` event reaching the dashboard while the modal
  *  is open, by calling the Fix 6 test hook
  *  `window.__openproxyUpdateLogDetail`. */
-async function injectUpdateLogDetail(
-  page: Page,
-  row: Record<string, unknown>,
-): Promise<void> {
+async function injectUpdateLogDetail(page: Page, row: Partial<RecentUsageRow>) {
+  const payload = { created_at: new Date().toISOString(), ...row };
   await page.evaluate((r: Record<string, unknown>) => {
-    const w = window as unknown as {
-      __openproxyUpdateLogDetail?: (row: unknown) => void;
-    };
-    if (typeof w.__openproxyUpdateLogDetail !== 'function') {
-      throw new Error(
-        'window.__openproxyUpdateLogDetail is not exposed — Fix 6 (TEST HOOK) is missing from the build.',
-      );
+    const w = window as any;
+    if (w.__liveLogsStore) {
+      w.__liveLogsStore.applyUsageRow(r);
     }
-    w.__openproxyUpdateLogDetail(r);
-  }, row);
+  }, payload);
 }
 
 /** Close the open modal via the X close button. */
@@ -361,6 +343,56 @@ async function closeModal(page: Page): Promise<void> {
 // ---------------------------------------------------------------------------
 
 test.describe('Log detail modal — contamination regression (Fixes 4-b + 5-b)', () => {
+
+test.beforeEach(async ({ page }: { page: Page }) => {
+  await page.addInitScript((args: { key: string; token: string }) => {
+    try {
+      localStorage.setItem(args.key, args.token);
+    } catch (_e: unknown) {
+      // Ignore — the script runs in the page context; if
+      // localStorage is unavailable (rare), the test will fail
+      // later with a clearer error.
+    }
+  }, { key: ADMIN_TOKEN_STORAGE_KEY, token: DUMMY_ADMIN_TOKEN });
+
+  // Intercept the API detail calls, lookup in the window state
+  await page.route('**/admin/api/usage/detail*', async (route) => {
+    const url = new URL(route.request().url());
+    const id = url.searchParams.get('id');
+    const traceId = url.searchParams.get('trace_id');
+
+    // Retrieve the row from state
+    const row = await page.evaluate((args: { id: string | null, traceId: string | null }) => {
+      const w = window as any;
+      if (!w.__liveLogsStore) return null;
+      const store = w.__liveLogsStore;
+      if (args.id) {
+        return store.rowsById.get(Number(args.id)) || null;
+      }
+      if (args.traceId) {
+        const attempts = Array.from(store.attemptsByKey.values()) as any[];
+        const attempt = attempts.find((a: any) => a.traceId === args.traceId);
+        if (attempt && attempt.row) return attempt.row;
+      }
+      return null;
+    }, { id, traceId });
+
+    if (row) {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({ row }),
+      });
+    } else {
+      await route.fulfill({
+        status: 404,
+        contentType: 'application/json',
+        body: JSON.stringify({ error: 'Not found in test mock state' }),
+      });
+    }
+  });
+});
+
 
   // -------------------------------------------------------------------------
   // Test 1 — pinned check rejects WS row event for a DIFFERENT request
@@ -410,10 +442,11 @@ test.describe('Log detail modal — contamination regression (Fixes 4-b + 5-b)',
 
     // The snapshot in state.logs.selectedRow must still be A's snapshot.
     const selReqId = await page.evaluate(() => {
-      const w = window as unknown as {
-        __openproxyState?: { logs?: { selectedRow?: { request_id?: string } | null } };
-      };
-      return w.__openproxyState?.logs?.selectedRow?.request_id ?? null;
+      const w = window as any;
+      const identity = w.__openproxyState?.logs?.selectedIdentity;
+      if (!identity) return null;
+      const attempt = w.__liveLogsStore?.selectDetail(identity);
+      return attempt?.requestId ?? null;
     });
     expect(selReqId).toBe('req-A-contam-1');
   });
@@ -450,7 +483,7 @@ test.describe('Log detail modal — contamination regression (Fixes 4-b + 5-b)',
     // (success). Per Fix 1, the special-case for `error_message` in the
     // overlay loop MUST replace the synthetic message with null.
     await injectUpdateLogDetail(page, {
-      id: 0,
+      id: 222,
       request_id: 'req-A-contam-2',
       trace_id: 'tid-A-contam-2',
       status_code: 200,
@@ -524,10 +557,11 @@ test.describe('Log detail modal — contamination regression (Fixes 4-b + 5-b)',
     // Verify the overlay happened: the snapshot's upstream_model_id
     // is now "" (NOT "claude-3-5-sonnet", NOT undefined).
     const snapshotModel = await page.evaluate(() => {
-      const w = window as unknown as {
-        __openproxyState?: { logs?: { selectedRow?: { upstream_model_id?: string } | null } };
-      };
-      return w.__openproxyState?.logs?.selectedRow?.upstream_model_id ?? '<undefined>';
+      const w = window as any;
+      const identity = w.__openproxyState?.logs?.selectedIdentity;
+      if (!identity) return '<undefined>';
+      const attempt = w.__liveLogsStore?.selectDetail(identity);
+      return attempt?.upstreamModelId ?? attempt?.row?.upstream_model_id ?? '<undefined>';
     });
     expect(snapshotModel).toBe('');
 
@@ -558,10 +592,11 @@ test.describe('Log detail modal — contamination regression (Fixes 4-b + 5-b)',
     // Sanity: the modal is open and selectedRow is set.
     expect(await page.locator('.log-detail-modal').count()).toBe(1);
     const selBefore = await page.evaluate(() => {
-      const w = window as unknown as {
-        __openproxyState?: { logs?: { selectedRow?: { request_id?: string } | null } };
-      };
-      return w.__openproxyState?.logs?.selectedRow?.request_id ?? null;
+      const w = window as any;
+      const identity = w.__openproxyState?.logs?.selectedIdentity;
+      if (!identity) return null;
+      const attempt = w.__liveLogsStore?.selectDetail(identity);
+      return attempt?.requestId ?? null;
     });
     expect(selBefore).toBe('req-A-contam-4');
 
@@ -574,16 +609,8 @@ test.describe('Log detail modal — contamination regression (Fixes 4-b + 5-b)',
     // `copyDebugBundle` (and any other reader) doesn't see stale
     // data after the modal is closed.
     const selAfter = await page.evaluate(() => {
-      const w = window as unknown as {
-        __openproxyState?: { logs?: { selectedRow?: unknown } };
-      };
-      // Return the raw value (null, undefined, or an object). We
-      // explicitly do NOT coalesce undefined → '<undefined>' here
-      // because Fix 3 sets selectedRow to `null` (not undefined),
-      // and we want to distinguish null (Fix 3 worked) from
-      // undefined (something else entirely). The assertion below
-      // accepts null only.
-      return w.__openproxyState?.logs?.selectedRow ?? null;
+      const w = window as any;
+      return w.__openproxyState?.logs?.selectedIdentity ?? null;
     });
     expect(selAfter).toBeNull();
   });
@@ -631,20 +658,23 @@ test.describe('Log detail modal — contamination regression (Fixes 4-b + 5-b)',
         const w = window as unknown as {
           __openproxyState: {
             logs: {
-              rows: RecentUsageRow[];
-              rowById: Map<number, RecentUsageRow>;
               page: number;
               rowsPerPage: number;
               followTail: boolean;
             };
           };
+          __liveLogsStore: any;
           __openproxyLogsGoPage: (page: number) => void;
         };
+        const store = w.__liveLogsStore;
+        store.rowsById.clear();
+        store.attemptsByKey.clear();
+        store.requestGroups.clear();
+        store.attemptKeyByRowId.clear();
+        (store as any).applyUsageRow(args.a);
+        (store as any).applyUsageRow(args.b);
+
         const logs = w.__openproxyState.logs;
-        logs.rows = [args.a, args.b];
-        logs.rowById.clear();
-        logs.rowById.set(args.a.id, args.a);
-        logs.rowById.set(args.b.id, args.b);
         logs.page = 1;
         logs.rowsPerPage = 50;
         logs.followTail = false;
@@ -743,10 +773,11 @@ test.describe('Log detail modal — contamination regression (Fixes 4-b + 5-b)',
 
     // The snapshot must still be A's.
     const selReqId = await page.evaluate(() => {
-      const w = window as unknown as {
-        __openproxyState?: { logs?: { selectedRow?: { request_id?: string } | null } };
-      };
-      return w.__openproxyState?.logs?.selectedRow?.request_id ?? null;
+      const w = window as any;
+      const identity = w.__openproxyState?.logs?.selectedIdentity;
+      if (!identity) return null;
+      const attempt = w.__liveLogsStore?.selectDetail(identity);
+      return attempt?.requestId ?? null;
     });
     expect(selReqId).toBe('req-A-contam-6');
   });
@@ -812,10 +843,11 @@ test.describe('Log detail modal — contamination regression (Fixes 4-b + 5-b)',
     // (the synthetic message proves it — the snapshot was taken
     // when the modal opened, before any WS event arrived).
     const selReqId = await page.evaluate(() => {
-      const w = window as unknown as {
-        __openproxyState?: { logs?: { selectedRow?: { request_id?: string } | null } };
-      };
-      return w.__openproxyState?.logs?.selectedRow?.request_id ?? null;
+      const w = window as any;
+      const identity = w.__openproxyState?.logs?.selectedIdentity;
+      if (!identity) return null;
+      const attempt = w.__liveLogsStore?.selectDetail(identity);
+      return attempt?.requestId ?? null;
     });
     expect(selReqId).toBe('req-A-contam-7');
   });

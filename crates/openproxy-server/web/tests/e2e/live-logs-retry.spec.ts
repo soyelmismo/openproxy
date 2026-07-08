@@ -55,10 +55,7 @@ interface StateSnapshot {
   // exists and check the same invariant — that the `connecting`
   // stage for `tr-old` is NOT overwritten by the `started`
   // stage for `tr-new`.
-  stagesByRequestId: Record<string, SyntheticStage>;
-  stagesByTraceId: Record<string, SyntheticStage>;
-  inflightByTraceId: Record<string, InflightInfo>;
-  inflightByRequestId: Record<string, InflightInfo>;
+  attemptsByKey: Record<string, any>;
   stateExposed: boolean;
   renderedTraceIds: string[];
   oldPhaseInDom: string | null;
@@ -89,6 +86,7 @@ declare global {
       };
     };
     __openproxyLogsGoPage: (page: number) => void;
+        __liveLogsStore: any;
   }
 }
 
@@ -120,6 +118,7 @@ async function snapshotAfterRetry(
           };
         };
         __openproxyLogsGoPage: (page: number) => void;
+        __liveLogsStore: any;
       };
       const logs = w.__openproxyState.logs;
 
@@ -131,42 +130,29 @@ async function snapshotAfterRetry(
       // the keys were swapped back, so the assertion on the DOM
       // is the load-bearing one.
       const inject = (e: SyntheticStage): void => {
-        if (e.trace_id && logs.stagesByTraceId) {
-          logs.stagesByTraceId.set(e.trace_id, e);
-        } else {
-          logs.stagesByRequestId.set(e.request_id, e);
-        }
-        const hasExact = logs.rows.some(
-          (r: { request_id?: string; trace_id?: string }) =>
-            r.request_id === e.request_id && r.trace_id === e.trace_id,
-        );
-        if (hasExact) return;
-        if (e.trace_id && logs.inflightByTraceId && !logs.inflightByTraceId.has(e.trace_id)) {
-          logs.inflightByTraceId.set(e.trace_id, {
-            request_id: e.request_id,
-            trace_id: e.trace_id,
-            created_at: e.timestamp,
-          });
-        } else if (!e.trace_id && !logs.inflightByRequestId.has(e.request_id)) {
-          logs.inflightByRequestId.set(e.request_id, {
-            request_id: e.request_id,
-            trace_id: e.trace_id,
-            created_at: e.timestamp,
-          });
-        }
+        const attemptKey = e.trace_id || `${e.request_id}:unknown`;
+        const timestampMs = Date.parse(e.timestamp.endsWith("Z") ? e.timestamp : e.timestamp + "Z");
+        const isTerminal = e.stage === "completed" || e.stage === "failed" || e.stage === "cancelled";
+        w.__liveLogsStore.applyAttemptEvent({
+          attempt_key: attemptKey,
+          request_id: e.request_id,
+          trace_id: e.trace_id,
+          stage: e.stage,
+          event_time: timestampMs,
+          started_at: timestampMs - e.elapsed_ms,
+          stage_seq: isTerminal ? 9999 : 0,
+          stage_rank: isTerminal ? 4 : 0,
+          terminal: isTerminal,
+          connect_ms: e.connect_ms,
+          ttft_ms: e.ttft_ms,
+          status_code: e.status_code,
+          error: e.error,
+          provider_id: e.provider_id,
+          upstream_model_id: e.upstream_model_id,
+        });
       };
 
-      // Isolate the test environment: the live dashboard has
-      // rows streaming in from the WebSocket feed; their
-      // pagination slot would push our two synthetic inflight
-      // placeholders off the visible page. We reset to page 1
-      // and clear the WS-driven state slices so the test is
-      // reproducible regardless of what the server is doing.
-      logs.rows = [];
-      logs.stagesByRequestId.clear();
-      if (logs.stagesByTraceId) logs.stagesByTraceId.clear();
-      logs.inflightByRequestId.clear();
-      if (logs.inflightByTraceId) logs.inflightByTraceId.clear();
+      w.__liveLogsStore.clearForTest();
       logs.page = 1;
       logs.rowsPerPage = 50;
       logs.followTail = false;
@@ -200,20 +186,12 @@ async function snapshotAfterRetry(
 
       // Convert the live Maps to plain records so the result
       // is JSON-serialisable across the playwright boundary.
-      const toRec = <V,>(m: Map<string, V> | undefined): Record<string, V> => {
-        const out: Record<string, V> = {};
-        if (!m) return out;
-        m.forEach((v, k) => {
-          out[k] = v;
-        });
-        return out;
-      };
-
+      const rec: Record<string, any> = {};
+      for (const entry of Array.from(w.__liveLogsStore.attemptsByKey.entries() as any)) {
+        rec[(entry as any)[0]] = (entry as any)[1];
+      }
       return {
-        stagesByRequestId: toRec(logs.stagesByRequestId),
-        stagesByTraceId: toRec(logs.stagesByTraceId),
-        inflightByRequestId: toRec(logs.inflightByRequestId),
-        inflightByTraceId: toRec(logs.inflightByTraceId),
+        attemptsByKey: rec,
         stateExposed: true,
         renderedTraceIds,
         oldPhaseInDom: oldPhase,

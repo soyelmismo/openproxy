@@ -947,6 +947,13 @@ export function renderLogDetailModal(log: LogDetailLog): TemplateResult {
   // in usage.rs); `log.error_msg` / `log.error_msg_redacted` come from
   // the detail endpoint (UsageDetailRow.error_msg in usage.rs).
   const detailErrors: unknown = (detail as Record<string, unknown>)["errors"];
+  
+  const isInflight: boolean = log.id === 0 || log.id == null;
+  const attempt = log.stages?.[0] as any;
+  const synthesizedError = isInflight
+    ? (attempt ? `Request in progress — current stage: ${attempt.stage}` : "Request in progress...")
+    : null;
+
   const errors: unknown = log.errors
     || log.error
     || log.error_msg
@@ -954,6 +961,7 @@ export function renderLogDetailModal(log: LogDetailLog): TemplateResult {
     || log.error_msg_redacted
     || log.error_message_redacted
     || detailErrors
+    || synthesizedError
     || null;
   // The backend's UsageDetailRow has a flat shape: it exposes
   // `request_body_json` (a serde_json::Value, already parsed) instead of
@@ -1247,7 +1255,22 @@ function renderModal() {
   if (!wrapper) return;
   
   // Create a LogDetailLog compatible object for the modal view
-  const logObj = attempt.row ? { ...attempt.row, detail: attempt.detail, stages: [attempt] } : { 
+  // The WS `log` row is the SSOT for live state, while `attempt.detail`
+  // contains the heavy payloads from the `/usage/detail` snapshot. We merge
+  // them, ensuring `log` properties take precedence, except for payloads which
+  // might be omitted (null) in WS events.
+  const detailObj = attempt?.detail as any;
+  const log = attempt.row;
+  const safeAttempt = { ...attempt, detail: undefined, row: undefined };
+  const logObj = detailObj && log ? {
+    ...detailObj,
+    ...log,
+    request_body_json: log.request_body_json ?? detailObj.request_body_json,
+    response_body_json: log.response_body_json ?? detailObj.response_body_json,
+    request_headers: log.request_headers ?? detailObj.request_headers,
+    response_headers: log.response_headers ?? detailObj.response_headers,
+    stages: [safeAttempt]
+  } : { 
     id: attempt.rowId, 
     request_id: attempt.requestId, 
     trace_id: attempt.traceId,
@@ -1255,8 +1278,9 @@ function renderModal() {
     total_ms: attempt.elapsedMsAtEvent,
     provider_id: attempt.providerId,
     upstream_model_id: attempt.upstreamModelId,
+    error_message: attempt.error,
     detail: attempt.detail,
-    stages: [attempt]
+    stages: [safeAttempt]
   };
   render(renderLogDetailModal(logObj as any), wrapper as HTMLElement);
 }
