@@ -16,11 +16,11 @@ impl<'a> PipelineNext<'a> {
 pub trait PipelineStage: Send + Sync {
     /// Executes this stage. A stage can either handle the request completely,
     /// or pass it to the next stage by calling `next.execute(ctx).await`.
-    async fn execute(
+    fn execute(
         &self,
         ctx: &mut PipelineContext,
         next: PipelineNext<'_>,
-    ) -> Result<PipelineResult, CoreError>;
+    ) -> impl std::future::Future<Output = Result<PipelineResult, CoreError>> + Send;
 }
 
 #[derive(Clone)]

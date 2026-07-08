@@ -131,12 +131,15 @@ pub trait OAuthProvider: Send + Sync {
     ///   URL, or empty string for non-PKCE flows.
     ///
     /// Returns `Err` if the provider uses Device Code flow.
-    async fn build_auth_url(&self, redirect_uri: &str) -> Result<(String, String, String)> {
-        let _ = redirect_uri;
-        Err(CoreError::Validation(format!(
-            "provider '{}' does not support authorization URL",
-            self.name()
-        )))
+    fn build_auth_url(&self, redirect_uri: &str) -> impl std::future::Future<Output = Result<(String, String, String)>> + Send {
+        let redirect_uri_clone = redirect_uri.to_string();
+        async move {
+            let _ = redirect_uri_clone;
+            Err(CoreError::Validation(format!(
+                "provider '{}' does not support authorization URL",
+                self.name()
+            )))
+        }
     }
 
     /// Exchange an authorization code for tokens (PKCE flow).
@@ -144,38 +147,38 @@ pub trait OAuthProvider: Send + Sync {
     /// `code` is the authorization code from the callback.
     /// `code_verifier` is the PKCE verifier stored during `build_auth_url`.
     /// `redirect_uri` must match the one used in `build_auth_url`.
-    async fn exchange_code(
+    fn exchange_code(
         &self,
         code: &str,
         code_verifier: &str,
         upstream_client: &Arc<UpstreamClient>,
         redirect_uri: &str,
-    ) -> Result<TokenResponse>;
+    ) -> impl std::future::Future<Output = Result<TokenResponse>> + Send;
 
     /// Request a device code and user code (Device Code flow).
-    async fn request_device_code(
+    fn request_device_code(
         &self,
         upstream_client: &Arc<UpstreamClient>,
-    ) -> Result<DeviceAuthorizationResponse>;
+    ) -> impl std::future::Future<Output = Result<DeviceAuthorizationResponse>> + Send;
 
     /// Poll the token endpoint with a device code (Device Code flow).
     ///
     /// Returns `Ok(Some(token))` on success, `Ok(None)` if the authorization
     /// is still pending (caller should retry after `interval` seconds).
-    async fn poll_device_token(
+    fn poll_device_token(
         &self,
         device_code: &str,
         upstream_client: &Arc<UpstreamClient>,
-    ) -> Result<Option<TokenResponse>>;
+    ) -> impl std::future::Future<Output = Result<Option<TokenResponse>>> + Send;
 
     /// Refresh an access token using a refresh token.
-    async fn refresh_token(
+    fn refresh_token(
         &self,
         refresh_token: &str,
         upstream_client: &Arc<UpstreamClient>,
         account_id: AccountId,
         db: DbRef<'_>,
-    ) -> Result<TokenResponse>;
+    ) -> impl std::future::Future<Output = Result<TokenResponse>> + Send;
 
     /// Optional metadata extracted directly from a token response.
     ///
@@ -201,14 +204,16 @@ pub trait OAuthProvider: Send + Sync {
     /// contract is: every SQLite read/write happens synchronously,
     /// the guard is released, and only the HTTP call to the
     /// provider is awaited.
-    async fn post_exchange(
+    fn post_exchange(
         &self,
         _account_id: AccountId,
         _db_pool: &std::sync::Arc<crate::db::DbPool>,
         _master_key: &MasterKey,
         _upstream: &Arc<UpstreamClient>,
-    ) -> Result<()> {
-        Ok(())
+    ) -> impl std::future::Future<Output = Result<()>> + Send {
+        async move {
+            Ok(())
+        }
     }
 }
 

@@ -236,21 +236,23 @@ pub trait ProviderAdapter: Send + Sync {
     /// HTTP transport is the [`UpstreamClient`] (hyper-based, with
     /// per-phase timeouts); the legacy `reqwest::Client` is no
     /// longer threaded through this trait.
-    async fn fetch_models(
+    fn fetch_models(
         &self,
         upstream_client: &Arc<UpstreamClient>,
         api_key: &str,
-    ) -> Result<Vec<DiscoveredModel>>;
+    ) -> impl std::future::Future<Output = Result<Vec<DiscoveredModel>>> + Send;
 
     /// Fetch models with account-level context (label).
     /// Default: ignores label and delegates to fetch_models.
-    async fn fetch_models_for_account(
+    fn fetch_models_for_account(
         &self,
         upstream_client: &Arc<UpstreamClient>,
         api_key: &str,
         _account_label: &str,
-    ) -> Result<Vec<DiscoveredModel>> {
-        self.fetch_models(upstream_client, api_key).await
+    ) -> impl std::future::Future<Output = Result<Vec<DiscoveredModel>>> + Send {
+        async move {
+            self.fetch_models(upstream_client, api_key).await
+        }
     }
 
     /// Normalize an OpenAI request view before serialization.
@@ -260,15 +262,16 @@ pub trait ProviderAdapter: Send + Sync {
     /// Execute the request completely within the adapter.
     /// If this returns `Some(...)`, the standard pipeline dispatch is skipped.
     /// Default implementation returns `None`.
-    async fn execute_custom(
+    fn execute_custom(
         &self,
         _upstream_client: &Arc<crate::upstream::UpstreamClient>,
         _req: Arc<crate::pipeline::PipelineRequest>,
         _resolved_target: &crate::pipeline::context::ResolvedTarget,
         _ctx: Option<CustomExecutionContext>,
-    ) -> Option<std::result::Result<crate::translation::OpenAIResponse, crate::error::CoreError>>
-    {
-        None
+    ) -> impl std::future::Future<Output = Option<std::result::Result<crate::translation::OpenAIResponse, crate::error::CoreError>>> + Send {
+        async move {
+            None
+        }
     }
 }
 
