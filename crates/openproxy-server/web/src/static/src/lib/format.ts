@@ -22,10 +22,5 @@ export function formatMs(ms: unknown): string {
 // Localised-friendly number for currency / counts. Not a full i18n
 // helper — just a one-liner we use in a few places.
 export function formatNumber(n: number, opts: Intl.NumberFormatOptions = {}): string {
-  try {
-    return new Intl.NumberFormat(undefined, opts).format(n);
-  } catch (e) {
-    // ponytail: [límite] entorno de tests sin ICU [mejora] usar full-icu en Node
-    return new Intl.NumberFormat('en-US', opts).format(n);
-  }
+  return new Intl.NumberFormat(undefined, opts).format(n);
 }

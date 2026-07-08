@@ -12,7 +12,8 @@ export default defineConfig({
   use: { 
     headless: true, 
     baseURL: 'http://localhost:8790',
-    storageState: 'tests/e2e/storageState.json'
+    storageState: 'tests/e2e/storageState.json',
+    locale: 'en-US'
   },
   // Single worker to avoid fighting the WebSocket / shared DB.
   workers: 1,
