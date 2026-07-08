@@ -192,10 +192,7 @@ pub fn auto_populate_empty_combo(conn: &Connection, combo_id: ComboId) -> Result
             |r| r.get::<_, String>(0),
         )
         .optional()
-        .map_err(|e| CoreError::Database {
-            message: format!("query auto_populate provider: {}", e),
-            source: Some(Box::new(e)),
-        })?;
+        .map_err(crate::error::map_db_error)?;
 
     let Some(provider_id) = provider else {
         return Ok(0);
@@ -238,23 +235,14 @@ fn combos_insert_targets_for_active_models(
                AND active = 1 \
              ORDER BY id ASC",
         )
-        .map_err(|e| CoreError::Database {
-            message: format!("prepare active models: {}", e),
-            source: Some(Box::new(e)),
-        })?;
+        .map_err(crate::error::map_db_error)?;
     let rows: Vec<(i64, String)> = stmt
         .query_map(params![provider_id.as_str()], |r| {
             Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?))
         })
-        .map_err(|e| CoreError::Database {
-            message: format!("query active models: {}", e),
-            source: Some(Box::new(e)),
-        })?
+        .map_err(crate::error::map_db_error)?
         .collect::<rusqlite::Result<Vec<_>>>()
-        .map_err(|e| CoreError::Database {
-            message: format!("read active models: {}", e),
-            source: Some(Box::new(e)),
-        })?;
+        .map_err(crate::error::map_db_error)?;
 
     let mut added = 0usize;
     {
@@ -264,10 +252,7 @@ fn combos_insert_targets_for_active_models(
                  combo_id, provider_id, account_id, model_row_id, priority_order\
              ) VALUES (?1, ?2, NULL, ?3, ?4)",
             )
-            .map_err(|e| CoreError::Database {
-                message: format!("prepare auto target insert: {e}"),
-                source: Some(Box::new(e)),
-            })?;
+            .map_err(crate::error::map_db_error)?;
         for (row_id, _model_id) in &rows {
             // Ignore UNIQUE collisions: this helper is reused by a code path
             // that may run after a manual add. Better to keep the existing
@@ -327,22 +312,13 @@ pub fn expand_account_rotation(
                  WHERE provider_id = ?1 AND health_status = 'healthy' \
                  ORDER BY priority ASC, id ASC",
             )
-            .map_err(|e| CoreError::Database {
-                message: format!("prepare expand_account_rotation: {}", e),
-                source: Some(Box::new(e)),
-            })?;
+            .map_err(crate::error::map_db_error)?;
         let rows = stmt
             .query_map(params![t.provider_id.as_str()], |row| row.get::<_, i64>(0))
-            .map_err(|e| CoreError::Database {
-                message: format!("query expand_account_rotation: {}", e),
-                source: Some(Box::new(e)),
-            })?;
+            .map_err(crate::error::map_db_error)?;
         let mut count = 0usize;
         for r in rows {
-            let account_id = r.map_err(|e| CoreError::Database {
-                message: format!("read account id row: {}", e),
-                source: Some(Box::new(e)),
-            })?;
+            let account_id = r.map_err(crate::error::map_db_error)?;
             let mut clone = t.clone();
             clone.account_id = Some(AccountId(account_id));
             out.push(clone);

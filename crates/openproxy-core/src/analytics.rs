@@ -223,10 +223,7 @@ pub fn latency_percentiles(conn: &Connection, f: &UsageFilter) -> Result<Latency
     )
     .expect("writing to String never fails");
 
-    let mut stmt = conn.prepare(&sql).map_err(|e| CoreError::Database {
-        message: format!("prepare latency_percentiles: {}", e),
-        source: Some(Box::new(e)),
-    })?;
+    let mut stmt = conn.prepare(&sql).map_err(crate::error::map_db_error)?;
 
     let params_slice = to_params(&w.params);
 
@@ -238,15 +235,9 @@ pub fn latency_percentiles(conn: &Connection, f: &UsageFilter) -> Result<Latency
 
     let mut rows = stmt
         .query(params_from_iter(params_slice))
-        .map_err(|e| CoreError::Database {
-            message: format!("query latency_percentiles: {}", e),
-            source: Some(Box::new(e)),
-        })?;
+        .map_err(crate::error::map_db_error)?;
 
-    while let Some(row) = rows.next().map_err(|e| CoreError::Database {
-        message: format!("read latency_percentiles row: {}", e),
-        source: Some(Box::new(e)),
-    })? {
+    while let Some(row) = rows.next().map_err(crate::error::map_db_error)? {
         rows_seen += 1;
         // Each metric is independently nullable; we simply skip nulls per
         // column. We never abort on nulls because the schema allows them
@@ -354,10 +345,7 @@ pub fn race_stats(conn: &Connection, f: &UsageFilter) -> Result<RaceStats> {
     )
     .expect("writing to String never fails");
 
-    let mut stmt = conn.prepare(&sql).map_err(|e| CoreError::Database {
-        message: format!("prepare race_stats: {}", e),
-        source: Some(Box::new(e)),
-    })?;
+    let mut stmt = conn.prepare(&sql).map_err(crate::error::map_db_error)?;
 
     let params_slice = to_params(&w.params);
 
@@ -382,31 +370,13 @@ pub fn race_stats(conn: &Connection, f: &UsageFilter) -> Result<RaceStats> {
 
     let mut rows = stmt
         .query(params_from_iter(params_slice))
-        .map_err(|e| CoreError::Database {
-            message: format!("query race_stats: {}", e),
-            source: Some(Box::new(e)),
-        })?;
+        .map_err(crate::error::map_db_error)?;
 
-    while let Some(row) = rows.next().map_err(|e| CoreError::Database {
-        message: format!("read race_stats row: {}", e),
-        source: Some(Box::new(e)),
-    })? {
-        let request_id: String = row.get(0).map_err(|e| CoreError::Database {
-            message: format!("read race_stats request_id: {}", e),
-            source: Some(Box::new(e)),
-        })?;
-        let race_lost: i64 = row.get(1).map_err(|e| CoreError::Database {
-            message: format!("read race_stats race_lost: {}", e),
-            source: Some(Box::new(e)),
-        })?;
-        let combo_target_id: Option<i64> = row.get(2).map_err(|e| CoreError::Database {
-            message: format!("read race_stats combo_target_id: {}", e),
-            source: Some(Box::new(e)),
-        })?;
-        let priority_order: Option<i64> = row.get(3).map_err(|e| CoreError::Database {
-            message: format!("read race_stats priority_order: {}", e),
-            source: Some(Box::new(e)),
-        })?;
+    while let Some(row) = rows.next().map_err(crate::error::map_db_error)? {
+        let request_id: String = row.get(0).map_err(crate::error::map_db_error)?;
+        let race_lost: i64 = row.get(1).map_err(crate::error::map_db_error)?;
+        let combo_target_id: Option<i64> = row.get(2).map_err(crate::error::map_db_error)?;
+        let priority_order: Option<i64> = row.get(3).map_err(crate::error::map_db_error)?;
 
         race_ids.insert(request_id);
 

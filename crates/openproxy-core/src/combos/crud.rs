@@ -40,10 +40,7 @@ pub fn create_combo(
 
     let id: i64 = conn
         .query_row("SELECT last_insert_rowid()", [], |r| r.get(0))
-        .map_err(|e| CoreError::Database {
-            message: format!("last_insert_rowid after insert combo: {}", e),
-            source: Some(Box::new(e)),
-        })?;
+        .map_err(crate::error::map_db_error)?;
     Ok(ComboId(id))
 }
 
@@ -73,22 +70,13 @@ pub fn list_combos(conn: &Connection) -> Result<Vec<Combo>> {
                    cooldown_factor, lkgp_exploration_rate, selection_window_secs \
              FROM combos ORDER BY id",
         )
-        .map_err(|e| CoreError::Database {
-            message: format!("prepare list combos: {}", e),
-            source: Some(Box::new(e)),
-        })?;
+        .map_err(crate::error::map_db_error)?;
     let rows = stmt
         .query_map([], row_to_combo)
-        .map_err(|e| CoreError::Database {
-            message: format!("query list combos: {}", e),
-            source: Some(Box::new(e)),
-        })?;
+        .map_err(crate::error::map_db_error)?;
     let mut out = Vec::new();
     for r in rows {
-        out.push(r.map_err(|e| CoreError::Database {
-            message: format!("read combo row: {}", e),
-            source: Some(Box::new(e)),
-        })?);
+        out.push(r.map_err(crate::error::map_db_error)?);
     }
     Ok(out)
 }
@@ -108,21 +96,12 @@ pub fn get_combo_by_name(conn: &Connection, name: &str) -> Result<Option<Combo>>
                    cooldown_factor, lkgp_exploration_rate, selection_window_secs \
              FROM combos WHERE name = ?1",
         )
-        .map_err(|e| CoreError::Database {
-            message: format!("prepare get_combo_by_name: {}", e),
-            source: Some(Box::new(e)),
-        })?;
+        .map_err(crate::error::map_db_error)?;
     let mut rows =
         stmt.query_map(params![name], row_to_combo)
-            .map_err(|e| CoreError::Database {
-                message: format!("query get_combo_by_name: {}", e),
-                source: Some(Box::new(e)),
-            })?;
+            .map_err(crate::error::map_db_error)?;
     match rows.next() {
-        Some(row) => Ok(Some(row.map_err(|e| CoreError::Database {
-            message: format!("read combo_by_name row: {}", e),
-            source: Some(Box::new(e)),
-        })?)),
+        Some(row) => Ok(Some(row.map_err(crate::error::map_db_error)?)),
         None => Ok(None),
     }
 }
@@ -386,10 +365,7 @@ pub fn add_target(conn: &Connection, input: AddTargetInput) -> Result<ComboTarge
 
     let id: i64 = conn
         .query_row("SELECT last_insert_rowid()", [], |r| r.get(0))
-        .map_err(|e| CoreError::Database {
-            message: format!("last_insert_rowid after insert combo_target: {}", e),
-            source: Some(Box::new(e)),
-        })?;
+        .map_err(crate::error::map_db_error)?;
     Ok(ComboTargetId(id))
 }
 
@@ -488,16 +464,10 @@ pub fn combo_in_chain(
                 "SELECT sub_combo_id FROM combo_targets \
                  WHERE combo_id = ?1 AND sub_combo_id IS NOT NULL",
             )
-            .map_err(|e| CoreError::Database {
-                message: format!("prepare combo_in_chain stmt: {}", e),
-                source: Some(Box::new(e)),
-            })?;
+            .map_err(crate::error::map_db_error)?;
         let sub_ids: Vec<i64> = stmt
             .query_map(params![current.0], |r| r.get::<_, Option<i64>>(0))
-            .map_err(|e| CoreError::Database {
-                message: format!("query combo_in_chain: {}", e),
-                source: Some(Box::new(e)),
-            })?
+            .map_err(crate::error::map_db_error)?
             .filter_map(|x| x.ok().flatten())
             .collect();
         if sub_ids.is_empty() {
@@ -551,22 +521,13 @@ pub fn list_targets(conn: &Connection, combo_id: ComboId) -> Result<Vec<ComboTar
                  AND NOT (ct.model_row_id IS NULL AND ct.sub_combo_id IS NULL) \
              ORDER BY ct.priority_order ASC, ct.id ASC",
         )
-        .map_err(|e| CoreError::Database {
-            message: format!("prepare list_targets: {}", e),
-            source: Some(Box::new(e)),
-        })?;
+        .map_err(crate::error::map_db_error)?;
     let rows = stmt
         .query_map(params![combo_id.0], row_to_target)
-        .map_err(|e| CoreError::Database {
-            message: format!("query list_targets: {}", e),
-            source: Some(Box::new(e)),
-        })?;
+        .map_err(crate::error::map_db_error)?;
     let mut out = Vec::new();
     for r in rows {
-        out.push(r.map_err(|e| CoreError::Database {
-            message: format!("read combo_target row: {}", e),
-            source: Some(Box::new(e)),
-        })?);
+        out.push(r.map_err(crate::error::map_db_error)?);
     }
     Ok(out)
 }
@@ -635,22 +596,13 @@ pub fn list_targets_with_model(
              WHERE ct.combo_id = ?1 \
              ORDER BY ct.priority_order ASC, ct.id ASC",
         )
-        .map_err(|e| CoreError::Database {
-            message: format!("prepare list_targets_with_model: {}", e),
-            source: Some(Box::new(e)),
-        })?;
+        .map_err(crate::error::map_db_error)?;
     let rows = stmt
         .query_map(params![combo_id.0], row_to_target_with_model)
-        .map_err(|e| CoreError::Database {
-            message: format!("query list_targets_with_model: {}", e),
-            source: Some(Box::new(e)),
-        })?;
+        .map_err(crate::error::map_db_error)?;
     let mut out = Vec::new();
     for r in rows {
-        out.push(r.map_err(|e| CoreError::Database {
-            message: format!("read combo_target_with_model row: {}", e),
-            source: Some(Box::new(e)),
-        })?);
+        out.push(r.map_err(crate::error::map_db_error)?);
     }
     Ok(out)
 }
@@ -757,31 +709,19 @@ pub fn reorder_targets(
 ) -> Result<()> {
     let tx = conn
         .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
-        .map_err(|e| CoreError::Database {
-            message: format!("begin reorder_targets tx: {}", e),
-            source: Some(Box::new(e)),
-        })?;
+        .map_err(crate::error::map_db_error)?;
 
     // Pull the current target ids for this combo, scoped by `combo_id`
     // so a stray id from another combo can never sneak into the
     // validation set.
     let mut stmt = tx
         .prepare("SELECT id FROM combo_targets WHERE combo_id = ?1")
-        .map_err(|e| CoreError::Database {
-            message: format!("prepare select combo_targets for reorder: {}", e),
-            source: Some(Box::new(e)),
-        })?;
+        .map_err(crate::error::map_db_error)?;
     let current: Vec<i64> = stmt
         .query_map(params![combo_id.0], |r| r.get::<_, i64>(0))
-        .map_err(|e| CoreError::Database {
-            message: format!("query combo_targets for reorder: {}", e),
-            source: Some(Box::new(e)),
-        })?
+        .map_err(crate::error::map_db_error)?
         .collect::<rusqlite::Result<Vec<_>>>()
-        .map_err(|e| CoreError::Database {
-            message: format!("read combo_targets for reorder: {}", e),
-            source: Some(Box::new(e)),
-        })?;
+        .map_err(crate::error::map_db_error)?;
     drop(stmt);
 
     // Multiset equality via sorted Vec<i64>: identical multisets
@@ -805,10 +745,7 @@ pub fn reorder_targets(
     {
         let mut stmt = tx
             .prepare("UPDATE combo_targets SET priority_order = ?1 WHERE id = ?2 AND combo_id = ?3")
-            .map_err(|e| CoreError::Database {
-                message: format!("prepare reorder stmt: {e}"),
-                source: Some(Box::new(e)),
-            })?;
+            .map_err(crate::error::map_db_error)?;
         for (idx, tid) in ordered_ids.iter().enumerate() {
             stmt.execute(params![(idx as i32) + 1, tid.0, combo_id.0])
                 .map_err(|e| CoreError::Database {
@@ -823,10 +760,7 @@ pub fn reorder_targets(
                 })?;
         }
     }
-    tx.commit().map_err(|e| CoreError::Database {
-        message: format!("commit reorder_targets tx: {}", e),
-        source: Some(Box::new(e)),
-    })?;
+    tx.commit().map_err(crate::error::map_db_error)?;
     Ok(())
 }
 

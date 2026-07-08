@@ -134,10 +134,7 @@ pub fn create(
 
     let id: i64 = conn
         .query_row("SELECT last_insert_rowid()", [], |r| r.get(0))
-        .map_err(|e| CoreError::Database {
-            message: format!("last_insert_rowid after insert account: {}", e),
-            source: Some(Box::new(e)),
-        })?;
+        .map_err(crate::error::map_db_error)?;
     Ok(AccountId(id))
 }
 
@@ -198,35 +195,23 @@ pub fn list(conn: &Connection, provider: Option<&ProviderId>) -> Result<Vec<Acco
         ),
     };
 
-    let mut stmt = conn.prepare(sql).map_err(|e| CoreError::Database {
-        message: format!("prepare list accounts: {}", e),
-        source: Some(Box::new(e)),
-    })?;
+    let mut stmt = conn.prepare(sql).map_err(crate::error::map_db_error)?;
 
     let mapper = |row: &rusqlite::Row<'_>| -> rusqlite::Result<Account> { row_to_account(row) };
 
     let rows = match provider {
         Some(pid) => {
             stmt.query_map(params![pid.as_str()], mapper)
-                .map_err(|e| CoreError::Database {
-                    message: format!("query list accounts: {}", e),
-                    source: Some(Box::new(e)),
-                })?
+                .map_err(crate::error::map_db_error)?
         }
         None => stmt
             .query_map([], mapper)
-            .map_err(|e| CoreError::Database {
-                message: format!("query list accounts: {}", e),
-                source: Some(Box::new(e)),
-            })?,
+            .map_err(crate::error::map_db_error)?,
     };
 
     let mut out = Vec::new();
     for r in rows {
-        out.push(r.map_err(|e| CoreError::Database {
-            message: format!("read account row: {}", e),
-            source: Some(Box::new(e)),
-        })?);
+        out.push(r.map_err(crate::error::map_db_error)?);
     }
     // Silence the unused-variable lint when the no-provider branch runs.
     let _ = provider_param;
@@ -617,24 +602,15 @@ pub fn list_expiring_oauth_accounts(
                AND expires_at <= ?1 \
              ORDER BY priority ASC, id ASC",
         )
-        .map_err(|e| CoreError::Database {
-            message: format!("prepare list_expiring_oauth: {}", e),
-            source: Some(Box::new(e)),
-        })?;
+        .map_err(crate::error::map_db_error)?;
 
     let rows = stmt
         .query_map(params![threshold], row_to_account)
-        .map_err(|e| CoreError::Database {
-            message: format!("query list_expiring_oauth: {}", e),
-            source: Some(Box::new(e)),
-        })?;
+        .map_err(crate::error::map_db_error)?;
 
     let mut out = Vec::new();
     for r in rows {
-        out.push(r.map_err(|e| CoreError::Database {
-            message: format!("read expiring oauth row: {}", e),
-            source: Some(Box::new(e)),
-        })?);
+        out.push(r.map_err(crate::error::map_db_error)?);
     }
 
     // Silence the unused-variable lint for the now variable.
@@ -649,22 +625,13 @@ pub fn list_expiring_oauth_accounts(
 pub fn list_oauth_account_ids(conn: &Connection) -> Result<Vec<i64>> {
     let mut stmt = conn
         .prepare("SELECT id FROM accounts WHERE auth_type = 'oauth'")
-        .map_err(|e| CoreError::Database {
-            message: format!("prepare list_oauth_account_ids: {}", e),
-            source: Some(Box::new(e)),
-        })?;
+        .map_err(crate::error::map_db_error)?;
     let rows = stmt
         .query_map([], |r| r.get::<_, i64>(0))
-        .map_err(|e| CoreError::Database {
-            message: format!("query list_oauth_account_ids: {}", e),
-            source: Some(Box::new(e)),
-        })?;
+        .map_err(crate::error::map_db_error)?;
     let mut out = Vec::new();
     for r in rows {
-        out.push(r.map_err(|e| CoreError::Database {
-            message: format!("read list_oauth_account_ids row: {}", e),
-            source: Some(Box::new(e)),
-        })?);
+        out.push(r.map_err(crate::error::map_db_error)?);
     }
     Ok(out)
 }
@@ -675,22 +642,13 @@ pub fn list_oauth_account_ids(conn: &Connection) -> Result<Vec<i64>> {
 pub fn list_oauth_provider_ids(conn: &Connection) -> Result<Vec<String>> {
     let mut stmt = conn
         .prepare("SELECT DISTINCT provider_id FROM accounts WHERE auth_type = 'oauth'")
-        .map_err(|e| CoreError::Database {
-            message: format!("prepare list_oauth_provider_ids: {}", e),
-            source: Some(Box::new(e)),
-        })?;
+        .map_err(crate::error::map_db_error)?;
     let rows = stmt
         .query_map([], |r| r.get::<_, String>(0))
-        .map_err(|e| CoreError::Database {
-            message: format!("query list_oauth_provider_ids: {}", e),
-            source: Some(Box::new(e)),
-        })?;
+        .map_err(crate::error::map_db_error)?;
     let mut out = Vec::new();
     for r in rows {
-        out.push(r.map_err(|e| CoreError::Database {
-            message: format!("read list_oauth_provider_ids row: {}", e),
-            source: Some(Box::new(e)),
-        })?);
+        out.push(r.map_err(crate::error::map_db_error)?);
     }
     Ok(out)
 }

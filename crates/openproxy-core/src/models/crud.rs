@@ -173,24 +173,15 @@ pub fn list_active(conn: &Connection, provider: &ProviderId) -> Result<Vec<Model
              WHERE provider_id = ? \
                AND active = 1",
         )
-        .map_err(|e| CoreError::Database {
-            message: format!("prepare list_active: {}", e),
-            source: Some(Box::new(e)),
-        })?;
+        .map_err(crate::error::map_db_error)?;
 
     let rows = stmt
         .query_map([provider.as_str()], map_row)
-        .map_err(|e| CoreError::Database {
-            message: format!("query list_active: {}", e),
-            source: Some(Box::new(e)),
-        })?;
+        .map_err(crate::error::map_db_error)?;
 
     let mut out = Vec::new();
     for r in rows {
-        out.push(r.map_err(|e| CoreError::Database {
-            message: format!("row list_active: {}", e),
-            source: Some(Box::new(e)),
-        })?);
+        out.push(r.map_err(crate::error::map_db_error)?);
     }
     Ok(out)
 }
@@ -223,24 +214,15 @@ pub fn list_active_all(conn: &Connection) -> Result<Vec<Model>> {
              FROM models \
              WHERE active = 1",
         )
-        .map_err(|e| CoreError::Database {
-            message: format!("prepare list_active_all: {}", e),
-            source: Some(Box::new(e)),
-        })?;
+        .map_err(crate::error::map_db_error)?;
 
     let rows = stmt
         .query_map([], map_row)
-        .map_err(|e| CoreError::Database {
-            message: format!("query list_active_all: {}", e),
-            source: Some(Box::new(e)),
-        })?;
+        .map_err(crate::error::map_db_error)?;
 
     let mut out = Vec::new();
     for r in rows {
-        out.push(r.map_err(|e| CoreError::Database {
-            message: format!("row list_active_all: {}", e),
-            source: Some(Box::new(e)),
-        })?);
+        out.push(r.map_err(crate::error::map_db_error)?);
     }
     Ok(out)
 }
@@ -259,24 +241,15 @@ pub fn list_all(conn: &Connection) -> Result<Vec<Model>> {
                     output_modalities_json \
              FROM models",
         )
-        .map_err(|e| CoreError::Database {
-            message: format!("prepare list_all: {}", e),
-            source: Some(Box::new(e)),
-        })?;
+        .map_err(crate::error::map_db_error)?;
 
     let rows = stmt
         .query_map([], map_row)
-        .map_err(|e| CoreError::Database {
-            message: format!("query list_all: {}", e),
-            source: Some(Box::new(e)),
-        })?;
+        .map_err(crate::error::map_db_error)?;
 
     let mut out = Vec::new();
     for r in rows {
-        out.push(r.map_err(|e| CoreError::Database {
-            message: format!("row list_all: {}", e),
-            source: Some(Box::new(e)),
-        })?);
+        out.push(r.map_err(crate::error::map_db_error)?);
     }
     Ok(out)
 }
@@ -313,10 +286,7 @@ pub fn mark_expired(conn: &Connection) -> Result<usize> {
                AND expires_at < datetime('now', '-7 days')",
             [],
         )
-        .map_err(|e| CoreError::Database {
-            message: format!("execute mark_expired: {}", e),
-            source: Some(Box::new(e)),
-        })?;
+        .map_err(crate::error::map_db_error)?;
     Ok(n)
 }
 
@@ -374,10 +344,7 @@ pub fn get_by_row_id(conn: &Connection, row_id: ModelRowId) -> Result<Option<Mod
             map_row,
         )
         .optional()
-        .map_err(|e| CoreError::Database {
-            message: format!("query get_by_row_id: {}", e),
-            source: Some(Box::new(e)),
-        })?;
+        .map_err(crate::error::map_db_error)?;
     Ok(res)
 }
 
@@ -401,26 +368,17 @@ pub fn get_by_row_ids(conn: &Connection, row_ids: &[ModelRowId]) -> Result<Vec<M
     );
     let mut stmt = conn
         .prepare_cached(&query)
-        .map_err(|e| CoreError::Database {
-            message: format!("prepare get_by_row_ids: {}", e),
-            source: Some(Box::new(e)),
-        })?;
+        .map_err(crate::error::map_db_error)?;
     let ids: Vec<&dyn rusqlite::ToSql> = row_ids
         .iter()
         .map(|id| &id.0 as &dyn rusqlite::ToSql)
         .collect();
     let rows = stmt
         .query_map(&*ids, map_row)
-        .map_err(|e| CoreError::Database {
-            message: format!("query get_by_row_ids: {}", e),
-            source: Some(Box::new(e)),
-        })?;
+        .map_err(crate::error::map_db_error)?;
     let mut models = Vec::with_capacity(row_ids.len());
     for row in rows {
-        models.push(row.map_err(|e| CoreError::Database {
-            message: format!("map row get_by_row_ids: {}", e),
-            source: Some(Box::new(e)),
-        })?);
+        models.push(row.map_err(crate::error::map_db_error)?);
     }
     Ok(models)
 }
@@ -461,21 +419,12 @@ pub fn find_active_by_name(conn: &Connection, model_id: &str) -> Result<Option<M
              ORDER BY id ASC \
              LIMIT 1",
         )
-        .map_err(|e| CoreError::Database {
-            message: format!("prepare find_active_by_name: {}", e),
-            source: Some(Box::new(e)),
-        })?;
+        .map_err(crate::error::map_db_error)?;
     let mut rows = stmt
         .query_map([model_id], map_row)
-        .map_err(|e| CoreError::Database {
-            message: format!("query find_active_by_name: {}", e),
-            source: Some(Box::new(e)),
-        })?;
+        .map_err(crate::error::map_db_error)?;
     match rows.next() {
-        Some(row) => Ok(Some(row.map_err(|e| CoreError::Database {
-            message: format!("read find_active_by_name row: {}", e),
-            source: Some(Box::new(e)),
-        })?)),
+        Some(row) => Ok(Some(row.map_err(crate::error::map_db_error)?)),
         None => Ok(None),
     }
 }
@@ -506,21 +455,12 @@ pub fn find_active_by_provider_and_name(
              ORDER BY id ASC \
              LIMIT 1",
         )
-        .map_err(|e| CoreError::Database {
-            message: format!("prepare find_active_by_provider_and_name: {}", e),
-            source: Some(Box::new(e)),
-        })?;
+        .map_err(crate::error::map_db_error)?;
     let mut rows = stmt
         .query_map(rusqlite::params![provider_id.as_str(), model_id], map_row)
-        .map_err(|e| CoreError::Database {
-            message: format!("query find_active_by_provider_and_name: {}", e),
-            source: Some(Box::new(e)),
-        })?;
+        .map_err(crate::error::map_db_error)?;
     match rows.next() {
-        Some(row) => Ok(Some(row.map_err(|e| CoreError::Database {
-            message: format!("read find_active_by_provider_and_name row: {}", e),
-            source: Some(Box::new(e)),
-        })?)),
+        Some(row) => Ok(Some(row.map_err(crate::error::map_db_error)?)),
         None => Ok(None),
     }
 }
@@ -558,10 +498,7 @@ pub fn set_test_status(conn: &Connection, id: ModelRowId, status: i32) -> Result
 pub fn delete(conn: &Connection, id: ModelRowId) -> Result<u64> {
     let tx = conn
         .unchecked_transaction()
-        .map_err(|e| CoreError::Database {
-            message: format!("begin delete model tx: {}", e),
-            source: Some(Box::new(e)),
-        })?;
+        .map_err(crate::error::map_db_error)?;
 
     // combo_targets.model_row_id has ON DELETE CASCADE (migration 000030);
     // the target row is cascade-deleted alongside the model.
@@ -573,10 +510,7 @@ pub fn delete(conn: &Connection, id: ModelRowId) -> Result<u64> {
             source: Some(Box::new(e)),
         })?;
 
-    tx.commit().map_err(|e| CoreError::Database {
-        message: format!("commit delete model tx: {}", e),
-        source: Some(Box::new(e)),
-    })?;
+    tx.commit().map_err(crate::error::map_db_error)?;
 
     Ok(removed as u64)
 }
@@ -691,10 +625,7 @@ pub fn apply_auto_activation(
     // `active` bit half-flipped for the rows we'd already UPDATEd.
     let tx = conn
         .unchecked_transaction()
-        .map_err(|e| CoreError::Database {
-            message: format!("begin apply_auto_activation tx: {}", e),
-            source: Some(Box::new(e)),
-        })?;
+        .map_err(crate::error::map_db_error)?;
 
     // ----------------------------------------------------------------
     // Step 1: identify rows that will be flipped from `active = 0` to
@@ -723,24 +654,15 @@ pub fn apply_auto_activation(
                        AND active = 0 \
                        AND model_id LIKE '%' || ?2 || '%'",
                 )
-                .map_err(|e| CoreError::Database {
-                    message: format!("apply_auto_activation prepare select-keyword: {}", e),
-                    source: Some(Box::new(e)),
-                })?;
+                .map_err(crate::error::map_db_error)?;
             let rows = stmt
                 .query_map(params![provider.as_str(), k], |r| {
                     Ok((r.get::<_, String>(0)?, r.get::<_, Option<String>>(1)?))
                 })
-                .map_err(|e| CoreError::Database {
-                    message: format!("apply_auto_activation query select-keyword: {}", e),
-                    source: Some(Box::new(e)),
-                })?;
+                .map_err(crate::error::map_db_error)?;
             let mut out = Vec::new();
             for r in rows {
-                out.push(r.map_err(|e| CoreError::Database {
-                    message: format!("apply_auto_activation row select-keyword: {}", e),
-                    source: Some(Box::new(e)),
-                })?);
+                out.push(r.map_err(crate::error::map_db_error)?);
             }
             out
         }
@@ -752,24 +674,15 @@ pub fn apply_auto_activation(
                        AND discovered_at >= datetime('now', '-60 seconds') \
                        AND active = 0",
                 )
-                .map_err(|e| CoreError::Database {
-                    message: format!("apply_auto_activation prepare select-all: {}", e),
-                    source: Some(Box::new(e)),
-                })?;
+                .map_err(crate::error::map_db_error)?;
             let rows = stmt
                 .query_map(params![provider.as_str()], |r| {
                     Ok((r.get::<_, String>(0)?, r.get::<_, Option<String>>(1)?))
                 })
-                .map_err(|e| CoreError::Database {
-                    message: format!("apply_auto_activation query select-all: {}", e),
-                    source: Some(Box::new(e)),
-                })?;
+                .map_err(crate::error::map_db_error)?;
             let mut out = Vec::new();
             for r in rows {
-                out.push(r.map_err(|e| CoreError::Database {
-                    message: format!("apply_auto_activation row select-all: {}", e),
-                    source: Some(Box::new(e)),
-                })?);
+                out.push(r.map_err(crate::error::map_db_error)?);
             }
             out
         }
@@ -838,10 +751,7 @@ pub fn apply_auto_activation(
         }
     }
 
-    tx.commit().map_err(|e| CoreError::Database {
-        message: format!("commit apply_auto_activation: {}", e),
-        source: Some(Box::new(e)),
-    })?;
+    tx.commit().map_err(crate::error::map_db_error)?;
 
     // After commit: broadcast each newly-inserted notification to any
     // connected WS clients. Failures here are swallowed — broadcast

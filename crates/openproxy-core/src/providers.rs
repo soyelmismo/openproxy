@@ -269,25 +269,16 @@ pub fn list(conn: &Connection) -> Result<Vec<Provider>> {
             "SELECT id, name, base_url, auth_type, format, extra_headers_json, auto_activate_keyword, active, created_at, use_proxies, current_proxy_id, proxy_rotation_errors \
              FROM providers WHERE id != ?1 ORDER BY id",
         )
-        .map_err(|e| CoreError::Database {
-            message: format!("prepare list providers: {}", e),
-            source: Some(Box::new(e)),
-        })?;
+        .map_err(crate::error::map_db_error)?;
     let rows = stmt
         .query_map(
             params![crate::seed::VIRTUAL_COMBO_PROVIDER_ID],
             row_to_provider,
         )
-        .map_err(|e| CoreError::Database {
-            message: format!("query list providers: {}", e),
-            source: Some(Box::new(e)),
-        })?;
+        .map_err(crate::error::map_db_error)?;
     let mut out = Vec::new();
     for r in rows {
-        out.push(r.map_err(|e| CoreError::Database {
-            message: format!("read provider row: {}", e),
-            source: Some(Box::new(e)),
-        })?);
+        out.push(r.map_err(crate::error::map_db_error)?);
     }
     Ok(out)
 }
@@ -309,25 +300,16 @@ pub fn list_active(conn: &Connection) -> Result<Vec<Provider>> {
             "SELECT id, name, base_url, auth_type, format, extra_headers_json, auto_activate_keyword, active, created_at, use_proxies, current_proxy_id, proxy_rotation_errors \
              FROM providers WHERE active = 1 AND id != ?1 ORDER BY id",
         )
-        .map_err(|e| CoreError::Database {
-            message: format!("prepare list_active providers: {}", e),
-            source: Some(Box::new(e)),
-        })?;
+        .map_err(crate::error::map_db_error)?;
     let rows = stmt
         .query_map(
             params![crate::seed::VIRTUAL_COMBO_PROVIDER_ID],
             row_to_provider,
         )
-        .map_err(|e| CoreError::Database {
-            message: format!("query list_active providers: {}", e),
-            source: Some(Box::new(e)),
-        })?;
+        .map_err(crate::error::map_db_error)?;
     let mut out = Vec::new();
     for r in rows {
-        out.push(r.map_err(|e| CoreError::Database {
-            message: format!("read active provider row: {}", e),
-            source: Some(Box::new(e)),
-        })?);
+        out.push(r.map_err(crate::error::map_db_error)?);
     }
     Ok(out)
 }

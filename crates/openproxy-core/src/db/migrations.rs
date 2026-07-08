@@ -272,10 +272,7 @@ fn ensure_tracking_table(conn: &Connection) -> Result<()> {
          )",
         [],
     )
-    .map_err(|e| CoreError::Database {
-        message: format!("create schema_migrations: {}", e),
-        source: Some(Box::new(e)),
-    })?;
+    .map_err(crate::error::map_db_error)?;
     Ok(())
 }
 
@@ -283,22 +280,13 @@ fn ensure_tracking_table(conn: &Connection) -> Result<()> {
 fn load_applied_versions(conn: &Connection) -> Result<std::collections::HashSet<i64>> {
     let mut stmt = conn
         .prepare("SELECT version FROM schema_migrations")
-        .map_err(|e| CoreError::Database {
-            message: format!("prepare select schema_migrations: {}", e),
-            source: Some(Box::new(e)),
-        })?;
+        .map_err(crate::error::map_db_error)?;
     let rows = stmt
         .query_map([], |row| row.get::<_, i64>(0))
-        .map_err(|e| CoreError::Database {
-            message: format!("query schema_migrations: {}", e),
-            source: Some(Box::new(e)),
-        })?;
+        .map_err(crate::error::map_db_error)?;
     let mut set = std::collections::HashSet::new();
     for r in rows {
-        let v = r.map_err(|e| CoreError::Database {
-            message: format!("read schema_migrations row: {}", e),
-            source: Some(Box::new(e)),
-        })?;
+        let v = r.map_err(crate::error::map_db_error)?;
         set.insert(v);
     }
     Ok(set)

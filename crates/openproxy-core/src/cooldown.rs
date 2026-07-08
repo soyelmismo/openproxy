@@ -278,10 +278,7 @@ pub fn prune_expired(conn: &Connection) -> Result<usize> {
             "DELETE FROM target_cooldowns WHERE datetime(cooldown_until) <= datetime(?1)",
             params![now.to_rfc3339()],
         )
-        .map_err(|e| CoreError::Database {
-            message: format!("prune_expired: {}", e),
-            source: Some(Box::new(e)),
-        })?;
+        .map_err(crate::error::map_db_error)?;
     Ok(n)
 }
 
@@ -303,10 +300,7 @@ pub fn list_for_combo(conn: &Connection, combo_id: ComboId) -> Result<Vec<Cooldo
                AND datetime(tc.cooldown_until) > datetime('now')
              ORDER BY datetime(tc.cooldown_until) ASC",
         )
-        .map_err(|e| CoreError::Database {
-            message: format!("prepare list_for_combo: {}", e),
-            source: Some(Box::new(e)),
-        })?;
+        .map_err(crate::error::map_db_error)?;
     let rows = stmt
         .query_map(params![combo_id.0], |row| {
             let until_str: String = row.get(1)?;
@@ -320,16 +314,10 @@ pub fn list_for_combo(conn: &Connection, combo_id: ComboId) -> Result<Vec<Cooldo
                 failure_count: row.get::<_, i64>(3)? as u32,
             })
         })
-        .map_err(|e| CoreError::Database {
-            message: format!("query list_for_combo: {}", e),
-            source: Some(Box::new(e)),
-        })?;
+        .map_err(crate::error::map_db_error)?;
     let mut out = Vec::new();
     for r in rows {
-        out.push(r.map_err(|e| CoreError::Database {
-            message: format!("read list_for_combo row: {}", e),
-            source: Some(Box::new(e)),
-        })?);
+        out.push(r.map_err(crate::error::map_db_error)?);
     }
     Ok(out)
 }

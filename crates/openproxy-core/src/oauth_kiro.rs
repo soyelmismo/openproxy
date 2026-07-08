@@ -625,20 +625,14 @@ impl OAuthProvider for KiroOAuthProvider {
                                 conn.execute(
                                         "UPDATE accounts SET oauth_provider_specific = ?1 WHERE id = ?2",
                                         rusqlite::params![meta_json, account_id.0],
-                                    ).map_err(|e| CoreError::Database {
-                                        message: format!("kiro update refreshed meta: {e}"),
-                                        source: Some(Box::new(e)),
-                                    })?;
+                                    ).map_err(crate::error::map_db_error)?;
                             }
                             crate::oauth::DbRef::Connection(mutex) => {
                                 let conn = mutex.lock();
                                 conn.execute(
                                         "UPDATE accounts SET oauth_provider_specific = ?1 WHERE id = ?2",
                                         rusqlite::params![meta_json, account_id.0],
-                                    ).map_err(|e| CoreError::Database {
-                                        message: format!("kiro update refreshed meta: {e}"),
-                                        source: Some(Box::new(e)),
-                                    })?;
+                                    ).map_err(crate::error::map_db_error)?;
                             }
                         }
                         success_body = Some(retry_bytes);

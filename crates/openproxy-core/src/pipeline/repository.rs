@@ -12,13 +12,6 @@ pub mod account;
 pub mod model;
 pub mod provider;
 
-fn map_db_error<E: std::error::Error + Send + Sync + 'static>(e: E) -> CoreError {
-    CoreError::Database {
-        message: e.to_string(),
-        source: Some(Box::new(e)),
-    }
-}
-
 fn map_anyhow_error(e: anyhow::Error) -> CoreError {
     CoreError::Database {
         message: e.to_string(),
@@ -224,7 +217,7 @@ impl PipelineRepository for SqlitePipelineRepository {
             "UPDATE usage SET was_winner = 1 WHERE id = ?",
             params![row_id.0],
         )
-        .map_err(map_db_error)?;
+        .map_err(crate::error::map_db_error)?;
         Ok(())
     }
 
@@ -270,7 +263,7 @@ impl PipelineRepository for SqlitePipelineRepository {
                 error_msg
             ],
         )
-        .map_err(map_db_error)?;
+        .map_err(crate::error::map_db_error)?;
         Ok(())
     }
 

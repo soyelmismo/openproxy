@@ -291,10 +291,7 @@ pub fn prune_expired_recording_bodies(conn: &Connection, ttl_secs: i64) -> Resul
                 format!("-{} seconds", ttl_secs)
             ],
         )
-        .map_err(|e| CoreError::Database {
-            message: format!("prune_expired_recording_bodies: {}", e),
-            source: Some(Box::new(e)),
-        })?;
+        .map_err(crate::error::map_db_error)?;
     Ok(n)
 }
 
@@ -315,10 +312,7 @@ pub fn prune_expired_usage_rows(conn: &Connection, ttl_secs: i64) -> Result<usiz
                 format!("-{} seconds", ttl_secs)
             ],
         )
-        .map_err(|e| CoreError::Database {
-            message: format!("prune_expired_usage_rows: {}", e),
-            source: Some(Box::new(e)),
-        })?;
+        .map_err(crate::error::map_db_error)?;
     Ok(n)
 }
 

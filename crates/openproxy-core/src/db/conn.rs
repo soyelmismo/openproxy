@@ -251,35 +251,20 @@ fn configure_connection(conn: &Connection) -> Result<()> {
     // any tables are created by migrations.
     let _ = conn.pragma_update(None, "auto_vacuum", "INCREMENTAL");
     conn.pragma_update(None, "journal_mode", "WAL")
-        .map_err(|e| CoreError::Database {
-            message: format!("pragma journal_mode=WAL: {}", e),
-            source: Some(Box::new(e)),
-        })?;
+        .map_err(crate::error::map_db_error)?;
     conn.pragma_update(None, "foreign_keys", "ON")
-        .map_err(|e| CoreError::Database {
-            message: format!("pragma foreign_keys=ON: {}", e),
-            source: Some(Box::new(e)),
-        })?;
+        .map_err(crate::error::map_db_error)?;
     // 5 second busy timeout: writer will retry on SQLITE_BUSY for this long.
     conn.pragma_update(None, "busy_timeout", 5000)
-        .map_err(|e| CoreError::Database {
-            message: format!("pragma busy_timeout=5000: {}", e),
-            source: Some(Box::new(e)),
-        })?;
+        .map_err(crate::error::map_db_error)?;
     conn.pragma_update(None, "synchronous", "NORMAL")
-        .map_err(|e| CoreError::Database {
-            message: format!("pragma synchronous=NORMAL: {}", e),
-            source: Some(Box::new(e)),
-        })?;
+        .map_err(crate::error::map_db_error)?;
     // Add an autocheckpoint limit (1000 pages, or 4MB) so the WAL doesn't
     // grow unbounded. The dashboard can issue heavy reads that trigger
     // checkpoints, and without a bound the WAL file can grow large enough
     // to cause SQLite disk I/O errors under contention.
     conn.pragma_update(None, "wal_autocheckpoint", 1000)
-        .map_err(|e| CoreError::Database {
-            message: format!("pragma wal_autocheckpoint=1000: {}", e),
-            source: Some(Box::new(e)),
-        })?;
+        .map_err(crate::error::map_db_error)?;
     // Memory-mapped I/O cap. Previously this was 256 MiB, which made
     // SQLite mmap the whole DB file into the process address space —
     // accessed pages count against RSS, so a small proxy DB still
@@ -290,27 +275,18 @@ fn configure_connection(conn: &Connection) -> Result<()> {
     // pages inflate idle RSS noticeably. 8 MiB per connection keeps
     // hot pages mapped while bounding the RSS contribution.
     conn.pragma_update(None, "mmap_size", 8 * 1024 * 1024)
-        .map_err(|e| CoreError::Database {
-            message: format!("pragma mmap_size: {}", e),
-            source: Some(Box::new(e)),
-        })?;
+        .map_err(crate::error::map_db_error)?;
     // Bound SQLite's in-memory page cache explicitly. The default
     // (-2000 = 2 MiB) is fine, but pinning it here prevents future
     // schema bumps from silently changing it. Negative values are
     // interpreted by SQLite as KiB.
     conn.pragma_update(None, "cache_size", -2000)
-        .map_err(|e| CoreError::Database {
-            message: format!("pragma cache_size: {}", e),
-            source: Some(Box::new(e)),
-        })?;
+        .map_err(crate::error::map_db_error)?;
     // Force temporary tables/indices to memory. Solves "disk I/O error"
     // on large GROUP BY / ORDER BY queries when /tmp is constrained or
     // lacks permissions.
     conn.pragma_update(None, "temp_store", "MEMORY")
-        .map_err(|e| CoreError::Database {
-            message: format!("pragma temp_store=MEMORY: {}", e),
-            source: Some(Box::new(e)),
-        })?;
+        .map_err(crate::error::map_db_error)?;
     Ok(())
 }
 

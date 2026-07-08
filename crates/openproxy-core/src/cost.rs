@@ -1,7 +1,7 @@
 //! Cost calculation. Wraps pricing::lookup and applies the
 //! tokens_per_sec guard (per C3): NULL if completion=0, ttft NULL, or (total-ttft)<=0.
 
-use crate::error::{CoreError, Result};
+use crate::error::{Result};
 use crate::ids::{
     AccountId, ApiKeyId, ComboId, ComboTargetId, ModelRowId, ProviderId, RequestId, UsageId,
 };
@@ -234,10 +234,7 @@ pub fn record(conn: &Connection, input: &UsageInput) -> Result<UsageId> {
             input.endpoint_kind.as_str(),
         ],
     )
-    .map_err(|e| CoreError::Database {
-        message: format!("insert usage row: {}", e),
-        source: Some(Box::new(e)),
-    })?;
+    .map_err(crate::error::map_db_error)?;
 
     let rowid = conn.last_insert_rowid();
 

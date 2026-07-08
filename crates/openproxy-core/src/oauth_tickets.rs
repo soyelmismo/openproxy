@@ -102,10 +102,7 @@ pub fn create_ticket(
             params![provider, dar.device_code, dar.user_code, expires_at],
             |r| r.get::<_, i64>(0),
         )
-        .map_err(|e| CoreError::Database {
-            message: format!("insert oauth_device_tickets: {e}"),
-            source: Some(Box::new(e)),
-        })?;
+        .map_err(crate::error::map_db_error)?;
     Ok(new_id)
 }
 
@@ -136,10 +133,7 @@ pub fn lookup_active(conn: &Connection, device_code: &str) -> Result<TicketStatu
             },
         )
         .optional()
-        .map_err(|e| CoreError::Database {
-            message: format!("lookup oauth_device_tickets: {e}"),
-            source: Some(Box::new(e)),
-        })?;
+        .map_err(crate::error::map_db_error)?;
     let Some((id, provider, device_code, user_code, account_id, expires_at, consumed_at)) = row
     else {
         return Ok(TicketStatus::Unknown);
@@ -186,10 +180,7 @@ pub fn mark_consumed(conn: &Connection, device_code: &str) -> Result<i64> {
                 AND consumed_at IS NULL",
             params![now, device_code],
         )
-        .map_err(|e| CoreError::Database {
-            message: format!("consume oauth_device_tickets: {e}"),
-            source: Some(Box::new(e)),
-        })?;
+        .map_err(crate::error::map_db_error)?;
     if rows == 0 {
         return Err(CoreError::NotFound {
             what: "oauth_device_ticket".into(),
@@ -202,10 +193,7 @@ pub fn mark_consumed(conn: &Connection, device_code: &str) -> Result<i64> {
             params![device_code],
             |r| r.get(0),
         )
-        .map_err(|e| CoreError::Database {
-            message: format!("re-read oauth_device_tickets.id: {e}"),
-            source: Some(Box::new(e)),
-        })?;
+        .map_err(crate::error::map_db_error)?;
     Ok(id)
 }
 
@@ -226,10 +214,7 @@ pub fn cleanup_expired(conn: &Connection) -> Result<usize> {
                  OR created_at < ?2",
             params![now_str, hard_cutoff_str],
         )
-        .map_err(|e| CoreError::Database {
-            message: format!("cleanup oauth_device_tickets: {e}"),
-            source: Some(Box::new(e)),
-        })?;
+        .map_err(crate::error::map_db_error)?;
     Ok(rows)
 }
 
