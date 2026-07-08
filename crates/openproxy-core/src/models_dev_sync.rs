@@ -278,7 +278,7 @@ async fn fetch_models_dev_once(upstream: &Arc<UpstreamClient>) -> Result<bytes::
     let req = UpstreamRequest::get(MODELS_DEV_URL);
     let cancel = CancellationToken::new();
     let response = upstream
-        .call(req, TimeoutProfile::Quota, cancel)
+        .call(req, TimeoutProfile::ModelDiscovery, cancel)
         .await
         .map_err(|e| match e {
             crate::upstream::UpstreamError::Cancel => CoreError::ClientDisconnected,
