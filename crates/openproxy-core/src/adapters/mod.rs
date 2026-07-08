@@ -545,6 +545,7 @@ pub(crate) async fn fetch_openai_models(
     upstream_client: &Arc<UpstreamClient>,
     api_key: &str,
     provider_name: &str,
+    target_format: TargetFormat,
 ) -> Result<Vec<DiscoveredModel>> {
     let body = upstream_get_json(
         upstream_client,
@@ -565,7 +566,7 @@ pub(crate) async fn fetch_openai_models(
             DiscoveredModel {
                 model_id: ModelId::new(id.clone()),
                 display_name: Some(id),
-                target_format: TargetFormat::Openai,
+                target_format,
                 context_length: None,
                 max_output_tokens: None,
                 input_modalities: None,
@@ -577,6 +578,35 @@ pub(crate) async fn fetch_openai_models(
         })
         .collect();
     Ok(out)
+}
+
+// =====================================================================
+// Shared Generic model-list fetcher
+// =====================================================================
+
+pub(crate) async fn fetch_models_with_auth<F>(
+    url: &str,
+    upstream_client: &std::sync::Arc<UpstreamClient>,
+    headers: &[(&str, String)],
+    array_key: &str,
+    error_prefix: &str,
+    mapper: F,
+) -> Result<Vec<DiscoveredModel>>
+where
+    F: Fn(&serde_json::Value) -> Option<DiscoveredModel>,
+{
+    let body = upstream_get_json(upstream_client, url, headers)
+        .await
+        .map_err(|e| CoreError::UpstreamConnection(format!("{error_prefix} /models: {e}")))?;
+
+    let arr = body
+        .get(array_key)
+        .and_then(|v| v.as_array())
+        .ok_or_else(|| {
+            CoreError::Parse(format!("{error_prefix} /models: missing '{array_key}' array"))
+        })?;
+
+    Ok(arr.iter().filter_map(mapper).collect())
 }
 
 // =====================================================================

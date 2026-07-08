@@ -75,6 +75,7 @@ impl ProviderAdapter for NvidiaNimAdapter {
             upstream_client,
             api_key,
             "nvidia-nim",
+            crate::models::TargetFormat::Openai,
         )
         .await
     }

@@ -75,6 +75,7 @@ impl ProviderAdapter for NousResearchAdapter {
             upstream_client,
             api_key,
             "nous-research",
+            crate::models::TargetFormat::Openai,
         )
         .await
     }

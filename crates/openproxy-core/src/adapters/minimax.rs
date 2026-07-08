@@ -76,57 +76,13 @@ impl ProviderAdapter for MiniMaxAdapter {
             CoreError::Internal("minimax: models_url is None (impossible)".into())
         })?;
 
-        // MiniMax returns a small payload and the request is
-        // fast; we let `TimeoutProfile::ModelDiscovery` drive the
-        // budget (30s headers / 60s body / 120s total).
-        let body = upstream_get_json(
-            upstream_client,
+        fetch_openai_models(
             &url,
-            &[("Authorization", format!("Bearer {api_key}"))],
+            upstream_client,
+            api_key,
+            "minimax",
+            crate::models::TargetFormat::Anthropic,
         )
         .await
-        .map_err(|e| CoreError::UpstreamConnection(format!("minimax /v1/models: {e}")))?;
-
-        // MiniMax returns an OpenAI-shaped list: {"object": "list",
-        // "data": [{...}, ...]}. We accept a few equivalent shapes to
-        // stay forward-compatible.
-        let arr = body
-            .get("data")
-            .or_else(|| body.get("models"))
-            .and_then(|v| v.as_array())
-            .ok_or_else(|| {
-                CoreError::Parse("minimax /v1/models: missing 'data' or 'models' array".into())
-            })?;
-
-        let out = arr
-            .iter()
-            .filter_map(|m| {
-                let id = m.get("id").and_then(|v| v.as_str())?;
-                let name = m
-                    .get("name")
-                    .and_then(|v| v.as_str())
-                    .map(|s| s.to_string())
-                    .unwrap_or_else(|| id.to_string());
-                Some(DiscoveredModel {
-                    model_id: ModelId::new(id.to_string()),
-                    display_name: Some(name),
-                    // MiniMax's chat surface is Anthropic Messages; every
-                    // discovered model goes there.
-                    target_format: TargetFormat::Anthropic,
-                    // MiniMax's /v1/models response doesn't expose
-                    // context_length / modalities / capabilities — leave
-                    // them as None so the runtime fallback in
-                    // `GET /v1/models` fills them in via heuristics.
-                    context_length: None,
-                    max_output_tokens: None,
-                    input_modalities: None,
-                    output_modalities: None,
-                    model_type: None,
-                    family: None,
-                    capabilities: None,
-                })
-            })
-            .collect();
-        Ok(out)
     }
 }

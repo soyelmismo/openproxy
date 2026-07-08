@@ -63,28 +63,13 @@ impl ProviderAdapter for GeminiAdapter {
             .models_url()
             .ok_or_else(|| CoreError::Internal("gemini: models_url is None (impossible)".into()))?;
 
-        // Gemini uses `x-goog-api-key: <key>` (not Bearer). The
-        // header name is non-standard so we still pass it through
-        // the `header_name` map for proper case-insensitive
-        // handling.
-        let body = upstream_get_json(
-            upstream_client,
+        fetch_models_with_auth(
             &url,
+            upstream_client,
             &[("x-goog-api-key", api_key.to_string())],
-        )
-        .await
-        .map_err(|e| CoreError::UpstreamConnection(format!("gemini /models: {e}")))?;
-
-        // Gemini returns {"models": [{"name": "models/gemini-2.0-flash", ...}]}
-        let arr = body
-            .get("models")
-            .and_then(|v| v.as_array())
-            .ok_or_else(|| CoreError::Parse("gemini /models: missing 'models' array".into()))?;
-
-        let out = arr
-            .iter()
-            .filter_map(|m| {
-                // The model name is "models/gemini-2.0-flash" — strip the prefix.
+            "models",
+            "gemini",
+            |m| {
                 let full_name = m.get("name").and_then(|v| v.as_str())?;
                 let id = full_name.strip_prefix("models/").unwrap_or(full_name);
                 let display_name = m
@@ -104,8 +89,8 @@ impl ProviderAdapter for GeminiAdapter {
                     family: None,
                     capabilities: None,
                 })
-            })
-            .collect();
-        Ok(out)
+            },
+        )
+        .await
     }
 }

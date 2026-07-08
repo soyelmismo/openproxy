@@ -124,25 +124,13 @@ impl ProviderAdapter for CloudflareWorkersAIAdapter {
             "{}/{}/ai/models/search",
             self.config.base_url, account_label
         );
-        let body = upstream_get_json(
-            upstream_client,
+        fetch_models_with_auth(
             &url,
+            upstream_client,
             &[("Authorization", format!("Bearer {}", api_key))],
-        )
-        .await
-        .map_err(|e| CoreError::UpstreamConnection(e.to_string()))?;
-
-        // CloudFlare returns: {"result": [{"name": "@cf/meta/llama-3.1-8b-instruct", "id": "<uuid>", ...}], "success": true, ...}
-        // The `name` field is the upstream model identifier; `id` is an
-        // internal CloudFlare UUID and must NOT be used as model_id.
-        let arr = body
-            .get("result")
-            .and_then(|v| v.as_array())
-            .ok_or_else(|| CoreError::Parse("cloudflare response missing 'result' array".into()))?;
-
-        let models: Vec<DiscoveredModel> = arr
-            .iter()
-            .filter_map(|raw| {
+            "result",
+            "cloudflare",
+            |raw| {
                 let name = raw.get("name")?.as_str()?;
                 Some(DiscoveredModel {
                     model_id: ModelId::new(name),
@@ -156,10 +144,9 @@ impl ProviderAdapter for CloudflareWorkersAIAdapter {
                     family: None,
                     capabilities: None,
                 })
-            })
-            .collect();
-
-        Ok(models)
+            },
+        )
+        .await
     }
 
     fn normalize_openai_request(&self, view: &mut crate::translation::OpenAIRequestView) {

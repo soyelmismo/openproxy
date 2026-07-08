@@ -78,6 +78,7 @@ impl ProviderAdapter for KilocodeAdapter {
             upstream_client,
             api_key,
             "kilocode",
+            crate::models::TargetFormat::Openai,
         )
         .await
     }
