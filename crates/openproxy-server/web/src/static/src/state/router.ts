@@ -74,7 +74,7 @@ const ROUTES: readonly Route[] = [
   // the preset directly off `location.hash`. Other routes are
   // unaffected.
   { name: "analytics", pattern: /^#?\/analytics(?:\?.*)?$/, mount: mountAnalytics as ViewMount },
-  { name: "logs", pattern: /^#?\/logs$/, mount: mountLogs as ViewMount },
+  { name: "logs", pattern: /^#?\/logs(?:\?.*)?$/, mount: mountLogs as ViewMount },
   // Debug Logs polls `/admin/debug/logs` on a 2s chained-setTimeout
   // loop. The view returns a cleanup function that cancels the
   // pending poll timer; `navigate()` stores it in `currentCleanup`

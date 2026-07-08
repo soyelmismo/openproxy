@@ -283,6 +283,17 @@ export async function mountLogs(): Promise<(() => void) | void> {
   
   clockStore.subscribe(requestUpdate);
 
+  const hash = location.hash || "";
+  const qIdx = hash.indexOf("?");
+  if (qIdx >= 0) {
+    const params = new URLSearchParams(hash.slice(qIdx + 1));
+    const traceId = params.get("trace_id") || "";
+    const requestId = params.get("request_id") || "";
+    if (traceId || requestId) {
+      void openLogDetail("", requestId, traceId);
+    }
+  }
+
   return () => {
     disconnectLogsWebSocket();
     clockStore.unsubscribe(requestUpdate);
