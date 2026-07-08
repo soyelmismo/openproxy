@@ -10,6 +10,7 @@ use super::*;
 /// - Auth: `x-goog-api-key: <key>` header
 /// - Chat URL: `${base}/models/${model}:generateContent`
 /// - Models URL: `${base}/models`
+#[derive(Clone)]
 pub struct GeminiAdapter {
     config: ProviderAdapterConfig,
 }
@@ -30,7 +31,6 @@ impl GeminiAdapter {
 
 crate::adapters::derive_default_from_new!(GeminiAdapter);
 
-#[async_trait]
 impl ProviderAdapter for GeminiAdapter {
     fn config(&self) -> &ProviderAdapterConfig {
         &self.config

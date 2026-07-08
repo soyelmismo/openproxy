@@ -48,6 +48,7 @@ use openproxy_core::{
     ids::{AccountId, ApiKeyId, ComboId, ModelRowId, ProviderId, RequestId, TraceId},
     models, providers,
     routing::{self, RoutingPlan},
+    adapters::ProviderAdapter,
 };
 use std::sync::Arc;
 use std::time::Instant;
@@ -321,7 +322,7 @@ fn translate_audio_routing_plan(
 
 async fn dispatch_audio_request(
     state: &AppState,
-    adapter: Arc<dyn adapters::ProviderAdapter>,
+    adapter: adapters::ProviderAdapterEnum,
     upstream_url: &str,
     api_key: &str,
     upstream_model_id: &str,

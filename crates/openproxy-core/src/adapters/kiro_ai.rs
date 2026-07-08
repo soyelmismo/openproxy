@@ -5,6 +5,7 @@ use super::*;
 // =====================================================================
 
 /// Adapter for Kiro AI (AWS CodeWhisperer).
+#[derive(Clone)]
 pub struct KiroAdapter {
     config: ProviderAdapterConfig,
 }
@@ -337,7 +338,6 @@ impl KiroAdapter {
 
 crate::adapters::derive_default_from_new!(KiroAdapter);
 
-#[async_trait]
 impl ProviderAdapter for KiroAdapter {
     fn id(&self) -> &ProviderId {
         &self.config.id

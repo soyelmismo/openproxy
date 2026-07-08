@@ -12,7 +12,7 @@ pub trait TargetFormatter: Send + Sync {
         model: &Model,
         messages_ref: &[OpenAIMessage],
         stream: bool,
-        adapter: &dyn ProviderAdapter,
+        adapter: &crate::adapters::ProviderAdapterEnum,
     ) -> Result<bytes::Bytes, CoreError>;
 }
 
@@ -24,7 +24,7 @@ impl TargetFormatter for OpenaiFormatter {
         model: &Model,
         messages_ref: &[OpenAIMessage],
         stream: bool,
-        adapter: &dyn ProviderAdapter,
+        adapter: &crate::adapters::ProviderAdapterEnum,
     ) -> Result<bytes::Bytes, CoreError> {
         let mut view = crate::translation::OpenAIRequestView::new(
             &req.openai_request,
@@ -48,7 +48,7 @@ impl TargetFormatter for AnthropicFormatter {
         model: &Model,
         messages_ref: &[OpenAIMessage],
         stream: bool,
-        _adapter: &dyn ProviderAdapter,
+        _adapter: &crate::adapters::ProviderAdapterEnum,
     ) -> Result<bytes::Bytes, CoreError> {
         let anthro = crate::translation::openai_to_anthropic(
             &req.openai_request,
@@ -74,7 +74,7 @@ impl TargetFormatter for GeminiFormatter {
         _model: &Model,
         messages_ref: &[OpenAIMessage],
         _stream: bool,
-        _adapter: &dyn ProviderAdapter,
+        _adapter: &crate::adapters::ProviderAdapterEnum,
     ) -> Result<bytes::Bytes, CoreError> {
         let gemini = crate::translation::openai_to_gemini(&req.openai_request, messages_ref);
         match serde_json::to_vec(&gemini) {
@@ -102,7 +102,7 @@ impl TargetFormatter for ResponsesFormatter {
         model: &Model,
         messages_ref: &[OpenAIMessage],
         stream: bool,
-        _adapter: &dyn ProviderAdapter,
+        _adapter: &crate::adapters::ProviderAdapterEnum,
     ) -> Result<bytes::Bytes, CoreError> {
         let (resolved_model, effort_from_model) =
             normalize_model_and_effort(model.model_id.as_str());

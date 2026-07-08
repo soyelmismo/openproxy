@@ -22,6 +22,7 @@ pub fn codex_user_agent() -> String {
             )
         })
 }
+#[derive(Clone)]
 pub struct CodexAdapter {
     config: ProviderAdapterConfig,
 }
@@ -86,7 +87,6 @@ impl Default for CodexAdapter {
     }
 }
 
-#[async_trait]
 impl ProviderAdapter for CodexAdapter {
     fn id(&self) -> &ProviderId {
         &self.config.id

@@ -338,7 +338,7 @@ pub fn test_config_with_mock(master_key: Arc<MasterKey>, base_url: String) -> Pi
         retries: RetriesConfig::default(),
         max_attempts: 1,
         master_key,
-        adapters: Arc::new(vec![Arc::new(mock) as Arc<dyn ProviderAdapter>]),
+        adapters: Arc::new(vec![crate::adapters::ProviderAdapterEnum::Mock(mock)]),
         http_client: reqwest::Client::new(),
         cooldown_secs: 60,
         cooldown_max_secs: 3600,

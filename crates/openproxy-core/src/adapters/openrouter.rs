@@ -9,6 +9,7 @@ use super::*;
 /// OpenRouter is OpenAI-only on the wire: every model is served through
 /// `POST /chat/completions` regardless of which upstream actually answers
 /// behind the scenes.
+#[derive(Clone)]
 pub struct OpenRouterAdapter {
     config: ProviderAdapterConfig,
 }
@@ -32,7 +33,6 @@ impl OpenRouterAdapter {
 
 crate::adapters::derive_default_from_new!(OpenRouterAdapter);
 
-#[async_trait]
 impl ProviderAdapter for OpenRouterAdapter {
     fn id(&self) -> &ProviderId {
         &self.config.id

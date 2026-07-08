@@ -76,42 +76,44 @@ impl UpstreamDispatcher {
         provider_id: &crate::ids::ProviderId,
         trigger: crate::pipeline::upstream_dispatcher::ProxyRotationTrigger,
     ) -> bool {
-        let conn = self.conn.lock();
-        if let Ok(Some(provider)) = crate::providers::get(&conn, provider_id)
-            && provider.use_proxies
-        {
-            let should_rotate = match trigger {
-                crate::pipeline::upstream_dispatcher::ProxyRotationTrigger::RateLimited => true,
-                crate::pipeline::upstream_dispatcher::ProxyRotationTrigger::Status(sc) => {
-                    let errors_list: Vec<&str> = provider
-                        .proxy_rotation_errors
-                        .split(',')
-                        .map(|s| s.trim())
-                        .collect();
-                    errors_list.contains(&sc.to_string().as_str())
-                }
-                crate::pipeline::upstream_dispatcher::ProxyRotationTrigger::ConnectError => {
-                    let errors_list: Vec<&str> = provider
-                        .proxy_rotation_errors
-                        .split(',')
-                        .map(|s| s.trim())
-                        .collect();
-                    errors_list.contains(&"connect_error") || errors_list.contains(&"timeout")
-                }
-            };
+        tokio::task::block_in_place(|| {
+            let conn = self.conn.lock();
+            if let Ok(Some(provider)) = crate::providers::get(&conn, provider_id)
+                && provider.use_proxies
+            {
+                let should_rotate = match trigger {
+                    crate::pipeline::upstream_dispatcher::ProxyRotationTrigger::RateLimited => true,
+                    crate::pipeline::upstream_dispatcher::ProxyRotationTrigger::Status(sc) => {
+                        let errors_list: Vec<&str> = provider
+                            .proxy_rotation_errors
+                            .split(',')
+                            .map(|s| s.trim())
+                            .collect();
+                        errors_list.contains(&sc.to_string().as_str())
+                    }
+                    crate::pipeline::upstream_dispatcher::ProxyRotationTrigger::ConnectError => {
+                        let errors_list: Vec<&str> = provider
+                            .proxy_rotation_errors
+                            .split(',')
+                            .map(|s| s.trim())
+                            .collect();
+                        errors_list.contains(&"connect_error") || errors_list.contains(&"timeout")
+                    }
+                };
 
-            if should_rotate && let Some(ref bad_proxy_id) = provider.current_proxy_id {
-                tracing::warn!(
-                    provider = %provider_id,
-                    proxy_id = %bad_proxy_id,
-                    "proxy rotation triggered: marking proxy as dead and clearing binding"
-                );
-                let _ = crate::free_proxies::update_proxy_status(&conn, bad_proxy_id, "dead", None);
-                let _ = crate::providers::update_current_proxy(&conn, provider_id, None);
-                return true;
+                if should_rotate && let Some(ref bad_proxy_id) = provider.current_proxy_id {
+                    tracing::warn!(
+                        provider = %provider_id,
+                        proxy_id = %bad_proxy_id,
+                        "proxy rotation triggered: marking proxy as dead and clearing binding"
+                    );
+                    let _ = crate::free_proxies::update_proxy_status(&conn, bad_proxy_id, "dead", None);
+                    let _ = crate::providers::update_current_proxy(&conn, provider_id, None);
+                    return true;
+                }
             }
-        }
-        false
+            false
+        })
     }
 
     pub(crate) fn is_client_disconnected(&self, rx: &mut watch::Receiver<bool>) -> bool {

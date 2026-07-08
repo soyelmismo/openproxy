@@ -1,3 +1,4 @@
+use crate::adapters::ProviderAdapter;
 use crate::adapters::AdapterFormat;
 use crate::compression::stats::CompressionStats;
 use crate::compression::CompressionMode;
@@ -11,9 +12,10 @@ use crate::timeouts;
 use async_trait::async_trait;
 use std::sync::Arc;
 
+#[derive(Clone, Copy)]
 pub struct OAuthRefreshStage;
 
-#[async_trait]
+
 impl PipelineStage for OAuthRefreshStage {
     async fn execute(
         &self,
@@ -62,9 +64,10 @@ impl PipelineStage for OAuthRefreshStage {
     }
 }
 
+#[derive(Clone, Copy)]
 pub struct TimeoutResolutionStage;
 
-#[async_trait]
+
 impl PipelineStage for TimeoutResolutionStage {
     async fn execute(
         &self,
@@ -114,9 +117,10 @@ impl PipelineStage for TimeoutResolutionStage {
     }
 }
 
+#[derive(Clone, Copy)]
 pub struct FormattingStage;
 
-#[async_trait]
+
 impl PipelineStage for FormattingStage {
     async fn execute(
         &self,
@@ -161,13 +165,13 @@ impl PipelineStage for FormattingStage {
         };
 
         let cloned_messages_ref = ctx.req.compressed_messages.get_or_init(|| {
-            if ctx.pipeline.config.compression_mode != CompressionMode::Off {
+            if crate::compression::would_compress(&ctx.req.openai_request.messages, ctx.pipeline.config.compression_mode) {
                 let mut msgs = ctx.req.openai_request.messages.clone();
                 let stats = crate::compression::apply_compression(&mut msgs, ctx.pipeline.config.compression_mode);
                 *ctx.pipeline.compression_stats_cell.write() = Some(stats);
                 Some(msgs)
             } else {
-                *ctx.pipeline.compression_stats_cell.write() = Some(CompressionStats::empty());
+                *ctx.pipeline.compression_stats_cell.write() = Some(crate::compression::stats::CompressionStats::empty());
                 None
             }
         });
@@ -177,7 +181,7 @@ impl PipelineStage for FormattingStage {
             .unwrap_or(&ctx.req.openai_request.messages);
 
         let formatter = crate::pipeline::formatting::get_formatter(target_format);
-        let body_bytes = match formatter.format_request(&ctx.req, &current.model, messages_ref, stream, adapter.as_ref()) {
+        let body_bytes = match formatter.format_request(&ctx.req, &current.model, messages_ref, stream, &adapter) {
             Ok(b) => b,
             Err(e) => {
                 return Ok(ctx.pipeline.record_and_fail(
@@ -204,9 +208,10 @@ impl PipelineStage for FormattingStage {
     }
 }
 
+#[derive(Clone, Copy)]
 pub struct DispatchStage;
 
-#[async_trait]
+
 impl PipelineStage for DispatchStage {
     async fn execute(
         &self,
@@ -391,9 +396,10 @@ impl PipelineStage for DispatchStage {
 }
 
 
+#[derive(Clone, Copy)]
 pub struct CustomAdapterStage;
 
-#[async_trait]
+
 impl PipelineStage for CustomAdapterStage {
     async fn execute(
         &self,

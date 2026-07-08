@@ -10,6 +10,7 @@ use super::*;
 /// Bearer auth. Model IDs use Ollama's `:` convention (e.g.
 /// `gemma4:31b`, `qwen3.5:397b`) — the colon is valid inside JSON
 /// strings so no special escaping is needed in the request body.
+#[derive(Clone)]
 pub struct OllamaCloudAdapter {
     config: ProviderAdapterConfig,
 }
@@ -30,7 +31,6 @@ impl OllamaCloudAdapter {
 
 crate::adapters::derive_default_from_new!(OllamaCloudAdapter);
 
-#[async_trait]
 impl ProviderAdapter for OllamaCloudAdapter {
     fn id(&self) -> &ProviderId {
         &self.config.id

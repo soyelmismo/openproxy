@@ -142,7 +142,7 @@ impl std::fmt::Debug for DiscoveryScheduler {
 pub async fn start(
     db_pool: Arc<DbPool>,
     master_key: Arc<MasterKey>,
-    adapters: Arc<Vec<Arc<dyn ProviderAdapter>>>,
+    adapters: Arc<Vec<crate::adapters::ProviderAdapterEnum>>,
     upstream_client: Arc<UpstreamClient>,
     config: DiscoverySchedulerConfig,
 ) -> DiscoveryScheduler {
@@ -236,7 +236,7 @@ pub async fn start(
 #[allow(clippy::too_many_arguments)]
 async fn run_one_provider(
     provider: ProviderId,
-    adapter: Arc<dyn ProviderAdapter>,
+    adapter: crate::adapters::ProviderAdapterEnum,
     db_pool: Arc<DbPool>,
     master_key: Arc<MasterKey>,
     upstream_client: Arc<UpstreamClient>,
@@ -304,7 +304,7 @@ async fn run_one_provider(
 ///    success; `error` on failure.
 async fn run_one_tick(
     provider: ProviderId,
-    adapter: Arc<dyn ProviderAdapter>,
+    adapter: crate::adapters::ProviderAdapterEnum,
     db_pool: &Arc<DbPool>,
     master_key: &Arc<MasterKey>,
     upstream_client: &Arc<UpstreamClient>,
@@ -479,7 +479,7 @@ async fn run_one_tick(
         conn,
         &provider,
         &api_key,
-        adapter.as_ref(),
+        &adapter,
         upstream_client,
         DISCOVERY_TTL_SECONDS,
         &account_label,
@@ -774,7 +774,7 @@ mod tests {
         // would fail to find a matching adapter if we tried to
         // register them.
         let (adapter, counter) = MockAdapter::new("openrouter", three_models());
-        let adapters: Arc<Vec<Arc<dyn ProviderAdapter>>> = Arc::new(vec![adapter]);
+        let adapters: Arc<Vec<crate::adapters::ProviderAdapterEnum>> = Arc::new(vec![adapter]);
 
         // Run with paused time + 1s ticks. We expect the first
         // tick to fire after 1s (the staggered sleep) and
@@ -864,7 +864,7 @@ mod tests {
         }
 
         let (adapter, counter) = MockAdapter::new("openrouter", three_models());
-        let adapters: Arc<Vec<Arc<dyn ProviderAdapter>>> = Arc::new(vec![adapter]);
+        let adapters: Arc<Vec<crate::adapters::ProviderAdapterEnum>> = Arc::new(vec![adapter]);
 
         let sched = start(
             pool.clone(),
@@ -941,12 +941,12 @@ mod tests {
         // Build 4 mock adapters, each with its own per-adapter
         // call counter so we can assert broadcast behavior at
         // the per-task granularity.
-        let (adapters, counters): (Vec<Arc<dyn ProviderAdapter>>, Vec<Arc<AtomicUsize>>) =
+        let (adapters, counters): (Vec<crate::adapters::ProviderAdapterEnum>, Vec<Arc<AtomicUsize>>) =
             provider_ids
                 .iter()
                 .map(|pid| {
                     let (a, c) = MockAdapter::new(pid, three_models());
-                    (a as Arc<dyn ProviderAdapter>, c)
+                    (a as crate::adapters::ProviderAdapterEnum, c)
                 })
                 .unzip();
         let adapters = Arc::new(adapters);
@@ -1051,7 +1051,7 @@ mod tests {
         let (pool, _path) = fresh_pool();
         let mk = MasterKey::generate();
         // No provider rows seeded at all.
-        let adapters: Arc<Vec<Arc<dyn ProviderAdapter>>> = Arc::new(vec![]);
+        let adapters: Arc<Vec<crate::adapters::ProviderAdapterEnum>> = Arc::new(vec![]);
 
         // Should return successfully with zero tasks spawned
         // (every built-in has no adapter).
@@ -1280,7 +1280,7 @@ mod tests {
             },
         ];
         let (adapter, _counter) = MockAdapter::new("openrouter", models);
-        let adapters: Arc<Vec<Arc<dyn ProviderAdapter>>> = Arc::new(vec![adapter]);
+        let adapters: Arc<Vec<crate::adapters::ProviderAdapterEnum>> = Arc::new(vec![adapter]);
 
         let sched = start(
             pool.clone(),
@@ -1443,10 +1443,10 @@ mod tests {
                 ))
             }
         }
-        let adapter: Arc<dyn ProviderAdapter> = Arc::new(FailingAdapter {
+        let adapter: crate::adapters::ProviderAdapterEnum = Arc::new(FailingAdapter {
             id: CoreProviderId::new("openrouter"),
         });
-        let adapters: Arc<Vec<Arc<dyn ProviderAdapter>>> = Arc::new(vec![adapter]);
+        let adapters: Arc<Vec<crate::adapters::ProviderAdapterEnum>> = Arc::new(vec![adapter]);
 
         let sched = start(
             pool.clone(),

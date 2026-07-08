@@ -8,6 +8,7 @@ use super::*;
 ///
 /// NVIDIA NIM speaks OpenAI-compatible `/v1/chat/completions` with
 /// Bearer auth. Free tier offers 70+ models at ~40 RPM.
+#[derive(Clone)]
 pub struct NvidiaNimAdapter {
     config: ProviderAdapterConfig,
 }
@@ -28,7 +29,6 @@ impl NvidiaNimAdapter {
 
 crate::adapters::derive_default_from_new!(NvidiaNimAdapter);
 
-#[async_trait]
 impl ProviderAdapter for NvidiaNimAdapter {
     fn id(&self) -> &ProviderId {
         &self.config.id

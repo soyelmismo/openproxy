@@ -75,6 +75,7 @@ impl OAuthSpec {
 }
 
 /// Generic provider implementation backed by an [`OAuthSpec`].
+#[derive(Clone)]
 pub struct GenericOAuthProvider {
     spec: OAuthSpec,
 }
@@ -126,7 +127,6 @@ impl GenericOAuthProvider {
     }
 }
 
-#[async_trait]
 impl OAuthProvider for GenericOAuthProvider {
     fn name(&self) -> &str {
         self.spec.id

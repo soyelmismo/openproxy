@@ -11,6 +11,7 @@ use super::*;
 /// picks `/chat/completions` vs `/messages` based on that stored value, and
 /// the auth header flips between `Authorization: Bearer ...` and
 /// `x-api-key: ...` accordingly.
+#[derive(Clone)]
 pub struct OpenCodeZenAdapter {
     config: ProviderAdapterConfig,
 }
@@ -31,7 +32,6 @@ impl OpenCodeZenAdapter {
 
 crate::adapters::derive_default_from_new!(OpenCodeZenAdapter);
 
-#[async_trait]
 impl ProviderAdapter for OpenCodeZenAdapter {
     fn id(&self) -> &ProviderId {
         &self.config.id

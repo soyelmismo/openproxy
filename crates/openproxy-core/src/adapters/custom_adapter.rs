@@ -11,6 +11,7 @@ use super::*;
 /// `extra_headers` from the [`providers::Provider`] row at construction
 /// time. This enables model refresh, chat routing, and other code paths
 /// that require a `ProviderAdapter` to work with custom providers.
+#[derive(Clone)]
 pub struct CustomAdapter {
     config: ProviderAdapterConfig,
 }
@@ -65,7 +66,6 @@ impl CustomAdapter {
     }
 }
 
-#[async_trait]
 impl ProviderAdapter for CustomAdapter {
     fn id(&self) -> &ProviderId {
         &self.config.id

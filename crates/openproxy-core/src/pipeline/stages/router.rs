@@ -6,9 +6,10 @@ use crate::pipeline::context::PipelineContext;
 use crate::pipeline::stage::PipelineStage;
 use async_trait::async_trait;
 
+#[derive(Clone, Copy)]
 pub struct RouterStage;
 
-#[async_trait]
+
 impl PipelineStage for RouterStage {
     async fn execute(
         &self,

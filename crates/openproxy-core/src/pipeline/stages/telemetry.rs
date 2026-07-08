@@ -5,9 +5,10 @@ use crate::pipeline::{ErrorPhase, PipelineResult};
 use async_trait::async_trait;
 use std::sync::Arc;
 
+#[derive(Clone, Copy)]
 pub struct TelemetryRecorderStage;
 
-#[async_trait]
+
 impl PipelineStage for TelemetryRecorderStage {
     async fn execute(
         &self,

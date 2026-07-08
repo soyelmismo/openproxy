@@ -264,7 +264,7 @@ impl ProviderAdapter for TestMockAdapter {
 /// the built-in adapter set, and we keep the `DbPool` + `AppState`
 /// in the test's hands so the test can mutate the DB directly
 /// between refreshes.
-async fn make_test_state(dir: &std::path::Path, adapter: Arc<dyn ProviderAdapter>) -> AppState {
+async fn make_test_state(dir: &std::path::Path, adapter: crate::adapters::ProviderAdapterEnum) -> AppState {
     let pool = Arc::new(core_db::DbPool::open(&dir.join("e2e.db")).expect("open pool"));
     {
         let mut w = pool.writer();
@@ -310,7 +310,7 @@ async fn make_test_state(dir: &std::path::Path, adapter: Arc<dyn ProviderAdapter
     // says "do NOT modify the seed list", and the test is gated on
     // its own provider id, so a built-in refresh racing the test's
     // call can't affect this DB.
-    let adapters: Arc<parking_lot::RwLock<Vec<Arc<dyn ProviderAdapter>>>> =
+    let adapters: Arc<parking_lot::RwLock<Vec<crate::adapters::ProviderAdapterEnum>>> =
         Arc::new(parking_lot::RwLock::new(vec![adapter]));
 
     AppState::for_test(AppConfig::default(), pool, mk, adapters).await
@@ -364,7 +364,7 @@ async fn call_refresh(
     state: &AppState,
     provider: &ProviderId,
     api_key: &str,
-    adapter: &Arc<dyn ProviderAdapter>,
+    adapter: &crate::adapters::ProviderAdapterEnum,
 ) -> Option<models::UpsertResult> {
     let conn = state.db_pool().open_connection().expect("open_connection");
     admin::refresh_models(
@@ -391,7 +391,7 @@ async fn e2e_discovery_and_delete_on_disappear() {
     let base_url = format!("http://{addr}");
 
     // --- Step 2: build the test adapter + AppState --------------
-    let adapter: Arc<dyn ProviderAdapter> =
+    let adapter: crate::adapters::ProviderAdapterEnum =
         Arc::new(TestMockAdapter::new("e2e-mock", base_url.clone()));
     let tmp = TempDir::new().expect("tempdir");
     let state = make_test_state(tmp.path(), adapter.clone()).await;

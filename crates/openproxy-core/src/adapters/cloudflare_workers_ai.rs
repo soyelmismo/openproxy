@@ -10,6 +10,7 @@ use super::*;
 /// CloudFlare account ID in the URL path. The account ID is stored
 /// in the account's `label` field and passed through
 /// `build_chat_url_for_account`.
+#[derive(Clone)]
 pub struct CloudflareWorkersAIAdapter {
     config: ProviderAdapterConfig,
 }
@@ -30,7 +31,6 @@ impl CloudflareWorkersAIAdapter {
 
 crate::adapters::derive_default_from_new!(CloudflareWorkersAIAdapter);
 
-#[async_trait]
 impl ProviderAdapter for CloudflareWorkersAIAdapter {
     fn config(&self) -> &ProviderAdapterConfig {
         &self.config

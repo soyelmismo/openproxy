@@ -17,6 +17,7 @@
 //! - `delete_*` is idempotent: a missing id is a no-op (0 rows affected), not
 //!   an error.
 
+use crate::adapters::ProviderAdapter;
 use crate::accounts;
 use crate::combos;
 use crate::cooldown;
@@ -953,7 +954,7 @@ pub async fn refresh_models(
     conn: Connection,
     provider: &ProviderId,
     api_key: &str,
-    adapter: &dyn crate::adapters::ProviderAdapter,
+    adapter: &crate::adapters::ProviderAdapterEnum,
     upstream_client: &std::sync::Arc<crate::upstream::UpstreamClient>,
     ttl_seconds: i64,
     account_label: &str,
@@ -1453,7 +1454,7 @@ mod tests {
 
     // NOTE: integration tests that actually hit the network via
     // `refresh_models` are intentionally not included here. The signature
-    // takes a fully wired `&dyn ProviderAdapter` and an
+    // takes a fully wired `&crate::adapters::ProviderAdapterEnum` and an
     // `&Arc<UpstreamClient>` precisely so the server crate can drive
     // it end-to-end; any wire-level exercise belongs in the server's
     // integration test suite.

@@ -193,6 +193,7 @@ async fn register_oidc_client(
     Ok((client.client_id, client.client_secret))
 }
 
+#[derive(Clone)]
 pub struct KiroOAuthProvider;
 
 impl KiroOAuthProvider {
@@ -207,7 +208,6 @@ impl Default for KiroOAuthProvider {
     }
 }
 
-#[async_trait]
 impl OAuthProvider for KiroOAuthProvider {
     fn name(&self) -> &str {
         "kiro"

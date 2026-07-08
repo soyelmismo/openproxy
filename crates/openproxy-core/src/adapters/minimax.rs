@@ -12,6 +12,7 @@ use super::*;
 /// appending `/v1/models`. Splitting the two paths this way is what lets
 /// the same `base_url` serve both surfaces without one being a substring
 /// of the other.
+#[derive(Clone)]
 pub struct MiniMaxAdapter {
     config: ProviderAdapterConfig,
 }
@@ -32,7 +33,6 @@ impl MiniMaxAdapter {
 
 crate::adapters::derive_default_from_new!(MiniMaxAdapter);
 
-#[async_trait]
 impl ProviderAdapter for MiniMaxAdapter {
     fn config(&self) -> &ProviderAdapterConfig {
         &self.config

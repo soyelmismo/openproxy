@@ -8,6 +8,7 @@ use super::*;
 ///
 /// Nous Research speaks OpenAI-compatible `/v1/chat/completions` with
 /// Bearer auth. Free-tier models include Hermes-4-405B and Hermes-4-70B.
+#[derive(Clone)]
 pub struct NousResearchAdapter {
     config: ProviderAdapterConfig,
 }
@@ -28,7 +29,6 @@ impl NousResearchAdapter {
 
 crate::adapters::derive_default_from_new!(NousResearchAdapter);
 
-#[async_trait]
 impl ProviderAdapter for NousResearchAdapter {
     fn id(&self) -> &ProviderId {
         &self.config.id

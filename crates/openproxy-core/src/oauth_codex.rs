@@ -48,6 +48,7 @@ fn codex_oauth_spec() -> OAuthSpec {
     }
 }
 
+#[derive(Clone)]
 pub struct CodexOAuthProvider {
     generic: GenericOAuthProvider,
 }
@@ -66,7 +67,6 @@ impl Default for CodexOAuthProvider {
     }
 }
 
-#[async_trait]
 impl OAuthProvider for CodexOAuthProvider {
     fn name(&self) -> &str {
         self.generic.name()

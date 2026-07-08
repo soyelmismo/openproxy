@@ -15,7 +15,7 @@ impl Pipeline {
     /// Drive one chat-completion request to completion.
     pub async fn run(&self, req: Arc<PipelineRequest>) -> PipelineResult {
         use crate::pipeline::context::PipelineContext;
-        use crate::pipeline::stage::PipelineChain;
+        use crate::pipeline::stage::{PipelineChain, PipelineStageEnum};
         use crate::pipeline::stages::{
             executor::UpstreamExecutorStage, quota::QuotaEnforcerStage, router::RouterStage,
             telemetry::TelemetryRecorderStage,
@@ -23,10 +23,10 @@ impl Pipeline {
 
         let ctx = PipelineContext::new(req, self.clone());
         let chain = PipelineChain::new(vec![
-            Arc::new(TelemetryRecorderStage),
-            Arc::new(RouterStage),
-            Arc::new(QuotaEnforcerStage),
-            Arc::new(UpstreamExecutorStage),
+            PipelineStageEnum::TelemetryRecorder(TelemetryRecorderStage),
+            PipelineStageEnum::Router(RouterStage),
+            PipelineStageEnum::QuotaEnforcer(QuotaEnforcerStage),
+            PipelineStageEnum::UpstreamExecutor(UpstreamExecutorStage),
         ]);
 
         match chain.execute(ctx).await {
@@ -46,43 +46,47 @@ impl Pipeline {
         if !targets.iter().any(|t| t.sub_combo_id.is_some()) {
             return Ok(targets);
         }
-        let mut out = Vec::with_capacity(targets.len());
-        let conn = self.conn.lock();
-        let mut visited: Vec<ComboId> = vec![*root_combo_id];
-        for t in targets {
-            if let Some(sub_id) = t.sub_combo_id {
-                let sub_flat = combos::resolve_combo_to_targets(&conn, sub_id, &mut visited, 0)?;
-                out.extend(sub_flat);
-            } else {
-                out.push(t);
+        tokio::task::block_in_place(|| {
+            let mut out = Vec::with_capacity(targets.len());
+            let conn = self.conn.lock();
+            let mut visited: Vec<ComboId> = vec![*root_combo_id];
+            for t in targets {
+                if let Some(sub_id) = t.sub_combo_id {
+                    let sub_flat = combos::resolve_combo_to_targets(&conn, sub_id, &mut visited, 0)?;
+                    out.extend(sub_flat);
+                } else {
+                    out.push(t);
+                }
             }
-        }
-        let expanded = combos::expand_account_rotation(&conn, out)?;
-        Ok(expanded)
+            let expanded = combos::expand_account_rotation(&conn, out)?;
+            Ok(expanded)
+        })
     }
 
     pub(crate) fn auto_populate_if_empty(&self, combo: &Combo) -> Result<usize> {
-        {
-            let conn = self.conn.lock();
-            if !combos::list_targets(&conn, combo.id)?.is_empty() {
-                return Ok(0);
+        tokio::task::block_in_place(|| {
+            {
+                let conn = self.conn.lock();
+                if !combos::list_targets(&conn, combo.id)?.is_empty() {
+                    return Ok(0);
+                }
             }
-        }
 
-        let added = {
-            let conn = self.conn.lock();
-            combos::auto_populate_empty_combo(&conn, combo.id)?
-        };
+            let added = {
+                let conn = self.conn.lock();
+                combos::auto_populate_empty_combo(&conn, combo.id)?
+            };
 
-        if added > 0 {
-            tracing::info!(
-                combo_id = combo.id.0,
-                combo_name = %combo.name,
-                added_targets = added,
-                "auto-populated empty combo with healthy provider's active models"
-            );
-        }
-        Ok(added)
+            if added > 0 {
+                tracing::info!(
+                    combo_id = combo.id.0,
+                    combo_name = %combo.name,
+                    added_targets = added,
+                    "auto-populated empty combo with healthy provider's active models"
+                );
+            }
+            Ok(added)
+        })
     }
 
     pub async fn resolve_combo_targets_full(
@@ -187,13 +191,13 @@ impl Pipeline {
             timestamp: String::new(),
             endpoint_kind: crate::endpoint::EndpointKind::Chat,
         });
-
+        use crate::pipeline::stage::PipelineStageEnum;
         let chain = crate::pipeline::stage::PipelineChain::new(vec![
-            Arc::new(crate::pipeline::stages::target::OAuthRefreshStage),
-            Arc::new(crate::pipeline::stages::target::CustomAdapterStage),
-            Arc::new(crate::pipeline::stages::target::TimeoutResolutionStage),
-            Arc::new(crate::pipeline::stages::target::FormattingStage),
-            Arc::new(crate::pipeline::stages::target::DispatchStage),
+            PipelineStageEnum::OAuthRefresh(crate::pipeline::stages::target::OAuthRefreshStage),
+            PipelineStageEnum::CustomAdapter(crate::pipeline::stages::target::CustomAdapterStage),
+            PipelineStageEnum::TimeoutResolution(crate::pipeline::stages::target::TimeoutResolutionStage),
+            PipelineStageEnum::Formatting(crate::pipeline::stages::target::FormattingStage),
+            PipelineStageEnum::Dispatch(crate::pipeline::stages::target::DispatchStage),
         ]);
 
         match chain.execute_nested(&mut ctx).await {
@@ -252,7 +256,7 @@ impl Pipeline {
     fn adapter_for(
         &self,
         provider_id: &crate::ids::ProviderId,
-    ) -> Option<Arc<dyn ProviderAdapter>> {
+    ) -> Option<crate::adapters::ProviderAdapterEnum> {
         self.config
             .adapters
             .iter()

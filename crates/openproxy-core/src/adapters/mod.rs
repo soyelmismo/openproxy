@@ -109,7 +109,7 @@ pub enum AdapterFormat {
 ///   is not closed at compile time.
 /// - **Generic dispatch** at every call site (`impl ProviderAdapter`) —
 ///   would require refactoring 60+ sites and breaking the
-///   `Arc<Vec<Arc<dyn ProviderAdapter>>>` registry pattern that
+///   `Arc<Vec<ProviderAdapterEnum>>` registry pattern that
 ///   `PipelineState` and `DiscoveryScheduler` rely on for runtime
 ///   iteration over a heterogeneous adapter collection.
 ///
@@ -117,7 +117,6 @@ pub enum AdapterFormat {
 /// of the edition-2024 / `#[async_trait]` migration. The runtime cost
 /// (one Box per `fetch_models` call, which already does network I/O)
 /// is negligible relative to the work each call performs.
-#[async_trait]
 pub trait ProviderAdapter: Send + Sync {
     /// Stable identifier of this provider (e.g. `"openrouter"`).
     fn id(&self) -> &ProviderId {
@@ -308,6 +307,128 @@ pub trait ProviderAdapter: Send + Sync {
     }
 }
 
+
+#[macro_export]
+macro_rules! define_provider_adapter {
+    (
+        $(#[$meta:meta])*
+        pub enum ProviderAdapterEnum {
+            $( $(#[$varmeta:meta])* $variant:ident($inner:ty) ),+ $(,)?
+        }
+    ) => {
+        $(#[$meta])*
+        #[derive(Clone)]
+        pub enum ProviderAdapterEnum {
+            $( $(#[$varmeta])* $variant($inner) ),+
+        }
+
+        impl ProviderAdapter for ProviderAdapterEnum {
+            fn id(&self) -> &crate::ids::ProviderId {
+                match self { $( $(#[$varmeta])* Self::$variant(inner) => inner.id(), )+ }
+            }
+            fn config(&self) -> &crate::adapters::ProviderAdapterConfig {
+                match self { $( $(#[$varmeta])* Self::$variant(inner) => inner.config(), )+ }
+            }
+            fn metadata(&self) -> crate::providers::ProviderMetadata {
+                match self { $( $(#[$varmeta])* Self::$variant(inner) => inner.metadata(), )+ }
+            }
+            fn auth_type(&self) -> crate::adapters::AdapterAuthType {
+                match self { $( $(#[$varmeta])* Self::$variant(inner) => inner.auth_type(), )+ }
+            }
+            fn format(&self) -> crate::adapters::AdapterFormat {
+                match self { $( $(#[$varmeta])* Self::$variant(inner) => inner.format(), )+ }
+            }
+            fn build_chat_url(&self, target_format: crate::models::TargetFormat, model: &crate::ids::ModelId) -> String {
+                match self { $( $(#[$varmeta])* Self::$variant(inner) => inner.build_chat_url(target_format, model), )+ }
+            }
+            fn build_chat_url_for_account(
+                &self,
+                target_format: crate::models::TargetFormat,
+                model: &crate::ids::ModelId,
+                account_label: &str,
+            ) -> String {
+                match self { $( $(#[$varmeta])* Self::$variant(inner) => inner.build_chat_url_for_account(target_format, model, account_label), )+ }
+            }
+            fn build_transcription_url(&self) -> String {
+                match self { $( $(#[$varmeta])* Self::$variant(inner) => inner.build_transcription_url(), )+ }
+            }
+            fn build_embeddings_url(&self) -> String {
+                match self { $( $(#[$varmeta])* Self::$variant(inner) => inner.build_embeddings_url(), )+ }
+            }
+            fn build_image_url(&self) -> String {
+                match self { $( $(#[$varmeta])* Self::$variant(inner) => inner.build_image_url(), )+ }
+            }
+            fn build_video_url(&self) -> String {
+                match self { $( $(#[$varmeta])* Self::$variant(inner) => inner.build_video_url(), )+ }
+            }
+            fn build_auth_header(&self, api_key: &str) -> (String, String) {
+                match self { $( $(#[$varmeta])* Self::$variant(inner) => inner.build_auth_header(api_key), )+ }
+            }
+            fn build_headers(
+                &self,
+                api_key: &str,
+                target_format: crate::models::TargetFormat,
+                model: &crate::ids::ModelId,
+            ) -> Vec<(String, String)> {
+                match self { $( $(#[$varmeta])* Self::$variant(inner) => inner.build_headers(api_key, target_format, model), )+ }
+            }
+            fn models_url(&self) -> Option<String> {
+                match self { $( $(#[$varmeta])* Self::$variant(inner) => inner.models_url(), )+ }
+            }
+            fn models_url_for_account(&self, account_label: &str) -> Option<String> {
+                match self { $( $(#[$varmeta])* Self::$variant(inner) => inner.models_url_for_account(account_label), )+ }
+            }
+            async fn fetch_models(
+                &self,
+                upstream_client: &std::sync::Arc<crate::upstream::UpstreamClient>,
+                api_key: &str,
+            ) -> crate::error::Result<Vec<crate::models::DiscoveredModel>> {
+                match self { $( $(#[$varmeta])* Self::$variant(inner) => inner.fetch_models(upstream_client, api_key).await, )+ }
+            }
+            async fn fetch_models_for_account(
+                &self,
+                upstream_client: &std::sync::Arc<crate::upstream::UpstreamClient>,
+                api_key: &str,
+                account_label: &str,
+            ) -> crate::error::Result<Vec<crate::models::DiscoveredModel>> {
+                match self { $( $(#[$varmeta])* Self::$variant(inner) => inner.fetch_models_for_account(upstream_client, api_key, account_label).await, )+ }
+            }
+            fn normalize_openai_request(&self, view: &mut crate::translation::OpenAIRequestView) {
+                match self { $( $(#[$varmeta])* Self::$variant(inner) => inner.normalize_openai_request(view), )+ }
+            }
+            async fn execute_custom(
+                &self,
+                upstream_client: &std::sync::Arc<crate::upstream::UpstreamClient>,
+                req: std::sync::Arc<crate::pipeline::PipelineRequest>,
+                resolved_target: &crate::pipeline::context::ResolvedTarget,
+                ctx: Option<crate::adapters::CustomExecutionContext>,
+            ) -> Option<std::result::Result<crate::translation::OpenAIResponse, crate::error::CoreError>> {
+                match self { $( $(#[$varmeta])* Self::$variant(inner) => inner.execute_custom(upstream_client, req, resolved_target, ctx).await, )+ }
+            }
+        }
+    }
+}
+
+define_provider_adapter! {
+    pub enum ProviderAdapterEnum {
+        Antigravity(crate::adapters::antigravity::AntigravityAdapter),
+        CloudflareWorkersAI(crate::adapters::cloudflare_workers_ai::CloudflareWorkersAIAdapter),
+        Codex(crate::adapters::codex::CodexAdapter),
+        Custom(crate::adapters::custom_adapter::CustomAdapter),
+        Gemini(crate::adapters::gemini::GeminiAdapter),
+        Kilocode(crate::adapters::kilocode::KilocodeAdapter),
+        Kiro(crate::adapters::kiro_ai::KiroAdapter),
+        MiniMax(crate::adapters::minimax::MiniMaxAdapter),
+        NousResearch(crate::adapters::nous_research::NousResearchAdapter),
+        NvidiaNim(crate::adapters::nvidia_nim::NvidiaNimAdapter),
+        OllamaCloud(crate::adapters::ollama_cloud::OllamaCloudAdapter),
+        OpenCodeZen(crate::adapters::opencode_zen::OpenCodeZenAdapter),
+                OpenRouter(crate::adapters::openrouter::OpenRouterAdapter),
+        #[cfg(test)]
+        Mock(crate::pipeline::test_utils::MockAdapter),
+    }
+}
+
 macro_rules! derive_default_from_new {
     ($name:ident) => {
         impl Default for $name {
@@ -494,26 +615,26 @@ pub(crate) async fn fetch_openai_models(
 // Factory
 // =====================================================================
 
-/// Return a `Vec<Arc<dyn ProviderAdapter>>` containing every built-in adapter.
+/// Return a `Vec<ProviderAdapterEnum>` containing every built-in adapter.
 ///
 /// The order matches the expected "popularity" order: OpenRouter, then
 /// MiniMax, then OpenCode Zen, then Ollama Cloud, then the remaining
 /// OpenAI-compatible providers, then Gemini and Antigravity. Callers may
 /// reorder, filter, or wrap the results.
-pub fn builtin_adapters() -> Vec<Arc<dyn ProviderAdapter>> {
+pub fn builtin_adapters() -> Vec<ProviderAdapterEnum> {
     vec![
-        Arc::new(OpenRouterAdapter::new()),
-        Arc::new(MiniMaxAdapter::new()),
-        Arc::new(OpenCodeZenAdapter::new()),
-        Arc::new(OllamaCloudAdapter::new()),
-        Arc::new(NousResearchAdapter::new()),
-        Arc::new(NvidiaNimAdapter::new()),
-        Arc::new(KilocodeAdapter::new()),
-        Arc::new(CloudflareWorkersAIAdapter::new()),
-        Arc::new(GeminiAdapter::new()),
-        Arc::new(AntigravityAdapter::new()),
-        Arc::new(CodexAdapter::new()),
-        Arc::new(KiroAdapter::new()),
+        ProviderAdapterEnum::OpenRouter(OpenRouterAdapter::new()),
+        ProviderAdapterEnum::MiniMax(MiniMaxAdapter::new()),
+        ProviderAdapterEnum::OpenCodeZen(OpenCodeZenAdapter::new()),
+        ProviderAdapterEnum::OllamaCloud(OllamaCloudAdapter::new()),
+        ProviderAdapterEnum::NousResearch(NousResearchAdapter::new()),
+        ProviderAdapterEnum::NvidiaNim(NvidiaNimAdapter::new()),
+        ProviderAdapterEnum::Kilocode(KilocodeAdapter::new()),
+        ProviderAdapterEnum::CloudflareWorkersAI(CloudflareWorkersAIAdapter::new()),
+        ProviderAdapterEnum::Gemini(GeminiAdapter::new()),
+        ProviderAdapterEnum::Antigravity(AntigravityAdapter::new()),
+        ProviderAdapterEnum::Codex(CodexAdapter::new()),
+        ProviderAdapterEnum::Kiro(KiroAdapter::new()),
     ]
 }
 

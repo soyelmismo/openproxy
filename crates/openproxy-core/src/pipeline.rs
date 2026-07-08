@@ -5,6 +5,7 @@
 //! rotation, executes the first eligible target with bounded timeouts, and
 //! records a usage row.
 
+use crate::adapters::ProviderAdapter;
 use crate::circuit_breaker::CircuitBreakerRegistry;
 use crate::combos::{Combo, SelectionRegistry};
 use crate::compression::stats::CompressionStats;
@@ -52,7 +53,7 @@ pub struct PipelineConfig {
     pub retries: RetriesConfig,
     pub max_attempts: u8,
     pub master_key: Arc<MasterKey>,
-    pub adapters: Arc<Vec<Arc<dyn crate::adapters::ProviderAdapter>>>,
+    pub adapters: Arc<Vec<crate::adapters::ProviderAdapterEnum>>,
     pub http_client: reqwest::Client,
     pub cooldown_secs: u64,
     pub cooldown_max_secs: u64,

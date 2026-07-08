@@ -10,6 +10,7 @@ use super::*;
 /// - Auth: `Authorization: Bearer <token>` (OAuth)
 /// - Chat URL: `${base}/v1internal:generateContent`
 /// - No model discovery endpoint (models are hardcoded)
+#[derive(Clone)]
 pub struct AntigravityAdapter {
     config: ProviderAdapterConfig,
 }
@@ -214,7 +215,6 @@ impl AntigravityAdapter {
 
 crate::adapters::derive_default_from_new!(AntigravityAdapter);
 
-#[async_trait]
 impl ProviderAdapter for AntigravityAdapter {
     fn config(&self) -> &ProviderAdapterConfig {
         &self.config

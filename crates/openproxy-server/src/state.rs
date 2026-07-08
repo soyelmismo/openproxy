@@ -34,7 +34,7 @@ pub struct AppState {
     config: AppConfig,
     db_pool: Arc<db::DbPool>,
     master_key: Arc<MasterKey>,
-    adapters: Arc<RwLock<Vec<Arc<dyn adapters::ProviderAdapter>>>>,
+    adapters: Arc<RwLock<Vec<adapters::ProviderAdapterEnum>>>,
     /// Per-key rate limiter for /v1/chat/completions. Prevents a
     /// single API key from driving unlimited paid upstream traffic.
     rate_limiter: Arc<crate::rate_limit::RateLimiter>,
@@ -295,7 +295,7 @@ impl AppState {
         config: AppConfig,
         db_pool: Arc<db::DbPool>,
         master_key: Arc<MasterKey>,
-        adapters: Arc<RwLock<Vec<Arc<dyn adapters::ProviderAdapter>>>>,
+        adapters: Arc<RwLock<Vec<adapters::ProviderAdapterEnum>>>,
     ) -> Self {
         let recording_ttl_secs_cell =
             Arc::new(RwLock::new(db::app_config::RECORDING_TTL_DEFAULT_SECS));
@@ -409,7 +409,7 @@ impl AppState {
 
     /// Snapshot the registry of provider adapters.
     ///
-    /// Returns a freshly-cloned `Vec<Arc<dyn ProviderAdapter>>` so
+    /// Returns a freshly-cloned `Vec<crate::adapters::ProviderAdapterEnum>` so
     /// callers (the chat pipeline, the admin handlers) see a
     /// self-consistent view of the registry at the moment they take
     /// the snapshot, even if another thread is hot-reloading the
@@ -417,7 +417,7 @@ impl AppState {
     /// `Arc::clone` inside the `Vec` is the only allocation —
     /// pipelines already pay this when constructing
     /// `PipelineConfig`.
-    pub fn adapters(&self) -> Vec<Arc<dyn adapters::ProviderAdapter>> {
+    pub fn adapters(&self) -> Vec<adapters::ProviderAdapterEnum> {
         self.adapters.read().clone()
     }
 
@@ -442,7 +442,7 @@ impl AppState {
     /// will retry the reload) rather than failing the request.
     pub fn rebuild_adapters(&self) -> Result<(), openproxy_core::CoreError> {
         // 1. Start with the static built-in adapter set.
-        let mut new_adapters: Vec<Arc<dyn adapters::ProviderAdapter>> =
+        let mut new_adapters: Vec<adapters::ProviderAdapterEnum> =
             adapters::builtin_adapters();
         // 2. Layer in any custom providers the DB has.
         let all_providers = {
@@ -455,7 +455,7 @@ impl AppState {
         }?;
         for p in &all_providers {
             if !openproxy_core::seed::is_builtin(p.id.as_str()) {
-                new_adapters.push(Arc::new(adapters::CustomAdapter::from_provider_row(p)));
+                new_adapters.push(adapters::ProviderAdapterEnum::Custom(adapters::CustomAdapter::from_provider_row(p)));
             }
         }
         // 3. Atomic swap into the shared slot.
@@ -971,7 +971,7 @@ async fn spawn_background_tasks(
 async fn start_discovery_scheduler(
     db_pool: Arc<openproxy_core::db::DbPool>,
     master_key: Arc<openproxy_core::secrets::MasterKey>,
-    adapters: Arc<RwLock<Vec<Arc<dyn openproxy_core::adapters::ProviderAdapter>>>>,
+    adapters: Arc<RwLock<Vec<openproxy_core::adapters::ProviderAdapterEnum>>>,
     upstream_client: Arc<openproxy_core::upstream::UpstreamClient>,
 ) -> openproxy_core::discovery_scheduler::DiscoveryScheduler {
     let adapters_clone = Arc::new(adapters.read().clone());
@@ -1033,7 +1033,8 @@ mod tests {
     //! `rebuild_adapters()` so the admin handlers can refresh it.
 
     use super::*;
-    use crate::state::AppState;
+    use crate::adapters::ProviderAdapter;
+use crate::state::AppState;
     use openproxy_core::{
         AppConfig, adapters, db as core_db, ids::ProviderId, providers, secrets::MasterKey,
     };
@@ -1072,7 +1073,7 @@ mod tests {
         // Start with an empty adapter registry; `rebuild_adapters`
         // is responsible for filling in both the built-ins and any
         // custom rows.
-        let adapters = Arc::new(RwLock::new(Vec::<Arc<dyn adapters::ProviderAdapter>>::new()));
+        let adapters = Arc::new(RwLock::new(Vec::<adapters::ProviderAdapterEnum>::new()));
         AppState::for_test(AppConfig::default(), db_pool, master_key, adapters).await
     }
 

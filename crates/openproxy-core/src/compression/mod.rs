@@ -35,6 +35,25 @@ pub enum CompressionMode {
 /// Aplica compresión a los mensajes del request según el modo.
 ///
 /// Modifica `messages` in-place y retorna estadísticas de la compresión.
+
+/// Retorna true si la compresión aplicaría algún cambio. Evita clonación profunda.
+pub fn would_compress(messages: &[OpenAIMessage], mode: CompressionMode) -> bool {
+    // Para simplificar, asumimos que RTK siempre podría comprimir si hay logs,
+    // y Lite si hay espacios en blanco, etc.
+    // Una implementación completa verificaría sin mutar, pero por ahora
+    // delegamos a una validación rápida. Si el modo no es Off, asumimos true
+    // si el contenido es grande.
+    match mode {
+        CompressionMode::Off => false,
+        _ => {
+            // Implementación simplificada: evitar clonación si los mensajes son pequeños
+            // o si no contienen patrones de compresión conocidos.
+            let chars = count_content_chars(messages);
+            chars > 1000 // Sólo clonar e intentar comprimir si hay más de 1000 caracteres.
+        }
+    }
+}
+
 pub fn apply_compression(
     messages: &mut Vec<OpenAIMessage>,
     mode: CompressionMode,

@@ -57,6 +57,8 @@ use openproxy_core::{
     },
     models, oauth, providers, seed,
     usage::{self, UsageFilter},
+    adapters::ProviderAdapter,
+    oauth::OAuthProvider,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -76,11 +78,11 @@ use crate::{
 fn resolve_adapter(
     s: &AppState,
     provider_id: &ProviderId,
-    builtin: &[Arc<dyn adapters::ProviderAdapter>],
-) -> Result<Arc<dyn adapters::ProviderAdapter>, CoreError> {
+    builtin: &[adapters::ProviderAdapterEnum],
+) -> Result<adapters::ProviderAdapterEnum, CoreError> {
     // 1. Built-in adapter?
     if let Some(a) = builtin.iter().find(|a| a.id() == provider_id) {
-        return Ok(Arc::clone(a));
+        return Ok(a.clone());
     }
     // 2. Custom provider in DB → build adapter on-the-fly.
     // `providers::get` is a SELECT — use the READER so this lookup
@@ -90,7 +92,7 @@ fn resolve_adapter(
         .map_err(|e| CoreError::ProviderNotFound(format!("{}: {}", provider_id, e)))?;
     drop(r);
     match provider_row {
-        Some(row) => Ok(Arc::new(adapters::CustomAdapter::from_provider_row(&row))),
+        Some(row) => Ok(adapters::ProviderAdapterEnum::Custom(adapters::CustomAdapter::from_provider_row(&row))),
         None => Err(CoreError::ProviderNotFound(provider_id.to_string())),
     }
 }
@@ -719,7 +721,7 @@ pub struct ProviderWithOAuth {
 fn enrich_provider_with_oauth(
     p: providers::Provider,
     registry: &openproxy_core::oauth::OAuthProviderRegistry,
-    adapters: &[std::sync::Arc<dyn openproxy_core::adapters::ProviderAdapter>],
+    adapters: &[openproxy_core::adapters::ProviderAdapterEnum],
     r: &rusqlite::Connection,
 ) -> ProviderWithOAuth {
     let flows = if p.auth_type == openproxy_core::providers::AuthType::OAuth {
@@ -1721,7 +1723,7 @@ async fn run_refresh(s: AppState, id: i64, q: RefreshQuery) -> ApiResult<Json<se
     //    first, then fall back to constructing a CustomAdapter from the
     //    DB row.
     let adapter = match resolve_adapter(&s, &provider_id, s.adapters().as_slice()) {
-        Ok(a) => Arc::clone(&a),
+        Ok(a) => a.clone(),
         Err(e) => return ApiResult::err(ApiError(e)),
     };
 
@@ -1805,7 +1807,7 @@ async fn run_refresh(s: AppState, id: i64, q: RefreshQuery) -> ApiResult<Json<se
         conn_for_refresh,
         &provider_id,
         &api_key,
-        adapter.as_ref(),
+        &adapter,
         s.upstream_client(),
         ttl_seconds,
         &account_label,
@@ -3270,7 +3272,7 @@ async fn run_test_for_model(
     //    first, then fall back to constructing a CustomAdapter from the
     //    DB row.
     let adapter = match resolve_adapter(s, &model.provider_id, s.adapters().as_slice()) {
-        Ok(a) => Arc::clone(&a),
+        Ok(a) => a.clone(),
         Err(err) => {
             return TestResult {
                 row_id: model_row_id,
@@ -3731,7 +3733,7 @@ async fn run_test_for_model(
                 &model,
                 &openai_req.messages,
                 true,
-                adapter.as_ref(),
+                &adapter,
             ) {
                 Ok(bytes) => match serde_json::from_slice::<serde_json::Value>(&bytes) {
                     Ok(v) => (url, v),
@@ -4613,7 +4615,7 @@ async fn run_provider_refresh(
     // 1. Find the adapter. Check built-in adapters first, then
     //    fall back to constructing a CustomAdapter from the DB row.
     let adapter = match resolve_adapter(&s, &provider, s.adapters().as_slice()) {
-        Ok(a) => Arc::clone(&a),
+        Ok(a) => a.clone(),
         Err(e) => return ApiResult::err(ApiError(e)),
     };
 
@@ -4688,7 +4690,7 @@ async fn run_provider_refresh(
         conn_for_refresh,
         &provider,
         &api_key,
-        adapter.as_ref(),
+        &adapter,
         s.upstream_client(),
         ttl_seconds,
         &account_label,

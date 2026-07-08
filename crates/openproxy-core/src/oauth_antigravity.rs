@@ -81,6 +81,7 @@ fn antigravity_oauth_spec() -> OAuthSpec {
     }
 }
 
+#[derive(Clone)]
 pub struct AntigravityOAuthProvider {
     generic: GenericOAuthProvider,
 }
@@ -99,7 +100,6 @@ impl Default for AntigravityOAuthProvider {
     }
 }
 
-#[async_trait]
 impl OAuthProvider for AntigravityOAuthProvider {
     fn name(&self) -> &str {
         self.generic.name()

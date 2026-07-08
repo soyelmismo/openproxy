@@ -8,9 +8,10 @@ use crate::upstream::CancellationToken;
 use async_trait::async_trait;
 use std::sync::Arc;
 
+#[derive(Clone, Copy)]
 pub struct UpstreamExecutorStage;
 
-#[async_trait]
+
 impl PipelineStage for UpstreamExecutorStage {
     async fn execute(
         &self,

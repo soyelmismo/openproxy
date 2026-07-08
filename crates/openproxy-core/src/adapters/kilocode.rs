@@ -9,6 +9,7 @@ use super::*;
 /// Kilocode is an OpenRouter gateway with its own auth. Chat goes through
 /// `/v1/chat/completions` but models are listed at `/models` (not
 /// `/v1/models`), so [`models_url`] overrides the default.
+#[derive(Clone)]
 pub struct KilocodeAdapter {
     config: ProviderAdapterConfig,
 }
@@ -29,7 +30,6 @@ impl KilocodeAdapter {
 
 crate::adapters::derive_default_from_new!(KilocodeAdapter);
 
-#[async_trait]
 impl ProviderAdapter for KilocodeAdapter {
     fn id(&self) -> &ProviderId {
         &self.config.id

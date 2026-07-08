@@ -119,7 +119,7 @@ pub struct OAuthProviderMeta {
 /// `#[async_trait]` on this trait (and every `impl OAuthProvider for ...`
 /// block) because the trait is used as a *trait object* — the
 /// `OAuthProviderRegistry` stores providers as
-/// `HashMap<String, Arc<dyn OAuthProvider + Send + Sync>>` so they can be
+/// `HashMap<String, OAuthProviderEnum>` so they can be
 /// looked up by name at runtime, and the registry accepts custom
 /// providers registered dynamically via `register()` / `register_arc()`.
 ///
@@ -142,7 +142,6 @@ pub struct OAuthProviderMeta {
 /// of the edition-2024 / `#[async_trait]` migration. The runtime cost
 /// (one Box per token-refresh call, which already does network I/O) is
 /// negligible relative to the work each call performs.
-#[async_trait]
 pub trait OAuthProvider: Send + Sync {
     /// Human-readable name for logging (e.g. "antigravity").
     fn name(&self) -> &str;
@@ -257,11 +256,100 @@ pub trait OAuthProvider: Send + Sync {
 /// are registered at startup; custom providers can be added at any time
 /// via `register()`. Internally stores `Arc` so cloning the registry
 /// is cheap and providers don't need to implement `Clone`.
-#[derive(Clone, Default)]
+
+#[macro_export]
+macro_rules! define_oauth_provider {
+    (
+        $(#[$meta:meta])*
+        pub enum OAuthProviderEnum {
+            $(
+                $(#[$varmeta:meta])*
+                $variant:ident($inner:ty)
+            ),+ $(,)?
+        }
+    ) => {
+        $(#[$meta])*
+        #[derive(Clone)]
+        pub enum OAuthProviderEnum {
+            $(
+                $(#[$varmeta])*
+                $variant($inner)
+            ),+
+        }
+
+        impl OAuthProvider for OAuthProviderEnum {
+            fn name(&self) -> &str {
+                match self { $( Self::$variant(inner) => inner.name(), )+ }
+            }
+            fn flow(&self) -> OAuthFlow {
+                match self { $( Self::$variant(inner) => inner.flow(), )+ }
+            }
+            async fn build_auth_url(&self, redirect_uri: &str) -> Result<(String, String, String)> {
+                match self { $( Self::$variant(inner) => inner.build_auth_url(redirect_uri).await, )+ }
+            }
+            async fn exchange_code(
+                &self,
+                code: &str,
+                code_verifier: &str,
+                upstream_client: &std::sync::Arc<crate::upstream::UpstreamClient>,
+                redirect_uri: &str,
+            ) -> Result<TokenResponse> {
+                match self { $( Self::$variant(inner) => inner.exchange_code(code, code_verifier, upstream_client, redirect_uri).await, )+ }
+            }
+            async fn request_device_code(
+                &self,
+                upstream_client: &std::sync::Arc<crate::upstream::UpstreamClient>,
+            ) -> Result<DeviceAuthorizationResponse> {
+                match self { $( Self::$variant(inner) => inner.request_device_code(upstream_client).await, )+ }
+            }
+            async fn poll_device_token(
+                &self,
+                device_code: &str,
+                upstream_client: &std::sync::Arc<crate::upstream::UpstreamClient>,
+            ) -> Result<Option<TokenResponse>> {
+                match self { $( Self::$variant(inner) => inner.poll_device_token(device_code, upstream_client).await, )+ }
+            }
+            async fn refresh_token(
+                &self,
+                refresh_token: &str,
+                upstream_client: &std::sync::Arc<crate::upstream::UpstreamClient>,
+                account_id: AccountId,
+                db: DbRef<'_>,
+            ) -> Result<TokenResponse> {
+                match self { $( Self::$variant(inner) => inner.refresh_token(refresh_token, upstream_client, account_id, db).await, )+ }
+            }
+            fn provider_specific_from_token(&self, token: &TokenResponse) -> Option<String> {
+                match self { $( Self::$variant(inner) => inner.provider_specific_from_token(token), )+ }
+            }
+            fn email_from_token(&self, token: &TokenResponse) -> Option<String> {
+                match self { $( Self::$variant(inner) => inner.email_from_token(token), )+ }
+            }
+            async fn post_exchange(
+                &self,
+                account_id: AccountId,
+                db_pool: &std::sync::Arc<crate::db::DbPool>,
+                master_key: &MasterKey,
+                upstream: &std::sync::Arc<crate::upstream::UpstreamClient>,
+            ) -> Result<()> {
+                match self { $( Self::$variant(inner) => inner.post_exchange(account_id, db_pool, master_key, upstream).await, )+ }
+            }
+        }
+    }
+}
+
+define_oauth_provider! {
+    pub enum OAuthProviderEnum {
+        Antigravity(crate::oauth_antigravity::AntigravityOAuthProvider),
+        Codex(crate::oauth_codex::CodexOAuthProvider),
+        Generic(crate::oauth_generic::GenericOAuthProvider),
+        Kiro(crate::oauth_kiro::KiroOAuthProvider),
+    }
+}
+
 pub struct OAuthProviderRegistry {
     inner: std::sync::Arc<
         std::sync::Mutex<
-            std::collections::HashMap<String, std::sync::Arc<dyn OAuthProvider + Send + Sync>>,
+            std::collections::HashMap<String, OAuthProviderEnum>,
         >,
     >,
 }
@@ -280,14 +368,10 @@ impl OAuthProviderRegistry {
         // Antigravity (Cloud Code) — registered under both `antigravity`
         // and `antigravity-cli` since they share the same OAuth flow.
         let antigravity =
-            std::sync::Arc::new(crate::oauth_antigravity::AntigravityOAuthProvider::new());
-        reg.register_arc_with_name("antigravity", antigravity);
-        reg.register_arc(std::sync::Arc::new(
-            crate::oauth_codex::CodexOAuthProvider::new(),
-        ));
-        reg.register_arc(std::sync::Arc::new(
-            crate::oauth_kiro::KiroOAuthProvider::new(),
-        ));
+            crate::oauth_antigravity::AntigravityOAuthProvider::new();
+        reg.register_arc_with_name("antigravity", OAuthProviderEnum::Antigravity(antigravity));
+        reg.register_arc(OAuthProviderEnum::Codex(crate::oauth_codex::CodexOAuthProvider::new()));
+        reg.register_arc(OAuthProviderEnum::Kiro(crate::oauth_kiro::KiroOAuthProvider::new()));
         reg
     }
 
@@ -295,7 +379,7 @@ impl OAuthProviderRegistry {
     /// provider's own `name()`. If a provider with the same name
     /// already exists, it is replaced. This allows custom providers
     /// to override built-in ones at runtime.
-    pub fn register_arc(&self, provider: std::sync::Arc<dyn OAuthProvider + Send + Sync>) {
+    pub fn register_arc(&self, provider: OAuthProviderEnum) {
         let name = provider.name().to_string();
         let mut guard = self.inner.lock().unwrap();
         guard.insert(name, provider);
@@ -308,7 +392,7 @@ impl OAuthProviderRegistry {
     pub fn register_arc_with_name(
         &self,
         name: &str,
-        provider: std::sync::Arc<dyn OAuthProvider + Send + Sync>,
+        provider: OAuthProviderEnum,
     ) {
         let mut guard = self.inner.lock().unwrap();
         guard.insert(name.to_string(), provider);
@@ -316,13 +400,13 @@ impl OAuthProviderRegistry {
 
     /// Register a new OAuth provider by `Box`. Convenience wrapper
     /// around `register_arc`.
-    pub fn register(&self, provider: Box<dyn OAuthProvider + Send + Sync>) {
-        self.register_arc(std::sync::Arc::from(provider));
+    pub fn register(&self, provider: OAuthProviderEnum) {
+        self.register_arc(provider);
     }
 
     /// Look up an OAuth provider by name. Returns `None` if no provider
     /// is registered with that name.
-    pub fn get(&self, name: &str) -> Option<std::sync::Arc<dyn OAuthProvider + Send + Sync>> {
+    pub fn get(&self, name: &str) -> Option<OAuthProviderEnum> {
         let guard = self.inner.lock().unwrap();
         guard.get(name).cloned()
     }
@@ -359,7 +443,7 @@ impl TokenRefreshCoordinator {
     pub async fn refresh_and_store(
         &self,
         provider_id: &str,
-        provider: Arc<dyn OAuthProvider + Send + Sync>,
+        provider: OAuthProviderEnum,
         refresh_token: &str,
         upstream_client: &Arc<UpstreamClient>,
         account_id: AccountId,
