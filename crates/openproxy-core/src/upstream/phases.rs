@@ -3,7 +3,7 @@
 //! Each phase is modelled explicitly so the caller (or a unit test) can
 //! race the per-phase timeout against the I/O and attribute a timeout
 //! to a specific phase. This is the central piece of the migration off
-//! reqwest (which only exposes a single `connect_timeout`).
+//! hyper (which only exposes a single `connect_timeout`).
 
 use std::fmt;
 use std::time::{Duration, Instant};

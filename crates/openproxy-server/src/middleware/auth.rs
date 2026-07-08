@@ -157,7 +157,7 @@ pub(crate) fn authenticate(
 /// closes the TCP connection (request-body read error OR
 /// response-body write error). We thread it into the pipeline as
 /// `PipelineRequest::client_disconnected` so the dispatch loop, the
-/// `reqwest::send()` `tokio::select!`, and the SSE `stream.next()`
+/// `UpstreamClient::call()` `tokio::select!`, and the SSE `stream.next()`
 /// `tokio::select!` all observe the real cancel — no time-based
 /// watchdog needed.
 /// `POST /v1/chat/completions`.

@@ -8,7 +8,7 @@
 //!
 //! The default numeric values mirror the existing `TimeoutsConfig` in
 //! `crates/openproxy-core/src/timeouts.rs` so behavior is identical to
-//! the reqwest path until call sites are migrated one by one.
+//! the legacy UpstreamClient path until call sites are migrated one by one.
 
 /// Fully-resolved per-phase timeouts (in milliseconds).
 ///

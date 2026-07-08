@@ -34,7 +34,7 @@ static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 async fn main() -> anyhow::Result<()> {
     // 0. Install rustls crypto provider. `ring` is pure-Rust and
     // transitively available; `aws-lc-rs` is also pulled in by
-    // `reqwest`. `install_default` is idempotent — a second call in
+    // `UpstreamClient`. `install_default` is idempotent — a second call in
     // the same process is a no-op, so it's safe even if a future
     // test harness re-instruments startup.
     //

@@ -28,7 +28,7 @@
 //! ## Manejo de errores
 //!
 //! `ClientError` cubre cuatro familias:
-//! - `Http` — fallo de transporte (red, DNS, TLS) propagado de reqwest.
+//! - `Http` — fallo de transporte (red, DNS, TLS) propagado del UpstreamClient.
 //! - `Api` — `CoreError` mapeado a partir del `code` JSON que el servidor
 //!   devuelve en sus respuestas 4xx/5xx (ver `ApiError` en
 //!   `openproxy-server`). El `Display` preserva el mensaje del servidor.
@@ -57,8 +57,8 @@ use std::fmt::Write as _;
 
 /// Cliente HTTP para la admin API de openproxy.
 ///
-/// Mantiene una `reqwest::Client` reutilizable y la `base_url` del server.
-/// Es `Send + Sync` y barato de clonar (comparte el `reqwest::Client`
+/// Mantiene un `UpstreamClient` reutilizable y la `base_url` del server.
+/// Es `Send + Sync` y barato de clonar (comparte el `UpstreamClient`
 /// interior, que ya es `Arc`-interno).
 #[derive(Clone)]
 pub struct Client {
@@ -67,12 +67,12 @@ pub struct Client {
 }
 
 impl Client {
-    /// Construye un cliente con un `reqwest::Client` por defecto.
+    /// Construye un cliente con un `UpstreamClient` por defecto.
     pub fn new(base_url: impl Into<String>) -> Self {
         Self::with_client(base_url, openproxy_core::upstream::UpstreamClient::new())
     }
 
-    /// Construye un cliente compartiendo un `reqwest::Client` propio.
+    /// Construye un cliente compartiendo un `UpstreamClient` propio.
     ///
     /// Útil cuando el llamador quiere configurar timeouts, TLS, proxies, o
     /// reutilizar un pool de conexiones a nivel de aplicación.
@@ -463,7 +463,7 @@ impl Client {
 /// Errores que puede devolver cualquier método del [`Client`].
 #[derive(Debug, thiserror::Error)]
 pub enum ClientError {
-    /// Fallo de transporte (red, DNS, TLS, timeout). Heredado de reqwest.
+    /// Fallo de transporte (red, DNS, TLS, timeout). Heredado del UpstreamClient.
     #[error("http: {0}")]
     Http(String),
 

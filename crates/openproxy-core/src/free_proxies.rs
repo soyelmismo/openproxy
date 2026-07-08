@@ -563,7 +563,7 @@ pub async fn test_proxy_connection(r#type: &str, host: &str, port: u16) -> Resul
     let mut req = UpstreamRequest::get("https://clients3.google.com/generate_204");
     req.proxy = Some(proxy_url);
 
-    // Tight timeout for the proxy test (equivalent to the old reqwest 5s timeout).
+    // Tight timeout for the proxy test (equivalent to the old 5s timeout).
     let profile = TimeoutProfile::Custom(ResolvedTimeouts {
         dns_ms: 2000,
         dial_ms: 3000,

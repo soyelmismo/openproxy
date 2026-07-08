@@ -379,12 +379,12 @@ fn extract_kiro_content(v: &Value) -> Option<String> {
 /// (already-decrypted) bearer token. The returned [`OpenAIResponse`]
 /// is the parsed (best-effort) body.
 ///
-/// **Gate 3 migration:** the previous `&reqwest::Client` parameter
+/// **Gate 3 migration:** the previous `&UpstreamClient` parameter
 /// was replaced with `&Arc<UpstreamClient>`. Call sites in the
 /// chat pipeline (`pipeline.rs:951`) were updated to pass
 /// `&self.config.upstream_client`. The server-side admin test
 /// endpoint at `crates/openproxy-server/src/handlers/admin.rs:1996`
-/// is an out-of-scope call site that still passes a `reqwest::Client`
+/// is an out-of-scope call site that still passes a `UpstreamClient`
 /// and is tracked as a follow-up (see Gate 3 report).
 ///
 /// **C3 fix:** the function now accepts the per-request

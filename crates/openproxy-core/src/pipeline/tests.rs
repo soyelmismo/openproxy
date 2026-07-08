@@ -806,7 +806,7 @@ async fn priority_combo_walks_row_after_first_5xx() {
             let my_call = server_call_count.fetch_add(1, AtomicOrdering::SeqCst) + 1;
 
             // Drain headers (and body, if Content-Length present)
-            // so reqwest can finish its write before we respond.
+            // so the client can finish its write before we respond.
             let mut buf = vec![0u8; 64 * 1024];
             let mut total = 0usize;
             let mut content_length: Option<usize> = None;
@@ -2702,7 +2702,7 @@ fn seed_solo_combo_at_url(
 }
 
 /// Cancellation while waiting on the upstream: the `tokio::select!`
-/// at the reqwest send site must short-circuit to
+/// at the client send site must short-circuit to
 /// `ClientDisconnected` / 499 instead of letting the request hang
 /// out for `total_ms`.
 ///
@@ -2810,7 +2810,7 @@ async fn cancellation_does_not_park_target_in_cooldown_or_circuit_breaker() {
 
 /// End-to-end exercise of the new (Gate 1) non-streaming chat
 /// dispatch path that uses `UpstreamClient::call()` instead of
-/// the legacy reqwest client. We bind a localhost listener, point
+/// the legacy client. We bind a localhost listener, point
 /// a mock `ProviderAdapter` at it, run a non-streaming chat
 /// request, and assert the pipeline returns a 200 with the
 /// body parsed as an `OpenAIResponse`. This proves the
@@ -2819,7 +2819,7 @@ async fn cancellation_does_not_park_target_in_cooldown_or_circuit_breaker() {
 /// resolves correctly, the body is collected via
 /// `UpstreamResponse::collect`, and the JSON parses to
 /// `OpenAIResponse` (the same downstream code path the
-/// reqwest-based path used).
+/// client-based path used).
 #[tokio::test(flavor = "multi_thread")]
 async fn non_streaming_dispatch_uses_upstream_client_end_to_end() {
     use crate::adapters::AdapterFormat;
@@ -3105,7 +3105,7 @@ async fn bug_a_body_reaches_upstream() {
 /// End-to-end exercise of the new (Gate 2) streaming chat
 /// dispatch path that uses `UpstreamClient::call()` and
 /// `UpstreamBodyStream::next_chunk()` instead of the legacy
-/// reqwest `bytes_stream()` API. We bind a localhost listener,
+/// client `collect()` API. We bind a localhost listener,
 /// point a mock `ProviderAdapter` at it, run a streaming chat
 /// request, and assert the pipeline forwards every SSE chunk
 /// (translated to OpenAI) into the `stream_sink` channel in
@@ -3539,7 +3539,7 @@ async fn cancellation_mid_sse_stream_aborts_immediately() {
     // 3. Bind the mock upstream, start its accept task. The server:
     //    a. accepts ONE connection (the dispatch will only open
     //       one — single target, no race),
-    //    b. drains the request bytes until "\r\n\r\n" so reqwest
+    //    b. drains the request bytes until "\r\n\r\n" so UpstreamClient
     //       is no longer blocked on writing the body,
     //    c. writes `200 OK` + `text/event-stream` headers,
     //    d. writes ONE valid OpenAI SSE chunk so the pipeline
@@ -3551,7 +3551,7 @@ async fn cancellation_mid_sse_stream_aborts_immediately() {
     //
     //    The server records whether it observed a client-side
     //    close (read returns 0 / Err) AFTER the cancel fires.
-    //    That is the proof that reqwest's connection was actually
+    //    That is the proof that UpstreamClient's connection was actually
     //    torn down as a consequence of the cancellation, not just
     //    that the pipeline's `select!` short-circuited internally.
     // -----------------------------------------------------------------
@@ -3573,7 +3573,7 @@ async fn cancellation_mid_sse_stream_aborts_immediately() {
         // Drain the request line + headers so the client can
         // finish writing its POST body. We bound the read at
         // 32 KiB which is far more than any of the headers +
-        // tiny body reqwest will send.
+        // tiny body the client will send.
         let mut buf = vec![0u8; 32 * 1024];
         let mut total = 0usize;
         loop {
@@ -3642,7 +3642,7 @@ async fn cancellation_mid_sse_stream_aborts_immediately() {
         }
 
         // Now STALL: read the socket until either the client
-        // closes (which is what we want to observe — reqwest
+        // closes (which is what we want to observe — UpstreamClient
         // tears the connection down when the pipeline drops
         // the response future) or 10s elapse. We deliberately
         // do NOT send a `[DONE]` sentinel and do NOT close the
@@ -3661,7 +3661,7 @@ async fn cancellation_mid_sse_stream_aborts_immediately() {
             poll_count += 1;
             match read {
                 // Client closed the connection — this is the
-                // signal that reqwest propagated the
+                // signal that the client propagated the
                 // cancellation all the way down to the socket.
                 Ok(Ok(0)) => {
                     eprintln!(
@@ -3679,7 +3679,7 @@ async fn cancellation_mid_sse_stream_aborts_immediately() {
                     server_bytes.fetch_add(n as u64, Ordering::SeqCst);
                 }
                 // Read errored out (typically a reset from the
-                // peer once reqwest drops the body future).
+                // peer once the client drops the body future).
                 Ok(Err(_)) => {
                     eprintln!("[test server] read errored (poll {})", poll_count);
                     server_client_closed.store(true, Ordering::SeqCst);
@@ -3729,7 +3729,7 @@ async fn cancellation_mid_sse_stream_aborts_immediately() {
     std::sync::Arc::make_mut(&mut req.openai_request).stream = true;
 
     // Drive the cancel ~300ms after the run starts. That's
-    // enough time for reqwest to finish the POST, get the
+    // enough time for UpstreamClient to finish the POST, get the
     // 200 OK, parse the first chunk, and start blocking on
     // the second `bytes_stream().next()`.
     let cancel_tx_clone = cancel_tx.clone();
@@ -3760,7 +3760,7 @@ async fn cancellation_mid_sse_stream_aborts_immediately() {
     //       `UpstreamConnection` from a hung-up socket — the
     //       server kept its side open),
     //    c. the server saw the connection as torn down AFTER
-    //       the cancel fired (i.e. reqwest propagated the
+    //       the cancel fired (i.e. the client propagated the
     //       abort to the socket). This is the proof that the
     //       pipeline's `select!` actually selected the cancel
     //       arm and dropped the body future, instead of
@@ -3870,7 +3870,7 @@ async fn run_with_fake_upstream_and_capture_stages(
 
     let server_handle = tokio::spawn(async move {
         let (mut sock, _peer) = listener.accept().await.expect("accept");
-        // Drain the request headers + body so reqwest's POST
+        // Drain the request headers + body so the client's POST
         // can finish and the response can fly.
         let mut buf = vec![0u8; 64 * 1024];
         let mut total = 0usize;
@@ -4351,7 +4351,7 @@ async fn run_streaming_and_get_response_body(
 
     let server_handle = tokio::spawn(async move {
         let (mut sock, _peer) = listener.accept().await.expect("accept");
-        // Drain request bytes so reqwest's POST can finish.
+        // Drain request bytes so the client's POST can finish.
         let mut buf = vec![0u8; 64 * 1024];
         let mut total = 0usize;
         let mut header_end: Option<usize> = None;

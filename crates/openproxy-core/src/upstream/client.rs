@@ -1,5 +1,5 @@
 //! The `UpstreamClient` — the hyper-based replacement for the
-//! reqwest-based `reqwest::Client` used by the chat pipeline.
+//! UpstreamClient-based `UpstreamClient` used by the chat pipeline.
 //!
 //! See the module-level docs in `mod.rs` for the full architecture;
 //! this file is the implementation.

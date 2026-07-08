@@ -18,9 +18,9 @@
 //! - **API key**: decrypted from the account row, mirroring the
 //!   pipeline's `resolve_target_api_key` helper.
 //!
-//! The upstream call is dispatched via `reqwest` directly (NOT via the
+//! The upstream call is dispatched via `UpstreamClient` directly (NOT via the
 //! hyper-based `UpstreamClient`), so the 8 MiB response cap on
-//! `UpstreamClient::call_inner` does not apply. `reqwest` has
+//! `UpstreamClient::call_inner` does not apply. `UpstreamClient` has
 //! first-class `multipart::Form` support which simplifies the body
 //! construction considerably.
 //!
@@ -62,7 +62,7 @@ use crate::{error::ApiError, middleware::auth::authenticate, state::AppState};
 /// 2. Authenticates via the chat scope.
 /// 3. Resolves routing for the model.
 /// 4. Looks up the adapter, builds the upstream URL, decrypts the API key.
-/// 5. Forwards the request to the upstream via `reqwest`.
+/// 5. Forwards the request to the upstream via `UpstreamClient`.
 /// 6. Returns the upstream response verbatim (body + Content-Type + status).
 /// 7. Records a best-effort usage row.
 pub async fn transcribe(

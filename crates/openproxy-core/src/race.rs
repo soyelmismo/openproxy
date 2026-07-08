@@ -26,7 +26,7 @@ pub enum RaceOutcome {
 ///   response was obtained; `Err` means this lane failed.
 ///
 /// - `handle`: the `JoinHandle` of the task that owns `future` (and any associated resources,
-///   like a reqwest response body). When the race is lost, `run` will `await` this handle for
+///   like an UpstreamClient response body). When the race is lost, `run` will `await` this handle for
 ///   up to `abort_grace_ms` to let the lane write its usage row and drop the body, then
 ///   hard-abort it if the grace window expires.
 ///

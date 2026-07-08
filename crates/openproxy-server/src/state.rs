@@ -7,7 +7,7 @@
 //! - The SQLite [`DbPool`] used for all persistence.
 //! - The [`MasterKey`] used to decrypt provider API keys at request time.
 //! - The registry of built-in [`ProviderAdapter`]s.
-//! - A shared [`reqwest::Client`] used for upstream LLM calls.
+//! - A shared [`UpstreamClient`] used for upstream LLM calls.
 //!
 //! All heavy fields are wrapped in `Arc` so handler signatures stay
 //! cheap-to-clone and the type itself is `Send + Sync` by construction.
@@ -27,7 +27,7 @@ use std::sync::atomic::AtomicBool;
 /// Per-process application state.
 ///
 /// Cheap to clone: every field is either an `Arc` or a cheap handle
-/// (`reqwest::Client` is internally `Arc`-backed, [`AppConfig`] is `Clone`).
+/// (`UpstreamClient` is internally `Arc`-backed, [`AppConfig`] is `Clone`).
 #[derive(Clone)]
 pub struct AppState {
     config: AppConfig,

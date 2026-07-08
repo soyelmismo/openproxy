@@ -133,7 +133,7 @@ pub async fn chat_completions(
 /// `cancel` is the per-request watch receiver produced by the
 /// [`crate::disconnect::client_disconnect_middleware`]. It flips to
 /// `true` on a real TCP-level client disconnect; the pipeline's
-/// dispatch loop, the `reqwest::send()` `tokio::select!`, and the
+/// dispatch loop, the `UpstreamClient::call()` `tokio::select!`, and the
 /// SSE `stream.next()` `tokio::select!` all observe it.
 async fn run_pipeline(
     state: AppState,

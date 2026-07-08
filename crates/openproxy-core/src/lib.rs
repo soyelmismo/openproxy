@@ -73,7 +73,7 @@ pub mod usage;
 
 // Gate 0: hyper-based upstream client. See `upstream/mod.rs` for the
 // architecture and the `upstream-hyper` feature flag in `Cargo.toml`.
-// This module coexists with the existing reqwest-based call sites;
+// This module coexists with the existing hyper-based call sites;
 // Gate 0 does NOT migrate any call site.
 pub mod upstream;
 
@@ -96,7 +96,7 @@ pub use error::{CoreError, ErrorContext, Result};
 /// ponytail: choosing `ring` over `aws-lc-rs` because it's
 /// pure-Rust, smaller in binary size, and has no native
 /// build step. `aws-lc-rs` is also pulled in transitively
-/// by `reqwest` (for the OAuth admin HTTPS calls) but
+/// by `UpstreamClient` (for the OAuth admin HTTPS calls) but
 /// rustls only accepts a single provider per process.
 #[cfg(feature = "upstream-hyper")]
 pub fn install_rustls_crypto_provider() {

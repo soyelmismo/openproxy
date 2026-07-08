@@ -186,7 +186,7 @@ impl UpstreamDispatcher {
     ) -> PipelineResult {
         // Gate 2: both the non-streaming path AND the streaming path
         // now go through the hyper-based `UpstreamClient`
-        // (`PipelineConfig::upstream_client`). The reqwest
+        // (`PipelineConfig::upstream_client`). The UpstreamClient
         // `request_builder` chain is gone from this dispatch.
         //
         // `body_bytes` is pre-serialized by the caller (single pass
@@ -226,7 +226,7 @@ impl UpstreamDispatcher {
         // Caller-supplied headers (auth, content-type overrides from
         // the adapter, etc.) — `post_json` already sets
         // `Content-Type: application/json`, so `insert` overwrites if
-        // a caller header collides (matches the reqwest chain's
+        // a caller header collides (matches the UpstreamClient chain's
         // behavior with `.header(k, v)` which appends; we choose
         // overwrite for determinism — the adapter layer is
         // responsible for not setting conflicting headers).
@@ -368,7 +368,7 @@ impl UpstreamDispatcher {
                     // message must reflect which budget actually fired so
                     // they can tune the right knob. The old mapping (all
                     // → "connect") was a leftover from the pre-migration
-                    // reqwest path that couldn't separate phases.
+                    // legacy UpstreamClient path that couldn't separate phases.
                     // Include the config field name so the operator
                     // knows which timeout to adjust in the dashboard.
                     let (phase_label, config_hint) = match phase {
@@ -1360,7 +1360,7 @@ impl UpstreamDispatcher {
         // structured `ClientDisconnected` result, and the rest
         // collapse to `UpstreamConnection`. The streaming path
         // doesn't have a "total" pre-migration mapping (it was
-        // `phase: "total"` from reqwest's whole-request timeout),
+        // `phase: "total"` from legacy whole-request timeout),
         // so `Body` here maps to the same `"total"` label to keep
         // the dashboards consistent.
         let response_result: std::result::Result<crate::upstream::UpstreamResponse, UpstreamError> =

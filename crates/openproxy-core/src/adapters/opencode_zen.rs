@@ -101,7 +101,7 @@ impl ProviderAdapter for OpenCodeZenAdapter {
             .ok_or_else(|| CoreError::Validation("opencode-zen: models_url is None".into()))?;
 
         // `bearer_auth(api_key)` is the equivalent of the old
-        // `.bearer_auth(api_key)` reqwest call: it sets the
+        // `.bearer_auth(api_key)` UpstreamClient call: it sets the
         // `Authorization: Bearer ***` header. We pass the same
         // string in via the helper.
         let body = upstream_get_json(

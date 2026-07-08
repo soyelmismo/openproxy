@@ -1124,8 +1124,8 @@ pub async fn test_combo_targets(
     // We rely on Axum's natural cancellation instead: when the
     // client drops the response future (closes the tab, navigates
     // away, etc.), the handler future is dropped, which in turn
-    // drops the in-flight `reqwest::RequestBuilder::send()` future
-    // (reqwest is cancel-safe) and aborts the loop. No watcher
+    // drops the in-flight `UpstreamClient::call()` future
+    // (UpstreamClient is cancel-safe) and aborts the loop. No watcher
     // task is needed — and a watcher task is in fact *counter-
     // productive* because it would outlive the handler and never
     // observe the drop. The 180s `tokio::time::timeout` below
@@ -6754,7 +6754,7 @@ mod tests {
     // broke "Test all". The handler now relies on Axum's natural
     // cancellation: when the client drops the response future, the
     // handler future is dropped, which in turn drops the in-flight
-    // `reqwest` future (cancel-safe) and aborts the loop. No watcher
+    // `UpstreamClient` future (cancel-safe) and aborts the loop. No watcher
     // task is needed.
     //
     // No regression test is added here because exercising the

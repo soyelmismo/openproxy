@@ -234,7 +234,7 @@ pub trait ProviderAdapter: Send + Sync {
     /// `{"data": [{...}]}` payload. Providers with a different
     /// response shape override this method. As of Gate 6 the
     /// HTTP transport is the [`UpstreamClient`] (hyper-based, with
-    /// per-phase timeouts); the legacy `reqwest::Client` is no
+    /// per-phase timeouts); the legacy `UpstreamClient` is no
     /// longer threaded through this trait.
     fn fetch_models(
         &self,
