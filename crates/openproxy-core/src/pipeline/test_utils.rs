@@ -361,7 +361,7 @@ pub fn test_config_with_mock(master_key: Arc<MasterKey>, base_url: String) -> Pi
     let mock = MockAdapter {
         config: ProviderAdapterConfig {
             id: ProviderId::new("mock-openai"),
-            base_url: "http://example.com".into(),
+            base_url,
             auth_type: AdapterAuthType::Bearer,
             format: AdapterFormat::Openai,
             extra_headers: Vec::new(),

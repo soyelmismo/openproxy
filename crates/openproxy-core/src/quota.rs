@@ -1045,8 +1045,6 @@ pub async fn fetch_kiro_quota(
         .and_then(|v| v.as_str())
         .map(|s| s.to_string());
 
-    let _overage_enabled = is_kiro_overage_enabled(&data);
-
     let usage_list = data.get("usageBreakdownList").and_then(|v| v.as_array());
 
     let mut session_used = None;
@@ -1096,27 +1094,6 @@ pub async fn fetch_kiro_quota(
         fetch_error: None,
         model_details: None,
     })
-}
-
-fn is_kiro_overage_enabled(data: &serde_json::Value) -> bool {
-    let overage_status = data
-        .get("overageConfiguration")
-        .and_then(|v| v.get("overageStatus"))
-        .and_then(|v| v.as_str())
-        .unwrap_or("")
-        .to_uppercase();
-
-    let overage_enabled_direct = data
-        .get("overageEnabled")
-        .and_then(|v| v.as_bool())
-        .unwrap_or(false);
-    let overage_enabled_config = data
-        .get("overageConfiguration")
-        .and_then(|v| v.get("overageEnabled"))
-        .and_then(|v| v.as_bool())
-        .unwrap_or(false);
-
-    overage_status == "ENABLED" || overage_enabled_direct || overage_enabled_config
 }
 
 // =====================================================================
@@ -2183,32 +2160,5 @@ mod tests {
         assert_eq!(q.plan_name.as_deref(), Some("Codex / ChatGPT"));
     }
 
-    #[test]
-    fn test_is_kiro_overage_enabled() {
-        let body = json!({
-            "overageConfiguration": {
-                "overageStatus": "ENABLED"
-            }
-        });
-        assert!(is_kiro_overage_enabled(&body));
 
-        let body2 = json!({
-            "overageEnabled": true
-        });
-        assert!(is_kiro_overage_enabled(&body2));
-
-        let body3 = json!({
-            "overageConfiguration": {
-                "overageEnabled": true
-            }
-        });
-        assert!(is_kiro_overage_enabled(&body3));
-
-        let body_disabled = json!({
-            "overageConfiguration": {
-                "overageStatus": "DISABLED"
-            }
-        });
-        assert!(!is_kiro_overage_enabled(&body_disabled));
-    }
 }

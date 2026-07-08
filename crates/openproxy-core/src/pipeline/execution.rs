@@ -254,16 +254,7 @@ impl Pipeline {
         combos::expand_account_rotation(&conn, ordered)
     }
 
-    fn adapter_for(
-        &self,
-        provider_id: &crate::ids::ProviderId,
-    ) -> Option<crate::adapters::ProviderAdapterEnum> {
-        self.config
-            .adapters
-            .iter()
-            .find(|a| a.id() == provider_id)
-            .cloned()
-    }
+
 
     #[cfg(test)]
     pub(crate) fn decrypt_account_key(&self, account_id: crate::ids::AccountId) -> Result<String> {
