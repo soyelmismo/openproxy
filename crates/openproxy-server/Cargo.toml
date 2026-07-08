@@ -86,16 +86,6 @@ rusqlite = { workspace = true }
 
 [dev-dependencies]
 tower = { version = "0.5", features = ["util"] }
-# `async_trait` is required by the Gate-C E2E test
-# (`tests/e2e_models_discovery.rs`) for the in-file
-# `TestMockAdapter` impl. The `ProviderAdapter` trait (defined in
-# `openproxy-core`) keeps `#[async_trait]` for dyn-safety — see the
-# trait's doc comment in `crates/openproxy-core/src/adapters.rs` for
-# the full rationale. Any `impl ProviderAdapter for ...` must also
-# carry `#[async_trait]` to match the trait's desugared method
-# signatures, so this dev-dep stays even after the edition-2024
-# upgrade.
-async-trait = { workspace = true }
 # Used by the Gate-C E2E integration test
 # (`tests/e2e_models_discovery.rs`) to get an isolated on-disk
 # SQLite directory per test run. Pulls in a couple of `remove_*`

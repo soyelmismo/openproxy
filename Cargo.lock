@@ -1683,7 +1683,6 @@ dependencies = [
  "aes-gcm",
  "anyhow",
  "argon2",
- "async-trait",
  "axum",
  "base64 0.22.1",
  "bytes",
@@ -1733,7 +1732,6 @@ name = "openproxy-server"
 version = "1.0.0"
 dependencies = [
  "anyhow",
- "async-trait",
  "axum",
  "bytes",
  "chrono",
