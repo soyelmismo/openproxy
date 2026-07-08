@@ -292,6 +292,14 @@ fn configure_connection(conn: &Connection) -> Result<()> {
             message: format!("pragma cache_size: {}", e),
             source: Some(Box::new(e)),
         })?;
+    // Force temporary tables/indices to memory. Solves "disk I/O error"
+    // on large GROUP BY / ORDER BY queries when /tmp is constrained or
+    // lacks permissions.
+    conn.pragma_update(None, "temp_store", "MEMORY")
+        .map_err(|e| CoreError::Database {
+            message: format!("pragma temp_store=MEMORY: {}", e),
+            source: Some(Box::new(e)),
+        })?;
     Ok(())
 }
 
