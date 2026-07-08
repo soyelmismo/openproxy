@@ -196,19 +196,16 @@ pub async fn start(
             "discovery scheduler for {provider} starting",
         );
 
-        tokio::spawn(async move {
-            run_one_provider(
-                provider,
-                adapter,
-                pool,
-                key,
-                upstream,
-                interval,
-                Duration::from_secs(first_delay_secs),
-                task_cancel,
-            )
-            .await;
-        });
+        tokio::spawn(run_one_provider(RunProviderParams {
+            provider,
+            adapter,
+            db_pool: pool,
+            master_key: key,
+            upstream_client: upstream,
+            interval_secs: interval,
+            first_delay: Duration::from_secs(first_delay_secs),
+            cancel: task_cancel,
+        }));
         task_count += 1;
     }
 
@@ -233,8 +230,7 @@ pub async fn start(
 ///     }
 ///   }
 /// ```
-#[allow(clippy::too_many_arguments)]
-async fn run_one_provider(
+struct RunProviderParams {
     provider: ProviderId,
     adapter: crate::adapters::ProviderAdapterEnum,
     db_pool: Arc<DbPool>,
@@ -243,7 +239,19 @@ async fn run_one_provider(
     interval_secs: u64,
     first_delay: Duration,
     cancel: CancellationToken,
-) {
+}
+
+async fn run_one_provider(params: RunProviderParams) {
+    let RunProviderParams {
+        provider,
+        adapter,
+        db_pool,
+        master_key,
+        upstream_client,
+        interval_secs,
+        first_delay,
+        cancel,
+    } = params;
     // First sleep honors the stagger and the cancel signal in
     // the same `select!`. If the operator cancels before the
     // first tick ever fires (e.g. shutdown on a slow boot) we
