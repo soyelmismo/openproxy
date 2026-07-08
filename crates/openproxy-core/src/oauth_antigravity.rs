@@ -355,10 +355,10 @@ pub fn read_project_id(conn: &Connection, account_id: AccountId) -> Result<Optio
             |r| r.get::<_, Option<String>>(0),
         )
         .optional()
-        .map_err(|e| CoreError::Database {
-            message: format!("read_project_id for account {}: {}", account_id.0, e),
-            source: Some(Box::new(e)),
-        })?;
+        .map_err(crate::error::map_db_error_ctx(format!(
+            "read_project_id for account {}",
+            account_id.0
+        )))?;
 
     let Some(raw) = raw.flatten() else {
         return Ok(None);

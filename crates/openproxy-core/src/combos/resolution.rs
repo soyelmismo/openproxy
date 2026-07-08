@@ -101,10 +101,10 @@ fn get_model_context_length(conn: &Connection, model_row_id: ModelRowId) -> Resu
             |row| row.get(0),
         )
         .optional()
-        .map_err(|e| CoreError::Database {
-            message: format!("get_model_context_length {}: {}", model_row_id.0, e),
-            source: Some(Box::new(e)),
-        })?
+        .map_err(crate::error::map_db_error_ctx(format!(
+            "get_model_context_length {}",
+            model_row_id.0
+        )))?
         .flatten();
     Ok(cw)
 }
@@ -262,10 +262,7 @@ fn combos_insert_targets_for_active_models(
                 Ok(n) if n > 0 => added += 1,
                 Ok(_) => {} // UNIQUE collision, no-op
                 Err(e) => {
-                    return Err(CoreError::Database {
-                        message: format!("insert auto target execute: {}", e),
-                        source: Some(Box::new(e)),
-                    });
+                    return Err(crate::error::map_db_error_ctx("insert auto target execute")(e));
                 }
             }
         }

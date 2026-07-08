@@ -882,10 +882,10 @@ pub fn read_profile_meta(
             |r| r.get::<_, Option<String>>(0),
         )
         .optional()
-        .map_err(|e| CoreError::Database {
-            message: format!("kiro read meta for account {}: {}", account_id.0, e),
-            source: Some(Box::new(e)),
-        })?;
+        .map_err(crate::error::map_db_error_ctx(format!(
+            "kiro read meta for account {}",
+            account_id.0
+        )))?;
 
     let Some(raw) = raw.flatten() else {
         return Ok(Some(KiroProviderMeta::default()));

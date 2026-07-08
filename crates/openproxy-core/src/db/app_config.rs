@@ -75,10 +75,9 @@ pub fn load_compression_override_from_db(conn: &Connection) -> Result<Option<Com
             }
         }
         Ok(None) => Ok(None),
-        Err(e) => Err(CoreError::Database {
-            message: format!("iterate load_compression_override: {}", e),
-            source: Some(Box::new(e)),
-        }),
+        Err(e) => Err(crate::error::map_db_error_ctx(
+            "iterate load_compression_override",
+        )(e)),
     }
 }
 
@@ -128,10 +127,9 @@ pub fn load_idle_chunk_retryable_from_db(conn: &Connection) -> Result<Option<boo
             }
         }
         Ok(None) => Ok(None),
-        Err(e) => Err(CoreError::Database {
-            message: format!("iterate load_idle_chunk_retryable: {}", e),
-            source: Some(Box::new(e)),
-        }),
+        Err(e) => Err(crate::error::map_db_error_ctx(
+            "iterate load_idle_chunk_retryable",
+        )(e)),
     }
 }
 
@@ -188,10 +186,9 @@ pub fn load_timeouts_override_from_db(conn: &Connection) -> Result<Option<Timeou
             }
         }
         Ok(None) => Ok(None),
-        Err(e) => Err(CoreError::Database {
-            message: format!("iterate load_timeouts_override: {}", e),
-            source: Some(Box::new(e)),
-        }),
+        Err(e) => Err(crate::error::map_db_error_ctx(
+            "iterate load_timeouts_override",
+        )(e)),
     }
 }
 
@@ -250,10 +247,7 @@ pub fn load_recording_ttl_from_db(conn: &Connection) -> Result<Option<i64>> {
             }
         }
         Ok(None) => Ok(None),
-        Err(e) => Err(CoreError::Database {
-            message: format!("iterate load_recording_ttl: {}", e),
-            source: Some(Box::new(e)),
-        }),
+        Err(e) => Err(crate::error::map_db_error_ctx("iterate load_recording_ttl")(e)),
     }
 }
 
@@ -305,10 +299,9 @@ pub fn load_quota_protection_override_from_db(
             }
         }
         Ok(None) => Ok(None),
-        Err(e) => Err(CoreError::Database {
-            message: format!("iterate load_quota_protection: {}", e),
-            source: Some(Box::new(e)),
-        }),
+        Err(e) => Err(crate::error::map_db_error_ctx(
+            "iterate load_quota_protection",
+        )(e)),
     }
 }
 

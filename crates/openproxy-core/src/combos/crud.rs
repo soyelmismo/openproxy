@@ -31,10 +31,10 @@ pub fn create_combo(
                     name
                 )));
             }
-            return Err(CoreError::Database {
-                message: format!("insert combo {}: {}", name, e),
-                source: Some(Box::new(e)),
-            });
+            return Err(crate::error::map_db_error_ctx(format!(
+                "insert combo {}",
+                name
+            ))(e));
         }
     }
 
@@ -55,10 +55,10 @@ pub fn get_combo(conn: &Connection, id: ComboId) -> Result<Option<Combo>> {
             row_to_combo,
         )
         .optional()
-        .map_err(|e| CoreError::Database {
-            message: format!("get combo {}: {}", id.0, e),
-            source: Some(Box::new(e)),
-        })?;
+        .map_err(crate::error::map_db_error_ctx(format!(
+            "get combo {}",
+            id.0
+        )))?;
     Ok(row)
 }
 
@@ -108,10 +108,10 @@ pub fn get_combo_by_name(conn: &Connection, name: &str) -> Result<Option<Combo>>
 
 pub fn delete_combo(conn: &Connection, id: ComboId) -> Result<()> {
     conn.execute("DELETE FROM combos WHERE id = ?1", params![id.0])
-        .map_err(|e| CoreError::Database {
-            message: format!("delete combo {}: {}", id.0, e),
-            source: Some(Box::new(e)),
-        })?;
+        .map_err(crate::error::map_db_error_ctx(format!(
+            "delete combo {}",
+            id.0
+        )))?;
     Ok(())
 }
 
@@ -156,10 +156,10 @@ pub fn add_target(conn: &Connection, input: AddTargetInput) -> Result<ComboTarge
             |r| r.get::<_, i64>(0),
         )
         .map(|v| v != 0)
-        .map_err(|e| CoreError::Database {
-            message: format!("check combo {} exists: {}", combo_id.0, e),
-            source: Some(Box::new(e)),
-        })?;
+        .map_err(crate::error::map_db_error_ctx(format!(
+            "check combo {} exists",
+            combo_id.0
+        )))?;
     if !combo_exists {
         return Err(CoreError::ComboNotFound(combo_id.0));
     }
@@ -174,10 +174,10 @@ pub fn add_target(conn: &Connection, input: AddTargetInput) -> Result<ComboTarge
                 |r| r.get::<_, i64>(0),
             )
             .map(|v| v != 0)
-            .map_err(|e| CoreError::Database {
-                message: format!("check model {} exists: {}", model_row_id.0, e),
-                source: Some(Box::new(e)),
-            })?;
+            .map_err(crate::error::map_db_error_ctx(format!(
+                "check model {} exists",
+                model_row_id.0
+            )))?;
         if !model_exists {
             return Err(CoreError::Validation(format!(
                 "model_row_id does not exist: {}",
@@ -197,10 +197,10 @@ pub fn add_target(conn: &Connection, input: AddTargetInput) -> Result<ComboTarge
                 params![model_row_id.0],
                 |r| r.get::<_, String>(0),
             )
-            .map_err(|e| CoreError::Database {
-                message: format!("read model {} provider_id: {}", model_row_id.0, e),
-                source: Some(Box::new(e)),
-            })?;
+            .map_err(crate::error::map_db_error_ctx(format!(
+                "read model {} provider_id",
+                model_row_id.0
+            )))?;
         if model_provider != provider_id.as_str() {
             return Err(CoreError::Validation(format!(
                 "model {} belongs to provider '{}', not '{}'",
@@ -223,10 +223,10 @@ pub fn add_target(conn: &Connection, input: AddTargetInput) -> Result<ComboTarge
                 |r| r.get::<_, i64>(0),
             )
             .map(|v| v != 0)
-            .map_err(|e| CoreError::Database {
-                message: format!("check sub-combo {} exists: {}", sub_id.0, e),
-                source: Some(Box::new(e)),
-            })?;
+            .map_err(crate::error::map_db_error_ctx(format!(
+                "check sub-combo {} exists",
+                sub_id.0
+            )))?;
         if !sub_exists {
             return Err(CoreError::Validation(format!(
                 "sub_combo_id does not exist: {}",
@@ -264,10 +264,10 @@ pub fn add_target(conn: &Connection, input: AddTargetInput) -> Result<ComboTarge
                 |r| r.get::<_, i64>(0),
             )
             .map(|v| v != 0)
-            .map_err(|e| CoreError::Database {
-                message: format!("check account {} exists: {}", aid.0, e),
-                source: Some(Box::new(e)),
-            })?;
+            .map_err(crate::error::map_db_error_ctx(format!(
+                "check account {} exists",
+                aid.0
+            )))?;
         if !account_exists {
             return Err(CoreError::AccountNotFound(aid.0));
         }
@@ -287,10 +287,10 @@ pub fn add_target(conn: &Connection, input: AddTargetInput) -> Result<ComboTarge
                 params![mrid.0],
                 |r| r.get::<_, String>(0),
             )
-            .map_err(|e| CoreError::Database {
-                message: format!("read model {} upstream model_id: {}", mrid.0, e),
-                source: Some(Box::new(e)),
-            })?,
+            .map_err(crate::error::map_db_error_ctx(format!(
+                "read model {} upstream model_id",
+                mrid.0
+            )))?,
         )
     } else {
         None
@@ -356,10 +356,7 @@ pub fn add_target(conn: &Connection, input: AddTargetInput) -> Result<ComboTarge
                     combo_id.0, provider_id, account_id, model_row_id, sub_combo_id
                 )));
             }
-            return Err(CoreError::Database {
-                message: format!("insert combo_target: {}", e),
-                source: Some(Box::new(e)),
-            });
+            return Err(crate::error::map_db_error_ctx("insert combo_target")(e));
         }
     }
 
@@ -617,19 +614,19 @@ pub fn get_target(conn: &Connection, id: ComboTargetId) -> Result<Option<ComboTa
             row_to_target,
         )
         .optional()
-        .map_err(|e| CoreError::Database {
-            message: format!("get combo_target {}: {}", id.0, e),
-            source: Some(Box::new(e)),
-        })?;
+        .map_err(crate::error::map_db_error_ctx(format!(
+            "get combo_target {}",
+            id.0
+        )))?;
     Ok(row)
 }
 
 pub fn delete_target(conn: &Connection, id: ComboTargetId) -> Result<()> {
     conn.execute("DELETE FROM combo_targets WHERE id = ?1", params![id.0])
-        .map_err(|e| CoreError::Database {
-            message: format!("delete combo_target {}: {}", id.0, e),
-            source: Some(Box::new(e)),
-        })?;
+        .map_err(crate::error::map_db_error_ctx(format!(
+            "delete combo_target {}",
+            id.0
+        )))?;
     Ok(())
 }
 
@@ -679,10 +676,10 @@ pub fn update_target_weight(
         "UPDATE combo_targets SET weight = ?1 WHERE id = ?2",
         params![weight as i64, target_id.0],
     )
-    .map_err(|e| CoreError::Database {
-        message: format!("update weight for combo_target {}: {}", target_id.0, e),
-        source: Some(Box::new(e)),
-    })?;
+    .map_err(crate::error::map_db_error_ctx(format!(
+        "update weight for combo_target {}",
+        target_id.0
+    )))?;
     Ok(())
 }
 
@@ -780,10 +777,10 @@ pub fn update_combo(conn: &Connection, id: ComboId, race_size: Option<u8>) -> Re
                 "UPDATE combos SET race_size = ?1 WHERE id = ?2",
                 params![rs as i64, id.0],
             )
-            .map_err(|e| CoreError::Database {
-                message: format!("update race_size for combo {}: {}", id.0, e),
-                source: Some(Box::new(e)),
-            })?;
+            .map_err(crate::error::map_db_error_ctx(format!(
+                "update race_size for combo {}",
+                id.0
+            )))?;
         if affected == 0 {
             return Err(CoreError::ComboNotFound(id.0));
         }
@@ -796,10 +793,10 @@ pub fn clear_targets(conn: &Connection, combo_id: ComboId) -> Result<()> {
         "DELETE FROM combo_targets WHERE combo_id = ?1",
         params![combo_id.0],
     )
-    .map_err(|e| CoreError::Database {
-        message: format!("clear combo_targets for combo {}: {}", combo_id.0, e),
-        source: Some(Box::new(e)),
-    })?;
+    .map_err(crate::error::map_db_error_ctx(format!(
+        "clear combo_targets for combo {}",
+        combo_id.0
+    )))?;
     Ok(())
 }
 
@@ -816,10 +813,10 @@ pub fn update_context_window(
             "UPDATE combos SET context_window = ?1 WHERE id = ?2",
             params![context_window, id.0],
         )
-        .map_err(|e| CoreError::Database {
-            message: format!("update context_window for combo {}: {}", id.0, e),
-            source: Some(Box::new(e)),
-        })?;
+        .map_err(crate::error::map_db_error_ctx(format!(
+            "update context_window for combo {}",
+            id.0
+        )))?;
     if affected == 0 {
         return Err(CoreError::ComboNotFound(id.0));
     }
@@ -853,10 +850,10 @@ pub fn update_priority_mode(conn: &Connection, id: ComboId, mode: Option<&str>) 
             "UPDATE combos SET priority_mode = ?1 WHERE id = ?2",
             params![value, id.0],
         )
-        .map_err(|e| CoreError::Database {
-            message: format!("update priority_mode for combo {}: {}", id.0, e),
-            source: Some(Box::new(e)),
-        })?;
+        .map_err(crate::error::map_db_error_ctx(format!(
+            "update priority_mode for combo {}",
+            id.0
+        )))?;
     if affected == 0 {
         return Err(CoreError::ComboNotFound(id.0));
     }
@@ -905,10 +902,10 @@ pub fn update_cooldown_settings(
                 id.0
             ],
         )
-        .map_err(|e| CoreError::Database {
-            message: format!("update cooldown settings for combo {}: {}", id.0, e),
-            source: Some(Box::new(e)),
-        })?;
+        .map_err(crate::error::map_db_error_ctx(format!(
+            "update cooldown settings for combo {}",
+            id.0
+        )))?;
     if affected == 0 {
         return Err(CoreError::ComboNotFound(id.0));
     }
@@ -931,10 +928,10 @@ pub fn update_cooldown_mode(conn: &Connection, id: ComboId, mode: Option<&str>) 
             "UPDATE combos SET cooldown_mode = ?1 WHERE id = ?2",
             params![mode_value, id.0],
         )
-        .map_err(|e| CoreError::Database {
-            message: format!("update cooldown_mode for combo {}: {}", id.0, e),
-            source: Some(Box::new(e)),
-        })?;
+        .map_err(crate::error::map_db_error_ctx(format!(
+            "update cooldown_mode for combo {}",
+            id.0
+        )))?;
     if affected == 0 {
         return Err(CoreError::ComboNotFound(id.0));
     }
@@ -948,10 +945,10 @@ pub fn update_cooldown_base(conn: &Connection, id: ComboId, base: Option<u64>) -
             "UPDATE combos SET cooldown_base_secs = ?1 WHERE id = ?2",
             params![base.map(|v| v as i64), id.0],
         )
-        .map_err(|e| CoreError::Database {
-            message: format!("update cooldown_base_secs for combo {}: {}", id.0, e),
-            source: Some(Box::new(e)),
-        })?;
+        .map_err(crate::error::map_db_error_ctx(format!(
+            "update cooldown_base_secs for combo {}",
+            id.0
+        )))?;
     if affected == 0 {
         return Err(CoreError::ComboNotFound(id.0));
     }
@@ -965,10 +962,10 @@ pub fn update_cooldown_max(conn: &Connection, id: ComboId, max: Option<u64>) -> 
             "UPDATE combos SET cooldown_max_secs = ?1 WHERE id = ?2",
             params![max.map(|v| v as i64), id.0],
         )
-        .map_err(|e| CoreError::Database {
-            message: format!("update cooldown_max_secs for combo {}: {}", id.0, e),
-            source: Some(Box::new(e)),
-        })?;
+        .map_err(crate::error::map_db_error_ctx(format!(
+            "update cooldown_max_secs for combo {}",
+            id.0
+        )))?;
     if affected == 0 {
         return Err(CoreError::ComboNotFound(id.0));
     }
@@ -982,10 +979,10 @@ pub fn update_cooldown_factor(conn: &Connection, id: ComboId, factor: Option<u32
             "UPDATE combos SET cooldown_factor = ?1 WHERE id = ?2",
             params![factor.map(|v| v as i64), id.0],
         )
-        .map_err(|e| CoreError::Database {
-            message: format!("update cooldown_factor for combo {}: {}", id.0, e),
-            source: Some(Box::new(e)),
-        })?;
+        .map_err(crate::error::map_db_error_ctx(format!(
+            "update cooldown_factor for combo {}",
+            id.0
+        )))?;
     if affected == 0 {
         return Err(CoreError::ComboNotFound(id.0));
     }
@@ -1018,10 +1015,10 @@ pub fn update_lkgp_settings(
             "UPDATE combos SET lkgp_exploration_rate = ?1 WHERE id = ?2",
             params![exploration_rate, id.0],
         )
-        .map_err(|e| CoreError::Database {
-            message: format!("update lkgp_exploration_rate for combo {}: {}", id.0, e),
-            source: Some(Box::new(e)),
-        })?;
+        .map_err(crate::error::map_db_error_ctx(format!(
+            "update lkgp_exploration_rate for combo {}",
+            id.0
+        )))?;
     if affected == 0 {
         return Err(CoreError::ComboNotFound(id.0));
     }
@@ -1045,10 +1042,10 @@ pub fn update_selection_window(
             "UPDATE combos SET selection_window_secs = ?1 WHERE id = ?2",
             params![window_secs.map(|v| v as i64), id.0],
         )
-        .map_err(|e| CoreError::Database {
-            message: format!("update selection_window_secs for combo {}: {}", id.0, e),
-            source: Some(Box::new(e)),
-        })?;
+        .map_err(crate::error::map_db_error_ctx(format!(
+            "update selection_window_secs for combo {}",
+            id.0
+        )))?;
     if affected == 0 {
         return Err(CoreError::ComboNotFound(id.0));
     }

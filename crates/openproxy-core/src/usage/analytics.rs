@@ -1338,10 +1338,9 @@ pub fn row_for_broadcast_by_id(conn: &Connection, id: i64) -> Result<Option<Rece
     match row {
         Ok(r) => Ok(r),
         Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
-        Err(e) => Err(CoreError::Database {
-            message: format!("query row_for_broadcast_by_id: {}", e),
-            source: Some(Box::new(e)),
-        }),
+        Err(e) => Err(crate::error::map_db_error_ctx(
+            "query row_for_broadcast_by_id",
+        )(e)),
     }
 }
 
@@ -1647,10 +1646,10 @@ fn collect_rows<T>(
 ) -> Result<Vec<T>> {
     let mut out = Vec::new();
     for r in iter {
-        out.push(r.map_err(|e| CoreError::Database {
-            message: format!("read {} row: {}", query_name, e),
-            source: Some(Box::new(e)),
-        })?);
+        out.push(r.map_err(crate::error::map_db_error_ctx(format!(
+            "read {} row",
+            query_name
+        )))?);
     }
     Ok(out)
 }

@@ -74,10 +74,10 @@ pub fn is_in_cooldown(conn: &Connection, target_id: ComboTargetId) -> Result<boo
             params![target_id.0, now.to_rfc3339()],
             |r| r.get(0),
         )
-        .map_err(|e| CoreError::Database {
-            message: format!("is_in_cooldown({}): {}", target_id.0, e),
-            source: Some(Box::new(e)),
-        })?;
+        .map_err(crate::error::map_db_error_ctx(format!(
+            "is_in_cooldown({})",
+            target_id.0
+        )))?;
     Ok(count > 0)
 }
 
@@ -214,10 +214,7 @@ pub fn record_failure_with_mode(
            updated_at = datetime('now')",
         params![target_id.0, until.to_rfc3339(), reason],
     )
-    .map_err(|e| CoreError::Database {
-        message: format!("record_failure_with_mode({}): {}", target_id.0, e),
-        source: Some(Box::new(e)),
-    })?;
+    .map_err(crate::error::map_db_error_ctx(format!("record_failure_with_mode({})", target_id.0)))?;
     Ok(())
 }
 
@@ -255,10 +252,10 @@ pub fn clear(conn: &Connection, target_id: ComboTargetId) -> Result<()> {
         "DELETE FROM target_cooldowns WHERE combo_target_id = ?1",
         params![target_id.0],
     )
-    .map_err(|e| CoreError::Database {
-        message: format!("clear({}): {}", target_id.0, e),
-        source: Some(Box::new(e)),
-    })?;
+    .map_err(crate::error::map_db_error_ctx(format!(
+        "clear({})",
+        target_id.0
+    )))?;
     Ok(())
 }
 
@@ -365,10 +362,10 @@ pub fn get_for_target(conn: &Connection, target_id: ComboTargetId) -> Result<Opt
             },
         )
         .optional()
-        .map_err(|e| CoreError::Database {
-            message: format!("get_for_target({}): {}", target_id.0, e),
-            source: Some(Box::new(e)),
-        })?;
+        .map_err(crate::error::map_db_error_ctx(format!(
+            "get_for_target({})",
+            target_id.0
+        )))?;
     Ok(row)
 }
 

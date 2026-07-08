@@ -155,10 +155,10 @@ pub fn get(conn: &Connection, id: AccountId) -> Result<Option<Account>> {
             row_to_account,
         )
         .optional()
-        .map_err(|e| CoreError::Database {
-            message: format!("get account {}: {}", id.0, e),
-            source: Some(Box::new(e)),
-        })?;
+        .map_err(crate::error::map_db_error_ctx(format!(
+            "get account {}",
+            id.0
+        )))?;
     Ok(row)
 }
 
@@ -229,10 +229,10 @@ pub fn decrypt_api_key(conn: &Connection, id: AccountId, master_key: &MasterKey)
             |r| r.get(0),
         )
         .optional()
-        .map_err(|e| CoreError::Database {
-            message: format!("select api_key_encrypted for account {}: {}", id.0, e),
-            source: Some(Box::new(e)),
-        })?
+        .map_err(crate::error::map_db_error_ctx(format!(
+            "select api_key_encrypted for account {}",
+            id.0
+        )))?
         .ok_or(CoreError::AccountNotFound(id.0))?;
 
     let blob = blob
@@ -267,10 +267,10 @@ pub fn decrypt_api_key_and_label(
             |r| Ok((r.get(0)?, r.get(1)?)),
         )
         .optional()
-        .map_err(|e| CoreError::Database {
-            message: format!("select api_key+label for account {}: {}", id.0, e),
-            source: Some(Box::new(e)),
-        })?;
+        .map_err(crate::error::map_db_error_ctx(format!(
+            "select api_key+label for account {}",
+            id.0
+        )))?;
     let (blob, label) = match row {
         Some(r) => r,
         None => return Err(CoreError::AccountNotFound(id.0)),
@@ -289,10 +289,10 @@ pub fn set_health(conn: &Connection, id: AccountId, health: HealthStatus) -> Res
             "UPDATE accounts SET health_status = ?1 WHERE id = ?2",
             params![health.as_str(), id.0],
         )
-        .map_err(|e| CoreError::Database {
-            message: format!("update health for account {}: {}", id.0, e),
-            source: Some(Box::new(e)),
-        })?;
+        .map_err(crate::error::map_db_error_ctx(format!(
+            "update health for account {}",
+            id.0
+        )))?;
     if affected == 0 {
         return Err(CoreError::AccountNotFound(id.0));
     }
@@ -312,10 +312,10 @@ pub fn set_rate_limited_until(
             "UPDATE accounts SET rate_limited_until = ?1 WHERE id = ?2",
             params![iso_ts, id.0],
         )
-        .map_err(|e| CoreError::Database {
-            message: format!("update rate_limited_until for account {}: {}", id.0, e),
-            source: Some(Box::new(e)),
-        })?;
+        .map_err(crate::error::map_db_error_ctx(format!(
+            "update rate_limited_until for account {}",
+            id.0
+        )))?;
     if affected == 0 {
         return Err(CoreError::AccountNotFound(id.0));
     }
@@ -368,10 +368,10 @@ pub fn set_quota(conn: &Connection, id: AccountId, q: &crate::quota::AccountQuot
                 id.0,
             ],
         )
-        .map_err(|e| CoreError::Database {
-            message: format!("update quota for account {}: {}", id.0, e),
-            source: Some(Box::new(e)),
-        })?;
+        .map_err(crate::error::map_db_error_ctx(format!(
+            "update quota for account {}",
+            id.0
+        )))?;
     if affected == 0 {
         return Err(CoreError::AccountNotFound(id.0));
     }
@@ -401,10 +401,10 @@ pub fn update_api_key(
             "UPDATE accounts SET api_key_encrypted = ?1 WHERE id = ?2",
             params![blob, id.0],
         )
-        .map_err(|e| CoreError::Database {
-            message: format!("update api_key for account {}: {}", id.0, e),
-            source: Some(Box::new(e)),
-        })?;
+        .map_err(crate::error::map_db_error_ctx(format!(
+            "update api_key for account {}",
+            id.0
+        )))?;
     if affected == 0 {
         return Err(CoreError::AccountNotFound(id.0));
     }
@@ -432,15 +432,15 @@ pub fn delete(conn: &Connection, id: AccountId) -> Result<()> {
         "UPDATE combo_targets SET account_id = NULL WHERE account_id = ?1",
         params![id.0],
     )
-    .map_err(|e| CoreError::Database {
-        message: format!("null combo_targets.account_id for account {}: {}", id.0, e),
-        source: Some(Box::new(e)),
-    })?;
+    .map_err(crate::error::map_db_error_ctx(format!(
+        "null combo_targets.account_id for account {}",
+        id.0
+    )))?;
     conn.execute("DELETE FROM accounts WHERE id = ?1", params![id.0])
-        .map_err(|e| CoreError::Database {
-            message: format!("delete account {}: {}", id.0, e),
-            source: Some(Box::new(e)),
-        })?;
+        .map_err(crate::error::map_db_error_ctx(format!(
+            "delete account {}",
+            id.0
+        )))?;
     Ok(())
 }
 
@@ -513,10 +513,10 @@ pub fn store_oauth_tokens(
                 id.0,
             ],
         )
-        .map_err(|e| CoreError::Database {
-            message: format!("store_oauth_tokens for account {}: {}", id.0, e),
-            source: Some(Box::new(e)),
-        })?;
+        .map_err(crate::error::map_db_error_ctx(format!(
+            "store_oauth_tokens for account {}",
+            id.0
+        )))?;
     if affected == 0 {
         return Err(CoreError::AccountNotFound(id.0));
     }
@@ -536,10 +536,10 @@ pub fn decrypt_access_token(
             |r| r.get(0),
         )
         .optional()
-        .map_err(|e| CoreError::Database {
-            message: format!("select access_token for account {}: {}", id.0, e),
-            source: Some(Box::new(e)),
-        })?
+        .map_err(crate::error::map_db_error_ctx(format!(
+            "select access_token for account {}",
+            id.0
+        )))?
         .ok_or(CoreError::AccountNotFound(id.0))?;
 
     let blob = blob.ok_or_else(|| {
@@ -562,10 +562,10 @@ pub fn decrypt_refresh_token(
             |r| r.get(0),
         )
         .optional()
-        .map_err(|e| CoreError::Database {
-            message: format!("select refresh_token for account {}: {}", id.0, e),
-            source: Some(Box::new(e)),
-        })?
+        .map_err(crate::error::map_db_error_ctx(format!(
+            "select refresh_token for account {}",
+            id.0
+        )))?
         .ok_or(CoreError::AccountNotFound(id.0))?;
 
     match blob {

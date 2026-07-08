@@ -74,10 +74,9 @@ impl DbPool {
     pub fn open(path: &Path) -> Result<Self> {
         let flags = OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_CREATE;
 
-        let writer = Connection::open_with_flags(path, flags).map_err(|e| CoreError::Database {
-            message: format!("open {}: {}", path.display(), e),
-            source: Some(Box::new(e)),
-        })?;
+        let writer = Connection::open_with_flags(path, flags).map_err(
+            crate::error::map_db_error_ctx(format!("open {}", path.display())),
+        )?;
 
         // SQLite defaults to creating temporary files in /tmp or /var/tmp which might
         // not be writable in some containers or could fill up quickly, causing
@@ -95,10 +94,9 @@ impl DbPool {
         // Reader: open a second handle on the same file. Cloning the writer
         // would also work, but a fresh open is explicit and avoids sharing any
         // per-connection state that might be written during the writer setup.
-        let reader = Connection::open_with_flags(path, flags).map_err(|e| CoreError::Database {
-            message: format!("open reader {}: {}", path.display(), e),
-            source: Some(Box::new(e)),
-        })?;
+        let reader = Connection::open_with_flags(path, flags).map_err(
+            crate::error::map_db_error_ctx(format!("open reader {}", path.display())),
+        )?;
 
         configure_connection(&reader)?;
 
@@ -189,19 +187,15 @@ impl DbPool {
         // The old Connection is dropped (closed) when we assign the
         // new one. rusqlite::Connection::drop closes the SQLite
         // handle.
-        let new_writer =
-            Connection::open_with_flags(&*self.path, flags).map_err(|e| CoreError::Database {
-                message: format!("reopen writer {}: {}", self.path.display(), e),
-                source: Some(Box::new(e)),
-            })?;
+        let new_writer = Connection::open_with_flags(&*self.path, flags).map_err(
+            crate::error::map_db_error_ctx(format!("reopen writer {}", self.path.display())),
+        )?;
         configure_connection(&new_writer)?;
 
         // Reopen the reader. We need to take the reader lock too.
-        let new_reader =
-            Connection::open_with_flags(&*self.path, flags).map_err(|e| CoreError::Database {
-                message: format!("reopen reader {}: {}", self.path.display(), e),
-                source: Some(Box::new(e)),
-            })?;
+        let new_reader = Connection::open_with_flags(&*self.path, flags).map_err(
+            crate::error::map_db_error_ctx(format!("reopen reader {}", self.path.display())),
+        )?;
         configure_connection(&new_reader)?;
 
         // Replace the connections. The old connections are dropped

@@ -303,10 +303,10 @@ pub fn set_active(conn: &Connection, id: ModelRowId, active: bool) -> Result<()>
         "UPDATE models SET active = ?1 WHERE id = ?2",
         params![bit, id.0],
     )
-    .map_err(|e| CoreError::Database {
-        message: format!("update active for model {}: {}", id.0, e),
-        source: Some(Box::new(e)),
-    })?;
+    .map_err(crate::error::map_db_error_ctx(format!(
+        "update active for model {}",
+        id.0
+    )))?;
     Ok(())
 }
 
@@ -322,10 +322,10 @@ pub fn set_active_bulk(conn: &Connection, provider: &ProviderId, active: bool) -
             "UPDATE models SET active = ?1 WHERE provider_id = ?2 AND custom = 0",
             params![bit, provider.as_str()],
         )
-        .map_err(|e| CoreError::Database {
-            message: format!("set_active_bulk for {}: {}", provider, e),
-            source: Some(Box::new(e)),
-        })?;
+        .map_err(crate::error::map_db_error_ctx(format!(
+            "set_active_bulk for {}",
+            provider
+        )))?;
     Ok(n as u64)
 }
 
@@ -479,10 +479,10 @@ pub fn set_test_status(conn: &Connection, id: ModelRowId, status: i32) -> Result
          WHERE id = ?2",
         params![status, id.0],
     )
-    .map_err(|e| CoreError::Database {
-        message: format!("update test status for model {}: {}", id.0, e),
-        source: Some(Box::new(e)),
-    })?;
+    .map_err(crate::error::map_db_error_ctx(format!(
+        "update test status for model {}",
+        id.0
+    )))?;
     Ok(())
 }
 
@@ -505,10 +505,10 @@ pub fn delete(conn: &Connection, id: ModelRowId) -> Result<u64> {
     // No pre-emptive cleanup needed.
     let removed = tx
         .execute("DELETE FROM models WHERE id = ?1", params![id.0])
-        .map_err(|e| CoreError::Database {
-            message: format!("delete model {}: {}", id.0, e),
-            source: Some(Box::new(e)),
-        })?;
+        .map_err(crate::error::map_db_error_ctx(format!(
+            "delete model {}",
+            id.0
+        )))?;
 
     tx.commit().map_err(crate::error::map_db_error)?;
 
@@ -712,10 +712,10 @@ pub fn apply_auto_activation(
             params![provider.as_str()],
         ),
     }
-    .map_err(|e| CoreError::Database {
-        message: format!("apply_auto_activation for {}: {}", provider, e),
-        source: Some(Box::new(e)),
-    })?;
+    .map_err(crate::error::map_db_error_ctx(format!(
+        "apply_auto_activation for {}",
+        provider
+    )))?;
 
     // ----------------------------------------------------------------
     // Step 3: insert `model_auto_activated` notifications for the rows

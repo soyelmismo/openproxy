@@ -215,10 +215,10 @@ pub fn create(conn: &Connection, new: NewProvider<'_>) -> Result<()> {
             if msg.contains("UNIQUE") || msg.contains("PRIMARY KEY") {
                 Err(CoreError::Validation("provider id already exists".into()))
             } else {
-                Err(CoreError::Database {
-                    message: format!("insert provider {}: {}", id, e),
-                    source: Some(Box::new(e)),
-                })
+                Err(crate::error::map_db_error_ctx(format!(
+                    "insert provider {}",
+                    id
+                ))(e))
             }
         }
     }
@@ -238,10 +238,7 @@ pub fn get(conn: &Connection, id: &ProviderId) -> Result<Option<Provider>> {
             row_to_provider,
         )
         .optional()
-        .map_err(|e| CoreError::Database {
-            message: format!("get provider {}: {}", id, e),
-            source: Some(Box::new(e)),
-        })?;
+        .map_err(crate::error::map_db_error_ctx(format!("get provider {}", id)))?;
     Ok(row)
 }
 
@@ -323,10 +320,10 @@ pub fn set_active(conn: &Connection, id: &ProviderId, active: bool) -> Result<()
         "UPDATE providers SET active = ?1 WHERE id = ?2",
         params![active as i64, id.as_str()],
     )
-    .map_err(|e| CoreError::Database {
-        message: format!("set active for provider {}: {}", id, e),
-        source: Some(Box::new(e)),
-    })?;
+    .map_err(crate::error::map_db_error_ctx(format!(
+        "set active for provider {}",
+        id
+    )))?;
     Ok(())
 }
 
@@ -335,10 +332,10 @@ pub fn set_active(conn: &Connection, id: &ProviderId, active: bool) -> Result<()
 /// idempotent.
 pub fn delete(conn: &Connection, id: &ProviderId) -> Result<()> {
     conn.execute("DELETE FROM providers WHERE id = ?1", params![id.as_str()])
-        .map_err(|e| CoreError::Database {
-            message: format!("delete provider {}: {}", id, e),
-            source: Some(Box::new(e)),
-        })?;
+        .map_err(crate::error::map_db_error_ctx(format!(
+            "delete provider {}",
+            id
+        )))?;
     Ok(())
 }
 
@@ -415,10 +412,10 @@ pub fn update(
 
     let affected = conn
         .execute(&sql, rusqlite::params_from_iter(bound.iter().copied()))
-        .map_err(|e| CoreError::Database {
-            message: format!("update provider {}: {}", id, e),
-            source: Some(Box::new(e)),
-        })?;
+        .map_err(crate::error::map_db_error_ctx(format!(
+            "update provider {}",
+            id
+        )))?;
 
     if affected == 0 {
         return Err(CoreError::ProviderNotFound(id.to_string()));
@@ -436,10 +433,10 @@ pub fn update_current_proxy(
         "UPDATE providers SET current_proxy_id = ?1 WHERE id = ?2",
         params![proxy_id, id.as_str()],
     )
-    .map_err(|e| CoreError::Database {
-        message: format!("update current proxy for provider {}: {}", id, e),
-        source: Some(Box::new(e)),
-    })?;
+    .map_err(crate::error::map_db_error_ctx(format!(
+        "update current proxy for provider {}",
+        id
+    )))?;
     Ok(())
 }
 

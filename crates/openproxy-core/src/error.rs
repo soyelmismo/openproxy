@@ -11,6 +11,16 @@ pub fn map_db_error<E: std::error::Error + Send + Sync + 'static>(e: E) -> CoreE
     }
 }
 
+pub fn map_db_error_ctx<E: std::error::Error + Send + Sync + 'static>(
+    ctx: impl Into<String>,
+) -> impl FnOnce(E) -> CoreError {
+    let ctx = ctx.into();
+    move |e| CoreError::Database {
+        message: format!("{}: {}", ctx, e),
+        source: Some(Box::new(e)),
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ErrorContext {
     pub request_id: RequestId,

@@ -170,10 +170,10 @@ fn provider_is_active(conn: &Connection, provider_id: &ProviderId) -> Result<boo
             |row| row.get(0),
         )
         .optional()
-        .map_err(|e| CoreError::Database {
-            message: format!("provider_is_active({}): {}", provider_id, e),
-            source: Some(Box::new(e)),
-        })?;
+        .map_err(crate::error::map_db_error_ctx(format!(
+            "provider_is_active({})",
+            provider_id
+        )))?;
     Ok(active.unwrap_or(0) != 0)
 }
 
@@ -194,10 +194,10 @@ fn find_healthy_account(conn: &Connection, provider_id: &ProviderId) -> Result<O
             |row| row.get(0),
         )
         .optional()
-        .map_err(|e| CoreError::Database {
-            message: format!("find_healthy_account({}): {}", provider_id, e),
-            source: Some(Box::new(e)),
-        })?;
+        .map_err(crate::error::map_db_error_ctx(format!(
+            "find_healthy_account({})",
+            provider_id
+        )))?;
     Ok(id.map(AccountId))
 }
 
