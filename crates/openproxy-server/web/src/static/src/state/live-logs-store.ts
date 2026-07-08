@@ -212,7 +212,7 @@ class LiveLogsStore {
 
     let attempt = this.attemptsByKey.get(attemptKey);
     if (!attempt) {
-      const startedAt = Date.parse(row.created_at);
+      const startedAt = Date.parse(row.created_at.endsWith("Z") ? row.created_at : row.created_at + "Z");
       attempt = {
         attemptKey,
         requestId: row.request_id,
