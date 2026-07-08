@@ -139,7 +139,7 @@ async fn run_pipeline(
     state: AppState,
     _cancel: CancelWatch,
     headers: HeaderMap,
-    body: serde_json::Value,
+    body: Arc<serde_json::Value>,
     auth_result: Option<ValidatedApiToken>,
     resolved_route: crate::middleware::routing::ResolvedRoute,
 ) -> Result<axum::response::Response, ApiError> {
@@ -183,7 +183,7 @@ async fn run_pipeline(
         combo_override,
         targets_override,
         request_headers: redact_sensitive_headers(&headers),
-        request_body_json: Some(Arc::new(raw_request_body)),
+        request_body_json: Some(raw_request_body),
         race_cancelled: false,
         race_cancel: None,
         endpoint_kind: openproxy_core::endpoint::EndpointKind::Chat,
