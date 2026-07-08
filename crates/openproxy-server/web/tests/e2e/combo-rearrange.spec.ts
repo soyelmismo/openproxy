@@ -74,8 +74,8 @@ test.describe('Combo Re-arrange functionality', () => {
 
     // Assert initial order in DOM
     const rows = await page.locator('tbody tr').all();
-    expect(await rows[0].getAttribute('data-drag-id')).toBe('101');
-    expect(await rows[1].getAttribute('data-drag-id')).toBe('102');
+    expect(await rows[0]!.getAttribute('data-drag-id')).toBe('101');
+    expect(await rows[1]!.getAttribute('data-drag-id')).toBe('102');
 
     // Click the "Down" button on the first row (target 101)
     const downBtn = row1.locator('button:text-is("↓")');
