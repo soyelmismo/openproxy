@@ -282,7 +282,7 @@ async fn handle_streaming_response(
     let (error_tx, error_rx) = tokio::sync::mpsc::channel::<bytes::Bytes>(1);
 
     tokio::spawn(async move {
-        let result = pipeline.run(Arc::new(req)).await;
+        let result = pipeline.run(req).await;
         let _ = done_tx.send(());
 
         if let Some(err) = result.error {
@@ -337,7 +337,7 @@ async fn handle_sync_response(
     done_tx: tokio::sync::oneshot::Sender<()>,
 ) -> Result<axum::response::Response, ApiError> {
     let started = Instant::now();
-    let result = pipeline.run(Arc::new(req)).await;
+    let result = pipeline.run(req).await;
     let _ = done_tx.send(());
     let elapsed_ms = started.elapsed().as_millis();
 

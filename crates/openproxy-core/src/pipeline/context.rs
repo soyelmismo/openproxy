@@ -1,7 +1,6 @@
 use crate::combos::{Combo, ComboTarget};
 use crate::models::Model;
 use crate::pipeline::{Pipeline, PipelineRequest};
-use std::sync::Arc;
 
 #[derive(Clone, Debug)]
 pub struct CustomProviderMeta {
@@ -25,7 +24,7 @@ pub struct ResolvedTarget {
 /// The execution context passed through the pipeline stages.
 #[derive(Clone)]
 pub struct PipelineContext {
-    pub req: Arc<PipelineRequest>,
+    pub req: PipelineRequest,
     pub pipeline: Pipeline,
 
     // State populated by outer stages
@@ -49,7 +48,7 @@ pub struct PipelineContext {
 }
 
 impl PipelineContext {
-    pub fn new(req: Arc<PipelineRequest>, pipeline: Pipeline) -> Self {
+    pub fn new(req: PipelineRequest, pipeline: Pipeline) -> Self {
         let trace_id = req.trace_id.to_string();
         Self {
             req,

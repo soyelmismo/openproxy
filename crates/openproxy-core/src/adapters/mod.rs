@@ -264,7 +264,7 @@ pub trait ProviderAdapter: Send + Sync {
     fn execute_custom(
         &self,
         _upstream_client: &Arc<crate::upstream::UpstreamClient>,
-        _req: Arc<crate::pipeline::PipelineRequest>,
+        _req: crate::pipeline::PipelineRequest,
         _resolved_target: &crate::pipeline::context::ResolvedTarget,
         _ctx: Option<CustomExecutionContext>,
     ) -> impl std::future::Future<
@@ -367,7 +367,7 @@ macro_rules! define_provider_adapter {
             async fn execute_custom(
                 &self,
                 upstream_client: &std::sync::Arc<$crate::upstream::UpstreamClient>,
-                req: std::sync::Arc<$crate::pipeline::PipelineRequest>,
+                req: $crate::pipeline::PipelineRequest,
                 resolved_target: &$crate::pipeline::context::ResolvedTarget,
                 ctx: Option<$crate::adapters::CustomExecutionContext>,
             ) -> Option<std::result::Result<$crate::translation::OpenAIResponse, $crate::error::CoreError>> {

@@ -114,7 +114,7 @@ impl RaceSink {
     /// clone and can be sent across tasks.
     pub fn handle(self: &Arc<Self>, worker_id: usize) -> RaceSinkHandle {
         RaceSinkHandle {
-            sink: Arc::clone(self),
+            sink: self.clone(),
             worker_id,
         }
     }

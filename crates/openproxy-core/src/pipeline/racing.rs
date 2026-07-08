@@ -6,7 +6,7 @@ use std::sync::Arc;
 
 pub(crate) async fn run_race(
     pipeline: &crate::pipeline::Pipeline,
-    req: Arc<PipelineRequest>,
+    req: PipelineRequest,
     combo: &Combo,
     to_run: Vec<crate::pipeline::context::ResolvedTarget>,
     race_size: u8,
@@ -59,7 +59,7 @@ pub(crate) async fn run_race(
     #[allow(clippy::needless_range_loop)]
     for worker_idx in 0..num_workers as usize {
         let p = pipeline.clone();
-        let mut req = (*req).clone();
+        let mut req = req.clone();
 
         let handle = race_sink.handle(worker_idx);
         req.stream_sink = Some(crate::race_sink::StreamSink::Race(handle));
@@ -104,9 +104,9 @@ pub(crate) async fn run_race(
                     return;
                 }
 
-                let req_arc = Arc::new(req.clone());
+                let _req_arc = Arc::new(req.clone());
                 let result = p
-                    .execute_single(req_arc, &combo, &target, 1, race_size, &worker_token)
+                    .execute_single(req.clone(), &combo, &target, 1, race_size, &worker_token)
                     .await;
 
                 if result.error.is_none() {

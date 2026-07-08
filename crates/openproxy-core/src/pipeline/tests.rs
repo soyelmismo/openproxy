@@ -216,7 +216,7 @@ async fn pipeline_run_with_no_targets_returns_502() {
     let p = Pipeline::new(conn, cfg);
 
     let (req, _dis_tx) = make_request(combo_id);
-    let result = p.run(std::sync::Arc::new(req)).await;
+    let result = p.run(req).await;
 
     // NoHealthyTargets is the failure path: 502 per `http_status()`.
     assert_eq!(result.status_code, 502, "no eligible targets → 502");
@@ -256,7 +256,7 @@ async fn pipeline_run_no_targets_records_usage_row() {
     let p = Pipeline::new(conn, cfg);
 
     let (req, _dis_tx) = make_request(combo_id);
-    let _ = p.run(std::sync::Arc::new(req)).await;
+    let _ = p.run(req).await;
 
     // A usage row should now exist. The dashboard reads this via
     // /admin/usage/recent.
@@ -325,7 +325,7 @@ async fn auto_populate_fills_combo_then_runs() {
     let p = Pipeline::new(conn, cfg);
 
     let (req, _dis_tx) = make_request(combo_id);
-    let result = p.run(std::sync::Arc::new(req)).await;
+    let result = p.run(req).await;
 
     // The combo was auto-populated. The pipeline's `execute_single`
     // would normally dispatch to a real adapter; with an empty
@@ -545,7 +545,7 @@ async fn pipeline_probes_parked_target_when_only_option() {
     let p = Pipeline::new(conn, cfg);
 
     let (req, _dis_tx) = make_request(combo_id);
-    let result = p.run(std::sync::Arc::new(req)).await;
+    let result = p.run(req).await;
 
     // (a) + (b) The pipeline must NOT surface NoHealthyTargets;
     // the dispatch loop walked the parked target and recorded
@@ -680,7 +680,7 @@ async fn pipeline_walks_full_row_when_all_targets_in_cooldown() {
     let p = Pipeline::new(conn, cfg);
 
     let (req, _dis_tx) = make_request(combo_id);
-    let result = p.run(std::sync::Arc::new(req)).await;
+    let result = p.run(req).await;
 
     // (a) + (b) The result must NOT be a NoHealthyTargets
     // 502 short-circuit. The dispatch loop walked the full
@@ -969,7 +969,7 @@ async fn priority_combo_walks_row_after_first_5xx() {
     let p = Pipeline::new(conn, cfg);
 
     let (req, _cancel_tx) = make_request(combo_id);
-    let result = tokio::time::timeout(Duration::from_secs(15), p.run(std::sync::Arc::new(req)))
+    let result = tokio::time::timeout(Duration::from_secs(15), p.run(req))
         .await
         .expect("pipeline.run timed out");
 
@@ -1209,7 +1209,7 @@ async fn adversarial_priority_combo_with_5_targets_walks_to_5th_when_all_fail() 
     let p = Pipeline::new(conn, cfg);
 
     let (req, _cancel_tx) = make_request(combo_id);
-    let result = tokio::time::timeout(Duration::from_secs(15), p.run(std::sync::Arc::new(req)))
+    let result = tokio::time::timeout(Duration::from_secs(15), p.run(req))
         .await
         .expect("pipeline.run timed out");
 
@@ -1403,7 +1403,7 @@ async fn adversarial_priority_combo_with_mixed_4xx_5xx_walks_to_first_2xx() {
     let p = Pipeline::new(conn, cfg);
 
     let (req, _cancel_tx) = make_request(combo_id);
-    let result = tokio::time::timeout(Duration::from_secs(15), p.run(std::sync::Arc::new(req)))
+    let result = tokio::time::timeout(Duration::from_secs(15), p.run(req))
         .await
         .expect("pipeline.run timed out");
 
@@ -1594,7 +1594,7 @@ data: [DONE]
     let p = Pipeline::new(conn, cfg);
 
     let (req, _cancel_tx) = make_request(combo_id);
-    let result = tokio::time::timeout(Duration::from_secs(15), p.run(std::sync::Arc::new(req)))
+    let result = tokio::time::timeout(Duration::from_secs(15), p.run(req))
         .await
         .expect("pipeline.run timed out");
 
@@ -1803,7 +1803,7 @@ async fn nested_combo_falls_through_to_parent_sibling_on_subcombo_failure() {
     let p = Pipeline::new(conn, cfg);
 
     let (req, _cancel_tx) = make_request(parent_combo_id);
-    let result = tokio::time::timeout(Duration::from_secs(15), p.run(std::sync::Arc::new(req)))
+    let result = tokio::time::timeout(Duration::from_secs(15), p.run(req))
         .await
         .expect("pipeline.run timed out");
 
@@ -1910,7 +1910,7 @@ async fn adversarial_priority_combo_with_zero_eligible_targets_fails_fast() {
     let (req, _dis_tx) = make_request(combo_id);
     let t0 = Instant::now();
     // Bounded: 10s is plenty for a 3-target row to fail fast.
-    let result = tokio::time::timeout(Duration::from_secs(10), p.run(std::sync::Arc::new(req)))
+    let result = tokio::time::timeout(Duration::from_secs(10), p.run(req))
         .await
         .expect("pipeline.run timed out — the priority walk is hanging on the parked targets");
     let elapsed = t0.elapsed();
@@ -2072,7 +2072,7 @@ async fn adversarial_priority_combo_respects_max_attempts_for_same_provider() {
     };
     let p = Pipeline::new(conn, cfg);
     let (req, _cancel_tx) = make_request(combo_id);
-    let result = tokio::time::timeout(Duration::from_secs(15), p.run(std::sync::Arc::new(req)))
+    let result = tokio::time::timeout(Duration::from_secs(15), p.run(req))
         .await
         .expect("pipeline.run timed out");
 
@@ -2283,7 +2283,7 @@ async fn bug4_per_target_retry_exhausts_then_falls_through_to_next_target() {
     };
     let p = Pipeline::new(conn, cfg);
     let (req, _cancel_tx) = make_request(combo_id);
-    let result = tokio::time::timeout(Duration::from_secs(15), p.run(std::sync::Arc::new(req)))
+    let result = tokio::time::timeout(Duration::from_secs(15), p.run(req))
         .await
         .expect("pipeline.run timed out");
 
@@ -2513,7 +2513,7 @@ async fn combo_with_all_accounts_in_circuit_breaker_does_not_short_circuit() {
     }
 
     let (req, _dis_tx) = make_request(combo_id);
-    let result = p.run(std::sync::Arc::new(req)).await;
+    let result = p.run(req).await;
 
     // The current code (with only the cooldown-table fix in
     // place) returns `NoHealthyTargets` here because:
@@ -2724,7 +2724,7 @@ async fn cancellation_during_request_aborts_with_499() {
     let (req, cancel_tx) = make_request(combo_id);
     cancel_tx.send(true).expect("send cancel");
 
-    let result = tokio::time::timeout(Duration::from_secs(3), p.run(std::sync::Arc::new(req)))
+    let result = tokio::time::timeout(Duration::from_secs(3), p.run(req))
         .await
         .expect("pipeline.run did not abort within 3s — cancellation is broken");
 
@@ -2767,7 +2767,7 @@ async fn cancellation_does_not_park_target_in_cooldown_or_circuit_breaker() {
     // incrementing the CB.
     cancel_tx.send(true).expect("send cancel");
 
-    p.run(std::sync::Arc::new(req)).await;
+    p.run(req).await;
 
     // 1. target_cooldowns is empty. The schema is keyed by
     //    `combo_target_id` (not `target_id`); see
@@ -2933,7 +2933,7 @@ async fn non_streaming_dispatch_uses_upstream_client_end_to_end() {
     let (req, _cancel_tx) = make_request(combo_id);
 
     // ----- 4. Run the pipeline and assert success -----
-    let result = tokio::time::timeout(Duration::from_secs(15), p.run(std::sync::Arc::new(req)))
+    let result = tokio::time::timeout(Duration::from_secs(15), p.run(req))
         .await
         .expect("pipeline.run timed out — non-streaming dispatch did not return");
 
@@ -3079,7 +3079,7 @@ async fn bug_a_body_reaches_upstream() {
 
     let (req, _cancel_tx) = make_request(combo_id);
 
-    let result = tokio::time::timeout(Duration::from_secs(15), p.run(std::sync::Arc::new(req)))
+    let result = tokio::time::timeout(Duration::from_secs(15), p.run(req))
         .await
         .expect("pipeline.run timed out — body-reaches-upstream did not return");
 
@@ -3284,7 +3284,7 @@ async fn streaming_dispatch_uses_upstream_client_end_to_end() {
     //         can report it in the panic message; the
     //         streaming dispatch populates the sink as a
     //         side effect. -----
-    let result = tokio::time::timeout(Duration::from_secs(15), p.run(std::sync::Arc::new(req)))
+    let result = tokio::time::timeout(Duration::from_secs(15), p.run(req))
         .await
         .expect("streaming pipeline.run timed out — next_chunk() did not return");
 
@@ -3427,7 +3427,7 @@ async fn cancellation_during_streaming_aborts_response_stream() {
     req.openai_request.stream = true;
     cancel_tx.send(true).expect("send cancel");
 
-    let result = tokio::time::timeout(Duration::from_secs(3), p.run(std::sync::Arc::new(req)))
+    let result = tokio::time::timeout(Duration::from_secs(3), p.run(req))
         .await
         .expect(
             "streaming pipeline.run did not abort within 3s of cancel — \
@@ -3738,7 +3738,7 @@ async fn cancellation_mid_sse_stream_aborts_immediately() {
         let _ = cancel_tx_clone.send(true);
     });
 
-    let result = tokio::time::timeout(Duration::from_secs(3), p.run(std::sync::Arc::new(req)))
+    let result = tokio::time::timeout(Duration::from_secs(3), p.run(req))
         .await
         .expect(
             "mid-stream cancellation: pipeline.run did not abort within 3s of \
@@ -3989,7 +3989,7 @@ async fn run_with_fake_upstream_and_capture_stages(
     let request_id_str = request_id.to_string();
 
     // 5. Run the pipeline.
-    let result = tokio::time::timeout(Duration::from_secs(15), p.run(std::sync::Arc::new(req)))
+    let result = tokio::time::timeout(Duration::from_secs(15), p.run(req))
         .await
         .expect("pipeline.run timed out");
     // Keep the sink receiver alive until after the pipeline
@@ -4517,7 +4517,7 @@ async fn run_streaming_and_get_response_body(
     let (sink_tx, mut sink_rx) = mpsc::channel::<bytes::Bytes>(32);
     req.stream_sink = Some(crate::race_sink::StreamSink::Direct(sink_tx));
 
-    let result = tokio::time::timeout(Duration::from_secs(15), p.run(std::sync::Arc::new(req)))
+    let result = tokio::time::timeout(Duration::from_secs(15), p.run(req))
         .await
         .expect("pipeline.run timed out — streaming response body did not complete");
     // Drain the sink so the channel can close cleanly.

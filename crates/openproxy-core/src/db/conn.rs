@@ -133,7 +133,7 @@ impl DbPool {
     /// spawned tasks; multiple consumers can hold the same handle and each
     /// `lock()` call serializes as before.
     pub fn writer_arc(&self) -> Arc<Mutex<Connection>> {
-        Arc::clone(&self.writer)
+        self.writer.clone()
     }
 
     /// Acquire the serialized reader. Blocks until the previous reader is released.

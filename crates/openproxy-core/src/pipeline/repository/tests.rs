@@ -364,7 +364,7 @@ fn circuit_breaker_unhealthy_filter_drops_target_before_cooldown_snapshot() {
         .enable_all()
         .build()
         .unwrap();
-    let result = runtime.block_on(p.run(std::sync::Arc::new(req)));
+    let result = runtime.block_on(p.run(req));
 
     match &result.error {
         Some(CoreError::NoHealthyTargets(id)) => {

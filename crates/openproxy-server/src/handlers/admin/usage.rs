@@ -915,7 +915,7 @@ pub struct UsageQuery {
 impl UsageQuery {
     /// Project into a [`UsageFilter`]. An empty `provider_id` string
     /// surfaces here as a 400 via [`CoreError::Validation`].
-    fn into_filter(self) -> Result<UsageFilter, ApiError> {
+    pub(crate) fn into_filter(self) -> Result<UsageFilter, ApiError> {
         let provider_id = self
             .provider_id
             .map(|s| {

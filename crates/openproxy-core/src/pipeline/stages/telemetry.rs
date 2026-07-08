@@ -2,7 +2,6 @@ use crate::error::CoreError;
 use crate::pipeline::context::PipelineContext;
 use crate::pipeline::stage::PipelineStage;
 use crate::pipeline::{ErrorPhase, PipelineResult};
-use std::sync::Arc;
 
 #[derive(Clone, Copy)]
 pub struct TelemetryRecorderStage;
@@ -32,7 +31,7 @@ impl PipelineStage for TelemetryRecorderStage {
                     && let Some(ref combo) = ctx.combo
                 {
                     ctx.pipeline.tracker.record_no_healthy_targets_row(
-                        Arc::clone(&ctx.req),
+                        ctx.req.clone(),
                         combo,
                         started,
                     );

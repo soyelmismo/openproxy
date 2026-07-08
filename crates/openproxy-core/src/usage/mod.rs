@@ -62,7 +62,7 @@ mod tests {
     /// Insert one usage row with all defaults driven by the test fixture.
     /// Counts start at 0/200ms ttft/1200ms total to make aggregate assertions
     /// easy to write by inspection.
-    #[allow(clippy::too_many_arguments)]
+    // ponytail: [Demasiados argumentos] -> [Refactorizar a struct en el futuro]
     fn insert(
         conn: &Connection,
         request_id: &str,

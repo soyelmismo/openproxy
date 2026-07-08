@@ -60,7 +60,7 @@ impl UsageTracker {
 
     pub(crate) fn record_no_healthy_targets_row(
         &self,
-        req: Arc<PipelineRequest>,
+        req: PipelineRequest,
         combo: &Combo,
         started: std::time::Instant,
     ) {
@@ -104,10 +104,10 @@ impl UsageTracker {
         let _ = crate::cost::record(&conn, &input);
     }
 
-    #[allow(clippy::too_many_arguments)]
+    // ponytail: [Demasiados argumentos] -> [Refactorizar a struct en el futuro]
     pub(crate) fn record_and_fail_with_trace_id_and_partial(
         &self,
-        req: Arc<PipelineRequest>,
+        req: PipelineRequest,
         combo: &Combo,
         target: &ComboTarget,
         ctx: FailureContext<'_>,
@@ -177,7 +177,7 @@ impl UsageTracker {
 
 pub struct UsageRecordBuilder<'a> {
     pub(crate) tracker: &'a UsageTracker,
-    pub(crate) req: Arc<PipelineRequest>,
+    pub(crate) req: PipelineRequest,
     pub(crate) combo: &'a Combo,
     pub(crate) target: &'a ComboTarget,
     pub(crate) model: Option<&'a Model>,
@@ -203,7 +203,7 @@ pub struct UsageRecordBuilder<'a> {
 impl<'a> UsageRecordBuilder<'a> {
     pub fn new(
         tracker: &'a UsageTracker,
-        req: Arc<PipelineRequest>,
+        req: PipelineRequest,
         combo: &'a Combo,
         target: &'a ComboTarget,
     ) -> Self {

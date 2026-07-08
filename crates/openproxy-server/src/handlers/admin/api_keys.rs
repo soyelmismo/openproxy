@@ -103,12 +103,14 @@ pub async fn update_api_key(
         core_api_keys::update(
             &w,
             ApiKeyId(id),
-            label,
-            scopes_slice,
-            allowed_models_slice,
-            allowed_combos_slice,
-            is_active,
-            expires_slice,
+            core_api_keys::UpdateParams {
+                label,
+                scopes: scopes_slice,
+                allowed_models: allowed_models_slice,
+                allowed_combos: allowed_combos_slice,
+                is_active,
+                expires_at: expires_slice,
+            },
         )?;
         Ok(Json(serde_json::json!({ "id": id })))
     }

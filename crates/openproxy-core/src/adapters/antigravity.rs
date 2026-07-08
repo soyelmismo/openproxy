@@ -289,7 +289,7 @@ impl ProviderAdapter for AntigravityAdapter {
     async fn execute_custom(
         &self,
         upstream_client: &Arc<UpstreamClient>,
-        req: Arc<crate::pipeline::PipelineRequest>,
+        req: crate::pipeline::PipelineRequest,
         resolved_target: &crate::pipeline::context::ResolvedTarget,
         _ctx: Option<crate::adapters::CustomExecutionContext>,
     ) -> Option<std::result::Result<crate::translation::OpenAIResponse, CoreError>> {

@@ -381,30 +381,34 @@ pub fn touch_last_used(conn: &Connection, id: ApiKeyId) -> Result<()> {
 /// `is_active = Some(false)` *also* stamps `revoked_at` (matching
 /// the soft-revoke semantics) so a dashboard "disable" toggle and
 /// the explicit revoke endpoint produce the same audit row.
-#[allow(clippy::too_many_arguments)]
+#[derive(Default)]
+pub struct UpdateParams<'a> {
+    pub label: Option<&'a str>,
+    pub scopes: Option<&'a [String]>,
+    pub allowed_models: Option<Option<&'a [String]>>,
+    pub allowed_combos: Option<Option<&'a [i64]>>,
+    pub is_active: Option<bool>,
+    pub expires_at: Option<Option<&'a str>>,
+}
+
 pub fn update(
     conn: &Connection,
     id: ApiKeyId,
-    label: Option<&str>,
-    scopes: Option<&[String]>,
-    allowed_models: Option<Option<&[String]>>,
-    allowed_combos: Option<Option<&[i64]>>,
-    is_active: Option<bool>,
-    expires_at: Option<Option<&str>>,
+    params: UpdateParams<'_>,
 ) -> Result<()> {
-    if let Some(s) = scopes
+    if let Some(s) = params.scopes
         && s.is_empty()
     {
         return Err(CoreError::Validation(
             "scopes must contain at least one entry".into(),
         ));
     }
-    let scopes_json: Option<String> = scopes
+    let scopes_json: Option<String> = params.scopes
         .map(|s| {
             serde_json::to_string(s).map_err(|e| CoreError::Parse(format!("serialize scopes: {e}")))
         })
         .transpose()?;
-    let allowed_models_json: Option<Option<String>> = allowed_models
+    let allowed_models_json: Option<Option<String>> = params.allowed_models
         .map(|inner| {
             inner
                 .map(|v| {
@@ -414,7 +418,7 @@ pub fn update(
                 .transpose()
         })
         .transpose()?;
-    let allowed_combos_json: Option<Option<String>> = allowed_combos
+    let allowed_combos_json: Option<Option<String>> = params.allowed_combos
         .map(|inner| {
             inner
                 .map(|v| {
@@ -424,14 +428,14 @@ pub fn update(
                 .transpose()
         })
         .transpose()?;
-    let expires_at_str: Option<Option<&str>> = expires_at;
+    let expires_at_str: Option<Option<&str>> = params.expires_at;
 
     // Build the dynamic SET clause. We only touch columns that the
     // caller actually provided, so a no-op PATCH round-trips through
     // the SQL with zero writes.
     let mut sets: Vec<&'static str> = Vec::new();
     let mut bound: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
-    if let Some(label_value) = label {
+    if let Some(label_value) = params.label {
         sets.push("label = ?");
         bound.push(Box::new(label_value.to_string()));
     }
@@ -447,7 +451,7 @@ pub fn update(
         sets.push("allowed_combos_json = ?");
         bound.push(Box::new(oc.clone()));
     }
-    if let Some(active) = is_active {
+    if let Some(active) = params.is_active {
         sets.push("is_active = ?");
         bound.push(Box::new(active as i64));
         if !active {
@@ -880,7 +884,10 @@ mod tests {
         let (key, _) = create(&conn, make_input("u"), "admin").expect("create");
 
         // Update only label.
-        update(&conn, key.id, Some("renamed"), None, None, None, None, None).expect("update label");
+        update(&conn, key.id, UpdateParams {
+            label: Some("renamed"),
+            ..Default::default()
+        }).expect("update label");
         let after = get_by_id(&conn, key.id).expect("get").expect("present");
         assert_eq!(after.label.as_deref(), Some("renamed"));
         assert_eq!(after.scopes, vec!["chat".to_string()], "scopes unchanged");
@@ -889,12 +896,10 @@ mod tests {
         update(
             &conn,
             key.id,
-            None,
-            Some(&["manage".to_string(), "read".to_string()]),
-            None,
-            None,
-            None,
-            None,
+            UpdateParams {
+                scopes: Some(&["manage".to_string(), "read".to_string()]),
+                ..Default::default()
+            },
         )
         .expect("update scopes");
         let after = get_by_id(&conn, key.id).expect("get").expect("present");
@@ -904,12 +909,10 @@ mod tests {
         update(
             &conn,
             key.id,
-            None,
-            None,
-            Some(Some(&["openai/gpt-4o".to_string()])),
-            None,
-            None,
-            None,
+            UpdateParams {
+                allowed_models: Some(Some(&["openai/gpt-4o".to_string()])),
+                ..Default::default()
+            },
         )
         .expect("update allowed_models");
         let after = get_by_id(&conn, key.id).expect("get").expect("present");
@@ -919,13 +922,13 @@ mod tests {
         );
 
         // Clear allowed_models via Some(None).
-        update(&conn, key.id, None, None, Some(None), None, None, None)
+        update(&conn, key.id, UpdateParams { label: None, scopes: None, allowed_models: Some(None), allowed_combos: None, is_active: None, expires_at: None })
             .expect("clear allowed_models");
         let after = get_by_id(&conn, key.id).expect("get").expect("present");
         assert!(after.allowed_models.is_none(), "allowed_models cleared");
 
         // Reject empty scopes.
-        let err = update(&conn, key.id, None, Some(&[]), None, None, None, None)
+        let err = update(&conn, key.id, UpdateParams { label: None, scopes: Some(&[]), allowed_models: None, allowed_combos: None, is_active: None, expires_at: None })
             .expect_err("empty scopes");
         assert!(matches!(err, CoreError::Validation(_)));
 
@@ -933,12 +936,10 @@ mod tests {
         let err = update(
             &conn,
             ApiKeyId(9999),
-            Some("x"),
-            None,
-            None,
-            None,
-            None,
-            None,
+            UpdateParams {
+                label: Some("x"),
+                ..Default::default()
+            },
         )
         .expect_err("missing");
         assert!(matches!(err, CoreError::Internal(_)));
@@ -949,13 +950,13 @@ mod tests {
         let (conn, _p) = fresh_pool();
         let (key, _) = create(&conn, make_input("dis"), "admin").expect("create");
 
-        update(&conn, key.id, None, None, None, None, Some(false), None).expect("disable");
+        update(&conn, key.id, UpdateParams { label: None, scopes: None, allowed_models: None, allowed_combos: None, is_active: Some(false), expires_at: None }).expect("disable");
         let after = get_by_id(&conn, key.id).expect("get").expect("present");
         assert!(!after.is_active);
         assert!(after.revoked_at.is_some());
 
         // Re-enable clears revoked_at.
-        update(&conn, key.id, None, None, None, None, Some(true), None).expect("enable");
+        update(&conn, key.id, UpdateParams { label: None, scopes: None, allowed_models: None, allowed_combos: None, is_active: Some(true), expires_at: None }).expect("enable");
         let after = get_by_id(&conn, key.id).expect("get").expect("present");
         assert!(after.is_active);
         assert!(after.revoked_at.is_none());

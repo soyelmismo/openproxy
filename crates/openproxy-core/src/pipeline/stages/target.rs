@@ -7,7 +7,6 @@ use crate::pipeline::{FailureContext, PipelineResult};
 use crate::retry::RetryPolicy;
 use crate::timeouts;
 use crate::timeouts::ModelTimeoutOverrides;
-use std::sync::Arc;
 
 #[derive(Clone, Copy)]
 pub struct OAuthRefreshStage;
@@ -80,7 +79,7 @@ impl PipelineStage for TimeoutResolutionStage {
                 Ok(o) => o,
                 Err(e) => {
                     return Ok(ctx.pipeline.record_and_fail(
-                        Arc::clone(&ctx.req),
+                        ctx.req.clone(),
                         ctx.combo.as_ref().unwrap(),
                         &current.target,
                         FailureContext {
@@ -134,7 +133,7 @@ impl PipelineStage for FormattingStage {
             None => {
                 let err = CoreError::ProviderNotFound(current.target.provider_id.to_string());
                 return Ok(ctx.pipeline.record_and_fail(
-                    Arc::clone(&ctx.req),
+                    ctx.req.clone(),
                     ctx.combo.as_ref().unwrap(),
                     &current.target,
                     FailureContext {
@@ -199,7 +198,7 @@ impl PipelineStage for FormattingStage {
             Ok(b) => b,
             Err(e) => {
                 return Ok(ctx.pipeline.record_and_fail(
-                    Arc::clone(&ctx.req),
+                    ctx.req.clone(),
                     ctx.combo.as_ref().unwrap(),
                     &current.target,
                     FailureContext {
@@ -250,7 +249,7 @@ impl PipelineStage for DispatchStage {
             None => {
                 let err = CoreError::ProviderNotFound(target.provider_id.to_string());
                 return Ok(ctx.pipeline.record_and_fail(
-                    Arc::clone(&ctx.req),
+                    ctx.req.clone(),
                     ctx.combo.as_ref().unwrap(),
                     target,
                     FailureContext {
@@ -271,7 +270,7 @@ impl PipelineStage for DispatchStage {
             && cancel.is_cancelled()
         {
             return Ok(ctx.pipeline.record_and_fail_with_trace_id(
-                Arc::clone(&ctx.req),
+                ctx.req.clone(),
                 ctx.combo.as_ref().unwrap(),
                 target,
                 FailureContext {
@@ -292,7 +291,7 @@ impl PipelineStage for DispatchStage {
             Ok(v) => v,
             Err(e) => {
                 return Ok(ctx.pipeline.record_and_fail(
-                    Arc::clone(&ctx.req),
+                    ctx.req.clone(),
                     ctx.combo.as_ref().unwrap(),
                     target,
                     FailureContext {
@@ -347,7 +346,7 @@ impl PipelineStage for DispatchStage {
             .dispatch_upstream(
                 target,
                 ctx.combo.as_ref().unwrap(),
-                Arc::clone(&ctx.req),
+                ctx.req.clone(),
                 model,
                 target_format,
                 &url,
@@ -396,7 +395,7 @@ impl PipelineStage for DispatchStage {
                                 "threshold": outcome.threshold,
                             },
                         });
-                        let conn = Arc::clone(&ctx.pipeline.conn);
+                        let conn = ctx.pipeline.conn.clone();
                         tokio::task::spawn_blocking(move || {
                             let conn = conn.lock();
                             let _ = crate::notifications::insert_and_broadcast(
@@ -445,7 +444,7 @@ impl PipelineStage for CustomAdapterStage {
             None => {
                 let err = CoreError::ProviderNotFound(target.provider_id.to_string());
                 return Ok(ctx.pipeline.record_and_fail_with_trace_id(
-                    Arc::clone(&ctx.req),
+                    ctx.req.clone(),
                     ctx.combo.as_ref().unwrap(),
                     target,
                     FailureContext {
@@ -466,10 +465,10 @@ impl PipelineStage for CustomAdapterStage {
         if let Some(result) = adapter
             .execute_custom(
                 &ctx.pipeline.config.upstream_client,
-                Arc::clone(&ctx.req),
+                ctx.req.clone(),
                 current,
                 Some(crate::adapters::CustomExecutionContext {
-                    conn: Arc::clone(&ctx.pipeline.conn),
+                    conn: ctx.pipeline.conn.clone(),
                     cooldown_mode: ctx.combo.as_ref().unwrap().cooldown_mode,
                     cooldown_base_secs: ctx
                         .combo
@@ -498,7 +497,7 @@ impl PipelineStage for CustomAdapterStage {
                     let total_ms = ctx.started.unwrap().elapsed().as_millis() as u64;
                     let usage_tuple = match crate::pipeline::usage_tracker::UsageRecordBuilder::new(
                         &ctx.pipeline.tracker,
-                        Arc::clone(&ctx.req),
+                        ctx.req.clone(),
                         ctx.combo.as_ref().unwrap(),
                         target,
                     )
@@ -556,7 +555,7 @@ impl PipelineStage for CustomAdapterStage {
                                 "reason": "upstream_401",
                             },
                         });
-                        let conn = Arc::clone(&ctx.pipeline.conn);
+                        let conn = ctx.pipeline.conn.clone();
                         tokio::task::spawn_blocking(move || {
                             let conn = conn.lock();
                             let _ = crate::notifications::insert_and_broadcast(
@@ -569,7 +568,7 @@ impl PipelineStage for CustomAdapterStage {
                         });
                     }
                     Ok(ctx.pipeline.record_and_fail_with_trace_id(
-                        Arc::clone(&ctx.req),
+                        ctx.req.clone(),
                         ctx.combo.as_ref().unwrap(),
                         target,
                         FailureContext {

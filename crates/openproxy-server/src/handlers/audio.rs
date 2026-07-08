@@ -471,7 +471,7 @@ fn resolve_api_key(
 /// stall the audio response — if the writer lock can't be acquired in
 /// 100ms, the row is dropped (logged at WARN) and the request still
 /// returns successfully. This matches the chat handler's MEDIUM-5 fix.
-#[allow(clippy::too_many_arguments)]
+// ponytail: [Demasiados argumentos] -> [Refactorizar a struct en el futuro]
 fn record_audio_usage_row(
     state: &AppState,
     request_id: RequestId,

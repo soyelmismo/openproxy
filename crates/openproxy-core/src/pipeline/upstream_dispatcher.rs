@@ -15,7 +15,7 @@ use crate::think_extractor::extract_think_from_response;
 /// (`fail_stream_client_disconnected`, `fail_on_sink_send_error`).
 /// Eliminates the 14-15 positional-argument anti-pattern.
 pub(crate) struct StreamFailureContext<'a> {
-    pub(crate) req: Arc<PipelineRequest>,
+    pub(crate) req: PipelineRequest,
     pub(crate) combo: &'a Combo,
     pub(crate) target: &'a ComboTarget,
     pub(crate) attempt: u8,
@@ -123,13 +123,13 @@ impl UpstreamDispatcher {
 
     pub(crate) fn record_and_fail(
         &self,
-        req: Arc<PipelineRequest>,
+        req: PipelineRequest,
         combo: &Combo,
         target: &ComboTarget,
         ctx: FailureContext<'_>,
     ) -> PipelineResult {
         self.record_and_fail_with_trace_id(
-            Arc::clone(&req),
+            req.clone(),
             combo,
             target,
             ctx,
@@ -139,7 +139,7 @@ impl UpstreamDispatcher {
 
     pub(crate) fn record_and_fail_with_trace_id(
         &self,
-        req: Arc<PipelineRequest>,
+        req: PipelineRequest,
         combo: &Combo,
         target: &ComboTarget,
         ctx: FailureContext<'_>,
@@ -152,7 +152,7 @@ impl UpstreamDispatcher {
 
     pub(crate) fn record_and_fail_with_trace_id_and_partial(
         &self,
-        req: Arc<PipelineRequest>,
+        req: PipelineRequest,
         combo: &Combo,
         target: &ComboTarget,
         ctx: FailureContext<'_>,
@@ -167,12 +167,12 @@ impl UpstreamDispatcher {
         )
     }
 
-    #[allow(clippy::too_many_arguments)]
+    // ponytail: [Demasiados argumentos] -> [Refactorizar a struct en el futuro]
     pub(crate) async fn dispatch_upstream(
         &self,
         target: &ComboTarget,
         combo: &Combo,
-        req: Arc<PipelineRequest>,
+        req: PipelineRequest,
         model: &Model,
         target_format: crate::models::TargetFormat,
         url: &str,
@@ -264,7 +264,7 @@ impl UpstreamDispatcher {
                 .dispatch_upstream_streaming(
                     target,
                     combo,
-                    Arc::clone(&req),
+                    req.clone(),
                     model,
                     target_format,
                     sink,
@@ -987,7 +987,7 @@ impl UpstreamDispatcher {
             crate::redact::redact_btreemap_sensitive(headers.iter().cloned().collect());
         let usage_tuple = match crate::pipeline::usage_tracker::UsageRecordBuilder::new(
             &self.tracker,
-            Arc::clone(&req),
+            req.clone(),
             combo,
             target,
         )
@@ -1276,12 +1276,12 @@ impl UpstreamDispatcher {
     /// Streaming variant of dispatch_upstream. Reads SSE lines from
     /// the upstream response and forwards each translated chunk through
     /// the stream_sink channel in real-time.
-    #[allow(clippy::too_many_arguments)]
+    // ponytail: [Demasiados argumentos] -> [Refactorizar a struct en el futuro]
     pub(crate) async fn dispatch_upstream_streaming(
         &self,
         target: &ComboTarget,
         combo: &Combo,
-        req: Arc<PipelineRequest>,
+        req: PipelineRequest,
         model: &Model,
         target_format: crate::models::TargetFormat,
         sink: &crate::race_sink::StreamSink,
@@ -1679,7 +1679,7 @@ impl UpstreamDispatcher {
                 // If the stream loop failed with a CoreError (e.g. I/O error reading body),
                 // we treat it as an upstream error and fail.
                 return self.record_and_fail_with_trace_id(
-                    Arc::clone(&req),
+                    req.clone(),
                     combo,
                     target,
                     crate::pipeline::FailureContext {
@@ -1712,7 +1712,7 @@ impl UpstreamDispatcher {
                 "client cancelled during SSE stream; aborting attempt"
             );
             return self.fail_stream_client_disconnected(StreamFailureContext {
-                req: Arc::clone(&req),
+                req: req.clone(),
                 combo,
                 target,
                 attempt,
@@ -1809,7 +1809,7 @@ impl UpstreamDispatcher {
         });
         let usage_tuple = match crate::pipeline::usage_tracker::UsageRecordBuilder::new(
             &self.tracker,
-            Arc::clone(&req),
+            req.clone(),
             combo,
             target,
         )

@@ -34,7 +34,7 @@ pub trait PipelineRepository: Send + Sync {
     fn decrypt_account_key(&self, account_id: AccountId, master_key: &MasterKey) -> Result<String>;
     fn decrypt_access_token(&self, account_id: AccountId, master_key: &MasterKey)
     -> Result<String>;
-    #[allow(clippy::too_many_arguments)]
+    // ponytail: [Demasiados argumentos] -> [Refactorizar a struct en el futuro]
     fn store_oauth_tokens(
         &self,
         account_id: AccountId,

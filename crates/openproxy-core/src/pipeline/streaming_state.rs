@@ -8,7 +8,6 @@ use crate::sse::AnthropicToolUseAccumulator;
 use crate::sse::SseParser;
 use crate::sse_accumulator::ResponseAccumulator;
 use crate::think_extractor::ThinkStreamExtractor;
-use std::sync::Arc;
 use std::time::Instant;
 
 use crate::translation::OpenAIUsage;
@@ -175,7 +174,7 @@ pub(crate) struct StreamingState {
 }
 
 pub(crate) struct StreamContext<'a> {
-    pub req: &'a Arc<PipelineRequest>,
+    pub req: &'a PipelineRequest,
     pub combo: &'a Combo,
     pub target: &'a ComboTarget,
     pub model: &'a Model,
@@ -254,7 +253,7 @@ impl StreamingState {
             return Ok(ChunkResult::Return(
                 dispatcher.fail_stream_client_disconnected(
                     crate::pipeline::upstream_dispatcher::StreamFailureContext {
-                        req: std::sync::Arc::clone(ctx.req),
+                        req: ctx.req.clone(),
                         combo: ctx.combo,
                         target: ctx.target,
                         attempt: ctx.attempt,
@@ -346,7 +345,7 @@ impl<'a> crate::pipeline::streaming::ChunkInterceptor for ChunkProcessor<'a> {
             return Ok(crate::pipeline::streaming::ChunkEvent::Return(
                 self.dispatcher.fail_stream_client_disconnected(
                     crate::pipeline::upstream_dispatcher::StreamFailureContext {
-                        req: Arc::clone(ctx.req),
+                        req: ctx.req.clone(),
                         combo: ctx.combo,
                         target: ctx.target,
                         attempt: ctx.attempt,
@@ -426,7 +425,7 @@ impl<'a> ChunkProcessor<'a> {
                 return Ok(crate::pipeline::streaming::ChunkEvent::Return(
                     self.dispatcher.fail_stream_client_disconnected(
                         crate::pipeline::upstream_dispatcher::StreamFailureContext {
-                            req: Arc::clone(req),
+                            req: req.clone(),
                             combo,
                             target,
                             attempt,
@@ -451,7 +450,7 @@ impl<'a> ChunkProcessor<'a> {
                     self.dispatcher.fail_on_sink_send_error(
                         crate::race_sink::StreamSinkError::Lost,
                         crate::pipeline::upstream_dispatcher::StreamFailureContext {
-                            req: Arc::clone(req),
+                            req: req.clone(),
                             combo,
                             target,
                             attempt,
@@ -532,7 +531,7 @@ impl<'a> ChunkProcessor<'a> {
                         };
                     return Ok(crate::pipeline::streaming::ChunkEvent::Return(
                         pipeline.record_and_fail_with_trace_id_and_partial(
-                            Arc::clone(req),
+                            req.clone(),
                             combo,
                             target,
                             FailureContext {
@@ -654,7 +653,7 @@ impl<'a> ChunkProcessor<'a> {
                         return Ok(crate::pipeline::streaming::ChunkEvent::Return(
                             self.dispatcher.fail_stream_client_disconnected(
                                 crate::pipeline::upstream_dispatcher::StreamFailureContext {
-                                    req: Arc::clone(req),
+                                    req: req.clone(),
                                     combo,
                                     target,
                                     attempt,
@@ -693,7 +692,7 @@ impl<'a> ChunkProcessor<'a> {
                             self.dispatcher.fail_on_sink_send_error(
                                 e,
                                 crate::pipeline::upstream_dispatcher::StreamFailureContext {
-                                    req: Arc::clone(req),
+                                    req: req.clone(),
                                     combo,
                                     target,
                                     attempt,
@@ -831,7 +830,7 @@ impl<'a> ChunkProcessor<'a> {
                 return Ok(crate::pipeline::streaming::ChunkEvent::Return(
                     self.dispatcher.fail_stream_client_disconnected(
                         crate::pipeline::upstream_dispatcher::StreamFailureContext {
-                            req: Arc::clone(req),
+                            req: req.clone(),
                             combo,
                             target,
                             attempt,
@@ -865,7 +864,7 @@ impl<'a> ChunkProcessor<'a> {
                     self.dispatcher.fail_on_sink_send_error(
                         e,
                         crate::pipeline::upstream_dispatcher::StreamFailureContext {
-                            req: Arc::clone(req),
+                            req: req.clone(),
                             combo,
                             target,
                             attempt,
@@ -975,7 +974,7 @@ impl<'a> ChunkProcessor<'a> {
                         return Ok(crate::pipeline::streaming::ChunkEvent::Return(
                             self.dispatcher.fail_stream_client_disconnected(
                                 crate::pipeline::upstream_dispatcher::StreamFailureContext {
-                                    req: Arc::clone(req),
+                                    req: req.clone(),
                                     combo,
                                     target,
                                     attempt,
@@ -1000,7 +999,7 @@ impl<'a> ChunkProcessor<'a> {
                             self.dispatcher.fail_on_sink_send_error(
                                 crate::race_sink::StreamSinkError::Lost,
                                 crate::pipeline::upstream_dispatcher::StreamFailureContext {
-                                    req: Arc::clone(req),
+                                    req: req.clone(),
                                     combo,
                                     target,
                                     attempt,
@@ -1129,7 +1128,7 @@ impl<'a> ChunkProcessor<'a> {
                             self.dispatcher.fail_on_sink_send_error(
                                 e,
                                 crate::pipeline::upstream_dispatcher::StreamFailureContext {
-                                    req: Arc::clone(req),
+                                    req: req.clone(),
                                     combo,
                                     target,
                                     attempt,

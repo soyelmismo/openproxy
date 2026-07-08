@@ -9,7 +9,7 @@ use tokio::sync::watch;
 
 impl Pipeline {
     /// Drive one chat-completion request to completion.
-    pub async fn run(&self, req: Arc<PipelineRequest>) -> PipelineResult {
+    pub async fn run(&self, req: PipelineRequest) -> PipelineResult {
         use crate::pipeline::context::PipelineContext;
         use crate::pipeline::stage::{PipelineChain, PipelineStageEnum};
         use crate::pipeline::stages::{
@@ -150,7 +150,7 @@ impl Pipeline {
 
     pub(crate) async fn execute_single(
         &self,
-        req: Arc<PipelineRequest>,
+        req: PipelineRequest,
         combo: &Combo,
         resolved_target: &crate::pipeline::context::ResolvedTarget,
         attempt: u8,
@@ -158,7 +158,7 @@ impl Pipeline {
         race_cancel: &CancellationToken,
     ) -> PipelineResult {
         let mut ctx =
-            crate::pipeline::context::PipelineContext::new(Arc::clone(&req), self.clone());
+            crate::pipeline::context::PipelineContext::new(req.clone(), self.clone());
         ctx.combo = Some(combo.clone());
         ctx.current_target = Some(resolved_target.clone());
         ctx.current_target_attempt = attempt;
@@ -333,13 +333,13 @@ impl Pipeline {
 
     pub(crate) fn record_and_fail(
         &self,
-        req: Arc<PipelineRequest>,
+        req: PipelineRequest,
         combo: &Combo,
         target: &ComboTarget,
         ctx: FailureContext<'_>,
     ) -> PipelineResult {
         self.record_and_fail_with_trace_id(
-            Arc::clone(&req),
+            req.clone(),
             combo,
             target,
             ctx,
@@ -349,7 +349,7 @@ impl Pipeline {
 
     pub(crate) fn record_and_fail_with_trace_id(
         &self,
-        req: Arc<PipelineRequest>,
+        req: PipelineRequest,
         combo: &Combo,
         target: &ComboTarget,
         ctx: FailureContext<'_>,
@@ -360,10 +360,10 @@ impl Pipeline {
         )
     }
 
-    #[allow(clippy::too_many_arguments)]
+    // ponytail: [Demasiados argumentos] -> [Refactorizar a struct en el futuro]
     pub(crate) fn record_and_fail_with_trace_id_and_partial(
         &self,
-        req: Arc<PipelineRequest>,
+        req: PipelineRequest,
         combo: &Combo,
         target: &ComboTarget,
         ctx: FailureContext<'_>,

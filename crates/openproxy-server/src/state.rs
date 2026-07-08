@@ -752,7 +752,7 @@ fn run_database_maintenance(
     Ok(())
 }
 
-#[allow(clippy::too_many_arguments)]
+// ponytail: [Demasiados argumentos] -> [Refactorizar a struct en el futuro]
 async fn spawn_background_tasks(
     db_pool: Arc<openproxy_core::db::DbPool>,
     _config: openproxy_core::AppConfig,

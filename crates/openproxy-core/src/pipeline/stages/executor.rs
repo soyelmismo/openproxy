@@ -5,7 +5,6 @@ use crate::pipeline::context::PipelineContext;
 use crate::pipeline::stage::PipelineStage;
 use crate::retry::RetryPolicy;
 use crate::upstream::CancellationToken;
-use std::sync::Arc;
 
 #[derive(Clone, Copy)]
 pub struct UpstreamExecutorStage;
@@ -41,7 +40,7 @@ impl PipelineStage for UpstreamExecutorStage {
                 .min(ctx.pipeline.config.racing.max_race_size as usize);
             let race_result = crate::pipeline::racing::run_race(
                 &ctx.pipeline,
-                Arc::clone(&ctx.req),
+                ctx.req.clone(),
                 combo,
                 to_run.clone(),
                 race_n as u8,
@@ -86,7 +85,7 @@ impl PipelineStage for UpstreamExecutorStage {
             let mut result = ctx
                 .pipeline
                 .execute_single(
-                    Arc::clone(&ctx.req),
+                    ctx.req.clone(),
                     combo,
                     target,
                     target_attempt,
@@ -143,7 +142,7 @@ impl PipelineStage for UpstreamExecutorStage {
                 result = ctx
                     .pipeline
                     .execute_single(
-                        Arc::clone(&ctx.req),
+                        ctx.req.clone(),
                         combo,
                         target,
                         target_attempt,

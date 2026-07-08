@@ -6,12 +6,11 @@ use crate::pipeline::repository::PipelineRepository;
 use crate::pipeline::{Pipeline, PipelineRequest, PipelineResult};
 use std::future::Future;
 use std::pin::Pin;
-use std::sync::Arc;
 use std::task::{Context, Poll};
 
 /// Request state passed down the middleware chain.
 pub struct PipelineState {
-    pub req: Arc<PipelineRequest>,
+    pub req: PipelineRequest,
     pub combo: Option<Combo>,
     pub eligible_targets: Option<Vec<crate::pipeline::context::ResolvedTarget>>,
     pub race_size: Option<usize>,
@@ -390,7 +389,7 @@ impl tower::Service<PipelineState> for RoutingService {
                     .min(pipeline.config.racing.max_race_size as usize);
                 let race_result = crate::pipeline::racing::run_race(
                     &pipeline,
-                    Arc::clone(&state.req),
+                    state.req.clone(),
                     &combo,
                     to_run.clone(),
                     race_n as u8,
@@ -450,7 +449,7 @@ impl tower::Service<PipelineState> for RoutingService {
                 let mut target_attempt: u8 = 1;
                 let mut result = pipeline
                     .execute_single(
-                        Arc::clone(&state.req),
+                        state.req.clone(),
                         &combo,
                         target,
                         target_attempt,
@@ -509,7 +508,7 @@ impl tower::Service<PipelineState> for RoutingService {
                     target_attempt = target_attempt.saturating_add(1);
                     result = pipeline
                         .execute_single(
-                            Arc::clone(&state.req),
+                            state.req.clone(),
                             &combo,
                             target,
                             target_attempt,
