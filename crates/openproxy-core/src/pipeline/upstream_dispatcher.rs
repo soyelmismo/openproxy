@@ -536,9 +536,18 @@ impl UpstreamDispatcher {
         // read should be bounded by `total_ms`, not `ttft_ms`.
         let non_streaming_body_deadline =
             started + std::time::Duration::from_millis(resolved_timeouts.total.as_millis() as u64);
-        let remaining = non_streaming_body_deadline
+        let mut remaining = non_streaming_body_deadline
             .checked_duration_since(Instant::now())
             .unwrap_or(std::time::Duration::ZERO);
+        
+        // Error responses should not stall the pipeline. We give the upstream
+        // 5 seconds to send the error body; if it stalls, we drop the body
+        // and proceed with the error status code. This prevents "ghost" requests
+        // stuck in `connecting` for 300s when an upstream hangs after sending headers.
+        if !(200..300).contains(&status_code) {
+            remaining = std::cmp::min(remaining, std::time::Duration::from_secs(5));
+        }
+
         let body_bytes = match tokio::time::timeout(remaining, response.collect()).await {
             Ok(Ok(b)) => b,
             Ok(Err(UpstreamError::Cancel)) => {
@@ -1479,9 +1488,13 @@ impl UpstreamDispatcher {
                 &target.provider_id,
                 crate::pipeline::upstream_dispatcher::ProxyRotationTrigger::Status(status_code),
             );
-            let body_str = match response.body.collect_all().await {
-                Ok(b) => String::from_utf8_lossy(&b).to_string(),
-                Err(_) => String::new(),
+            // Error responses should not stall the pipeline. We give the upstream
+            // 5 seconds to send the error body; if it stalls, we drop the body
+            // and proceed with the error status code. This prevents "ghost" requests
+            // stuck in `connecting` for 300s when an upstream hangs after sending headers.
+            let body_str = match tokio::time::timeout(std::time::Duration::from_secs(5), response.body.collect_all()).await {
+                Ok(Ok(b)) => String::from_utf8_lossy(&b).to_string(),
+                _ => String::new(),
             };
             // G2.3: surface `account_invalid` on 401/403 (mirrors the
             // non-streaming path's hook above). The streaming path
