@@ -712,12 +712,15 @@ pub struct ProviderWithOAuth {
     pub provider: providers::Provider,
     pub oauth_flows: Option<Vec<String>>,
     pub metadata: openproxy_core::providers::ProviderMetadata,
+    pub active_models: i64,
+    pub total_models: i64,
 }
 
 fn enrich_provider_with_oauth(
     p: providers::Provider,
     registry: &openproxy_core::oauth::OAuthProviderRegistry,
     adapters: &[std::sync::Arc<dyn openproxy_core::adapters::ProviderAdapter>],
+    r: &rusqlite::Connection,
 ) -> ProviderWithOAuth {
     let flows = if p.auth_type == openproxy_core::providers::AuthType::OAuth {
         if let Some(oauth_impl) = registry.get(p.id.as_str()) {
@@ -756,10 +759,15 @@ fn enrich_provider_with_oauth(
             }
         });
 
+    let active_models: i64 = r.query_row("SELECT count(*) FROM models WHERE provider_id = ? AND active = 1", [p.id.as_str()], |row| row.get(0)).unwrap_or(0);
+    let total_models: i64 = r.query_row("SELECT count(*) FROM models WHERE provider_id = ?", [p.id.as_str()], |row| row.get(0)).unwrap_or(0);
+
     ProviderWithOAuth {
         provider: p,
         oauth_flows: flows,
         metadata,
+        active_models,
+        total_models,
     }
 }
 
@@ -774,7 +782,7 @@ pub async fn list_providers(State(s): State<AppState>) -> ApiResult<Json<Vec<Pro
         let adapters = s.adapters();
         let enriched = list
             .into_iter()
-            .map(|p| enrich_provider_with_oauth(p, registry.as_ref(), &adapters))
+            .map(|p| enrich_provider_with_oauth(p, registry.as_ref(), &adapters, &r))
             .collect();
         Ok(Json(enriched))
     }
@@ -836,7 +844,7 @@ pub async fn get_provider(
             providers::get(&r, &id)?.ok_or_else(|| CoreError::ProviderNotFound(id.to_string()))?;
         let registry = s.oauth_provider_registry();
         let adapters = s.adapters();
-        let enriched = enrich_provider_with_oauth(provider, registry.as_ref(), &adapters);
+        let enriched = enrich_provider_with_oauth(provider, registry.as_ref(), &adapters, &r);
         Ok(Json(enriched))
     }
     .await;

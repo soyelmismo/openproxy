@@ -686,10 +686,10 @@ async function onDeleteModel(rowId: number): Promise<void> {
 
 // ---- Templates: grid ----
 
-function renderProviderCard(p: Provider, accounts: Account[], models: Model[]): TemplateResult {
-  const providerModels = models;
+function renderProviderCard(p: Provider, accounts: Account[]): TemplateResult {
   const unhealthyAccs = accounts.filter((a) => a.health_status === "unhealthy").length;
-  const activeModels = providerModels.filter((m) => m.active).length;
+  const activeModels = p.active_models ?? 0;
+  const totalModels = p.total_models ?? 0;
   const cardClasses: string = [
     "provider-card",
     unhealthyAccs > 0 ? "has-errors" : "",
@@ -717,7 +717,7 @@ function renderProviderCard(p: Provider, accounts: Account[], models: Model[]): 
       </div>
       <div class="stat">
         <label>Models</label>
-        <value>${activeModels}/${models.length}</value>
+        <value>${activeModels}/${totalModels}</value>
       </div>
     </div>
   </a>`;
@@ -744,8 +744,7 @@ function renderProviderGrid(): TemplateResult {
       </div>`
     : html`<div class="provider-grid">${list.map((p) => {
         const accounts = (state.accounts || []).filter((a) => a.provider_id === p.id);
-        const models = (state.models || []).filter((m) => m.provider_id === p.id);
-        return renderProviderCard(p, accounts, models);
+        return renderProviderCard(p, accounts);
       })}</div>`;
   return html`
     <div class="page-header"><h2>Providers</h2>
@@ -1117,15 +1116,13 @@ export async function mountProviders(opts: MountProvidersOpts = {}): Promise<(()
   const cleanup = mountView(main, renderProviderGrid);
   try {
     const hasCache = state.providers && state.providers.length > 0;
-    const [providers, accounts, models, proxies] = await Promise.all([
+    const [providers, accounts, proxies] = await Promise.all([
       hasCache ? Promise.resolve(state.providers) : api("/providers") as Promise<Provider[]>,
       hasCache && state.accounts ? Promise.resolve(state.accounts) : api("/accounts") as Promise<Account[]>,
-      hasCache && state.models ? Promise.resolve(state.models) : api("/models") as Promise<Model[]>,
       api("/proxies?status=alive") as Promise<any[]>,
     ]);
     state.providers = providers;
     state.accounts = accounts;
-    state.models = models;
     state.proxies = proxies;
     requestUpdate();
 
@@ -1133,11 +1130,9 @@ export async function mountProviders(opts: MountProvidersOpts = {}): Promise<(()
       Promise.all([
         api("/providers") as Promise<Provider[]>,
         api("/accounts") as Promise<Account[]>,
-        api("/models") as Promise<Model[]>,
-      ]).then(([p, a, m]) => {
+      ]).then(([p, a]) => {
         state.providers = p;
         state.accounts = a;
-        state.models = m;
         requestUpdate();
       }).catch((e) => console.error("Background refresh failed:", e));
     }

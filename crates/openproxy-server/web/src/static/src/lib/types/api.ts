@@ -141,6 +141,8 @@ export interface Provider {
   proxy_rotation_errors: string;
   oauth_flows?: string[];
   metadata?: ProviderMetadata;
+  active_models?: number;
+  total_models?: number;
 }
 
 // ----------------------------------------------------------------------------
