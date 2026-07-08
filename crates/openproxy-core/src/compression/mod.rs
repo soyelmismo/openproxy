@@ -35,7 +35,6 @@ pub enum CompressionMode {
 /// Aplica compresión a los mensajes del request según el modo.
 ///
 /// Modifica `messages` in-place y retorna estadísticas de la compresión.
-
 /// Retorna true si la compresión aplicaría algún cambio. Evita clonación profunda.
 pub fn would_compress(messages: &[OpenAIMessage], mode: CompressionMode) -> bool {
     // Para simplificar, asumimos que RTK siempre podría comprimir si hay logs,

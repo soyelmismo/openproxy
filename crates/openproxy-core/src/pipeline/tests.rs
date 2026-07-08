@@ -1,11 +1,9 @@
 use super::*;
-use crate::adapters::{AdapterAuthType, AdapterFormat, ProviderAdapter, ProviderAdapterConfig};
 use crate::circuit_breaker::Health;
 use crate::combos::{self, ComboTarget, Strategy};
 use crate::config::TimeoutsConfig;
 use crate::db::conn::DbPool;
 use crate::db::migrations;
-use crate::error::Result;
 use crate::ids::{AccountId, ComboId, ComboTargetId, ModelRowId, ProviderId, RequestId, TraceId};
 use crate::models::TargetFormat;
 use crate::pipeline::quotas::QuotaStatus;
@@ -782,7 +780,7 @@ async fn pipeline_walks_full_row_when_all_targets_in_cooldown() {
 ///     (`choices[0].message.content == "from model 2"`).
 #[tokio::test]
 async fn priority_combo_walks_row_after_first_5xx() {
-    use crate::adapters::{AdapterFormat, ProviderAdapter};
+    use crate::adapters::AdapterFormat;
     use crate::combos::{self, AddTargetInput, Strategy};
     use std::sync::atomic::{AtomicU32, Ordering as AtomicOrdering};
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -1074,7 +1072,7 @@ async fn adversarial_priority_combo_with_5_targets_walks_to_5th_when_all_fail() 
     use tokio::net::TcpListener;
 
     // 1. Mock adapter that always responds 500 with an openai-shaped body.
-    use crate::adapters::{AdapterFormat, ProviderAdapter};
+    use crate::adapters::AdapterFormat;
     // 2. Spin a 500-only listener.
     let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
     let local_addr = listener.local_addr().expect("local_addr");
@@ -1279,7 +1277,7 @@ async fn adversarial_priority_combo_with_mixed_4xx_5xx_walks_to_first_2xx() {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::TcpListener;
 
-    use crate::adapters::{AdapterFormat, ProviderAdapter};
+    use crate::adapters::AdapterFormat;
     // 1. Listener: 1st → 400, 2nd → 503, 3rd → 200.
     let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
     let local_addr = listener.local_addr().expect("local_addr");
@@ -1467,7 +1465,7 @@ async fn round_robin_combo_walks_past_non_retryable_400() {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::TcpListener;
 
-    use crate::adapters::{AdapterFormat, ProviderAdapter};
+    use crate::adapters::AdapterFormat;
     // 1. Listener: 1st → 400 (non-retryable), 2nd → 200.
     // The walk must advance past the 400 and reach target #2.
     let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
@@ -1642,7 +1640,7 @@ async fn nested_combo_falls_through_to_parent_sibling_on_subcombo_failure() {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::TcpListener;
 
-    use crate::adapters::{AdapterFormat, ProviderAdapter};
+    use crate::adapters::AdapterFormat;
     // Listener: calls 1-2 → 400 (sub-combo's X and Y), call 3 → 200 (Z).
     let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
     let local_addr = listener.local_addr().expect("local_addr");
@@ -1963,7 +1961,7 @@ async fn adversarial_priority_combo_respects_max_attempts_for_same_provider() {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::TcpListener;
 
-    use crate::adapters::{AdapterFormat, ProviderAdapter};
+    use crate::adapters::AdapterFormat;
     // Listener: always 503.
     let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
     let local_addr = listener.local_addr().expect("local_addr");
@@ -2130,7 +2128,7 @@ async fn bug4_per_target_retry_exhausts_then_falls_through_to_next_target() {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::TcpListener;
 
-    use crate::adapters::{AdapterFormat, ProviderAdapter};
+    use crate::adapters::AdapterFormat;
     // Listener: per-call counter, returns 503 for the first
     // `bug4_max_attempts_for_target1` calls and 200 for the
     // rest. This lets us assert both the per-target retry
@@ -2833,7 +2831,7 @@ async fn cancellation_does_not_park_target_in_cooldown_or_circuit_breaker() {
 /// reqwest-based path used).
 #[tokio::test]
 async fn non_streaming_dispatch_uses_upstream_client_end_to_end() {
-    use crate::adapters::{AdapterFormat, ProviderAdapter};
+    use crate::adapters::AdapterFormat;
     use std::sync::Arc;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::TcpListener;
@@ -2982,7 +2980,7 @@ async fn non_streaming_dispatch_uses_upstream_client_end_to_end() {
 /// body — not an empty `Content-Length: 0`.
 #[tokio::test]
 async fn bug_a_body_reaches_upstream() {
-    use crate::adapters::{AdapterFormat, ProviderAdapter};
+    use crate::adapters::AdapterFormat;
     use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -3133,7 +3131,7 @@ async fn bug_a_body_reaches_upstream() {
 ///      sink.send) still produces a well-formed OpenAI chunk.
 #[tokio::test]
 async fn streaming_dispatch_uses_upstream_client_end_to_end() {
-    use crate::adapters::{AdapterAuthType, AdapterFormat, ProviderAdapter, ProviderAdapterConfig};
+    use crate::adapters::{AdapterAuthType, AdapterFormat, ProviderAdapterConfig};
     use std::sync::Arc;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::TcpListener;
@@ -3484,7 +3482,7 @@ async fn cancellation_during_streaming_aborts_response_stream() {
 /// cancel arm of the inner `tokio::select!`.
 #[tokio::test]
 async fn cancellation_mid_sse_stream_aborts_immediately() {
-    use crate::adapters::{AdapterAuthType, AdapterFormat, ProviderAdapter, ProviderAdapterConfig};
+    use crate::adapters::{AdapterAuthType, AdapterFormat, ProviderAdapterConfig};
     use std::sync::Arc;
     use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -3871,7 +3869,7 @@ async fn run_with_fake_upstream_and_capture_stages(
     content_type: &'static str,
     streaming: bool,
 ) -> (Vec<crate::usage::StageEvent>, PipelineResult, RequestId) {
-    use crate::adapters::{AdapterFormat, ProviderAdapter};
+    use crate::adapters::AdapterFormat;
     use crate::usage;
     use std::sync::Arc;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -4352,7 +4350,7 @@ async fn run_streaming_and_get_response_body(
     recording: bool,
     target_format: TargetFormat,
 ) -> (Option<serde_json::Value>, crate::pipeline::PipelineResult) {
-    use crate::adapters::{AdapterFormat, ProviderAdapter};
+    use crate::adapters::AdapterFormat;
     use std::sync::Arc;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::TcpListener;

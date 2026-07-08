@@ -293,25 +293,25 @@ macro_rules! define_provider_adapter {
             fn id(&self) -> &$crate::ids::ProviderId {
                 match self { $( $(#[$varmeta])* Self::$variant(inner) => inner.id(), )+ }
             }
-            fn config(&self) -> &crate::adapters::ProviderAdapterConfig {
+            fn config(&self) -> &$crate::adapters::ProviderAdapterConfig {
                 match self { $( $(#[$varmeta])* Self::$variant(inner) => inner.config(), )+ }
             }
-            fn metadata(&self) -> crate::providers::ProviderMetadata {
+            fn metadata(&self) -> $crate::providers::ProviderMetadata {
                 match self { $( $(#[$varmeta])* Self::$variant(inner) => inner.metadata(), )+ }
             }
-            fn auth_type(&self) -> crate::adapters::AdapterAuthType {
+            fn auth_type(&self) -> $crate::adapters::AdapterAuthType {
                 match self { $( $(#[$varmeta])* Self::$variant(inner) => inner.auth_type(), )+ }
             }
-            fn format(&self) -> crate::adapters::AdapterFormat {
+            fn format(&self) -> $crate::adapters::AdapterFormat {
                 match self { $( $(#[$varmeta])* Self::$variant(inner) => inner.format(), )+ }
             }
-            fn build_chat_url(&self, target_format: crate::models::TargetFormat, model: &crate::ids::ModelId) -> String {
+            fn build_chat_url(&self, target_format: $crate::models::TargetFormat, model: &$crate::ids::ModelId) -> String {
                 match self { $( $(#[$varmeta])* Self::$variant(inner) => inner.build_chat_url(target_format, model), )+ }
             }
             fn build_chat_url_for_account(
                 &self,
-                target_format: crate::models::TargetFormat,
-                model: &crate::ids::ModelId,
+                target_format: $crate::models::TargetFormat,
+                model: &$crate::ids::ModelId,
                 account_label: &str,
             ) -> String {
                 match self { $( $(#[$varmeta])* Self::$variant(inner) => inner.build_chat_url_for_account(target_format, model, account_label), )+ }
@@ -334,8 +334,8 @@ macro_rules! define_provider_adapter {
             fn build_headers(
                 &self,
                 api_key: &str,
-                target_format: crate::models::TargetFormat,
-                model: &crate::ids::ModelId,
+                target_format: $crate::models::TargetFormat,
+                model: &$crate::ids::ModelId,
             ) -> Vec<(String, String)> {
                 match self { $( $(#[$varmeta])* Self::$variant(inner) => inner.build_headers(api_key, target_format, model), )+ }
             }
@@ -347,29 +347,29 @@ macro_rules! define_provider_adapter {
             }
             async fn fetch_models(
                 &self,
-                upstream_client: &std::sync::Arc<crate::upstream::UpstreamClient>,
+                upstream_client: &std::sync::Arc<$crate::upstream::UpstreamClient>,
                 api_key: &str,
-            ) -> crate::error::Result<Vec<crate::models::DiscoveredModel>> {
+            ) -> $crate::error::Result<Vec<$crate::models::DiscoveredModel>> {
                 match self { $( $(#[$varmeta])* Self::$variant(inner) => inner.fetch_models(upstream_client, api_key).await, )+ }
             }
             async fn fetch_models_for_account(
                 &self,
-                upstream_client: &std::sync::Arc<crate::upstream::UpstreamClient>,
+                upstream_client: &std::sync::Arc<$crate::upstream::UpstreamClient>,
                 api_key: &str,
                 account_label: &str,
-            ) -> crate::error::Result<Vec<crate::models::DiscoveredModel>> {
+            ) -> $crate::error::Result<Vec<$crate::models::DiscoveredModel>> {
                 match self { $( $(#[$varmeta])* Self::$variant(inner) => inner.fetch_models_for_account(upstream_client, api_key, account_label).await, )+ }
             }
-            fn normalize_openai_request(&self, view: &mut crate::translation::OpenAIRequestView) {
+            fn normalize_openai_request(&self, view: &mut $crate::translation::OpenAIRequestView) {
                 match self { $( $(#[$varmeta])* Self::$variant(inner) => inner.normalize_openai_request(view), )+ }
             }
             async fn execute_custom(
                 &self,
-                upstream_client: &std::sync::Arc<crate::upstream::UpstreamClient>,
-                req: std::sync::Arc<crate::pipeline::PipelineRequest>,
-                resolved_target: &crate::pipeline::context::ResolvedTarget,
-                ctx: Option<crate::adapters::CustomExecutionContext>,
-            ) -> Option<std::result::Result<crate::translation::OpenAIResponse, crate::error::CoreError>> {
+                upstream_client: &std::sync::Arc<$crate::upstream::UpstreamClient>,
+                req: std::sync::Arc<$crate::pipeline::PipelineRequest>,
+                resolved_target: &$crate::pipeline::context::ResolvedTarget,
+                ctx: Option<$crate::adapters::CustomExecutionContext>,
+            ) -> Option<std::result::Result<$crate::translation::OpenAIResponse, $crate::error::CoreError>> {
                 match self { $( $(#[$varmeta])* Self::$variant(inner) => inner.execute_custom(upstream_client, req, resolved_target, ctx).await, )+ }
             }
         }

@@ -3,7 +3,6 @@ use crate::combos;
 use crate::config::{RacingConfig, RetriesConfig, TimeoutsConfig};
 use crate::db::conn::DbPool;
 use crate::db::migrations;
-use crate::error::Result;
 use crate::ids::{AccountId, ComboId, ModelRowId, ProviderId, RequestId, TraceId};
 use crate::models::TargetFormat;
 use crate::pipeline::{PipelineConfig, PipelineRequest};

@@ -570,14 +570,14 @@ async fn run_one_tick(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::adapters::{AdapterAuthType, AdapterFormat, ProviderAdapterConfig};
+    
     use crate::db::migrations;
     use crate::ids::{AccountId, ModelId, ProviderId as CoreProviderId};
     use crate::models::{DiscoveredModel, TargetFormat};
     use crate::providers;
     use rusqlite::Connection;
     use std::path::PathBuf;
-    use std::sync::Arc as StdArc;
+    
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     /// A 1-second-interval config that staggers nothing (the
@@ -621,7 +621,6 @@ mod tests {
     /// and counts every call. Lifted into a `pub` style (still
     /// module-private) so the test bodies can construct one
     /// per test case.
-
     /// Insert a provider row + a single account whose API key
     /// decrypts to `"sk-test"`. Mirrors what
     /// `openproxy_core::admin::create_account` does in

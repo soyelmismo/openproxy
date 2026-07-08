@@ -1008,6 +1008,7 @@ impl<T> Pipe for T {}
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::adapters::ProviderAdapter;
     use crate::db::conn::DbPool;
     use crate::db::migrations;
     use std::path::PathBuf;

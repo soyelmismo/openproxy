@@ -230,7 +230,6 @@ pub trait OAuthProvider: Send + Sync {
 /// are registered at startup; custom providers can be added at any time
 /// via `register()`. Internally stores `Arc` so cloning the registry
 /// is cheap and providers don't need to implement `Clone`.
-
 #[macro_export]
 macro_rules! define_oauth_provider {
     (
@@ -272,21 +271,21 @@ macro_rules! define_oauth_provider {
             }
             async fn request_device_code(
                 &self,
-                upstream_client: &std::sync::Arc<crate::upstream::UpstreamClient>,
+                upstream_client: &std::sync::Arc<$crate::upstream::UpstreamClient>,
             ) -> Result<DeviceAuthorizationResponse> {
                 match self { $( Self::$variant(inner) => inner.request_device_code(upstream_client).await, )+ }
             }
             async fn poll_device_token(
                 &self,
                 device_code: &str,
-                upstream_client: &std::sync::Arc<crate::upstream::UpstreamClient>,
+                upstream_client: &std::sync::Arc<$crate::upstream::UpstreamClient>,
             ) -> Result<Option<TokenResponse>> {
                 match self { $( Self::$variant(inner) => inner.poll_device_token(device_code, upstream_client).await, )+ }
             }
             async fn refresh_token(
                 &self,
                 refresh_token: &str,
-                upstream_client: &std::sync::Arc<crate::upstream::UpstreamClient>,
+                upstream_client: &std::sync::Arc<$crate::upstream::UpstreamClient>,
                 account_id: AccountId,
                 db: DbRef<'_>,
             ) -> Result<TokenResponse> {
@@ -301,9 +300,9 @@ macro_rules! define_oauth_provider {
             async fn post_exchange(
                 &self,
                 account_id: AccountId,
-                db_pool: &std::sync::Arc<crate::db::DbPool>,
+                db_pool: &std::sync::Arc<$crate::db::DbPool>,
                 master_key: &MasterKey,
-                upstream: &std::sync::Arc<crate::upstream::UpstreamClient>,
+                upstream: &std::sync::Arc<$crate::upstream::UpstreamClient>,
             ) -> Result<()> {
                 match self { $( Self::$variant(inner) => inner.post_exchange(account_id, db_pool, master_key, upstream).await, )+ }
             }
@@ -322,6 +321,12 @@ define_oauth_provider! {
 
 pub struct OAuthProviderRegistry {
     inner: std::sync::Arc<std::sync::Mutex<std::collections::HashMap<String, OAuthProviderEnum>>>,
+}
+
+impl Default for OAuthProviderRegistry {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl OAuthProviderRegistry {
