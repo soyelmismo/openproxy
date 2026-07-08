@@ -210,7 +210,7 @@ impl SignatureCache {
         None
     }
 
-    #[allow(dead_code)]
+    #[cfg(test)]
     pub fn clear(&self) {
         if let Ok(mut cache) = self.session_signatures.lock() {
             cache.clear();
@@ -219,6 +219,8 @@ impl SignatureCache {
             cache.clear();
         }
     }
+
+
 }
 
 // ---------------------------------------------------------------------------
@@ -771,7 +773,7 @@ pub(crate) async fn call_antigravity_v1internal(
 // SSE parsing
 // ---------------------------------------------------------------------------
 
-#[allow(dead_code)]
+#[cfg(test)]
 pub fn parse_antigravity_line(
     line: &str,
     accumulated_text: &mut String,

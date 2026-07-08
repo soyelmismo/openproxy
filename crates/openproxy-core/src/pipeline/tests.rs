@@ -128,42 +128,6 @@ fn seed_provider(conn: &Connection, provider_id: &str, auth_type: AuthType) {
     .expect("seed provider");
 }
 
-/// Seed a provider and a single model row, returning the model's row id.
-#[allow(dead_code)]
-fn seed_provider_and_model(
-    conn: &Connection,
-    provider_id: &str,
-    model_id: &str,
-    fmt: TargetFormat,
-) -> ModelRowId {
-    providers::create(
-        conn,
-        providers::NewProvider {
-            id: &ProviderId::new(provider_id),
-            name: provider_id,
-            base_url: "https://example.com",
-            auth_type: AuthType::Bearer,
-            format: match fmt {
-                TargetFormat::Openai => ProviderFormat::Openai,
-                TargetFormat::Anthropic => ProviderFormat::Anthropic,
-                TargetFormat::Gemini => ProviderFormat::Openai,
-                TargetFormat::Responses => ProviderFormat::Responses,
-            },
-            extra_headers_json: None,
-            auto_activate_keyword: None,
-        },
-    )
-    .expect("seed provider");
-    conn.execute(
-        "INSERT INTO models(provider_id, model_id, target_format) VALUES (?1, ?2, ?3)",
-        rusqlite::params![provider_id, model_id, fmt.as_str()],
-    )
-    .expect("seed model");
-    let id: i64 = conn
-        .query_row("SELECT last_insert_rowid()", [], |r| r.get(0))
-        .expect("last_insert_rowid");
-    ModelRowId(id)
-}
 
 /// Build a `PipelineRequest` with sensible defaults.
 fn make_request(combo_id: ComboId) -> (PipelineRequest, watch::Sender<bool>) {
