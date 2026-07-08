@@ -1020,27 +1020,37 @@ export function renderLogDetailModal(log: LogDetailLog): TemplateResult {
             ${userAgentBlock}
           </div>
           <div class="log-detail-tabs">
-            <button class="detail-tab" data-arg1="request" @click=${(e: Event) => logDetailTabClick("request", e)}>Request</button>
-            <button class="detail-tab" data-arg1="response" @click=${(e: Event) => logDetailTabClick("response", e)}>Response</button>
-            <button class="detail-tab" data-arg1="errors" @click=${(e: Event) => logDetailTabClick("errors", e)}>Errors</button>
-            <button class="detail-tab" data-arg1="raw" @click=${(e: Event) => logDetailTabClick("raw", e)}>Raw</button>
+            <button class="detail-tab ${currentActiveTab === "request" ? "active" : ""}" data-arg1="request" @click=${(e: Event) => logDetailTabClick("request", e)}>Request</button>
+            <button class="detail-tab ${currentActiveTab === "response" ? "active" : ""}" data-arg1="response" @click=${(e: Event) => logDetailTabClick("response", e)}>Response</button>
+            <button class="detail-tab ${currentActiveTab === "errors" ? "active" : ""}" data-arg1="errors" @click=${(e: Event) => logDetailTabClick("errors", e)}>Errors</button>
+            <button class="detail-tab ${currentActiveTab === "raw" ? "active" : ""}" data-arg1="raw" @click=${(e: Event) => logDetailTabClick("raw", e)}>Raw</button>
           </div>
           <div class="log-detail-content" id="log-detail-content">
-            ${renderRequestTab(requestBody, createdAt)}
-            ${renderResponseTab(response, isStreaming, createdAt, isPartial)}
-            ${errors != null
-              ? jsonSection("Errors", errors, "errors")
-              : html`<section class="log-detail-section" data-log-tab="errors">
-                   <h4>Errors</h4>
-                   <p class="muted">No errors recorded.</p>
-                 </section>`}
-            ${jsonSection("Raw log", log, "raw")}
+            <div style="display: ${currentActiveTab === "request" ? "block" : "none"}">
+              ${renderRequestTab(requestBody, createdAt)}
+            </div>
+            <div style="display: ${currentActiveTab === "response" ? "block" : "none"}">
+              ${renderResponseTab(response, isStreaming, createdAt, isPartial)}
+            </div>
+            <div style="display: ${currentActiveTab === "errors" ? "block" : "none"}">
+              ${errors != null
+                ? jsonSection("Errors", errors, "errors")
+                : html`<section class="log-detail-section" data-log-tab="errors">
+                     <h4>Errors</h4>
+                     <p class="muted">No errors recorded.</p>
+                   </section>`}
+            </div>
+            <div style="display: ${currentActiveTab === "raw" ? "block" : "none"}">
+              ${jsonSection("Raw log", log, "raw")}
+            </div>
           </div>
         </div>
       </div>
     </div>
   `;
 }
+
+let currentActiveTab: string = "request";
 
 /** Click handler for the `.detail-tab` buttons. Toggles which
  *  `#log-detail-content [data-log-tab]` section is visible (mutually
@@ -1049,22 +1059,9 @@ export function renderLogDetailModal(log: LogDetailLog): TemplateResult {
  *  Lit-html's `@click` wiring means we no longer need a separate
  *  document-level listener (`tabClickOnce` / `wireTabClickOnce` in
  *  the pre-migration code). */
-function logDetailTabClick(which: string, e: Event): void {
-  // Update section visibility.
-  document.querySelectorAll("#log-detail-content [data-log-tab]").forEach((sec) => {
-    const el = sec as HTMLElement;
-    el.style.display = (sec.getAttribute("data-log-tab") === which) ? "" : "none";
-  });
-  // Update the active-tab indicator on the clicked button.
-  const btn = e.currentTarget;
-  if (btn instanceof Element) {
-    const tabsContainer = btn.closest(".log-detail-tabs");
-    if (tabsContainer != null) {
-      tabsContainer.querySelectorAll(".detail-tab").forEach((t) => {
-        t.classList.toggle("active", t === btn);
-      });
-    }
-  }
+function logDetailTabClick(which: string, _e: Event): void {
+  currentActiveTab = which;
+  renderModal(); // re-render to reflect the new active tab
 }
 
 // Initialize the log-detail tab UI: show only the first [data-log-tab]
@@ -1072,25 +1069,8 @@ function logDetailTabClick(which: string, e: Event): void {
 // active. Centralized here so it can be re-invoked after any in-place
 // re-render (e.g. updateOpenLogDetail re-rendering the modal).
 function initializeLogDetailTabs(): void {
-  const modal: HTMLElement | null = document.getElementById("log-detail-modal");
-  if (!modal) return;
-  const sections: NodeListOf<Element> = modal.querySelectorAll("[data-log-tab]");
-  if (sections.length === 0) return;
-  // Hide all but the first; mark first as active.
-  sections.forEach((s, i) => {
-    const sEl: HTMLElement = s as HTMLElement;
-    sEl.style.display = i === 0 ? "" : "none";
-  });
-  // BUG-INIT-1: the rendered tab buttons are `.detail-tab` inside
-  // `.log-detail-tabs` (data-action="logDetailTab"), not anything
-  // marked with `data-log-detail-tab`. Pick the first `.detail-tab`
-  // child of the tabs container.
-  const tabsContainer: HTMLElement | null = modal.querySelector(".log-detail-tabs");
-  if (tabsContainer != null) {
-    tabsContainer.querySelectorAll(".detail-tab").forEach((t) => t.classList.remove("active"));
-    const firstTab: HTMLElement | null = tabsContainer.querySelector(".detail-tab");
-    if (firstTab) firstTab.classList.add("active");
-  }
+  currentActiveTab = "request";
+  renderModal();
 }
 
 /** Get or create the `#modal-root` container that holds all
@@ -1211,10 +1191,12 @@ export async function openLogDetail(
   id: string,
   requestId: string,
   traceId: string,
-  row?: any
+  row?: any // AttemptState (from logs.ts)
 ): Promise<void> {
   const gen = bumpOpenLogDetailGeneration();
-  const isFinalized = row && row.terminal && row.row;
+  const isFinalized = row != null && row.terminal && row.row;
+  
+  const fallbackAttemptKey = traceId || (requestId ? `${requestId}:unknown` : id);
   
   if (isFinalized) {
     try {
@@ -1224,7 +1206,7 @@ export async function openLogDetail(
         const payload = await res.json();
         if (payload && payload.row) {
           liveLogsStore.setDetail(
-            id ? { kind: "row_id", id: Number(id) } : { kind: "attempt", attemptKey: traceId || requestId || id },
+            id ? { kind: "row_id", id: Number(id) } : { kind: "attempt", attemptKey: fallbackAttemptKey },
             payload.row
           );
           if (isCurrentOpenLogDetailGeneration(gen)) {
@@ -1239,7 +1221,7 @@ export async function openLogDetail(
   
   if (!isCurrentOpenLogDetailGeneration(gen)) return;
   
-  state.logs.selectedIdentity = id ? { kind: "row_id", id: Number(id) } : { kind: "attempt", attemptKey: traceId || requestId || id };
+  state.logs.selectedIdentity = id ? { kind: "row_id", id: Number(id) } : { kind: "attempt", attemptKey: fallbackAttemptKey };
   pinnedRequestId = requestId;
   pinnedTraceId = traceId;
   

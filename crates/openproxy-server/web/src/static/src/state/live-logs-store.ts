@@ -145,6 +145,22 @@ class LiveLogsStore {
   }
 
   private applyAttemptEvent(event: AttemptEventPayload) {
+    if (event.trace_id) {
+      const unknownKey = `${event.request_id}:unknown`;
+      if (this.attemptsByKey.has(unknownKey) && unknownKey !== event.attempt_key) {
+        const oldAttempt = this.attemptsByKey.get(unknownKey)!;
+        this.attemptsByKey.delete(unknownKey);
+        const group = this.requestGroups.get(event.request_id);
+        if (group) group.delete(unknownKey);
+        
+        oldAttempt.attemptKey = event.attempt_key;
+        oldAttempt.traceId = event.trace_id;
+        
+        this.attemptsByKey.set(event.attempt_key, oldAttempt);
+        this.trackRequestGroup(event.request_id, event.attempt_key);
+      }
+    }
+
     const existing = this.attemptsByKey.get(event.attempt_key);
 
     // If there's already a terminal row for this attempt, ignore phase updates
@@ -210,6 +226,22 @@ class LiveLogsStore {
     // Attempt key fallback if trace_id is empty
     const attemptKey = row.trace_id || `${row.request_id}:unknown`;
     this.attemptKeyByRowId.set(row.id, attemptKey);
+
+    if (row.trace_id) {
+      const unknownKey = `${row.request_id}:unknown`;
+      if (this.attemptsByKey.has(unknownKey) && unknownKey !== attemptKey) {
+        const oldAttempt = this.attemptsByKey.get(unknownKey)!;
+        this.attemptsByKey.delete(unknownKey);
+        const group = this.requestGroups.get(row.request_id);
+        if (group) group.delete(unknownKey);
+        
+        oldAttempt.attemptKey = attemptKey;
+        oldAttempt.traceId = row.trace_id;
+        
+        this.attemptsByKey.set(attemptKey, oldAttempt);
+        this.trackRequestGroup(row.request_id, attemptKey);
+      }
+    }
 
     let attempt = this.attemptsByKey.get(attemptKey);
     if (!attempt) {
