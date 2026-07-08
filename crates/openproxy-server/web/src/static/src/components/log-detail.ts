@@ -14,6 +14,7 @@ import { html, render, type TemplateResult } from "lit-html";
 import { state } from "../state/index.js";
 import { showToast } from "./toast.js";
 import { liveLogsStore } from "../state/live-logs-store.js";
+import { api } from "../lib/api.js";
 
 /** Loose shape for the `log` arg in renderLogDetailModal. The
  *  modal accepts the long-poll row shape (RecentUsageRow) and the
@@ -1206,20 +1207,17 @@ export async function openLogDetail(
   
   const fallbackAttemptKey = traceId || (requestId ? `${requestId}:unknown` : id);
   
-  if (isFinalized) {
+  if (isFinalized || row == null) {
     try {
       const queryParam = traceId ? `trace_id=${encodeURIComponent(traceId)}` : `id=${encodeURIComponent(id)}`;
-      const res = await fetch(`/admin/api/usage/detail?${queryParam}`);
-      if (res.ok) {
-        const payload = await res.json();
-        if (payload && payload.row) {
-          liveLogsStore.setDetail(
-            id ? { kind: "row_id", id: Number(id) } : { kind: "attempt", attemptKey: fallbackAttemptKey },
-            payload.row
-          );
-          if (isCurrentOpenLogDetailGeneration(gen)) {
-            renderModal();
-          }
+      const payload = await api(`/usage/detail?${queryParam}`) as any;
+      if (payload && payload.row) {
+        liveLogsStore.setDetail(
+          id ? { kind: "row_id", id: Number(id) } : { kind: "attempt", attemptKey: fallbackAttemptKey },
+          payload.row
+        );
+        if (isCurrentOpenLogDetailGeneration(gen)) {
+          renderModal();
         }
       }
     } catch (e) {
