@@ -2048,7 +2048,7 @@ mod tests {
         assert_eq!(q.session_used, Some(400)); // 1000 * (1 - 0.6)
         assert_eq!(q.session_limit, Some(1000));
         assert_eq!(q.session_reset_at.as_deref(), Some("2025-01-01T00:00:00Z"));
-        assert!(q.plan_name.unwrap().contains("claude-sonnet-4"));
+        assert_eq!(q.plan_name.unwrap(), "Antigravity");
         assert!(q.fetch_error.is_none());
     }
 
