@@ -128,9 +128,6 @@ impl UsageTracker {
             status_code,
         } = ctx;
         let total_ms = started.elapsed().as_millis() as u64;
-        let request_body_json = req.request_body_json.clone().or_else(|| {
-            serde_json::to_value(&req.openai_request).ok()
-        });
         let request_headers = crate::redact::redact_btreemap_sensitive(req.request_headers.clone());
         let response_body_json: Option<serde_json::Value> =
             acc.filter(|a| !a.is_completely_empty()).map(|a| {
@@ -151,7 +148,6 @@ impl UsageTracker {
             .attempt(attempt)
             .race_size(race_size)
             .trace_id(trace_id)
-            .request_body_json(request_body_json)
             .response_body_json(response_body_json)
             .request_headers(Some(request_headers))
             .is_streaming(is_streaming)
@@ -397,7 +393,11 @@ impl<'a> UsageRecordBuilder<'a> {
             race_lost: self.err.is_some() && self.req.race_cancelled,
             api_key_id: self.req.api_key_id,
             request_body_json: if recording {
-                self.request_body_json.clone()
+                self.request_body_json.clone().or_else(|| {
+                    self.req.request_body_json.clone().or_else(|| {
+                        serde_json::to_value(&self.req.openai_request).ok()
+                    })
+                })
             } else {
                 None
             },

@@ -512,7 +512,6 @@ impl PipelineStage for CustomAdapterStage {
                     .trace_id(ctx.trace_id.clone())
                     .prompt_tokens_opt(response.usage.as_ref().map(|u| u.prompt_tokens))
                     .completion_tokens_opt(response.usage.as_ref().map(|u| u.completion_tokens))
-                    .request_body_json(None)
                     .response_body_json(None)
                     .request_headers(None)
                     .response_headers(None)
