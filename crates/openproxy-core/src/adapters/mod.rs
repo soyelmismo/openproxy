@@ -287,7 +287,7 @@ macro_rules! define_provider_adapter {
         }
 
         impl ProviderAdapter for ProviderAdapterEnum {
-            fn id(&self) -> &crate::ids::ProviderId {
+            fn id(&self) -> &$crate::ids::ProviderId {
                 match self { $( $(#[$varmeta])* Self::$variant(inner) => inner.id(), )+ }
             }
             fn config(&self) -> &crate::adapters::ProviderAdapterConfig {

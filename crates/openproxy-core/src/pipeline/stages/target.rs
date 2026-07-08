@@ -1,7 +1,5 @@
 use crate::adapters::AdapterFormat;
 use crate::adapters::ProviderAdapter;
-use crate::compression::CompressionMode;
-use crate::compression::stats::CompressionStats;
 use crate::error::CoreError;
 use crate::pipeline::context::PipelineContext;
 use crate::pipeline::stage::{PipelineNext, PipelineStage};
@@ -26,38 +24,35 @@ impl PipelineStage for OAuthRefreshStage {
             .expect("current_target must be set");
         let target = &current.target;
 
-        if let Some(account_id) = target.account_id {
-            if let Some(custom_meta) = &mut current.custom_meta {
-                if let Some(refresh_token) = &custom_meta.maybe_refresh {
-                    if let Some(registry) = ctx.pipeline.config.oauth_provider_registry.as_ref() {
-                        if let Some(provider) = registry.get(target.provider_id.as_str()) {
-                            let provider_id_str = target.provider_id.as_str();
-                            tracing::info!(
-                                account = account_id.0,
-                                provider = provider_id_str,
-                                "pipeline: proactive OAuth token refresh"
-                            );
-                            match crate::oauth::TokenRefreshCoordinator::global()
-                                .refresh_and_store(
-                                    provider_id_str,
-                                    provider,
-                                    refresh_token,
-                                    &ctx.pipeline.config.upstream_client,
-                                    account_id,
-                                    crate::oauth::DbRef::Connection(&ctx.pipeline.conn),
-                                    &ctx.pipeline.config.master_key,
-                                )
-                                .await
-                            {
-                                Ok(token) => {
-                                    custom_meta.access_token = token.access_token;
-                                }
-                                Err(e) => {
-                                    tracing::warn!(account = account_id.0, provider = provider_id_str, error = %e, "pipeline: proactive OAuth refresh failed, continuing with existing token");
-                                }
-                            }
-                        }
-                    }
+        if let Some(account_id) = target.account_id
+            && let Some(custom_meta) = &mut current.custom_meta
+            && let Some(refresh_token) = &custom_meta.maybe_refresh
+            && let Some(registry) = ctx.pipeline.config.oauth_provider_registry.as_ref()
+            && let Some(provider) = registry.get(target.provider_id.as_str())
+        {
+            let provider_id_str = target.provider_id.as_str();
+            tracing::info!(
+                account = account_id.0,
+                provider = provider_id_str,
+                "pipeline: proactive OAuth token refresh"
+            );
+            match crate::oauth::TokenRefreshCoordinator::global()
+                .refresh_and_store(
+                    provider_id_str,
+                    provider,
+                    refresh_token,
+                    &ctx.pipeline.config.upstream_client,
+                    account_id,
+                    crate::oauth::DbRef::Connection(&ctx.pipeline.conn),
+                    &ctx.pipeline.config.master_key,
+                )
+                .await
+            {
+                Ok(token) => {
+                    custom_meta.access_token = token.access_token;
+                }
+                Err(e) => {
+                    tracing::warn!(account = account_id.0, provider = provider_id_str, error = %e, "pipeline: proactive OAuth refresh failed, continuing with existing token");
                 }
             }
         }
@@ -234,7 +229,7 @@ impl PipelineStage for DispatchStage {
     async fn execute(
         &self,
         ctx: &mut PipelineContext,
-        next: PipelineNext<'_>,
+        _next: PipelineNext<'_>,
     ) -> Result<PipelineResult, CoreError> {
         let current = ctx.current_target.as_ref().unwrap();
         let target = &current.target;
@@ -272,25 +267,25 @@ impl PipelineStage for DispatchStage {
             }
         };
 
-        if let Some(cancel) = &ctx.race_cancel {
-            if cancel.is_cancelled() {
-                return Ok(ctx.pipeline.record_and_fail_with_trace_id(
-                    Arc::clone(&ctx.req),
-                    ctx.combo.as_ref().unwrap(),
-                    target,
-                    FailureContext {
-                        attempt,
-                        race_size,
-                        err: &CoreError::RaceLost,
-                        started,
-                        model: Some(model),
-                        connect_ms: None,
-                        ttft_ms: None,
-                        status_code: CoreError::RaceLost.http_status(),
-                    },
-                    trace_id,
-                ));
-            }
+        if let Some(cancel) = &ctx.race_cancel
+            && cancel.is_cancelled()
+        {
+            return Ok(ctx.pipeline.record_and_fail_with_trace_id(
+                Arc::clone(&ctx.req),
+                ctx.combo.as_ref().unwrap(),
+                target,
+                FailureContext {
+                    attempt,
+                    race_size,
+                    err: &CoreError::RaceLost,
+                    started,
+                    model: Some(model),
+                    connect_ms: None,
+                    ttft_ms: None,
+                    status_code: CoreError::RaceLost.http_status(),
+                },
+                trace_id,
+            ));
         }
 
         let (api_key, account_label) = match ctx.pipeline.resolve_target_api_key_and_label(target) {
@@ -344,7 +339,7 @@ impl PipelineStage for DispatchStage {
         });
 
         let body_bytes = ctx.body_bytes.clone().unwrap();
-        let resolved_timeouts = ctx.resolved_timeouts.clone().unwrap();
+        let resolved_timeouts = ctx.resolved_timeouts.unwrap();
 
         let result = ctx
             .pipeline

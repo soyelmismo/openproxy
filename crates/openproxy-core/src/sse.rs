@@ -2311,21 +2311,20 @@ pub fn parse_responses_sse_stream_line(
     if let Some(u) = value
         .get("usage")
         .or_else(|| value.get("response").and_then(|r| r.get("usage")))
+        && let Ok(mut u_parsed) = serde_json::from_value::<OpenAIUsage>(u.clone())
     {
-        if let Ok(mut u_parsed) = serde_json::from_value::<OpenAIUsage>(u.clone()) {
-            if u_parsed.prompt_tokens == 0 && u.get("input_tokens").is_some() {
-                u_parsed.prompt_tokens =
-                    u.get("input_tokens").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
-            }
-            if u_parsed.completion_tokens == 0 && u.get("output_tokens").is_some() {
-                u_parsed.completion_tokens =
-                    u.get("output_tokens").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
-            }
-            if u_parsed.total_tokens == 0 {
-                u_parsed.total_tokens = u_parsed.prompt_tokens + u_parsed.completion_tokens;
-            }
-            usage = Some(u_parsed);
+        if u_parsed.prompt_tokens == 0 && u.get("input_tokens").is_some() {
+            u_parsed.prompt_tokens =
+                u.get("input_tokens").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
         }
+        if u_parsed.completion_tokens == 0 && u.get("output_tokens").is_some() {
+            u_parsed.completion_tokens =
+                u.get("output_tokens").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+        }
+        if u_parsed.total_tokens == 0 {
+            u_parsed.total_tokens = u_parsed.prompt_tokens + u_parsed.completion_tokens;
+        }
+        usage = Some(u_parsed);
     }
 
     if event_type == "response.output_item.added"

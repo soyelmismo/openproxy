@@ -950,11 +950,11 @@ pub fn create_custom_model(conn: &Connection, input: CreateCustomModelInput) -> 
 /// the production path: `DbPool::with_conn` plus a second open via the
 /// pool's writer mutex that we then drop before awaiting) and hand the
 /// owned handle in here, so the future stays `Send` end to end.
-pub async fn refresh_models(
+pub async fn refresh_models<A: crate::adapters::ProviderAdapter>(
     conn: Connection,
     provider: &ProviderId,
     api_key: &str,
-    adapter: &crate::adapters::ProviderAdapterEnum,
+    adapter: &A,
     upstream_client: &std::sync::Arc<crate::upstream::UpstreamClient>,
     ttl_seconds: i64,
     account_label: &str,
@@ -1388,48 +1388,14 @@ mod tests {
         let conn = pool.open_connection().expect("open conn");
 
         // We need a minimal adapter impl to satisfy the trait. We don't
-        // call `fetch_models` on it (the missing-provider branch returns
-        // before that), so the impl can be a stub.
-        struct StubAdapter;
-        impl crate::adapters::ProviderAdapter for StubAdapter {
-            fn id(&self) -> &ProviderId {
-                static ID: std::sync::OnceLock<ProviderId> = std::sync::OnceLock::new();
-                ID.get_or_init(|| ProviderId::new("stub"))
-            }
-            fn config(&self) -> &crate::adapters::ProviderAdapterConfig {
-                unimplemented!("not called in this branch")
-            }
-            fn build_chat_url(
-                &self,
-                _target_format: crate::models::TargetFormat,
-                _model: &crate::ids::ModelId,
-            ) -> String {
-                unimplemented!("not called in this branch")
-            }
-            fn build_auth_header(&self, _api_key: &str) -> (String, String) {
-                unimplemented!("not called in this branch")
-            }
-            fn build_headers(
-                &self,
-                _api_key: &str,
-                _target_format: crate::models::TargetFormat,
-                _model: &crate::ids::ModelId,
-            ) -> Vec<(String, String)> {
-                unimplemented!("not called in this branch")
-            }
-            fn models_url(&self) -> Option<String> {
-                unimplemented!("not called in this branch")
-            }
-            async fn fetch_models(
-                &self,
-                _upstream_client: &std::sync::Arc<crate::upstream::UpstreamClient>,
-                _api_key: &str,
-            ) -> Result<Vec<crate::models::DiscoveredModel>> {
-                unimplemented!("not called in this branch")
-            }
-        }
-
-        let adapter = StubAdapter;
+        // call `fetch_models` on it.
+        let adapter = crate::adapters::ProviderAdapterEnum::Mock(
+            crate::pipeline::test_utils::MockAdapter::new(
+                "stub",
+                String::new(),
+                crate::adapters::AdapterFormat::Openai,
+            ),
+        );
         let upstream = crate::upstream::UpstreamClient::new();
 
         let rt = tokio::runtime::Builder::new_current_thread()

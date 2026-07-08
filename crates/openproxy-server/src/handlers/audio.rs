@@ -51,7 +51,6 @@ use openproxy_core::{
     models, providers,
     routing::{self, RoutingPlan},
 };
-use std::sync::Arc;
 use std::time::Instant;
 
 use crate::{error::ApiError, middleware::auth::authenticate, state::AppState};

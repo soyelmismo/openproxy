@@ -1,12 +1,9 @@
-use crate::adapters::{AdapterFormat, CustomExecutionContext, ProviderAdapter};
+use crate::adapters::ProviderAdapter;
 use crate::combos::{self, Combo, ComboTarget};
-use crate::compression::stats::CompressionStats;
 use crate::error::{CoreError, Result};
 use crate::ids::ComboId;
 use crate::pipeline::repository::PipelineRepository;
 use crate::pipeline::{ErrorPhase, FailureContext, Pipeline, PipelineRequest, PipelineResult};
-use crate::retry::RetryPolicy;
-use crate::timeouts::{self, ModelTimeoutOverrides};
 use crate::upstream::CancellationToken;
 use std::sync::Arc;
 use tokio::sync::watch;

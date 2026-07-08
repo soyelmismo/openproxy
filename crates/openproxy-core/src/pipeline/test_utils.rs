@@ -205,8 +205,12 @@ pub fn make_request_with_model(model: &str) -> OpenAIRequest {
 
 /// Minimal `ProviderAdapter` impl for tests that just need URL/header
 /// plumbing without any per-format normalization.
+#[derive(Clone)]
 pub struct MockAdapter {
     pub config: ProviderAdapterConfig,
+    pub call_count: Option<std::sync::Arc<std::sync::atomic::AtomicUsize>>,
+    pub models_to_return: Option<Vec<crate::models::DiscoveredModel>>,
+    pub fail_fetch: bool,
 }
 
 impl MockAdapter {
@@ -219,7 +223,27 @@ impl MockAdapter {
                 format,
                 extra_headers: Vec::new(),
             },
+            call_count: None,
+            models_to_return: None,
+            fail_fetch: false,
         }
+    }
+
+    pub fn with_discovery(
+        id: &str,
+        models: Vec<crate::models::DiscoveredModel>,
+    ) -> (Self, std::sync::Arc<std::sync::atomic::AtomicUsize>) {
+        let counter = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let mut adapter = Self::new(id, String::new(), AdapterFormat::Openai);
+        adapter.call_count = Some(counter.clone());
+        adapter.models_to_return = Some(models);
+        (adapter, counter)
+    }
+
+    pub fn failing_discovery(id: &str) -> Self {
+        let mut adapter = Self::new(id, String::new(), AdapterFormat::Openai);
+        adapter.fail_fetch = true;
+        adapter
     }
 }
 
@@ -254,8 +278,20 @@ impl ProviderAdapter for MockAdapter {
         &self,
         _upstream_client: &std::sync::Arc<crate::upstream::UpstreamClient>,
         _api_key: &str,
-    ) -> Result<Vec<crate::models::DiscoveredModel>> {
-        Ok(Vec::new())
+    ) -> crate::error::Result<Vec<crate::models::DiscoveredModel>> {
+        if self.fail_fetch {
+            return Err(crate::error::CoreError::Internal(
+                "simulated upstream 500".into(),
+            ));
+        }
+        if let Some(counter) = &self.call_count {
+            counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        }
+        if let Some(models) = &self.models_to_return {
+            Ok(models.clone())
+        } else {
+            Ok(Vec::new())
+        }
     }
 }
 
@@ -324,12 +360,15 @@ pub fn test_config_with_mock(master_key: Arc<MasterKey>, base_url: String) -> Pi
     let defaults = Timeouts::from_config(&TimeoutsConfig::default());
     let mock = MockAdapter {
         config: ProviderAdapterConfig {
-            id: ProviderId::new("test-mock-sse"),
-            base_url,
+            id: ProviderId::new("mock-openai"),
+            base_url: "http://example.com".into(),
             auth_type: AdapterAuthType::Bearer,
             format: AdapterFormat::Openai,
             extra_headers: Vec::new(),
         },
+        call_count: None,
+        fail_fetch: false,
+        models_to_return: None,
     };
     PipelineConfig {
         defaults,

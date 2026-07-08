@@ -1,7 +1,6 @@
 use crate::error::CoreError;
 use crate::pipeline::PipelineResult;
 use crate::pipeline::context::PipelineContext;
-use std::sync::Arc;
 
 pub struct PipelineNext<'a> {
     chain: &'a PipelineChain,

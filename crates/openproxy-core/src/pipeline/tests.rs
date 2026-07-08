@@ -216,57 +216,6 @@ fn make_request(combo_id: ComboId) -> (PipelineRequest, watch::Sender<bool>) {
 /// plumbing without any per-format normalization. Tests that need to
 /// override `normalize_request_body` should define their own adapter
 /// struct (see `normalize_request_body_hook_called_in_chat_pipeline`).
-pub(super) struct MockAdapter {
-    pub config: ProviderAdapterConfig,
-}
-impl MockAdapter {
-    pub fn new(id: &str, base_url: String, format: AdapterFormat) -> Self {
-        Self {
-            config: ProviderAdapterConfig {
-                id: ProviderId::new(id),
-                base_url,
-                auth_type: AdapterAuthType::Bearer,
-                format,
-                extra_headers: Vec::new(),
-            },
-        }
-    }
-}
-impl ProviderAdapter for MockAdapter {
-    fn id(&self) -> &ProviderId {
-        &self.config.id
-    }
-    fn config(&self) -> &ProviderAdapterConfig {
-        &self.config
-    }
-    fn build_chat_url(&self, _target_format: TargetFormat, _model: &crate::ids::ModelId) -> String {
-        self.config.base_url.clone()
-    }
-    fn build_auth_header(&self, api_key: &str) -> (String, String) {
-        ("Authorization".into(), format!("Bearer {api_key}"))
-    }
-    fn build_headers(
-        &self,
-        api_key: &str,
-        _target_format: TargetFormat,
-        _model: &crate::ids::ModelId,
-    ) -> Vec<(String, String)> {
-        vec![
-            self.build_auth_header(api_key),
-            ("Content-Type".into(), "application/json".into()),
-        ]
-    }
-    fn models_url(&self) -> Option<String> {
-        None
-    }
-    async fn fetch_models(
-        &self,
-        _upstream_client: &std::sync::Arc<crate::upstream::UpstreamClient>,
-        _api_key: &str,
-    ) -> Result<Vec<crate::models::DiscoveredModel>> {
-        Ok(Vec::new())
-    }
-}
 
 #[test]
 fn pipeline_creation_doesnt_panic() {
@@ -1028,7 +977,11 @@ async fn priority_combo_walks_row_after_first_5xx() {
 
     // ----- 4. Wire the mock adapter + run the pipeline -----
     let defaults = Timeouts::from_config(&TimeoutsConfig::default());
-    let mock = MockAdapter::new("prio-mock", upstream_url.clone(), AdapterFormat::Openai);
+    let mock = crate::pipeline::test_utils::MockAdapter::new(
+        "prio-mock",
+        upstream_url.clone(),
+        AdapterFormat::Openai,
+    );
     let cfg = PipelineConfig {
         defaults,
         racing: RacingConfig::default(),
@@ -1260,7 +1213,11 @@ async fn adversarial_priority_combo_with_5_targets_walks_to_5th_when_all_fail() 
 
     // 4. Wire the mock + run.
     let defaults = Timeouts::from_config(&TimeoutsConfig::default());
-    let mock = MockAdapter::new("adv-mock", upstream_url.clone(), AdapterFormat::Openai);
+    let mock = crate::pipeline::test_utils::MockAdapter::new(
+        "adv-mock",
+        upstream_url.clone(),
+        AdapterFormat::Openai,
+    );
     let cfg = PipelineConfig {
         defaults,
         racing: RacingConfig::default(),
@@ -1462,7 +1419,11 @@ async fn adversarial_priority_combo_with_mixed_4xx_5xx_walks_to_first_2xx() {
 
     // 3. Wire the mock + run.
     let defaults = Timeouts::from_config(&TimeoutsConfig::default());
-    let mock = MockAdapter::new("adv-mock", upstream_url.clone(), AdapterFormat::Openai);
+    let mock = crate::pipeline::test_utils::MockAdapter::new(
+        "adv-mock",
+        upstream_url.clone(),
+        AdapterFormat::Openai,
+    );
     let cfg = PipelineConfig {
         defaults,
         racing: RacingConfig::default(),
@@ -1651,7 +1612,11 @@ data: [DONE]
 
     // 3. Wire the mock + run.
     let defaults = Timeouts::from_config(&TimeoutsConfig::default());
-    let mock = MockAdapter::new("rr-mock", upstream_url.clone(), AdapterFormat::Openai);
+    let mock = crate::pipeline::test_utils::MockAdapter::new(
+        "rr-mock",
+        upstream_url.clone(),
+        AdapterFormat::Openai,
+    );
     let cfg = PipelineConfig {
         defaults,
         racing: RacingConfig::default(),
@@ -1857,7 +1822,11 @@ async fn nested_combo_falls_through_to_parent_sibling_on_subcombo_failure() {
     };
 
     let defaults = Timeouts::from_config(&TimeoutsConfig::default());
-    let mock = MockAdapter::new("nested-mock", upstream_url.clone(), AdapterFormat::Openai);
+    let mock = crate::pipeline::test_utils::MockAdapter::new(
+        "nested-mock",
+        upstream_url.clone(),
+        AdapterFormat::Openai,
+    );
     let cfg = PipelineConfig {
         defaults,
         racing: RacingConfig::default(),
@@ -2116,7 +2085,11 @@ async fn adversarial_priority_combo_respects_max_attempts_for_same_provider() {
     };
 
     let defaults = Timeouts::from_config(&TimeoutsConfig::default());
-    let mock = MockAdapter::new("adv-mock", upstream_url.clone(), AdapterFormat::Openai);
+    let mock = crate::pipeline::test_utils::MockAdapter::new(
+        "adv-mock",
+        upstream_url.clone(),
+        AdapterFormat::Openai,
+    );
     let cfg = PipelineConfig {
         defaults,
         racing: RacingConfig::default(),
@@ -2309,7 +2282,11 @@ async fn bug4_per_target_retry_exhausts_then_falls_through_to_next_target() {
     };
 
     let defaults = Timeouts::from_config(&TimeoutsConfig::default());
-    let mock = MockAdapter::new("adv-mock", upstream_url.clone(), AdapterFormat::Openai);
+    let mock = crate::pipeline::test_utils::MockAdapter::new(
+        "adv-mock",
+        upstream_url.clone(),
+        AdapterFormat::Openai,
+    );
     let cfg = PipelineConfig {
         defaults,
         racing: RacingConfig::default(),
@@ -2975,7 +2952,7 @@ async fn non_streaming_dispatch_uses_upstream_client_end_to_end() {
         seed_solo_combo_at_url(&pool.writer(), "non-streaming-test", &upstream_url, &mk);
 
     let defaults = Timeouts::from_config(&TimeoutsConfig::default());
-    let mock = MockAdapter::new(
+    let mock = crate::pipeline::test_utils::MockAdapter::new(
         "non-streaming-test",
         upstream_url.clone(),
         AdapterFormat::Openai,
@@ -3123,7 +3100,11 @@ async fn bug_a_body_reaches_upstream() {
         seed_solo_combo_at_url(&pool.writer(), "body-bug-test", &upstream_url, &mk);
 
     let defaults = Timeouts::from_config(&TimeoutsConfig::default());
-    let mock = MockAdapter::new("body-bug-test", upstream_url.clone(), AdapterFormat::Openai);
+    let mock = crate::pipeline::test_utils::MockAdapter::new(
+        "body-bug-test",
+        upstream_url.clone(),
+        AdapterFormat::Openai,
+    );
     let cfg = PipelineConfig {
         defaults,
         racing: RacingConfig::default(),
@@ -3195,48 +3176,6 @@ async fn streaming_dispatch_uses_upstream_client_end_to_end() {
 
     // ----- 1. A mock ProviderAdapter that points at our
     //         localhost listener -----
-    struct MockAdapter {
-        config: ProviderAdapterConfig,
-    }
-    impl ProviderAdapter for MockAdapter {
-        fn id(&self) -> &ProviderId {
-            &self.config.id
-        }
-        fn config(&self) -> &ProviderAdapterConfig {
-            &self.config
-        }
-        fn build_chat_url(
-            &self,
-            _target_format: TargetFormat,
-            _model: &crate::ids::ModelId,
-        ) -> String {
-            format!("{}/chat/completions", self.config.base_url)
-        }
-        fn build_auth_header(&self, api_key: &str) -> (String, String) {
-            ("Authorization".into(), format!("Bearer {api_key}"))
-        }
-        fn build_headers(
-            &self,
-            api_key: &str,
-            _target_format: TargetFormat,
-            _model: &crate::ids::ModelId,
-        ) -> Vec<(String, String)> {
-            vec![
-                self.build_auth_header(api_key),
-                ("Content-Type".into(), "application/json".into()),
-            ]
-        }
-        fn models_url(&self) -> Option<String> {
-            None
-        }
-        async fn fetch_models(
-            &self,
-            _upstream_client: &std::sync::Arc<crate::upstream::UpstreamClient>,
-            _api_key: &str,
-        ) -> Result<Vec<crate::models::DiscoveredModel>> {
-            Ok(Vec::new())
-        }
-    }
 
     // ----- 2. Bind the listener and spawn a server that
     //         returns three well-formed OpenAI SSE chunks
@@ -3349,7 +3288,7 @@ async fn streaming_dispatch_uses_upstream_client_end_to_end() {
         seed_solo_combo_at_url(&pool.writer(), "streaming-test", &upstream_url, &mk);
 
     let defaults = Timeouts::from_config(&TimeoutsConfig::default());
-    let mock = MockAdapter {
+    let mock = crate::pipeline::test_utils::MockAdapter {
         config: ProviderAdapterConfig {
             id: ProviderId::new("streaming-test"),
             base_url: upstream_url.clone(),
@@ -3357,6 +3296,9 @@ async fn streaming_dispatch_uses_upstream_client_end_to_end() {
             format: AdapterFormat::Openai,
             extra_headers: Vec::new(),
         },
+        call_count: None,
+        fail_fetch: false,
+        models_to_return: None,
     };
     let cfg = PipelineConfig {
         defaults,
@@ -3599,50 +3541,6 @@ async fn cancellation_mid_sse_stream_aborts_immediately() {
     //    (`fetch_models`, `models_url`) return values that would
     //    never get called by the streaming dispatch path.
     // -----------------------------------------------------------------
-    struct MockAdapter {
-        config: ProviderAdapterConfig,
-    }
-    impl ProviderAdapter for MockAdapter {
-        fn id(&self) -> &crate::ids::ProviderId {
-            &self.config.id
-        }
-        fn config(&self) -> &ProviderAdapterConfig {
-            &self.config
-        }
-        fn build_chat_url(
-            &self,
-            _target_format: crate::models::TargetFormat,
-            _model: &crate::ids::ModelId,
-        ) -> String {
-            format!("{}/chat/completions", self.config.base_url)
-        }
-        fn build_auth_header(&self, api_key: &str) -> (String, String) {
-            ("Authorization".into(), format!("Bearer {api_key}"))
-        }
-        fn build_headers(
-            &self,
-            api_key: &str,
-            _target_format: crate::models::TargetFormat,
-            _model: &crate::ids::ModelId,
-        ) -> Vec<(String, String)> {
-            vec![
-                self.build_auth_header(api_key),
-                ("Content-Type".into(), "application/json".into()),
-            ]
-        }
-        fn models_url(&self) -> Option<String> {
-            None
-        }
-        async fn fetch_models(
-            &self,
-            _upstream_client: &std::sync::Arc<crate::upstream::UpstreamClient>,
-            _api_key: &str,
-        ) -> Result<Vec<crate::models::DiscoveredModel>> {
-            // Not exercised by the streaming path; return an
-            // empty list so the type is satisfied.
-            Ok(Vec::new())
-        }
-    }
 
     // -----------------------------------------------------------------
     // 2. Build a `PipelineConfig` that registers ONLY the mock
@@ -3655,7 +3553,7 @@ async fn cancellation_mid_sse_stream_aborts_immediately() {
     // -----------------------------------------------------------------
     fn test_config_with_mock(master_key: Arc<MasterKey>, base_url: String) -> PipelineConfig {
         let defaults = Timeouts::from_config(&TimeoutsConfig::default());
-        let mock = MockAdapter {
+        let mock = crate::pipeline::test_utils::MockAdapter {
             config: ProviderAdapterConfig {
                 id: ProviderId::new("test-mock-sse"),
                 base_url,
@@ -3663,6 +3561,9 @@ async fn cancellation_mid_sse_stream_aborts_immediately() {
                 format: AdapterFormat::Openai,
                 extra_headers: Vec::new(),
             },
+            call_count: None,
+            fail_fetch: false,
+            models_to_return: None,
         };
         PipelineConfig {
             defaults,
@@ -4081,7 +3982,11 @@ async fn run_with_fake_upstream_and_capture_stages(
         seed_solo_combo_at_url(&pool.writer(), provider_id, &upstream_url, &mk);
 
     let defaults = Timeouts::from_config(&TimeoutsConfig::default());
-    let mock = MockAdapter::new(provider_id, upstream_url.clone(), AdapterFormat::Openai);
+    let mock = crate::pipeline::test_utils::MockAdapter::new(
+        provider_id,
+        upstream_url.clone(),
+        AdapterFormat::Openai,
+    );
     let recording_flag = Arc::new(std::sync::atomic::AtomicBool::new(true));
     let cfg = PipelineConfig {
         defaults,
@@ -4632,7 +4537,11 @@ async fn run_streaming_and_get_response_body(
     let defaults = Timeouts::from_config(&TimeoutsConfig::default());
     // Mixed so the pipeline consults model.target_format (pipeline.rs:1355)
     // to pick the SSE parser branch.
-    let mock = MockAdapter::new(provider_id, upstream_url.clone(), AdapterFormat::Mixed);
+    let mock = crate::pipeline::test_utils::MockAdapter::new(
+        provider_id,
+        upstream_url.clone(),
+        AdapterFormat::Mixed,
+    );
     let recording_flag = Arc::new(std::sync::atomic::AtomicBool::new(recording));
     let cfg = PipelineConfig {
         defaults,

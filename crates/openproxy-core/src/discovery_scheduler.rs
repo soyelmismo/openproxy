@@ -621,77 +621,6 @@ mod tests {
     /// and counts every call. Lifted into a `pub` style (still
     /// module-private) so the test bodies can construct one
     /// per test case.
-    struct MockAdapter {
-        id: CoreProviderId,
-        call_count: StdArc<AtomicUsize>,
-        models: Vec<DiscoveredModel>,
-    }
-
-    impl MockAdapter {
-        fn new(id: &str, models: Vec<DiscoveredModel>) -> (Arc<Self>, Arc<AtomicUsize>) {
-            let counter = Arc::new(AtomicUsize::new(0));
-            let adapter = Arc::new(Self {
-                id: CoreProviderId::new(id),
-                call_count: counter.clone(),
-                models,
-            });
-            (adapter, counter)
-        }
-    }
-
-    impl ProviderAdapter for MockAdapter {
-        fn id(&self) -> &CoreProviderId {
-            &self.id
-        }
-        fn config(&self) -> &ProviderAdapterConfig {
-            // Construct a config on the fly — the discovery
-            // tick doesn't read this field, but the trait
-            // requires returning a reference. We use a `Box::leak`
-            // to anchor a stable address for the lifetime of
-            // the test; `MockAdapter` is short-lived.
-            let cfg = Box::new(ProviderAdapterConfig {
-                id: self.id.clone(),
-                base_url: format!("https://mock-{}", self.id),
-                auth_type: AdapterAuthType::Bearer,
-                format: AdapterFormat::Openai,
-                extra_headers: Vec::new(),
-            });
-            Box::leak(cfg)
-        }
-        fn build_chat_url(&self, _target_format: TargetFormat, _model: &ModelId) -> String {
-            String::new()
-        }
-        fn build_auth_header(&self, _api_key: &str) -> (String, String) {
-            ("Authorization".to_string(), "Bearer mock".to_string())
-        }
-        fn build_headers(
-            &self,
-            api_key: &str,
-            _target_format: TargetFormat,
-            _model: &ModelId,
-        ) -> Vec<(String, String)> {
-            // The default impl in adapters.rs constructs
-            // content-type + extra_headers + auth header. We
-            // don't go through the default because we have
-            // no real config; emit a minimal set instead.
-            let (k, v) = self.build_auth_header(api_key);
-            vec![
-                ("Content-Type".to_string(), "application/json".to_string()),
-                (k, v),
-            ]
-        }
-        fn models_url(&self) -> Option<String> {
-            Some(format!("https://mock-{}/models", self.id))
-        }
-        async fn fetch_models(
-            &self,
-            _upstream_client: &Arc<UpstreamClient>,
-            _api_key: &str,
-        ) -> crate::error::Result<Vec<DiscoveredModel>> {
-            self.call_count.fetch_add(1, Ordering::SeqCst);
-            Ok(self.models.clone())
-        }
-    }
 
     /// Insert a provider row + a single account whose API key
     /// decrypts to `"sk-test"`. Mirrors what
@@ -771,8 +700,12 @@ mod tests {
         // Insert only the OpenRouter adapter; the other built-ins
         // would fail to find a matching adapter if we tried to
         // register them.
-        let (adapter, counter) = MockAdapter::new("openrouter", three_models());
-        let adapters: Arc<Vec<crate::adapters::ProviderAdapterEnum>> = Arc::new(vec![adapter]);
+        let (adapter, counter) =
+            crate::pipeline::test_utils::MockAdapter::with_discovery("openrouter", three_models());
+        let adapters: Arc<Vec<crate::adapters::ProviderAdapterEnum>> =
+            Arc::new(vec![crate::adapters::ProviderAdapterEnum::Mock(
+                adapter.clone(),
+            )]);
 
         // Run with paused time + 1s ticks. We expect the first
         // tick to fire after 1s (the staggered sleep) and
@@ -861,8 +794,12 @@ mod tests {
             .expect("seed provider");
         }
 
-        let (adapter, counter) = MockAdapter::new("openrouter", three_models());
-        let adapters: Arc<Vec<crate::adapters::ProviderAdapterEnum>> = Arc::new(vec![adapter]);
+        let (adapter, counter) =
+            crate::pipeline::test_utils::MockAdapter::with_discovery("openrouter", three_models());
+        let adapters: Arc<Vec<crate::adapters::ProviderAdapterEnum>> =
+            Arc::new(vec![crate::adapters::ProviderAdapterEnum::Mock(
+                adapter.clone(),
+            )]);
 
         let sched = start(
             pool.clone(),
@@ -945,8 +882,9 @@ mod tests {
         ) = provider_ids
             .iter()
             .map(|pid| {
-                let (a, c) = MockAdapter::new(pid, three_models());
-                (a as crate::adapters::ProviderAdapterEnum, c)
+                let (a, c) =
+                    crate::pipeline::test_utils::MockAdapter::with_discovery(pid, three_models());
+                (crate::adapters::ProviderAdapterEnum::Mock(a), c)
             })
             .unzip();
         let adapters = Arc::new(adapters);
@@ -1279,8 +1217,12 @@ mod tests {
                 capabilities: None,
             },
         ];
-        let (adapter, _counter) = MockAdapter::new("openrouter", models);
-        let adapters: Arc<Vec<crate::adapters::ProviderAdapterEnum>> = Arc::new(vec![adapter]);
+        let (adapter, _counter) =
+            crate::pipeline::test_utils::MockAdapter::with_discovery("openrouter", models);
+        let adapters: Arc<Vec<crate::adapters::ProviderAdapterEnum>> =
+            Arc::new(vec![crate::adapters::ProviderAdapterEnum::Mock(
+                adapter.clone(),
+            )]);
 
         let sched = start(
             pool.clone(),
@@ -1398,54 +1340,11 @@ mod tests {
         // Adapter that ALWAYS fails on `fetch_models`. We can't
         // reuse `MockAdapter` because its `fetch_models` returns
         // `Ok`. Build a thin shim.
-        struct FailingAdapter {
-            id: CoreProviderId,
-        }
-        impl ProviderAdapter for FailingAdapter {
-            fn id(&self) -> &CoreProviderId {
-                &self.id
-            }
-            fn config(&self) -> &ProviderAdapterConfig {
-                let cfg = Box::new(ProviderAdapterConfig {
-                    id: self.id.clone(),
-                    base_url: format!("https://mock-{}", self.id),
-                    auth_type: AdapterAuthType::Bearer,
-                    format: AdapterFormat::Openai,
-                    extra_headers: Vec::new(),
-                });
-                Box::leak(cfg)
-            }
-            fn build_chat_url(&self, _target_format: TargetFormat, _model: &ModelId) -> String {
-                String::new()
-            }
-            fn build_auth_header(&self, _api_key: &str) -> (String, String) {
-                ("Authorization".to_string(), "Bearer mock".to_string())
-            }
-            fn build_headers(
-                &self,
-                _api_key: &str,
-                _target_format: TargetFormat,
-                _model: &ModelId,
-            ) -> Vec<(String, String)> {
-                Vec::new()
-            }
-            fn models_url(&self) -> Option<String> {
-                Some(format!("https://mock-{}/models", self.id))
-            }
-            async fn fetch_models(
-                &self,
-                _upstream_client: &Arc<UpstreamClient>,
-                _api_key: &str,
-            ) -> crate::error::Result<Vec<DiscoveredModel>> {
-                Err(crate::error::CoreError::Internal(
-                    "simulated upstream 500".to_string(),
-                ))
-            }
-        }
-        let adapter: crate::adapters::ProviderAdapterEnum = Arc::new(FailingAdapter {
-            id: CoreProviderId::new("openrouter"),
-        });
-        let adapters: Arc<Vec<crate::adapters::ProviderAdapterEnum>> = Arc::new(vec![adapter]);
+        let adapter = crate::adapters::ProviderAdapterEnum::Mock(
+            crate::pipeline::test_utils::MockAdapter::failing_discovery("openrouter"),
+        );
+        let adapters: Arc<Vec<crate::adapters::ProviderAdapterEnum>> =
+            Arc::new(vec![adapter.clone()]);
 
         let sched = start(
             pool.clone(),

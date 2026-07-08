@@ -1034,8 +1034,8 @@ mod tests {
     //! `rebuild_adapters()` so the admin handlers can refresh it.
 
     use super::*;
-    use crate::adapters::ProviderAdapter;
     use crate::state::AppState;
+    use openproxy_core::adapters::ProviderAdapter;
     use openproxy_core::{
         AppConfig, adapters, db as core_db, ids::ProviderId, providers, secrets::MasterKey,
     };

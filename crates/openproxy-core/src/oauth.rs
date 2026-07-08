@@ -260,7 +260,7 @@ macro_rules! define_oauth_provider {
                 &self,
                 code: &str,
                 code_verifier: &str,
-                upstream_client: &std::sync::Arc<crate::upstream::UpstreamClient>,
+                upstream_client: &std::sync::Arc<$crate::upstream::UpstreamClient>,
                 redirect_uri: &str,
             ) -> Result<TokenResponse> {
                 match self { $( Self::$variant(inner) => inner.exchange_code(code, code_verifier, upstream_client, redirect_uri).await, )+ }
