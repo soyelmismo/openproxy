@@ -5567,7 +5567,14 @@ pub async fn debug_vacuum(State(s): State<AppState>) -> ApiResult<Json<serde_jso
         }
 
         // Step 3: DB is healthy — run full VACUUM.
-        match w.execute_batch("VACUUM;") {
+        // VACUUM creates a full copy of the DB. We temporarily switch temp_store
+        // to FILE to prevent memory exhaustion, as our global temp_store=MEMORY
+        // would force the entire VACUUM operation into RAM.
+        let _ = w.pragma_update(None, "temp_store", "FILE");
+        let vacuum_res = w.execute_batch("VACUUM;");
+        let _ = w.pragma_update(None, "temp_store", "MEMORY");
+
+        match vacuum_res {
             Ok(()) => {
                 tracing::info!("VACUUM step 3: full VACUUM completed");
                 // Reopen connections so subsequent queries see the
