@@ -180,16 +180,16 @@ impl AppState {
         let upstream_client = UpstreamClient::new();
         let oauth_provider_registry = Arc::new(oauth::OAuthProviderRegistry::builtin());
 
-        spawn_background_tasks(
-            db_pool.clone(),
-            config.clone(),
-            recording_ttl_secs_cell.clone(),
-            maintenance_cell.clone(),
-            vacuum_status.clone(),
-            master_key.clone(),
-            upstream_client.clone(),
-            oauth_provider_registry.clone(),
-        )
+        spawn_background_tasks(SpawnBackgroundTasksArgs {
+            db_pool: db_pool.clone(),
+            config: config.clone(),
+            recording_ttl_secs_cell: recording_ttl_secs_cell.clone(),
+            maintenance_cell: maintenance_cell.clone(),
+            vacuum_status: vacuum_status.clone(),
+            master_key: master_key.clone(),
+            upstream_client: upstream_client.clone(),
+            oauth_provider_registry: oauth_provider_registry.clone(),
+        })
         .await;
 
         let discovery_scheduler = Arc::new(
@@ -291,16 +291,16 @@ impl AppState {
         let upstream_client = UpstreamClient::new();
         let oauth_provider_registry = Arc::new(oauth::OAuthProviderRegistry::builtin());
 
-        spawn_background_tasks(
-            db_pool.clone(),
-            config.clone(),
-            recording_ttl_secs_cell.clone(),
-            maintenance_cell.clone(),
-            vacuum_status.clone(),
-            master_key.clone(),
-            upstream_client.clone(),
-            oauth_provider_registry.clone(),
-        )
+        spawn_background_tasks(SpawnBackgroundTasksArgs {
+            db_pool: db_pool.clone(),
+            config: config.clone(),
+            recording_ttl_secs_cell: recording_ttl_secs_cell.clone(),
+            maintenance_cell: maintenance_cell.clone(),
+            vacuum_status: vacuum_status.clone(),
+            master_key: master_key.clone(),
+            upstream_client: upstream_client.clone(),
+            oauth_provider_registry: oauth_provider_registry.clone(),
+        })
         .await;
 
         let adapters_snapshot = Arc::new(adapters.read().clone());
@@ -752,17 +752,28 @@ fn run_database_maintenance(
     Ok(())
 }
 
-// ponytail: [Demasiados argumentos] -> [Refactorizar a struct en el futuro]
-async fn spawn_background_tasks(
+struct SpawnBackgroundTasksArgs {
     db_pool: Arc<openproxy_core::db::DbPool>,
-    _config: openproxy_core::AppConfig,
+    config: openproxy_core::AppConfig,
     recording_ttl_secs_cell: Arc<RwLock<i64>>,
     maintenance_cell: Arc<RwLock<openproxy_core::config::MaintenanceConfig>>,
     vacuum_status: Arc<RwLock<crate::state::VacuumStatus>>,
     master_key: Arc<openproxy_core::secrets::MasterKey>,
     upstream_client: Arc<openproxy_core::upstream::UpstreamClient>,
     oauth_provider_registry: Arc<openproxy_core::oauth::OAuthProviderRegistry>,
-) {
+}
+
+async fn spawn_background_tasks(args: SpawnBackgroundTasksArgs) {
+    let SpawnBackgroundTasksArgs {
+        db_pool,
+        config: _config,
+        recording_ttl_secs_cell,
+        maintenance_cell,
+        vacuum_status,
+        master_key,
+        upstream_client,
+        oauth_provider_registry,
+    } = args;
     let prune_pool = db_pool.clone();
     tokio::spawn(async move {
         let mut tick = tokio::time::interval(std::time::Duration::from_secs(60));

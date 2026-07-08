@@ -152,19 +152,19 @@ pub async fn transcribe(
     };
 
     // 9. Record usage.
-    let _ = record_audio_usage_row(
-        &state,
-        RequestId::new(),
+    let _ = record_audio_usage_row(AudioUsageArgs {
+        state: &state,
+        request_id: RequestId::new(),
         api_key_id,
-        &targets.provider_id,
-        targets.account_id,
-        targets.combo_id,
-        targets.model_row_id,
-        &targets.upstream_model_id,
-        status_code.as_u16(),
+        provider_id: &targets.provider_id,
+        account_id: targets.account_id,
+        combo_id: targets.combo_id,
+        model_row_id: targets.model_row_id,
+        upstream_model_id: &targets.upstream_model_id,
+        status_code: status_code.as_u16(),
         error_msg,
         total_ms,
-    );
+    });
 
     // 10. Return response.
     build_audio_response(status_code.as_u16(), &content_type, body_bytes)
@@ -295,19 +295,19 @@ fn translate_audio_routing_plan(
             }))
         }
         RoutingPlan::NotFound { model, hint } => {
-            let _ = record_audio_usage_row(
+            let _ = record_audio_usage_row(AudioUsageArgs {
                 state,
-                RequestId::new(),
+                request_id: RequestId::new(),
                 api_key_id,
-                &ProviderId::new(""),
-                None,
-                None,
-                None,
-                &model,
-                404,
-                Some("model_not_found".to_string()),
-                started.elapsed().as_millis() as u64,
-            );
+                provider_id: &ProviderId::new(""),
+                account_id: None,
+                combo_id: None,
+                model_row_id: None,
+                upstream_model_id: &model,
+                status_code: 404,
+                error_msg: Some("model_not_found".to_string()),
+                total_ms: started.elapsed().as_millis() as u64,
+            });
             let mut msg = format!("model not found: {}", model);
             if let Some(h) = hint {
                 msg.push_str(&format!(" (hint: {})", h));
@@ -471,20 +471,34 @@ fn resolve_api_key(
 /// stall the audio response — if the writer lock can't be acquired in
 /// 100ms, the row is dropped (logged at WARN) and the request still
 /// returns successfully. This matches the chat handler's MEDIUM-5 fix.
-// ponytail: [Demasiados argumentos] -> [Refactorizar a struct en el futuro]
-fn record_audio_usage_row(
-    state: &AppState,
+struct AudioUsageArgs<'a> {
+    state: &'a AppState,
     request_id: RequestId,
     api_key_id: Option<ApiKeyId>,
-    provider_id: &ProviderId,
+    provider_id: &'a ProviderId,
     account_id: Option<AccountId>,
     combo_id: Option<ComboId>,
     model_row_id: Option<ModelRowId>,
-    upstream_model_id: &str,
+    upstream_model_id: &'a str,
     status_code: u16,
     error_msg: Option<String>,
     total_ms: u64,
-) -> Result<(), ApiError> {
+}
+
+fn record_audio_usage_row(args: AudioUsageArgs<'_>) -> Result<(), ApiError> {
+    let AudioUsageArgs {
+        state,
+        request_id,
+        api_key_id,
+        provider_id,
+        account_id,
+        combo_id,
+        model_row_id,
+        upstream_model_id,
+        status_code,
+        error_msg,
+        total_ms,
+    } = args;
     use openproxy_core::cost::UsageInput;
     let input = UsageInput {
         request_id,

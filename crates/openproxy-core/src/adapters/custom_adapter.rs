@@ -112,10 +112,11 @@ impl ProviderAdapter for CustomAdapter {
         _model: &ModelId,
     ) -> Vec<(String, String)> {
         let mut headers = Vec::with_capacity(2 + self.config.extra_headers.len());
-        if let Some((name, value)) = self.build_auth_header(api_key) {
-            if !name.is_empty() && !api_key.is_empty() {
-                headers.push((name, value));
-            }
+        if let Some((name, value)) = self.build_auth_header(api_key)
+            && !name.is_empty()
+            && !api_key.is_empty()
+        {
+            headers.push((name, value));
         }
         headers.push(("Content-Type".into(), "application/json".into()));
         for (k, v) in &self.config.extra_headers {

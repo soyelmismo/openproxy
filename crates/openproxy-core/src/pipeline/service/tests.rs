@@ -52,7 +52,7 @@ async fn test_resolve_service_resolves_combo() {
     let mut service = ResolveService::new(pipeline, LeafService);
     let (req, _dis_tx) = make_request(combo_id);
     let state = PipelineState {
-        req: req,
+        req,
         combo: None,
         eligible_targets: None,
         race_size: None,
