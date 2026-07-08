@@ -107,7 +107,8 @@ impl UpstreamDispatcher {
                         proxy_id = %bad_proxy_id,
                         "proxy rotation triggered: marking proxy as dead and clearing binding"
                     );
-                    let _ = crate::free_proxies::update_proxy_status(&conn, bad_proxy_id, "dead", None);
+                    let _ =
+                        crate::free_proxies::update_proxy_status(&conn, bad_proxy_id, "dead", None);
                     let _ = crate::providers::update_current_proxy(&conn, provider_id, None);
                     return true;
                 }

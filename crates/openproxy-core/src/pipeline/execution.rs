@@ -52,7 +52,8 @@ impl Pipeline {
             let mut visited: Vec<ComboId> = vec![*root_combo_id];
             for t in targets {
                 if let Some(sub_id) = t.sub_combo_id {
-                    let sub_flat = combos::resolve_combo_to_targets(&conn, sub_id, &mut visited, 0)?;
+                    let sub_flat =
+                        combos::resolve_combo_to_targets(&conn, sub_id, &mut visited, 0)?;
                     out.extend(sub_flat);
                 } else {
                     out.push(t);
@@ -160,14 +161,15 @@ impl Pipeline {
         race_size: u8,
         race_cancel: &CancellationToken,
     ) -> PipelineResult {
-        let mut ctx = crate::pipeline::context::PipelineContext::new(Arc::clone(&req), self.clone());
+        let mut ctx =
+            crate::pipeline::context::PipelineContext::new(Arc::clone(&req), self.clone());
         ctx.combo = Some(combo.clone());
         ctx.current_target = Some(resolved_target.clone());
         ctx.current_target_attempt = attempt;
         ctx.race_size = race_size;
         ctx.race_cancel = Some(race_cancel.clone());
         ctx.started = Some(std::time::Instant::now());
-        
+
         if attempt > 1 {
             ctx.trace_id = format!("{}:retry{}", req.trace_id, attempt - 1);
         } else {
@@ -195,7 +197,9 @@ impl Pipeline {
         let chain = crate::pipeline::stage::PipelineChain::new(vec![
             PipelineStageEnum::OAuthRefresh(crate::pipeline::stages::target::OAuthRefreshStage),
             PipelineStageEnum::CustomAdapter(crate::pipeline::stages::target::CustomAdapterStage),
-            PipelineStageEnum::TimeoutResolution(crate::pipeline::stages::target::TimeoutResolutionStage),
+            PipelineStageEnum::TimeoutResolution(
+                crate::pipeline::stages::target::TimeoutResolutionStage,
+            ),
             PipelineStageEnum::Formatting(crate::pipeline::stages::target::FormattingStage),
             PipelineStageEnum::Dispatch(crate::pipeline::stages::target::DispatchStage),
         ]);

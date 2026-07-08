@@ -5,12 +5,10 @@ use crate::pipeline::context::PipelineContext;
 use crate::pipeline::stage::PipelineStage;
 use crate::retry::RetryPolicy;
 use crate::upstream::CancellationToken;
-use async_trait::async_trait;
 use std::sync::Arc;
 
 #[derive(Clone, Copy)]
 pub struct UpstreamExecutorStage;
-
 
 impl PipelineStage for UpstreamExecutorStage {
     async fn execute(

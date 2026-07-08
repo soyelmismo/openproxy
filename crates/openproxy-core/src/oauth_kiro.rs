@@ -11,7 +11,6 @@
 //! "region": "us-east-1"}`. The chat executor reads this field and
 //! embeds it in every upstream request.
 
-use async_trait::async_trait;
 use rusqlite::{Connection, OptionalExtension, params};
 use serde::{Deserialize, Serialize};
 

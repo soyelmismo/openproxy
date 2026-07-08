@@ -232,7 +232,6 @@ impl MockAdapter {
         }
     }
 }
-#[async_trait::async_trait]
 impl ProviderAdapter for MockAdapter {
     fn id(&self) -> &ProviderId {
         &self.config.id
@@ -3199,7 +3198,6 @@ async fn streaming_dispatch_uses_upstream_client_end_to_end() {
     struct MockAdapter {
         config: ProviderAdapterConfig,
     }
-    #[async_trait::async_trait]
     impl ProviderAdapter for MockAdapter {
         fn id(&self) -> &ProviderId {
             &self.config.id
@@ -3604,7 +3602,6 @@ async fn cancellation_mid_sse_stream_aborts_immediately() {
     struct MockAdapter {
         config: ProviderAdapterConfig,
     }
-    #[async_trait::async_trait]
     impl ProviderAdapter for MockAdapter {
         fn id(&self) -> &crate::ids::ProviderId {
             &self.config.id

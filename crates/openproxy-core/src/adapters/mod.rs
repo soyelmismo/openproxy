@@ -16,7 +16,6 @@ use crate::error::{CoreError, Result};
 use crate::ids::{ModelId, ProviderId};
 use crate::models::{DiscoveredModel, TargetFormat};
 use crate::upstream::{CancellationToken, TimeoutProfile, UpstreamClient, UpstreamRequest};
-use async_trait::async_trait;
 use bytes::Bytes;
 use http::HeaderValue;
 use serde::{Deserialize, Serialize};
@@ -83,40 +82,6 @@ pub enum AdapterFormat {
 ///
 /// All methods are `&self` and the trait is `Send + Sync` so adapters can live
 /// behind an `Arc<dyn ProviderAdapter>` in long-lived registries.
-///
-/// # Why `#[async_trait]` is still here (edition 2024 migration)
-///
-/// The workspace was upgraded to Rust edition 2024 / rustc 1.96+, which
-/// supports native `async fn` in traits. We intentionally keep
-/// `#[async_trait]` on this trait (and every `impl ProviderAdapter for ...`
-/// block in the codebase) because the trait is used as a *trait object* —
-/// `Arc<dyn ProviderAdapter>` shows up in `PipelineState.adapters`,
-/// `DiscoveryScheduler` task arguments, `admin::refresh_models`, the
-/// Gate-C E2E test, and roughly 60+ other call sites.
-///
-/// Native `async fn` in a trait is **not** dyn-safe: the compiler cannot
-/// vtable a method whose return type is an `impl Future` (the future's
-/// size is unbounded). The `#[async_trait]` macro desugars each
-/// `async fn foo(&self, ...) -> T` into
-/// `fn foo(&self, ...) -> Pin<Box<dyn Future<Output = T> + Send + '_>>`,
-/// which IS dyn-safe at the cost of one heap allocation per call (the
-/// "Box pinning + dynamic dispatch" overhead).
-///
-/// Eliminating that overhead would require either:
-/// - **Enum dispatch** (a `BuiltinAdapter` enum wrapping the 12 concrete
-///   impls) — not viable here because `CustomAdapter` is constructed from
-///   runtime config and registered dynamically, so the set of adapters
-///   is not closed at compile time.
-/// - **Generic dispatch** at every call site (`impl ProviderAdapter`) —
-///   would require refactoring 60+ sites and breaking the
-///   `Arc<Vec<ProviderAdapterEnum>>` registry pattern that
-///   `PipelineState` and `DiscoveryScheduler` rely on for runtime
-///   iteration over a heterogeneous adapter collection.
-///
-/// Both alternatives are large architectural refactors outside the scope
-/// of the edition-2024 / `#[async_trait]` migration. The runtime cost
-/// (one Box per `fetch_models` call, which already does network I/O)
-/// is negligible relative to the work each call performs.
 pub trait ProviderAdapter: Send + Sync {
     /// Stable identifier of this provider (e.g. `"openrouter"`).
     fn id(&self) -> &ProviderId {
@@ -306,7 +271,6 @@ pub trait ProviderAdapter: Send + Sync {
         None
     }
 }
-
 
 #[macro_export]
 macro_rules! define_provider_adapter {

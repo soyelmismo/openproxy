@@ -2,11 +2,9 @@ use crate::error::CoreError;
 use crate::pipeline::PipelineResult;
 use crate::pipeline::context::PipelineContext;
 use crate::pipeline::stage::PipelineStage;
-use async_trait::async_trait;
 
 #[derive(Clone, Copy)]
 pub struct QuotaEnforcerStage;
-
 
 impl PipelineStage for QuotaEnforcerStage {
     async fn execute(

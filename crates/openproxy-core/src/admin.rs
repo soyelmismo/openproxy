@@ -17,8 +17,8 @@
 //! - `delete_*` is idempotent: a missing id is a no-op (0 rows affected), not
 //!   an error.
 
-use crate::adapters::ProviderAdapter;
 use crate::accounts;
+use crate::adapters::ProviderAdapter;
 use crate::combos;
 use crate::cooldown;
 use crate::error::{CoreError, Result};
@@ -1391,7 +1391,6 @@ mod tests {
         // call `fetch_models` on it (the missing-provider branch returns
         // before that), so the impl can be a stub.
         struct StubAdapter;
-        #[async_trait::async_trait]
         impl crate::adapters::ProviderAdapter for StubAdapter {
             fn id(&self) -> &ProviderId {
                 static ID: std::sync::OnceLock<ProviderId> = std::sync::OnceLock::new();

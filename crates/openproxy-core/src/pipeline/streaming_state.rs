@@ -280,7 +280,6 @@ pub(crate) struct ChunkProcessor<'a> {
     pub state: &'a mut StreamingState,
     pub dispatcher: &'a crate::pipeline::upstream_dispatcher::UpstreamDispatcher,
 }
-#[async_trait::async_trait]
 impl<'a> crate::pipeline::streaming::ChunkInterceptor for ChunkProcessor<'a> {
     async fn process_chunk(
         &mut self,

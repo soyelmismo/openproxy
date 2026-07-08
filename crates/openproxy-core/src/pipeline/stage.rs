@@ -74,7 +74,10 @@ impl PipelineChain {
 
     /// Executes the pipeline chain over an existing mutable PipelineContext,
     /// allowing for nested inner chains.
-    pub async fn execute_nested(&self, ctx: &mut PipelineContext) -> Result<PipelineResult, CoreError> {
+    pub async fn execute_nested(
+        &self,
+        ctx: &mut PipelineContext,
+    ) -> Result<PipelineResult, CoreError> {
         self.execute_stage(0, ctx).await
     }
 

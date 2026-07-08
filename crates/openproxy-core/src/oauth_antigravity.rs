@@ -10,7 +10,6 @@
 //! JSON: `{"projectId": "..."}`. The chat executor reads this
 //! field and embeds it in the upstream request envelope.
 
-use async_trait::async_trait;
 use rusqlite::{Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 

@@ -152,7 +152,6 @@ impl TestMockAdapter {
     }
 }
 
-#[async_trait::async_trait]
 impl ProviderAdapter for TestMockAdapter {
     fn id(&self) -> &ProviderId {
         &self.config.id
@@ -264,7 +263,10 @@ impl ProviderAdapter for TestMockAdapter {
 /// the built-in adapter set, and we keep the `DbPool` + `AppState`
 /// in the test's hands so the test can mutate the DB directly
 /// between refreshes.
-async fn make_test_state(dir: &std::path::Path, adapter: crate::adapters::ProviderAdapterEnum) -> AppState {
+async fn make_test_state(
+    dir: &std::path::Path,
+    adapter: crate::adapters::ProviderAdapterEnum,
+) -> AppState {
     let pool = Arc::new(core_db::DbPool::open(&dir.join("e2e.db")).expect("open pool"));
     {
         let mut w = pool.writer();

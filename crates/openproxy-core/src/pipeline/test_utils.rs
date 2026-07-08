@@ -223,7 +223,6 @@ impl MockAdapter {
     }
 }
 
-#[async_trait::async_trait]
 impl ProviderAdapter for MockAdapter {
     fn id(&self) -> &ProviderId {
         &self.config.id

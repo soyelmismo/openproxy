@@ -11,7 +11,6 @@ use crate::error::{CoreError, Result};
 use crate::ids::AccountId;
 use crate::secrets::MasterKey;
 use crate::upstream::UpstreamClient;
-use async_trait::async_trait;
 use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -112,36 +111,6 @@ pub struct OAuthProviderMeta {
 /// trait. The trait methods are `async` because they make HTTP calls to
 /// the OAuth endpoints.
 ///
-/// # Why `#[async_trait]` is still here (edition 2024 migration)
-///
-/// The workspace was upgraded to Rust edition 2024 / rustc 1.96+, which
-/// supports native `async fn` in traits. We intentionally keep
-/// `#[async_trait]` on this trait (and every `impl OAuthProvider for ...`
-/// block) because the trait is used as a *trait object* — the
-/// `OAuthProviderRegistry` stores providers as
-/// `HashMap<String, OAuthProviderEnum>` so they can be
-/// looked up by name at runtime, and the registry accepts custom
-/// providers registered dynamically via `register()` / `register_arc()`.
-///
-/// Native `async fn` in a trait is **not** dyn-safe (the compiler cannot
-/// vtable a method whose return type is an `impl Future` because the
-/// future's size is unbounded). The `#[async_trait]` macro desugars each
-/// `async fn foo(&self, ...) -> T` into
-/// `fn foo(&self, ...) -> Pin<Box<dyn Future<Output = T> + Send + '_>>`,
-/// which IS dyn-safe at the cost of one heap allocation per call.
-///
-/// Eliminating that overhead would require either:
-/// - **Enum dispatch** — not viable because `register()` accepts
-///   arbitrary user-supplied `OAuthProvider` impls at runtime; the set
-///   of providers is not closed at compile time.
-/// - **Generic dispatch** at every call site — would require refactoring
-///   the registry, the background refresh scheduler, and the on-demand
-///   refresh path in `pipeline.rs`.
-///
-/// Both alternatives are large architectural refactors outside the scope
-/// of the edition-2024 / `#[async_trait]` migration. The runtime cost
-/// (one Box per token-refresh call, which already does network I/O) is
-/// negligible relative to the work each call performs.
 pub trait OAuthProvider: Send + Sync {
     /// Human-readable name for logging (e.g. "antigravity").
     fn name(&self) -> &str;
@@ -347,11 +316,7 @@ define_oauth_provider! {
 }
 
 pub struct OAuthProviderRegistry {
-    inner: std::sync::Arc<
-        std::sync::Mutex<
-            std::collections::HashMap<String, OAuthProviderEnum>,
-        >,
-    >,
+    inner: std::sync::Arc<std::sync::Mutex<std::collections::HashMap<String, OAuthProviderEnum>>>,
 }
 
 impl OAuthProviderRegistry {
@@ -367,11 +332,14 @@ impl OAuthProviderRegistry {
         let reg = Self::new();
         // Antigravity (Cloud Code) — registered under both `antigravity`
         // and `antigravity-cli` since they share the same OAuth flow.
-        let antigravity =
-            crate::oauth_antigravity::AntigravityOAuthProvider::new();
+        let antigravity = crate::oauth_antigravity::AntigravityOAuthProvider::new();
         reg.register_arc_with_name("antigravity", OAuthProviderEnum::Antigravity(antigravity));
-        reg.register_arc(OAuthProviderEnum::Codex(crate::oauth_codex::CodexOAuthProvider::new()));
-        reg.register_arc(OAuthProviderEnum::Kiro(crate::oauth_kiro::KiroOAuthProvider::new()));
+        reg.register_arc(OAuthProviderEnum::Codex(
+            crate::oauth_codex::CodexOAuthProvider::new(),
+        ));
+        reg.register_arc(OAuthProviderEnum::Kiro(
+            crate::oauth_kiro::KiroOAuthProvider::new(),
+        ));
         reg
     }
 
@@ -389,11 +357,7 @@ impl OAuthProviderRegistry {
     /// (useful for aliases like `antigravity-cli` → same impl as
     /// `antigravity`). If a provider with the same key already
     /// exists, it is replaced.
-    pub fn register_arc_with_name(
-        &self,
-        name: &str,
-        provider: OAuthProviderEnum,
-    ) {
+    pub fn register_arc_with_name(&self, name: &str, provider: OAuthProviderEnum) {
         let mut guard = self.inner.lock().unwrap();
         guard.insert(name.to_string(), provider);
     }

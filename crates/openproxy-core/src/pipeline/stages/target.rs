@@ -1,20 +1,18 @@
-use crate::adapters::ProviderAdapter;
 use crate::adapters::AdapterFormat;
-use crate::compression::stats::CompressionStats;
+use crate::adapters::ProviderAdapter;
 use crate::compression::CompressionMode;
-use crate::timeouts::ModelTimeoutOverrides;
+use crate::compression::stats::CompressionStats;
 use crate::error::CoreError;
 use crate::pipeline::context::PipelineContext;
 use crate::pipeline::stage::{PipelineNext, PipelineStage};
 use crate::pipeline::{FailureContext, PipelineResult};
 use crate::retry::RetryPolicy;
 use crate::timeouts;
-use async_trait::async_trait;
+use crate::timeouts::ModelTimeoutOverrides;
 use std::sync::Arc;
 
 #[derive(Clone, Copy)]
 pub struct OAuthRefreshStage;
-
 
 impl PipelineStage for OAuthRefreshStage {
     async fn execute(
@@ -22,9 +20,12 @@ impl PipelineStage for OAuthRefreshStage {
         ctx: &mut PipelineContext,
         next: PipelineNext<'_>,
     ) -> Result<PipelineResult, CoreError> {
-        let current = ctx.current_target.as_mut().expect("current_target must be set");
+        let current = ctx
+            .current_target
+            .as_mut()
+            .expect("current_target must be set");
         let target = &current.target;
-        
+
         if let Some(account_id) = target.account_id {
             if let Some(custom_meta) = &mut current.custom_meta {
                 if let Some(refresh_token) = &custom_meta.maybe_refresh {
@@ -67,7 +68,6 @@ impl PipelineStage for OAuthRefreshStage {
 #[derive(Clone, Copy)]
 pub struct TimeoutResolutionStage;
 
-
 impl PipelineStage for TimeoutResolutionStage {
     async fn execute(
         &self,
@@ -102,8 +102,9 @@ impl PipelineStage for TimeoutResolutionStage {
                 }
             };
 
-        let resolved_timeouts = timeouts::resolve(&ctx.pipeline.config.defaults, Some(&model_overrides));
-        
+        let resolved_timeouts =
+            timeouts::resolve(&ctx.pipeline.config.defaults, Some(&model_overrides));
+
         tracing::debug!(
             target_id = current.target.id.0,
             provider = %current.target.provider_id,
@@ -111,7 +112,7 @@ impl PipelineStage for TimeoutResolutionStage {
             total_ms = resolved_timeouts.total.as_millis() as u64,
             "resolved timeouts for target"
         );
-        
+
         ctx.resolved_timeouts = Some(resolved_timeouts);
         next.execute(ctx).await
     }
@@ -120,7 +121,6 @@ impl PipelineStage for TimeoutResolutionStage {
 #[derive(Clone, Copy)]
 pub struct FormattingStage;
 
-
 impl PipelineStage for FormattingStage {
     async fn execute(
         &self,
@@ -128,7 +128,13 @@ impl PipelineStage for FormattingStage {
         next: PipelineNext<'_>,
     ) -> Result<PipelineResult, CoreError> {
         let current = ctx.current_target.as_ref().unwrap();
-        let adapter = match ctx.pipeline.config.adapters.iter().find(|a| a.id() == &current.target.provider_id) {
+        let adapter = match ctx
+            .pipeline
+            .config
+            .adapters
+            .iter()
+            .find(|a| a.id() == &current.target.provider_id)
+        {
             Some(a) => a.clone(),
             None => {
                 let err = CoreError::ProviderNotFound(current.target.provider_id.to_string());
@@ -165,13 +171,20 @@ impl PipelineStage for FormattingStage {
         };
 
         let cloned_messages_ref = ctx.req.compressed_messages.get_or_init(|| {
-            if crate::compression::would_compress(&ctx.req.openai_request.messages, ctx.pipeline.config.compression_mode) {
+            if crate::compression::would_compress(
+                &ctx.req.openai_request.messages,
+                ctx.pipeline.config.compression_mode,
+            ) {
                 let mut msgs = ctx.req.openai_request.messages.clone();
-                let stats = crate::compression::apply_compression(&mut msgs, ctx.pipeline.config.compression_mode);
+                let stats = crate::compression::apply_compression(
+                    &mut msgs,
+                    ctx.pipeline.config.compression_mode,
+                );
                 *ctx.pipeline.compression_stats_cell.write() = Some(stats);
                 Some(msgs)
             } else {
-                *ctx.pipeline.compression_stats_cell.write() = Some(crate::compression::stats::CompressionStats::empty());
+                *ctx.pipeline.compression_stats_cell.write() =
+                    Some(crate::compression::stats::CompressionStats::empty());
                 None
             }
         });
@@ -181,7 +194,13 @@ impl PipelineStage for FormattingStage {
             .unwrap_or(&ctx.req.openai_request.messages);
 
         let formatter = crate::pipeline::formatting::get_formatter(target_format);
-        let body_bytes = match formatter.format_request(&ctx.req, &current.model, messages_ref, stream, &adapter) {
+        let body_bytes = match formatter.format_request(
+            &ctx.req,
+            &current.model,
+            messages_ref,
+            stream,
+            &adapter,
+        ) {
             Ok(b) => b,
             Err(e) => {
                 return Ok(ctx.pipeline.record_and_fail(
@@ -211,7 +230,6 @@ impl PipelineStage for FormattingStage {
 #[derive(Clone, Copy)]
 pub struct DispatchStage;
 
-
 impl PipelineStage for DispatchStage {
     async fn execute(
         &self,
@@ -225,8 +243,14 @@ impl PipelineStage for DispatchStage {
         let race_size = ctx.race_size;
         let started = ctx.started.unwrap();
         let trace_id = ctx.trace_id.clone();
-        
-        let adapter = match ctx.pipeline.config.adapters.iter().find(|a| a.id() == &target.provider_id) {
+
+        let adapter = match ctx
+            .pipeline
+            .config
+            .adapters
+            .iter()
+            .find(|a| a.id() == &target.provider_id)
+        {
             Some(a) => a.clone(),
             None => {
                 let err = CoreError::ProviderNotFound(target.provider_id.to_string());
@@ -247,7 +271,7 @@ impl PipelineStage for DispatchStage {
                 ));
             }
         };
-        
+
         if let Some(cancel) = &ctx.race_cancel {
             if cancel.is_cancelled() {
                 return Ok(ctx.pipeline.record_and_fail_with_trace_id(
@@ -292,9 +316,10 @@ impl PipelineStage for DispatchStage {
 
         let target_format = ctx.target_format.unwrap();
         let account_label_str = account_label.as_deref().unwrap_or("");
-        let url = adapter.build_chat_url_for_account(target_format, &model.model_id, account_label_str);
+        let url =
+            adapter.build_chat_url_for_account(target_format, &model.model_id, account_label_str);
         let headers = adapter.build_headers(&api_key, target_format, &model.model_id);
-        
+
         let compression_stats_at_connecting = ctx.pipeline.compression_stats_cell.read().clone();
         crate::usage::publish_stage_event(crate::usage::StageEvent {
             request_id: ctx.req.request_id.to_string(),
@@ -321,7 +346,9 @@ impl PipelineStage for DispatchStage {
         let body_bytes = ctx.body_bytes.clone().unwrap();
         let resolved_timeouts = ctx.resolved_timeouts.clone().unwrap();
 
-        let result = ctx.pipeline.dispatcher
+        let result = ctx
+            .pipeline
+            .dispatcher
             .dispatch_upstream(
                 target,
                 ctx.combo.as_ref().unwrap(),
@@ -347,13 +374,16 @@ impl PipelineStage for DispatchStage {
                         "client cancelled; leaving circuit breaker untouched"
                     );
                 }
-                Some(e) if RetryPolicy::is_retryable(e, ctx.pipeline.config.idle_chunk_retryable) => {
+                Some(e)
+                    if RetryPolicy::is_retryable(e, ctx.pipeline.config.idle_chunk_retryable) =>
+                {
                     let outcome = ctx.pipeline.circuit_breaker.record_failure_outcome(aid);
                     if outcome.just_opened {
                         let provider_id_str = target.provider_id.to_string();
                         let model_id_str = model.model_id.as_str().to_string();
                         let combo_target_id = target.id.0;
-                        let dedup_key = format!("{}:{}", crate::notifications::CODE_CIRCUIT_OPEN, aid.0);
+                        let dedup_key =
+                            format!("{}:{}", crate::notifications::CODE_CIRCUIT_OPEN, aid.0);
                         let payload = serde_json::json!({
                             "code": crate::notifications::CODE_CIRCUIT_OPEN,
                             "message": format!(
@@ -395,10 +425,8 @@ impl PipelineStage for DispatchStage {
     }
 }
 
-
 #[derive(Clone, Copy)]
 pub struct CustomAdapterStage;
-
 
 impl PipelineStage for CustomAdapterStage {
     async fn execute(
@@ -406,9 +434,18 @@ impl PipelineStage for CustomAdapterStage {
         ctx: &mut PipelineContext,
         next: PipelineNext<'_>,
     ) -> Result<PipelineResult, CoreError> {
-        let current = ctx.current_target.as_mut().expect("current_target must be set");
+        let current = ctx
+            .current_target
+            .as_mut()
+            .expect("current_target must be set");
         let target = &current.target;
-        let adapter = match ctx.pipeline.config.adapters.iter().find(|a| a.id() == &target.provider_id) {
+        let adapter = match ctx
+            .pipeline
+            .config
+            .adapters
+            .iter()
+            .find(|a| a.id() == &target.provider_id)
+        {
             Some(a) => a.clone(),
             None => {
                 let err = CoreError::ProviderNotFound(target.provider_id.to_string());
@@ -439,13 +476,24 @@ impl PipelineStage for CustomAdapterStage {
                 Some(crate::adapters::CustomExecutionContext {
                     conn: Arc::clone(&ctx.pipeline.conn),
                     cooldown_mode: ctx.combo.as_ref().unwrap().cooldown_mode,
-                    cooldown_base_secs: ctx.combo.as_ref().unwrap()
+                    cooldown_base_secs: ctx
+                        .combo
+                        .as_ref()
+                        .unwrap()
                         .cooldown_base_secs
                         .unwrap_or(ctx.pipeline.config.cooldown_secs),
-                    cooldown_max_secs: ctx.combo.as_ref().unwrap()
+                    cooldown_max_secs: ctx
+                        .combo
+                        .as_ref()
+                        .unwrap()
                         .cooldown_max_secs
                         .unwrap_or(ctx.pipeline.config.cooldown_max_secs),
-                    cooldown_factor: ctx.combo.as_ref().unwrap().cooldown_factor.unwrap_or(ctx.pipeline.config.cooldown_factor),
+                    cooldown_factor: ctx
+                        .combo
+                        .as_ref()
+                        .unwrap()
+                        .cooldown_factor
+                        .unwrap_or(ctx.pipeline.config.cooldown_factor),
                 }),
             )
             .await

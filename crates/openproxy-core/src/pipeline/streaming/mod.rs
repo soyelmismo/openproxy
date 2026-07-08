@@ -18,7 +18,6 @@ pub(crate) enum ChunkEvent {
 
 use crate::pipeline::streaming_state::StreamContext;
 
-#[async_trait::async_trait]
 pub(crate) trait ChunkInterceptor: Send + Sync {
     /// Processes a chunk event, optionally mutating it or emitting a new event.
     /// Returning an Error will abort the pipeline.

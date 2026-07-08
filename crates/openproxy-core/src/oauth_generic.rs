@@ -5,7 +5,6 @@
 //! standard: PKCE authorization-code flow, optional device-code flow, and token
 //! refresh through a token endpoint.
 
-use async_trait::async_trait;
 use base64::Engine;
 use rand::Rng;
 use sha2::{Digest, Sha256};

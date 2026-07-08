@@ -3,7 +3,6 @@
 //! Uses OpenAI's custom device authorization flow.
 //! The ChatGPT account id from `id_token` claims is stored as `{"workspaceId": "..."}` when available.
 
-use async_trait::async_trait;
 use base64::Engine;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;

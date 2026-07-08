@@ -4,11 +4,9 @@ use crate::error::CoreError;
 use crate::pipeline::PipelineResult;
 use crate::pipeline::context::PipelineContext;
 use crate::pipeline::stage::PipelineStage;
-use async_trait::async_trait;
 
 #[derive(Clone, Copy)]
 pub struct RouterStage;
-
 
 impl PipelineStage for RouterStage {
     async fn execute(

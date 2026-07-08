@@ -575,7 +575,6 @@ mod tests {
     use crate::ids::{AccountId, ModelId, ProviderId as CoreProviderId};
     use crate::models::{DiscoveredModel, TargetFormat};
     use crate::providers;
-    use async_trait::async_trait;
     use rusqlite::Connection;
     use std::path::PathBuf;
     use std::sync::Arc as StdArc;
@@ -640,7 +639,6 @@ mod tests {
         }
     }
 
-    #[async_trait]
     impl ProviderAdapter for MockAdapter {
         fn id(&self) -> &CoreProviderId {
             &self.id
@@ -941,14 +939,16 @@ mod tests {
         // Build 4 mock adapters, each with its own per-adapter
         // call counter so we can assert broadcast behavior at
         // the per-task granularity.
-        let (adapters, counters): (Vec<crate::adapters::ProviderAdapterEnum>, Vec<Arc<AtomicUsize>>) =
-            provider_ids
-                .iter()
-                .map(|pid| {
-                    let (a, c) = MockAdapter::new(pid, three_models());
-                    (a as crate::adapters::ProviderAdapterEnum, c)
-                })
-                .unzip();
+        let (adapters, counters): (
+            Vec<crate::adapters::ProviderAdapterEnum>,
+            Vec<Arc<AtomicUsize>>,
+        ) = provider_ids
+            .iter()
+            .map(|pid| {
+                let (a, c) = MockAdapter::new(pid, three_models());
+                (a as crate::adapters::ProviderAdapterEnum, c)
+            })
+            .unzip();
         let adapters = Arc::new(adapters);
 
         // 1h interval: the only way a per-provider task can
@@ -1401,7 +1401,6 @@ mod tests {
         struct FailingAdapter {
             id: CoreProviderId,
         }
-        #[async_trait]
         impl ProviderAdapter for FailingAdapter {
             fn id(&self) -> &CoreProviderId {
                 &self.id

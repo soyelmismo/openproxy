@@ -2314,10 +2314,12 @@ pub fn parse_responses_sse_stream_line(
     {
         if let Ok(mut u_parsed) = serde_json::from_value::<OpenAIUsage>(u.clone()) {
             if u_parsed.prompt_tokens == 0 && u.get("input_tokens").is_some() {
-                u_parsed.prompt_tokens = u.get("input_tokens").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+                u_parsed.prompt_tokens =
+                    u.get("input_tokens").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
             }
             if u_parsed.completion_tokens == 0 && u.get("output_tokens").is_some() {
-                u_parsed.completion_tokens = u.get("output_tokens").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+                u_parsed.completion_tokens =
+                    u.get("output_tokens").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
             }
             if u_parsed.total_tokens == 0 {
                 u_parsed.total_tokens = u_parsed.prompt_tokens + u_parsed.completion_tokens;
@@ -2394,7 +2396,7 @@ pub fn parse_responses_sse_stream_line(
             .or_else(|| value.get("id"))
             .and_then(|v| v.as_str())
             .unwrap_or("");
-        
+
         if state.tool_calls.is_empty() {
             return Ok(None);
         }

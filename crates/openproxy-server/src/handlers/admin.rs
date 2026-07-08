@@ -48,17 +48,19 @@ use axum::{
 };
 use futures::StreamExt;
 use openproxy_core::{
-    CoreError, accounts, adapters, admin, analytics, api_keys as core_api_keys, combos,
+    CoreError, accounts, adapters,
+    adapters::ProviderAdapter,
+    admin, analytics, api_keys as core_api_keys, combos,
     config::{CircuitBreakerConfig, RacingConfig, RetriesConfig, TimeoutsConfig},
     db as core_db,
     db::conn::ADMIN_LOCK_TIMEOUT,
     ids::{
         AccountId, ApiKeyId, ComboId, ComboTargetId, ModelRowId, ProviderId, RequestId, TraceId,
     },
-    models, oauth, providers, seed,
-    usage::{self, UsageFilter},
-    adapters::ProviderAdapter,
+    models, oauth,
     oauth::OAuthProvider,
+    providers, seed,
+    usage::{self, UsageFilter},
 };
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -92,7 +94,9 @@ fn resolve_adapter(
         .map_err(|e| CoreError::ProviderNotFound(format!("{}: {}", provider_id, e)))?;
     drop(r);
     match provider_row {
-        Some(row) => Ok(adapters::ProviderAdapterEnum::Custom(adapters::CustomAdapter::from_provider_row(&row))),
+        Some(row) => Ok(adapters::ProviderAdapterEnum::Custom(
+            adapters::CustomAdapter::from_provider_row(&row),
+        )),
         None => Err(CoreError::ProviderNotFound(provider_id.to_string())),
     }
 }
@@ -761,8 +765,20 @@ fn enrich_provider_with_oauth(
             }
         });
 
-    let active_models: i64 = r.query_row("SELECT count(*) FROM models WHERE provider_id = ? AND active = 1", [p.id.as_str()], |row| row.get(0)).unwrap_or(0);
-    let total_models: i64 = r.query_row("SELECT count(*) FROM models WHERE provider_id = ?", [p.id.as_str()], |row| row.get(0)).unwrap_or(0);
+    let active_models: i64 = r
+        .query_row(
+            "SELECT count(*) FROM models WHERE provider_id = ? AND active = 1",
+            [p.id.as_str()],
+            |row| row.get(0),
+        )
+        .unwrap_or(0);
+    let total_models: i64 = r
+        .query_row(
+            "SELECT count(*) FROM models WHERE provider_id = ?",
+            [p.id.as_str()],
+            |row| row.get(0),
+        )
+        .unwrap_or(0);
 
     ProviderWithOAuth {
         provider: p,
@@ -3651,136 +3667,132 @@ async fn run_test_for_model(
         adapters::AdapterFormat::Gemini => openproxy_core::models::TargetFormat::Gemini,
         adapters::AdapterFormat::Responses => openproxy_core::models::TargetFormat::Responses,
     };
-    let (url, body_value): (String, serde_json::Value) =
-        if effective_target_format == openproxy_core::models::TargetFormat::Anthropic {
-            let anthropic_req = openai_to_anthropic(
-                &openai_req,
-                model.model_id.as_str(),
-                &openai_req.messages,
-                openai_req.stream,
-            );
-            let url = adapter.build_chat_url_for_account(
-                openproxy_core::models::TargetFormat::Anthropic,
-                &model.model_id,
-                &_account_label,
-            );
-            match serde_json::to_value(&anthropic_req) {
-                Ok(v) => (url, v),
-                Err(e) => {
-                    let err = CoreError::Internal(format!("serialize anthropic req: {}", e));
-                    return TestResult {
-                        row_id: model_row_id,
-                        status: 500,
-                        elapsed_ms: 0,
-                        error_msg: Some(err.to_string()),
-                        skipped: true,
-                        skip_reason: Some(err.to_string()),
-                    };
-                }
+    let (url, body_value): (String, serde_json::Value) = if effective_target_format
+        == openproxy_core::models::TargetFormat::Anthropic
+    {
+        let anthropic_req = openai_to_anthropic(
+            &openai_req,
+            model.model_id.as_str(),
+            &openai_req.messages,
+            openai_req.stream,
+        );
+        let url = adapter.build_chat_url_for_account(
+            openproxy_core::models::TargetFormat::Anthropic,
+            &model.model_id,
+            &_account_label,
+        );
+        match serde_json::to_value(&anthropic_req) {
+            Ok(v) => (url, v),
+            Err(e) => {
+                let err = CoreError::Internal(format!("serialize anthropic req: {}", e));
+                return TestResult {
+                    row_id: model_row_id,
+                    status: 500,
+                    elapsed_ms: 0,
+                    error_msg: Some(err.to_string()),
+                    skipped: true,
+                    skip_reason: Some(err.to_string()),
+                };
             }
-        } else if effective_target_format == openproxy_core::models::TargetFormat::Gemini {
-            let gemini_req = openai_to_gemini(&openai_req, &openai_req.messages);
-            let url = adapter.build_chat_url_for_account(
-                openproxy_core::models::TargetFormat::Gemini,
-                &model.model_id,
-                &_account_label,
-            );
-            match serde_json::to_value(&gemini_req) {
-                Ok(v) => (url, v),
-                Err(e) => {
-                    let err = CoreError::Internal(format!("serialize gemini req: {}", e));
-                    return TestResult {
-                        row_id: model_row_id,
-                        status: 500,
-                        elapsed_ms: 0,
-                        error_msg: Some(err.to_string()),
-                        skipped: true,
-                        skip_reason: Some(err.to_string()),
-                    };
-                }
+        }
+    } else if effective_target_format == openproxy_core::models::TargetFormat::Gemini {
+        let gemini_req = openai_to_gemini(&openai_req, &openai_req.messages);
+        let url = adapter.build_chat_url_for_account(
+            openproxy_core::models::TargetFormat::Gemini,
+            &model.model_id,
+            &_account_label,
+        );
+        match serde_json::to_value(&gemini_req) {
+            Ok(v) => (url, v),
+            Err(e) => {
+                let err = CoreError::Internal(format!("serialize gemini req: {}", e));
+                return TestResult {
+                    row_id: model_row_id,
+                    status: 500,
+                    elapsed_ms: 0,
+                    error_msg: Some(err.to_string()),
+                    skipped: true,
+                    skip_reason: Some(err.to_string()),
+                };
             }
-        } else if effective_target_format == openproxy_core::models::TargetFormat::Responses {
-            let url = adapter.build_chat_url_for_account(
-                openproxy_core::models::TargetFormat::Responses,
-                &model.model_id,
-                &_account_label,
-            );
-            let mut responses_req = openai_req.clone();
-            responses_req.max_tokens = None;
-            let (_cancel_tx, client_disconnected) = tokio::sync::watch::channel(false);
-            let pipeline_req = openproxy_core::pipeline::PipelineRequest {
-                request_id: RequestId::new(),
-                trace_id: TraceId::new(),
-                combo_id: ComboId(0),
-                openai_request: Arc::new(responses_req),
-                client_disconnected,
-                stream_sink: None,
-                api_key_id: None,
-                race_cancel: None,
-                combo_override: None,
-                targets_override: None,
-                request_headers: std::collections::BTreeMap::new(),
-                request_body_json: None,
-                race_cancelled: false,
-                endpoint_kind: openproxy_core::endpoint::EndpointKind::Chat,
-                compressed_messages: std::sync::OnceLock::new(),
-            };
-            let formatter = openproxy_core::pipeline::formatting::get_formatter(
-                openproxy_core::models::TargetFormat::Responses,
-            );
-            match formatter.format_request(
-                &pipeline_req,
-                &model,
-                &openai_req.messages,
-                true,
-                &adapter,
-            ) {
-                Ok(bytes) => match serde_json::from_slice::<serde_json::Value>(&bytes) {
-                    Ok(v) => (url, v),
-                    Err(e) => {
-                        let err = CoreError::Internal(format!("serialize responses req: {}", e));
-                        return TestResult {
-                            row_id: model_row_id,
-                            status: 500,
-                            elapsed_ms: 0,
-                            error_msg: Some(err.to_string()),
-                            skipped: true,
-                            skip_reason: Some(err.to_string()),
-                        };
-                    }
-                },
-                Err(e) => {
-                    return TestResult {
-                        row_id: model_row_id,
-                        status: 500,
-                        elapsed_ms: 0,
-                        error_msg: Some(e.to_string()),
-                        skipped: true,
-                        skip_reason: Some(e.to_string()),
-                    };
-                }
-            }
-        } else {
-            let url = adapter.build_chat_url_for_account(
-                openproxy_core::models::TargetFormat::Openai,
-                &model.model_id,
-                &_account_label,
-            );
-            match serde_json::to_value(&openai_req) {
-                Ok(v) => (url, v),
-                Err(e) => {
-                    let err = CoreError::Internal(format!("serialize openai req: {}", e));
-                    return TestResult {
-                        row_id: model_row_id,
-                        status: 500,
-                        elapsed_ms: 0,
-                        error_msg: Some(err.to_string()),
-                        skipped: true,
-                        skip_reason: Some(err.to_string()),
-                    };
-                }
-            }
+        }
+    } else if effective_target_format == openproxy_core::models::TargetFormat::Responses {
+        let url = adapter.build_chat_url_for_account(
+            openproxy_core::models::TargetFormat::Responses,
+            &model.model_id,
+            &_account_label,
+        );
+        let mut responses_req = openai_req.clone();
+        responses_req.max_tokens = None;
+        let (_cancel_tx, client_disconnected) = tokio::sync::watch::channel(false);
+        let pipeline_req = openproxy_core::pipeline::PipelineRequest {
+            request_id: RequestId::new(),
+            trace_id: TraceId::new(),
+            combo_id: ComboId(0),
+            openai_request: Arc::new(responses_req),
+            client_disconnected,
+            stream_sink: None,
+            api_key_id: None,
+            race_cancel: None,
+            combo_override: None,
+            targets_override: None,
+            request_headers: std::collections::BTreeMap::new(),
+            request_body_json: None,
+            race_cancelled: false,
+            endpoint_kind: openproxy_core::endpoint::EndpointKind::Chat,
+            compressed_messages: std::sync::OnceLock::new(),
         };
+        let formatter = openproxy_core::pipeline::formatting::get_formatter(
+            openproxy_core::models::TargetFormat::Responses,
+        );
+        match formatter.format_request(&pipeline_req, &model, &openai_req.messages, true, &adapter)
+        {
+            Ok(bytes) => match serde_json::from_slice::<serde_json::Value>(&bytes) {
+                Ok(v) => (url, v),
+                Err(e) => {
+                    let err = CoreError::Internal(format!("serialize responses req: {}", e));
+                    return TestResult {
+                        row_id: model_row_id,
+                        status: 500,
+                        elapsed_ms: 0,
+                        error_msg: Some(err.to_string()),
+                        skipped: true,
+                        skip_reason: Some(err.to_string()),
+                    };
+                }
+            },
+            Err(e) => {
+                return TestResult {
+                    row_id: model_row_id,
+                    status: 500,
+                    elapsed_ms: 0,
+                    error_msg: Some(e.to_string()),
+                    skipped: true,
+                    skip_reason: Some(e.to_string()),
+                };
+            }
+        }
+    } else {
+        let url = adapter.build_chat_url_for_account(
+            openproxy_core::models::TargetFormat::Openai,
+            &model.model_id,
+            &_account_label,
+        );
+        match serde_json::to_value(&openai_req) {
+            Ok(v) => (url, v),
+            Err(e) => {
+                let err = CoreError::Internal(format!("serialize openai req: {}", e));
+                return TestResult {
+                    row_id: model_row_id,
+                    status: 500,
+                    elapsed_ms: 0,
+                    error_msg: Some(err.to_string()),
+                    skipped: true,
+                    skip_reason: Some(err.to_string()),
+                };
+            }
+        }
+    };
 
     // 8. Build the HTTP request. The 15s timeout caps the test wall-
     //    clock cost — a hung upstream shouldn't pin a dashboard

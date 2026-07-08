@@ -2,12 +2,10 @@ use crate::error::CoreError;
 use crate::pipeline::context::PipelineContext;
 use crate::pipeline::stage::PipelineStage;
 use crate::pipeline::{ErrorPhase, PipelineResult};
-use async_trait::async_trait;
 use std::sync::Arc;
 
 #[derive(Clone, Copy)]
 pub struct TelemetryRecorderStage;
-
 
 impl PipelineStage for TelemetryRecorderStage {
     async fn execute(

@@ -442,8 +442,7 @@ impl AppState {
     /// will retry the reload) rather than failing the request.
     pub fn rebuild_adapters(&self) -> Result<(), openproxy_core::CoreError> {
         // 1. Start with the static built-in adapter set.
-        let mut new_adapters: Vec<adapters::ProviderAdapterEnum> =
-            adapters::builtin_adapters();
+        let mut new_adapters: Vec<adapters::ProviderAdapterEnum> = adapters::builtin_adapters();
         // 2. Layer in any custom providers the DB has.
         let all_providers = {
             let w = self.db_pool().writer();
@@ -455,7 +454,9 @@ impl AppState {
         }?;
         for p in &all_providers {
             if !openproxy_core::seed::is_builtin(p.id.as_str()) {
-                new_adapters.push(adapters::ProviderAdapterEnum::Custom(adapters::CustomAdapter::from_provider_row(p)));
+                new_adapters.push(adapters::ProviderAdapterEnum::Custom(
+                    adapters::CustomAdapter::from_provider_row(p),
+                ));
             }
         }
         // 3. Atomic swap into the shared slot.
@@ -1034,7 +1035,7 @@ mod tests {
 
     use super::*;
     use crate::adapters::ProviderAdapter;
-use crate::state::AppState;
+    use crate::state::AppState;
     use openproxy_core::{
         AppConfig, adapters, db as core_db, ids::ProviderId, providers, secrets::MasterKey,
     };
