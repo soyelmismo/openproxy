@@ -286,9 +286,13 @@ async fn handle_streaming_response(
         let _ = done_tx.send(());
 
         if let Some(err) = result.error {
+            let raw_err = err.to_string();
+            let redacted = openproxy_core::cost::redact_error_msg(&raw_err);
+            let message = crate::error::truncate_error_message(&redacted.0);
+
             let error_json = serde_json::json!({
                 "error": {
-                    "message": err.to_string(),
+                    "message": message,
                     "type": err.code(),
                     "code": err.http_status(),
                 }
