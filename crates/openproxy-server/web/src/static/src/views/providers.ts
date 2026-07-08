@@ -28,11 +28,7 @@ import { showCreateAccount, showUpdateAccountKey } from "../handlers/account-han
 import { showCustomModelForm } from "../components/model-custom-form.js";
 import { OAuthLogin } from "../handlers/oauth-handlers.js";
 import { renderQuotaCell } from "./quota-cell.js";
-import {
-  BUILTIN_PROVIDER_IDS,
-  providerHasQuota,
-  statusPillClass,
-} from "../lib/constants.js";
+import { statusPillClass } from "../lib/constants.js";
 import {
   applySort,
   SORTABLE_COLUMNS,
@@ -322,7 +318,10 @@ async function onRefreshAccountQuota(accountId: number, e: Event | null): Promis
 
 async function onRefreshAllQuotas(providerId: string): Promise<void> {
   const accounts = (state.accounts || []).filter((a) => a.provider_id === providerId);
-  const supported = accounts.filter((a) => providerHasQuota(a.provider_id));
+  const supported = accounts.filter((a) => {
+    const p = state.providers.find((p) => p.id === a.provider_id);
+    return p?.metadata?.supports_quota === true;
+  });
   if (supported.length === 0) {
     showToast(`No accounts with quota support for ${providerId}.`, "info");
     return;
@@ -687,10 +686,10 @@ async function onDeleteModel(rowId: number): Promise<void> {
 
 // ---- Templates: grid ----
 
-function renderProviderCard(p: Provider, accounts: Account[], models: Model[]): TemplateResult {
-  const providerModels = models;
+function renderProviderCard(p: Provider, accounts: Account[]): TemplateResult {
   const unhealthyAccs = accounts.filter((a) => a.health_status === "unhealthy").length;
-  const activeModels = providerModels.filter((m) => m.active).length;
+  const activeModels = p.active_models ?? 0;
+  const totalModels = p.total_models ?? 0;
   const cardClasses: string = [
     "provider-card",
     unhealthyAccs > 0 ? "has-errors" : "",
@@ -718,7 +717,7 @@ function renderProviderCard(p: Provider, accounts: Account[], models: Model[]): 
       </div>
       <div class="stat">
         <label>Models</label>
-        <value>${activeModels}/${models.length}</value>
+        <value>${activeModels}/${totalModels}</value>
       </div>
     </div>
   </a>`;
@@ -745,8 +744,7 @@ function renderProviderGrid(): TemplateResult {
       </div>`
     : html`<div class="provider-grid">${list.map((p) => {
         const accounts = (state.accounts || []).filter((a) => a.provider_id === p.id);
-        const models = (state.models || []).filter((m) => m.provider_id === p.id);
-        return renderProviderCard(p, accounts, models);
+        return renderProviderCard(p, accounts);
       })}</div>`;
   return html`
     <div class="page-header"><h2>Providers</h2>
@@ -762,7 +760,7 @@ function renderProviderGrid(): TemplateResult {
 // ---- Templates: detail ----
 
 function renderDetailHeader(provider: Provider): TemplateResult {
-  const isBuiltin = BUILTIN_PROVIDER_IDS.includes(provider.id);
+  const isDeletable = provider.metadata?.deletable ?? true;
   return html`
     <div class="provider-detail-header${provider.active ? "" : " inactive"}">
       <div class="provider-icon icon-large" data-format=${provider.format}>${providerGlyph(provider.id)}</div>
@@ -784,9 +782,9 @@ function renderDetailHeader(provider: Provider): TemplateResult {
         <button class="primary" @click=${() => onToggleProviderActive(provider.id, !provider.active)}>
           ${provider.active ? "Deactivate" : "Activate"}
         </button>
-        ${isBuiltin
-          ? html`<button class="locked" disabled title="Built-in providers cannot be deleted. Deactivate them instead.">🔒 Delete (built-in)</button>`
-          : html`<button class="danger small" @click=${() => onConfirmDeleteProvider(provider.id)}>Delete</button>`}
+          ${!isDeletable
+            ? html`<button class="locked" disabled title="Built-in providers cannot be deleted. Deactivate them instead.">🔒 Delete (built-in)</button>`
+            : html`<button class="danger small" @click=${() => onConfirmDeleteProvider(provider.id)}>Delete</button>`}
       </div>
     </div>
   `;
@@ -825,7 +823,7 @@ function renderOAuthSection(provider: Provider): TemplateResult {
 }
 
 function renderConnectionsSection(provider: Provider, accounts: Account[]): TemplateResult {
-  const hasQuota = providerHasQuota(provider.id);
+  const hasQuota = provider.metadata?.supports_quota ?? false;
   const body: TemplateResult = accounts.length === 0
     ? html`<table><tbody><tr><td colspan="6" class="empty-row">No accounts. Add an API key to start using this provider.</td></tr></tbody></table>`
     : html`<table>
@@ -1077,21 +1075,34 @@ export async function mountProviders(opts: MountProvidersOpts = {}): Promise<(()
     const cleanup = mountView(main, renderProviderDetail);
     try {
       // Cold paint: fetch providers/accounts/models. Warm re-render
-      // (from cache after navigate()) skips the network.
+      // (from cache after navigate()) skips the network initially, but
+      // does a background refresh to prevent frozen quotas and statuses.
       const proxiesPromise = api("/proxies?status=alive") as Promise<any[]>;
       if (state.providers.length === 0) {
         const [providers, accounts, models, proxies] = await Promise.all([
           api("/providers") as Promise<Provider[]>,
           api("/accounts") as Promise<Account[]>,
-          api("/models") as Promise<Model[]>,
+          api("/models?provider_id=" + encodeURIComponent(opts.detailId)) as Promise<Model[]>,
           proxiesPromise,
         ]);
         state.providers = providers;
         state.accounts = accounts;
         state.models = models;
+        state.modelsComplete = false;
         state.proxies = proxies;
       } else {
         state.proxies = await proxiesPromise;
+        Promise.all([
+          api("/providers") as Promise<Provider[]>,
+          api("/accounts") as Promise<Account[]>,
+          api("/models?provider_id=" + encodeURIComponent(opts.detailId)) as Promise<Model[]>,
+        ]).then(([p, a, m]) => {
+          state.providers = p;
+          state.accounts = a;
+          state.models = m;
+          state.modelsComplete = false;
+          requestUpdate();
+        }).catch((e) => console.error("Background refresh failed:", e));
       }
       requestUpdate();
     } catch (e: unknown) {
@@ -1106,17 +1117,27 @@ export async function mountProviders(opts: MountProvidersOpts = {}): Promise<(()
   loadError = null;
   const cleanup = mountView(main, renderProviderGrid);
   try {
-    const [providers, accounts, models, proxies] = await Promise.all([
-      state.providers && state.providers.length ? Promise.resolve(state.providers) : api("/providers") as Promise<Provider[]>,
-      state.accounts && state.accounts.length ? Promise.resolve(state.accounts) : api("/accounts") as Promise<Account[]>,
-      state.models && state.models.length ? Promise.resolve(state.models) : api("/models") as Promise<Model[]>,
+    const hasCache = state.providers && state.providers.length > 0;
+    const [providers, accounts, proxies] = await Promise.all([
+      hasCache ? Promise.resolve(state.providers) : api("/providers") as Promise<Provider[]>,
+      hasCache && state.accounts ? Promise.resolve(state.accounts) : api("/accounts") as Promise<Account[]>,
       api("/proxies?status=alive") as Promise<any[]>,
     ]);
     state.providers = providers;
     state.accounts = accounts;
-    state.models = models;
     state.proxies = proxies;
     requestUpdate();
+
+    if (hasCache) {
+      Promise.all([
+        api("/providers") as Promise<Provider[]>,
+        api("/accounts") as Promise<Account[]>,
+      ]).then(([p, a]) => {
+        state.providers = p;
+        state.accounts = a;
+        requestUpdate();
+      }).catch((e) => console.error("Background refresh failed:", e));
+    }
   } catch (e: unknown) {
     loadError = e instanceof Error ? e.message : String(e);
     requestUpdate();

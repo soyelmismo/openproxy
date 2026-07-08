@@ -232,6 +232,11 @@ const MIGRATIONS: &[Migration] = &[
         name: "000044_add_responses_format",
         sql: include_str!("../../migrations/000044_add_responses_format.sql"),
     },
+    Migration {
+        version: 45,
+        name: "000045_add_usage_winner_partial",
+        sql: include_str!("../../migrations/000045_add_usage_winner_partial.sql"),
+    },
 ];
 
 /// Apply pending migrations on `conn`. Idempotent: skips versions already in

@@ -82,6 +82,7 @@ pub struct PipelineRequest {
     pub request_body_json: Option<Arc<serde_json::Value>>,
     pub race_cancelled: bool,
     pub endpoint_kind: crate::endpoint::EndpointKind,
+    pub compressed_messages: std::sync::OnceLock<Option<Vec<crate::translation::OpenAIMessage>>>,
 }
 
 /// Outcome of a single `Pipeline::run()` call.

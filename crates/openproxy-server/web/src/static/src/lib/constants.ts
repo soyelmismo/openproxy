@@ -73,15 +73,5 @@ export function statusPillClass(code: number | null): string {
   return "lost";
 }
 
-// Built-in provider ids — these cannot be deleted from the UI
-// (the cascade would lose the server-side adapter). Mirrors the
-// old app.js BUILTIN_PROVIDER_IDS list.
-export const BUILTIN_PROVIDER_IDS: readonly string[] = ["openrouter", "minimax", "opencode-zen"];
-
-// Providers that expose a quota fetcher (POST .../refresh-quota).
-// The server is the source of truth via `quota_capable_providers`,
-// but we mirror the list client-side so the confirm dialog and the
-// "not supported by this provider" hint only appear when there is
-// actually something to refresh.
-export const QUOTA_CAPABLE_PROVIDERS: readonly string[] = ["minimax", "minimax-cn", "openrouter", "antigravity", "agy", "kiro"];
-export const providerHasQuota = (providerId: string): boolean => QUOTA_CAPABLE_PROVIDERS.includes(providerId);
+// Built-in provider ids and quota-capable lists have been removed.
+// The UI now uses `provider.metadata` to determine built-in, deletable, and quota support.

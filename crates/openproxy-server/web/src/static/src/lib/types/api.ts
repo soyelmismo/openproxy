@@ -113,6 +113,13 @@ export interface ModelCapabilities {
 // Provider
 // ----------------------------------------------------------------------------
 
+export interface ProviderMetadata {
+  built_in: boolean;
+  deletable: boolean;
+  supports_quota: boolean;
+  quota_refresh_supported: boolean;
+}
+
 /** Fila de la tabla `providers`. `auth_type` y `format` son enums
  *  tipados (no strings libres). `active` lleva `#[serde(default = "default_true")]`
  *  así que clientes viejos que no lo manden lo ven como `true`.
@@ -133,6 +140,9 @@ export interface Provider {
   current_proxy_id: string | null;
   proxy_rotation_errors: string;
   oauth_flows?: string[];
+  metadata?: ProviderMetadata;
+  active_models?: number;
+  total_models?: number;
 }
 
 // ----------------------------------------------------------------------------

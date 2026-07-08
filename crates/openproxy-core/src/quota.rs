@@ -18,6 +18,8 @@ use crate::error::{CoreError, Result};
 use crate::upstream::{
     CancellationToken, TimeoutProfile, UpstreamClient, UpstreamError, UpstreamRequest,
 };
+use dashmap::DashMap;
+use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
@@ -361,6 +363,116 @@ fn now_unix_secs_str() -> String {
 // Antigravity (Google Cloud Code)
 // =====================================================================
 
+static PLAN_CACHE: Lazy<DashMap<String, String>> = Lazy::new(DashMap::new);
+
+async fn fetch_antigravity_subscription_plan(
+    upstream: &Arc<UpstreamClient>,
+    access_token: &str,
+) -> Option<String> {
+    if let Some(plan) = PLAN_CACHE.get(access_token) {
+        return Some(plan.value().clone());
+    }
+
+    let endpoints = [
+        "https://daily-cloudcode-pa.sandbox.googleapis.com/v1internal:loadCodeAssist",
+        "https://cloudcode-pa.googleapis.com/v1internal:loadCodeAssist",
+    ];
+
+    let payload = bytes::Bytes::from_static(b"{\"metadata\": {\"ideType\": \"ANTIGRAVITY\"}}");
+
+    for endpoint in &endpoints {
+        let mut req = UpstreamRequest::post_json(*endpoint, payload.clone());
+        if let Ok(v) = http::HeaderValue::from_str(&format!("Bearer {access_token}")) {
+            req.headers.insert(http::header::AUTHORIZATION, v);
+        }
+        req.headers.insert(
+            http::header::CONTENT_TYPE,
+            http::HeaderValue::from_static("application/json"),
+        );
+        crate::antigravity_headers::inject_antigravity_headers(&mut req.headers, None);
+
+        let cancel = CancellationToken::new();
+        let response = upstream.call(req, TimeoutProfile::Quota, cancel).await;
+
+        if let Ok(resp) = response
+            && resp.status.is_success()
+        {
+            let body = match resp.collect().await {
+                Ok(b) => b,
+                Err(_) => continue,
+            };
+            if let Ok(json) = serde_json::from_slice::<serde_json::Value>(&body) {
+                let paid_name = json.pointer("/paidTier/name").and_then(|v| v.as_str());
+                let paid_id = json.pointer("/paidTier/id").and_then(|v| v.as_str());
+
+                let mut tier = paid_name.or(paid_id);
+
+                if tier.is_none() {
+                    let is_ineligible = json
+                        .pointer("/ineligibleTiers")
+                        .and_then(|v| v.as_array())
+                        .is_some_and(|a| !a.is_empty());
+
+                    if !is_ineligible {
+                        let current_name =
+                            json.pointer("/currentTier/name").and_then(|v| v.as_str());
+                        let current_id = json.pointer("/currentTier/id").and_then(|v| v.as_str());
+                        tier = current_name.or(current_id);
+                    } else if let Some(allowed) =
+                        json.pointer("/allowedTiers").and_then(|v| v.as_array())
+                    {
+                        for t in allowed {
+                            if t.get("isDefault")
+                                .and_then(|v| v.as_bool())
+                                .unwrap_or(false)
+                            {
+                                let name = t.get("name").and_then(|v| v.as_str());
+                                let id = t.get("id").and_then(|v| v.as_str());
+                                tier = name.or(id);
+                                break;
+                            }
+                        }
+                    }
+                }
+
+                if let Some(t) = tier {
+                    let upper = t.to_uppercase();
+                    let plan_name = if upper.contains("ULTRA") {
+                        "Ultra".to_string()
+                    } else if upper.contains("PRO")
+                        || upper.contains("PREMIUM")
+                        || upper.contains("GOOGLE_ONE")
+                        || upper.contains("ONE_AI")
+                        || upper.contains("GOOGLE ONE")
+                    {
+                        "Pro".to_string()
+                    } else if upper.contains("ENTERPRISE") {
+                        "Enterprise".to_string()
+                    } else if upper.contains("BUSINESS") || upper.contains("STANDARD") {
+                        "Business".to_string()
+                    } else if upper.contains("PLUS") {
+                        "Plus".to_string()
+                    } else if upper.contains("LITE") || upper.contains("LIGHT") {
+                        "Lite".to_string()
+                    } else if upper.contains("FREE")
+                        || upper.contains("INDIVIDUAL")
+                        || upper.contains("LEGACY")
+                    {
+                        "Free".to_string()
+                    } else {
+                        t.to_string()
+                    };
+
+                    PLAN_CACHE.insert(access_token.to_string(), plan_name.clone());
+                    return Some(plan_name);
+                }
+            }
+        }
+    }
+
+    None
+}
+
 /// Fetch quota for Antigravity (Google Cloud Code) using an OAuth access
 /// token. Calls BOTH endpoints and merges the results:
 ///   - `fetchAvailableModels` → per-model quota (`model_details`)
@@ -375,30 +487,62 @@ pub async fn fetch_antigravity_quota(
     upstream: &Arc<UpstreamClient>,
     access_token: &str,
 ) -> Result<AccountQuota> {
-    let models_result = fetch_antigravity_models_quota(upstream, access_token).await;
-    let summary_result = fetch_antigravity_user_quota(upstream, access_token).await;
+    let (models_result, summary_result, plan_result) = tokio::join!(
+        fetch_antigravity_models_quota(upstream, access_token),
+        fetch_antigravity_user_quota(upstream, access_token),
+        fetch_antigravity_subscription_plan(upstream, access_token),
+    );
 
     match (models_result, summary_result) {
-        (Ok(mut models_quota), Ok(summary_quota)) => {
+        (Ok(mut models_quota), summary_res) => {
             // Merge: models_quota has per-model details; summary_quota
             // has weekly + 5h grouped quota. Overlay the summary's
             // weekly fields onto the models quota.
-            if summary_quota.weekly_used.is_some() {
-                models_quota.weekly_used = summary_quota.weekly_used;
-                models_quota.weekly_limit = summary_quota.weekly_limit;
-                models_quota.weekly_reset_at = summary_quota.weekly_reset_at;
+            if let Ok(ref summary_quota) = summary_res {
+                if summary_quota.weekly_used.is_some() {
+                    models_quota.weekly_used = summary_quota.weekly_used;
+                    models_quota.weekly_limit = summary_quota.weekly_limit;
+                    models_quota.weekly_reset_at = summary_quota.weekly_reset_at.clone();
+                }
+                // If models_quota has no session data, use the summary's
+                // 5h (session) data as a fallback.
+                if models_quota.session_used.is_none() && summary_quota.session_used.is_some() {
+                    models_quota.session_used = summary_quota.session_used;
+                    models_quota.session_limit = summary_quota.session_limit;
+                    models_quota.session_reset_at = summary_quota.session_reset_at.clone();
+                }
             }
-            // If models_quota has no session data, use the summary's
-            // 5h (session) data as a fallback.
-            if models_quota.session_used.is_none() && summary_quota.session_used.is_some() {
-                models_quota.session_used = summary_quota.session_used;
-                models_quota.session_limit = summary_quota.session_limit;
-                models_quota.session_reset_at = summary_quota.session_reset_at;
+
+            if let Some(plan) = plan_result {
+                models_quota.plan_name = Some(plan);
+            } else if models_quota.plan_name.is_none()
+                || models_quota.plan_name.as_deref() == Some("Antigravity")
+            {
+                if let Ok(ref summary_quota) = summary_res {
+                    if let Some(summary_plan) = &summary_quota.plan_name
+                        && summary_plan != "Antigravity"
+                    {
+                        models_quota.plan_name = Some(summary_plan.clone());
+                    } else {
+                        models_quota.plan_name = Some("Free".to_string());
+                    }
+                } else {
+                    models_quota.plan_name = Some("Free".to_string());
+                }
             }
+
             Ok(models_quota)
         }
-        (Ok(models_quota), Err(_)) => Ok(models_quota),
-        (Err(_), Ok(summary_quota)) => Ok(summary_quota),
+        (Err(_models_err), Ok(mut summary_quota)) => {
+            if let Some(plan) = plan_result {
+                summary_quota.plan_name = Some(plan);
+            } else if summary_quota.plan_name.is_none()
+                || summary_quota.plan_name.as_deref() == Some("Antigravity")
+            {
+                summary_quota.plan_name = Some("Free".to_string());
+            }
+            Ok(summary_quota)
+        }
         (Err(models_err), Err(_)) => Err(models_err),
     }
 }
@@ -516,7 +660,7 @@ fn parse_antigravity_models_response(body: &serde_json::Value) -> Result<Account
         .unwrap();
 
     Ok(AccountQuota {
-        plan_name: Some(format!("Antigravity ({})", worst.model_id)),
+        plan_name: Some("Antigravity".to_string()),
         session_used: Some(worst.session_used),
         session_limit: Some(worst.session_limit),
         session_reset_at: worst.session_reset_at.clone(),
@@ -630,8 +774,11 @@ fn parse_antigravity_user_quota_summary(body: &serde_json::Value) -> Result<Acco
     let mut session_used: Option<i64> = None;
     let mut session_limit: Option<i64> = None;
     let mut session_reset_at: Option<String> = None;
+    let mut plan_name: Option<String> = None;
 
     for group in groups {
+        let group_plan = group.get("displayName").and_then(|n| n.as_str());
+
         let buckets = match group.get("buckets").and_then(|b| b.as_array()) {
             Some(b) => b,
             None => continue,
@@ -664,11 +811,17 @@ fn parse_antigravity_user_quota_summary(body: &serde_json::Value) -> Result<Acco
                 weekly_used = Some(used);
                 weekly_limit = Some(NORMALIZED_BASE);
                 weekly_reset_at = reset_time;
+                if plan_name.is_none() {
+                    plan_name = group_plan.map(|s| s.to_string());
+                }
             } else if !is_weekly && session_used.is_none() {
                 // First non-weekly bucket (typically 5h) → session.
                 session_used = Some(used);
                 session_limit = Some(NORMALIZED_BASE);
                 session_reset_at = reset_time;
+                if plan_name.is_none() {
+                    plan_name = group_plan.map(|s| s.to_string());
+                }
             }
         }
     }
@@ -686,7 +839,7 @@ fn parse_antigravity_user_quota_summary(body: &serde_json::Value) -> Result<Acco
         weekly_used,
         weekly_limit,
         weekly_reset_at,
-        plan_name: Some("Antigravity".to_string()),
+        plan_name: Some(plan_name.unwrap_or_else(|| "Antigravity".to_string())),
         last_fetched_at: now_unix_secs_str(),
         fetch_error: None,
         model_details: None,
@@ -967,34 +1120,8 @@ fn is_kiro_overage_enabled(data: &serde_json::Value) -> bool {
 }
 
 // =====================================================================
-// Provider capability registry
-// =====================================================================
-
-/// The list of provider ids that have a quota endpoint we know how to
-/// call today. The HTTP handler uses this list to short-circuit a quota
-/// refresh with a `{"supported": false}` body when the caller asks
-/// about an unsupported provider.
-///
-/// This is a static list (not a DB table) because the set is extremely
-/// stable — it only changes when a new fetcher lands, and that always
-/// coincides with a code change. See `fetch_account_quota` in the
-/// `admin` module for the dispatch that pairs with this list.
-pub fn quota_capable_providers() -> &'static [&'static str] {
-    &[
-        "minimax",
-        "minimax-cn",
-        "openrouter",
-        "antigravity",
-        "agy",
-        "kiro",
-    ]
-}
-
-/// Convenience wrapper used by the HTTP handler and the front-end
-/// mirror: is `provider_id` in the supported set?
-pub fn supports_quota(provider_id: &str) -> bool {
-    quota_capable_providers().contains(&provider_id)
-}
+// Provider capabilities have moved to `ProviderAdapter::metadata()` and
+// `ProviderMetadata`. The `quota_capable_providers` static list was removed.
 
 // =====================================================================
 // OpenRouter
@@ -1282,14 +1409,38 @@ pub async fn fetch_codex_quota(
     access_token: &str,
     workspace_id: Option<&str>,
 ) -> Result<AccountQuota> {
-    let url = "https://chatgpt.com/backend-api/accounts/check/v4-2023-04-27";
+    let url = "https://chatgpt.com/backend-api/wham/usage";
     let mut req = UpstreamRequest::get(url);
     req.headers.insert(
         http::header::AUTHORIZATION,
         http::HeaderValue::from_str(&format!("Bearer {}", access_token))
             .unwrap_or_else(|_| http::HeaderValue::from_static("")),
     );
-    if let Some(ws) = workspace_id
+    req.headers.insert(
+        http::header::ACCEPT,
+        http::HeaderValue::from_static("application/json"),
+    );
+    req.headers.insert(
+        http::header::CONTENT_TYPE,
+        http::HeaderValue::from_static("application/json"),
+    );
+    req.headers.insert(
+        http::header::HeaderName::from_static("origin"),
+        http::HeaderValue::from_static("https://chatgpt.com"),
+    );
+    req.headers.insert(
+        http::header::HeaderName::from_static("originator"),
+        http::HeaderValue::from_static("codex_cli_rs"),
+    );
+    if let Ok(v) = http::HeaderValue::from_str(&crate::adapters::codex::codex_client_version()) {
+        req.headers
+            .insert(http::HeaderName::from_static("version"), v);
+    }
+    if let Ok(v) = http::HeaderValue::from_str(&crate::adapters::codex::codex_user_agent()) {
+        req.headers.insert(http::header::USER_AGENT, v);
+    }
+    let workspace_header = workspace_id.and_then(codex_workspace_header);
+    if let Some(ws) = workspace_header.as_deref()
         && let Ok(val) = http::HeaderValue::from_str(ws)
     {
         req.headers
@@ -1304,6 +1455,11 @@ pub async fn fetch_codex_quota(
 
     let status = response.status.as_u16();
     if !(200..300).contains(&status) {
+        let body = response.collect().await.unwrap_or_default();
+        let snippet = String::from_utf8_lossy(&body)
+            .chars()
+            .take(200)
+            .collect::<String>();
         return Ok(AccountQuota {
             session_used: None,
             session_limit: None,
@@ -1313,24 +1469,109 @@ pub async fn fetch_codex_quota(
             weekly_reset_at: None,
             plan_name: None,
             last_fetched_at: now_unix_secs_str(),
-            fetch_error: Some(format!("Codex quota check failed: HTTP {}", status)),
+            fetch_error: Some(if snippet.is_empty() {
+                format!("Codex quota check failed: HTTP {}", status)
+            } else {
+                format!("Codex quota check failed: HTTP {}: {}", status, snippet)
+            }),
             model_details: None,
         });
     }
 
-    let _ = response.collect().await; // consume body
+    let body = response
+        .collect()
+        .await
+        .map_err(|e| CoreError::UpstreamConnection(format!("codex quota read: {e}")))?;
+    let json: serde_json::Value = serde_json::from_slice(&body)
+        .map_err(|e| CoreError::Parse(format!("codex quota parse: {e}")))?;
+    parse_codex_usage_quota(&json)
+}
+
+fn codex_workspace_header(provider_specific: &str) -> Option<String> {
+    let raw = provider_specific.trim();
+    if raw.is_empty() {
+        return None;
+    }
+    if !raw.starts_with('{') {
+        return Some(raw.to_string());
+    }
+    serde_json::from_str::<serde_json::Value>(raw)
+        .ok()
+        .and_then(|v| {
+            v.get("workspaceId")
+                .or_else(|| v.get("workspace_id"))
+                .and_then(|v| v.as_str())
+                .filter(|s| !s.is_empty())
+                .map(ToString::to_string)
+        })
+}
+
+fn parse_codex_usage_quota(body: &serde_json::Value) -> Result<AccountQuota> {
+    let rate_limit = body
+        .get("rate_limit")
+        .or_else(|| body.get("rateLimit"))
+        .and_then(|v| v.as_object())
+        .ok_or_else(|| CoreError::Parse("codex quota missing rate_limit".into()))?;
+
+    let primary = rate_limit
+        .get("primary_window")
+        .or_else(|| rate_limit.get("primaryWindow"));
+    let secondary = rate_limit
+        .get("secondary_window")
+        .or_else(|| rate_limit.get("secondaryWindow"));
+    let (session_used, session_reset_at) = parse_codex_usage_window(primary);
+    let (weekly_used, weekly_reset_at) = parse_codex_usage_window(secondary);
+
     Ok(AccountQuota {
-        session_used: None,
-        session_limit: None,
-        session_reset_at: None,
-        weekly_used: None,
-        weekly_limit: None,
-        weekly_reset_at: None,
+        session_used,
+        session_limit: session_used.map(|_| 100),
+        session_reset_at,
+        weekly_used,
+        weekly_limit: weekly_used.map(|_| 100),
+        weekly_reset_at,
         plan_name: Some("Codex / ChatGPT".into()),
         last_fetched_at: now_unix_secs_str(),
         fetch_error: None,
         model_details: None,
     })
+}
+
+fn parse_codex_usage_window(window: Option<&serde_json::Value>) -> (Option<i64>, Option<String>) {
+    let Some(window) = window.and_then(|v| v.as_object()) else {
+        return (None, None);
+    };
+    let used = window
+        .get("used_percent")
+        .or_else(|| window.get("usedPercent"))
+        .and_then(json_f64)
+        .map(|v| v.round().clamp(0.0, 100.0) as i64);
+    let reset_at = window
+        .get("reset_at")
+        .or_else(|| window.get("resetAt"))
+        .and_then(json_f64)
+        .filter(|v| *v > 0.0)
+        .map(|v| (v.ceil() as u64).to_string())
+        .or_else(|| {
+            window
+                .get("reset_after_seconds")
+                .or_else(|| window.get("resetAfterSeconds"))
+                .and_then(json_f64)
+                .filter(|v| *v > 0.0)
+                .map(|v| {
+                    let now = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .map(|d| d.as_secs())
+                        .unwrap_or(0);
+                    (now + v.ceil() as u64).to_string()
+                })
+        });
+    (used, reset_at)
+}
+
+fn json_f64(value: &serde_json::Value) -> Option<f64> {
+    value
+        .as_f64()
+        .or_else(|| value.as_str().and_then(|s| s.parse::<f64>().ok()))
 }
 
 #[cfg(test)]
@@ -1525,26 +1766,6 @@ mod tests {
         let q = parse_minimax_quota(&body, "test://url").expect("parse");
         assert_eq!(q.session_used, Some(0));
         assert_eq!(q.weekly_used, Some(0));
-    }
-
-    // ---- capability registry ----
-
-    #[test]
-    fn quota_capable_providers_includes_openrouter() {
-        let list = quota_capable_providers();
-        assert!(list.contains(&"minimax"));
-        assert!(list.contains(&"minimax-cn"));
-        assert!(list.contains(&"openrouter"));
-    }
-
-    #[test]
-    fn supports_quota_matches_registry() {
-        assert!(supports_quota("minimax"));
-        assert!(supports_quota("minimax-cn"));
-        assert!(supports_quota("openrouter"));
-        assert!(!supports_quota("opencode-zen"));
-        assert!(!supports_quota("custom-provider"));
-        assert!(!supports_quota(""));
     }
 
     // ---- OpenRouter parser ----
@@ -1922,16 +2143,44 @@ mod tests {
     }
 
     #[test]
-    fn quota_capable_providers_includes_antigravity() {
-        let list = quota_capable_providers();
-        assert!(list.contains(&"antigravity"));
-        assert!(list.contains(&"agy"));
+    fn codex_workspace_header_accepts_raw_and_json() {
+        assert_eq!(
+            codex_workspace_header("acc_raw").as_deref(),
+            Some("acc_raw")
+        );
+        assert_eq!(
+            codex_workspace_header(r#"{"workspaceId":"acc_json"}"#).as_deref(),
+            Some("acc_json")
+        );
+        assert_eq!(
+            codex_workspace_header(r#"{"workspace_id":"acc_snake"}"#).as_deref(),
+            Some("acc_snake")
+        );
+        assert_eq!(codex_workspace_header("{}"), None);
     }
 
     #[test]
-    fn supports_quota_matches_antigravity() {
-        assert!(supports_quota("antigravity"));
-        assert!(supports_quota("agy"));
+    fn parse_codex_usage_quota_maps_windows() {
+        let body = json!({
+            "rate_limit": {
+                "primary_window": {
+                    "used_percent": 17.4,
+                    "reset_at": 1783434000
+                },
+                "secondary_window": {
+                    "used_percent": "48.6",
+                    "reset_at": "1784038800"
+                }
+            }
+        });
+        let q = parse_codex_usage_quota(&body).expect("parse");
+        assert_eq!(q.session_used, Some(17));
+        assert_eq!(q.session_limit, Some(100));
+        assert_eq!(q.session_reset_at.as_deref(), Some("1783434000"));
+        assert_eq!(q.weekly_used, Some(49));
+        assert_eq!(q.weekly_limit, Some(100));
+        assert_eq!(q.weekly_reset_at.as_deref(), Some("1784038800"));
+        assert_eq!(q.plan_name.as_deref(), Some("Codex / ChatGPT"));
     }
 
     #[test]
@@ -1961,11 +2210,5 @@ mod tests {
             }
         });
         assert!(!is_kiro_overage_enabled(&body_disabled));
-    }
-
-    #[test]
-    fn quota_capable_providers_includes_kiro() {
-        assert!(quota_capable_providers().contains(&"kiro"));
-        assert!(supports_quota("kiro"));
     }
 }

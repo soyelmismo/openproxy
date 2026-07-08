@@ -62,6 +62,7 @@ pub mod redact;
 pub mod retry;
 pub mod secrets;
 pub mod seed;
+pub mod smart_warmup;
 pub mod sse;
 pub mod sse_accumulator;
 pub mod think_extractor;

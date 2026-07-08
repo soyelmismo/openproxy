@@ -13,8 +13,6 @@ import type {
   Account,
   Model,
   Combo,
-  StageEvent,
-  RecentUsageRow,
 } from "../lib/types/api.js";
 
 // ----------------------------------------------------------------------------
@@ -115,25 +113,6 @@ export type ProviderDetailUi = Record<string, Record<string, unknown>>;
  *  arrives with an empty `trace_id` (it then keys by `request_id`
  *  to avoid losing the signal entirely). */
 export interface LogsState {
-  rows: RecentUsageRow[];
-  rowById: Map<number, RecentUsageRow>;
-  lastSeenId: number;
-  /** Primary: keyed by `trace_id` (per attempt). */
-  stagesByTraceId: Map<string, StageEvent>;
-  /** Fallback: keyed by `request_id` for stage events with an
-   *  empty `trace_id` (very rare; can happen for synthetic events
-   *  emitted from inside the frontend itself). */
-  stagesByRequestId: Map<LogsRequestId, StageEvent>;
-  /** Per-attempt inflight placeholders, keyed by `trace_id`. The
-   *  original code keyed this by `request_id` which again caused
-   *  retry attempts to overwrite the in-flight placeholder of the
-   *  first attempt. The view renders these mixed with the real
-   *  rows (see `renderLogsRows` in `views/logs.ts`). */
-  inflightByTraceId: Map<string, RecentUsageRow>;
-  /** Fallback: inflight placeholders for trace_id-less rows. */
-  inflightByRequestId: Map<LogsRequestId, RecentUsageRow>;
-  liveTokens: Map<LogsRequestId, number>;
-  selectedRow: RecentUsageRow | null;
   page: number;
   rowsPerPage: number;
   maxRows: number;
@@ -142,10 +121,6 @@ export interface LogsState {
   ws: WebSocket | null;
   reconnectAttempt: number;
   reconnectTimer: ReturnType<typeof setTimeout> | null;
-  latencyTickerHandle: ReturnType<typeof setInterval> | null;
-  /** Interval handle for the stale-inflight reaper (cleans up ghost
-   *  placeholders left by lost terminal events / dropped usage rows). */
-  staleReaperHandle: ReturnType<typeof setInterval> | null;
   recording: boolean;
   recordingLoading: boolean;
   /** Set of column keys (matching LOG_COLUMNS[].key) that the user
@@ -155,6 +130,8 @@ export interface LogsState {
    *  toggleColumn handler so the rest of the code can keep
    *  reading the same reference. */
   visibleColumns: Set<string> | null;
+  /** Selected identity for the detail modal. */
+  selectedIdentity: { kind: "row_id", id: number } | { kind: "attempt", attemptKey: string } | null;
 }
 
 /** Shape of the cached provider-detail sub-state (per-provider
@@ -165,6 +142,7 @@ export interface DashboardState {
   providers: Provider[];
   accounts: Account[];
   models: Model[];
+  modelsComplete: boolean;
   combos: Combo[];
   proxies: any[];
   /** Cached API key rows. The shape is provider-specific; the
@@ -228,6 +206,7 @@ export const state: DashboardState = {
   providers: [],
   accounts: [],
   models: [],
+  modelsComplete: false,
   combos: [],
   proxies: [],
   apiKeys: [],
@@ -258,15 +237,6 @@ export const state: DashboardState = {
   modelPickerSelection: new Set<string>(),
   // Live-logs state. Heavy enough to warrant a sub-object.
   logs: {
-    rows: [],
-    rowById: new Map<number, RecentUsageRow>(),
-    lastSeenId: 0,
-    stagesByTraceId: new Map<string, StageEvent>(),
-    stagesByRequestId: new Map<LogsRequestId, StageEvent>(),
-    inflightByTraceId: new Map<string, RecentUsageRow>(),
-    inflightByRequestId: new Map<LogsRequestId, RecentUsageRow>(),
-    liveTokens: new Map<LogsRequestId, number>(),
-    selectedRow: null,
     page: 1,
     rowsPerPage: 50,
     maxRows: 500,
@@ -275,11 +245,10 @@ export const state: DashboardState = {
     ws: null,
     reconnectAttempt: 0,
     reconnectTimer: null,
-    latencyTickerHandle: null,
-    staleReaperHandle: null,
     recording: false,
     recordingLoading: false,
     visibleColumns: null,
+    selectedIdentity: null,
   },
   // Latency tracker for the last `api()` call (used by the health
   // pill in the sidebar).

@@ -1,0 +1,284 @@
+//! Background daemon for Smart Warmup.
+//!
+//! Scans all active Antigravity accounts on a timer. If an account's
+//! quota is 100% full, it sends a tiny request through the same
+//! Antigravity executor used by normal API traffic.
+//! A 4-hour cooldown prevents pinging the model repeatedly.
+
+use crate::accounts;
+use crate::config::AppConfig;
+use crate::db::DbPool;
+use crate::ids::ProviderId;
+use crate::quota::fetch_antigravity_quota;
+use crate::secrets::MasterKey;
+use crate::translation::{OpenAIMessage, OpenAIRequest};
+use crate::upstream::UpstreamClient;
+use dashmap::DashMap;
+use once_cell::sync::Lazy;
+use std::sync::Arc;
+use std::time::Duration;
+use tokio::time::sleep;
+
+/// History of when an account+model was last warmed up.
+/// Key: "account_id:model_name", Value: Unix timestamp (seconds).
+static WARMUP_HISTORY: Lazy<DashMap<String, i64>> = Lazy::new(DashMap::new);
+
+/// 4-hour cooldown (since Pro quota resets every 5h).
+const COOLDOWN_SECS: i64 = 14_400;
+
+fn build_warmup_request(model: &str) -> OpenAIRequest {
+    OpenAIRequest {
+        model: model.to_string(),
+        messages: vec![OpenAIMessage {
+            role: "user".to_string(),
+            content: Some(serde_json::Value::String("Say hi".to_string())),
+            name: None,
+            tool_call_id: None,
+            tool_calls: None,
+            extra: serde_json::Map::new(),
+        }],
+        max_tokens: None,
+        temperature: Some(0.0),
+        stream: false,
+        top_p: None,
+        stop: None,
+        tools: None,
+        tool_choice: None,
+        top_k: None,
+        user: None,
+        extra: serde_json::Map::new(),
+    }
+}
+
+pub async fn start_smart_warmup_scheduler(
+    db_pool: Arc<DbPool>,
+    config: AppConfig,
+    upstream: Arc<UpstreamClient>,
+    master_key: Arc<MasterKey>,
+) {
+    if !config.smart_warmup.enabled {
+        tracing::debug!("Smart warmup is disabled in config; not starting scheduler");
+        return;
+    }
+
+    let interval = config.smart_warmup.interval_secs;
+    if interval == 0 {
+        return;
+    }
+
+    tracing::info!(
+        "[SmartWarmup] Scheduler started. Scanning every {}s for {} models",
+        interval,
+        config.smart_warmup.models.len()
+    );
+
+    tokio::spawn(async move {
+        loop {
+            run_warmup_cycle(&db_pool, &config, &upstream, &master_key).await;
+            sleep(Duration::from_secs(interval)).await;
+        }
+    });
+}
+
+async fn run_warmup_cycle(
+    db_pool: &Arc<DbPool>,
+    config: &AppConfig,
+    upstream: &Arc<UpstreamClient>,
+    master_key: &Arc<MasterKey>,
+) {
+    // Extract necessary data so we can drop the DB lock before the network call
+    let account_list: Vec<(i64, String, String, String)> = {
+        let conn = db_pool.writer();
+
+        let provider_id = ProviderId::new("antigravity");
+        let accounts = match accounts::list(&conn, Some(&provider_id)) {
+            Ok(accs) => accs,
+            Err(e) => {
+                tracing::warn!("[SmartWarmup] Failed to list accounts: {}", e);
+                return;
+            }
+        };
+
+        accounts
+            .into_iter()
+            .filter(|a| !matches!(a.health_status, crate::accounts::HealthStatus::Unhealthy))
+            .filter_map(|a| {
+                let token = accounts::decrypt_access_token(&conn, a.id, master_key).ok()?;
+                let project_id = crate::executor_antigravity::read_project_id(&conn, a.id).ok()?;
+                Some((a.id.0, a.id.0.to_string(), token, project_id))
+            })
+            .collect()
+    };
+
+    let now = chrono::Utc::now().timestamp();
+    let models_to_ping = &config.smart_warmup.models;
+
+    for (account_id_i64, account_id_str, access_token, project_id) in account_list {
+        // Fetch fresh quota
+        let quota = match fetch_antigravity_quota(upstream, &access_token).await {
+            Ok(q) => q,
+            Err(e) => {
+                tracing::debug!(
+                    "[SmartWarmup] Failed to fetch quota for account {}: {}",
+                    account_id_str,
+                    e
+                );
+                continue;
+            }
+        };
+
+        // Persist the fresh quota so the UI / frontend sees it
+        {
+            let conn = db_pool.writer();
+            let _ =
+                crate::accounts::set_quota(&conn, crate::ids::AccountId(account_id_i64), &quota);
+        }
+
+        // Check if 100% capacity
+        let is_100_percent = matches!(
+            (quota.session_used, quota.session_limit),
+            (Some(0), Some(limit)) if limit > 0
+        );
+
+        if !is_100_percent {
+            continue;
+        }
+
+        for model_alias in models_to_ping {
+            let true_model_id = {
+                let conn = db_pool.reader();
+                resolve_model_alias(&conn, model_alias)
+            };
+
+            let history_key = format!("{}:{}", account_id_str, true_model_id);
+
+            // Check cooldown
+            if let Some(last_ts) = WARMUP_HISTORY.get(&history_key)
+                && now - *last_ts < COOLDOWN_SECS
+            {
+                continue; // Skip, still in cooldown
+            }
+
+            tracing::info!(
+                "[SmartWarmup] 🔥 Triggering dummy ping for {} (alias: {}) on account {}",
+                true_model_id,
+                model_alias,
+                account_id_str
+            );
+
+            let success = ping_antigravity_model(
+                upstream,
+                &access_token,
+                &project_id,
+                &true_model_id,
+                &account_id_str,
+            )
+            .await;
+
+            if success {
+                WARMUP_HISTORY.insert(history_key, now);
+            }
+
+            // Pequeña pausa entre modelos para no acribillar la API
+            tokio::time::sleep(Duration::from_millis(6000)).await;
+        }
+
+        // Pausa entre cuentas para ser sigilosos (anti-DDoS/bot detection)
+        tokio::time::sleep(Duration::from_secs(15)).await;
+    }
+
+    // Cleanup history older than 24h to prevent memory leak
+    let cutoff = now - 86_400;
+    WARMUP_HISTORY.retain(|_, v| *v > cutoff);
+}
+
+async fn ping_antigravity_model(
+    upstream: &Arc<UpstreamClient>,
+    access_token: &str,
+    project_id: &str,
+    model: &str,
+    account_id: &str,
+) -> bool {
+    let request = build_warmup_request(model);
+    let (_cancel_tx, cancel_rx) = tokio::sync::watch::channel(false);
+
+    match crate::executor_antigravity::execute_antigravity(
+        upstream,
+        access_token,
+        project_id,
+        &request,
+        cancel_rx,
+        None,
+        None,
+    )
+    .await
+    {
+        Ok(_) => true,
+        Err(e) => {
+            tracing::warn!(
+                "[SmartWarmup] Ping request failed for {} on {}: {}",
+                model,
+                account_id,
+                e
+            );
+            false
+        }
+    }
+}
+
+/// Helper: maps a config string (like "gpt-oss-120b-medium") into the true provider model_id
+/// (like "gemini-1.5-pro") by resolving it against the `combos` and `models` tables.
+/// If it can't find a combo or model, it assumes the string itself is the target.
+fn resolve_model_alias(conn: &rusqlite::Connection, alias: &str) -> String {
+    use crate::ids::ProviderId;
+
+    // Try to lookup as a combo
+    if let Ok(Some(combo)) = crate::combos::crud::get_combo_by_name(conn, alias) {
+        let mut visited = Vec::new();
+        if let Ok(targets) =
+            crate::combos::resolution::resolve_combo_to_targets(conn, combo.id, &mut visited, 0)
+        {
+            for target in targets {
+                if let Some(row_id) = target.model_row_id
+                    && let Ok(Some(model)) = crate::models::get_by_row_id(conn, row_id)
+                    && model.provider_id.as_str() == "antigravity"
+                {
+                    return model.model_id.0;
+                }
+            }
+        }
+    }
+
+    // Try to lookup as an exact model name for antigravity
+    if let Ok(Some(model)) = crate::models::find_active_by_provider_and_name(
+        conn,
+        &ProviderId::new("antigravity"),
+        alias,
+    ) {
+        return model.model_id.0;
+    }
+
+    // Fallback: return the raw alias string
+    alias.to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn warmup_request_is_minimal_openai_shape() {
+        let request = super::build_warmup_request("gemini-2.5-flash-lite");
+
+        assert_eq!(request.model, "gemini-2.5-flash-lite");
+        assert_eq!(request.messages.len(), 1);
+        assert_eq!(request.messages[0].role, "user");
+        assert_eq!(
+            request.messages[0]
+                .content
+                .as_ref()
+                .and_then(|v| v.as_str()),
+            Some("Say hi")
+        );
+        assert!(!request.stream);
+        assert_eq!(request.temperature, Some(0.0));
+    }
+}

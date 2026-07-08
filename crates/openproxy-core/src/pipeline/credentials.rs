@@ -10,6 +10,20 @@ use std::sync::Arc;
 pub struct CredentialManager;
 
 impl CredentialManager {
+    fn antigravity_project_from_account(raw_account: &RawAccount) -> Option<String> {
+        raw_account
+            .oauth_provider_specific
+            .as_deref()
+            .and_then(|raw| serde_json::from_str::<serde_json::Value>(raw).ok())
+            .and_then(|meta| {
+                meta.get("projectId")
+                    .or_else(|| meta.get("project_id"))
+                    .and_then(|v| v.as_str())
+                    .filter(|v| !v.is_empty())
+                    .map(ToString::to_string)
+            })
+    }
+
     pub fn resolve_credentials(
         eligible: Vec<ComboTarget>,
         models_map: HashMap<i64, Model>,
@@ -131,7 +145,10 @@ impl CredentialManager {
                                     )
                                 }
                                 "antigravity" => {
-                                    let proj = antigravity_map.get(&account_id.0).cloned();
+                                    let proj =
+                                        antigravity_map.get(&account_id.0).cloned().or_else(|| {
+                                            Self::antigravity_project_from_account(raw_account)
+                                        });
                                     if proj.is_none() {
                                         tracing::error!("failed to read antigravity project");
                                         continue;
@@ -193,5 +210,41 @@ impl CredentialManager {
             });
         }
         resolved
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn raw_with_meta(raw: Option<&str>) -> RawAccount {
+        RawAccount {
+            api_key_encrypted: None,
+            label: None,
+            access_token_encrypted: None,
+            refresh_token_encrypted: None,
+            expires_at: None,
+            oauth_provider_specific: raw.map(ToString::to_string),
+        }
+    }
+
+    #[test]
+    fn antigravity_project_reads_camel_case_account_meta() {
+        let account = raw_with_meta(Some(r#"{"projectId":"proj-abc"}"#));
+
+        assert_eq!(
+            CredentialManager::antigravity_project_from_account(&account).as_deref(),
+            Some("proj-abc")
+        );
+    }
+
+    #[test]
+    fn antigravity_project_reads_snake_case_account_meta() {
+        let account = raw_with_meta(Some(r#"{"project_id":"proj-snake"}"#));
+
+        assert_eq!(
+            CredentialManager::antigravity_project_from_account(&account).as_deref(),
+            Some("proj-snake")
+        );
     }
 }

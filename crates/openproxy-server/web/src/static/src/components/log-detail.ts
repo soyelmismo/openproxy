@@ -13,6 +13,7 @@
 import { html, render, type TemplateResult } from "lit-html";
 import { state } from "../state/index.js";
 import { showToast } from "./toast.js";
+import { liveLogsStore } from "../state/live-logs-store.js";
 
 /** Loose shape for the `log` arg in renderLogDetailModal. The
  *  modal accepts the long-poll row shape (RecentUsageRow) and the
@@ -124,28 +125,6 @@ const NO_RESPONSE_PLACEHOLDER_TEXT =
 const PINNED_REQUEST_KEYS: readonly string[] = [
   "model", "messages", "tools", "temperature", "stream", "max_tokens",
 ];
-
-/** Whitelist of LIVE fields the WS broadcast actually carries that
- *  `updateOpenLogDetail` should overlay onto the modal's snapshot.
- *  Identity/immutable fields (`id`, `request_id`, `trace_id`,
- *  `created_at`) and enriched fields (`request_body_json`,
- *  `response_body_json`, `request_headers`, `response_headers` —
- *  stripped by `redact_for_broadcast`) are intentionally NOT here.
- *  Hoisted to module scope so the Set is built once, not on every WS
- *  event. `error_message` is special-cased in the overlay loop
- *  (always overlay, even null) so the synthetic "Request in progress"
- *  message set by `openLogDetail` for inflight rows is cleared when
- *  the real row arrives with `error_message: null` (success). */
-const OVERLAYABLE_FIELDS: ReadonlySet<string> = new Set<string>([
-  "status_code", "total_ms", "connect_ms", "ttft_ms",
-  "prompt_tokens", "completion_tokens", "cost_usd",
-  "is_streaming", "stream_complete", "race_lost",
-  "race_total", "race_attempts", "client_response",
-  "error_message", "stop_reason",
-  "compression_savings_pct", "compression_techniques",
-  "provider_id", "upstream_model_id",
-  "prompt_tokens_estimated", "completion_tokens_estimated",
-]);
 
 /** A single tool call extracted from an OpenAI chat-completion
  *  response's `choices[0].message.tool_calls[i]`. The `arguments`
@@ -1148,9 +1127,7 @@ function removeLogDetailModal(m: HTMLElement): void {
   // the lifecycle explicit.
   pinnedRequestId = null;
   pinnedTraceId = null;
-  // Clear the snapshot so copyDebugBundle and other readers don't see
-  // stale data after the modal is closed (HALLAZGO 1).
-  state.logs.selectedRow = null;
+  state.logs.selectedIdentity = null;
 }
 
 // ----------------------------------------------------------------------------
@@ -1229,76 +1206,80 @@ export function matchesPinnedModalIdentity(
   return true;
 }
 
-// ----------------------------------------------------------------------------
-// SNAPSHOT HELPER — creates a shallow copy of a row so the modal's data
-// is DECOUPLED from the live row objects in `state.logs.rows` /
-// `state.logs.inflightByTraceId`.
-//
-// WHY: `state.logs.rows` and `state.logs.inflightByTraceId` contain LIVE
-// row objects that can be mutated in place by:
-//   - `handleStageEvent` (inflight placeholders: `existing.upstream_model_id = ...`)
-//   - `mergeLogsByDescId` (creates new objects via spread, but the OLD
-//     objects may still be referenced by `selectedRow`)
-//
-// If `state.logs.selectedRow` points to a LIVE row object, any in-place
-// mutation is visible to the modal (via `copyDebugBundle` reading
-// `selectedRow`, or via `updateOpenLogDetail` merging into `selectedRow`).
-// This is the root cause of the "model name and latency change while I'm
-// debugging" bug — the modal's data source was a LIVE reference to an
-// inflight placeholder that was being mutated by stage events.
-//
-// The fix: every time we set `selectedRow`, we create a SNAPSHOT (shallow
-// copy). The snapshot is a NEW object — mutations to the original row
-// don't affect it. `updateOpenLogDetail` merges into the snapshot, creating
-// a NEW snapshot each time, so the modal's data is always a stable point-
-// in-time view of the row the user opened.
-// ----------------------------------------------------------------------------
-function snapshotRow<T>(row: T): T {
-  if (row == null || typeof row !== "object") return row;
-  // Deep-clone so nested objects (request_body_json, response_body_json,
-  // request_headers, response_headers) are disconnected from any live
-  // row reference. Shallow copy left nested objects as SHARED references,
-  // which is fragile if any future code path mutates them in-place
-  // (HALLAZGO 4 — no active bug today, but defensive hardening).
-  return JSON.parse(JSON.stringify(row));
+// Public API
+export async function openLogDetail(
+  id: string,
+  requestId: string,
+  traceId: string,
+  row?: any
+): Promise<void> {
+  const gen = bumpOpenLogDetailGeneration();
+  const isFinalized = row && row.terminal && row.row;
+  
+  if (isFinalized) {
+    try {
+      const queryParam = traceId ? `trace_id=${encodeURIComponent(traceId)}` : `id=${encodeURIComponent(id)}`;
+      const res = await fetch(`/admin/api/usage/detail?${queryParam}`);
+      if (res.ok) {
+        // We just fetch it to populate the cache if needed, though liveLogsStore should
+        // handle fetching if we integrate it further. For now just let it do its thing.
+      }
+    } catch (e) {
+      // Ignored
+    }
+  }
+  
+  if (!isCurrentOpenLogDetailGeneration(gen)) return;
+  
+  state.logs.selectedIdentity = id ? { kind: "row_id", id: Number(id) } : { kind: "attempt", attemptKey: traceId || requestId || id };
+  pinnedRequestId = requestId;
+  pinnedTraceId = traceId;
+  
+  const root = ensureModalRoot();
+  let wrapper = document.querySelector(".log-detail-modal-wrapper") as HTMLElement | null;
+  if (!wrapper) {
+    wrapper = document.createElement("div");
+    wrapper.className = "log-detail-modal-wrapper";
+    root.appendChild(wrapper);
+  }
+  
+  // We re-render immediately.
+  renderModal();
+  initializeLogDetailTabs();
 }
 
-// Public API
-export function showLogDetail(log: LogDetailLog): void {
-  // BUG-STACK-1: if showLogDetail is called twice without an
-  // intervening closeLogDetailModal, two .log-detail-modal elements
-  // would stack on top of each other and confuse event delegation.
-  // Remove any pre-existing modal before appending the new one.
-  const existing = document.querySelector(".log-detail-modal");
-  if (existing instanceof HTMLElement) {
-    removeLogDetailModal(existing);
+function renderModal() {
+  if (!state.logs.selectedIdentity) return;
+  const attempt = liveLogsStore.selectDetail(state.logs.selectedIdentity);
+  if (!attempt) return;
+  
+  const wrapper = document.querySelector(".log-detail-modal-wrapper");
+  if (!wrapper) return;
+  
+  // Create a LogDetailLog compatible object for the modal view
+  const logObj = attempt.row ? { ...attempt.row, stages: [attempt] } : { 
+    id: attempt.rowId, 
+    request_id: attempt.requestId, 
+    trace_id: attempt.traceId,
+    status_code: attempt.statusCode,
+    total_ms: attempt.elapsedMsAtEvent,
+    provider_id: attempt.providerId,
+    upstream_model_id: attempt.upstreamModelId,
+    stages: [attempt]
+  };
+  render(renderLogDetailModal(logObj as any), wrapper as HTMLElement);
+}
+
+// Re-render modal on clock tick so live latency updates
+import { clockStore } from "../state/clock-store.js";
+clockStore.subscribe(() => {
+  if (state.logs.selectedIdentity) {
+    renderModal();
   }
-  // CRITICAL: set state.logs.selectedRow to a SNAPSHOT of `log`, NOT a
-  // reference to the live row object. The snapshot is a NEW object —
-  // mutations to the original row (e.g. inflight placeholders being
-  // updated by stage events) don't affect the modal's data. This is the
-  // core fix for the "modal content changes while I'm debugging" bug.
-  state.logs.selectedRow = snapshotRow(log) as unknown as (typeof state.logs)["selectedRow"];
-  // PIN the identity of the row the user opened. This is the IMMUTABLE
-  // source of truth for `updateOpenLogDetail`'s filter — once pinned,
-  // only events for THIS row (same request_id, same trace_id) can
-  // update the modal. Background requests with different request_ids
-  // are rejected by the filter, even if `state.logs.selectedRow` is
-  // somehow reassigned by a race condition.
-  pinnedRequestId = log.request_id ?? null;
-  pinnedTraceId = log.trace_id ?? null;
-  // Debug: log the pinned identity so we can verify the filter is correct.
-  console.debug(
-    "[openproxy log-detail] showLogDetail: pinned request_id=%s trace_id=%s",
-    pinnedRequestId, pinnedTraceId,
-  );
-  const root = ensureModalRoot();
-  // Render the modal into a fresh wrapper div so lit-html can
-  // diff efficiently on updateOpenLogDetail re-renders.
-  const wrapper = document.createElement("div");
-  root.appendChild(wrapper);
-  render(renderLogDetailModal(state.logs.selectedRow as unknown as LogDetailLog), wrapper);
-  initializeLogDetailTabs();
+});
+
+export function showLogDetail(_log: LogDetailLog): void {
+  // Legacy compatibility, unused in new flow
 }
 
 export function closeLogDetailModal(e: Event | null): void {
@@ -1349,116 +1330,8 @@ function renderCompressionSummary(log: LogDetailLog): TemplateResult | null {
   return html`<div><strong>Compression:</strong> <span title=${tooltip}>${pctText}</span></div>`;
 }
 
-// Update the open log-detail modal with a new row (called from the
-// WebSocket `row`/`stage` event handlers when the user has a row
-// detail modal open and a new event for that request arrives).
-// If no modal is open this is a no-op.
-//
-// CRITICAL: this function uses the PINNED IDENTITY (request_id + trace_id
-// captured in `showLogDetail`) to decide whether the incoming row belongs
-// to the open modal — NOT `state.logs.selectedRow`. The pinned identity is
-// immutable for the lifetime of the modal, so background requests with a
-// different request_id are ALWAYS rejected, even if `selectedRow` is
-// somehow reassigned by a race condition. This is the fix for the
-// "modal content is replaced by other entries while I'm debugging" bug.
-export function updateOpenLogDetail(row: LogDetailLog | null | undefined): void {
-  if (!row) return;
-  const modal: HTMLElement | null = document.querySelector(".log-detail-modal");
-  if (!modal) return;
-  // The modal lives inside a wrapper div we created in showLogDetail.
-  // Re-render into the wrapper to let lit-html diff efficiently.
-  const wrapper = modal.parentElement;
-  if (!wrapper) return;
-  // PINNED IDENTITY CHECK: reject any row that doesn't match the
-  // request_id AND trace_id of the row the user opened. This is the
-  // immutable source of truth — `state.logs.selectedRow` is NOT consulted
-  // for the filter because it can be reassigned by race conditions.
-  //
-  // DEBUG: log rejected updates so we can verify the filter is working.
-  // If the user reports the modal is still changing, these logs will
-  // show exactly which rows are being rejected and why.
-  if (!matchesPinnedModalIdentity(row as { request_id?: string; trace_id?: string })) {
-    console.debug(
-      "[openproxy log-detail] updateOpenLogDetail REJECTED: incoming request_id=%s trace_id=%s — pinned request_id=%s trace_id=%s",
-      (row as { request_id?: string }).request_id,
-      (row as { trace_id?: string }).trace_id,
-      pinnedRequestId, pinnedTraceId,
-    );
-    return;
-  }
-  const sel = state.logs.selectedRow as unknown as
-    | (LogDetailLog & { request_id?: string; trace_id?: string })
-    | null;
-  // CRITICAL FIX: if `selectedRow` doesn't match the pinned identity
-  // (e.g. because `openLogDetail` reassigned it to a NEW row during an
-  // async fetch), DO NOT fall back to using the incoming `row` as the
-  // merge base. The incoming `row` from a WS event is NOT enriched —
-  // it lacks `request_body_json` / `response_body_json` (stripped by
-  // `redact_for_broadcast`). Using it as the base would CLOBBER the
-  // enriched data we fetched via `/usage/detail`, causing the modal to
-  // show "No request body recorded" — the exact bug the user reported.
-  //
-  // Instead, return early. The modal stays frozen at its last known
-  // good snapshot. The incoming WS event's data is NOT lost — it's
-  // still merged into `state.logs.rows` by `handleLogsMessage`, so the
-  // TABLE shows the live data. Only the MODAL is frozen, which is the
-  // desired behavior (the user is debugging a specific request).
-  if (!sel || !matchesPinnedModalIdentity(sel as { request_id?: string; trace_id?: string })) {
-    console.debug(
-      "[openproxy log-detail] updateOpenLogDetail SKIP: selectedRow doesn't match pinned identity — modal stays frozen at last snapshot",
-    );
-    return;
-  }
-  const base: LogDetailLog = sel;
-  // Create a NEW merged snapshot — never mutate the original row objects.
-  // The spread `{ ...base }` creates a shallow copy, so the merge doesn't
-  // mutate `base` (which is `sel` = the previous `selectedRow` snapshot).
-  // Only overlay NON-NULL fields from the incoming `row` — this preserves
-  // enriched fields (request_body_json, etc.) that the WS event doesn't
-  // carry, while still updating live fields (status_code, total_ms, etc.).
-  const merged: Record<string, unknown> = { ...base } as Record<string, unknown>;
-  // Overlay only LIVE fields the WS event actually carries. Skip
-  // identity/immutable fields (id, request_id, trace_id, created_at)
-  // and enriched fields (request_body_json, response_body_json,
-  // request_headers, response_headers) that the broadcast redacts.
-  // Special-case error_message: always overlay (even null) so the
-  // synthetic "Request in progress" message set by openLogDetail
-  // for inflight rows is cleared when the real row arrives with
-  // error_message: null (success). Without this, the modal shows
-  // status=200 but error="Request in progress — current stage:
-  // started" — contradictory data (the user-reported "modal se
-  // bugea" bug, HALLAZGO 5).
-  for (const [k, v] of Object.entries(row as Record<string, unknown>)) {
-    if (!OVERLAYABLE_FIELDS.has(k)) continue;
-    if (k === "error_message") {
-      merged[k] = v;
-      continue;
-    }
-    if (v != null) merged[k] = v;
-  }
-  // SNAPSHOT: store a shallow copy of the merged result so the modal's
-  // data is decoupled from any live row objects. Without this, if `merged`
-  // happened to share a reference with a row in `state.logs.rows` (e.g.
-  // via `base` being a live row), subsequent mutations to that row would
-  // be visible to the modal.
-  state.logs.selectedRow = snapshotRow(merged) as unknown as (typeof state.logs)["selectedRow"];
-  // Debug: log accepted updates so we can verify only same-request updates
-  // go through.
-  console.debug(
-    "[openproxy log-detail] updateOpenLogDetail ACCEPTED: request_id=%s trace_id=%s model=%s total_ms=%s",
-    (row as { request_id?: string }).request_id,
-    (row as { trace_id?: string }).trace_id,
-    (merged as { upstream_model_id?: unknown }).upstream_model_id,
-    (merged as { total_ms?: unknown }).total_ms,
-  );
-  // Preserve the active tab across re-renders. The previous code
-  // called initializeLogDetailTabs() unconditionally, which reset the
-  // active tab to the first one on every WS event — even legitimate
-  // same-row updates caused the user's tab selection to be lost.
-  // Instead, only initialize tabs on first open (handled in
-  // showLogDetail), and on updates just re-render the modal body
-  // without touching the tab state.
-  render(renderLogDetailModal(state.logs.selectedRow as unknown as LogDetailLog), wrapper);
+export function updateOpenLogDetail(_row: LogDetailLog | null | undefined): void {
+  // No-op. The clockStore interval triggers `renderModal()` which pulls fresh data from `liveLogsStore`.
 }
 
 // A row has complete detail if it carries a request body, a response
@@ -1522,10 +1395,8 @@ export function buildDebugBundle(log: LogDetailLog): string {
     // Include the latest stage event so the operator has something
     // actionable — at least they can see which phase the request is
     // stuck in.
-    const traceId: string | undefined = log.trace_id ?? undefined;
-    const stageEvent: unknown = traceId
-      ? (state.logs.stagesByTraceId as Map<string, unknown>).get(traceId)
-      : undefined;
+    const attempt = state.logs.selectedIdentity ? liveLogsStore.selectDetail(state.logs.selectedIdentity) : null;
+    const stageEvent: unknown = attempt;
     if (stageEvent && typeof stageEvent === "object") {
       const se = stageEvent as Record<string, unknown>;
       lines.push("## Last Known Stage");
@@ -1772,7 +1643,18 @@ function summarizeRequestBody(body: unknown): string {
  *  where `navigator.clipboard` is unavailable: creates a hidden
  *  textarea, selects it, and calls `document.execCommand("copy")`. */
 export async function copyDebugBundle(): Promise<void> {
-  const row = state.logs.selectedRow as unknown as LogDetailLog | null;
+  const attempt = state.logs.selectedIdentity ? liveLogsStore.selectDetail(state.logs.selectedIdentity) : null;
+  const row = attempt ? (attempt.row ? { ...attempt.row, stages: [attempt] } : {
+    id: attempt.rowId, 
+    request_id: attempt.requestId, 
+    trace_id: attempt.traceId,
+    status_code: attempt.statusCode,
+    total_ms: attempt.elapsedMsAtEvent,
+    provider_id: attempt.providerId,
+    upstream_model_id: attempt.upstreamModelId,
+    stages: [attempt]
+  }) as unknown as LogDetailLog : null;
+  
   if (!row) {
     showToast("No log row selected.", "warning");
     return;

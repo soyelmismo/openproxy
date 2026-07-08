@@ -18,6 +18,7 @@ fn map_row(row: &Row<'_>) -> rusqlite::Result<Model> {
         "openai" => TargetFormat::Openai,
         "anthropic" => TargetFormat::Anthropic,
         "gemini" => TargetFormat::Gemini,
+        "responses" => TargetFormat::Responses,
         other => {
             return Err(rusqlite::Error::FromSqlConversionFailure(
                 0,

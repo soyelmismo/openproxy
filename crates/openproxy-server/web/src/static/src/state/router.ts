@@ -8,7 +8,7 @@
 import { html, render } from 'lit-html';
 import { state } from "./index.js";
 import { startBgPoll } from "./bg-poll.js";
-import { stopLogLatencyTicker } from "./ticker.js";
+
 // DASHBOARD-FIX (Bug 2 / Step 2e): the router now imports the auth
 // helper `isLoggedIn` and the login view `mountLogin`. `navigate()`
 // below gates every route on `isLoggedIn()` except `login`; a logged-
@@ -211,9 +211,6 @@ export function navigate(): void {
       render(html`<div class="banner banner-error">Error: ${msg}</div>`, main);
     }
   });
-  // Stop the live-logs latency ticker if the user has navigated
-  // away from `#/logs` — otherwise it keeps running at 10 Hz forever.
-  if (r.name !== "logs") stopLogLatencyTicker();
   // (Re)start the background poll. It is idempotent: re-calling
   // clears any existing interval and starts a fresh one, so the
   // navigation is the natural place to do it.

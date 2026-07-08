@@ -127,6 +127,17 @@ pub trait ProviderAdapter: Send + Sync {
     /// Static configuration snapshot.
     fn config(&self) -> &ProviderAdapterConfig;
 
+    /// Provider metadata for frontend/admin
+    fn metadata(&self) -> crate::providers::ProviderMetadata {
+        let built_in = crate::providers::is_builtin(self.id().as_str());
+        crate::providers::ProviderMetadata {
+            built_in,
+            deletable: !built_in,
+            supports_quota: false,
+            quota_refresh_supported: false,
+        }
+    }
+
     /// Shortcut for `self.config().auth_type`.
     fn auth_type(&self) -> AdapterAuthType {
         self.config().auth_type

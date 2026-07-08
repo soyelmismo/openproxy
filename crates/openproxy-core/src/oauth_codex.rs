@@ -1,22 +1,27 @@
 //! Codex / ChatGPT OAuth provider.
 //!
-//! Uses OpenAI's Auth0-backed PKCE flow and stores the ChatGPT account id
-//! from `id_token` claims as `{"workspaceId": "..."}` when available.
+//! Uses OpenAI's custom device authorization flow.
+//! The ChatGPT account id from `id_token` claims is stored as `{"workspaceId": "..."}` when available.
 
 use async_trait::async_trait;
 use base64::Engine;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
-use crate::error::Result;
+use crate::error::{CoreError, Result};
 use crate::ids::AccountId;
 use crate::oauth::{DbRef, DeviceAuthorizationResponse, OAuthFlow, OAuthProvider, TokenResponse};
 use crate::oauth_generic::{GenericOAuthProvider, OAuthRequestEncoding, OAuthSpec};
-use crate::upstream::UpstreamClient;
+use crate::upstream::{
+    CancellationToken, TimeoutProfile, UpstreamClient, UpstreamError, UpstreamRequest,
+};
 
 const CLIENT_ID: &str = "app_EMoamEEZ73f0CkXaXp7hrann";
-const AUTH_URL: &str = "https://auth.openai.com/oauth/authorize";
 const TOKEN_URL: &str = "https://auth.openai.com/oauth/token";
+const DEVICE_USERCODE_URL: &str = "https://auth.openai.com/api/accounts/deviceauth/usercode";
+const DEVICE_TOKEN_URL: &str = "https://auth.openai.com/api/accounts/deviceauth/token";
+const VERIFICATION_URI: &str = "https://auth.openai.com/codex/device";
+const REDIRECT_URI: &str = "https://auth.openai.com/deviceauth/callback";
 const SCOPES: &[&str] = &["openid", "profile", "email", "offline_access"];
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -28,8 +33,8 @@ pub struct CodexProviderMeta {
 fn codex_oauth_spec() -> OAuthSpec {
     OAuthSpec {
         id: "codex",
-        flow: OAuthFlow::AuthorizationCodePkce,
-        authorize_url: Some(AUTH_URL),
+        flow: OAuthFlow::DeviceCode,
+        authorize_url: None,
         token_url: TOKEN_URL,
         device_authorization_url: None,
         client_id_env: Some("OPENPROXY_CODEX_CLIENT_ID"),
@@ -37,12 +42,7 @@ fn codex_oauth_spec() -> OAuthSpec {
         client_secret_env: None,
         client_secret_default: None,
         scopes: SCOPES,
-        auth_extra_params: &[
-            ("id_token_add_organizations", "true"),
-            ("codex_cli_simplified_flow", "true"),
-            ("originator", "codex_cli_rs"),
-            ("prompt", "login"),
-        ],
+        auth_extra_params: &[],
         request_encoding: OAuthRequestEncoding::FormUrlEncoded,
         user_agent: Some(crate::adapters::codex::codex_user_agent),
     }
@@ -76,27 +76,110 @@ impl OAuthProvider for CodexOAuthProvider {
         self.generic.flow()
     }
 
-    async fn build_auth_url(&self, redirect_uri: &str) -> Result<(String, String, String)> {
-        self.generic.build_auth_url(redirect_uri).await
+    async fn build_auth_url(&self, _redirect_uri: &str) -> Result<(String, String, String)> {
+        Err(CoreError::Validation(
+            "codex uses device code flow, not PKCE".into(),
+        ))
     }
 
     async fn exchange_code(
         &self,
-        code: &str,
-        code_verifier: &str,
-        upstream_client: &Arc<UpstreamClient>,
-        redirect_uri: &str,
+        _code: &str,
+        _code_verifier: &str,
+        _upstream_client: &Arc<UpstreamClient>,
+        _redirect_uri: &str,
     ) -> Result<TokenResponse> {
-        self.generic
-            .exchange_code(code, code_verifier, upstream_client, redirect_uri)
-            .await
+        Err(CoreError::Validation(
+            "codex uses device code flow, not authorization code".into(),
+        ))
     }
 
     async fn request_device_code(
         &self,
         upstream_client: &Arc<UpstreamClient>,
     ) -> Result<DeviceAuthorizationResponse> {
-        self.generic.request_device_code(upstream_client).await
+        let body = serde_json::json!({ "client_id": CLIENT_ID });
+        let body_bytes = serde_json::to_vec(&body).unwrap();
+        let mut req =
+            UpstreamRequest::post_json(DEVICE_USERCODE_URL, bytes::Bytes::from(body_bytes));
+        req.headers.insert(
+            http::header::CONTENT_TYPE,
+            http::HeaderValue::from_static("application/json"),
+        );
+        req.headers.insert(
+            http::header::ACCEPT,
+            http::HeaderValue::from_static("application/json"),
+        );
+
+        let cancel = CancellationToken::new();
+        let response = upstream_client
+            .call(req, TimeoutProfile::OAuth, cancel)
+            .await
+            .map_err(|e| match e {
+                UpstreamError::Cancel => CoreError::ClientDisconnected,
+                other => CoreError::UpstreamConnection(format!("codex deviceauth: {other}")),
+            })?;
+
+        let status = response.status;
+        let body = response.collect().await.map_err(|e| match e {
+            UpstreamError::Cancel => CoreError::ClientDisconnected,
+            other => CoreError::UpstreamConnection(format!("codex deviceauth body: {other}")),
+        })?;
+
+        if status.as_u16() == 404 {
+            return Err(CoreError::Validation(
+                "Device code login is not enabled for this account. Enable it in ChatGPT security settings.".into()
+            ));
+        }
+
+        if !status.is_success() {
+            return Err(CoreError::UpstreamError {
+                status: status.as_u16(),
+                provider: "codex".into(),
+                model: "<oauth>".into(),
+                body: String::from_utf8_lossy(&body).into(),
+            });
+        }
+
+        #[derive(Deserialize)]
+        struct UserCodeResp {
+            device_auth_id: String,
+            user_code: Option<String>,
+            usercode: Option<String>,
+            interval: Option<serde_json::Value>,
+        }
+
+        let resp: UserCodeResp = serde_json::from_slice(&body)
+            .map_err(|e| CoreError::Parse(format!("codex usercode parse: {e}")))?;
+
+        let user_code = resp
+            .user_code
+            .or(resp.usercode)
+            .ok_or_else(|| CoreError::Parse("codex usercode missing user_code".into()))?;
+
+        let combined_code = format!("{}|{}", resp.device_auth_id, user_code);
+
+        let interval = resp
+            .interval
+            .and_then(|v| {
+                if let Some(i) = v.as_u64() {
+                    Some(i)
+                } else if let Some(s) = v.as_str() {
+                    s.parse::<u64>().ok()
+                } else {
+                    None
+                }
+            })
+            .unwrap_or(5);
+
+        Ok(DeviceAuthorizationResponse {
+            device_code: combined_code,
+            user_code,
+            verification_uri: VERIFICATION_URI.into(),
+            verification_uri_complete: None,
+            expires_in: Some(15 * 60),
+            interval: Some(interval),
+        })
     }
 
     async fn poll_device_token(
@@ -104,9 +187,109 @@ impl OAuthProvider for CodexOAuthProvider {
         device_code: &str,
         upstream_client: &Arc<UpstreamClient>,
     ) -> Result<Option<TokenResponse>> {
-        self.generic
-            .poll_device_token(device_code, upstream_client)
+        let parts: Vec<&str> = device_code.splitn(2, '|').collect();
+        if parts.len() != 2 {
+            return Err(CoreError::Validation(
+                "Invalid codex composite device code".into(),
+            ));
+        }
+        let device_auth_id = parts[0];
+        let user_code = parts[1];
+
+        let body = serde_json::json!({
+            "device_auth_id": device_auth_id,
+            "user_code": user_code,
+        });
+        let body_bytes = serde_json::to_vec(&body).unwrap();
+        let mut req = UpstreamRequest::post_json(DEVICE_TOKEN_URL, bytes::Bytes::from(body_bytes));
+        req.headers.insert(
+            http::header::CONTENT_TYPE,
+            http::HeaderValue::from_static("application/json"),
+        );
+        req.headers.insert(
+            http::header::ACCEPT,
+            http::HeaderValue::from_static("application/json"),
+        );
+
+        let cancel = CancellationToken::new();
+        let response = upstream_client
+            .call(req, TimeoutProfile::OAuth, cancel.clone())
             .await
+            .map_err(|e| match e {
+                UpstreamError::Cancel => CoreError::ClientDisconnected,
+                other => CoreError::UpstreamConnection(format!("codex poll: {other}")),
+            })?;
+
+        let status = response.status;
+        let body = response.collect().await.map_err(|e| match e {
+            UpstreamError::Cancel => CoreError::ClientDisconnected,
+            other => CoreError::UpstreamConnection(format!("codex poll body: {other}")),
+        })?;
+
+        if status.as_u16() == 403 || status.as_u16() == 404 {
+            return Ok(None);
+        }
+
+        if !status.is_success() {
+            return Err(CoreError::UpstreamError {
+                status: status.as_u16(),
+                provider: "codex".into(),
+                model: "<oauth>".into(),
+                body: String::from_utf8_lossy(&body).into(),
+            });
+        }
+
+        #[derive(Deserialize)]
+        struct PollResp {
+            authorization_code: String,
+            code_verifier: String,
+        }
+
+        let poll_resp: PollResp = serde_json::from_slice(&body)
+            .map_err(|e| CoreError::Parse(format!("codex poll parse: {e}")))?;
+
+        let params = vec![
+            ("grant_type", "authorization_code"),
+            ("client_id", CLIENT_ID),
+            ("code", poll_resp.authorization_code.as_str()),
+            ("code_verifier", poll_resp.code_verifier.as_str()),
+            ("redirect_uri", REDIRECT_URI),
+        ];
+
+        let token_body = crate::oauth_generic::urlencoded_body(&params);
+        let mut token_req = UpstreamRequest::post_json(TOKEN_URL, token_body);
+        token_req.headers.insert(
+            http::header::CONTENT_TYPE,
+            http::HeaderValue::from_static("application/x-www-form-urlencoded"),
+        );
+
+        let token_response = upstream_client
+            .call(token_req, TimeoutProfile::OAuth, cancel)
+            .await
+            .map_err(|e| match e {
+                UpstreamError::Cancel => CoreError::ClientDisconnected,
+                other => CoreError::UpstreamConnection(format!("codex exchange: {other}")),
+            })?;
+
+        let token_status = token_response.status;
+        let token_body_bytes = token_response.collect().await.map_err(|e| match e {
+            UpstreamError::Cancel => CoreError::ClientDisconnected,
+            other => CoreError::UpstreamConnection(format!("codex exchange body: {other}")),
+        })?;
+
+        if !token_status.is_success() {
+            return Err(CoreError::UpstreamError {
+                status: token_status.as_u16(),
+                provider: "codex".into(),
+                model: "<oauth>".into(),
+                body: String::from_utf8_lossy(&token_body_bytes).into(),
+            });
+        }
+
+        let token: TokenResponse = serde_json::from_slice(&token_body_bytes)
+            .map_err(|e| CoreError::Parse(format!("codex token parse: {e}")))?;
+
+        Ok(Some(token))
     }
 
     async fn refresh_token(
@@ -172,26 +355,6 @@ fn extract_workspace_id(claims: &serde_json::Value) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[tokio::test]
-    async fn codex_authorize_url_includes_cli_params() {
-        let p = CodexOAuthProvider::new();
-        let (url, verifier, challenge) = p
-            .build_auth_url("http://localhost:8788/admin/callback.html")
-            .await
-            .unwrap();
-
-        assert!(!verifier.is_empty());
-        assert_eq!(
-            challenge,
-            crate::oauth_generic::code_challenge_s256(&verifier)
-        );
-        assert!(url.starts_with(AUTH_URL));
-        assert!(url.contains("client_id=app_EMoamEEZ73f0CkXaXp7hrann"));
-        assert!(url.contains("scope=openid%20profile%20email%20offline_access"));
-        assert!(url.contains("originator=codex_cli_rs"));
-        assert!(url.contains("codex_cli_simplified_flow=true"));
-    }
 
     #[test]
     fn extracts_workspace_id_from_claims() {

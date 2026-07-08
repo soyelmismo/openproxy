@@ -52,7 +52,9 @@ use openproxy_core::{
     config::{CircuitBreakerConfig, RacingConfig, RetriesConfig, TimeoutsConfig},
     db as core_db,
     db::conn::ADMIN_LOCK_TIMEOUT,
-    ids::{AccountId, ApiKeyId, ComboId, ComboTargetId, ModelRowId, ProviderId},
+    ids::{
+        AccountId, ApiKeyId, ComboId, ComboTargetId, ModelRowId, ProviderId, RequestId, TraceId,
+    },
     models, oauth, providers, seed,
     usage::{self, UsageFilter},
 };
@@ -709,11 +711,16 @@ pub struct ProviderWithOAuth {
     #[serde(flatten)]
     pub provider: providers::Provider,
     pub oauth_flows: Option<Vec<String>>,
+    pub metadata: openproxy_core::providers::ProviderMetadata,
+    pub active_models: i64,
+    pub total_models: i64,
 }
 
 fn enrich_provider_with_oauth(
     p: providers::Provider,
     registry: &openproxy_core::oauth::OAuthProviderRegistry,
+    adapters: &[std::sync::Arc<dyn openproxy_core::adapters::ProviderAdapter>],
+    r: &rusqlite::Connection,
 ) -> ProviderWithOAuth {
     let flows = if p.auth_type == openproxy_core::providers::AuthType::OAuth {
         if let Some(oauth_impl) = registry.get(p.id.as_str()) {
@@ -736,9 +743,31 @@ fn enrich_provider_with_oauth(
     } else {
         None
     };
+
+    let metadata = adapters
+        .iter()
+        .find(|a| a.id() == &p.id)
+        .map(|a| a.metadata())
+        .unwrap_or_else(|| {
+            // Fallback for custom providers that aren't loaded in the adapter registry yet
+            let built_in = openproxy_core::providers::is_builtin(p.id.as_str());
+            openproxy_core::providers::ProviderMetadata {
+                built_in,
+                deletable: !built_in,
+                supports_quota: false,
+                quota_refresh_supported: false,
+            }
+        });
+
+    let active_models: i64 = r.query_row("SELECT count(*) FROM models WHERE provider_id = ? AND active = 1", [p.id.as_str()], |row| row.get(0)).unwrap_or(0);
+    let total_models: i64 = r.query_row("SELECT count(*) FROM models WHERE provider_id = ?", [p.id.as_str()], |row| row.get(0)).unwrap_or(0);
+
     ProviderWithOAuth {
         provider: p,
         oauth_flows: flows,
+        metadata,
+        active_models,
+        total_models,
     }
 }
 
@@ -750,9 +779,10 @@ pub async fn list_providers(State(s): State<AppState>) -> ApiResult<Json<Vec<Pro
         let r = s.db_pool().reader();
         let list = admin::list_providers(&r)?;
         let registry = s.oauth_provider_registry();
+        let adapters = s.adapters();
         let enriched = list
             .into_iter()
-            .map(|p| enrich_provider_with_oauth(p, registry.as_ref()))
+            .map(|p| enrich_provider_with_oauth(p, registry.as_ref(), &adapters, &r))
             .collect();
         Ok(Json(enriched))
     }
@@ -813,7 +843,8 @@ pub async fn get_provider(
         let provider =
             providers::get(&r, &id)?.ok_or_else(|| CoreError::ProviderNotFound(id.to_string()))?;
         let registry = s.oauth_provider_registry();
-        let enriched = enrich_provider_with_oauth(provider, registry.as_ref());
+        let adapters = s.adapters();
+        let enriched = enrich_provider_with_oauth(provider, registry.as_ref(), &adapters, &r);
         Ok(Json(enriched))
     }
     .await;
@@ -3611,8 +3642,15 @@ async fn run_test_for_model(
     //    (OpenAI-compatible, Anthropic, Gemini).
     //    `serde_json::to_value` cannot fail for these struct shapes in
     //    practice, but we still want a typed error if it ever does.
+    let effective_target_format = match adapter.format() {
+        adapters::AdapterFormat::Openai => openproxy_core::models::TargetFormat::Openai,
+        adapters::AdapterFormat::Anthropic => openproxy_core::models::TargetFormat::Anthropic,
+        adapters::AdapterFormat::Mixed => model.target_format,
+        adapters::AdapterFormat::Gemini => openproxy_core::models::TargetFormat::Gemini,
+        adapters::AdapterFormat::Responses => openproxy_core::models::TargetFormat::Responses,
+    };
     let (url, body_value): (String, serde_json::Value) =
-        if model.target_format == openproxy_core::models::TargetFormat::Anthropic {
+        if effective_target_format == openproxy_core::models::TargetFormat::Anthropic {
             let anthropic_req = openai_to_anthropic(
                 &openai_req,
                 model.model_id.as_str(),
@@ -3638,7 +3676,7 @@ async fn run_test_for_model(
                     };
                 }
             }
-        } else if model.target_format == openproxy_core::models::TargetFormat::Gemini {
+        } else if effective_target_format == openproxy_core::models::TargetFormat::Gemini {
             let gemini_req = openai_to_gemini(&openai_req, &openai_req.messages);
             let url = adapter.build_chat_url_for_account(
                 openproxy_core::models::TargetFormat::Gemini,
@@ -3656,6 +3694,67 @@ async fn run_test_for_model(
                         error_msg: Some(err.to_string()),
                         skipped: true,
                         skip_reason: Some(err.to_string()),
+                    };
+                }
+            }
+        } else if effective_target_format == openproxy_core::models::TargetFormat::Responses {
+            let url = adapter.build_chat_url_for_account(
+                openproxy_core::models::TargetFormat::Responses,
+                &model.model_id,
+                &_account_label,
+            );
+            let mut responses_req = openai_req.clone();
+            responses_req.max_tokens = None;
+            let (_cancel_tx, client_disconnected) = tokio::sync::watch::channel(false);
+            let pipeline_req = openproxy_core::pipeline::PipelineRequest {
+                request_id: RequestId::new(),
+                trace_id: TraceId::new(),
+                combo_id: ComboId(0),
+                openai_request: Arc::new(responses_req),
+                client_disconnected,
+                stream_sink: None,
+                api_key_id: None,
+                race_cancel: None,
+                combo_override: None,
+                targets_override: None,
+                request_headers: std::collections::BTreeMap::new(),
+                request_body_json: None,
+                race_cancelled: false,
+                endpoint_kind: openproxy_core::endpoint::EndpointKind::Chat,
+                compressed_messages: std::sync::OnceLock::new(),
+            };
+            let formatter = openproxy_core::pipeline::formatting::get_formatter(
+                openproxy_core::models::TargetFormat::Responses,
+            );
+            match formatter.format_request(
+                &pipeline_req,
+                &model,
+                &openai_req.messages,
+                true,
+                adapter.as_ref(),
+            ) {
+                Ok(bytes) => match serde_json::from_slice::<serde_json::Value>(&bytes) {
+                    Ok(v) => (url, v),
+                    Err(e) => {
+                        let err = CoreError::Internal(format!("serialize responses req: {}", e));
+                        return TestResult {
+                            row_id: model_row_id,
+                            status: 500,
+                            elapsed_ms: 0,
+                            error_msg: Some(err.to_string()),
+                            skipped: true,
+                            skip_reason: Some(err.to_string()),
+                        };
+                    }
+                },
+                Err(e) => {
+                    return TestResult {
+                        row_id: model_row_id,
+                        status: 500,
+                        elapsed_ms: 0,
+                        error_msg: Some(e.to_string()),
+                        skipped: true,
+                        skip_reason: Some(e.to_string()),
                     };
                 }
             }
@@ -3684,7 +3783,7 @@ async fn run_test_for_model(
     // 8. Build the HTTP request. The 15s timeout caps the test wall-
     //    clock cost — a hung upstream shouldn't pin a dashboard
     //    button indefinitely.
-    let headers = adapter.build_headers(&api_key, model.target_format, &model.model_id);
+    let headers = adapter.build_headers(&api_key, effective_target_format, &model.model_id);
     let client = if let Some(ref proxy_uri) = proxy_url {
         match reqwest::Proxy::all(proxy_uri) {
             Ok(p) => reqwest::Client::builder()
@@ -3907,11 +4006,22 @@ pub async fn update_account_api_key(
 /// extra fields to drive the toggle and refresh buttons; this endpoint
 /// returns them. There is no filter — the dashboard's model list is
 /// small enough that a single shot is fine.
-pub async fn list_models_admin(State(s): State<AppState>) -> ApiResult<Json<Vec<models::Model>>> {
+#[derive(serde::Deserialize)]
+pub struct ListModelsQuery {
+    pub provider_id: Option<String>,
+}
+
+pub async fn list_models_admin(
+    State(s): State<AppState>,
+    axum::extract::Query(q): axum::extract::Query<ListModelsQuery>,
+) -> ApiResult<Json<Vec<models::Model>>> {
     let body: Result<Json<Vec<models::Model>>, ApiError> = async {
         // Read-only SELECT — use the READER.
         let r = s.db_pool().reader();
-        let list = models::list_all(&r)?;
+        let mut list = models::list_all(&r)?;
+        if let Some(p) = q.provider_id {
+            list.retain(|m| m.provider_id.as_str() == p);
+        }
         Ok(Json(list))
     }
     .await;
@@ -3959,7 +4069,14 @@ pub async fn refresh_account_quota(
             let w = s_clone.db_pool().writer();
             tracing::debug!(account_id = account_id.0, "refresh_account_quota: writer acquired");
             let acc = admin::account_for_quota_refresh(&w, account_id)?;
-            if !admin::quota_capable_providers().contains(&acc.provider_id.as_str()) {
+            let adapters = s_clone.adapters();
+            let supports_quota = adapters
+                .iter()
+                .find(|a| a.id() == &acc.provider_id)
+                .map(|a| a.metadata().quota_refresh_supported)
+                .unwrap_or(false);
+
+            if !supports_quota {
                 return Ok(Json(serde_json::json!({
                     "account_id": account_id.0,
                     "supported": false,

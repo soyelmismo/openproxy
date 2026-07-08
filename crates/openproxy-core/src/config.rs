@@ -345,6 +345,41 @@ impl Default for QuotaProtectionConfig {
     }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SmartWarmupConfig {
+    #[serde(default = "default_smart_warmup_enabled")]
+    pub enabled: bool,
+    #[serde(default = "default_smart_warmup_interval")]
+    pub interval_secs: u64,
+    #[serde(default = "default_smart_warmup_models")]
+    pub models: Vec<String>,
+}
+
+fn default_smart_warmup_enabled() -> bool {
+    true
+}
+
+fn default_smart_warmup_interval() -> u64 {
+    600
+}
+
+fn default_smart_warmup_models() -> Vec<String> {
+    vec![
+        "gemini-2.5-flash-lite".to_string(),
+        "gpt-oss-120b-medium".to_string(),
+    ]
+}
+
+impl Default for SmartWarmupConfig {
+    fn default() -> Self {
+        Self {
+            enabled: default_smart_warmup_enabled(),
+            interval_secs: default_smart_warmup_interval(),
+            models: default_smart_warmup_models(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct AppConfig {
     #[serde(default)]
@@ -367,6 +402,8 @@ pub struct AppConfig {
     pub compression: CompressionConfig,
     #[serde(default)]
     pub quota_protection: QuotaProtectionConfig,
+    #[serde(default)]
+    pub smart_warmup: SmartWarmupConfig,
 }
 
 impl AppConfig {

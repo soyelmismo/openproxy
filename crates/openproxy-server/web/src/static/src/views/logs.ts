@@ -1,40 +1,7 @@
-// views/logs.ts — live logs view (lit-html).
-//
-// MIGRATED to lit-html. The full table (header + body + pagination)
-// is now a single TemplateResult; `requestUpdate()` triggers a
-// microtask-coalesced re-render that diffs the new template against
-// the previous one and patches only the changed DOM nodes. This
-// replaces the old `logsEl.innerHTML = headerHtml + bodyHtml +
-// paginationHtml` rebuild and the `requestAnimationFrame` render
-// throttle (lit-html's microtask coalescing already does the same
-// job).
-//
-// The 100ms latency ticker (`state/ticker.ts`) continues to mutate
-// `.log-phase-sub` and `.log-latency` in place. Those elements are
-// created by lit-html on first render with a static initial value
-// (e.g. `0ms`); the ticker is the source of truth for the live
-// counter. lit-html leaves them untouched on subsequent renders
-// (their text content is a static part of the template, not a
-// `${...}` interpolation), so the ticker's mutations survive
-// `requestUpdate()` calls.
-//
-// Similarly, the connection-status badge (`#logs-connection-status`)
-// and the recording-toggle button (`#logs-recording-toggle`) are
-// rendered with STATIC class/text in the template; their dynamic
-// state is managed by direct DOM manipulation in `state/ws.ts`
-// (`setLogsStatus`) and `components/recording-toggle.ts`
-// (`renderRecordingToggle`). lit-html leaves them alone after the
-// first render, so the direct mutations survive.
-//
-// The detail modal lives in `components/log-detail.ts` to keep this
-// file focused on orchestration.
-
 import { html, type TemplateResult } from "lit-html";
 import { repeat } from "lit-html/directives/repeat.js";
 import { live } from "lit-html/directives/live.js";
-// unsafeHTML import removed — log-row.ts now returns TemplateResult directly.
 import { state } from "../state/index.js";
-import { api } from "../state/api.js";
 import { renderLogRowHtml } from "../components/log-row.js";
 import { LOG_COLUMNS, LOGS_VISIBLE_COLUMNS_STORAGE_KEY } from "../lib/constants.js";
 import {
@@ -43,56 +10,16 @@ import {
   disconnectLogsWebSocket,
 } from "../state/ws.js";
 import { fetchRecordingState, toggleRecording } from "../components/recording-toggle.js";
-import { showToast } from "../components/toast.js";
 import { mountView, requestUpdate } from "../state/reactive.js";
-import {
-  showLogDetail,
-  updateOpenLogDetail,
-  bumpOpenLogDetailGeneration,
-  isCurrentOpenLogDetailGeneration,
-} from "../components/log-detail.js";
+import { openLogDetail } from "../components/log-detail.js";
+import { liveLogsStore } from "../state/live-logs-store.js";
+import { clockStore } from "../state/clock-store.js";
 import type { RecentUsageRow, StageEvent } from "../lib/types/api.js";
 import type { NotificationEvent } from "../lib/types/notifications.js";
 
-// Local copy of the LogDetailLog shape from components/log-detail.ts.
-// G3 kept that interface private (it's an "open record" union of
-// RecentUsageRow + the detail-endpoint extras). We re-declare the
-// minimum fields we touch — `id`, `request_id` — so the call sites
-// (showLogDetail / updateOpenLogDetail / hasCompleteLogDetail) accept
-// a RecentUsageRow without forcing us to export the shape from the
-// component. The component itself accepts the same open shape.
-interface LogDetailLog {
-  id?: number;
-  request_id?: string;
-  [k: string]: unknown;
-}
-
-// WebSocket message envelope. The server sends one of several payload
-// types — see `handleLogsMessage` below for the per-branch handling. We
-// model the discriminated union on `type` and let the per-branch data be
-// a tight union of the known payload shapes (consumers type-guard before
-// reading). `export`d so `state/ws-bus.ts` (F2) can subscribe by type.
-//
-// F2 added `'notification'` to the `type` union and `NotificationEvent`
-// to the `data` union — the dashboard's notifications tray subscribes to
-// the new type via `subscribeWs('notification', ...)` in `state/ws-bus.ts`.
-//
-// We mark fields optional so old code that accesses `msg.data ?? msg.row
-// ?? msg` keeps type-checking; consumers narrow via type-guards. The
-// `channel` field is set on `lag_warning` envelopes so the client can
-// distinguish `notifications` lags from `usage` / `stage` lags and refetch
-// from the appropriate REST endpoint (notifications are refetched via
-// `GET /admin/api/notifications`; usage/stage use the `resync` envelope).
+// Keep legacy WsEnvelope for compatibility with ws-bus.ts and notifications
 export interface WsEnvelope {
-  type:
-    | "history"
-    | "row"
-    | "stage"
-    | "lag_warning"
-    | "resync"
-    | "pong"
-    | "error"
-    | "notification";
+  type: "history" | "row" | "stage" | "lag_warning" | "resync" | "pong" | "error" | "notification" | "snapshot" | "attempt_event" | "usage_row" | "gap";
   data?: StageEvent | RecentUsageRow | NotificationEvent;
   row?: unknown;
   rows?: RecentUsageRow[];
@@ -101,62 +28,14 @@ export interface WsEnvelope {
   delta?: string;
   complete?: boolean;
   id?: number;
-  // H7 fix: `lag_warning` and `resync` envelopes
-  // (RACE-F-5) carry extra fields the dashboard uses to
-  // recover from a lagged broadcast channel. The plan said
-  // we MUST NOT change the wire contract of WS envelopes,
-  // so these are additional fields on an extensible
-  // JSON object — old clients that don't know about them
-  // simply ignore the unknown keys. We mark both as
-  // optional so existing usage of `WsEnvelope` keeps
-  // type-checking.
   skipped?: number;
-  // F2: `channel` is set on `lag_warning` envelopes to tell the
-  // client which broadcast channel lagged. `notifications` lags
-  // should refetch via `GET /admin/api/notifications`; `usage` /
-  // `stage` lags are followed by a `resync` envelope with
-  // `since_id`. Absent on `resync` envelopes.
   channel?: "usage" | "stage" | "notifications";
   since_id?: number;
-  // F2: `server_time` is set on `pong` envelopes (the server's
-  // RFC-3339 timestamp when it processed the client's `ping`).
-  // Already in use by the existing pong handler.
   server_time?: string;
 }
 
-// ---- Module-local UI state ----------------------------------------------
-//
-// `columnsMenuOpen` tracks whether the columns popover menu is open.
-// Toggling it and calling `requestUpdate()` re-renders the menu with
-// the new `.open` class. The document-level outside-click handler
-// (installed once per session in `mountLogs`) reads this flag to
-// close the menu when the user clicks elsewhere.
 let columnsMenuOpen: boolean = false;
 
-type RenderableLogRow = RecentUsageRow & { __inflight?: boolean };
-
-const SYNTHETIC_LOG_ID_THRESHOLD = 1_000_000_000;
-const renderedLogRowsByKey = new Map<string, RenderableLogRow>();
-let logsRenderScheduled = false;
-
-function isSyntheticLogId(id: number): boolean {
-  return Number.isFinite(id) && id > SYNTHETIC_LOG_ID_THRESHOLD;
-}
-
-function isInflightLogRow(row: RecentUsageRow & { __inflight?: boolean }): boolean {
-  return !!row.__inflight || !row.id || row.id <= 0 || isSyntheticLogId(row.id);
-}
-
-function totalPages(): number {
-  return Math.max(1, Math.ceil(getRenderableLogRows().length / state.logs.rowsPerPage));
-}
-
-// ---- Visible-columns state ---------------------------------------------
-// The user can hide any subset of the log-table columns. The set of
-// visible column keys lives on `state.logs.visibleColumns` (a Set),
-// and is persisted to localStorage as a JSON array. Default is
-// "all columns visible"; an empty set is forbidden (you can't hide
-// the last column).
 function loadVisibleColumns(): Set<string> {
   const allKeys = LOG_COLUMNS.map((c) => c.key);
   let result = new Set(allKeys);
@@ -170,270 +49,33 @@ function loadVisibleColumns(): Set<string> {
       }
     }
   } catch (_e) {
-    // Corrupt localStorage value — fall back to "all visible".
     result = new Set(allKeys);
   }
   return result;
 }
 
 function saveVisibleColumns(): void {
-  // `state.logs.visibleColumns` is `Set<string> | null`. The narrow
-  // in the `if (!cols) return;` above doesn't propagate to the
-  // iterator context (TS widens the type back to the union when
-  // reaching the spread), so we re-narrow to a concrete Set here.
-  const cols: Set<string> | null = state.logs.visibleColumns;
+  const cols = state.logs.visibleColumns;
   if (!cols) return;
   try {
-    localStorage.setItem(
-      LOGS_VISIBLE_COLUMNS_STORAGE_KEY,
-      JSON.stringify(Array.from(cols)),
-    );
-  } catch (_e) { /* localStorage may be disabled — non-fatal */ }
+    localStorage.setItem(LOGS_VISIBLE_COLUMNS_STORAGE_KEY, JSON.stringify(Array.from(cols)));
+  } catch (_e) {}
 }
 
-const logKeyMap = new WeakMap<RecentUsageRow, string>();
-let logKeyCounter = 0;
-
-function fallbackLogRowKey(row: RecentUsageRow): string {
-  let fallback = logKeyMap.get(row);
-  if (!fallback) {
-    logKeyCounter++;
-    fallback = `fallback:${logKeyCounter}`;
-    logKeyMap.set(row, fallback);
-  }
-  return fallback;
-}
-
-function stableLogRowKey(row: RenderableLogRow): string {
-  if (isInflightLogRow(row)) {
-    if (row.trace_id) return `inflight:tid:${row.trace_id}`;
-    if (row.request_id) return `inflight:rid:${row.request_id}`;
-    return fallbackLogRowKey(row);
-  }
-  if (row.id && row.id > 0 && !isSyntheticLogId(row.id)) return `id:${row.id}`;
-  if (row.trace_id) return `tid:${row.trace_id}`;
-  if (row.request_id) return `rid:${row.request_id}`;
-  return fallbackLogRowKey(row);
-}
-
-function ensureUniqueRenderKeys(rows: RenderableLogRow[]): WeakMap<RecentUsageRow, string> {
-  const seen = new Set<string>();
-  const keys = new WeakMap<RecentUsageRow, string>();
-  for (const row of rows) {
-    const baseKey = stableLogRowKey(row);
-    let key = baseKey;
-    if (seen.has(key)) {
-      let suffix = 1;
-      while (seen.has(`${baseKey}:dup:${suffix}`)) suffix++;
-      key = `${baseKey}:dup:${suffix}`;
-    }
-    seen.add(key);
-    keys.set(row, key);
-  }
-  return keys;
-}
-
-function compareRenderableLogRows(a: RenderableLogRow, b: RenderableLogRow): number {
-  const aInflight = isInflightLogRow(a);
-  const bInflight = isInflightLogRow(b);
-  if (aInflight !== bInflight) return aInflight ? -1 : 1;
-
-  const aTime = Date.parse(a.created_at || "") || 0;
-  const bTime = Date.parse(b.created_at || "") || 0;
-  if (aInflight && bInflight) {
-    const byTime = bTime - aTime;
-    if (byTime !== 0) return byTime;
-    return stableLogRowKey(a).localeCompare(stableLogRowKey(b));
-  }
-
-  const byId = (b.id || 0) - (a.id || 0);
-  if (byId !== 0) return byId;
-  const byTime = bTime - aTime;
-  if (byTime !== 0) return byTime;
-  return stableLogRowKey(a).localeCompare(stableLogRowKey(b));
-}
-
-function getRenderableLogRows(): RenderableLogRow[] {
-  const inflightRows: RenderableLogRow[] = [
-    ...Array.from(state.logs.inflightByTraceId.values()),
-    ...Array.from(state.logs.inflightByRequestId.values()),
-  ].map((p) => Object.assign({}, p, { id: 0, __inflight: true }));
-
-  return (state.logs.rows as RenderableLogRow[])
-    .concat(inflightRows)
-    .sort(compareRenderableLogRows);
-}
-
-function scheduleLogsViewUpdate(): void {
-  if (state.currentView?.name !== "logs") return;
-  if (logsRenderScheduled) return;
-  logsRenderScheduled = true;
-  const flush = (): void => {
-    logsRenderScheduled = false;
-    if (state.currentView?.name === "logs") requestUpdate();
-  };
-  if (typeof requestAnimationFrame === "function") {
-    requestAnimationFrame(flush);
-  } else {
-    setTimeout(flush, 16);
+function handleLogsMessage(event: MessageEvent): void {
+  try {
+    const env = JSON.parse(event.data) as WsEnvelope;
+    // Pass directly to the store
+    liveLogsStore.dispatch(env);
+  } catch (e) {
+    // Ignore invalid JSON
   }
 }
-
-function mergeLogsByDescId(existing: RecentUsageRow[], incoming: RecentUsageRow[]): RecentUsageRow[] {
-  // Key strategy: each attempt is a SEPARATE row, keyed by its unique
-  // `trace_id` (per-attempt). Retries of the same `request_id` have
-  // DIFFERENT `trace_id`s and MUST NOT be collapsed into one row —
-  // collapsing causes the "row flickers / overlaps" bug where a new
-  // attempt's data overlays the previous attempt's data.
-  //
-  // Identity precedence:
-  //   1. DB id (for finalized rows with id > 0) — `id:<id>`
-  //   2. trace_id (for inflight rows) — `tid:<trace_id>`
-  //   3. request_id (only when trace_id is empty) — `rid:<request_id>`
-  //
-  // We do NOT use a `req:<request_id>` secondary alias anymore. The
-  // old alias caused race attempts (same request_id, different
-  // trace_id) to collapse into one row, which:
-  //   - made the table flicker as each attempt's data overlaid the last
-  //   - showed the WRONG attempt's model/tokens/latency
-  //   - broke the "new requests don't appear until they finish" flow
-  //     (the inflight placeholder was merged into a finalized row)
-  const merged = new Map<string, RecentUsageRow>();
-  const rowKey = (r: RecentUsageRow): string => {
-    if (r.id && r.id > 0) return `id:${r.id}`;
-    if (r.trace_id) return `tid:${r.trace_id}`;
-    if (r.request_id) return `rid:${r.request_id}`;
-    return fallbackLogRowKey(r);
-  };
-  for (const row of existing) {
-    merged.set(rowKey(row), row);
-  }
-  for (const row of incoming) {
-    if (row == null) continue;
-    const k = rowKey(row);
-    let base = merged.get(k);
-    // Inflight rows (id=0) with a trace_id: match by trace_id only.
-    // Do NOT match by request_id — sibling race attempts share the
-    // same request_id and must stay separate.
-    if ((!row.id || row.id === 0) && row.trace_id) {
-      const tidKey = `tid:${row.trace_id}`;
-      if (merged.has(tidKey)) base = merged.get(tidKey) as RecentUsageRow;
-    }
-    // Merge: start from base, then overlay incoming fields. BUT —
-    // only overlay fields that are not null/undefined in the incoming
-    // row. This prevents a re-broadcast (e.g. the client_response
-    // UPDATE re-broadcast) from clobbering fields it doesn't carry
-    // (cost_usd, compression_savings_pct, etc.) with null.
-    const mergedRow: RecentUsageRow = { ...(base || {} as RecentUsageRow) };
-    const target = mergedRow as unknown as Record<string, unknown>;
-    for (const [key, value] of Object.entries(row)) {
-      if (value !== null && value !== undefined) {
-        target[key] = value;
-      }
-    }
-    merged.set(k, mergedRow);
-    if (row.id && row.id > 0) state.logs.lastSeenId = Math.max(state.logs.lastSeenId, row.id);
-  }
-  // Build the result array from primary-keyed entries only (no aliases).
-  const result: RecentUsageRow[] = Array.from(merged.values());
-  result.sort((a, b) => {
-    // Finalized rows (id > 0) sort by id descending. Inflight rows
-    // (id === 0) sort by created_at descending so the newest
-    // inflight appears at the top.
-    if (a.id && a.id > 0 && b.id && b.id > 0) return b.id - a.id;
-    const aTime = Date.parse(a.created_at || "") || 0;
-    const bTime = Date.parse(b.created_at || "") || 0;
-    return bTime - aTime;
-  });
-  const limit = state.logs.maxRows;
-  if (result.length > limit) {
-    const finalResult = result.slice(0, limit);
-    const trimmed = new Map<number, RecentUsageRow>();
-    for (const r of finalResult) {
-      if (r.id && r.id > 0) trimmed.set(Number(r.id), r);
-    }
-    state.logs.rowById = trimmed;
-    return finalResult;
-  }
-  const byId = new Map<number, RecentUsageRow>();
-  for (const r of result) {
-    if (r.id && r.id > 0) byId.set(Number(r.id), r);
-  }
-  state.logs.rowById = byId;
-  return result;
-}
-
-// ---- Templates ---------------------------------------------------------
 
 function renderHeaderRow(visibleColKeys: Set<string>): TemplateResult {
-  // The header row uses the same `.log-row` class as the body rows
-  // (the CSS targets both). Inline styles preserve the original
-  // look (sticky, uppercase, muted) without needing a new CSS class.
   return html`<div class="log-row" style="cursor:default;border-bottom:1px solid var(--color-border);font-weight:600;font-size:0.72rem;text-transform:uppercase;color:var(--color-text-muted);background:var(--color-log-header-bg);position:sticky;top:0;z-index:1;">${LOG_COLUMNS
     .filter((c) => visibleColKeys.has(c.key))
     .map((c) => html`<span class="log-${c.key}" data-col=${c.key}>${c.label}</span>`)}</div>`;
-}
-
-// Render a single log row. `renderLogRowHtml` (in components/log-row.ts)
-// returns an HTML string — that component is not yet migrated to
-// lit-html. We embed it via `unsafeHTML`. The string is built
-// entirely from server-controlled data with `escapeHtml`/`escapeAttr`
-// applied at every interpolation inside `log-row.ts`, so unsafe
-// injection is safe here. When `log-row.ts` is migrated to return a
-// `TemplateResult`, the `unsafeHTML` wrapper can be dropped.
-function renderLogRow(
-  r: RecentUsageRow & { __inflight?: boolean },
-  visibleColKeys: Set<string>,
-  rowKey: string,
-): TemplateResult {
-  // Resolve the live stage for this row. Primary key is
-  // `trace_id` so each attempt of a multi-attempt request
-  // (per-target retry, fallback to next combo target, race
-  // loser) has its own phase. The request_id fallback is
-  // only for the edge case where a row's `trace_id` is
-  // empty (synthetic events emitted from the frontend
-  // itself).
-  //
-  // CRITICAL: for finalized rows (status_code > 0 AND not
-  // inflight), derive the stage from the row's own status_code
-  // instead of looking up the shared stage map. When a request
-  // is retried, trace_id is reused across attempts, so the
-  // stage map only holds one entry — the retry's "completed"
-  // would overwrite the failed attempt's "failed", causing the
-  // failed row to show "completado".
-  //
-  // Inflight placeholders MUST NOT take this path: the backend
-  // sends status_code=200 from waiting_ttft/streaming (not only
-  // terminal), so synthesizing a terminal stage from
-  // status_code>0 would render "completed / 0ms" while the
-  // request is still streaming (see HALLAZGO 1 + NUEVO BUG A).
-  const isInflight: boolean = isInflightLogRow(r);
-  let stage: StageEvent | undefined;
-  if (!isInflight && r.status_code > 0) {
-    const hasError = !!(r.error_message && r.error_message.length > 0);
-    stage = {
-      request_id: r.request_id,
-      trace_id: r.trace_id,
-      provider_id: r.provider_id,
-      upstream_model_id: r.upstream_model_id,
-      stage: r.race_lost ? "cancelled" : ((r.status_code >= 400 || hasError) ? "failed" : "completed"),
-      elapsed_ms: r.total_ms || 0,
-      connect_ms: r.connect_ms,
-      ttft_ms: r.ttft_ms,
-      status_code: r.status_code,
-      error: r.error_message ?? null,
-      stop_reason: r.stop_reason ?? null,
-      compression_savings_pct: r.compression_savings_pct ?? null,
-      compression_techniques: r.compression_techniques ?? null,
-      timestamp: r.created_at || new Date().toISOString(),
-    };
-  } else {
-    stage =
-      (r.trace_id && state.logs.stagesByTraceId.get(r.trace_id)) ||
-      (r.request_id && state.logs.stagesByRequestId.get(r.request_id)) ||
-      undefined;
-  }
-  return html`${renderLogRowHtml(r, stage, visibleColKeys, r.total_ms, rowKey)}`;
 }
 
 function renderPagination(totalRows: number, totalP: number): TemplateResult {
@@ -447,7 +89,7 @@ function renderPagination(totalRows: number, totalP: number): TemplateResult {
     <span class="page-info">Page ${state.logs.page} of ${totalP}</span>
     <button ?disabled=${isLast} @click=${logsNextPage}>Next ›</button>
     <button ?disabled=${isLast} @click=${() => logsGoPage(totalP)}>⟩⟩</button>
-    <label class="logs-follow-toggle" title="When ON, new rows automatically scroll the view to the most recent page. When OFF, the view stays on the page you are reading.">
+    <label class="logs-follow-toggle" title="When ON, new rows automatically scroll the view to the most recent page.">
       <input type="checkbox" id="logs-follow-input" ?checked=${state.logs.followTail} @change=${logsSetFollow}>
       <span>Follow</span>
     </label>
@@ -460,56 +102,38 @@ function renderColumnsMenu(): TemplateResult {
 }
 
 function renderLogsView(): TemplateResult {
-  // Build the merged row list: historical rows + in-flight placeholders.
-  // In-flight rows intentionally keep `id=0`; their render identity and
-  // click lookup are keyed by `trace_id`/`request_id`. Older code used
-  // time-varying synthetic ids, which made the visible row identity
-  // unstable during bursts.
-  const rows = getRenderableLogRows();
-  const totalRows = rows.length;
+  const allRows = liveLogsStore.selectLogRows();
+  const totalRows = allRows.length;
   const rpp = state.logs.rowsPerPage;
   const totalP = Math.max(1, Math.ceil(totalRows / rpp));
-  if (state.logs.page > totalP) state.logs.page = totalP;
+  
+  if (state.logs.followTail) {
+    state.logs.page = 1;
+  } else if (state.logs.page > totalP) {
+    state.logs.page = totalP;
+  }
+  
   if (state.logs.page < 1) state.logs.page = 1;
+  
   const start = (state.logs.page - 1) * rpp;
   const end = Math.min(start + rpp, totalRows);
-  const pageRows = rows.slice(start, end);
-  for (const r of pageRows) {
-    if (!r.__inflight && r.status_code > 0) {
-      synthesizeTerminalEvent(r);
-    }
-  }
+  const pageRows = allRows.slice(start, end);
+  
   const visibleColKeys = state.logs.visibleColumns || new Set(LOG_COLUMNS.map((c) => c.key));
 
-  const passKeys = ensureUniqueRenderKeys(pageRows);
-  renderedLogRowsByKey.clear();
-  for (const r of pageRows) {
-    const key = passKeys.get(r);
-    if (key) renderedLogRowsByKey.set(key, r);
-  }
-
-  // The connection-status badge and the recording-toggle button are
-  // rendered with STATIC class/text content. Their dynamic state is
-  // managed by direct DOM manipulation in `state/ws.ts`
-  // (`setLogsStatus`) and `components/recording-toggle.ts`
-  // (`renderRecordingToggle`). lit-html leaves static attributes and
-  // static text alone after the first render, so those direct
-  // mutations survive `requestUpdate()`. Do NOT add `${...}`
-  // interpolations to these elements without also routing the
-  // updates through `requestUpdate()`.
   return html`
     <div class="logs-header">
       <h2>Live Logs</h2>
       <div class="logs-header-actions">
         <div class="columns-menu-wrapper">
-          <button id="logs-columns-toggle" type="button" class="logs-columns-toggle" aria-haspopup="true" aria-expanded=${columnsMenuOpen ? "true" : "false"} title="Choose which columns to show or hide. The selection is saved in this browser." @click=${onToggleColumnsMenu}>
+          <button id="logs-columns-toggle" type="button" class="logs-columns-toggle" aria-haspopup="true" aria-expanded=${columnsMenuOpen ? "true" : "false"} @click=${onToggleColumnsMenu}>
             <span>Columns</span>
             <span class="logs-columns-caret" aria-hidden="true">▾</span>
           </button>
           ${renderColumnsMenu()}
         </div>
         <span id="logs-connection-status" class="logs-connection-badge disconnected">🔴 disconnected</span>
-        <button id="logs-recording-toggle" class="logs-recording-toggle" type="button" aria-pressed="false" title="When ON, the server saves full request/response bodies and headers for every request (disk). When OFF, only metadata is kept." @click=${onRecordingToggleClick}>
+        <button id="logs-recording-toggle" class="logs-recording-toggle" type="button" @click=${onRecordingToggleClick}>
           <span class="logs-recording-dot" aria-hidden="true"></span>
           <span class="logs-recording-label">⏺ Record: <strong>OFF</strong></span>
         </button>
@@ -519,14 +143,11 @@ function renderLogsView(): TemplateResult {
       <div class="logs-scroll-area" id="logs-scroll-area">
         ${renderHeaderRow(visibleColKeys)}
         ${pageRows.length === 0
-          ? html`<div class="empty" style="padding:2rem;">No recent requests yet. Use the API to see logs appear here in real time.</div>`
+          ? html`<div class="empty" style="padding:2rem;">No recent requests yet.</div>`
           : repeat(
               pageRows,
-              (r: RecentUsageRow) => passKeys.get(r)!,
-              (r: RecentUsageRow) => {
-                const rowKey = passKeys.get(r)!;
-                return html`<div data-key=${rowKey}>${renderLogRow(r, visibleColKeys, rowKey)}</div>`;
-              },
+              (r) => r.attemptKey,
+              (r) => html`<div data-key=${r.attemptKey}>${renderLogRowHtml(r, visibleColKeys, clockStore.nowMs)}</div>`
             )}
       </div>
       ${renderPagination(totalRows, totalP)}
@@ -534,28 +155,27 @@ function renderLogsView(): TemplateResult {
   `;
 }
 
-// ---- Click handlers (replaces data-action + attachLogRowHandlers) ------
-
-// Event delegation for log-row clicks. A single `@click` handler on
-// the `#logs` container reads the closest `.log-row[data-request-id]`
-// ancestor of the click target and opens the detail modal. This
-// replaces the per-row `addEventListener` in `attachLogRowHandlers`
-// (which had to be re-run after every `innerHTML` rebuild).
 function onLogsClick(e: Event): void {
   const target = e.target;
   if (!(target instanceof Element)) return;
-  // The header row also has class `.log-row` but no `data-request-id`;
-  // the attribute selector skips it.
   const rowEl = target.closest(".log-row[data-request-id]");
   if (!rowEl) return;
   const el = rowEl as HTMLElement;
-  const id = el.dataset["id"] || "";
-  const requestId = el.dataset["requestId"] || "";
-  const traceId = el.dataset["traceId"] || "";
-  const rowKey = el.dataset["rowKey"] || "";
-  if (!id && !requestId) return;
-  const clickedRow = rowKey ? renderedLogRowsByKey.get(rowKey) : undefined;
-  void openLogDetail(id, requestId, traceId, clickedRow);
+  const id = el.dataset["id"];
+  const attemptKey = el.dataset["attemptKey"];
+  
+  const identity = id ? { kind: "row_id" as const, id: Number(id) } : (attemptKey ? { kind: "attempt" as const, attemptKey } : null);
+  if (!identity) return;
+  
+  const clickedRow = liveLogsStore.selectDetail(identity);
+  if (clickedRow) {
+    void openLogDetail(
+      clickedRow.rowId ? String(clickedRow.rowId) : "",
+      clickedRow.requestId,
+      clickedRow.traceId,
+      clickedRow.row as any
+    );
+  }
 }
 
 function onToggleColumnsMenu(): void {
@@ -564,9 +184,6 @@ function onToggleColumnsMenu(): void {
 }
 
 function onColumnToggle(key: string, e: Event): void {
-  // Stop the click from bubbling to the document-level outside-click
-  // handler (which would close the menu before the @change could fire
-  // on the next render).
   e.stopPropagation();
   toggleColumn(key);
 }
@@ -574,14 +191,6 @@ function onColumnToggle(key: string, e: Event): void {
 function onRecordingToggleClick(): void {
   void toggleRecording();
 }
-
-// ---- Pagination handlers -----------------------------------------------
-//
-// Exported (and re-exported via the registry in handlers/registry.ts)
-// for back-compat with anything that still routes through
-// `data-action`. The lit-html template uses direct `@click` handlers
-// instead, so the registry entries are unused at runtime but kept
-// for type-safety.
 
 export function logsPrevPage(): void {
   if (state.logs.page > 1) {
@@ -591,15 +200,18 @@ export function logsPrevPage(): void {
   }
 }
 export function logsNextPage(): void {
-  if (state.logs.page < totalPages()) {
+  const allRows = liveLogsStore.selectLogRows();
+  const totalP = Math.max(1, Math.ceil(allRows.length / state.logs.rowsPerPage));
+  if (state.logs.page < totalP) {
     state.logs.page++;
-    if (state.logs.page >= totalPages()) state.logs.followTail = false;
+    if (state.logs.page >= totalP) state.logs.followTail = false;
     requestUpdate();
   }
 }
 export function logsGoPage(p: number): void {
-  const total = totalPages();
-  state.logs.page = Math.max(1, Math.min(p, total));
+  const allRows = liveLogsStore.selectLogRows();
+  const totalP = Math.max(1, Math.ceil(allRows.length / state.logs.rowsPerPage));
+  state.logs.page = Math.max(1, Math.min(p, totalP));
   state.logs.followTail = (state.logs.page === 1);
   requestUpdate();
 }
@@ -613,12 +225,6 @@ export function logsSetFollow(e: Event): void {
   if (enabled) { state.logs.page = 1; requestUpdate(); }
 }
 
-// ---- Columns menu ------------------------------------------------------
-//
-// `toggleColumnsMenu` and `toggleColumn` are exported for back-compat
-// with the registry. The lit-html template uses direct `@click` /
-// `@change` handlers (`onToggleColumnsMenu`, `onColumnToggle`).
-
 export function toggleColumnsMenu(): void {
   columnsMenuOpen = !columnsMenuOpen;
   requestUpdate();
@@ -630,12 +236,6 @@ export function toggleColumn(key: string): void {
   }
   const set = state.logs.visibleColumns;
   if (set.has(key)) {
-    // Refuse to hide the last visible column — an empty table is
-    // useless and the user has no "show all" affordance without
-    // toggling each one back on. The browser's default click has
-    // already flipped the checkbox to unchecked; `requestUpdate()`
-    // re-renders and lit-html sets `?checked` back to true (because
-    // `set.has(key)` is still true).
     if (set.size === 1) {
       requestUpdate();
       return;
@@ -648,806 +248,21 @@ export function toggleColumn(key: string): void {
   requestUpdate();
 }
 
-// ---- Stage event handling ----------------------------------------------
-
-function handleStageEvent(event: StageEvent): void {
-  if (!event || !event.request_id) return;
-  const requestId = event.request_id;
-  // Index the live stage by `trace_id` (per attempt), not by
-  // `request_id`. A request with retries has multiple `trace_id`s
-  // — keying by `request_id` would overwrite the stage of every
-  // previous attempt of that request, which is the user-visible
-  // "phase of the failed attempt got rewritten to 'Started' on
-  // retry" bug. The request_id-keyed map is the fallback for the
-  // rare case where the event has no `trace_id` (we keep both
-  // maps in sync via `setStage`, but only `stagesByTraceId` is
-  // read by the renderer).
-  const stageAccepted = setStage(event, requestId);
-  // Find an existing row in the rendered list that matches this
-  // event's `(request_id, trace_id)`. A matching row is either:
-  //   * a row whose `trace_id` equals the event's — the normal
-  //     case for a fresh request or a retry whose row already
-  //     arrived, or
-  //   * a historical row (status_code > 0) for the same
-  //     `request_id` but with a *different* `trace_id` — this is
-  //     the retry case the user reported: the old row stays
-  //     visible with its failed/completed stage, and we don't
-  //     want to mutate it. We also don't want to bind the new
-  //     event to it (its phase would be misleading).
-  const traceId = event.trace_id || "";
-  const exactRow = traceId
-    ? state.logs.rows.find((r) => r.request_id === requestId && r.trace_id === traceId)
-    : undefined;
-  if (exactRow) {
-    if (exactRow.id != null) state.logs.rowById.set(exactRow.id, exactRow);
-    if (state.logs.followTail) state.logs.page = 1;
-    scheduleLogsViewUpdate();
-    if (state.currentView?.name === "logs") updateOpenLogDetail(exactRow as unknown as LogDetailLog);
-    return;
-  }
-  if (!stageAccepted) {
-    scheduleLogsViewUpdate();
-    return;
-  }
-  // A row exists for this `request_id` but with a different
-  // `trace_id` (retry against a fresh trace_id): the new attempt
-  // gets its own inflight placeholder, leaving the historical row
-  // untouched.
-  if (traceId && !state.logs.inflightByTraceId.has(traceId)) {
-    state.logs.inflightByTraceId.set(traceId, {
-      id: 0,
-      request_id: requestId,
-      provider_id: event.provider_id || "",
-      upstream_model_id: event.upstream_model_id || "",
-      created_at: event.timestamp || new Date().toISOString(),
-      status_code: 0, prompt_tokens: null, completion_tokens: null,
-      total_ms: 0, cost_usd: 0, is_streaming: false, stream_complete: false, race_lost: false,
-      trace_id: traceId,
-      connect_ms: null,
-      ttft_ms: null,
-      request_body_json: null,
-      response_body_json: null,
-      // RecentUsageRow has these as required-with-null. For an
-      // inflight placeholder we don't have the headers yet, so they
-      // stay null. Same for race_* (single-target rows race_total
-      // is null until the proxy finishes counting attempts).
-      request_headers: null,
-      response_headers: null,
-      race_total: null,
-      race_attempts: null,
-      error_message: null,
-      stop_reason: null,
-      compression_savings_pct: null,
-      compression_techniques: null,
-      client_response: false,
-      prompt_tokens_estimated: false,
-      completion_tokens_estimated: false,
-    });
-  } else if (traceId && state.logs.inflightByTraceId.has(traceId)) {
-    if (!stageAccepted) {
-      scheduleLogsViewUpdate();
-      return;
-    }
-    // Update existing inflight placeholder with new stage event
-    // data (model, provider, streaming status). The `started`
-    // event arrives with an empty upstream_model_id; later
-    // `connecting` / `streaming` events carry the real model.
-    const existing = state.logs.inflightByTraceId.get(traceId)!;
-    if (event.upstream_model_id) existing.upstream_model_id = event.upstream_model_id;
-    if (event.provider_id) existing.provider_id = event.provider_id;
-    if (event.stage === "streaming") existing.is_streaming = true;
-    if (event.status_code > 0) existing.status_code = event.status_code;
-    // Propagate timing/latency fields so renderLogRow has accurate
-    // data even before the terminal `row` event arrives. Without
-    // this, the inflight placeholder keeps total_ms=0 while
-    // status_code=200, which combined with the
-    // synthesis-on-status_code>0 path caused the row to show
-    // "completed / 0ms" while a live latency counter kept running
-    // — see HALLAZGO 1 + NUEVO BUG A.
-    if (typeof event.elapsed_ms === "number") (existing as any).total_ms = event.elapsed_ms;
-    if (event.connect_ms != null) existing.connect_ms = event.connect_ms;
-    if (event.ttft_ms != null) existing.ttft_ms = event.ttft_ms;
-    if (event.error) existing.error_message = event.error;
-    if (event.stop_reason) (existing as any).stop_reason = event.stop_reason;
-    if (event.compression_savings_pct != null) (existing as any).compression_savings_pct = event.compression_savings_pct;
-    if (event.compression_techniques) (existing as any).compression_techniques = event.compression_techniques;
-    if (event.stage === "completed" || event.stage === "failed" || event.stage === "cancelled") {
-      existing.is_streaming = false;
-      (existing as any).stream_complete = true;
-    }
-  } else if (!traceId && !state.logs.inflightByRequestId.has(requestId)) {
-    // Trace_id-less event: fall back to the request_id-keyed
-    // inflight map (and the request_id-keyed stage map, handled
-    // by setStage above). This branch is only reachable for
-    // synthetic events emitted from the frontend itself.
-    state.logs.inflightByRequestId.set(requestId, {
-      id: 0,
-      request_id: requestId,
-      provider_id: event.provider_id || "",
-      upstream_model_id: event.upstream_model_id || "",
-      created_at: event.timestamp || new Date().toISOString(),
-      status_code: 0, prompt_tokens: null, completion_tokens: null,
-      total_ms: 0, cost_usd: 0, is_streaming: false, stream_complete: false, race_lost: false,
-      trace_id: "",
-      connect_ms: null,
-      ttft_ms: null,
-      request_body_json: null,
-      response_body_json: null,
-      request_headers: null,
-      response_headers: null,
-      race_total: null,
-      race_attempts: null,
-      error_message: null,
-      stop_reason: null,
-      compression_savings_pct: null,
-      compression_techniques: null,
-      client_response: false,
-      prompt_tokens_estimated: false,
-      completion_tokens_estimated: false,
-    });
-  } else if (!traceId && state.logs.inflightByRequestId.has(requestId)) {
-    if (!stageAccepted) {
-      scheduleLogsViewUpdate();
-      return;
-    }
-    const existing = state.logs.inflightByRequestId.get(requestId)!;
-    if (event.upstream_model_id) existing.upstream_model_id = event.upstream_model_id;
-    if (event.provider_id) existing.provider_id = event.provider_id;
-    if (event.stage === "streaming") existing.is_streaming = true;
-    if (event.status_code > 0) existing.status_code = event.status_code;
-    // Same propagation as the trace_id branch above: keep the
-    // inflight placeholder in sync with the stage event so
-    // renderLogRow has accurate data before the terminal `row`
-    // event arrives (see HALLAZGO 1 + NUEVO BUG A).
-    if (typeof event.elapsed_ms === "number") (existing as any).total_ms = event.elapsed_ms;
-    if (event.connect_ms != null) existing.connect_ms = event.connect_ms;
-    if (event.ttft_ms != null) existing.ttft_ms = event.ttft_ms;
-    if (event.error) existing.error_message = event.error;
-    if (event.stop_reason) (existing as any).stop_reason = event.stop_reason;
-    if (event.compression_savings_pct != null) (existing as any).compression_savings_pct = event.compression_savings_pct;
-    if (event.compression_techniques) (existing as any).compression_techniques = event.compression_techniques;
-    if (event.stage === "completed" || event.stage === "failed" || event.stage === "cancelled") {
-      existing.is_streaming = false;
-      (existing as any).stream_complete = true;
-    }
-  }
-  if (state.logs.followTail) state.logs.page = 1;
-  scheduleLogsViewUpdate();
-}
-
-// Mirror the stage event into the two stage maps keyed by
-// `trace_id` (primary) and `request_id` (fallback for events
-// with an empty `trace_id`). Centralized so callers can't forget
-// to update one of the two.
-function setStage(event: StageEvent, requestId: string): boolean {
-  const traceId = event.trace_id || "";
-  // Terminal events ("completed" / "failed" / "cancelled") are sticky — a late
-  // non-terminal event (e.g. a reordered "streaming" broadcast, or a "connecting"
-  // arriving after a synthesized "cancelled" from the reaper) must not clobber a
-  // terminal that's already in the map.
-  const isTerminal = (s: string): boolean =>
-    s === "completed" || s === "failed" || s === "cancelled";
-  const stageRank = (s: string): number => {
-    switch (s) {
-      case "started": return 1;
-      case "connecting": return 2;
-      case "waiting_ttft": return 3;
-      case "streaming": return 4;
-      case "completed":
-      case "failed":
-      case "cancelled":
-        return 5;
-      default:
-        return 0;
-    }
-  };
-  const isOlderNonTerminal = (incoming: StageEvent, current: StageEvent): boolean => {
-    if (isTerminal(incoming.stage)) return false;
-    const incomingElapsed = typeof incoming.elapsed_ms === "number" ? incoming.elapsed_ms : -1;
-    const currentElapsed = typeof current.elapsed_ms === "number" ? current.elapsed_ms : -1;
-    if (incomingElapsed < currentElapsed) return true;
-    if (incomingElapsed > currentElapsed) return false;
-
-    const incomingTime = Date.parse(incoming.timestamp || "") || 0;
-    const currentTime = Date.parse(current.timestamp || "") || 0;
-    if (incomingTime < currentTime) return true;
-    if (incomingTime > currentTime) return false;
-
-    return stageRank(incoming.stage) < stageRank(current.stage);
-  };
-  const map = traceId ? state.logs.stagesByTraceId : state.logs.stagesByRequestId;
-  const key = traceId || requestId;
-  const existing = map.get(key);
-  if (existing && isTerminal(existing.stage) && !isTerminal(event.stage)) {
-    return false;
-  }
-  if (existing && isOlderNonTerminal(event, existing)) {
-    return false;
-  }
-  map.set(key, event);
-  return true;
-}
-
-// Synthesize a terminal stage event from a finalized usage row
-// when the backend's terminal event was missed (lagged subscriber,
-// resync, history, or recording=OFF). Only emits when the
-// currently-stored stage is still non-terminal.
-function synthesizeTerminalEvent(row: RecentUsageRow): void {
-  if (!row.request_id) return;
-  if (row.status_code <= 0) return;
-  // Look up the currently-stored stage for this attempt.
-  const existingStage: StageEvent | undefined = row.trace_id
-    ? state.logs.stagesByTraceId.get(row.trace_id)
-    : state.logs.stagesByRequestId.get(row.request_id);
-  const existingIsTerminal: boolean = !!existingStage &&
-    (existingStage.stage === "completed" || existingStage.stage === "failed");
-  if (existingIsTerminal) return;
-  // If error_message is set, the request actually failed regardless of
-  // status_code. This covers edge cases where the backend recorded a
-  // partial 2xx status (e.g. timeout after headers received) but the
-  // request didn't actually complete.
-  const hasError = !!(row.error_message && row.error_message.length > 0);
-  const synth: StageEvent = {
-    request_id: row.request_id,
-    stage: (row.status_code >= 400 || hasError) ? "failed" : "completed",
-    elapsed_ms: row.total_ms || 0,
-    status_code: row.status_code,
-    timestamp: row.created_at || new Date().toISOString(),
-    trace_id: row.trace_id,
-    provider_id: row.provider_id,
-    upstream_model_id: row.upstream_model_id,
-    connect_ms: row.connect_ms,
-    ttft_ms: row.ttft_ms,
-    error: row.error_message ?? null,
-    stop_reason: row.stop_reason ?? null,
-    compression_savings_pct: row.compression_savings_pct ?? null,
-    compression_techniques: row.compression_techniques ?? null,
-  };
-  setStage(synth, row.request_id);
-}
-
-// Race-aware fast reaping. When a race winner's row arrives, any
-// sibling inflight placeholders for the same `request_id` (but a
-// different `trace_id`) that are still in a non-terminal stage are
-// race losers whose terminal "cancelled" event was lost (broadcast
-// lag) or whose task was aborted before recording. Synthesize a
-// terminal "cancelled" so they don't linger as ghosts. Safe: once a
-// winner is found every sibling is a loser; a later real "cancelled"
-// event or `row` just updates / cleans up the placeholder.
-function reapRaceLosers(winnerRow: RecentUsageRow): void {
-  const rid = winnerRow.request_id;
-  if (!rid) return;
-  const isTerminal = (s: string | undefined): boolean =>
-    !!s && (s === "completed" || s === "failed" || s === "cancelled");
-  for (const [tid, placeholder] of state.logs.inflightByTraceId) {
-    if (tid === winnerRow.trace_id) continue;
-    if (placeholder.request_id !== rid) continue;
-    const stage = state.logs.stagesByTraceId.get(tid);
-    if (stage && isTerminal(stage.stage)) continue;
-    const synth: StageEvent = {
-      request_id: rid,
-      trace_id: tid,
-      provider_id: placeholder.provider_id,
-      upstream_model_id: placeholder.upstream_model_id,
-      stage: "cancelled",
-      elapsed_ms: 0,
-      connect_ms: null,
-      ttft_ms: null,
-      status_code: 499,
-      error: "race lost",
-      stop_reason: null,
-      compression_savings_pct: null,
-      compression_techniques: null,
-      timestamp: new Date().toISOString(),
-    };
-    setStage(synth, rid);
-  }
-}
-
-// Stale inflight reaper (fallback). Scans inflight placeholders whose
-// stage is still non-terminal and whose `created_at` is older than the
-// threshold (well beyond any upstream timeout / watchdog). These are
-// ghosts left by a lost terminal event AND a dropped/missing usage row
-// (e.g. broadcast lag where resync brought no row because the row was
-// never written). Synthesize a terminal "cancelled" so the entry stops
-// ticking and is visually resolved. Conservative threshold to avoid
-// reaping genuinely slow in-flight requests.
-const STALE_INFLIGHT_MS = 120_000;
-function reapStaleInflight(): void {
-  const now = Date.now();
-  const isTerminal = (s: string | undefined): boolean =>
-    !!s && (s === "completed" || s === "failed" || s === "cancelled");
-
-  // Reconcile and prune finalized items that are present in state.logs.rows
-  const finalizedTraceIds = new Set<string>();
-  const finalizedRequestIds = new Set<string>();
-  for (const r of state.logs.rows) {
-    if (r.trace_id) finalizedTraceIds.add(r.trace_id);
-    if (r.request_id) finalizedRequestIds.add(r.request_id);
-  }
-
-  const scan = (map: Map<string, RecentUsageRow>, byTrace: boolean): void => {
-    for (const [key, placeholder] of map) {
-      // Check if it's already in the finalized list
-      const isFinalized = byTrace
-        ? (placeholder.trace_id && finalizedTraceIds.has(placeholder.trace_id))
-        : (placeholder.request_id && finalizedRequestIds.has(placeholder.request_id));
-
-      if (isFinalized) {
-        map.delete(key);
-        continue;
-      }
-
-      const stage = byTrace
-        ? state.logs.stagesByTraceId.get(key)
-        : state.logs.stagesByRequestId.get(key);
-      const isFinished = stage && isTerminal(stage.stage);
-      const t = Date.parse(placeholder.created_at || "");
-
-      if (isFinished) {
-        // If it's already terminal (but has no finalized DB row yet), prune it after 10 seconds
-        if (isFinite(t) && now - t > 10_000) {
-          map.delete(key);
-        }
-        continue;
-      }
-
-      if (!isFinite(t) || now - t < STALE_INFLIGHT_MS) continue;
-
-      const synth: StageEvent = {
-        request_id: placeholder.request_id,
-        trace_id: byTrace ? key : "",
-        provider_id: placeholder.provider_id,
-        upstream_model_id: placeholder.upstream_model_id,
-        stage: "cancelled",
-        elapsed_ms: 0,
-        connect_ms: null,
-        ttft_ms: null,
-        status_code: 499,
-        error: "cancelled (stale)",
-        stop_reason: null,
-        compression_savings_pct: null,
-        compression_techniques: null,
-        timestamp: new Date().toISOString(),
-      };
-      setStage(synth, placeholder.request_id);
-      // Bug fix: also update the placeholder's status_code and
-      // error_message so the table and modal show consistent state.
-      placeholder.status_code = 499;
-      placeholder.error_message = "Stream stalled — no response from upstream for 120s. The request was cancelled by the stale-inflight reaper.";
-      // Compute total_ms from created_at so the latency cell freezes
-      const startedAt = Date.parse(placeholder.created_at || "");
-      if (isFinite(startedAt)) {
-        (placeholder as { total_ms: number }).total_ms = Math.max(0, Date.now() - startedAt);
-      }
-      if (state.currentView?.name === "logs") {
-        updateOpenLogDetail(placeholder as unknown as LogDetailLog);
-      }
-    }
-  };
-  scan(state.logs.inflightByTraceId, true);
-  scan(state.logs.inflightByRequestId, false);
-
-  scheduleLogsViewUpdate();
-}
-
-export function startStaleInflightReaper(): void {
-  if (state.logs.staleReaperHandle) return;
-  state.logs.staleReaperHandle = setInterval(reapStaleInflight, 5_000);
-}
-
-export function stopStaleInflightReaper(): void {
-  if (state.logs.staleReaperHandle) {
-    clearInterval(state.logs.staleReaperHandle);
-    state.logs.staleReaperHandle = null;
-  }
-}
-
-// H7 fix: when the server reports it lost us on a
-// broadcast channel, it sends a `{"type":"resync",
-// "since_id":N}` envelope. We then fetch any rows newer than
-// N from the `usage/recent` endpoint and merge them in.
-// Without this, a slow dashboard would permanently lose the
-// rows it failed to consume in time.
-async function resyncUsageRows(sinceId: number): Promise<void> {
-  try {
-    const rows = await api(
-      `/usage/recent?since_id=${encodeURIComponent(String(sinceId))}&limit=500`,
-    ) as RecentUsageRow[] | null;
-    if (Array.isArray(rows) && rows.length > 0) {
-      state.logs.rows = mergeLogsByDescId(state.logs.rows, rows);
-      for (const r of rows) {
-        if (r && typeof r.id === "number") {
-          state.logs.rowById.set(r.id, r);
-        }
-        // Clear inflight placeholders for resynced rows.
-        if (r.request_id && state.logs.inflightByRequestId.has(r.request_id)) {
-          state.logs.inflightByRequestId.delete(r.request_id);
-        }
-        if (r.trace_id && state.logs.inflightByTraceId.has(r.trace_id)) {
-          state.logs.inflightByTraceId.delete(r.trace_id);
-        }
-        // Synthesize terminal events for finished rows so the
-        // ticker doesn't keep growing on resynced data.
-        synthesizeTerminalEvent(r);
-      }
-      if (state.logs.followTail) state.logs.page = 1;
-      scheduleLogsViewUpdate();
-    }
-  } catch (e: unknown) {
-    const err = e instanceof Error ? e : null;
-    const msg = err ? err.message : String(e);
-    showToast(`Failed to refetch missed log rows: ${msg}`, "error");
-  }
-}
-
-function isStageEventShape(x: unknown): x is StageEvent {
-  if (!x || typeof x !== "object") return false;
-  const o = x as Record<string, unknown>;
-  return typeof o["request_id"] === "string" && typeof o["stage"] === "string";
-}
-
-function isRecentUsageRowShape(x: unknown): x is RecentUsageRow {
-  if (!x || typeof x !== "object") return false;
-  const o = x as Record<string, unknown>;
-  // The recent-usage row always has a `request_id` and a
-  // `created_at`. Other fields can be present or absent, but
-  // these two are stable across the long-poll and detail paths.
-  return typeof o["request_id"] === "string" && typeof o["created_at"] === "string";
-}
-
-function handleLogsMessage(raw: MessageEvent): void {
-  let msg: WsEnvelope;
-  try {
-    const parsed: unknown = JSON.parse(raw.data);
-    msg = parsed as WsEnvelope;
-  } catch (_e) {
-    showToast("Live Logs received an invalid WebSocket message.", "error");
-    return;
-  }
-  // CRASH FIX: only call requestUpdate() if the logs view is the
-  // currently mounted view. During boot, the WS opens (via
-  // initNotificationsStore in the sidebar) BEFORE the router has
-  // mounted any view into #main. If a WS message arrives during
-  // this window and we call requestUpdate(), lit-html tries to
-  // render the logs template (which uses `repeat`) into a container
-  // that either doesn't exist yet or belongs to a different view —
-  // causing "can't access property 'data', this._$AA.nextSibling
-  // is null" (a lit-html internal crash).
-  //
-  // We still update `state.logs.*` (so the data is fresh when the
-  // user navigates to logs), but we skip the requestUpdate() call.
-  const isLogsViewActive: boolean = state.currentView?.name === "logs";
-  if (msg.type === "history") {
-    const rawRows = Array.isArray(msg.rows) ? msg.rows : [];
-    const rows: RecentUsageRow[] = rawRows.filter(isRecentUsageRowShape);
-    state.logs.rows = mergeLogsByDescId(state.logs.rows, rows);
-    // Historical rows are by definition finished (they came from
-    // the DB, not a live stream). Synthesize terminal events so
-    // the latency ticker doesn't keep ticking on them.
-    for (const r of rows) {
-      synthesizeTerminalEvent(r);
-    }
-    state.logs.page = 1; state.logs.followTail = true;
-    scheduleLogsViewUpdate();
-  } else if (msg.type === "row") {
-    const candidate = msg.data ?? msg.row ?? msg;
-    if (!isRecentUsageRowShape(candidate)) return;
-    const row = candidate;
-    state.logs.rows = mergeLogsByDescId(state.logs.rows, [row]);
-    if (row.request_id && state.logs.inflightByRequestId.has(row.request_id)) {
-      state.logs.inflightByRequestId.delete(row.request_id);
-    }
-    if (row.trace_id && state.logs.inflightByTraceId.has(row.trace_id)) {
-      // Drop the per-attempt inflight placeholder once the row
-      // arrives. The row carries the same `trace_id` as the
-      // placeholder (set by `handleStageEvent`), so this lookup
-      // is well-defined even when retries are active.
-      state.logs.inflightByTraceId.delete(row.trace_id);
-    }
-    if (row.is_streaming && !row.stream_complete) {
-      const tokensMap = state.logs.liveTokens as unknown as Map<string, string>;
-      tokensMap.set(row.request_id, tokensMap.get(row.request_id) || "");
-    }
-    // Synthesize a terminal stage event if the backend's
-    // terminal event was missed (lagged subscriber, recording=OFF,
-    // or streaming without [DONE]).
-    synthesizeTerminalEvent(row);
-    // Race-aware fast reaping: when a race winner's row arrives,
-    // any sibling inflight placeholders for the same request_id
-    // (different trace_id) still in a non-terminal stage are race
-    // losers whose terminal "cancelled" event was lost. Synthesize
-    // "cancelled" so they don't linger as ghosts stuck at
-    // "connecting"/"started".
-    if (row.race_total && row.race_total > 1) {
-      reapRaceLosers(row);
-    }
-    if (state.logs.followTail) state.logs.page = 1;
-    scheduleLogsViewUpdate();
-    if (isLogsViewActive) updateOpenLogDetail(row as unknown as LogDetailLog);
-  } else if (msg.type === "stage") {
-    const candidate = msg.data ?? msg;
-    if (isStageEventShape(candidate)) {
-      handleStageEvent(candidate);
-    }
-  } else if (msg.type === "error") {
-    showToast(msg.message || "Live Logs WebSocket error", "error");
-  } else if (msg.type === "lag_warning") {
-    // H7 fix: the server detected a broadcast `Lagged(_)` on
-    // either the row, stage, or notifications channel. A `resync`
-    // envelope follows immediately for row/stage lags (handled
-    // below). Show a persistent banner so the operator knows the
-    // displayed log is not a complete picture; the resync fetch
-    // will fill in the gap in the background.
-    //
-    // F2: a `notifications` lag does NOT carry a `resync` follow-up
-    // — the notifications tray (F4) refetches via
-    // `GET /admin/api/notifications` (notifications are persisted,
-    // so the REST list is the source of truth). We show a different
-    // toast so the operator knows it's the tray that lagged, not
-    // the live-logs feed.
-    const skipped = Number(msg.skipped || 0);
-    if (msg.channel === "notifications") {
-      showToast(
-        `Notifications feed lagged; ${skipped} event(s) skipped. ` +
-          `Refetching the tray…`,
-        "warning",
-      );
-    } else {
-      showToast(
-        `Live Logs broadcast lagged; ${skipped} event(s) skipped. ` +
-          `Refetching to catch up…`,
-        "warning",
-      );
-    }
-  } else if (msg.type === "resync") {
-    // H7 fix: the server lost us on a broadcast channel and
-    // is asking the dashboard to fetch any rows newer than
-    // `since_id` to recover. This is the only path that
-    // prevents permanent state loss for slow dashboards.
-    const sinceId = Number(msg.since_id || 0);
-    void resyncUsageRows(sinceId);
-  } else if (msg.type === "notification") {
-    // F2: notifications (model_new / model_gone / model_auto_activated /
-    // system) are surfaced to the dashboard tray, NOT to the logs view.
-    // The logs handler intentionally does nothing here — the envelope
-    // is dispatched to ws-bus subscribers (notifications tray F4, live-
-    // store F5) by `state/ws.ts` after this handler returns. Listed
-    // explicitly so the discriminated union on `msg.type` is exhaustive
-    // and a future `else if (msg.type === ...)` doesn't accidentally
-    // swallow notifications.
-  }
-}
-
-async function openLogDetail(
-  id: string,
-  requestId: string,
-  traceId?: string,
-  clickedRow?: RenderableLogRow,
-): Promise<void> {
-  const gen: number = bumpOpenLogDetailGeneration();
-  const numericId = Number(id);
-  const isSyntheticId: boolean = isSyntheticLogId(numericId);
-    
-  let row: RecentUsageRow | undefined;
-  if (clickedRow) {
-    const exactFinalRow = clickedRow.trace_id
-      ? state.logs.rows.find((r) => r.request_id === requestId && r.trace_id === clickedRow.trace_id)
-      : state.logs.rows.find((r) => r.request_id === requestId && !r.trace_id);
-    row = exactFinalRow || clickedRow;
-  }
-
-  // 1. Exact DB id match
-  if (!row && Number.isFinite(numericId) && numericId > 0 && !isSyntheticId) {
-    row = state.logs.rowById.get(numericId) || state.logs.rows.find((r) => Number(r.id) === numericId);
-  }
-  // 2. Exact trace_id match
-  if (!row && traceId) {
-    row = state.logs.rows.find((r) => r.request_id === requestId && r.trace_id === traceId)
-       || state.logs.inflightByTraceId.get(traceId);
-  }
-  // 3. Fallback request_id match
-  if (!row) {
-    if (isSyntheticId || numericId === 0) {
-      row = state.logs.inflightByRequestId.get(requestId);
-    }
-    if (!row) {
-      row = state.logs.rows.find((r) => r.request_id === requestId && (!r.trace_id))
-         || state.logs.rows.find((r) => r.request_id === requestId)
-         || state.logs.inflightByRequestId.get(requestId);
-    }
-  }
-  // 4. Ghost stub
-  if (!row) {
-    row = {
-      id: numericId || 0, request_id: requestId, provider_id: "", upstream_model_id: "",
-      created_at: new Date().toISOString(), status_code: 0, total_ms: 0,
-      prompt_tokens: null, completion_tokens: null, cost_usd: 0,
-      is_streaming: false, stream_complete: false, race_lost: false,
-      trace_id: traceId || "", connect_ms: null, ttft_ms: null,
-      request_body_json: null, response_body_json: null,
-      request_headers: null, response_headers: null,
-      race_total: null, race_attempts: null,
-      error_message: null,
-      stop_reason: null,
-      compression_savings_pct: null,
-      compression_techniques: null,
-      client_response: false,
-      prompt_tokens_estimated: false,
-      completion_tokens_estimated: false,
-    };
-  }
-
-  const inflight: RecentUsageRow | undefined =
-    (traceId ? state.logs.inflightByTraceId.get(traceId) : undefined) ||
-    (requestId ? state.logs.inflightByRequestId.get(requestId) : undefined);
-    
-  const isInflight: boolean = !!inflight || isSyntheticId || isInflightLogRow(row as RenderableLogRow);
-  const finalRow = row;
-  // Do not merge inflight/ghost rows into `state.logs.rows` — they
-  // have id 0 / synthetic ids and would duplicate the inflight
-  // placeholder already rendered from the inflight maps.
-  if (!isInflight && !state.logs.rows.find((r) => r.id === finalRow.id)) {
-    state.logs.rows = mergeLogsByDescId(state.logs.rows, [finalRow]);
-  }
-  // CRITICAL FIX: do NOT set `state.logs.selectedRow` here. The previous
-  // code (`state.logs.selectedRow = { ...row }`) ran BEFORE the async
-  // /usage/detail fetch and BEFORE `showLogDetail`. This created a window
-  // (the entire fetch duration) where `selectedRow` pointed to the NEW
-  // clicked row's non-enriched snapshot, while the modal still showed
-  // the OLD row and `pinnedRequestId` still pointed to the OLD row.
-  //
-  // Any WS event for the OLD pinned row during this window would pass
-  // the pinned identity check in `updateOpenLogDetail`, but `sel`
-  // (= `selectedRow`) would be the NEW row's snapshot (doesn't match
-  // the OLD pinned identity). The old fallback `base = row` would then
-  // CLOBBER the modal with the non-enriched WS event data.
-  //
-  // The fix: `selectedRow` is set ONLY by `showLogDetail` (which also
-  // sets the pinned identity) and by `updateOpenLogDetail` (which
-  // preserves the pinned identity). No other code path may set it.
-  // This ensures `selectedRow` and `pinnedRequestId`/`pinnedTraceId`
-  // are ALWAYS in sync.
-
-  if (isInflight) {
-    // SNAPSHOT: work on a copy so we don't mutate the LIVE inflight
-    // placeholder (which is rendered in the table and may be updated by
-    // future stage events). The synthesized error_message below is for
-    // the MODAL only — it should not leak back into the table row.
-    row = { ...row };
-    const stage: StageEvent | undefined =
-      (traceId ? state.logs.stagesByTraceId.get(traceId) : undefined) ||
-      (requestId ? state.logs.stagesByRequestId.get(requestId) : undefined);
-    const terminal: boolean =
-      !!stage &&
-      (stage.stage === "cancelled" || stage.stage === "failed" || stage.stage === "completed");
-    if (!row.error_message) {
-      if (terminal) {
-        row.error_message = stage && stage.stage === "cancelled"
-          ? "Cancelled (race loser) — no recorded detail."
-          : "Request ended without a recorded detail row.";
-      } else {
-        // Improve the "still in progress" message: if the row is
-        // older than 30s with no new stage events, surface a more
-        // actionable message so the operator knows the stream is
-        // likely stalled (not just slow). The proxy will record a
-        // failure row after the idle-chunk timeout (default 120s).
-        const ageMs: number = row.created_at
-          ? Date.now() - new Date(row.created_at).getTime()
-          : 0;
-        const stageName: string = stage?.stage ?? "unknown";
-        const elapsedMs: number | undefined = stage?.elapsed_ms;
-        if (ageMs > 30_000) {
-          const ageSec: number = Math.round(ageMs / 1000);
-          row.error_message = `Stream appears stalled — last stage "${stageName}" ${ageSec}s ago. ` +
-            `The proxy will record a failure row after the idle-chunk timeout (default 120s). ` +
-            `Use "Copy debug bundle" to capture the current state for debugging.`;
-        } else {
-          row.error_message = `Request in progress — current stage: "${stageName}"` +
-            (elapsedMs != null ? ` (${elapsedMs}ms elapsed)` : "") +
-            `. Detail will be available when the stream completes.`;
-        }
-      }
-    }
-    showLogDetail(row as unknown as LogDetailLog);
-    return;
-  }
-
-  // Always fetch detail from the server for finalized rows to avoid table dependencies
-  // and guarantee we show the exact clicked attempt. Skip only for synthetic / in-flight IDs.
-  if (Number.isFinite(numericId)
-      && numericId > 0
-      // If traceId is not set, we can fall back to id, but if numericId is 0 or synthetic, skip.
-      && !isSyntheticId) {
-    try {
-      const queryParam = traceId
-        ? `trace_id=${encodeURIComponent(traceId)}`
-        : `id=${encodeURIComponent(id)}`;
-      const detail = await api(`/usage/detail?${queryParam}`) as { row?: RecentUsageRow; detail?: RecentUsageRow } | RecentUsageRow | null;
-      // RACE-CONDITION GUARD: if the user clicked another row while
-      // this fetch was in flight, `gen` is no longer current. Discard
-      // the result — the user is now looking at a different row's
-      // modal, and applying this fetch's data would either overwrite
-      // the wrong modal or open a stale modal on top of the current
-      // one. This is the second half of the generation-counter fix
-      // (the first half is `bumpOpenLogDetailGeneration` at the top).
-      if (!isCurrentOpenLogDetailGeneration(gen)) return;
-      const fetched = (detail && typeof detail === "object" && ("row" in detail || "detail" in detail))
-        ? (detail.row ?? detail.detail ?? null)
-        : (detail as RecentUsageRow | null);
-      if (fetched) {
-        row = fetched;
-        state.logs.rowById.set(Number(row.id || id), row);
-      }
-    } catch (e: unknown) {
-      // RACE-CONDITION GUARD: same check on the error path — if the
-      // user navigated away, don't show a stale toast.
-      if (!isCurrentOpenLogDetailGeneration(gen)) return;
-      // Non-fatal: render with whatever we have — the modal will
-      // show "not recorded" for missing fields, which is truthful.
-      showToast(`Request detail unavailable: ${e instanceof Error ? e.message : String(e)}`, "error");
-    }
-  }
-  // RACE-CONDITION GUARD: final check before opening the modal. If the
-  // user clicked another row during the fetch (or during the inflight
-  // branch above), don't open this modal — the user's latest click
-  // should win.
-  if (!isCurrentOpenLogDetailGeneration(gen)) return;
-  // Render the modal with the best data we have (possibly enriched
-  // by the detail call above).
-  showLogDetail(row as unknown as LogDetailLog);
-}
-if (typeof window !== "undefined") {
-  const w = window as unknown as { openLogDetail?: typeof openLogDetail };
-  w.openLogDetail = openLogDetail;
-}
-
-// ---- Mount -------------------------------------------------------------
-
 export async function mountLogs(): Promise<(() => void) | void> {
   const main = document.getElementById("main");
   if (!main) return;
 
-  // Reset view-local UI state on every mount. The router calls the
-  // previous view's cleanup (which stops the WS, ticker, and reaper)
-  // before mounting this one, so we re-initialise everything here.
   columnsMenuOpen = false;
 
-  // First-mount of this view: restore the user's column-visibility
-  // choice from localStorage, falling back to "all visible". Done
-  // here (not at module load) so it only runs in the browser, and
-  // only when the user actually navigates to /logs.
   if (!state.logs.visibleColumns) {
     state.logs.visibleColumns = loadVisibleColumns();
   }
-  if (!state.logs.ws || state.logs.ws.readyState !== WebSocket.OPEN) {
-    state.logs.rows = [];
-    state.logs.rowById = new Map();
-    state.logs.lastSeenId = 0;
-    state.logs.liveTokens = new Map();
-    state.logs.reconnectAttempt = 0;
-    state.logs.page = 1;
-    state.logs.followTail = true;
-    // Clear stale inflight/stage state from previous sessions so
-    // old ghost entries (left by aborted race losers before the
-    // grace-period fix) don't survive across view navigations.
-    state.logs.inflightByTraceId = new Map();
-    state.logs.inflightByRequestId = new Map();
-    state.logs.stagesByTraceId = new Map();
-    state.logs.stagesByRequestId = new Map();
-  }
+  
+  state.logs.page = 1;
+  state.logs.followTail = true;
 
-  // Mount the lit-html view. `mountView` registers the render
-  // function with the reactive system so `requestUpdate()` (called
-  // from the WS handler, pagination handlers, etc.) triggers a
-  // microtask-coalesced re-render.
   const cleanupReactive = mountView(main, renderLogsView);
 
-  // Wire the document-level outside-click handler for the columns
-  // menu. Bound once per session; the handler reads `columnsMenuOpen`
-  // (module-local) so it stays in sync with the template. Clicks
-  // inside the `.columns-menu-wrapper` are left alone so the user
-  // can interact with the checkboxes without closing the menu.
   const onDocClickForMenu = (ev: Event): void => {
     if (!columnsMenuOpen) return;
     const target = ev.target;
@@ -1463,70 +278,16 @@ export async function mountLogs(): Promise<(() => void) | void> {
   }
 
   fetchRecordingState();
-  // CRITICAL: register the message handler IMMEDIATELY so stage
-  // events arriving via WS are processed into inflight placeholders
-  // even before the first render completes. The 250ms render interval
-  // picks up the inflight data on the next tick.
-  // The handler is also registered at module load (see bottom of file)
-  // so stage events arriving during boot (before mountLogs runs) are
-  // captured.
   setMessageHandler(handleLogsMessage);
   connectLogsWebSocket();
-  // CRASH FIX: do NOT start the latency ticker. The ticker (100ms
-  // interval) modifies DOM nodes directly (sub.textContent = ...)
-  // which conflicts with lit-html's diffing. When the 250ms render
-  // interval re-renders the template, lit-html finds DOM nodes in a
-  // state that doesn't match its internal template tree → crash
-  // 'nextSibling is null'. The live latency is now computed in the
-  // render function itself (renderLogRow reads stage.timestamp and
-  // computes elapsed = Date.now() - timestamp on each render). The
-  // 250ms render interval refreshes it at 4Hz — slightly less smooth
-  // than the ticker's 10Hz but without the DOM conflict.
-  // startLogLatencyTicker();  // DISABLED — see comment above
-  startStaleInflightReaper();
-
-  // CRASH FIX: render on a fixed 250ms interval instead of calling
-  // requestUpdate() from WS message handlers. The previous approach
-  // (requestUpdate on every WS message) crashed lit-html because:
-  // 1. WS messages arrive asynchronously during boot, before the
-  //    view's DOM is fully initialized
-  // 2. The ticker modifies DOM nodes directly (textContent), which
-  //    can corrupt lit-html's internal state when requestUpdate()
-  //    tries to diff against the modified DOM
-  // 3. Rapid requestUpdate() calls (multiple per second under load)
-  //    overwhelm lit-html's microtask coalescing
-  //
-  // The interval approach decouples data updates (WS handlers modify
-  // state.logs.*) from rendering (the interval calls requestUpdate()
-  // at a controlled 4Hz cadence). This is the same pattern the
-  // live-store uses for the home dashboard.
-  let renderInterval: ReturnType<typeof setInterval> | null = setInterval(() => {
-    requestUpdate();
-  }, 250);
+  
+  clockStore.subscribe(requestUpdate);
 
   return () => {
-    if (renderInterval) {
-      clearInterval(renderInterval);
-      renderInterval = null;
-    }
-    // Do NOT clear the message handler on unmount. The handler only
-    // updates state.logs.* (no requestUpdate, no DOM mutation) so it's
-    // safe to keep running. This ensures stage events arriving while
-    // the user is on another view are still processed — inflight
-    // placeholders are created so when the user navigates back to logs,
-    // they see the live requests immediately. The 250ms render interval
-    // (which only runs while logs is mounted) picks up the data.
-    // setMessageHandler(null);  // intentionally NOT called
     disconnectLogsWebSocket();
-    // stopLogLatencyTicker();  // not started — see comment in mount body
-    stopStaleInflightReaper();
+    clockStore.unsubscribe(requestUpdate);
     cleanupReactive();
   };
 }
 
-// Register the WS message handler at module load time so stage events
-// arriving during boot (before the user navigates to the logs view) are
-// captured into inflight placeholders. The handler is safe to call at
-// any time — it only updates state.logs.* data, never touches the DOM
-// (rendering is done by the 250ms render interval in mountLogs).
 setMessageHandler(handleLogsMessage);
