@@ -3729,7 +3729,7 @@ async fn run_test_for_model(
             request_id: RequestId::new(),
             trace_id: TraceId::new(),
             combo_id: ComboId(0),
-            openai_request: Arc::new(responses_req),
+            openai_request: responses_req,
             client_disconnected,
             stream_sink: None,
             api_key_id: None,

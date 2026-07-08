@@ -328,7 +328,9 @@ async fn dispatch_audio_request(
     upstream_model_id: &str,
     body: ParsedAudioBody,
 ) -> Result<openproxy_core::upstream::UpstreamResponse, ApiError> {
-    let (auth_name, auth_value) = adapter.build_auth_header(api_key);
+    let Some((auth_name, auth_value)) = adapter.build_auth_header(api_key) else {
+        return Err(ApiError(CoreError::Validation("Invalid API Key".into())));
+    };
 
     let boundary = format!("----WebKitFormBoundary{}", uuid::Uuid::new_v4().simple());
     let mut payload = Vec::new();

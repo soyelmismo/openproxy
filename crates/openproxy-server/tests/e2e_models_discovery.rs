@@ -169,8 +169,8 @@ impl ProviderAdapter for TestMockAdapter {
         format!("{}/chat/completions", self.config.base_url)
     }
 
-    fn build_auth_header(&self, api_key: &str) -> (String, String) {
-        ("Authorization".into(), format!("Bearer {api_key}"))
+    fn build_auth_header(&self, api_key: &str) -> Option<(String, String)> {
+        Some(("Authorization".into(), format!("Bearer {api_key}")))
     }
 
     fn build_headers(
@@ -179,11 +179,11 @@ impl ProviderAdapter for TestMockAdapter {
         _target_format: TargetFormat,
         _model: &ModelId,
     ) -> Vec<(String, String)> {
-        let (name, value) = self.build_auth_header(api_key);
-        vec![
-            (name, value),
-            ("Content-Type".to_string(), "application/json".to_string()),
-        ]
+        let mut h = vec![("Content-Type".to_string(), "application/json".to_string())];
+        if let Some((name, value)) = self.build_auth_header(api_key) {
+            h.push((name, value));
+        }
+        h
     }
 
     fn models_url(&self) -> Option<String> {

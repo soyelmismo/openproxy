@@ -56,8 +56,8 @@ impl ProviderAdapter for OpenRouterAdapter {
         format!("{}/chat/completions", self.config.base_url)
     }
 
-    fn build_auth_header(&self, api_key: &str) -> (String, String) {
-        ("Authorization".into(), format!("Bearer {}", api_key))
+    fn build_auth_header(&self, api_key: &str) -> Option<(String, String)> {
+        Some(("Authorization".into(), format!("Bearer {}", api_key)))
     }
 
     fn build_headers(
@@ -66,9 +66,10 @@ impl ProviderAdapter for OpenRouterAdapter {
         _target_format: TargetFormat,
         _model: &ModelId,
     ) -> Vec<(String, String)> {
-        let (name, value) = self.build_auth_header(api_key);
         let mut headers = Vec::with_capacity(2 + self.config.extra_headers.len());
-        headers.push((name, value));
+        if let Some((name, value)) = self.build_auth_header(api_key) {
+            headers.push((name, value));
+        }
         headers.push(("Content-Type".into(), "application/json".into()));
         for (k, v) in &self.config.extra_headers {
             headers.push((k.clone(), v.clone()));

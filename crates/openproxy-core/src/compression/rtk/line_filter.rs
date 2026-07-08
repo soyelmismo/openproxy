@@ -582,7 +582,7 @@ fn strip_ansi(text: &str) -> String {
     // ASCII bytes are always single-byte in UTF-8, so removing them never
     // splits a multi-byte sequence. The remaining bytes are a valid UTF-8
     // subsequence of the original valid UTF-8 string.
-    unsafe { String::from_utf8_unchecked(out) }
+    String::from_utf8(out).unwrap_or_default()
 }
 
 fn truncate_unicode_safe(s: &str, max_chars: usize) -> String {

@@ -109,8 +109,8 @@ impl ProviderAdapter for CodexAdapter {
         format!("{}/responses", self.config.base_url)
     }
 
-    fn build_auth_header(&self, api_key: &str) -> (String, String) {
-        ("Authorization".into(), format!("Bearer {}", api_key))
+    fn build_auth_header(&self, api_key: &str) -> Option<(String, String)> {
+        Some(("Authorization".into(), format!("Bearer {}", api_key)))
     }
 
     fn build_headers(
@@ -119,9 +119,7 @@ impl ProviderAdapter for CodexAdapter {
         _target_format: TargetFormat,
         _model: &ModelId,
     ) -> Vec<(String, String)> {
-        let (name, value) = self.build_auth_header(api_key);
-        vec![
-            (name, value),
+        let mut headers = vec![
             ("Content-Type".into(), "application/json".into()),
             ("Origin".into(), "https://chatgpt.com".into()),
             ("originator".into(), "codex_cli_rs".into()),
@@ -133,7 +131,11 @@ impl ProviderAdapter for CodexAdapter {
                 "User-Agent".into(),
                 crate::adapters::codex::codex_user_agent(),
             ),
-        ]
+        ];
+        if let Some(auth) = self.build_auth_header(api_key) {
+            headers.push(auth);
+        }
+        headers
     }
 
     fn models_url(&self) -> Option<String> {

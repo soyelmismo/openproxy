@@ -1002,9 +1002,9 @@ impl UpstreamDispatcher {
         .trace_id(trace_id)
         .prompt_tokens_opt(prompt_tokens)
         .completion_tokens_opt(completion_tokens)
-        .request_body_json(Some(Arc::new(
+        .request_body_json(Some(
             serde_json::from_slice(&body_bytes).unwrap_or(serde_json::Value::Null),
-        )))
+        ))
         .response_body_json(Some(response_body_value))
         .request_headers(Some(request_headers_btm))
         .response_headers(response_headers)
@@ -1805,9 +1805,7 @@ impl UpstreamDispatcher {
         // captured (e.g., requests constructed internally without
         // going through the HTTP handler).
         let request_body_json = req.request_body_json.clone().or_else(|| {
-            serde_json::to_value(&*req.openai_request)
-                .ok()
-                .map(Arc::new)
+            serde_json::to_value(&req.openai_request).ok()
         });
         let usage_tuple = match crate::pipeline::usage_tracker::UsageRecordBuilder::new(
             &self.tracker,

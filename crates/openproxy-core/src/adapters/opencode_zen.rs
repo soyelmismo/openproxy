@@ -50,14 +50,8 @@ impl ProviderAdapter for OpenCodeZenAdapter {
         }
     }
 
-    fn build_auth_header(&self, api_key: &str) -> (String, String) {
-        // The default trait impl uses a single auth_type from the config;
-        // for `Mixed` we want the format-specific header, so we always return
-        // the Bearer variant here and let `build_headers` choose per-format.
-        // Callers that need the Anthropic-style `x-api-key` should use
-        // `build_headers` with `target_format = Anthropic` (or override
-        // `build_auth_header` in a derived impl).
-        ("Authorization".into(), format!("Bearer {}", api_key))
+    fn build_auth_header(&self, api_key: &str) -> Option<(String, String)> {
+        Some(("Authorization".into(), format!("Bearer {}", api_key)))
     }
 
     fn build_headers(
@@ -66,7 +60,9 @@ impl ProviderAdapter for OpenCodeZenAdapter {
         target_format: TargetFormat,
         _model: &ModelId,
     ) -> Vec<(String, String)> {
-        let mut headers = Vec::with_capacity(4);
+        let mut headers = vec![
+            ("Content-Type".into(), "application/json".into()),
+        ];
 
         // Only add auth headers if we have an API key.
         if !api_key.is_empty() {
@@ -76,13 +72,14 @@ impl ProviderAdapter for OpenCodeZenAdapter {
                     headers.push(("Anthropic-Version".into(), "2023-06-01".into()));
                 }
                 TargetFormat::Openai | TargetFormat::Gemini => {
-                    headers.push(("Authorization".into(), format!("Bearer {}", api_key)));
+                    if let Some(auth) = self.build_auth_header(api_key) {
+                        headers.push(auth);
+                    }
                 }
                 TargetFormat::Responses => unreachable!("Responses format handled natively"),
             }
         }
 
-        headers.push(("Content-Type".into(), "application/json".into()));
         headers.push(("User-Agent".into(), "openproxy/0.1".into()));
         headers
     }

@@ -96,12 +96,12 @@ impl ProviderAdapter for CustomAdapter {
         }
     }
 
-    fn build_auth_header(&self, api_key: &str) -> (String, String) {
+    fn build_auth_header(&self, api_key: &str) -> Option<(String, String)> {
         match self.config.auth_type {
-            AdapterAuthType::Bearer => ("Authorization".into(), format!("Bearer {}", api_key)),
-            AdapterAuthType::XApiKey => ("x-api-key".into(), api_key.to_string()),
-            AdapterAuthType::GoogApiKey => ("x-goog-api-key".into(), api_key.to_string()),
-            AdapterAuthType::None => (String::new(), String::new()),
+            AdapterAuthType::Bearer => Some(("Authorization".into(), format!("Bearer {}", api_key))),
+            AdapterAuthType::GoogApiKey => Some(("x-goog-api-key".into(), api_key.to_string())),
+            AdapterAuthType::XApiKey => Some(("x-api-key".into(), api_key.to_string())),
+            AdapterAuthType::None => None,
         }
     }
 
@@ -111,10 +111,11 @@ impl ProviderAdapter for CustomAdapter {
         _target_format: TargetFormat,
         _model: &ModelId,
     ) -> Vec<(String, String)> {
-        let (name, value) = self.build_auth_header(api_key);
         let mut headers = Vec::with_capacity(2 + self.config.extra_headers.len());
-        if !name.is_empty() && !api_key.is_empty() {
-            headers.push((name, value));
+        if let Some((name, value)) = self.build_auth_header(api_key) {
+            if !name.is_empty() && !api_key.is_empty() {
+                headers.push((name, value));
+            }
         }
         headers.push(("Content-Type".into(), "application/json".into()));
         for (k, v) in &self.config.extra_headers {

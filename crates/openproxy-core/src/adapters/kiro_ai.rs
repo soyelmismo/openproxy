@@ -382,8 +382,8 @@ impl ProviderAdapter for KiroAdapter {
         crate::executor_kiro::kiro_runtime_url(&region)
     }
 
-    fn build_auth_header(&self, api_key: &str) -> (String, String) {
-        ("Authorization".into(), format!("Bearer {api_key}"))
+    fn build_auth_header(&self, api_key: &str) -> Option<(String, String)> {
+        Some(("Authorization".into(), format!("Bearer {}", api_key)))
     }
 
     fn build_headers(
@@ -392,11 +392,14 @@ impl ProviderAdapter for KiroAdapter {
         _target_format: TargetFormat,
         _model: &ModelId,
     ) -> Vec<(String, String)> {
-        let (name, value) = self.build_auth_header(api_key);
-        vec![
-            (name, value),
+        let mut headers = vec![
             ("Content-Type".into(), "application/json".into()),
-        ]
+            ("x-goog-api-client".into(), "kiro_ai".into()),
+        ];
+        if let Some(auth) = self.build_auth_header(api_key) {
+            headers.push(auth);
+        }
+        headers
     }
 
     fn models_url(&self) -> Option<String> {
@@ -493,7 +496,7 @@ impl ProviderAdapter for KiroAdapter {
         // Let's check `execute_kiro` signature.
         // Assuming it's `(&Arc<UpstreamClient>, &str, &str, Option<&str>, &OpenAIRequest, ...)`
         // I will just use a cloned request for now or modify `execute_kiro` later.
-        let mut custom_req = (*req.openai_request).clone();
+        let mut custom_req = req.openai_request.clone();
         custom_req.model = resolved_target.model.model_id.as_str().to_string();
 
         Some(

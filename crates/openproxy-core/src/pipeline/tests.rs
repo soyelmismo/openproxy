@@ -132,7 +132,7 @@ fn make_request(combo_id: ComboId) -> (PipelineRequest, watch::Sender<bool>) {
         request_id: RequestId::new(),
         trace_id: TraceId::new(),
         combo_id,
-        openai_request: std::sync::Arc::new(OpenAIRequest {
+        openai_request: OpenAIRequest {
             model: "any".into(),
             messages: vec![OpenAIMessage {
                 role: "user".into(),
@@ -152,7 +152,7 @@ fn make_request(combo_id: ComboId) -> (PipelineRequest, watch::Sender<bool>) {
             top_k: None,
             user: None,
             extra: serde_json::Map::new(),
-        }),
+        },
         client_disconnected: dis_rx,
         // Use Discard sink for non-streaming test requests. The
         // pipeline forces stream=true to the upstream, but SSE
@@ -3276,7 +3276,7 @@ async fn streaming_dispatch_uses_upstream_client_end_to_end() {
     //         (we never send `true`, so the watch stays
     //         false for the whole run). -----
     let (mut req, _cancel_tx) = make_request(combo_id);
-    std::sync::Arc::make_mut(&mut req.openai_request).stream = true;
+    req.openai_request.stream = true;
     let (sink_tx, mut sink_rx) = mpsc::channel::<bytes::Bytes>(32);
     req.stream_sink = Some(crate::race_sink::StreamSink::Direct(sink_tx));
 
@@ -3424,7 +3424,7 @@ async fn cancellation_during_streaming_aborts_response_stream() {
     let p = Pipeline::new(conn, cfg);
 
     let (mut req, cancel_tx) = make_request(combo_id);
-    std::sync::Arc::make_mut(&mut req.openai_request).stream = true;
+    req.openai_request.stream = true;
     cancel_tx.send(true).expect("send cancel");
 
     let result = tokio::time::timeout(Duration::from_secs(3), p.run(std::sync::Arc::new(req)))
@@ -3726,7 +3726,7 @@ async fn cancellation_mid_sse_stream_aborts_immediately() {
     let p = Pipeline::new(conn, cfg);
 
     let (mut req, cancel_tx) = make_request(combo_id);
-    std::sync::Arc::make_mut(&mut req.openai_request).stream = true;
+    req.openai_request.stream = true;
 
     // Drive the cancel ~300ms after the run starts. That's
     // enough time for UpstreamClient to finish the POST, get the
@@ -3962,7 +3962,7 @@ async fn run_with_fake_upstream_and_capture_stages(
     let _ = usage::init_stage_broadcast();
     let mut rx = usage::stage_broadcast().subscribe();
     let (mut req, _cancel_tx) = make_request(combo_id);
-    std::sync::Arc::make_mut(&mut req.openai_request).stream = streaming;
+    req.openai_request.stream = streaming;
     // The default `make_request` helper drops the stream_sink
     // receiver as soon as the function returns, which would
     // cause the pipeline's `sink.send(...)` calls to return
@@ -4513,7 +4513,7 @@ async fn run_streaming_and_get_response_body(
 
     // Build a streaming request with a real sink channel.
     let (mut req, _cancel_tx) = make_request(combo_id);
-    std::sync::Arc::make_mut(&mut req.openai_request).stream = true;
+    req.openai_request.stream = true;
     let (sink_tx, mut sink_rx) = mpsc::channel::<bytes::Bytes>(32);
     req.stream_sink = Some(crate::race_sink::StreamSink::Direct(sink_tx));
 

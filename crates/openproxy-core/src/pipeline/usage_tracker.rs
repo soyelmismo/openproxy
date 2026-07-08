@@ -129,9 +129,7 @@ impl UsageTracker {
         } = ctx;
         let total_ms = started.elapsed().as_millis() as u64;
         let request_body_json = req.request_body_json.clone().or_else(|| {
-            serde_json::to_value(&*req.openai_request)
-                .ok()
-                .map(Arc::new)
+            serde_json::to_value(&req.openai_request).ok()
         });
         let request_headers = crate::redact::redact_btreemap_sensitive(req.request_headers.clone());
         let response_body_json: Option<serde_json::Value> =
@@ -193,7 +191,7 @@ pub struct UsageRecordBuilder<'a> {
     pub(crate) trace_id: String,
     pub(crate) prompt_tokens: Option<u32>,
     pub(crate) completion_tokens: Option<u32>,
-    pub(crate) request_body_json: Option<Arc<serde_json::Value>>,
+    pub(crate) request_body_json: Option<serde_json::Value>,
     pub(crate) response_body_json: Option<serde_json::Value>,
     pub(crate) request_headers: Option<std::collections::BTreeMap<String, String>>,
     pub(crate) response_headers: Option<std::collections::BTreeMap<String, String>>,
@@ -283,7 +281,7 @@ impl<'a> UsageRecordBuilder<'a> {
         self.completion_tokens = completion_tokens;
         self
     }
-    pub fn request_body_json(mut self, request_body_json: Option<Arc<serde_json::Value>>) -> Self {
+    pub fn request_body_json(mut self, request_body_json: Option<serde_json::Value>) -> Self {
         self.request_body_json = request_body_json;
         self
     }
@@ -399,7 +397,7 @@ impl<'a> UsageRecordBuilder<'a> {
             race_lost: self.err.is_some() && self.req.race_cancelled,
             api_key_id: self.req.api_key_id,
             request_body_json: if recording {
-                self.request_body_json.clone().map(|v| (*v).clone())
+                self.request_body_json.clone()
             } else {
                 None
             },

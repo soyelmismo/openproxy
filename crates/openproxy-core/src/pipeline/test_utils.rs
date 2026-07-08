@@ -137,7 +137,7 @@ pub fn make_request(combo_id: ComboId) -> (PipelineRequest, watch::Sender<bool>)
         request_id: RequestId::new(),
         trace_id: TraceId::new(),
         combo_id,
-        openai_request: std::sync::Arc::new(OpenAIRequest {
+        openai_request: OpenAIRequest {
             model: "any".into(),
             messages: vec![OpenAIMessage {
                 role: "user".into(),
@@ -157,7 +157,7 @@ pub fn make_request(combo_id: ComboId) -> (PipelineRequest, watch::Sender<bool>)
             top_k: None,
             user: None,
             extra: serde_json::Map::new(),
-        }),
+        },
         client_disconnected: dis_rx,
         // Use Discard sink for non-streaming test requests. The
         // pipeline forces stream=true to the upstream, but SSE
@@ -255,8 +255,8 @@ impl ProviderAdapter for MockAdapter {
     fn build_chat_url(&self, _target_format: TargetFormat, _model: &crate::ids::ModelId) -> String {
         self.config.base_url.clone()
     }
-    fn build_auth_header(&self, api_key: &str) -> (String, String) {
-        ("Authorization".into(), format!("Bearer {api_key}"))
+    fn build_auth_header(&self, api_key: &str) -> Option<(String, String)> {
+        Some(("Authorization".into(), format!("Bearer {}", api_key)))
     }
     fn build_headers(
         &self,
@@ -264,10 +264,13 @@ impl ProviderAdapter for MockAdapter {
         _target_format: TargetFormat,
         _model: &crate::ids::ModelId,
     ) -> Vec<(String, String)> {
-        vec![
-            self.build_auth_header(api_key),
+        let mut headers = vec![
             ("Content-Type".into(), "application/json".into()),
-        ]
+        ];
+        if let Some(auth) = self.build_auth_header(api_key) {
+            headers.push(auth);
+        }
+        headers
     }
     fn models_url(&self) -> Option<String> {
         None

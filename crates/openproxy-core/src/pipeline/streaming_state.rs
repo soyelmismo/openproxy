@@ -297,7 +297,9 @@ impl<'a> crate::pipeline::streaming::ChunkInterceptor for ChunkProcessor<'a> {
         }
 
         // ── Common prefix: decode, filter, TTFT, race guard ──
-        let line = unsafe { std::str::from_utf8_unchecked(line_bytes.as_ref()) };
+        let Ok(line) = std::str::from_utf8(line_bytes.as_ref()) else {
+            return Ok(crate::pipeline::streaming::ChunkEvent::Skip);
+        };
         let line = line.trim_end_matches('\r');
         if line.is_empty() || line.starts_with(':') {
             return Ok(crate::pipeline::streaming::ChunkEvent::Skip);
@@ -413,9 +415,8 @@ impl<'a> ChunkProcessor<'a> {
         }
         let payload_bytes = &line_bytes[5..]; // skip "data:"
         let json_payload_bytes = crate::sse::skip_leading_spaces(payload_bytes);
-        // Use unchecked — we already know it's UTF-8
-        // (from_utf8_unchecked was called on line_bytes above).
-        let json_payload = unsafe { std::str::from_utf8_unchecked(json_payload_bytes) };
+        // Use checked from_utf8 even though we validated above to avoid unsafe blocks.
+        let json_payload = std::str::from_utf8(json_payload_bytes).unwrap_or("");
         let json_payload = json_payload.trim_end_matches(['\r', '\n', ' ']);
         // Fast [DONE] check.
         if json_payload == "[DONE]" {

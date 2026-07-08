@@ -185,12 +185,12 @@ pub trait ProviderAdapter: Send + Sync {
 
     /// Build the auth header pair `(header_name, header_value)` for the given
     /// API key.
-    fn build_auth_header(&self, api_key: &str) -> (String, String) {
+    fn build_auth_header(&self, api_key: &str) -> Option<(String, String)> {
         match self.config().auth_type {
-            AdapterAuthType::Bearer => ("Authorization".into(), format!("Bearer {}", api_key)),
-            AdapterAuthType::GoogApiKey => ("x-goog-api-key".into(), api_key.to_string()),
-            // Expandir según existan otros
-            _ => unimplemented!(),
+            AdapterAuthType::Bearer => Some(("Authorization".into(), format!("Bearer {}", api_key))),
+            AdapterAuthType::GoogApiKey => Some(("x-goog-api-key".into(), api_key.to_string())),
+            AdapterAuthType::XApiKey => Some(("x-api-key".into(), api_key.to_string())),
+            AdapterAuthType::None => None,
         }
     }
 
@@ -206,9 +206,10 @@ pub trait ProviderAdapter: Send + Sync {
         _target_format: TargetFormat,
         _model: &ModelId,
     ) -> Vec<(String, String)> {
-        let (name, value) = self.build_auth_header(api_key);
         let mut headers = Vec::with_capacity(2 + self.config().extra_headers.len());
-        headers.push((name, value));
+        if let Some((name, value)) = self.build_auth_header(api_key) {
+            headers.push((name, value));
+        }
         headers.push(("Content-Type".into(), "application/json".into()));
         for (k, v) in &self.config().extra_headers {
             headers.push((k.clone(), v.clone()));
@@ -328,7 +329,7 @@ macro_rules! define_provider_adapter {
             fn build_video_url(&self) -> String {
                 match self { $( $(#[$varmeta])* Self::$variant(inner) => inner.build_video_url(), )+ }
             }
-            fn build_auth_header(&self, api_key: &str) -> (String, String) {
+            fn build_auth_header(&self, api_key: &str) -> Option<(String, String)> {
                 match self { $( $(#[$varmeta])* Self::$variant(inner) => inner.build_auth_header(api_key), )+ }
             }
             fn build_headers(
@@ -640,7 +641,7 @@ mod tests {
     #[test]
     fn openrouter_builds_bearer_auth() {
         let a = OpenRouterAdapter::new();
-        let (name, value) = a.build_auth_header("sk-test-123");
+        let (name, value) = a.build_auth_header("sk-test-123").unwrap();
         assert_eq!(name, "Authorization");
         assert_eq!(value, "Bearer sk-test-123");
     }
@@ -907,7 +908,7 @@ mod tests {
     #[test]
     fn ollama_cloud_builds_bearer_auth() {
         let a = OllamaCloudAdapter::new();
-        let (name, value) = a.build_auth_header("test-key");
+        let (name, value) = a.build_auth_header("test-key").unwrap();
         assert_eq!(name, "Authorization");
         assert_eq!(value, "Bearer test-key");
     }
@@ -947,7 +948,7 @@ mod tests {
     #[test]
     fn nous_research_builds_bearer_auth() {
         let a = NousResearchAdapter::new();
-        let (name, value) = a.build_auth_header("nr-key");
+        let (name, value) = a.build_auth_header("nr-key").unwrap();
         assert_eq!(name, "Authorization");
         assert_eq!(value, "Bearer nr-key");
     }
@@ -987,7 +988,7 @@ mod tests {
     #[test]
     fn nvidia_nim_builds_bearer_auth() {
         let a = NvidiaNimAdapter::new();
-        let (name, value) = a.build_auth_header("nvapi-test");
+        let (name, value) = a.build_auth_header("nvapi-test").unwrap();
         assert_eq!(name, "Authorization");
         assert_eq!(value, "Bearer nvapi-test");
     }
@@ -1027,7 +1028,7 @@ mod tests {
     #[test]
     fn kilocode_builds_bearer_auth() {
         let a = KilocodeAdapter::new();
-        let (name, value) = a.build_auth_header("kl-key");
+        let (name, value) = a.build_auth_header("kl-key").unwrap();
         assert_eq!(name, "Authorization");
         assert_eq!(value, "Bearer kl-key");
     }
@@ -1067,7 +1068,7 @@ mod tests {
     #[test]
     fn gemini_builds_goog_api_key_auth() {
         let a = GeminiAdapter::new();
-        let (name, value) = a.build_auth_header("AIzaSyTest123");
+        let (name, value) = a.build_auth_header("AIzaSyTest123").unwrap();
         assert_eq!(name, "x-goog-api-key");
         assert_eq!(value, "AIzaSyTest123");
     }
@@ -1107,7 +1108,7 @@ mod tests {
     #[test]
     fn antigravity_builds_bearer_auth() {
         let a = AntigravityAdapter::new();
-        let (name, value) = a.build_auth_header("ya29.test-token");
+        let (name, value) = a.build_auth_header("ya29.test-token").unwrap();
         assert_eq!(name, "Authorization");
         assert_eq!(value, "Bearer ya29.test-token");
     }
@@ -1208,7 +1209,7 @@ mod tests {
             crate::providers::ProviderFormat::Openai,
         );
         let a = CustomAdapter::from_provider_row(&p);
-        let (name, value) = a.build_auth_header("sk-test-123");
+        let (name, value) = a.build_auth_header("sk-test-123").unwrap();
         assert_eq!(name, "Authorization");
         assert_eq!(value, "Bearer sk-test-123");
     }
@@ -1222,7 +1223,7 @@ mod tests {
             crate::providers::ProviderFormat::Anthropic,
         );
         let a = CustomAdapter::from_provider_row(&p);
-        let (name, value) = a.build_auth_header("sk-ant-test");
+        let (name, value) = a.build_auth_header("sk-ant-test").unwrap();
         assert_eq!(name, "x-api-key");
         assert_eq!(value, "sk-ant-test");
     }
@@ -1236,9 +1237,7 @@ mod tests {
             crate::providers::ProviderFormat::Openai,
         );
         let a = CustomAdapter::from_provider_row(&p);
-        let (name, value) = a.build_auth_header("");
-        assert!(name.is_empty());
-        assert!(value.is_empty());
+        assert_eq!(a.build_auth_header(""), None);
     }
 
     #[test]
