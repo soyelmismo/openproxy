@@ -41,7 +41,6 @@
 
 pub mod providers;
 
-use openproxy_core::oauth::OAuthProvider;
 pub mod accounts;
 use openproxy_core::usage as core_usage;
 

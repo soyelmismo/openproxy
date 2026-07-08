@@ -4,7 +4,6 @@ use crate::ids::ComboId;
 use crate::pipeline::repository::PipelineRepository;
 use crate::pipeline::{ErrorPhase, FailureContext, Pipeline, PipelineRequest, PipelineResult};
 use crate::upstream::CancellationToken;
-use std::sync::Arc;
 use tokio::sync::watch;
 
 impl Pipeline {
