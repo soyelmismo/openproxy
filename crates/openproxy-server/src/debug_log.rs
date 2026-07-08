@@ -124,12 +124,14 @@ pub fn init() {
     let _ = DEBUG_LOG_BUFFER.get_or_init(|| Mutex::new(DebugLogBuffer::new()));
     let _ = FILE_LOG_SENDER.get_or_init(|| {
         let (tx, mut rx) = mpsc::unbounded_channel::<DebugLogEntry>();
-        
+
         let home = std::env::var("HOME")
             .ok()
             .or_else(|| std::env::var("USERPROFILE").ok())
             .unwrap_or_else(|| ".".to_string());
-        let path = std::path::PathBuf::from(home).join(".openproxy").join("debug.log");
+        let path = std::path::PathBuf::from(home)
+            .join(".openproxy")
+            .join("debug.log");
 
         tokio::spawn(async move {
             if let Some(parent) = path.parent() {
@@ -147,7 +149,8 @@ pub fn init() {
                 Err(_) => return, // Fail silently if cannot write
             };
 
-            let mut rotation_interval = tokio::time::interval(std::time::Duration::from_secs(12 * 3600));
+            let mut rotation_interval =
+                tokio::time::interval(std::time::Duration::from_secs(12 * 3600));
             rotation_interval.tick().await; // Consume immediate first tick
 
             loop {

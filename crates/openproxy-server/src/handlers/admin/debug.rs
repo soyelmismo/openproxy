@@ -1,9 +1,8 @@
 use super::*;
 use axum::{
-    extract::{State, Query},
     Json,
+    extract::{Query, State},
 };
-
 
 pub async fn debug_logs(
     State(_s): State<AppState>,
@@ -346,7 +345,6 @@ pub async fn debug_recover(State(s): State<AppState>) -> ApiResult<Json<serde_js
         Err(e) => ApiResult::err(e),
     }
 }
-
 
 pub async fn get_recording(
     State(s): State<AppState>,

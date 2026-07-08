@@ -1,12 +1,11 @@
 use super::*;
 use crate::handlers::admin::debug::json_text;
 use axum::{
-    extract::{State, Query},
     Json,
+    extract::{Query, State},
 };
 
 use openproxy_core::usage as core_usage;
-
 
 pub async fn usage_summary(
     State(s): State<AppState>,
@@ -86,8 +85,9 @@ pub async fn usage_by_day(
 ) -> ApiResult<Json<Vec<core_usage::ByDayRow>>> {
     let body: Result<Json<Vec<core_usage::ByDayRow>>, ApiError> = async {
         let f = q.into_filter()?;
-        let result =
-            run_analytics_query_with_filter(&s, &f, "by_day", |conn, fl| core_usage::by_day(conn, fl))?;
+        let result = run_analytics_query_with_filter(&s, &f, "by_day", |conn, fl| {
+            core_usage::by_day(conn, fl)
+        })?;
         Ok(Json(result))
     }
     .await;
@@ -314,7 +314,6 @@ pub async fn usage_detail(
     .await;
     body.into()
 }
-
 
 pub(crate) async fn stream_usage_rows(socket: WebSocket, state: AppState) {
     // Split the WebSocket into a sender and receiver half. The
@@ -660,7 +659,10 @@ pub(crate) fn run_analytics_query_with_filter<T, F>(
     query_fn: F,
 ) -> Result<T, ApiError>
 where
-    F: Fn(&openproxy_core::db::conn::ReaderGuard<'_>, &core_usage::UsageFilter) -> Result<T, CoreError>,
+    F: Fn(
+        &openproxy_core::db::conn::ReaderGuard<'_>,
+        &core_usage::UsageFilter,
+    ) -> Result<T, CoreError>,
 {
     // First attempt: use the reader connection.
     let r = s
@@ -872,7 +874,10 @@ pub(crate) async fn outbox_send(tx: &tokio::sync::mpsc::Sender<String>, value: s
     }
 }
 
-pub(crate) async fn outbox_try_send(tx: &tokio::sync::mpsc::Sender<String>, value: serde_json::Value) {
+pub(crate) async fn outbox_try_send(
+    tx: &tokio::sync::mpsc::Sender<String>,
+    value: serde_json::Value,
+) {
     let text: String = match json_text(value) {
         Ok(t) => t,
         Err(e) => {
@@ -888,7 +893,6 @@ pub(crate) async fn outbox_try_send(tx: &tokio::sync::mpsc::Sender<String>, valu
         Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => {}
     }
 }
-
 
 #[derive(Debug, Default, Deserialize)]
 pub struct UsageQuery {
@@ -910,7 +914,6 @@ pub struct UsageQuery {
     /// `None`) falls through to the explicit `from`/`to` fields.
     pub preset: Option<String>,
 }
-
 
 impl UsageQuery {
     /// Project into a [`UsageFilter`]. An empty `provider_id` string

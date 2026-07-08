@@ -377,14 +377,16 @@ async fn dispatch_audio_request(
 
     if !auth_name.is_empty()
         && let Ok(k) = axum::http::HeaderName::from_bytes(auth_name.as_bytes())
-            && let Ok(v) = axum::http::HeaderValue::from_str(&auth_value) {
-                req.headers.insert(k, v);
-            }
+        && let Ok(v) = axum::http::HeaderValue::from_str(&auth_value)
+    {
+        req.headers.insert(k, v);
+    }
     for (k, v) in &adapter.config().extra_headers {
         if let Ok(hn) = axum::http::HeaderName::from_bytes(k.as_bytes())
-            && let Ok(hv) = axum::http::HeaderValue::from_str(v) {
-                req.headers.insert(hn, hv);
-            }
+            && let Ok(hv) = axum::http::HeaderValue::from_str(v)
+        {
+            req.headers.insert(hn, hv);
+        }
     }
 
     let client = state.upstream_client();

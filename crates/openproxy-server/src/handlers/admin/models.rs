@@ -1,7 +1,7 @@
 use super::*;
 use axum::{
-    extract::{Path, State, Query},
     Json,
+    extract::{Path, Query, State},
 };
 
 use openproxy_core::admin as core_admin;
@@ -147,7 +147,6 @@ pub async fn refresh_models(
 ) -> ApiResult<Json<serde_json::Value>> {
     run_refresh(s, id, q).await
 }
-
 
 pub(crate) async fn run_test_for_model(
     s: &AppState,
@@ -461,7 +460,11 @@ pub(crate) async fn run_test_for_model(
                 }
             } else {
                 let w = s.db_pool().writer();
-                match core_accounts::decrypt_access_token(&w, test_account_id, s.master_key().as_ref()) {
+                match core_accounts::decrypt_access_token(
+                    &w,
+                    test_account_id,
+                    s.master_key().as_ref(),
+                ) {
                     Ok(t) => t,
                     Err(e) => {
                         let elapsed_ms = start.elapsed().as_millis() as u64;
@@ -726,9 +729,10 @@ pub(crate) async fn run_test_for_model(
     req.proxy = proxy_url.clone();
     for (k, v) in &headers {
         if let Ok(hn) = axum::http::HeaderName::from_bytes(k.as_bytes())
-            && let Ok(hv) = axum::http::HeaderValue::from_str(v) {
-                req.headers.insert(hn, hv);
-            }
+            && let Ok(hv) = axum::http::HeaderValue::from_str(v)
+        {
+            req.headers.insert(hn, hv);
+        }
     }
 
     // 9. Send + measure. We capture both the wall-clock elapsed time
@@ -819,7 +823,11 @@ pub(crate) async fn run_test_for_model(
     }
 }
 
-pub(crate) async fn run_refresh(s: AppState, id: i64, q: RefreshQuery) -> ApiResult<Json<serde_json::Value>> {
+pub(crate) async fn run_refresh(
+    s: AppState,
+    id: i64,
+    q: RefreshQuery,
+) -> ApiResult<Json<serde_json::Value>> {
     let row_id = ModelRowId(id);
     let ttl_seconds = q.ttl_seconds.unwrap_or(3_600);
 

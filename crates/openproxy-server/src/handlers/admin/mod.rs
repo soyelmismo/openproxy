@@ -44,13 +44,13 @@ pub mod providers;
 pub mod accounts;
 use openproxy_core::usage as core_usage;
 
-pub mod proxies;
-pub mod notifications;
-pub mod debug;
-pub mod oauth;
 pub mod api_keys;
 pub mod combos;
+pub mod debug;
 pub mod models;
+pub mod notifications;
+pub mod oauth;
+pub mod proxies;
 pub mod runtime;
 pub mod usage;
 
@@ -62,8 +62,6 @@ pub mod auth;
 use openproxy_core::accounts as core_accounts;
 use openproxy_core::providers as core_providers;
 
-
-
 use axum::{
     extract::ws::{Message, WebSocket, WebSocketUpgrade},
     http::HeaderMap,
@@ -72,15 +70,15 @@ use axum::{
 use futures::StreamExt;
 use openproxy_core::{
     CoreError, adapters,
-    adapters::ProviderAdapter, analytics, api_keys as core_api_keys, combos as core_combos,
+    adapters::ProviderAdapter,
+    analytics, api_keys as core_api_keys, combos as core_combos,
     config::{CircuitBreakerConfig, RacingConfig, RetriesConfig, TimeoutsConfig},
     db as core_db,
     db::conn::ADMIN_LOCK_TIMEOUT,
     ids::{
         AccountId, ApiKeyId, ComboId, ComboTargetId, ModelRowId, ProviderId, RequestId, TraceId,
     },
-    models as core_models, oauth as core_oauth,
-    seed,
+    models as core_models, oauth as core_oauth, seed,
     usage::UsageFilter,
 };
 use serde::{Deserialize, Serialize};
@@ -123,8 +121,6 @@ use crate::{
 // Returns `Err` for unknown preset strings so the operator sees a 400
 // instead of silently falling back to "no filter" (which would return
 // the wrong data and confuse debugging).
-
-
 
 // =====================================================================
 // Health
@@ -962,7 +958,6 @@ pub struct ListModelsQuery {
 // The endpoint always returns 200; the success/failure bit is in the
 // JSON body, and the operator-facing `last_fetched_at` is updated even
 // on a failed fetch (so the dashboard can show "tried 12s ago").
-
 
 // Inspect a freshly-fetched [`AccountQuota`] and decide whether to
 // fire a `quota_low` notification. Returns `(scope, remaining, limit)`

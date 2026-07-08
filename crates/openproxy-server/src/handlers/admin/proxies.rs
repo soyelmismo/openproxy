@@ -1,9 +1,8 @@
 use super::*;
 use axum::{
-    extract::{Path, State, Query},
     Json,
+    extract::{Path, Query, State},
 };
-
 
 pub async fn list_proxies(
     State(s): State<AppState>,

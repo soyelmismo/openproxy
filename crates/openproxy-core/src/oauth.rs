@@ -28,6 +28,18 @@ pub enum DbRef<'a> {
     Connection(&'a parking_lot::Mutex<rusqlite::Connection>),
 }
 
+impl<'a> DbRef<'a> {
+    pub fn with_conn<R>(
+        &self,
+        f: impl FnOnce(&rusqlite::Connection) -> crate::error::Result<R>,
+    ) -> crate::error::Result<R> {
+        match self {
+            DbRef::Pool(pool) => f(&pool.writer()),
+            DbRef::Connection(mutex) => f(&mutex.lock()),
+        }
+    }
+}
+
 /// The OAuth flow used by a provider.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]

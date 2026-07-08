@@ -1,11 +1,11 @@
 use super::*;
 use axum::{
-    extract::{Path, State, Query},
     Json,
+    extract::{Path, Query, State},
 };
 
-use openproxy_core::oauth::OAuthProvider;
 use openproxy_core::accounts as core_accounts;
+use openproxy_core::oauth::OAuthProvider;
 
 pub async fn oauth_authorize(
     State(s): State<AppState>,
@@ -383,7 +383,6 @@ pub async fn oauth_callback(
         "message": "Copy the code above and paste it into the Exchange endpoint.",
     }))
 }
-
 
 pub(crate) async fn refresh_oauth_if_needed(
     s: &AppState,

@@ -1,9 +1,5 @@
 use super::*;
-use axum::{
-    extract::State,
-    Json,
-};
-
+use axum::{Json, extract::State};
 
 pub async fn admin_health() -> Json<serde_json::Value> {
     Json(serde_json::json!({

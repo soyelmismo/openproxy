@@ -1,9 +1,8 @@
 use super::*;
 use axum::{
-    extract::{Path, State, Query},
     Json,
+    extract::{Path, Query, State},
 };
-
 
 pub async fn list_notifications(
     State(s): State<AppState>,
@@ -55,8 +54,9 @@ pub async fn mark_all_notifications_read(
 ) -> ApiResult<Json<serde_json::Value>> {
     let body: Result<Json<serde_json::Value>, ApiError> = async {
         let w = s.db_pool().writer();
-        let updated = openproxy_core::notifications::mark_all_read(&w)
-            .map_err(|e| CoreError::Internal(format!("core_notifications::mark_all_read: {}", e)))?;
+        let updated = openproxy_core::notifications::mark_all_read(&w).map_err(|e| {
+            CoreError::Internal(format!("core_notifications::mark_all_read: {}", e))
+        })?;
         Ok(Json(serde_json::json!({ "updated": updated })))
     }
     .await;

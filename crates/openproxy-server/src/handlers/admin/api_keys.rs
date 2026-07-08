@@ -1,9 +1,8 @@
 use super::*;
 use axum::{
-    extract::{Path, State},
     Json,
+    extract::{Path, State},
 };
-
 
 pub async fn list_api_keys(
     State(s): State<AppState>,

@@ -1,7 +1,7 @@
 use super::*;
 use axum::{
-    extract::{Path, State},
     Json,
+    extract::{Path, State},
 };
 
 use openproxy_core::admin as core_admin;
@@ -38,7 +38,8 @@ pub async fn get_combo(
         // Read-only SELECT — use the READER.
         let r = s.db_pool().reader();
         let id = ComboId(id);
-        let combo = core_combos::get_combo(&r, id)?.ok_or_else(|| CoreError::ComboNotFound(id.0))?;
+        let combo =
+            core_combos::get_combo(&r, id)?.ok_or_else(|| CoreError::ComboNotFound(id.0))?;
         Ok(Json(combo))
     }
     .await;
@@ -424,7 +425,11 @@ pub async fn update_combo_target(
                 ))));
             }
             let w = s.db_pool().writer();
-            core_combos::update_target_priority(&w, ComboTargetId(target_id), priority_order as i32)?;
+            core_combos::update_target_priority(
+                &w,
+                ComboTargetId(target_id),
+                priority_order as i32,
+            )?;
         }
         // Optional `weight` (migration 000035).
         if let Some(v) = body.get("weight") {

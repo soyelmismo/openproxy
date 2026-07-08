@@ -142,7 +142,8 @@ pub fn build_router(state: AppState) -> Router {
         )
         .route(
             "/config/recording-ttl",
-            get(handlers::admin::runtime::get_recording_ttl).put(handlers::admin::runtime::put_recording_ttl),
+            get(handlers::admin::runtime::get_recording_ttl)
+                .put(handlers::admin::runtime::put_recording_ttl),
         )
         .route(
             "/config/compression",
@@ -167,7 +168,8 @@ pub fn build_router(state: AppState) -> Router {
         )
         .route(
             "/providers",
-            get(handlers::admin::providers::list_providers).post(handlers::admin::providers::create_provider),
+            get(handlers::admin::providers::list_providers)
+                .post(handlers::admin::providers::create_provider),
         )
         .route(
             "/providers/{id}",
@@ -177,7 +179,8 @@ pub fn build_router(state: AppState) -> Router {
         )
         .route(
             "/accounts",
-            get(handlers::admin::accounts::list_accounts).post(handlers::admin::accounts::create_account),
+            get(handlers::admin::accounts::list_accounts)
+                .post(handlers::admin::accounts::create_account),
         )
         .route(
             "/accounts/{id}",
@@ -213,7 +216,8 @@ pub fn build_router(state: AppState) -> Router {
         )
         .route(
             "/combos/{id}/targets",
-            get(handlers::admin::combos::list_combo_targets).post(handlers::admin::combos::add_target),
+            get(handlers::admin::combos::list_combo_targets)
+                .post(handlers::admin::combos::add_target),
         )
         // IMPORTANT: this literal-segment route MUST be registered
         // before `/combos/{id}/targets/:target_id`. axum 0.7
@@ -251,7 +255,10 @@ pub fn build_router(state: AppState) -> Router {
                 .delete(handlers::admin::combos::delete_combo_target),
         )
         .route("/usage/summary", get(handlers::admin::usage::usage_summary))
-        .route("/usage/by-model", get(handlers::admin::usage::usage_by_model))
+        .route(
+            "/usage/by-model",
+            get(handlers::admin::usage::usage_by_model),
+        )
         .route(
             "/usage/by-provider",
             get(handlers::admin::usage::usage_by_provider),
@@ -261,17 +268,29 @@ pub fn build_router(state: AppState) -> Router {
             get(handlers::admin::usage::usage_monthly_by_provider),
         )
         .route("/usage/by-day", get(handlers::admin::usage::usage_by_day))
-        .route("/usage/by-account", get(handlers::admin::usage::usage_by_account))
-        .route("/usage/by-status", get(handlers::admin::usage::usage_by_status))
+        .route(
+            "/usage/by-account",
+            get(handlers::admin::usage::usage_by_account),
+        )
+        .route(
+            "/usage/by-status",
+            get(handlers::admin::usage::usage_by_status),
+        )
         .route("/usage/errors", get(handlers::admin::usage::usage_errors))
         .route("/usage/latency", get(handlers::admin::usage::usage_latency))
         .route("/usage/races", get(handlers::admin::usage::usage_races))
         .route("/usage/recent", get(handlers::admin::usage::usage_recent))
         .route("/usage/detail", get(handlers::admin::usage::usage_detail))
         .route("/debug/logs", get(handlers::admin::debug::debug_logs))
-        .route("/debug/clear", post(handlers::admin::debug::debug_logs_clear))
+        .route(
+            "/debug/clear",
+            post(handlers::admin::debug::debug_logs_clear),
+        )
         .route("/debug/vacuum", post(handlers::admin::debug::debug_vacuum))
-        .route("/debug/recover", post(handlers::admin::debug::debug_recover))
+        .route(
+            "/debug/recover",
+            post(handlers::admin::debug::debug_recover),
+        )
         .route(
             "/recording",
             get(handlers::admin::debug::get_recording).post(handlers::admin::debug::set_recording),
@@ -280,7 +299,10 @@ pub fn build_router(state: AppState) -> Router {
             "/models/{id}/refresh",
             post(handlers::admin::models::refresh_models),
         )
-        .route("/models/{id}/toggle", post(handlers::admin::models::toggle_model))
+        .route(
+            "/models/{id}/toggle",
+            post(handlers::admin::models::toggle_model),
+        )
         .route(
             "/models/bulk-toggle",
             post(handlers::admin::models::bulk_toggle_models),
@@ -290,7 +312,10 @@ pub fn build_router(state: AppState) -> Router {
             axum::routing::delete(handlers::admin::models::delete_model),
         )
         .route("/models", get(handlers::admin::models::list_models_admin))
-        .route("/models/custom", post(handlers::admin::models::create_custom_model))
+        .route(
+            "/models/custom",
+            post(handlers::admin::models::create_custom_model),
+        )
         .route(
             "/models/{id}/test",
             post(handlers::admin::models::test_model).route_layer(middleware::from_fn(
@@ -307,7 +332,8 @@ pub fn build_router(state: AppState) -> Router {
         )
         .route(
             "/keys",
-            get(handlers::admin::api_keys::list_api_keys).post(handlers::admin::api_keys::create_api_key),
+            get(handlers::admin::api_keys::list_api_keys)
+                .post(handlers::admin::api_keys::create_api_key),
         )
         .route(
             "/keys/{id}",
@@ -315,21 +341,40 @@ pub fn build_router(state: AppState) -> Router {
                 .patch(handlers::admin::api_keys::update_api_key)
                 .delete(handlers::admin::api_keys::delete_api_key),
         )
-        .route("/keys/{id}/revoke", post(handlers::admin::api_keys::revoke_api_key))
+        .route(
+            "/keys/{id}/revoke",
+            post(handlers::admin::api_keys::revoke_api_key),
+        )
         .route(
             "/keys/{id}/regenerate",
             post(handlers::admin::api_keys::regenerate_api_key),
         )
-        .route("/keys/{id}/usage", get(handlers::admin::api_keys::api_key_usage))
+        .route(
+            "/keys/{id}/usage",
+            get(handlers::admin::api_keys::api_key_usage),
+        )
         // Free proxies endpoints
         .route(
             "/proxies",
-            get(handlers::admin::proxies::list_proxies).post(handlers::admin::proxies::create_custom_proxy),
+            get(handlers::admin::proxies::list_proxies)
+                .post(handlers::admin::proxies::create_custom_proxy),
         )
-        .route("/proxies/sync", post(handlers::admin::proxies::sync_proxies))
-        .route("/proxies/test-all", post(handlers::admin::proxies::test_all_proxies))
-        .route("/proxies/{id}", delete(handlers::admin::proxies::delete_proxy))
-        .route("/proxies/{id}/test", post(handlers::admin::proxies::test_proxy))
+        .route(
+            "/proxies/sync",
+            post(handlers::admin::proxies::sync_proxies),
+        )
+        .route(
+            "/proxies/test-all",
+            post(handlers::admin::proxies::test_all_proxies),
+        )
+        .route(
+            "/proxies/{id}",
+            delete(handlers::admin::proxies::delete_proxy),
+        )
+        .route(
+            "/proxies/{id}/test",
+            post(handlers::admin::proxies::test_proxy),
+        )
         // OAuth endpoints
         // models.dev sync
         .route(
@@ -353,7 +398,10 @@ pub fn build_router(state: AppState) -> Router {
         // `/notifications/unread-count`) MUST come before the
         // `{id}`-param routes so axum 0.8's registration-order
         // matcher doesn't let `{id}` swallow `read-all` / `unread-count`.
-        .route("/notifications", get(handlers::admin::notifications::list_notifications))
+        .route(
+            "/notifications",
+            get(handlers::admin::notifications::list_notifications),
+        )
         .route(
             "/notifications/read-all",
             post(handlers::admin::notifications::mark_all_notifications_read),
@@ -453,7 +501,10 @@ pub fn build_router(state: AppState) -> Router {
         .route("/", get(admin_ui::index_html))
         .route("/callback.html", get(admin_ui::callback_html))
         .route("/health", get(handlers::admin::runtime::admin_health))
-        .route("/oauth/callback", get(handlers::admin::oauth::oauth_callback))
+        .route(
+            "/oauth/callback",
+            get(handlers::admin::oauth::oauth_callback),
+        )
         .route("/ws", get(handlers::admin::usage::usage_stream))
         // F3: i18n string packs. Public (no auth) — the dashboard's
         // `loadLang('en')` runs at boot BEFORE the SPA can attach the

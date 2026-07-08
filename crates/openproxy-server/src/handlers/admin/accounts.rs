@@ -1,12 +1,11 @@
 use super::*;
 use axum::{
-    extract::{Path, State, Query},
     Json,
+    extract::{Path, Query, State},
 };
-use openproxy_core::admin as core_admin;
 use openproxy_core::accounts as core_accounts;
+use openproxy_core::admin as core_admin;
 use openproxy_core::providers as core_providers;
-
 
 pub async fn list_accounts(
     State(s): State<AppState>,
@@ -84,7 +83,8 @@ pub async fn update_account_api_key(
     }
     .await;
     body.into()
-}pub async fn refresh_account_quota(
+}
+pub async fn refresh_account_quota(
     State(s): State<AppState>,
     Path(account_id): Path<i64>,
 ) -> ApiResult<Json<serde_json::Value>> {

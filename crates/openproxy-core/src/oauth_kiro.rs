@@ -436,17 +436,9 @@ impl OAuthProvider for KiroOAuthProvider {
         account_id: AccountId,
         db: crate::oauth::DbRef<'_>,
     ) -> Result<TokenResponse> {
-        let meta = match db {
-            crate::oauth::DbRef::Pool(pool) => {
-                let conn = pool.writer();
-                crate::oauth_kiro::read_profile_meta(&conn, account_id)?
-            }
-            crate::oauth::DbRef::Connection(mutex) => {
-                let conn = mutex.lock();
-                crate::oauth_kiro::read_profile_meta(&conn, account_id)?
-            }
-        }
-        .unwrap_or_else(KiroProviderMeta::default);
+        let meta = db
+            .with_conn(|conn| crate::oauth_kiro::read_profile_meta(conn, account_id))?
+            .unwrap_or_else(KiroProviderMeta::default);
 
         let region_str = if meta.region.is_empty() {
             DEFAULT_REGION.to_string()
@@ -619,22 +611,13 @@ impl OAuthProvider for KiroOAuthProvider {
                         let meta_json = serde_json::to_string(&updated_meta).map_err(|e| {
                             CoreError::Internal(format!("kiro meta serialize: {e}"))
                         })?;
-                        match db {
-                            crate::oauth::DbRef::Pool(pool) => {
-                                let conn = pool.writer();
-                                conn.execute(
-                                        "UPDATE accounts SET oauth_provider_specific = ?1 WHERE id = ?2",
-                                        rusqlite::params![meta_json, account_id.0],
-                                    ).map_err(crate::error::map_db_error)?;
-                            }
-                            crate::oauth::DbRef::Connection(mutex) => {
-                                let conn = mutex.lock();
-                                conn.execute(
-                                        "UPDATE accounts SET oauth_provider_specific = ?1 WHERE id = ?2",
-                                        rusqlite::params![meta_json, account_id.0],
-                                    ).map_err(crate::error::map_db_error)?;
-                            }
-                        }
+                        db.with_conn(|conn| {
+                            conn.execute(
+                                "UPDATE accounts SET oauth_provider_specific = ?1 WHERE id = ?2",
+                                rusqlite::params![meta_json, account_id.0],
+                            )
+                            .map_err(crate::error::map_db_error)
+                        })?;
                         success_body = Some(retry_bytes);
                     }
                 }

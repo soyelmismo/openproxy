@@ -1,13 +1,12 @@
 use super::*;
 use axum::{
-    extract::{Path, State, Query},
     Json,
+    extract::{Path, Query, State},
 };
-use openproxy_core::admin as core_admin;
 use openproxy_core::accounts as core_accounts;
-use openproxy_core::providers as core_providers;
+use openproxy_core::admin as core_admin;
 use openproxy_core::oauth::OAuthProvider;
-
+use openproxy_core::providers as core_providers;
 
 pub async fn list_providers(State(s): State<AppState>) -> ApiResult<Json<Vec<ProviderWithOAuth>>> {
     let body: Result<Json<Vec<ProviderWithOAuth>>, ApiError> = async {
@@ -75,8 +74,8 @@ pub async fn get_provider(
         // Read-only SELECT — use the READER.
         let r = s.db_pool().reader();
         let id = ProviderId::new(id);
-        let provider =
-            core_providers::get(&r, &id)?.ok_or_else(|| CoreError::ProviderNotFound(id.to_string()))?;
+        let provider = core_providers::get(&r, &id)?
+            .ok_or_else(|| CoreError::ProviderNotFound(id.to_string()))?;
         let registry = s.oauth_provider_registry();
         let adapters = s.adapters();
         let enriched = enrich_provider_with_oauth(provider, registry.as_ref(), &adapters, &r);
@@ -219,11 +218,12 @@ async fn run_provider_refresh(
     //    always invoked by core_admin::refresh_models regardless.)
 
     // 3. Resolve a healthy/degraded account for this provider.
-    let selected_account_id = match crate::handlers::admin::accounts::resolve_refresh_account(&s, &provider, &q).await {
-        Ok((Some(account_id), _)) => Some(account_id),
-        Ok((None, _)) => None,
-        Err(e) => return ApiResult::err(e),
-    };
+    let selected_account_id =
+        match crate::handlers::admin::accounts::resolve_refresh_account(&s, &provider, &q).await {
+            Ok((Some(account_id), _)) => Some(account_id),
+            Ok((None, _)) => None,
+            Err(e) => return ApiResult::err(e),
+        };
 
     // 4. Decrypt or refresh the selected credential. Drop DB guards
     //    before awaiting refresh; adapter.fetch_models() below then
