@@ -24,15 +24,15 @@
 //! | `GET  /admin/fonts/*`         | embedded fonts (`admin_ui::serve_asset`)  |
 //! | `*    /admin/api/*`           | admin REST API (auth-protected)           |
 //! | `GET  /admin/ws`              | live-logs WebSocket (own auth via `?token=`) |
-//! | `GET  /admin/health`          | `admin_health` (unauthenticated, kept public for LB probes) |
-//! | `GET  /admin/oauth/callback`  | `oauth_callback` (unauthenticated, browser callback) |
+//! | `GET  /admin/health`          | `handlers::admin::runtime::admin_health` (unauthenticated, kept public for LB probes) |
+//! | `GET  /admin/oauth/callback`  | `handlers::admin::oauth::oauth_callback` (unauthenticated, browser callback) |
 //!
 //! The dashboard SPA loads BEFORE auth: `index.html`, `callback.html`,
 //! and every `/admin/dist/*` / `/admin/styles/*` / `/admin/fonts/*`
 //! asset are served without checking credentials. The SPA itself
 //! sends the admin API key as a Bearer token on each `/admin/api/*`
 //! call. The WebSocket upgrade at `/admin/ws` does its own auth
-//! inside the handler (`usage_stream`) so it can accept `?token=`
+//! inside the handler (`handlers::admin::usage::usage_stream`) so it can accept `?token=`
 //! in the query string (browsers can't set headers on WS handshakes).
 
 use axum::{
@@ -129,91 +129,91 @@ pub fn build_router(state: AppState) -> Router {
     //
     // The middleware reads only the `Authorization` header, which
     // is the contract for the HTTP path. The WebSocket upgrade
-    // handler (`usage_stream`) also accepts `?token=` in the query
+    // handler (`handlers::admin::usage::usage_stream`) also accepts `?token=` in the query
     // string — that path is handled inside the handler itself
     // (the middleware would not see the WS upgrade as a normal
     // request), so the per-handler auth check there is the source
     // of truth for the WebSocket path.
     let admin_api_routes = Router::new()
-        .route("/config", get(handlers::admin::get_runtime_config))
+        .route("/config", get(handlers::admin::runtime::get_runtime_config))
         .route(
             "/config/timeouts",
-            axum::routing::put(handlers::admin::put_runtime_timeouts),
+            axum::routing::put(handlers::admin::runtime::put_runtime_timeouts),
         )
         .route(
             "/config/recording-ttl",
-            get(handlers::admin::get_recording_ttl).put(handlers::admin::put_recording_ttl),
+            get(handlers::admin::runtime::get_recording_ttl).put(handlers::admin::runtime::put_recording_ttl),
         )
         .route(
             "/config/compression",
-            axum::routing::put(handlers::admin::put_runtime_compression),
+            axum::routing::put(handlers::admin::runtime::put_runtime_compression),
         )
         .route(
             "/config/idle-chunk-retryable",
-            axum::routing::put(handlers::admin::put_idle_chunk_retryable),
+            axum::routing::put(handlers::admin::runtime::put_idle_chunk_retryable),
         )
         .route(
             "/config/quota-protection",
-            axum::routing::put(handlers::admin::put_runtime_quota_protection),
+            axum::routing::put(handlers::admin::runtime::put_runtime_quota_protection),
         )
         .route(
             "/config/maintenance",
-            get(handlers::admin::get_maintenance_config)
-                .put(handlers::admin::put_maintenance_config),
+            get(handlers::admin::runtime::get_maintenance_config)
+                .put(handlers::admin::runtime::put_maintenance_config),
         )
         .route(
             "/config/vacuum-status",
-            get(handlers::admin::get_vacuum_status),
+            get(handlers::admin::runtime::get_vacuum_status),
         )
         .route(
             "/providers",
-            get(handlers::admin::list_providers).post(handlers::admin::create_provider),
+            get(handlers::admin::providers::list_providers).post(handlers::admin::providers::create_provider),
         )
         .route(
             "/providers/{id}",
-            get(handlers::admin::get_provider)
-                .delete(handlers::admin::delete_provider)
-                .patch(handlers::admin::update_provider),
+            get(handlers::admin::providers::get_provider)
+                .delete(handlers::admin::providers::delete_provider)
+                .patch(handlers::admin::providers::update_provider),
         )
         .route(
             "/accounts",
-            get(handlers::admin::list_accounts).post(handlers::admin::create_account),
+            get(handlers::admin::accounts::list_accounts).post(handlers::admin::accounts::create_account),
         )
         .route(
             "/accounts/{id}",
-            axum::routing::delete(handlers::admin::delete_account),
+            axum::routing::delete(handlers::admin::accounts::delete_account),
         )
         .route(
             "/accounts/{id}/health",
-            post(handlers::admin::set_account_health),
+            post(handlers::admin::accounts::set_account_health),
         )
         .route(
             "/accounts/{id}/api-key",
-            put(handlers::admin::update_account_api_key),
+            put(handlers::admin::accounts::update_account_api_key),
         )
         .route(
             "/accounts/{id}/refresh-quota",
-            post(handlers::admin::refresh_account_quota),
+            post(handlers::admin::accounts::refresh_account_quota),
         )
         .route(
             "/combos",
-            get(handlers::admin::list_combos).post(handlers::admin::create_combo),
+            get(handlers::admin::combos::list_combos).post(handlers::admin::combos::create_combo),
         )
         .route(
             "/combos/{id}",
-            get(handlers::admin::get_combo)
-                .delete(handlers::admin::delete_combo)
-                .patch(handlers::admin::update_combo),
+            get(handlers::admin::combos::get_combo)
+                .delete(handlers::admin::combos::delete_combo)
+                .patch(handlers::admin::combos::update_combo),
         )
         .route(
             "/combos/{id}/test-all",
-            post(handlers::admin::test_combo_targets).route_layer(middleware::from_fn(
+            post(handlers::admin::combos::test_combo_targets).route_layer(middleware::from_fn(
                 crate::disconnect::client_disconnect_middleware,
             )),
         )
         .route(
             "/combos/{id}/targets",
-            get(handlers::admin::list_combo_targets).post(handlers::admin::add_target),
+            get(handlers::admin::combos::list_combo_targets).post(handlers::admin::combos::add_target),
         )
         // IMPORTANT: this literal-segment route MUST be registered
         // before `/combos/{id}/targets/:target_id`. axum 0.7
@@ -223,7 +223,7 @@ pub fn build_router(state: AppState) -> Router {
         // PATCH and DELETE).
         .route(
             "/combos/{id}/targets/valid-sub-combos",
-            get(handlers::admin::list_valid_sub_combos),
+            get(handlers::admin::combos::list_valid_sub_combos),
         )
         // IMPORTANT: this literal-segment route MUST be registered
         // before `/combos/{id}/targets/:target_id`. axum 0.7
@@ -233,7 +233,7 @@ pub fn build_router(state: AppState) -> Router {
         // PATCH and DELETE).
         .route(
             "/combos/{id}/targets/reorder",
-            axum::routing::post(handlers::admin::reorder_combo_targets),
+            axum::routing::post(handlers::admin::combos::reorder_combo_targets),
         )
         // IMPORTANT: this literal-segment route MUST be registered
         // before `/combos/{id}/targets/:target_id`. axum 0.7
@@ -243,103 +243,103 @@ pub fn build_router(state: AppState) -> Router {
         // PATCH and DELETE).
         .route(
             "/combos/{id}/targets/{target_id}/clear-cooldown",
-            axum::routing::post(handlers::admin::clear_combo_target_cooldown),
+            axum::routing::post(handlers::admin::combos::clear_combo_target_cooldown),
         )
         .route(
             "/combos/{id}/targets/{target_id}",
-            axum::routing::patch(handlers::admin::update_combo_target)
-                .delete(handlers::admin::delete_combo_target),
+            axum::routing::patch(handlers::admin::combos::update_combo_target)
+                .delete(handlers::admin::combos::delete_combo_target),
         )
-        .route("/usage/summary", get(handlers::admin::usage_summary))
-        .route("/usage/by-model", get(handlers::admin::usage_by_model))
+        .route("/usage/summary", get(handlers::admin::usage::usage_summary))
+        .route("/usage/by-model", get(handlers::admin::usage::usage_by_model))
         .route(
             "/usage/by-provider",
-            get(handlers::admin::usage_by_provider),
+            get(handlers::admin::usage::usage_by_provider),
         )
         .route(
             "/usage/monthly-by-provider",
-            get(handlers::admin::usage_monthly_by_provider),
+            get(handlers::admin::usage::usage_monthly_by_provider),
         )
-        .route("/usage/by-day", get(handlers::admin::usage_by_day))
-        .route("/usage/by-account", get(handlers::admin::usage_by_account))
-        .route("/usage/by-status", get(handlers::admin::usage_by_status))
-        .route("/usage/errors", get(handlers::admin::usage_errors))
-        .route("/usage/latency", get(handlers::admin::usage_latency))
-        .route("/usage/races", get(handlers::admin::usage_races))
-        .route("/usage/recent", get(handlers::admin::usage_recent))
-        .route("/usage/detail", get(handlers::admin::usage_detail))
-        .route("/debug/logs", get(handlers::admin::debug_logs))
-        .route("/debug/clear", post(handlers::admin::debug_logs_clear))
-        .route("/debug/vacuum", post(handlers::admin::debug_vacuum))
-        .route("/debug/recover", post(handlers::admin::debug_recover))
+        .route("/usage/by-day", get(handlers::admin::usage::usage_by_day))
+        .route("/usage/by-account", get(handlers::admin::usage::usage_by_account))
+        .route("/usage/by-status", get(handlers::admin::usage::usage_by_status))
+        .route("/usage/errors", get(handlers::admin::usage::usage_errors))
+        .route("/usage/latency", get(handlers::admin::usage::usage_latency))
+        .route("/usage/races", get(handlers::admin::usage::usage_races))
+        .route("/usage/recent", get(handlers::admin::usage::usage_recent))
+        .route("/usage/detail", get(handlers::admin::usage::usage_detail))
+        .route("/debug/logs", get(handlers::admin::debug::debug_logs))
+        .route("/debug/clear", post(handlers::admin::debug::debug_logs_clear))
+        .route("/debug/vacuum", post(handlers::admin::debug::debug_vacuum))
+        .route("/debug/recover", post(handlers::admin::debug::debug_recover))
         .route(
             "/recording",
-            get(handlers::admin::get_recording).post(handlers::admin::set_recording),
+            get(handlers::admin::debug::get_recording).post(handlers::admin::debug::set_recording),
         )
         .route(
             "/models/{id}/refresh",
-            post(handlers::admin::refresh_models),
+            post(handlers::admin::models::refresh_models),
         )
-        .route("/models/{id}/toggle", post(handlers::admin::toggle_model))
+        .route("/models/{id}/toggle", post(handlers::admin::models::toggle_model))
         .route(
             "/models/bulk-toggle",
-            post(handlers::admin::bulk_toggle_models),
+            post(handlers::admin::models::bulk_toggle_models),
         )
         .route(
             "/models/{id}",
-            axum::routing::delete(handlers::admin::delete_model),
+            axum::routing::delete(handlers::admin::models::delete_model),
         )
-        .route("/models", get(handlers::admin::list_models_admin))
-        .route("/models/custom", post(handlers::admin::create_custom_model))
+        .route("/models", get(handlers::admin::models::list_models_admin))
+        .route("/models/custom", post(handlers::admin::models::create_custom_model))
         .route(
             "/models/{id}/test",
-            post(handlers::admin::test_model).route_layer(middleware::from_fn(
+            post(handlers::admin::models::test_model).route_layer(middleware::from_fn(
                 crate::disconnect::client_disconnect_middleware,
             )),
         )
         .route(
             "/providers/{id}/refresh",
-            post(handlers::admin::refresh_provider_models),
+            post(handlers::admin::providers::refresh_provider_models),
         )
         .route(
             "/providers/{id}/active",
-            post(handlers::admin::set_provider_active),
+            post(handlers::admin::providers::set_provider_active),
         )
         .route(
             "/keys",
-            get(handlers::admin::list_api_keys).post(handlers::admin::create_api_key),
+            get(handlers::admin::api_keys::list_api_keys).post(handlers::admin::api_keys::create_api_key),
         )
         .route(
             "/keys/{id}",
-            get(handlers::admin::get_api_key)
-                .patch(handlers::admin::update_api_key)
-                .delete(handlers::admin::delete_api_key),
+            get(handlers::admin::api_keys::get_api_key)
+                .patch(handlers::admin::api_keys::update_api_key)
+                .delete(handlers::admin::api_keys::delete_api_key),
         )
-        .route("/keys/{id}/revoke", post(handlers::admin::revoke_api_key))
+        .route("/keys/{id}/revoke", post(handlers::admin::api_keys::revoke_api_key))
         .route(
             "/keys/{id}/regenerate",
-            post(handlers::admin::regenerate_api_key),
+            post(handlers::admin::api_keys::regenerate_api_key),
         )
-        .route("/keys/{id}/usage", get(handlers::admin::api_key_usage))
+        .route("/keys/{id}/usage", get(handlers::admin::api_keys::api_key_usage))
         // Free proxies endpoints
         .route(
             "/proxies",
-            get(handlers::admin::list_proxies).post(handlers::admin::create_custom_proxy),
+            get(handlers::admin::proxies::list_proxies).post(handlers::admin::proxies::create_custom_proxy),
         )
-        .route("/proxies/sync", post(handlers::admin::sync_proxies))
-        .route("/proxies/test-all", post(handlers::admin::test_all_proxies))
-        .route("/proxies/{id}", delete(handlers::admin::delete_proxy))
-        .route("/proxies/{id}/test", post(handlers::admin::test_proxy))
+        .route("/proxies/sync", post(handlers::admin::proxies::sync_proxies))
+        .route("/proxies/test-all", post(handlers::admin::proxies::test_all_proxies))
+        .route("/proxies/{id}", delete(handlers::admin::proxies::delete_proxy))
+        .route("/proxies/{id}/test", post(handlers::admin::proxies::test_proxy))
         // OAuth endpoints
         // models.dev sync
         .route(
             "/models/sync-models-dev",
-            post(handlers::admin::sync_models_dev),
+            post(handlers::admin::models::sync_models_dev),
         )
         // Re-price historical usage rows after models.dev sync
         .route(
             "/usage/recompute-costs",
-            post(handlers::admin::recompute_usage_costs),
+            post(handlers::admin::usage::recompute_usage_costs),
         )
         // ----------------------------------------------------------------
         // Notifications tray (F1). Surfaces discovery + system events
@@ -353,42 +353,42 @@ pub fn build_router(state: AppState) -> Router {
         // `/notifications/unread-count`) MUST come before the
         // `{id}`-param routes so axum 0.8's registration-order
         // matcher doesn't let `{id}` swallow `read-all` / `unread-count`.
-        .route("/notifications", get(handlers::admin::list_notifications))
+        .route("/notifications", get(handlers::admin::notifications::list_notifications))
         .route(
             "/notifications/read-all",
-            post(handlers::admin::mark_all_notifications_read),
+            post(handlers::admin::notifications::mark_all_notifications_read),
         )
         .route(
             "/notifications/unread-count",
-            get(handlers::admin::notifications_unread_count),
+            get(handlers::admin::notifications::notifications_unread_count),
         )
         .route(
             "/notifications/{id}/read",
-            post(handlers::admin::mark_notification_read),
+            post(handlers::admin::notifications::mark_notification_read),
         )
         .route(
             "/notifications/{id}/archive",
-            post(handlers::admin::archive_notification),
+            post(handlers::admin::notifications::archive_notification),
         )
         .route(
             "/notifications/{id}",
-            axum::routing::delete(handlers::admin::delete_notification),
+            axum::routing::delete(handlers::admin::notifications::delete_notification),
         )
         .route(
             "/oauth/{provider}/authorize",
-            get(handlers::admin::oauth_authorize),
+            get(handlers::admin::oauth::oauth_authorize),
         )
         .route(
             "/oauth/{provider}/exchange",
-            post(handlers::admin::oauth_exchange),
+            post(handlers::admin::oauth::oauth_exchange),
         )
         .route(
             "/oauth/{provider}/device-code",
-            post(handlers::admin::oauth_device_code),
+            post(handlers::admin::oauth::oauth_device_code),
         )
         .route(
             "/oauth/{provider}/device-poll",
-            post(handlers::admin::oauth_device_poll),
+            post(handlers::admin::oauth::oauth_device_poll),
         )
         // NOTE: `/oauth/callback` is intentionally NOT
         // registered here — it lives at `/admin/oauth/callback`
@@ -439,7 +439,7 @@ pub fn build_router(state: AppState) -> Router {
     //
     // Auth scope:
     //   - `/admin/api/*`       — auth middleware (above)
-    //   - `/admin/ws`          — per-handler auth (`usage_stream`)
+    //   - `/admin/ws`          — per-handler auth (`handlers::admin::usage::usage_stream`)
     //   - `/admin/health`      — public (LB probes)
     //   - `/admin/oauth/callback` — public (browser callback)
     //   - everything else      — public (SPA shell + assets)
@@ -452,9 +452,9 @@ pub fn build_router(state: AppState) -> Router {
         // via the SPA fallback.)
         .route("/", get(admin_ui::index_html))
         .route("/callback.html", get(admin_ui::callback_html))
-        .route("/health", get(handlers::admin::admin_health))
-        .route("/oauth/callback", get(handlers::admin::oauth_callback))
-        .route("/ws", get(handlers::admin::usage_stream))
+        .route("/health", get(handlers::admin::runtime::admin_health))
+        .route("/oauth/callback", get(handlers::admin::oauth::oauth_callback))
+        .route("/ws", get(handlers::admin::usage::usage_stream))
         // F3: i18n string packs. Public (no auth) — the dashboard's
         // `loadLang('en')` runs at boot BEFORE the SPA can attach the
         // admin Bearer token, and i18n packs contain no secrets
@@ -494,7 +494,7 @@ pub fn build_router(state: AppState) -> Router {
         // long-context requests attach tens of KiB of system prompt +
         // tool definitions) and has no project-wide ceiling for the
         // admin JSON extractors (POST /admin/api/combos/{id}/targets,
-        // bulk_toggle_models, reorder_combo_targets, etc.). Raising to
+        // handlers::admin::models::bulk_toggle_models, handlers::admin::combos::reorder_combo_targets, etc.). Raising to
         // 32 MiB allows long-context chat while keeping a sane DoS
         // ceiling. Streaming requests (SSE) are not affected — the
         // limit applies to the request body, not the response.
