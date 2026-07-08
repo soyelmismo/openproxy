@@ -27,7 +27,7 @@ const resetHint = (ts: string | null | undefined): string => {
 };
 
 function renderModelQuotaRows(details: ModelQuotaDetail[]): TemplateResult {
-  return html`<details class="quota-model-details" open>
+  return html`<details class="quota-model-details">
     <summary>Models (${details.length})</summary>
     <div class="quota-model-list">
       ${details.map((d) => {
