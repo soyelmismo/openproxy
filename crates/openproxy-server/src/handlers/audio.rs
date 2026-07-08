@@ -132,20 +132,20 @@ pub async fn transcribe(
     )
     .await?;
 
-    let status_code = response.status().as_u16();
+    let status_code = response.status;
     let content_type = response
-        .headers()
-        .get(reqwest::header::CONTENT_TYPE)
+        .headers
+        .get(axum::http::header::CONTENT_TYPE)
         .and_then(|v| v.to_str().ok())
         .unwrap_or("application/json")
         .to_string();
     let body_bytes = response
-        .bytes()
+        .collect()
         .await
-        .map_err(|e| ApiError(CoreError::UpstreamConnection(format!("read body: {}", e))))?;
+        .map_err(|e| ApiError(CoreError::UpstreamConnection(format!("read body: {:?}", e))))?;
 
     let total_ms = started.elapsed().as_millis() as u64;
-    let error_msg = if status_code < 400 {
+    let error_msg = if status_code.as_u16() < 400 {
         None
     } else {
         Some(format!("upstream status {}", status_code))
@@ -161,13 +161,13 @@ pub async fn transcribe(
         targets.combo_id,
         targets.model_row_id,
         &targets.upstream_model_id,
-        status_code,
+        status_code.as_u16(),
         error_msg,
         total_ms,
     );
 
     // 10. Return response.
-    build_audio_response(status_code, &content_type, body_bytes)
+    build_audio_response(status_code.as_u16(), &content_type, body_bytes)
 }
 
 struct ParsedAudioBody {
@@ -327,34 +327,75 @@ async fn dispatch_audio_request(
     api_key: &str,
     upstream_model_id: &str,
     body: ParsedAudioBody,
-) -> Result<reqwest::Response, ApiError> {
+) -> Result<openproxy_core::upstream::UpstreamResponse, ApiError> {
     let (auth_name, auth_value) = adapter.build_auth_header(api_key);
-    let client = state.http_client();
 
-    let mut form = reqwest::multipart::Form::new().text("model", upstream_model_id.to_string());
+    let boundary = format!("----WebKitFormBoundary{}", uuid::Uuid::new_v4().simple());
+    let mut payload = Vec::new();
+
+    // model field
+    payload.extend_from_slice(format!("--{}\r\n", boundary).as_bytes());
+    payload.extend_from_slice(b"Content-Disposition: form-data; name=\"model\"\r\n\r\n");
+    payload.extend_from_slice(upstream_model_id.as_bytes());
+    payload.extend_from_slice(b"\r\n");
+
+    // form fields
     for (k, v) in &body.form_fields {
-        form = form.text(k.clone(), v.clone());
+        payload.extend_from_slice(format!("--{}\r\n", boundary).as_bytes());
+        payload.extend_from_slice(
+            format!("Content-Disposition: form-data; name=\"{}\"\r\n\r\n", k).as_bytes(),
+        );
+        payload.extend_from_slice(v.as_bytes());
+        payload.extend_from_slice(b"\r\n");
     }
-    let file_part = reqwest::multipart::Part::bytes(body.file_bytes)
-        .file_name(body.file_name)
-        .mime_str(&body.file_content_type)
-        .map_err(|e| ApiError(CoreError::Internal(format!("mime_str: {e}"))))?;
-    form = form.part("file", file_part);
 
-    let mut req = client.post(upstream_url).multipart(form);
-    if !auth_name.is_empty() {
-        req = req.header(auth_name, auth_value);
-    }
+    // file field
+    payload.extend_from_slice(format!("--{}\r\n", boundary).as_bytes());
+    payload.extend_from_slice(
+        format!(
+            "Content-Disposition: form-data; name=\"file\"; filename=\"{}\"\r\n",
+            body.file_name
+        )
+        .as_bytes(),
+    );
+    payload
+        .extend_from_slice(format!("Content-Type: {}\r\n\r\n", body.file_content_type).as_bytes());
+    payload.extend_from_slice(&body.file_bytes);
+    payload.extend_from_slice(b"\r\n");
+
+    // end
+    payload.extend_from_slice(format!("--{}--\r\n", boundary).as_bytes());
+
+    let content_type = format!("multipart/form-data; boundary={}", boundary);
+    let mut req = openproxy_core::upstream::UpstreamRequest::post_multipart(
+        upstream_url,
+        content_type,
+        bytes::Bytes::from(payload),
+    );
+
+    if !auth_name.is_empty()
+        && let Ok(k) = axum::http::HeaderName::from_bytes(auth_name.as_bytes())
+            && let Ok(v) = axum::http::HeaderValue::from_str(&auth_value) {
+                req.headers.insert(k, v);
+            }
     for (k, v) in &adapter.config().extra_headers {
-        req = req.header(k, v);
+        if let Ok(hn) = axum::http::HeaderName::from_bytes(k.as_bytes())
+            && let Ok(hv) = axum::http::HeaderValue::from_str(v) {
+                req.headers.insert(hn, hv);
+            }
     }
 
-    req.send().await.map_err(|e| {
-        ApiError(CoreError::UpstreamConnection(format!(
-            "{}: {}",
-            upstream_url, e
-        )))
-    })
+    let client = state.upstream_client();
+    let cancel = openproxy_core::upstream::CancellationToken::new();
+    client
+        .call(req, openproxy_core::upstream::TimeoutProfile::Quota, cancel)
+        .await
+        .map_err(|e| {
+            ApiError(CoreError::UpstreamConnection(format!(
+                "{}: {:?}",
+                upstream_url, e
+            )))
+        })
 }
 
 fn build_audio_response(

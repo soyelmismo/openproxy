@@ -52,7 +52,6 @@ pub fn test_config(master_key: Arc<MasterKey>) -> PipelineConfig {
         adapters: Arc::new(Vec::new()),
         // A vanilla HTTP client is fine for tests: nothing in the
         // routing path actually fires a request.
-        http_client: reqwest::Client::new(),
         // 60s default cooldown for tests; individual tests that
         // exercise the cooldown path can pass a shorter value
         // through a local `PipelineConfig` override.
@@ -376,7 +375,6 @@ pub fn test_config_with_mock(master_key: Arc<MasterKey>, base_url: String) -> Pi
         max_attempts: 1,
         master_key,
         adapters: Arc::new(vec![crate::adapters::ProviderAdapterEnum::Mock(mock)]),
-        http_client: reqwest::Client::new(),
         cooldown_secs: 60,
         cooldown_max_secs: 3600,
         cooldown_factor: 2,

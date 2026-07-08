@@ -205,7 +205,6 @@ fn build_pipeline(state: &AppState) -> Pipeline {
         max_attempts: state.config().retries.max_attempts,
         master_key: state.master_key().clone(),
         adapters: Arc::new(state.adapters()),
-        http_client: state.http_client().clone(),
         cooldown_secs: state.config().cooldown.cooldown_secs,
         cooldown_max_secs: state.config().cooldown.max_secs,
         cooldown_factor: state.config().cooldown.factor,

@@ -27,11 +27,8 @@ tracing-subscriber = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 anyhow = { workspace = true }
-# The `multipart` feature on reqwest is required for the audio handler
-# to build an upstream `reqwest::multipart::Form` (forwarding the
 # Whisper request to the upstream `/audio/transcriptions` endpoint).
 # The `json`/`stream`/`rustls` features match the workspace defaults.
-reqwest = { workspace = true, features = ["multipart"] }
 uuid = { workspace = true }
 futures = { workspace = true }
 chrono = { workspace = true }

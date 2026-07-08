@@ -131,7 +131,10 @@ pub trait OAuthProvider: Send + Sync {
     ///   URL, or empty string for non-PKCE flows.
     ///
     /// Returns `Err` if the provider uses Device Code flow.
-    fn build_auth_url(&self, redirect_uri: &str) -> impl std::future::Future<Output = Result<(String, String, String)>> + Send {
+    fn build_auth_url(
+        &self,
+        redirect_uri: &str,
+    ) -> impl std::future::Future<Output = Result<(String, String, String)>> + Send {
         let redirect_uri_clone = redirect_uri.to_string();
         async move {
             let _ = redirect_uri_clone;
@@ -211,9 +214,7 @@ pub trait OAuthProvider: Send + Sync {
         _master_key: &MasterKey,
         _upstream: &Arc<UpstreamClient>,
     ) -> impl std::future::Future<Output = Result<()>> + Send {
-        async move {
-            Ok(())
-        }
+        async move { Ok(()) }
     }
 }
 

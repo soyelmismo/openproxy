@@ -3798,58 +3798,63 @@ async fn run_test_for_model(
     //    clock cost — a hung upstream shouldn't pin a dashboard
     //    button indefinitely.
     let headers = adapter.build_headers(&api_key, effective_target_format, &model.model_id);
-    let client = if let Some(ref proxy_uri) = proxy_url {
-        match reqwest::Proxy::all(proxy_uri) {
-            Ok(p) => reqwest::Client::builder()
-                .user_agent("openproxy/1.0")
-                .connect_timeout(std::time::Duration::from_secs(15))
-                .proxy(p)
-                .build()
-                .unwrap_or_else(|_| s.http_client()),
-            Err(_) => s.http_client(),
-        }
-    } else {
-        s.http_client()
-    };
-    let mut req = client
-        .post(&url)
-        .timeout(std::time::Duration::from_secs(15));
+    let mut req = openproxy_core::upstream::UpstreamRequest::post_json(
+        url,
+        bytes::Bytes::from(serde_json::to_vec(&body_value).unwrap()),
+    );
+    req.proxy = proxy_url.clone();
     for (k, v) in &headers {
-        req = req.header(k.as_str(), v.as_str());
+        if let Ok(hn) = axum::http::HeaderName::from_bytes(k.as_bytes())
+            && let Ok(hv) = axum::http::HeaderValue::from_str(v) {
+                req.headers.insert(hn, hv);
+            }
     }
-    req = req.json(&body_value);
 
     // 9. Send + measure. We capture both the wall-clock elapsed time
     //    and a truncated error body so the dashboard can show
     //    something useful when the upstream is unhappy.
     let start = std::time::Instant::now();
-    let result = if let Some(mut rx) = cancel_rx.clone() {
-        tokio::select! {
-            res = req.send() => res.map_err(|e| e.to_string()),
-            _ = async {
+    let client = s.upstream_client();
+    let cancel = openproxy_core::upstream::CancellationToken::new();
+
+    if let Some(mut rx) = cancel_rx.clone() {
+        let rx_cancel = cancel.clone();
+        tokio::spawn(async move {
+            if *rx.borrow() {
+                rx_cancel.cancel();
+                return;
+            }
+            while rx.changed().await.is_ok() {
                 if *rx.borrow() {
+                    rx_cancel.cancel();
                     return;
                 }
-                while rx.changed().await.is_ok() {
-                    if *rx.borrow() {
-                        return;
-                    }
-                }
-            } => {
-                Err("cancellation requested".to_string())
             }
-        }
-    } else {
-        req.send().await.map_err(|e| e.to_string())
-    };
+        });
+    }
+
+    let profile = openproxy_core::upstream::TimeoutProfile::Custom(
+        openproxy_core::upstream::ResolvedTimeouts {
+            dns_ms: 2000,
+            dial_ms: 5000,
+            tls_ms: 5000,
+            write_ms: 5000,
+            headers_ms: 15000,
+            body_chunk_ms: 5000,
+            total_ms: 15000,
+        },
+    );
+
+    let result = client.call(req, profile, cancel).await;
     let elapsed_ms = start.elapsed().as_millis() as u64;
 
     let (status, error_msg) = match result {
         Ok(response) => {
-            let status = response.status().as_u16();
-            if !response.status().is_success() {
-                let body = response.text().await.unwrap_or_default();
-                let truncated: String = body.chars().take(TEST_ERROR_BODY_MAX_CHARS).collect();
+            let status = response.status.as_u16();
+            if status >= 400 {
+                let body = response.collect().await.unwrap_or_default();
+                let text = String::from_utf8_lossy(&body);
+                let truncated: String = text.chars().take(TEST_ERROR_BODY_MAX_CHARS).collect();
                 (status, Some(truncated))
             } else {
                 (status, None)
@@ -3860,7 +3865,7 @@ async fn run_test_for_model(
             // / timeout). The schema doesn't constrain this — `0` is a
             // distinct sentinel that the dashboard renders as a network
             // error.
-            (0, Some(e))
+            (0, Some(format!("{:?}", e)))
         }
     };
 
@@ -7250,6 +7255,6 @@ mod tests {
         .await;
 
         assert_eq!(r.status, 0);
-        assert_eq!(r.error_msg.as_deref(), Some("cancellation requested"));
+        assert_eq!(r.error_msg.as_deref(), Some("Cancel"));
     }
 }

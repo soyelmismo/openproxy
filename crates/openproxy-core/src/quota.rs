@@ -2159,6 +2159,4 @@ mod tests {
         assert_eq!(q.weekly_reset_at.as_deref(), Some("1784038800"));
         assert_eq!(q.plan_name.as_deref(), Some("Codex / ChatGPT"));
     }
-
-
 }

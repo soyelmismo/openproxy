@@ -250,9 +250,7 @@ pub trait ProviderAdapter: Send + Sync {
         api_key: &str,
         _account_label: &str,
     ) -> impl std::future::Future<Output = Result<Vec<DiscoveredModel>>> + Send {
-        async move {
-            self.fetch_models(upstream_client, api_key).await
-        }
+        async move { self.fetch_models(upstream_client, api_key).await }
     }
 
     /// Normalize an OpenAI request view before serialization.
@@ -268,10 +266,12 @@ pub trait ProviderAdapter: Send + Sync {
         _req: Arc<crate::pipeline::PipelineRequest>,
         _resolved_target: &crate::pipeline::context::ResolvedTarget,
         _ctx: Option<CustomExecutionContext>,
-    ) -> impl std::future::Future<Output = Option<std::result::Result<crate::translation::OpenAIResponse, crate::error::CoreError>>> + Send {
-        async move {
-            None
-        }
+    ) -> impl std::future::Future<
+        Output = Option<
+            std::result::Result<crate::translation::OpenAIResponse, crate::error::CoreError>,
+        >,
+    > + Send {
+        async move { None }
     }
 }
 

@@ -8,9 +8,7 @@ authors.workspace = true
 
 [features]
 # Default-on: build the new `upstream/` hyper-based client alongside the
-# existing reqwest-based call sites. Setting `--no-default-features` (or
 # `default-features = false`) for openproxy-core disables the module.
-# Call sites that still use reqwest are NOT touched in this gate; the
 # feature flag is only a compile-time switch for the new module.
 default = ["upstream-hyper"]
 upstream-hyper = ["dep:hyper", "dep:hyper-util", "dep:http", "dep:http-body", "dep:http-body-util", "dep:futures-util", "dep:tokio-rustls", "dep:rustls", "dep:rustls-pki-types", "dep:webpki-roots", "dep:socket2"]
@@ -21,7 +19,6 @@ upstream-stub = []
 [dependencies]
 tokio = { workspace = true }
 axum = { workspace = true }
-reqwest = { workspace = true }
 rusqlite = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
@@ -35,7 +32,6 @@ chrono = { workspace = true }
 uuid = { workspace = true }
 futures = { workspace = true }
 # `tokio_util::sync::CancellationToken` lives behind the `rt` feature.
-# We promote the transitive dep (it already arrives via reqwest) to a
 # direct dep so the discovery scheduler can fan out `cancel()` to every
 # per-provider task with broadcast semantics. See Gate E1 spec.
 tokio-util = { workspace = true, features = ["rt"] }
@@ -61,7 +57,6 @@ tiktoken-rs = "0.6"
 
 # --- hyper-based upstream client (Gate 0) ---
 # Pinned to versions that are already present in the workspace lockfile
-# (transitively via reqwest). The `upstream-hyper` feature gates these
 # so disabling the module also disables the direct dep; that keeps
 # `cargo build -p openproxy-core --no-default-features` working.
 hyper = { version = "1.10", default-features = false, features = ["client", "http1", "http2"], optional = true }
@@ -80,7 +75,6 @@ socket2 = { version = "0.6", features = ["all"], optional = true }
 # TLS for the upstream/ connector. Only the production HTTPS path
 # uses these (HTTP uses a plain `tokio::net::TcpStream`). The
 # versions track the `tokio-rustls 0.26 / rustls 0.23` pair that
-# reqwest already pulls in transitively; pinning them as direct
 # deps here keeps the feature flag self-contained.
 tokio-rustls = { version = "0.26", optional = true }
 rustls = { version = "0.23", default-features = false, features = ["logging", "std", "tls12", "ring"], optional = true }

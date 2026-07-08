@@ -570,14 +570,14 @@ async fn run_one_tick(
 #[cfg(test)]
 mod tests {
     use super::*;
-    
+
     use crate::db::migrations;
     use crate::ids::{AccountId, ModelId, ProviderId as CoreProviderId};
     use crate::models::{DiscoveredModel, TargetFormat};
     use crate::providers;
     use rusqlite::Connection;
     use std::path::PathBuf;
-    
+
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     /// A 1-second-interval config that staggers nothing (the

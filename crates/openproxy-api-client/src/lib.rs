@@ -60,26 +60,27 @@ use std::fmt::Write as _;
 /// Mantiene una `reqwest::Client` reutilizable y la `base_url` del server.
 /// Es `Send + Sync` y barato de clonar (comparte el `reqwest::Client`
 /// interior, que ya es `Arc`-interno).
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct Client {
     base_url: String,
-    http: reqwest::Client,
+    http: std::sync::Arc<openproxy_core::upstream::UpstreamClient>,
 }
 
 impl Client {
     /// Construye un cliente con un `reqwest::Client` por defecto.
     pub fn new(base_url: impl Into<String>) -> Self {
-        Self::with_client(base_url, reqwest::Client::new())
+        Self::with_client(base_url, openproxy_core::upstream::UpstreamClient::new())
     }
 
     /// Construye un cliente compartiendo un `reqwest::Client` propio.
     ///
     /// Útil cuando el llamador quiere configurar timeouts, TLS, proxies, o
     /// reutilizar un pool de conexiones a nivel de aplicación.
-    pub fn with_client(base_url: impl Into<String>, http: reqwest::Client) -> Self {
+    pub fn with_client(
+        base_url: impl Into<String>,
+        http: std::sync::Arc<openproxy_core::upstream::UpstreamClient>,
+    ) -> Self {
         let base = base_url.into();
-        // Trim del slash final para que `url("/admin/...")` siempre
-        // concatene con un único separador, evitando `//admin/...`.
         let base_url = base.trim_end_matches('/').to_string();
         Self { base_url, http }
     }
@@ -88,13 +89,56 @@ impl Client {
         format!("{}{}", self.base_url, path)
     }
 
+    async fn req(
+        &self,
+        req: openproxy_core::upstream::UpstreamRequest,
+    ) -> Result<openproxy_core::upstream::UpstreamResponse, ClientError> {
+        let cancel = openproxy_core::upstream::CancellationToken::new();
+        self.http
+            .call(req, openproxy_core::upstream::TimeoutProfile::Quota, cancel)
+            .await
+            .map_err(|e| ClientError::Http(e.to_string()))
+    }
+
+    async fn get(
+        &self,
+        path: &str,
+    ) -> Result<openproxy_core::upstream::UpstreamResponse, ClientError> {
+        self.req(openproxy_core::upstream::UpstreamRequest::get(
+            self.url(path),
+        ))
+        .await
+    }
+
+    async fn delete(
+        &self,
+        path: &str,
+    ) -> Result<openproxy_core::upstream::UpstreamResponse, ClientError> {
+        let mut r = openproxy_core::upstream::UpstreamRequest::get(self.url(path));
+        r.method = http::Method::DELETE;
+        self.req(r).await
+    }
+
+    async fn post_json(
+        &self,
+        path: &str,
+        body: impl serde::Serialize,
+    ) -> Result<openproxy_core::upstream::UpstreamResponse, ClientError> {
+        let b = bytes::Bytes::from(serde_json::to_vec(&body).unwrap());
+        self.req(openproxy_core::upstream::UpstreamRequest::post_json(
+            self.url(path),
+            b,
+        ))
+        .await
+    }
+
     // -----------------------------------------------------------------
     // Health
     // -----------------------------------------------------------------
 
     /// `GET /admin/health` — liveness con tag de versión.
     pub async fn health(&self) -> Result<serde_json::Value, ClientError> {
-        let resp = self.http.get(self.url("/admin/health")).send().await?;
+        let resp = self.get("/admin/health").await?;
         parse_json(resp).await
     }
 
@@ -104,7 +148,7 @@ impl Client {
 
     /// `GET /admin/providers`.
     pub async fn list_providers(&self) -> Result<Vec<providers::Provider>, ClientError> {
-        let resp = self.http.get(self.url("/admin/providers")).send().await?;
+        let resp = self.get("/admin/providers").await?;
         parse_json(resp).await
     }
 
@@ -113,12 +157,7 @@ impl Client {
         &self,
         input: CreateProviderInput,
     ) -> Result<ProviderId, ClientError> {
-        let resp = self
-            .http
-            .post(self.url("/admin/providers"))
-            .json(&input)
-            .send()
-            .await?;
+        let resp = self.post_json("/admin/providers", &input).await?;
         let body: serde_json::Value = parse_json(resp).await?;
         let id = body.get("id").and_then(|v| v.as_str()).ok_or_else(|| {
             ClientError::Deserialize(serde_json::Error::io(std::io::Error::new(
@@ -132,7 +171,7 @@ impl Client {
     /// `DELETE /admin/providers/:id`. Idempotente.
     pub async fn delete_provider(&self, id: &ProviderId) -> Result<(), ClientError> {
         let path = format!("/admin/providers/{}", urlencoded(id.as_str()));
-        let resp = self.http.delete(self.url(&path)).send().await?;
+        let resp = self.delete(&path).await?;
         parse_unit(resp).await
     }
 
@@ -150,7 +189,9 @@ impl Client {
             let qs = build_query(&[("provider_id", Some(p.as_str()))]);
             write!(&mut url, "?{}", qs).expect("writing to String never fails");
         }
-        let resp = self.http.get(url).send().await?;
+        let resp = self
+            .req(openproxy_core::upstream::UpstreamRequest::get(url))
+            .await?;
         parse_json(resp).await
     }
 
@@ -159,12 +200,7 @@ impl Client {
         &self,
         input: CreateAccountInput,
     ) -> Result<AccountId, ClientError> {
-        let resp = self
-            .http
-            .post(self.url("/admin/accounts"))
-            .json(&input)
-            .send()
-            .await?;
+        let resp = self.post_json("/admin/accounts", &input).await?;
         let body: serde_json::Value = parse_json(resp).await?;
         let id = body.get("id").and_then(|v| v.as_i64()).ok_or_else(|| {
             ClientError::Deserialize(serde_json::Error::io(std::io::Error::new(
@@ -178,7 +214,7 @@ impl Client {
     /// `DELETE /admin/accounts/:id`. Idempotente.
     pub async fn delete_account(&self, id: AccountId) -> Result<(), ClientError> {
         let path = format!("/admin/accounts/{}", id.0);
-        let resp = self.http.delete(self.url(&path)).send().await?;
+        let resp = self.delete(&path).await?;
         parse_unit(resp).await
     }
 
@@ -190,7 +226,14 @@ impl Client {
         input: UpdateAccountApiKeyInput,
     ) -> Result<(), ClientError> {
         let path = format!("/admin/accounts/{}/api-key", id.0);
-        let resp = self.http.put(self.url(&path)).json(&input).send().await?;
+        let resp = {
+            let mut req = openproxy_core::upstream::UpstreamRequest::post_json(
+                self.url(&path),
+                bytes::Bytes::from(serde_json::to_vec(&input).unwrap()),
+            );
+            req.method = http::Method::PUT;
+            self.req(req).await?
+        };
         parse_unit(resp).await
     }
 
@@ -200,18 +243,13 @@ impl Client {
 
     /// `GET /admin/combos`.
     pub async fn list_combos(&self) -> Result<Vec<combos::Combo>, ClientError> {
-        let resp = self.http.get(self.url("/admin/combos")).send().await?;
+        let resp = self.get("/admin/combos").await?;
         parse_json(resp).await
     }
 
     /// `POST /admin/combos`. Devuelve el `ComboId` recién creado.
     pub async fn create_combo(&self, input: CreateComboInput) -> Result<ComboId, ClientError> {
-        let resp = self
-            .http
-            .post(self.url("/admin/combos"))
-            .json(&input)
-            .send()
-            .await?;
+        let resp = self.post_json("/admin/combos", &input).await?;
         let body: serde_json::Value = parse_json(resp).await?;
         let id = body.get("id").and_then(|v| v.as_i64()).ok_or_else(|| {
             ClientError::Deserialize(serde_json::Error::io(std::io::Error::new(
@@ -225,7 +263,7 @@ impl Client {
     /// `DELETE /admin/combos/:id`. Idempotente.
     pub async fn delete_combo(&self, id: ComboId) -> Result<(), ClientError> {
         let path = format!("/admin/combos/{}", id.0);
-        let resp = self.http.delete(self.url(&path)).send().await?;
+        let resp = self.delete(&path).await?;
         parse_unit(resp).await
     }
 
@@ -235,7 +273,7 @@ impl Client {
         combo_id: ComboId,
     ) -> Result<Vec<combos::ComboTarget>, ClientError> {
         let path = format!("/admin/combos/{}/targets", combo_id.0);
-        let resp = self.http.get(self.url(&path)).send().await?;
+        let resp = self.get(&path).await?;
         parse_json(resp).await
     }
 
@@ -248,7 +286,7 @@ impl Client {
         input: AddTargetInput,
     ) -> Result<i64, ClientError> {
         let path = format!("/admin/combos/{}/targets", combo_id.0);
-        let resp = self.http.post(self.url(&path)).json(&input).send().await?;
+        let resp = self.post_json(&path, &input).await?;
         let body: serde_json::Value = parse_json(resp).await?;
         let id = body.get("id").and_then(|v| v.as_i64()).ok_or_else(|| {
             ClientError::Deserialize(serde_json::Error::io(std::io::Error::new(
@@ -271,7 +309,7 @@ impl Client {
     /// del shape; los consumidores que necesiten los campos pueden
     /// deserializar desde aquí.
     pub async fn list_models(&self) -> Result<serde_json::Value, ClientError> {
-        let resp = self.http.get(self.url("/v1/models")).send().await?;
+        let resp = self.get("/v1/models").await?;
         parse_json(resp).await
     }
 
@@ -287,7 +325,14 @@ impl Client {
     /// `models`, según reporta el server.
     pub async fn refresh_models(&self, model_row_id: ModelRowId) -> Result<usize, ClientError> {
         let path = format!("/admin/models/{}/refresh", model_row_id.0);
-        let resp = self.http.post(self.url(&path)).send().await?;
+        let resp = {
+            let mut req = openproxy_core::upstream::UpstreamRequest::post_json(
+                self.url(&path),
+                bytes::Bytes::new(),
+            );
+            req.method = http::Method::POST;
+            self.req(req).await?
+        };
         let body: serde_json::Value = parse_json(resp).await?;
         let touched = body
             .get("touched")
@@ -317,7 +362,9 @@ impl Client {
             self.url("/admin/usage/summary"),
             usage_filter_query(f)
         );
-        let resp = self.http.get(url).send().await?;
+        let resp = self
+            .req(openproxy_core::upstream::UpstreamRequest::get(url))
+            .await?;
         parse_json(resp).await
     }
 
@@ -328,7 +375,9 @@ impl Client {
             self.url("/admin/usage/by-model"),
             usage_filter_query(f)
         );
-        let resp = self.http.get(url).send().await?;
+        let resp = self
+            .req(openproxy_core::upstream::UpstreamRequest::get(url))
+            .await?;
         parse_json(resp).await
     }
 
@@ -342,7 +391,9 @@ impl Client {
             self.url("/admin/usage/by-account"),
             usage_filter_query(f)
         );
-        let resp = self.http.get(url).send().await?;
+        let resp = self
+            .req(openproxy_core::upstream::UpstreamRequest::get(url))
+            .await?;
         parse_json(resp).await
     }
 
@@ -353,7 +404,9 @@ impl Client {
             self.url("/admin/usage/by-status"),
             usage_filter_query(f)
         );
-        let resp = self.http.get(url).send().await?;
+        let resp = self
+            .req(openproxy_core::upstream::UpstreamRequest::get(url))
+            .await?;
         parse_json(resp).await
     }
 
@@ -370,7 +423,9 @@ impl Client {
             write!(&mut qs, "limit={}", limit).expect("writing to String never fails");
         }
         let url = format!("{}?{}", self.url("/admin/usage/errors"), qs);
-        let resp = self.http.get(url).send().await?;
+        let resp = self
+            .req(openproxy_core::upstream::UpstreamRequest::get(url))
+            .await?;
         parse_json(resp).await
     }
 
@@ -381,7 +436,9 @@ impl Client {
             self.url("/admin/usage/latency"),
             usage_filter_query(f)
         );
-        let resp = self.http.get(url).send().await?;
+        let resp = self
+            .req(openproxy_core::upstream::UpstreamRequest::get(url))
+            .await?;
         parse_json(resp).await
     }
 
@@ -392,7 +449,9 @@ impl Client {
             self.url("/admin/usage/races"),
             usage_filter_query(f)
         );
-        let resp = self.http.get(url).send().await?;
+        let resp = self
+            .req(openproxy_core::upstream::UpstreamRequest::get(url))
+            .await?;
         parse_json(resp).await
     }
 }
@@ -406,7 +465,7 @@ impl Client {
 pub enum ClientError {
     /// Fallo de transporte (red, DNS, TLS, timeout). Heredado de reqwest.
     #[error("http: {0}")]
-    Http(#[from] reqwest::Error),
+    Http(String),
 
     /// El server devolvió un error tipado (`{"error": {"code", "message"}}`).
     /// El `CoreError` se reconstruye a partir del `code`; el `Display`
@@ -439,10 +498,13 @@ pub enum ClientError {
 ///    código y mensaje crudos.
 /// 3. `4xx/5xx` con body que no encaja en el sobre → [`ClientError::Status`].
 async fn parse_json<T: serde::de::DeserializeOwned>(
-    resp: reqwest::Response,
+    resp: openproxy_core::upstream::UpstreamResponse,
 ) -> Result<T, ClientError> {
-    let status = resp.status();
-    let bytes = resp.bytes().await?;
+    let status = resp.status;
+    let bytes = resp
+        .collect()
+        .await
+        .map_err(|e| ClientError::Http(e.to_string()))?;
     if status.is_success() {
         Ok(serde_json::from_slice(&bytes)?)
     } else {
@@ -453,16 +515,22 @@ async fn parse_json<T: serde::de::DeserializeOwned>(
 /// Variante para endpoints que devuelven `{"deleted": ...}` u otro body
 /// informativo. No necesitamos el body, solo verificar que el status
 /// sea 2xx y que, si no lo es, el body se traduzca a `ClientError`.
-async fn parse_unit(resp: reqwest::Response) -> Result<(), ClientError> {
-    let status = resp.status();
+async fn parse_unit(resp: openproxy_core::upstream::UpstreamResponse) -> Result<(), ClientError> {
+    let status = resp.status;
     if status.is_success() {
         // Drenamos el body para liberar la conexión al pool, pero no lo
         // inspeccionamos: los endpoints de delete devuelven `{"deleted":
         // ...}` y esa información no es relevante para el llamador.
-        let _ = resp.bytes().await?;
+        let _ = resp
+            .collect()
+            .await
+            .map_err(|e| ClientError::Http(e.to_string()))?;
         Ok(())
     } else {
-        let bytes = resp.bytes().await?;
+        let bytes = resp
+            .collect()
+            .await
+            .map_err(|e| ClientError::Http(e.to_string()))?;
         Err(map_error_body(status.as_u16(), &bytes))
     }
 }

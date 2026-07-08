@@ -334,23 +334,27 @@ struct ProxiflyItem {
 }
 
 async fn sync_proxifly() -> crate::error::Result<Vec<ScrapedProxy>> {
-    let client = reqwest::Client::new();
+    use crate::upstream::{TimeoutProfile, UpstreamClient, UpstreamRequest};
+    let client = UpstreamClient::new();
+    let req = UpstreamRequest::get("https://api.proxifly.dev/proxy?format=json&quantity=100");
+    let cancel = crate::upstream::CancellationToken::new();
     let res = client
-        .get("https://api.proxifly.dev/proxy?format=json&quantity=100")
-        .send()
+        .call(req, TimeoutProfile::ModelDiscovery, cancel)
         .await
-        .map_err(|e| crate::error::CoreError::Internal(format!("Proxifly HTTP error: {}", e)))?;
+        .map_err(|e| crate::error::CoreError::Internal(format!("Proxifly HTTP error: {:?}", e)))?;
 
-    if !res.status().is_success() {
+    if res.status != 200 {
         return Err(crate::error::CoreError::Internal(format!(
             "Proxifly HTTP status: {}",
-            res.status()
+            res.status
         )));
     }
 
-    let items: Vec<ProxiflyItem> = res
-        .json()
+    let body_bytes = res
+        .collect()
         .await
+        .map_err(|e| crate::error::CoreError::Internal(format!("Proxifly body error: {:?}", e)))?;
+    let items: Vec<ProxiflyItem> = serde_json::from_slice(&body_bytes)
         .map_err(|e| crate::error::CoreError::Internal(format!("Proxifly JSON error: {}", e)))?;
 
     let list = items
@@ -373,7 +377,8 @@ async fn sync_proxifly() -> crate::error::Result<Vec<ScrapedProxy>> {
 }
 
 async fn sync_iplocate() -> crate::error::Result<Vec<ScrapedProxy>> {
-    let client = reqwest::Client::new();
+    use crate::upstream::{TimeoutProfile, UpstreamClient, UpstreamRequest};
+    let client = UpstreamClient::new();
     let mut list = Vec::new();
     let protocols = vec!["http", "https", "socks4", "socks5"];
 
@@ -382,21 +387,33 @@ async fn sync_iplocate() -> crate::error::Result<Vec<ScrapedProxy>> {
             "https://raw.githubusercontent.com/iplocate/free-proxy-list/main/protocols/{}.txt",
             proto
         );
-        let res = match client.get(&url).send().await {
+        let req = UpstreamRequest::get(url);
+        let cancel = crate::upstream::CancellationToken::new();
+        let res = match client
+            .call(req, TimeoutProfile::ModelDiscovery, cancel)
+            .await
+        {
             Ok(r) => r,
             Err(e) => {
-                tracing::warn!("iplocate fetch error for {}: {}", proto, e);
+                tracing::warn!("iplocate fetch error for {}: {:?}", proto, e);
                 continue;
             }
         };
-        if !res.status().is_success() {
-            tracing::warn!("iplocate status error for {}: {}", proto, res.status());
+        if res.status != 200 {
+            tracing::warn!("iplocate status error for {}: {}", proto, res.status);
             continue;
         }
-        let text = match res.text().await {
+        let body_bytes = match res.collect().await {
+            Ok(b) => b,
+            Err(e) => {
+                tracing::warn!("iplocate body error for {}: {:?}", proto, e);
+                continue;
+            }
+        };
+        let text = match String::from_utf8(body_bytes.to_vec()) {
             Ok(t) => t,
             Err(e) => {
-                tracing::warn!("iplocate read error for {}: {}", proto, e);
+                tracing::warn!("iplocate decode error for {}: {}", proto, e);
                 continue;
             }
         };
@@ -439,23 +456,27 @@ struct OneProxyApiResponse {
 }
 
 async fn sync_oneproxy() -> crate::error::Result<Vec<ScrapedProxy>> {
-    let client = reqwest::Client::new();
+    use crate::upstream::{TimeoutProfile, UpstreamClient, UpstreamRequest};
+    let client = UpstreamClient::new();
+    let req = UpstreamRequest::get("https://1proxy-api.aitradepulse.com/api/v1/proxies/advanced");
+    let cancel = crate::upstream::CancellationToken::new();
     let res = client
-        .get("https://1proxy-api.aitradepulse.com/api/v1/proxies/advanced")
-        .send()
+        .call(req, TimeoutProfile::ModelDiscovery, cancel)
         .await
-        .map_err(|e| crate::error::CoreError::Internal(format!("1proxy HTTP error: {}", e)))?;
+        .map_err(|e| crate::error::CoreError::Internal(format!("1proxy HTTP error: {:?}", e)))?;
 
-    if !res.status().is_success() {
+    if res.status != 200 {
         return Err(crate::error::CoreError::Internal(format!(
             "1proxy HTTP status: {}",
-            res.status()
+            res.status
         )));
     }
 
-    let body: OneProxyApiResponse = res
-        .json()
+    let body_bytes = res
+        .collect()
         .await
+        .map_err(|e| crate::error::CoreError::Internal(format!("1proxy body error: {:?}", e)))?;
+    let body: OneProxyApiResponse = serde_json::from_slice(&body_bytes)
         .map_err(|e| crate::error::CoreError::Internal(format!("1proxy JSON error: {}", e)))?;
 
     let proxies = body.proxies.unwrap_or_default();
@@ -535,31 +556,38 @@ pub async fn sync_all_providers(db_pool: Arc<DbPool>) -> crate::error::Result<Sy
 
 // Proxy validation logic
 pub async fn test_proxy_connection(r#type: &str, host: &str, port: u16) -> Result<i64, String> {
+    use crate::upstream::{ResolvedTimeouts, TimeoutProfile, UpstreamClient, UpstreamRequest};
     let proxy_url = format!("{}://{}:{}", r#type, host, port);
-    let proxy = reqwest::Proxy::all(&proxy_url).map_err(|e| format!("Invalid proxy URL: {}", e))?;
 
-    let client = reqwest::Client::builder()
-        .proxy(proxy)
-        .timeout(std::time::Duration::from_secs(5))
-        .build()
-        .map_err(|e| format!("Failed to build HTTP client: {}", e))?;
+    let client = UpstreamClient::new();
+    let mut req = UpstreamRequest::get("https://clients3.google.com/generate_204");
+    req.proxy = Some(proxy_url);
+
+    // Tight timeout for the proxy test (equivalent to the old reqwest 5s timeout).
+    let profile = TimeoutProfile::Custom(ResolvedTimeouts {
+        dns_ms: 2000,
+        dial_ms: 3000,
+        tls_ms: 3000,
+        write_ms: 2000,
+        headers_ms: 5000,
+        body_chunk_ms: 2000,
+        total_ms: 5000,
+    });
+    let cancel = crate::upstream::CancellationToken::new();
 
     let start = std::time::Instant::now();
-    let res = client
-        .get("https://clients3.google.com/generate_204")
-        .send()
-        .await;
+    let res = client.call(req, profile, cancel).await;
 
     match res {
         Ok(r) => {
-            if r.status().is_success() || r.status().is_redirection() {
+            if r.status == 204 || r.status == 200 {
                 let latency = start.elapsed().as_millis() as i64;
                 Ok(latency)
             } else {
-                Err(format!("Status check failed: HTTP {}", r.status()))
+                Err(format!("Status check failed: HTTP {}", r.status))
             }
         }
-        Err(e) => Err(format!("Connection probe failed: {}", e)),
+        Err(e) => Err(format!("Connection probe failed: {:?}", e)),
     }
 }
 

@@ -9,11 +9,12 @@ authors.workspace = true
 [dependencies]
 openproxy-core = { path = "../openproxy-core" }
 tokio = { workspace = true }
-reqwest = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
 anyhow = { workspace = true }
+http = "1.4.2"
+bytes = "1.12.1"
 
 [dev-dependencies]
 httpmock = "0.8.3"

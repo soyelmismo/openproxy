@@ -83,7 +83,6 @@ fn test_config(master_key: Arc<MasterKey>) -> PipelineConfig {
         adapters: Arc::new(Vec::new()),
         // A vanilla HTTP client is fine for tests: nothing in the
         // routing path actually fires a request.
-        http_client: reqwest::Client::new(),
         // 60s default cooldown for tests; individual tests that
         // exercise the cooldown path can pass a shorter value
         // through a local `PipelineConfig` override.
@@ -125,7 +124,6 @@ fn seed_provider(conn: &Connection, provider_id: &str, auth_type: AuthType) {
     )
     .expect("seed provider");
 }
-
 
 /// Build a `PipelineRequest` with sensible defaults.
 fn make_request(combo_id: ComboId) -> (PipelineRequest, watch::Sender<bool>) {
@@ -187,7 +185,7 @@ fn pipeline_creation_doesnt_panic() {
     let _p = Pipeline::new(conn, cfg);
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn pipeline_run_with_no_targets_returns_502() {
     // With the auto-populate fallback in place, the only way to
     // hit the bare NoHealthyTargets path is to have an empty combo
@@ -229,7 +227,7 @@ async fn pipeline_run_with_no_targets_returns_502() {
     assert!(result.final_response.is_none());
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn pipeline_run_no_targets_records_usage_row() {
     // The NoHealthyTargets path must write a usage row so the
     // dashboard's Live Logs tail isn't permanently empty. We
@@ -278,7 +276,7 @@ async fn pipeline_run_no_targets_records_usage_row() {
     assert_eq!(error.as_deref(), Some("no_healthy_targets"));
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn auto_populate_fills_combo_then_runs() {
     // The auto-populate fallback should turn an empty combo into
     // a routable one when there is a healthy provider with active
@@ -520,7 +518,7 @@ fn seed_target_with_account(
     (combo_id, target_id, account_id, ModelRowId(model_rowid))
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn pipeline_probes_parked_target_when_only_option() {
     // Cooldown semantics: the persistent cooldown protects
     // *between* requests, not *within* a single request. When
@@ -597,7 +595,7 @@ async fn pipeline_probes_parked_target_when_only_option() {
     assert!(crate::cooldown::is_in_cooldown(&w, target_id).expect("check"));
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn pipeline_walks_full_row_when_all_targets_in_cooldown() {
     // Regression for the cross-request cooldown contract:
     // when *every* target in a priority combo is parked, the
@@ -778,7 +776,7 @@ async fn pipeline_walks_full_row_when_all_targets_in_cooldown() {
 ///   - the result has no error,
 ///   - the surfaced body comes from target 2
 ///     (`choices[0].message.content == "from model 2"`).
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn priority_combo_walks_row_after_first_5xx() {
     use crate::adapters::AdapterFormat;
     use crate::combos::{self, AddTargetInput, Strategy};
@@ -957,7 +955,6 @@ async fn priority_combo_walks_row_after_first_5xx() {
         max_attempts: 1,
         master_key: mk,
         adapters: Arc::new(vec![crate::adapters::ProviderAdapterEnum::Mock(mock)]),
-        http_client: reqwest::Client::new(),
         cooldown_secs: 60,
         cooldown_max_secs: 3600,
         cooldown_factor: 2,
@@ -1064,7 +1061,7 @@ async fn priority_combo_walks_row_after_first_5xx() {
 /// shared mock always returns 200, so we override the listener
 /// directly. To assert the walk, we re-spin a 500-only
 /// listener inline.
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn adversarial_priority_combo_with_5_targets_walks_to_5th_when_all_fail() {
     use crate::combos::AddTargetInput;
     use std::sync::atomic::{AtomicU32, Ordering as AtomicOrdering};
@@ -1198,7 +1195,6 @@ async fn adversarial_priority_combo_with_5_targets_walks_to_5th_when_all_fail() 
         max_attempts: 1,
         master_key: mk,
         adapters: Arc::new(vec![crate::adapters::ProviderAdapterEnum::Mock(mock)]),
-        http_client: reqwest::Client::new(),
         cooldown_secs: 60,
         cooldown_max_secs: 3600,
         cooldown_factor: 2,
@@ -1270,7 +1266,7 @@ async fn adversarial_priority_combo_with_5_targets_walks_to_5th_when_all_fail() 
 /// known limitation of the fix and a future iteration needs to
 /// reconsider whether 4xx should be retried across targets in
 /// a Priority combo.
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn adversarial_priority_combo_with_mixed_4xx_5xx_walks_to_first_2xx() {
     use crate::combos::AddTargetInput;
     use std::sync::atomic::{AtomicU32, Ordering as AtomicOrdering};
@@ -1393,7 +1389,6 @@ async fn adversarial_priority_combo_with_mixed_4xx_5xx_walks_to_first_2xx() {
         max_attempts: 1,
         master_key: mk,
         adapters: Arc::new(vec![crate::adapters::ProviderAdapterEnum::Mock(mock)]),
-        http_client: reqwest::Client::new(),
         cooldown_secs: 60,
         cooldown_max_secs: 3600,
         cooldown_factor: 2,
@@ -1458,7 +1453,7 @@ async fn adversarial_priority_combo_with_mixed_4xx_5xx_walks_to_first_2xx() {
 /// through to the next sibling on ANY error (retryable OR not).
 /// Only `ClientDisconnected` aborts early (handled at the top of
 /// the loop).
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn round_robin_combo_walks_past_non_retryable_400() {
     use crate::combos::AddTargetInput;
     use std::sync::atomic::{AtomicU32, Ordering as AtomicOrdering};
@@ -1586,7 +1581,6 @@ data: [DONE]
         max_attempts: 1,
         master_key: mk,
         adapters: Arc::new(vec![crate::adapters::ProviderAdapterEnum::Mock(mock)]),
-        http_client: reqwest::Client::new(),
         cooldown_secs: 60,
         cooldown_max_secs: 3600,
         cooldown_factor: 2,
@@ -1633,7 +1627,7 @@ data: [DONE]
 ///
 /// Post-fix: the walk advances through X (400) → Y (400) → Z (200)
 /// and returns Z's 200.
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn nested_combo_falls_through_to_parent_sibling_on_subcombo_failure() {
     use crate::combos::AddTargetInput;
     use std::sync::atomic::{AtomicU32, Ordering as AtomicOrdering};
@@ -1796,7 +1790,6 @@ async fn nested_combo_falls_through_to_parent_sibling_on_subcombo_failure() {
         max_attempts: 1,
         master_key: mk,
         adapters: Arc::new(vec![crate::adapters::ProviderAdapterEnum::Mock(mock)]),
-        http_client: reqwest::Client::new(),
         cooldown_secs: 60,
         cooldown_max_secs: 3600,
         cooldown_factor: 2,
@@ -1844,7 +1837,7 @@ async fn nested_combo_falls_through_to_parent_sibling_on_subcombo_failure() {
 /// state. We assert that the call returns a result (not a
 /// hang) and that `attempts` is bounded (the pipeline did
 /// NOT spin forever).
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn adversarial_priority_combo_with_zero_eligible_targets_fails_fast() {
     use crate::combos::AddTargetInput;
     use std::sync::atomic::Ordering;
@@ -1954,7 +1947,7 @@ async fn adversarial_priority_combo_with_zero_eligible_targets_fails_fast() {
 /// the 1-target degenerate case. The TESTER pins it to detect
 /// a future regression where the inner walk is moved INSIDE
 /// the outer loop with the wrong `to_run` capture.
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn adversarial_priority_combo_respects_max_attempts_for_same_provider() {
     use crate::combos::AddTargetInput;
     use std::sync::atomic::{AtomicU32, Ordering as AtomicOrdering};
@@ -2059,7 +2052,6 @@ async fn adversarial_priority_combo_respects_max_attempts_for_same_provider() {
         max_attempts: 3,
         master_key: mk,
         adapters: Arc::new(vec![crate::adapters::ProviderAdapterEnum::Mock(mock)]),
-        http_client: reqwest::Client::new(),
         cooldown_secs: 60,
         cooldown_max_secs: 3600,
         cooldown_factor: 2,
@@ -2121,7 +2113,7 @@ async fn adversarial_priority_combo_respects_max_attempts_for_same_provider() {
 /// target 1 → 3 tries (all 503) → fall through → target 2 →
 /// 1 try (200) → success. Total upstream calls: 4. The 4th
 /// call is the one that succeeds.
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn bug4_per_target_retry_exhausts_then_falls_through_to_next_target() {
     use crate::combos::AddTargetInput;
     use std::sync::atomic::{AtomicU32, Ordering as AtomicOrdering};
@@ -2278,7 +2270,6 @@ async fn bug4_per_target_retry_exhausts_then_falls_through_to_next_target() {
         max_attempts: 1,
         master_key: mk,
         adapters: Arc::new(vec![crate::adapters::ProviderAdapterEnum::Mock(mock)]),
-        http_client: reqwest::Client::new(),
         cooldown_secs: 60,
         cooldown_max_secs: 3600,
         cooldown_factor: 2,
@@ -2330,7 +2321,7 @@ async fn bug4_per_target_retry_exhausts_then_falls_through_to_next_target() {
     drop(server_handle);
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn pipeline_does_not_record_cooldown_on_4xx_error() {
     // The pipeline uses `RetryPolicy::is_retryable` to decide
     // whether to park a target. With the revised retry policy,
@@ -2365,7 +2356,7 @@ async fn pipeline_does_not_record_cooldown_on_4xx_error() {
     // unit-level guard keeps the rule in one place.
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn pipeline_clears_cooldown_on_success_path() {
     // The "clear" path runs inside the execute_single loop. We
     // assert the helper clears the row on a *retryable*
@@ -2417,7 +2408,7 @@ async fn pipeline_clears_cooldown_on_success_path() {
 // misleading 502.
 // -------------------------------------------------------------------
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn combo_with_all_accounts_in_circuit_breaker_does_not_short_circuit() {
     // Three providers, one model each, one account per provider,
     // three targets per provider → 9 targets total. The combo is
@@ -2719,7 +2710,7 @@ fn seed_solo_combo_at_url(
 /// per-target boundary check fires on the first iteration with
 /// no upstream work attempted. The send-side `tokio::select!` is
 /// exercised by A.3's mock listener below.
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn cancellation_during_request_aborts_with_499() {
     let (pool, conn, _path) = fresh_pool();
     let mk = Arc::new(MasterKey::generate());
@@ -2758,7 +2749,7 @@ async fn cancellation_during_request_aborts_with_499() {
 /// the in-memory circuit breaker. A client closing the
 /// connection is not an upstream failure; the next request from
 /// any client should still be able to try the target.
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn cancellation_does_not_park_target_in_cooldown_or_circuit_breaker() {
     let (pool, conn, _path) = fresh_pool();
     let mk = Arc::new(MasterKey::generate());
@@ -2829,7 +2820,7 @@ async fn cancellation_does_not_park_target_in_cooldown_or_circuit_breaker() {
 /// `UpstreamResponse::collect`, and the JSON parses to
 /// `OpenAIResponse` (the same downstream code path the
 /// reqwest-based path used).
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn non_streaming_dispatch_uses_upstream_client_end_to_end() {
     use crate::adapters::AdapterFormat;
     use std::sync::Arc;
@@ -2926,7 +2917,6 @@ async fn non_streaming_dispatch_uses_upstream_client_end_to_end() {
         max_attempts: 1,
         master_key: mk,
         adapters: Arc::new(vec![crate::adapters::ProviderAdapterEnum::Mock(mock)]),
-        http_client: reqwest::Client::new(),
         cooldown_secs: 60,
         cooldown_max_secs: 3600,
         cooldown_factor: 2,
@@ -2978,7 +2968,7 @@ async fn non_streaming_dispatch_uses_upstream_client_end_to_end() {
 /// hyper. This test exercises the full pipeline end-to-end and
 /// asserts that the mock upstream actually receives the JSON
 /// body — not an empty `Content-Length: 0`.
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn bug_a_body_reaches_upstream() {
     use crate::adapters::AdapterFormat;
     use std::sync::Arc;
@@ -3074,7 +3064,6 @@ async fn bug_a_body_reaches_upstream() {
         max_attempts: 1,
         master_key: mk,
         adapters: Arc::new(vec![crate::adapters::ProviderAdapterEnum::Mock(mock)]),
-        http_client: reqwest::Client::new(),
         cooldown_secs: 60,
         cooldown_max_secs: 3600,
         cooldown_factor: 2,
@@ -3129,7 +3118,7 @@ async fn bug_a_body_reaches_upstream() {
 ///      drives the SSE line splitter.
 ///   4. The translation step (parse_openai_sse_line +
 ///      sink.send) still produces a well-formed OpenAI chunk.
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn streaming_dispatch_uses_upstream_client_end_to_end() {
     use crate::adapters::{AdapterAuthType, AdapterFormat, ProviderAdapterConfig};
     use std::sync::Arc;
@@ -3269,7 +3258,6 @@ async fn streaming_dispatch_uses_upstream_client_end_to_end() {
         max_attempts: 1,
         master_key: mk,
         adapters: Arc::new(vec![crate::adapters::ProviderAdapterEnum::Mock(mock)]),
-        http_client: reqwest::Client::new(),
         cooldown_secs: 60,
         cooldown_max_secs: 3600,
         cooldown_factor: 2,
@@ -3412,7 +3400,7 @@ async fn streaming_dispatch_uses_upstream_client_end_to_end() {
 /// for a follow-up test that will exercise the actual
 /// stream-side `tokio::select!` (see the TODO at the end of
 /// this function).
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn cancellation_during_streaming_aborts_response_stream() {
     use tokio::net::TcpListener;
 
@@ -3480,7 +3468,7 @@ async fn cancellation_during_streaming_aborts_response_stream() {
 /// server holds the socket open without sending more data, so
 /// the only way the pipeline can finish is by hitting the
 /// cancel arm of the inner `tokio::select!`.
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn cancellation_mid_sse_stream_aborts_immediately() {
     use crate::adapters::{AdapterAuthType, AdapterFormat, ProviderAdapterConfig};
     use std::sync::Arc;
@@ -3534,7 +3522,6 @@ async fn cancellation_mid_sse_stream_aborts_immediately() {
             max_attempts: 1,
             master_key,
             adapters: Arc::new(vec![crate::adapters::ProviderAdapterEnum::Mock(mock)]),
-            http_client: reqwest::Client::new(),
             cooldown_secs: 60,
             cooldown_max_secs: 3600,
             cooldown_factor: 2,
@@ -3957,7 +3944,6 @@ async fn run_with_fake_upstream_and_capture_stages(
         max_attempts: 1,
         master_key: mk,
         adapters: Arc::new(vec![crate::adapters::ProviderAdapterEnum::Mock(mock)]),
-        http_client: reqwest::Client::new(),
         cooldown_secs: 60,
         cooldown_max_secs: 3600,
         cooldown_factor: 2,
@@ -4072,7 +4058,7 @@ mod stage_event {
 /// `started → connecting → waiting_ttft → streaming → completed`
 /// in that order, with `streaming.ttft_ms.is_some()` and the
 /// final `completed` carrying `error: None`.
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn phase_robustness_non_streaming_emits_full_stage_sequence() {
     // Since the pipeline now forces stream=true to the upstream,
     // the mock must return SSE (not JSON) for 200 OK responses.
@@ -4178,7 +4164,7 @@ async fn phase_robustness_non_streaming_emits_full_stage_sequence() {
 /// where the operator needs an explicit "headers in, body
 /// imminent" signal). The §5.1 test covers the non-streaming
 /// 5-event sequence.
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn phase_robustness_streaming_emits_full_stage_sequence() {
     // The fake upstream just needs to be a real SSE stream
     // with at least one `data: ...` line and a `data: [DONE]`.
@@ -4263,7 +4249,7 @@ data: [DONE]\n\n";
 /// post-§3.2 dedup regression where `record_and_fail` would
 /// re-emit a `failed` in addition to the centralized emit in
 /// `UsageRecordBuilder`.
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn phase_robustness_failure_emits_exactly_one_failed() {
     let body = r#"{"error":{"message":"upstream boom","type":"server_error"}}"#;
     let (events, result, _request_id) = run_with_fake_upstream_and_capture_stages(
@@ -4512,7 +4498,6 @@ async fn run_streaming_and_get_response_body(
         max_attempts: 1,
         master_key: mk,
         adapters: Arc::new(vec![crate::adapters::ProviderAdapterEnum::Mock(mock)]),
-        http_client: reqwest::Client::new(),
         cooldown_secs: 60,
         cooldown_max_secs: 3600,
         cooldown_factor: 2,
@@ -4557,7 +4542,7 @@ async fn run_streaming_and_get_response_body(
 /// `usage` + `finish_reason:"stop"` must persist a fully
 /// reconstructed `response_body_json` that round-trips through
 /// `OpenAIResponse`.
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn streaming_response_body_persists_reconstructed_openai_chat() {
     // 3 content chunks (fast path) + 1 terminal chunk (slow path)
     // — matches the typical OpenAI streaming shape.
@@ -4615,7 +4600,7 @@ async fn streaming_response_body_persists_reconstructed_openai_chat() {
 /// `content_block_delta{type:input_json_delta}` fragments
 /// must persist a tool_calls entry with the right name and
 /// a parseable JSON `arguments` string.
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn streaming_response_body_persists_reconstructed_anthropic_message_with_tool_use() {
     // Note: Anthropic SSE events are `event: <name>\ndata: <json>`
     // pairs. We send a realistic full turn.
@@ -4687,7 +4672,7 @@ async fn streaming_response_body_persists_reconstructed_anthropic_message_with_t
 /// G1 §5.4 (test 3): a Gemini stream with two text parts and
 /// a STOP finishReason must persist concatenated content with
 /// `finish_reason == "stop"` (the Gemini mapping).
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn streaming_response_body_persists_reconstructed_gemini_response() {
     // Gemini SSE wire format: `data: {"candidates":[{"content":{"parts":[{"text":"..."}]}}]}`
     // — the Gemini SSE parser extracts text from
@@ -4740,7 +4725,7 @@ async fn streaming_response_body_persists_reconstructed_gemini_response() {
 /// `usage`. The slow path must capture the reasoning and surface
 /// it as `choices[0].message.reasoning_content` in the persisted
 /// body.
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn streaming_response_body_persists_reasoning_content_o1() {
     // The reasoning chunk MUST also carry `usage` (or a
     // non-null finish_reason) to trigger the slow path per the
@@ -4793,7 +4778,7 @@ async fn streaming_response_body_persists_reasoning_content_o1() {
 /// G1 §5.4 (test 5): Anthropic extended thinking via
 /// `thinking_delta` must surface as
 /// `choices[0].message.reasoning_content` in the persisted body.
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn streaming_response_body_persists_anthropic_thinking() {
     let chunks: Vec<&'static [u8]> = vec![
             // message_start with thinking enabled.
@@ -4851,7 +4836,7 @@ async fn streaming_response_body_persists_anthropic_thinking() {
 /// accumulator must concatenate the two streams separately so
 /// the persisted JSON has both `choices[0].message.content`
 /// and `choices[0].message.reasoning_content`.
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn streaming_response_body_persists_gemini_thought_parts() {
     // Gemini wire format: `data: {"candidates":[{"content":{"parts":[{"thought":true,"text":"r"},{"text":"a"}]}}]}`.
     let chunks: Vec<&'static [u8]> = vec![
@@ -4910,7 +4895,7 @@ async fn streaming_response_body_persists_gemini_thought_parts() {
 /// streaming request. This is the CPU savings the spec calls
 /// out: no JSON value allocation when the operator has
 /// disabled recording.
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn recording_off_does_not_allocate_response_body() {
     let chunks: Vec<&'static [u8]> = vec![
             br#"data: {"id":"x","object":"chat.completion.chunk","created":1,"model":"m","choices":[{"index":0,"delta":{"content":"hi"},"finish_reason":null}]}
@@ -4959,7 +4944,7 @@ async fn recording_off_does_not_allocate_response_body() {
 /// upstream client's buffer (the client doesn't drain the
 /// socket fast enough). The CPU property (fast path skips
 /// JSON parsing) is the same at any chunk count.
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn openai_fast_path_no_regression() {
     // Build 20 chunks. Each carries one char of content; the
     // total content is "a" * 20. The test exists to prove
@@ -5037,7 +5022,7 @@ async fn openai_fast_path_no_regression() {
 /// (default 120 s, but the relative ordering with the
 /// mocked server's backpressure can still produce
 /// intermittent connect-stage timeouts).
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 #[ignore] // Timing-sensitive: the pipeline's target-resolution
 // DB queries create enough synchronous work between
 // server spawn and upstream connect to trigger an

@@ -53,7 +53,6 @@ pub struct PipelineConfig {
     pub max_attempts: u8,
     pub master_key: Arc<MasterKey>,
     pub adapters: Arc<Vec<crate::adapters::ProviderAdapterEnum>>,
-    pub http_client: reqwest::Client,
     pub cooldown_secs: u64,
     pub cooldown_max_secs: u64,
     pub cooldown_factor: u32,

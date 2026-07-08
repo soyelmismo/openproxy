@@ -79,6 +79,17 @@ impl DbPool {
             source: Some(Box::new(e)),
         })?;
 
+        // SQLite defaults to creating temporary files in /tmp or /var/tmp which might
+        // not be writable in some containers or could fill up quickly, causing
+        // "disk I/O error" during VACUUM or large GROUP BY operations.
+        if let Some(parent) = path.parent() {
+            let p_str = parent.to_string_lossy();
+            if !p_str.is_empty() {
+                // This PRAGMA is deprecated but still works and sets the global temp dir
+                let _ = writer.execute(&format!("PRAGMA temp_store_directory = '{}'", p_str), []);
+            }
+        }
+
         configure_connection(&writer)?;
 
         // Reader: open a second handle on the same file. Cloning the writer

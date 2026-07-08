@@ -253,8 +253,6 @@ impl Pipeline {
         combos::expand_account_rotation(&conn, ordered)
     }
 
-
-
     #[cfg(test)]
     pub(crate) fn decrypt_account_key(&self, account_id: crate::ids::AccountId) -> Result<String> {
         let conn = self.conn.lock();
