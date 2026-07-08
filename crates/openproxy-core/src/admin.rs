@@ -775,12 +775,11 @@ pub fn delete_combo(conn: &Connection, id: ComboId) -> Result<()> {
 /// no dedicated "target not in combo" variant in [`CoreError`]; the
 /// server maps that to HTTP 400, which is the right code for a
 /// URL-shape mismatch the caller should fix.
-pub fn delete_combo_target(
+fn ensure_target_in_combo(
     conn: &Connection,
     combo_id: ComboId,
     target_id: ComboTargetId,
 ) -> Result<()> {
-    // Validate the target belongs to the combo (defense in depth).
     let belongs: bool = conn
         .query_row(
             "SELECT EXISTS(SELECT 1 FROM combo_targets WHERE id = ?1 AND combo_id = ?2)",
@@ -801,6 +800,16 @@ pub fn delete_combo_target(
             target_id.0, combo_id.0
         )));
     }
+    Ok(())
+}
+
+pub fn delete_combo_target(
+    conn: &Connection,
+    combo_id: ComboId,
+    target_id: ComboTargetId,
+) -> Result<()> {
+    // Validate the target belongs to the combo (defense in depth).
+    ensure_target_in_combo(conn, combo_id, target_id)?;
     combos::delete_target(conn, target_id)
 }
 
@@ -846,26 +855,7 @@ pub fn clear_combo_target_cooldown(
     // cooldown, but the operator's intent here is "clear the
     // cooldown, not delete the target", so we use the explicit
     // DELETE rather than a no-op target delete.
-    let belongs: bool = conn
-        .query_row(
-            "SELECT EXISTS(SELECT 1 FROM combo_targets WHERE id = ?1 AND combo_id = ?2)",
-            params![target_id.0, combo_id.0],
-            |r| r.get::<_, i64>(0),
-        )
-        .map(|v| v != 0)
-        .map_err(|e| CoreError::Database {
-            message: format!(
-                "check combo_target {} belongs to combo {}: {}",
-                target_id.0, combo_id.0, e
-            ),
-            source: Some(Box::new(e)),
-        })?;
-    if !belongs {
-        return Err(CoreError::Validation(format!(
-            "target {} not in combo {}",
-            target_id.0, combo_id.0
-        )));
-    }
+    ensure_target_in_combo(conn, combo_id, target_id)?;
     cooldown::clear(conn, target_id)
 }
 
