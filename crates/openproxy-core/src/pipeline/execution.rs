@@ -342,14 +342,17 @@ impl Pipeline {
                                 "reason": "upstream_401",
                             },
                         });
-                        let conn = self.conn.lock();
-                        let _ = crate::notifications::insert_and_broadcast(
-                            &conn,
-                            crate::notifications::KIND_SYSTEM,
-                            &payload,
-                            Some(&dedup_key),
-                            Some(&provider_id_str),
-                        );
+                        let conn = Arc::clone(&self.conn);
+                        tokio::task::spawn_blocking(move || {
+                            let conn = conn.lock();
+                            let _ = crate::notifications::insert_and_broadcast(
+                                &conn,
+                                crate::notifications::KIND_SYSTEM,
+                                &payload,
+                                Some(&dedup_key),
+                                Some(&provider_id_str),
+                            );
+                        });
                     }
                     self.record_and_fail_with_trace_id(
                         req,
@@ -422,20 +425,21 @@ impl Pipeline {
             req.openai_request.stream
         };
 
-        // Deep clone messages ONLY if we actually need compression
-        let mut cloned_messages: Option<Vec<crate::translation::OpenAIMessage>> = None;
-        let compression_stats = if self.config.compression_mode != CompressionMode::Off {
-            let mut msgs = req.openai_request.messages.clone();
-            let stats =
-                crate::compression::apply_compression(&mut msgs, self.config.compression_mode);
-            cloned_messages = Some(msgs);
-            stats
-        } else {
-            CompressionStats::empty()
-        };
-        *self.compression_stats_cell.write() = Some(compression_stats);
+        // Deep clone messages ONLY if we actually need compression, and cache it per-request.
+        let cloned_messages_ref = req.compressed_messages.get_or_init(|| {
+            if self.config.compression_mode != CompressionMode::Off {
+                let mut msgs = req.openai_request.messages.clone();
+                let stats =
+                    crate::compression::apply_compression(&mut msgs, self.config.compression_mode);
+                *self.compression_stats_cell.write() = Some(stats);
+                Some(msgs)
+            } else {
+                *self.compression_stats_cell.write() = Some(CompressionStats::empty());
+                None
+            }
+        });
 
-        let messages_ref = cloned_messages
+        let messages_ref = cloned_messages_ref
             .as_deref()
             .unwrap_or(&req.openai_request.messages);
 
@@ -563,7 +567,7 @@ impl Pipeline {
                         let provider_id_str = target.provider_id.to_string();
                         let model_id_str = model.model_id.as_str().to_string();
                         let combo_target_id = target.id.0;
-                        let conn = self.conn.lock();
+
                         let dedup_key =
                             format!("{}:{}", crate::notifications::CODE_CIRCUIT_OPEN, aid.0);
                         let payload = serde_json::json!({
@@ -583,13 +587,17 @@ impl Pipeline {
                                 "threshold": outcome.threshold,
                             },
                         });
-                        let _ = crate::notifications::insert_and_broadcast(
-                            &conn,
-                            crate::notifications::KIND_SYSTEM,
-                            &payload,
-                            Some(&dedup_key),
-                            Some(&provider_id_str),
-                        );
+                        let conn = Arc::clone(&self.conn);
+                        tokio::task::spawn_blocking(move || {
+                            let conn = conn.lock();
+                            let _ = crate::notifications::insert_and_broadcast(
+                                &conn,
+                                crate::notifications::KIND_SYSTEM,
+                                &payload,
+                                Some(&dedup_key),
+                                Some(&provider_id_str),
+                            );
+                        });
                     }
                 }
                 _ => {

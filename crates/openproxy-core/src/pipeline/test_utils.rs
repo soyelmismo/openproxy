@@ -174,6 +174,7 @@ pub fn make_request(combo_id: ComboId) -> (PipelineRequest, watch::Sender<bool>)
         race_cancelled: false,
         race_cancel: None,
         endpoint_kind: crate::endpoint::EndpointKind::Chat,
+        compressed_messages: std::sync::OnceLock::new(),
     };
     (req, _dis_tx)
 }

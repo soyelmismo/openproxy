@@ -187,6 +187,7 @@ async fn run_pipeline(
         race_cancelled: false,
         race_cancel: None,
         endpoint_kind: openproxy_core::endpoint::EndpointKind::Chat,
+        compressed_messages: std::sync::OnceLock::new(),
     };
 
     if openai_req.stream {

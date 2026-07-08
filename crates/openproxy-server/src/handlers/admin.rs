@@ -3721,6 +3721,7 @@ async fn run_test_for_model(
                 request_body_json: None,
                 race_cancelled: false,
                 endpoint_kind: openproxy_core::endpoint::EndpointKind::Chat,
+                compressed_messages: std::sync::OnceLock::new(),
             };
             let formatter = openproxy_core::pipeline::formatting::get_formatter(
                 openproxy_core::models::TargetFormat::Responses,
