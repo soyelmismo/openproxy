@@ -156,8 +156,7 @@ impl Pipeline {
         race_size: u8,
         race_cancel: &CancellationToken,
     ) -> PipelineResult {
-        let mut ctx =
-            crate::pipeline::context::PipelineContext::new(req.clone(), self.clone());
+        let mut ctx = crate::pipeline::context::PipelineContext::new(req.clone(), self.clone());
         ctx.combo = Some(combo.clone());
         ctx.current_target = Some(resolved_target.clone());
         ctx.current_target_attempt = attempt;

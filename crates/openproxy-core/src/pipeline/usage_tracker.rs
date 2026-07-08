@@ -394,9 +394,10 @@ impl<'a> UsageRecordBuilder<'a> {
             api_key_id: self.req.api_key_id,
             request_body_json: if recording {
                 self.request_body_json.clone().or_else(|| {
-                    self.req.request_body_json.clone().or_else(|| {
-                        serde_json::to_value(&self.req.openai_request).ok()
-                    })
+                    self.req
+                        .request_body_json
+                        .clone()
+                        .or_else(|| serde_json::to_value(&self.req.openai_request).ok())
                 })
             } else {
                 None

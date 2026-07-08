@@ -4,6 +4,7 @@
 //! and refreshes their quota. Also includes the shared logic for refreshing a single account's quota
 //! (used by both the daemon and the manual UI endpoint).
 
+use crate::AppConfig;
 use crate::accounts;
 use crate::adapters::{ProviderAdapter, ProviderAdapterEnum};
 use crate::admin;
@@ -14,10 +15,9 @@ use crate::oauth::{DbRef, OAuthProvider, OAuthProviderRegistry};
 use crate::quota::AccountQuota;
 use crate::secrets::MasterKey;
 use crate::upstream::UpstreamClient;
-use crate::AppConfig;
 use parking_lot::RwLock;
 use std::sync::Arc;
-use tokio::time::{sleep, Duration};
+use tokio::time::{Duration, sleep};
 
 const QUOTA_LOW_ABSOLUTE_FLOOR: i64 = 1000;
 
@@ -72,7 +72,7 @@ async fn run_quota_sync_cycle(
     oauth_registry: &Arc<OAuthProviderRegistry>,
 ) {
     tracing::debug!("[QuotaSync] Starting cycle");
-    
+
     // 1. Identify which providers support quota fetching
     let supported_providers: Vec<String> = {
         let ads = adapters.read();
@@ -133,7 +133,7 @@ async fn run_quota_sync_cycle(
             sleep(Duration::from_millis(delay_ms)).await;
         }
     }
-    
+
     tracing::debug!("[QuotaSync] Cycle completed");
 }
 
@@ -147,11 +147,10 @@ pub async fn refresh_single_account_quota(
     upstream_client: &Arc<UpstreamClient>,
     oauth_registry: &Arc<OAuthProviderRegistry>,
 ) -> crate::error::Result<Option<AccountQuota>> {
-    
     let (provider_id_str, api_key, access_token, provider_specific) = {
         let w = db_pool.writer();
         let acc = admin::account_for_quota_refresh(&w, account_id)?;
-        
+
         let supports_quota = adapters
             .iter()
             .find(|a| a.id().as_str() == acc.provider_id.as_str())
@@ -185,8 +184,7 @@ pub async fn refresh_single_account_quota(
     )
     .await;
 
-    let q = if q.fetch_error.as_deref().is_some_and(|e| e.contains("401"))
-        && access_token.is_some()
+    let q = if q.fetch_error.as_deref().is_some_and(|e| e.contains("401")) && access_token.is_some()
     {
         let refresh_result = {
             let w = db_pool.writer();
@@ -311,7 +309,7 @@ pub fn compute_low_quota_signal(q: &AccountQuota) -> Option<(&'static str, i64, 
     } else if let Some(used) = q.session_used {
         let _ = used;
     }
-    
+
     if let (Some(used), Some(limit)) = (q.weekly_used, q.weekly_limit) {
         let remaining = (limit - used).max(0);
         if is_low(remaining, limit) {

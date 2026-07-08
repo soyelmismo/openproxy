@@ -200,10 +200,9 @@ pub fn list(conn: &Connection, provider: Option<&ProviderId>) -> Result<Vec<Acco
     let mapper = |row: &rusqlite::Row<'_>| -> rusqlite::Result<Account> { row_to_account(row) };
 
     let rows = match provider {
-        Some(pid) => {
-            stmt.query_map(params![pid.as_str()], mapper)
-                .map_err(crate::error::map_db_error)?
-        }
+        Some(pid) => stmt
+            .query_map(params![pid.as_str()], mapper)
+            .map_err(crate::error::map_db_error)?,
         None => stmt
             .query_map([], mapper)
             .map_err(crate::error::map_db_error)?,

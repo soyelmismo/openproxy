@@ -264,9 +264,7 @@ impl ProviderAdapter for MockAdapter {
         _target_format: TargetFormat,
         _model: &crate::ids::ModelId,
     ) -> Vec<(String, String)> {
-        let mut headers = vec![
-            ("Content-Type".into(), "application/json".into()),
-        ];
+        let mut headers = vec![("Content-Type".into(), "application/json".into())];
         if let Some(auth) = self.build_auth_header(api_key) {
             headers.push(auth);
         }

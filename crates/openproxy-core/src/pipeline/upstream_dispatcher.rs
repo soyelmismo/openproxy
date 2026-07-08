@@ -14,6 +14,61 @@ use crate::think_extractor::extract_think_from_response;
 /// Bundles the parameters shared by streaming failure methods
 /// (`fail_stream_client_disconnected`, `fail_on_sink_send_error`).
 /// Eliminates the 14-15 positional-argument anti-pattern.
+
+pub(crate) struct DispatchContext<'a> {
+    pub(crate) attempt: u8,
+    pub(crate) race_size: u8,
+    pub(crate) started: Instant,
+    pub(crate) model: &'a Model,
+}
+
+impl<'a> DispatchContext<'a> {
+    #[inline]
+    pub(crate) fn fail_ctx<'e>(
+        &self,
+        err: &'e CoreError,
+        connect_ms: Option<u64>,
+        ttft_ms: Option<u64>,
+    ) -> crate::pipeline::FailureContext<'e>
+    where
+        'a: 'e,
+    {
+        crate::pipeline::FailureContext {
+            attempt: self.attempt,
+            race_size: self.race_size,
+            err,
+            started: self.started,
+            model: Some(self.model),
+            connect_ms,
+            ttft_ms,
+            status_code: err.http_status(),
+        }
+    }
+
+    #[inline]
+    pub(crate) fn fail_ctx_code<'e>(
+        &self,
+        err: &'e CoreError,
+        connect_ms: Option<u64>,
+        ttft_ms: Option<u64>,
+        status_code: u16,
+    ) -> crate::pipeline::FailureContext<'e>
+    where
+        'a: 'e,
+    {
+        crate::pipeline::FailureContext {
+            attempt: self.attempt,
+            race_size: self.race_size,
+            err,
+            started: self.started,
+            model: Some(self.model),
+            connect_ms,
+            ttft_ms,
+            status_code,
+        }
+    }
+}
+
 pub(crate) struct StreamFailureContext<'a> {
     pub(crate) req: PipelineRequest,
     pub(crate) combo: &'a Combo,
@@ -184,6 +239,13 @@ impl UpstreamDispatcher {
         race_size: u8,
         trace_id: String,
     ) -> PipelineResult {
+        let dctx = DispatchContext {
+            attempt,
+            race_size,
+            started,
+            model,
+        };
+
         // Gate 2: both the non-streaming path AND the streaming path
         // now go through the hyper-based `UpstreamClient`
         // (`PipelineConfig::upstream_client`). The UpstreamClient
@@ -202,16 +264,7 @@ impl UpstreamDispatcher {
                         req,
                         combo,
                         target,
-                        FailureContext {
-                            attempt,
-                            race_size,
-                            err: &e,
-                            started,
-                            model: Some(model),
-                            connect_ms: None,
-                            ttft_ms: None,
-                            status_code: e.http_status(),
-                        },
+                        dctx.fail_ctx_code(&e, None, None, e.http_status()),
                     );
                 }
             }
@@ -299,16 +352,12 @@ impl UpstreamDispatcher {
                 req,
                 combo,
                 target,
-                FailureContext {
-                    attempt,
-                    race_size,
-                    err: &CoreError::ClientDisconnected,
-                    started,
-                    model: Some(model),
-                    connect_ms: Some(elapsed),
-                    ttft_ms: None,
-                    status_code: CoreError::ClientDisconnected.http_status(),
-                },
+                dctx.fail_ctx_code(
+                    &CoreError::ClientDisconnected,
+                    Some(elapsed),
+                    None,
+                    CoreError::ClientDisconnected.http_status(),
+                ),
             );
         }
         let cancel_token = CancellationToken::from_watch(req.client_disconnected.clone());
@@ -344,16 +393,12 @@ impl UpstreamDispatcher {
                         req,
                         combo,
                         target,
-                        FailureContext {
-                            attempt,
-                            race_size,
-                            err: &CoreError::ClientDisconnected,
-                            started,
-                            model: Some(model),
-                            connect_ms: Some(connect_and_send_ms),
-                            ttft_ms: None,
-                            status_code: CoreError::ClientDisconnected.http_status(),
-                        },
+                        dctx.fail_ctx_code(
+                            &CoreError::ClientDisconnected,
+                            Some(connect_and_send_ms),
+                            None,
+                            CoreError::ClientDisconnected.http_status(),
+                        ),
                     );
                 }
                 Err(UpstreamError::Timeout(phase)) => {
@@ -397,16 +442,12 @@ impl UpstreamDispatcher {
                         req,
                         combo,
                         target,
-                        FailureContext {
-                            attempt,
-                            race_size,
-                            err: &err,
-                            started,
-                            model: Some(model),
-                            connect_ms: Some(connect_and_send_ms),
-                            ttft_ms: None,
-                            status_code: err.http_status(),
-                        },
+                        dctx.fail_ctx_code(
+                            &err,
+                            Some(connect_and_send_ms),
+                            None,
+                            err.http_status(),
+                        ),
                     );
                 }
                 Err(UpstreamError::Connection(msg))
@@ -423,16 +464,12 @@ impl UpstreamDispatcher {
                         req,
                         combo,
                         target,
-                        FailureContext {
-                            attempt,
-                            race_size,
-                            err: &err,
-                            started,
-                            model: Some(model),
-                            connect_ms: Some(connect_and_send_ms),
-                            ttft_ms: None,
-                            status_code: err.http_status(),
-                        },
+                        dctx.fail_ctx_code(
+                            &err,
+                            Some(connect_and_send_ms),
+                            None,
+                            err.http_status(),
+                        ),
                     );
                 }
             };
@@ -539,7 +576,7 @@ impl UpstreamDispatcher {
         let mut remaining = non_streaming_body_deadline
             .checked_duration_since(Instant::now())
             .unwrap_or(std::time::Duration::ZERO);
-        
+
         // Error responses should not stall the pipeline. We give the upstream
         // 5 seconds to send the error body; if it stalls, we drop the body
         // and proceed with the error status code. This prevents "ghost" requests
@@ -562,16 +599,12 @@ impl UpstreamDispatcher {
                     req,
                     combo,
                     target,
-                    FailureContext {
-                        attempt,
-                        race_size,
-                        err: &CoreError::ClientDisconnected,
-                        started,
-                        model: Some(model),
-                        connect_ms: Some(connect_and_send_ms),
-                        ttft_ms: Some(ttft_ms),
-                        status_code: CoreError::ClientDisconnected.http_status(),
-                    },
+                    dctx.fail_ctx_code(
+                        &CoreError::ClientDisconnected,
+                        Some(connect_and_send_ms),
+                        Some(ttft_ms),
+                        CoreError::ClientDisconnected.http_status(),
+                    ),
                 );
             }
             Ok(Err(UpstreamError::Timeout(phase))) => {
@@ -583,16 +616,12 @@ impl UpstreamDispatcher {
                     req,
                     combo,
                     target,
-                    FailureContext {
-                        attempt,
-                        race_size,
-                        err: &err,
-                        started,
-                        model: Some(model),
-                        connect_ms: Some(connect_and_send_ms),
-                        ttft_ms: Some(ttft_ms),
-                        status_code: err.http_status(),
-                    },
+                    dctx.fail_ctx_code(
+                        &err,
+                        Some(connect_and_send_ms),
+                        Some(ttft_ms),
+                        err.http_status(),
+                    ),
                 );
             }
             Ok(Err(e)) => {
@@ -605,16 +634,12 @@ impl UpstreamDispatcher {
                     req,
                     combo,
                     target,
-                    FailureContext {
-                        attempt,
-                        race_size,
-                        err: &err,
-                        started,
-                        model: Some(model),
-                        connect_ms: Some(connect_and_send_ms),
-                        ttft_ms: Some(ttft_ms),
-                        status_code: err.http_status(),
-                    },
+                    dctx.fail_ctx_code(
+                        &err,
+                        Some(connect_and_send_ms),
+                        Some(ttft_ms),
+                        err.http_status(),
+                    ),
                 );
             }
             Err(_elapsed) => {
@@ -638,16 +663,12 @@ impl UpstreamDispatcher {
                     req,
                     combo,
                     target,
-                    FailureContext {
-                        attempt,
-                        race_size,
-                        err: &err,
-                        started,
-                        model: Some(model),
-                        connect_ms: Some(connect_and_send_ms),
-                        ttft_ms: Some(ttft_ms),
-                        status_code: err.http_status(),
-                    },
+                    dctx.fail_ctx_code(
+                        &err,
+                        Some(connect_and_send_ms),
+                        Some(ttft_ms),
+                        err.http_status(),
+                    ),
                 );
             }
         };
@@ -692,16 +713,7 @@ impl UpstreamDispatcher {
                     req,
                     combo,
                     target,
-                    FailureContext {
-                        attempt,
-                        race_size,
-                        err: &err,
-                        started,
-                        model: Some(model),
-                        connect_ms: Some(connect_and_send_ms),
-                        ttft_ms: Some(ttft_ms),
-                        status_code,
-                    },
+                    dctx.fail_ctx_code(&err, Some(connect_and_send_ms), Some(ttft_ms), status_code),
                 );
             }
             // G2.3: surface an `account_invalid` system notification
@@ -757,16 +769,7 @@ impl UpstreamDispatcher {
                 req,
                 combo,
                 target,
-                FailureContext {
-                    attempt,
-                    race_size,
-                    err: &err,
-                    started,
-                    model: Some(model),
-                    connect_ms: Some(connect_and_send_ms),
-                    ttft_ms: Some(ttft_ms),
-                    status_code,
-                },
+                dctx.fail_ctx_code(&err, Some(connect_and_send_ms), Some(ttft_ms), status_code),
             );
         }
 
@@ -832,16 +835,12 @@ impl UpstreamDispatcher {
                     req,
                     combo,
                     target,
-                    FailureContext {
-                        attempt,
-                        race_size,
-                        err: &err,
-                        started,
-                        model: Some(model),
-                        connect_ms: Some(connect_and_send_ms),
-                        ttft_ms: Some(ttft_ms),
-                        status_code: err.http_status(),
-                    },
+                    dctx.fail_ctx_code(
+                        &err,
+                        Some(connect_and_send_ms),
+                        Some(ttft_ms),
+                        err.http_status(),
+                    ),
                 );
             }
         };
@@ -865,16 +864,12 @@ impl UpstreamDispatcher {
                             req,
                             combo,
                             target,
-                            FailureContext {
-                                attempt,
-                                race_size,
-                                err: &err,
-                                started,
-                                model: Some(model),
-                                connect_ms: Some(connect_and_send_ms),
-                                ttft_ms: Some(ttft_ms),
-                                status_code: err.http_status(),
-                            },
+                            dctx.fail_ctx_code(
+                                &err,
+                                Some(connect_and_send_ms),
+                                Some(ttft_ms),
+                                err.http_status(),
+                            ),
                         );
                     }
                 }
@@ -889,16 +884,12 @@ impl UpstreamDispatcher {
                                 req,
                                 combo,
                                 target,
-                                FailureContext {
-                                    attempt,
-                                    race_size,
-                                    err: &err,
-                                    started,
-                                    model: Some(model),
-                                    connect_ms: Some(connect_and_send_ms),
-                                    ttft_ms: Some(ttft_ms),
-                                    status_code: err.http_status(),
-                                },
+                                dctx.fail_ctx_code(
+                                    &err,
+                                    Some(connect_and_send_ms),
+                                    Some(ttft_ms),
+                                    err.http_status(),
+                                ),
                             );
                         }
                     };
@@ -914,16 +905,12 @@ impl UpstreamDispatcher {
                                 req,
                                 combo,
                                 target,
-                                FailureContext {
-                                    attempt,
-                                    race_size,
-                                    err: &err,
-                                    started,
-                                    model: Some(model),
-                                    connect_ms: Some(connect_and_send_ms),
-                                    ttft_ms: Some(ttft_ms),
-                                    status_code: err.http_status(),
-                                },
+                                dctx.fail_ctx_code(
+                                    &err,
+                                    Some(connect_and_send_ms),
+                                    Some(ttft_ms),
+                                    err.http_status(),
+                                ),
                             );
                         }
                     };
@@ -966,16 +953,7 @@ impl UpstreamDispatcher {
                 req,
                 combo,
                 target,
-                FailureContext {
-                    attempt,
-                    race_size,
-                    err: &err,
-                    started,
-                    model: Some(model),
-                    connect_ms: Some(connect_and_send_ms),
-                    ttft_ms: Some(ttft_ms),
-                    status_code: 502,
-                },
+                dctx.fail_ctx_code(&err, Some(connect_and_send_ms), Some(ttft_ms), 502),
             );
         }
 
@@ -1055,6 +1033,13 @@ impl UpstreamDispatcher {
             created,
             model_name,
         } = fctx;
+        let dctx = DispatchContext {
+            attempt,
+            race_size,
+            started,
+            model,
+        };
+
         let has_partial_content = acc.as_ref().is_some_and(|a| !a.is_empty());
         if let Some(ref a) = acc
             && let Some((code, message)) = a.extract_upstream_error_from_raw()
@@ -1087,16 +1072,7 @@ impl UpstreamDispatcher {
                 req,
                 combo,
                 target,
-                FailureContext {
-                    attempt,
-                    race_size,
-                    err: &err,
-                    started,
-                    model: Some(model),
-                    connect_ms: Some(connect_ms),
-                    ttft_ms,
-                    status_code: code,
-                },
+                dctx.fail_ctx_code(&err, Some(connect_ms), None, code),
                 trace_id,
                 acc_ref,
                 Some(chunk_id),
@@ -1122,16 +1098,7 @@ impl UpstreamDispatcher {
             req,
             combo,
             target,
-            FailureContext {
-                attempt,
-                race_size,
-                err: &err,
-                started,
-                model: Some(model),
-                connect_ms: Some(connect_ms),
-                ttft_ms,
-                status_code: 499,
-            },
+            dctx.fail_ctx_code(&err, Some(connect_ms), None, 499),
             trace_id,
             acc_ref,
             Some(chunk_id),
@@ -1161,6 +1128,13 @@ impl UpstreamDispatcher {
             created,
             model_name,
         } = fctx;
+        let dctx = DispatchContext {
+            attempt,
+            race_size,
+            started,
+            model,
+        };
+
         let err = match e {
             crate::race_sink::StreamSinkError::Lost => {
                 tracing::debug!(
@@ -1208,16 +1182,7 @@ impl UpstreamDispatcher {
                             req,
                             combo,
                             target,
-                            FailureContext {
-                                attempt,
-                                race_size,
-                                err: &err,
-                                started,
-                                model: Some(model),
-                                connect_ms: Some(connect_ms),
-                                ttft_ms: None,
-                                status_code: code,
-                            },
+                            dctx.fail_ctx_code(&err, Some(connect_ms), None, code),
                             trace_id,
                             acc_ref,
                             Some(chunk_id),
@@ -1257,16 +1222,7 @@ impl UpstreamDispatcher {
             req,
             combo,
             target,
-            FailureContext {
-                attempt,
-                race_size,
-                err: &err,
-                started,
-                model: Some(model),
-                connect_ms: Some(connect_ms),
-                ttft_ms,
-                status_code: err.http_status(),
-            },
+            dctx.fail_ctx_code(&err, Some(connect_ms), None, err.http_status()),
             trace_id,
             acc_ref,
             Some(chunk_id),
@@ -1298,6 +1254,13 @@ impl UpstreamDispatcher {
         trace_id: String,
         upstream_request: UpstreamRequest,
     ) -> PipelineResult {
+        let dctx = DispatchContext {
+            attempt,
+            race_size,
+            started,
+            model,
+        };
+
         // Cancellation: the `client_disconnected` watch is the
         // operator's signal that the client has gone away. The
         // hyper-based upstream client accepts a `CancellationToken`;
@@ -1331,16 +1294,12 @@ impl UpstreamDispatcher {
                 req,
                 combo,
                 target,
-                FailureContext {
-                    attempt,
-                    race_size,
-                    err: &CoreError::ClientDisconnected,
-                    started,
-                    model: Some(model),
-                    connect_ms: Some(elapsed),
-                    ttft_ms: None,
-                    status_code: CoreError::ClientDisconnected.http_status(),
-                },
+                dctx.fail_ctx_code(
+                    &CoreError::ClientDisconnected,
+                    Some(elapsed),
+                    None,
+                    CoreError::ClientDisconnected.http_status(),
+                ),
             );
         }
         let cancel_token = if let Some(rc) = req.race_cancel.as_ref() {
@@ -1384,16 +1343,12 @@ impl UpstreamDispatcher {
                         req,
                         combo,
                         target,
-                        FailureContext {
-                            attempt,
-                            race_size,
-                            err: &CoreError::ClientDisconnected,
-                            started,
-                            model: Some(model),
-                            connect_ms: Some(connect_and_send_ms),
-                            ttft_ms: None,
-                            status_code: CoreError::ClientDisconnected.http_status(),
-                        },
+                        dctx.fail_ctx_code(
+                            &CoreError::ClientDisconnected,
+                            Some(connect_and_send_ms),
+                            None,
+                            CoreError::ClientDisconnected.http_status(),
+                        ),
                     );
                 }
                 Err(UpstreamError::Timeout(phase)) => {
@@ -1429,16 +1384,12 @@ impl UpstreamDispatcher {
                         req,
                         combo,
                         target,
-                        FailureContext {
-                            attempt,
-                            race_size,
-                            err: &err,
-                            started,
-                            model: Some(model),
-                            connect_ms: Some(connect_and_send_ms),
-                            ttft_ms: None,
-                            status_code: err.http_status(),
-                        },
+                        dctx.fail_ctx_code(
+                            &err,
+                            Some(connect_and_send_ms),
+                            None,
+                            err.http_status(),
+                        ),
                     );
                 }
                 Err(UpstreamError::Connection(msg))
@@ -1455,16 +1406,12 @@ impl UpstreamDispatcher {
                         req,
                         combo,
                         target,
-                        FailureContext {
-                            attempt,
-                            race_size,
-                            err: &err,
-                            started,
-                            model: Some(model),
-                            connect_ms: Some(connect_and_send_ms),
-                            ttft_ms: None,
-                            status_code: err.http_status(),
-                        },
+                        dctx.fail_ctx_code(
+                            &err,
+                            Some(connect_and_send_ms),
+                            None,
+                            err.http_status(),
+                        ),
                     );
                 }
             };
@@ -1492,7 +1439,12 @@ impl UpstreamDispatcher {
             // 5 seconds to send the error body; if it stalls, we drop the body
             // and proceed with the error status code. This prevents "ghost" requests
             // stuck in `connecting` for 300s when an upstream hangs after sending headers.
-            let body_str = match tokio::time::timeout(std::time::Duration::from_secs(5), response.body.collect_all()).await {
+            let body_str = match tokio::time::timeout(
+                std::time::Duration::from_secs(5),
+                response.body.collect_all(),
+            )
+            .await
+            {
                 Ok(Ok(b)) => String::from_utf8_lossy(&b).to_string(),
                 _ => String::new(),
             };
@@ -1591,16 +1543,7 @@ impl UpstreamDispatcher {
                 req,
                 combo,
                 target,
-                FailureContext {
-                    attempt,
-                    race_size,
-                    err: &err,
-                    started,
-                    model: Some(model),
-                    connect_ms: Some(connect_and_send_ms),
-                    ttft_ms: None,
-                    status_code,
-                },
+                dctx.fail_ctx_code(&err, Some(connect_and_send_ms), None, status_code),
             );
         }
 
@@ -1692,16 +1635,7 @@ impl UpstreamDispatcher {
                     req.clone(),
                     combo,
                     target,
-                    crate::pipeline::FailureContext {
-                        attempt,
-                        race_size,
-                        started,
-                        model: Some(model),
-                        connect_ms: Some(connect_and_send_ms),
-                        ttft_ms: state.ttft_ms,
-                        err: &e,
-                        status_code: 502,
-                    },
+                    dctx.fail_ctx_code(&e, Some(connect_and_send_ms), state.ttft_ms, 502),
                     trace_id.to_string(),
                 );
             }
@@ -1769,16 +1703,7 @@ impl UpstreamDispatcher {
                 req,
                 combo,
                 target,
-                FailureContext {
-                    attempt,
-                    race_size,
-                    err: &err,
-                    started,
-                    model: Some(model),
-                    connect_ms: Some(connect_and_send_ms),
-                    ttft_ms,
-                    status_code: 502,
-                },
+                dctx.fail_ctx_code(&err, Some(connect_and_send_ms), None, 502),
                 trace_id,
                 acc_ref,
                 Some(&chunk_id),

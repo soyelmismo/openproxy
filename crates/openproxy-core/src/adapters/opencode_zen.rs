@@ -60,9 +60,7 @@ impl ProviderAdapter for OpenCodeZenAdapter {
         target_format: TargetFormat,
         _model: &ModelId,
     ) -> Vec<(String, String)> {
-        let mut headers = vec![
-            ("Content-Type".into(), "application/json".into()),
-        ];
+        let mut headers = vec![("Content-Type".into(), "application/json".into())];
 
         // Only add auth headers if we have an API key.
         if !api_key.is_empty() {

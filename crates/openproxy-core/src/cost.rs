@@ -1,7 +1,7 @@
 //! Cost calculation. Wraps pricing::lookup and applies the
 //! tokens_per_sec guard (per C3): NULL if completion=0, ttft NULL, or (total-ttft)<=0.
 
-use crate::error::{Result};
+use crate::error::Result;
 use crate::ids::{
     AccountId, ApiKeyId, ComboId, ComboTargetId, ModelRowId, ProviderId, RequestId, UsageId,
 };

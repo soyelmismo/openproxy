@@ -97,9 +97,9 @@ pub fn get_combo_by_name(conn: &Connection, name: &str) -> Result<Option<Combo>>
              FROM combos WHERE name = ?1",
         )
         .map_err(crate::error::map_db_error)?;
-    let mut rows =
-        stmt.query_map(params![name], row_to_combo)
-            .map_err(crate::error::map_db_error)?;
+    let mut rows = stmt
+        .query_map(params![name], row_to_combo)
+        .map_err(crate::error::map_db_error)?;
     match rows.next() {
         Some(row) => Ok(Some(row.map_err(crate::error::map_db_error)?)),
         None => Ok(None),

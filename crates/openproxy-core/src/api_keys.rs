@@ -373,11 +373,7 @@ pub struct UpdateParams<'a> {
     pub expires_at: Option<Option<&'a str>>,
 }
 
-pub fn update(
-    conn: &Connection,
-    id: ApiKeyId,
-    params: UpdateParams<'_>,
-) -> Result<()> {
+pub fn update(conn: &Connection, id: ApiKeyId, params: UpdateParams<'_>) -> Result<()> {
     if let Some(s) = params.scopes
         && s.is_empty()
     {
@@ -385,12 +381,14 @@ pub fn update(
             "scopes must contain at least one entry".into(),
         ));
     }
-    let scopes_json: Option<String> = params.scopes
+    let scopes_json: Option<String> = params
+        .scopes
         .map(|s| {
             serde_json::to_string(s).map_err(|e| CoreError::Parse(format!("serialize scopes: {e}")))
         })
         .transpose()?;
-    let allowed_models_json: Option<Option<String>> = params.allowed_models
+    let allowed_models_json: Option<Option<String>> = params
+        .allowed_models
         .map(|inner| {
             inner
                 .map(|v| {
@@ -400,7 +398,8 @@ pub fn update(
                 .transpose()
         })
         .transpose()?;
-    let allowed_combos_json: Option<Option<String>> = params.allowed_combos
+    let allowed_combos_json: Option<Option<String>> = params
+        .allowed_combos
         .map(|inner| {
             inner
                 .map(|v| {
@@ -866,10 +865,15 @@ mod tests {
         let (key, _) = create(&conn, make_input("u"), "admin").expect("create");
 
         // Update only label.
-        update(&conn, key.id, UpdateParams {
-            label: Some("renamed"),
-            ..Default::default()
-        }).expect("update label");
+        update(
+            &conn,
+            key.id,
+            UpdateParams {
+                label: Some("renamed"),
+                ..Default::default()
+            },
+        )
+        .expect("update label");
         let after = get_by_id(&conn, key.id).expect("get").expect("present");
         assert_eq!(after.label.as_deref(), Some("renamed"));
         assert_eq!(after.scopes, vec!["chat".to_string()], "scopes unchanged");
@@ -904,14 +908,36 @@ mod tests {
         );
 
         // Clear allowed_models via Some(None).
-        update(&conn, key.id, UpdateParams { label: None, scopes: None, allowed_models: Some(None), allowed_combos: None, is_active: None, expires_at: None })
-            .expect("clear allowed_models");
+        update(
+            &conn,
+            key.id,
+            UpdateParams {
+                label: None,
+                scopes: None,
+                allowed_models: Some(None),
+                allowed_combos: None,
+                is_active: None,
+                expires_at: None,
+            },
+        )
+        .expect("clear allowed_models");
         let after = get_by_id(&conn, key.id).expect("get").expect("present");
         assert!(after.allowed_models.is_none(), "allowed_models cleared");
 
         // Reject empty scopes.
-        let err = update(&conn, key.id, UpdateParams { label: None, scopes: Some(&[]), allowed_models: None, allowed_combos: None, is_active: None, expires_at: None })
-            .expect_err("empty scopes");
+        let err = update(
+            &conn,
+            key.id,
+            UpdateParams {
+                label: None,
+                scopes: Some(&[]),
+                allowed_models: None,
+                allowed_combos: None,
+                is_active: None,
+                expires_at: None,
+            },
+        )
+        .expect_err("empty scopes");
         assert!(matches!(err, CoreError::Validation(_)));
 
         // Missing id → Internal.
@@ -932,13 +958,37 @@ mod tests {
         let (conn, _p) = fresh_pool();
         let (key, _) = create(&conn, make_input("dis"), "admin").expect("create");
 
-        update(&conn, key.id, UpdateParams { label: None, scopes: None, allowed_models: None, allowed_combos: None, is_active: Some(false), expires_at: None }).expect("disable");
+        update(
+            &conn,
+            key.id,
+            UpdateParams {
+                label: None,
+                scopes: None,
+                allowed_models: None,
+                allowed_combos: None,
+                is_active: Some(false),
+                expires_at: None,
+            },
+        )
+        .expect("disable");
         let after = get_by_id(&conn, key.id).expect("get").expect("present");
         assert!(!after.is_active);
         assert!(after.revoked_at.is_some());
 
         // Re-enable clears revoked_at.
-        update(&conn, key.id, UpdateParams { label: None, scopes: None, allowed_models: None, allowed_combos: None, is_active: Some(true), expires_at: None }).expect("enable");
+        update(
+            &conn,
+            key.id,
+            UpdateParams {
+                label: None,
+                scopes: None,
+                allowed_models: None,
+                allowed_combos: None,
+                is_active: Some(true),
+                expires_at: None,
+            },
+        )
+        .expect("enable");
         let after = get_by_id(&conn, key.id).expect("get").expect("present");
         assert!(after.is_active);
         assert!(after.revoked_at.is_none());

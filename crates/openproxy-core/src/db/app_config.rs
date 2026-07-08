@@ -108,9 +108,9 @@ pub fn load_idle_chunk_retryable_from_db(conn: &Connection) -> Result<Option<boo
     let mut stmt = conn
         .prepare("SELECT value FROM app_config WHERE key = ?1")
         .map_err(crate::error::map_db_error)?;
-    let mut rows =
-        stmt.query(params![IDLE_CHUNK_RETRYABLE_KEY])
-            .map_err(crate::error::map_db_error)?;
+    let mut rows = stmt
+        .query(params![IDLE_CHUNK_RETRYABLE_KEY])
+        .map_err(crate::error::map_db_error)?;
     match rows.next() {
         Ok(Some(row)) => {
             let raw: String = row.get(0).map_err(crate::error::map_db_error)?;

@@ -1,4 +1,4 @@
-use crate::error::{Result};
+use crate::error::Result;
 use crate::ids::{ModelRowId, ProviderId};
 use crate::models::{DiscoveredModel, UpsertResult};
 use rusqlite::{Connection, params};

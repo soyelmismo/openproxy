@@ -153,7 +153,8 @@ async fn run_warmup_cycle(
                     "SELECT last_ts FROM smart_warmup_history WHERE history_key = ?1",
                     rusqlite::params![history_key],
                     |r| r.get::<_, i64>(0),
-                ).ok()
+                )
+                .ok()
             };
 
             if let Some(ts) = last_ts
