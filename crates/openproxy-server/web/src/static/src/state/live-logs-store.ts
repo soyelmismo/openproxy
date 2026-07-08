@@ -33,6 +33,7 @@ export interface AttemptState {
   error: string | null;
   rowId: number | null;
   row: RecentUsageRow | null;
+  detail?: Record<string, unknown> | null;
   source: "live" | "snapshot" | "db";
 }
 
@@ -361,6 +362,13 @@ class LiveLogsStore {
       return this.attemptsByKey.get(identity.attemptKey);
     }
     return null;
+  }
+
+  public setDetail(identity: { kind: "row_id", id: number } | { kind: "attempt", attemptKey: string }, detail: Record<string, unknown>) {
+    const attempt = this.selectDetail(identity);
+    if (attempt) {
+      attempt.detail = detail;
+    }
   }
 }
 

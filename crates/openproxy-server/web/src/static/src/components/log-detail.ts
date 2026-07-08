@@ -1221,8 +1221,16 @@ export async function openLogDetail(
       const queryParam = traceId ? `trace_id=${encodeURIComponent(traceId)}` : `id=${encodeURIComponent(id)}`;
       const res = await fetch(`/admin/api/usage/detail?${queryParam}`);
       if (res.ok) {
-        // We just fetch it to populate the cache if needed, though liveLogsStore should
-        // handle fetching if we integrate it further. For now just let it do its thing.
+        const payload = await res.json();
+        if (payload && payload.row) {
+          liveLogsStore.setDetail(
+            id ? { kind: "row_id", id: Number(id) } : { kind: "attempt", attemptKey: traceId || requestId || id },
+            payload.row
+          );
+          if (isCurrentOpenLogDetailGeneration(gen)) {
+            renderModal();
+          }
+        }
       }
     } catch (e) {
       // Ignored
@@ -1257,7 +1265,7 @@ function renderModal() {
   if (!wrapper) return;
   
   // Create a LogDetailLog compatible object for the modal view
-  const logObj = attempt.row ? { ...attempt.row, stages: [attempt] } : { 
+  const logObj = attempt.row ? { ...attempt.row, detail: attempt.detail, stages: [attempt] } : { 
     id: attempt.rowId, 
     request_id: attempt.requestId, 
     trace_id: attempt.traceId,
@@ -1265,6 +1273,7 @@ function renderModal() {
     total_ms: attempt.elapsedMsAtEvent,
     provider_id: attempt.providerId,
     upstream_model_id: attempt.upstreamModelId,
+    detail: attempt.detail,
     stages: [attempt]
   };
   render(renderLogDetailModal(logObj as any), wrapper as HTMLElement);
