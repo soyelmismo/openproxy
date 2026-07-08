@@ -1076,7 +1076,8 @@ export async function mountProviders(opts: MountProvidersOpts = {}): Promise<(()
     const cleanup = mountView(main, renderProviderDetail);
     try {
       // Cold paint: fetch providers/accounts/models. Warm re-render
-      // (from cache after navigate()) skips the network.
+      // (from cache after navigate()) skips the network initially, but
+      // does a background refresh to prevent frozen quotas and statuses.
       const proxiesPromise = api("/proxies?status=alive") as Promise<any[]>;
       if (state.providers.length === 0) {
         const [providers, accounts, models, proxies] = await Promise.all([
@@ -1091,6 +1092,16 @@ export async function mountProviders(opts: MountProvidersOpts = {}): Promise<(()
         state.proxies = proxies;
       } else {
         state.proxies = await proxiesPromise;
+        Promise.all([
+          api("/providers") as Promise<Provider[]>,
+          api("/accounts") as Promise<Account[]>,
+          api("/models") as Promise<Model[]>,
+        ]).then(([p, a, m]) => {
+          state.providers = p;
+          state.accounts = a;
+          state.models = m;
+          requestUpdate();
+        }).catch((e) => console.error("Background refresh failed:", e));
       }
       requestUpdate();
     } catch (e: unknown) {
@@ -1105,10 +1116,11 @@ export async function mountProviders(opts: MountProvidersOpts = {}): Promise<(()
   loadError = null;
   const cleanup = mountView(main, renderProviderGrid);
   try {
+    const hasCache = state.providers && state.providers.length > 0;
     const [providers, accounts, models, proxies] = await Promise.all([
-      state.providers && state.providers.length ? Promise.resolve(state.providers) : api("/providers") as Promise<Provider[]>,
-      state.accounts && state.accounts.length ? Promise.resolve(state.accounts) : api("/accounts") as Promise<Account[]>,
-      state.models && state.models.length ? Promise.resolve(state.models) : api("/models") as Promise<Model[]>,
+      hasCache ? Promise.resolve(state.providers) : api("/providers") as Promise<Provider[]>,
+      hasCache && state.accounts ? Promise.resolve(state.accounts) : api("/accounts") as Promise<Account[]>,
+      hasCache && state.models ? Promise.resolve(state.models) : api("/models") as Promise<Model[]>,
       api("/proxies?status=alive") as Promise<any[]>,
     ]);
     state.providers = providers;
@@ -1116,6 +1128,19 @@ export async function mountProviders(opts: MountProvidersOpts = {}): Promise<(()
     state.models = models;
     state.proxies = proxies;
     requestUpdate();
+
+    if (hasCache) {
+      Promise.all([
+        api("/providers") as Promise<Provider[]>,
+        api("/accounts") as Promise<Account[]>,
+        api("/models") as Promise<Model[]>,
+      ]).then(([p, a, m]) => {
+        state.providers = p;
+        state.accounts = a;
+        state.models = m;
+        requestUpdate();
+      }).catch((e) => console.error("Background refresh failed:", e));
+    }
   } catch (e: unknown) {
     loadError = e instanceof Error ? e.message : String(e);
     requestUpdate();
