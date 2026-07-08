@@ -106,9 +106,9 @@ async fn run_quota_sync_cycle(
     let delay_ms = config.quota_sync.delay_between_accounts_ms;
 
     // 3. Process each account with a delay
+    let ads = adapters.read().clone();
     for account_id in accounts_to_sync {
-        let ads = adapters.read();
-        let res = refresh_single_account_quota(
+        match refresh_single_account_quota(
             account_id,
             db_pool,
             master_key,
@@ -116,16 +116,17 @@ async fn run_quota_sync_cycle(
             upstream_client,
             oauth_registry,
         )
-        .await;
-
-        drop(ads);
-
-        if let Err(e) = res {
-            tracing::warn!(
-                "[QuotaSync] Failed to refresh quota for account {}: {}",
-                account_id.0,
-                e
-            );
+        .await
+        {
+            Ok(Some(_)) => {}
+            Ok(None) => {}
+            Err(e) => {
+                tracing::warn!(
+                    "[QuotaSync] Failed to refresh quota for account {}: {}",
+                    account_id.0,
+                    e
+                );
+            }
         }
 
         if delay_ms > 0 {
@@ -145,7 +146,7 @@ pub async fn refresh_single_account_quota(
     adapters: &[ProviderAdapterEnum],
     upstream_client: &Arc<UpstreamClient>,
     oauth_registry: &Arc<OAuthProviderRegistry>,
-) -> crate::error::Result<AccountQuota> {
+) -> crate::error::Result<Option<AccountQuota>> {
     
     let (provider_id_str, api_key, access_token, provider_specific) = {
         let w = db_pool.writer();
@@ -158,9 +159,7 @@ pub async fn refresh_single_account_quota(
             .unwrap_or(false);
 
         if !supports_quota {
-            return Err(crate::error::CoreError::Validation(
-                format!("quota fetching not implemented for provider '{}'", acc.provider_id)
-            ));
+            return Ok(None);
         }
 
         let provider_str = acc.provider_id.to_string();
@@ -177,7 +176,7 @@ pub async fn refresh_single_account_quota(
         (provider_str, k, token, provider_specific)
     };
 
-    let mut q = admin::fetch_account_quota(
+    let q = admin::fetch_account_quota(
         &provider_id_str,
         upstream_client,
         &api_key,
@@ -186,66 +185,78 @@ pub async fn refresh_single_account_quota(
     )
     .await;
 
-    if q.fetch_error.as_deref().is_some_and(|e| e.contains("401")) && access_token.is_some() {
+    let q = if q.fetch_error.as_deref().is_some_and(|e| e.contains("401"))
+        && access_token.is_some()
+    {
         let refresh_result = {
             let w = db_pool.writer();
-            accounts::decrypt_refresh_token(&w, account_id, master_key)
+            accounts::decrypt_refresh_token(&w, account_id, master_key.as_ref())
                 .ok()
                 .flatten()
         };
-
-        if let Some(refresh_token) = refresh_result {
-            if let Some(provider) = oauth_registry.get(&provider_id_str) {
-                match provider
-                    .refresh_token(
-                        &refresh_token,
-                        upstream_client,
-                        account_id,
-                        DbRef::Pool(db_pool.as_ref()),
-                    )
-                    .await
-                {
-                    Ok(new_tokens) => {
-                        let expires_at = new_tokens.expires_in.map(|secs| {
-                            (chrono::Utc::now() + chrono::Duration::seconds(secs as i64))
-                                .format("%Y-%m-%dT%H:%M:%SZ")
-                                .to_string()
-                        });
-                        {
-                            let w = db_pool.writer();
-                            let _ = accounts::store_oauth_tokens(
-                                &w,
-                                account_id,
-                                &new_tokens.access_token,
-                                new_tokens.refresh_token.as_deref(),
-                                master_key,
-                                &new_tokens.token_type,
-                                expires_at.as_deref(),
-                                new_tokens.scope.as_deref(),
-                                None,
-                                None,
-                            );
-                        }
-                        q = admin::fetch_account_quota(
-                            &provider_id_str,
-                            upstream_client,
-                            &api_key,
-                            Some(&new_tokens.access_token),
-                            provider_specific.as_deref(),
-                        )
-                        .await;
-                    }
-                    Err(e) => {
-                        tracing::warn!(
-                            error = %e,
-                            account_id = account_id.0,
-                            "on-demand token refresh failed"
+        if let Some(refresh_token) = refresh_result
+            && let Some(provider) = oauth_registry.get(&provider_id_str)
+        {
+            match provider
+                .refresh_token(
+                    &refresh_token,
+                    upstream_client,
+                    account_id,
+                    DbRef::Pool(db_pool.as_ref()),
+                )
+                .await
+            {
+                Ok(new_tokens) => {
+                    let expires_at = new_tokens.expires_in.map(|secs| {
+                        (chrono::Utc::now() + chrono::Duration::seconds(secs as i64))
+                            .format("%Y-%m-%dT%H:%M:%SZ")
+                            .to_string()
+                    });
+                    // Store the refreshed tokens.
+                    {
+                        let w = db_pool.writer();
+                        let _ = accounts::store_oauth_tokens(
+                            &w,
+                            account_id,
+                            &new_tokens.access_token,
+                            new_tokens.refresh_token.as_deref(),
+                            master_key,
+                            &new_tokens.token_type,
+                            expires_at.as_deref(),
+                            new_tokens.scope.as_deref(),
+                            None,
+                            None,
                         );
                     }
+                    // Retry the quota call with the new access token.
+                    admin::fetch_account_quota(
+                        &provider_id_str,
+                        upstream_client,
+                        &api_key,
+                        Some(&new_tokens.access_token),
+                        provider_specific.as_deref(),
+                    )
+                    .await
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        error = %e,
+                        account_id = account_id.0,
+                        "on-demand token refresh failed"
+                    );
+                    q // return original error
                 }
             }
+        } else {
+            tracing::debug!(
+                account_id = account_id.0,
+                "401 but no refresh token available for on-demand refresh"
+            );
+            q
         }
-    }
+    } else {
+        q
+    };
 
     {
         let w = db_pool.writer();
@@ -288,7 +299,7 @@ pub async fn refresh_single_account_quota(
         }
     }
 
-    Ok(q)
+    Ok(Some(q))
 }
 
 pub fn compute_low_quota_signal(q: &AccountQuota) -> Option<(&'static str, i64, i64)> {

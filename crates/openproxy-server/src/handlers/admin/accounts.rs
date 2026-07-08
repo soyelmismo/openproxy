@@ -93,29 +93,35 @@ pub async fn update_account_api_key(
     let result: Result<Json<serde_json::Value>, ApiError> = async move {
         let account_id = AccountId::new(account_id);
 
-        let q = openproxy_core::quota_sync::refresh_single_account_quota(
+        let q_opt = openproxy_core::quota_sync::refresh_single_account_quota(
             account_id,
             s_clone.db_pool(),
             s_clone.master_key(),
             &s_clone.adapters(),
-            &s_clone.upstream_client(),
+            s_clone.upstream_client(),
             &s_clone.oauth_provider_registry(),
         )
         .await?;
 
-        Ok(Json(serde_json::json!({
-            "account_id": account_id.0,
-            "supported": true,
-            "session_used": q.session_used,
-            "session_limit": q.session_limit,
-            "session_reset_at": q.session_reset_at,
-            "weekly_used": q.weekly_used,
-            "weekly_limit": q.weekly_limit,
-            "weekly_reset_at": q.weekly_reset_at,
-            "plan_name": q.plan_name,
-            "last_fetched_at": q.last_fetched_at,
-            "error": q.fetch_error,
-        })))
+        if let Some(q) = q_opt {
+            Ok(Json(serde_json::json!({
+                "account_id": account_id.0,
+                "supported": true,
+                "session_used": q.session_used,
+                "session_limit": q.session_limit,
+                "session_reset_at": q.session_reset_at,
+                "weekly_used": q.weekly_used,
+                "weekly_limit": q.weekly_limit,
+                "weekly_reset_at": q.weekly_reset_at,
+                "last_fetched_at": q.last_fetched_at,
+                "fetch_error": q.fetch_error,
+            })))
+        } else {
+            Ok(Json(serde_json::json!({
+                "account_id": account_id.0,
+                "supported": false,
+            })))
+        }
     }
     .await;
     result.into()

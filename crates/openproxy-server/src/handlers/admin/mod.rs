@@ -963,14 +963,6 @@ pub struct ListModelsQuery {
 // JSON body, and the operator-facing `last_fetched_at` is updated even
 // on a failed fetch (so the dashboard can show "tried 12s ago").
 
-/// Low-quota threshold: 10% of the limit. If the limit is missing or
-/// zero, the absolute floor of 1000 is used (matches the task spec's
-/// "absolute threshold like 1000"). Encoded as the integer test
-/// `remaining * 10 < limit` in [`is_low`] below to stay in integer
-/// arithmetic — the actual comparison doesn't reference a float
-/// constant (floats would just add rounding noise for no benefit at
-/// this scale).
-
 
 // Inspect a freshly-fetched [`AccountQuota`] and decide whether to
 // fire a `quota_low` notification. Returns `(scope, remaining, limit)`

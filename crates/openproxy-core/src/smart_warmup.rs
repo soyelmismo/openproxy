@@ -149,14 +149,11 @@ async fn run_warmup_cycle(
             // Check cooldown
             let last_ts = {
                 let conn = db_pool.reader();
-                match conn.query_row(
+                conn.query_row(
                     "SELECT last_ts FROM smart_warmup_history WHERE history_key = ?1",
                     rusqlite::params![history_key],
                     |r| r.get::<_, i64>(0),
-                ) {
-                    Ok(ts) => Some(ts),
-                    Err(_) => None,
-                }
+                ).ok()
             };
 
             if let Some(ts) = last_ts

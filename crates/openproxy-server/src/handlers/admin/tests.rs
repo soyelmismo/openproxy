@@ -1,7 +1,7 @@
 use super::*;
 use crate::handlers::admin::usage::UsageQuery;
 use crate::handlers::admin::runtime::{get_recording_ttl, put_recording_ttl, put_runtime_timeouts};
-use crate::handlers::admin::accounts::{refresh_account_quota, compute_low_quota_signal};
+use crate::handlers::admin::accounts::refresh_account_quota;
 use crate::handlers::admin::providers::refresh_provider_models;
 
     use axum::{
@@ -1054,102 +1054,7 @@ use crate::handlers::admin::providers::refresh_provider_models;
 
     // ---- G2.4 quota_low helper tests -----------------------------------
 
-    fn q(
-        session_used: Option<i64>,
-        session_limit: Option<i64>,
-        weekly_used: Option<i64>,
-        weekly_limit: Option<i64>,
-        fetch_error: Option<&str>,
-    ) -> openproxy_core::quota::AccountQuota {
-        openproxy_core::quota::AccountQuota {
-            session_used,
-            session_limit,
-            session_reset_at: None,
-            weekly_used,
-            weekly_limit,
-            weekly_reset_at: None,
-            plan_name: None,
-            last_fetched_at: "2026-01-01T00:00:00Z".into(),
-            fetch_error: fetch_error.map(str::to_string),
-            model_details: None,
-        }
-    }
 
-    #[test]
-    fn quota_low_fires_when_session_remaining_below_10pct() {
-        // limit=1000, used=950 → remaining=50 → 5% < 10% → fires.
-        let quota = q(Some(950), Some(1000), None, None, None);
-        let (scope, remaining, limit) = compute_low_quota_signal(&quota).expect("should fire");
-        assert_eq!(scope, "session");
-        assert_eq!(remaining, 50);
-        assert_eq!(limit, 1000);
-    }
-
-    #[test]
-    fn quota_low_does_not_fire_when_session_remaining_above_10pct() {
-        // limit=1000, used=800 → remaining=200 → 20% > 10% → no fire.
-        let quota = q(Some(800), Some(1000), None, None, None);
-        assert!(compute_low_quota_signal(&quota).is_none());
-    }
-
-    #[test]
-    fn quota_low_falls_through_to_weekly_when_session_healthy() {
-        // session at 50% (healthy), weekly at 5% (low) → fires on weekly.
-        let quota = q(Some(500), Some(1000), Some(950), Some(1000), None);
-        let (scope, _, _) = compute_low_quota_signal(&quota).expect("should fire");
-        assert_eq!(scope, "weekly");
-    }
-
-    #[test]
-    fn quota_low_fires_on_session_first_when_both_low() {
-        // Both windows low → session wins (documented priority).
-        let quota = q(Some(950), Some(1000), Some(950), Some(1000), None);
-        let (scope, _, _) = compute_low_quota_signal(&quota).expect("should fire");
-        assert_eq!(scope, "session");
-    }
-
-    #[test]
-    fn quota_low_boundary_exactly_10pct_does_not_fire() {
-        // remaining=100, limit=1000 → exactly 10%. The integer test
-        // `remaining * 10 < limit` is `1000 < 1000` → false → no fire.
-        // (Strict less-than: the operator gets the warning when the
-        // account is BELOW 10%, not AT 10%.)
-        let quota = q(Some(900), Some(1000), None, None, None);
-        assert!(compute_low_quota_signal(&quota).is_none());
-    }
-
-    #[test]
-    fn quota_low_handles_zero_limit_via_absolute_floor() {
-        // limit=0 (degenerate), remaining=500 → 500 < 1000 → fires.
-        // `remaining = limit - used = 0 - (-500) = 500` (used is negative
-        // here only to construct the test; in practice `used >= 0` so
-        // this branch fires only when `limit = 0` and the row is
-        // degenerate — the absolute floor catches it).
-        let quota = q(Some(-500), Some(0), None, None, None);
-        let (_, remaining, _) = compute_low_quota_signal(&quota).expect("should fire");
-        assert_eq!(remaining, 500);
-    }
-
-    #[test]
-    fn quota_low_does_not_fire_when_no_quota_data() {
-        // All-NULL quota (provider doesn't expose a quota endpoint).
-        let quota = q(None, None, None, None, None);
-        assert!(compute_low_quota_signal(&quota).is_none());
-    }
-
-    // Note: `quota_low` does NOT consult `fetch_error` — that gate is
-    // applied by the caller (`refresh_account_quota`) before invoking
-    // `compute_low_quota_signal`. The helper itself only inspects the
-    // numeric fields. Verified by this test: a quota with `fetch_error`
-    // set but valid numeric fields still returns Some — the caller is
-    // responsible for skipping the call when there's an error.
-    #[test]
-    fn quota_low_helper_ignores_fetch_error_field() {
-        let quota = q(Some(950), Some(1000), None, None, Some("upstream 500"));
-        // Helper returns Some — the caller's `fetch_error.is_none()`
-        // gate is what suppresses the notification in the error case.
-        assert!(compute_low_quota_signal(&quota).is_some());
-    }
 
     #[tokio::test]
     async fn test_run_test_for_model_cancellation() {

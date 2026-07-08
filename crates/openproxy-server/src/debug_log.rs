@@ -417,8 +417,8 @@ impl MessageVisitor {
 mod tests {
     use super::*;
 
-    #[test]
-    fn buffer_evicts_oldest_when_full() {
+    #[tokio::test]
+    async fn buffer_evicts_oldest_when_full() {
         init();
         // Push BUFFER_CAPACITY + 10 entries; verify only the last
         // BUFFER_CAPACITY are kept. The snapshot is taken INSIDE
@@ -454,8 +454,8 @@ mod tests {
         );
     }
 
-    #[test]
-    fn snapshot_since_filters_by_seq() {
+    #[tokio::test]
+    async fn snapshot_since_filters_by_seq() {
         init();
         let buf = DEBUG_LOG_BUFFER.get().expect("init");
         let snap = {
@@ -504,8 +504,8 @@ mod tests {
     // against a future refactor that accidentally drops the
     // per-layer filter, which would re-introduce the bug where
     // `RUST_LOG=error` silences WARN from the ring buffer.
-    #[test]
-    fn debug_log_layer_captures_warn_and_error_via_subscriber() {
+    #[tokio::test]
+    async fn debug_log_layer_captures_warn_and_error_via_subscriber() {
         init();
         // Reset the buffer to a known-empty state inside the lock
         // so we don't see entries from other tests that ran first.
