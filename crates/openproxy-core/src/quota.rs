@@ -1290,10 +1290,11 @@ pub async fn fetch_codex_quota(
             .unwrap_or_else(|_| http::HeaderValue::from_static("")),
     );
     if let Some(ws) = workspace_id
-        && let Ok(val) = http::HeaderValue::from_str(ws) {
-            req.headers
-                .insert(http::HeaderName::from_static("chatgpt-account-id"), val);
-        }
+        && let Ok(val) = http::HeaderValue::from_str(ws)
+    {
+        req.headers
+            .insert(http::HeaderName::from_static("chatgpt-account-id"), val);
+    }
 
     let cancel = CancellationToken::new();
     let response = upstream
