@@ -48,6 +48,7 @@ use std::sync::OnceLock;
 use chrono::Utc;
 use parking_lot::Mutex;
 use serde::Serialize;
+use tokio::sync::mpsc;
 use tracing::field::{Field, Visit};
 use tracing::{Event, Subscriber};
 use tracing_subscriber::{Layer, layer::Context};
@@ -90,6 +91,7 @@ pub struct DebugLogEntry {
 /// The global ring buffer. Initialized once via [`init`] (called from
 /// `telemetry::init`); accessed via [`snapshot`] and [`snapshot_since`].
 static DEBUG_LOG_BUFFER: OnceLock<Mutex<DebugLogBuffer>> = OnceLock::new();
+static FILE_LOG_SENDER: OnceLock<mpsc::UnboundedSender<DebugLogEntry>> = OnceLock::new();
 
 /// Internal struct holding the VecDeque + the monotonic seq counter.
 struct DebugLogBuffer {
@@ -120,6 +122,67 @@ impl DebugLogBuffer {
 /// Idempotent: subsequent calls are no-ops.
 pub fn init() {
     let _ = DEBUG_LOG_BUFFER.get_or_init(|| Mutex::new(DebugLogBuffer::new()));
+    let _ = FILE_LOG_SENDER.get_or_init(|| {
+        let (tx, mut rx) = mpsc::unbounded_channel::<DebugLogEntry>();
+        
+        let home = std::env::var("HOME")
+            .ok()
+            .or_else(|| std::env::var("USERPROFILE").ok())
+            .unwrap_or_else(|| ".".to_string());
+        let path = std::path::PathBuf::from(home).join(".openproxy").join("debug.log");
+
+        tokio::spawn(async move {
+            if let Some(parent) = path.parent() {
+                let _ = tokio::fs::create_dir_all(parent).await;
+            }
+
+            let mut file = match tokio::fs::OpenOptions::new()
+                .create(true)
+                .write(true)
+                .truncate(true)
+                .open(&path)
+                .await
+            {
+                Ok(f) => f,
+                Err(_) => return, // Fail silently if cannot write
+            };
+
+            let mut rotation_interval = tokio::time::interval(std::time::Duration::from_secs(12 * 3600));
+            rotation_interval.tick().await; // Consume immediate first tick
+
+            loop {
+                tokio::select! {
+                    _ = rotation_interval.tick() => {
+                        // Rotate: truncate every 12 hours
+                        if let Ok(new_file) = tokio::fs::OpenOptions::new()
+                            .create(true)
+                            .write(true)
+                            .truncate(true)
+                            .open(&path)
+                            .await
+                        {
+                            file = new_file;
+                        }
+                    }
+                    msg_opt = rx.recv() => {
+                        match msg_opt {
+                            Some(entry) => {
+                                if let Ok(mut json) = serde_json::to_string(&entry) {
+                                    json.push('\n');
+                                    use tokio::io::AsyncWriteExt;
+                                    let _ = file.write_all(json.as_bytes()).await;
+                                    let _ = file.flush().await;
+                                }
+                            }
+                            None => break,
+                        }
+                    }
+                }
+            }
+        });
+
+        tx
+    });
 }
 
 /// Snapshot ALL entries currently in the buffer, in insertion order
@@ -233,9 +296,18 @@ where
         };
 
         // Push into the global buffer.
-        if let Some(buf) = DEBUG_LOG_BUFFER.get() {
+        let file_entry = if let Some(buf) = DEBUG_LOG_BUFFER.get() {
             let mut guard = buf.lock();
+            let to_send = entry.clone();
             guard.push(entry);
+            to_send
+        } else {
+            entry
+        };
+
+        // Push to the file log task.
+        if let Some(tx) = FILE_LOG_SENDER.get() {
+            let _ = tx.send(file_entry);
         }
     }
 }
