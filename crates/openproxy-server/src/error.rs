@@ -75,7 +75,7 @@ impl IntoResponse for ApiError {
 /// disagree on how big an error message can be.
 const API_ERROR_MESSAGE_MAX: usize = 2048;
 
-fn truncate_error_message(raw: &str) -> String {
+pub(crate) fn truncate_error_message(raw: &str) -> String {
     if raw.len() <= API_ERROR_MESSAGE_MAX {
         return raw.to_string();
     }

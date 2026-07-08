@@ -221,7 +221,7 @@ async fn ping_antigravity_model(
                 account_id,
                 e
             );
-            return false;
+            false
         }
     }
 }
