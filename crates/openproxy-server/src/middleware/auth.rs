@@ -6,7 +6,7 @@ use std::sync::Arc;
 /// Extracted parsed JSON payload for the chat endpoint.
 #[derive(Clone)]
 pub struct ParsedChatRequest {
-    pub raw: serde_json::Value,
+    pub raw: Arc<serde_json::Value>,
     pub bytes: bytes::Bytes,
 }
 
@@ -196,7 +196,7 @@ pub async fn auth_middleware(
     let auth_result = authenticate(&state, &parts.headers, requested_model)?;
 
     parts.extensions.insert(ParsedChatRequest {
-        raw: parsed,
+        raw: Arc::new(parsed),
         bytes: bytes.clone(),
     });
     if let Some(res) = auth_result {

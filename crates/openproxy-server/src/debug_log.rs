@@ -475,7 +475,7 @@ mod tests {
         );
 
         // Only WARN + ERROR should be in the buffer (INFO filtered out).
-        let snap = snapshot_since(before);
+        let snap = snapshot_since(before).into_iter().filter(|s| s.target == "test::bug3").collect::<Vec<_>>();
         assert_eq!(
             snap.len(),
             2,
