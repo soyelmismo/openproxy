@@ -732,11 +732,11 @@ fn parse_literal_ip(host: &str, port: u16) -> Option<SocketAddr> {
 }
 
 /// Resolve `host:port` to one or more `SocketAddr`s using tokio's
-/// async DNS, with a simple in-memory cache (60s TTL) to avoid
+/// async DNS, with a simple in-memory cache (5m TTL) to avoid
 /// hitting getaddrinfo on every fresh dial.
 async fn resolve_host(host: &str, port: u16) -> io::Result<Vec<SocketAddr>> {
     // Check the DNS cache first. Keyed on (host, port).
-    // TTL: 60 seconds — balances freshness vs syscall overhead.
+    // TTL: 300 seconds (5 minutes).
     // The cache is a process-wide DashMap; entries are (addrs, expiry).
     // On cache hit, return the cached addrs if not expired.
     // On cache miss or expiry, fall through to tokio::net::lookup_host.
@@ -752,7 +752,7 @@ async fn resolve_host(host: &str, port: u16) -> io::Result<Vec<SocketAddr>> {
     let cache = DNS_CACHE.get_or_init(dashmap::DashMap::new);
     let cache_key = format!("{}:{}", host, port);
     let now = std::time::Instant::now();
-    const DNS_TTL: std::time::Duration = std::time::Duration::from_secs(60);
+    const DNS_TTL: std::time::Duration = std::time::Duration::from_secs(300);
 
     if let Some(entry) = cache.get(&cache_key)
         && now < entry.1
