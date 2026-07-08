@@ -1082,23 +1082,25 @@ export async function mountProviders(opts: MountProvidersOpts = {}): Promise<(()
         const [providers, accounts, models, proxies] = await Promise.all([
           api("/providers") as Promise<Provider[]>,
           api("/accounts") as Promise<Account[]>,
-          api("/models") as Promise<Model[]>,
+          api("/models?provider_id=" + encodeURIComponent(opts.detailId)) as Promise<Model[]>,
           proxiesPromise,
         ]);
         state.providers = providers;
         state.accounts = accounts;
         state.models = models;
+        state.modelsComplete = false;
         state.proxies = proxies;
       } else {
         state.proxies = await proxiesPromise;
         Promise.all([
           api("/providers") as Promise<Provider[]>,
           api("/accounts") as Promise<Account[]>,
-          api("/models") as Promise<Model[]>,
+          api("/models?provider_id=" + encodeURIComponent(opts.detailId)) as Promise<Model[]>,
         ]).then(([p, a, m]) => {
           state.providers = p;
           state.accounts = a;
           state.models = m;
+          state.modelsComplete = false;
           requestUpdate();
         }).catch((e) => console.error("Background refresh failed:", e));
       }

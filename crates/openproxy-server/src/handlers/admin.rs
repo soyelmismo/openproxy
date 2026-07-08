@@ -4005,11 +4005,22 @@ pub async fn update_account_api_key(
 /// extra fields to drive the toggle and refresh buttons; this endpoint
 /// returns them. There is no filter — the dashboard's model list is
 /// small enough that a single shot is fine.
-pub async fn list_models_admin(State(s): State<AppState>) -> ApiResult<Json<Vec<models::Model>>> {
+#[derive(serde::Deserialize)]
+pub struct ListModelsQuery {
+    pub provider_id: Option<String>,
+}
+
+pub async fn list_models_admin(
+    State(s): State<AppState>,
+    axum::extract::Query(q): axum::extract::Query<ListModelsQuery>,
+) -> ApiResult<Json<Vec<models::Model>>> {
     let body: Result<Json<Vec<models::Model>>, ApiError> = async {
         // Read-only SELECT — use the READER.
         let r = s.db_pool().reader();
-        let list = models::list_all(&r)?;
+        let mut list = models::list_all(&r)?;
+        if let Some(p) = q.provider_id {
+            list.retain(|m| m.provider_id.as_str() == p);
+        }
         Ok(Json(list))
     }
     .await;

@@ -427,7 +427,10 @@ function addTargetTemplate(
 }
 
 export async function showAddTarget(comboId: number): Promise<void> {
-  if (!state.models || state.models.length === 0) state.models = await api("/models") as typeof state.models;
+  if (!state.modelsComplete) {
+    state.models = await api("/models") as typeof state.models;
+    state.modelsComplete = true;
+  }
   // The per-model account selects read from `state.accounts`
   // directly (see `accountsForProviderTemplate`), so the modal
   // template no longer takes `accounts` as a parameter. We still

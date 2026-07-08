@@ -88,6 +88,7 @@ export async function refreshProvider(providerId: string, e: Event | null): Prom
     // the user explicitly asked for fresh data.
     state.providers = await api("/providers") as typeof state.providers;
     state.models = await api("/models") as typeof state.models;
+    state.modelsComplete = true;
     requestUpdate();
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);
@@ -115,6 +116,7 @@ export async function refreshAllProviders(): Promise<void> {
     }
     state.providers = await api("/providers") as typeof state.providers;
     state.models = await api("/models") as typeof state.models;
+    state.modelsComplete = true;
     requestUpdate();
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);

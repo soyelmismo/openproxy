@@ -54,7 +54,10 @@ interface TestResult {
 // should use the in-table Enable/Disable buttons instead.
 
 export async function showEditModel(rowId: number): Promise<void> {
-  if (!state.models || state.models.length === 0) state.models = await api("/models") as Model[];
+  if (!state.modelsComplete) {
+    state.models = await api("/models") as Model[];
+    state.modelsComplete = true;
+  }
   const m = (state.models || []).find((x) => x.row_id === rowId);
   if (!m) { showToast("Model row not found", "error"); return; }
   const wrapper = document.createElement("div");
@@ -627,6 +630,7 @@ export async function createCustomModel(providerId: string, e: Event): Promise<v
     const modalBg = target.closest(".modal-bg");
     if (modalBg) modalBg.remove();
     state.models = await api("/models") as Model[];
+    state.modelsComplete = true;
     requestUpdate();
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);

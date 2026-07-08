@@ -148,7 +148,10 @@ function keyFormTemplate({ mode, key, wrapper }: { mode: "create" | "edit"; key?
 }
 
 export async function showCreateKey(): Promise<void> {
-  if (!state.models || state.models.length === 0) state.models = await api("/models") as Model[];
+  if (!state.modelsComplete) {
+    state.models = await api("/models") as Model[];
+    state.modelsComplete = true;
+  }
   const wrapper = document.createElement("div");
   ensureModalRoot().appendChild(wrapper);
   render(keyFormTemplate({ mode: "create", wrapper }), wrapper);
@@ -156,7 +159,10 @@ export async function showCreateKey(): Promise<void> {
 }
 
 export async function showEditKey(id: number): Promise<void> {
-  if (!state.models || state.models.length === 0) state.models = await api("/models") as Model[];
+  if (!state.modelsComplete) {
+    state.models = await api("/models") as Model[];
+    state.modelsComplete = true;
+  }
   let key: KeyRow;
   try { key = await api("/keys/" + id) as KeyRow; }
   catch (e: unknown) {

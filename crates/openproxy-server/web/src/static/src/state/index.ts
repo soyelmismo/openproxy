@@ -142,6 +142,7 @@ export interface DashboardState {
   providers: Provider[];
   accounts: Account[];
   models: Model[];
+  modelsComplete: boolean;
   combos: Combo[];
   proxies: any[];
   /** Cached API key rows. The shape is provider-specific; the
@@ -205,6 +206,7 @@ export const state: DashboardState = {
   providers: [],
   accounts: [],
   models: [],
+  modelsComplete: false,
   combos: [],
   proxies: [],
   apiKeys: [],
