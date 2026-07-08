@@ -148,16 +148,18 @@ class LiveLogsStore {
     if (event.trace_id) {
       const unknownKey = `${event.request_id}:unknown`;
       if (this.attemptsByKey.has(unknownKey) && unknownKey !== event.attempt_key) {
-        const oldAttempt = this.attemptsByKey.get(unknownKey)!;
-        this.attemptsByKey.delete(unknownKey);
-        const group = this.requestGroups.get(event.request_id);
-        if (group) group.delete(unknownKey);
-        
-        oldAttempt.attemptKey = event.attempt_key;
-        oldAttempt.traceId = event.trace_id;
-        
-        this.attemptsByKey.set(event.attempt_key, oldAttempt);
-        this.trackRequestGroup(event.request_id, event.attempt_key);
+        if (!this.attemptsByKey.has(event.attempt_key)) {
+          const oldAttempt = this.attemptsByKey.get(unknownKey)!;
+          this.attemptsByKey.delete(unknownKey);
+          const group = this.requestGroups.get(event.request_id);
+          if (group) group.delete(unknownKey);
+          
+          oldAttempt.attemptKey = event.attempt_key;
+          oldAttempt.traceId = event.trace_id;
+          
+          this.attemptsByKey.set(event.attempt_key, oldAttempt);
+          this.trackRequestGroup(event.request_id, event.attempt_key);
+        }
       }
     }
 
@@ -174,8 +176,13 @@ class LiveLogsStore {
     }
 
     // Sequence check for out of order non-terminal events
-    if (existing && existing.stageSeq >= event.stage_seq && !event.terminal) {
-      return;
+    if (existing && !event.terminal) {
+      if (existing.stageSeq > event.stage_seq) {
+        return;
+      }
+      if (existing.stageSeq === event.stage_seq && existing.stageRank >= event.stage_rank) {
+        return;
+      }
     }
 
     const newState: AttemptState = existing ? { ...existing } : {
@@ -230,16 +237,18 @@ class LiveLogsStore {
     if (row.trace_id) {
       const unknownKey = `${row.request_id}:unknown`;
       if (this.attemptsByKey.has(unknownKey) && unknownKey !== attemptKey) {
-        const oldAttempt = this.attemptsByKey.get(unknownKey)!;
-        this.attemptsByKey.delete(unknownKey);
-        const group = this.requestGroups.get(row.request_id);
-        if (group) group.delete(unknownKey);
-        
-        oldAttempt.attemptKey = attemptKey;
-        oldAttempt.traceId = row.trace_id;
-        
-        this.attemptsByKey.set(attemptKey, oldAttempt);
-        this.trackRequestGroup(row.request_id, attemptKey);
+        if (!this.attemptsByKey.has(attemptKey)) {
+          const oldAttempt = this.attemptsByKey.get(unknownKey)!;
+          this.attemptsByKey.delete(unknownKey);
+          const group = this.requestGroups.get(row.request_id);
+          if (group) group.delete(unknownKey);
+          
+          oldAttempt.attemptKey = attemptKey;
+          oldAttempt.traceId = row.trace_id;
+          
+          this.attemptsByKey.set(attemptKey, oldAttempt);
+          this.trackRequestGroup(row.request_id, attemptKey);
+        }
       }
     }
 
@@ -273,6 +282,9 @@ class LiveLogsStore {
       attempt.row = row;
       attempt.terminal = true;
       attempt.terminalKind = row.status_code >= 400 ? "failed" : "completed";
+      attempt.stage = (row.status_code >= 400 ? "failed" : "completed") as StageName;
+      attempt.stageSeq = 9999;
+      attempt.stageRank = 4;
       attempt.updatedAtMs = attempt.startedAtMs + row.total_ms;
       attempt.elapsedMsAtEvent = row.total_ms;
       attempt.source = "db";
