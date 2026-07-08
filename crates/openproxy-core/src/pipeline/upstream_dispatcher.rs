@@ -13,8 +13,7 @@ use crate::think_extractor::extract_think_from_response;
 
 /// Bundles the parameters shared by streaming failure methods
 /// (`fail_stream_client_disconnected`, `fail_on_sink_send_error`).
-/// Eliminates the 14-15 positional-argument anti-pattern.
-
+/// Eliminates la anti-pattern de 14-15 argumentos posicionales.
 pub(crate) struct DispatchContext<'a> {
     pub(crate) attempt: u8,
     pub(crate) race_size: u8,
