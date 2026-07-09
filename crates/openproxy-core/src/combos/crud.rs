@@ -1269,7 +1269,7 @@ mod tests {
         // checking if C1 is in C1's subchain?
         // start = C1, target = C1 -> but since current logic is `start == target` => true
         let result = combo_in_chain(&conn, c1, c3, MAX_SUB_COMBO_DEPTH).expect("query success");
-        assert_eq!(result, false);
+        assert!(!result);
     }
 
     #[test]
@@ -1302,11 +1302,11 @@ mod tests {
 
         // checking if C1 is in C2's chain -> since C2 -> C3 -> C1
         let result = combo_in_chain(&conn, c1, c1, MAX_SUB_COMBO_DEPTH).expect("query success");
-        assert_eq!(result, true); // start == target
+        assert!(result); // start == target
 
         let result2 =
             combo_in_chain(&conn, c1, ComboId(2), MAX_SUB_COMBO_DEPTH).expect("query success");
-        assert_eq!(result2, true);
+        assert!(result2);
     }
 
     #[test]
@@ -1317,7 +1317,7 @@ mod tests {
         let c1 = ComboId(1);
 
         let result = combo_in_chain(&conn, c1, c1, MAX_SUB_COMBO_DEPTH).expect("query success");
-        assert_eq!(result, true);
+        assert!(result);
     }
 
     #[test]
@@ -1351,10 +1351,10 @@ mod tests {
 
         // Depth 3 allows reaching up to 3 links down. C1 -> (C2)1 -> (C3)2 -> (C4)3 -> C5 (4th)
         let result = combo_in_chain(&conn, c5, c1, 3).expect("query success");
-        assert_eq!(result, false);
+        assert!(!result);
 
         // Depth 4 should reach C5
         let result2 = combo_in_chain(&conn, c5, c1, 4).expect("query success");
-        assert_eq!(result2, true);
+        assert!(result2);
     }
 }
