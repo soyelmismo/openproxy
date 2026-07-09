@@ -86,7 +86,10 @@ impl DbPool {
             if !p_str.is_empty() {
                 // This PRAGMA is deprecated but still works and sets the global temp dir
                 let p_escaped = p_str.replace("'", "''");
-                let _ = writer.execute(&format!("PRAGMA temp_store_directory = '{}'", p_escaped), []);
+                let _ = writer.execute(
+                    &format!("PRAGMA temp_store_directory = '{}'", p_escaped),
+                    [],
+                );
             }
         }
 
