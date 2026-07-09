@@ -84,7 +84,7 @@ async function readFreezeObservation(
           ttft_ms: number | null;
           status_code: number;
           error: string | null;
-          timestamp: string;
+          created_at: string;
           provider_id: string;
           upstream_model_id: string;
         }
@@ -420,7 +420,7 @@ test('Live Logs: finalized row freezes ticker at the row total_ms', async ({ pag
         ttft_ms: number | null;
         status_code: number;
         error: string | null;
-        timestamp: string;
+        created_at: string;
         provider_id: string;
         upstream_model_id: string;
       }

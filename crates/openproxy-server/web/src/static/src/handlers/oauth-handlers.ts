@@ -43,10 +43,12 @@ export const OAuthLogin: OAuthLoginShape = {
     try {
       const resp = (await api(`/oauth/${provider}/authorize`)) as { error?: string; authorization_url?: string } & AuthData;
       if (resp.error) throw new Error(resp.error);
-      const isLocal = window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1";
+      const forceManual = (window as any).force_manual === true;
+      const isLocal = !forceManual && (window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1");
       if (isLocal) await this.pkcePopup(provider, resp as AuthData);
       else this.showManualPasteForm(provider, resp as AuthData);
     } catch (err: unknown) {
+      console.error("startPKCE catch err:", err);
       const msg = err instanceof Error ? err.message : String(err);
       showToast(`OAuth failed: ${msg}`, "error");
     }
@@ -180,3 +182,8 @@ export const OAuthLogin: OAuthLoginShape = {
     }
   },
 };
+
+// Expose for E2E testing
+if (typeof window !== "undefined") {
+  (window as any).OAuthLogin = OAuthLogin;
+}

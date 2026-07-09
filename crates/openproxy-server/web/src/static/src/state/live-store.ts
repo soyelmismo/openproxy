@@ -689,10 +689,32 @@ async function rehydrateInitial(): Promise<void> {
     // Server returns oldest-first; prepend in that order so the
     // buffer ends up newest-first (last prepended = front).
     let maxId = 0;
+    const validRows: RecentUsageRow[] = [];
     for (const row of rows) {
       if (!isRecentUsageRowShape(row)) continue;
-      prependRow(row);
+      validRows.push(row);
       if (typeof row.id === "number" && row.id > maxId) maxId = row.id;
+    }
+    if (validRows.length > 0) {
+      // Merge with any WS rows that may have already arrived
+      recentRows.push(...validRows);
+      // Sort newest-first (descending by created_at)
+      recentRows.sort((a, b) => {
+        const ta = new Date(a.created_at!).getTime();
+        const tb = new Date(b.created_at!).getTime();
+        return tb - ta;
+      });
+      // Trim to max length
+      if (recentRows.length > MAX_RECENT_ROWS) {
+        recentRows.length = MAX_RECENT_ROWS;
+      }
+      // Rebuild the IDs set
+      recentRowIds.clear();
+      for (const row of recentRows) {
+        if (typeof row.id === "number") {
+          recentRowIds.add(row.id);
+        }
+      }
     }
     if (maxId > lastSeenRowId) lastSeenRowId = maxId;
   } catch (e: unknown) {
