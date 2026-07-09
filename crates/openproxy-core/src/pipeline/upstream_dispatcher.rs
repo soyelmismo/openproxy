@@ -253,6 +253,17 @@ impl UpstreamDispatcher {
             }
         };
         upstream_request.proxy = proxy_url;
+
+        let proxy_status = upstream_request.proxy.as_ref().and_then(|url| {
+            let conn = self.conn.lock();
+            crate::free_proxies::get_proxy_status_by_url(&conn, url)
+        });
+        tracing::info!(
+            proxy_used = ?upstream_request.proxy,
+            proxy_status = %proxy_status.unwrap_or_else(|| "none".to_string()),
+            "assigned proxy for upstream request"
+        );
+
         // is_streaming is always true because we force stream=true
         // to the upstream (see comment above). The body-chunk gap
         // timeout (idle_chunk_ms) applies normally — but only AFTER

@@ -158,6 +158,7 @@ impl PipelineStage for UpstreamExecutorStage {
                     next_attempt = target_attempt + 1,
                     delay_ms = delay.as_millis() as u64,
                     error = %e,
+                    is_proxy_rotated = e.is_proxy_rotated(),
                     "target failed retryably; retrying same target"
                 );
                 tokio::time::sleep(delay).await;
@@ -194,6 +195,7 @@ impl PipelineStage for UpstreamExecutorStage {
                             attempt = target_attempt,
                             retryable = RetryPolicy::is_retryable(e, ctx.pipeline.config.idle_chunk_retryable),
                             error = %e,
+                            is_proxy_rotated = e.is_proxy_rotated(),
                             remaining_targets = to_run.len(),
                             "target rate-limited; trying next target in combo"
                         );
@@ -205,6 +207,7 @@ impl PipelineStage for UpstreamExecutorStage {
                             strategy = ?combo.strategy,
                             retryable = RetryPolicy::is_retryable(e, ctx.pipeline.config.idle_chunk_retryable),
                             error = %e,
+                            is_proxy_rotated = e.is_proxy_rotated(),
                             "target failed; trying next target"
                         );
                     }
