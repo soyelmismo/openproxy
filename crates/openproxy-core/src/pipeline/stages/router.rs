@@ -14,7 +14,7 @@ impl PipelineStage for RouterStage {
         ctx: &mut PipelineContext,
         next: crate::pipeline::stage::PipelineNext<'_>,
     ) -> Result<PipelineResult, CoreError> {
-        let combo = match ctx.pipeline.load_combo(&ctx.req) {
+        let combo = match ctx.pipeline.load_combo(&ctx.req).await {
             Ok(c) => c,
             Err(e) => return Err(e),
         };
@@ -24,13 +24,13 @@ impl PipelineStage for RouterStage {
         let attempt = ctx.attempt;
         let targets = match ctx
             .pipeline
-            .resolve_targets(&combo, ctx.req.targets_override.as_deref())
+            .resolve_targets(&combo, ctx.req.targets_override.as_deref()).await
         {
             Ok(t) => t,
             Err(e) => return Err(e),
         };
 
-        let flat_targets = match ctx.pipeline.flatten_targets(&combo.id, targets.clone()) {
+        let flat_targets = match ctx.pipeline.flatten_targets(&combo.id, targets.clone()).await {
             Ok(t) => t,
             Err(e) => return Err(e),
         };
@@ -55,19 +55,19 @@ impl PipelineStage for RouterStage {
 
         if eligible.is_empty() {
             if attempt == 1 {
-                let repopulated = match ctx.pipeline.auto_populate_if_empty(&combo) {
+                let repopulated = match ctx.pipeline.auto_populate_if_empty(&combo).await {
                     Ok(n) => n,
                     Err(e) => return Err(e),
                 };
                 if repopulated > 0 {
                     let targets = match ctx
                         .pipeline
-                        .resolve_targets(&combo, ctx.req.targets_override.as_deref())
+                        .resolve_targets(&combo, ctx.req.targets_override.as_deref()).await
                     {
                         Ok(t) => t,
                         Err(e) => return Err(e),
                     };
-                    let flat_targets = match ctx.pipeline.flatten_targets(&combo.id, targets) {
+                    let flat_targets = match ctx.pipeline.flatten_targets(&combo.id, targets).await {
                         Ok(t) => t,
                         Err(e) => return Err(e),
                     };

@@ -33,7 +33,7 @@ impl Pipeline {
         }
     }
 
-    pub(crate) fn flatten_targets(
+    pub(crate) async fn flatten_targets(
         &self,
         root_combo_id: &ComboId,
         targets: Vec<ComboTarget>,
@@ -41,10 +41,12 @@ impl Pipeline {
         if !targets.iter().any(|t| t.sub_combo_id.is_some()) {
             return Ok(targets);
         }
-        tokio::task::block_in_place(|| {
+        let conn_clone = self.conn.clone();
+        let root_combo_id = *root_combo_id;
+        tokio::task::spawn_blocking(move || {
             let mut out = Vec::with_capacity(targets.len());
-            let conn = self.conn.lock();
-            let mut visited: Vec<ComboId> = vec![*root_combo_id];
+            let conn = conn_clone.lock();
+            let mut visited: Vec<ComboId> = vec![root_combo_id];
             for t in targets {
                 if let Some(sub_id) = t.sub_combo_id {
                     let sub_flat =
@@ -56,33 +58,36 @@ impl Pipeline {
             }
             let expanded = combos::expand_account_rotation(&conn, out)?;
             Ok(expanded)
-        })
+        }).await.unwrap()
     }
 
-    pub(crate) fn auto_populate_if_empty(&self, combo: &Combo) -> Result<usize> {
-        tokio::task::block_in_place(|| {
+    pub(crate) async fn auto_populate_if_empty(&self, combo: &Combo) -> Result<usize> {
+        let conn_clone = self.conn.clone();
+        let combo_id = combo.id;
+        let combo_name = combo.name.clone();
+        tokio::task::spawn_blocking(move || {
             {
-                let conn = self.conn.lock();
-                if !combos::list_targets(&conn, combo.id)?.is_empty() {
+                let conn = conn_clone.lock();
+                if !combos::list_targets(&conn, combo_id)?.is_empty() {
                     return Ok(0);
                 }
             }
 
             let added = {
-                let conn = self.conn.lock();
-                combos::auto_populate_empty_combo(&conn, combo.id)?
+                let conn = conn_clone.lock();
+                combos::auto_populate_empty_combo(&conn, combo_id)?
             };
 
             if added > 0 {
                 tracing::info!(
-                    combo_id = combo.id.0,
-                    combo_name = %combo.name,
+                    combo_id = combo_id.0,
+                    combo_name = %combo_name,
                     added_targets = added,
                     "auto-populated empty combo with healthy provider's active models"
                 );
             }
             Ok(added)
-        })
+        }).await.unwrap()
     }
 
     pub async fn resolve_combo_targets_full(
@@ -222,37 +227,44 @@ impl Pipeline {
         }
     }
 
-    pub(crate) fn load_combo(&self, req: &PipelineRequest) -> Result<Combo> {
+    pub(crate) async fn load_combo(&self, req: &PipelineRequest) -> Result<Combo> {
         if let Some(combo) = req.combo_override.as_ref() {
             return Ok(combo.clone());
         }
-        tokio::task::block_in_place(|| {
-            let conn = self.conn.lock();
-            combos::get_combo(&conn, req.combo_id)?.ok_or(CoreError::ComboNotFound(req.combo_id.0))
-        })
+        let conn_clone = self.conn.clone();
+        let combo_id = req.combo_id;
+        tokio::task::spawn_blocking(move || {
+            let conn = conn_clone.lock();
+            combos::get_combo(&conn, combo_id)?.ok_or(CoreError::ComboNotFound(combo_id.0))
+        }).await.unwrap()
     }
 
-    pub(crate) fn resolve_targets(
+    pub(crate) async fn resolve_targets(
         &self,
         combo: &Combo,
         targets_override: Option<&[ComboTarget]>,
     ) -> Result<Vec<ComboTarget>> {
-        tokio::task::block_in_place(|| {
-            if let Some(overrides) = targets_override {
-                let conn = self.conn.lock();
-                return combos::expand_account_rotation(&conn, overrides.to_vec());
+        let conn_clone = self.conn.clone();
+        let combo_clone = combo.clone();
+        let overrides = targets_override.map(|o| o.to_vec());
+        let rr_counters = self.rr_counters.clone();
+        let selection_registry = self.selection_registry.clone();
+        tokio::task::spawn_blocking(move || {
+            if let Some(overrides) = overrides {
+                let conn = conn_clone.lock();
+                return combos::expand_account_rotation(&conn, overrides);
             }
 
-            let conn = self.conn.lock();
-            let _ = combos::list_targets(&conn, combo.id)?;
+            let conn = conn_clone.lock();
+            let _ = combos::list_targets(&conn, combo_clone.id)?;
             let ordered = combos::resolve_target_order_with_mode(
                 &conn,
-                combo,
-                &self.rr_counters,
-                &self.selection_registry,
+                &combo_clone,
+                &rr_counters,
+                &selection_registry,
             )?;
             combos::expand_account_rotation(&conn, ordered)
-        })
+        }).await.unwrap()
     }
 
     #[cfg(test)]

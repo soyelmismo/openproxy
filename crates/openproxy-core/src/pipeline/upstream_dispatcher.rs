@@ -103,14 +103,16 @@ impl UpstreamDispatcher {
             .load(std::sync::atomic::Ordering::Relaxed)
     }
 
-    pub(crate) fn check_and_trigger_proxy_rotation(
+    pub(crate) async fn check_and_trigger_proxy_rotation(
         &self,
         provider_id: &crate::ids::ProviderId,
         trigger: crate::pipeline::upstream_dispatcher::ProxyRotationTrigger,
     ) -> bool {
-        tokio::task::block_in_place(|| {
-            let conn = self.conn.lock();
-            if let Ok(Some(provider)) = crate::providers::get(&conn, provider_id)
+        let conn_clone = self.conn.clone();
+        let provider_id = provider_id.clone();
+        tokio::task::spawn_blocking(move || {
+            let conn = conn_clone.lock();
+            if let Ok(Some(provider)) = crate::providers::get(&conn, &provider_id)
                 && provider.use_proxies
             {
                 let should_rotate = match trigger {
@@ -141,12 +143,12 @@ impl UpstreamDispatcher {
                     );
                     let _ =
                         crate::free_proxies::update_proxy_status(&conn, bad_proxy_id, "dead", None);
-                    let _ = crate::providers::update_current_proxy(&conn, provider_id, None);
+                    let _ = crate::providers::update_current_proxy(&conn, &provider_id, None);
                     return true;
                 }
             }
             false
-        })
+        }).await.unwrap()
     }
 
     pub(crate) fn is_client_disconnected(&self, rx: &mut watch::Receiver<bool>) -> bool {
@@ -232,10 +234,14 @@ impl UpstreamDispatcher {
         // from the translated struct — no intermediate `Value`).
         let mut upstream_request = UpstreamRequest::post_json(url.to_string(), body_bytes);
         // If the provider has proxy routing enabled, fetch/assign a proxy
-        let proxy_url = match tokio::task::block_in_place(|| {
-            let conn = self.conn.lock();
-            crate::free_proxies::get_or_assign_provider_proxy(&conn, &target.provider_id)
-        }) {
+        let proxy_url = match {
+            let conn_clone = self.conn.clone();
+            let provider_id = target.provider_id.clone();
+            tokio::task::spawn_blocking(move || {
+                let conn = conn_clone.lock();
+                crate::free_proxies::get_or_assign_provider_proxy(&conn, &provider_id)
+            }).await.unwrap()
+        } {
             Ok(url) => url,
             Err(e) => {
                 return self.record_and_fail(
@@ -382,7 +388,7 @@ impl UpstreamDispatcher {
                     self.check_and_trigger_proxy_rotation(
                         &target.provider_id,
                         crate::pipeline::upstream_dispatcher::ProxyRotationTrigger::ConnectError,
-                    );
+                    ).await;
                     // Bug fix: attribute the timeout to the CORRECT phase
                     // instead of collapsing DNS/Dial/TLS/Write/Headers all
                     // into "connect". The user configures per-phase budgets
@@ -435,7 +441,7 @@ impl UpstreamDispatcher {
                     self.check_and_trigger_proxy_rotation(
                         &target.provider_id,
                         crate::pipeline::upstream_dispatcher::ProxyRotationTrigger::ConnectError,
-                    );
+                    ).await;
                     let err = CoreError::UpstreamConnection(msg);
                     return self.record_and_fail(
                         req,
@@ -605,7 +611,7 @@ impl UpstreamDispatcher {
                 self.check_and_trigger_proxy_rotation(
                     &target.provider_id,
                     crate::pipeline::upstream_dispatcher::ProxyRotationTrigger::ConnectError,
-                );
+                ).await;
                 let err = CoreError::UpstreamConnection(format!("read upstream body: {e}"));
                 return self.record_and_fail(
                     req,
@@ -623,7 +629,7 @@ impl UpstreamDispatcher {
                 self.check_and_trigger_proxy_rotation(
                     &target.provider_id,
                     crate::pipeline::upstream_dispatcher::ProxyRotationTrigger::ConnectError,
-                );
+                ).await;
                 let elapsed = started.elapsed().as_millis() as u64;
                 let err = CoreError::UpstreamTimeout {
                     phase: "total (config: total_ms)".to_string(),
@@ -663,7 +669,7 @@ impl UpstreamDispatcher {
             let mut is_proxy_rotated = self.check_and_trigger_proxy_rotation(
                 &target.provider_id,
                 crate::pipeline::upstream_dispatcher::ProxyRotationTrigger::Status(status_code),
-            );
+            ).await;
             let body_str = String::from_utf8_lossy(&body_bytes).to_string();
             // Parse `Retry-After` from response_headers (extracted at L1751
             // before the body was consumed). Accepts either an integer
@@ -679,7 +685,7 @@ impl UpstreamDispatcher {
                     is_proxy_rotated = self.check_and_trigger_proxy_rotation(
                         &target.provider_id,
                         crate::pipeline::upstream_dispatcher::ProxyRotationTrigger::RateLimited,
-                    );
+                    ).await;
                 }
                 let err = CoreError::RateLimited {
                     provider: target.provider_id.to_string(),
@@ -727,8 +733,9 @@ impl UpstreamDispatcher {
                         "status_code": status_code,
                     },
                 });
-                tokio::task::block_in_place(|| {
-                    let conn = self.conn.lock();
+                let conn_clone = self.conn.clone();
+                tokio::task::spawn_blocking(move || {
+                    let conn = conn_clone.lock();
                     let _ = crate::notifications::insert_and_broadcast(
                         &conn,
                         crate::notifications::KIND_SYSTEM,
@@ -736,7 +743,7 @@ impl UpstreamDispatcher {
                         Some(&dedup_key),
                         Some(&provider_id_str),
                     );
-                });
+                }).await.unwrap();
             }
             let err = CoreError::UpstreamError {
                 status: status_code,
@@ -1334,7 +1341,7 @@ impl UpstreamDispatcher {
                     self.check_and_trigger_proxy_rotation(
                         &target.provider_id,
                         crate::pipeline::upstream_dispatcher::ProxyRotationTrigger::ConnectError,
-                    );
+                    ).await;
                     // Bug fix (PR #33): attribute the timeout to the
                     // CORRECT phase instead of collapsing all into
                     // "connect". Mirrors the non-streaming path's fix.
@@ -1379,7 +1386,7 @@ impl UpstreamDispatcher {
                     self.check_and_trigger_proxy_rotation(
                         &target.provider_id,
                         crate::pipeline::upstream_dispatcher::ProxyRotationTrigger::ConnectError,
-                    );
+                    ).await;
                     let err = CoreError::UpstreamConnection(msg);
                     return self.record_and_fail(
                         req,
@@ -1413,7 +1420,7 @@ impl UpstreamDispatcher {
             let mut is_proxy_rotated = self.check_and_trigger_proxy_rotation(
                 &target.provider_id,
                 crate::pipeline::upstream_dispatcher::ProxyRotationTrigger::Status(status_code),
-            );
+            ).await;
             // Error responses should not stall the pipeline. We give the upstream
             // 5 seconds to send the error body; if it stalls, we drop the body
             // and proceed with the error status code. This prevents "ghost" requests
@@ -1454,8 +1461,9 @@ impl UpstreamDispatcher {
                         "status_code": status_code,
                     },
                 });
-                tokio::task::block_in_place(|| {
-                    let conn = self.conn.lock();
+                let conn_clone = self.conn.clone();
+                tokio::task::spawn_blocking(move || {
+                    let conn = conn_clone.lock();
                     let _ = crate::notifications::insert_and_broadcast(
                         &conn,
                         crate::notifications::KIND_SYSTEM,
@@ -1463,7 +1471,7 @@ impl UpstreamDispatcher {
                         Some(&dedup_key),
                         Some(&provider_id_str),
                     );
-                });
+                }).await.unwrap();
             }
             // NEW-2 fix: when the upstream returns 429 (or 408/503)
             // with a `Retry-After` header, surface the error as
@@ -1484,7 +1492,7 @@ impl UpstreamDispatcher {
                     is_proxy_rotated = self.check_and_trigger_proxy_rotation(
                         &target.provider_id,
                         crate::pipeline::upstream_dispatcher::ProxyRotationTrigger::RateLimited,
-                    );
+                    ).await;
                 }
                 CoreError::RateLimited {
                     provider: target.provider_id.to_string(),

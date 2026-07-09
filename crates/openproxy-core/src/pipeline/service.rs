@@ -140,7 +140,7 @@ where
 
         Box::pin(async move {
             // 1. Resolve the combo.
-            let combo = match pipeline.load_combo(&state.req) {
+            let combo = match pipeline.load_combo(&state.req).await {
                 Ok(c) => c,
                 Err(e) => return Ok(pipeline.failure(e, 0, ErrorPhase::Resolve)),
             };
@@ -149,13 +149,13 @@ where
 
             // 2. Resolve and expand targets.
             let targets =
-                match pipeline.resolve_targets(&combo, state.req.targets_override.as_deref()) {
+                match pipeline.resolve_targets(&combo, state.req.targets_override.as_deref()).await {
                     Ok(t) => t,
                     Err(e) => return Ok(pipeline.failure(e, attempt - 1, ErrorPhase::Resolve)),
                 };
 
             // 3. Flatten sub-combos.
-            let flat_targets = match pipeline.flatten_targets(&combo.id, targets.clone()) {
+            let flat_targets = match pipeline.flatten_targets(&combo.id, targets.clone()).await {
                 Ok(t) => t,
                 Err(e) => return Ok(pipeline.failure(e, attempt - 1, ErrorPhase::Resolve)),
             };
@@ -181,7 +181,7 @@ where
 
             if eligible.is_empty() {
                 if attempt == 1 {
-                    let repopulated = match pipeline.repo().auto_populate_empty_combo(combo.id) {
+                    let repopulated = match tokio::task::spawn_blocking({ let p = pipeline.clone(); let cid = combo.id; move || p.repo().auto_populate_empty_combo(cid) }).await.unwrap() {
                         Ok(n) => n,
                         Err(e) => {
                             tracing::warn!(
@@ -195,14 +195,14 @@ where
                     };
                     if repopulated > 0 {
                         let targets = match pipeline
-                            .resolve_targets(&combo, state.req.targets_override.as_deref())
+                            .resolve_targets(&combo, state.req.targets_override.as_deref()).await
                         {
                             Ok(t) => t,
                             Err(e) => {
                                 return Ok(pipeline.failure(e, attempt - 1, ErrorPhase::Resolve));
                             }
                         };
-                        let flat_targets = match pipeline.flatten_targets(&combo.id, targets) {
+                        let flat_targets = match pipeline.flatten_targets(&combo.id, targets).await {
                             Ok(t) => t,
                             Err(e) => {
                                 return Ok(pipeline.failure(e, attempt - 1, ErrorPhase::Resolve));
