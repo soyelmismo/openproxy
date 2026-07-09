@@ -234,14 +234,15 @@ impl UpstreamDispatcher {
         // from the translated struct — no intermediate `Value`).
         let mut upstream_request = UpstreamRequest::post_json(url.to_string(), body_bytes);
         // If the provider has proxy routing enabled, fetch/assign a proxy
-        let proxy_url = match {
+        let proxy_result = {
             let conn_clone = self.conn.clone();
             let provider_id = target.provider_id.clone();
             tokio::task::spawn_blocking(move || {
                 let conn = conn_clone.lock();
                 crate::free_proxies::get_or_assign_provider_proxy(&conn, &provider_id)
             }).await.unwrap()
-        } {
+        };
+        let proxy_url = match proxy_result {
             Ok(url) => url,
             Err(e) => {
                 return self.record_and_fail(
