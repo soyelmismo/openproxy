@@ -147,7 +147,7 @@ function renderLogsView(): TemplateResult {
           : repeat(
               pageRows,
               (r) => r.attemptKey,
-              (r) => html`<div data-key=${r.attemptKey}>${renderLogRowHtml(r, visibleColKeys, clockStore.nowMs)}</div>`
+              (r) => html`<div data-key=${r.attemptKey}>${renderLogRowHtml(r, visibleColKeys, clockStore.nowMs - liveLogsStore.clockOffsetMs)}</div>`
             )}
       </div>
       ${renderPagination(totalRows, totalP)}
