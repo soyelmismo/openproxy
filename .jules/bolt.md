@@ -4,3 +4,6 @@
 ## 2024-05-18 - Minimize heap allocations in Axum middleware
 **Learning:** We can reduce large `.clone()` allocations for large `serde_json::Value` structs by wrapping them in an `Arc`.
 **Action:** Use `Arc<T>` for heavy JSON payloads passed across middleware.
+## 2024-02-14 - Caching Hostname Resolution
+**Learning:** Frequent calls to `std::fs::read_to_string` and `std::env::var` for static data like hostnames causes measurable blocking I/O overhead.
+**Action:** Use `std::sync::OnceLock` to execute the file reads once and cache the result, turning a blocking I/O operation into a fast memory read.
