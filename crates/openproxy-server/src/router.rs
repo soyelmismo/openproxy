@@ -564,3 +564,107 @@ async fn health() -> Json<serde_json::Value> {
         "version": env!("CARGO_PKG_VERSION"),
     }))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::{body::Body, http::{Request, StatusCode}};
+    use openproxy_core::{db as core_db, secrets::MasterKey, AppConfig};
+    use parking_lot::RwLock;
+    use std::{path::PathBuf, sync::Arc};
+    use tower::ServiceExt;
+
+    fn fresh_pool() -> (core_db::DbPool, PathBuf) {
+        static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let n = SEQ.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        let pid = std::process::id();
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let dir = std::env::temp_dir().join(format!("openproxy-router-test-{}-{}-{}", pid, nanos, n));
+        std::fs::create_dir_all(&dir).expect("mkdir tempdir");
+        let path = dir.join("state.db");
+        let pool = core_db::DbPool::open(&path).expect("open pool");
+        {
+            let mut w = pool.writer();
+            core_db::migrations::run(&mut w).expect("migrations");
+        }
+        (pool, path)
+    }
+
+    async fn make_state() -> AppState {
+        let (pool, _path) = fresh_pool();
+        let db_pool = Arc::new(pool);
+        let master_key = Arc::new(MasterKey::generate());
+        let adapters = Arc::new(RwLock::new(Vec::new()));
+        AppState::for_test(AppConfig::default(), db_pool, master_key, adapters).await
+    }
+
+    #[tokio::test]
+    async fn test_health_check_public() {
+        let state = make_state().await;
+        let app = build_router(state);
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/v1/health")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body_bytes = axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let body_json: serde_json::Value = serde_json::from_slice(&body_bytes).unwrap();
+        assert_eq!(body_json["status"], "ok");
+        assert!(body_json["version"].is_string());
+    }
+
+    #[tokio::test]
+    async fn test_admin_health_check_public() {
+        let state = make_state().await;
+        let app = build_router(state);
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/admin/health")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body_bytes = axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let body_json: serde_json::Value = serde_json::from_slice(&body_bytes).unwrap();
+        assert_eq!(body_json["status"], "ok");
+        assert!(body_json["version"].is_string());
+    }
+
+    #[tokio::test]
+    async fn test_admin_ui_fallback() {
+        let state = make_state().await;
+        let app = build_router(state);
+
+        // Accessing a nonexistent endpoint that isn't under `/api` should fall back to SPA html
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/admin/nonexistent-spa-route")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response.headers().get(axum::http::header::CONTENT_TYPE).unwrap(),
+            "text/html; charset=utf-8"
+        );
+    }
+}
