@@ -949,6 +949,7 @@ pub async fn execute_antigravity(
             provider: "antigravity".to_string(),
             model: openai.model.clone(),
             body: body_text.to_string(),
+            is_proxy_rotated: false,
         });
     }
 

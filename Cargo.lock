@@ -1616,6 +1616,7 @@ dependencies = [
  "urlencoding",
  "uuid",
  "webpki-roots",
+ "zeroize",
 ]
 
 [[package]]

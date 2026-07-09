@@ -169,9 +169,12 @@ pub(crate) async fn run_test_for_model(
                 row_id: model_row_id,
                 status: e.http_status(),
                 elapsed_ms: 0,
-                error_msg: Some(e.to_string()),
+                error_msg: Some(openproxy_core::cost::redact_error_msg(&e.to_string()).0),
                 skipped: true,
-                skip_reason: Some(format!("model lookup failed: {}", e)),
+                skip_reason: Some(format!(
+                    "model lookup failed: {}",
+                    openproxy_core::cost::redact_error_msg(&e.to_string()).0
+                )),
             };
         }
     };
@@ -204,9 +207,9 @@ pub(crate) async fn run_test_for_model(
                 row_id: model_row_id,
                 status: err.http_status(),
                 elapsed_ms: 0,
-                error_msg: Some(err.to_string()),
+                error_msg: Some(openproxy_core::cost::redact_error_msg(&err.to_string()).0),
                 skipped: true,
-                skip_reason: Some(err.to_string()),
+                skip_reason: Some(openproxy_core::cost::redact_error_msg(&err.to_string()).0),
             };
         }
     };
@@ -219,7 +222,8 @@ pub(crate) async fn run_test_for_model(
     let (is_anonymous, accounts_list) = {
         let w = s.db_pool().writer();
         let provider_row = core_providers::get(&w, &model.provider_id).unwrap_or_default();
-        let accs = core_accounts::list(&w, Some(&model.provider_id)).unwrap_or_default();
+        let accs = core_accounts::list(&w, Some(&model.provider_id), s.master_key().as_ref())
+            .unwrap_or_default();
         let anon = match &provider_row {
             Some(p) if matches!(p.auth_type, core_providers::AuthType::None) => true,
             _ if accs.is_empty() => true, // No accounts → try anonymous
@@ -238,7 +242,9 @@ pub(crate) async fn run_test_for_model(
             Some(id) => {
                 // Per-model path: look up the already-pinned account.
                 let w = s.db_pool().writer();
-                core_accounts::get(&w, id).ok().flatten()
+                core_accounts::get(&w, id, s.master_key().as_ref())
+                    .ok()
+                    .flatten()
             }
             None => {
                 let healthy = accounts_list
@@ -271,7 +277,9 @@ pub(crate) async fn run_test_for_model(
             Some(aid) => {
                 let account = {
                     let w = s.db_pool().writer();
-                    core_accounts::get(&w, aid).ok().flatten()
+                    core_accounts::get(&w, aid, s.master_key().as_ref())
+                        .ok()
+                        .flatten()
                 };
                 if let Some(ref acc) = account
                     && acc.auth_type == "oauth"
@@ -314,9 +322,13 @@ pub(crate) async fn run_test_for_model(
                                 row_id: model_row_id,
                                 status: e.http_status(),
                                 elapsed_ms: 0,
-                                error_msg: Some(e.to_string()),
+                                error_msg: Some(
+                                    openproxy_core::cost::redact_error_msg(&e.to_string()).0,
+                                ),
                                 skipped: true,
-                                skip_reason: Some(e.to_string()),
+                                skip_reason: Some(
+                                    openproxy_core::cost::redact_error_msg(&e.to_string()).0,
+                                ),
                             };
                         }
                     }
@@ -400,7 +412,7 @@ pub(crate) async fn run_test_for_model(
             // re-query. This only happens for the per-row path when
             // the model has accounts but the caller didn't pin one.
             let w = s.db_pool().writer();
-            core_accounts::list(&w, Some(&model.provider_id))
+            core_accounts::list(&w, Some(&model.provider_id), s.master_key().as_ref())
                 .ok()
                 .and_then(|l| {
                     l.iter()
@@ -419,7 +431,9 @@ pub(crate) async fn run_test_for_model(
         let access_token = {
             let account = {
                 let w = s.db_pool().writer();
-                core_accounts::get(&w, test_account_id).ok().flatten()
+                core_accounts::get(&w, test_account_id, s.master_key().as_ref())
+                    .ok()
+                    .flatten()
             };
             if let Some(ref acc) = account
                 && acc.auth_type == "oauth"
@@ -541,7 +555,10 @@ pub(crate) async fn run_test_for_model(
         let elapsed_ms = start.elapsed().as_millis() as u64;
         let (status, error_msg) = match executor_result {
             Ok(_response) => (200_u16, None),
-            Err(e) => (e.http_status(), Some(e.to_string())),
+            Err(e) => (
+                e.http_status(),
+                Some(openproxy_core::cost::redact_error_msg(&e.to_string()).0),
+            ),
         };
 
         // Persist the result (per-row path only).
@@ -552,9 +569,9 @@ pub(crate) async fn run_test_for_model(
                     row_id: model_row_id,
                     status: e.http_status(),
                     elapsed_ms,
-                    error_msg: Some(e.to_string()),
+                    error_msg: Some(openproxy_core::cost::redact_error_msg(&e.to_string()).0),
                     skipped: true,
-                    skip_reason: Some(e.to_string()),
+                    skip_reason: Some(openproxy_core::cost::redact_error_msg(&e.to_string()).0),
                 };
             }
         }
@@ -603,9 +620,9 @@ pub(crate) async fn run_test_for_model(
                     row_id: model_row_id,
                     status: 500,
                     elapsed_ms: 0,
-                    error_msg: Some(err.to_string()),
+                    error_msg: Some(openproxy_core::cost::redact_error_msg(&err.to_string()).0),
                     skipped: true,
-                    skip_reason: Some(err.to_string()),
+                    skip_reason: Some(openproxy_core::cost::redact_error_msg(&err.to_string()).0),
                 };
             }
         }
@@ -624,9 +641,9 @@ pub(crate) async fn run_test_for_model(
                     row_id: model_row_id,
                     status: 500,
                     elapsed_ms: 0,
-                    error_msg: Some(err.to_string()),
+                    error_msg: Some(openproxy_core::cost::redact_error_msg(&err.to_string()).0),
                     skipped: true,
-                    skip_reason: Some(err.to_string()),
+                    skip_reason: Some(openproxy_core::cost::redact_error_msg(&err.to_string()).0),
                 };
             }
         }
@@ -669,9 +686,11 @@ pub(crate) async fn run_test_for_model(
                         row_id: model_row_id,
                         status: 500,
                         elapsed_ms: 0,
-                        error_msg: Some(err.to_string()),
+                        error_msg: Some(openproxy_core::cost::redact_error_msg(&err.to_string()).0),
                         skipped: true,
-                        skip_reason: Some(err.to_string()),
+                        skip_reason: Some(
+                            openproxy_core::cost::redact_error_msg(&err.to_string()).0,
+                        ),
                     };
                 }
             },
@@ -680,9 +699,9 @@ pub(crate) async fn run_test_for_model(
                     row_id: model_row_id,
                     status: 500,
                     elapsed_ms: 0,
-                    error_msg: Some(e.to_string()),
+                    error_msg: Some(openproxy_core::cost::redact_error_msg(&e.to_string()).0),
                     skipped: true,
-                    skip_reason: Some(e.to_string()),
+                    skip_reason: Some(openproxy_core::cost::redact_error_msg(&e.to_string()).0),
                 };
             }
         }
@@ -700,9 +719,9 @@ pub(crate) async fn run_test_for_model(
                     row_id: model_row_id,
                     status: 500,
                     elapsed_ms: 0,
-                    error_msg: Some(err.to_string()),
+                    error_msg: Some(openproxy_core::cost::redact_error_msg(&err.to_string()).0),
                     skipped: true,
-                    skip_reason: Some(err.to_string()),
+                    skip_reason: Some(openproxy_core::cost::redact_error_msg(&err.to_string()).0),
                 };
             }
         }
@@ -714,7 +733,32 @@ pub(crate) async fn run_test_for_model(
     let headers = adapter.build_headers(&api_key, effective_target_format, &model.model_id);
     let mut req = openproxy_core::upstream::UpstreamRequest::post_json(
         url,
-        bytes::Bytes::from(serde_json::to_vec(&body_value).unwrap()),
+        match serde_json::to_vec(&body_value) {
+            Ok(b) => bytes::Bytes::from(b),
+            Err(e) => {
+                let _ = cancel_rx;
+                return TestResult {
+                    row_id: model_row_id,
+                    status: 500,
+                    elapsed_ms: 0,
+                    error_msg: Some(
+                        openproxy_core::cost::redact_error_msg(&format!(
+                            "failed to serialize request: {}",
+                            e
+                        ))
+                        .0,
+                    ),
+                    skipped: true,
+                    skip_reason: Some(
+                        openproxy_core::cost::redact_error_msg(&format!(
+                            "failed to serialize request: {}",
+                            e
+                        ))
+                        .0,
+                    ),
+                };
+            }
+        },
     );
     req.proxy = proxy_url.clone();
     for (k, v) in &headers {
@@ -796,9 +840,9 @@ pub(crate) async fn run_test_for_model(
                 row_id: model_row_id,
                 status: e.http_status(),
                 elapsed_ms,
-                error_msg: Some(e.to_string()),
+                error_msg: Some(openproxy_core::cost::redact_error_msg(&e.to_string()).0),
                 skipped: true,
-                skip_reason: Some(e.to_string()),
+                skip_reason: Some(openproxy_core::cost::redact_error_msg(&e.to_string()).0),
             };
         }
     }
@@ -855,10 +899,11 @@ pub(crate) async fn run_refresh(
             Ok(p) => p,
             Err(e) => return ApiResult::err(ApiError(e)),
         };
-        let accounts_list = match core_accounts::list(&w, Some(&provider_id)) {
-            Ok(l) => l,
-            Err(e) => return ApiResult::err(ApiError(e)),
-        };
+        let accounts_list =
+            match core_accounts::list(&w, Some(&provider_id), s.master_key().as_ref()) {
+                Ok(l) => l,
+                Err(e) => return ApiResult::err(ApiError(e)),
+            };
 
         let is_anonymous = match &provider_row {
             Some(p) if matches!(p.auth_type, core_providers::AuthType::None) => true,
@@ -880,7 +925,7 @@ pub(crate) async fn run_refresh(
         Some(account_id) => {
             let account = {
                 let w = s.db_pool().writer();
-                match core_accounts::get(&w, account_id) {
+                match core_accounts::get(&w, account_id, s.master_key().as_ref()) {
                     Ok(Some(a)) => a,
                     Ok(None) => {
                         return ApiResult::err(ApiError(CoreError::AccountNotFound(account_id.0)));
@@ -905,7 +950,7 @@ pub(crate) async fn run_refresh(
     let account_label = match selected_account_id {
         Some(account_id) => {
             let w = s.db_pool().writer();
-            match core_accounts::get(&w, account_id) {
+            match core_accounts::get(&w, account_id, s.master_key().as_ref()) {
                 Ok(Some(a)) => a.label.unwrap_or_default(),
                 _ => String::new(),
             }

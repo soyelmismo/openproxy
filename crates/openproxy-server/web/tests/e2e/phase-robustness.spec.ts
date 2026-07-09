@@ -84,7 +84,7 @@ async function readFreezeObservation(
           ttft_ms: number | null;
           status_code: number;
           error: string | null;
-          timestamp: string;
+          created_at: string;
           provider_id: string;
           upstream_model_id: string;
         }
@@ -103,6 +103,7 @@ async function readFreezeObservation(
             };
           };
         };
+
         // First read of the latency text.
         const firstRead = (): { latency: string | null; sublabel: string | null; phase: string | null; tickingClass: boolean; rowFound: boolean } => {
           const rowEl = document.querySelector(
@@ -233,6 +234,7 @@ test('Live Logs: stale streaming stage freezes the latency ticker', async ({ pag
         };
         __openproxyLogsGoPage: (page: number) => void;
       };
+
       // Isolate the test: the live dashboard may have other
       // rows/stages streaming in from the WS feed.
       const store = (w as any).__liveLogsStore;
@@ -363,7 +365,7 @@ test('Live Logs: finalized row freezes ticker at the row total_ms', async ({ pag
     ttft_ms: 120,
     status_code: 200,
     error: null,
-    timestamp: sixSecondsAgo,
+    created_at: sixSecondsAgo,
     provider_id: 'openrouter',
     upstream_model_id: 'gpt-4o-mini',
     stop_reason: null,
@@ -418,7 +420,7 @@ test('Live Logs: finalized row freezes ticker at the row total_ms', async ({ pag
         ttft_ms: number | null;
         status_code: number;
         error: string | null;
-        timestamp: string;
+        created_at: string;
         provider_id: string;
         upstream_model_id: string;
       }

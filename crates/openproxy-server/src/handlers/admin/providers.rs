@@ -220,7 +220,7 @@ async fn run_provider_refresh(
         Some(account_id) => {
             let account = {
                 let w = s.db_pool().writer();
-                match core_accounts::get(&w, account_id) {
+                match core_accounts::get(&w, account_id, s.master_key().as_ref()) {
                     Ok(Some(a)) => a,
                     Ok(None) => {
                         return ApiResult::err(ApiError(CoreError::AccountNotFound(account_id.0)));
@@ -245,7 +245,7 @@ async fn run_provider_refresh(
     let account_label = match selected_account_id {
         Some(account_id) => {
             let w = s.db_pool().writer();
-            match core_accounts::get(&w, account_id) {
+            match core_accounts::get(&w, account_id, s.master_key().as_ref()) {
                 Ok(Some(a)) => a.label.unwrap_or_default(),
                 _ => String::new(),
             }
