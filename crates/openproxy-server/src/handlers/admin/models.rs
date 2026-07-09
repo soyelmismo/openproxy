@@ -169,9 +169,9 @@ pub(crate) async fn run_test_for_model(
                 row_id: model_row_id,
                 status: e.http_status(),
                 elapsed_ms: 0,
-                error_msg: Some(e.to_string()),
+                error_msg: Some(openproxy_core::cost::redact_error_msg(&e.to_string()).0),
                 skipped: true,
-                skip_reason: Some(format!("model lookup failed: {}", e)),
+                skip_reason: Some(format!("model lookup failed: {}", openproxy_core::cost::redact_error_msg(&e.to_string()).0)),
             };
         }
     };
@@ -204,9 +204,9 @@ pub(crate) async fn run_test_for_model(
                 row_id: model_row_id,
                 status: err.http_status(),
                 elapsed_ms: 0,
-                error_msg: Some(err.to_string()),
+                error_msg: Some(openproxy_core::cost::redact_error_msg(&err.to_string()).0),
                 skipped: true,
-                skip_reason: Some(err.to_string()),
+                skip_reason: Some(openproxy_core::cost::redact_error_msg(&err.to_string()).0),
             };
         }
     };
@@ -314,9 +314,9 @@ pub(crate) async fn run_test_for_model(
                                 row_id: model_row_id,
                                 status: e.http_status(),
                                 elapsed_ms: 0,
-                                error_msg: Some(e.to_string()),
+                                error_msg: Some(openproxy_core::cost::redact_error_msg(&e.to_string()).0),
                                 skipped: true,
-                                skip_reason: Some(e.to_string()),
+                                skip_reason: Some(openproxy_core::cost::redact_error_msg(&e.to_string()).0),
                             };
                         }
                     }
@@ -541,7 +541,7 @@ pub(crate) async fn run_test_for_model(
         let elapsed_ms = start.elapsed().as_millis() as u64;
         let (status, error_msg) = match executor_result {
             Ok(_response) => (200_u16, None),
-            Err(e) => (e.http_status(), Some(e.to_string())),
+            Err(e) => (e.http_status(), Some(openproxy_core::cost::redact_error_msg(&e.to_string()).0)),
         };
 
         // Persist the result (per-row path only).
@@ -552,9 +552,9 @@ pub(crate) async fn run_test_for_model(
                     row_id: model_row_id,
                     status: e.http_status(),
                     elapsed_ms,
-                    error_msg: Some(e.to_string()),
+                    error_msg: Some(openproxy_core::cost::redact_error_msg(&e.to_string()).0),
                     skipped: true,
-                    skip_reason: Some(e.to_string()),
+                    skip_reason: Some(openproxy_core::cost::redact_error_msg(&e.to_string()).0),
                 };
             }
         }
@@ -603,9 +603,9 @@ pub(crate) async fn run_test_for_model(
                     row_id: model_row_id,
                     status: 500,
                     elapsed_ms: 0,
-                    error_msg: Some(err.to_string()),
+                    error_msg: Some(openproxy_core::cost::redact_error_msg(&err.to_string()).0),
                     skipped: true,
-                    skip_reason: Some(err.to_string()),
+                    skip_reason: Some(openproxy_core::cost::redact_error_msg(&err.to_string()).0),
                 };
             }
         }
@@ -624,9 +624,9 @@ pub(crate) async fn run_test_for_model(
                     row_id: model_row_id,
                     status: 500,
                     elapsed_ms: 0,
-                    error_msg: Some(err.to_string()),
+                    error_msg: Some(openproxy_core::cost::redact_error_msg(&err.to_string()).0),
                     skipped: true,
-                    skip_reason: Some(err.to_string()),
+                    skip_reason: Some(openproxy_core::cost::redact_error_msg(&err.to_string()).0),
                 };
             }
         }
@@ -669,9 +669,9 @@ pub(crate) async fn run_test_for_model(
                         row_id: model_row_id,
                         status: 500,
                         elapsed_ms: 0,
-                        error_msg: Some(err.to_string()),
+                        error_msg: Some(openproxy_core::cost::redact_error_msg(&err.to_string()).0),
                         skipped: true,
-                        skip_reason: Some(err.to_string()),
+                        skip_reason: Some(openproxy_core::cost::redact_error_msg(&err.to_string()).0),
                     };
                 }
             },
@@ -680,9 +680,9 @@ pub(crate) async fn run_test_for_model(
                     row_id: model_row_id,
                     status: 500,
                     elapsed_ms: 0,
-                    error_msg: Some(e.to_string()),
+                    error_msg: Some(openproxy_core::cost::redact_error_msg(&e.to_string()).0),
                     skipped: true,
-                    skip_reason: Some(e.to_string()),
+                    skip_reason: Some(openproxy_core::cost::redact_error_msg(&e.to_string()).0),
                 };
             }
         }
@@ -700,9 +700,9 @@ pub(crate) async fn run_test_for_model(
                     row_id: model_row_id,
                     status: 500,
                     elapsed_ms: 0,
-                    error_msg: Some(err.to_string()),
+                    error_msg: Some(openproxy_core::cost::redact_error_msg(&err.to_string()).0),
                     skipped: true,
-                    skip_reason: Some(err.to_string()),
+                    skip_reason: Some(openproxy_core::cost::redact_error_msg(&err.to_string()).0),
                 };
             }
         }
@@ -714,7 +714,20 @@ pub(crate) async fn run_test_for_model(
     let headers = adapter.build_headers(&api_key, effective_target_format, &model.model_id);
     let mut req = openproxy_core::upstream::UpstreamRequest::post_json(
         url,
-        bytes::Bytes::from(serde_json::to_vec(&body_value).unwrap()),
+        match serde_json::to_vec(&body_value) {
+            Ok(b) => bytes::Bytes::from(b),
+            Err(e) => {
+                let _ = cancel_rx;
+                return TestResult {
+                    row_id: model_row_id,
+                    status: 500,
+                    elapsed_ms: 0,
+                    error_msg: Some(openproxy_core::cost::redact_error_msg(&format!("failed to serialize request: {}", e)).0),
+                    skipped: true,
+                    skip_reason: Some(openproxy_core::cost::redact_error_msg(&format!("failed to serialize request: {}", e)).0),
+                };
+            }
+        },
     );
     req.proxy = proxy_url.clone();
     for (k, v) in &headers {
@@ -796,9 +809,9 @@ pub(crate) async fn run_test_for_model(
                 row_id: model_row_id,
                 status: e.http_status(),
                 elapsed_ms,
-                error_msg: Some(e.to_string()),
+                error_msg: Some(openproxy_core::cost::redact_error_msg(&e.to_string()).0),
                 skipped: true,
-                skip_reason: Some(e.to_string()),
+                skip_reason: Some(openproxy_core::cost::redact_error_msg(&e.to_string()).0),
             };
         }
     }

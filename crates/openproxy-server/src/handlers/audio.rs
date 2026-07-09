@@ -415,10 +415,9 @@ fn build_audio_response(
     Ok(builder
         .body(axum::body::Body::from(body))
         .unwrap_or_else(|_| {
-            Response::builder()
-                .status(StatusCode::INTERNAL_SERVER_ERROR)
-                .body(axum::body::Body::empty())
-                .unwrap()
+            let mut res = Response::new(axum::body::Body::empty());
+            *res.status_mut() = StatusCode::INTERNAL_SERVER_ERROR;
+            res
         }))
 }
 
