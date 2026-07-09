@@ -197,7 +197,7 @@ test('Live Logs: stale streaming stage freezes the latency ticker', async ({ pag
   const traceId = 'tr-stale-1';
 
   const now = Date.now();
-  const fiveSecondsAgo = now - 5_000;
+  const fiveSecondsAgo = now - 6_000;
   const streamingEvent = {
     attempt_key: traceId,
     request_id: requestId,
