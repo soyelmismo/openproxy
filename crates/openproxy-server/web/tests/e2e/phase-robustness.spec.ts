@@ -243,6 +243,13 @@ test('Live Logs: stale streaming stage freezes the latency ticker', async ({ pag
       store.requestGroups.clear();
       store.attemptKeyByRowId.clear();
 
+      // Adjust the injected event times by the store's clock offset
+      // so they correctly emulate server time.
+      if (store.clockOffsetMs) {
+        args.event.started_at -= store.clockOffsetMs;
+        args.event.event_time -= store.clockOffsetMs;
+      }
+
       (store as any).applyUsageRow({
         id: 0,
         request_id: args.requestId,
