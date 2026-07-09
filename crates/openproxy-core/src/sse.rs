@@ -224,7 +224,11 @@ pub fn parse_openai_sse_line(line: &str) -> Result<Option<UpstreamSseChunk>> {
 
     let usage = probe.usage.map(|u| OpenAIUsage {
         prompt_tokens: u.prompt_tokens.unwrap_or(0).try_into().unwrap_or(u32::MAX),
-        completion_tokens: u.completion_tokens.unwrap_or(0).try_into().unwrap_or(u32::MAX),
+        completion_tokens: u
+            .completion_tokens
+            .unwrap_or(0)
+            .try_into()
+            .unwrap_or(u32::MAX),
         total_tokens: u.total_tokens.unwrap_or(0).try_into().unwrap_or(u32::MAX),
     });
     // o1-style reasoning models (o1, o3, deepseek-r1) emit
@@ -666,10 +670,18 @@ pub fn translate_anthropic_sse_payload(
 
             let usage = data.get("usage").map(|u| {
                 crate::translation::OpenAIUsage {
-                    prompt_tokens: u.get("input_tokens").and_then(|t| t.as_u64()).unwrap_or(0)
-                        .try_into().unwrap_or(u32::MAX),
-                    completion_tokens: u.get("output_tokens").and_then(|t| t.as_u64()).unwrap_or(0)
-                        .try_into().unwrap_or(u32::MAX),
+                    prompt_tokens: u
+                        .get("input_tokens")
+                        .and_then(|t| t.as_u64())
+                        .unwrap_or(0)
+                        .try_into()
+                        .unwrap_or(u32::MAX),
+                    completion_tokens: u
+                        .get("output_tokens")
+                        .and_then(|t| t.as_u64())
+                        .unwrap_or(0)
+                        .try_into()
+                        .unwrap_or(u32::MAX),
                     total_tokens: 0, // Will be computed
                 }
             });
@@ -2373,8 +2385,7 @@ pub fn parse_responses_sse_stream_line(
             provider: "responses".into(),
             model: model_name.to_string(),
             body: error.to_string(),
-    is_proxy_rotated: false,
-
+            is_proxy_rotated: false,
         });
     }
 

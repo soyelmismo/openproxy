@@ -7,7 +7,7 @@
 use crate::error::{CoreError, Result};
 use crate::ids::{AccountId, ProviderId};
 use crate::secrets::MasterKey;
-use rusqlite::{params, Connection, OptionalExtension};
+use rusqlite::{Connection, OptionalExtension, params};
 use serde::{Deserialize, Serialize};
 
 /// Health flag tracked per account. `Healthy` is the default; `Degraded` and
@@ -141,11 +141,7 @@ pub fn create(
 
 /// Look up a single account by id. Returns `Ok(None)` when absent.
 /// The `master_key` is required to decrypt `oauth_provider_specific`.
-pub fn get(
-    conn: &Connection,
-    id: AccountId,
-    master_key: &MasterKey,
-) -> Result<Option<Account>> {
+pub fn get(conn: &Connection, id: AccountId, master_key: &MasterKey) -> Result<Option<Account>> {
     let row = conn
         .query_row(
             "SELECT id, provider_id, label, priority, extra_config_json, \
@@ -204,9 +200,9 @@ pub fn list(
         }
     };
 
-    let mut stmt = conn.prepare(sql).map_err(crate::error::map_db_error_ctx(
-        "list accounts prepare",
-    ))?;
+    let mut stmt = conn
+        .prepare(sql)
+        .map_err(crate::error::map_db_error_ctx("list accounts prepare"))?;
 
     let accounts: Vec<Account> = match provider {
         Some(p) => stmt
@@ -846,7 +842,11 @@ mod tests {
         assert_eq!(acc.auth_type, "api_key", "default auth_type");
 
         // Missing id → None, not error.
-        assert!(get(&conn, AccountId(9999), &mk).expect("get missing").is_none());
+        assert!(
+            get(&conn, AccountId(9999), &mk)
+                .expect("get missing")
+                .is_none()
+        );
     }
 
     #[test]

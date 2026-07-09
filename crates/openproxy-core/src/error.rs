@@ -139,8 +139,12 @@ pub enum CoreError {
 impl CoreError {
     pub fn is_proxy_rotated(&self) -> bool {
         match self {
-            CoreError::UpstreamError { is_proxy_rotated, .. } => *is_proxy_rotated,
-            CoreError::RateLimited { is_proxy_rotated, .. } => *is_proxy_rotated,
+            CoreError::UpstreamError {
+                is_proxy_rotated, ..
+            } => *is_proxy_rotated,
+            CoreError::RateLimited {
+                is_proxy_rotated, ..
+            } => *is_proxy_rotated,
             _ => false,
         }
     }

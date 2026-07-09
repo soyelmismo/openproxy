@@ -5151,9 +5151,15 @@ fn test_quota_routing_and_protection() {
 
     {
         let conn = conn.lock();
-        let acc1 = crate::accounts::get(&conn, AccountId(1), &master_key).unwrap().unwrap();
-        let acc2 = crate::accounts::get(&conn, AccountId(2), &master_key).unwrap().unwrap();
-        let acc3 = crate::accounts::get(&conn, AccountId(3), &master_key).unwrap().unwrap();
+        let acc1 = crate::accounts::get(&conn, AccountId(1), &master_key)
+            .unwrap()
+            .unwrap();
+        let acc2 = crate::accounts::get(&conn, AccountId(2), &master_key)
+            .unwrap()
+            .unwrap();
+        let acc3 = crate::accounts::get(&conn, AccountId(3), &master_key)
+            .unwrap()
+            .unwrap();
 
         assert_eq!(
             crate::pipeline::quotas::evaluate_account_quota(
@@ -5218,9 +5224,15 @@ fn test_quota_routing_and_protection() {
 
     {
         let conn = conn.lock();
-        let acc4 = crate::accounts::get(&conn, AccountId(4), &master_key).unwrap().unwrap();
-        let acc5 = crate::accounts::get(&conn, AccountId(5), &master_key).unwrap().unwrap();
-        let acc6 = crate::accounts::get(&conn, AccountId(6), &master_key).unwrap().unwrap();
+        let acc4 = crate::accounts::get(&conn, AccountId(4), &master_key)
+            .unwrap()
+            .unwrap();
+        let acc5 = crate::accounts::get(&conn, AccountId(5), &master_key)
+            .unwrap()
+            .unwrap();
+        let acc6 = crate::accounts::get(&conn, AccountId(6), &master_key)
+            .unwrap()
+            .unwrap();
 
         assert_eq!(
             crate::pipeline::quotas::evaluate_account_quota(

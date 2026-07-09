@@ -411,8 +411,7 @@ async fn call_oauth_endpoint(
             provider: spec.id.into(),
             model: "<oauth>".into(),
             body: String::from_utf8_lossy(&body).to_string(),
-    is_proxy_rotated: false,
-
+            is_proxy_rotated: false,
         });
     }
     Ok(body)
@@ -514,7 +513,8 @@ mod tests {
             user_agent: None,
         });
 
-        let (url, verifier, challenge, state) = p.build_auth_url("http://localhost/cb").await.unwrap();
+        let (url, verifier, challenge, state) =
+            p.build_auth_url("http://localhost/cb").await.unwrap();
         assert!(!verifier.is_empty());
         assert_eq!(challenge, code_challenge_s256(&verifier));
         assert!(url.starts_with("https://auth.example/authorize?"));

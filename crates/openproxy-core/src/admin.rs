@@ -48,9 +48,7 @@ fn validate_base_url(url: &str) -> Result<()> {
     // Strip the scheme and extract host (everything up to the first `/`,
     // or end-of-string after `://`). Port is allowed as part of host.
     let remainder = &url[url.find("://").unwrap() + 3..];
-    let host_end = remainder
-        .find('/')
-        .unwrap_or(remainder.len());
+    let host_end = remainder.find('/').unwrap_or(remainder.len());
     let host_part = &remainder[..host_end];
     // Strip port if present
     let host = if let Some(colon_pos) = host_part.rfind(':') {

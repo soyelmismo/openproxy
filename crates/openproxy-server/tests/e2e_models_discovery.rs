@@ -409,7 +409,8 @@ async fn e2e_discovery_and_delete_on_disappear() {
     // ============================================================
     let account_id: AccountId = {
         let w = state.db_pool().writer();
-        let accounts_list = accounts::list(&w, Some(&provider), state.master_key().as_ref()).expect("list accounts");
+        let accounts_list = accounts::list(&w, Some(&provider), state.master_key().as_ref())
+            .expect("list accounts");
         assert_eq!(accounts_list.len(), 1, "fixture must have one account");
         // `accounts::create` defaults `auth_type` to `"api_key"`
         // (the static-key flow). The test doesn't care which it

@@ -266,6 +266,8 @@ impl StreamingState {
             return Ok(ChunkResult::Return(
                 dispatcher.fail_stream_client_disconnected(
                     crate::pipeline::upstream_dispatcher::StreamFailureContext {
+                        proxy_url: None,
+                        proxy_status: None,
                         req: ctx.req.clone(),
                         combo: ctx.combo,
                         target: ctx.target,
@@ -358,6 +360,8 @@ impl<'a> crate::pipeline::streaming::ChunkInterceptor for ChunkProcessor<'a> {
             return Ok(crate::pipeline::streaming::ChunkEvent::Return(
                 self.dispatcher.fail_stream_client_disconnected(
                     crate::pipeline::upstream_dispatcher::StreamFailureContext {
+                        proxy_url: None,
+                        proxy_status: None,
                         req: ctx.req.clone(),
                         combo: ctx.combo,
                         target: ctx.target,
@@ -438,6 +442,8 @@ impl<'a> ChunkProcessor<'a> {
                 return Ok(crate::pipeline::streaming::ChunkEvent::Return(
                     self.dispatcher.fail_stream_client_disconnected(
                         crate::pipeline::upstream_dispatcher::StreamFailureContext {
+                            proxy_url: None,
+                            proxy_status: None,
                             req: req.clone(),
                             combo,
                             target,
@@ -463,6 +469,8 @@ impl<'a> ChunkProcessor<'a> {
                     self.dispatcher.fail_on_sink_send_error(
                         crate::race_sink::StreamSinkError::Lost,
                         crate::pipeline::upstream_dispatcher::StreamFailureContext {
+                            proxy_url: None,
+                            proxy_status: None,
                             req: req.clone(),
                             combo,
                             target,
@@ -533,8 +541,7 @@ impl<'a> ChunkProcessor<'a> {
                         provider: provider_name.to_string(),
                         model: model_name.to_string(),
                         body: message.to_string(),
-    is_proxy_rotated: false,
-
+                        is_proxy_rotated: false,
                     };
                     let acc_ref: Option<&crate::sse_accumulator::ResponseAccumulator> =
                         match &mut state.acc {
@@ -550,6 +557,8 @@ impl<'a> ChunkProcessor<'a> {
                             combo,
                             target,
                             FailureContext {
+                                proxy_url: None,
+                                proxy_status: None,
                                 attempt,
                                 race_size,
                                 err: &err,
@@ -668,6 +677,8 @@ impl<'a> ChunkProcessor<'a> {
                         return Ok(crate::pipeline::streaming::ChunkEvent::Return(
                             self.dispatcher.fail_stream_client_disconnected(
                                 crate::pipeline::upstream_dispatcher::StreamFailureContext {
+                                    proxy_url: None,
+                                    proxy_status: None,
                                     req: req.clone(),
                                     combo,
                                     target,
@@ -707,6 +718,8 @@ impl<'a> ChunkProcessor<'a> {
                             self.dispatcher.fail_on_sink_send_error(
                                 e,
                                 crate::pipeline::upstream_dispatcher::StreamFailureContext {
+                                    proxy_url: None,
+                                    proxy_status: None,
                                     req: req.clone(),
                                     combo,
                                     target,
@@ -845,6 +858,8 @@ impl<'a> ChunkProcessor<'a> {
                 return Ok(crate::pipeline::streaming::ChunkEvent::Return(
                     self.dispatcher.fail_stream_client_disconnected(
                         crate::pipeline::upstream_dispatcher::StreamFailureContext {
+                            proxy_url: None,
+                            proxy_status: None,
                             req: req.clone(),
                             combo,
                             target,
@@ -879,6 +894,8 @@ impl<'a> ChunkProcessor<'a> {
                     self.dispatcher.fail_on_sink_send_error(
                         e,
                         crate::pipeline::upstream_dispatcher::StreamFailureContext {
+                            proxy_url: None,
+                            proxy_status: None,
                             req: req.clone(),
                             combo,
                             target,
@@ -989,6 +1006,8 @@ impl<'a> ChunkProcessor<'a> {
                         return Ok(crate::pipeline::streaming::ChunkEvent::Return(
                             self.dispatcher.fail_stream_client_disconnected(
                                 crate::pipeline::upstream_dispatcher::StreamFailureContext {
+                                    proxy_url: None,
+                                    proxy_status: None,
                                     req: req.clone(),
                                     combo,
                                     target,
@@ -1014,6 +1033,8 @@ impl<'a> ChunkProcessor<'a> {
                             self.dispatcher.fail_on_sink_send_error(
                                 crate::race_sink::StreamSinkError::Lost,
                                 crate::pipeline::upstream_dispatcher::StreamFailureContext {
+                                    proxy_url: None,
+                                    proxy_status: None,
                                     req: req.clone(),
                                     combo,
                                     target,
@@ -1143,6 +1164,8 @@ impl<'a> ChunkProcessor<'a> {
                             self.dispatcher.fail_on_sink_send_error(
                                 e,
                                 crate::pipeline::upstream_dispatcher::StreamFailureContext {
+                                    proxy_url: None,
+                                    proxy_status: None,
                                     req: req.clone(),
                                     combo,
                                     target,

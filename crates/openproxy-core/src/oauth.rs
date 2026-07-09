@@ -692,7 +692,11 @@ pub async fn start_refresh_scheduler(
         // any accounts; per-provider filtering happens in Rust below.
         let accounts = {
             let conn = db_pool.writer();
-            match crate::accounts::list_expiring_oauth_accounts(&conn, MAX_REFRESH_LEAD_SECS, master_key.as_ref()) {
+            match crate::accounts::list_expiring_oauth_accounts(
+                &conn,
+                MAX_REFRESH_LEAD_SECS,
+                master_key.as_ref(),
+            ) {
                 Ok(accs) => accs,
                 Err(e) => {
                     tracing::warn!(error = %e, "oauth refresh scheduler: failed to list expiring accounts");

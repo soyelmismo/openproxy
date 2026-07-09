@@ -68,7 +68,10 @@ impl Default for CodexOAuthProvider {
 impl OAuthProvider for CodexOAuthProvider {
     crate::delegate_oauth_to_generic!(name, flow);
 
-    async fn build_auth_url(&self, _redirect_uri: &str) -> Result<(String, String, String, String)> {
+    async fn build_auth_url(
+        &self,
+        _redirect_uri: &str,
+    ) -> Result<(String, String, String, String)> {
         Err(CoreError::Validation(
             "codex uses device code flow, not PKCE".into(),
         ))
@@ -130,8 +133,7 @@ impl OAuthProvider for CodexOAuthProvider {
                 provider: "codex".into(),
                 model: "<oauth>".into(),
                 body: String::from_utf8_lossy(&body).into(),
-    is_proxy_rotated: false,
-
+                is_proxy_rotated: false,
             });
         }
 
@@ -230,8 +232,7 @@ impl OAuthProvider for CodexOAuthProvider {
                 provider: "codex".into(),
                 model: "<oauth>".into(),
                 body: String::from_utf8_lossy(&body).into(),
-    is_proxy_rotated: false,
-
+                is_proxy_rotated: false,
             });
         }
 
@@ -279,8 +280,7 @@ impl OAuthProvider for CodexOAuthProvider {
                 provider: "codex".into(),
                 model: "<oauth>".into(),
                 body: String::from_utf8_lossy(&token_body_bytes).into(),
-    is_proxy_rotated: false,
-
+                is_proxy_rotated: false,
             });
         }
 

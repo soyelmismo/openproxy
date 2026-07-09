@@ -51,8 +51,7 @@ impl ProviderAdapter for GeminiAdapter {
         let safe_model: String = model_str.replace('/', "");
         format!(
             "{}/models/{}:streamGenerateContent?alt=sse",
-            self.config.base_url,
-            safe_model
+            self.config.base_url, safe_model
         )
     }
 

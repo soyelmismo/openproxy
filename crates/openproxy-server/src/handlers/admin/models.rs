@@ -219,7 +219,8 @@ pub(crate) async fn run_test_for_model(
     let (is_anonymous, accounts_list) = {
         let w = s.db_pool().writer();
         let provider_row = core_providers::get(&w, &model.provider_id).unwrap_or_default();
-        let accs = core_accounts::list(&w, Some(&model.provider_id), s.master_key().as_ref()).unwrap_or_default();
+        let accs = core_accounts::list(&w, Some(&model.provider_id), s.master_key().as_ref())
+            .unwrap_or_default();
         let anon = match &provider_row {
             Some(p) if matches!(p.auth_type, core_providers::AuthType::None) => true,
             _ if accs.is_empty() => true, // No accounts → try anonymous
@@ -238,7 +239,9 @@ pub(crate) async fn run_test_for_model(
             Some(id) => {
                 // Per-model path: look up the already-pinned account.
                 let w = s.db_pool().writer();
-                core_accounts::get(&w, id, s.master_key().as_ref()).ok().flatten()
+                core_accounts::get(&w, id, s.master_key().as_ref())
+                    .ok()
+                    .flatten()
             }
             None => {
                 let healthy = accounts_list
@@ -271,7 +274,9 @@ pub(crate) async fn run_test_for_model(
             Some(aid) => {
                 let account = {
                     let w = s.db_pool().writer();
-                    core_accounts::get(&w, aid, s.master_key().as_ref()).ok().flatten()
+                    core_accounts::get(&w, aid, s.master_key().as_ref())
+                        .ok()
+                        .flatten()
                 };
                 if let Some(ref acc) = account
                     && acc.auth_type == "oauth"
@@ -419,7 +424,9 @@ pub(crate) async fn run_test_for_model(
         let access_token = {
             let account = {
                 let w = s.db_pool().writer();
-                core_accounts::get(&w, test_account_id, s.master_key().as_ref()).ok().flatten()
+                core_accounts::get(&w, test_account_id, s.master_key().as_ref())
+                    .ok()
+                    .flatten()
             };
             if let Some(ref acc) = account
                 && acc.auth_type == "oauth"
@@ -855,10 +862,11 @@ pub(crate) async fn run_refresh(
             Ok(p) => p,
             Err(e) => return ApiResult::err(ApiError(e)),
         };
-        let accounts_list = match core_accounts::list(&w, Some(&provider_id), s.master_key().as_ref()) {
-            Ok(l) => l,
-            Err(e) => return ApiResult::err(ApiError(e)),
-        };
+        let accounts_list =
+            match core_accounts::list(&w, Some(&provider_id), s.master_key().as_ref()) {
+                Ok(l) => l,
+                Err(e) => return ApiResult::err(ApiError(e)),
+            };
 
         let is_anonymous = match &provider_row {
             Some(p) if matches!(p.auth_type, core_providers::AuthType::None) => true,

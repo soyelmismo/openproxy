@@ -87,16 +87,9 @@ use super::phases::UpstreamPhase;
 pub fn is_private_or_reserved(ip: &IpAddr) -> bool {
     match ip {
         IpAddr::V4(v4) => {
-            v4.octets()[0] == 0
-                || v4.is_loopback()
-                || v4.is_private()
-                || v4.is_link_local()
+            v4.octets()[0] == 0 || v4.is_loopback() || v4.is_private() || v4.is_link_local()
         }
-        IpAddr::V6(v6) => {
-            v6.is_loopback()
-                || v6.is_unique_local()
-                || v6.is_unicast_link_local()
-        }
+        IpAddr::V6(v6) => v6.is_loopback() || v6.is_unique_local() || v6.is_unicast_link_local(),
     }
 }
 
@@ -570,7 +563,9 @@ async fn run_phased_connect(
         if cfg!(test) {
             tracing::debug!("SSRF: filter disabled in test build");
         } else {
-            tracing::debug!("SSRF: private upstream connections allowed via OPENPROXY_ALLOW_PRIVATE_UPSTREAMS");
+            tracing::debug!(
+                "SSRF: private upstream connections allowed via OPENPROXY_ALLOW_PRIVATE_UPSTREAMS"
+            );
         }
         addrs
     } else {
