@@ -5,7 +5,7 @@
       "origin": "http://localhost:8790",
       "localStorage": [
         {
-          "name": "openproxy:adminToken",
+          "name": "openproxy_admin_token",
           "value": "op_live_test_dummy_token_for_e2e"
         }
       ]
@@ -14,7 +14,7 @@
       "origin": "http://127.0.0.1:8790",
       "localStorage": [
         {
-          "name": "openproxy:adminToken",
+          "name": "openproxy_admin_token",
           "value": "op_live_test_dummy_token_for_e2e"
         }
       ]
