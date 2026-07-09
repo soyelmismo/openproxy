@@ -103,7 +103,7 @@ async function readFreezeObservation(
             };
           };
         };
-        const logs = w.__openproxyState.logs;
+//         // const logs = w.__openproxyState.logs;
 
         // First read of the latency text.
         const firstRead = (): { latency: string | null; sublabel: string | null; phase: string | null; tickingClass: boolean; rowFound: boolean } => {
@@ -235,7 +235,7 @@ test('Live Logs: stale streaming stage freezes the latency ticker', async ({ pag
         };
         __openproxyLogsGoPage: (page: number) => void;
       };
-      const logs = w.__openproxyState.logs;
+//       // const logs = w.__openproxyState.logs;
 
       // Isolate the test: the live dashboard may have other
       // rows/stages streaming in from the WS feed.
@@ -442,7 +442,7 @@ test('Live Logs: finalized row freezes ticker at the row total_ms', async ({ pag
         };
         __openproxyLogsGoPage: (page: number) => void;
       };
-      const logs = w.__openproxyState.logs;
+      // const logs = w.__openproxyState.logs;
 
       const store = (w as any).__liveLogsStore;
       store.rowsById.clear();
@@ -450,9 +450,9 @@ test('Live Logs: finalized row freezes ticker at the row total_ms', async ({ pag
       store.requestGroups.clear();
       store.attemptKeyByRowId.clear();
 
-      logs.page = 1;
-      logs.rowsPerPage = 50;
-      logs.followTail = false;
+      w.__openproxyState.logs.page = 1;
+      w.__openproxyState.logs.rowsPerPage = 50;
+      w.__openproxyState.logs.followTail = false;
 
       // We deliberately do NOT push a terminal `stage` event
       // here. The §4.2 path is supposed to synthesise one from

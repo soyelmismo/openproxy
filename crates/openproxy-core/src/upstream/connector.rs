@@ -81,18 +81,6 @@ use tower_service::Service;
 
 use super::phases::UpstreamPhase;
 
-/// Returns `true` for private, reserved, loopback, and link-local IP
-/// addresses that should never be the target of an upstream HTTP request
-/// (SSRF protection).
-pub fn is_private_or_reserved(ip: &IpAddr) -> bool {
-    match ip {
-        IpAddr::V4(v4) => {
-            v4.octets()[0] == 0 || v4.is_loopback() || v4.is_private() || v4.is_link_local()
-        }
-        IpAddr::V6(v6) => v6.is_loopback() || v6.is_unique_local() || v6.is_unicast_link_local(),
-    }
-}
-
 /// The connection type returned by the connector. Plain HTTP keeps a
 /// `TokioIo<TcpStream>`; HTTPS wraps it in `TokioIo<ClientTlsStream<TcpStream>>`.
 /// Both variants satisfy hyper-util's `Connect` blanket impl bounds
@@ -545,51 +533,6 @@ async fn run_phased_connect(
                 }));
             }
         }
-    };
-
-    // ---- SSRF filter: skip private / reserved addresses --------------------
-    // Cloud metadata endpoints (169.254.169.254), loopback, RFC-1918,
-    // and link-local ranges must never be the target of an upstream request.
-    //
-    // In test builds the filter is disabled so integration tests can use
-    // localhost mock servers without being blocked.
-    let allow_private = cfg!(test)
-        || cfg!(feature = "ssrf-bypass")
-        || std::env::var("OPENPROXY_ALLOW_PRIVATE_UPSTREAMS")
-            .map(|v| v == "true" || v == "1")
-            .unwrap_or(false);
-
-    let addrs: Vec<SocketAddr> = if allow_private {
-        if cfg!(test) {
-            tracing::debug!("SSRF: filter disabled in test build");
-        } else {
-            tracing::debug!(
-                "SSRF: private upstream connections allowed via OPENPROXY_ALLOW_PRIVATE_UPSTREAMS"
-            );
-        }
-        addrs
-    } else {
-        let filtered: Vec<SocketAddr> = addrs
-            .into_iter()
-            .filter(|a| {
-                if is_private_or_reserved(&a.ip()) {
-                    tracing::warn!(addr = %a, "SSRF: skipping private/reserved address");
-                    false
-                } else {
-                    true
-                }
-            })
-            .collect();
-
-        if filtered.is_empty() {
-            return Err(Box::new(PhasedConnectorError {
-                phase: UpstreamPhase::Dial,
-                kind: PhasedErrorKind::Io(io::Error::other(
-                    "all resolved addresses are private/reserved (SSRF block). Set OPENPROXY_ALLOW_PRIVATE_UPSTREAMS=true to allow.",
-                )),
-            }));
-        }
-        filtered
     };
 
     // ---- Phase 2: Dial --------------------------------------------------

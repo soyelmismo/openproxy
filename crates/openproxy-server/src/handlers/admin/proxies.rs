@@ -3,7 +3,6 @@ use axum::{
     Json,
     extract::{Path, Query, State},
 };
-use openproxy_core::upstream::is_private_or_reserved;
 
 pub async fn list_proxies(
     State(s): State<AppState>,
@@ -38,16 +37,6 @@ pub async fn create_custom_proxy(
             return Err(ApiError(CoreError::Validation(
                 "host and port are required".into(),
             )));
-        }
-        // Reject literal private/reserved IP addresses (SSRF protection).
-        // Hostnames are allowed — only reject IPs that parse to private ranges.
-        let host_str = body.host.trim();
-        if let Ok(ip) = host_str.parse::<std::net::IpAddr>()
-            && is_private_or_reserved(&ip)
-        {
-            return Err(ApiError(CoreError::Validation(format!(
-                "host '{host_str}' resolves to a private/reserved IP and is not allowed"
-            ))));
         }
         let w = s.db_pool().writer();
         let p = openproxy_core::free_proxies::add_custom_proxy(

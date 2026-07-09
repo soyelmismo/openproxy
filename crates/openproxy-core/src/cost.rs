@@ -65,9 +65,6 @@ pub struct UsageInput {
     pub completion_tokens_estimated: bool,
     /// The endpoint kind (chat, audio, image, etc.). Defaults to Chat.
     pub endpoint_kind: crate::endpoint::EndpointKind,
-    pub proxy_url: Option<String>,
-    pub proxy_status: Option<String>,
-    pub is_proxy_rotated: bool,
 }
 
 /// Computes (cost_usd, tokens_per_sec) from pricing + tokens + timing.
@@ -168,12 +165,12 @@ pub fn record(conn: &Connection, input: &UsageInput) -> Result<UsageId> {
             response_headers, error_message, is_streaming, stream_complete, \
             stop_reason, compression_savings_pct, compression_techniques, \
             client_response, prompt_tokens_estimated, completion_tokens_estimated, \
-            endpoint_kind, proxy_url, proxy_status, is_proxy_rotated\
+            endpoint_kind\
          ) VALUES (\
             ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, \
             ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, \
             ?21, ?22, ?23, datetime('now'), ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31, ?32, ?33, ?34, ?35, ?36, \
-            ?37, ?38, ?39, ?40\
+            ?37\
          )",
         params![
             request_id,
@@ -235,9 +232,6 @@ pub fn record(conn: &Connection, input: &UsageInput) -> Result<UsageId> {
             input.prompt_tokens_estimated as i64,
             input.completion_tokens_estimated as i64,
             input.endpoint_kind.as_str(),
-            input.proxy_url,
-            input.proxy_status,
-            input.is_proxy_rotated as i64,
         ],
     )
     .map_err(crate::error::map_db_error)?;
@@ -292,9 +286,6 @@ mod tests {
 
     fn make_input() -> UsageInput {
         UsageInput {
-            proxy_url: None,
-            proxy_status: None,
-            is_proxy_rotated: false,
             request_id: RequestId::new(),
             trace_id: TraceId::new().to_string(),
             attempt: 1,

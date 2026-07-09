@@ -148,13 +148,11 @@ where
             let attempt: u8 = 1;
 
             // 2. Resolve and expand targets.
-            let targets = match pipeline
-                .resolve_targets(&combo, state.req.targets_override.as_deref())
-                .await
-            {
-                Ok(t) => t,
-                Err(e) => return Ok(pipeline.failure(e, attempt - 1, ErrorPhase::Resolve)),
-            };
+            let targets =
+                match pipeline.resolve_targets(&combo, state.req.targets_override.as_deref()).await {
+                    Ok(t) => t,
+                    Err(e) => return Ok(pipeline.failure(e, attempt - 1, ErrorPhase::Resolve)),
+                };
 
             // 3. Flatten sub-combos.
             let flat_targets = match pipeline.flatten_targets(&combo.id, targets.clone()).await {
@@ -183,14 +181,7 @@ where
 
             if eligible.is_empty() {
                 if attempt == 1 {
-                    let repopulated = match tokio::task::spawn_blocking({
-                        let p = pipeline.clone();
-                        let cid = combo.id;
-                        move || p.repo().auto_populate_empty_combo(cid)
-                    })
-                    .await
-                    .unwrap()
-                    {
+                    let repopulated = match tokio::task::spawn_blocking({ let p = pipeline.clone(); let cid = combo.id; move || p.repo().auto_populate_empty_combo(cid) }).await.unwrap() {
                         Ok(n) => n,
                         Err(e) => {
                             tracing::warn!(
@@ -204,16 +195,14 @@ where
                     };
                     if repopulated > 0 {
                         let targets = match pipeline
-                            .resolve_targets(&combo, state.req.targets_override.as_deref())
-                            .await
+                            .resolve_targets(&combo, state.req.targets_override.as_deref()).await
                         {
                             Ok(t) => t,
                             Err(e) => {
                                 return Ok(pipeline.failure(e, attempt - 1, ErrorPhase::Resolve));
                             }
                         };
-                        let flat_targets = match pipeline.flatten_targets(&combo.id, targets).await
-                        {
+                        let flat_targets = match pipeline.flatten_targets(&combo.id, targets).await {
                             Ok(t) => t,
                             Err(e) => {
                                 return Ok(pipeline.failure(e, attempt - 1, ErrorPhase::Resolve));
@@ -310,28 +299,26 @@ where
 
         Box::pin(async move {
             let combo = state.combo.as_ref().unwrap();
-            let eligible = state.eligible_targets.take().unwrap();
+            let mut eligible = state.eligible_targets.take().unwrap();
             let attempt: u8 = 1;
 
             // Apply dynamic quota routing and protection.
-            let filtered = {
+            eligible = {
                 let conn = pipeline.conn.lock();
-                let master_key = pipeline.config.master_key.clone();
                 crate::pipeline::quotas::apply_quota_routing(
                     pipeline.config.quota_protection.enabled,
                     pipeline.config.quota_protection.threshold_percentage,
                     &conn,
-                    &master_key,
                     eligible,
                     &state.req.openai_request.model,
                 )
             };
-            if filtered.is_empty() {
+            if eligible.is_empty() {
                 let err = CoreError::NoHealthyTargets(combo.id.0);
                 return Ok(pipeline.failure(err, attempt - 1, ErrorPhase::Route));
             }
 
-            state.eligible_targets = Some(filtered);
+            state.eligible_targets = Some(eligible);
             inner.call(state).await
         })
     }

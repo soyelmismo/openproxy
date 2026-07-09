@@ -2345,7 +2345,6 @@ async fn pipeline_does_not_record_cooldown_on_4xx_error() {
         provider: "p".into(),
         model: "m".into(),
         body: "bad".into(),
-        is_proxy_rotated: false,
     };
     // 4xx is now retryable (combo walk continues to next target).
     assert!(
@@ -5123,7 +5122,7 @@ async fn streaming_response_body_caps_at_16mib() {
 fn test_quota_routing_and_protection() {
     let (_pool, conn, _db_path) = fresh_pool();
     let master_key = Arc::new(MasterKey::generate());
-    let config = test_config(Arc::clone(&master_key));
+    let config = test_config(master_key);
     let pipeline = Pipeline::new(conn.clone(), config);
 
     seed_provider(&conn.lock(), "antigravity", AuthType::Bearer);
@@ -5151,15 +5150,9 @@ fn test_quota_routing_and_protection() {
 
     {
         let conn = conn.lock();
-        let acc1 = crate::accounts::get(&conn, AccountId(1), &master_key)
-            .unwrap()
-            .unwrap();
-        let acc2 = crate::accounts::get(&conn, AccountId(2), &master_key)
-            .unwrap()
-            .unwrap();
-        let acc3 = crate::accounts::get(&conn, AccountId(3), &master_key)
-            .unwrap()
-            .unwrap();
+        let acc1 = crate::accounts::get(&conn, AccountId(1)).unwrap().unwrap();
+        let acc2 = crate::accounts::get(&conn, AccountId(2)).unwrap().unwrap();
+        let acc3 = crate::accounts::get(&conn, AccountId(3)).unwrap().unwrap();
 
         assert_eq!(
             crate::pipeline::quotas::evaluate_account_quota(
@@ -5224,15 +5217,9 @@ fn test_quota_routing_and_protection() {
 
     {
         let conn = conn.lock();
-        let acc4 = crate::accounts::get(&conn, AccountId(4), &master_key)
-            .unwrap()
-            .unwrap();
-        let acc5 = crate::accounts::get(&conn, AccountId(5), &master_key)
-            .unwrap()
-            .unwrap();
-        let acc6 = crate::accounts::get(&conn, AccountId(6), &master_key)
-            .unwrap()
-            .unwrap();
+        let acc4 = crate::accounts::get(&conn, AccountId(4)).unwrap().unwrap();
+        let acc5 = crate::accounts::get(&conn, AccountId(5)).unwrap().unwrap();
+        let acc6 = crate::accounts::get(&conn, AccountId(6)).unwrap().unwrap();
 
         assert_eq!(
             crate::pipeline::quotas::evaluate_account_quota(
@@ -5329,7 +5316,6 @@ fn test_quota_routing_and_protection() {
         pipeline.config.quota_protection.enabled,
         pipeline.config.quota_protection.threshold_percentage,
         &pipeline.conn.lock(),
-        &master_key,
         targets.clone(),
         "gemini-3-flash",
     );
@@ -5348,7 +5334,6 @@ fn test_quota_routing_and_protection() {
         pipeline.config.quota_protection.enabled,
         pipeline.config.quota_protection.threshold_percentage,
         &pipeline.conn.lock(),
-        &master_key,
         targets_only_protected,
         "gemini-3-flash",
     );
@@ -5390,7 +5375,6 @@ fn test_quota_routing_and_protection() {
         pipeline.config.quota_protection.enabled,
         pipeline.config.quota_protection.threshold_percentage,
         &pipeline.conn.lock(),
-        &master_key,
         targets_sorting,
         "gemini-3-flash",
     );

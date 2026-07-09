@@ -35,10 +35,7 @@ async fn resolve_targets_with_empty_combo_returns_empty() {
     let combo = combos::get_combo(&pool.writer(), combo_id)
         .expect("get")
         .expect("present");
-    let targets = p
-        .resolve_targets(&combo, None)
-        .await
-        .expect("resolve_targets");
+    let targets = p.resolve_targets(&combo, None).await.expect("resolve_targets");
     assert!(targets.is_empty(), "combo with no targets → empty vec");
 }
 
@@ -82,10 +79,7 @@ async fn resolve_targets_with_healthy_account_expands_to_one() {
     let combo = combos::get_combo(&pool.writer(), combo_id)
         .expect("get")
         .expect("present");
-    let targets = p
-        .resolve_targets(&combo, None)
-        .await
-        .expect("resolve_targets");
+    let targets = p.resolve_targets(&combo, None).await.expect("resolve_targets");
     assert_eq!(targets.len(), 1);
     assert_eq!(targets[0].account_id, Some(AccountId(1)));
 }
@@ -118,10 +112,7 @@ async fn resolve_targets_with_no_healthy_accounts_drops_target() {
     let combo = combos::get_combo(&pool.writer(), combo_id)
         .expect("get")
         .expect("present");
-    let targets = p
-        .resolve_targets(&combo, None)
-        .await
-        .expect("resolve_targets");
+    let targets = p.resolve_targets(&combo, None).await.expect("resolve_targets");
     assert_eq!(targets.len(), 1, "target kept with account_id=None");
     assert!(targets[0].account_id.is_none());
 }

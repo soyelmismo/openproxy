@@ -164,9 +164,6 @@ fn record_model_not_found_usage_row(
         ids::{ProviderId, TraceId},
     };
     let input = UsageInput {
-        proxy_url: None,
-        proxy_status: None,
-        is_proxy_rotated: false,
         request_id,
         trace_id: TraceId::new().to_string(),
         attempt: 1,

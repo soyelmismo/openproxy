@@ -47,7 +47,6 @@ pub struct UpstreamRequest {
     /// Default: `true` (streaming).
     pub is_streaming: bool,
     pub proxy: Option<String>,
-    pub proxy_status: Option<String>,
 }
 
 impl UpstreamRequest {
@@ -60,7 +59,6 @@ impl UpstreamRequest {
             body: None,
             is_streaming: true,
             proxy: None,
-            proxy_status: None,
         }
     }
 
@@ -78,7 +76,6 @@ impl UpstreamRequest {
             body: Some(body),
             is_streaming: true,
             proxy: None,
-            proxy_status: None,
         }
     }
 
@@ -112,7 +109,6 @@ impl UpstreamRequest {
             // transcription from being killed by an idle-chunk watchdog.
             is_streaming: false,
             proxy: None,
-            proxy_status: None,
         }
     }
 }

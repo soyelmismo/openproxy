@@ -92,7 +92,7 @@ async fn run_quota_sync_cycle(
         let mut target_accounts = Vec::new();
         for provider_str in &supported_providers {
             let pid = crate::ids::ProviderId::new(provider_str.clone());
-            if let Ok(accs) = accounts::list(&conn, Some(&pid), master_key) {
+            if let Ok(accs) = accounts::list(&conn, Some(&pid)) {
                 for acc in accs {
                     if acc.health_status != accounts::HealthStatus::Unhealthy {
                         target_accounts.push(acc.id);
@@ -149,7 +149,7 @@ pub async fn refresh_single_account_quota(
 ) -> crate::error::Result<Option<AccountQuota>> {
     let (provider_id_str, api_key, access_token, provider_specific) = {
         let w = db_pool.writer();
-        let acc = admin::account_for_quota_refresh(&w, account_id, master_key.as_ref())?;
+        let acc = admin::account_for_quota_refresh(&w, account_id)?;
 
         let supports_quota = adapters
             .iter()

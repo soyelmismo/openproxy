@@ -8,7 +8,6 @@ use aes_gcm::aead::{Aead, AeadCore, KeyInit, OsRng};
 use aes_gcm::{Aes256Gcm, Key, Nonce};
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as BASE64;
-use zeroize::Zeroize;
 
 use crate::error::{CoreError, Result};
 
@@ -18,7 +17,7 @@ const ENV_VAR: &str = "OPENPROXY_MASTER_KEY";
 const PREVIOUS_ENV_VAR: &str = "OPENPROXY_MASTER_KEY_PREVIOUS";
 
 /// AES-256 master key. Owns its 32 raw bytes; zeroized on drop via
-/// the [`Drop`] implementation below.
+/// `Aes256Gcm` key material handling.
 pub struct MasterKey {
     current: [u8; KEY_LEN],
     /// Optional previous key for rotation. If decryption with the
@@ -129,15 +128,6 @@ impl MasterKey {
         Err(CoreError::Internal(
             "aes-gcm decrypt failed with both current and previous keys".into(),
         ))
-    }
-}
-
-impl Drop for MasterKey {
-    fn drop(&mut self) {
-        self.current.zeroize();
-        if let Some(ref mut prev) = self.previous {
-            prev.zeroize();
-        }
     }
 }
 

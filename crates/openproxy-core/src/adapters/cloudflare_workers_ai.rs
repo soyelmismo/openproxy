@@ -62,12 +62,9 @@ impl ProviderAdapter for CloudflareWorkersAIAdapter {
         _model: &ModelId,
         account_label: &str,
     ) -> String {
-        // Sanitize the account label to prevent path traversal — strip
-        // "/" and "." characters that could alter the URL structure.
-        let safe_label = account_label.replace(['/', '.'], "");
         format!(
             "{}/{}/ai/v1/chat/completions",
-            self.config.base_url, safe_label
+            self.config.base_url, account_label
         )
     }
 
@@ -86,11 +83,9 @@ impl ProviderAdapter for CloudflareWorkersAIAdapter {
         if account_label.trim().is_empty() {
             return None;
         }
-        // Sanitize the account label to prevent path traversal.
-        let safe_label = account_label.replace(['/', '.'], "");
         Some(format!(
             "{}/{}/ai/models/search",
-            self.config.base_url, safe_label
+            self.config.base_url, account_label
         ))
     }
 

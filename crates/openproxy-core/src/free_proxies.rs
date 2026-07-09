@@ -130,27 +130,6 @@ pub fn get_proxy(conn: &Connection, id: &str) -> crate::error::Result<Option<Fre
     }
 }
 
-pub fn get_proxy_status_by_url(conn: &rusqlite::Connection, url: &str) -> Option<String> {
-    let parts: Vec<&str> = url.split("://").collect();
-    if parts.len() != 2 {
-        return None;
-    }
-    let host_port = parts[1];
-    let host_port_parts: Vec<&str> = host_port.split(':').collect();
-    if host_port_parts.len() != 2 {
-        return None;
-    }
-    let host = host_port_parts[0];
-    let port: i64 = host_port_parts[1].parse().ok()?;
-
-    conn.query_row(
-        "SELECT status FROM free_proxies WHERE host = ?1 AND port = ?2",
-        rusqlite::params![host, port],
-        |row| row.get::<_, String>(0),
-    )
-    .ok()
-}
-
 pub fn add_custom_proxy(
     conn: &Connection,
     host: String,

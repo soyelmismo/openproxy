@@ -99,16 +99,6 @@ pub(crate) fn build_sse_frame(payload: &str) -> bytes::Bytes {
 // parser is stateless, so the accumulator lives in the caller
 // (pipeline.rs) and we expose the struct here for it to thread
 // through each `translate_anthropic_sse_event` call.
-/// Maximum allowed length for accumulated tool call arguments string.
-/// Prevents unbounded memory growth from malicious input_json_delta fragments.
-const MAX_TOOL_ARGUMENTS_BYTES: usize = 1_048_576; // 1 MiB
-
-/// Maximum allowed length for tool call ID string.
-const MAX_TOOL_ID_BYTES: usize = 256;
-
-/// Maximum allowed length for tool call name string.
-const MAX_TOOL_NAME_BYTES: usize = 256;
-
 #[derive(Debug, Default, Clone)]
 pub struct AnthropicToolUseAccumulator {
     /// Index of the tool call within the assistant message's `tool_calls` array.
@@ -119,42 +109,6 @@ pub struct AnthropicToolUseAccumulator {
     pub name: String,
     /// Accumulated partial JSON fragments from input_json_delta.
     pub arguments: String,
-}
-
-impl AnthropicToolUseAccumulator {
-    /// Create a new accumulator with bounds checking.
-    pub fn new_with_bounds(index: u32, id: String, name: String) -> Result<Self> {
-        if id.len() > MAX_TOOL_ID_BYTES {
-            return Err(CoreError::Parse(format!(
-                "Anthropic tool_use id exceeds maximum length of {} bytes",
-                MAX_TOOL_ID_BYTES
-            )));
-        }
-        if name.len() > MAX_TOOL_NAME_BYTES {
-            return Err(CoreError::Parse(format!(
-                "Anthropic tool_use name exceeds maximum length of {} bytes",
-                MAX_TOOL_NAME_BYTES
-            )));
-        }
-        Ok(Self {
-            index,
-            id,
-            name,
-            arguments: String::new(),
-        })
-    }
-
-    /// Append to arguments with bounds checking.
-    pub fn push_arguments(&mut self, fragment: &str) -> Result<()> {
-        if self.arguments.len() + fragment.len() > MAX_TOOL_ARGUMENTS_BYTES {
-            return Err(CoreError::Parse(format!(
-                "Anthropic tool_use arguments exceeds maximum length of {} bytes",
-                MAX_TOOL_ARGUMENTS_BYTES
-            )));
-        }
-        self.arguments.push_str(fragment);
-        Ok(())
-    }
 }
 
 // =====================================================================
@@ -223,13 +177,9 @@ pub fn parse_openai_sse_line(line: &str) -> Result<Option<UpstreamSseChunk>> {
         .map_err(|e| CoreError::Parse(format!("openai sse json: {e}")))?;
 
     let usage = probe.usage.map(|u| OpenAIUsage {
-        prompt_tokens: u.prompt_tokens.unwrap_or(0).try_into().unwrap_or(u32::MAX),
-        completion_tokens: u
-            .completion_tokens
-            .unwrap_or(0)
-            .try_into()
-            .unwrap_or(u32::MAX),
-        total_tokens: u.total_tokens.unwrap_or(0).try_into().unwrap_or(u32::MAX),
+        prompt_tokens: u.prompt_tokens.unwrap_or(0) as u32,
+        completion_tokens: u.completion_tokens.unwrap_or(0) as u32,
+        total_tokens: u.total_tokens.unwrap_or(0) as u32,
     });
     // o1-style reasoning models (o1, o3, deepseek-r1) emit
     // `delta.reasoning_content` on chunks that also carry `usage`
@@ -450,9 +400,9 @@ pub fn parse_gemini_sse_line(
     // the wrong type, the whole usage is `None`.
     let usage = probe.usage_metadata.and_then(|u| {
         Some(OpenAIUsage {
-            prompt_tokens: u.prompt_tokens?.try_into().unwrap_or(u32::MAX),
-            completion_tokens: u.completion_tokens?.try_into().unwrap_or(u32::MAX),
-            total_tokens: u.total_tokens?.try_into().unwrap_or(u32::MAX),
+            prompt_tokens: u.prompt_tokens? as u32,
+            completion_tokens: u.completion_tokens? as u32,
+            total_tokens: u.total_tokens? as u32,
         })
     });
 
@@ -491,18 +441,7 @@ pub fn parse_anthropic_sse_stream_line(
     }
 
     if let Some(event_type) = line.strip_prefix("event: ") {
-        let event_type = event_type.trim();
-        if event_type.len() > MAX_SSE_EVENT_TYPE_BYTES {
-            tracing::warn!(
-                actual_len = event_type.len(),
-                max = MAX_SSE_EVENT_TYPE_BYTES,
-                "SSE event type exceeds maximum length — truncating"
-            );
-            // Truncate instead of erroring to keep the stream alive.
-            *current_event = None;
-            return Ok(None);
-        }
-        *current_event = Some(event_type.to_string());
+        *current_event = Some(event_type.trim().to_string());
         return Ok(None);
     }
 
@@ -670,18 +609,10 @@ pub fn translate_anthropic_sse_payload(
 
             let usage = data.get("usage").map(|u| {
                 crate::translation::OpenAIUsage {
-                    prompt_tokens: u
-                        .get("input_tokens")
-                        .and_then(|t| t.as_u64())
-                        .unwrap_or(0)
-                        .try_into()
-                        .unwrap_or(u32::MAX),
-                    completion_tokens: u
-                        .get("output_tokens")
-                        .and_then(|t| t.as_u64())
-                        .unwrap_or(0)
-                        .try_into()
-                        .unwrap_or(u32::MAX),
+                    prompt_tokens: u.get("input_tokens").and_then(|t| t.as_u64()).unwrap_or(0)
+                        as u32,
+                    completion_tokens: u.get("output_tokens").and_then(|t| t.as_u64()).unwrap_or(0)
+                        as u32,
                     total_tokens: 0, // Will be computed
                 }
             });
@@ -824,12 +755,7 @@ pub fn translate_anthropic_sse_event(
                 // the arguments JSON across the wire chunks).
                 let prev_len = acc.arguments.len();
                 if let Some(partial) = delta.partial_json.as_deref() {
-                    // Bound check: prevent unbounded argument accumulation
-                    if prev_len + partial.len() > MAX_TOOL_ARGUMENTS_BYTES {
-                        // Drop the fragment, don't accumulate
-                    } else {
-                        acc.arguments.push_str(partial);
-                    }
+                    acc.arguments.push_str(partial);
                 }
                 let new_fragment = &acc.arguments[prev_len..];
                 // Emit a chunk that carries ONLY the newly-appended
@@ -979,11 +905,12 @@ pub fn translate_anthropic_sse_event(
             // Allocate a new tool_call index for this turn.
             let index = *tool_call_index_counter;
             *tool_call_index_counter += 1;
-            *tool_use_acc = Some(AnthropicToolUseAccumulator::new_with_bounds(
+            *tool_use_acc = Some(AnthropicToolUseAccumulator {
                 index,
-                id.clone(),
-                name.clone(),
-            )?);
+                id: id.clone(),
+                name: name.clone(),
+                arguments: String::new(),
+            });
             // Emit the initial OpenAI-style tool_call chunk with
             // id+type+name and empty arguments (the standard
             // OpenAI streaming-tools shape). `finish_reason` stays
@@ -2244,15 +2171,6 @@ mod tests {
 }
 
 pub const MAX_SSE_LINE_BYTES: usize = 65_536;
-/// Maximum allowed bytes for an SSE event type string (e.g., "message_start", "content_block_delta").
-/// Prevents unbounded memory allocation from malformed upstream event: lines.
-pub const MAX_SSE_EVENT_TYPE_BYTES: usize = 1024;
-/// Maximum allowed tool calls accumulated in ResponsesSseState.
-/// Prevents unbounded vector growth from a malicious upstream.
-pub const MAX_RESPONSES_TOOL_CALLS: usize = 128;
-/// Maximum allowed bytes for accumulated tool call arguments in the Responses API path.
-/// Prevents unbounded string growth per tool call from accumulated delta fragments.
-pub const MAX_RESPONSES_TOOL_CALL_ARGS_BYTES: usize = 1_048_576; // 1 MiB
 
 pub struct SseParser {
     buffer: bytes::BytesMut,
@@ -2385,7 +2303,6 @@ pub fn parse_responses_sse_stream_line(
             provider: "responses".into(),
             model: model_name.to_string(),
             body: error.to_string(),
-            is_proxy_rotated: false,
         });
     }
 
@@ -2396,13 +2313,13 @@ pub fn parse_responses_sse_stream_line(
         .or_else(|| value.get("response").and_then(|r| r.get("usage")))
         && let Ok(mut u_parsed) = serde_json::from_value::<OpenAIUsage>(u.clone())
     {
-        if u.get("input_tokens").is_some() {
-            let val = u.get("input_tokens").and_then(|v| v.as_u64()).unwrap_or(0);
-            u_parsed.prompt_tokens = val.try_into().unwrap_or(u32::MAX);
+        if u_parsed.prompt_tokens == 0 && u.get("input_tokens").is_some() {
+            u_parsed.prompt_tokens =
+                u.get("input_tokens").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
         }
-        if u.get("output_tokens").is_some() {
-            let val = u.get("output_tokens").and_then(|v| v.as_u64()).unwrap_or(0);
-            u_parsed.completion_tokens = val.try_into().unwrap_or(u32::MAX);
+        if u_parsed.completion_tokens == 0 && u.get("output_tokens").is_some() {
+            u_parsed.completion_tokens =
+                u.get("output_tokens").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
         }
         if u_parsed.total_tokens == 0 {
             u_parsed.total_tokens = u_parsed.prompt_tokens + u_parsed.completion_tokens;
@@ -2415,15 +2332,6 @@ pub fn parse_responses_sse_stream_line(
     {
         let item_type = item.get("type").and_then(|v| v.as_str()).unwrap_or("");
         if item_type == "function_call" {
-            // Guard: prevent unbounded tool_calls vector growth
-            if state.tool_calls.len() >= MAX_RESPONSES_TOOL_CALLS {
-                tracing::warn!(
-                    count = state.tool_calls.len(),
-                    max = MAX_RESPONSES_TOOL_CALLS,
-                    "ResponsesSseState: tool_calls limit reached — dropping new call"
-                );
-                return Ok(None);
-            }
             let call_id = item
                 .get("call_id")
                 .or_else(|| item.get("id"))
@@ -2502,19 +2410,9 @@ pub fn parse_responses_sse_stream_line(
                     && let Some(args) = func.get_mut("arguments")
                     && let Some(args_str) = args.as_str()
                 {
-                    // Guard: prevent unbounded arguments accumulation
-                    if args_str.len() + delta.len() > MAX_RESPONSES_TOOL_CALL_ARGS_BYTES {
-                        tracing::warn!(
-                            current_len = args_str.len(),
-                            delta_len = delta.len(),
-                            max = MAX_RESPONSES_TOOL_CALL_ARGS_BYTES,
-                            "ResponsesSseState: tool call arguments limit reached — dropping delta"
-                        );
-                    } else {
-                        let mut new_args = args_str.to_string();
-                        new_args.push_str(delta);
-                        *args = serde_json::Value::String(new_args);
-                    }
+                    let mut new_args = args_str.to_string();
+                    new_args.push_str(delta);
+                    *args = serde_json::Value::String(new_args);
                 }
                 index = i;
                 break;

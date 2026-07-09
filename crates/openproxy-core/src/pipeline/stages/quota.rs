@@ -19,12 +19,10 @@ impl PipelineStage for QuotaEnforcerStage {
 
         let filtered = {
             let conn = ctx.pipeline.conn.lock();
-            let master_key = ctx.pipeline.config.master_key.clone();
             crate::pipeline::quotas::apply_quota_routing(
                 ctx.pipeline.config.quota_protection.enabled,
                 ctx.pipeline.config.quota_protection.threshold_percentage,
                 &conn,
-                &master_key,
                 eligible,
                 &ctx.req.openai_request.model,
             )

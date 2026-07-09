@@ -15,7 +15,7 @@ pub async fn list_accounts(
         // Read-only SELECT — use the READER.
         let r = s.db_pool().reader();
         let provider = q.provider_id.map(ProviderId::new);
-        let list = core_admin::list_accounts(&r, provider.as_ref(), s.master_key().as_ref())?;
+        let list = core_admin::list_accounts(&r, provider.as_ref())?;
         Ok(Json(list))
     }
 }
@@ -127,7 +127,7 @@ pub(crate) async fn resolve_refresh_account(
         Ok(p) => p,
         Err(e) => return Err(ApiError(e)),
     };
-    let accounts_list = match core_accounts::list(&w, Some(provider), s.master_key().as_ref()) {
+    let accounts_list = match core_accounts::list(&w, Some(provider)) {
         Ok(l) => l,
         Err(e) => return Err(ApiError(e)),
     };

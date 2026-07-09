@@ -43,15 +43,10 @@ impl ProviderAdapter for GeminiAdapter {
         // streamGenerateContent?alt=sse endpoint. Calling generateContent would
         // return a non-streaming JSON body, which blocks headers until completion
         // and causes timeouts.
-        //
-        // Sanitize the model id to prevent path traversal — strip "/"
-        // segments.  Dot characters are *kept* because real model names
-        // like "gemini-2.5-flash" contain them.
-        let model_str = model.as_str();
-        let safe_model: String = model_str.replace('/', "");
         format!(
             "{}/models/{}:streamGenerateContent?alt=sse",
-            self.config.base_url, safe_model
+            self.config.base_url,
+            model.as_str()
         )
     }
 
