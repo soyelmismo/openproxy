@@ -226,8 +226,10 @@ impl Pipeline {
         if let Some(combo) = req.combo_override.as_ref() {
             return Ok(combo.clone());
         }
-        let conn = self.conn.lock();
-        combos::get_combo(&conn, req.combo_id)?.ok_or(CoreError::ComboNotFound(req.combo_id.0))
+        tokio::task::block_in_place(|| {
+            let conn = self.conn.lock();
+            combos::get_combo(&conn, req.combo_id)?.ok_or(CoreError::ComboNotFound(req.combo_id.0))
+        })
     }
 
     pub(crate) fn resolve_targets(
@@ -235,20 +237,22 @@ impl Pipeline {
         combo: &Combo,
         targets_override: Option<&[ComboTarget]>,
     ) -> Result<Vec<ComboTarget>> {
-        if let Some(overrides) = targets_override {
-            let conn = self.conn.lock();
-            return combos::expand_account_rotation(&conn, overrides.to_vec());
-        }
+        tokio::task::block_in_place(|| {
+            if let Some(overrides) = targets_override {
+                let conn = self.conn.lock();
+                return combos::expand_account_rotation(&conn, overrides.to_vec());
+            }
 
-        let conn = self.conn.lock();
-        let _ = combos::list_targets(&conn, combo.id)?;
-        let ordered = combos::resolve_target_order_with_mode(
-            &conn,
-            combo,
-            &self.rr_counters,
-            &self.selection_registry,
-        )?;
-        combos::expand_account_rotation(&conn, ordered)
+            let conn = self.conn.lock();
+            let _ = combos::list_targets(&conn, combo.id)?;
+            let ordered = combos::resolve_target_order_with_mode(
+                &conn,
+                combo,
+                &self.rr_counters,
+                &self.selection_registry,
+            )?;
+            combos::expand_account_rotation(&conn, ordered)
+        })
     }
 
     #[cfg(test)]

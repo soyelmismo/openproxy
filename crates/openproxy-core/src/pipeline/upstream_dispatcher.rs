@@ -232,18 +232,18 @@ impl UpstreamDispatcher {
         // from the translated struct — no intermediate `Value`).
         let mut upstream_request = UpstreamRequest::post_json(url.to_string(), body_bytes);
         // If the provider has proxy routing enabled, fetch/assign a proxy
-        let proxy_url = {
+        let proxy_url = match tokio::task::block_in_place(|| {
             let conn = self.conn.lock();
-            match crate::free_proxies::get_or_assign_provider_proxy(&conn, &target.provider_id) {
-                Ok(url) => url,
-                Err(e) => {
-                    return self.record_and_fail(
-                        req,
-                        combo,
-                        target,
-                        dctx.fail_ctx_code(&e, None, None, e.http_status()),
-                    );
-                }
+            crate::free_proxies::get_or_assign_provider_proxy(&conn, &target.provider_id)
+        }) {
+            Ok(url) => url,
+            Err(e) => {
+                return self.record_and_fail(
+                    req,
+                    combo,
+                    target,
+                    dctx.fail_ctx_code(&e, None, None, e.http_status()),
+                );
             }
         };
         upstream_request.proxy = proxy_url;
@@ -727,14 +727,16 @@ impl UpstreamDispatcher {
                         "status_code": status_code,
                     },
                 });
-                let conn = self.conn.lock();
-                let _ = crate::notifications::insert_and_broadcast(
-                    &conn,
-                    crate::notifications::KIND_SYSTEM,
-                    &payload,
-                    Some(&dedup_key),
-                    Some(&provider_id_str),
-                );
+                tokio::task::block_in_place(|| {
+                    let conn = self.conn.lock();
+                    let _ = crate::notifications::insert_and_broadcast(
+                        &conn,
+                        crate::notifications::KIND_SYSTEM,
+                        &payload,
+                        Some(&dedup_key),
+                        Some(&provider_id_str),
+                    );
+                });
             }
             let err = CoreError::UpstreamError {
                 status: status_code,
@@ -1452,14 +1454,16 @@ impl UpstreamDispatcher {
                         "status_code": status_code,
                     },
                 });
-                let conn = self.conn.lock();
-                let _ = crate::notifications::insert_and_broadcast(
-                    &conn,
-                    crate::notifications::KIND_SYSTEM,
-                    &payload,
-                    Some(&dedup_key),
-                    Some(&provider_id_str),
-                );
+                tokio::task::block_in_place(|| {
+                    let conn = self.conn.lock();
+                    let _ = crate::notifications::insert_and_broadcast(
+                        &conn,
+                        crate::notifications::KIND_SYSTEM,
+                        &payload,
+                        Some(&dedup_key),
+                        Some(&provider_id_str),
+                    );
+                });
             }
             // NEW-2 fix: when the upstream returns 429 (or 408/503)
             // with a `Retry-After` header, surface the error as
