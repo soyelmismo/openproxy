@@ -141,12 +141,14 @@ pub trait OAuthProvider: Send + Sync {
     ///   exchange), or empty string for non-PKCE flows.
     /// - `code_challenge` is the S256 challenge to include in the auth
     ///   URL, or empty string for non-PKCE flows.
+    /// - `state` is a random value included in the authorization URL
+    ///   to prevent CSRF attacks on the callback.
     ///
     /// Returns `Err` if the provider uses Device Code flow.
     fn build_auth_url(
         &self,
         redirect_uri: &str,
-    ) -> impl std::future::Future<Output = Result<(String, String, String)>> + Send {
+    ) -> impl std::future::Future<Output = Result<(String, String, String, String)>> + Send {
         let redirect_uri_clone = redirect_uri.to_string();
         async move {
             let _ = redirect_uri_clone;
@@ -270,7 +272,7 @@ macro_rules! define_oauth_provider {
             fn flow(&self) -> OAuthFlow {
                 match self { $( Self::$variant(inner) => inner.flow(), )+ }
             }
-            async fn build_auth_url(&self, redirect_uri: &str) -> Result<(String, String, String)> {
+            async fn build_auth_url(&self, redirect_uri: &str) -> Result<(String, String, String, String)> {
                 match self { $( Self::$variant(inner) => inner.build_auth_url(redirect_uri).await, )+ }
             }
             async fn exchange_code(
@@ -690,7 +692,11 @@ pub async fn start_refresh_scheduler(
         // any accounts; per-provider filtering happens in Rust below.
         let accounts = {
             let conn = db_pool.writer();
-            match crate::accounts::list_expiring_oauth_accounts(&conn, MAX_REFRESH_LEAD_SECS) {
+            match crate::accounts::list_expiring_oauth_accounts(
+                &conn,
+                MAX_REFRESH_LEAD_SECS,
+                master_key.as_ref(),
+            ) {
                 Ok(accs) => accs,
                 Err(e) => {
                     tracing::warn!(error = %e, "oauth refresh scheduler: failed to list expiring accounts");

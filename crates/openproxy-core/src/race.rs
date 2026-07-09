@@ -368,6 +368,7 @@ mod tests {
                 provider: "p".into(),
                 model: "m".into(),
                 body: "unauthorized".into(),
+                is_proxy_rotated: false,
             })
         });
         let (l2, _r2) = make_lane(async {
@@ -504,6 +505,7 @@ mod tests {
             provider: "p".into(),
             model: "m".into(),
             body: "x".into(),
+            is_proxy_rotated: false,
         };
         let rate = CoreError::RateLimited {
             provider: "p".into(),
@@ -515,6 +517,7 @@ mod tests {
             provider: "p".into(),
             model: "m".into(),
             body: "x".into(),
+            is_proxy_rotated: false,
         };
         let net = CoreError::UpstreamConnection("x".into());
         let parse = CoreError::Parse("x".into());

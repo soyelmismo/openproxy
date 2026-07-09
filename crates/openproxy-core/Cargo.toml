@@ -15,6 +15,10 @@ upstream-hyper = ["dep:hyper", "dep:hyper-util", "dep:http", "dep:http-body", "d
 # Stub gate for callers that want to disable just this client (e.g.
 # downstream consumers building with `default-features = false`).
 upstream-stub = []
+# Allow private/reserved IP addresses in upstream connections (SSRF bypass).
+# Used by downstream test harnesses (e.g. openproxy-api-client) that connect
+# to localhost mock servers.
+ssrf-bypass = []
 
 [dependencies]
 tokio = { workspace = true }
@@ -46,6 +50,7 @@ tdigest = { workspace = true }
 dashmap = { workspace = true }
 regex = { workspace = true }
 sha2 = { workspace = true }
+zeroize = { workspace = true }
 urlencoding = { workspace = true }
 memchr = "2"
 # Real BPE tokenizer (cl100k_base — the same tokenizer OpenAI uses for

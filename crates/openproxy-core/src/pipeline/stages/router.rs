@@ -24,13 +24,18 @@ impl PipelineStage for RouterStage {
         let attempt = ctx.attempt;
         let targets = match ctx
             .pipeline
-            .resolve_targets(&combo, ctx.req.targets_override.as_deref()).await
+            .resolve_targets(&combo, ctx.req.targets_override.as_deref())
+            .await
         {
             Ok(t) => t,
             Err(e) => return Err(e),
         };
 
-        let flat_targets = match ctx.pipeline.flatten_targets(&combo.id, targets.clone()).await {
+        let flat_targets = match ctx
+            .pipeline
+            .flatten_targets(&combo.id, targets.clone())
+            .await
+        {
             Ok(t) => t,
             Err(e) => return Err(e),
         };
@@ -62,12 +67,14 @@ impl PipelineStage for RouterStage {
                 if repopulated > 0 {
                     let targets = match ctx
                         .pipeline
-                        .resolve_targets(&combo, ctx.req.targets_override.as_deref()).await
+                        .resolve_targets(&combo, ctx.req.targets_override.as_deref())
+                        .await
                     {
                         Ok(t) => t,
                         Err(e) => return Err(e),
                     };
-                    let flat_targets = match ctx.pipeline.flatten_targets(&combo.id, targets).await {
+                    let flat_targets = match ctx.pipeline.flatten_targets(&combo.id, targets).await
+                    {
                         Ok(t) => t,
                         Err(e) => return Err(e),
                     };

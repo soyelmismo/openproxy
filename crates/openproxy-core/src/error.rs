@@ -89,6 +89,7 @@ pub enum CoreError {
         provider: String,
         model: String,
         body: String,
+        is_proxy_rotated: bool,
     },
 
     #[error("upstream connection error: {0}")]
@@ -136,6 +137,18 @@ pub enum CoreError {
 }
 
 impl CoreError {
+    pub fn is_proxy_rotated(&self) -> bool {
+        match self {
+            CoreError::UpstreamError {
+                is_proxy_rotated, ..
+            } => *is_proxy_rotated,
+            CoreError::RateLimited {
+                is_proxy_rotated, ..
+            } => *is_proxy_rotated,
+            _ => false,
+        }
+    }
+
     /// Produce a best-effort clone that drops any non-cloneable boxed source.
     ///
     /// `CoreError` cannot derive `Clone` because the `Database` variant holds a
@@ -173,11 +186,13 @@ impl CoreError {
                 provider,
                 model,
                 body,
+                is_proxy_rotated,
             } => CoreError::UpstreamError {
                 status: *status,
                 provider: provider.clone(),
                 model: model.clone(),
                 body: body.clone(),
+                is_proxy_rotated: *is_proxy_rotated,
             },
             CoreError::UpstreamConnection(s) => CoreError::UpstreamConnection(s.clone()),
             CoreError::RateLimited {
