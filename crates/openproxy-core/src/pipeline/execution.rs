@@ -216,8 +216,6 @@ impl Pipeline {
                     combo,
                     &resolved_target.target,
                     FailureContext {
-                        proxy_url: None,
-                        proxy_status: None,
                         attempt,
                         race_size,
                         err: &e,

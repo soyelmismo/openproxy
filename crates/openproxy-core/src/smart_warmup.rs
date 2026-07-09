@@ -85,7 +85,7 @@ async fn run_warmup_cycle(
         let conn = db_pool.writer();
 
         let provider_id = ProviderId::new("antigravity");
-        let accounts = match accounts::list(&conn, Some(&provider_id), master_key) {
+        let accounts = match accounts::list(&conn, Some(&provider_id)) {
             Ok(accs) => accs,
             Err(e) => {
                 tracing::warn!("[SmartWarmup] Failed to list accounts: {}", e);

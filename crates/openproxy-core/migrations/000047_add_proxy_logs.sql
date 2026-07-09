@@ -1,3 +1,0 @@
-ALTER TABLE usage ADD COLUMN proxy_url TEXT;
-ALTER TABLE usage ADD COLUMN proxy_status TEXT;
-ALTER TABLE usage ADD COLUMN is_proxy_rotated INTEGER NOT NULL DEFAULT 0;

@@ -419,13 +419,9 @@ impl MessageVisitor {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Mutex;
-
-    static TEST_MUTEX: Mutex<()> = Mutex::new(());
 
     #[tokio::test]
     async fn buffer_evicts_oldest_when_full() {
-        let _test_lock = TEST_MUTEX.lock().unwrap();
         init();
         // Push BUFFER_CAPACITY + 10 entries; verify only the last
         // BUFFER_CAPACITY are kept. The snapshot is taken INSIDE
@@ -463,7 +459,6 @@ mod tests {
 
     #[tokio::test]
     async fn snapshot_since_filters_by_seq() {
-        let _test_lock = TEST_MUTEX.lock().unwrap();
         init();
         let buf = DEBUG_LOG_BUFFER.get().expect("init");
         let snap = {
@@ -514,7 +509,6 @@ mod tests {
     // `RUST_LOG=error` silences WARN from the ring buffer.
     #[tokio::test]
     async fn debug_log_layer_captures_warn_and_error_via_subscriber() {
-        let _test_lock = TEST_MUTEX.lock().unwrap();
         init();
         // Reset the buffer to a known-empty state inside the lock
         // so we don't see entries from other tests that ran first.

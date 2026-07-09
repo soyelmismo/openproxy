@@ -242,11 +242,6 @@ const MIGRATIONS: &[Migration] = &[
         name: "000046_smart_warmup_history",
         sql: include_str!("../../migrations/000046_smart_warmup_history.sql"),
     },
-    Migration {
-        version: 47,
-        name: "000047_add_proxy_logs",
-        sql: include_str!("../../migrations/000047_add_proxy_logs.sql"),
-    },
 ];
 
 /// Apply pending migrations on `conn`. Idempotent: skips versions already in

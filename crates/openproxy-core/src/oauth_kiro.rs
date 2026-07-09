@@ -183,7 +183,6 @@ async fn register_oidc_client(
             provider: "kiro".into(),
             model: "<oauth_register>".into(),
             body: body_str,
-            is_proxy_rotated: false,
         });
     }
 
@@ -217,10 +216,7 @@ impl OAuthProvider for KiroOAuthProvider {
         OAuthFlow::DeviceCode
     }
 
-    async fn build_auth_url(
-        &self,
-        _redirect_uri: &str,
-    ) -> Result<(String, String, String, String)> {
+    async fn build_auth_url(&self, _redirect_uri: &str) -> Result<(String, String, String)> {
         Err(CoreError::Validation(
             "kiro uses device code flow, not PKCE".into(),
         ))
@@ -291,7 +287,6 @@ impl OAuthProvider for KiroOAuthProvider {
                 provider: "kiro".into(),
                 model: "<oauth>".into(),
                 body: body_str,
-                is_proxy_rotated: false,
             });
         }
 
@@ -344,7 +339,6 @@ impl OAuthProvider for KiroOAuthProvider {
                 provider: "kiro".into(),
                 model: "<oauth>".into(),
                 body: body_str,
-                is_proxy_rotated: false,
             });
         }
 
@@ -427,7 +421,6 @@ impl OAuthProvider for KiroOAuthProvider {
                 provider: "kiro".into(),
                 model: "<oauth>".into(),
                 body: body_str,
-                is_proxy_rotated: false,
             });
         }
 
@@ -504,7 +497,6 @@ impl OAuthProvider for KiroOAuthProvider {
                     provider: "kiro".into(),
                     model: "<oauth_social>".into(),
                     body: body_str,
-                    is_proxy_rotated: false,
                 });
             }
 
@@ -641,7 +633,6 @@ impl OAuthProvider for KiroOAuthProvider {
                     provider: "kiro".into(),
                     model: "<oauth>".into(),
                     body: body_str,
-                    is_proxy_rotated: false,
                 });
             }
         };
@@ -843,7 +834,6 @@ async fn list_available_profiles(
             provider: "kiro".into(),
             model: "<post_exchange>".into(),
             body: body_str,
-            is_proxy_rotated: false,
         });
     }
 

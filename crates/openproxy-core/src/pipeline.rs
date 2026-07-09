@@ -105,8 +105,6 @@ pub struct FailureContext<'a> {
     pub connect_ms: Option<u64>,
     pub ttft_ms: Option<u64>,
     pub status_code: u16,
-    pub proxy_url: Option<String>,
-    pub proxy_status: Option<String>,
 }
 
 /// Orchestrates a single request end-to-end.

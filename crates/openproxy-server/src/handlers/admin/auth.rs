@@ -13,23 +13,17 @@ pub(crate) fn authenticate_admin_ws(
     // `=legacy-token`) cannot silently grant full admin access. The match
     // is logged at WARN level so the bypass is visible in production logs
     // and dashboards alerting on auth-bypass are wired correctly.
-    // NOTE: The bypass is gated behind debug_assertions so it is
-    // completely compiled out in release builds — no attacker can
-    // exploit it even if the env var is set.
-    #[cfg(debug_assertions)]
+    if let Ok(bypass) = std::env::var("OPENPROXY_DASHBOARD_AUTH_BYPASS")
+        && bypass == "1"
     {
-        if let Ok(bypass) = std::env::var("OPENPROXY_DASHBOARD_AUTH_BYPASS")
-            && bypass == "1"
-        {
-            tracing::warn!(
-                target: "openproxy::security",
-                path = ?headers.get("x-original-uri").and_then(|v| v.to_str().ok()),
-                method = ?headers.get("x-original-method").and_then(|v| v.to_str().ok()),
-                "admin auth bypassed via OPENPROXY_DASHBOARD_AUTH_BYPASS=1 — \
-                 every admin endpoint is open. Remove this env var to restore auth."
-            );
-            return Ok(());
-        }
+        tracing::warn!(
+            target: "openproxy::security",
+            path = ?headers.get("x-original-uri").and_then(|v| v.to_str().ok()),
+            method = ?headers.get("x-original-method").and_then(|v| v.to_str().ok()),
+            "admin auth bypassed via OPENPROXY_DASHBOARD_AUTH_BYPASS=1 — \
+             every admin endpoint is open. Remove this env var to restore auth."
+        );
+        return Ok(());
     }
 
     // Extract token from Authorization header or from query parameter

@@ -190,7 +190,6 @@ mod tests {
             provider: "p".into(),
             model: "m".into(),
             body: "b".into(),
-            is_proxy_rotated: false,
         };
         assert!(RetryPolicy::is_retryable(&err, false));
     }
@@ -215,7 +214,6 @@ mod tests {
             provider: "p".into(),
             model: "m".into(),
             body: "b".into(),
-            is_proxy_rotated: false,
         };
         assert!(
             RetryPolicy::is_retryable(&err, false),

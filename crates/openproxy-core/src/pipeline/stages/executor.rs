@@ -124,32 +124,9 @@ impl PipelineStage for UpstreamExecutorStage {
                         let upstream = std::time::Duration::from_millis(*retry_after_ms);
                         if upstream > delay { upstream } else { delay }
                     }
-                } else if let CoreError::UpstreamError {
-                    status: 429,
-                    is_proxy_rotated: true,
-                    ..
-                } = e
-                {
-                    std::time::Duration::from_millis(0)
                 } else {
                     delay
                 };
-
-                // CAP THE DELAY
-                // If the upstream delay is absurdly long (e.g. > 15 seconds) and we are not rotating proxies,
-                // we should NOT sleep in a live pipeline, as the client will disconnect anyway.
-                // We break the loop to fall through to the next target instead.
-                if delay.as_secs() > 15 {
-                    tracing::warn!(
-                        combo_id = combo.id.0,
-                        target_id = target.target.id.0,
-                        provider = %target.target.provider_id,
-                        delay_secs = delay.as_secs(),
-                        "delay too long; aborting retry for this target"
-                    );
-                    break;
-                }
-
                 tracing::debug!(
                     combo_id = combo.id.0,
                     target_id = target.target.id.0,
@@ -158,7 +135,6 @@ impl PipelineStage for UpstreamExecutorStage {
                     next_attempt = target_attempt + 1,
                     delay_ms = delay.as_millis() as u64,
                     error = %e,
-                    is_proxy_rotated = e.is_proxy_rotated(),
                     "target failed retryably; retrying same target"
                 );
                 tokio::time::sleep(delay).await;
@@ -195,7 +171,6 @@ impl PipelineStage for UpstreamExecutorStage {
                             attempt = target_attempt,
                             retryable = RetryPolicy::is_retryable(e, ctx.pipeline.config.idle_chunk_retryable),
                             error = %e,
-                            is_proxy_rotated = e.is_proxy_rotated(),
                             remaining_targets = to_run.len(),
                             "target rate-limited; trying next target in combo"
                         );
@@ -207,7 +182,6 @@ impl PipelineStage for UpstreamExecutorStage {
                             strategy = ?combo.strategy,
                             retryable = RetryPolicy::is_retryable(e, ctx.pipeline.config.idle_chunk_retryable),
                             error = %e,
-                            is_proxy_rotated = e.is_proxy_rotated(),
                             "target failed; trying next target"
                         );
                     }

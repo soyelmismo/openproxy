@@ -45,14 +45,13 @@ pub async fn oauth_authorize(
         let web_port = std::env::var("OPENPROXY_WEB_PORT").unwrap_or_else(|_| "8788".to_string());
         let redirect_uri = format!("http://localhost:{}/admin/callback.html", web_port);
 
-        let (auth_url, code_verifier, _, state) =
+        let (auth_url, code_verifier, _code_challenge) =
             provider_impl.build_auth_url(&redirect_uri).await?;
 
         Ok(Json(serde_json::json!({
             "authorization_url": auth_url,
             "code_verifier": code_verifier,
             "redirect_uri": redirect_uri,
-            "state": state,
         })))
     }
 }
@@ -368,22 +367,11 @@ pub async fn oauth_callback(
     Query(params): Query<std::collections::HashMap<String, String>>,
 ) -> Json<serde_json::Value> {
     let code = params.get("code").cloned().unwrap_or_default();
-    let state = params.get("state").cloned();
-    // Sanitize: never return raw error details from upstream providers —
-    // they may contain URLs with tokens, internal error codes, or
-    // other sensitive information. Map known error types to generic
-    // messages and drop anything else.
-    let error = params.get("error").map(|raw| match raw.as_str() {
-        "access_denied" => "access_denied",
-        "server_error" => "server_error",
-        "temporarily_unavailable" => "temporarily_unavailable",
-        _ => "authorization_failed",
-    });
+    let error = params.get("error").cloned();
 
     Json(serde_json::json!({
-        "code": if code.is_empty() { None::<String> } else { Some(code) },
-        "error": error.map(String::from),
-        "state": state,
+        "code": code,
+        "error": error,
         "message": "Copy the code above and paste it into the Exchange endpoint.",
     }))
 }

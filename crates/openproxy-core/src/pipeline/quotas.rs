@@ -1,5 +1,3 @@
-use crate::secrets::MasterKey;
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum QuotaStatus {
     Available,
@@ -96,7 +94,6 @@ pub(crate) fn apply_quota_routing(
     quota_protection_enabled: bool,
     threshold_percentage: u32,
     conn: &rusqlite::Connection,
-    master_key: &MasterKey,
     targets: Vec<crate::pipeline::context::ResolvedTarget>,
     requested_model: &str,
 ) -> Vec<crate::pipeline::context::ResolvedTarget> {
@@ -120,7 +117,7 @@ pub(crate) fn apply_quota_routing(
             continue;
         };
 
-        match crate::accounts::get(&conn, aid, master_key) {
+        match crate::accounts::get(&conn, aid) {
             Ok(Some(account)) => {
                 let status = evaluate_account_quota(
                     quota_protection_enabled,
