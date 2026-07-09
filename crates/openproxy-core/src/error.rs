@@ -89,6 +89,7 @@ pub enum CoreError {
         provider: String,
         model: String,
         body: String,
+        is_proxy_rotated: bool,
     },
 
     #[error("upstream connection error: {0}")]
@@ -173,11 +174,13 @@ impl CoreError {
                 provider,
                 model,
                 body,
+                is_proxy_rotated,
             } => CoreError::UpstreamError {
                 status: *status,
                 provider: provider.clone(),
                 model: model.clone(),
                 body: body.clone(),
+                is_proxy_rotated: *is_proxy_rotated,
             },
             CoreError::UpstreamConnection(s) => CoreError::UpstreamConnection(s.clone()),
             CoreError::RateLimited {

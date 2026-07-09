@@ -608,6 +608,8 @@ fn core_error_from_code(code: &str, message: &str) -> Option<CoreError> {
             provider: "<see message>".to_string(),
             model: "<see message>".to_string(),
             body: message.to_string(),
+    is_proxy_rotated: false,
+
         }),
         "rate_limited" => Some(CoreError::RateLimited {
             provider: "<see message>".to_string(),

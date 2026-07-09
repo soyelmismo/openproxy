@@ -183,6 +183,8 @@ async fn register_oidc_client(
             provider: "kiro".into(),
             model: "<oauth_register>".into(),
             body: body_str,
+    is_proxy_rotated: false,
+
         });
     }
 
@@ -287,6 +289,8 @@ impl OAuthProvider for KiroOAuthProvider {
                 provider: "kiro".into(),
                 model: "<oauth>".into(),
                 body: body_str,
+    is_proxy_rotated: false,
+
             });
         }
 
@@ -339,6 +343,8 @@ impl OAuthProvider for KiroOAuthProvider {
                 provider: "kiro".into(),
                 model: "<oauth>".into(),
                 body: body_str,
+    is_proxy_rotated: false,
+
             });
         }
 
@@ -421,6 +427,8 @@ impl OAuthProvider for KiroOAuthProvider {
                 provider: "kiro".into(),
                 model: "<oauth>".into(),
                 body: body_str,
+    is_proxy_rotated: false,
+
             });
         }
 
@@ -497,6 +505,8 @@ impl OAuthProvider for KiroOAuthProvider {
                     provider: "kiro".into(),
                     model: "<oauth_social>".into(),
                     body: body_str,
+    is_proxy_rotated: false,
+
                 });
             }
 
@@ -633,6 +643,8 @@ impl OAuthProvider for KiroOAuthProvider {
                     provider: "kiro".into(),
                     model: "<oauth>".into(),
                     body: body_str,
+    is_proxy_rotated: false,
+
                 });
             }
         };
@@ -834,6 +846,8 @@ async fn list_available_profiles(
             provider: "kiro".into(),
             model: "<post_exchange>".into(),
             body: body_str,
+    is_proxy_rotated: false,
+
         });
     }
 

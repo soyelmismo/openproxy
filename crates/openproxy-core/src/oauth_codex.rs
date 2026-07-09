@@ -130,6 +130,8 @@ impl OAuthProvider for CodexOAuthProvider {
                 provider: "codex".into(),
                 model: "<oauth>".into(),
                 body: String::from_utf8_lossy(&body).into(),
+    is_proxy_rotated: false,
+
             });
         }
 
@@ -228,6 +230,8 @@ impl OAuthProvider for CodexOAuthProvider {
                 provider: "codex".into(),
                 model: "<oauth>".into(),
                 body: String::from_utf8_lossy(&body).into(),
+    is_proxy_rotated: false,
+
             });
         }
 
@@ -275,6 +279,8 @@ impl OAuthProvider for CodexOAuthProvider {
                 provider: "codex".into(),
                 model: "<oauth>".into(),
                 body: String::from_utf8_lossy(&token_body_bytes).into(),
+    is_proxy_rotated: false,
+
             });
         }
 

@@ -405,6 +405,8 @@ async fn call_oauth_endpoint(
             provider: spec.id.into(),
             model: "<oauth>".into(),
             body: String::from_utf8_lossy(&body).to_string(),
+    is_proxy_rotated: false,
+
         });
     }
     Ok(body)

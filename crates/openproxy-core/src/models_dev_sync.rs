@@ -292,6 +292,8 @@ async fn fetch_models_dev_once(upstream: &Arc<UpstreamClient>) -> Result<bytes::
             provider: "models.dev".into(),
             model: "<sync>".into(),
             body: text.to_string(),
+    is_proxy_rotated: false,
+
         });
     }
 

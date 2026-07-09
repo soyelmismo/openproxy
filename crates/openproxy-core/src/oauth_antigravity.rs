@@ -256,6 +256,8 @@ async fn load_code_assist(
             provider: "antigravity".into(),
             model: "<post_exchange>".into(),
             body: body_str,
+    is_proxy_rotated: false,
+
         });
     }
 
@@ -321,6 +323,8 @@ async fn onboard_user(
             provider: "antigravity".into(),
             model: "<post_exchange>".into(),
             body: body_str,
+    is_proxy_rotated: false,
+
         });
     }
 

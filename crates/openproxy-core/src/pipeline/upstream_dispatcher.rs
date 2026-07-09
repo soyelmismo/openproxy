@@ -750,6 +750,7 @@ impl UpstreamDispatcher {
                 provider: target.provider_id.to_string(),
                 model: model.model_id.as_str().to_string(),
                 body: body_str,
+                is_proxy_rotated,
             };
             return self.record_and_fail(
                 req,
@@ -1046,6 +1047,7 @@ impl UpstreamDispatcher {
                 provider: target.provider_id.to_string(),
                 model: model_name.to_string(),
                 body: message,
+                is_proxy_rotated: false,
             };
             let acc_ref: Option<&crate::sse_accumulator::ResponseAccumulator> = match acc {
                 Some(a) => {
@@ -1155,6 +1157,7 @@ impl UpstreamDispatcher {
                             provider: target.provider_id.to_string(),
                             model: model_name.to_string(),
                             body: message,
+                            is_proxy_rotated: false,
                         };
                         let acc_ref: Option<&crate::sse_accumulator::ResponseAccumulator> =
                             match acc {
@@ -1526,6 +1529,7 @@ impl UpstreamDispatcher {
                     provider: target.provider_id.to_string(),
                     model: model.model_id.as_str().to_string(),
                     body: body_str,
+                    is_proxy_rotated,
                 }
             };
             return self.record_and_fail(

@@ -2303,6 +2303,8 @@ pub fn parse_responses_sse_stream_line(
             provider: "responses".into(),
             model: model_name.to_string(),
             body: error.to_string(),
+    is_proxy_rotated: false,
+
         });
     }
 
