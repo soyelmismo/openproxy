@@ -205,11 +205,16 @@ pub async fn usage_stream(
     // check prevents the browser-based CSWSH attack vector.
     if let Some(origin) = headers.get("origin").and_then(|v| v.to_str().ok()) {
         // Allow localhost origins (dev mode / same-host dashboard).
-        if !origin.starts_with("http://localhost")
-            && !origin.starts_with("http://127.0.0.1")
-            && !origin.starts_with("https://localhost")
-            && !origin.starts_with("https://127.0.0.1")
-        {
+        let is_localhost = origin == "http://localhost"
+            || origin.starts_with("http://localhost:")
+            || origin == "http://127.0.0.1"
+            || origin.starts_with("http://127.0.0.1:")
+            || origin == "https://localhost"
+            || origin.starts_with("https://localhost:")
+            || origin == "https://127.0.0.1"
+            || origin.starts_with("https://127.0.0.1:");
+
+        if !is_localhost {
             // Reject non-localhost origins to prevent cross-site
             // WebSocket hijacking (CSWSH). Direct connections
             // (curl, wscat, etc.) don't send Origin, so they pass.
