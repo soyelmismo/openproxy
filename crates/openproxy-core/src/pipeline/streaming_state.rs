@@ -12,6 +12,10 @@ use std::time::Instant;
 
 use crate::translation::OpenAIUsage;
 
+/// Maximum allowed length for accumulated tool call arguments string.
+/// Prevents unbounded memory growth from malicious or buggy upstream.
+const MAX_TOOL_CALL_ARGS_BYTES: usize = 1_048_576; // 1 MiB
+
 #[derive(Default)]
 pub(crate) struct ToolCallAccumulator {
     /// Map of tool_call index → running total of arguments seen so far.
@@ -33,6 +37,9 @@ impl ToolCallAccumulator {
         if prev.is_empty() {
             // First chunk for this index — the arguments IS the
             // fragment (there's nothing before it).
+            if arguments.len() > MAX_TOOL_CALL_ARGS_BYTES {
+                return String::new(); // Drop fragment, don't accumulate
+            }
             prev.push_str(arguments);
             return arguments.to_string();
         }
@@ -40,12 +47,18 @@ impl ToolCallAccumulator {
             // Running-total pattern: the upstream sent prev + new.
             // Extract just the new suffix.
             let new_fragment = &arguments[prev.len()..];
+            if prev.len() + new_fragment.len() > MAX_TOOL_CALL_ARGS_BYTES {
+                return String::new(); // Drop fragment, don't accumulate
+            }
             prev.push_str(new_fragment);
             new_fragment.to_string()
         } else {
             // Fragment pattern (correct OpenAI behavior): the
             // upstream sent just the new fragment. Update the
             // running total and pass it through.
+            if prev.len() + arguments.len() > MAX_TOOL_CALL_ARGS_BYTES {
+                return String::new(); // Drop fragment, don't accumulate
+            }
             prev.push_str(arguments);
             arguments.to_string()
         }

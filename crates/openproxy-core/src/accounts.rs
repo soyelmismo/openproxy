@@ -7,7 +7,7 @@
 use crate::error::{CoreError, Result};
 use crate::ids::{AccountId, ProviderId};
 use crate::secrets::MasterKey;
-use rusqlite::{Connection, OptionalExtension, params};
+use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 
 /// Health flag tracked per account. `Healthy` is the default; `Degraded` and
@@ -79,6 +79,7 @@ pub struct Account {
     /// OAuth scope string.
     pub oauth_scope: Option<String>,
     /// Provider-specific OAuth metadata (JSON).
+    #[serde(skip_serializing)]
     pub oauth_provider_specific: Option<String>,
     /// Token expiry timestamp (ISO-8601). NULL for non-OAuth accounts.
     pub expires_at: Option<String>,
@@ -139,7 +140,12 @@ pub fn create(
 }
 
 /// Look up a single account by id. Returns `Ok(None)` when absent.
-pub fn get(conn: &Connection, id: AccountId) -> Result<Option<Account>> {
+/// The `master_key` is required to decrypt `oauth_provider_specific`.
+pub fn get(
+    conn: &Connection,
+    id: AccountId,
+    master_key: &MasterKey,
+) -> Result<Option<Account>> {
     let row = conn
         .query_row(
             "SELECT id, provider_id, label, priority, extra_config_json, \
@@ -152,7 +158,7 @@ pub fn get(conn: &Connection, id: AccountId) -> Result<Option<Account>> {
                     created_at \
              FROM accounts WHERE id = ?1",
             params![id.0],
-            row_to_account,
+            |row| row_to_account(row, master_key),
         )
         .optional()
         .map_err(crate::error::map_db_error_ctx(format!(
@@ -165,9 +171,14 @@ pub fn get(conn: &Connection, id: AccountId) -> Result<Option<Account>> {
 /// List accounts, optionally filtered by provider. Ordered by
 /// `(priority ASC, id ASC)` so the highest-priority account comes first; this
 /// is the canonical order consumed by the routing layer.
-pub fn list(conn: &Connection, provider: Option<&ProviderId>) -> Result<Vec<Account>> {
-    let (sql, provider_param): (&str, Option<String>) = match provider {
-        Some(_) => (
+/// The `master_key` is required to decrypt `oauth_provider_specific`.
+pub fn list(
+    conn: &Connection,
+    provider: Option<&ProviderId>,
+    master_key: &MasterKey,
+) -> Result<Vec<Account>> {
+    let sql = match provider {
+        Some(_) => {
             "SELECT id, provider_id, label, priority, extra_config_json, \
                     health_status, rate_limited_until, \
                     quota_session_used, quota_session_limit, quota_session_reset_at, \
@@ -177,10 +188,9 @@ pub fn list(conn: &Connection, provider: Option<&ProviderId>) -> Result<Vec<Acco
                     auth_type, email, oauth_scope, oauth_provider_specific, expires_at, \
                     created_at \
              FROM accounts WHERE provider_id = ?1 \
-             ORDER BY priority ASC, id ASC",
-            None,
-        ),
-        None => (
+             ORDER BY priority ASC, id ASC"
+        }
+        None => {
             "SELECT id, provider_id, label, priority, extra_config_json, \
                     health_status, rate_limited_until, \
                     quota_session_used, quota_session_limit, quota_session_reset_at, \
@@ -190,31 +200,27 @@ pub fn list(conn: &Connection, provider: Option<&ProviderId>) -> Result<Vec<Acco
                     auth_type, email, oauth_scope, oauth_provider_specific, expires_at, \
                     created_at \
              FROM accounts \
-             ORDER BY priority ASC, id ASC",
-            None,
-        ),
+             ORDER BY priority ASC, id ASC"
+        }
     };
 
-    let mut stmt = conn.prepare(sql).map_err(crate::error::map_db_error)?;
+    let mut stmt = conn.prepare(sql).map_err(crate::error::map_db_error_ctx(
+        "list accounts prepare",
+    ))?;
 
-    let mapper = |row: &rusqlite::Row<'_>| -> rusqlite::Result<Account> { row_to_account(row) };
-
-    let rows = match provider {
-        Some(pid) => stmt
-            .query_map(params![pid.as_str()], mapper)
-            .map_err(crate::error::map_db_error)?,
+    let accounts: Vec<Account> = match provider {
+        Some(p) => stmt
+            .query_map(params![p.as_str()], |row| row_to_account(row, master_key))
+            .map_err(crate::error::map_db_error)?
+            .map(|r| r.map_err(crate::error::map_db_error_ctx("list accounts row")))
+            .collect::<Result<Vec<Account>>>()?,
         None => stmt
-            .query_map([], mapper)
-            .map_err(crate::error::map_db_error)?,
+            .query_map(params![], |row| row_to_account(row, master_key))
+            .map_err(crate::error::map_db_error)?
+            .map(|r| r.map_err(crate::error::map_db_error_ctx("list accounts row")))
+            .collect::<Result<Vec<Account>>>()?,
     };
-
-    let mut out = Vec::new();
-    for r in rows {
-        out.push(r.map_err(crate::error::map_db_error)?);
-    }
-    // Silence the unused-variable lint when the no-provider branch runs.
-    let _ = provider_param;
-    Ok(out)
+    Ok(accounts)
 }
 
 /// Decrypt the stored API key for `id`. Returns [`CoreError::AccountNotFound`]
@@ -450,11 +456,33 @@ pub fn delete(conn: &Connection, id: AccountId) -> Result<()> {
 
 /// Store encrypted OAuth tokens and metadata on an account row.
 ///
-/// All token fields are encrypted with `master_key` before being written.
-/// The `email`, `oauth_scope`, `oauth_provider_specific`, and `expires_at`
+/// All token fields and `oauth_provider_specific` are encrypted with
+/// `master_key` before being written. The `email` and `oauth_scope`
 /// columns are stored as plaintext (they are not secrets).
 /// Default token lifetime when the upstream omits `expires_in` (1 hour).
 const DEFAULT_EXPIRES_IN_SECS: i64 = 3600;
+
+/// Encrypt `oauth_provider_specific` JSON with `master_key` and return
+/// base64-encoded ciphertext suitable for storage in a TEXT column.
+fn encrypt_oauth_provider_specific(value: &str, master_key: &MasterKey) -> Result<String> {
+    let blob = master_key.encrypt(value)?;
+    Ok(base64::Engine::encode(
+        &base64::engine::general_purpose::STANDARD,
+        &blob,
+    ))
+}
+
+/// Decrypt an `oauth_provider_specific` value that was encrypted with
+/// [`encrypt_oauth_provider_specific`]. Returns `None` when the input
+/// is `None`, or if decryption fails (legacy plaintext data).
+pub fn decrypt_oauth_provider_specific(
+    encrypted_b64: Option<&str>,
+    master_key: &MasterKey,
+) -> Option<String> {
+    let b64 = encrypted_b64?;
+    let blob = base64::Engine::decode(&base64::engine::general_purpose::STANDARD, b64).ok()?;
+    master_key.decrypt(&blob).ok()
+}
 
 // ponytail: [Demasiados argumentos] -> [Refactorizar a struct en el futuro]
 pub fn store_oauth_tokens(
@@ -472,6 +500,12 @@ pub fn store_oauth_tokens(
     let access_blob = master_key.encrypt(access_token)?;
     let refresh_blob = match refresh_token {
         Some(rt) => Some(master_key.encrypt(rt)?),
+        None => None,
+    };
+
+    // Encrypt oauth_provider_specific with master_key (base64 for TEXT column).
+    let provider_specific_encrypted = match provider_specific {
+        Some(ps) => Some(encrypt_oauth_provider_specific(ps, master_key)?),
         None => None,
     };
 
@@ -508,7 +542,7 @@ pub fn store_oauth_tokens(
                 token_type,
                 expires_at_resolved,
                 scope,
-                provider_specific,
+                provider_specific_encrypted,
                 email,
                 id.0,
             ],
@@ -579,6 +613,7 @@ pub fn decrypt_refresh_token(
 pub fn list_expiring_oauth_accounts(
     conn: &Connection,
     within_seconds: i64,
+    master_key: &MasterKey,
 ) -> Result<Vec<Account>> {
     let now = chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string();
     let threshold = (chrono::Utc::now() + chrono::Duration::seconds(within_seconds))
@@ -604,7 +639,7 @@ pub fn list_expiring_oauth_accounts(
         .map_err(crate::error::map_db_error)?;
 
     let rows = stmt
-        .query_map(params![threshold], row_to_account)
+        .query_map(params![threshold], |row| row_to_account(row, master_key))
         .map_err(crate::error::map_db_error)?;
 
     let mut out = Vec::new();
@@ -653,7 +688,9 @@ pub fn list_oauth_provider_ids(conn: &Connection) -> Result<Vec<String>> {
 }
 
 /// Map a single SELECT row into an `Account`. Shared by `get` and `list`.
-fn row_to_account(row: &rusqlite::Row<'_>) -> rusqlite::Result<Account> {
+/// The `master_key` is required to decrypt `oauth_provider_specific` (and other
+/// OAuth token fields if they were stored encrypted).
+fn row_to_account(row: &rusqlite::Row<'_>, master_key: &MasterKey) -> rusqlite::Result<Account> {
     let id: i64 = row.get(0)?;
     let provider_id: String = row.get(1)?;
     let label: Option<String> = row.get(2)?;
@@ -676,7 +713,7 @@ fn row_to_account(row: &rusqlite::Row<'_>) -> rusqlite::Result<Account> {
     let auth_type: String = row.get(17)?;
     let email: Option<String> = row.get(18)?;
     let oauth_scope: Option<String> = row.get(19)?;
-    let oauth_provider_specific: Option<String> = row.get(20)?;
+    let oauth_provider_specific_encrypted: Option<String> = row.get(20)?;
     let expires_at: Option<String> = row.get(21)?;
     let created_at: String = row.get(22)?;
     let quota_model_details: Option<serde_json::Value> = quota_model_details_raw
@@ -691,6 +728,10 @@ fn row_to_account(row: &rusqlite::Row<'_>) -> rusqlite::Result<Account> {
             Box::new(FromStrError(format!("{}", e))),
         )
     })?;
+
+    // Decrypt oauth_provider_specific using master_key
+    let oauth_provider_specific =
+        decrypt_oauth_provider_specific(oauth_provider_specific_encrypted.as_deref(), master_key);
 
     Ok(Account {
         id: AccountId(id),
@@ -793,7 +834,7 @@ mod tests {
         )
         .expect("create");
 
-        let acc = get(&conn, id).expect("get").expect("present");
+        let acc = get(&conn, id, &mk).expect("get").expect("present");
         assert_eq!(acc.id, id);
         assert_eq!(acc.provider_id, ProviderId::new("openrouter"));
         assert_eq!(acc.label.as_deref(), Some("primary"));
@@ -805,7 +846,7 @@ mod tests {
         assert_eq!(acc.auth_type, "api_key", "default auth_type");
 
         // Missing id → None, not error.
-        assert!(get(&conn, AccountId(9999)).expect("get missing").is_none());
+        assert!(get(&conn, AccountId(9999), &mk).expect("get missing").is_none());
     }
 
     #[test]
@@ -899,10 +940,10 @@ mod tests {
             .expect("create");
         }
 
-        let all = list(&conn, None).expect("list all");
+        let all = list(&conn, None, &mk).expect("list all");
         assert_eq!(all.len(), 3);
 
-        let only_or = list(&conn, Some(&ProviderId::new("openrouter"))).expect("list or");
+        let only_or = list(&conn, Some(&ProviderId::new("openrouter")), &mk).expect("list or");
         assert_eq!(only_or.len(), 2);
         // Ordered by priority ASC.
         assert_eq!(only_or[0].priority, 10);
@@ -911,11 +952,11 @@ mod tests {
             assert_eq!(a.provider_id, ProviderId::new("openrouter"));
         }
 
-        let only_an = list(&conn, Some(&ProviderId::new("anthropic"))).expect("list an");
+        let only_an = list(&conn, Some(&ProviderId::new("anthropic")), &mk).expect("list an");
         assert_eq!(only_an.len(), 1);
         assert_eq!(only_an[0].provider_id, ProviderId::new("anthropic"));
 
-        let none = list(&conn, Some(&ProviderId::new("nope"))).expect("list nope");
+        let none = list(&conn, Some(&ProviderId::new("nope")), &mk).expect("list nope");
         assert!(none.is_empty());
     }
 
@@ -938,15 +979,15 @@ mod tests {
         .expect("create");
 
         set_health(&conn, id, HealthStatus::Degraded).expect("set degraded");
-        let a = get(&conn, id).expect("get").expect("present");
+        let a = get(&conn, id, &mk).expect("get").expect("present");
         assert_eq!(a.health_status, HealthStatus::Degraded);
 
         set_health(&conn, id, HealthStatus::Unhealthy).expect("set unhealthy");
-        let a = get(&conn, id).expect("get").expect("present");
+        let a = get(&conn, id, &mk).expect("get").expect("present");
         assert_eq!(a.health_status, HealthStatus::Unhealthy);
 
         set_health(&conn, id, HealthStatus::Healthy).expect("back to healthy");
-        let a = get(&conn, id).expect("get").expect("present");
+        let a = get(&conn, id, &mk).expect("get").expect("present");
         assert_eq!(a.health_status, HealthStatus::Healthy);
 
         // Missing id → AccountNotFound.
@@ -973,11 +1014,11 @@ mod tests {
         .expect("create");
 
         // Initially None.
-        let a = get(&conn, id).expect("get").expect("present");
+        let a = get(&conn, id, &mk).expect("get").expect("present");
         assert!(a.rate_limited_until.is_none());
 
         set_rate_limited_until(&conn, id, Some("2026-06-13T12:34:56Z")).expect("set");
-        let a = get(&conn, id).expect("get").expect("present");
+        let a = get(&conn, id, &mk).expect("get").expect("present");
         assert_eq!(
             a.rate_limited_until.as_deref(),
             Some("2026-06-13T12:34:56Z")
@@ -985,7 +1026,7 @@ mod tests {
 
         // Clear with None.
         set_rate_limited_until(&conn, id, None).expect("clear");
-        let a = get(&conn, id).expect("get").expect("present");
+        let a = get(&conn, id, &mk).expect("get").expect("present");
         assert!(a.rate_limited_until.is_none());
 
         // Missing id → AccountNotFound.
@@ -1010,10 +1051,10 @@ mod tests {
             None,
         )
         .expect("create");
-        assert!(get(&conn, id).expect("get").is_some());
+        assert!(get(&conn, id, &mk).expect("get").is_some());
 
         delete(&conn, id).expect("delete");
-        assert!(get(&conn, id).expect("get after delete").is_none());
+        assert!(get(&conn, id, &mk).expect("get after delete").is_none());
 
         // Idempotent: a second delete is a no-op, not an error.
         delete(&conn, id).expect("delete again is fine");
@@ -1038,7 +1079,7 @@ mod tests {
         .expect("create");
 
         // Initially: every quota_* column is NULL.
-        let a = get(&conn, id).expect("get").expect("present");
+        let a = get(&conn, id, &mk).expect("get").expect("present");
         assert!(a.quota_session_used.is_none());
         assert!(a.quota_session_limit.is_none());
         assert!(a.quota_session_reset_at.is_none());
@@ -1065,7 +1106,7 @@ mod tests {
         set_quota(&conn, id, &q).expect("set_quota");
 
         // Re-read: every field survives the round-trip.
-        let a = get(&conn, id).expect("get").expect("present");
+        let a = get(&conn, id, &mk).expect("get").expect("present");
         assert_eq!(a.quota_session_used, Some(1234));
         assert_eq!(a.quota_session_limit, Some(5000));
         assert_eq!(a.quota_session_reset_at.as_deref(), Some("1700000000"));
@@ -1077,7 +1118,7 @@ mod tests {
         assert!(a.quota_fetch_error.is_none());
 
         // Also visible through `list`.
-        let all = list(&conn, Some(&ProviderId::new("minimax"))).expect("list");
+        let all = list(&conn, Some(&ProviderId::new("minimax")), &mk).expect("list");
         assert_eq!(all.len(), 1);
         assert_eq!(all[0].quota_session_used, Some(1234));
     }
@@ -1117,7 +1158,7 @@ mod tests {
         };
         set_quota(&conn, id, &q).expect("set_quota");
 
-        let a = get(&conn, id).expect("get").expect("present");
+        let a = get(&conn, id, &mk).expect("get").expect("present");
         assert_eq!(a.quota_fetch_error.as_deref(), Some("minimax 401"));
         assert_eq!(a.quota_last_fetched_at.as_deref(), Some("1700000099"));
         assert!(a.quota_session_used.is_none());
@@ -1569,7 +1610,7 @@ mod tests {
         .expect("store");
 
         // The account should now have a non-NULL expires_at ~1 hour in the future.
-        let acc = get(&conn, id).expect("get").expect("present");
+        let acc = get(&conn, id, &mk).expect("get").expect("present");
         let expires = acc.expires_at.expect("expires_at should be populated");
         let parsed = chrono::DateTime::parse_from_rfc3339(&expires)
             .expect("valid ISO-8601")
@@ -1616,7 +1657,7 @@ mod tests {
         )
         .expect("store");
 
-        let acc = get(&conn, id).expect("get").expect("present");
+        let acc = get(&conn, id, &mk).expect("get").expect("present");
         assert_eq!(acc.expires_at.as_deref(), Some(explicit));
     }
 
@@ -1736,7 +1777,7 @@ mod tests {
         delete(&conn, account_id).expect("delete account with combo_target reference");
 
         // The account is gone.
-        let gone = get(&conn, account_id).expect("get").is_none();
+        let gone = get(&conn, account_id, &mk).expect("get").is_none();
         assert!(gone, "account should be deleted");
 
         // The combo_target still exists, but account_id is now NULL
@@ -1805,7 +1846,7 @@ mod tests {
         assert_eq!(decrypted_rt.as_deref(), Some(refresh1));
 
         // 5. Verify email and provider specific metadata are preserved.
-        let acc = get(&conn, id).expect("get").expect("present");
+        let acc = get(&conn, id, &mk).expect("get").expect("present");
         assert_eq!(acc.email.as_deref(), Some("user@domain.com"));
         assert_eq!(
             acc.oauth_provider_specific.as_deref(),

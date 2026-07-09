@@ -413,7 +413,7 @@ mod tests {
     #[tokio::test]
     async fn antigravity_authorize_url_comes_from_generic_spec() {
         let p = AntigravityOAuthProvider::new();
-        let (url, verifier, challenge) = p
+        let (url, verifier, challenge, _state) = p
             .build_auth_url("http://localhost:8788/admin/callback.html")
             .await
             .unwrap();

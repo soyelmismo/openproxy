@@ -23,7 +23,7 @@ pub trait PipelineRepository: Send + Sync {
     fn load_combo(&self, combo_id: ComboId) -> Result<Option<Combo>>;
     fn list_targets(&self, combo_id: ComboId) -> Result<Vec<ComboTarget>>;
     fn auto_populate_empty_combo(&self, combo_id: ComboId) -> Result<usize>;
-    fn get_account(&self, account_id: AccountId) -> Result<Option<crate::accounts::Account>>;
+    fn get_account(&self, account_id: AccountId, master_key: &MasterKey) -> Result<Option<crate::accounts::Account>>;
     fn decrypt_account_key(&self, account_id: AccountId, master_key: &MasterKey) -> Result<String>;
     fn decrypt_access_token(&self, account_id: AccountId, master_key: &MasterKey)
     -> Result<String>;
@@ -46,7 +46,7 @@ pub trait PipelineRepository: Send + Sync {
         provider_id: Option<&str>,
     ) -> Result<()>;
     fn load_model(&self, row_id: ModelRowId) -> Result<Model>;
-    fn get_account_label(&self, account_id: AccountId) -> Result<Option<String>>;
+    fn get_account_label(&self, account_id: AccountId, master_key: &MasterKey) -> Result<Option<String>>;
     fn record_usage_row(&self, input: &UsageInput) -> Result<Option<UsageId>>;
     fn mark_client_response(&self, row_id: UsageId) -> Result<()>;
     fn record_no_healthy_targets_row(
@@ -116,9 +116,9 @@ impl PipelineRepository for SqlitePipelineRepository {
         crate::combos::auto_populate_empty_combo(&conn, combo_id)
     }
 
-    fn get_account(&self, account_id: AccountId) -> Result<Option<crate::accounts::Account>> {
+    fn get_account(&self, account_id: AccountId, master_key: &MasterKey) -> Result<Option<crate::accounts::Account>> {
         let conn = self.conn.lock();
-        crate::accounts::get(&conn, account_id)
+        crate::accounts::get(&conn, account_id, master_key)
     }
 
     fn decrypt_account_key(&self, account_id: AccountId, master_key: &MasterKey) -> Result<String> {
@@ -182,9 +182,9 @@ impl PipelineRepository for SqlitePipelineRepository {
         })
     }
 
-    fn get_account_label(&self, account_id: AccountId) -> Result<Option<String>> {
+    fn get_account_label(&self, account_id: AccountId, master_key: &MasterKey) -> Result<Option<String>> {
         let conn = self.conn.lock();
-        Ok(crate::accounts::get(&conn, account_id)?.and_then(|a| a.label))
+        Ok(crate::accounts::get(&conn, account_id, master_key)?.and_then(|a| a.label))
     }
 
     fn record_usage_row(&self, input: &UsageInput) -> Result<Option<UsageId>> {

@@ -9,6 +9,7 @@ use base64::Engine;
 use rand::Rng;
 use sha2::{Digest, Sha256};
 use std::sync::Arc;
+use uuid::Uuid;
 
 use crate::error::{CoreError, Result};
 use crate::ids::AccountId;
@@ -135,7 +136,7 @@ impl OAuthProvider for GenericOAuthProvider {
         self.spec.flow
     }
 
-    async fn build_auth_url(&self, redirect_uri: &str) -> Result<(String, String, String)> {
+    async fn build_auth_url(&self, redirect_uri: &str) -> Result<(String, String, String, String)> {
         let authorize_url = self.spec.authorize_url.ok_or_else(|| {
             CoreError::Validation(format!(
                 "provider '{}' does not support authorization URL",
@@ -179,10 +180,15 @@ impl OAuthProvider for GenericOAuthProvider {
             params.push((*key, (*value).to_string()));
         }
 
+        // Generate a random state value to prevent CSRF on the callback.
+        let state = Uuid::new_v4().to_string();
+        params.push(("state", state.clone()));
+
         Ok((
             format!("{authorize_url}?{}", urlencoded_string(&params)),
             code_verifier,
             code_challenge,
+            state,
         ))
     }
 
@@ -323,7 +329,7 @@ macro_rules! delegate_oauth_to_generic {
         async fn build_auth_url(
             &self,
             redirect_uri: &str,
-        ) -> $crate::error::Result<(String, String, String)> {
+        ) -> $crate::error::Result<(String, String, String, String)> {
             self.generic.build_auth_url(redirect_uri).await
         }
     };
@@ -508,7 +514,7 @@ mod tests {
             user_agent: None,
         });
 
-        let (url, verifier, challenge) = p.build_auth_url("http://localhost/cb").await.unwrap();
+        let (url, verifier, challenge, state) = p.build_auth_url("http://localhost/cb").await.unwrap();
         assert!(!verifier.is_empty());
         assert_eq!(challenge, code_challenge_s256(&verifier));
         assert!(url.starts_with("https://auth.example/authorize?"));
@@ -516,5 +522,7 @@ mod tests {
         assert!(url.contains("scope=openid%20email"));
         assert!(url.contains("prompt=login"));
         assert!(url.contains("code_challenge_method=S256"));
+        assert!(url.contains("state="));
+        assert!(!state.is_empty());
     }
 }

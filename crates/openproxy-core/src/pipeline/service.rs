@@ -299,26 +299,28 @@ where
 
         Box::pin(async move {
             let combo = state.combo.as_ref().unwrap();
-            let mut eligible = state.eligible_targets.take().unwrap();
+            let eligible = state.eligible_targets.take().unwrap();
             let attempt: u8 = 1;
 
             // Apply dynamic quota routing and protection.
-            eligible = {
-                let conn = pipeline.conn.lock();
-                crate::pipeline::quotas::apply_quota_routing(
-                    pipeline.config.quota_protection.enabled,
-                    pipeline.config.quota_protection.threshold_percentage,
-                    &conn,
-                    eligible,
-                    &state.req.openai_request.model,
-                )
-            };
-            if eligible.is_empty() {
+            let filtered = {
+                            let conn = pipeline.conn.lock();
+                            let master_key = pipeline.config.master_key.clone();
+                            crate::pipeline::quotas::apply_quota_routing(
+                                pipeline.config.quota_protection.enabled,
+                                pipeline.config.quota_protection.threshold_percentage,
+                                &conn,
+                                &master_key,
+                                eligible,
+                                &state.req.openai_request.model,
+                            )
+                        };
+            if filtered.is_empty() {
                 let err = CoreError::NoHealthyTargets(combo.id.0);
                 return Ok(pipeline.failure(err, attempt - 1, ErrorPhase::Route));
             }
 
-            state.eligible_targets = Some(eligible);
+            state.eligible_targets = Some(filtered);
             inner.call(state).await
         })
     }

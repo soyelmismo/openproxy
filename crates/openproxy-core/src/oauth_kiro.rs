@@ -218,7 +218,7 @@ impl OAuthProvider for KiroOAuthProvider {
         OAuthFlow::DeviceCode
     }
 
-    async fn build_auth_url(&self, _redirect_uri: &str) -> Result<(String, String, String)> {
+    async fn build_auth_url(&self, _redirect_uri: &str) -> Result<(String, String, String, String)> {
         Err(CoreError::Validation(
             "kiro uses device code flow, not PKCE".into(),
         ))
