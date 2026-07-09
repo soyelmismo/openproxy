@@ -941,3 +941,35 @@ impl UsageQuery {
         })
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_usage_timestamp_rfc3339() {
+        let ts = "2026-06-18T07:00:00Z";
+        let parsed = parse_usage_timestamp(ts, "from").unwrap();
+        assert_eq!(parsed, "2026-06-18T07:00:00Z");
+    }
+
+    #[test]
+    fn test_parse_usage_timestamp_sqlite_style() {
+        let ts = "2026-06-18 07:00:00";
+        let parsed = parse_usage_timestamp(ts, "from").unwrap();
+        assert_eq!(parsed, "2026-06-18T07:00:00Z");
+    }
+
+    #[test]
+    fn test_parse_usage_timestamp_invalid() {
+        let ts = "not a timestamp";
+        let err = parse_usage_timestamp(ts, "from").unwrap_err();
+        match err {
+            ApiError(CoreError::Validation(msg)) => {
+                assert!(msg.contains("must be an RFC-3339 timestamp"));
+                assert!(msg.contains("from"));
+            }
+            _ => panic!("Expected Validation error, got {:?}", err),
+        }
+    }
+}
