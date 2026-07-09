@@ -502,6 +502,9 @@ fn record_audio_usage_row(args: AudioUsageArgs<'_>) -> Result<(), ApiError> {
     } = args;
     use openproxy_core::cost::UsageInput;
     let input = UsageInput {
+        proxy_url: None,
+        proxy_status: None,
+        is_proxy_rotated: false,
         request_id,
         trace_id: TraceId::new().to_string(),
         attempt: 1,

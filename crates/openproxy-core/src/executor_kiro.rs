@@ -484,6 +484,7 @@ pub async fn execute_kiro(
             provider: "kiro".into(),
             model: openai.model.clone(),
             body: body_str,
+            is_proxy_rotated: false,
         });
     }
 
