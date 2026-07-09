@@ -4,3 +4,6 @@
 ## 2024-05-18 - Minimize heap allocations in Axum middleware
 **Learning:** We can reduce large `.clone()` allocations for large `serde_json::Value` structs by wrapping them in an `Arc`.
 **Action:** Use `Arc<T>` for heavy JSON payloads passed across middleware.
+## 2025-02-20 - Array Allocation and Clone Optimization in usage_filter_query
+**Learning:** Constructing arrays containing `Option<String>` locally from a struct containing `Option<String>` requires deep clones of the strings, and iterating via `.collect::<Vec<_>>()` performs unnecessary vector allocation. Directly creating an array of `Option<&str>` via `.as_deref()` bypasses both the string cloning and intermediate array allocation.
+**Action:** When constructing arrays of pairs for query builders from references to a source struct, prefer extracting properties as references (`Option<&str>`) with `.as_deref()` or local lifetime-bound string conversions rather than `.clone()`.
