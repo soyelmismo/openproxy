@@ -1230,8 +1230,7 @@ mod tests {
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_nanos())
             .unwrap_or(0);
-        let dir =
-            std::env::temp_dir().join(format!("openproxy-crud-test-{}-{}-{}", pid, nanos, n));
+        let dir = std::env::temp_dir().join(format!("openproxy-crud-test-{}-{}-{}", pid, nanos, n));
         std::fs::create_dir_all(&dir).expect("mkdir tempdir");
         let path = dir.join("crud.db");
         let pool = DbPool::open(&path).expect("open pool");
@@ -1305,7 +1304,8 @@ mod tests {
         let result = combo_in_chain(&conn, c1, c1, MAX_SUB_COMBO_DEPTH).expect("query success");
         assert_eq!(result, true); // start == target
 
-        let result2 = combo_in_chain(&conn, c1, ComboId(2), MAX_SUB_COMBO_DEPTH).expect("query success");
+        let result2 =
+            combo_in_chain(&conn, c1, ComboId(2), MAX_SUB_COMBO_DEPTH).expect("query success");
         assert_eq!(result2, true);
     }
 
