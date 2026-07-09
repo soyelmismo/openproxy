@@ -271,7 +271,9 @@ pub fn run(conn: &mut Connection) -> Result<()> {
         return Ok(());
     }
 
-    let needs_fk_off = pending.iter().any(|m| m.sql.contains("PRAGMA foreign_keys = OFF"));
+    let needs_fk_off = pending
+        .iter()
+        .any(|m| m.sql.contains("PRAGMA foreign_keys = OFF"));
     if needs_fk_off {
         conn.execute_batch("PRAGMA foreign_keys = OFF")
             .map_err(|e| CoreError::Migration {
