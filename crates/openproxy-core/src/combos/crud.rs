@@ -1233,10 +1233,13 @@ mod tests {
         let race_size = 2;
 
         // Create combo
-        let combo_id = create_combo(&conn, name, strategy, race_size).expect("Failed to create combo");
+        let combo_id =
+            create_combo(&conn, name, strategy, race_size).expect("Failed to create combo");
 
         // Verify combo
-        let combo = get_combo(&conn, combo_id).expect("Failed to get combo").expect("Combo not found");
+        let combo = get_combo(&conn, combo_id)
+            .expect("Failed to get combo")
+            .expect("Combo not found");
         assert_eq!(combo.name, name);
         assert_eq!(combo.strategy, strategy);
         assert_eq!(combo.race_size, race_size);
@@ -1265,16 +1268,24 @@ mod tests {
         let race_size = 1;
 
         // First creation should succeed
-        let _ = create_combo(&conn, name, strategy, race_size).expect("Failed to create combo first time");
+        let _ = create_combo(&conn, name, strategy, race_size)
+            .expect("Failed to create combo first time");
 
         // Second creation with same name should fail with Validation error
         let result = create_combo(&conn, name, strategy, race_size);
 
         match result {
             Err(CoreError::Validation(msg)) => {
-                assert!(msg.contains("combo name already exists"), "Unexpected validation message: {}", msg);
+                assert!(
+                    msg.contains("combo name already exists"),
+                    "Unexpected validation message: {}",
+                    msg
+                );
             }
-            _ => panic!("Expected CoreError::Validation for duplicate name, got {:?}", result),
+            _ => panic!(
+                "Expected CoreError::Validation for duplicate name, got {:?}",
+                result
+            ),
         }
     }
 }
