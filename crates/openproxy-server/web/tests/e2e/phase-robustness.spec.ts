@@ -365,7 +365,7 @@ test('Live Logs: finalized row freezes ticker at the row total_ms', async ({ pag
     ttft_ms: 120,
     status_code: 200,
     error: null,
-    created_at: sixSecondsAgo,
+    timestamp: sixSecondsAgo,
     provider_id: 'openrouter',
     upstream_model_id: 'gpt-4o-mini',
     stop_reason: null,

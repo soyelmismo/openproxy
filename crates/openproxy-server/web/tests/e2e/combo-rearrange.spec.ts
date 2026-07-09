@@ -51,10 +51,9 @@ test.describe('Combo Re-arrange functionality', () => {
     });
 
     // 2. Set up a listener for the reorder POST request
-    let reorderPayload: any = null;
+
     await page.route(`**/admin/api/combos/${comboId}/targets/reorder`, async route => {
       expect(route.request().method()).toBe('POST');
-      reorderPayload = JSON.parse(route.request().postData() || '{}');
       await route.fulfill({
         status: 200,
         contentType: 'application/json',
@@ -79,10 +78,13 @@ test.describe('Combo Re-arrange functionality', () => {
 
     // Click the "Down" button on the first row (target 101)
     const downBtn = row1.locator('button:text-is("↓")');
+    const requestPromise = page.waitForRequest(r => r.url().includes('reorder') && r.method() === 'POST');
     await downBtn.click();
+    const request = await requestPromise;
 
     // Verify the reorder API was called with [102, 101]
-    expect(reorderPayload).not.toBeNull();
-    expect(reorderPayload.target_ids).toEqual([102, 101]);
+    const payload = JSON.parse(request.postData() || '{}');
+    expect(payload).not.toBeNull();
+    expect(payload.target_ids).toEqual([102, 101]);
   });
 });
