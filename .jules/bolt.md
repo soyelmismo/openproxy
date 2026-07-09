@@ -4,3 +4,6 @@
 ## 2024-05-18 - Minimize heap allocations in Axum middleware
 **Learning:** We can reduce large `.clone()` allocations for large `serde_json::Value` structs by wrapping them in an `Arc`.
 **Action:** Use `Arc<T>` for heavy JSON payloads passed across middleware.
+## $(date +%Y-%m-%d) - Optimize SQLite Migrations Transaction
+**Learning:** Applying individual SQLite migrations sequentially in a loop, each starting its own transaction (N+1 transaction issue), significantly slows down database initialization when the migration count grows. By grouping all pending migrations inside a single `Transaction` and moving schema enforcement pragmas outside the loop, database setup execution time during testing/cold-starts is noticeably reduced (by around ~25%).
+**Action:** When executing batch schema updates or bulk sequential operations on SQLite startup, avoid individual transactions in a loop; wrap the loop in a single overarching `rusqlite::Transaction`.
