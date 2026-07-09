@@ -1213,3 +1213,68 @@ impl std::fmt::Display for FromStrError {
     }
 }
 impl std::error::Error for FromStrError {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rusqlite::Connection;
+
+    fn setup_db() -> Connection {
+        let mut conn = Connection::open_in_memory().unwrap();
+        crate::db::migrations::run(&mut conn).unwrap();
+        conn
+    }
+
+    #[test]
+    fn test_create_combo_success() {
+        let conn = setup_db();
+        let name = "my-test-combo";
+        let strategy = Strategy::RoundRobin;
+        let race_size = 2;
+
+        // Create combo
+        let combo_id = create_combo(&conn, name, strategy, race_size).expect("Failed to create combo");
+
+        // Verify combo
+        let combo = get_combo(&conn, combo_id).expect("Failed to get combo").expect("Combo not found");
+        assert_eq!(combo.name, name);
+        assert_eq!(combo.strategy, strategy);
+        assert_eq!(combo.race_size, race_size);
+    }
+
+    #[test]
+    fn test_create_combo_validation_error() {
+        let conn = setup_db();
+        let name = "my-invalid-combo";
+        let strategy = Strategy::Priority;
+
+        // Test race_size = 0 (too small)
+        let result_small = create_combo(&conn, name, strategy, 0);
+        assert!(matches!(result_small, Err(CoreError::Validation(_))));
+
+        // Test race_size = 9 (too large)
+        let result_large = create_combo(&conn, name, strategy, 9);
+        assert!(matches!(result_large, Err(CoreError::Validation(_))));
+    }
+
+    #[test]
+    fn test_create_combo_unique_name_error() {
+        let conn = setup_db();
+        let name = "my-unique-combo";
+        let strategy = Strategy::RoundRobin;
+        let race_size = 1;
+
+        // First creation should succeed
+        let _ = create_combo(&conn, name, strategy, race_size).expect("Failed to create combo first time");
+
+        // Second creation with same name should fail with Validation error
+        let result = create_combo(&conn, name, strategy, race_size);
+
+        match result {
+            Err(CoreError::Validation(msg)) => {
+                assert!(msg.contains("combo name already exists"), "Unexpected validation message: {}", msg);
+            }
+            _ => panic!("Expected CoreError::Validation for duplicate name, got {:?}", result),
+        }
+    }
+}
