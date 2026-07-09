@@ -568,8 +568,11 @@ async fn health() -> Json<serde_json::Value> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use axum::{body::Body, http::{Request, StatusCode}};
-    use openproxy_core::{db as core_db, secrets::MasterKey, AppConfig};
+    use axum::{
+        body::Body,
+        http::{Request, StatusCode},
+    };
+    use openproxy_core::{AppConfig, db as core_db, secrets::MasterKey};
     use parking_lot::RwLock;
     use std::{path::PathBuf, sync::Arc};
     use tower::ServiceExt;
@@ -582,7 +585,8 @@ mod tests {
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_nanos())
             .unwrap_or(0);
-        let dir = std::env::temp_dir().join(format!("openproxy-router-test-{}-{}-{}", pid, nanos, n));
+        let dir =
+            std::env::temp_dir().join(format!("openproxy-router-test-{}-{}-{}", pid, nanos, n));
         std::fs::create_dir_all(&dir).expect("mkdir tempdir");
         let path = dir.join("state.db");
         let pool = core_db::DbPool::open(&path).expect("open pool");
@@ -617,7 +621,9 @@ mod tests {
             .unwrap();
 
         assert_eq!(response.status(), StatusCode::OK);
-        let body_bytes = axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let body_bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
         let body_json: serde_json::Value = serde_json::from_slice(&body_bytes).unwrap();
         assert_eq!(body_json["status"], "ok");
         assert!(body_json["version"].is_string());
@@ -639,7 +645,9 @@ mod tests {
             .unwrap();
 
         assert_eq!(response.status(), StatusCode::OK);
-        let body_bytes = axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let body_bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
         let body_json: serde_json::Value = serde_json::from_slice(&body_bytes).unwrap();
         assert_eq!(body_json["status"], "ok");
         assert!(body_json["version"].is_string());
@@ -663,7 +671,10 @@ mod tests {
 
         assert_eq!(response.status(), StatusCode::OK);
         assert_eq!(
-            response.headers().get(axum::http::header::CONTENT_TYPE).unwrap(),
+            response
+                .headers()
+                .get(axum::http::header::CONTENT_TYPE)
+                .unwrap(),
             "text/html; charset=utf-8"
         );
     }
