@@ -103,7 +103,6 @@ async function readFreezeObservation(
             };
           };
         };
-        const logs = w.__openproxyState.logs;
 
         // First read of the latency text.
         const firstRead = (): { latency: string | null; sublabel: string | null; phase: string | null; tickingClass: boolean; rowFound: boolean } => {
@@ -235,7 +234,6 @@ test('Live Logs: stale streaming stage freezes the latency ticker', async ({ pag
         };
         __openproxyLogsGoPage: (page: number) => void;
       };
-      const logs = w.__openproxyState.logs;
 
       // Isolate the test: the live dashboard may have other
       // rows/stages streaming in from the WS feed.
