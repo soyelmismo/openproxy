@@ -148,7 +148,9 @@ impl UpstreamDispatcher {
                 }
             }
             false
-        }).await.unwrap()
+        })
+        .await
+        .unwrap()
     }
 
     pub(crate) fn is_client_disconnected(&self, rx: &mut watch::Receiver<bool>) -> bool {
@@ -240,7 +242,9 @@ impl UpstreamDispatcher {
             tokio::task::spawn_blocking(move || {
                 let conn = conn_clone.lock();
                 crate::free_proxies::get_or_assign_provider_proxy(&conn, &provider_id)
-            }).await.unwrap()
+            })
+            .await
+            .unwrap()
         };
         let proxy_url = match proxy_result {
             Ok(url) => url,
@@ -389,7 +393,8 @@ impl UpstreamDispatcher {
                     self.check_and_trigger_proxy_rotation(
                         &target.provider_id,
                         crate::pipeline::upstream_dispatcher::ProxyRotationTrigger::ConnectError,
-                    ).await;
+                    )
+                    .await;
                     // Bug fix: attribute the timeout to the CORRECT phase
                     // instead of collapsing DNS/Dial/TLS/Write/Headers all
                     // into "connect". The user configures per-phase budgets
@@ -442,7 +447,8 @@ impl UpstreamDispatcher {
                     self.check_and_trigger_proxy_rotation(
                         &target.provider_id,
                         crate::pipeline::upstream_dispatcher::ProxyRotationTrigger::ConnectError,
-                    ).await;
+                    )
+                    .await;
                     let err = CoreError::UpstreamConnection(msg);
                     return self.record_and_fail(
                         req,
@@ -612,7 +618,8 @@ impl UpstreamDispatcher {
                 self.check_and_trigger_proxy_rotation(
                     &target.provider_id,
                     crate::pipeline::upstream_dispatcher::ProxyRotationTrigger::ConnectError,
-                ).await;
+                )
+                .await;
                 let err = CoreError::UpstreamConnection(format!("read upstream body: {e}"));
                 return self.record_and_fail(
                     req,
@@ -630,7 +637,8 @@ impl UpstreamDispatcher {
                 self.check_and_trigger_proxy_rotation(
                     &target.provider_id,
                     crate::pipeline::upstream_dispatcher::ProxyRotationTrigger::ConnectError,
-                ).await;
+                )
+                .await;
                 let elapsed = started.elapsed().as_millis() as u64;
                 let err = CoreError::UpstreamTimeout {
                     phase: "total (config: total_ms)".to_string(),
@@ -667,10 +675,12 @@ impl UpstreamDispatcher {
         // instead of using the fixed exponential backoff. The default
         // backoff is < 1 s; an upstream that asks for 30 s gets 30 s.
         if !(200..300).contains(&status_code) {
-            let mut is_proxy_rotated = self.check_and_trigger_proxy_rotation(
-                &target.provider_id,
-                crate::pipeline::upstream_dispatcher::ProxyRotationTrigger::Status(status_code),
-            ).await;
+            let mut is_proxy_rotated = self
+                .check_and_trigger_proxy_rotation(
+                    &target.provider_id,
+                    crate::pipeline::upstream_dispatcher::ProxyRotationTrigger::Status(status_code),
+                )
+                .await;
             let body_str = String::from_utf8_lossy(&body_bytes).to_string();
             // Parse `Retry-After` from response_headers (extracted at L1751
             // before the body was consumed). Accepts either an integer
@@ -683,10 +693,12 @@ impl UpstreamDispatcher {
                 status_code == 429 || status_code == 408 || status_code == 503;
             if let Some(retry_ms) = retry_after_ms.filter(|_| is_rate_limited_status) {
                 if !is_proxy_rotated {
-                    is_proxy_rotated = self.check_and_trigger_proxy_rotation(
-                        &target.provider_id,
-                        crate::pipeline::upstream_dispatcher::ProxyRotationTrigger::RateLimited,
-                    ).await;
+                    is_proxy_rotated = self
+                        .check_and_trigger_proxy_rotation(
+                            &target.provider_id,
+                            crate::pipeline::upstream_dispatcher::ProxyRotationTrigger::RateLimited,
+                        )
+                        .await;
                 }
                 let err = CoreError::RateLimited {
                     provider: target.provider_id.to_string(),
@@ -744,7 +756,9 @@ impl UpstreamDispatcher {
                         Some(&dedup_key),
                         Some(&provider_id_str),
                     );
-                }).await.unwrap();
+                })
+                .await
+                .unwrap();
             }
             let err = CoreError::UpstreamError {
                 status: status_code,
@@ -1342,7 +1356,8 @@ impl UpstreamDispatcher {
                     self.check_and_trigger_proxy_rotation(
                         &target.provider_id,
                         crate::pipeline::upstream_dispatcher::ProxyRotationTrigger::ConnectError,
-                    ).await;
+                    )
+                    .await;
                     // Bug fix (PR #33): attribute the timeout to the
                     // CORRECT phase instead of collapsing all into
                     // "connect". Mirrors the non-streaming path's fix.
@@ -1387,7 +1402,8 @@ impl UpstreamDispatcher {
                     self.check_and_trigger_proxy_rotation(
                         &target.provider_id,
                         crate::pipeline::upstream_dispatcher::ProxyRotationTrigger::ConnectError,
-                    ).await;
+                    )
+                    .await;
                     let err = CoreError::UpstreamConnection(msg);
                     return self.record_and_fail(
                         req,
@@ -1418,10 +1434,12 @@ impl UpstreamDispatcher {
 
         let status_code = response.status.as_u16();
         if !(200..300).contains(&status_code) {
-            let mut is_proxy_rotated = self.check_and_trigger_proxy_rotation(
-                &target.provider_id,
-                crate::pipeline::upstream_dispatcher::ProxyRotationTrigger::Status(status_code),
-            ).await;
+            let mut is_proxy_rotated = self
+                .check_and_trigger_proxy_rotation(
+                    &target.provider_id,
+                    crate::pipeline::upstream_dispatcher::ProxyRotationTrigger::Status(status_code),
+                )
+                .await;
             // Error responses should not stall the pipeline. We give the upstream
             // 5 seconds to send the error body; if it stalls, we drop the body
             // and proceed with the error status code. This prevents "ghost" requests
@@ -1472,7 +1490,9 @@ impl UpstreamDispatcher {
                         Some(&dedup_key),
                         Some(&provider_id_str),
                     );
-                }).await.unwrap();
+                })
+                .await
+                .unwrap();
             }
             // NEW-2 fix: when the upstream returns 429 (or 408/503)
             // with a `Retry-After` header, surface the error as
@@ -1490,10 +1510,12 @@ impl UpstreamDispatcher {
                 status_code == 429 || status_code == 408 || status_code == 503;
             let err = if let Some(retry_ms) = retry_after_ms.filter(|_| is_rate_limited_status) {
                 if !is_proxy_rotated {
-                    is_proxy_rotated = self.check_and_trigger_proxy_rotation(
-                        &target.provider_id,
-                        crate::pipeline::upstream_dispatcher::ProxyRotationTrigger::RateLimited,
-                    ).await;
+                    is_proxy_rotated = self
+                        .check_and_trigger_proxy_rotation(
+                            &target.provider_id,
+                            crate::pipeline::upstream_dispatcher::ProxyRotationTrigger::RateLimited,
+                        )
+                        .await;
                 }
                 CoreError::RateLimited {
                     provider: target.provider_id.to_string(),

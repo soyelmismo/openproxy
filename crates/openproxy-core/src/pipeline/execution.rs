@@ -58,7 +58,9 @@ impl Pipeline {
             }
             let expanded = combos::expand_account_rotation(&conn, out)?;
             Ok(expanded)
-        }).await.unwrap()
+        })
+        .await
+        .unwrap()
     }
 
     pub(crate) async fn auto_populate_if_empty(&self, combo: &Combo) -> Result<usize> {
@@ -87,7 +89,9 @@ impl Pipeline {
                 );
             }
             Ok(added)
-        }).await.unwrap()
+        })
+        .await
+        .unwrap()
     }
 
     pub async fn resolve_combo_targets_full(
@@ -236,7 +240,9 @@ impl Pipeline {
         tokio::task::spawn_blocking(move || {
             let conn = conn_clone.lock();
             combos::get_combo(&conn, combo_id)?.ok_or(CoreError::ComboNotFound(combo_id.0))
-        }).await.unwrap()
+        })
+        .await
+        .unwrap()
     }
 
     pub(crate) async fn resolve_targets(
@@ -264,7 +270,9 @@ impl Pipeline {
                 &selection_registry,
             )?;
             combos::expand_account_rotation(&conn, ordered)
-        }).await.unwrap()
+        })
+        .await
+        .unwrap()
     }
 
     #[cfg(test)]
