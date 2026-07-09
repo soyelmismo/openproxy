@@ -65,6 +65,9 @@ impl UsageTracker {
         started: std::time::Instant,
     ) {
         let input = UsageInput {
+            proxy_url: None,
+            proxy_status: None,
+            is_proxy_rotated: false,
             request_id: req.request_id,
             trace_id: req.trace_id.to_string(),
             attempt: 1,
@@ -126,6 +129,7 @@ impl UsageTracker {
             connect_ms,
             ttft_ms,
             status_code,
+            ..
         } = ctx;
         let total_ms = started.elapsed().as_millis() as u64;
         let request_headers = crate::redact::redact_btreemap_sensitive(req.request_headers.clone());
@@ -194,6 +198,9 @@ pub struct UsageRecordBuilder<'a> {
     pub(crate) is_streaming: bool,
     pub(crate) stream_complete: bool,
     pub(crate) stop_reason: Option<String>,
+    pub(crate) proxy_url: Option<String>,
+    pub(crate) proxy_status: Option<String>,
+    pub(crate) is_proxy_rotated: bool,
 }
 
 impl<'a> UsageRecordBuilder<'a> {
@@ -226,6 +233,9 @@ impl<'a> UsageRecordBuilder<'a> {
             is_streaming: false,
             stream_complete: false,
             stop_reason: None,
+            proxy_url: None,
+            proxy_status: None,
+            is_proxy_rotated: false,
         }
     }
 
@@ -309,6 +319,18 @@ impl<'a> UsageRecordBuilder<'a> {
     }
     pub fn stop_reason(mut self, stop_reason: Option<String>) -> Self {
         self.stop_reason = stop_reason;
+        self
+    }
+    pub fn proxy_url(mut self, proxy_url: Option<String>) -> Self {
+        self.proxy_url = proxy_url;
+        self
+    }
+    pub fn proxy_status(mut self, proxy_status: Option<String>) -> Self {
+        self.proxy_status = proxy_status;
+        self
+    }
+    pub fn is_proxy_rotated(mut self, is_proxy_rotated: bool) -> Self {
+        self.is_proxy_rotated = is_proxy_rotated;
         self
     }
 
@@ -428,6 +450,9 @@ impl<'a> UsageRecordBuilder<'a> {
             prompt_tokens_estimated,
             completion_tokens_estimated,
             endpoint_kind: crate::endpoint::EndpointKind::Chat,
+            proxy_url: self.proxy_url.clone(),
+            proxy_status: self.proxy_status.clone(),
+            is_proxy_rotated: self.is_proxy_rotated,
         };
 
         {

@@ -34,6 +34,8 @@ impl<'a> DispatchContext<'a> {
         'a: 'e,
     {
         crate::pipeline::FailureContext {
+            proxy_url: None,
+            proxy_status: None,
             attempt: self.attempt,
             race_size: self.race_size,
             err,
@@ -57,6 +59,8 @@ pub(crate) struct StreamFailureContext<'a> {
     pub(crate) connect_ms: u64,
     pub(crate) ttft_ms: Option<u64>,
     pub(crate) trace_id: String,
+    pub(crate) proxy_url: Option<String>,
+    pub(crate) proxy_status: Option<String>,
     pub(crate) acc: Option<&'a mut crate::sse_accumulator::ResponseAccumulator>,
     pub(crate) chunk_id: &'a str,
     pub(crate) created: u64,
@@ -258,6 +262,18 @@ impl UpstreamDispatcher {
             }
         };
         upstream_request.proxy = proxy_url;
+
+        let proxy_status = upstream_request.proxy.as_ref().and_then(|url| {
+            let conn = self.conn.lock();
+            crate::free_proxies::get_proxy_status_by_url(&conn, url)
+        });
+        upstream_request.proxy_status = proxy_status.clone();
+        tracing::info!(
+            proxy_used = ?upstream_request.proxy,
+            proxy_status = %proxy_status.as_ref().unwrap_or(&"none".to_string()),
+            "assigned proxy for upstream request"
+        );
+
         // is_streaming is always true because we force stream=true
         // to the upstream (see comment above). The body-chunk gap
         // timeout (idle_chunk_ms) applies normally — but only AFTER
@@ -349,6 +365,8 @@ impl UpstreamDispatcher {
             );
         }
         let cancel_token = CancellationToken::from_watch(req.client_disconnected.clone());
+        let req_proxy_url = upstream_request.proxy.clone();
+        let req_proxy_status = upstream_request.proxy_status.clone();
         let result = self
             .config
             .upstream_client
@@ -765,6 +783,7 @@ impl UpstreamDispatcher {
                 provider: target.provider_id.to_string(),
                 model: model.model_id.as_str().to_string(),
                 body: body_str,
+                is_proxy_rotated,
             };
             return self.record_and_fail(
                 req,
@@ -979,6 +998,8 @@ impl UpstreamDispatcher {
             combo,
             target,
         )
+        .proxy_url(req_proxy_url.clone())
+        .proxy_status(req_proxy_status.clone())
         .model_opt(Some(model))
         .err_opt(None)
         .connect_ms_opt(Some(connect_and_send_ms))
@@ -1033,6 +1054,8 @@ impl UpstreamDispatcher {
             chunk_id,
             created,
             model_name,
+            proxy_url,
+            proxy_status,
         } = fctx;
         let dctx = DispatchContext {
             attempt,
@@ -1061,6 +1084,7 @@ impl UpstreamDispatcher {
                 provider: target.provider_id.to_string(),
                 model: model_name.to_string(),
                 body: message,
+                is_proxy_rotated: false,
             };
             let acc_ref: Option<&crate::sse_accumulator::ResponseAccumulator> = match acc {
                 Some(a) => {
@@ -1069,11 +1093,14 @@ impl UpstreamDispatcher {
                 }
                 None => None,
             };
+            let mut fail_ctx = dctx.fail_ctx_code(&err, Some(connect_ms), None, code);
+            fail_ctx.proxy_url = proxy_url.clone();
+            fail_ctx.proxy_status = proxy_status.clone();
             return self.record_and_fail_with_trace_id_and_partial(
                 req,
                 combo,
                 target,
-                dctx.fail_ctx_code(&err, Some(connect_ms), None, code),
+                fail_ctx,
                 trace_id,
                 acc_ref,
                 Some(chunk_id),
@@ -1095,11 +1122,14 @@ impl UpstreamDispatcher {
         } else {
             CoreError::ClientDisconnected
         };
+        let mut fail_ctx = dctx.fail_ctx_code(&err, Some(connect_ms), None, 499);
+        fail_ctx.proxy_url = proxy_url;
+        fail_ctx.proxy_status = proxy_status;
         self.record_and_fail_with_trace_id_and_partial(
             req,
             combo,
             target,
-            dctx.fail_ctx_code(&err, Some(connect_ms), None, 499),
+            fail_ctx,
             trace_id,
             acc_ref,
             Some(chunk_id),
@@ -1128,6 +1158,8 @@ impl UpstreamDispatcher {
             chunk_id,
             created,
             model_name,
+            proxy_url,
+            proxy_status,
         } = fctx;
         let dctx = DispatchContext {
             attempt,
@@ -1170,6 +1202,7 @@ impl UpstreamDispatcher {
                             provider: target.provider_id.to_string(),
                             model: model_name.to_string(),
                             body: message,
+                            is_proxy_rotated: false,
                         };
                         let acc_ref: Option<&crate::sse_accumulator::ResponseAccumulator> =
                             match acc {
@@ -1179,11 +1212,14 @@ impl UpstreamDispatcher {
                                 }
                                 None => None,
                             };
+                        let mut fail_ctx = dctx.fail_ctx_code(&err, Some(connect_ms), None, code);
+                        fail_ctx.proxy_url = proxy_url.clone();
+                        fail_ctx.proxy_status = proxy_status.clone();
                         self.record_and_fail_with_trace_id_and_partial(
                             req,
                             combo,
                             target,
-                            dctx.fail_ctx_code(&err, Some(connect_ms), None, code),
+                            fail_ctx,
                             trace_id,
                             acc_ref,
                             Some(chunk_id),
@@ -1219,11 +1255,14 @@ impl UpstreamDispatcher {
             }
             None => None,
         };
+        let mut fail_ctx = dctx.fail_ctx_code(&err, Some(connect_ms), None, err.http_status());
+        fail_ctx.proxy_url = proxy_url;
+        fail_ctx.proxy_status = proxy_status;
         self.record_and_fail_with_trace_id_and_partial(
             req,
             combo,
             target,
-            dctx.fail_ctx_code(&err, Some(connect_ms), None, err.http_status()),
+            fail_ctx,
             trace_id,
             acc_ref,
             Some(chunk_id),
@@ -1308,6 +1347,8 @@ impl UpstreamDispatcher {
         } else {
             CancellationToken::from_watch(req.client_disconnected.clone())
         };
+        let req_proxy_url = upstream_request.proxy.clone();
+        let req_proxy_status = upstream_request.proxy_status.clone();
         let result = self
             .config
             .upstream_client
@@ -1549,6 +1590,7 @@ impl UpstreamDispatcher {
                     provider: target.provider_id.to_string(),
                     model: model.model_id.as_str().to_string(),
                     body: body_str,
+                    is_proxy_rotated,
                 }
             };
             return self.record_and_fail(
@@ -1668,6 +1710,8 @@ impl UpstreamDispatcher {
                 "client cancelled during SSE stream; aborting attempt"
             );
             return self.fail_stream_client_disconnected(StreamFailureContext {
+                proxy_url: req_proxy_url.clone(),
+                proxy_status: req_proxy_status.clone(),
                 req: req.clone(),
                 combo,
                 target,
@@ -1757,6 +1801,8 @@ impl UpstreamDispatcher {
             combo,
             target,
         )
+        .proxy_url(req_proxy_url.clone())
+        .proxy_status(req_proxy_status.clone())
         .model_opt(Some(model))
         .err_opt(None)
         .connect_ms_opt(Some(connect_and_send_ms))

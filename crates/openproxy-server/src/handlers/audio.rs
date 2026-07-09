@@ -415,10 +415,9 @@ fn build_audio_response(
     Ok(builder
         .body(axum::body::Body::from(body))
         .unwrap_or_else(|_| {
-            Response::builder()
-                .status(StatusCode::INTERNAL_SERVER_ERROR)
-                .body(axum::body::Body::empty())
-                .unwrap()
+            let mut res = Response::new(axum::body::Body::empty());
+            *res.status_mut() = StatusCode::INTERNAL_SERVER_ERROR;
+            res
         }))
 }
 
@@ -503,6 +502,9 @@ fn record_audio_usage_row(args: AudioUsageArgs<'_>) -> Result<(), ApiError> {
     } = args;
     use openproxy_core::cost::UsageInput;
     let input = UsageInput {
+        proxy_url: None,
+        proxy_status: None,
+        is_proxy_rotated: false,
         request_id,
         trace_id: TraceId::new().to_string(),
         attempt: 1,

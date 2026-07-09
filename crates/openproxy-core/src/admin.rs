@@ -33,6 +33,38 @@ use std::sync::Arc;
 use std::time::Duration;
 
 // =====================================================================
+// Helpers
+// =====================================================================
+
+/// Validate that a `base_url` is a well-formed HTTP(S) URL with a non-empty
+/// host. Rejects data URIs, file URIs, bare hosts, and any other scheme.
+fn validate_base_url(url: &str) -> Result<()> {
+    // ponytail: [parseo url manual] [usar crate url o http::Uri en el futuro]
+    if !(url.starts_with("http://") || url.starts_with("https://")) {
+        return Err(CoreError::Validation(format!(
+            "base_url must start with http:// or https://, got: {url}"
+        )));
+    }
+    // Strip the scheme and extract host (everything up to the first `/`,
+    // or end-of-string after `://`). Port is allowed as part of host.
+    let remainder = &url[url.find("://").unwrap() + 3..];
+    let host_end = remainder.find('/').unwrap_or(remainder.len());
+    let host_part = &remainder[..host_end];
+    // Strip port if present
+    let host = if let Some(colon_pos) = host_part.rfind(':') {
+        &host_part[..colon_pos]
+    } else {
+        host_part
+    };
+    if host.is_empty() {
+        return Err(CoreError::Validation(format!(
+            "base_url must have a non-empty host, got: {url}"
+        )));
+    }
+    Ok(())
+}
+
+// =====================================================================
 // Providers
 // =====================================================================
 
@@ -57,6 +89,7 @@ pub struct CreateProviderInput {
 /// - [`CoreError::Validation`] on unknown `auth_type` / `format` or duplicate
 ///   id (delegated to [`providers::create`]).
 pub fn create_provider(conn: &Connection, input: CreateProviderInput) -> Result<ProviderId> {
+    validate_base_url(&input.base_url)?;
     let id = ProviderId::new(input.id);
     let auth = AuthType::parse(&input.auth_type)?;
     let format = ProviderFormat::parse(&input.format)?;
@@ -215,6 +248,10 @@ pub fn update_provider(
     id: &ProviderId,
     input: UpdateProviderInput,
 ) -> Result<()> {
+    // Validate base_url if it is being updated.
+    if let Some(ref url) = input.base_url {
+        validate_base_url(url)?;
+    }
     // Rust's `Option<Option<&str>>` is awkward to build; the inner
     // map over `Option<String>` keeps the call site readable.
     let keyword: Option<Option<&str>> = match input.auto_activate_keyword {
@@ -278,11 +315,13 @@ pub fn create_account(
 }
 
 /// List accounts, optionally filtered by provider.
+/// The `master_key` is required to decrypt `oauth_provider_specific`.
 pub fn list_accounts(
     conn: &Connection,
     provider: Option<&ProviderId>,
+    master_key: &MasterKey,
 ) -> Result<Vec<accounts::Account>> {
-    accounts::list(conn, provider)
+    accounts::list(conn, provider, master_key)
 }
 
 /// Delete an account by id. Idempotent.
@@ -335,8 +374,13 @@ pub fn persist_account_quota(conn: &Connection, id: AccountId, q: &AccountQuota)
 /// id is missing. The caller still holds the writer guard when this
 /// returns; the typical pattern is to call this, drop the guard, then
 /// fire the upstream HTTP call.
-pub fn account_for_quota_refresh(conn: &Connection, id: AccountId) -> Result<accounts::Account> {
-    accounts::get(conn, id)?.ok_or(CoreError::AccountNotFound(id.0))
+/// The `master_key` is required to decrypt `oauth_provider_specific`.
+pub fn account_for_quota_refresh(
+    conn: &Connection,
+    id: AccountId,
+    master_key: &MasterKey,
+) -> Result<accounts::Account> {
+    accounts::get(conn, id, master_key)?.ok_or(CoreError::AccountNotFound(id.0))
 }
 
 /// Return the set of provider ids that have a quota fetcher
@@ -1137,7 +1181,7 @@ mod tests {
         .expect("create account");
 
         // Listing returns the row.
-        let all = list_accounts(&conn, None).expect("list all");
+        let all = list_accounts(&conn, None, &mk).expect("list all");
         assert_eq!(all.len(), 1);
         assert_eq!(all[0].id, id);
         assert_eq!(all[0].label.as_deref(), Some("primary"));
@@ -1145,7 +1189,7 @@ mod tests {
 
         // Filtered by provider.
         let filtered =
-            list_accounts(&conn, Some(&ProviderId::new("openrouter"))).expect("list filtered");
+            list_accounts(&conn, Some(&ProviderId::new("openrouter")), &mk).expect("list filtered");
         assert_eq!(filtered.len(), 1);
 
         // The plaintext is NOT visible in the raw BLOB.
@@ -1179,7 +1223,7 @@ mod tests {
             },
         )
         .expect("create default-prio");
-        let a = list_accounts(&conn, None)
+        let a = list_accounts(&conn, None, &mk)
             .expect("list")
             .into_iter()
             .find(|a| a.id == id2)

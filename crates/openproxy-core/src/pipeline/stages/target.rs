@@ -83,6 +83,8 @@ impl PipelineStage for TimeoutResolutionStage {
                         ctx.combo.as_ref().unwrap(),
                         &current.target,
                         FailureContext {
+                            proxy_url: None,
+                            proxy_status: None,
                             attempt,
                             race_size,
                             err: &e,
@@ -137,6 +139,8 @@ impl PipelineStage for FormattingStage {
                     ctx.combo.as_ref().unwrap(),
                     &current.target,
                     FailureContext {
+                        proxy_url: None,
+                        proxy_status: None,
                         attempt: ctx.current_target_attempt,
                         race_size: ctx.race_size,
                         err: &err,
@@ -202,6 +206,8 @@ impl PipelineStage for FormattingStage {
                     ctx.combo.as_ref().unwrap(),
                     &current.target,
                     FailureContext {
+                        proxy_url: None,
+                        proxy_status: None,
                         attempt: ctx.current_target_attempt,
                         race_size: ctx.race_size,
                         err: &e,
@@ -253,6 +259,8 @@ impl PipelineStage for DispatchStage {
                     ctx.combo.as_ref().unwrap(),
                     target,
                     FailureContext {
+                        proxy_url: None,
+                        proxy_status: None,
                         attempt,
                         race_size,
                         err: &err,
@@ -274,6 +282,8 @@ impl PipelineStage for DispatchStage {
                 ctx.combo.as_ref().unwrap(),
                 target,
                 FailureContext {
+                    proxy_url: None,
+                    proxy_status: None,
                     attempt,
                     race_size,
                     err: &CoreError::RaceLost,
@@ -295,6 +305,8 @@ impl PipelineStage for DispatchStage {
                     ctx.combo.as_ref().unwrap(),
                     target,
                     FailureContext {
+                        proxy_url: None,
+                        proxy_status: None,
                         attempt,
                         race_size,
                         err: &e,
@@ -448,6 +460,8 @@ impl PipelineStage for CustomAdapterStage {
                     ctx.combo.as_ref().unwrap(),
                     target,
                     FailureContext {
+                        proxy_url: None,
+                        proxy_status: None,
                         attempt: ctx.current_target_attempt,
                         race_size: ctx.race_size,
                         err: &err,
@@ -571,6 +585,8 @@ impl PipelineStage for CustomAdapterStage {
                         ctx.combo.as_ref().unwrap(),
                         target,
                         FailureContext {
+                            proxy_url: None,
+                            proxy_status: None,
                             attempt: ctx.current_target_attempt,
                             race_size: ctx.race_size,
                             err: &e,

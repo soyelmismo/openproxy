@@ -64,7 +64,7 @@ use openproxy_core::providers as core_providers;
 
 use axum::{
     extract::ws::{Message, WebSocket, WebSocketUpgrade},
-    http::HeaderMap,
+    http::{HeaderMap, StatusCode},
     response::IntoResponse,
 };
 use futures::StreamExt;

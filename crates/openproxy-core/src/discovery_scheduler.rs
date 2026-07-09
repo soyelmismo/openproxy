@@ -338,7 +338,7 @@ async fn run_one_tick(
                 return;
             }
         };
-        let accs = match accounts::list(&w, Some(&provider)) {
+        let accs = match accounts::list(&w, Some(&provider), master_key) {
             Ok(a) => a,
             Err(e) => {
                 tracing::warn!(

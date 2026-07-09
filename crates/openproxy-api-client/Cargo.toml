@@ -17,4 +17,5 @@ http = "1.4.2"
 bytes = "1.12.1"
 
 [dev-dependencies]
+openproxy-core = { path = "../openproxy-core", features = ["ssrf-bypass"] }
 httpmock = "0.8.3"
