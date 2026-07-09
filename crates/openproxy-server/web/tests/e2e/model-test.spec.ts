@@ -10,12 +10,12 @@ test.describe('Model Test functionality', () => {
       });
     });
     // Mock the models endpoint so the page renders some models
-    await page.route('**/admin/api/providers/gemini/models', async route => {
+    await page.route('**/admin/api/models*', async route => {
       await route.fulfill({
         status: 200,
         contentType: 'application/json',
         body: JSON.stringify([
-          { id: '1', provider_id: 'openai', original_model_id: 'gpt-4o', mapped_model_id: 'gpt-4o', is_active: true }
+          { row_id: 1, provider_id: 'gemini', model_id: 'gemini-1.5-flash', active: true, target_format: 'openai', discovered_at: '2025-01-01', model_type: 'chat' }
         ])
       });
     });

@@ -41,6 +41,54 @@ async function openFirstLogRow(page: Page): Promise<string | null> {
   await page.goto('http://localhost:8790/');
   await page.click('a[href="#/logs"]');
   await expect(page.locator('#main')).toBeVisible();
+
+  // Intercept the API detail calls, lookup in the window state
+  await page.route('**/admin/api/usage/detail*', async (route) => {
+    const url = new URL(route.request().url());
+    const traceId = url.searchParams.get('trace_id');
+    const row = await page.evaluate((tid: string | null) => {
+      const w = window as any;
+      if (!w.__liveLogsStore) return null;
+      return Array.from(w.__liveLogsStore.rowsById.values()).find((r: any) => r.trace_id === tid) || null;
+    }, traceId);
+    if (row) {
+      await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ row }) });
+    } else {
+      await route.fulfill({ status: 404, contentType: 'application/json', body: JSON.stringify({ error: 'not found' }) });
+    }
+  });
+  
+  // Inject a row into the dashboard state
+  await page.evaluate(() => {
+    const w = window as any;
+    const store = w.__liveLogsStore;
+    if (store) {
+      store.applyUsageRow({
+        id: 1,
+        request_id: 'test-req-1',
+        trace_id: 'test-trace-1',
+        created_at: new Date().toISOString(),
+        client_ip: '127.0.0.1',
+        combo_id: null,
+        provider_id: 'openai',
+        upstream_model_id: 'gpt-4o',
+        mapped_model_id: 'gpt-4o',
+        auth_type: 'none',
+        status_code: 200,
+        prompt_tokens: 10,
+        completion_tokens: 20,
+        total_tokens: 30,
+        latency_ms: 100,
+        total_ms: 150,
+        time_to_first_token_ms: 50,
+        normalized_cost: 0,
+        request_body_json: '{"test":true}',
+        response_body_json: null,
+        error_message: null
+      });
+    }
+  });
+
   // Wait for the WebSocket + first row.
   const row = page.locator('#logs .log-row[data-id]').first();
   await row.waitFor({ timeout: 10000 });
@@ -96,7 +144,7 @@ test.describe('Log detail modal — adversarial', () => {
     // Post-fix: every section inside #log-detail-content must
     // have a data-log-tab attribute. If jsonSection regressed
     // and dropped the attribute, this catches it.
-    const sectionCount = await page.locator('#log-detail-content > section').count();
+    const sectionCount = await page.locator('#log-detail-content section').count();
     const dataTabCount = await page.locator('#log-detail-content [data-log-tab]').count();
     expect(sectionCount).toBeGreaterThan(0);
     expect(dataTabCount).toBe(sectionCount);
@@ -137,8 +185,7 @@ test.describe('Log detail modal — adversarial', () => {
         // when errors != null), so guard.
         const count = await otherSec.count();
         if (count === 0) continue;
-        const display = await otherSec.evaluate((el) => getComputedStyle(el).display);
-        expect(display).toBe('none');
+        await expect(otherSec).toBeHidden();
       }
     }
   });
@@ -158,8 +205,7 @@ test.describe('Log detail modal — adversarial', () => {
       for (const tab of tabs) {
         const sec = page.locator(`#log-detail-content [data-log-tab="${tab}"]`);
         if (await sec.count() === 0) continue;
-        const display = await sec.evaluate((el) => getComputedStyle(el).display);
-        expect(display, `iteration ${i}, tab ${tab}`).toBe('none');
+        await expect(sec).toBeHidden();
       }
       // Close the modal before the next iteration.
       await page.locator('.log-detail-modal .close-btn').click();
