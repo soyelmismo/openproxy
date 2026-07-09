@@ -88,3 +88,35 @@ pub fn init(config: &LoggingConfig) -> anyhow::Result<()> {
     }
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use openproxy_core::config::{LogFormat, LoggingConfig};
+
+    #[tokio::test]
+    async fn test_telemetry_init_text_format() {
+        let config = LoggingConfig {
+            format: LogFormat::Text,
+            level: "info".to_string(),
+        };
+        // The first call might succeed or fail if the subscriber is already set by another test.
+        let _ = init(&config);
+
+        // The second call is guaranteed to fail because the global subscriber is definitely set.
+        let result = init(&config);
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_telemetry_init_json_format() {
+        let config = LoggingConfig {
+            format: LogFormat::Json,
+            level: "info".to_string(),
+        };
+        let _ = init(&config);
+
+        let result = init(&config);
+        assert!(result.is_err());
+    }
+}
