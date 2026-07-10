@@ -8,8 +8,8 @@
 #   5. docker         — multi-arch (amd64+arm64) image push to ghcr.io
 #   6. release        — tags v<version>, creates GitHub Release with zips
 #
-# On PRs: frontend + rust-checks + build matrix run. No docker push, no
-# release. On master pushes: the full pipeline runs, including docker
+# On PRs: frontend + rust-checks run.
+# On master pushes: the full pipeline runs, including e2e tests, build matrix, docker
 # push and a tagged GitHub Release.
 #
 # Concurrency: per-ref, cancel-in-progress=false so a master push mid-
@@ -161,6 +161,7 @@ jobs:
     name: Compute next version
     runs-on: ubuntu-latest
     needs: rust-checks
+    if: github.event_name == 'push' && github.ref == 'refs/heads/master'
     outputs:
       version: ${{ steps.version.outputs.version }}
       prev_tag: ${{ steps.version.outputs.prev_tag }}
@@ -579,39 +580,4 @@ jobs:
         working-directory: crates/openproxy-server/web
         run: pnpm run test:e2e
 
-  # -----------------------------------------------------------------------------
-  # 8. Gemma Code Review — PRs only. Runs after frontend and rust-checks.
-  # -----------------------------------------------------------------------------
-  gemma-review:
-    name: Gemma 4 Code Review
-    runs-on: ubuntu-latest
-    needs: [frontend, rust-checks]
-    if: github.event_name == 'pull_request'
-    permissions:
-      pull-requests: write
-      contents: read
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-      
-      - name: Review Code
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          API_KEY: ${{ secrets.GEMINI_API_KEY }}
-          PR_NUMBER: ${{ github.event.pull_request.number }}
-        run: |
-          DIFF=$(gh pr diff $PR_NUMBER)
-          
-          ESCAPED_DIFF=$(echo "$DIFF" | jq -R -s '.')
-          PROMPT="Review this code source, detect errors, suggest improvements. Be concise:\n$ESCAPED_DIFF"
-          
-          PAYLOAD=$(jq -n --arg text "$PROMPT" '{contents: [{parts: [{text: $text}]}]}')
-          
-          RESPONSE=$(curl -s -X POST \
-            -H "Content-Type: application/json" \
-            -d "$PAYLOAD" \
-            "https://generativelanguage.googleapis.com/v1beta/models/gemma-4-31b:generateContent?key=$API_KEY")
-          
-          COMMENT=$(echo "$RESPONSE" | jq -r '.candidates[0].content.parts[0].text // "Error. Review failed."')
-          
-          gh pr comment $PR_NUMBER --body "$COMMENT"
+
