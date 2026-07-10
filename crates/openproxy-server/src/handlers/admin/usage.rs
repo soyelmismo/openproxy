@@ -209,11 +209,9 @@ pub async fn usage_stream(
             .or_else(|| headers.get("host"))
             .and_then(|v| v.to_str().ok())
             .unwrap_or("");
-        
-        let is_same_host = !host.is_empty() && (
-            origin == format!("http://{}", host) || 
-            origin == format!("https://{}", host)
-        );
+
+        let is_same_host = !host.is_empty()
+            && (origin == format!("http://{}", host) || origin == format!("https://{}", host));
 
         // Allow localhost origins (dev mode / same-host dashboard).
         let is_localhost = origin == "http://localhost"
