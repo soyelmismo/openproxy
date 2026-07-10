@@ -1193,6 +1193,38 @@ impl<'a> ChunkProcessor<'a> {
                     error = %e,
                     "failed to parse SSE line from upstream"
                 );
+                let acc_ref: Option<&crate::sse_accumulator::ResponseAccumulator> =
+                    match &mut state.acc {
+                        Some(a) => {
+                            a.mark_partial();
+                            Some(&*a)
+                        }
+                        None => None,
+                    };
+                return Ok(crate::pipeline::streaming::ChunkEvent::Return(
+                    self.dispatcher.record_and_fail_with_trace_id_and_partial(
+                        req.clone(),
+                        combo,
+                        target,
+                        crate::pipeline::FailureContext {
+                            proxy_url: None,
+                            proxy_status: None,
+                            attempt,
+                            race_size,
+                            err: &e,
+                            started,
+                            model: Some(model),
+                            connect_ms: Some(connect_and_send_ms),
+                            ttft_ms: state.ttft_ms,
+                            status_code: e.http_status(),
+                        },
+                        trace_id.to_string(),
+                        acc_ref,
+                        Some(&chunk_id),
+                        created,
+                        &model_name,
+                    ),
+                ));
             }
         }
 
