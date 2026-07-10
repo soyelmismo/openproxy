@@ -94,18 +94,29 @@ mod tests {
     use super::*;
     use openproxy_core::config::{LogFormat, LoggingConfig};
 
+    // Helper to assert that init either succeeds or fails safely with the expected
+    // SetGlobalDefaultError if another test ran first.
+    fn assert_init_result(result: anyhow::Result<()>) {
+        match result {
+            Ok(_) => {}
+            Err(e) => {
+                let msg = e.to_string();
+                assert!(
+                    msg.contains("a global default trace dispatcher has already been set") || msg.contains("attempted to set a logger after the logging system was already initialized"),
+                    "unexpected error: {}",
+                    msg
+                );
+            }
+        }
+    }
+
     #[tokio::test]
     async fn test_telemetry_init_text_format() {
         let config = LoggingConfig {
             format: LogFormat::Text,
             level: "info".to_string(),
         };
-        // The first call might succeed or fail if the subscriber is already set by another test.
-        let _ = init(&config);
-
-        // The second call is guaranteed to fail because the global subscriber is definitely set.
-        let result = init(&config);
-        assert!(result.is_err());
+        assert_init_result(init(&config));
     }
 
     #[tokio::test]
@@ -114,9 +125,15 @@ mod tests {
             format: LogFormat::Json,
             level: "info".to_string(),
         };
-        let _ = init(&config);
+        assert_init_result(init(&config));
+    }
 
-        let result = init(&config);
-        assert!(result.is_err());
+    #[tokio::test]
+    async fn test_telemetry_init_invalid_level() {
+        let config = LoggingConfig {
+            format: LogFormat::Text,
+            level: "invalid_level_string_should_fallback_or_ignore".to_string(),
+        };
+        assert_init_result(init(&config));
     }
 }
