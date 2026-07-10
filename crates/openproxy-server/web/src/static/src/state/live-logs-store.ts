@@ -254,7 +254,11 @@ class LiveLogsStore {
       }
     }
 
-    const isTerminal = !(row.is_streaming && !row.stream_complete);
+    // A row from history or the usage feed always represents a finished
+    // (or aborted) request that has been saved to the DB. Even if
+    // `stream_complete` is false (e.g. client disconnected mid-stream),
+    // the request is terminal.
+    const isTerminal = true;
 
     let attempt = this.attemptsByKey.get(attemptKey);
     if (!attempt) {

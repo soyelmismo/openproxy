@@ -67,7 +67,6 @@ import {
   buildLatencyChart,
   createSparkline,
   observeResize,
-  isStatusChartBarsMode,
   CHART_COLORS,
 } from "../components/uplot-chart.js";
 
@@ -95,14 +94,12 @@ interface ChartInstances {
   throughput: uPlot;
   statusCodes: uPlot;
   latency: uPlot;
-  sparkActive: uPlot;
   sparkRequests: uPlot;
+  sparkSuccess: uPlot;
+  sparkLatency: uPlot;
   sparkTokens: uPlot;
   sparkCost: uPlot;
   resizeDisposers: Array<() => void>;
-  /** True if the status-codes chart was built with the bars plugin (and
-   *  therefore expects cumulative-sum stacked data). */
-  statusBarsMode: boolean;
 }
 let charts: ChartInstances | null = null;
 
@@ -196,42 +193,21 @@ function formatTime(iso: string): string {
 // Data preparation for uPlot
 // ============================================================================
 
-/** Convert throughput points into uPlot's `AlignedData` format:
- *  `[xs, rps, tps, cps_scaled]`. The cps series is multiplied by 1000 so
- *  it shares the right axis with tps without being invisible (cost is
- *  typically µ$/sec). */
+/** Convert throughput points into `[time, requests/s, tokens/s]`. */
 function throughputData(points: ThroughputPoint[]): uPlot.AlignedData {
   const xs: number[] = new Array<number>(points.length);
   const rps: number[] = new Array<number>(points.length);
   const tps: number[] = new Array<number>(points.length);
-  const cps: number[] = new Array<number>(points.length);
   for (let i = 0; i < points.length; i++) {
     const p: ThroughputPoint = points[i]!;
-    // uPlot's default `ms: 1e-3` means X values are in seconds.
     xs[i] = p.t / 1000;
     rps[i] = p.rps;
     tps[i] = p.tps;
-    // cps × 1000 → "millicents/sec" on the tps axis. The cursor readout
-    // reverses this scaling (see the `value` formatter in
-    // `buildThroughputChart`).
-    cps[i] = p.cps * 1000;
   }
-  return [xs, rps, tps, cps];
+  return [xs, rps, tps];
 }
 
-/** Convert status-code points into uPlot's `AlignedData` format.
- *
- *  Two modes:
- *  - **Bars mode** (stacked): data is `[xs, s2xx+s4xx+s5xx, s2xx+s4xx, s2xx]`.
- *    The series are rendered in array order: series[1] (5xx total) drawn
- *    first (tallest), series[2] (4xx cumulative) drawn second, series[3]
- *    (2xx) drawn last. Each series' bar is drawn from 0 to its value, so
- *    later (shorter) bars overwrite the bottom portion of earlier (taller)
- *    bars, leaving only the top slice of each visible — that's the stacked
- *    look. The visible slices bottom-to-top are: 2xx, 4xx, 5xx.
- *  - **Line mode** (fallback): data is `[xs, s2xx, s4xx, s5xx]` — original
- *    counts, 3 separate line series. */
-function statusCodesData(points: StatusCodePoint[], barsMode: boolean): uPlot.AlignedData {
+function statusCodesData(points: StatusCodePoint[]): uPlot.AlignedData {
   const xs: number[] = new Array<number>(points.length);
   const s2xx: number[] = new Array<number>(points.length);
   const s4xx: number[] = new Array<number>(points.length);
@@ -242,19 +218,6 @@ function statusCodesData(points: StatusCodePoint[], barsMode: boolean): uPlot.Al
     s2xx[i] = p.s2xx;
     s4xx[i] = p.s4xx;
     s5xx[i] = p.s5xx;
-  }
-  if (barsMode) {
-    // Cumulative sums for stacking. The series array in
-    // `buildStatusCodesChart` (bars branch) is ordered:
-    //   [X, 5xx-cumulative, 4xx-cumulative, 2xx-original]
-    // We compute the cumulatives here.
-    const total: number[] = new Array<number>(points.length);
-    const mid: number[] = new Array<number>(points.length);
-    for (let i = 0; i < points.length; i++) {
-      total[i] = s2xx[i]! + s4xx[i]! + s5xx[i]!;
-      mid[i] = s2xx[i]! + s4xx[i]!;
-    }
-    return [xs, total, mid, s2xx];
   }
   return [xs, s2xx, s4xx, s5xx];
 }
@@ -295,20 +258,20 @@ function sparklineData(
   return [xs, ys];
 }
 
-/** Build a flat-line sparkline for the Active Requests KPI. We don't have
- *  historical active-request counts (the live-store only tracks the current
- *  `activeRequests.size`, not a time series), so we plot a flat line at
- *  the current value. The visual is a horizontal line — boring but
- *  truthful (we don't fabricate history). */
-function activeRequestsSparkline(currentCount: number): uPlot.AlignedData {
-  // 60 points, all at the current value.
-  const xs: number[] = new Array<number>(60);
-  const ys: number[] = new Array<number>(60);
-  for (let i = 0; i < 60; i++) {
+function successSparkline(points: StatusCodePoint[]): uPlot.AlignedData {
+  const xs: number[] = new Array<number>(points.length);
+  const ys: Array<number | null> = new Array<number | null>(points.length);
+  for (let i = 0; i < points.length; i++) {
+    const p = points[i]!;
+    const total = p.s2xx + p.s4xx + p.s5xx;
     xs[i] = i;
-    ys[i] = currentCount;
+    ys[i] = total > 0 ? p.s2xx / total * 100 : null;
   }
   return [xs, ys];
+}
+
+function latencySparkline(points: LatencyPoint[]): uPlot.AlignedData {
+  return [points.map((_, i) => i), points.map((point) => point.p95 || null)];
 }
 
 // ============================================================================
@@ -340,7 +303,8 @@ function renderConnectionDot(state: LiveConnectionState): TemplateResult {
     : state === "connecting"
     ? "home-conn-dot home-conn-dot-warn"
     : "home-conn-dot home-conn-dot-err";
-  return html`<span class="${cls}" title="${t("home.connected")}"></span>`;
+  const title = state === "connected" ? t("home.connected") : state === "connecting" ? t("home.connecting") : t("home.disconnected");
+  return html`<span class="${cls}" title=${title}></span>`;
 }
 
 /** Window selector — segmented control with 1m / 5m / 30m buttons. The
@@ -357,48 +321,49 @@ function renderWindowSelector(): TemplateResult {
       <button
         type="button"
         class="home-window-btn ${w.value === windowSecs ? "active" : ""}"
+        aria-pressed=${w.value === windowSecs ? "true" : "false"}
         @click=${() => onWindowChange(w.value)}
       >${w.label}</button>
     `)}
   </div>`;
 }
 
-/** KPI tile — big number, label, and a sparkline container. The sparkline
- *  container has a stable ID so the uPlot instance created in it persists
- *  across lit-html re-renders. */
 function renderKpiTile(
   label: string,
   value: string,
-  sparklineId: string,
-  trendClass: string = "",
+  meta: string,
+  sparklineId: string | null,
+  tone: string = "",
 ): TemplateResult {
-  return html`<div class="home-kpi-tile">
+  return html`<div class="home-kpi-tile ${tone}">
     <div class="home-kpi-label">${label}</div>
-    <div class="home-kpi-value ${trendClass}">${value}</div>
-    <div class="home-kpi-spark" id="${sparklineId}"></div>
+    <div class="home-kpi-value">${value}</div>
+    <div class="home-kpi-meta">${meta}</div>
+    ${sparklineId
+      ? html`<div class="home-kpi-spark" id=${sparklineId}></div>`
+      : html`<div class="home-kpi-live"><span></span>${t("home.kpi.current")}</div>`}
   </div>`;
 }
 
-/** KPI grid — 4 tiles. The values are computed from the current snapshot.
- *  If the snapshot is null (before the first live-store update), the
- *  values are "—" placeholders. */
 function renderKpiGrid(snapshot: Snapshot | null): TemplateResult {
-  const activeReqs: string = snapshot ? String(snapshot.activeRequests) : "—";
-  const reqsPerMin: string = snapshot
-    ? formatCompact(snapshot.requestsPerSec * 60)
-    : "—";
-  const tokensPerMin: string = snapshot
-    ? formatCompact(snapshot.tokensPerSec * 60)
-    : "—";
-  const costPerMin: string = snapshot
-    ? formatCostPerMin(snapshot.costPerSec * 60)
-    : "—";
+  const status = snapshot?.statusCodes.reduce((acc, point) => {
+    acc.ok += point.s2xx;
+    acc.errors += point.s4xx + point.s5xx;
+    return acc;
+  }, { ok: 0, errors: 0 }) ?? { ok: 0, errors: 0 };
+  const responses = status.ok + status.errors;
+  const bucketSecs = snapshot && snapshot.throughput.length > 0 ? windowSecs / snapshot.throughput.length : 1;
+  const windowRequests = snapshot?.throughput.reduce((sum, point) => sum + point.rps * bucketSecs, 0) ?? 0;
+  const success = responses > 0 ? `${(status.ok / responses * 100).toFixed(1)}%` : "—";
+  const successTone = responses === 0 ? "" : status.ok / responses >= 0.99 ? "is-good" : status.ok / responses >= 0.95 ? "is-warn" : "is-bad";
 
   return html`<div class="home-kpi-grid">
-    ${renderKpiTile(t("home.kpi.active_requests"), activeReqs, "spark-active")}
-    ${renderKpiTile(t("home.kpi.requests_per_min"), reqsPerMin, "spark-requests")}
-    ${renderKpiTile(t("home.kpi.tokens_per_min"), tokensPerMin, "spark-tokens")}
-    ${renderKpiTile(t("home.kpi.cost_per_min"), costPerMin, "spark-cost")}
+    ${renderKpiTile(t("home.kpi.active_requests"), snapshot ? String(snapshot.activeRequests) : "—", t("home.kpi.in_flight"), null)}
+    ${renderKpiTile(t("home.kpi.requests_per_min"), snapshot ? formatCompact(snapshot.requestsPerSec * 60) : "—", `${formatCompact(windowRequests)} ${t("home.kpi.in_window")}`, "spark-requests")}
+    ${renderKpiTile(t("home.kpi.success_rate"), success, `${formatCompact(status.errors)} ${t("home.kpi.failed")}`, "spark-success", successTone)}
+    ${renderKpiTile(t("home.kpi.p95_latency"), snapshot && responses > 0 ? formatLatency(snapshot.p95LatencyMs) : "—", `${t("home.kpi.p50")} ${snapshot && responses > 0 ? formatLatency(snapshot.p50LatencyMs) : "—"}`, "spark-latency")}
+    ${renderKpiTile(t("home.kpi.tokens_per_min"), snapshot ? formatCompact(snapshot.tokensPerSec * 60) : "—", t("home.kpi.rolling_rate"), "spark-tokens")}
+    ${renderKpiTile(t("home.kpi.cost_per_min"), snapshot ? formatCostPerMin(snapshot.costPerSec * 60) : "—", `${formatCostPerMin((snapshot?.costPerSec ?? 0) * 3600)} ${t("home.kpi.per_hour")}`, "spark-cost")}
   </div>`;
 }
 
@@ -410,37 +375,28 @@ function renderRaceOutcomesCard(snapshot: Snapshot | null): TemplateResult {
   const won: number = snapshot ? snapshot.raceOutcomes.won : 0;
   const lost: number = snapshot ? snapshot.raceOutcomes.lost : 0;
   const single: number = snapshot ? snapshot.raceOutcomes.single : 0;
-  const total: number = won + lost + single;
-  const pct: (n: number) => string = (n: number) =>
-    total > 0 ? Math.round((n / total) * 100) + "%" : "—";
+  const raced: number = won + lost;
+  const total: number = raced + single;
+  const raceShare = total > 0 ? raced / total : 0;
+  const winShare = raced > 0 ? won / raced : 0;
 
   return html`<section class="card home-chart-card">
-    <div class="card-title">${t("home.chart.race_outcomes")}</div>
-    <div class="card-subtitle">${t("home.chart.race_outcomes.subtitle")}</div>
-    <div class="home-race-stats">
-      <div class="home-race-stat home-race-stat-won">
-        <div class="home-race-stat-value">${pct(won)}</div>
-        <div class="home-race-stat-label">${t("home.chart.race_outcomes.won")}</div>
-        <div class="home-race-stat-count">${won}</div>
-      </div>
-      <div class="home-race-stat home-race-stat-lost">
-        <div class="home-race-stat-value">${pct(lost)}</div>
-        <div class="home-race-stat-label">${t("home.chart.race_outcomes.lost")}</div>
-        <div class="home-race-stat-count">${lost}</div>
-      </div>
-      <div class="home-race-stat home-race-stat-single">
-        <div class="home-race-stat-value">${pct(single)}</div>
-        <div class="home-race-stat-label">${t("home.chart.race_outcomes.single")}</div>
-        <div class="home-race-stat-count">${single}</div>
+    <div class="home-card-heading"><div><h3>${t("home.chart.race_outcomes")}</h3><p>${t("home.chart.race_outcomes.subtitle")}</p></div><span class="home-chart-stat">${raced > 0 ? `${(winShare * 100).toFixed(1)}%` : "—"}</span></div>
+    <div class="home-race-summary">
+      <div class="home-race-hero"><strong>${raced > 0 ? `${(winShare * 100).toFixed(1)}%` : "—"}</strong><span>${t("home.race.winning_attempts")}</span></div>
+      <div class="home-race-bars" aria-label=${t("home.chart.race_outcomes")}>
+        <div><span>${t("home.chart.race_outcomes.won")}</span><strong>${formatCompact(won)}</strong><i><b class="won" style=${`width:${winShare * 100}%`}></b></i></div>
+        <div><span>${t("home.chart.race_outcomes.lost")}</span><strong>${formatCompact(lost)}</strong><i><b class="lost" style=${`width:${raced > 0 ? lost / raced * 100 : 0}%`}></b></i></div>
+        <div><span>${t("home.chart.race_outcomes.single")}</span><strong>${formatCompact(single)}</strong><i><b class="single" style=${`width:${total > 0 ? single / total * 100 : 0}%`}></b></i></div>
       </div>
     </div>
+    <div class="home-race-foot">${(raceShare * 100).toFixed(1)}% ${t("home.race.traffic_raced")}</div>
   </section>`;
 }
 
-/** Activity feed row — single recent-usage row rendered as a flex row. */
-function renderActivityRow(r: RecentUsageRow, _index: number): TemplateResult {
+function renderActivityRow(r: RecentUsageRow): TemplateResult {
   const cls: string = statusPillClass(r.status_code);
-  return html`<div class="home-activity-row" data-id="${r.id}">
+  return html`<a class="home-activity-row" href=${`#/logs?request_id=${encodeURIComponent(r.request_id || "")}`} data-id=${r.id}>
     <span class="home-activity-time">${formatTime(r.created_at)}</span>
     <span class="home-activity-model" title="${r.upstream_model_id || ""}">${r.upstream_model_id || "—"}</span>
     <span class="home-activity-provider" title="${r.provider_id || ""}">${r.provider_id || "—"}</span>
@@ -448,7 +404,7 @@ function renderActivityRow(r: RecentUsageRow, _index: number): TemplateResult {
     <span class="home-activity-latency">${formatLatency(r.total_ms)}</span>
     <span class="home-activity-tokens">${formatTokensInOut(r.prompt_tokens, r.completion_tokens)}</span>
     <span class="home-activity-cost">${formatCost(r.cost_usd)}</span>
-  </div>`;
+  </a>`;
 }
 
 /** Activity feed — scrollable list of the last 20 rows. Uses `repeat`
@@ -460,11 +416,11 @@ function renderActivityFeed(snapshot: Snapshot | null): TemplateResult {
   const body: TemplateResult = rows.length === 0
     ? html`<div class="home-activity-empty muted">${t("home.activity_feed.empty")}</div>`
     : html`<div class="home-activity-list" ${ref(activityFeedRef)}>
-        ${rows.map((r: RecentUsageRow, i: number) => html`<div data-key=${r.id}>${renderActivityRow(r, i)}</div>`)}
+        ${rows.map((r: RecentUsageRow) => renderActivityRow(r))}
       </div>`;
 
   return html`<section class="card home-activity-card">
-    <div class="card-title">${t("home.activity_feed")}</div>
+    <div class="home-card-heading"><div><h3>${t("home.activity_feed")}</h3><p>${t("home.activity_feed.subtitle")}</p></div><a href="#/logs">${t("home.activity_feed.view_all")} →</a></div>
     <div class="home-activity-header">
       <span>${t("home.activity_feed.col_time") || "Time"}</span>
       <span>${t("home.activity_feed.col_model") || "Model"}</span>
@@ -484,6 +440,13 @@ function activityFeedRef(el: Element | undefined): void {
   activityFeedEl = el instanceof HTMLElement ? el : null;
 }
 
+function renderChartCard(title: string, subtitle: string, id: string, stat: string): TemplateResult {
+  return html`<section class="card home-chart-card">
+    <div class="home-card-heading"><div><h3>${title}</h3><p>${subtitle}</p></div><span class="home-chart-stat">${stat}</span></div>
+    <div class="home-chart-container" id=${id}></div>
+  </section>`;
+}
+
 // ----------------------------------------------------------------------------
 // Main render function
 // ----------------------------------------------------------------------------
@@ -491,11 +454,13 @@ function activityFeedRef(el: Element | undefined): void {
 function renderHome(): TemplateResult {
   const snapshot: Snapshot | null = currentSnapshot;
   const conn: LiveConnectionState = currentConnectionState;
+  const hasResponses = snapshot?.statusCodes.some((point) => point.s2xx + point.s4xx + point.s5xx > 0) ?? false;
 
   return html`
     <div class="home-dashboard">
       <div class="page-header home-header">
         <div class="home-header-text">
+          <span class="page-eyebrow">${t("common.realtime")}</span>
           <h2>${t("home.title")}${renderConnectionDot(conn)}</h2>
           <p class="home-subtitle muted">${t("home.subtitle")}</p>
         </div>
@@ -504,21 +469,9 @@ function renderHome(): TemplateResult {
       ${renderConnectionBanner(conn)}
       ${renderKpiGrid(snapshot)}
       <div class="home-charts-grid">
-        <section class="card home-chart-card">
-          <div class="card-title">${t("home.chart.throughput")}</div>
-          <div class="card-subtitle">${t("home.chart.throughput.subtitle")}</div>
-          <div class="home-chart-container" id="chart-throughput"></div>
-        </section>
-        <section class="card home-chart-card">
-          <div class="card-title">${t("home.chart.status_codes")}</div>
-          <div class="card-subtitle">${t("home.chart.status_codes.subtitle")}</div>
-          <div class="home-chart-container" id="chart-status-codes"></div>
-        </section>
-        <section class="card home-chart-card">
-          <div class="card-title">${t("home.chart.latency")}</div>
-          <div class="card-subtitle">${t("home.chart.latency.subtitle")}</div>
-          <div class="home-chart-container" id="chart-latency"></div>
-        </section>
+        ${renderChartCard(t("home.chart.throughput"), t("home.chart.throughput.subtitle"), "chart-throughput", snapshot ? `${formatCompact(snapshot.requestsPerSec * 60)} rpm` : "—")}
+        ${renderChartCard(t("home.chart.status_codes"), t("home.chart.status_codes.subtitle"), "chart-status-codes", snapshot && hasResponses ? `${(snapshot.successRate * 100).toFixed(1)}%` : "—")}
+        ${renderChartCard(t("home.chart.latency"), t("home.chart.latency.subtitle"), "chart-latency", snapshot && hasResponses ? `p95 ${formatLatency(snapshot.p95LatencyMs)}` : "—")}
         ${renderRaceOutcomesCard(snapshot)}
       </div>
       ${renderActivityFeed(snapshot)}
@@ -563,7 +516,7 @@ function onLiveUpdate(): void {
   });
 }
 
-/** Push the current snapshot's data into the 4 main uPlot charts + 4
+/** Push the current snapshot's data into the main charts and KPI
  *  sparklines via `setData`. Called once after the charts are created
  *  (initial paint) and on every live-store update. */
 function pushSnapshotToCharts(): void {
@@ -573,15 +526,14 @@ function pushSnapshotToCharts(): void {
 
   // Main charts
   charts.throughput.setData(throughputData(snapshot.throughput));
-  charts.statusCodes.setData(
-    statusCodesData(snapshot.statusCodes, charts.statusBarsMode),
-  );
+  charts.statusCodes.setData(statusCodesData(snapshot.statusCodes));
   charts.latency.setData(latencyData(snapshot.latency));
 
   // Sparklines — last 60 buckets of each metric.
   const last60: ThroughputPoint[] = snapshot.throughput.slice(-60);
-  charts.sparkActive.setData(activeRequestsSparkline(snapshot.activeRequests));
   charts.sparkRequests.setData(sparklineData(last60, "rps", 60));
+  charts.sparkSuccess.setData(successSparkline(snapshot.statusCodes.slice(-60)));
+  charts.sparkLatency.setData(latencySparkline(snapshot.latency.slice(-60)));
   charts.sparkTokens.setData(sparklineData(last60, "tps", 60));
   charts.sparkCost.setData(sparklineData(last60, "cps", 60));
 }
@@ -607,7 +559,7 @@ function restoreActivityScroll(): void {
 // Chart lifecycle
 // ============================================================================
 
-/** Create the 4 main uPlot charts + 4 KPI sparklines. Called after the
+/** Create the main uPlot charts and KPI sparklines. Called after the
  *  first lit-html render (so the chart container `<div>`s exist in the
  *  DOM). Each chart gets a ResizeObserver that keeps it sized to its
  *  container. */
@@ -617,13 +569,14 @@ function createCharts(): void {
   const throughputEl: HTMLElement | null = document.getElementById("chart-throughput");
   const statusEl: HTMLElement | null = document.getElementById("chart-status-codes");
   const latencyEl: HTMLElement | null = document.getElementById("chart-latency");
-  const sparkActiveEl: HTMLElement | null = document.getElementById("spark-active");
   const sparkReqEl: HTMLElement | null = document.getElementById("spark-requests");
+  const sparkSuccessEl: HTMLElement | null = document.getElementById("spark-success");
+  const sparkLatencyEl: HTMLElement | null = document.getElementById("spark-latency");
   const sparkTokEl: HTMLElement | null = document.getElementById("spark-tokens");
   const sparkCostEl: HTMLElement | null = document.getElementById("spark-cost");
 
   if (!throughputEl || !statusEl || !latencyEl
-      || !sparkActiveEl || !sparkReqEl || !sparkTokEl || !sparkCostEl) {
+      || !sparkReqEl || !sparkSuccessEl || !sparkLatencyEl || !sparkTokEl || !sparkCostEl) {
     // Containers not in the DOM yet — the first lit-html render hasn't
     // completed. The caller should defer via requestAnimationFrame.
     return;
@@ -631,17 +584,18 @@ function createCharts(): void {
 
   const resizeDisposers: Array<() => void> = [];
 
-  const throughput: uPlot = buildThroughputChart(throughputEl, windowSecs);
+  const throughput: uPlot = buildThroughputChart(throughputEl);
   resizeDisposers.push(observeResize(throughput, throughputEl));
 
-  const statusCodes: uPlot = buildStatusCodesChart(statusEl, windowSecs);
+  const statusCodes: uPlot = buildStatusCodesChart(statusEl);
   resizeDisposers.push(observeResize(statusCodes, statusEl));
 
-  const latency: uPlot = buildLatencyChart(latencyEl, windowSecs);
+  const latency: uPlot = buildLatencyChart(latencyEl);
   resizeDisposers.push(observeResize(latency, latencyEl));
 
-  const sparkActive: uPlot = createSparkline(sparkActiveEl, CHART_COLORS.blue);
   const sparkRequests: uPlot = createSparkline(sparkReqEl, CHART_COLORS.blue);
+  const sparkSuccess: uPlot = createSparkline(sparkSuccessEl, CHART_COLORS.green);
+  const sparkLatency: uPlot = createSparkline(sparkLatencyEl, CHART_COLORS.orange);
   const sparkTokens: uPlot = createSparkline(sparkTokEl, CHART_COLORS.green);
   const sparkCost: uPlot = createSparkline(sparkCostEl, CHART_COLORS.orange);
 
@@ -649,12 +603,12 @@ function createCharts(): void {
     throughput,
     statusCodes,
     latency,
-    sparkActive,
     sparkRequests,
+    sparkSuccess,
+    sparkLatency,
     sparkTokens,
     sparkCost,
     resizeDisposers,
-    statusBarsMode: isStatusChartBarsMode(),
   };
 
   // Push the current snapshot (if any) into the new charts.
@@ -673,11 +627,17 @@ function destroyCharts(): void {
   try { charts.throughput.destroy(); } catch (e: unknown) { console.warn("[home] throughput.destroy threw:", e); }
   try { charts.statusCodes.destroy(); } catch (e: unknown) { console.warn("[home] statusCodes.destroy threw:", e); }
   try { charts.latency.destroy(); } catch (e: unknown) { console.warn("[home] latency.destroy threw:", e); }
-  try { charts.sparkActive.destroy(); } catch (e: unknown) { console.warn("[home] sparkActive.destroy threw:", e); }
   try { charts.sparkRequests.destroy(); } catch (e: unknown) { console.warn("[home] sparkRequests.destroy threw:", e); }
+  try { charts.sparkSuccess.destroy(); } catch (e: unknown) { console.warn("[home] sparkSuccess.destroy threw:", e); }
+  try { charts.sparkLatency.destroy(); } catch (e: unknown) { console.warn("[home] sparkLatency.destroy threw:", e); }
   try { charts.sparkTokens.destroy(); } catch (e: unknown) { console.warn("[home] sparkTokens.destroy threw:", e); }
   try { charts.sparkCost.destroy(); } catch (e: unknown) { console.warn("[home] sparkCost.destroy threw:", e); }
   charts = null;
+}
+
+function refreshChartTheme(): void {
+  destroyCharts();
+  requestAnimationFrame(() => createCharts());
 }
 
 // ============================================================================
@@ -729,6 +689,8 @@ export async function mountHome(): Promise<(() => void) | void> {
   // with the reactive system so `requestUpdate()` (called from
   // `onLiveUpdate`) triggers a microtask-coalesced re-render.
   cleanupReactive = mountView(main, renderHome);
+  document.addEventListener("themechange", refreshChartTheme);
+  onLiveUpdate();
 
   // Create the uPlot charts after the first lit-html render. We use
   // `requestAnimationFrame` (rather than `queueMicrotask`) so the
@@ -748,6 +710,7 @@ export async function mountHome(): Promise<(() => void) | void> {
   // try to update after the store is gone), then store, then lit-html.
   return () => {
     destroyCharts();
+    document.removeEventListener("themechange", refreshChartTheme);
     if (unsubLive) { unsubLive(); unsubLive = null; }
     if (disposeStore) { disposeStore(); disposeStore = null; }
     if (cleanupReactive) { cleanupReactive(); cleanupReactive = null; }
