@@ -657,18 +657,25 @@ pub fn auto_create_combos(conn: &Connection) -> Result<usize> {
                 })
                 .map_err(crate::error::map_db_error)?;
 
-            let mut map: std::collections::HashMap<String, Vec<(i64, String, i64)>> = std::collections::HashMap::new();
+            let mut map: std::collections::HashMap<String, Vec<(i64, String, i64)>> =
+                std::collections::HashMap::new();
             // We can optionally filter here, but we iterate over `normalized_ids` later anyway.
             for row in rows {
-                let (norm_id, row_id, provider_id, account_id) = row.map_err(crate::error::map_db_error)?;
-                map.entry(norm_id).or_default().push((row_id, provider_id, account_id));
+                let (norm_id, row_id, provider_id, account_id) =
+                    row.map_err(crate::error::map_db_error)?;
+                map.entry(norm_id)
+                    .or_default()
+                    .push((row_id, provider_id, account_id));
             }
             map
         }
     };
 
     // Filter combos to just those related to our normalized_ids
-    let combo_names: Vec<String> = normalized_ids.iter().map(|id| format!("auto:{}", id)).collect();
+    let combo_names: Vec<String> = normalized_ids
+        .iter()
+        .map(|id| format!("auto:{}", id))
+        .collect();
 
     let existing_combos: std::collections::HashMap<String, i64> = {
         if combo_names.is_empty() {
@@ -677,11 +684,13 @@ pub fn auto_create_combos(conn: &Connection) -> Result<usize> {
             let mut stmt = conn
                 .prepare("SELECT name, id FROM combos")
                 .map_err(crate::error::map_db_error)?;
-            stmt.query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?)))
-                .map_err(crate::error::map_db_error)?
-                .filter_map(|r| r.ok())
-                .filter(|(name, _)| combo_names.contains(name)) // only load what we care about
-                .collect()
+            stmt.query_map([], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+            })
+            .map_err(crate::error::map_db_error)?
+            .filter_map(|r| r.ok())
+            .filter(|(name, _)| combo_names.contains(name)) // only load what we care about
+            .collect()
         }
     };
 
@@ -697,20 +706,22 @@ pub fn auto_create_combos(conn: &Connection) -> Result<usize> {
             let mut set = std::collections::HashSet::new();
             for chunk in combo_ids.chunks(900) {
                 let placeholders = vec!["?"; chunk.len()].join(",");
-                let query = format!("SELECT combo_id, provider_id, account_id, model_row_id FROM combo_targets WHERE combo_id IN ({})", placeholders);
-                let mut stmt = conn
-                    .prepare(&query)
-                    .map_err(crate::error::map_db_error)?;
+                let query = format!(
+                    "SELECT combo_id, provider_id, account_id, model_row_id FROM combo_targets WHERE combo_id IN ({})",
+                    placeholders
+                );
+                let mut stmt = conn.prepare(&query).map_err(crate::error::map_db_error)?;
                 let params = rusqlite::params_from_iter(chunk.iter());
-                let rows = stmt.query_map(params, |row| {
-                    Ok((
-                        row.get::<_, i64>(0)?,
-                        row.get::<_, String>(1)?,
-                        row.get::<_, Option<i64>>(2)?.unwrap_or(-1),
-                        row.get::<_, i64>(3)?,
-                    ))
-                })
-                .map_err(crate::error::map_db_error)?;
+                let rows = stmt
+                    .query_map(params, |row| {
+                        Ok((
+                            row.get::<_, i64>(0)?,
+                            row.get::<_, String>(1)?,
+                            row.get::<_, Option<i64>>(2)?.unwrap_or(-1),
+                            row.get::<_, i64>(3)?,
+                        ))
+                    })
+                    .map_err(crate::error::map_db_error)?;
                 for row in rows.filter_map(|r| r.ok()) {
                     set.insert(row);
                 }
@@ -726,12 +737,16 @@ pub fn auto_create_combos(conn: &Connection) -> Result<usize> {
             let mut map = std::collections::HashMap::new();
             for chunk in combo_ids.chunks(900) {
                 let placeholders = vec!["?"; chunk.len()].join(",");
-                let query = format!("SELECT combo_id, MAX(priority_order) FROM combo_targets WHERE combo_id IN ({}) GROUP BY combo_id", placeholders);
-                let mut stmt = conn
-                    .prepare(&query)
-                    .map_err(crate::error::map_db_error)?;
+                let query = format!(
+                    "SELECT combo_id, MAX(priority_order) FROM combo_targets WHERE combo_id IN ({}) GROUP BY combo_id",
+                    placeholders
+                );
+                let mut stmt = conn.prepare(&query).map_err(crate::error::map_db_error)?;
                 let params = rusqlite::params_from_iter(chunk.iter());
-                let rows = stmt.query_map(params, |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i32>(1)?)))
+                let rows = stmt
+                    .query_map(params, |row| {
+                        Ok((row.get::<_, i64>(0)?, row.get::<_, i32>(1)?))
+                    })
                     .map_err(crate::error::map_db_error)?;
                 for (id, max_order) in rows.filter_map(|r| r.ok()) {
                     map.insert(id, max_order);
@@ -745,7 +760,8 @@ pub fn auto_create_combos(conn: &Connection) -> Result<usize> {
     // so the multiple INSERTS don't trigger implicit per-statement fsyncs.
     let is_in_tx = !conn.is_autocommit();
     if !is_in_tx {
-        conn.execute("BEGIN", []).map_err(crate::error::map_db_error)?;
+        conn.execute("BEGIN", [])
+            .map_err(crate::error::map_db_error)?;
     }
 
     let mut created = 0usize;
@@ -779,7 +795,8 @@ pub fn auto_create_combos(conn: &Connection) -> Result<usize> {
                 // Create the combo. Use race_size = min(targets, 3) so
                 // parallel race fires across available providers.
                 let race_size = (targets.len() as u8).min(3);
-                insert_combo_stmt.execute(rusqlite::params![&combo_name, race_size])
+                insert_combo_stmt
+                    .execute(rusqlite::params![&combo_name, race_size])
                     .map_err(crate::error::map_db_error)?;
 
                 created += 1;
@@ -789,12 +806,8 @@ pub fn auto_create_combos(conn: &Connection) -> Result<usize> {
 
         // Insert new targets (append-only logic).
         for &(row_id, ref provider_id, account_id) in targets {
-            let target_exists = existing_targets.contains(&(
-                combo_id,
-                provider_id.clone(),
-                account_id,
-                row_id,
-            ));
+            let target_exists =
+                existing_targets.contains(&(combo_id, provider_id.clone(), account_id, row_id));
 
             if !target_exists {
                 let current_max = max_orders.get(&combo_id).copied().unwrap_or(-1);
@@ -815,7 +828,8 @@ pub fn auto_create_combos(conn: &Connection) -> Result<usize> {
     }
 
     if !is_in_tx {
-        conn.execute("COMMIT", []).map_err(crate::error::map_db_error)?;
+        conn.execute("COMMIT", [])
+            .map_err(crate::error::map_db_error)?;
     }
 
     Ok(created)
