@@ -289,21 +289,27 @@ pub fn run(conn: &mut Connection) -> Result<()> {
             message: format!("begin tx: {}", e),
         })?;
 
+    let mut stmt = tx
+        .prepare_cached("INSERT INTO schema_migrations(version) VALUES (?1)")
+        .map_err(|e| CoreError::Migration {
+            version: 0,
+            message: format!("prepare stmt: {}", e),
+        })?;
+
     for m in pending {
         tx.execute_batch(m.sql).map_err(|e| CoreError::Migration {
             version: m.version,
             message: format!("{}: {}", m.name, e),
         })?;
 
-        tx.execute(
-            "INSERT INTO schema_migrations(version) VALUES (?1)",
-            params![m.version],
-        )
-        .map_err(|e| CoreError::Migration {
-            version: m.version,
-            message: format!("{}: insert into schema_migrations: {}", m.name, e),
-        })?;
+        stmt.execute(params![m.version])
+            .map_err(|e| CoreError::Migration {
+                version: m.version,
+                message: format!("{}: insert into schema_migrations: {}", m.name, e),
+            })?;
     }
+
+    drop(stmt);
 
     tx.commit().map_err(|e| CoreError::Migration {
         version: 0,
