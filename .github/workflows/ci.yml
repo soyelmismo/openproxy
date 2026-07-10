@@ -154,13 +154,13 @@ jobs:
         run: cargo test --workspace
 
   # -----------------------------------------------------------------------------
-  # 3. Compute next version. Always runs after rust-checks so we don't waste
-  #    cycles parsing tags for a PR that already failed checks.
+  # 3. Compute next version. Always runs after rust-checks and e2e-tests so we
+  #    don't waste cycles parsing tags for a PR that already failed checks.
   # -----------------------------------------------------------------------------
   prepare-version:
     name: Compute next version
     runs-on: ubuntu-latest
-    needs: rust-checks
+    needs: [rust-checks, e2e-tests]
     if: github.event_name == 'push' && github.ref == 'refs/heads/master'
     outputs:
       version: ${{ steps.version.outputs.version }}
@@ -255,7 +255,7 @@ jobs:
   # -----------------------------------------------------------------------------
   build:
     name: Build ${{ matrix.target }}
-    needs: [rust-checks, prepare-version]
+    needs: [rust-checks, e2e-tests, prepare-version]
     strategy:
       fail-fast: false
       matrix:
@@ -422,7 +422,7 @@ jobs:
   docker:
     name: Docker build & push
     runs-on: ubuntu-latest
-    needs: [rust-checks, prepare-version]
+    needs: [rust-checks, e2e-tests, prepare-version]
     steps:
       - uses: actions/checkout@v4
 
@@ -475,7 +475,7 @@ jobs:
   release:
     name: Tag & GitHub Release
     runs-on: ubuntu-latest
-    needs: [rust-checks, prepare-version, build, docker]
+    needs: [rust-checks, e2e-tests, prepare-version, build, docker]
     if: github.event_name == 'push' && github.ref == 'refs/heads/master'
     steps:
       - uses: actions/checkout@v4
