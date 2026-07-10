@@ -191,7 +191,6 @@ pub struct UsageRecordBuilder<'a> {
     pub(crate) trace_id: String,
     pub(crate) prompt_tokens: Option<u32>,
     pub(crate) completion_tokens: Option<u32>,
-    pub(crate) request_body_json: Option<serde_json::Value>,
     pub(crate) response_body_json: Option<serde_json::Value>,
     pub(crate) request_headers: Option<std::collections::BTreeMap<String, String>>,
     pub(crate) response_headers: Option<std::collections::BTreeMap<String, String>>,
@@ -226,7 +225,6 @@ impl<'a> UsageRecordBuilder<'a> {
             trace_id: "".to_string(),
             prompt_tokens: None,
             completion_tokens: None,
-            request_body_json: None,
             response_body_json: None,
             request_headers: None,
             response_headers: None,
@@ -285,10 +283,6 @@ impl<'a> UsageRecordBuilder<'a> {
     }
     pub fn completion_tokens_opt(mut self, completion_tokens: Option<u32>) -> Self {
         self.completion_tokens = completion_tokens;
-        self
-    }
-    pub fn request_body_json(mut self, request_body_json: Option<serde_json::Value>) -> Self {
-        self.request_body_json = request_body_json;
         self
     }
     pub fn response_body_json(mut self, response_body_json: Option<serde_json::Value>) -> Self {
@@ -415,27 +409,26 @@ impl<'a> UsageRecordBuilder<'a> {
             race_lost: self.err.is_some() && self.req.race_cancelled,
             api_key_id: self.req.api_key_id,
             request_body_json: if recording {
-                self.request_body_json.clone().or_else(|| {
-                    self.req
-                        .request_body_json
-                        .clone()
-                        .or_else(|| serde_json::to_value(&self.req.openai_request).ok())
+                self.req.request_body_json.clone().or_else(|| {
+                    serde_json::to_vec(&*self.req.openai_request)
+                        .ok()
+                        .map(bytes::Bytes::from)
                 })
             } else {
                 None
             },
             response_body_json: if recording {
-                self.response_body_json.clone()
+                self.response_body_json
             } else {
                 None
             },
             request_headers: if recording {
-                self.request_headers.clone()
+                self.request_headers
             } else {
                 None
             },
             response_headers: if recording {
-                self.response_headers.clone()
+                self.response_headers
             } else {
                 None
             },

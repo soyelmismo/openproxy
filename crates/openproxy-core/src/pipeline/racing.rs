@@ -104,7 +104,6 @@ pub(crate) async fn run_race(
                     return;
                 }
 
-                let _req_arc = Arc::new(req.clone());
                 let result = p
                     .execute_single(req.clone(), &combo, &target, 1, race_size, &worker_token)
                     .await;

@@ -660,7 +660,7 @@ pub(crate) async fn run_test_for_model(
             request_id: RequestId::new(),
             trace_id: TraceId::new(),
             combo_id: ComboId(0),
-            openai_request: responses_req,
+            openai_request: std::sync::Arc::new(responses_req),
             client_disconnected,
             stream_sink: None,
             api_key_id: None,
@@ -671,7 +671,7 @@ pub(crate) async fn run_test_for_model(
             request_body_json: None,
             race_cancelled: false,
             endpoint_kind: openproxy_core::endpoint::EndpointKind::Chat,
-            compressed_messages: std::sync::OnceLock::new(),
+            compressed_messages: std::sync::Arc::new(std::sync::OnceLock::new()),
         };
         let formatter = openproxy_core::pipeline::formatting::get_formatter(
             openproxy_core::models::TargetFormat::Responses,

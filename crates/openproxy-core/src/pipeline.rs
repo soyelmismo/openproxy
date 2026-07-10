@@ -70,7 +70,7 @@ pub struct PipelineRequest {
     pub request_id: RequestId,
     pub trace_id: TraceId,
     pub combo_id: ComboId,
-    pub openai_request: crate::translation::OpenAIRequest,
+    pub openai_request: Arc<crate::translation::OpenAIRequest>,
     pub client_disconnected: tokio::sync::watch::Receiver<bool>,
     pub stream_sink: Option<crate::race_sink::StreamSink>,
     pub api_key_id: Option<ApiKeyId>,
@@ -78,10 +78,11 @@ pub struct PipelineRequest {
     pub combo_override: Option<Combo>,
     pub targets_override: Option<Vec<crate::combos::ComboTarget>>,
     pub request_headers: std::collections::BTreeMap<String, String>,
-    pub request_body_json: Option<serde_json::Value>,
+    pub request_body_json: Option<bytes::Bytes>,
     pub race_cancelled: bool,
     pub endpoint_kind: crate::endpoint::EndpointKind,
-    pub compressed_messages: std::sync::OnceLock<Option<Vec<crate::translation::OpenAIMessage>>>,
+    pub compressed_messages:
+        Arc<std::sync::OnceLock<Option<Vec<crate::translation::OpenAIMessage>>>>,
 }
 
 /// Outcome of a single `Pipeline::run()` call.

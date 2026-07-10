@@ -297,7 +297,7 @@ impl ProviderAdapter for AntigravityAdapter {
 
         let project_id = custom_meta.antigravity_project.as_deref().unwrap_or("");
 
-        let mut custom_req = req.openai_request.clone();
+        let mut custom_req = (*req.openai_request).clone();
         custom_req.model = resolved_target.model.model_id.as_str().to_string();
 
         Some(

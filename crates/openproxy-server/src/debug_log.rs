@@ -58,6 +58,7 @@ use tracing_subscriber::{Layer, layer::Context};
 /// 500 KB worst case — a trivial amount of memory for hours of
 /// debugging context.
 const BUFFER_CAPACITY: usize = 1000;
+const FILE_LOG_CAPACITY: usize = 1000;
 
 /// A single captured tracing event, ready to be serialized to the
 /// dashboard via `GET /admin/debug/logs`.
@@ -91,7 +92,7 @@ pub struct DebugLogEntry {
 /// The global ring buffer. Initialized once via [`init`] (called from
 /// `telemetry::init`); accessed via [`snapshot`] and [`snapshot_since`].
 static DEBUG_LOG_BUFFER: OnceLock<Mutex<DebugLogBuffer>> = OnceLock::new();
-static FILE_LOG_SENDER: OnceLock<mpsc::UnboundedSender<DebugLogEntry>> = OnceLock::new();
+static FILE_LOG_SENDER: OnceLock<mpsc::Sender<DebugLogEntry>> = OnceLock::new();
 
 /// Internal struct holding the VecDeque + the monotonic seq counter.
 struct DebugLogBuffer {
@@ -123,7 +124,7 @@ impl DebugLogBuffer {
 pub fn init() {
     let _ = DEBUG_LOG_BUFFER.get_or_init(|| Mutex::new(DebugLogBuffer::new()));
     let _ = FILE_LOG_SENDER.get_or_init(|| {
-        let (tx, mut rx) = mpsc::unbounded_channel::<DebugLogEntry>();
+        let (tx, mut rx) = mpsc::channel::<DebugLogEntry>(FILE_LOG_CAPACITY);
 
         let home = std::env::var("HOME")
             .ok()
@@ -310,7 +311,7 @@ where
 
         // Push to the file log task.
         if let Some(tx) = FILE_LOG_SENDER.get() {
-            let _ = tx.send(file_entry);
+            let _ = tx.try_send(file_entry);
         }
     }
 }

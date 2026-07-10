@@ -45,15 +45,13 @@ pub async fn routing_middleware(
     let auth_token = req.extensions().get::<ValidatedApiToken>().cloned();
     let api_key_id = auth_token.as_ref().map(|t| t.key_id);
 
-    let openai_req: OpenAIRequest = serde_json::from_slice(&parsed_chat_req.bytes)
-        .map_err(|e| ApiError(CoreError::Parse(e.to_string())))?;
-
+    let openai_req = parsed_chat_req.parsed;
     let plan = resolve_routing_plan(&state, req.headers(), &openai_req, &auth_token)?;
     let (combo_id, combo_override, targets_override) =
         translate_plan_to_targets(&state, &plan, api_key_id)?;
 
     let resolved = ResolvedRoute {
-        openai_req: Arc::new(openai_req),
+        openai_req,
         combo_id,
         combo_override,
         targets_override,

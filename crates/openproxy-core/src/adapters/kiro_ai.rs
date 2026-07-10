@@ -496,7 +496,7 @@ impl ProviderAdapter for KiroAdapter {
         // Let's check `execute_kiro` signature.
         // Assuming it's `(&Arc<UpstreamClient>, &str, &str, Option<&str>, &OpenAIRequest, ...)`
         // I will just use a cloned request for now or modify `execute_kiro` later.
-        let mut custom_req = req.openai_request.clone();
+        let mut custom_req = (*req.openai_request).clone();
         custom_req.model = resolved_target.model.model_id.as_str().to_string();
 
         Some(

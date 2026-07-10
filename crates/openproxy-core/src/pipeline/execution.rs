@@ -165,7 +165,7 @@ impl Pipeline {
         race_size: u8,
         race_cancel: &CancellationToken,
     ) -> PipelineResult {
-        let mut ctx = crate::pipeline::context::PipelineContext::new(req.clone(), self.clone());
+        let mut ctx = crate::pipeline::context::PipelineContext::new(req, self.clone());
         ctx.combo = Some(combo.clone());
         ctx.current_target = Some(resolved_target.clone());
         ctx.current_target_attempt = attempt;
@@ -174,13 +174,13 @@ impl Pipeline {
         ctx.started = Some(std::time::Instant::now());
 
         if attempt > 1 {
-            ctx.trace_id = format!("{}:retry{}", req.trace_id, attempt - 1);
+            ctx.trace_id = format!("{}:retry{}", ctx.req.trace_id, attempt - 1);
         } else {
-            ctx.trace_id = req.trace_id.to_string();
+            ctx.trace_id = ctx.req.trace_id.to_string();
         }
 
         crate::usage::publish_stage_event(crate::usage::StageEvent {
-            request_id: req.request_id.to_string(),
+            request_id: ctx.req.request_id.to_string(),
             trace_id: ctx.trace_id.to_string(),
             provider_id: resolved_target.target.provider_id.to_string(),
             upstream_model_id: resolved_target.model.model_id.as_str().to_string(),
@@ -212,7 +212,7 @@ impl Pipeline {
             Err(e) => {
                 // Generic catch-all if a stage returns Err instead of Ok(PipelineResult with error)
                 self.record_and_fail_with_trace_id(
-                    req,
+                    ctx.req,
                     combo,
                     &resolved_target.target,
                     FailureContext {

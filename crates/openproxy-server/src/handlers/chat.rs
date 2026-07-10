@@ -117,7 +117,7 @@ pub async fn chat_completions(
         state,
         cancel,
         headers,
-        parsed_req.raw,
+        parsed_req.bytes,
         token_inner,
         resolved_route,
     )
@@ -137,13 +137,12 @@ pub async fn chat_completions(
 /// SSE `stream.next()` `tokio::select!` all observe it.
 async fn run_pipeline(
     state: AppState,
-    _cancel: CancelWatch,
+    cancel: CancelWatch,
     headers: HeaderMap,
-    body: Arc<serde_json::Value>,
+    raw_request_body: bytes::Bytes,
     auth_result: Option<ValidatedApiToken>,
     resolved_route: crate::middleware::routing::ResolvedRoute,
 ) -> Result<axum::response::Response, ApiError> {
-    let raw_request_body = body;
     let api_key_id: Option<ApiKeyId> = auth_result.as_ref().map(|r| r.key_id);
 
     let combo_id = resolved_route.combo_id;
@@ -161,7 +160,10 @@ async fn run_pipeline(
     // 7. Watchdog handling.
     let watchdog_budget_ms = calculate_watchdog_budget(&state, &headers);
     let (tx, rx) = tokio::sync::mpsc::channel(64);
-    let (client_disconnected, watchdog_tx) = create_watchdog_channels(openai_req.stream);
+    let CancelWatch {
+        tx: watchdog_tx,
+        rx: client_disconnected,
+    } = cancel;
     let stream_sink = if openai_req.stream {
         Some(openproxy_core::race_sink::StreamSink::Direct(tx))
     } else {
@@ -176,18 +178,18 @@ async fn run_pipeline(
         request_id,
         trace_id,
         combo_id,
-        openai_request: (*openai_req).clone(),
+        openai_request: openai_req.clone(),
         client_disconnected,
         stream_sink,
         api_key_id,
         combo_override,
         targets_override,
         request_headers: redact_sensitive_headers(&headers),
-        request_body_json: Some((*raw_request_body).clone()),
+        request_body_json: Some(raw_request_body),
         race_cancelled: false,
         race_cancel: None,
         endpoint_kind: openproxy_core::endpoint::EndpointKind::Chat,
-        compressed_messages: std::sync::OnceLock::new(),
+        compressed_messages: Arc::new(std::sync::OnceLock::new()),
     };
 
     if openai_req.stream {
@@ -242,16 +244,6 @@ fn calculate_watchdog_budget(state: &AppState, headers: &HeaderMap) -> u64 {
         }
         _ => total_ms,
     }
-}
-
-fn create_watchdog_channels(
-    _is_streaming: bool,
-) -> (
-    tokio::sync::watch::Receiver<bool>,
-    tokio::sync::watch::Sender<bool>,
-) {
-    let (fresh_tx, fresh_rx) = tokio::sync::watch::channel(false);
-    (fresh_rx, fresh_tx)
 }
 
 fn spawn_watchdog(

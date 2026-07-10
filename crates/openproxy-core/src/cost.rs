@@ -8,9 +8,8 @@ use crate::ids::{
 use crate::pricing;
 use once_cell::sync::Lazy;
 use rusqlite::{Connection, params};
-use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone)]
 pub struct UsageInput {
     pub request_id: RequestId,
     pub trace_id: String,
@@ -35,7 +34,7 @@ pub struct UsageInput {
     /// traffic is `None`; the column is also `None` for rows
     /// predating the 000015 migration.
     pub api_key_id: Option<ApiKeyId>,
-    pub request_body_json: Option<serde_json::Value>,
+    pub request_body_json: Option<bytes::Bytes>,
     pub response_body_json: Option<serde_json::Value>,
     pub request_headers: Option<std::collections::BTreeMap<String, String>>,
     pub response_headers: Option<std::collections::BTreeMap<String, String>>,
@@ -202,7 +201,7 @@ pub fn record(conn: &Connection, input: &UsageInput) -> Result<UsageId> {
             input
                 .request_body_json
                 .as_ref()
-                .and_then(|j| serde_json::to_string(j).ok()),
+                .and_then(|j| std::str::from_utf8(j).ok()),
             input
                 .response_body_json
                 .as_ref()

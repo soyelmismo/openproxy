@@ -172,19 +172,38 @@ pub async fn client_disconnect_middleware(mut req: Request, next: Next) -> Respo
 /// `Poll::Ready(None)` means the body is *done* — for the response
 /// body that's the natural end of the stream, NOT a disconnect.
 ///
-/// Disconnect is only signalled by the explicit `Err` arm.
+/// Disconnect is signalled by the explicit `Err` arm, or if the body
+/// is dropped before naturally reaching the end of the stream.
 #[derive(Debug)]
-pub struct DisconnectBody<B> {
+pub struct DisconnectBody<B: HttpBody> {
     inner: B,
     tx: watch::Sender<bool>,
     fired: Arc<AtomicBool>,
+    complete: bool,
 }
 
-impl<B> DisconnectBody<B> {
+impl<B: HttpBody> DisconnectBody<B> {
     /// Wrap `inner`. `tx` is fired (idempotently) the first time
     /// `poll_frame` returns `Err` on this body.
     pub fn new(inner: B, tx: watch::Sender<bool>, fired: Arc<AtomicBool>) -> Self {
-        Self { inner, tx, fired }
+        let complete = inner.is_end_stream();
+        Self {
+            inner,
+            tx,
+            fired,
+            complete,
+        }
+    }
+}
+
+impl<B: HttpBody> Drop for DisconnectBody<B> {
+    fn drop(&mut self) {
+        if !self.complete
+            && !self.inner.is_end_stream()
+            && !self.fired.swap(true, Ordering::AcqRel)
+        {
+            let _ = self.tx.send(true);
+        }
     }
 }
 
@@ -197,7 +216,9 @@ impl<B: HttpBody + Unpin> HttpBody for DisconnectBody<B> {
         cx: &mut Context<'_>,
     ) -> Poll<Option<Result<Frame<Self::Data>, Self::Error>>> {
         let result = Pin::new(&mut self.inner).poll_frame(cx);
-        if let Poll::Ready(Some(Err(_))) = &result {
+        if let Poll::Ready(None) = &result {
+            self.complete = true;
+        } else if let Poll::Ready(Some(Err(_))) = &result {
             // First-error wins. `send` is a no-op if the receiver
             // was dropped (pipeline already finished), so we don't
             // care about the result. We also flip the local
@@ -304,6 +325,19 @@ mod tests {
         }
     }
 
+    struct PendingBody;
+    impl HttpBody for PendingBody {
+        type Data = Bytes;
+        type Error = std::io::Error;
+
+        fn poll_frame(
+            self: Pin<&mut Self>,
+            _cx: &mut Context<'_>,
+        ) -> Poll<Option<Result<Frame<Self::Data>, Self::Error>>> {
+            Poll::Pending
+        }
+    }
+
     /// A `http_body::Body` that produces one frame of data and
     /// then yields `None` on the next poll. This represents a
     /// *normal* completion, not a disconnect — the watch must
@@ -395,9 +429,19 @@ mod tests {
         assert!(
             !*rx.borrow(),
             "watch fired on body completion (None) — the wrapper should \
-             only fire on the explicit Err arm, not on the natural end \
-             of the stream"
+             not fire on the natural end of the stream"
         );
+    }
+
+    #[tokio::test]
+    async fn dropping_incomplete_body_fires_watch() {
+        let (tx, rx) = new_cancel_pair();
+        let fired = Arc::new(AtomicBool::new(false));
+        let body = DisconnectBody::new(PendingBody, tx, fired);
+
+        drop(body);
+
+        assert!(*rx.borrow());
     }
 
     /// Idempotency: if a body emits multiple `Err` frames in a row
