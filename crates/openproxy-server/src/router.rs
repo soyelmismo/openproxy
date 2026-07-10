@@ -564,3 +564,26 @@ async fn health() -> Json<serde_json::Value> {
         "version": env!("CARGO_PKG_VERSION"),
     }))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use openproxy_core::{AppConfig, db, secrets::MasterKey};
+    use parking_lot::RwLock;
+    use std::sync::Arc;
+
+    #[tokio::test]
+    async fn test_build_router_success() {
+        let config = AppConfig::default();
+        let dir = tempfile::tempdir().unwrap();
+        let pool = db::DbPool::open(&dir.path().join("test.db")).unwrap();
+        // AppState::for_test doesn't run migrations. We'll run them to be safe.
+        db::migrations::run(&mut pool.writer()).unwrap();
+        let db_pool = Arc::new(pool);
+        let master_key = Arc::new(MasterKey::generate());
+        let adapters = Arc::new(RwLock::new(vec![]));
+        let state = AppState::for_test(config, db_pool, master_key, adapters).await;
+        // Simply ensure the router builds without panicking.
+        let _router = build_router(state);
+    }
+}
