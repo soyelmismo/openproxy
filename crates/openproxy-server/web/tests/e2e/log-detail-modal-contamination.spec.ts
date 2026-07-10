@@ -148,6 +148,9 @@ function makeFinalizedRow(overrides: Partial<RecentUsageRow> = {}): RecentUsageR
     client_response: true,
     prompt_tokens_estimated: false,
     completion_tokens_estimated: false,
+    proxy_url: null,
+    proxy_status: null,
+    is_proxy_rotated: false,
     created_at: new Date().toISOString(),
     ...overrides,
   };
@@ -187,6 +190,9 @@ function makeInflightRow(overrides: Partial<RecentUsageRow> = {}): RecentUsageRo
     client_response: false,
     prompt_tokens_estimated: false,
     completion_tokens_estimated: false,
+    proxy_url: null,
+    proxy_status: null,
+    is_proxy_rotated: false,
     created_at: new Date().toISOString(),
     ...overrides,
   };
