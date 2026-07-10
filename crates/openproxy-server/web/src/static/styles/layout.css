@@ -23,9 +23,9 @@ body.sidebar-collapsed #app {
 }
 
 .sidebar {
-  background: var(--color-surface-2);
+  background: var(--color-surface);
   border-right: var(--border-w) var(--border-style) var(--color-border);
-  padding: var(--space-4);
+  padding: var(--space-4) var(--space-3);
   position: relative;
   display: flex;
   flex-direction: column;
@@ -50,18 +50,20 @@ body.sidebar-collapsed #app {
 }
 .sidebar nav a {
   display: block;
-  padding: 0.45rem 0.6rem;
+  padding: 0.5rem 0.65rem;
   color: var(--color-text);
   border: var(--border-w) var(--border-style) transparent;
   border-bottom-color: transparent;
   font-size: var(--fs-sm);
-  transition: background var(--t-fast);
+  border-radius: var(--radius-md);
+  transition: background var(--t-fast), color var(--t-fast), border-color var(--t-fast);
 }
 .sidebar nav a:hover { background: var(--color-surface-2); }
 .sidebar nav a.active {
   background: var(--color-primary-soft);
   color: var(--color-primary);
-  border-color: var(--color-primary);
+  border-color: transparent;
+  box-shadow: inset 3px 0 0 var(--color-primary);
   font-weight: 600;
 }
 
@@ -161,6 +163,7 @@ main {
   overflow-x: auto;
   overflow-y: auto;
   min-width: 0;
+  background: var(--color-bg);
 }
 
 .page-header {
@@ -169,8 +172,8 @@ main {
   justify-content: space-between;
   flex-wrap: wrap;
   gap: var(--space-3);
-  padding-bottom: var(--space-3);
-  border-bottom: var(--border-w-2) var(--border-style) var(--color-border);
+  padding-bottom: 0;
+  border-bottom: 0;
   margin-bottom: var(--space-5);
 }
 .page-header h2 { margin: 0; }
@@ -183,7 +186,9 @@ main {
 .detail-section,
 section.card {
   background: var(--color-surface);
-  border: var(--border-w) var(--border-style) var(--color-border);
+  border: var(--border-w) var(--border-style) var(--color-border-soft);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-sm);
   padding: var(--space-4);
   margin-bottom: var(--space-4);
 }

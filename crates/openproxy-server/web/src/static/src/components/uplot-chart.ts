@@ -100,16 +100,15 @@ export function injectUplotCss(): void {
  *  theme switching we'd need to read CSS custom properties via
  *  `getComputedStyle(document.documentElement)`. Out of scope for F6. */
 export const CHART_COLORS = {
-  blue: "#2b5a78",   // --color-info (sky dark)
-  green: "#4d7c2a",  // --color-success (sage)
-  orange: "#a86a00", // --color-warn (peach dark)
-  red: "#b21f1f",    // --color-error (salmon dark)
-  purple: "#6a26a4", // --c-purple-stripe
-  gray: "#5a5a5a",   // --color-text-muted
-  // Semantic for status codes
-  status2xx: "#4d7c2a",  // green
-  status4xx: "#a86a00",  // orange
-  status5xx: "#b21f1f",  // red
+  blue: "#2563eb",
+  green: "#16a34a",
+  orange: "#ea580c",
+  red: "#dc2626",
+  purple: "#7c3aed",
+  gray: "#64748b",
+  status2xx: "#16a34a",
+  status4xx: "#f59e0b",
+  status5xx: "#dc2626",
 } as const;
 
 // ----------------------------------------------------------------------------
@@ -137,15 +136,15 @@ export interface LiveChartOpts {
   scales: uPlot.Scales;
   axes: uPlot.Axis[];
   initialData?: ChartData;
+  legend?: uPlot.Legend;
 }
 
 // ----------------------------------------------------------------------------
 // Live chart (full-size, axes visible)
 // ----------------------------------------------------------------------------
 
-/** Sensible defaults shared by all full-size charts. Disables the legend
- *  (we render our own), the select box (zoom is overkill for live data),
- *  and the drag cursor (panning would scroll the page).
+/** Sensible defaults shared by all full-size charts. Keeps a live legend
+ *  for exact hover values while disabling selection and drag-to-zoom.
  *
  *  We construct the full Options object in one go (rather than mutating
  *  a base) because the strict tsconfig has `exactOptionalPropertyTypes` —
@@ -156,11 +155,12 @@ function buildOptions(
   series: uPlot.Series[],
   scales: uPlot.Scales,
   axes: uPlot.Axis[],
+  legend: uPlot.Legend,
 ): uPlot.Options {
   return {
     width,
     height,
-    legend: { show: false },
+    legend,
     cursor: {
       drag: { x: false, y: false },
       // Keep the cursor focus ring (shows X/Y values on hover) — useful
@@ -169,7 +169,7 @@ function buildOptions(
     // `Select` extends `BBox` which requires left/top/width/height —
     // we provide zeros alongside `show: false` to satisfy the type.
     select: { show: false, left: 0, top: 0, width: 0, height: 0 },
-    padding: [8, 8, 0, 0],
+    padding: [34, 10, 2, 4],
     series,
     scales,
     axes,
@@ -198,7 +198,14 @@ export function createLiveChart(container: HTMLElement, opts: LiveChartOpts): uP
   const h: number = Math.max(80, container.clientHeight || 200);
   const data: ChartData = opts.initialData ?? [[]];
   const u: uPlot = new uPlot(
-    buildOptions(w, h, opts.series, opts.scales, opts.axes),
+    buildOptions(
+      w,
+      h,
+      opts.series,
+      opts.scales,
+      opts.axes,
+      opts.legend ?? { show: true, live: true },
+    ),
     data,
     container,
   );
@@ -355,103 +362,79 @@ export function observeResize(u: uPlot, container: HTMLElement): () => void {
 /** X-axis ticks formatter for time-series charts. uPlot's default is fine
  *  but we override to show "HH:MM:SS" (the live dashboard is about recent
  *  activity, not dates). */
-function timeFormatter(scaleSecs: number): (u: uPlot, vals: number[]) => string[] {
-  // For short windows (1m, 5m), show seconds. For long windows (30m),
-  // show minutes:seconds.
-  return (_u: uPlot, vals: number[]): string[] => {
-    return vals.map((v: number) => {
-      if (!Number.isFinite(v)) return "";
-      const d: Date = new Date(v * 1000);
-      const hh: string = String(d.getHours()).padStart(2, "0");
-      const mm: string = String(d.getMinutes()).padStart(2, "0");
-      if (scaleSecs <= 300) {
-        const ss: string = String(d.getSeconds()).padStart(2, "0");
-        return `${hh}:${mm}:${ss}`;
-      }
-      return `${hh}:${mm}`;
-    });
-  };
+function timeFormatter(u: uPlot, vals: number[]): string[] {
+  const scale = u.scales["x"];
+  const span: number = (scale?.max ?? 0) - (scale?.min ?? 0);
+  return vals.map((v: number) => {
+    if (!Number.isFinite(v)) return "";
+    const d: Date = new Date(v * 1000);
+    const hh: string = String(d.getHours()).padStart(2, "0");
+    const mm: string = String(d.getMinutes()).padStart(2, "0");
+    if (span <= 300) {
+      const ss: string = String(d.getSeconds()).padStart(2, "0");
+      return `${hh}:${mm}:${ss}`;
+    }
+    return `${hh}:${mm}`;
+  });
+}
+
+function formatRate(_u: uPlot, raw: number): string {
+  if (!Number.isFinite(raw)) return "";
+  return compactValue(raw) + "/s";
+}
+
+function formatCount(_u: uPlot, raw: number): string {
+  return Number.isFinite(raw) ? compactValue(raw) : "";
+}
+
+function formatDuration(_u: uPlot, raw: number): string {
+  if (!Number.isFinite(raw)) return "";
+  return raw >= 1000 ? (raw / 1000).toFixed(2) + "s" : Math.round(raw) + "ms";
+}
+
+function compactValue(v: number): string {
+  if (Math.abs(v) >= 1_000_000) return (v / 1_000_000).toFixed(1) + "M";
+  if (Math.abs(v) >= 1_000) return (v / 1_000).toFixed(1) + "k";
+  if (Number.isInteger(v)) return String(v);
+  return v.toFixed(2);
 }
 
 /** Number formatter for axis ticks. Uses compact notation (1.2k, 8.2k). */
 function compactNumber(_u: uPlot, vals: number[]): string[] {
-  return vals.map((v: number) => {
-    if (!Number.isFinite(v)) return "";
-    if (Math.abs(v) >= 1_000_000) return (v / 1_000_000).toFixed(1) + "M";
-    if (Math.abs(v) >= 1_000) return (v / 1_000).toFixed(1) + "k";
-    if (Number.isInteger(v)) return String(v);
-    return v.toFixed(1);
-  });
+  return vals.map((v: number) => Number.isFinite(v) ? compactValue(v) : "");
 }
 
-/** uPlot's bar path builder, or null if unavailable (the property is
- *  optional in the type defs). We null-check before assigning to a
- *  series' `paths` field (which is non-optional under
- *  `exactOptionalPropertyTypes`). */
-function barsPathBuilder(): uPlot.Series.PathBuilder | null {
-  const factory: uPlot.Series.BarsPathBuilderFactory | undefined = uPlot.paths.bars;
-  if (!factory) return null;
-  return factory({ size: [0.6, 100], align: 0 });
+function positiveRange(_u: uPlot, _min: number, max: number): [number, number] {
+  if (!Number.isFinite(max) || max <= 0) return [0, 1];
+  return [0, max * 1.05];
 }
 
-/** Returns true if the status-codes chart was built with the bars plugin
- *  (and therefore expects cumulative-sum stacked data), false if it fell
- *  back to the line renderer (which expects original-count data).
- *
- *  The home view calls this once after building the chart to decide which
- *  data preparation path to use on every `setData`. */
-export function isStatusChartBarsMode(): boolean {
-  return uPlot.paths.bars !== undefined;
-}
-
-/** Throughput chart: 3 line series (rps / tps / cps) over time.
- *  - rps on the left Y-axis (auto-scaled).
- *  - tps on the right Y-axis (auto-scaled, typically much larger than rps).
- *  - cps on the right Y-axis too — but cost is usually µ$/sec so the right
- *    axis shows dollars; the values are tiny compared to tps, so we plot
- *    cps × 1000 (i.e. "millicents/sec") on the same axis as tps. The
- *    legend/label notes this scaling.
- *
- *  This is a pragmatic compromise — dual right-axes (one for tps, one for
- *  cps) would be confusing visually, and showing cps on its own axis that
- *  auto-scales to ~0.001 would make the line invisible. */
-export function buildThroughputChart(container: HTMLElement, windowSecs: number): uPlot {
+/** Requests and tokens per second on independent Y axes. */
+export function buildThroughputChart(container: HTMLElement): uPlot {
   return createLiveChart(container, {
     series: [
-      {}, // X
+      { label: "Time" },
       {
-        label: "rps",
+        label: "Requests",
         stroke: CHART_COLORS.blue,
-        width: 1.5,
+        width: 2,
         points: { show: false },
         scale: "rps",
+        value: formatRate,
       },
       {
-        label: "tps",
+        label: "Tokens",
         stroke: CHART_COLORS.green,
-        width: 1.5,
+        width: 2,
         points: { show: false },
         scale: "tps",
-      },
-      {
-        label: "cps",
-        stroke: CHART_COLORS.orange,
-        width: 1.5,
-        points: { show: false },
-        // Scale cps × 1000 so it shares the right axis with tps without
-        // being invisible. The legend in the chart header notes this.
-        scale: "tps",
-        // Map values: input is $/sec; we plot as millicents/sec for
-        // visibility. uPlot's `value` formatter is for the cursor readout.
-        value: (_u: uPlot, raw: number): string => {
-          return "$" + (raw / 1000).toFixed(5) + "/s";
-        },
+        value: formatRate,
       },
     ],
     scales: {
       x: { time: true },
-      rps: { auto: true },
-      tps: { auto: true },
+      rps: { auto: true, range: positiveRange },
+      tps: { auto: true, range: positiveRange },
     },
     axes: [
       {
@@ -459,13 +442,13 @@ export function buildThroughputChart(container: HTMLElement, windowSecs: number)
         ticks: { stroke: cssVar("--color-border"), width: 1 },
         stroke: cssVar("--color-text-muted"),
         font: "10px 'Courier New', monospace",
-        values: timeFormatter(windowSecs),
+        values: timeFormatter,
       },
       {
         scale: "rps",
         side: 3, // left
         grid: { show: false },
-        stroke: cssVar("--color-text-muted"),
+        stroke: CHART_COLORS.blue,
         font: "10px 'Courier New', monospace",
         values: compactNumber,
         size: 40,
@@ -474,7 +457,7 @@ export function buildThroughputChart(container: HTMLElement, windowSecs: number)
         scale: "tps",
         side: 1, // right
         grid: { show: false },
-        stroke: cssVar("--color-text-muted"),
+        stroke: CHART_COLORS.green,
         font: "10px 'Courier New', monospace",
         values: compactNumber,
         size: 40,
@@ -483,118 +466,37 @@ export function buildThroughputChart(container: HTMLElement, windowSecs: number)
   });
 }
 
-/** Status codes chart: 3 series (2xx / 4xx / 5xx) per bucket. Rendered as
- *  vertical bars (uPlot's `paths.bars` factory) on a single shared Y-axis
- *  (count per bucket).
- *
- *  Stacking: uPlot doesn't have built-in stacked bars in core. The standard
- *  recipe (https://github.com/leeoniya/uPlot/blob/master/demos/stacked-bars.js)
- *  uses cumulative-sum data + reverse-order rendering so each series' bar
- *  is drawn from 0 to its (cumulative) value, with the tallest drawn first
- *  so subsequent shorter bars cover the bottom portion, leaving the top
- *  slice visible. We implement that recipe in the home view's data
- *  preparation (`stackStatusData`): the data array passed to `setData` is
- *  `[xs, total_cumulative, mid_cumulative, s2xx]` so series[1] (5xx) is the
- *  tallest, series[3] (2xx) is the shortest.
- *
- *  The series array here matches that order: series[1] = "5xx" (drawn
- *  first, bottom layer), series[2] = "4xx" (drawn second, covers bottom
- *  of 5xx), series[3] = "2xx" (drawn last, covers bottom of 4xx). The
- *  visible slices from bottom-to-top are: 2xx, 4xx, 5xx — matching the
- *  natural reading order. */
-export function buildStatusCodesChart(container: HTMLElement, windowSecs: number): uPlot {
-  const paths: uPlot.Series.PathBuilder | null = barsPathBuilder();
-  // We construct the series objects without `paths` if the bars factory
-  // isn't available — `exactOptionalPropertyTypes` requires this branch.
-  if (paths !== null) {
-    return createLiveChart(container, {
-      series: [
-        {}, // X
-        {
-          // series[1] = 5xx cumulative (tallest, drawn FIRST so others
-          // stack on top of it). Label/color match the 5xx semantic.
-          label: "5xx",
-          stroke: CHART_COLORS.status5xx,
-          fill: "rgba(178, 31, 31, 0.85)",
-          width: 1,
-          points: { show: false },
-          paths,
-        },
-        {
-          // series[2] = 4xx cumulative (s2xx + s4xx). Drawn second, covers
-          // the bottom (s2xx + s4xx) of series[1]'s bar.
-          label: "4xx",
-          stroke: CHART_COLORS.status4xx,
-          fill: "rgba(168, 106, 0, 0.85)",
-          width: 1,
-          points: { show: false },
-          paths,
-        },
-        {
-          // series[3] = 2xx original count. Drawn last, covers the bottom
-          // (s2xx) of series[2]'s bar.
-          label: "2xx",
-          stroke: CHART_COLORS.status2xx,
-          fill: "rgba(77, 124, 42, 0.85)",
-          width: 1,
-          points: { show: false },
-          paths,
-        },
-      ],
-      scales: {
-        x: { time: true },
-        y: { auto: true },
-      },
-      axes: [
-        {
-          grid: { stroke: cssVar("--color-border-soft"), width: 1 },
-          ticks: { stroke: cssVar("--color-border"), width: 1 },
-          stroke: cssVar("--color-text-muted"),
-          font: "10px 'Courier New', monospace",
-          values: timeFormatter(windowSecs),
-        },
-        {
-          side: 3, // left
-          grid: { show: false },
-          stroke: cssVar("--color-text-muted"),
-          font: "10px 'Courier New', monospace",
-          values: compactNumber,
-          size: 40,
-        },
-      ],
-    });
-  }
-  // Fallback: line renderer (bars factory unavailable — uPlot builds
-  // without the bars plugin, which is rare but possible). The 3 series
-  // are rendered as overlapping area charts with translucent fills.
+/** Successful, client-error, and server-error responses per bucket. */
+export function buildStatusCodesChart(container: HTMLElement): uPlot {
   return createLiveChart(container, {
     series: [
-      {},
+      { label: "Time" },
       {
-        label: "2xx",
+        label: "Successful",
         stroke: CHART_COLORS.status2xx,
-        fill: "rgba(77, 124, 42, 0.25)",
-        width: 1.5,
+        fill: "rgba(22, 163, 74, 0.12)",
+        width: 2,
         points: { show: false },
+        value: formatCount,
       },
       {
-        label: "4xx",
+        label: "Client error",
         stroke: CHART_COLORS.status4xx,
-        fill: "rgba(168, 106, 0, 0.25)",
-        width: 1.5,
+        width: 2,
         points: { show: false },
+        value: formatCount,
       },
       {
-        label: "5xx",
+        label: "Server error",
         stroke: CHART_COLORS.status5xx,
-        fill: "rgba(178, 31, 31, 0.25)",
-        width: 1.5,
+        width: 2,
         points: { show: false },
+        value: formatCount,
       },
     ],
     scales: {
       x: { time: true },
-      y: { auto: true },
+      y: { auto: true, range: positiveRange },
     },
     axes: [
       {
@@ -602,7 +504,7 @@ export function buildStatusCodesChart(container: HTMLElement, windowSecs: number
         ticks: { stroke: cssVar("--color-border"), width: 1 },
         stroke: cssVar("--color-text-muted"),
         font: "10px 'Courier New', monospace",
-        values: timeFormatter(windowSecs),
+        values: timeFormatter,
       },
       {
         side: 3,
@@ -618,34 +520,36 @@ export function buildStatusCodesChart(container: HTMLElement, windowSecs: number
 
 /** Latency chart: 3 line series (p50 / p95 / p99) in milliseconds, single
  *  shared Y-axis. */
-export function buildLatencyChart(container: HTMLElement, windowSecs: number): uPlot {
+export function buildLatencyChart(container: HTMLElement): uPlot {
   return createLiveChart(container, {
     series: [
-      {}, // X
+      { label: "Time" },
       {
         label: "p50",
         stroke: CHART_COLORS.blue,
-        width: 1.5,
+        width: 2,
         points: { show: false },
-        fill: "rgba(43, 90, 120, 0.15)",
+        fill: "rgba(37, 99, 235, 0.10)",
+        value: formatDuration,
       },
       {
         label: "p95",
         stroke: CHART_COLORS.orange,
-        width: 1.5,
+        width: 2,
         points: { show: false },
-        fill: "rgba(168, 106, 0, 0.10)",
+        value: formatDuration,
       },
       {
         label: "p99",
         stroke: CHART_COLORS.red,
-        width: 1.5,
+        width: 2,
         points: { show: false },
+        value: formatDuration,
       },
     ],
     scales: {
       x: { time: true },
-      y: { auto: true },
+      y: { auto: true, range: positiveRange },
     },
     axes: [
       {
@@ -653,7 +557,7 @@ export function buildLatencyChart(container: HTMLElement, windowSecs: number): u
         ticks: { stroke: cssVar("--color-border"), width: 1 },
         stroke: cssVar("--color-text-muted"),
         font: "10px 'Courier New', monospace",
-        values: timeFormatter(windowSecs),
+        values: timeFormatter,
       },
       {
         side: 3,
@@ -677,18 +581,21 @@ export function buildLatencyChart(container: HTMLElement, windowSecs: number): u
 // Builders used by the analytics view (B3)
 // ----------------------------------------------------------------------------
 
-/** Date formatter for the daily-usage chart's X axis. Formats timestamps
- *  (in seconds) as "MM-DD" so the labels stay compact even on narrow
- *  viewports. The year is omitted (the analytics view's window is at
- *  most a year, so the year is implied by the selected preset). */
-function dateFormatter(_u: uPlot, vals: number[]): string[] {
+/** Compact, unambiguous UTC dates. Includes the year for long ranges. */
+function dateFormatter(u: uPlot, vals: number[]): string[] {
+  const scale = u.scales["x"];
+  const spanDays: number = ((scale?.max ?? 0) - (scale?.min ?? 0)) / 86_400;
+  let previous = "";
   return vals.map((v: number) => {
     if (!Number.isFinite(v)) return "";
     const d: Date = new Date(v * 1000);
     if (Number.isNaN(d.getTime())) return "";
-    const mm: string = String(d.getUTCMonth() + 1).padStart(2, "0");
-    const dd: string = String(d.getUTCDate()).padStart(2, "0");
-    return `${mm}-${dd}`;
+    const label = new Intl.DateTimeFormat(undefined, spanDays > 370
+      ? { month: "short", year: "2-digit", timeZone: "UTC" }
+      : { month: "short", day: "numeric", timeZone: "UTC" }).format(d);
+    if (label === previous) return "";
+    previous = label;
+    return label;
   });
 }
 
@@ -704,39 +611,41 @@ function costAxisFormatter(_u: uPlot, vals: number[]): string[] {
   });
 }
 
-/** Daily usage chart: 2 line series on dual Y axes over time.
- *  - Left axis: unique requests per day (blue line).
- *  - Right axis: total cost USD per day (orange line).
- *
- *  The X axis is time (dates as "MM-DD"). Built for the analytics view's
- *  `/usage/by-day` payload (B3). The caller populates it via
- *  `setData([[ts1, ts2, ...], [reqs1, reqs2, ...], [cost1, cost2, ...]])`
- *  where timestamps are in seconds since epoch (UTC midnight of each day). */
+/** Daily requests, errors, and cost on two Y axes. */
 export function buildDailyUsageChart(container: HTMLElement): uPlot {
   return createLiveChart(container, {
     series: [
-      {}, // X (time)
+      { label: "Date" },
       {
-        label: "requests",
+        label: "Requests",
         stroke: CHART_COLORS.blue,
-        width: 1.5,
-        points: { show: false },
-        fill: "rgba(43, 90, 120, 0.15)",
+        width: 2,
+        points: { show: true, size: 5, width: 2 },
+        fill: "rgba(37, 99, 235, 0.10)",
         scale: "reqs",
+        value: formatCount,
       },
       {
-        label: "cost",
+        label: "Errors",
+        stroke: CHART_COLORS.red,
+        width: 2,
+        points: { show: true, size: 5, width: 2 },
+        scale: "reqs",
+        value: formatCount,
+      },
+      {
+        label: "Cost",
         stroke: CHART_COLORS.orange,
-        width: 1.5,
-        points: { show: false },
+        width: 2,
+        points: { show: true, size: 5, width: 2 },
         scale: "cost",
-        value: (_u: uPlot, raw: number): string => "$" + raw.toFixed(4),
+        value: (_u: uPlot, raw: number): string => Number.isFinite(raw) ? "$" + raw.toFixed(4) : "",
       },
     ],
     scales: {
       x: { time: true },
-      reqs: { auto: true },
-      cost: { auto: true },
+      reqs: { auto: true, range: positiveRange },
+      cost: { auto: true, range: positiveRange },
     },
     axes: [
       {
@@ -750,7 +659,7 @@ export function buildDailyUsageChart(container: HTMLElement): uPlot {
         scale: "reqs",
         side: 3, // left
         grid: { show: false },
-        stroke: cssVar("--color-text-muted"),
+        stroke: CHART_COLORS.blue,
         font: "10px 'Courier New', monospace",
         values: compactNumber,
         size: 40,
@@ -759,120 +668,10 @@ export function buildDailyUsageChart(container: HTMLElement): uPlot {
         scale: "cost",
         side: 1, // right
         grid: { show: false },
-        stroke: cssVar("--color-text-muted"),
+        stroke: CHART_COLORS.orange,
         font: "10px 'Courier New', monospace",
         values: costAxisFormatter,
         size: 44,
-      },
-    ],
-  });
-}
-
-/** Categorical vertical bar chart. Used by the analytics view for:
- *    - Usage by model (top N models, sorted by cost)
- *    - Usage by provider (sorted by cost)
- *    - Status codes (4 buckets: 2xx / 4xx / 5xx / Other)
- *    - Latency percentiles (6 bars: p50/p95 × connect/ttft/total)
- *
- *  The X axis is categorical (integer indices 0..n-1) with a `values`
- *  formatter that maps indices back to `labels`. The Y axis is the value
- *  (auto-scaled). One series, one color. The caller populates the chart
- *  via `setData([[0, 1, 2, ...], [val0, val1, val2, ...]])`.
- *
- *  `labels` is captured by closure into the X-axis formatter — the chart
- *  must be destroyed + recreated if the label set changes (e.g. when the
- *  user changes filters and the top-N models change). This matches the
- *  analytics view's lifecycle: charts are created after each fetch and
- *  destroyed on unmount / re-mount.
- *
- *  `valueFormatter` formats the cursor readout (the value shown when the
- *  user hovers a bar). Pass `null` to use the raw number. */
-export function buildCategoryBarsChart(
-  container: HTMLElement,
-  labels: string[],
-  color: string,
-  valueFormatter: ((u: uPlot, raw: number) => string) | null,
-): uPlot {
-  const paths: uPlot.Series.PathBuilder | null = barsPathBuilder();
-  const fill: string = color + "cc"; // 80% alpha via 0xcc hex suffix (color is #RRGGBB)
-  // Cursor readout: show "label: value" so the user can identify which bar
-  // they're hovering even when the X-axis label is truncated.
-  const values: uPlot.Series.Values = (_u: uPlot, _seriesIdx: number, idx: number | null): object => {
-    if (idx == null) return {};
-    const label: string = labels[idx] ?? "";
-    return { label };
-  };
-  // X-axis tick formatter: map integer indices back to category labels.
-  const xValues: (u: uPlot, vals: number[]) => string[] = (_u: uPlot, vals: number[]): string[] => {
-    return vals.map((v: number) => {
-      const idx: number = Math.round(v);
-      if (!Number.isInteger(idx) || idx < 0 || idx >= labels.length) return "";
-      return labels[idx] ?? "";
-    });
-  };
-
-  // Build the series. We construct it without `paths` if the bars factory
-  // is unavailable (exactOptionalPropertyTypes requires this branch).
-  const series: uPlot.Series[] = [
-    {}, // X (categorical indices)
-    paths !== null
-      ? {
-          label: "value",
-          stroke: color,
-          fill,
-          width: 1,
-          points: { show: false },
-          paths,
-          values,
-          value: valueFormatter ?? ((_u: uPlot, raw: number): string => String(raw)),
-        }
-      : {
-          label: "value",
-          stroke: color,
-          fill: color + "33",
-          width: 1.5,
-          points: { show: false },
-          values,
-          value: valueFormatter ?? ((_u: uPlot, raw: number): string => String(raw)),
-        },
-  ];
-
-  return createLiveChart(container, {
-    series,
-    scales: {
-      // distr: 2 = categorical — each X value is a category center, and
-      // the axis ticks land on integer positions (0, 1, 2, ...). Without
-      // this, uPlot treats X as a continuous linear scale and the bars
-      // cluster at the left edge.
-      x: { time: false, distr: 2 },
-      y: { auto: true, range: (_u: uPlot, min: number, max: number): [number, number] => {
-        // Always include 0 in the range so bars start from the baseline.
-        if (!Number.isFinite(min) || !Number.isFinite(max)) return [0, 1];
-        const top: number = max <= 0 ? 1 : max;
-        return [0, top];
-      } },
-    },
-    axes: [
-      {
-        grid: { stroke: cssVar("--color-border-soft"), width: 1 },
-        ticks: { stroke: cssVar("--color-border"), width: 1 },
-        stroke: cssVar("--color-text-muted"),
-        font: "10px 'Courier New', monospace",
-        values: xValues,
-        // Rotate long labels 45° so they don't overlap. Short labels
-        // (e.g. "2xx", "p50c") fit horizontally and look better un-rotated,
-        // but rotation is a single setting per axis — we accept the slight
-        // aesthetic cost on short-label charts in exchange for not having
-        // to thread a "rotate" flag through every caller.
-        rotate: 45,
-      },
-      {
-        side: 3, // left
-        grid: { show: false },
-        stroke: cssVar("--color-text-muted"),
-        font: "10px 'Courier New', monospace",
-        values: compactNumber,
-        size: 40,
       },
     ],
   });

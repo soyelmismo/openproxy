@@ -749,6 +749,9 @@ pub struct RecentUsageRow {
     pub prompt_tokens_estimated: bool,
     /// True if completion_tokens were estimated (upstream didn't report usage).
     pub completion_tokens_estimated: bool,
+    pub proxy_url: Option<String>,
+    pub proxy_status: Option<String>,
+    pub is_proxy_rotated: bool,
     /// The endpoint kind (chat, audio, image, etc.). Defaults to Chat.
     pub endpoint_kind: crate::endpoint::EndpointKind,
     pub created_at: String,
@@ -794,6 +797,9 @@ pub struct UsageDetailRow {
     pub prompt_tokens_estimated: bool,
     /// True if completion_tokens were estimated (upstream didn't report usage).
     pub completion_tokens_estimated: bool,
+    pub proxy_url: Option<String>,
+    pub proxy_status: Option<String>,
+    pub is_proxy_rotated: bool,
     /// The endpoint kind (chat, audio, image, etc.). Defaults to Chat.
     pub endpoint_kind: crate::endpoint::EndpointKind,
     pub created_at: String,
@@ -845,7 +851,7 @@ pub fn recent(conn: &Connection, since_id: i64, limit: u32) -> Result<Vec<Recent
                     race_lost, created_at, stop_reason, \
                     compression_savings_pct, compression_techniques, \
                     client_response, prompt_tokens_estimated, completion_tokens_estimated, \
-                    endpoint_kind \
+                    endpoint_kind, proxy_url, proxy_status, is_proxy_rotated \
              FROM usage \
              WHERE id > ?1 \
              ORDER BY id ASC \
@@ -921,6 +927,12 @@ pub fn recent(conn: &Connection, since_id: i64, limit: u32) -> Result<Vec<Recent
             let completion_tokens_estimated: i64 = row.get(col_idx)?;
             col_idx += 1;
             let endpoint_kind_str: String = row.get(col_idx)?;
+            col_idx += 1;
+            let proxy_url: Option<String> = row.get(col_idx)?;
+            col_idx += 1;
+            let proxy_status: Option<String> = row.get(col_idx)?;
+            col_idx += 1;
+            let is_proxy_rotated: i64 = row.get(col_idx)?;
 
             if !(0..=u16::MAX as i64).contains(&status_code) {
                 return Err(rusqlite::Error::FromSqlConversionFailure(
@@ -988,6 +1000,9 @@ pub fn recent(conn: &Connection, since_id: i64, limit: u32) -> Result<Vec<Recent
                 client_response: client_response != 0,
                 prompt_tokens_estimated: prompt_tokens_estimated != 0,
                 completion_tokens_estimated: completion_tokens_estimated != 0,
+                proxy_url,
+                proxy_status,
+                is_proxy_rotated: is_proxy_rotated != 0,
                 endpoint_kind,
                 created_at,
             })
@@ -1024,7 +1039,7 @@ pub fn recent_desc(conn: &Connection, limit: u32) -> Result<Vec<RecentUsageRow>>
                     race_lost, created_at, stop_reason, \
                     compression_savings_pct, compression_techniques, \
                     client_response, prompt_tokens_estimated, completion_tokens_estimated, \
-                    endpoint_kind \
+                    endpoint_kind, proxy_url, proxy_status, is_proxy_rotated \
              FROM usage \
              ORDER BY id DESC \
              LIMIT ?1",
@@ -1099,6 +1114,12 @@ pub fn recent_desc(conn: &Connection, limit: u32) -> Result<Vec<RecentUsageRow>>
             let completion_tokens_estimated: i64 = row.get(col_idx)?;
             col_idx += 1;
             let endpoint_kind_str: String = row.get(col_idx)?;
+            col_idx += 1;
+            let proxy_url: Option<String> = row.get(col_idx)?;
+            col_idx += 1;
+            let proxy_status: Option<String> = row.get(col_idx)?;
+            col_idx += 1;
+            let is_proxy_rotated: i64 = row.get(col_idx)?;
 
             if !(0..=u16::MAX as i64).contains(&status_code) {
                 return Err(rusqlite::Error::FromSqlConversionFailure(
@@ -1167,6 +1188,9 @@ pub fn recent_desc(conn: &Connection, limit: u32) -> Result<Vec<RecentUsageRow>>
                 client_response: client_response != 0,
                 prompt_tokens_estimated: prompt_tokens_estimated != 0,
                 completion_tokens_estimated: completion_tokens_estimated != 0,
+                proxy_url,
+                proxy_status,
+                is_proxy_rotated: is_proxy_rotated != 0,
                 endpoint_kind,
                 created_at,
             })
@@ -1198,7 +1222,7 @@ pub fn row_for_broadcast_by_id(conn: &Connection, id: i64) -> Result<Option<Rece
                     race_lost, created_at, stop_reason, \
                     compression_savings_pct, compression_techniques, \
                     client_response, prompt_tokens_estimated, completion_tokens_estimated, \
-                    endpoint_kind \
+                    endpoint_kind, proxy_url, proxy_status, is_proxy_rotated \
              FROM usage \
              WHERE id = ?1",
         )
@@ -1272,6 +1296,12 @@ pub fn row_for_broadcast_by_id(conn: &Connection, id: i64) -> Result<Option<Rece
             let completion_tokens_estimated: i64 = row.get(col_idx)?;
             col_idx += 1;
             let endpoint_kind_str: String = row.get(col_idx)?;
+            col_idx += 1;
+            let proxy_url: Option<String> = row.get(col_idx)?;
+            col_idx += 1;
+            let proxy_status: Option<String> = row.get(col_idx)?;
+            col_idx += 1;
+            let is_proxy_rotated: i64 = row.get(col_idx)?;
 
             if !(0..=u16::MAX as i64).contains(&status_code) {
                 return Err(rusqlite::Error::FromSqlConversionFailure(
@@ -1329,6 +1359,9 @@ pub fn row_for_broadcast_by_id(conn: &Connection, id: i64) -> Result<Option<Rece
                 client_response: client_response != 0,
                 prompt_tokens_estimated: prompt_tokens_estimated != 0,
                 completion_tokens_estimated: completion_tokens_estimated != 0,
+                proxy_url,
+                proxy_status,
+                is_proxy_rotated: is_proxy_rotated != 0,
                 endpoint_kind,
                 created_at,
             })
@@ -1357,7 +1390,7 @@ pub fn detail_by_id(conn: &Connection, id: i64) -> Result<Option<UsageDetailRow>
                     request_body_json, response_body_json, request_headers, \
                     response_headers, error_message, client_response, \
                     prompt_tokens_estimated, completion_tokens_estimated, \
-                    endpoint_kind \
+                    endpoint_kind, proxy_url, proxy_status, is_proxy_rotated \
              FROM usage \
              WHERE id = ?1",
         )
@@ -1413,6 +1446,12 @@ pub fn detail_by_id(conn: &Connection, id: i64) -> Result<Option<UsageDetailRow>
             let completion_tokens_estimated: i64 = row.get(col_idx)?;
             col_idx += 1;
             let endpoint_kind_str: String = row.get(col_idx)?;
+            col_idx += 1;
+            let proxy_url: Option<String> = row.get(col_idx)?;
+            col_idx += 1;
+            let proxy_status: Option<String> = row.get(col_idx)?;
+            col_idx += 1;
+            let is_proxy_rotated: i64 = row.get(col_idx)?;
 
             if !(0..=u16::MAX as i64).contains(&status_code) {
                 return Err(rusqlite::Error::FromSqlConversionFailure(
@@ -1480,6 +1519,9 @@ pub fn detail_by_id(conn: &Connection, id: i64) -> Result<Option<UsageDetailRow>
                 client_response: client_response != 0,
                 prompt_tokens_estimated: prompt_tokens_estimated != 0,
                 completion_tokens_estimated: completion_tokens_estimated != 0,
+                proxy_url,
+                proxy_status,
+                is_proxy_rotated: is_proxy_rotated != 0,
                 endpoint_kind,
             })
         })
@@ -1502,7 +1544,7 @@ pub fn detail_by_trace_id(conn: &Connection, trace_id: &str) -> Result<Option<Us
                     request_body_json, response_body_json, request_headers, \
                     response_headers, error_message, client_response, \
                     prompt_tokens_estimated, completion_tokens_estimated, \
-                    endpoint_kind \
+                    endpoint_kind, proxy_url, proxy_status, is_proxy_rotated \
              FROM usage \
              WHERE trace_id = ?1",
         )
@@ -1558,6 +1600,12 @@ pub fn detail_by_trace_id(conn: &Connection, trace_id: &str) -> Result<Option<Us
             let completion_tokens_estimated: i64 = row.get(col_idx)?;
             col_idx += 1;
             let endpoint_kind_str: String = row.get(col_idx)?;
+            col_idx += 1;
+            let proxy_url: Option<String> = row.get(col_idx)?;
+            col_idx += 1;
+            let proxy_status: Option<String> = row.get(col_idx)?;
+            col_idx += 1;
+            let is_proxy_rotated: i64 = row.get(col_idx)?;
 
             if !(0..=u16::MAX as i64).contains(&status_code) {
                 return Err(rusqlite::Error::FromSqlConversionFailure(
@@ -1625,6 +1673,9 @@ pub fn detail_by_trace_id(conn: &Connection, trace_id: &str) -> Result<Option<Us
                 client_response: client_response != 0,
                 prompt_tokens_estimated: prompt_tokens_estimated != 0,
                 completion_tokens_estimated: completion_tokens_estimated != 0,
+                proxy_url,
+                proxy_status,
+                is_proxy_rotated: is_proxy_rotated != 0,
                 endpoint_kind,
             })
         })
