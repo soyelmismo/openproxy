@@ -805,8 +805,7 @@ pub fn auto_create_combos(conn: &Connection) -> Result<usize> {
 
         // Insert new targets (append-only logic).
         for &(row_id, ref provider_id, account_id) in targets {
-            let target_exists =
-                existing_targets.contains(&(combo_id, account_id, row_id));
+            let target_exists = existing_targets.contains(&(combo_id, account_id, row_id));
 
             if !target_exists {
                 let current_max = max_orders.get(&combo_id).copied().unwrap_or(-1);
