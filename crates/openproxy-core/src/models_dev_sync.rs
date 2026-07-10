@@ -597,8 +597,6 @@ pub fn enrich_models_from_sync(conn: &Connection) -> Result<usize> {
 /// provider+account combo (first account per provider).
 /// Returns the number of combos created.
 pub fn auto_create_combos(conn: &Connection) -> Result<usize> {
-    use rusqlite::OptionalExtension;
-
     // Find model_id_normalized values that are active in ≥2 different providers with
     // healthy accounts. We use the `models` table joined with accounts.
     let mut stmt = conn
@@ -627,49 +625,149 @@ pub fn auto_create_combos(conn: &Connection) -> Result<usize> {
         ids
     };
 
+    // Pre-group all active targets by model_id_normalized for the target normalized_ids to avoid N queries inside the loop.
+    let targets_by_norm_id: std::collections::HashMap<String, Vec<(i64, String, i64)>> = {
+        if normalized_ids.is_empty() {
+            std::collections::HashMap::new()
+        } else {
+            // Because SQLite variables max out at 999 typically, we query in chunks if needed.
+            // But since normalized_ids is already filtered by `HAVING COUNT >= 2`, it's rarely > 999 at once.
+            // Even if it is, doing a full table scan is acceptable because this sync runs infrequently
+            // in a background task.
+            let mut stmt = conn
+                .prepare(
+                    "SELECT m.model_id_normalized, m.rowid, m.provider_id, a.id
+                     FROM models m
+                     JOIN accounts a ON a.provider_id = m.provider_id AND a.health_status = 'healthy'
+                     WHERE m.active = 1
+                       AND m.model_id_normalized IS NOT NULL
+                       AND m.model_id_normalized != ''
+                     ORDER BY m.model_id_normalized, m.provider_id",
+                )
+                .map_err(crate::error::map_db_error)?;
+
+            let rows = stmt
+                .query_map([], |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, i64>(1)?,
+                        row.get::<_, String>(2)?,
+                        row.get::<_, Option<i64>>(3)?.unwrap_or(-1),
+                    ))
+                })
+                .map_err(crate::error::map_db_error)?;
+
+            let mut map: std::collections::HashMap<String, Vec<(i64, String, i64)>> = std::collections::HashMap::new();
+            // We can optionally filter here, but we iterate over `normalized_ids` later anyway.
+            for row in rows {
+                let (norm_id, row_id, provider_id, account_id) = row.map_err(crate::error::map_db_error)?;
+                map.entry(norm_id).or_default().push((row_id, provider_id, account_id));
+            }
+            map
+        }
+    };
+
+    // Filter combos to just those related to our normalized_ids
+    let combo_names: Vec<String> = normalized_ids.iter().map(|id| format!("auto:{}", id)).collect();
+
+    let existing_combos: std::collections::HashMap<String, i64> = {
+        if combo_names.is_empty() {
+            std::collections::HashMap::new()
+        } else {
+            let mut stmt = conn
+                .prepare("SELECT name, id FROM combos")
+                .map_err(crate::error::map_db_error)?;
+            stmt.query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?)))
+                .map_err(crate::error::map_db_error)?
+                .filter_map(|r| r.ok())
+                .filter(|(name, _)| combo_names.contains(name)) // only load what we care about
+                .collect()
+        }
+    };
+
+    let combo_ids: Vec<i64> = existing_combos.values().copied().collect();
+    let existing_targets: std::collections::HashSet<(i64, String, i64, i64)> = {
+        if combo_ids.is_empty() {
+            std::collections::HashSet::new()
+        } else {
+            // We use IN (?) bindings where possible, but if there's > 999 we can chunk or just fetch what we need
+            // Here, fetching only for known combos is much smaller than the full table.
+            // In a background job context, a manual filter like this is safe if chunking isn't strictly required
+            // but let's implement chunks just to be fully SQLite-safe.
+            let mut set = std::collections::HashSet::new();
+            for chunk in combo_ids.chunks(900) {
+                let placeholders = vec!["?"; chunk.len()].join(",");
+                let query = format!("SELECT combo_id, provider_id, account_id, model_row_id FROM combo_targets WHERE combo_id IN ({})", placeholders);
+                let mut stmt = conn
+                    .prepare(&query)
+                    .map_err(crate::error::map_db_error)?;
+                let params = rusqlite::params_from_iter(chunk.iter());
+                let rows = stmt.query_map(params, |row| {
+                    Ok((
+                        row.get::<_, i64>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, Option<i64>>(2)?.unwrap_or(-1),
+                        row.get::<_, i64>(3)?,
+                    ))
+                })
+                .map_err(crate::error::map_db_error)?;
+                for row in rows.filter_map(|r| r.ok()) {
+                    set.insert(row);
+                }
+            }
+            set
+        }
+    };
+
+    let mut max_orders: std::collections::HashMap<i64, i32> = {
+        if combo_ids.is_empty() {
+            std::collections::HashMap::new()
+        } else {
+            let mut map = std::collections::HashMap::new();
+            for chunk in combo_ids.chunks(900) {
+                let placeholders = vec!["?"; chunk.len()].join(",");
+                let query = format!("SELECT combo_id, MAX(priority_order) FROM combo_targets WHERE combo_id IN ({}) GROUP BY combo_id", placeholders);
+                let mut stmt = conn
+                    .prepare(&query)
+                    .map_err(crate::error::map_db_error)?;
+                let params = rusqlite::params_from_iter(chunk.iter());
+                let rows = stmt.query_map(params, |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i32>(1)?)))
+                    .map_err(crate::error::map_db_error)?;
+                for (id, max_order) in rows.filter_map(|r| r.ok()) {
+                    map.insert(id, max_order);
+                }
+            }
+            map
+        }
+    };
+
+    // Check if we are already in a transaction. If not, open one explicitly
+    // so the multiple INSERTS don't trigger implicit per-statement fsyncs.
+    let is_in_tx = !conn.is_autocommit();
+    if !is_in_tx {
+        conn.execute("BEGIN", []).map_err(crate::error::map_db_error)?;
+    }
+
     let mut created = 0usize;
+
+    // Prepare statements outside the loop for insertions.
+    let mut insert_combo_stmt = conn
+        .prepare("INSERT INTO combos (name, strategy, race_size) VALUES (?1, 'priority', ?2)")
+        .map_err(crate::error::map_db_error)?;
+
+    let mut insert_target_stmt = conn
+        .prepare(
+            "INSERT INTO combo_targets (combo_id, provider_id, account_id, model_row_id, priority_order) VALUES (?1, ?2, ?3, ?4, ?5)",
+        )
+        .map_err(crate::error::map_db_error)?;
 
     for norm_id in &normalized_ids {
         let combo_name = format!("auto:{}", norm_id);
 
-        // Check if a combo for this normalized model name already exists.
-        // We query the ID if it exists, so we can append to it.
-        let combo_id: Option<i64> = conn
-            .query_row(
-                "SELECT id FROM combos WHERE name = ?1",
-                rusqlite::params![&combo_name],
-                |row| row.get::<_, i64>(0),
-            )
-            .optional()
-            .map_err(crate::error::map_db_error)?;
+        let combo_id = existing_combos.get(&combo_name).copied();
 
-        // Get all (provider_id, model_row_id, account_id) combos for this normalized model.
-        let mut target_stmt = conn
-            .prepare(
-                "SELECT m.rowid, m.provider_id, a.id
-                 FROM models m
-                 JOIN accounts a ON a.provider_id = m.provider_id AND a.health_status = 'healthy'
-                 WHERE m.model_id_normalized = ?1 AND m.active = 1
-                 ORDER BY m.provider_id",
-            )
-            .map_err(crate::error::map_db_error)?;
-
-        let targets: Vec<(i64, String, i64)> = {
-            let rows = target_stmt
-                .query_map(rusqlite::params![norm_id], |row| {
-                    Ok((
-                        row.get::<_, i64>(0)?,
-                        row.get::<_, String>(1)?,
-                        row.get::<_, i64>(2)?,
-                    ))
-                })
-                .map_err(crate::error::map_db_error)?;
-            let mut t = Vec::new();
-            for row in rows {
-                t.push(row.map_err(crate::error::map_db_error)?);
-            }
-            t
-        };
+        let empty_targets = Vec::new();
+        let targets = targets_by_norm_id.get(norm_id).unwrap_or(&empty_targets);
 
         if targets.len() < 2 {
             continue;
@@ -681,11 +779,8 @@ pub fn auto_create_combos(conn: &Connection) -> Result<usize> {
                 // Create the combo. Use race_size = min(targets, 3) so
                 // parallel race fires across available providers.
                 let race_size = (targets.len() as u8).min(3);
-                conn.execute(
-                    "INSERT INTO combos (name, strategy, race_size) VALUES (?1, 'priority', ?2)",
-                    rusqlite::params![&combo_name, race_size],
-                )
-                .map_err(crate::error::map_db_error)?;
+                insert_combo_stmt.execute(rusqlite::params![&combo_name, race_size])
+                    .map_err(crate::error::map_db_error)?;
 
                 created += 1;
                 conn.last_insert_rowid()
@@ -693,52 +788,34 @@ pub fn auto_create_combos(conn: &Connection) -> Result<usize> {
         };
 
         // Insert new targets (append-only logic).
-        {
-            let mut insert_stmt = conn
-                .prepare(
-                    "INSERT INTO combo_targets (combo_id, provider_id, account_id, model_row_id, priority_order)                      VALUES (?1, ?2, ?3, ?4, ?5)",
-                )
-                .map_err(crate::error::map_db_error)?;
+        for &(row_id, ref provider_id, account_id) in targets {
+            let target_exists = existing_targets.contains(&(
+                combo_id,
+                provider_id.clone(),
+                account_id,
+                row_id,
+            ));
 
-            for &(row_id, ref provider_id, account_id) in &targets {
-                // Check if target already exists in the combo.
-                let target_exists: bool = conn
-                    .query_row(
-                        "SELECT EXISTS(                          SELECT 1 FROM combo_targets                          WHERE combo_id = ?1                            AND provider_id = ?2                            AND COALESCE(account_id, -1) = COALESCE(?3, -1)                            AND model_row_id = ?4)",
-                        rusqlite::params![
-                            combo_id,
-                            provider_id,
-                            account_id,
-                            row_id
-                        ],
-                        |row| row.get::<_, i64>(0),
-                    )
-                    .map(|v| v != 0)
-                    .unwrap_or(false);
+            if !target_exists {
+                let current_max = max_orders.get(&combo_id).copied().unwrap_or(-1);
+                let next_order = current_max + 1;
+                max_orders.insert(combo_id, next_order);
 
-                if !target_exists {
-                    // Get next priority order (max + 1)
-                    let max_order: i32 = conn
-                        .query_row(
-                            "SELECT COALESCE(MAX(priority_order), -1) FROM combo_targets WHERE combo_id = ?1",
-                            rusqlite::params![combo_id],
-                            |row| row.get(0),
-                        )
-                        .unwrap_or(-1);
-                    let next_order = max_order + 1;
-
-                    insert_stmt
-                        .execute(rusqlite::params![
-                            combo_id,
-                            provider_id,
-                            account_id,
-                            row_id,
-                            next_order
-                        ])
-                        .map_err(crate::error::map_db_error)?;
-                }
+                insert_target_stmt
+                    .execute(rusqlite::params![
+                        combo_id,
+                        provider_id,
+                        account_id,
+                        row_id,
+                        next_order
+                    ])
+                    .map_err(crate::error::map_db_error)?;
             }
         }
+    }
+
+    if !is_in_tx {
+        conn.execute("COMMIT", []).map_err(crate::error::map_db_error)?;
     }
 
     Ok(created)
