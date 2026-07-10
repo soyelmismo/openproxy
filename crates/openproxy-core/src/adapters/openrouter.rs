@@ -46,8 +46,8 @@ impl ProviderAdapter for OpenRouterAdapter {
         crate::providers::ProviderMetadata {
             built_in: crate::providers::is_builtin(self.id().as_str()),
             deletable: !crate::providers::is_builtin(self.id().as_str()),
-            supports_quota: true,
-            quota_refresh_supported: true,
+            supports_quota: false,
+            quota_refresh_supported: false,
         }
     }
 

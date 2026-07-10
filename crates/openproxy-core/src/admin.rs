@@ -1115,7 +1115,6 @@ mod tests {
         let providers_with_quota = [
             "minimax",
             "minimax-cn",
-            "openrouter",
             "antigravity",
             "agy",
             "codex",
@@ -1124,7 +1123,6 @@ mod tests {
         let providers_with_fetcher = [
             "minimax",
             "minimax-cn",
-            "openrouter",
             "antigravity",
             "agy",
             "codex",
