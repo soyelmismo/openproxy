@@ -189,8 +189,8 @@ export async function testModel(rowId: number, _modelId: string, _e: Event | nul
       // class selector rather than the index because the latter
       // is brittle to column reorders.
       const cell = row.querySelector(".last-test-cell");
-      if (cell) {
-        cell.innerHTML = `<span class="status-pill ${statusPillClass(result.status)}">${result.status}</span> <small>${result.elapsed_ms}ms</small>`;
+      if (cell instanceof HTMLElement) {
+        render(html`<span class="status-pill ${statusPillClass(result.status)}">${result.status}</span> <small>${result.elapsed_ms}ms</small>`, cell);
       }
     }
     if (result.status >= 200 && result.status < 300) {
@@ -429,8 +429,8 @@ export async function bulkTestSelected(_providerId: string): Promise<void> {
       const row = document.getElementById(`model-row-${rowId}`);
       if (row) {
         const cell = row.querySelector(".last-test-cell");
-        if (cell) {
-          cell.innerHTML = `<span class="status-pill ${statusPillClass(result.status)}">${result.status}</span> <small>${result.elapsed_ms}ms</small>`;
+        if (cell instanceof HTMLElement) {
+          render(html`<span class="status-pill ${statusPillClass(result.status)}">${result.status}</span> <small>${result.elapsed_ms}ms</small>`, cell);
         }
       }
       if (btn) {

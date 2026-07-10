@@ -82,25 +82,30 @@ fn machine_id() -> String {
 /// Best-effort hostname read. Returns `None` if the hostname can't be
 /// determined (e.g. in a container without hostname configured).
 fn hostname() -> Option<String> {
-    // Try /etc/hostname first (Linux), then the HOSTNAME env var, then
-    // gethostname crate equivalent (std::env::var).
-    if let Ok(s) = std::fs::read_to_string("/etc/hostname") {
-        let trimmed = s.trim();
-        if !trimmed.is_empty() {
-            return Some(trimmed.to_string());
-        }
-    }
-    if let Ok(s) = std::env::var("HOSTNAME")
-        && !s.is_empty()
-    {
-        return Some(s);
-    }
-    if let Ok(s) = std::env::var("COMPUTERNAME")
-        && !s.is_empty()
-    {
-        return Some(s);
-    }
-    None
+    static CACHE: OnceLock<Option<String>> = OnceLock::new();
+    CACHE
+        .get_or_init(|| {
+            // Try /etc/hostname first (Linux), then the HOSTNAME env var, then
+            // gethostname crate equivalent (std::env::var).
+            if let Ok(s) = std::fs::read_to_string("/etc/hostname") {
+                let trimmed = s.trim();
+                if !trimmed.is_empty() {
+                    return Some(trimmed.to_string());
+                }
+            }
+            if let Ok(s) = std::env::var("HOSTNAME")
+                && !s.is_empty()
+            {
+                return Some(s);
+            }
+            if let Ok(s) = std::env::var("COMPUTERNAME")
+                && !s.is_empty()
+            {
+                return Some(s);
+            }
+            None
+        })
+        .clone()
 }
 
 /// Per-launch session ID. Generated once per process lifetime.

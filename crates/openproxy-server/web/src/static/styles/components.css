@@ -50,6 +50,7 @@ table {
   border-collapse: collapse;
   background: var(--color-surface);
   font-size: var(--fs-sm);
+  border-radius: var(--radius-md);
 }
 th, td {
   text-align: left;
