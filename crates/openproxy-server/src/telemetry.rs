@@ -119,4 +119,49 @@ mod tests {
         let result = init(&config);
         assert!(result.is_err());
     }
+
+    #[tokio::test]
+    async fn test_telemetry_init_success_isolated() {
+        // Because tracing-subscriber can only be initialized once globally per process,
+        // standard tests running in a shared process often cannot test the successful `Ok(())` path
+        // if another test has already run `init()`.
+        // To reliably test the success path, we fork a child process that runs ONLY this test,
+        // passing a specific environment variable so the child knows it's the isolated runner.
+
+        let env_var = "_RUN_ISOLATED_TELEMETRY_INIT";
+
+        if std::env::var(env_var).is_ok() {
+            // We are the child process. Run the actual success test.
+            let config = LoggingConfig {
+                format: LogFormat::Text,
+                level: "info".to_string(),
+            };
+
+            // This is guaranteed to be the FIRST time init is called in this process.
+            let result = init(&config);
+            assert!(result.is_ok(), "Telemetry init should succeed on first call");
+            return;
+        }
+
+        // We are the parent test runner. Spawn the child process.
+        // We find the current executable (the test binary) and tell it to run this specific test function.
+        let exe = std::env::current_exe().expect("Failed to get current executable");
+
+        let output = std::process::Command::new(exe)
+            .arg("--exact")
+            .arg("telemetry::tests::test_telemetry_init_success_isolated")
+            // We must avoid capturing test output (the default cargo test behavior)
+            // so we add --nocapture, although it's for the child test runner.
+            .arg("--nocapture")
+            .env(env_var, "1")
+            .output()
+            .expect("Failed to execute child process");
+
+        assert!(
+            output.status.success(),
+            "Isolated telemetry init test failed.\nSTDOUT:\n{}\nSTDERR:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
 }
