@@ -16,3 +16,6 @@
 ## 2024-03-20 - [N+1 SQLite Queries in sync loops]
 **Learning:** Checking for row existence (`SELECT EXISTS`) iteratively within a rust loop creates massive single query overheads, and using `transaction()` is invalid on a `&Connection` borrowing context without refactoring to `&mut`.
 **Action:** Move query statements ahead of loops using `IN` or fetching pre-filtered `HashSet`s. Manually execute `BEGIN` and `COMMIT` through SQL strings if you cannot mutate the connection structure directly. Use `vec!["?"; len].join(",")` to generate `IN` clauses without depending on external crates like `itertools`.
+## 2026-07-10 - Avoid Cloning Large JSON Structs in PipelineRequest
+**Learning:** Wrapping `request_body_json` in `Arc<serde_json::Value>` instead of `Option<serde_json::Value>` within `PipelineRequest` prevents expensive deep cloning of the JSON payload during the chat completions pipeline execution. This significantly reduces heap allocations, especially for large requests.
+**Action:** Use `Arc<T>` to wrap large JSON payloads inside internal request structures when they only need to be shared across pipeline stages without mutation.

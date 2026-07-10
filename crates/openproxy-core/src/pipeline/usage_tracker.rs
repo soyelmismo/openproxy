@@ -418,7 +418,8 @@ impl<'a> UsageRecordBuilder<'a> {
                 self.request_body_json.clone().or_else(|| {
                     self.req
                         .request_body_json
-                        .clone()
+                        .as_deref()
+                        .cloned()
                         .or_else(|| serde_json::to_value(&self.req.openai_request).ok())
                 })
             } else {

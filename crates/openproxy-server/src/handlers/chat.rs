@@ -183,7 +183,7 @@ async fn run_pipeline(
         combo_override,
         targets_override,
         request_headers: redact_sensitive_headers(&headers),
-        request_body_json: Some((*raw_request_body).clone()),
+        request_body_json: Some(raw_request_body.clone()),
         race_cancelled: false,
         race_cancel: None,
         endpoint_kind: openproxy_core::endpoint::EndpointKind::Chat,
