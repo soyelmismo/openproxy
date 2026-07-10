@@ -139,7 +139,10 @@ mod tests {
 
             // This is guaranteed to be the FIRST time init is called in this process.
             let result = init(&config);
-            assert!(result.is_ok(), "Telemetry init should succeed on first call");
+            assert!(
+                result.is_ok(),
+                "Telemetry init should succeed on first call"
+            );
             return;
         }
 
