@@ -13,6 +13,14 @@ import { getToken } from "./auth.js";
 /** Connection status for the live-logs view. */
 export type LogsStatus = "connected" | "connecting" | "reconnecting" | "disconnected";
 
+const statusSubscribers = new Set<(status: LogsStatus) => void>();
+
+export function subscribeLogsStatus(fn: (status: LogsStatus) => void): () => void {
+  statusSubscribers.add(fn);
+  fn(state.logs.status as LogsStatus);
+  return () => statusSubscribers.delete(fn);
+}
+
 export function logsWsUrl(): string {
   const scheme: "ws:" | "wss:" = location.protocol === "https:" ? "wss:" : "ws:";
   // Post-F0 single-binary merge: the live-logs WebSocket is served
@@ -46,6 +54,7 @@ export function logsWsUrl(): string {
 
 export function setLogsStatus(status: LogsStatus): void {
   state.logs.status = status;
+  for (const subscriber of statusSubscribers) subscriber(status);
   const badge: HTMLElement | null = document.getElementById("logs-connection-status");
   if (!badge) return;
   const labels: Record<LogsStatus, string> = {

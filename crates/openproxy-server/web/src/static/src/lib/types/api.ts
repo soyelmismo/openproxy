@@ -561,6 +561,9 @@ export interface RecentUsageRow {
   prompt_tokens_estimated: boolean;
   /** True if completion_tokens were estimated (upstream didn't report usage). */
   completion_tokens_estimated: boolean;
+  proxy_url: string | null;
+  proxy_status: string | null;
+  is_proxy_rotated: boolean;
   created_at: string;
 }
 
