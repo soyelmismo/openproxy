@@ -6,7 +6,7 @@
 //! invocation against an already-migrated DB applies zero new versions.
 
 use crate::error::{CoreError, Result};
-use rusqlite::{Connection, Transaction, params};
+use rusqlite::{Connection, params};
 
 /// One embedded migration. `version` is the integer PK stored in
 /// `schema_migrations`. `sql` is the raw file contents.
@@ -267,9 +267,57 @@ pub fn run(conn: &mut Connection) -> Result<()> {
     // because the list is tiny and in-source.
     pending.sort_by_key(|m| m.version);
 
-    for m in pending {
-        apply_one(conn, m)?;
+    if pending.is_empty() {
+        return Ok(());
     }
+
+    let needs_fk_off = pending
+        .iter()
+        .any(|m| m.sql.contains("PRAGMA foreign_keys = OFF"));
+    if needs_fk_off {
+        conn.execute_batch("PRAGMA foreign_keys = OFF")
+            .map_err(|e| CoreError::Migration {
+                version: 0,
+                message: format!("PRAGMA foreign_keys = OFF: {}", e),
+            })?;
+    }
+
+    let tx = conn
+        .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+        .map_err(|e| CoreError::Migration {
+            version: 0,
+            message: format!("begin tx: {}", e),
+        })?;
+
+    for m in pending {
+        tx.execute_batch(m.sql).map_err(|e| CoreError::Migration {
+            version: m.version,
+            message: format!("{}: {}", m.name, e),
+        })?;
+
+        tx.execute(
+            "INSERT INTO schema_migrations(version) VALUES (?1)",
+            params![m.version],
+        )
+        .map_err(|e| CoreError::Migration {
+            version: m.version,
+            message: format!("{}: insert into schema_migrations: {}", m.name, e),
+        })?;
+    }
+
+    tx.commit().map_err(|e| CoreError::Migration {
+        version: 0,
+        message: format!("commit: {}", e),
+    })?;
+
+    if needs_fk_off {
+        conn.execute_batch("PRAGMA foreign_keys = ON")
+            .map_err(|e| CoreError::Migration {
+                version: 0,
+                message: format!("PRAGMA foreign_keys = ON: {}", e),
+            })?;
+    }
+
     Ok(())
 }
 
@@ -300,57 +348,6 @@ fn load_applied_versions(conn: &Connection) -> Result<std::collections::HashSet<
         set.insert(v);
     }
     Ok(set)
-}
-
-fn apply_one(conn: &mut Connection, m: &Migration) -> Result<()> {
-    // If the migration disables foreign keys (table rebuild pattern),
-    // execute the pragma *before* the transaction — it has no effect
-    // inside a SQLite transaction.
-    if m.sql.contains("PRAGMA foreign_keys = OFF") {
-        conn.execute_batch("PRAGMA foreign_keys = OFF")
-            .map_err(|e| CoreError::Migration {
-                version: m.version,
-                message: format!("{}: PRAGMA foreign_keys = OFF: {}", m.name, e),
-            })?;
-    }
-
-    // Use IMMEDIATE so the migration lock is taken up-front, matching spec §9.
-    let tx: Transaction<'_> = conn
-        .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
-        .map_err(|e| CoreError::Migration {
-            version: m.version,
-            message: format!("begin tx: {}", e),
-        })?;
-
-    tx.execute_batch(m.sql).map_err(|e| CoreError::Migration {
-        version: m.version,
-        message: format!("{}: {}", m.name, e),
-    })?;
-
-    tx.execute(
-        "INSERT INTO schema_migrations(version) VALUES (?1)",
-        params![m.version],
-    )
-    .map_err(|e| CoreError::Migration {
-        version: m.version,
-        message: format!("{}: insert into schema_migrations: {}", m.name, e),
-    })?;
-
-    tx.commit().map_err(|e| CoreError::Migration {
-        version: m.version,
-        message: format!("{}: commit: {}", m.name, e),
-    })?;
-
-    // Re-enable foreign keys if the migration had disabled them.
-    if m.sql.contains("PRAGMA foreign_keys = OFF") {
-        conn.execute_batch("PRAGMA foreign_keys = ON")
-            .map_err(|e| CoreError::Migration {
-                version: m.version,
-                message: format!("{}: PRAGMA foreign_keys = ON: {}", m.name, e),
-            })?;
-    }
-
-    Ok(())
 }
 
 #[cfg(test)]

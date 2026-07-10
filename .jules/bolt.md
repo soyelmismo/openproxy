@@ -4,6 +4,9 @@
 ## 2024-05-18 - Minimize heap allocations in Axum middleware
 **Learning:** We can reduce large `.clone()` allocations for large `serde_json::Value` structs by wrapping them in an `Arc`.
 **Action:** Use `Arc<T>` for heavy JSON payloads passed across middleware.
+## 2026-07-10 - Optimize SQLite Migrations Transaction
+**Learning:** Applying individual SQLite migrations sequentially in a loop, each starting its own transaction (N+1 transaction issue), significantly slows down database initialization when the migration count grows. By grouping all pending migrations inside a single `Transaction` and moving schema enforcement pragmas outside the loop, database setup execution time during testing/cold-starts is noticeably reduced (by around ~25%).
+**Action:** When executing batch schema updates or bulk sequential operations on SQLite startup, avoid individual transactions in a loop; wrap the loop in a single overarching `rusqlite::Transaction`.
 ## 2024-02-14 - Caching Hostname Resolution
 **Learning:** Frequent calls to `std::fs::read_to_string` and `std::env::var` for static data like hostnames causes measurable blocking I/O overhead.
 **Action:** Use `std::sync::OnceLock` to execute the file reads once and cache the result, turning a blocking I/O operation into a fast memory read.
