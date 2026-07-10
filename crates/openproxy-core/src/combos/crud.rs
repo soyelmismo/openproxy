@@ -1250,9 +1250,12 @@ mod tests {
         let strategy = Strategy::Priority;
         let race_size = 2;
 
-        let combo_id = create_combo(&conn, combo_name, strategy, race_size).expect("create combo failed");
+        let combo_id =
+            create_combo(&conn, combo_name, strategy, race_size).expect("create combo failed");
 
-        let combo = get_combo(&conn, combo_id).expect("get combo failed").expect("combo not found");
+        let combo = get_combo(&conn, combo_id)
+            .expect("get combo failed")
+            .expect("combo not found");
 
         assert_eq!(combo.name, combo_name);
         assert_eq!(combo.strategy, strategy);
@@ -1268,14 +1271,16 @@ mod tests {
         let strategy = Strategy::RoundRobin;
 
         // Race size 0 is invalid
-        let err = create_combo(&conn, combo_name, strategy, 0).expect_err("create combo should fail with race size 0");
+        let err = create_combo(&conn, combo_name, strategy, 0)
+            .expect_err("create combo should fail with race size 0");
         match err {
             CoreError::Validation(msg) => assert!(msg.contains("race_size must be in 1..=8")),
             _ => panic!("Expected Validation error, got {:?}", err),
         }
 
         // Race size 9 is invalid
-        let err2 = create_combo(&conn, combo_name, strategy, 9).expect_err("create combo should fail with race size 9");
+        let err2 = create_combo(&conn, combo_name, strategy, 9)
+            .expect_err("create combo should fail with race size 9");
         match err2 {
             CoreError::Validation(msg) => assert!(msg.contains("race_size must be in 1..=8")),
             _ => panic!("Expected Validation error, got {:?}", err2),
@@ -1291,14 +1296,19 @@ mod tests {
         let strategy = Strategy::Priority;
         let race_size = 1;
 
-        let _combo_id = create_combo(&conn, combo_name, strategy, race_size).expect("create combo failed");
+        let _combo_id =
+            create_combo(&conn, combo_name, strategy, race_size).expect("create combo failed");
 
         // Attempting to create a combo with the same name should fail
-        let err = create_combo(&conn, combo_name, strategy, race_size).expect_err("create duplicate combo should fail");
+        let err = create_combo(&conn, combo_name, strategy, race_size)
+            .expect_err("create duplicate combo should fail");
 
         match err {
             CoreError::Validation(msg) => assert!(msg.contains("combo name already exists")),
-            _ => panic!("Expected Validation error for duplicate name, got {:?}", err),
+            _ => panic!(
+                "Expected Validation error for duplicate name, got {:?}",
+                err
+            ),
         }
     }
 
@@ -1312,14 +1322,24 @@ mod tests {
         let strategy = Strategy::Shuffle;
         let race_size = 1;
 
-        let err = create_combo(&conn, combo_name, strategy, race_size).expect_err("create combo with shuffle strategy should fail");
+        let err = create_combo(&conn, combo_name, strategy, race_size)
+            .expect_err("create combo with shuffle strategy should fail");
 
         // The error will be mapped to a database error due to CHECK constraint violation
         if let CoreError::Database { message, source } = &err {
             assert!(message.contains("insert combo"));
-            assert!(source.as_ref().unwrap().to_string().contains("CHECK constraint failed"));
+            assert!(
+                source
+                    .as_ref()
+                    .unwrap()
+                    .to_string()
+                    .contains("CHECK constraint failed")
+            );
         } else {
-            panic!("Expected Database error with CHECK constraint failure, got {:?}", err);
+            panic!(
+                "Expected Database error with CHECK constraint failure, got {:?}",
+                err
+            );
         }
     }
 
