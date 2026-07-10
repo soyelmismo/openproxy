@@ -7,3 +7,6 @@
 ## 2025-02-20 - Array Allocation and Clone Optimization in usage_filter_query
 **Learning:** Constructing arrays containing `Option<String>` locally from a struct containing `Option<String>` requires deep clones of the strings, and iterating via `.collect::<Vec<_>>()` performs unnecessary vector allocation. Directly creating an array of `Option<&str>` via `.as_deref()` bypasses both the string cloning and intermediate array allocation.
 **Action:** When constructing arrays of pairs for query builders from references to a source struct, prefer extracting properties as references (`Option<&str>`) with `.as_deref()` or local lifetime-bound string conversions rather than `.clone()`.
+## 2024-03-20 - [N+1 SQLite Queries in sync loops]
+**Learning:** Checking for row existence (`SELECT EXISTS`) iteratively within a rust loop creates massive single query overheads, and using `transaction()` is invalid on a `&Connection` borrowing context without refactoring to `&mut`.
+**Action:** Move query statements ahead of loops using `IN` or fetching pre-filtered `HashSet`s. Manually execute `BEGIN` and `COMMIT` through SQL strings if you cannot mutate the connection structure directly. Use `vec!["?"; len].join(",")` to generate `IN` clauses without depending on external crates like `itertools`.
