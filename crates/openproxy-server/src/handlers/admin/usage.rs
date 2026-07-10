@@ -204,20 +204,33 @@ pub async fn usage_stream(
     // admin auth middleware + network ACLs on /admin/. The Origin
     // check prevents the browser-based CSWSH attack vector.
     if let Some(origin) = headers.get("origin").and_then(|v| v.to_str().ok()) {
+        let host = headers
+            .get("x-forwarded-host")
+            .or_else(|| headers.get("host"))
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("");
+        
+        let is_same_host = !host.is_empty() && (
+            origin == format!("http://{}", host) || 
+            origin == format!("https://{}", host)
+        );
+
         // Allow localhost origins (dev mode / same-host dashboard).
         if !origin.starts_with("http://localhost")
             && !origin.starts_with("http://127.0.0.1")
             && !origin.starts_with("https://localhost")
             && !origin.starts_with("https://127.0.0.1")
+            && !is_same_host
         {
-            // Reject non-localhost origins to prevent cross-site
+            // Reject non-localhost/non-matching origins to prevent cross-site
             // WebSocket hijacking (CSWSH). Direct connections
             // (curl, wscat, etc.) don't send Origin, so they pass.
             tracing::warn!(
                 origin = %origin,
-                "WebSocket connection rejected: non-localhost origin"
+                host = %host,
+                "WebSocket connection rejected: non-matching origin"
             );
-            return (StatusCode::FORBIDDEN, "Forbidden: non-localhost origin").into_response();
+            return (StatusCode::FORBIDDEN, "Forbidden: origin mismatch").into_response();
         }
     }
 
