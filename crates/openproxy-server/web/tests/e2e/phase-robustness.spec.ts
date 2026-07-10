@@ -250,38 +250,6 @@ test('Live Logs: stale streaming stage freezes the latency ticker', async ({ pag
         args.event.event_time -= store.clockOffsetMs;
       }
 
-      (store as any).applyUsageRow({
-        id: 0,
-        request_id: args.requestId,
-        trace_id: args.traceId,
-        provider_id: 'openrouter',
-        upstream_model_id: 'gpt-4o-mini',
-        created_at: new Date(args.event.started_at).toISOString(),
-        status_code: 0,
-        total_ms: null,
-        prompt_tokens: null,
-        completion_tokens: null,
-        cost_usd: 0,
-        is_streaming: true,
-        stream_complete: false,
-        race_lost: false,
-        connect_ms: 30,
-        ttft_ms: 120,
-        request_body_json: null,
-        response_body_json: null,
-        request_headers: null,
-        response_headers: null,
-        race_total: null,
-        race_attempts: null,
-        error_message: null,
-        stop_reason: null,
-        compression_savings_pct: null,
-        compression_techniques: null,
-        client_response: false,
-        prompt_tokens_estimated: false,
-        completion_tokens_estimated: false,
-      });
-
       (store as any).dispatch({
         type: 'attempt_event',
         cursor: 0,
