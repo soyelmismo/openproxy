@@ -564,3 +564,105 @@ async fn health() -> Json<serde_json::Value> {
         "version": env!("CARGO_PKG_VERSION"),
     }))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::{
+        body::Body,
+        http::{Request, StatusCode},
+    };
+    use openproxy_core::{
+        AppConfig,
+        adapters::ProviderAdapterEnum,
+        db::DbPool,
+        secrets::MasterKey,
+    };
+    use parking_lot::RwLock;
+    use std::{path::PathBuf, sync::Arc};
+    use tower::ServiceExt;
+
+    fn tempdir() -> PathBuf {
+        let base = std::env::temp_dir();
+        let pid = std::process::id();
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let dir = base.join(format!("openproxy-server-router-test-{}-{}", pid, nanos));
+        std::fs::create_dir_all(&dir).expect("mkdir");
+        dir
+    }
+
+    async fn make_test_state() -> (AppState, String) {
+        let dir = tempdir();
+        let pool = Arc::new(DbPool::open(&dir.join("router_test.db")).expect("open pool"));
+        {
+            let mut w = pool.writer();
+            openproxy_core::db::migrations::run(&mut w).expect("migrations");
+        }
+
+        let plaintext = "sk-test-dummy-12345".to_string();
+        let key_hash = openproxy_core::api_keys::hash_key(&plaintext);
+        {
+            let w = pool.writer();
+            w.execute(
+                "INSERT INTO api_keys (key_hash, key_prefix, label, scopes_json, created_by) \
+                 VALUES (?1, ?2, ?3, ?4, 'test')",
+                rusqlite::params![
+                    key_hash,
+                    &plaintext[..plaintext.len().min(12)],
+                    "router-test",
+                    "[\"manage\"]",
+                ],
+            ).expect("insert api key");
+        }
+
+        let master_key = Arc::new(MasterKey::generate());
+        let adapters = Arc::new(RwLock::new(Vec::<ProviderAdapterEnum>::new()));
+        let state = AppState::for_test(AppConfig::default(), pool, master_key, adapters).await;
+        (state, plaintext)
+    }
+
+    #[tokio::test]
+    async fn test_build_router_health_and_request_id() {
+        let (state, _) = make_test_state().await;
+        let app = build_router(state);
+
+        // Test public endpoint
+        let req = Request::builder()
+            .method("GET")
+            .uri("/v1/health")
+            .body(Body::empty())
+            .unwrap();
+
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+
+        // Ensure request-id middleware is applied
+        assert!(resp.headers().contains_key("x-request-id"));
+    }
+
+    #[tokio::test]
+    async fn test_build_router_admin_api_404_fallback() {
+        let (state, token) = make_test_state().await;
+        let app = build_router(state);
+
+        // Test that an unknown admin API endpoint returns a JSON 404, not the SPA HTML
+        let req = Request::builder()
+            .method("GET")
+            .uri("/admin/api/nonexistent_endpoint_123")
+            .header("authorization", format!("Bearer {}", token))
+            .body(Body::empty())
+            .unwrap();
+
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+
+        let content_type = resp.headers().get("content-type").unwrap().to_str().unwrap();
+        assert_eq!(content_type, "application/json");
+
+        // Ensure request-id middleware is applied here as well
+        assert!(resp.headers().contains_key("x-request-id"));
+    }
+}
