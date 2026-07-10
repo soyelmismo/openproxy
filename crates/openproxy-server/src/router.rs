@@ -573,10 +573,7 @@ mod tests {
         http::{Request, StatusCode},
     };
     use openproxy_core::{
-        AppConfig,
-        adapters::ProviderAdapterEnum,
-        db::DbPool,
-        secrets::MasterKey,
+        AppConfig, adapters::ProviderAdapterEnum, db::DbPool, secrets::MasterKey,
     };
     use parking_lot::RwLock;
     use std::{path::PathBuf, sync::Arc};
@@ -615,7 +612,8 @@ mod tests {
                     "router-test",
                     "[\"manage\"]",
                 ],
-            ).expect("insert api key");
+            )
+            .expect("insert api key");
         }
 
         let master_key = Arc::new(MasterKey::generate());
@@ -659,7 +657,12 @@ mod tests {
         let resp = app.oneshot(req).await.unwrap();
         assert_eq!(resp.status(), StatusCode::NOT_FOUND);
 
-        let content_type = resp.headers().get("content-type").unwrap().to_str().unwrap();
+        let content_type = resp
+            .headers()
+            .get("content-type")
+            .unwrap()
+            .to_str()
+            .unwrap();
         assert_eq!(content_type, "application/json");
 
         // Ensure request-id middleware is applied here as well
