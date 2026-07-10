@@ -469,9 +469,7 @@ pub fn combo_in_chain(
             placeholders
         );
 
-        let mut stmt = conn
-            .prepare(&query)
-            .map_err(crate::error::map_db_error)?;
+        let mut stmt = conn.prepare(&query).map_err(crate::error::map_db_error)?;
 
         let params_vec: Vec<&dyn rusqlite::ToSql> = current_level
             .iter()
@@ -479,7 +477,9 @@ pub fn combo_in_chain(
             .collect();
 
         let sub_ids: Vec<i64> = stmt
-            .query_map(rusqlite::params_from_iter(params_vec), |r| r.get::<_, Option<i64>>(0))
+            .query_map(rusqlite::params_from_iter(params_vec), |r| {
+                r.get::<_, Option<i64>>(0)
+            })
             .map_err(crate::error::map_db_error)?
             .filter_map(|x| x.ok().flatten())
             .collect();
@@ -1414,7 +1414,10 @@ mod tests {
         // Verify that searching for a non-existent combo (C3) safely terminates
         // and returns false despite the cycle.
         let result_c3_in_c1 = combo_in_chain(&conn, c3, c1, 10).expect("query success");
-        assert!(!result_c3_in_c1, "C3 is not in the cycle, so it should return false");
+        assert!(
+            !result_c3_in_c1,
+            "C3 is not in the cycle, so it should return false"
+        );
     }
 
     #[test]
