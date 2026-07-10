@@ -570,13 +570,11 @@ mod tests {
     use super::*;
     use axum::http::{Request, StatusCode};
     use http_body_util::BodyExt;
-    use std::path::PathBuf;
-    use tower::ServiceExt;
-    use openproxy_core::{
-        AppConfig, adapters, db as core_db, secrets::MasterKey,
-    };
+    use openproxy_core::{AppConfig, adapters, db as core_db, secrets::MasterKey};
     use parking_lot::RwLock;
+    use std::path::PathBuf;
     use std::sync::Arc;
+    use tower::ServiceExt;
 
     async fn make_state() -> AppState {
         let (pool, _path) = fresh_pool();
@@ -648,7 +646,8 @@ mod tests {
                     "smoke-test",
                     "[\"manage\"]",
                 ],
-            ).unwrap();
+            )
+            .unwrap();
         }
 
         let response = app
@@ -663,7 +662,10 @@ mod tests {
             .unwrap();
 
         assert_eq!(response.status(), StatusCode::NOT_FOUND);
-        assert_eq!(response.headers().get("content-type").unwrap(), "application/json");
+        assert_eq!(
+            response.headers().get("content-type").unwrap(),
+            "application/json"
+        );
 
         let body = response.into_body().collect().await.unwrap().to_bytes();
         let body: serde_json::Value = serde_json::from_slice(&body).unwrap();
