@@ -16,3 +16,6 @@
 ## 2024-03-20 - [N+1 SQLite Queries in sync loops]
 **Learning:** Checking for row existence (`SELECT EXISTS`) iteratively within a rust loop creates massive single query overheads, and using `transaction()` is invalid on a `&Connection` borrowing context without refactoring to `&mut`.
 **Action:** Move query statements ahead of loops using `IN` or fetching pre-filtered `HashSet`s. Manually execute `BEGIN` and `COMMIT` through SQL strings if you cannot mutate the connection structure directly. Use `vec!["?"; len].join(",")` to generate `IN` clauses without depending on external crates like `itertools`.
+## 2026-07-10 - Omit Strings in HashSet Tuples When Uniqueness is Guaranteed
+**Learning:** When using `HashSet` for fast inclusion checks within loops, tuples containing strings require expensive `.clone()` calls. If a database `UNIQUE` constraint guarantees uniqueness based on integer fields alone, the string field can be safely omitted from the hash set.
+**Action:** Always check schema constraints to strip unnecessary heavy fields (like Strings) from lookup structures in performance-critical loops.
