@@ -29,9 +29,7 @@ import { mountView, requestUpdate } from "../state/reactive.js";
 import { t } from "../i18n/index.js";
 import {
   buildDailyUsageChart,
-  buildCategoryBarsChart,
   observeResize,
-  CHART_COLORS,
 } from "../components/uplot-chart.js";
 import type {
   ByDayRow,
@@ -71,11 +69,16 @@ interface LatencyPayload {
   p95_ttft_ms?: number | null;
   p50_total_ms?: number | null;
   p95_total_ms?: number | null;
+  p50_tokens_per_sec?: number | null;
+  p95_tokens_per_sec?: number | null;
 }
 interface RaceStatsPayload {
   total_races?: number;
   winners?: number;
   losers?: number;
+  avg_winner_position?: number | null;
+  avg_ttft_savings_ms?: number | null;
+  wins_by_target?: Array<[number, number]>;
 }
 
 // Ordered list of presets rendered as buttons in the time-range
@@ -103,16 +106,35 @@ const PRESET_LABEL_KEYS: Record<UsagePreset, string> = {
 };
 
 function fmtCost(v: number): string {
-  return `$${v.toFixed(2)}`;
+  if (!Number.isFinite(v)) return "$0.00";
+  if (v !== 0 && Math.abs(v) < 0.01) return `$${v.toFixed(4)}`;
+  return new Intl.NumberFormat(undefined, {
+    style: "currency",
+    currency: "USD",
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  }).format(v);
 }
 
-/** Truncate a string to `maxLen` characters, appending an ellipsis if
- *  truncated. Used for bar-chart category labels (model names can be
- *  30+ chars; the X axis only has room for ~14 before labels overlap
- *  even with 45° rotation). */
-function truncate(s: string, maxLen: number): string {
-  if (s.length <= maxLen) return s;
-  return s.slice(0, maxLen - 1) + "…";
+function fmtNumber(v: number): string {
+  return new Intl.NumberFormat(undefined, { notation: "compact", maximumFractionDigits: 1 }).format(v);
+}
+
+function fmtPercent(v: number): string {
+  return Number.isFinite(v) ? `${(v * 100).toFixed(v === 0 || v >= 0.1 ? 1 : 2)}%` : "—";
+}
+
+function fmtDuration(v: number | null | undefined): string {
+  if (v == null || !Number.isFinite(v)) return "—";
+  return v >= 1000 ? `${(v / 1000).toFixed(2)}s` : `${Math.round(v)}ms`;
+}
+
+function fmtDateTime(v: string): string {
+  const date = new Date(v);
+  if (Number.isNaN(date.getTime())) return "—";
+  return new Intl.DateTimeFormat(undefined, {
+    month: "short", day: "numeric", hour: "2-digit", minute: "2-digit",
+  }).format(date);
 }
 
 // ── URL hash parsing ────────────────────────────────────────────────
@@ -351,73 +373,21 @@ function dateToSeconds(date: string): number {
   return ms / 1000;
 }
 
-/** Daily usage chart data: `[xs, reqs, cost]` where `xs` are UTC
+/** Daily usage chart data: `[xs, reqs, errors, cost]` where `xs` are UTC
  *  midnight timestamps. */
 function dailyUsageData(rows: ByDayRow[]): uPlot.AlignedData {
   const xs: number[] = new Array<number>(rows.length);
   const reqs: number[] = new Array<number>(rows.length);
+  const errors: number[] = new Array<number>(rows.length);
   const cost: number[] = new Array<number>(rows.length);
   for (let i = 0; i < rows.length; i++) {
     const r: ByDayRow = rows[i]!;
     xs[i] = dateToSeconds(r.date);
     reqs[i] = r.unique_requests;
+    errors[i] = r.errors;
     cost[i] = r.total_cost_usd;
   }
-  return [xs, reqs, cost];
-}
-
-/** By-model bar chart data: top N models sorted by total cost DESC.
- *  Returns the data array + the labels (truncated model names). */
-function byModelBars(rows: ByModelRow[]): { data: uPlot.AlignedData; labels: string[] } {
-  const sorted = [...rows].sort((a, b) => b.total_cost_usd - a.total_cost_usd).slice(0, 10);
-  const labels: string[] = sorted.map((r: ByModelRow) => truncate(r.upstream_model_id, 14));
-  const xs: number[] = sorted.map((_, i: number) => i);
-  const ys: number[] = sorted.map((r: ByModelRow) => r.total_cost_usd);
-  return { data: [xs, ys], labels };
-}
-
-/** By-provider bar chart data: all providers sorted by total cost DESC. */
-function byProviderBars(rows: ByProviderRow[]): { data: uPlot.AlignedData; labels: string[] } {
-  const sorted = [...rows].sort((a, b) => b.total_cost_usd - a.total_cost_usd);
-  const labels: string[] = sorted.map((r: ByProviderRow) => truncate(r.provider_id, 14));
-  const xs: number[] = sorted.map((_, i: number) => i);
-  const ys: number[] = sorted.map((r: ByProviderRow) => r.total_cost_usd);
-  return { data: [xs, ys], labels };
-}
-
-/** Status-codes bar chart data: 4 buckets in fixed order
- *  (2xx / 4xx / 5xx / Other). Labels are the bucket names. */
-function statusCodesBars(buckets: StatusBuckets): { data: uPlot.AlignedData; labels: string[] } {
-  return {
-    data: [[0, 1, 2, 3], [buckets.s2xx, buckets.s4xx, buckets.s5xx, buckets.other]],
-    labels: ["2xx", "4xx", "5xx", "Other"],
-  };
-}
-
-/** Latency bar chart data: 6 metrics in fixed order
- *  (p50 conn / p95 conn / p50 ttft / p95 ttft / p50 total / p95 total).
- *  Null values (no samples for that percentile) are coerced to 0 so
- *  the bar renders as a flat baseline rather than a gap. */
-function latencyBars(payload: LatencyPayload): { data: uPlot.AlignedData; labels: string[] } {
-  const vals: number[] = [
-    payload.p50_connect_ms ?? 0,
-    payload.p95_connect_ms ?? 0,
-    payload.p50_ttft_ms ?? 0,
-    payload.p95_ttft_ms ?? 0,
-    payload.p50_total_ms ?? 0,
-    payload.p95_total_ms ?? 0,
-  ];
-  return {
-    data: [[0, 1, 2, 3, 4, 5], vals],
-    labels: [
-      t("analytics.latency.p50_connect"),
-      t("analytics.latency.p95_connect"),
-      t("analytics.latency.p50_ttft"),
-      t("analytics.latency.p95_ttft"),
-      t("analytics.latency.p50_total"),
-      t("analytics.latency.p95_total"),
-    ],
-  };
+  return [xs, reqs, errors, cost];
 }
 
 // ---- View state ----
@@ -442,10 +412,6 @@ let apiKeys: ApiKeyFilterRow[] = [];
 // immediately after creation, and destroyed on view unmount.
 interface AnalyticsCharts {
   dailyUsage: uPlot;
-  byModel: uPlot;
-  byProvider: uPlot;
-  statusCodes: uPlot;
-  latency: uPlot;
   resizeDisposers: Array<() => void>;
 }
 let charts: AnalyticsCharts | null = null;
@@ -459,12 +425,8 @@ function createAnalyticsCharts(): void {
   if (charts) return; // idempotent
 
   const dailyEl: HTMLElement | null = document.getElementById("chart-daily-usage");
-  const byModelEl: HTMLElement | null = document.getElementById("chart-by-model");
-  const byProviderEl: HTMLElement | null = document.getElementById("chart-by-provider");
-  const statusEl: HTMLElement | null = document.getElementById("chart-status-codes");
-  const latencyEl: HTMLElement | null = document.getElementById("chart-latency");
 
-  if (!dailyEl || !byModelEl || !byProviderEl || !statusEl || !latencyEl) {
+  if (!dailyEl) {
     // Containers not in the DOM yet — the loading state hasn't
     // cleared, or the render hasn't committed. The caller should
     // defer via requestAnimationFrame.
@@ -477,65 +439,13 @@ function createAnalyticsCharts(): void {
   const dailyUsage: uPlot = buildDailyUsageChart(dailyEl);
   resizeDisposers.push(observeResize(dailyUsage, dailyEl));
 
-  // By-model — categorical bar chart. Labels are truncated model IDs.
-  const modelBars = byModelBars(byModel);
-  const byModelChart: uPlot = buildCategoryBarsChart(
-    byModelEl,
-    modelBars.labels,
-    CHART_COLORS.purple,
-    (_u: uPlot, raw: number): string => "$" + raw.toFixed(4),
-  );
-  resizeDisposers.push(observeResize(byModelChart, byModelEl));
-
-  // By-provider — categorical bar chart.
-  const providerBars = byProviderBars(byProvider);
-  const byProviderChart: uPlot = buildCategoryBarsChart(
-    byProviderEl,
-    providerBars.labels,
-    CHART_COLORS.blue,
-    (_u: uPlot, raw: number): string => "$" + raw.toFixed(4),
-  );
-  resizeDisposers.push(observeResize(byProviderChart, byProviderEl));
-
-  // Status codes — categorical bar chart, 4 fixed buckets.
-  const statusBars = statusCodesBars(groupByStatus(byStatus));
-  const statusCodes: uPlot = buildCategoryBarsChart(
-    statusEl,
-    statusBars.labels,
-    CHART_COLORS.green,
-    null,
-  );
-  resizeDisposers.push(observeResize(statusCodes, statusEl));
-
-  // Latency — categorical bar chart, 6 fixed metrics.
-  const latencyChartData = latencyBars(latency ?? {});
-  const latencyChart: uPlot = buildCategoryBarsChart(
-    latencyEl,
-    latencyChartData.labels,
-    CHART_COLORS.orange,
-    (_u: uPlot, raw: number): string => {
-      if (!Number.isFinite(raw)) return "—";
-      if (raw >= 1000) return (raw / 1000).toFixed(1) + "s";
-      return Math.round(raw) + "ms";
-    },
-  );
-  resizeDisposers.push(observeResize(latencyChart, latencyEl));
-
   charts = {
     dailyUsage,
-    byModel: byModelChart,
-    byProvider: byProviderChart,
-    statusCodes,
-    latency: latencyChart,
     resizeDisposers,
   };
 
   // Push the current data into the new charts immediately.
   charts.dailyUsage.setData(dailyUsageData(byDay));
-  charts.byModel.setData(modelBars.data);
-  charts.byProvider.setData(providerBars.data);
-  charts.statusCodes.setData(statusBars.data);
-  charts.latency.setData(latencyChartData.data);
 }
 
 /** Destroy all uPlot instances + disconnect their ResizeObservers.
@@ -548,134 +458,218 @@ function destroyAnalyticsCharts(): void {
     }
   }
   try { charts.dailyUsage.destroy(); } catch (e: unknown) { console.warn("[analytics] dailyUsage.destroy threw:", e); }
-  try { charts.byModel.destroy(); } catch (e: unknown) { console.warn("[analytics] byModel.destroy threw:", e); }
-  try { charts.byProvider.destroy(); } catch (e: unknown) { console.warn("[analytics] byProvider.destroy threw:", e); }
-  try { charts.statusCodes.destroy(); } catch (e: unknown) { console.warn("[analytics] statusCodes.destroy threw:", e); }
-  try { charts.latency.destroy(); } catch (e: unknown) { console.warn("[analytics] latency.destroy threw:", e); }
   charts = null;
+}
+
+function refreshAnalyticsChartTheme(): void {
+  destroyAnalyticsCharts();
+  requestAnimationFrame(() => createAnalyticsCharts());
 }
 
 // ---- Templates ----
 
 function renderPresetSelector(active: UsagePreset): TemplateResult {
   return html`<div class="preset-selector" role="group" aria-label=${t("analytics.range_label")}>
-    ${PRESETS.map((p) => html`<button class="preset-btn${p === active ? " active" : ""}" type="button" @click=${() => setHashParams({ preset: p })}>${t(PRESET_LABEL_KEYS[p])}</button>`)}
+    ${PRESETS.map((p) => html`<button
+      class="preset-btn${p === active ? " active" : ""}"
+      type="button"
+      aria-pressed=${p === active ? "true" : "false"}
+      @click=${() => setHashParams({ preset: p })}
+    >${t(PRESET_LABEL_KEYS[p])}</button>`)}
   </div>`;
 }
 
-function renderAnalyticsFilters(providerId: string, apiKeyId: string): TemplateResult {
-  return html`<div class="analytics-filters">
-    <select class="filter-dropdown" .value=${providerId} @change=${(e: Event) => setHashParams({ providerId: (e.target as HTMLSelectElement).value })}>
-      <option value="">${t("analytics.filter.all_providers")}</option>
-      ${providers.map((p) => html`<option value=${p.id}>${p.name}</option>`)}
-    </select>
-    <select class="filter-dropdown" .value=${apiKeyId} @change=${(e: Event) => setHashParams({ apiKeyId: (e.target as HTMLSelectElement).value })}>
-      <option value="">${t("analytics.filter.all_api_keys")}</option>
-      ${apiKeys.map((k) => html`<option value=${String(k.id)}>${k.key_prefix || "—"} (${k.label || "—"})</option>`)}
-    </select>
-    <button class="btn-link" @click=${() => setHashParams({ providerId: "", apiKeyId: "" })}>${t("analytics.filter.clear")}</button>
-  </div>`;
-}
-
-function card(title: string, body: TemplateResult): TemplateResult {
-  return html`<section class="card"><div class="section-header"><h3>${title}</h3></div>${body}</section>`;
-}
-
-/** Chart card — same structure as the home dashboard's
- *  `.home-chart-card` (title + subtitle + container div). The
- *  container has a stable ID so lit-html preserves it across
- *  re-renders and the uPlot instance stays attached. */
-function chartCard(title: string, subtitle: string, containerId: string): TemplateResult {
-  return html`<section class="card analytics-chart-card">
-    <div class="card-title">${title}</div>
-    <div class="card-subtitle">${subtitle}</div>
-    <div class="analytics-chart-container" id="${containerId}"></div>
-  </section>`;
-}
-
-function renderSummaryBlock(): TemplateResult {
-  if (!summary) return html``;
-  return card(t("analytics.summary"), html`<div class="metrics">
-    <div><label>${t("analytics.summary.unique_requests")}</label><div class="value">${summary.unique_requests}</div></div>
-    <div><label>${t("analytics.summary.total_rows")}</label><div class="value">${summary.total_rows}</div></div>
-    <div><label>${t("analytics.summary.winners")}</label><div class="value">${summary.winners}</div></div>
-    <div><label>${t("analytics.summary.losers")}</label><div class="value">${summary.losers}</div></div>
-    <div><label>${t("analytics.summary.errors")}</label><div class="value">${summary.errors}</div></div>
-    <div><label>${t("analytics.summary.prompt_tokens")}</label><div class="value">${summary.total_prompt_tokens}</div></div>
-    <div><label>${t("analytics.summary.completion_tokens")}</label><div class="value">${summary.total_completion_tokens}</div></div>
-    <div><label>${t("analytics.summary.total_cost")}</label><div class="value">$${summary.total_cost_usd.toFixed(4)}</div></div>
-    <div><label>${t("analytics.summary.avg_ttft")}</label><div class="value">${summary.avg_ttft_ms ? summary.avg_ttft_ms.toFixed(1) : "—"}</div></div>
-  </div>`);
-}
-
-/** Race outcomes card — 3 stat blocks (Won / Lost / Total). Matches
- *  the home dashboard's race-outcomes pattern (3 numbers, not a
- *  donut) per the B3 spec. */
-function renderRaceBlock(): TemplateResult {
-  if (!races) return html``;
-  const won: number = races.winners ?? 0;
-  const lost: number = races.losers ?? 0;
-  const total: number = races.total_races ?? 0;
-  const pct: (n: number) => string = (n: number) =>
-    total > 0 ? Math.round((n / total) * 100) + "%" : "—";
-
-  return html`<section class="card analytics-chart-card">
-    <div class="card-title">${t("analytics.chart.race_outcomes")}</div>
-    <div class="card-subtitle">${t("analytics.chart.race_outcomes.subtitle")}</div>
-    <div class="analytics-race-stats">
-      <div class="analytics-race-stat analytics-race-stat-won">
-        <div class="analytics-race-stat-value">${pct(won)}</div>
-        <div class="analytics-race-stat-label">${t("analytics.chart.race_outcomes.won")}</div>
-        <div class="analytics-race-stat-count">${won}</div>
-      </div>
-      <div class="analytics-race-stat analytics-race-stat-lost">
-        <div class="analytics-race-stat-value">${pct(lost)}</div>
-        <div class="analytics-race-stat-label">${t("analytics.chart.race_outcomes.lost")}</div>
-        <div class="analytics-race-stat-count">${lost}</div>
-      </div>
-      <div class="analytics-race-stat analytics-race-stat-total">
-        <div class="analytics-race-stat-value">${total}</div>
-        <div class="analytics-race-stat-label">${t("analytics.chart.race_outcomes.total")}</div>
-        <div class="analytics-race-stat-count">${t("analytics.latency.samples")}: ${races.total_races ?? "—"}</div>
-      </div>
+function renderAnalyticsToolbar(providerId: string, apiKeyId: string, preset: UsagePreset): TemplateResult {
+  const hasFilters = providerId !== "" || apiKeyId !== "";
+  return html`<section class="analytics-toolbar" aria-label=${t("analytics.filters_label")}>
+    <div class="analytics-filter-row">
+      <label class="analytics-filter-field" for="analytics-provider-filter">
+        <span>${t("analytics.filter.provider")}</span>
+        <select id="analytics-provider-filter" class="filter-dropdown" .value=${providerId} @change=${(e: Event) => setHashParams({ providerId: (e.target as HTMLSelectElement).value })}>
+          <option value="">${t("analytics.filter.all_providers")}</option>
+          ${providers.map((p) => html`<option value=${p.id}>${p.name}</option>`)}
+        </select>
+      </label>
+      <label class="analytics-filter-field" for="analytics-key-filter">
+        <span>${t("analytics.filter.api_key")}</span>
+        <select id="analytics-key-filter" class="filter-dropdown" .value=${apiKeyId} @change=${(e: Event) => setHashParams({ apiKeyId: (e.target as HTMLSelectElement).value })}>
+          <option value="">${t("analytics.filter.all_api_keys")}</option>
+          ${apiKeys.map((k) => html`<option value=${String(k.id)}>${k.label || k.key_prefix || "—"}${k.key_prefix ? ` · ${k.key_prefix}` : ""}</option>`)}
+        </select>
+      </label>
+      ${hasFilters ? html`<button class="analytics-clear-btn" type="button" @click=${() => setHashParams({ providerId: "", apiKeyId: "" })}>${t("analytics.filter.clear")}</button>` : html``}
+    </div>
+    <div class="analytics-range-row">
+      <span class="analytics-range-label">${t("analytics.range_label")}</span>
+      ${renderPresetSelector(preset)}
     </div>
   </section>`;
 }
 
-// Latency is rendered as a uPlot bar chart (6 metrics). The latency
-// payload also carries a `samples` count — we surface it as a small
-// caption under the chart card title so the operator knows how many
-// requests the percentiles were computed over.
-function renderLatencyCaption(): TemplateResult {
-  if (!latency) return html``;
-  const samples: string = latency.samples != null ? String(latency.samples) : "—";
-  return html`<div class="card-subtitle">${t("analytics.chart.latency.subtitle")} · ${t("analytics.latency.samples")}: ${samples}</div>`;
+function card(title: string, body: TemplateResult, className: string = ""): TemplateResult {
+  return html`<section class="card analytics-data-card ${className}">
+    <div class="analytics-card-heading"><h3>${title}</h3></div>
+    ${body}
+  </section>`;
+}
+
+function metric(label: string, value: string, meta: string, tone: string = ""): TemplateResult {
+  return html`<div class="analytics-metric ${tone}">
+    <span class="analytics-metric-label">${label}</span>
+    <strong class="analytics-metric-value">${value}</strong>
+    <span class="analytics-metric-meta">${meta}</span>
+  </div>`;
+}
+
+function renderMetrics(): TemplateResult {
+  if (!summary) return html``;
+  const buckets = groupByStatus(byStatus);
+  const statusTotal = buckets.s2xx + buckets.s4xx + buckets.s5xx + buckets.other;
+  const successRate = statusTotal > 0 ? buckets.s2xx / statusTotal : NaN;
+  const totalTokens = summary.total_prompt_tokens + summary.total_completion_tokens;
+  const costPerRequest = summary.unique_requests > 0 ? summary.total_cost_usd / summary.unique_requests : 0;
+  const p95Total = latency?.p95_total_ms;
+  const successTone = !Number.isFinite(successRate) ? "" : successRate >= 0.99 ? "is-good" : successRate >= 0.95 ? "is-warn" : "is-bad";
+  return html`<div class="analytics-metrics" aria-label=${t("analytics.summary")}>
+    ${metric(t("analytics.summary.unique_requests"), fmtNumber(summary.unique_requests), `${fmtNumber(summary.total_attempts)} ${t("analytics.metric.attempts")}`)}
+    ${metric(t("analytics.metric.success_rate"), fmtPercent(successRate), `${fmtNumber(buckets.s4xx + buckets.s5xx)} ${t("analytics.metric.failed_responses")}`, successTone)}
+    ${metric(t("analytics.metric.tokens"), fmtNumber(totalTokens), `${fmtNumber(summary.total_prompt_tokens)} in · ${fmtNumber(summary.total_completion_tokens)} out`)}
+    ${metric(t("analytics.summary.total_cost"), fmtCost(summary.total_cost_usd), `${fmtCost(costPerRequest)} ${t("analytics.metric.per_request")}`)}
+    ${metric(t("analytics.metric.avg_ttft"), fmtDuration(summary.avg_ttft_ms), `${fmtDuration(summary.avg_total_ms)} ${t("analytics.metric.avg_total")}`)}
+    ${metric(t("analytics.metric.p95_latency"), fmtDuration(p95Total), `${fmtNumber(latency?.samples ?? 0)} ${t("analytics.metric.successful_samples")}`)}
+  </div>`;
+}
+
+interface RankingItem {
+  name: string;
+  context: string;
+  requests: number;
+  cost: number;
+}
+
+function renderRanking(title: string, subtitle: string, items: RankingItem[]): TemplateResult {
+  const ranked = [...items].sort((a, b) => b.cost - a.cost).slice(0, 8);
+  const total = items.reduce((sum, item) => sum + item.cost, 0);
+  const max = ranked[0]?.cost ?? 0;
+  return html`<section class="card analytics-ranking-card">
+    <div class="analytics-card-heading">
+      <div><h3>${title}</h3><p>${subtitle}</p></div>
+    </div>
+    ${ranked.length === 0 ? html`<p class="empty">${t("analytics.empty.no_usage")}</p>` : html`
+      <div class="analytics-ranking-list">
+        ${ranked.map((item, index) => {
+          const width = max > 0 ? Math.max(2, item.cost / max * 100) : 0;
+          const share = total > 0 ? item.cost / total : 0;
+          return html`<div class="analytics-ranking-row">
+            <span class="analytics-rank">${index + 1}</span>
+            <div class="analytics-ranking-main">
+              <div class="analytics-ranking-copy">
+                <span class="analytics-ranking-name" title=${item.name}>${item.name}</span>
+                <span class="analytics-ranking-context">${item.context} · ${fmtNumber(item.requests)} req</span>
+              </div>
+              <div class="analytics-ranking-value"><strong>${fmtCost(item.cost)}</strong><span>${fmtPercent(share)}</span></div>
+              <div class="analytics-ranking-track" aria-hidden="true"><span style=${`width:${width}%`}></span></div>
+            </div>
+          </div>`;
+        })}
+      </div>`}
+  </section>`;
+}
+
+function renderStatusHealth(): TemplateResult {
+  const buckets = groupByStatus(byStatus);
+  const entries = [
+    { label: "2xx", value: buckets.s2xx, cls: "ok" },
+    { label: "4xx", value: buckets.s4xx, cls: "warn" },
+    { label: "5xx", value: buckets.s5xx, cls: "err" },
+    { label: t("analytics.status.other"), value: buckets.other, cls: "other" },
+  ];
+  const total = entries.reduce((sum, item) => sum + item.value, 0);
+  const successRate = total > 0 ? buckets.s2xx / total : NaN;
+  const health = !Number.isFinite(successRate)
+    ? t("analytics.status.no_data")
+    : successRate >= 0.99 ? t("analytics.status.healthy")
+    : successRate >= 0.95 ? t("analytics.status.attention")
+    : t("analytics.status.degraded");
+  const healthTone = !Number.isFinite(successRate) ? "neutral" : successRate >= 0.99 ? "good" : successRate >= 0.95 ? "warn" : "bad";
+  return html`<section class="card analytics-status-card">
+    <div class="analytics-card-heading"><div><h3>${t("analytics.chart.status_codes")}</h3><p>${t("analytics.chart.status_codes.subtitle")}</p></div><span class="analytics-health-label ${healthTone}">${health}</span></div>
+    <div class="analytics-status-hero"><strong>${fmtPercent(successRate)}</strong><span>${t("analytics.metric.success_rate")}</span></div>
+    <div class="analytics-status-track" aria-label=${t("analytics.chart.status_codes")}>
+      ${entries.map((item) => html`<span class=${item.cls} style=${`width:${total > 0 ? item.value / total * 100 : 0}%`}></span>`)}
+    </div>
+    <div class="analytics-status-legend">
+      ${entries.map((item) => html`<div><span class="analytics-status-dot ${item.cls}"></span><span>${item.label}</span><strong>${fmtNumber(item.value)}</strong><small>${fmtPercent(total > 0 ? item.value / total : NaN)}</small></div>`)}
+    </div>
+  </section>`;
+}
+
+function renderLatencyBlock(): TemplateResult {
+  const rows = [
+    { label: t("analytics.latency.connect"), p50: latency?.p50_connect_ms, p95: latency?.p95_connect_ms },
+    { label: t("analytics.latency.ttft"), p50: latency?.p50_ttft_ms, p95: latency?.p95_ttft_ms },
+    { label: t("analytics.latency.total"), p50: latency?.p50_total_ms, p95: latency?.p95_total_ms },
+  ];
+  const max = Math.max(1, ...rows.map((row) => row.p95 ?? 0));
+  return html`<section class="card analytics-latency-card">
+    <div class="analytics-card-heading"><div><h3>${t("analytics.chart.latency")}</h3><p>${t("analytics.chart.latency.subtitle")} · ${fmtNumber(latency?.samples ?? 0)} ${t("analytics.latency.samples").toLowerCase()}</p></div></div>
+    <div class="analytics-latency-key"><span class="p50">p50</span><span class="p95">p95</span></div>
+    <div class="analytics-latency-list">
+      ${rows.map((row) => html`<div class="analytics-latency-row">
+        <div class="analytics-latency-row-head"><strong>${row.label}</strong><span><small>${fmtDuration(row.p50)}</small><b>${fmtDuration(row.p95)}</b></span></div>
+        <div class="analytics-latency-track">
+          <span class="p95" style=${`width:${(row.p95 ?? 0) / max * 100}%`}></span>
+          <span class="p50" style=${`width:${(row.p50 ?? 0) / max * 100}%`}></span>
+        </div>
+      </div>`)}
+    </div>
+    <div class="analytics-throughput-foot"><span>${t("analytics.metric.generation_speed")}</span><strong>p50 ${latency?.p50_tokens_per_sec == null ? "—" : fmtNumber(latency.p50_tokens_per_sec)} tok/s</strong><strong>p95 ${latency?.p95_tokens_per_sec == null ? "—" : fmtNumber(latency.p95_tokens_per_sec)} tok/s</strong></div>
+  </section>`;
+}
+
+function renderRaceBlock(): TemplateResult {
+  const total = races?.total_races ?? 0;
+  const winners = races?.winners ?? 0;
+  const losers = races?.losers ?? 0;
+  const completionRate = total > 0 ? winners / total : NaN;
+  const extraAttempts = total > 0 ? losers / total : 0;
+  return html`<section class="card analytics-race-card">
+    <div class="analytics-card-heading"><div><h3>${t("analytics.chart.race_outcomes")}</h3><p>${t("analytics.chart.race_outcomes.subtitle")}</p></div></div>
+    <div class="analytics-race-grid">
+      <div><span>${t("analytics.chart.race_outcomes.total")}</span><strong>${fmtNumber(total)}</strong></div>
+      <div><span>${t("analytics.race.completion")}</span><strong>${fmtPercent(completionRate)}</strong></div>
+      <div><span>${t("analytics.race.avg_winner_position")}</span><strong>${races?.avg_winner_position == null ? "—" : `#${races.avg_winner_position.toFixed(1)}`}</strong></div>
+      <div><span>${t("analytics.race.extra_attempts")}</span><strong>${total > 0 ? extraAttempts.toFixed(1) : "—"}</strong></div>
+    </div>
+    <div class="analytics-race-progress"><span style=${`width:${Number.isFinite(completionRate) ? Math.min(100, completionRate * 100) : 0}%`}></span></div>
+    <p class="analytics-race-note">${fmtNumber(winners)} ${t("analytics.race.winners")} · ${fmtNumber(losers)} ${t("analytics.race.cancelled_contenders")}</p>
+  </section>`;
 }
 
 function renderByModelTable(): TemplateResult {
   const body = byModel.length
-    ? html`<table>
-        <thead><tr><th>${t("analytics.table.col_provider")}</th><th>${t("analytics.table.col_model")}</th><th>${t("analytics.table.col_unique")}</th><th>${t("analytics.table.col_total")}</th><th>${t("analytics.table.col_cost")}</th></tr></thead>
-        <tbody>${byModel.map((r) => html`<tr><td>${r.provider_id}</td><td>${r.upstream_model_id}</td><td>${r.unique_requests}</td><td>${r.total_rows}</td><td>${fmtCost(r.total_cost_usd)}</td></tr>`)}</tbody>
-      </table>`
+    ? html`<div class="analytics-table-wrap"><table>
+        <thead><tr><th>${t("analytics.table.col_provider")}</th><th>${t("analytics.table.col_model")}</th><th class="num">${t("analytics.table.col_unique")}</th><th class="num">${t("analytics.metric.tokens")}</th><th class="num">${t("analytics.table.col_cost")}</th></tr></thead>
+        <tbody>${byModel.map((r) => html`<tr><td>${r.provider_id}</td><td class="analytics-model-cell" title=${r.upstream_model_id}>${r.upstream_model_id}</td><td class="num">${fmtNumber(r.unique_requests)}</td><td class="num">${fmtNumber(r.total_prompt_tokens + r.total_completion_tokens)}</td><td class="num">${fmtCost(r.total_cost_usd)}</td></tr>`)}</tbody>
+      </table></div>`
     : html`<p class="empty">${t("analytics.empty.no_usage")}</p>`;
   return card(t("analytics.chart.by_model"), body);
 }
 
 function renderByProviderTable(): TemplateResult {
   const body = byProvider.length
-    ? html`<table>
+    ? html`<div class="analytics-table-wrap"><table>
         <thead><tr><th>${t("analytics.table.col_provider")}</th><th class="num">${t("analytics.table.col_unique")}</th><th class="num">${t("analytics.table.col_total")}</th><th class="num">${t("analytics.table.col_winners")}</th><th class="num">${t("analytics.table.col_prompt_tok")}</th><th class="num">${t("analytics.table.col_completion_tok")}</th><th class="num">${t("analytics.table.col_cost")}</th></tr></thead>
         <tbody>${byProvider.map((r) => html`<tr>
           <td>${r.provider_id}</td>
-          <td class="num">${r.unique_requests}</td>
-          <td class="num">${r.total_rows}</td>
-          <td class="num">${r.winners}</td>
-          <td class="num">${r.total_prompt_tokens}</td>
-          <td class="num">${r.total_completion_tokens}</td>
+          <td class="num">${fmtNumber(r.unique_requests)}</td>
+          <td class="num">${fmtNumber(r.total_rows)}</td>
+          <td class="num">${fmtNumber(r.winners)}</td>
+          <td class="num">${fmtNumber(r.total_prompt_tokens)}</td>
+          <td class="num">${fmtNumber(r.total_completion_tokens)}</td>
           <td class="num">${fmtCost(r.total_cost_usd)}</td>
         </tr>`)}</tbody>
-      </table>`
+      </table></div>`
     : html`<p class="empty">${t("analytics.empty.no_usage")}</p>`;
   return card(t("analytics.chart.by_provider"), body);
 }
@@ -705,7 +699,7 @@ function renderMonthlyMatrix(): TemplateResult {
     const tt = pivot.totalsByMonth.get(m) ?? 0;
     return html`<th class="num">${fmtCost(tt)}</th>`;
   });
-  return card(t("analytics.monthly.title"), html`<table class="monthly-matrix">
+  return card(t("analytics.monthly.title"), html`<div class="analytics-table-wrap"><table class="monthly-matrix">
     <thead>
       <tr><th>${t("analytics.monthly.col_provider")}</th>${pivot.months.map((m) => html`<th>${m}</th>`)}<th class="num">${t("analytics.monthly.col_total")}</th></tr>
     </thead>
@@ -713,7 +707,7 @@ function renderMonthlyMatrix(): TemplateResult {
     <tfoot>
       <tr><th>${t("analytics.monthly.col_total")}</th>${footMonths}<th class="num">${fmtCost(pivot.grandTotal)}</th></tr>
     </tfoot>
-  </table>`);
+  </table></div>`);
 }
 
 // ── Recent errors table ─────────────────────────────────────────────
@@ -728,19 +722,20 @@ function renderRecentErrors(): TemplateResult {
   if (slice.length === 0) {
     return card(t("analytics.errors.title"), html`<p class="empty">${t("analytics.empty.no_errors")}</p>`);
   }
-  const body = html`<table>
-    <thead><tr><th>${t("analytics.errors.col_time")}</th><th>${t("analytics.errors.col_provider")}</th><th>${t("analytics.errors.col_model")}</th><th>${t("analytics.errors.col_status")}</th><th>${t("analytics.errors.col_message")}</th></tr></thead>
+  const body = html`<div class="analytics-table-wrap"><table class="analytics-errors-table">
+    <thead><tr><th>${t("analytics.errors.col_time")}</th><th>${t("analytics.errors.col_provider")}</th><th>${t("analytics.errors.col_model")}</th><th>${t("analytics.errors.col_status")}</th><th>${t("analytics.errors.col_message")}</th><th><span class="sr-only">${t("analytics.errors.view")}</span></th></tr></thead>
     <tbody>${slice.map((e) => {
       const href = `#/logs?request_id=${e.request_id || ""}`;
-      return html`<tr class="clickable" @click=${() => { location.hash = href; }}>
-        <td>${e.created_at || ""}</td>
+      return html`<tr>
+        <td><time datetime=${e.created_at || ""}>${fmtDateTime(e.created_at || "")}</time></td>
         <td>${e.provider_id || ""}</td>
-        <td>${e.upstream_model_id || ""}</td>
+        <td class="analytics-model-cell" title=${e.upstream_model_id || ""}>${e.upstream_model_id || ""}</td>
         <td><span class="status-pill err">${e.status_code || "—"}</span></td>
         <td>${e.error_msg_redacted || t("analytics.errors.no_message")}<br><small class="muted"><code>${e.trace_id || ""}</code></small></td>
+        <td><a class="analytics-error-link" href=${href} aria-label=${t("analytics.errors.view")}>→</a></td>
       </tr>`;
     })}</tbody>
-  </table>`;
+  </table></div>`;
   return card(t("analytics.errors.title"), body);
 }
 
@@ -749,51 +744,63 @@ function renderBody(): TemplateResult {
   if (errorMsg) return html`<div class="banner banner-error">${errorMsg}</div>`;
   if (!summary) return html`<div class="loading">${t("common.loading")}</div>`;
 
-  // Null-pricing warning: rows that consumed tokens but recorded
-  // $0 cost (pricing was missing at record time). Surfaces
-  // under-reporting so the operator knows to run models.dev sync.
   const nullPricingCount = summary.rows_with_null_pricing ?? 0;
   const nullPricingBanner = nullPricingCount > 0
     ? html`<div class="banner banner-warning">${t("analytics.null_pricing_warning", { count: nullPricingCount })}</div>`
     : html``;
 
-  // Charts grid: 2 columns on desktop, 1 on mobile. Daily usage
-  // spans the full width (it's a time series that benefits from the
-  // extra horizontal room). The 4 categorical bar charts pair up
-  // (by-model | by-provider, status | latency). Race outcomes is a
-  // full-width row of 3 stat blocks.
+  const modelItems: RankingItem[] = byModel.map((row) => ({
+    name: row.upstream_model_id,
+    context: row.provider_id,
+    requests: row.unique_requests,
+    cost: row.total_cost_usd,
+  }));
+  const providerItems: RankingItem[] = byProvider.map((row) => ({
+    name: row.provider_id,
+    context: `${fmtNumber(row.total_prompt_tokens + row.total_completion_tokens)} tok`,
+    requests: row.unique_requests,
+    cost: row.total_cost_usd,
+  }));
+
   return html`
     ${nullPricingBanner}
-    <div class="analytics-charts-grid">
-      <div class="analytics-chart-span-2">
-        ${chartCard(t("analytics.chart.daily_usage"), t("analytics.chart.daily_usage.subtitle"), "chart-daily-usage")}
-      </div>
-      ${chartCard(t("analytics.chart.by_model"), t("analytics.chart.by_model.subtitle"), "chart-by-model")}
-      ${chartCard(t("analytics.chart.by_provider"), t("analytics.chart.by_provider.subtitle"), "chart-by-provider")}
-      ${chartCard(t("analytics.chart.status_codes"), t("analytics.chart.status_codes.subtitle"), "chart-status-codes")}
-      <section class="card analytics-chart-card">
-        <div class="card-title">${t("analytics.chart.latency")}</div>
-        ${renderLatencyCaption()}
-        <div class="analytics-chart-container" id="chart-latency"></div>
+    ${renderMetrics()}
+    <div class="analytics-primary-grid">
+      <section class="card analytics-trend-card">
+        <div class="analytics-card-heading"><div><h3>${t("analytics.chart.daily_usage")}</h3><p>${t("analytics.chart.daily_usage.subtitle")}</p></div></div>
+        <div class="analytics-chart-container" id="chart-daily-usage"></div>
       </section>
-      <div class="analytics-chart-span-2">
-        ${renderRaceBlock()}
-      </div>
+      ${renderStatusHealth()}
     </div>
-    ${renderSummaryBlock()}
-    ${renderByModelTable()}
-    ${renderByProviderTable()}
-    ${renderMonthlyMatrix()}
+    <div class="analytics-insight-grid">
+      ${renderRanking(t("analytics.chart.by_model"), t("analytics.chart.by_model.subtitle"), modelItems)}
+      ${renderRanking(t("analytics.chart.by_provider"), t("analytics.chart.by_provider.subtitle"), providerItems)}
+    </div>
+    <div class="analytics-insight-grid">
+      ${renderLatencyBlock()}
+      ${renderRaceBlock()}
+    </div>
+    <details class="analytics-details">
+      <summary><span>${t("analytics.details.title")}</span><small>${t("analytics.details.subtitle")}</small></summary>
+      <div class="analytics-details-body">
+        ${renderByModelTable()}
+        ${renderByProviderTable()}
+        ${renderMonthlyMatrix()}
+      </div>
+    </details>
     ${renderRecentErrors()}`;
 }
 
 function renderAnalytics(): TemplateResult {
   const { preset, providerId, apiKeyId } = parseHashParams();
   return html`
-    <div class="page-header"><h2>${t("analytics.title")}</h2></div>
-    ${renderAnalyticsFilters(providerId, apiKeyId)}
-    ${renderPresetSelector(preset)}
-    ${renderBody()}`;
+    <div class="analytics-dashboard">
+      <div class="page-header analytics-header">
+        <div><span class="page-eyebrow">${t("nav.analytics")}</span><h2>${t("analytics.title")}</h2><p>${t("analytics.subtitle")}</p></div>
+      </div>
+      ${renderAnalyticsToolbar(providerId, apiKeyId, preset)}
+      ${renderBody()}
+    </div>`;
 }
 
 // ---- Mount ----
@@ -808,6 +815,7 @@ export async function mountAnalytics(): Promise<(() => void) | void> {
   errorMsg = null;
   charts = null;
   const cleanupReactive = mountView(el, renderAnalytics);
+  document.addEventListener("themechange", refreshAnalyticsChartTheme);
 
   const { preset, providerId, apiKeyId } = parseHashParams();
   try {
@@ -875,6 +883,7 @@ export async function mountAnalytics(): Promise<(() => void) | void> {
   }
   return () => {
     destroyAnalyticsCharts();
+    document.removeEventListener("themechange", refreshAnalyticsChartTheme);
     cleanupReactive();
   };
 }

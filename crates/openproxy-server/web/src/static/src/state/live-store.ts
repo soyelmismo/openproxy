@@ -76,7 +76,7 @@
 import type { WsEnvelope } from "../views/logs.js";
 import type { RecentUsageRow, StageEvent } from "../lib/types/api.js";
 import { subscribeWs } from "./ws-bus.js";
-import { connectLogsWebSocket, disconnectLogsWebSocket } from "./ws.js";
+import { connectLogsWebSocket, disconnectLogsWebSocket, subscribeLogsStatus, type LogsStatus } from "./ws.js";
 import { state } from "./index.js";
 import { api } from "../lib/api.js";
 
@@ -717,6 +717,7 @@ async function rehydrateInitial(): Promise<void> {
       }
     }
     if (maxId > lastSeenRowId) lastSeenRowId = maxId;
+    scheduleUpdate();
   } catch (e: unknown) {
     // Non-fatal: the store still works, just without an initial seed.
     // The activity feed starts empty and fills from live WS events.
@@ -773,6 +774,16 @@ let unsubRow: (() => void) | null = null;
 let unsubStage: (() => void) | null = null;
 let unsubLag: (() => void) | null = null;
 let unsubResync: (() => void) | null = null;
+let unsubConnection: (() => void) | null = null;
+
+function handleConnectionStatus(status: LogsStatus): void {
+  connectionState = status === "connected"
+    ? "connected"
+    : status === "connecting" || status === "reconnecting"
+      ? "connecting"
+      : "disconnected";
+  scheduleUpdate();
+}
 
 /** Returns true if the live-logs WS is currently OPEN or CONNECTING.
  *  Used to decide whether the store should open the WS itself (when
@@ -799,6 +810,7 @@ export function mountLiveStore(): () => void {
     unsubStage = subscribeWs("stage", handleStage);
     unsubLag = subscribeWs("lag_warning", handleLagWarning);
     unsubResync = subscribeWs("resync", handleResync);
+    unsubConnection = subscribeLogsStatus(handleConnectionStatus);
     installVisibilityListener();
     // If no other view is driving the WS, open it ourselves. The
     // `storeOpenedWs` flag lets us close it on unmount only if we
@@ -835,6 +847,8 @@ export function unmountLiveStore(): void {
     unsubLag = null;
     unsubResync?.();
     unsubResync = null;
+    unsubConnection?.();
+    unsubConnection = null;
     if (storeOpenedWs) {
       disconnectLogsWebSocket();
       storeOpenedWs = false;
