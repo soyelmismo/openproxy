@@ -1213,3 +1213,148 @@ impl std::fmt::Display for FromStrError {
     }
 }
 impl std::error::Error for FromStrError {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::db::conn::DbPool;
+    use crate::db::migrations;
+    use std::path::PathBuf;
+    use std::sync::atomic::AtomicU64;
+
+    fn fresh_pool() -> (DbPool, PathBuf) {
+        static SEQ: AtomicU64 = AtomicU64::new(0);
+        let n = SEQ.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        let pid = std::process::id();
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let dir = std::env::temp_dir().join(format!("openproxy-crud-test-{}-{}-{}", pid, nanos, n));
+        std::fs::create_dir_all(&dir).expect("mkdir tempdir");
+        let path = dir.join("crud.db");
+        let pool = DbPool::open(&path).expect("open pool");
+        {
+            let mut w = pool.writer();
+            migrations::run(&mut w).expect("migrations");
+        }
+        (pool, path)
+    }
+
+    #[test]
+    fn test_combo_in_chain_no_cycle() {
+        let (pool, _path) = fresh_pool();
+        let conn = pool.writer();
+
+        // C1 -> C2 -> C3
+        let c1 = ComboId(1);
+        let _c2 = ComboId(2);
+        let c3 = ComboId(3);
+
+        conn.execute_batch(
+            "
+            INSERT INTO providers (id, name, base_url, auth_type, format) VALUES ('p1', 'P1', 'url', 'bearer', 'openai');
+            INSERT INTO combos (id, name, strategy) VALUES (1, 'c1', 'priority');
+            INSERT INTO combos (id, name, strategy) VALUES (2, 'c2', 'priority');
+            INSERT INTO combos (id, name, strategy) VALUES (3, 'c3', 'priority');
+
+            INSERT INTO combo_targets (combo_id, provider_id, sub_combo_id, priority_order)
+            VALUES (1, 'p1', 2, 1);
+
+            INSERT INTO combo_targets (combo_id, provider_id, sub_combo_id, priority_order)
+            VALUES (2, 'p1', 3, 1);
+            "
+        ).expect("insert test data");
+
+        // checking if C1 is in C1's subchain?
+        // start = C1, target = C1 -> but since current logic is `start == target` => true
+        let result = combo_in_chain(&conn, c1, c3, MAX_SUB_COMBO_DEPTH).expect("query success");
+        assert!(!result);
+    }
+
+    #[test]
+    fn test_combo_in_chain_has_cycle() {
+        let (pool, _path) = fresh_pool();
+        let conn = pool.writer();
+
+        // C1 -> C2 -> C3 -> C1
+        let c1 = ComboId(1);
+        let _c2 = ComboId(2);
+        let _c3 = ComboId(3);
+
+        conn.execute_batch(
+            "
+            INSERT INTO providers (id, name, base_url, auth_type, format) VALUES ('p1', 'P1', 'url', 'bearer', 'openai');
+            INSERT INTO combos (id, name, strategy) VALUES (1, 'c1', 'priority');
+            INSERT INTO combos (id, name, strategy) VALUES (2, 'c2', 'priority');
+            INSERT INTO combos (id, name, strategy) VALUES (3, 'c3', 'priority');
+
+            INSERT INTO combo_targets (combo_id, provider_id, sub_combo_id, priority_order)
+            VALUES (1, 'p1', 2, 1);
+
+            INSERT INTO combo_targets (combo_id, provider_id, sub_combo_id, priority_order)
+            VALUES (2, 'p1', 3, 1);
+
+            INSERT INTO combo_targets (combo_id, provider_id, sub_combo_id, priority_order)
+            VALUES (3, 'p1', 1, 1);
+            "
+        ).expect("insert test data");
+
+        // checking if C1 is in C2's chain -> since C2 -> C3 -> C1
+        let result = combo_in_chain(&conn, c1, c1, MAX_SUB_COMBO_DEPTH).expect("query success");
+        assert!(result); // start == target
+
+        let result2 =
+            combo_in_chain(&conn, c1, ComboId(2), MAX_SUB_COMBO_DEPTH).expect("query success");
+        assert!(result2);
+    }
+
+    #[test]
+    fn test_combo_in_chain_start_equals_target() {
+        let (pool, _path) = fresh_pool();
+        let conn = pool.writer();
+
+        let c1 = ComboId(1);
+
+        let result = combo_in_chain(&conn, c1, c1, MAX_SUB_COMBO_DEPTH).expect("query success");
+        assert!(result);
+    }
+
+    #[test]
+    fn test_combo_in_chain_max_depth_exceeded() {
+        let (pool, _path) = fresh_pool();
+        let conn = pool.writer();
+
+        // C1 -> C2 -> C3 -> C4 -> C5
+        let c5 = ComboId(5);
+        let c1 = ComboId(1);
+
+        conn.execute_batch(
+            "
+            INSERT INTO providers (id, name, base_url, auth_type, format) VALUES ('p1', 'P1', 'url', 'bearer', 'openai');
+            INSERT INTO combos (id, name, strategy) VALUES (1, 'c1', 'priority');
+            INSERT INTO combos (id, name, strategy) VALUES (2, 'c2', 'priority');
+            INSERT INTO combos (id, name, strategy) VALUES (3, 'c3', 'priority');
+            INSERT INTO combos (id, name, strategy) VALUES (4, 'c4', 'priority');
+            INSERT INTO combos (id, name, strategy) VALUES (5, 'c5', 'priority');
+
+            INSERT INTO combo_targets (combo_id, provider_id, sub_combo_id, priority_order)
+            VALUES (1, 'p1', 2, 1);
+            INSERT INTO combo_targets (combo_id, provider_id, sub_combo_id, priority_order)
+            VALUES (2, 'p1', 3, 1);
+            INSERT INTO combo_targets (combo_id, provider_id, sub_combo_id, priority_order)
+            VALUES (3, 'p1', 4, 1);
+            INSERT INTO combo_targets (combo_id, provider_id, sub_combo_id, priority_order)
+            VALUES (4, 'p1', 5, 1);
+            "
+        ).expect("insert test data");
+
+        // Depth 3 allows reaching up to 3 links down. C1 -> (C2)1 -> (C3)2 -> (C4)3 -> C5 (4th)
+        let result = combo_in_chain(&conn, c5, c1, 3).expect("query success");
+        assert!(!result);
+
+        // Depth 4 should reach C5
+        let result2 = combo_in_chain(&conn, c5, c1, 4).expect("query success");
+        assert!(result2);
+    }
+}
