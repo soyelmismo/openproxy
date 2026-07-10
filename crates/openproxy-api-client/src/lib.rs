@@ -654,17 +654,19 @@ fn build_query(pairs: &[(&str, Option<&str>)]) -> String {
 /// `GET /admin/usage/*`. Coincide 1:1 con los campos de
 /// `handlers::admin::UsageQuery` en el server.
 fn usage_filter_query(f: &UsageFilter) -> String {
-    let pairs: [(&str, Option<String>); 6] = [
-        ("from", f.from.clone()),
-        ("to", f.to.clone()),
-        ("provider_id", f.provider_id.as_ref().map(|p| p.0.clone())),
-        ("model_id", f.model_id.clone()),
-        ("account_id", f.account_id.map(|a| a.0.to_string())),
-        ("combo_id", f.combo_id.map(|c| c.0.to_string())),
+    let account_id_str = f.account_id.map(|a| a.0.to_string());
+    let combo_id_str = f.combo_id.map(|c| c.0.to_string());
+
+    let pairs: [(&str, Option<&str>); 6] = [
+        ("from", f.from.as_deref()),
+        ("to", f.to.as_deref()),
+        ("provider_id", f.provider_id.as_ref().map(|p| p.0.as_str())),
+        ("model_id", f.model_id.as_deref()),
+        ("account_id", account_id_str.as_deref()),
+        ("combo_id", combo_id_str.as_deref()),
     ];
-    let borrowed: Vec<(&str, Option<&str>)> =
-        pairs.iter().map(|(k, v)| (*k, v.as_deref())).collect();
-    build_query(&borrowed)
+
+    build_query(&pairs)
 }
 
 /// Percent-encoding mínimo para un único valor de query string.
