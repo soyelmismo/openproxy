@@ -32,30 +32,35 @@ let filterSearch = "";
 let filterSource = "";
 let filterStatus = "";
 let filterProtocol = "";
-let loadError: string | null = null;
 let isSyncing = false;
+let loadError: string | null = null;
+let currentPage = 1;
 
 function onSearchInput(e: Event): void {
   const target = e.target as HTMLInputElement;
   filterSearch = target.value.trim().toLowerCase();
+  currentPage = 1;
   requestUpdate();
 }
 
 function onSourceChange(e: Event): void {
   const target = e.target as HTMLSelectElement;
   filterSource = target.value;
+  currentPage = 1;
   requestUpdate();
 }
 
 function onStatusChange(e: Event): void {
   const target = e.target as HTMLSelectElement;
   filterStatus = target.value;
+  currentPage = 1;
   requestUpdate();
 }
 
 function onProtocolChange(e: Event): void {
   const target = e.target as HTMLSelectElement;
   filterProtocol = target.value;
+  currentPage = 1;
   requestUpdate();
 }
 
@@ -158,6 +163,9 @@ function renderProxies(): TemplateResult {
     return true;
   });
 
+  const pageSize = 50;
+  const paginated = filtered.slice(0, currentPage * pageSize);
+
   const syncBtnLabel = isSyncing ? "Syncing..." : t("proxies.btn.sync");
 
   return html`
@@ -255,9 +263,16 @@ function renderProxies(): TemplateResult {
               </tr>
             </thead>
             <tbody>
-              ${filtered.map(renderProxyRow)}
+              ${paginated.map(renderProxyRow)}
             </tbody>
           </table>
+          ${paginated.length < filtered.length ? html`
+            <div style="text-align: center; margin: 1.5rem 0;">
+              <button class="secondary" @click=${() => { currentPage++; requestUpdate(); }}>
+                Load More (${filtered.length - paginated.length} remaining)
+              </button>
+            </div>
+          ` : ''}
         `
     }
   `;
