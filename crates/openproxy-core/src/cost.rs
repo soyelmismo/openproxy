@@ -278,6 +278,9 @@ pub fn record(conn: &Connection, input: &UsageInput) -> Result<UsageId> {
         client_response: input.client_response,
         prompt_tokens_estimated: input.prompt_tokens_estimated,
         completion_tokens_estimated: input.completion_tokens_estimated,
+        proxy_url: input.proxy_url.clone(),
+        proxy_status: input.proxy_status.clone(),
+        is_proxy_rotated: input.is_proxy_rotated,
         endpoint_kind: input.endpoint_kind,
     };
     crate::usage::publish_usage_row(row);
