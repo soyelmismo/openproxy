@@ -198,9 +198,7 @@ impl<B: HttpBody> DisconnectBody<B> {
 
 impl<B: HttpBody> Drop for DisconnectBody<B> {
     fn drop(&mut self) {
-        if !self.complete
-            && !self.inner.is_end_stream()
-            && !self.fired.swap(true, Ordering::AcqRel)
+        if !self.complete && !self.inner.is_end_stream() && !self.fired.swap(true, Ordering::AcqRel)
         {
             let _ = self.tx.send(true);
         }

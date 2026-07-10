@@ -1676,13 +1676,17 @@ fn expires_at_in_the_past_with_active_1_is_visible() {
     )
     .expect("seed");
 
+    let now_minus_one_hour: String = conn
+        .query_row("SELECT datetime('now', '-1 hour')", [], |r| r.get(0))
+        .expect("now-1h");
+
     // Backdate `expires_at` by hand: we want to prove that a past
     // `expires_at` does NOT hide a row from `list_active`.
     let updated = conn
         .execute(
-            "UPDATE models SET expires_at = datetime('now', '-1 hour') \
+            "UPDATE models SET expires_at = ?3 \
                  WHERE provider_id = ?1 AND model_id = ?2",
-            rusqlite::params!["prov-d", "stale"],
+            rusqlite::params!["prov-d", "stale", now_minus_one_hour],
         )
         .expect("backdate expires_at");
     assert_eq!(updated, 1, "the one seeded row was backdated");
@@ -1702,9 +1706,6 @@ fn expires_at_in_the_past_with_active_1_is_visible() {
     )
     .expect("get")
     .expect("present");
-    let now_minus_one_hour: String = conn
-        .query_row("SELECT datetime('now', '-1 hour')", [], |r| r.get(0))
-        .expect("now-1h");
     assert_eq!(
         row.expires_at.as_deref(),
         Some(now_minus_one_hour.as_str()),

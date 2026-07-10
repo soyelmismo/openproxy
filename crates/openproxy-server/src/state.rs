@@ -864,9 +864,10 @@ async fn spawn_background_tasks(args: SpawnBackgroundTasksArgs) {
             .ok()
             .and_then(|s| s.parse().ok())
             .unwrap_or(6); // Default 6 hours
-        
-        let mut proxy_tick = tokio::time::interval(std::time::Duration::from_secs(interval_hours * 3600));
-        
+
+        let mut proxy_tick =
+            tokio::time::interval(std::time::Duration::from_secs(interval_hours * 3600));
+
         // Retrasar 10 segundos el primer sync para no bloquear el inicio de otros subsistemas
         tokio::time::sleep(std::time::Duration::from_secs(10)).await;
 
@@ -876,7 +877,9 @@ async fn spawn_background_tasks(args: SpawnBackgroundTasksArgs) {
                 Ok(summary) => {
                     tracing::info!(added = summary.added, "background proxy sync completed");
                     // Iniciar pruebas en segundo plano de inmediato tras el sync
-                    openproxy_core::free_proxies::test_all_proxies_background(proxy_sync_pool.clone());
+                    openproxy_core::free_proxies::test_all_proxies_background(
+                        proxy_sync_pool.clone(),
+                    );
                 }
                 Err(e) => {
                     tracing::error!("background proxy sync failed: {}", e);
