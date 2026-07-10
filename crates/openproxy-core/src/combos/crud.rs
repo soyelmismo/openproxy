@@ -454,31 +454,47 @@ pub fn combo_in_chain(
     if start_combo_id == target_combo_id {
         return Ok(true);
     }
-    let mut current = start_combo_id;
+
+    let mut current_level = vec![start_combo_id.0];
+
     for _ in 0..max_depth {
+        if current_level.is_empty() {
+            break;
+        }
+
+        let placeholders = vec!["?"; current_level.len()].join(",");
+        let query = format!(
+            "SELECT DISTINCT sub_combo_id FROM combo_targets \
+             WHERE combo_id IN ({}) AND sub_combo_id IS NOT NULL",
+            placeholders
+        );
+
         let mut stmt = conn
-            .prepare(
-                "SELECT sub_combo_id FROM combo_targets \
-                 WHERE combo_id = ?1 AND sub_combo_id IS NOT NULL",
-            )
+            .prepare(&query)
             .map_err(crate::error::map_db_error)?;
+
+        let params_vec: Vec<&dyn rusqlite::ToSql> = current_level
+            .iter()
+            .map(|id| id as &dyn rusqlite::ToSql)
+            .collect();
+
         let sub_ids: Vec<i64> = stmt
-            .query_map(params![current.0], |r| r.get::<_, Option<i64>>(0))
+            .query_map(rusqlite::params_from_iter(params_vec), |r| r.get::<_, Option<i64>>(0))
             .map_err(crate::error::map_db_error)?
             .filter_map(|x| x.ok().flatten())
             .collect();
+
         if sub_ids.is_empty() {
             return Ok(false);
         }
+
         for sid in &sub_ids {
             if *sid == target_combo_id.0 {
                 return Ok(true);
             }
         }
-        // Advance to the first sub-combo found at this level; a
-        // deeper probe is only relevant if that branch itself
-        // eventually leads back to `target_combo_id`.
-        current = ComboId(sub_ids[0]);
+
+        current_level = sub_ids;
     }
     Ok(false)
 }
@@ -1356,5 +1372,82 @@ mod tests {
         // Depth 4 should reach C5
         let result2 = combo_in_chain(&conn, c5, c1, 4).expect("query success");
         assert!(result2);
+    }
+
+    #[test]
+    fn test_combo_in_chain_mutual_cycle() {
+        let (pool, _path) = fresh_pool();
+        let conn = pool.writer();
+
+        // C1 -> C2 -> C1 (cycle)
+        // We want to verify that cycle detection works correctly and returns true/false
+        // as appropriate without looping infinitely.
+        let c1 = ComboId(1);
+        let c2 = ComboId(2);
+        let c3 = ComboId(3); // Not in the cycle
+
+        conn.execute_batch(
+            "
+            INSERT INTO providers (id, name, base_url, auth_type, format) VALUES ('p1', 'P1', 'url', 'bearer', 'openai');
+            INSERT INTO combos (id, name, strategy) VALUES (1, 'c1', 'priority');
+            INSERT INTO combos (id, name, strategy) VALUES (2, 'c2', 'priority');
+            INSERT INTO combos (id, name, strategy) VALUES (3, 'c3', 'priority');
+
+            -- C1 points to C2
+            INSERT INTO combo_targets (combo_id, provider_id, sub_combo_id, priority_order)
+            VALUES (1, 'p1', 2, 1);
+
+            -- C2 points to C1
+            INSERT INTO combo_targets (combo_id, provider_id, sub_combo_id, priority_order)
+            VALUES (2, 'p1', 1, 1);
+            "
+        ).expect("insert test data");
+
+        // Verify C2 is in C1's chain
+        let result_c2_in_c1 = combo_in_chain(&conn, c2, c1, 10).expect("query success");
+        assert!(result_c2_in_c1, "C1 points to C2, so C2 is in C1's chain");
+
+        // Verify C1 is in C2's chain
+        let result_c1_in_c2 = combo_in_chain(&conn, c1, c2, 10).expect("query success");
+        assert!(result_c1_in_c2, "C2 points to C1, so C1 is in C2's chain");
+
+        // Verify that searching for a non-existent combo (C3) safely terminates
+        // and returns false despite the cycle.
+        let result_c3_in_c1 = combo_in_chain(&conn, c3, c1, 10).expect("query success");
+        assert!(!result_c3_in_c1, "C3 is not in the cycle, so it should return false");
+    }
+
+    #[test]
+    fn test_combo_in_chain_multi_branch() {
+        let (pool, _path) = fresh_pool();
+        let conn = pool.writer();
+
+        // C1 -> C2 (priority 1)
+        // C1 -> C3 (priority 2)
+        // C3 -> C4 (priority 1)
+        let c1 = ComboId(1);
+        let c4 = ComboId(4);
+
+        conn.execute_batch(
+            "
+            INSERT INTO providers (id, name, base_url, auth_type, format) VALUES ('p1', 'P1', 'url', 'bearer', 'openai');
+            INSERT INTO combos (id, name, strategy) VALUES (1, 'c1', 'priority');
+            INSERT INTO combos (id, name, strategy) VALUES (2, 'c2', 'priority');
+            INSERT INTO combos (id, name, strategy) VALUES (3, 'c3', 'priority');
+            INSERT INTO combos (id, name, strategy) VALUES (4, 'c4', 'priority');
+
+            INSERT INTO combo_targets (combo_id, provider_id, sub_combo_id, priority_order)
+            VALUES (1, 'p1', 2, 1);
+            INSERT INTO combo_targets (combo_id, provider_id, sub_combo_id, priority_order)
+            VALUES (1, 'p1', 3, 2);
+
+            INSERT INTO combo_targets (combo_id, provider_id, sub_combo_id, priority_order)
+            VALUES (3, 'p1', 4, 1);
+            "
+        ).expect("insert test data");
+
+        // The logic must be able to explore C3 (second branch) and find C4.
+        let result = combo_in_chain(&conn, c4, c1, 10).expect("query success");
+        assert!(result, "C1 should be able to reach C4 via C3");
     }
 }
