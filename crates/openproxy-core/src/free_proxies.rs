@@ -682,7 +682,15 @@ pub fn test_all_proxies_background(db_pool: Arc<DbPool>) {
     tokio::spawn(async move {
         let proxies = {
             let r = db_pool.reader();
-            let mut stmt = match r.prepare("SELECT id, type, host, port FROM free_proxies") {
+            let mut stmt = match r.prepare("
+                SELECT id, type, host, port FROM free_proxies 
+                ORDER BY 
+                    CASE status 
+                        WHEN 'unknown' THEN 1 
+                        WHEN 'alive' THEN 2 
+                        ELSE 3 
+                    END ASC
+            ") {
                 Ok(s) => s,
                 Err(e) => {
                     tracing::error!("Failed to prepare list query in background test: {}", e);
