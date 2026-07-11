@@ -2239,4 +2239,32 @@ mod tests {
         assert!(out.top_k.is_none());
         assert!(out.metadata.is_none());
     }
+
+    #[test]
+    fn parse_image_url_to_inline_data_extracts_base64() {
+        let part_json = serde_json::json!({
+            "type": "image_url",
+            "image_url": {
+                "url": "data:image/jpeg;base64,f00bar"
+            }
+        });
+
+        let result = super::parse_image_url_to_inline_data(&part_json).unwrap();
+        assert_eq!(result.mime_type, "image/jpeg");
+        assert_eq!(result.data, "f00bar");
+
+        let invalid_type = serde_json::json!({
+            "type": "text",
+            "text": "hello"
+        });
+        assert!(super::parse_image_url_to_inline_data(&invalid_type).is_none());
+
+        let invalid_url = serde_json::json!({
+            "type": "image_url",
+            "image_url": {
+                "url": "https://example.com/image.jpg"
+            }
+        });
+        assert!(super::parse_image_url_to_inline_data(&invalid_url).is_none());
+    }
 }
