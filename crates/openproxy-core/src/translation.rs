@@ -362,12 +362,12 @@ fn parse_image_url_to_inline_data(part: &serde_json::Value) -> Option<GeminiInli
     if obj.get("type").and_then(|v| v.as_str())? != "image_url" {
         return None;
     }
-    
+
     let url = obj.get("image_url")?.as_object()?.get("url")?.as_str()?;
     let stripped = url.strip_prefix("data:")?;
     let (mime_type, rest) = stripped.split_once(';')?;
     let (_, data) = rest.split_once(',')?;
-    
+
     Some(GeminiInlineData {
         mime_type: mime_type.to_string(),
         data: data.to_string(),
