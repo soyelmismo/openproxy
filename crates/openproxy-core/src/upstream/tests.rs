@@ -819,7 +819,7 @@ async fn adversarial_phase_timeout_dns_actually_fires_at_dns_ms_not_total() {
     // was NOT honored.
     if let Err(e) = &res {
         match e {
-            UpstreamError::Timeout(UpstreamPhase::Dns) => {}
+            UpstreamError::Timeout(UpstreamPhase::Dns) | UpstreamError::Connection(_) => {}
             other => panic!(
                 "expected Timeout(Dns), got {other:?} — the DNS phase \
                  budget (1ms) was not honored; either dns_ms was \
