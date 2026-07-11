@@ -695,7 +695,10 @@ pub fn auto_create_combos(conn: &Connection) -> Result<usize> {
     };
 
     let combo_ids: Vec<i64> = existing_combos.values().copied().collect();
-    let existing_targets: std::collections::HashSet<(i64, String, i64, i64)> = {
+    // BOLT: Optimize HashSet lookup by omitting the String `provider_id` field.
+    // The combination of (combo_id, account_id, model_row_id) already satisfies a UNIQUE constraint.
+    // This avoids an expensive `.clone()` allocation on `provider_id` in the hot loop below.
+    let existing_targets: std::collections::HashSet<(i64, i64, i64)> = {
         if combo_ids.is_empty() {
             std::collections::HashSet::new()
         } else {
@@ -707,7 +710,7 @@ pub fn auto_create_combos(conn: &Connection) -> Result<usize> {
             for chunk in combo_ids.chunks(900) {
                 let placeholders = vec!["?"; chunk.len()].join(",");
                 let query = format!(
-                    "SELECT combo_id, provider_id, account_id, model_row_id FROM combo_targets WHERE combo_id IN ({})",
+                    "SELECT combo_id, account_id, model_row_id FROM combo_targets WHERE combo_id IN ({})",
                     placeholders
                 );
                 let mut stmt = conn.prepare(&query).map_err(crate::error::map_db_error)?;
@@ -716,9 +719,8 @@ pub fn auto_create_combos(conn: &Connection) -> Result<usize> {
                     .query_map(params, |row| {
                         Ok((
                             row.get::<_, i64>(0)?,
-                            row.get::<_, String>(1)?,
-                            row.get::<_, Option<i64>>(2)?.unwrap_or(-1),
-                            row.get::<_, i64>(3)?,
+                            row.get::<_, Option<i64>>(1)?.unwrap_or(-1),
+                            row.get::<_, i64>(2)?,
                         ))
                     })
                     .map_err(crate::error::map_db_error)?;
@@ -807,7 +809,7 @@ pub fn auto_create_combos(conn: &Connection) -> Result<usize> {
         // Insert new targets (append-only logic).
         for &(row_id, ref provider_id, account_id) in targets {
             let target_exists =
-                existing_targets.contains(&(combo_id, provider_id.clone(), account_id, row_id));
+                existing_targets.contains(&(combo_id, account_id, row_id));
 
             if !target_exists {
                 let current_max = max_orders.get(&combo_id).copied().unwrap_or(-1);
