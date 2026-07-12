@@ -625,8 +625,7 @@ fn openai_to_gemini_antigravity(
                 && !reasoning.is_empty()
             {
                 parts.push(serde_json::json!({
-                    "text": reasoning,
-                    "thought": true
+                    "text": reasoning
                 }));
             }
 
@@ -773,12 +772,12 @@ fn openai_to_gemini_antigravity(
         
         if let Some(max_tokens) = openai.max_tokens {
             if (max_tokens as i64) <= budget {
-                gen_config["maxOutputTokens"] = serde_json::json!(budget + 8192);
+                gen_config["maxOutputTokens"] = serde_json::json!(8192);
             } else {
-                gen_config["maxOutputTokens"] = serde_json::json!(max_tokens);
+                gen_config["maxOutputTokens"] = serde_json::json!(max_tokens.min(8192));
             }
         } else {
-            gen_config["maxOutputTokens"] = serde_json::json!(budget + 8192);
+            gen_config["maxOutputTokens"] = serde_json::json!(8192);
         }
     } else {
         gen_config["maxOutputTokens"] = serde_json::json!(openai.max_tokens.unwrap_or(8192).min(8192));
@@ -791,12 +790,6 @@ fn openai_to_gemini_antigravity(
     }
     if let Some(top_k) = openai.top_k {
         gen_config["topK"] = serde_json::json!(top_k);
-    }
-    if let Some(fp) = openai.extra.get("frequency_penalty") {
-        gen_config["frequencyPenalty"] = fp.clone();
-    }
-    if let Some(pp) = openai.extra.get("presence_penalty") {
-        gen_config["presencePenalty"] = pp.clone();
     }
     if let Some(n) = openai.extra.get("n") {
         gen_config["candidateCount"] = n.clone();
@@ -811,12 +804,7 @@ fn openai_to_gemini_antigravity(
     let mut request_val = serde_json::json!({
         "contents": contents,
         "generationConfig": gen_config,
-        "safetySettings": [
-            { "category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE" },
-            { "category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE" },
-            { "category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "BLOCK_NONE" },
-            { "category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_NONE" },
-        ]
+        "safetySettings": []
     });
 
     if let Some(si) = system_instruction {
