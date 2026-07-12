@@ -840,6 +840,17 @@ mod tests {
     }
 
     #[test]
+    fn test_parse_i64() {
+        assert_eq!(parse_i64("123"), Some(123));
+        assert_eq!(parse_i64("  -456  "), Some(-456));
+        assert_eq!(parse_i64("0"), Some(0));
+        assert_eq!(parse_i64("abc"), None);
+        assert_eq!(parse_i64(""), None);
+        assert_eq!(parse_i64("  "), None);
+        assert_eq!(parse_i64("12.34"), None);
+    }
+
+    #[test]
     fn test_list_combo_targets() {
         let server = httpmock::MockServer::start();
         let client = Client::new(server.base_url());
