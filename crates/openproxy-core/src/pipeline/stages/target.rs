@@ -529,9 +529,9 @@ impl PipelineStage for CustomAdapterStage {
                     .response_body_json(serde_json::to_value(&response).ok())
                     .request_headers(None)
                     .response_headers(None)
-                    .is_streaming(false)
+                    .is_streaming(ctx.req.stream_sink.is_some())
                     .stream_complete(true)
-                    .stop_reason(None)
+                    .stop_reason(response.choices.first().and_then(|c| c.finish_reason.clone()))
                     .record()
                     {
                         Ok(id) => id,
