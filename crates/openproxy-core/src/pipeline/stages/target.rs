@@ -526,7 +526,7 @@ impl PipelineStage for CustomAdapterStage {
                     .trace_id(ctx.trace_id.clone())
                     .prompt_tokens_opt(response.usage.as_ref().map(|u| u.prompt_tokens))
                     .completion_tokens_opt(response.usage.as_ref().map(|u| u.completion_tokens))
-                    .response_body_json(None)
+                    .response_body_json(serde_json::to_value(&response).ok())
                     .request_headers(None)
                     .response_headers(None)
                     .is_streaming(false)
