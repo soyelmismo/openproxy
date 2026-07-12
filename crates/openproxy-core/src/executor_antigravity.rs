@@ -593,6 +593,28 @@ fn openai_to_gemini_antigravity(
         }
     }
 
+    let has_tool_history = openai_messages.iter().any(|msg| {
+        msg.role == "tool" || msg.role == "function" || msg.tool_calls.is_some()
+    });
+
+    let mut tool_id_to_name = std::collections::HashMap::new();
+    for msg in &openai_messages {
+        if let Some(tool_calls) = &msg.tool_calls {
+            for tc in tool_calls {
+                if let Some(id) = tc.get("id").and_then(|v| v.as_str()) {
+                    let name = tc
+                        .get("function")
+                        .and_then(|f| f.get("name"))
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("");
+                    if !name.is_empty() {
+                        tool_id_to_name.insert(id.to_string(), name.to_string());
+                    }
+                }
+            }
+        }
+    }
+
     // Merge consecutive messages with the same role
     let mut grouped_messages: Vec<(String, Vec<serde_json::Value>)> = Vec::new();
 
@@ -605,28 +627,61 @@ fn openai_to_gemini_antigravity(
         let mut parts = Vec::new();
 
         if msg.role == "tool" || msg.role == "function" {
-            let final_name = msg.name.as_deref().unwrap_or("unknown");
+            let tool_call_id = msg.tool_call_id.clone().unwrap_or_default();
+            let mut final_name = msg.name.as_deref().unwrap_or("unknown").to_string();
+            if final_name == "unknown" && !tool_call_id.is_empty() {
+                if let Some(mapped) = tool_id_to_name.get(&tool_call_id) {
+                    final_name = mapped.clone();
+                }
+            }
+
             let content_str = match &msg.content {
                 Some(serde_json::Value::String(s)) => s.clone(),
                 Some(other) => other.to_string(),
                 None => String::new(),
             };
+            let mut function_response = serde_json::json!({
+                "name": final_name,
+                "response": { "result": content_str }
+            });
+            if !tool_call_id.is_empty() {
+                function_response["id"] = serde_json::json!(tool_call_id);
+            }
             parts.push(serde_json::json!({
-                "functionResponse": {
-                    "name": final_name,
-                    "response": { "result": content_str },
-                    "id": msg.tool_call_id.clone().unwrap_or_default()
-                }
+                "functionResponse": function_response
             }));
         } else {
             // Check for assistant's reasoning_content and prepend it as a thinking part
             if msg.role == "assistant"
                 && let Some(reasoning) = msg.extra.get("reasoning_content").and_then(|v| v.as_str())
                 && !reasoning.is_empty()
+                && !has_tool_history
             {
-                parts.push(serde_json::json!({
-                    "text": reasoning
-                }));
+                let mut thinking_part = serde_json::json!({
+                    "text": reasoning,
+                    "thought": true
+                });
+
+                // Inject signature if available
+                if let Some(sig) = SignatureCache::global().get_session_signature(session_id) {
+                    thinking_part["thoughtSignature"] = serde_json::json!(sig);
+                    thinking_part["thought_signature"] = serde_json::json!(sig);
+                } else {
+                    let model_lower = model_name.to_lowercase();
+                    let is_thinking = model_lower.contains("gemini")
+                        && (model_lower.contains("-thinking")
+                            || model_lower.contains("gemini-2.0-pro")
+                            || model_lower.contains("gemini-3-pro")
+                            || model_lower.contains("gemini-3.1-pro"))
+                        && !model_lower.contains("claude");
+                    let is_flash = model_lower.contains("flash");
+                    if is_thinking || is_flash {
+                        thinking_part["thoughtSignature"] = serde_json::json!("skip_thought_signature_validator");
+                        thinking_part["thought_signature"] = serde_json::json!("skip_thought_signature_validator");
+                    }
+                }
+
+                parts.push(thinking_part);
             }
 
             // Normal text content part
@@ -675,10 +730,13 @@ fn openai_to_gemini_antigravity(
                     let mut func_call_part = serde_json::json!({
                         "functionCall": {
                             "name": name,
-                            "args": arguments,
-                            "id": id
+                            "args": arguments
                         }
                     });
+                    
+                    if !id.is_empty() {
+                        func_call_part["functionCall"]["id"] = serde_json::json!(id);
+                    }
 
                     // Inject signature if available
                     if let Some(sig) = SignatureCache::global().get_session_signature(session_id) {
