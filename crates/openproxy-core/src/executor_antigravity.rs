@@ -744,6 +744,7 @@ fn openai_to_gemini_antigravity(
         None
     } else {
         Some(serde_json::json!({
+            "role": "user",
             "parts": [
                 {
                     "text": system_parts.join("\n\n")
@@ -811,10 +812,10 @@ fn openai_to_gemini_antigravity(
         "contents": contents,
         "generationConfig": gen_config,
         "safetySettings": [
-            { "category": "HARM_CATEGORY_HARASSMENT", "threshold": "OFF" },
-            { "category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "OFF" },
-            { "category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "OFF" },
-            { "category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "OFF" },
+            { "category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE" },
+            { "category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE" },
+            { "category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "BLOCK_NONE" },
+            { "category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_NONE" },
         ]
     });
 
@@ -842,9 +843,17 @@ fn openai_to_gemini_antigravity(
                     }
                 }
                 if let Some(obj) = func.as_object_mut() {
-                    obj.remove("type");
-                    obj.remove("strict");
-                    obj.remove("additionalProperties");
+                    let mut clean_obj = serde_json::Map::new();
+                    if let Some(name) = obj.get("name") {
+                        clean_obj.insert("name".to_string(), name.clone());
+                    }
+                    if let Some(desc) = obj.get("description") {
+                        clean_obj.insert("description".to_string(), desc.clone());
+                    }
+                    if let Some(params) = obj.get("parameters") {
+                        clean_obj.insert("parameters".to_string(), params.clone());
+                    }
+                    *obj = clean_obj;
                 }
                 func
             };
