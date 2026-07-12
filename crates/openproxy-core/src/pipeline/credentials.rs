@@ -73,24 +73,24 @@ impl CredentialManager {
                         }
                     };
 
-                    let blob = match &raw_account.api_key_encrypted {
-                        Some(b) => b,
-                        None => {
-                            tracing::error!(
-                                "account {} has no API key (OAuth account?)",
-                                account_id.0
-                            );
-                            continue;
-                        }
+                    let (key, has_api_key) = match &raw_account.api_key_encrypted {
+                        Some(b) => match master_key.decrypt(b) {
+                            Ok(k) => (k, true),
+                            Err(e) => {
+                                tracing::error!(error=%e, "failed to decrypt api key");
+                                continue;
+                            }
+                        },
+                        None => (String::new(), false),
                     };
 
-                    let key = match master_key.decrypt(blob) {
-                        Ok(k) => k,
-                        Err(e) => {
-                            tracing::error!(error=%e, "failed to decrypt api key");
-                            continue;
-                        }
-                    };
+                    if !has_api_key && !matches!(t.provider_id.as_str(), "kiro" | "antigravity" | "codex") {
+                        tracing::error!(
+                            "account {} has no API key (OAuth account?)",
+                            account_id.0
+                        );
+                        continue;
+                    }
                     let label = raw_account.label.clone();
 
                     let custom_meta =
