@@ -664,6 +664,21 @@ fn openai_to_gemini_antigravity(
     if let Some(top_p) = openai.top_p {
         gen_config["topP"] = serde_json::json!(top_p);
     }
+    if let Some(top_k) = openai.top_k {
+        gen_config["topK"] = serde_json::json!(top_k);
+    }
+    if let Some(fp) = openai.extra.get("frequency_penalty") {
+        gen_config["frequencyPenalty"] = fp.clone();
+    }
+    if let Some(pp) = openai.extra.get("presence_penalty") {
+        gen_config["presencePenalty"] = pp.clone();
+    }
+    if let Some(n) = openai.extra.get("n") {
+        gen_config["candidateCount"] = n.clone();
+    }
+    if let Some(seed) = openai.extra.get("seed") {
+        gen_config["seed"] = seed.clone();
+    }
     if let Some(stop) = &openai.stop {
         gen_config["stopSequences"] = serde_json::json!(stop);
     }
