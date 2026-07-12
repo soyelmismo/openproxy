@@ -80,6 +80,7 @@ libmimalloc-sys = { version = "0.1", default-features = false, features = ["exte
 # as a closure parameter). Previously it was only a dev-dependency (for
 # tests), but the retry helper needs it at build time.
 rusqlite = { workspace = true }
+ahash = "0.8.12"
 
 [dev-dependencies]
 tower = { version = "0.5", features = ["util"] }
