@@ -788,7 +788,24 @@ fn openai_to_gemini_antigravity(
             let mut gemini_func = if let Some(func) = tool.get("function") {
                 func.clone()
             } else {
-                tool.clone()
+                let mut func = tool.clone();
+                if func.get("name").is_none() {
+                    let tool_type_opt = func
+                        .get("type")
+                        .and_then(|v| v.as_str())
+                        .map(|s| s.to_string());
+                    if let Some(tool_type) = tool_type_opt {
+                        if let Some(obj) = func.as_object_mut() {
+                            obj.insert("name".to_string(), serde_json::json!(tool_type));
+                        }
+                    }
+                }
+                if let Some(obj) = func.as_object_mut() {
+                    obj.remove("type");
+                    obj.remove("strict");
+                    obj.remove("additionalProperties");
+                }
+                func
             };
 
             let name_opt = gemini_func
@@ -828,6 +845,7 @@ fn openai_to_gemini_antigravity(
             }
 
             if let Some(params) = gemini_func.get_mut("parameters") {
+                crate::schema_cleaner::clean_json_schema(params);
                 if let Some(params_obj) = params.as_object_mut() {
                     if !params_obj.contains_key("type") {
                         params_obj.insert("type".to_string(), serde_json::json!("OBJECT"));

@@ -38,6 +38,7 @@ pub mod db;
 pub mod discovery_scheduler;
 pub mod endpoint;
 pub mod executor_antigravity;
+pub mod schema_cleaner;
 
 pub mod executor_kiro;
 pub mod free_proxies;
