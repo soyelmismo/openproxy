@@ -657,7 +657,7 @@ fn openai_to_gemini_antigravity(
 
     // Build generationConfig
     let mut gen_config = serde_json::json!({});
-    gen_config["maxOutputTokens"] = serde_json::json!(openai.max_tokens.unwrap_or(8192));
+    gen_config["maxOutputTokens"] = serde_json::json!(openai.max_tokens.unwrap_or(8192).min(8192));
     if let Some(temp) = openai.temperature {
         gen_config["temperature"] = serde_json::json!(temp);
     }
