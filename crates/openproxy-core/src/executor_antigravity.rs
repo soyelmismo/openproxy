@@ -686,8 +686,15 @@ fn openai_to_gemini_antigravity(
                         func_call_part["thoughtSignature"] = serde_json::json!(sig);
                         func_call_part["thought_signature"] = serde_json::json!(sig);
                     } else {
-                        let is_flash = model_name.to_lowercase().contains("flash");
-                        if is_flash {
+                        let model_lower = model_name.to_lowercase();
+                        let is_thinking = model_lower.contains("gemini")
+                            && (model_lower.contains("-thinking")
+                                || model_lower.contains("gemini-2.0-pro")
+                                || model_lower.contains("gemini-3-pro")
+                                || model_lower.contains("gemini-3.1-pro"))
+                            && !model_lower.contains("claude");
+                        let is_flash = model_lower.contains("flash");
+                        if is_thinking || is_flash {
                             func_call_part["thoughtSignature"] =
                                 serde_json::json!("skip_thought_signature_validator");
                             func_call_part["thought_signature"] =
@@ -715,7 +722,7 @@ fn openai_to_gemini_antigravity(
         grouped_messages.push((gemini_role.to_string(), parts));
     }
 
-    let contents: Vec<serde_json::Value> = grouped_messages
+    let mut contents: Vec<serde_json::Value> = grouped_messages
         .into_iter()
         .map(|(role, parts)| {
             serde_json::json!({
@@ -724,6 +731,13 @@ fn openai_to_gemini_antigravity(
             })
         })
         .collect();
+
+    if contents.is_empty() {
+        contents.push(serde_json::json!({
+            "role": "user",
+            "parts": [{ "text": "Continue" }]
+        }));
+    }
 
     // Build systemInstruction
     let system_instruction = if system_parts.is_empty() {
@@ -740,7 +754,34 @@ fn openai_to_gemini_antigravity(
 
     // Build generationConfig
     let mut gen_config = serde_json::json!({});
-    gen_config["maxOutputTokens"] = serde_json::json!(openai.max_tokens.unwrap_or(8192).min(8192));
+    
+    let model_lower = model_name.to_lowercase();
+    let is_thinking = model_lower.contains("gemini")
+        && (model_lower.contains("-thinking")
+            || model_lower.contains("gemini-2.0-pro")
+            || model_lower.contains("gemini-3-pro")
+            || model_lower.contains("gemini-3.1-pro"))
+        && !model_lower.contains("claude");
+
+    if is_thinking {
+        let budget = 4096;
+        gen_config["thinkingConfig"] = serde_json::json!({
+            "includeThoughts": true,
+            "thinkingBudget": budget
+        });
+        
+        if let Some(max_tokens) = openai.max_tokens {
+            if (max_tokens as i64) <= budget {
+                gen_config["maxOutputTokens"] = serde_json::json!(budget + 8192);
+            } else {
+                gen_config["maxOutputTokens"] = serde_json::json!(max_tokens);
+            }
+        } else {
+            gen_config["maxOutputTokens"] = serde_json::json!(budget + 8192);
+        }
+    } else {
+        gen_config["maxOutputTokens"] = serde_json::json!(openai.max_tokens.unwrap_or(8192).min(8192));
+    }
     if let Some(temp) = openai.temperature {
         gen_config["temperature"] = serde_json::json!(temp);
     }
