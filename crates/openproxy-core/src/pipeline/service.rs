@@ -576,30 +576,27 @@ impl tower::Service<PipelineState> for RoutingService {
                                     
                                     let mut reset_str = account.quota_session_reset_at.clone();
                                     
-                                    if let Some(json) = &account.quota_model_details {
-                                        if let Ok(details) = serde_json::from_str::<Vec<crate::quota::ModelQuotaDetail>>(json) {
+                                    if let Some(json) = &account.quota_model_details
+                                        && let Ok(details) = serde_json::from_str::<Vec<crate::quota::ModelQuotaDetail>>(json) {
                                             let req_model = &target.model.model_id.0;
                                             let norm_req = crate::model_normalize::normalize_model_id(req_model);
                                             
                                             if let Some(detail) = details.iter().find(|d| {
                                                 let norm_detail = crate::model_normalize::normalize_model_id(&d.model_id);
                                                 norm_req.eq_ignore_ascii_case(&norm_detail) || req_model.eq_ignore_ascii_case(&d.model_id)
-                                            }) {
-                                                if detail.session_reset_at.is_some() {
+                                            })
+                                                && detail.session_reset_at.is_some() {
                                                     reset_str = detail.session_reset_at.clone();
                                                 }
-                                            }
                                         }
-                                    }
                                     
                                     crate::quota::parse_reset_time(&reset_str?)
                                 })();
 
-                                if let Some(secs) = override_secs {
-                                    if secs > base_secs {
+                                if let Some(secs) = override_secs
+                                    && secs > base_secs {
                                         base_secs = secs;
                                     }
-                                }
                             }
 
                             let max_secs = combo

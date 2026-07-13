@@ -482,21 +482,19 @@ fn flatten_tools(tools: &[serde_json::Value]) -> Vec<serde_json::Value> {
                         let mut name = String::new();
                         if let Some(n) = obj.get("name").and_then(|v| v.as_str()) {
                             name = n.to_string();
-                        } else if let Some(func) = obj.get("function") {
-                            if let Some(n) = func.get("name").and_then(|v| v.as_str()) {
+                        } else if let Some(func) = obj.get("function")
+                            && let Some(n) = func.get("name").and_then(|v| v.as_str()) {
                                 name = n.to_string();
                             }
-                        }
                         if !name.is_empty() {
                             let qualified = qualify_namespace_tool_name(namespace_name, &name);
                             if obj.contains_key("name") {
                                 obj.insert("name".to_string(), serde_json::json!(qualified));
                             }
-                            if let Some(func) = obj.get_mut("function") {
-                                if let Some(func_obj) = func.as_object_mut() {
+                            if let Some(func) = obj.get_mut("function")
+                                && let Some(func_obj) = func.as_object_mut() {
                                     func_obj.insert("name".to_string(), serde_json::json!(qualified));
                                 }
-                            }
                         }
                     }
                     flat.push(sub_tool);
@@ -511,18 +509,16 @@ fn flatten_tools(tools: &[serde_json::Value]) -> Vec<serde_json::Value> {
 
 fn enforce_uppercase_types(value: &mut serde_json::Value) {
     if let serde_json::Value::Object(map) = value {
-        if let Some(type_val) = map.get_mut("type") {
-            if let serde_json::Value::String(s) = type_val {
+        if let Some(type_val) = map.get_mut("type")
+            && let serde_json::Value::String(s) = type_val {
                 *s = s.to_uppercase();
             }
-        }
-        if let Some(properties) = map.get_mut("properties") {
-            if let serde_json::Value::Object(props) = properties {
+        if let Some(properties) = map.get_mut("properties")
+            && let serde_json::Value::Object(props) = properties {
                 for v in props.values_mut() {
                     enforce_uppercase_types(v);
                 }
             }
-        }
         if let Some(items) = map.get_mut("items") {
             enforce_uppercase_types(items);
         }
@@ -629,11 +625,10 @@ fn openai_to_gemini_antigravity(
         if msg.role == "tool" || msg.role == "function" {
             let tool_call_id = msg.tool_call_id.clone().unwrap_or_default();
             let mut final_name = msg.name.as_deref().unwrap_or("unknown").to_string();
-            if final_name == "unknown" && !tool_call_id.is_empty() {
-                if let Some(mapped) = tool_id_to_name.get(&tool_call_id) {
+            if final_name == "unknown" && !tool_call_id.is_empty()
+                && let Some(mapped) = tool_id_to_name.get(&tool_call_id) {
                     final_name = mapped.clone();
                 }
-            }
 
             let content_str = match &msg.content {
                 Some(serde_json::Value::String(s)) => s.clone(),
@@ -882,11 +877,10 @@ fn openai_to_gemini_antigravity(
                         .get("type")
                         .and_then(|v| v.as_str())
                         .map(|s| s.to_string());
-                    if let Some(tool_type) = tool_type_opt {
-                        if let Some(obj) = func.as_object_mut() {
+                    if let Some(tool_type) = tool_type_opt
+                        && let Some(obj) = func.as_object_mut() {
                             obj.insert("name".to_string(), serde_json::json!(tool_type));
                         }
-                    }
                 }
                 if let Some(obj) = func.as_object_mut() {
                     let mut clean_obj = serde_json::Map::new();
@@ -917,11 +911,10 @@ fn openai_to_gemini_antigravity(
                 {
                     continue;
                 }
-                if name == "local_shell_call" {
-                    if let Some(obj) = gemini_func.as_object_mut() {
+                if name == "local_shell_call"
+                    && let Some(obj) = gemini_func.as_object_mut() {
                         obj.insert("name".to_string(), serde_json::json!("shell"));
                     }
-                }
             } else {
                 continue;
             }
@@ -942,11 +935,10 @@ fn openai_to_gemini_antigravity(
 
             if let Some(params) = gemini_func.get_mut("parameters") {
                 crate::schema_cleaner::clean_json_schema(params);
-                if let Some(params_obj) = params.as_object_mut() {
-                    if !params_obj.contains_key("type") {
+                if let Some(params_obj) = params.as_object_mut()
+                    && !params_obj.contains_key("type") {
                         params_obj.insert("type".to_string(), serde_json::json!("OBJECT"));
                     }
-                }
                 enforce_uppercase_types(params);
             } else {
                 if gemini_func.get("name").and_then(|v| v.as_str()) == Some("apply_patch") {
