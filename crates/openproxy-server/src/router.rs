@@ -564,3 +564,111 @@ async fn health() -> Json<serde_json::Value> {
         "version": env!("CARGO_PKG_VERSION"),
     }))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::http::{Request, StatusCode};
+    use http_body_util::BodyExt;
+    use openproxy_core::{AppConfig, adapters, db as core_db, secrets::MasterKey};
+    use parking_lot::RwLock;
+    use std::path::PathBuf;
+    use std::sync::Arc;
+    use tower::ServiceExt;
+
+    async fn make_state() -> AppState {
+        let (pool, _path) = fresh_pool();
+        let db_pool = Arc::new(pool);
+        let master_key = Arc::new(MasterKey::generate());
+        let adapters = Arc::new(RwLock::new(Vec::<adapters::ProviderAdapterEnum>::new()));
+        AppState::for_test(AppConfig::default(), db_pool, master_key, adapters).await
+    }
+
+    fn fresh_pool() -> (core_db::DbPool, PathBuf) {
+        static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let n = SEQ.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        let pid = std::process::id();
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let dir =
+            std::env::temp_dir().join(format!("openproxy-router-test-{}-{}-{}", pid, nanos, n));
+        std::fs::create_dir_all(&dir).expect("mkdir tempdir");
+        let path = dir.join("state.db");
+        let pool = core_db::DbPool::open(&path).expect("open pool");
+        {
+            let mut w = pool.writer();
+            core_db::migrations::run(&mut w).expect("migrations");
+        }
+        (pool, path)
+    }
+
+    #[tokio::test]
+    async fn test_public_health() {
+        let state = make_state().await;
+        let app = build_router(state);
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/v1/health")
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let body = response.into_body().collect().await.unwrap().to_bytes();
+        let body: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(body["status"], "ok");
+    }
+
+    #[tokio::test]
+    async fn test_admin_api_fallback_404_json() {
+        // Unmatched /admin/api/* routes should return JSON 404, not HTML
+        let state = make_state().await;
+        let app = build_router(state.clone());
+
+        let api_key = "test-api-key-123";
+        let key_hash = openproxy_core::api_keys::hash_key(api_key);
+        {
+            let w = state.db_pool().writer();
+            w.execute(
+                "INSERT INTO api_keys (key_hash, key_prefix, label, scopes_json, \
+                    allowed_models_json, allowed_combos_json, expires_at, created_by) \
+                 VALUES (?1, ?2, ?3, ?4, NULL, NULL, NULL, 'test')",
+                rusqlite::params![
+                    key_hash,
+                    &api_key[..api_key.len().min(12)],
+                    "smoke-test",
+                    "[\"manage\"]",
+                ],
+            )
+            .unwrap();
+        }
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/admin/api/does-not-exist-12345")
+                    .header("Authorization", format!("Bearer {}", api_key))
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+        assert_eq!(
+            response.headers().get("content-type").unwrap(),
+            "application/json"
+        );
+
+        let body = response.into_body().collect().await.unwrap().to_bytes();
+        let body: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(body["error"]["code"], "not_found");
+    }
+}
