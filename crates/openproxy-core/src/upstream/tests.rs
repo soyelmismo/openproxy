@@ -820,9 +820,9 @@ async fn adversarial_phase_timeout_dns_actually_fires_at_dns_ms_not_total() {
     if let Err(e) = &res {
         match e {
             UpstreamError::Timeout(UpstreamPhase::Dns) => {}
-            UpstreamError::Connection(s)
-                if s.contains("failed to lookup address information")
-                    || s.contains("Name or service not known") => {}
+            UpstreamError::Connection(msg)
+                if msg.contains("failed to lookup address information")
+                    || msg.contains("Name or service not known") => {}
             other => panic!(
                 "expected Timeout(Dns) or quick DNS failure, got {other:?} — the DNS phase \
                  budget (1ms) was not honored; either dns_ms was \
