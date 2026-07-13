@@ -43,6 +43,67 @@ fn parse_retry_after_ms_invalid_inputs() {
     assert_eq!(parse_retry_after_ms("-1"), None);
 }
 
+#[test]
+fn test_is_upstream_health_issue() {
+    // Timeout
+    assert!(is_upstream_health_issue(&CoreError::UpstreamTimeout {
+        phase: "connect".to_string(),
+        ms: 100
+    }));
+    assert!(!is_upstream_health_issue(&CoreError::UpstreamTimeout {
+        phase: "idle_chunk".to_string(),
+        ms: 100
+    }));
+
+    // Connection error
+    assert!(is_upstream_health_issue(&CoreError::UpstreamConnection(
+        "reset".to_string()
+    )));
+
+    // Rate limited
+    assert!(is_upstream_health_issue(&CoreError::RateLimited {
+        provider: "test".to_string(),
+        retry_after_ms: 1000,
+        is_proxy_rotated: false
+    }));
+
+    // Upstream error status code
+    assert!(is_upstream_health_issue(&CoreError::UpstreamError {
+        status: 500,
+        provider: "test".to_string(),
+        model: "m".to_string(),
+        body: "error".to_string(),
+        is_proxy_rotated: false
+    }));
+    assert!(is_upstream_health_issue(&CoreError::UpstreamError {
+        status: 503,
+        provider: "test".to_string(),
+        model: "m".to_string(),
+        body: "error".to_string(),
+        is_proxy_rotated: false
+    }));
+    assert!(!is_upstream_health_issue(&CoreError::UpstreamError {
+        status: 400,
+        provider: "test".to_string(),
+        model: "m".to_string(),
+        body: "error".to_string(),
+        is_proxy_rotated: false
+    }));
+    assert!(!is_upstream_health_issue(&CoreError::UpstreamError {
+        status: 404,
+        provider: "test".to_string(),
+        model: "m".to_string(),
+        body: "error".to_string(),
+        is_proxy_rotated: false
+    }));
+
+    // Other errors
+    assert!(!is_upstream_health_issue(&CoreError::NotFound {
+        what: "test".to_string(),
+        id: "test".to_string()
+    }));
+}
+
 /// Build a fresh on-disk pool with migrations applied, plus an
 /// independent `Connection` wrapped in a `Mutex<Connection>` for the
 /// `Pipeline` to own. The same shape the rest of the crate's test
