@@ -95,7 +95,7 @@ fn flatten_refs(
     // 检查并替换 $ref
     if let Some(Value::String(ref_path)) = map.remove("$ref") {
         // 解析引用名 (例如 #/$defs/MyType -> MyType)
-        let ref_name = ref_path.split('/').last().unwrap_or(&ref_path);
+        let ref_name = ref_path.split('/').next_back().unwrap_or(&ref_path);
 
         if let Some(def_schema) = defs.get(ref_name) {
             // 将定义的内容合并到当前 map
@@ -118,13 +118,13 @@ fn flatten_refs(
             let desc_val = map
                 .entry("description".to_string())
                 .or_insert_with(|| Value::String(String::new()));
-            if let Value::String(s) = desc_val {
-                if !s.contains(&hint) {
-                    if !s.is_empty() {
-                        s.push(' ');
-                    }
-                    s.push_str(&hint);
+            if let Value::String(s) = desc_val
+                && !s.contains(&hint)
+            {
+                if !s.is_empty() {
+                    s.push(' ');
                 }
+                s.push_str(&hint);
             }
         }
     }
@@ -162,22 +162,21 @@ fn clean_json_schema_recursive(value: &mut Value, is_schema_node: bool, depth: u
             // 针对某些 MCP 工具（如 pencil）误用 items 定义对象属性的情况进行修复。
             // 如果 type=object 或包含 properties，但又定义了 items，Gemini 会因为 items 只能出现在 array 中而报错。
             // 我们将 items 的内容“对齐”到 properties 中。
-            if map.get("type").and_then(|t| t.as_str()) == Some("object")
-                || map.contains_key("properties")
+            if (map.get("type").and_then(|t| t.as_str()) == Some("object")
+                || map.contains_key("properties"))
+                && let Some(items) = map.remove("items")
             {
-                if let Some(items) = map.remove("items") {
-                    tracing::warn!(
-                        "[Schema-Normalization] Found 'items' in an Object-like node. Moving content to 'properties'."
-                    );
-                    let target_props = map
-                        .entry("properties".to_string())
-                        .or_insert_with(|| json!({}));
-                    if let Some(target_map) = target_props.as_object_mut() {
-                        if let Some(source_map) = items.as_object() {
-                            for (k, v) in source_map {
-                                target_map.entry(k.clone()).or_insert_with(|| v.clone());
-                            }
-                        }
+                tracing::warn!(
+                    "[Schema-Normalization] Found 'items' in an Object-like node. Moving content to 'properties'."
+                );
+                let target_props = map
+                    .entry("properties".to_string())
+                    .or_insert_with(|| json!({}));
+                if let Some(target_map) = target_props.as_object_mut()
+                    && let Some(source_map) = items.as_object()
+                {
+                    for (k, v) in source_map {
+                        target_map.entry(k.clone()).or_insert_with(|| v.clone());
                     }
                 }
             }
@@ -206,19 +205,18 @@ fn clean_json_schema_recursive(value: &mut Value, is_schema_node: bool, depth: u
                     }
                 }
 
-                if !nullable_keys.is_empty() || !dropped_keys.is_empty() {
-                    if let Some(Value::Array(req_arr)) = map.get_mut("required") {
-                        req_arr.retain(|r| {
-                            r.as_str()
-                                .map(|s| {
-                                    !nullable_keys.contains(s)
-                                        && !dropped_keys.iter().any(|d| d == s)
-                                })
-                                .unwrap_or(true)
-                        });
-                        if req_arr.is_empty() {
-                            map.remove("required");
-                        }
+                if (!nullable_keys.is_empty() || !dropped_keys.is_empty())
+                    && let Some(Value::Array(req_arr)) = map.get_mut("required")
+                {
+                    req_arr.retain(|r| {
+                        r.as_str()
+                            .map(|s| {
+                                !nullable_keys.contains(s) && !dropped_keys.iter().any(|d| d == s)
+                            })
+                            .unwrap_or(true)
+                    });
+                    if req_arr.is_empty() {
+                        map.remove("required");
                     }
                 }
 
@@ -275,51 +273,46 @@ fn clean_json_schema_recursive(value: &mut Value, is_schema_node: bool, depth: u
                 union_to_merge = Some(one_of.clone());
             }
 
-            if let Some(union_array) = union_to_merge {
-                if let Some((best_branch, all_types)) = extract_best_schema_from_union(&union_array)
-                {
-                    if let Value::Object(branch_obj) = best_branch {
-                        // 合并分支属性到当前 map
-                        for (k, v) in branch_obj {
-                            if k == "properties" {
-                                if let Some(target_props) = map
-                                    .entry("properties".to_string())
-                                    .or_insert_with(|| Value::Object(serde_json::Map::new()))
-                                    .as_object_mut()
-                                {
-                                    if let Some(source_props) = v.as_object() {
-                                        for (pk, pv) in source_props {
-                                            target_props
-                                                .entry(pk.clone())
-                                                .or_insert_with(|| pv.clone());
-                                        }
-                                    }
+            if let Some(union_array) = union_to_merge
+                && let Some((best_branch, all_types)) = extract_best_schema_from_union(&union_array)
+            {
+                if let Value::Object(branch_obj) = best_branch {
+                    // 合并分支属性到当前 map
+                    for (k, v) in branch_obj {
+                        if k == "properties" {
+                            if let Some(target_props) = map
+                                .entry("properties".to_string())
+                                .or_insert_with(|| Value::Object(serde_json::Map::new()))
+                                .as_object_mut()
+                                && let Some(source_props) = v.as_object()
+                            {
+                                for (pk, pv) in source_props {
+                                    target_props.entry(pk.clone()).or_insert_with(|| pv.clone());
                                 }
-                            } else if k == "required" {
-                                if let Some(target_req) = map
-                                    .entry("required".to_string())
-                                    .or_insert_with(|| Value::Array(Vec::new()))
-                                    .as_array_mut()
-                                {
-                                    if let Some(source_req) = v.as_array() {
-                                        for rv in source_req {
-                                            if !target_req.contains(rv) {
-                                                target_req.push(rv.clone());
-                                            }
-                                        }
-                                    }
-                                }
-                            } else if !map.contains_key(&k) {
-                                map.insert(k, v);
                             }
+                        } else if k == "required" {
+                            if let Some(target_req) = map
+                                .entry("required".to_string())
+                                .or_insert_with(|| Value::Array(Vec::new()))
+                                .as_array_mut()
+                                && let Some(source_req) = v.as_array()
+                            {
+                                for rv in source_req {
+                                    if !target_req.contains(rv) {
+                                        target_req.push(rv.clone());
+                                    }
+                                }
+                            }
+                        } else if !map.contains_key(&k) {
+                            map.insert(k, v);
                         }
                     }
+                }
 
-                    // [NEW] 添加类型提示到描述中 (参考 CLIProxyAPI)
-                    if all_types.len() > 1 {
-                        let type_hint = format!("Accepts: {}", all_types.join(" | "));
-                        append_hint_to_description(map, type_hint);
-                    }
+                // [NEW] 添加类型提示到描述中 (参考 CLIProxyAPI)
+                if all_types.len() > 1 {
+                    let type_hint = format!("Accepts: {}", all_types.join(" | "));
+                    append_hint_to_description(map, type_hint);
                 }
             }
 
@@ -386,10 +379,10 @@ fn clean_json_schema_recursive(value: &mut Value, is_schema_node: bool, depth: u
                 // 之前的实现会为空 Object 注入 reason 字段，导致 Gemini CLI 等工具报 "malformed function call"
                 // 因为模型会生成包含 reason 参数的调用，但工具定义中并没有这个参数
                 // 现在改为：空 Object 保持空的 properties，让 Gemini 模型自行决定是否需要参数
-                if map.get("type").and_then(|t| t.as_str()) == Some("object") {
-                    if !map.contains_key("properties") {
-                        map.insert("properties".to_string(), serde_json::json!({}));
-                    }
+                if map.get("type").and_then(|t| t.as_str()) == Some("object")
+                    && !map.contains_key("properties")
+                {
+                    map.insert("properties".to_string(), serde_json::json!({}));
                 }
 
                 // 7. [SAFETY] Required 字段对齐
@@ -398,14 +391,13 @@ fn clean_json_schema_recursive(value: &mut Value, is_schema_node: bool, depth: u
                     .and_then(|p| p.as_object())
                     .map(|obj| obj.keys().cloned().collect());
 
-                if let Some(required_val) = map.get_mut("required") {
-                    if let Some(req_arr) = required_val.as_array_mut() {
-                        if let Some(keys) = &valid_prop_keys {
-                            req_arr
-                                .retain(|k| k.as_str().map(|s| keys.contains(s)).unwrap_or(false));
-                        } else {
-                            req_arr.clear();
-                        }
+                if let Some(required_val) = map.get_mut("required")
+                    && let Some(req_arr) = required_val.as_array_mut()
+                {
+                    if let Some(keys) = &valid_prop_keys {
+                        req_arr.retain(|k| k.as_str().map(|s| keys.contains(s)).unwrap_or(false));
+                    } else {
+                        req_arr.clear();
                     }
                 }
 
@@ -463,13 +455,13 @@ fn clean_json_schema_recursive(value: &mut Value, is_schema_node: bool, depth: u
                     let desc_val = map
                         .entry("description".to_string())
                         .or_insert_with(|| Value::String("".to_string()));
-                    if let Value::String(s) = desc_val {
-                        if !s.contains("nullable") {
-                            if !s.is_empty() {
-                                s.push(' ');
-                            }
-                            s.push_str("(nullable)");
+                    if let Value::String(s) = desc_val
+                        && !s.contains("nullable")
+                    {
+                        if !s.is_empty() {
+                            s.push(' ');
                         }
+                        s.push_str("(nullable)");
                     }
                 }
 
@@ -597,15 +589,15 @@ fn move_constraints_to_description(map: &mut serde_json::Map<String, Value>) {
     let mut hints = Vec::new();
 
     for (field, label) in CONSTRAINT_FIELDS {
-        if let Some(val) = map.get(*field) {
-            if !val.is_null() {
-                let val_str = if let Some(s) = val.as_str() {
-                    s.to_string()
-                } else {
-                    val.to_string()
-                };
-                hints.push(format!("{}: {}", label, val_str));
-            }
+        if let Some(val) = map.get(*field)
+            && !val.is_null()
+        {
+            let val_str = if let Some(s) = val.as_str() {
+                s.to_string()
+            } else {
+                val.to_string()
+            };
+            hints.push(format!("{}: {}", label, val_str));
         }
     }
 
@@ -627,10 +619,10 @@ fn score_schema_option(val: &Value) -> i32 {
         if obj.contains_key("items") || obj.get("type").and_then(|t| t.as_str()) == Some("array") {
             return 2;
         }
-        if let Some(type_str) = obj.get("type").and_then(|t| t.as_str()) {
-            if type_str != "null" {
-                return 1;
-            }
+        if let Some(type_str) = obj.get("type").and_then(|t| t.as_str())
+            && type_str != "null"
+        {
+            return 1;
         }
     }
     0
@@ -648,10 +640,10 @@ fn extract_best_schema_from_union(union_array: &Vec<Value>) -> Option<(Value, Ve
         let score = score_schema_option(item);
 
         // 收集类型信息
-        if let Some(type_str) = get_schema_type_name(item) {
-            if !all_types.contains(&type_str) {
-                all_types.push(type_str);
-            }
+        if let Some(type_str) = get_schema_type_name(item)
+            && !all_types.contains(&type_str)
+        {
+            all_types.push(type_str);
         }
 
         if score > best_score {
@@ -667,10 +659,10 @@ fn extract_best_schema_from_union(union_array: &Vec<Value>) -> Option<(Value, Ve
 fn get_schema_type_name(schema: &Value) -> Option<String> {
     if let Value::Object(obj) = schema {
         // 优先使用显式的 type 字段
-        if let Some(type_val) = obj.get("type") {
-            if let Some(s) = type_val.as_str() {
-                return Some(s.to_string());
-            }
+        if let Some(type_val) = obj.get("type")
+            && let Some(s) = type_val.as_str()
+        {
+            return Some(s.to_string());
         }
 
         // 根据结构推断类型
@@ -696,12 +688,12 @@ fn get_schema_type_name(schema: &Value) -> Option<String> {
 /// * `args` - 工具调用的参数对象 (会被原地修改)
 /// * `schema` - 工具的参数 schema 定义 (通常是 parameters 对象)
 pub fn fix_tool_call_args(args: &mut Value, schema: &Value) {
-    if let Some(properties) = schema.get("properties").and_then(|p| p.as_object()) {
-        if let Some(args_obj) = args.as_object_mut() {
-            for (key, value) in args_obj.iter_mut() {
-                if let Some(prop_schema) = properties.get(key) {
-                    fix_single_arg_recursive(value, prop_schema);
-                }
+    if let Some(properties) = schema.get("properties").and_then(|p| p.as_object())
+        && let Some(args_obj) = args.as_object_mut()
+    {
+        for (key, value) in args_obj.iter_mut() {
+            if let Some(prop_schema) = properties.get(key) {
+                fix_single_arg_recursive(value, prop_schema);
             }
         }
     }
@@ -728,11 +720,11 @@ fn fix_single_arg_recursive(value: &mut Value, schema: &Value) {
         .unwrap_or("")
         .to_lowercase();
     if schema_type == "array" {
-        if let Some(items_schema) = schema.get("items") {
-            if let Some(arr) = value.as_array_mut() {
-                for item in arr {
-                    fix_single_arg_recursive(item, items_schema);
-                }
+        if let Some(items_schema) = schema.get("items")
+            && let Some(arr) = value.as_array_mut()
+        {
+            for item in arr {
+                fix_single_arg_recursive(item, items_schema);
             }
         }
         return;
@@ -751,11 +743,10 @@ fn fix_single_arg_recursive(value: &mut Value, schema: &Value) {
                 // 优先尝试解析为整数
                 if let Ok(i) = s.parse::<i64>() {
                     *value = Value::Number(serde_json::Number::from(i));
-                } else if let Ok(f) = s.parse::<f64>() {
-                    if let Some(n) = serde_json::Number::from_f64(f) {
+                } else if let Ok(f) = s.parse::<f64>()
+                    && let Some(n) = serde_json::Number::from_f64(f) {
                         *value = Value::Number(n);
                     }
-                }
             }
         }
         "boolean" => {
@@ -775,12 +766,11 @@ fn fix_single_arg_recursive(value: &mut Value, schema: &Value) {
                 }
             }
         }
-        "string" => {
+        "string"
             // 非字符串 → 字符串 (防止客户端误传数字给文本字段)
-            if !value.is_string() && !value.is_null() && !value.is_object() && !value.is_array() {
+            if !value.is_string() && !value.is_null() && !value.is_object() && !value.is_array() => {
                 *value = Value::String(value.to_string());
             }
-        }
         _ => {}
     }
 }
