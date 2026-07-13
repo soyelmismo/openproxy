@@ -1269,6 +1269,18 @@ pub async fn execute_antigravity(
     if !(200..300).contains(&status) {
         let body_bytes = response.collect().await.unwrap_or_default();
         let body_text = String::from_utf8_lossy(&body_bytes);
+
+        if status == 429 && body_text.contains("INSUFFICIENT_G1_CREDITS_BALANCE") {
+            return Err(CoreError::RateLimited {
+                provider: "antigravity".to_string(),
+                // Superar los 15s fuerza la rotación instantánea abortando los reintentos locales.
+                // El tiempo real de reinicio de la cuota (y el modelo) es trackeado y gobernado
+                // globalmente por el background sync en el sistema de cuotas.
+                retry_after_ms: u32::MAX as u64,
+                is_proxy_rotated: false,
+            });
+        }
+
         return Err(CoreError::UpstreamError {
             status,
             provider: "antigravity".to_string(),

@@ -9,6 +9,8 @@ pub struct RawAccount {
     pub refresh_token_encrypted: Option<Vec<u8>>,
     pub expires_at: Option<String>,
     pub oauth_provider_specific: Option<String>,
+    pub quota_session_reset_at: Option<String>,
+    pub quota_models_json: Option<String>,
 }
 
 pub struct KiroMeta {
@@ -38,7 +40,7 @@ pub fn get_accounts_meta(
         .join(",");
 
     let query = format!(
-        "SELECT id, api_key_encrypted, label, access_token_encrypted, refresh_token_encrypted, expires_at, oauth_provider_specific FROM accounts WHERE id IN ({})",
+        "SELECT id, api_key_encrypted, label, access_token_encrypted, refresh_token_encrypted, expires_at, oauth_provider_specific, quota_session_reset_at, quota_models_json FROM accounts WHERE id IN ({})",
         placeholders
     );
     if let Ok(mut stmt) = conn.prepare_cached(&query) {
@@ -55,6 +57,8 @@ pub fn get_accounts_meta(
                 r.get::<_, Option<Vec<u8>>>(4)?,
                 r.get::<_, Option<String>>(5)?,
                 r.get::<_, Option<String>>(6)?,
+                r.get::<_, Option<String>>(7)?,
+                r.get::<_, Option<String>>(8)?,
             ))
         }) {
             for row in rows.flatten() {
@@ -67,6 +71,8 @@ pub fn get_accounts_meta(
                         refresh_token_encrypted: row.4,
                         expires_at: row.5,
                         oauth_provider_specific: row.6,
+                        quota_session_reset_at: row.7,
+                        quota_models_json: row.8,
                     },
                 );
             }
