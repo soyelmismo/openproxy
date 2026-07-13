@@ -371,6 +371,18 @@ mod tests {
             Some("function_call_output")
         );
     }
+
+    #[test]
+    fn normalize_effort_returns_expected() {
+        assert_eq!(super::normalize_effort("max"), "xhigh");
+        assert_eq!(super::normalize_effort("xhigh"), "xhigh");
+        assert_eq!(super::normalize_effort("high"), "high");
+        assert_eq!(super::normalize_effort("medium"), "medium");
+        assert_eq!(super::normalize_effort("low"), "low");
+        assert_eq!(super::normalize_effort("none"), "none");
+        assert_eq!(super::normalize_effort("unknown"), "medium");
+        assert_eq!(super::normalize_effort(""), "medium");
+    }
 }
 
 fn normalize_effort(value: &str) -> &'static str {
