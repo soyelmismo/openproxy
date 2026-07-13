@@ -84,11 +84,10 @@ impl CredentialManager {
                         None => (String::new(), false),
                     };
 
-                    if !has_api_key && !matches!(t.provider_id.as_str(), "kiro" | "antigravity" | "codex") {
-                        tracing::error!(
-                            "account {} has no API key (OAuth account?)",
-                            account_id.0
-                        );
+                    if !has_api_key
+                        && !matches!(t.provider_id.as_str(), "kiro" | "antigravity" | "codex")
+                    {
+                        tracing::error!("account {} has no API key (OAuth account?)", account_id.0);
                         continue;
                     }
                     let label = raw_account.label.clone();
@@ -225,6 +224,8 @@ mod tests {
             refresh_token_encrypted: None,
             expires_at: None,
             oauth_provider_specific: raw.map(ToString::to_string),
+            quota_model_details: None,
+            quota_session_reset_at: None,
         }
     }
 

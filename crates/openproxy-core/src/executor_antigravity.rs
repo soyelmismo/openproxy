@@ -482,20 +482,20 @@ fn flatten_tools(tools: &[serde_json::Value]) -> Vec<serde_json::Value> {
                         let mut name = String::new();
                         if let Some(n) = obj.get("name").and_then(|v| v.as_str()) {
                             name = n.to_string();
-                        } else if let Some(func) = obj.get("function") {
-                            if let Some(n) = func.get("name").and_then(|v| v.as_str()) {
-                                name = n.to_string();
-                            }
+                        } else if let Some(func) = obj.get("function")
+                            && let Some(n) = func.get("name").and_then(|v| v.as_str())
+                        {
+                            name = n.to_string();
                         }
                         if !name.is_empty() {
                             let qualified = qualify_namespace_tool_name(namespace_name, &name);
                             if obj.contains_key("name") {
                                 obj.insert("name".to_string(), serde_json::json!(qualified));
                             }
-                            if let Some(func) = obj.get_mut("function") {
-                                if let Some(func_obj) = func.as_object_mut() {
-                                    func_obj.insert("name".to_string(), serde_json::json!(qualified));
-                                }
+                            if let Some(func) = obj.get_mut("function")
+                                && let Some(func_obj) = func.as_object_mut()
+                            {
+                                func_obj.insert("name".to_string(), serde_json::json!(qualified));
                             }
                         }
                     }
@@ -511,16 +511,16 @@ fn flatten_tools(tools: &[serde_json::Value]) -> Vec<serde_json::Value> {
 
 fn enforce_uppercase_types(value: &mut serde_json::Value) {
     if let serde_json::Value::Object(map) = value {
-        if let Some(type_val) = map.get_mut("type") {
-            if let serde_json::Value::String(s) = type_val {
-                *s = s.to_uppercase();
-            }
+        if let Some(type_val) = map.get_mut("type")
+            && let serde_json::Value::String(s) = type_val
+        {
+            *s = s.to_uppercase();
         }
-        if let Some(properties) = map.get_mut("properties") {
-            if let serde_json::Value::Object(props) = properties {
-                for v in props.values_mut() {
-                    enforce_uppercase_types(v);
-                }
+        if let Some(properties) = map.get_mut("properties")
+            && let serde_json::Value::Object(props) = properties
+        {
+            for v in props.values_mut() {
+                enforce_uppercase_types(v);
             }
         }
         if let Some(items) = map.get_mut("items") {
@@ -593,9 +593,9 @@ fn openai_to_gemini_antigravity(
         }
     }
 
-    let has_tool_history = openai_messages.iter().any(|msg| {
-        msg.role == "tool" || msg.role == "function" || msg.tool_calls.is_some()
-    });
+    let has_tool_history = openai_messages
+        .iter()
+        .any(|msg| msg.role == "tool" || msg.role == "function" || msg.tool_calls.is_some());
 
     let mut tool_id_to_name = std::collections::HashMap::new();
     for msg in &openai_messages {
@@ -629,10 +629,11 @@ fn openai_to_gemini_antigravity(
         if msg.role == "tool" || msg.role == "function" {
             let tool_call_id = msg.tool_call_id.clone().unwrap_or_default();
             let mut final_name = msg.name.as_deref().unwrap_or("unknown").to_string();
-            if final_name == "unknown" && !tool_call_id.is_empty() {
-                if let Some(mapped) = tool_id_to_name.get(&tool_call_id) {
-                    final_name = mapped.clone();
-                }
+            if final_name == "unknown"
+                && !tool_call_id.is_empty()
+                && let Some(mapped) = tool_id_to_name.get(&tool_call_id)
+            {
+                final_name = mapped.clone();
             }
 
             let content_str = match &msg.content {
@@ -676,8 +677,10 @@ fn openai_to_gemini_antigravity(
                         && !model_lower.contains("claude");
                     let is_flash = model_lower.contains("flash");
                     if is_thinking || is_flash {
-                        thinking_part["thoughtSignature"] = serde_json::json!("skip_thought_signature_validator");
-                        thinking_part["thought_signature"] = serde_json::json!("skip_thought_signature_validator");
+                        thinking_part["thoughtSignature"] =
+                            serde_json::json!("skip_thought_signature_validator");
+                        thinking_part["thought_signature"] =
+                            serde_json::json!("skip_thought_signature_validator");
                     }
                 }
 
@@ -733,7 +736,7 @@ fn openai_to_gemini_antigravity(
                             "args": arguments
                         }
                     });
-                    
+
                     if !id.is_empty() {
                         func_call_part["functionCall"]["id"] = serde_json::json!(id);
                     }
@@ -812,7 +815,7 @@ fn openai_to_gemini_antigravity(
 
     // Build generationConfig
     let mut gen_config = serde_json::json!({});
-    
+
     let model_lower = model_name.to_lowercase();
     let is_thinking = model_lower.contains("gemini")
         && (model_lower.contains("-thinking")
@@ -827,7 +830,7 @@ fn openai_to_gemini_antigravity(
             "includeThoughts": true,
             "thinkingBudget": budget
         });
-        
+
         if let Some(max_tokens) = openai.max_tokens {
             if (max_tokens as i64) <= budget {
                 gen_config["maxOutputTokens"] = serde_json::json!(8192);
@@ -838,7 +841,8 @@ fn openai_to_gemini_antigravity(
             gen_config["maxOutputTokens"] = serde_json::json!(8192);
         }
     } else {
-        gen_config["maxOutputTokens"] = serde_json::json!(openai.max_tokens.unwrap_or(8192).min(8192));
+        gen_config["maxOutputTokens"] =
+            serde_json::json!(openai.max_tokens.unwrap_or(8192).min(8192));
     }
     if let Some(temp) = openai.temperature {
         gen_config["temperature"] = serde_json::json!(temp);
@@ -882,10 +886,10 @@ fn openai_to_gemini_antigravity(
                         .get("type")
                         .and_then(|v| v.as_str())
                         .map(|s| s.to_string());
-                    if let Some(tool_type) = tool_type_opt {
-                        if let Some(obj) = func.as_object_mut() {
-                            obj.insert("name".to_string(), serde_json::json!(tool_type));
-                        }
+                    if let Some(tool_type) = tool_type_opt
+                        && let Some(obj) = func.as_object_mut()
+                    {
+                        obj.insert("name".to_string(), serde_json::json!(tool_type));
                     }
                 }
                 if let Some(obj) = func.as_object_mut() {
@@ -917,10 +921,10 @@ fn openai_to_gemini_antigravity(
                 {
                     continue;
                 }
-                if name == "local_shell_call" {
-                    if let Some(obj) = gemini_func.as_object_mut() {
-                        obj.insert("name".to_string(), serde_json::json!("shell"));
-                    }
+                if name == "local_shell_call"
+                    && let Some(obj) = gemini_func.as_object_mut()
+                {
+                    obj.insert("name".to_string(), serde_json::json!("shell"));
                 }
             } else {
                 continue;
@@ -942,10 +946,10 @@ fn openai_to_gemini_antigravity(
 
             if let Some(params) = gemini_func.get_mut("parameters") {
                 crate::schema_cleaner::clean_json_schema(params);
-                if let Some(params_obj) = params.as_object_mut() {
-                    if !params_obj.contains_key("type") {
-                        params_obj.insert("type".to_string(), serde_json::json!("OBJECT"));
-                    }
+                if let Some(params_obj) = params.as_object_mut()
+                    && !params_obj.contains_key("type")
+                {
+                    params_obj.insert("type".to_string(), serde_json::json!("OBJECT"));
                 }
                 enforce_uppercase_types(params);
             } else {
@@ -986,7 +990,8 @@ fn openai_to_gemini_antigravity(
         }
 
         if !function_declarations.is_empty() {
-            request_val["tools"] = serde_json::json!([{ "functionDeclarations": function_declarations }]);
+            request_val["tools"] =
+                serde_json::json!([{ "functionDeclarations": function_declarations }]);
 
             let mut mode = "VALIDATED";
             if let Some(tool_choice) = &openai.tool_choice {
@@ -1507,9 +1512,8 @@ pub async fn execute_antigravity(
                         "finish_reason": serde_json::Value::Null
                     }]
                 });
-                let sse_frame = crate::sse::build_sse_frame(
-                    &serde_json::to_string(&tool_call_delta).unwrap(),
-                );
+                let sse_frame =
+                    crate::sse::build_sse_frame(&serde_json::to_string(&tool_call_delta).unwrap());
                 let _ = sink.send(sse_frame).await;
             }
         }
