@@ -1242,6 +1242,108 @@ mod tests {
     }
 
     #[test]
+    fn test_create_combo_success() {
+        let (pool, _path) = fresh_pool();
+        let conn = pool.writer();
+
+        let combo_name = "test_combo_1";
+        let strategy = Strategy::Priority;
+        let race_size = 2;
+
+        let combo_id =
+            create_combo(&conn, combo_name, strategy, race_size).expect("create combo failed");
+
+        let combo = get_combo(&conn, combo_id)
+            .expect("get combo failed")
+            .expect("combo not found");
+
+        assert_eq!(combo.name, combo_name);
+        assert_eq!(combo.strategy, strategy);
+        assert_eq!(combo.race_size, race_size);
+    }
+
+    #[test]
+    fn test_create_combo_invalid_race_size() {
+        let (pool, _path) = fresh_pool();
+        let conn = pool.writer();
+
+        let combo_name = "test_combo_2";
+        let strategy = Strategy::RoundRobin;
+
+        // Race size 0 is invalid
+        let err = create_combo(&conn, combo_name, strategy, 0)
+            .expect_err("create combo should fail with race size 0");
+        match err {
+            CoreError::Validation(msg) => assert!(msg.contains("race_size must be in 1..=8")),
+            _ => panic!("Expected Validation error, got {:?}", err),
+        }
+
+        // Race size 9 is invalid
+        let err2 = create_combo(&conn, combo_name, strategy, 9)
+            .expect_err("create combo should fail with race size 9");
+        match err2 {
+            CoreError::Validation(msg) => assert!(msg.contains("race_size must be in 1..=8")),
+            _ => panic!("Expected Validation error, got {:?}", err2),
+        }
+    }
+
+    #[test]
+    fn test_create_combo_duplicate_name() {
+        let (pool, _path) = fresh_pool();
+        let conn = pool.writer();
+
+        let combo_name = "test_combo_dup";
+        let strategy = Strategy::Priority;
+        let race_size = 1;
+
+        let _combo_id =
+            create_combo(&conn, combo_name, strategy, race_size).expect("create combo failed");
+
+        // Attempting to create a combo with the same name should fail
+        let err = create_combo(&conn, combo_name, strategy, race_size)
+            .expect_err("create duplicate combo should fail");
+
+        match err {
+            CoreError::Validation(msg) => assert!(msg.contains("combo name already exists")),
+            _ => panic!(
+                "Expected Validation error for duplicate name, got {:?}",
+                err
+            ),
+        }
+    }
+
+    #[test]
+    fn test_create_combo_invalid_strategy() {
+        let (pool, _path) = fresh_pool();
+        let conn = pool.writer();
+
+        let combo_name = "test_combo_shuffle";
+        // Strategy::Shuffle is not permitted by DB constraint for combos.
+        let strategy = Strategy::Shuffle;
+        let race_size = 1;
+
+        let err = create_combo(&conn, combo_name, strategy, race_size)
+            .expect_err("create combo with shuffle strategy should fail");
+
+        // The error will be mapped to a database error due to CHECK constraint violation
+        if let CoreError::Database { message, source } = &err {
+            assert!(message.contains("insert combo"));
+            assert!(
+                source
+                    .as_ref()
+                    .unwrap()
+                    .to_string()
+                    .contains("CHECK constraint failed")
+            );
+        } else {
+            panic!(
+                "Expected Database error with CHECK constraint failure, got {:?}",
+                err
+            );
+        }
+    }
+
+    #[test]
     fn test_combo_in_chain_no_cycle() {
         let (pool, _path) = fresh_pool();
         let conn = pool.writer();
