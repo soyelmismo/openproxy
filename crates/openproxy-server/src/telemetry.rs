@@ -119,4 +119,20 @@ mod tests {
         let result = init(&config);
         assert!(result.is_err());
     }
+
+    #[test]
+    fn test_telemetry_init_invalid_level_does_not_panic() {
+        // Since we can't reliably test the full `init()` function with an invalid level
+        // (because `tracing_subscriber::registry().try_init()` returns an error if another
+        // test already initialized the subscriber, which is common in parallel tests),
+        // we instead verify that parsing a garbage level via EnvFilter does not panic.
+        // The `EnvFilter::new()` and `try_from_default_env().unwrap_or_else` code inside
+        // `init()` will gracefully treat invalid syntax as a valid target (e.g., target="invalid_level_!!!")
+        // rather than panicking.
+        let filter = EnvFilter::new("invalid_level_!!!");
+        assert_eq!(
+            filter.to_string(),
+            "invalid_level_!!!=trace" // default level for a custom target
+        );
+    }
 }
