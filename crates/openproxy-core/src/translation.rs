@@ -362,12 +362,12 @@ fn parse_image_url_to_inline_data(part: &serde_json::Value) -> Option<GeminiInli
     if obj.get("type").and_then(|v| v.as_str())? != "image_url" {
         return None;
     }
-    
+
     let url = obj.get("image_url")?.as_object()?.get("url")?.as_str()?;
     let stripped = url.strip_prefix("data:")?;
     let (mime_type, rest) = stripped.split_once(';')?;
     let (_, data) = rest.split_once(',')?;
-    
+
     Some(GeminiInlineData {
         mime_type: mime_type.to_string(),
         data: data.to_string(),
@@ -2238,5 +2238,33 @@ mod tests {
         assert!(out.tool_choice.is_none());
         assert!(out.top_k.is_none());
         assert!(out.metadata.is_none());
+    }
+
+    #[test]
+    fn parse_image_url_to_inline_data_extracts_base64() {
+        let part_json = serde_json::json!({
+            "type": "image_url",
+            "image_url": {
+                "url": "data:image/jpeg;base64,f00bar"
+            }
+        });
+
+        let result = super::parse_image_url_to_inline_data(&part_json).unwrap();
+        assert_eq!(result.mime_type, "image/jpeg");
+        assert_eq!(result.data, "f00bar");
+
+        let invalid_type = serde_json::json!({
+            "type": "text",
+            "text": "hello"
+        });
+        assert!(super::parse_image_url_to_inline_data(&invalid_type).is_none());
+
+        let invalid_url = serde_json::json!({
+            "type": "image_url",
+            "image_url": {
+                "url": "https://example.com/image.jpg"
+            }
+        });
+        assert!(super::parse_image_url_to_inline_data(&invalid_url).is_none());
     }
 }
