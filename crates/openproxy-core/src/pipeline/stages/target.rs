@@ -531,7 +531,12 @@ impl PipelineStage for CustomAdapterStage {
                     .response_headers(None)
                     .is_streaming(ctx.req.stream_sink.is_some())
                     .stream_complete(true)
-                    .stop_reason(response.choices.first().and_then(|c| c.finish_reason.clone()))
+                    .stop_reason(
+                        response
+                            .choices
+                            .first()
+                            .and_then(|c| c.finish_reason.clone()),
+                    )
                     .record()
                     {
                         Ok(id) => id,

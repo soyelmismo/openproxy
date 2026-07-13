@@ -1,4 +1,4 @@
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 /// 不被 Gemini 支持但包含重要语义信息的约束字段
 /// 这些字段将在删除前被转化为 description 提示
@@ -47,8 +47,6 @@ pub fn clean_json_schema(value: &mut Value) {
     // 递归清理
     clean_json_schema_recursive(value, true, 0);
 }
-
-
 
 /// [NEW #952] 递归收集所有层级的 $defs 和 definitions
 ///
@@ -121,12 +119,13 @@ fn flatten_refs(
                 .entry("description".to_string())
                 .or_insert_with(|| Value::String(String::new()));
             if let Value::String(s) = desc_val
-                && !s.contains(&hint) {
-                    if !s.is_empty() {
-                        s.push(' ');
-                    }
-                    s.push_str(&hint);
+                && !s.contains(&hint)
+            {
+                if !s.is_empty() {
+                    s.push(' ');
                 }
+                s.push_str(&hint);
+            }
         }
     }
 
@@ -165,18 +164,22 @@ fn clean_json_schema_recursive(value: &mut Value, is_schema_node: bool, depth: u
             // 我们将 items 的内容“对齐”到 properties 中。
             if (map.get("type").and_then(|t| t.as_str()) == Some("object")
                 || map.contains_key("properties"))
-                && let Some(items) = map.remove("items") {
-                    tracing::warn!("[Schema-Normalization] Found 'items' in an Object-like node. Moving content to 'properties'.");
-                    let target_props = map
-                        .entry("properties".to_string())
-                        .or_insert_with(|| json!({}));
-                    if let Some(target_map) = target_props.as_object_mut()
-                        && let Some(source_map) = items.as_object() {
-                            for (k, v) in source_map {
-                                target_map.entry(k.clone()).or_insert_with(|| v.clone());
-                            }
-                        }
+                && let Some(items) = map.remove("items")
+            {
+                tracing::warn!(
+                    "[Schema-Normalization] Found 'items' in an Object-like node. Moving content to 'properties'."
+                );
+                let target_props = map
+                    .entry("properties".to_string())
+                    .or_insert_with(|| json!({}));
+                if let Some(target_map) = target_props.as_object_mut()
+                    && let Some(source_map) = items.as_object()
+                {
+                    for (k, v) in source_map {
+                        target_map.entry(k.clone()).or_insert_with(|| v.clone());
+                    }
                 }
+            }
 
             // 1. [CRITICAL] 深度递归处理子项
             // 处理 properties (对象)
@@ -203,19 +206,19 @@ fn clean_json_schema_recursive(value: &mut Value, is_schema_node: bool, depth: u
                 }
 
                 if (!nullable_keys.is_empty() || !dropped_keys.is_empty())
-                    && let Some(Value::Array(req_arr)) = map.get_mut("required") {
-                        req_arr.retain(|r| {
-                            r.as_str()
-                                .map(|s| {
-                                    !nullable_keys.contains(s)
-                                        && !dropped_keys.iter().any(|d| d == s)
-                                })
-                                .unwrap_or(true)
-                        });
-                        if req_arr.is_empty() {
-                            map.remove("required");
-                        }
+                    && let Some(Value::Array(req_arr)) = map.get_mut("required")
+                {
+                    req_arr.retain(|r| {
+                        r.as_str()
+                            .map(|s| {
+                                !nullable_keys.contains(s) && !dropped_keys.iter().any(|d| d == s)
+                            })
+                            .unwrap_or(true)
+                    });
+                    if req_arr.is_empty() {
+                        map.remove("required");
                     }
+                }
 
                 // [NEW] 隐式类型注入：如果有 properties 但没 type，补全为 object
                 if !map.contains_key("type") {
@@ -272,46 +275,46 @@ fn clean_json_schema_recursive(value: &mut Value, is_schema_node: bool, depth: u
 
             if let Some(union_array) = union_to_merge
                 && let Some((best_branch, all_types)) = extract_best_schema_from_union(&union_array)
-                {
-                    if let Value::Object(branch_obj) = best_branch {
-                        // 合并分支属性到当前 map
-                        for (k, v) in branch_obj {
-                            if k == "properties" {
-                                if let Some(target_props) = map
-                                    .entry("properties".to_string())
-                                    .or_insert_with(|| Value::Object(serde_json::Map::new()))
-                                    .as_object_mut()
-                                    && let Some(source_props) = v.as_object() {
-                                        for (pk, pv) in source_props {
-                                            target_props
-                                                .entry(pk.clone())
-                                                .or_insert_with(|| pv.clone());
-                                        }
-                                    }
-                            } else if k == "required" {
-                                if let Some(target_req) = map
-                                    .entry("required".to_string())
-                                    .or_insert_with(|| Value::Array(Vec::new()))
-                                    .as_array_mut()
-                                    && let Some(source_req) = v.as_array() {
-                                        for rv in source_req {
-                                            if !target_req.contains(rv) {
-                                                target_req.push(rv.clone());
-                                            }
-                                        }
-                                    }
-                            } else if !map.contains_key(&k) {
-                                map.insert(k, v);
+            {
+                if let Value::Object(branch_obj) = best_branch {
+                    // 合并分支属性到当前 map
+                    for (k, v) in branch_obj {
+                        if k == "properties" {
+                            if let Some(target_props) = map
+                                .entry("properties".to_string())
+                                .or_insert_with(|| Value::Object(serde_json::Map::new()))
+                                .as_object_mut()
+                                && let Some(source_props) = v.as_object()
+                            {
+                                for (pk, pv) in source_props {
+                                    target_props.entry(pk.clone()).or_insert_with(|| pv.clone());
+                                }
                             }
+                        } else if k == "required" {
+                            if let Some(target_req) = map
+                                .entry("required".to_string())
+                                .or_insert_with(|| Value::Array(Vec::new()))
+                                .as_array_mut()
+                                && let Some(source_req) = v.as_array()
+                            {
+                                for rv in source_req {
+                                    if !target_req.contains(rv) {
+                                        target_req.push(rv.clone());
+                                    }
+                                }
+                            }
+                        } else if !map.contains_key(&k) {
+                            map.insert(k, v);
                         }
                     }
-
-                    // [NEW] 添加类型提示到描述中 (参考 CLIProxyAPI)
-                    if all_types.len() > 1 {
-                        let type_hint = format!("Accepts: {}", all_types.join(" | "));
-                        append_hint_to_description(map, type_hint);
-                    }
                 }
+
+                // [NEW] 添加类型提示到描述中 (参考 CLIProxyAPI)
+                if all_types.len() > 1 {
+                    let type_hint = format!("Accepts: {}", all_types.join(" | "));
+                    append_hint_to_description(map, type_hint);
+                }
+            }
 
             // 3. [SAFETY] 检查当前对象是否为 JSON Schema 节点
             // 只有当对象看起来像 Schema (包含 type, properties, items, enum, anyOf 等) 时，才执行白名单过滤。
@@ -377,9 +380,10 @@ fn clean_json_schema_recursive(value: &mut Value, is_schema_node: bool, depth: u
                 // 因为模型会生成包含 reason 参数的调用，但工具定义中并没有这个参数
                 // 现在改为：空 Object 保持空的 properties，让 Gemini 模型自行决定是否需要参数
                 if map.get("type").and_then(|t| t.as_str()) == Some("object")
-                    && !map.contains_key("properties") {
-                        map.insert("properties".to_string(), serde_json::json!({}));
-                    }
+                    && !map.contains_key("properties")
+                {
+                    map.insert("properties".to_string(), serde_json::json!({}));
+                }
 
                 // 7. [SAFETY] Required 字段对齐
                 let valid_prop_keys: Option<std::collections::HashSet<String>> = map
@@ -388,14 +392,14 @@ fn clean_json_schema_recursive(value: &mut Value, is_schema_node: bool, depth: u
                     .map(|obj| obj.keys().cloned().collect());
 
                 if let Some(required_val) = map.get_mut("required")
-                    && let Some(req_arr) = required_val.as_array_mut() {
-                        if let Some(keys) = &valid_prop_keys {
-                            req_arr
-                                .retain(|k| k.as_str().map(|s| keys.contains(s)).unwrap_or(false));
-                        } else {
-                            req_arr.clear();
-                        }
+                    && let Some(req_arr) = required_val.as_array_mut()
+                {
+                    if let Some(keys) = &valid_prop_keys {
+                        req_arr.retain(|k| k.as_str().map(|s| keys.contains(s)).unwrap_or(false));
+                    } else {
+                        req_arr.clear();
                     }
+                }
 
                 if !map.contains_key("type") {
                     if map.contains_key("enum") {
@@ -452,12 +456,13 @@ fn clean_json_schema_recursive(value: &mut Value, is_schema_node: bool, depth: u
                         .entry("description".to_string())
                         .or_insert_with(|| Value::String("".to_string()));
                     if let Value::String(s) = desc_val
-                        && !s.contains("nullable") {
-                            if !s.is_empty() {
-                                s.push(' ');
-                            }
-                            s.push_str("(nullable)");
+                        && !s.contains("nullable")
+                    {
+                        if !s.is_empty() {
+                            s.push(' ');
                         }
+                        s.push_str("(nullable)");
+                    }
                 }
 
                 // 9. Enum 值强制转字符串
@@ -585,14 +590,15 @@ fn move_constraints_to_description(map: &mut serde_json::Map<String, Value>) {
 
     for (field, label) in CONSTRAINT_FIELDS {
         if let Some(val) = map.get(*field)
-            && !val.is_null() {
-                let val_str = if let Some(s) = val.as_str() {
-                    s.to_string()
-                } else {
-                    val.to_string()
-                };
-                hints.push(format!("{}: {}", label, val_str));
-            }
+            && !val.is_null()
+        {
+            let val_str = if let Some(s) = val.as_str() {
+                s.to_string()
+            } else {
+                val.to_string()
+            };
+            hints.push(format!("{}: {}", label, val_str));
+        }
     }
 
     if !hints.is_empty() {
@@ -614,9 +620,10 @@ fn score_schema_option(val: &Value) -> i32 {
             return 2;
         }
         if let Some(type_str) = obj.get("type").and_then(|t| t.as_str())
-            && type_str != "null" {
-                return 1;
-            }
+            && type_str != "null"
+        {
+            return 1;
+        }
     }
     0
 }
@@ -634,9 +641,10 @@ fn extract_best_schema_from_union(union_array: &Vec<Value>) -> Option<(Value, Ve
 
         // 收集类型信息
         if let Some(type_str) = get_schema_type_name(item)
-            && !all_types.contains(&type_str) {
-                all_types.push(type_str);
-            }
+            && !all_types.contains(&type_str)
+        {
+            all_types.push(type_str);
+        }
 
         if score > best_score {
             best_score = score;
@@ -652,9 +660,10 @@ fn get_schema_type_name(schema: &Value) -> Option<String> {
     if let Value::Object(obj) = schema {
         // 优先使用显式的 type 字段
         if let Some(type_val) = obj.get("type")
-            && let Some(s) = type_val.as_str() {
-                return Some(s.to_string());
-            }
+            && let Some(s) = type_val.as_str()
+        {
+            return Some(s.to_string());
+        }
 
         // 根据结构推断类型
         if obj.contains_key("properties") {
@@ -680,13 +689,14 @@ fn get_schema_type_name(schema: &Value) -> Option<String> {
 /// * `schema` - 工具的参数 schema 定义 (通常是 parameters 对象)
 pub fn fix_tool_call_args(args: &mut Value, schema: &Value) {
     if let Some(properties) = schema.get("properties").and_then(|p| p.as_object())
-        && let Some(args_obj) = args.as_object_mut() {
-            for (key, value) in args_obj.iter_mut() {
-                if let Some(prop_schema) = properties.get(key) {
-                    fix_single_arg_recursive(value, prop_schema);
-                }
+        && let Some(args_obj) = args.as_object_mut()
+    {
+        for (key, value) in args_obj.iter_mut() {
+            if let Some(prop_schema) = properties.get(key) {
+                fix_single_arg_recursive(value, prop_schema);
             }
         }
+    }
 }
 
 /// 递归修正单个参数的类型
@@ -711,11 +721,12 @@ fn fix_single_arg_recursive(value: &mut Value, schema: &Value) {
         .to_lowercase();
     if schema_type == "array" {
         if let Some(items_schema) = schema.get("items")
-            && let Some(arr) = value.as_array_mut() {
-                for item in arr {
-                    fix_single_arg_recursive(item, items_schema);
-                }
+            && let Some(arr) = value.as_array_mut()
+        {
+            for item in arr {
+                fix_single_arg_recursive(item, items_schema);
             }
+        }
         return;
     }
 
@@ -857,19 +868,23 @@ mod tests {
         // 2. 验证标准字段被移除并转为描述 (Robust Constraint Migration)
         assert!(schema["properties"]["location"].get("minLength").is_none());
         assert!(schema["properties"]["location"].get("format").is_none());
-        assert!(schema["properties"]["location"]["description"]
-            .as_str()
-            .unwrap()
-            .contains("[Constraint: minLen: 1, format: city]"));
+        assert!(
+            schema["properties"]["location"]["description"]
+                .as_str()
+                .unwrap()
+                .contains("[Constraint: minLen: 1, format: city]")
+        );
 
         // 3. 验证名为 "pattern" 的属性未被误删
         assert!(schema["properties"].get("pattern").is_some());
         assert_eq!(schema["properties"]["pattern"]["type"], "object");
 
         // 4. 验证内部的 pattern 校验字段被移除并转为描述
-        assert!(schema["properties"]["pattern"]["properties"]["regex"]
-            .get("pattern")
-            .is_none());
+        assert!(
+            schema["properties"]["pattern"]["properties"]["regex"]
+                .get("pattern")
+                .is_none()
+        );
         assert!(
             schema["properties"]["pattern"]["properties"]["regex"]["description"]
                 .as_str()
@@ -1106,14 +1121,18 @@ mod tests {
 
         // 验证 type 被降级，且描述被追加 (nullable)
         assert_eq!(schema["type"], "string");
-        assert!(schema["description"]
-            .as_str()
-            .unwrap()
-            .contains("User name"));
-        assert!(schema["description"]
-            .as_str()
-            .unwrap()
-            .contains("(nullable)"));
+        assert!(
+            schema["description"]
+                .as_str()
+                .unwrap()
+                .contains("User name")
+        );
+        assert!(
+            schema["description"]
+                .as_str()
+                .unwrap()
+                .contains("(nullable)")
+        );
     }
 
     // [NEW TEST] 验证 anyOf 内部的 propertyNames 被移除
@@ -1367,10 +1386,12 @@ mod tests {
         // 验证内部缺失引用也被降级
         let missing = &schema["properties"]["missing"];
         assert_eq!(missing["type"], "string");
-        assert!(missing["description"]
-            .as_str()
-            .unwrap()
-            .contains("NonExistent"));
+        assert!(
+            missing["description"]
+                .as_str()
+                .unwrap()
+                .contains("NonExistent")
+        );
     }
 
     // [NEW TEST #952] 验证深层嵌套的多级 $defs 都能被收集
@@ -1572,9 +1593,11 @@ mod tests {
 
         // 验证基本结构保留，没有崩溃
         assert_eq!(schema["properties"]["start"]["type"], "object");
-        assert!(schema["properties"]["start"]["properties"]
-            .get("toB")
-            .is_some());
+        assert!(
+            schema["properties"]["start"]["properties"]
+                .get("toB")
+                .is_some()
+        );
     }
 
     #[test]
@@ -1595,9 +1618,11 @@ mod tests {
         assert_eq!(schema["properties"]["foo"]["type"], "string");
 
         // 验证描述中增加了类型提示 (注意: null 分支在清洗后变为了带 (nullable) 标记的 string，因此去重后为 string | object)
-        assert!(schema["description"]
-            .as_str()
-            .unwrap()
-            .contains("Accepts: string | object"));
+        assert!(
+            schema["description"]
+                .as_str()
+                .unwrap()
+                .contains("Accepts: string | object")
+        );
     }
 }
