@@ -494,7 +494,8 @@ fn flatten_tools(tools: &[serde_json::Value]) -> Vec<serde_json::Value> {
                             }
                             if let Some(func) = obj.get_mut("function") {
                                 if let Some(func_obj) = func.as_object_mut() {
-                                    func_obj.insert("name".to_string(), serde_json::json!(qualified));
+                                    func_obj
+                                        .insert("name".to_string(), serde_json::json!(qualified));
                                 }
                             }
                         }
@@ -593,9 +594,9 @@ fn openai_to_gemini_antigravity(
         }
     }
 
-    let has_tool_history = openai_messages.iter().any(|msg| {
-        msg.role == "tool" || msg.role == "function" || msg.tool_calls.is_some()
-    });
+    let has_tool_history = openai_messages
+        .iter()
+        .any(|msg| msg.role == "tool" || msg.role == "function" || msg.tool_calls.is_some());
 
     let mut tool_id_to_name = std::collections::HashMap::new();
     for msg in &openai_messages {
@@ -676,8 +677,10 @@ fn openai_to_gemini_antigravity(
                         && !model_lower.contains("claude");
                     let is_flash = model_lower.contains("flash");
                     if is_thinking || is_flash {
-                        thinking_part["thoughtSignature"] = serde_json::json!("skip_thought_signature_validator");
-                        thinking_part["thought_signature"] = serde_json::json!("skip_thought_signature_validator");
+                        thinking_part["thoughtSignature"] =
+                            serde_json::json!("skip_thought_signature_validator");
+                        thinking_part["thought_signature"] =
+                            serde_json::json!("skip_thought_signature_validator");
                     }
                 }
 
@@ -733,7 +736,7 @@ fn openai_to_gemini_antigravity(
                             "args": arguments
                         }
                     });
-                    
+
                     if !id.is_empty() {
                         func_call_part["functionCall"]["id"] = serde_json::json!(id);
                     }
@@ -812,7 +815,7 @@ fn openai_to_gemini_antigravity(
 
     // Build generationConfig
     let mut gen_config = serde_json::json!({});
-    
+
     let model_lower = model_name.to_lowercase();
     let is_thinking = model_lower.contains("gemini")
         && (model_lower.contains("-thinking")
@@ -827,7 +830,7 @@ fn openai_to_gemini_antigravity(
             "includeThoughts": true,
             "thinkingBudget": budget
         });
-        
+
         if let Some(max_tokens) = openai.max_tokens {
             if (max_tokens as i64) <= budget {
                 gen_config["maxOutputTokens"] = serde_json::json!(8192);
@@ -838,7 +841,8 @@ fn openai_to_gemini_antigravity(
             gen_config["maxOutputTokens"] = serde_json::json!(8192);
         }
     } else {
-        gen_config["maxOutputTokens"] = serde_json::json!(openai.max_tokens.unwrap_or(8192).min(8192));
+        gen_config["maxOutputTokens"] =
+            serde_json::json!(openai.max_tokens.unwrap_or(8192).min(8192));
     }
     if let Some(temp) = openai.temperature {
         gen_config["temperature"] = serde_json::json!(temp);
@@ -986,7 +990,8 @@ fn openai_to_gemini_antigravity(
         }
 
         if !function_declarations.is_empty() {
-            request_val["tools"] = serde_json::json!([{ "functionDeclarations": function_declarations }]);
+            request_val["tools"] =
+                serde_json::json!([{ "functionDeclarations": function_declarations }]);
 
             let mut mode = "VALIDATED";
             if let Some(tool_choice) = &openai.tool_choice {
@@ -1507,9 +1512,8 @@ pub async fn execute_antigravity(
                         "finish_reason": serde_json::Value::Null
                     }]
                 });
-                let sse_frame = crate::sse::build_sse_frame(
-                    &serde_json::to_string(&tool_call_delta).unwrap(),
-                );
+                let sse_frame =
+                    crate::sse::build_sse_frame(&serde_json::to_string(&tool_call_delta).unwrap());
                 let _ = sink.send(sse_frame).await;
             }
         }

@@ -1,4 +1,4 @@
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 /// 不被 Gemini 支持但包含重要语义信息的约束字段
 /// 这些字段将在删除前被转化为 description 提示
@@ -47,8 +47,6 @@ pub fn clean_json_schema(value: &mut Value) {
     // 递归清理
     clean_json_schema_recursive(value, true, 0);
 }
-
-
 
 /// [NEW #952] 递归收集所有层级的 $defs 和 definitions
 ///
@@ -168,7 +166,9 @@ fn clean_json_schema_recursive(value: &mut Value, is_schema_node: bool, depth: u
                 || map.contains_key("properties")
             {
                 if let Some(items) = map.remove("items") {
-                    tracing::warn!("[Schema-Normalization] Found 'items' in an Object-like node. Moving content to 'properties'.");
+                    tracing::warn!(
+                        "[Schema-Normalization] Found 'items' in an Object-like node. Moving content to 'properties'."
+                    );
                     let target_props = map
                         .entry("properties".to_string())
                         .or_insert_with(|| json!({}));
@@ -878,19 +878,23 @@ mod tests {
         // 2. 验证标准字段被移除并转为描述 (Robust Constraint Migration)
         assert!(schema["properties"]["location"].get("minLength").is_none());
         assert!(schema["properties"]["location"].get("format").is_none());
-        assert!(schema["properties"]["location"]["description"]
-            .as_str()
-            .unwrap()
-            .contains("[Constraint: minLen: 1, format: city]"));
+        assert!(
+            schema["properties"]["location"]["description"]
+                .as_str()
+                .unwrap()
+                .contains("[Constraint: minLen: 1, format: city]")
+        );
 
         // 3. 验证名为 "pattern" 的属性未被误删
         assert!(schema["properties"].get("pattern").is_some());
         assert_eq!(schema["properties"]["pattern"]["type"], "object");
 
         // 4. 验证内部的 pattern 校验字段被移除并转为描述
-        assert!(schema["properties"]["pattern"]["properties"]["regex"]
-            .get("pattern")
-            .is_none());
+        assert!(
+            schema["properties"]["pattern"]["properties"]["regex"]
+                .get("pattern")
+                .is_none()
+        );
         assert!(
             schema["properties"]["pattern"]["properties"]["regex"]["description"]
                 .as_str()
@@ -1127,14 +1131,18 @@ mod tests {
 
         // 验证 type 被降级，且描述被追加 (nullable)
         assert_eq!(schema["type"], "string");
-        assert!(schema["description"]
-            .as_str()
-            .unwrap()
-            .contains("User name"));
-        assert!(schema["description"]
-            .as_str()
-            .unwrap()
-            .contains("(nullable)"));
+        assert!(
+            schema["description"]
+                .as_str()
+                .unwrap()
+                .contains("User name")
+        );
+        assert!(
+            schema["description"]
+                .as_str()
+                .unwrap()
+                .contains("(nullable)")
+        );
     }
 
     // [NEW TEST] 验证 anyOf 内部的 propertyNames 被移除
@@ -1388,10 +1396,12 @@ mod tests {
         // 验证内部缺失引用也被降级
         let missing = &schema["properties"]["missing"];
         assert_eq!(missing["type"], "string");
-        assert!(missing["description"]
-            .as_str()
-            .unwrap()
-            .contains("NonExistent"));
+        assert!(
+            missing["description"]
+                .as_str()
+                .unwrap()
+                .contains("NonExistent")
+        );
     }
 
     // [NEW TEST #952] 验证深层嵌套的多级 $defs 都能被收集
@@ -1593,9 +1603,11 @@ mod tests {
 
         // 验证基本结构保留，没有崩溃
         assert_eq!(schema["properties"]["start"]["type"], "object");
-        assert!(schema["properties"]["start"]["properties"]
-            .get("toB")
-            .is_some());
+        assert!(
+            schema["properties"]["start"]["properties"]
+                .get("toB")
+                .is_some()
+        );
     }
 
     #[test]
@@ -1616,9 +1628,11 @@ mod tests {
         assert_eq!(schema["properties"]["foo"]["type"], "string");
 
         // 验证描述中增加了类型提示 (注意: null 分支在清洗后变为了带 (nullable) 标记的 string，因此去重后为 string | object)
-        assert!(schema["description"]
-            .as_str()
-            .unwrap()
-            .contains("Accepts: string | object"));
+        assert!(
+            schema["description"]
+                .as_str()
+                .unwrap()
+                .contains("Accepts: string | object")
+        );
     }
 }
