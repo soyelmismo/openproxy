@@ -566,39 +566,48 @@ impl tower::Service<PipelineState> for RoutingService {
                             let mut base_secs = combo
                                 .cooldown_base_secs
                                 .unwrap_or(pipeline.config.cooldown_secs);
-                            
+
                             // Align cooldown with exact quota reset time if possible
-                            if let Some(crate::error::CoreError::RateLimited { .. }) = &result.error {
+                            if let Some(crate::error::CoreError::RateLimited { .. }) = &result.error
+                            {
                                 let override_secs = (|| -> Option<u64> {
                                     let account_id = target.target.account_id?;
-                                    let (accounts, _, _) = pipeline.repo().get_accounts_meta(&[account_id]).ok()?;
+                                    let (accounts, _, _) =
+                                        pipeline.repo().get_accounts_meta(&[account_id]).ok()?;
                                     let account = accounts.get(&account_id.0)?;
-                                    
+
                                     let mut reset_str = account.quota_session_reset_at.clone();
-                                    
-                                    if let Some(json) = &account.quota_model_details {
-                                        if let Ok(details) = serde_json::from_str::<Vec<crate::quota::ModelQuotaDetail>>(json) {
-                                            let req_model = &target.model.model_id.0;
-                                            let norm_req = crate::model_normalize::normalize_model_id(req_model);
-                                            
-                                            if let Some(detail) = details.iter().find(|d| {
-                                                let norm_detail = crate::model_normalize::normalize_model_id(&d.model_id);
-                                                norm_req.eq_ignore_ascii_case(&norm_detail) || req_model.eq_ignore_ascii_case(&d.model_id)
-                                            }) {
-                                                if detail.session_reset_at.is_some() {
-                                                    reset_str = detail.session_reset_at.clone();
-                                                }
-                                            }
+
+                                    if let Some(json) = &account.quota_model_details
+                                        && let Ok(details) =
+                                            serde_json::from_str::<
+                                                Vec<crate::quota::ModelQuotaDetail>,
+                                            >(json)
+                                    {
+                                        let req_model = &target.model.model_id.0;
+                                        let norm_req =
+                                            crate::model_normalize::normalize_model_id(req_model);
+
+                                        if let Some(detail) = details.iter().find(|d| {
+                                            let norm_detail =
+                                                crate::model_normalize::normalize_model_id(
+                                                    &d.model_id,
+                                                );
+                                            norm_req.eq_ignore_ascii_case(&norm_detail)
+                                                || req_model.eq_ignore_ascii_case(&d.model_id)
+                                        }) && detail.session_reset_at.is_some()
+                                        {
+                                            reset_str = detail.session_reset_at.clone();
                                         }
                                     }
-                                    
+
                                     crate::quota::parse_reset_time(&reset_str?)
                                 })();
 
-                                if let Some(secs) = override_secs {
-                                    if secs > base_secs {
-                                        base_secs = secs;
-                                    }
+                                if let Some(secs) = override_secs
+                                    && secs > base_secs
+                                {
+                                    base_secs = secs;
                                 }
                             }
 
