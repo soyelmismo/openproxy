@@ -576,7 +576,7 @@ impl tower::Service<PipelineState> for RoutingService {
                                     
                                     let mut reset_str = account.quota_session_reset_at.clone();
                                     
-                                    if let Some(json) = &account.quota_models_json {
+                                    if let Some(json) = &account.quota_model_details {
                                         if let Ok(details) = serde_json::from_str::<Vec<crate::quota::ModelQuotaDetail>>(json) {
                                             let req_model = &target.model.model_id.0;
                                             let norm_req = crate::model_normalize::normalize_model_id(req_model);
