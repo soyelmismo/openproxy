@@ -150,3 +150,16 @@ pub(crate) fn classify_zen_target_format(id: &str) -> TargetFormat {
         TargetFormat::Openai
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_classify_zen_target_format() {
+        assert_eq!(classify_zen_target_format("claude-3-haiku"), TargetFormat::Anthropic);
+        assert_eq!(classify_zen_target_format("minimax-abab6.5"), TargetFormat::Anthropic);
+        assert_eq!(classify_zen_target_format("gpt-4-turbo"), TargetFormat::Openai);
+        assert_eq!(classify_zen_target_format("gemini-pro"), TargetFormat::Openai); // fallback to Openai
+    }
+}
