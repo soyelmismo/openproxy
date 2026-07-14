@@ -863,29 +863,34 @@ async fn spawn_background_tasks(args: SpawnBackgroundTasksArgs) {
         let interval_hours: u64 = std::env::var("OPENPROXY_PROXIES_SYNC_INTERVAL_HOURS")
             .ok()
             .and_then(|s| s.parse().ok())
-            .unwrap_or(6); // Default 6 hours
+            .unwrap_or(6)
+            .max(1);
 
-        let mut proxy_tick =
-            tokio::time::interval(std::time::Duration::from_secs(interval_hours * 3600));
-
-        // Retrasar 10 segundos el primer sync para no bloquear el inicio de otros subsistemas
         tokio::time::sleep(std::time::Duration::from_secs(10)).await;
 
         loop {
             tracing::info!("running scheduled background proxy sync");
+            let mut next_sleep = interval_hours * 3600;
+            
             match openproxy_core::free_proxies::sync_all_providers(proxy_sync_pool.clone()).await {
                 Ok(summary) => {
                     tracing::info!(added = summary.added, "background proxy sync completed");
-                    // Iniciar pruebas en segundo plano de inmediato tras el sync
-                    openproxy_core::free_proxies::test_all_proxies_background(
-                        proxy_sync_pool.clone(),
-                    );
+                    if summary.fetched == 0 {
+                        tracing::warn!("0 proxies fetched, retrying in 5 minutes");
+                        next_sleep = 300;
+                    } else {
+                        // Iniciar pruebas en segundo plano de inmediato tras el sync
+                        openproxy_core::free_proxies::test_all_proxies_background(
+                            proxy_sync_pool.clone(),
+                        );
+                    }
                 }
                 Err(e) => {
                     tracing::error!("background proxy sync failed: {}", e);
+                    next_sleep = 300;
                 }
             }
-            proxy_tick.tick().await;
+            tokio::time::sleep(std::time::Duration::from_secs(next_sleep)).await;
         }
     });
 
