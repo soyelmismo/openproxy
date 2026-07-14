@@ -899,7 +899,6 @@ async fn spawn_background_tasks(args: SpawnBackgroundTasksArgs) {
     let vac_status = vacuum_status.clone();
     tokio::spawn(async move {
         let mut prune_tick = tokio::time::interval(std::time::Duration::from_secs(3600));
-        prune_tick.tick().await;
         let mut vacuum_counter: u32 = 0;
         loop {
             prune_tick.tick().await;
