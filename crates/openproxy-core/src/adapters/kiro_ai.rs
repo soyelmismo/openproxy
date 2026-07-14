@@ -1,5 +1,8 @@
 use super::*;
 
+static KIRO_REGION_RE: once_cell::sync::Lazy<regex::Regex> =
+    once_cell::sync::Lazy::new(|| regex::Regex::new(r"[a-z]{2}-[a-z]+-[0-9]").unwrap());
+
 // =====================================================================
 // Kiro AI (AWS CodeWhisperer)
 // =====================================================================
@@ -374,8 +377,7 @@ impl ProviderAdapter for KiroAdapter {
     ) -> String {
         let mut region = "us-east-1".to_string();
         if !account_label.is_empty()
-            && let Ok(re) = regex::Regex::new(r"[a-z]{2}-[a-z]+-[0-9]")
-            && let Some(m) = re.find(account_label)
+            && let Some(m) = KIRO_REGION_RE.find(account_label)
         {
             region = m.as_str().to_string();
         }
@@ -427,8 +429,7 @@ impl ProviderAdapter for KiroAdapter {
 
         let mut region = "us-east-1".to_string();
         if !account_label.is_empty()
-            && let Ok(re) = regex::Regex::new(r"[a-z]{2}-[a-z]+-[0-9]")
-            && let Some(m) = re.find(account_label)
+            && let Some(m) = KIRO_REGION_RE.find(account_label)
         {
             region = m.as_str().to_string();
         }
