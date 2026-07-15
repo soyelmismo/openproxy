@@ -731,7 +731,7 @@ async fn pipeline_probes_parked_target_when_only_option() {
     // success branch of the dispatch loop.
     let w = pool.writer();
     let is_in_cooldown = w.query_row(
-        "SELECT COUNT(*) FROM combo_targets WHERE id = ?1 AND datetime(cooldown_until) > datetime(?2)",
+        "SELECT COUNT(*) FROM target_cooldowns WHERE combo_target_id = ?1 AND datetime(cooldown_until) > datetime(?2)",
         rusqlite::params![target_id.0, chrono::Utc::now().to_rfc3339()],
         |r| r.get::<_, i64>(0),
     ).unwrap() > 0;
@@ -895,7 +895,7 @@ async fn pipeline_walks_full_row_when_all_targets_in_cooldown() {
     // (or left the seeded row in place).
     for tid in &target_ids {
         let is_in_cooldown = w.query_row(
-            "SELECT COUNT(*) FROM combo_targets WHERE id = ?1 AND datetime(cooldown_until) > datetime(?2)",
+            "SELECT COUNT(*) FROM target_cooldowns WHERE combo_target_id = ?1 AND datetime(cooldown_until) > datetime(?2)",
             rusqlite::params![tid.0, chrono::Utc::now().to_rfc3339()],
             |r| r.get::<_, i64>(0),
         ).unwrap() > 0;
@@ -2532,7 +2532,7 @@ async fn pipeline_clears_cooldown_on_success_path() {
         repo.record_cooldown(target_id, "before", openproxy_types::config::CooldownMode::Flat, 60, 60, 1).expect("park");
 
         let is_in_cooldown = w.query_row(
-            "SELECT COUNT(*) FROM combo_targets WHERE id = ?1 AND datetime(cooldown_until) > datetime(?2)",
+            "SELECT COUNT(*) FROM target_cooldowns WHERE combo_target_id = ?1 AND datetime(cooldown_until) > datetime(?2)",
             rusqlite::params![target_id.0, chrono::Utc::now().to_rfc3339()],
             |r| r.get::<_, i64>(0),
         ).unwrap() > 0;
@@ -2542,7 +2542,7 @@ async fn pipeline_clears_cooldown_on_success_path() {
         repo.clear_cooldown(target_id).expect("clear");
 
         let is_in_cooldown = w.query_row(
-            "SELECT COUNT(*) FROM combo_targets WHERE id = ?1 AND datetime(cooldown_until) > datetime(?2)",
+            "SELECT COUNT(*) FROM target_cooldowns WHERE combo_target_id = ?1 AND datetime(cooldown_until) > datetime(?2)",
             rusqlite::params![target_id.0, chrono::Utc::now().to_rfc3339()],
             |r| r.get::<_, i64>(0),
         ).unwrap() > 0;
@@ -2958,7 +2958,7 @@ async fn cancellation_does_not_park_target_in_cooldown_or_circuit_breaker() {
     for tid in &target_ids {
         let count: i64 = w
             .query_row(
-                "SELECT COUNT(*) FROM target_cooldowns WHERE combo_target_id = ?1",
+                "SELECT COUNT(*) FROM target_cooldowns WHERE combo_combo_target_id = ?1",
                 [tid],
                 |r| r.get(0),
             )

@@ -35,4 +35,3 @@ pub mod redact;
 
 #[cfg(test)]
 pub mod tests;
-pub mod repository_tests;

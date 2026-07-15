@@ -443,7 +443,7 @@ impl PipelineRepository for SqlitePipelineRepository {
     fn record_cooldown(
         &self,
         target_id: ComboTargetId,
-        _reason: &str,
+        reason: &str,
         _mode: CooldownMode,
         base_secs: u64,
         _max_secs: u64,
@@ -453,8 +453,13 @@ impl PipelineRepository for SqlitePipelineRepository {
         let cooldown_until = chrono::Utc::now() + chrono::Duration::seconds(base_secs as i64);
         let cooldown_until_str = cooldown_until.to_rfc3339();
         conn.execute(
-            "UPDATE combo_targets SET cooldown_until = ?1 WHERE id = ?2",
-            rusqlite::params![cooldown_until_str, target_id.0]
+            "INSERT INTO target_cooldowns (combo_target_id, cooldown_until, reason, updated_at) \
+             VALUES (?1, ?2, ?3, datetime('now')) \
+             ON CONFLICT(combo_target_id) DO UPDATE SET \
+                 cooldown_until = excluded.cooldown_until, \
+                 reason = excluded.reason, \
+                 updated_at = excluded.updated_at",
+            rusqlite::params![target_id.0, cooldown_until_str, reason]
         ).map(|_| ()).map_err(|e| openproxy_types::error::CoreError::Internal(e.to_string()))
     }
 
@@ -803,7 +808,7 @@ pub fn prune_expired_cooldowns(conn: &rusqlite::Connection) -> Result<usize> {
 
 pub fn clear_cooldown(conn: &rusqlite::Connection, target_id: ComboTargetId) -> Result<()> {
     conn.execute(
-        "UPDATE combo_targets SET cooldown_until = NULL WHERE id = ?1",
+        "DELETE FROM target_cooldowns WHERE combo_target_id = ?1",
         rusqlite::params![target_id.0]
     ).map(|_| ()).map_err(|e| openproxy_types::error::CoreError::Internal(e.to_string()))
 }
