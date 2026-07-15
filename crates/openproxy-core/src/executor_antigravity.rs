@@ -1204,6 +1204,7 @@ fn parse_antigravity_line_with_parts(
 
 pub async fn execute_antigravity(
     upstream_client: &Arc<UpstreamClient>,
+    url: &str,
     access_token: &str,
     project_id: &str,
     openai: &OpenAIRequest,
@@ -1226,7 +1227,6 @@ pub async fn execute_antigravity(
         .map_err(|e| CoreError::Internal(format!("failed to serialize envelope: {e}")))?;
 
     // 3. Build the upstream request
-    let url = "https://daily-cloudcode-pa.googleapis.com/v1internal:streamGenerateContent?alt=sse";
 
     let cancel = CancellationToken::from_watch(client_disconnected);
 

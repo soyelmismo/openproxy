@@ -15,30 +15,19 @@ pub struct AntigravityAdapter {
     config: ProviderAdapterConfig,
 }
 
+pub const DEFAULT_ANTIGRAVITY_BASE_URL: &str = "https://daily-cloudcode-pa.googleapis.com";
+
 impl AntigravityAdapter {
     pub fn new() -> Self {
         Self {
             config: ProviderAdapterConfig {
                 id: ProviderId::new("antigravity"),
-                base_url: "https://daily-cloudcode-pa.googleapis.com".into(),
+                base_url: DEFAULT_ANTIGRAVITY_BASE_URL.into(),
                 auth_type: AdapterAuthType::Bearer,
                 format: AdapterFormat::Gemini,
                 extra_headers: vec![],
             },
         }
-    }
-
-    /// Remap Antigravity upstream model IDs to client-facing IDs.
-    fn remap_antigravity_model_id(upstream_id: &str) -> String {
-        match upstream_id {
-            "gemini-3.5-flash-extra-low" => "gemini-3.5-flash-low",
-            "gemini-3.5-flash-low" => "gemini-3.5-flash-medium",
-            "gemini-3.5-flash-medium" => "gemini-3.5-flash-high",
-            "gemini-3.5-flash-high" => "gemini-3.5-flash-high",
-            "gemini-3-flash-agent" => "gemini-3.5-flash-high",
-            _ => upstream_id,
-        }
-        .to_string()
     }
 
     /// Parse fetchAvailableModels response into DiscoveredModel list.
@@ -48,7 +37,7 @@ impl AntigravityAdapter {
         let mut models = Vec::new();
         for (model_id, model_data) in models_obj {
             let upstream_id = model_id.clone();
-            let client_id = Self::remap_antigravity_model_id(&upstream_id);
+            let client_id = upstream_id.clone();
 
             let display_name = model_data
                 .get("displayName")
@@ -125,92 +114,6 @@ impl AntigravityAdapter {
             Some(models)
         }
     }
-
-    /// Hardcoded model catalog for when no OAuth token is available.
-    fn hardcoded_models(&self) -> Vec<DiscoveredModel> {
-        vec![
-            DiscoveredModel {
-                model_id: ModelId::new("gemini-2.5-pro"),
-                display_name: Some("Gemini 2.5 Pro".to_string()),
-                target_format: TargetFormat::Gemini,
-                context_length: Some(1_048_576),
-                max_output_tokens: Some(8192),
-                input_modalities: None,
-                output_modalities: None,
-                model_type: Some("chat".to_string()),
-                family: None,
-                capabilities: Some(crate::capabilities::ModelCapabilities {
-                    vision: Some(true),
-                    tool_calling: Some(true),
-                    reasoning: None,
-                    thinking: None,
-                    attachment: None,
-                    structured_output: None,
-                    temperature: None,
-                }),
-            },
-            DiscoveredModel {
-                model_id: ModelId::new("gemini-2.5-flash"),
-                display_name: Some("Gemini 2.5 Flash".to_string()),
-                target_format: TargetFormat::Gemini,
-                context_length: Some(1_048_576),
-                max_output_tokens: Some(8192),
-                input_modalities: None,
-                output_modalities: None,
-                model_type: Some("chat".to_string()),
-                family: None,
-                capabilities: Some(crate::capabilities::ModelCapabilities {
-                    vision: Some(true),
-                    tool_calling: Some(true),
-                    reasoning: None,
-                    thinking: None,
-                    attachment: None,
-                    structured_output: None,
-                    temperature: None,
-                }),
-            },
-            DiscoveredModel {
-                model_id: ModelId::new("claude-sonnet-4-6"),
-                display_name: Some("Claude Sonnet 4.6".to_string()),
-                target_format: TargetFormat::Anthropic,
-                context_length: Some(200_000),
-                max_output_tokens: Some(8192),
-                input_modalities: None,
-                output_modalities: None,
-                model_type: Some("chat".to_string()),
-                family: None,
-                capabilities: Some(crate::capabilities::ModelCapabilities {
-                    vision: Some(true),
-                    tool_calling: Some(true),
-                    reasoning: None,
-                    thinking: None,
-                    attachment: None,
-                    structured_output: None,
-                    temperature: None,
-                }),
-            },
-            DiscoveredModel {
-                model_id: ModelId::new("claude-opus-4-6-thinking"),
-                display_name: Some("Claude Opus 4.6 (Thinking)".to_string()),
-                target_format: TargetFormat::Anthropic,
-                context_length: Some(200_000),
-                max_output_tokens: Some(8192),
-                input_modalities: None,
-                output_modalities: None,
-                model_type: Some("chat".to_string()),
-                family: None,
-                capabilities: Some(crate::capabilities::ModelCapabilities {
-                    vision: Some(true),
-                    tool_calling: Some(true),
-                    reasoning: None,
-                    thinking: None,
-                    attachment: None,
-                    structured_output: None,
-                    temperature: None,
-                }),
-            },
-        ]
-    }
 }
 
 crate::adapters::derive_default_from_new!(AntigravityAdapter);
@@ -251,7 +154,7 @@ impl ProviderAdapter for AntigravityAdapter {
         api_key: &str,
     ) -> Result<Vec<DiscoveredModel>> {
         if api_key.is_empty() {
-            return Ok(self.hardcoded_models());
+            return Ok(vec![]);
         }
 
         let endpoints = [
@@ -283,7 +186,7 @@ impl ProviderAdapter for AntigravityAdapter {
             }
         }
 
-        Ok(self.hardcoded_models())
+        Ok(vec![])
     }
 
     async fn execute_custom(
@@ -300,9 +203,12 @@ impl ProviderAdapter for AntigravityAdapter {
         let mut custom_req = (*req.openai_request).clone();
         custom_req.model = resolved_target.model.model_id.as_str().to_string();
 
+        let url = format!("{}/v1internal:streamGenerateContent?alt=sse", self.config.base_url);
+
         Some(
             crate::executor_antigravity::execute_antigravity(
                 upstream_client,
+                &url,
                 &custom_meta.access_token,
                 project_id,
                 &custom_req,
