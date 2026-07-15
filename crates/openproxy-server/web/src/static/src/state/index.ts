@@ -144,7 +144,7 @@ export interface DashboardState {
   models: Model[];
   modelsComplete: boolean;
   combos: Combo[];
-  proxies: any[];
+  proxies: import("../lib/types/api.js").FreeProxy[];
   /** Cached API key rows. The shape is provider-specific; the
    *  dashboard views hydrate it from `/admin/api-keys`. Kept
    *  loose here (out of G3 scope — G4 will narrow it). */

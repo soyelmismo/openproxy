@@ -13,19 +13,7 @@ import {
 } from "../handlers/proxy-handlers.js";
 import { t } from "../i18n/index.js";
 
-interface FreeProxyRow {
-  id: string;
-  source: string;
-  host: string;
-  port: number;
-  type: string;
-  country_code: string | null;
-  status: string;
-  latency_ms: number | null;
-  last_validated: string | null;
-  created_at: string;
-  updated_at: string;
-}
+import { type FreeProxy as FreeProxyRow } from "../lib/types/api.js";
 
 // Module-local filters state
 let filterSearch = "";
