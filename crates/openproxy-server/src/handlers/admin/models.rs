@@ -61,30 +61,35 @@ pub async fn test_model(
     State(s): State<AppState>,
     Path(model_row_id): Path<i64>,
     cancel_watch: Option<axum::Extension<crate::disconnect::CancelWatch>>,
-    body: Option<Json<TestModelInput>>,
+    body_bytes: axum::body::Bytes,
 ) -> ApiResult<Json<serde_json::Value>> {
     let cancel_rx = cancel_watch.map(|axum::Extension(cw)| cw.rx);
 
-    let (account_id, proxy_url) = if let Some(Json(input)) = body {
-        let aid = input.account_id.map(AccountId::new);
-        let purl = if let Some(ref pid) = input.proxy_id {
-            let r = s.db_pool().reader();
-            if let Ok(Some(p)) = openproxy_core::free_proxies::get_proxy(&r, pid) {
-                Some(format!(
-                    "{}://{}:{}",
-                    p.r#type.to_lowercase(),
-                    p.host,
-                    p.port
-                ))
-            } else {
-                None
-            }
-        } else {
-            None
-        };
-        (aid, purl)
-    } else {
+    let (account_id, proxy_url) = if body_bytes.is_empty() {
         (None, None)
+    } else {
+        match serde_json::from_slice::<TestModelInput>(&body_bytes) {
+            Ok(input) => {
+                let aid = input.account_id.map(AccountId::new);
+                let purl = if let Some(ref pid) = input.proxy_id {
+                    let r = s.db_pool().reader();
+                    if let Ok(Some(p)) = openproxy_core::free_proxies::get_proxy(&r, pid) {
+                        Some(format!(
+                            "{}://{}:{}",
+                            p.r#type.to_lowercase(),
+                            p.host,
+                            p.port
+                        ))
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                };
+                (aid, purl)
+            }
+            Err(e) => return ApiResult::err(ApiError(CoreError::Parse(format!("Invalid JSON: {}", e)))),
+        }
     };
 
     let r = run_test_for_model(
