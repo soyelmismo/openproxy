@@ -8,6 +8,7 @@
 
 use crate::accounts::HealthStatus;
 use crate::error::{CoreError, Result};
+use crate::adapters::ProviderAdapter;
 use crate::ids::AccountId;
 use crate::secrets::MasterKey;
 use crate::upstream::UpstreamClient;
@@ -616,12 +617,13 @@ pub fn pipeline_token_needs_refresh(db_expires_at: Option<&str>, provider_id: &s
 ///   conservative window).
 /// - **Special cases** (e.g. iflow): 24 hours before expiry.
 pub(crate) fn refresh_lead_seconds(provider_id: &str) -> u64 {
-    match provider_id {
-        "kiro" | "antigravity" | "codex" => 300, // 5 minutes
-
-        // Non-rotating providers — refresh 15 min before expiry.
-        _ => 900, // 15 minutes
+    let adapters = crate::adapters::builtin_adapters();
+    if let Some(adapter) = adapters.iter().find(|a| a.id().as_str() == provider_id) {
+        if let Some(lead) = adapter.metadata().oauth_refresh_lead_seconds {
+            return lead;
+        }
     }
+    900 // 15 minutes default
 }
 
 /// Returns the refresh lead time in seconds for a given provider.

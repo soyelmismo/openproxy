@@ -343,12 +343,10 @@ fn enrich_provider_with_oauth(
         .unwrap_or_else(|| {
             // Fallback for custom providers that aren't loaded in the adapter registry yet
             let built_in = openproxy_core::providers::is_builtin(p.id.as_str());
-            openproxy_core::providers::ProviderMetadata {
-                built_in,
-                deletable: !built_in,
-                supports_quota: false,
-                quota_refresh_supported: false,
-            }
+            let mut meta = openproxy_core::providers::ProviderMetadata::custom_default();
+            meta.built_in = built_in;
+            meta.deletable = !built_in;
+            meta
         });
 
     let active_models: i64 = r

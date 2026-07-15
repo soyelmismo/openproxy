@@ -88,6 +88,8 @@ impl ProviderAdapter for KiroAdapter {
             deletable: !crate::providers::is_builtin(self.id().as_str()),
             supports_quota: true,
             quota_refresh_supported: true,
+            requires_oauth: true,
+            oauth_refresh_lead_seconds: Some(300),
         };
         // Ensure legacy alias 'kiro' supports quota
         if self.id().as_str() == "kiro" {

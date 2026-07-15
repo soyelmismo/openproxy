@@ -43,12 +43,12 @@ impl ProviderAdapter for OpenRouterAdapter {
     }
 
     fn metadata(&self) -> crate::providers::ProviderMetadata {
-        crate::providers::ProviderMetadata {
-            built_in: crate::providers::is_builtin(self.id().as_str()),
-            deletable: !crate::providers::is_builtin(self.id().as_str()),
-            supports_quota: false,
-            quota_refresh_supported: false,
-        }
+        let mut meta = crate::providers::ProviderMetadata::custom_default();
+        meta.built_in = crate::providers::is_builtin(self.id().as_str());
+        meta.deletable = !crate::providers::is_builtin(self.id().as_str());
+        meta.supports_quota = true;
+        meta.quota_refresh_supported = true;
+        meta
     }
 
     fn build_chat_url(&self, _target_format: TargetFormat, _model: &ModelId) -> String {

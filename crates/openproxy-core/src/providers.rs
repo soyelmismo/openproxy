@@ -176,6 +176,8 @@ pub struct ProviderMetadata {
     pub deletable: bool,
     pub supports_quota: bool,
     pub quota_refresh_supported: bool,
+    pub requires_oauth: bool,
+    pub oauth_refresh_lead_seconds: Option<u64>,
 }
 
 impl ProviderMetadata {
@@ -185,6 +187,8 @@ impl ProviderMetadata {
             deletable: true,
             supports_quota: false,
             quota_refresh_supported: false,
+            requires_oauth: false,
+            oauth_refresh_lead_seconds: None,
         }
     }
 }

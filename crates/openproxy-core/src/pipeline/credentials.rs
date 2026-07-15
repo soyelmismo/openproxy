@@ -4,6 +4,7 @@ use crate::models::Model;
 use crate::pipeline::context::{CustomProviderMeta, ResolvedTarget};
 use crate::pipeline::repository::account::{KiroMeta, RawAccount};
 use crate::secrets::MasterKey;
+use crate::adapters::ProviderAdapter;
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -84,16 +85,21 @@ impl CredentialManager {
                         None => (String::new(), false),
                     };
 
-                    if !has_api_key
-                        && !matches!(t.provider_id.as_str(), "kiro" | "antigravity" | "codex")
-                    {
+                    let adapters = crate::adapters::builtin_adapters();
+                    let requires_oauth = adapters
+                        .iter()
+                        .find(|a| a.id().as_str() == t.provider_id.as_str())
+                        .map(|a| a.metadata().requires_oauth)
+                        .unwrap_or(false);
+
+                    if !has_api_key && !requires_oauth {
                         tracing::error!("account {} has no API key (OAuth account?)", account_id.0);
                         continue;
                     }
                     let label = raw_account.label.clone();
 
                     let custom_meta =
-                        if matches!(t.provider_id.as_str(), "kiro" | "antigravity" | "codex") {
+                        if requires_oauth {
                             let access_token = match &raw_account.access_token_encrypted {
                                 Some(b) => match master_key.decrypt(b) {
                                     Ok(k) => k,

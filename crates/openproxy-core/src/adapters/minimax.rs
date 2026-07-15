@@ -31,6 +31,7 @@ impl MiniMaxAdapter {
     }
 }
 
+use crate::adapters::ProviderAdapter;
 crate::adapters::derive_default_from_new!(MiniMaxAdapter);
 
 impl ProviderAdapter for MiniMaxAdapter {
@@ -39,17 +40,11 @@ impl ProviderAdapter for MiniMaxAdapter {
     }
 
     fn metadata(&self) -> crate::providers::ProviderMetadata {
-        let mut meta = crate::providers::ProviderMetadata {
-            built_in: crate::providers::is_builtin(self.id().as_str()),
-            deletable: !crate::providers::is_builtin(self.id().as_str()),
-            supports_quota: true,
-            quota_refresh_supported: false,
-        };
-        // Some legacy providers like 'minimax' might not be in seed but are built-ins
-        if self.id().as_str() == "minimax" || self.id().as_str() == "minimax-cn" {
-            meta.supports_quota = true;
-            meta.quota_refresh_supported = true;
-        }
+        let mut meta = crate::providers::ProviderMetadata::custom_default();
+        meta.built_in = crate::providers::is_builtin(self.id().as_str());
+        meta.deletable = !crate::providers::is_builtin(self.id().as_str());
+        meta.supports_quota = true;
+        meta.quota_refresh_supported = true;
         meta
     }
 

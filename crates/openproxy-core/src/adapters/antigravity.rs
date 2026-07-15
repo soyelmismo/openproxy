@@ -129,6 +129,8 @@ impl ProviderAdapter for AntigravityAdapter {
             deletable: !crate::providers::is_builtin(self.id().as_str()),
             supports_quota: true,
             quota_refresh_supported: true,
+            requires_oauth: true,
+            oauth_refresh_lead_seconds: Some(300),
         };
         // Ensure aliases like 'agy' support quota
         if self.id().as_str() == "antigravity" || self.id().as_str() == "agy" {
