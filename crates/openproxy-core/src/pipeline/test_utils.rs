@@ -89,6 +89,7 @@ pub fn seed_provider(conn: &Connection, provider_id: &str, auth_type: AuthType) 
             format: ProviderFormat::Openai,
             extra_headers_json: None,
             auto_activate_keyword: None,
+            rate_limit_scope: crate::providers::RateLimitScope::Account,
         },
     )
     .expect("seed provider");
@@ -116,6 +117,7 @@ pub fn seed_provider_and_model(
             },
             extra_headers_json: None,
             auto_activate_keyword: None,
+            rate_limit_scope: crate::providers::RateLimitScope::Account,
         },
     )
     .expect("seed provider");
@@ -316,6 +318,7 @@ pub fn seed_solo_combo_at_url(
             format: ProviderFormat::Openai,
             extra_headers_json: None,
             auto_activate_keyword: None,
+            rate_limit_scope: crate::providers::RateLimitScope::Account,
         },
     )
     .expect("seed provider");

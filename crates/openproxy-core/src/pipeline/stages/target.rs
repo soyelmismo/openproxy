@@ -383,7 +383,12 @@ impl PipelineStage for DispatchStage {
                 Some(e)
                     if RetryPolicy::is_retryable(e, ctx.pipeline.config.idle_chunk_retryable) =>
                 {
-                    let outcome = ctx.pipeline.circuit_breaker.record_failure_outcome(aid);
+                    let key = if target.rate_limit_scope == crate::providers::RateLimitScope::Model {
+                        crate::circuit_breaker::CircuitBreakerKey::Model(aid, target.model_row_id.expect("flattened"))
+                    } else {
+                        crate::circuit_breaker::CircuitBreakerKey::Account(aid)
+                    };
+                    let outcome = ctx.pipeline.circuit_breaker.record_failure_outcome(key);
                     if outcome.just_opened {
                         let provider_id_str = target.provider_id.to_string();
                         let model_id_str = model.model_id.as_str().to_string();
@@ -421,7 +426,12 @@ impl PipelineStage for DispatchStage {
                     }
                 }
                 _ => {
-                    ctx.pipeline.circuit_breaker.record_success(aid);
+                    let key = if target.rate_limit_scope == crate::providers::RateLimitScope::Model {
+                        crate::circuit_breaker::CircuitBreakerKey::Model(aid, target.model_row_id.expect("flattened"))
+                    } else {
+                        crate::circuit_breaker::CircuitBreakerKey::Account(aid)
+                    };
+                    ctx.pipeline.circuit_breaker.record_success(key);
                 }
             }
         }

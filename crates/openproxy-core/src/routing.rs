@@ -49,6 +49,7 @@ pub enum RoutingPlan {
         /// `upstream_model_id` column in `usage` carries this string
         /// for analytics.
         model_id: String,
+        rate_limit_scope: crate::providers::RateLimitScope,
     },
     /// A combo. The chat handler dispatches through the normal
     /// pipeline path keyed on `combo_id`.
@@ -141,7 +142,8 @@ fn try_resolve_direct_model(
     // The provider must be active; a deactivated provider means the
     // model is not routable today. We surface this as "no match"
     // rather than a 5xx — the operator can re-enable the provider.
-    if !provider_is_active(conn, &model.provider_id)? {
+    let (active, rate_limit_scope) = provider_active_and_scope(conn, &model.provider_id)?;
+    if !active {
         return Ok(None);
     }
 
@@ -155,25 +157,36 @@ fn try_resolve_direct_model(
         account_id,
         model_row_id: model.row_id,
         model_id: model.model_id.as_str().to_string(),
+        rate_limit_scope,
     }))
 }
 
-/// Cheap "is this provider active?" probe. Returns `Ok(false)` when
+/// Cheap "is this provider active?" probe plus its rate limit scope.
+/// Returns `Ok((false, RateLimitScope::Account))` when
 /// the row is missing so a deleted provider (e.g. after a race with
 /// the admin UI) is treated as inactive.
-fn provider_is_active(conn: &Connection, provider_id: &ProviderId) -> Result<bool> {
-    let active: Option<i64> = conn
+fn provider_active_and_scope(
+    conn: &Connection,
+    provider_id: &ProviderId,
+) -> Result<(bool, crate::providers::RateLimitScope)> {
+    let row: Option<(i64, String)> = conn
         .query_row(
-            "SELECT active FROM providers WHERE id = ?1",
+            "SELECT active, rate_limit_scope FROM providers WHERE id = ?1",
             rusqlite::params![provider_id.as_str()],
-            |row| row.get(0),
+            |row| Ok((row.get(0)?, row.get(1)?)),
         )
         .optional()
         .map_err(crate::error::map_db_error_ctx(format!(
-            "provider_is_active({})",
+            "provider_active_and_scope({})",
             provider_id
         )))?;
-    Ok(active.unwrap_or(0) != 0)
+    match row {
+        Some((active, scope_str)) => {
+            let scope = crate::providers::RateLimitScope::parse(&scope_str).unwrap_or_default();
+            Ok((active != 0, scope))
+        }
+        None => Ok((false, crate::providers::RateLimitScope::default())),
+    }
 }
 
 
@@ -235,6 +248,7 @@ pub fn build_synthetic_combo(
     provider_id: ProviderId,
     account_id: Option<AccountId>,
     model_row_id: ModelRowId,
+    rate_limit_scope: crate::providers::RateLimitScope,
 ) -> (Combo, Vec<ComboTarget>) {
     // The synthetic target uses an all-zero id so the row never
     // collides with a real `combo_targets.id`. The pipeline
@@ -251,6 +265,7 @@ pub fn build_synthetic_combo(
         sub_combo_id: None,
         priority_order: 0,
         weight: 1,
+        rate_limit_scope,
     };
     let combo = Combo {
         id: ComboId(SYNTHETIC_COMBO_ID),
@@ -319,6 +334,7 @@ mod tests {
                 format: ProviderFormat::Openai,
                 extra_headers_json: None,
                 auto_activate_keyword: None,
+            rate_limit_scope: crate::providers::RateLimitScope::Account,
             },
         )
         .expect("seed provider");
@@ -372,11 +388,12 @@ mod tests {
                 account_id,
                 model_row_id,
                 model_id,
+                ..
             } => {
                 assert_eq!(provider_id, ProviderId::new("openrouter"));
                 assert_eq!(model_row_id, model_row);
                 assert_eq!(model_id, "anthropic/claude-3.5");
-                assert!(account_id.is_some(), "resolver picks a healthy account");
+                assert!(account_id.is_none(), "resolver always uses auto-rotation");
             }
             other => panic!("expected Direct, got {:?}", other),
         }
@@ -556,6 +573,7 @@ mod tests {
             ProviderId::new("openrouter"),
             Some(AccountId(42)),
             ModelRowId(7),
+            crate::providers::RateLimitScope::Account,
         );
         assert_eq!(combo.id, ComboId(SYNTHETIC_COMBO_ID));
         assert_eq!(combo.name, SYNTHETIC_COMBO_NAME);

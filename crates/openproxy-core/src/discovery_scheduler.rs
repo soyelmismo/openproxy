@@ -650,6 +650,7 @@ mod tests {
                 format: providers::ProviderFormat::Openai,
                 extra_headers_json: None,
                 auto_activate_keyword: None,
+            rate_limit_scope: crate::providers::RateLimitScope::Account,
             },
         )
         .expect("seed provider");
@@ -796,6 +797,7 @@ mod tests {
                     format: providers::ProviderFormat::Openai,
                     extra_headers_json: None,
                     auto_activate_keyword: None,
+            rate_limit_scope: crate::providers::RateLimitScope::Account,
                 },
             )
             .expect("seed provider");
@@ -1038,6 +1040,7 @@ mod tests {
                 format: providers::ProviderFormat::Openai,
                 extra_headers_json: None,
                 auto_activate_keyword: None,
+            rate_limit_scope: crate::providers::RateLimitScope::Account,
             },
         )
         .expect("seed provider for upsert");

@@ -81,6 +81,7 @@ pub struct CreateProviderInput {
     pub auth_type: String,
     pub format: String,
     pub extra_headers_json: Option<String>,
+    pub rate_limit_scope: Option<crate::providers::RateLimitScope>,
 }
 
 /// Insert a new provider. Returns the [`ProviderId`] used.
@@ -103,6 +104,7 @@ pub fn create_provider(conn: &Connection, input: CreateProviderInput) -> Result<
             format,
             extra_headers_json: input.extra_headers_json.as_deref(),
             auto_activate_keyword: None,
+            rate_limit_scope: input.rate_limit_scope.unwrap_or(crate::providers::RateLimitScope::Account),
         },
     )?;
     Ok(id)
@@ -172,6 +174,7 @@ pub struct UpdateProviderInput {
     pub auto_activate_keyword: Option<Option<String>>,
     pub use_proxies: Option<bool>,
     pub proxy_rotation_errors: Option<String>,
+    pub rate_limit_scope: Option<crate::providers::RateLimitScope>,
 }
 
 impl<'de> Deserialize<'de> for UpdateProviderInput {
@@ -188,6 +191,7 @@ impl<'de> Deserialize<'de> for UpdateProviderInput {
             AutoActivateKeyword,
             UseProxies,
             ProxyRotationErrors,
+            RateLimitScope,
         }
 
         struct V;
@@ -211,6 +215,9 @@ impl<'de> Deserialize<'de> for UpdateProviderInput {
                         Field::UseProxies => out.use_proxies = Some(map.next_value()?),
                         Field::ProxyRotationErrors => {
                             out.proxy_rotation_errors = Some(map.next_value()?)
+                        }
+                        Field::RateLimitScope => {
+                            out.rate_limit_scope = Some(map.next_value()?)
                         }
                         Field::AutoActivateKeyword => {
                             // The whole point of this custom deserialize:
@@ -268,6 +275,7 @@ pub fn update_provider(
         keyword,
         input.use_proxies,
         input.proxy_rotation_errors.as_deref(),
+        input.rate_limit_scope,
     )
 }
 
@@ -1075,7 +1083,7 @@ mod tests {
 
         let id = create_provider(
             &conn,
-            CreateProviderInput {
+            CreateProviderInput { rate_limit_scope: None,
                 id: "openrouter".into(),
                 name: "OpenRouter".into(),
                 base_url: "https://openrouter.ai/api/v1".into(),
@@ -1096,7 +1104,7 @@ mod tests {
         // Invalid auth_type surfaces as Validation.
         let err = create_provider(
             &conn,
-            CreateProviderInput {
+            CreateProviderInput { rate_limit_scope: None,
                 id: "bad".into(),
                 name: "x".into(),
                 base_url: "https://x".into(),
@@ -1152,7 +1160,7 @@ mod tests {
         let conn = pool.writer();
         create_provider(
             &conn,
-            CreateProviderInput {
+            CreateProviderInput { rate_limit_scope: None,
                 id: "openrouter".into(),
                 name: "OpenRouter".into(),
                 base_url: "https://openrouter.ai/api/v1".into(),
@@ -1238,7 +1246,7 @@ mod tests {
         for pid in ["p1", "p2"] {
             create_provider(
                 &conn,
-                CreateProviderInput {
+                CreateProviderInput { rate_limit_scope: None,
                     id: pid.into(),
                     name: pid.into(),
                     base_url: "https://example.com".into(),
@@ -1462,7 +1470,7 @@ mod tests {
         let conn = pool.writer();
         create_provider(
             &conn,
-            CreateProviderInput {
+            CreateProviderInput { rate_limit_scope: None,
                 id: "p".into(),
                 name: "Original".into(),
                 base_url: "https://example.com".into(),
@@ -1477,7 +1485,7 @@ mod tests {
         update_provider(
             &conn,
             &ProviderId::new("p"),
-            UpdateProviderInput {
+            UpdateProviderInput { rate_limit_scope: None,
                 name: Some("Renamed".into()),
                 base_url: None,
                 extra_headers_json: None,
@@ -1495,7 +1503,7 @@ mod tests {
         update_provider(
             &conn,
             &ProviderId::new("p"),
-            UpdateProviderInput {
+            UpdateProviderInput { rate_limit_scope: None,
                 name: None,
                 base_url: None,
                 extra_headers_json: None,
@@ -1547,7 +1555,7 @@ mod tests {
         let conn = pool.writer();
         create_provider(
             &conn,
-            CreateProviderInput {
+            CreateProviderInput { rate_limit_scope: None,
                 id: "p".into(),
                 name: "P".into(),
                 base_url: "https://x".into(),
@@ -1641,7 +1649,7 @@ mod tests {
         let conn = pool.writer();
         create_provider(
             &conn,
-            CreateProviderInput {
+            CreateProviderInput { rate_limit_scope: None,
                 id: "my-custom".into(),
                 name: "My Custom".into(),
                 base_url: "https://example.test".into(),
@@ -1681,7 +1689,7 @@ mod tests {
         for pid in ["p1", "p2"] {
             create_provider(
                 conn,
-                CreateProviderInput {
+                CreateProviderInput { rate_limit_scope: None,
                     id: pid.into(),
                     name: pid.into(),
                     base_url: "https://example.com".into(),

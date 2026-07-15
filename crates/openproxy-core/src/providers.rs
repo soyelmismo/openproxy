@@ -104,6 +104,37 @@ impl AuthType {
     }
 }
 
+/// How the provider's rate limits are scoped.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum RateLimitScope {
+    /// Quota/Rate limits apply to the entire account (default).
+    #[default]
+    Account,
+    /// Quota/Rate limits apply per-model.
+    Model,
+}
+
+impl RateLimitScope {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            RateLimitScope::Account => "account",
+            RateLimitScope::Model => "model",
+        }
+    }
+
+    pub fn parse(s: &str) -> Result<Self> {
+        match s {
+            "account" => Ok(RateLimitScope::Account),
+            "model" => Ok(RateLimitScope::Model),
+            other => Err(CoreError::Validation(format!(
+                "invalid rate_limit_scope: {}",
+                other
+            ))),
+        }
+    }
+}
+
 /// Row view of the `providers` table. `created_at` is the SQLite datetime
 /// string (UTC) the DB stamped on insert.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -136,6 +167,7 @@ pub struct Provider {
     pub current_proxy_id: Option<String>,
     #[serde(default = "default_proxy_rotation_errors")]
     pub proxy_rotation_errors: String,
+    pub rate_limit_scope: RateLimitScope,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -177,6 +209,7 @@ pub struct NewProvider<'a> {
     pub format: ProviderFormat,
     pub extra_headers_json: Option<&'a str>,
     pub auto_activate_keyword: Option<&'a str>,
+    pub rate_limit_scope: RateLimitScope,
 }
 
 /// Insert a new provider. The DB enforces uniqueness on `id` (PRIMARY KEY)
@@ -191,10 +224,11 @@ pub fn create(conn: &Connection, new: NewProvider<'_>) -> Result<()> {
         format,
         extra_headers_json,
         auto_activate_keyword,
+        rate_limit_scope,
     } = new;
     let result = conn.execute(
-        "INSERT INTO providers(id, name, base_url, auth_type, format, extra_headers_json, auto_activate_keyword) \
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+        "INSERT INTO providers(id, name, base_url, auth_type, format, extra_headers_json, auto_activate_keyword, rate_limit_scope) \
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
         params![
             id.as_str(),
             name,
@@ -203,6 +237,7 @@ pub fn create(conn: &Connection, new: NewProvider<'_>) -> Result<()> {
             format.as_str(),
             extra_headers_json,
             auto_activate_keyword,
+            rate_limit_scope.as_str(),
         ],
     );
 
@@ -232,7 +267,7 @@ pub fn create(conn: &Connection, new: NewProvider<'_>) -> Result<()> {
 pub fn get(conn: &Connection, id: &ProviderId) -> Result<Option<Provider>> {
     let row = conn
         .query_row(
-            "SELECT id, name, base_url, auth_type, format, extra_headers_json, auto_activate_keyword, active, created_at, use_proxies, current_proxy_id, proxy_rotation_errors \
+            "SELECT id, name, base_url, auth_type, format, extra_headers_json, auto_activate_keyword, active, created_at, use_proxies, current_proxy_id, proxy_rotation_errors, rate_limit_scope \
              FROM providers WHERE id = ?1",
             params![id.as_str()],
             row_to_provider,
@@ -263,7 +298,7 @@ pub fn get(conn: &Connection, id: &ProviderId) -> Result<Option<Provider>> {
 pub fn list(conn: &Connection) -> Result<Vec<Provider>> {
     let mut stmt = conn
         .prepare(
-            "SELECT id, name, base_url, auth_type, format, extra_headers_json, auto_activate_keyword, active, created_at, use_proxies, current_proxy_id, proxy_rotation_errors \
+            "SELECT id, name, base_url, auth_type, format, extra_headers_json, auto_activate_keyword, active, created_at, use_proxies, current_proxy_id, proxy_rotation_errors, rate_limit_scope \
              FROM providers WHERE id != ?1 ORDER BY id",
         )
         .map_err(crate::error::map_db_error)?;
@@ -294,7 +329,7 @@ pub fn list(conn: &Connection) -> Result<Vec<Provider>> {
 pub fn list_active(conn: &Connection) -> Result<Vec<Provider>> {
     let mut stmt = conn
         .prepare(
-            "SELECT id, name, base_url, auth_type, format, extra_headers_json, auto_activate_keyword, active, created_at, use_proxies, current_proxy_id, proxy_rotation_errors \
+            "SELECT id, name, base_url, auth_type, format, extra_headers_json, auto_activate_keyword, active, created_at, use_proxies, current_proxy_id, proxy_rotation_errors, rate_limit_scope \
              FROM providers WHERE active = 1 AND id != ?1 ORDER BY id",
         )
         .map_err(crate::error::map_db_error)?;
@@ -359,6 +394,7 @@ pub fn update(
     auto_activate_keyword: Option<Option<&str>>,
     use_proxies: Option<bool>,
     proxy_rotation_errors: Option<&str>,
+    rate_limit_scope: Option<RateLimitScope>,
 ) -> Result<()> {
     // Build the SET clause dynamically so we only touch the supplied columns.
     // Each branch adds a fragment plus its bound value to `bound_values`.
@@ -388,6 +424,10 @@ pub fn update(
     if let Some(v) = proxy_rotation_errors {
         sets.push("proxy_rotation_errors = ?");
         bound_values.push(Box::new(v.to_string()));
+    }
+    if let Some(v) = rate_limit_scope {
+        sets.push("rate_limit_scope = ?");
+        bound_values.push(Box::new(v.as_str().to_string()));
     }
 
     if sets.is_empty() {
@@ -457,6 +497,7 @@ fn row_to_provider(row: &rusqlite::Row<'_>) -> rusqlite::Result<Provider> {
     let use_proxies: i64 = row.get(9)?;
     let current_proxy_id: Option<String> = row.get(10)?;
     let proxy_rotation_errors: String = row.get(11)?;
+    let rate_limit_scope: String = row.get(12)?;
 
     // The DB's CHECK constraints guarantee these parse, so a Validation
     // error here would indicate schema/data corruption, not a user mistake.
@@ -471,6 +512,13 @@ fn row_to_provider(row: &rusqlite::Row<'_>) -> rusqlite::Result<Provider> {
     let format = ProviderFormat::parse(&format).map_err(|e| {
         rusqlite::Error::FromSqlConversionFailure(
             4,
+            rusqlite::types::Type::Text,
+            Box::new(FromStrError(format!("{}", e))),
+        )
+    })?;
+    let rate_limit_scope = RateLimitScope::parse(&rate_limit_scope).map_err(|e| {
+        rusqlite::Error::FromSqlConversionFailure(
+            12,
             rusqlite::types::Type::Text,
             Box::new(FromStrError(format!("{}", e))),
         )
@@ -497,6 +545,7 @@ fn row_to_provider(row: &rusqlite::Row<'_>) -> rusqlite::Result<Provider> {
         use_proxies,
         current_proxy_id,
         proxy_rotation_errors,
+        rate_limit_scope,
     })
 }
 
@@ -555,6 +604,7 @@ mod tests {
                 format: ProviderFormat::Openai,
                 extra_headers_json: Some(r#"{"X-Title":"openproxy"}"#),
                 auto_activate_keyword: Some("claude"),
+                rate_limit_scope: crate::providers::RateLimitScope::Account,
             },
         )
         .expect("create");
@@ -589,6 +639,7 @@ mod tests {
                 format: ProviderFormat::Anthropic,
                 extra_headers_json: None,
                 auto_activate_keyword: None,
+            rate_limit_scope: crate::providers::RateLimitScope::Account,
             },
         )
         .expect("first create");
@@ -603,6 +654,7 @@ mod tests {
                 format: ProviderFormat::Openai,
                 extra_headers_json: None,
                 auto_activate_keyword: None,
+            rate_limit_scope: crate::providers::RateLimitScope::Account,
             },
         )
         .expect_err("duplicate must fail");
@@ -628,6 +680,7 @@ mod tests {
                     format: ProviderFormat::Openai,
                     extra_headers_json: None,
                     auto_activate_keyword: None,
+            rate_limit_scope: crate::providers::RateLimitScope::Account,
                 },
             )
             .expect("create");
@@ -657,6 +710,7 @@ mod tests {
                 format: ProviderFormat::Openai,
                 extra_headers_json: None,
                 auto_activate_keyword: None,
+            rate_limit_scope: crate::providers::RateLimitScope::Account,
             },
         )
         .expect("create");
@@ -710,12 +764,13 @@ mod tests {
                 format: ProviderFormat::Openai,
                 extra_headers_json: Some(r#"{"old":true}"#),
                 auto_activate_keyword: None,
+            rate_limit_scope: crate::providers::RateLimitScope::Account,
             },
         )
         .expect("create");
 
         // Partial: only name.
-        update(&conn, &id, Some("Renamed"), None, None, None, None, None).expect("update name");
+        update(&conn, &id, Some("Renamed"), None, None, None, None, None, None).expect("update name");
         let p = get(&conn, &id).expect("get").expect("present");
         assert_eq!(p.name, "Renamed");
         assert_eq!(p.base_url, "https://original.example", "untouched");
@@ -736,6 +791,7 @@ mod tests {
             Some(Some("claude")),
             None,
             None,
+            None,
         )
         .expect("update url+headers+keyword");
         let p = get(&conn, &id).expect("get").expect("present");
@@ -745,18 +801,18 @@ mod tests {
         assert_eq!(p.auto_activate_keyword.as_deref(), Some("claude"));
 
         // Clear the keyword: Some(None) sets NULL.
-        update(&conn, &id, None, None, None, Some(None), None, None).expect("clear keyword");
+        update(&conn, &id, None, None, None, Some(None), None, None, None).expect("clear keyword");
         let p = get(&conn, &id).expect("get").expect("present");
         assert_eq!(p.auto_activate_keyword, None);
 
         // No-op update on an existing id: should not error and not touch row.
-        update(&conn, &id, None, None, None, None, None, None).expect("no-op");
+        update(&conn, &id, None, None, None, None, None, None, None).expect("no-op");
         let p = get(&conn, &id).expect("get").expect("present");
         assert_eq!(p.base_url, "https://new.example");
 
         // Update on a missing id: ProviderNotFound.
         let missing = ProviderId::new("nope");
-        let err = update(&conn, &missing, Some("X"), None, None, None, None, None)
+        let err = update(&conn, &missing, Some("X"), None, None, None, None, None, None)
             .expect_err("missing id must error");
         assert!(matches!(err, CoreError::ProviderNotFound(_)));
     }
@@ -808,6 +864,7 @@ mod tests {
                 format: ProviderFormat::Openai,
                 extra_headers_json: None,
                 auto_activate_keyword: None,
+            rate_limit_scope: crate::providers::RateLimitScope::Account,
             },
         )
         .expect("create");
@@ -830,6 +887,7 @@ mod tests {
                 format: ProviderFormat::Openai,
                 extra_headers_json: None,
                 auto_activate_keyword: None,
+            rate_limit_scope: crate::providers::RateLimitScope::Account,
             },
         )
         .expect("create");
@@ -867,6 +925,7 @@ mod tests {
                     format: ProviderFormat::Openai,
                     extra_headers_json: None,
                     auto_activate_keyword: None,
+            rate_limit_scope: crate::providers::RateLimitScope::Account,
                 },
             )
             .expect("create");
@@ -919,6 +978,7 @@ mod tests {
                     format: ProviderFormat::Openai,
                     extra_headers_json: None,
                     auto_activate_keyword: None,
+            rate_limit_scope: crate::providers::RateLimitScope::Account,
                 },
             )
             .expect("create");

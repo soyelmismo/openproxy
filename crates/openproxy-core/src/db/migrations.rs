@@ -247,6 +247,11 @@ const MIGRATIONS: &[Migration] = &[
         name: "000047_add_proxy_logs",
         sql: include_str!("../../migrations/000047_add_proxy_logs.sql"),
     },
+    Migration {
+        version: 48,
+        name: "000048_provider_rate_limit_scope",
+        sql: include_str!("../../migrations/000048_provider_rate_limit_scope.sql"),
+    },
 ];
 
 /// Apply pending migrations on `conn`. Idempotent: skips versions already in

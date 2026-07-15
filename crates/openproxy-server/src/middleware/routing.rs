@@ -126,10 +126,11 @@ fn translate_plan_to_targets(
             provider_id,
             account_id,
             model_row_id,
+            rate_limit_scope,
             ..
         } => {
             let (synthetic_combo, synthetic_targets) =
-                build_synthetic_combo(provider_id.clone(), *account_id, *model_row_id);
+                build_synthetic_combo(provider_id.clone(), *account_id, *model_row_id, *rate_limit_scope);
             Ok((
                 ComboId(SYNTHETIC_COMBO_ID),
                 Some(synthetic_combo),

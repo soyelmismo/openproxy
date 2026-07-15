@@ -778,6 +778,7 @@ mod tests {
               use_proxies INTEGER DEFAULT 0,
               current_proxy_id TEXT,
               proxy_rotation_errors TEXT DEFAULT '429,connect_error,timeout',
+              rate_limit_scope TEXT DEFAULT 'account',
               active INTEGER NOT NULL DEFAULT 1,
               created_at TEXT NOT NULL DEFAULT (datetime('now')),
               updated_at TEXT NOT NULL DEFAULT (datetime('now')),

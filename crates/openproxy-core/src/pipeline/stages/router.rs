@@ -44,7 +44,14 @@ impl PipelineStage for RouterStage {
         let mut eligible: Vec<ComboTarget> = flat_targets
             .into_iter()
             .filter(|t| match t.account_id {
-                Some(aid) => ctx.pipeline.circuit_breaker.is_healthy(aid) == Health::Healthy,
+                Some(aid) => {
+                    let key = if t.rate_limit_scope == crate::providers::RateLimitScope::Model {
+                        crate::circuit_breaker::CircuitBreakerKey::Model(aid, t.model_row_id.expect("flattened"))
+                    } else {
+                        crate::circuit_breaker::CircuitBreakerKey::Account(aid)
+                    };
+                    ctx.pipeline.circuit_breaker.is_healthy(key) == Health::Healthy
+                }
                 None => true,
             })
             .collect();
@@ -82,7 +89,12 @@ impl PipelineStage for RouterStage {
                         .into_iter()
                         .filter(|t| match t.account_id {
                             Some(aid) => {
-                                ctx.pipeline.circuit_breaker.is_healthy(aid) == Health::Healthy
+                                let key = if t.rate_limit_scope == crate::providers::RateLimitScope::Model {
+                                    crate::circuit_breaker::CircuitBreakerKey::Model(aid, t.model_row_id.expect("flattened"))
+                                } else {
+                                    crate::circuit_breaker::CircuitBreakerKey::Account(aid)
+                                };
+                                ctx.pipeline.circuit_breaker.is_healthy(key) == Health::Healthy
                             }
                             None => true,
                         })

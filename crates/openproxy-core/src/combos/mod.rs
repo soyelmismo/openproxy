@@ -243,6 +243,8 @@ pub struct ComboTarget {
     /// rows that pre-date the migration read back as `1`.
     #[serde(default = "default_target_weight")]
     pub weight: i32,
+    #[serde(default)]
+    pub rate_limit_scope: crate::providers::RateLimitScope,
 }
 
 /// Default weight for `ComboTarget::weight`. Used by serde when the

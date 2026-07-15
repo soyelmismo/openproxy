@@ -1169,6 +1169,7 @@ mod tests {
             format,
             extra_headers_json: None,
             auto_activate_keyword: None,
+            rate_limit_scope: crate::providers::RateLimitScope::Account,
             active: true,
             created_at: "2026-01-01T00:00:00Z".into(),
             use_proxies: false,

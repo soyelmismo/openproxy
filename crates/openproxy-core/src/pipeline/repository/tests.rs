@@ -318,6 +318,7 @@ fn circuit_breaker_unhealthy_filter_drops_target_before_cooldown_snapshot() {
                 format: ProviderFormat::Openai,
                 extra_headers_json: None,
                 auto_activate_keyword: None,
+            rate_limit_scope: crate::providers::RateLimitScope::Account,
             },
         )
         .expect("seed provider");
@@ -365,7 +366,7 @@ fn circuit_breaker_unhealthy_filter_drops_target_before_cooldown_snapshot() {
     let cfg = test_config(mk);
     let p = Pipeline::new(conn, cfg);
     for aid in &account_ids {
-        p.circuit_breaker.force_unhealthy(*aid);
+        p.circuit_breaker.force_unhealthy(crate::circuit_breaker::CircuitBreakerKey::Account(*aid));
     }
 
     let (req, _dis_tx) = make_request(combo_id);

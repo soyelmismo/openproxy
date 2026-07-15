@@ -255,6 +255,7 @@ fn translate_audio_routing_plan(
             account_id,
             model_row_id,
             model_id,
+            ..
         } => Ok(Some(AudioTargets {
             provider_id,
             account_id,

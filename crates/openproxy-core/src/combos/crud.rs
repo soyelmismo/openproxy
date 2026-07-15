@@ -527,7 +527,7 @@ pub fn list_targets(conn: &Connection, combo_id: ComboId) -> Result<Vec<ComboTar
     let mut stmt = conn
         .prepare(
             "SELECT ct.id, ct.combo_id, ct.provider_id, ct.account_id, ct.model_row_id, \
-                    ct.sub_combo_id, ct.priority_order, ct.weight \
+                    ct.sub_combo_id, ct.priority_order, ct.weight, p.rate_limit_scope \
              FROM combo_targets ct \
              INNER JOIN providers p ON p.id = ct.provider_id \
              WHERE ct.combo_id = ?1 AND p.active = 1 \
@@ -623,9 +623,11 @@ pub fn list_targets_with_model(
 pub fn get_target(conn: &Connection, id: ComboTargetId) -> Result<Option<ComboTarget>> {
     let row = conn
         .query_row(
-            "SELECT id, combo_id, provider_id, account_id, model_row_id, \
-                    sub_combo_id, priority_order, weight \
-             FROM combo_targets WHERE id = ?1",
+            "SELECT ct.id, ct.combo_id, ct.provider_id, ct.account_id, ct.model_row_id, \
+                    ct.sub_combo_id, ct.priority_order, ct.weight, p.rate_limit_scope \
+             FROM combo_targets ct \
+             INNER JOIN providers p ON p.id = ct.provider_id \
+             WHERE ct.id = ?1",
             params![id.0],
             row_to_target,
         )
@@ -1153,6 +1155,7 @@ fn row_to_target(row: &Row<'_>) -> rusqlite::Result<ComboTarget> {
     // `NOT NULL` guarantee (or a row inserted before the migration
     // backfilled defaults) does not poison the routing layer.
     let weight: i32 = row.get::<_, Option<i64>>(7)?.unwrap_or(1) as i32;
+    let rate_limit_scope: String = row.get(8)?;
 
     Ok(ComboTarget {
         id: ComboTargetId(id),
@@ -1163,6 +1166,7 @@ fn row_to_target(row: &Row<'_>) -> rusqlite::Result<ComboTarget> {
         sub_combo_id: sub_combo_id.map(ComboId),
         priority_order,
         weight,
+        rate_limit_scope: crate::providers::RateLimitScope::parse(&rate_limit_scope).unwrap_or_default(),
     })
 }
 

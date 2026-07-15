@@ -1,9 +1,15 @@
 //! Per-account circuit breaker. In-memory, per-process.
 
 use crate::config::CircuitBreakerConfig;
-use crate::ids::AccountId;
+use crate::ids::{AccountId, ModelRowId};
 use parking_lot::Mutex;
 use std::collections::HashMap;
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum CircuitBreakerKey {
+    Account(AccountId),
+    Model(AccountId, ModelRowId),
+}
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -67,7 +73,7 @@ pub struct FailureOutcome {
 
 #[derive(Clone)]
 pub struct CircuitBreakerRegistry {
-    inner: Arc<Mutex<HashMap<AccountId, AccountBreaker>>>,
+    inner: Arc<Mutex<HashMap<CircuitBreakerKey, AccountBreaker>>>,
     threshold: u8,
     unhealthy_duration: Duration,
 }
@@ -82,7 +88,7 @@ impl CircuitBreakerRegistry {
     }
 
     /// Check if account is eligible. If unhealthy and cooldown passed, transition to healthy.
-    pub fn is_healthy(&self, account: AccountId) -> Health {
+    pub fn is_healthy(&self, account: CircuitBreakerKey) -> Health {
         let mut g = self.inner.lock();
         let entry = g.entry(account).or_insert_with(|| AccountBreaker {
             consecutive_failures: 0,
@@ -103,7 +109,7 @@ impl CircuitBreakerRegistry {
     }
 
     /// Record a successful request: reset failures, healthy.
-    pub fn record_success(&self, account: AccountId) {
+    pub fn record_success(&self, account: CircuitBreakerKey) {
         let mut g = self.inner.lock();
         if let Some(entry) = g.get_mut(&account) {
             entry.consecutive_failures = 0;
@@ -114,7 +120,7 @@ impl CircuitBreakerRegistry {
     }
 
     /// Record a failure: increment counter, mark unhealthy if threshold reached.
-    pub fn record_failure(&self, account: AccountId) -> Health {
+    pub fn record_failure(&self, account: CircuitBreakerKey) -> Health {
         self.record_failure_outcome(account).health
     }
 
@@ -125,7 +131,7 @@ impl CircuitBreakerRegistry {
     /// notification exactly once per closed→open transition (the naive
     /// "compare `is_healthy` before and after" approach has a
     /// check-then-act race against concurrent callers).
-    pub fn record_failure_outcome(&self, account: AccountId) -> FailureOutcome {
+    pub fn record_failure_outcome(&self, account: CircuitBreakerKey) -> FailureOutcome {
         let mut g = self.inner.lock();
         let entry = g.entry(account).or_insert_with(|| AccountBreaker {
             consecutive_failures: 0,
@@ -153,7 +159,7 @@ impl CircuitBreakerRegistry {
 
     /// Test helper: force an account unhealthy now.
     #[cfg(test)]
-    pub fn force_unhealthy(&self, account: AccountId) {
+    pub fn force_unhealthy(&self, account: CircuitBreakerKey) {
         let mut g = self.inner.lock();
         g.insert(
             account,
@@ -208,6 +214,7 @@ impl CircuitBreakerRegistry {
 
 #[cfg(test)]
 mod tests {
+    fn aid(id: i64) -> CircuitBreakerKey { CircuitBreakerKey::Account(AccountId(id)) }
     use super::*;
     use std::thread;
     use std::time::Duration as StdDuration;
@@ -222,56 +229,56 @@ mod tests {
     #[test]
     fn new_account_is_healthy() {
         let reg = CircuitBreakerRegistry::new(&cfg(5, 60_000));
-        assert_eq!(reg.is_healthy(AccountId(1)), Health::Healthy);
+        assert_eq!(reg.is_healthy(aid(1)), Health::Healthy);
     }
 
     #[test]
     fn failures_below_threshold_stay_healthy() {
         let reg = CircuitBreakerRegistry::new(&cfg(5, 60_000));
         for _ in 0..4 {
-            assert_eq!(reg.record_failure(AccountId(1)), Health::Healthy);
+            assert_eq!(reg.record_failure(aid(1)), Health::Healthy);
         }
-        assert_eq!(reg.is_healthy(AccountId(1)), Health::Healthy);
+        assert_eq!(reg.is_healthy(aid(1)), Health::Healthy);
     }
 
     #[test]
     fn failures_reach_threshold_makes_unhealthy() {
         let reg = CircuitBreakerRegistry::new(&cfg(5, 60_000));
         for _ in 0..4 {
-            assert_eq!(reg.record_failure(AccountId(1)), Health::Healthy);
+            assert_eq!(reg.record_failure(aid(1)), Health::Healthy);
         }
-        assert_eq!(reg.record_failure(AccountId(1)), Health::Unhealthy);
-        assert_eq!(reg.is_healthy(AccountId(1)), Health::Unhealthy);
+        assert_eq!(reg.record_failure(aid(1)), Health::Unhealthy);
+        assert_eq!(reg.is_healthy(aid(1)), Health::Unhealthy);
     }
 
     #[test]
     fn unhealthy_cooldown_transitions_to_healthy() {
         let reg = CircuitBreakerRegistry::new(&cfg(5, 1));
-        reg.force_unhealthy(AccountId(1));
-        assert_eq!(reg.is_healthy(AccountId(1)), Health::Unhealthy);
+        reg.force_unhealthy(aid(1));
+        assert_eq!(reg.is_healthy(aid(1)), Health::Unhealthy);
         thread::sleep(StdDuration::from_millis(10));
-        assert_eq!(reg.is_healthy(AccountId(1)), Health::Healthy);
+        assert_eq!(reg.is_healthy(aid(1)), Health::Healthy);
     }
 
     #[test]
     fn record_success_resets_counter() {
         let reg = CircuitBreakerRegistry::new(&cfg(5, 60_000));
         for _ in 0..4 {
-            reg.record_failure(AccountId(1));
+            reg.record_failure(aid(1));
         }
-        reg.record_success(AccountId(1));
+        reg.record_success(aid(1));
         for _ in 0..4 {
-            assert_eq!(reg.record_failure(AccountId(1)), Health::Healthy);
+            assert_eq!(reg.record_failure(aid(1)), Health::Healthy);
         }
-        assert_eq!(reg.is_healthy(AccountId(1)), Health::Healthy);
+        assert_eq!(reg.is_healthy(aid(1)), Health::Healthy);
     }
 
     #[test]
     fn multiple_accounts_independent() {
         let reg = CircuitBreakerRegistry::new(&cfg(5, 60_000));
-        reg.force_unhealthy(AccountId(1));
-        assert_eq!(reg.is_healthy(AccountId(1)), Health::Unhealthy);
-        assert_eq!(reg.is_healthy(AccountId(2)), Health::Healthy);
+        reg.force_unhealthy(aid(1));
+        assert_eq!(reg.is_healthy(aid(1)), Health::Unhealthy);
+        assert_eq!(reg.is_healthy(aid(2)), Health::Healthy);
     }
 
     #[test]
@@ -284,18 +291,18 @@ mod tests {
         // failure while the breaker is open).
         let reg = CircuitBreakerRegistry::new(&cfg(3, 60_000));
         for _ in 0..2 {
-            let o = reg.record_failure_outcome(AccountId(1));
+            let o = reg.record_failure_outcome(aid(1));
             assert!(!o.just_opened, "below threshold must not open");
             assert_eq!(o.health, Health::Healthy);
         }
         // 3rd failure crosses the threshold.
-        let opened = reg.record_failure_outcome(AccountId(1));
+        let opened = reg.record_failure_outcome(aid(1));
         assert!(opened.just_opened);
         assert_eq!(opened.health, Health::Unhealthy);
         assert_eq!(opened.consecutive_failures, 3);
         assert_eq!(opened.threshold, 3);
         // 4th failure re-affirms the open state — must NOT re-fire.
-        let still_open = reg.record_failure_outcome(AccountId(1));
+        let still_open = reg.record_failure_outcome(aid(1));
         assert!(!still_open.just_opened);
         assert_eq!(still_open.health, Health::Unhealthy);
         assert_eq!(still_open.consecutive_failures, 4);
@@ -309,17 +316,17 @@ mod tests {
         // opens again within 24h" case the per-account dedup key
         // is designed to collapse in the notifications tray.
         let reg = CircuitBreakerRegistry::new(&cfg(2, 1));
-        let o1 = reg.record_failure_outcome(AccountId(1));
+        let o1 = reg.record_failure_outcome(aid(1));
         assert!(!o1.just_opened);
-        let o2 = reg.record_failure_outcome(AccountId(1));
+        let o2 = reg.record_failure_outcome(aid(1));
         assert!(o2.just_opened);
         // Cooldown elapses; `is_healthy` resets the counter.
         thread::sleep(StdDuration::from_millis(10));
-        assert_eq!(reg.is_healthy(AccountId(1)), Health::Healthy);
+        assert_eq!(reg.is_healthy(aid(1)), Health::Healthy);
         // Re-open after cooldown.
-        let o3 = reg.record_failure_outcome(AccountId(1));
+        let o3 = reg.record_failure_outcome(aid(1));
         assert!(!o3.just_opened);
-        let o4 = reg.record_failure_outcome(AccountId(1));
+        let o4 = reg.record_failure_outcome(aid(1));
         assert!(o4.just_opened, "re-opening after cooldown must re-fire");
     }
 }

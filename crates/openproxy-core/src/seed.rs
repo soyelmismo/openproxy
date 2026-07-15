@@ -36,6 +36,7 @@ struct Builtin<'a> {
     /// decide whether each new row is active after a refresh. `None`
     /// leaves all discovered models active.
     auto_activate_keyword: Option<&'a str>,
+    rate_limit_scope: &'a str,
 }
 
 const BUILTINS: &[Builtin<'static>] = &[
@@ -49,6 +50,7 @@ const BUILTINS: &[Builtin<'static>] = &[
             r#"{"HTTP-Referer":"https://openproxy.local","X-Title":"openproxy"}"#,
         ),
         auto_activate_keyword: None,
+        rate_limit_scope: "account",
     },
     Builtin {
         id: "minimax",
@@ -58,6 +60,7 @@ const BUILTINS: &[Builtin<'static>] = &[
         format: "anthropic",
         extra_headers_json: Some(r#"{"Anthropic-Version":"2023-06-01"}"#),
         auto_activate_keyword: None,
+        rate_limit_scope: "account",
     },
     Builtin {
         id: "opencode-zen",
@@ -67,6 +70,7 @@ const BUILTINS: &[Builtin<'static>] = &[
         format: "mixed",
         extra_headers_json: None,
         auto_activate_keyword: None,
+        rate_limit_scope: "account",
     },
     Builtin {
         id: "ollama-cloud",
@@ -76,6 +80,7 @@ const BUILTINS: &[Builtin<'static>] = &[
         format: "openai",
         extra_headers_json: None,
         auto_activate_keyword: None,
+        rate_limit_scope: "account",
     },
     Builtin {
         id: "nous-research",
@@ -85,6 +90,7 @@ const BUILTINS: &[Builtin<'static>] = &[
         format: "openai",
         extra_headers_json: None,
         auto_activate_keyword: None,
+        rate_limit_scope: "account",
     },
     Builtin {
         id: "nvidia-nim",
@@ -94,6 +100,7 @@ const BUILTINS: &[Builtin<'static>] = &[
         format: "openai",
         extra_headers_json: None,
         auto_activate_keyword: None,
+        rate_limit_scope: "account",
     },
     Builtin {
         id: "kilocode",
@@ -103,6 +110,7 @@ const BUILTINS: &[Builtin<'static>] = &[
         format: "openai",
         extra_headers_json: None,
         auto_activate_keyword: None,
+        rate_limit_scope: "account",
     },
     Builtin {
         id: "gemini",
@@ -112,6 +120,7 @@ const BUILTINS: &[Builtin<'static>] = &[
         format: "gemini",
         extra_headers_json: None,
         auto_activate_keyword: None,
+        rate_limit_scope: "account",
     },
     Builtin {
         id: "antigravity",
@@ -121,6 +130,7 @@ const BUILTINS: &[Builtin<'static>] = &[
         format: "gemini",
         extra_headers_json: None,
         auto_activate_keyword: None,
+        rate_limit_scope: "model",
     },
     Builtin {
         id: "codex",
@@ -130,6 +140,7 @@ const BUILTINS: &[Builtin<'static>] = &[
         format: "responses",
         extra_headers_json: None,
         auto_activate_keyword: None,
+        rate_limit_scope: "account",
     },
     Builtin {
         id: "kiro",
@@ -139,6 +150,7 @@ const BUILTINS: &[Builtin<'static>] = &[
         format: "openai",
         extra_headers_json: None,
         auto_activate_keyword: None,
+        rate_limit_scope: "account",
     },
     Builtin {
         id: "cloudflare-workers-ai",
@@ -148,6 +160,7 @@ const BUILTINS: &[Builtin<'static>] = &[
         format: "openai",
         extra_headers_json: None,
         auto_activate_keyword: None,
+        rate_limit_scope: "account",
     },
 ];
 
@@ -249,6 +262,7 @@ pub fn seed_builtin_providers(conn: &Connection) -> Result<usize> {
                 format: fmt,
                 extra_headers_json: b.extra_headers_json,
                 auto_activate_keyword: b.auto_activate_keyword,
+                rate_limit_scope: providers::RateLimitScope::parse(b.rate_limit_scope).expect("builtin scope is valid"),
             },
         )?;
         seeded += 1;
@@ -284,6 +298,7 @@ pub fn seed_virtual_combo_provider(conn: &Connection) -> Result<bool> {
             format: ProviderFormat::Openai,
             extra_headers_json: None,
             auto_activate_keyword: None,
+            rate_limit_scope: providers::RateLimitScope::Account,
         },
     )?;
     Ok(true)
@@ -454,6 +469,7 @@ mod tests {
                 format: ProviderFormat::Openai,
                 extra_headers_json: None,
                 auto_activate_keyword: None,
+            rate_limit_scope: crate::providers::RateLimitScope::Account,
             },
         )
         .expect("pre-seed");
