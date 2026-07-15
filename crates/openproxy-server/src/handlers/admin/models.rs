@@ -507,6 +507,7 @@ pub(crate) async fn run_test_for_model(
                 let final_cancel_rx = cancel_rx.clone().unwrap_or(dummy_cancel_rx);
                 openproxy_core::executor_antigravity::execute_antigravity(
                     http_client,
+                    &format!("{}/v1internal:streamGenerateContent?alt=sse", openproxy_core::adapters::antigravity::DEFAULT_ANTIGRAVITY_BASE_URL),
                     &access_token,
                     &project_id,
                     &openai_req,
