@@ -480,4 +480,24 @@ mod tests {
         };
         assert_eq!(got, None, "corrupt JSON must fall back to None");
     }
+
+    #[test]
+    fn compression_roundtrip_through_db() {
+        let dir = tempdir();
+        let pool = DbPool::open(&dir.join("compression.db")).unwrap();
+        {
+            let mut w = pool.writer();
+            crate::db::migrations::run(&mut w).unwrap();
+        }
+        let mode = CompressionMode::Lite;
+        {
+            let w = pool.writer();
+            save_compression_to_db(&w, &mode, 1_700_000_003).unwrap();
+        }
+        let got = {
+            let w = pool.writer();
+            load_compression_override_from_db(&w).unwrap()
+        };
+        assert_eq!(got, Some(mode));
+    }
 }
