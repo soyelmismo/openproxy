@@ -809,7 +809,8 @@ mod tests {
             "auth_type": "bearer",
             "format": "openai",
             "active": true,
-            "created_at": "2026-01-01T00:00:00Z"
+            "created_at": "2026-01-01T00:00:00Z",
+            "rate_limit_scope": "account"
         })];
 
         server.mock(|when, then| {
