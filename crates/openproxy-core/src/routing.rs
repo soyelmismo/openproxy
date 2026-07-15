@@ -145,11 +145,10 @@ fn try_resolve_direct_model(
         return Ok(None);
     }
 
-    // Pick a healthy account. `account_id = None` on the synthetic
-    // target tells the pipeline to fall back to the auto-rotation
-    // path, which is the documented behaviour for a provider with no
-    // pinned account.
-    let account_id = find_healthy_account(conn, &model.provider_id)?;
+    // `account_id = None` on the synthetic target tells the pipeline
+    // to fall back to the auto-rotation path, which is the documented
+    // behaviour for a provider with no pinned account.
+    let account_id = None;
 
     Ok(Some(RoutingPlan::Direct {
         provider_id: model.provider_id.clone(),
@@ -177,29 +176,7 @@ fn provider_is_active(conn: &Connection, provider_id: &ProviderId) -> Result<boo
     Ok(active.unwrap_or(0) != 0)
 }
 
-/// Pick the highest-priority healthy account for the provider. Returns
-/// `None` when no healthy account exists; the pipeline's
-/// account-rotation path then expands the target into one row per
-/// healthy account at request time (and drops it entirely if there are
-/// none).
-fn find_healthy_account(conn: &Connection, provider_id: &ProviderId) -> Result<Option<AccountId>> {
-    let id: Option<i64> = conn
-        .query_row(
-            "SELECT id FROM accounts \
-             WHERE provider_id = ?1 \
-               AND health_status = 'healthy' \
-             ORDER BY priority ASC, id ASC \
-             LIMIT 1",
-            rusqlite::params![provider_id.as_str()],
-            |row| row.get(0),
-        )
-        .optional()
-        .map_err(crate::error::map_db_error_ctx(format!(
-            "find_healthy_account({})",
-            provider_id
-        )))?;
-    Ok(id.map(AccountId))
-}
+
 
 /// Strip the proxy-level `<provider>/` prefix from `model_str` if the
 /// segment before the first `/` matches a known provider id.
