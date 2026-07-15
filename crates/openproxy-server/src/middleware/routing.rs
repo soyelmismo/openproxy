@@ -9,8 +9,8 @@ use openproxy_core::{
     combos::{Combo, ComboTarget},
     ids::{ApiKeyId, ComboId, RequestId},
     routing::{self, RoutingPlan, SYNTHETIC_COMBO_ID, build_synthetic_combo},
-    translation::OpenAIRequest,
 };
+use openproxy_types::OpenAIRequest;
 use std::sync::Arc;
 
 use crate::{
@@ -116,8 +116,8 @@ fn translate_plan_to_targets(
 ) -> Result<
     (
         ComboId,
-        Option<openproxy_core::combos::Combo>,
-        Option<Vec<openproxy_core::combos::ComboTarget>>,
+        Option<openproxy_types::Combo>,
+        Option<Vec<openproxy_types::ComboTarget>>,
     ),
     ApiError,
 > {
@@ -163,9 +163,9 @@ fn record_model_not_found_usage_row(
     upstream_model: &str,
 ) -> std::result::Result<(), ApiError> {
     use openproxy_core::{
-        cost::{self, UsageInput},
         ids::{ProviderId, TraceId},
     };
+    use openproxy_types::UsageInput;
     let input = UsageInput {
         proxy_url: None,
         proxy_status: None,
@@ -203,7 +203,7 @@ fn record_model_not_found_usage_row(
         client_response: true,
         prompt_tokens_estimated: false,
         completion_tokens_estimated: false,
-        endpoint_kind: openproxy_core::endpoint::EndpointKind::Chat,
+        endpoint_kind: openproxy_types::EndpointKind::Chat,
     };
     let w = match state
         .db_pool()
@@ -215,6 +215,6 @@ fn record_model_not_found_usage_row(
             return Ok(());
         }
     };
-    let _ = cost::record(&w, &input).map_err(ApiError);
+    let _ = openproxy_db::cost::record(&w, &input).map_err(ApiError);
     Ok(())
 }

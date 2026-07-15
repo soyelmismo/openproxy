@@ -4,6 +4,8 @@
 //! code (barrel module + crud.rs) separate from test scaffolding.
 
 use super::*;
+use crate::error::CoreError;
+use crate::ids::{ModelId, ModelRowId, ProviderId};
 use rusqlite::{Connection, params};
 use std::time::Duration;
 
@@ -220,11 +222,8 @@ fn upsert_updates_existing() {
 /// `DiscoveredModel` to carry context_length, max_output_tokens,
 /// modalities, model_type, family, and capabilities_json through
 /// to the SQL `INSERT` / `UPDATE`. This test pins down the
-/// happy-path: all metadata fields land in the row.
 #[test]
 fn upsert_persists_openrouter_metadata() {
-    use crate::capabilities::ModelCapabilities;
-
     let conn = fresh_db();
     let provider = ProviderId::new("provA");
 
@@ -238,11 +237,11 @@ fn upsert_persists_openrouter_metadata() {
         output_modalities: Some(vec!["text".into()]),
         model_type: Some("chat".into()),
         family: Some("Qwen3".into()),
-        capabilities: Some(ModelCapabilities {
+        capabilities: Some(openproxy_types::ModelCapabilities {
             tool_calling: Some(true),
             temperature: Some(true),
             structured_output: Some(true),
-            ..ModelCapabilities::empty()
+            ..openproxy_types::ModelCapabilities::empty()
         }),
     }];
 

@@ -4,6 +4,11 @@ members = [
     "crates/openproxy-core",
     "crates/openproxy-server",
     "crates/openproxy-api-client",
+    "crates/openproxy-types",
+    "crates/openproxy-db",
+    "crates/openproxy-compression",
+    "crates/openproxy-adapters",
+    "crates/openproxy-pipeline",
 ]
 
 [workspace.package]

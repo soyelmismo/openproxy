@@ -1,5 +1,4 @@
 use super::*;
-use crate::ids::*;
 /// In-memory registry that tracks per-target recent success and
 /// request counts for the LKGP / least_used / p2c priority modes.
 ///
@@ -191,7 +190,7 @@ impl SelectionRegistry {
 }
 
 /// Helper: current wall-clock epoch-ms.
-fn now_ms() -> u64 {
+pub(crate) fn now_ms() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_millis() as u64)

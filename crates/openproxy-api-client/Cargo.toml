@@ -8,6 +8,8 @@ authors.workspace = true
 
 [dependencies]
 openproxy-core = { path = "../openproxy-core" }
+openproxy-adapters = { path = "../openproxy-adapters" }
+openproxy-types = { path = "../openproxy-types" }
 tokio = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

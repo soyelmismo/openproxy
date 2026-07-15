@@ -7,11 +7,10 @@
 //! - A background refresh scheduler that proactively refreshes expiring tokens.
 
 use crate::accounts::HealthStatus;
-use crate::adapters::ProviderAdapter;
 use crate::error::{CoreError, Result};
 use crate::ids::AccountId;
-use crate::secrets::MasterKey;
-use crate::upstream::UpstreamClient;
+use openproxy_db::secrets::MasterKey;
+use openproxy_adapters::upstream::UpstreamClient;
 use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -25,7 +24,7 @@ pub use crate::accounts::{
 
 /// A reference to either a `DbPool` or a locked/lockable database `Connection`.
 pub enum DbRef<'a> {
-    Pool(&'a crate::db::DbPool),
+    Pool(&'a openproxy_db::DbPool),
     Connection(&'a parking_lot::Mutex<rusqlite::Connection>),
 }
 
@@ -225,7 +224,7 @@ pub trait OAuthProvider: Send + Sync {
     fn post_exchange(
         &self,
         _account_id: AccountId,
-        _db_pool: &std::sync::Arc<crate::db::DbPool>,
+        _db_pool: &std::sync::Arc<openproxy_db::DbPool>,
         _master_key: &MasterKey,
         _upstream: &Arc<UpstreamClient>,
     ) -> impl std::future::Future<Output = Result<()>> + Send {
@@ -280,28 +279,28 @@ macro_rules! define_oauth_provider {
                 &self,
                 code: &str,
                 code_verifier: &str,
-                upstream_client: &std::sync::Arc<$crate::upstream::UpstreamClient>,
+                upstream_client: &std::sync::Arc<openproxy_adapters::upstream::UpstreamClient>,
                 redirect_uri: &str,
             ) -> Result<TokenResponse> {
                 match self { $( Self::$variant(inner) => inner.exchange_code(code, code_verifier, upstream_client, redirect_uri).await, )+ }
             }
             async fn request_device_code(
                 &self,
-                upstream_client: &std::sync::Arc<$crate::upstream::UpstreamClient>,
+                upstream_client: &std::sync::Arc<openproxy_adapters::upstream::UpstreamClient>,
             ) -> Result<DeviceAuthorizationResponse> {
                 match self { $( Self::$variant(inner) => inner.request_device_code(upstream_client).await, )+ }
             }
             async fn poll_device_token(
                 &self,
                 device_code: &str,
-                upstream_client: &std::sync::Arc<$crate::upstream::UpstreamClient>,
+                upstream_client: &std::sync::Arc<openproxy_adapters::upstream::UpstreamClient>,
             ) -> Result<Option<TokenResponse>> {
                 match self { $( Self::$variant(inner) => inner.poll_device_token(device_code, upstream_client).await, )+ }
             }
             async fn refresh_token(
                 &self,
                 refresh_token: &str,
-                upstream_client: &std::sync::Arc<$crate::upstream::UpstreamClient>,
+                upstream_client: &std::sync::Arc<openproxy_adapters::upstream::UpstreamClient>,
                 account_id: AccountId,
                 db: DbRef<'_>,
             ) -> Result<TokenResponse> {
@@ -316,9 +315,9 @@ macro_rules! define_oauth_provider {
             async fn post_exchange(
                 &self,
                 account_id: AccountId,
-                db_pool: &std::sync::Arc<$crate::db::DbPool>,
+                db_pool: &std::sync::Arc<openproxy_db::DbPool>,
                 master_key: &MasterKey,
-                upstream: &std::sync::Arc<$crate::upstream::UpstreamClient>,
+                upstream: &std::sync::Arc<openproxy_adapters::upstream::UpstreamClient>,
             ) -> Result<()> {
                 match self { $( Self::$variant(inner) => inner.post_exchange(account_id, db_pool, master_key, upstream).await, )+ }
             }
@@ -399,6 +398,45 @@ impl OAuthProviderRegistry {
     pub fn get(&self, name: &str) -> Option<OAuthProviderEnum> {
         let guard = self.inner.lock().unwrap();
         guard.get(name).cloned()
+    }
+}
+
+impl openproxy_pipeline::oauth::PipelineOAuthRegistry for OAuthProviderRegistry {
+    fn refresh_and_store<'a>(
+        &'a self,
+        provider_id: &'a str,
+        refresh_token: &'a str,
+        upstream_client: &'a Arc<openproxy_adapters::upstream::UpstreamClient>,
+        account_id: AccountId,
+        conn: &'a parking_lot::Mutex<rusqlite::Connection>,
+        master_key: &'a MasterKey,
+    ) -> futures_util::future::BoxFuture<'a, std::result::Result<openproxy_pipeline::oauth::TokenResponse, CoreError>> {
+        use futures_util::FutureExt;
+        async move {
+            let provider = self.get(provider_id).ok_or_else(|| {
+                CoreError::ProviderNotFound(provider_id.to_string())
+            })?;
+            let token = TokenRefreshCoordinator::global()
+                .refresh_and_store(
+                    provider_id,
+                    provider,
+                    refresh_token,
+                    upstream_client,
+                    account_id,
+                    DbRef::Connection(conn),
+                    master_key,
+                )
+                .await?;
+            Ok(openproxy_pipeline::oauth::TokenResponse {
+                access_token: token.access_token,
+                token_type: token.token_type,
+                expires_in: token.expires_in,
+                refresh_token: token.refresh_token,
+                scope: token.scope,
+                id_token: token.id_token,
+            })
+        }
+        .boxed()
     }
 }
 
@@ -520,11 +558,11 @@ pub fn token_expires_at(expires_in: Option<u64>) -> Option<String> {
 /// The function manages its own database connections from `db_pool`
 /// to avoid holding a SQLite connection across `.await`.
 pub async fn resolve_oauth_token(
-    db_pool: &crate::db::DbPool,
+    db_pool: &openproxy_db::DbPool,
     account: &crate::accounts::Account,
     provider_id: &str,
     registry: &OAuthProviderRegistry,
-    upstream_client: &std::sync::Arc<crate::upstream::UpstreamClient>,
+    upstream_client: &std::sync::Arc<openproxy_adapters::upstream::UpstreamClient>,
     master_key: &MasterKey,
 ) -> Result<String> {
     use crate::accounts::{decrypt_access_token, decrypt_refresh_token};
@@ -617,7 +655,7 @@ pub fn pipeline_token_needs_refresh(db_expires_at: Option<&str>, provider_id: &s
 ///   conservative window).
 /// - **Special cases** (e.g. iflow): 24 hours before expiry.
 pub(crate) fn refresh_lead_seconds(provider_id: &str) -> u64 {
-    let adapters = crate::adapters::builtin_adapters();
+    let adapters = openproxy_adapters::adapters::builtin_adapters();
     if let Some(adapter) = adapters.iter().find(|a| a.id().as_str() == provider_id)
         && let Some(lead) = adapter.metadata().oauth_refresh_lead_seconds
     {
@@ -673,7 +711,7 @@ const MAX_BACKOFF_SECS: u64 = 3600;
 const BASE_BACKOFF_SECS: u64 = 60;
 
 pub async fn start_refresh_scheduler(
-    db_pool: std::sync::Arc<crate::db::DbPool>,
+    db_pool: std::sync::Arc<openproxy_db::DbPool>,
     master_key: std::sync::Arc<MasterKey>,
     upstream_client: Arc<UpstreamClient>,
     registry: Arc<OAuthProviderRegistry>,

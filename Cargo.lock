@@ -1567,6 +1567,42 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c08d65885ee38876c4f86fa503fb49d7b507c2b62552df7c70b2fce627e06381"
 
 [[package]]
+name = "openproxy-adapters"
+version = "1.0.0"
+dependencies = [
+ "ahash",
+ "anyhow",
+ "bytes",
+ "dashmap",
+ "futures-util",
+ "http",
+ "http-body",
+ "http-body-util",
+ "hyper",
+ "hyper-util",
+ "once_cell",
+ "openproxy-db",
+ "openproxy-types",
+ "parking_lot",
+ "regex",
+ "rusqlite",
+ "rustls",
+ "rustls-pki-types",
+ "serde",
+ "serde_json",
+ "sha2 0.11.0",
+ "socket2",
+ "thiserror",
+ "tokio",
+ "tokio-rustls",
+ "tokio-util",
+ "tower-service",
+ "tracing",
+ "uuid",
+ "webpki-roots",
+]
+
+[[package]]
 name = "openproxy-api-client"
 version = "1.0.0"
 dependencies = [
@@ -1574,11 +1610,28 @@ dependencies = [
  "bytes",
  "http",
  "httpmock",
+ "openproxy-adapters",
  "openproxy-core",
+ "openproxy-types",
  "serde",
  "serde_json",
  "thiserror",
  "tokio",
+]
+
+[[package]]
+name = "openproxy-compression"
+version = "1.0.0"
+dependencies = [
+ "criterion",
+ "hex",
+ "memchr",
+ "once_cell",
+ "openproxy-types",
+ "regex",
+ "serde",
+ "serde_json",
+ "sha2 0.11.0",
 ]
 
 [[package]]
@@ -1606,6 +1659,11 @@ dependencies = [
  "hyper-util",
  "memchr",
  "once_cell",
+ "openproxy-adapters",
+ "openproxy-compression",
+ "openproxy-db",
+ "openproxy-pipeline",
+ "openproxy-types",
  "parking_lot",
  "rand 0.10.1",
  "regex",
@@ -1634,6 +1692,58 @@ dependencies = [
 ]
 
 [[package]]
+name = "openproxy-db"
+version = "1.0.0"
+dependencies = [
+ "aes-gcm",
+ "base64 0.22.1",
+ "chrono",
+ "once_cell",
+ "openproxy-types",
+ "parking_lot",
+ "regex",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "tracing",
+ "zeroize",
+]
+
+[[package]]
+name = "openproxy-pipeline"
+version = "1.0.0"
+dependencies = [
+ "anyhow",
+ "bytes",
+ "chrono",
+ "futures-util",
+ "hex",
+ "http",
+ "http-body",
+ "http-body-util",
+ "memchr",
+ "once_cell",
+ "openproxy-adapters",
+ "openproxy-compression",
+ "openproxy-db",
+ "openproxy-types",
+ "parking_lot",
+ "rand 0.10.1",
+ "regex",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "sha2 0.11.0",
+ "thiserror",
+ "tokio",
+ "tokio-util",
+ "tower",
+ "tower-service",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
 name = "openproxy-server"
 version = "1.0.0"
 dependencies = [
@@ -1649,7 +1759,12 @@ dependencies = [
  "libmimalloc-sys",
  "mimalloc",
  "mime_guess",
+ "openproxy-adapters",
+ "openproxy-compression",
  "openproxy-core",
+ "openproxy-db",
+ "openproxy-pipeline",
+ "openproxy-types",
  "parking_lot",
  "rusqlite",
  "rust-embed",
@@ -1661,6 +1776,23 @@ dependencies = [
  "tower",
  "tracing",
  "tracing-subscriber",
+ "uuid",
+]
+
+[[package]]
+name = "openproxy-types"
+version = "1.0.0"
+dependencies = [
+ "bytes",
+ "chrono",
+ "once_cell",
+ "parking_lot",
+ "regex",
+ "serde",
+ "serde_json",
+ "thiserror",
+ "tiktoken-rs",
+ "tracing",
  "uuid",
 ]
 

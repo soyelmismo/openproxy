@@ -63,13 +63,13 @@ use std::fmt::Write as _;
 #[derive(Clone)]
 pub struct Client {
     base_url: String,
-    http: std::sync::Arc<openproxy_core::upstream::UpstreamClient>,
+    http: std::sync::Arc<openproxy_adapters::upstream::UpstreamClient>,
 }
 
 impl Client {
     /// Construye un cliente con un `UpstreamClient` por defecto.
     pub fn new(base_url: impl Into<String>) -> Self {
-        Self::with_client(base_url, openproxy_core::upstream::UpstreamClient::new())
+        Self::with_client(base_url, openproxy_adapters::upstream::UpstreamClient::new())
     }
 
     /// Construye un cliente compartiendo un `UpstreamClient` propio.
@@ -78,7 +78,7 @@ impl Client {
     /// reutilizar un pool de conexiones a nivel de aplicación.
     pub fn with_client(
         base_url: impl Into<String>,
-        http: std::sync::Arc<openproxy_core::upstream::UpstreamClient>,
+        http: std::sync::Arc<openproxy_adapters::upstream::UpstreamClient>,
     ) -> Self {
         let base = base_url.into();
         let base_url = base.trim_end_matches('/').to_string();
@@ -91,11 +91,11 @@ impl Client {
 
     async fn req(
         &self,
-        req: openproxy_core::upstream::UpstreamRequest,
-    ) -> Result<openproxy_core::upstream::UpstreamResponse, ClientError> {
-        let cancel = openproxy_core::upstream::CancellationToken::new();
+        req: openproxy_adapters::upstream::UpstreamRequest,
+    ) -> Result<openproxy_adapters::upstream::UpstreamResponse, ClientError> {
+        let cancel = openproxy_adapters::upstream::CancellationToken::new();
         self.http
-            .call(req, openproxy_core::upstream::TimeoutProfile::Quota, cancel)
+            .call(req, openproxy_adapters::upstream::TimeoutProfile::Quota, cancel)
             .await
             .map_err(|e| ClientError::Http(e.to_string()))
     }
@@ -103,8 +103,8 @@ impl Client {
     async fn get(
         &self,
         path: &str,
-    ) -> Result<openproxy_core::upstream::UpstreamResponse, ClientError> {
-        self.req(openproxy_core::upstream::UpstreamRequest::get(
+    ) -> Result<openproxy_adapters::upstream::UpstreamResponse, ClientError> {
+        self.req(openproxy_adapters::upstream::UpstreamRequest::get(
             self.url(path),
         ))
         .await
@@ -113,8 +113,8 @@ impl Client {
     async fn delete(
         &self,
         path: &str,
-    ) -> Result<openproxy_core::upstream::UpstreamResponse, ClientError> {
-        let mut r = openproxy_core::upstream::UpstreamRequest::get(self.url(path));
+    ) -> Result<openproxy_adapters::upstream::UpstreamResponse, ClientError> {
+        let mut r = openproxy_adapters::upstream::UpstreamRequest::get(self.url(path));
         r.method = http::Method::DELETE;
         self.req(r).await
     }
@@ -123,9 +123,9 @@ impl Client {
         &self,
         path: &str,
         body: impl serde::Serialize,
-    ) -> Result<openproxy_core::upstream::UpstreamResponse, ClientError> {
+    ) -> Result<openproxy_adapters::upstream::UpstreamResponse, ClientError> {
         let b = bytes::Bytes::from(serde_json::to_vec(&body).unwrap());
-        self.req(openproxy_core::upstream::UpstreamRequest::post_json(
+        self.req(openproxy_adapters::upstream::UpstreamRequest::post_json(
             self.url(path),
             b,
         ))
@@ -190,7 +190,7 @@ impl Client {
             write!(&mut url, "?{}", qs).expect("writing to String never fails");
         }
         let resp = self
-            .req(openproxy_core::upstream::UpstreamRequest::get(url))
+            .req(openproxy_adapters::upstream::UpstreamRequest::get(url))
             .await?;
         parse_json(resp).await
     }
@@ -227,7 +227,7 @@ impl Client {
     ) -> Result<(), ClientError> {
         let path = format!("/admin/accounts/{}/api-key", id.0);
         let resp = {
-            let mut req = openproxy_core::upstream::UpstreamRequest::post_json(
+            let mut req = openproxy_adapters::upstream::UpstreamRequest::post_json(
                 self.url(&path),
                 bytes::Bytes::from(serde_json::to_vec(&input).unwrap()),
             );
@@ -326,7 +326,7 @@ impl Client {
     pub async fn refresh_models(&self, model_row_id: ModelRowId) -> Result<usize, ClientError> {
         let path = format!("/admin/models/{}/refresh", model_row_id.0);
         let resp = {
-            let mut req = openproxy_core::upstream::UpstreamRequest::post_json(
+            let mut req = openproxy_adapters::upstream::UpstreamRequest::post_json(
                 self.url(&path),
                 bytes::Bytes::new(),
             );
@@ -363,7 +363,7 @@ impl Client {
             usage_filter_query(f)
         );
         let resp = self
-            .req(openproxy_core::upstream::UpstreamRequest::get(url))
+            .req(openproxy_adapters::upstream::UpstreamRequest::get(url))
             .await?;
         parse_json(resp).await
     }
@@ -376,7 +376,7 @@ impl Client {
             usage_filter_query(f)
         );
         let resp = self
-            .req(openproxy_core::upstream::UpstreamRequest::get(url))
+            .req(openproxy_adapters::upstream::UpstreamRequest::get(url))
             .await?;
         parse_json(resp).await
     }
@@ -392,7 +392,7 @@ impl Client {
             usage_filter_query(f)
         );
         let resp = self
-            .req(openproxy_core::upstream::UpstreamRequest::get(url))
+            .req(openproxy_adapters::upstream::UpstreamRequest::get(url))
             .await?;
         parse_json(resp).await
     }
@@ -405,7 +405,7 @@ impl Client {
             usage_filter_query(f)
         );
         let resp = self
-            .req(openproxy_core::upstream::UpstreamRequest::get(url))
+            .req(openproxy_adapters::upstream::UpstreamRequest::get(url))
             .await?;
         parse_json(resp).await
     }
@@ -424,7 +424,7 @@ impl Client {
         }
         let url = format!("{}?{}", self.url("/admin/usage/errors"), qs);
         let resp = self
-            .req(openproxy_core::upstream::UpstreamRequest::get(url))
+            .req(openproxy_adapters::upstream::UpstreamRequest::get(url))
             .await?;
         parse_json(resp).await
     }
@@ -437,7 +437,7 @@ impl Client {
             usage_filter_query(f)
         );
         let resp = self
-            .req(openproxy_core::upstream::UpstreamRequest::get(url))
+            .req(openproxy_adapters::upstream::UpstreamRequest::get(url))
             .await?;
         parse_json(resp).await
     }
@@ -450,7 +450,7 @@ impl Client {
             usage_filter_query(f)
         );
         let resp = self
-            .req(openproxy_core::upstream::UpstreamRequest::get(url))
+            .req(openproxy_adapters::upstream::UpstreamRequest::get(url))
             .await?;
         parse_json(resp).await
     }
@@ -498,7 +498,7 @@ pub enum ClientError {
 ///    código y mensaje crudos.
 /// 3. `4xx/5xx` con body que no encaja en el sobre → [`ClientError::Status`].
 async fn parse_json<T: serde::de::DeserializeOwned>(
-    resp: openproxy_core::upstream::UpstreamResponse,
+    resp: openproxy_adapters::upstream::UpstreamResponse,
 ) -> Result<T, ClientError> {
     let status = resp.status;
     let bytes = resp
@@ -515,7 +515,7 @@ async fn parse_json<T: serde::de::DeserializeOwned>(
 /// Variante para endpoints que devuelven `{"deleted": ...}` u otro body
 /// informativo. No necesitamos el body, solo verificar que el status
 /// sea 2xx y que, si no lo es, el body se traduzca a `ClientError`.
-async fn parse_unit(resp: openproxy_core::upstream::UpstreamResponse) -> Result<(), ClientError> {
+async fn parse_unit(resp: openproxy_adapters::upstream::UpstreamResponse) -> Result<(), ClientError> {
     let status = resp.status;
     if status.is_success() {
         // Drenamos el body para liberar la conexión al pool, pero no lo

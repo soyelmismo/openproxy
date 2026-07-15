@@ -12,7 +12,7 @@
 //! losing workers could leak through the forwarding tasks before the
 //! 10-ms polling loop detected the winner and fired `race_cancel`.
 
-use crate::upstream::CancellationToken;
+use openproxy_adapters::upstream::CancellationToken;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use tokio::sync::mpsc;

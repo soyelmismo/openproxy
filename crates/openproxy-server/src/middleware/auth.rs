@@ -6,7 +6,7 @@ use std::sync::Arc;
 /// Extracted parsed JSON payload for the chat endpoint.
 #[derive(Clone)]
 pub struct ParsedChatRequest {
-    pub parsed: Arc<openproxy_core::translation::OpenAIRequest>,
+    pub parsed: Arc<openproxy_types::OpenAIRequest>,
     pub bytes: bytes::Bytes,
 }
 
@@ -188,7 +188,7 @@ pub async fn auth_middleware(
         }
     };
 
-    let parsed: openproxy_core::translation::OpenAIRequest = serde_json::from_slice(&bytes)
+    let parsed: openproxy_types::OpenAIRequest = serde_json::from_slice(&bytes)
         .map_err(|e| crate::error::ApiError(openproxy_core::CoreError::Parse(e.to_string())))?;
 
     let requested_model = &parsed.model;

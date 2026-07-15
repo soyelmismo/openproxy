@@ -37,8 +37,9 @@
 
 use crate::error::{CoreError, Result};
 use crate::ids::AccountId;
-use crate::translation::{OpenAIMessage, OpenAIRequest, OpenAIResponse};
-use crate::upstream::{
+use openproxy_types::{OpenAIMessage, OpenAIRequest};
+use openproxy_pipeline::translation::{OpenAIChoice, OpenAIResponse};
+use openproxy_adapters::upstream::{
     CancellationToken, TimeoutProfile, UpstreamClient, UpstreamError, UpstreamRequest,
 };
 use rusqlite::Connection;
@@ -284,9 +285,9 @@ pub fn parse_kiro_response(body: &[u8], model: &str) -> Result<OpenAIResponse> {
                 object: "chat.completion".to_string(),
                 created,
                 model: model.to_string(),
-                choices: vec![crate::translation::OpenAIChoice {
+                choices: vec![OpenAIChoice {
                     index: 0,
-                    message: crate::translation::OpenAIMessage {
+                    message: openproxy_types::OpenAIMessage {
                         role: "assistant".to_string(),
                         content: Some(serde_json::Value::String(content)),
                         name: None,
@@ -317,9 +318,9 @@ pub fn parse_kiro_response(body: &[u8], model: &str) -> Result<OpenAIResponse> {
         object: "chat.completion".to_string(),
         created,
         model: model.to_string(),
-        choices: vec![crate::translation::OpenAIChoice {
+        choices: vec![OpenAIChoice {
             index: 0,
-            message: crate::translation::OpenAIMessage {
+            message: openproxy_types::OpenAIMessage {
                 role: "assistant".to_string(),
                 content: Some(serde_json::Value::String(content)),
                 name: None,
@@ -494,7 +495,7 @@ pub async fn execute_kiro(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::translation::{OpenAIMessage, OpenAIRequest};
+    use openproxy_types::{OpenAIMessage, OpenAIRequest};
     use serde_json::json;
 
     fn req(msgs: Vec<(&str, &str)>) -> OpenAIRequest {

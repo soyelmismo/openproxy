@@ -293,8 +293,8 @@ pub fn build_synthetic_combo(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::db::conn::DbPool;
-    use crate::db::migrations;
+    use openproxy_db::conn::DbPool;
+    use openproxy_db::migrations;
     use crate::providers::{self, AuthType, ProviderFormat};
     use std::path::PathBuf;
     use std::sync::atomic::AtomicU64;

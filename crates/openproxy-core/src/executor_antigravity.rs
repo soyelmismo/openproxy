@@ -30,8 +30,9 @@
 
 use crate::error::CoreError;
 use crate::ids::AccountId;
-use crate::translation::{OpenAIChoice, OpenAIMessage, OpenAIRequest, OpenAIResponse, OpenAIUsage};
-use crate::upstream::{
+use openproxy_types::{OpenAIMessage, OpenAIRequest};
+use openproxy_pipeline::translation::{OpenAIChoice, OpenAIResponse, OpenAIUsage};
+use openproxy_adapters::upstream::{
     CancellationToken, TimeoutProfile, UpstreamClient, UpstreamError, UpstreamRequest,
     UpstreamResponse,
 };
@@ -1071,7 +1072,7 @@ pub(crate) async fn call_antigravity_v1internal(
                 http::HeaderValue::from_static("text/event-stream"),
             );
         }
-        crate::antigravity_headers::inject_antigravity_headers(&mut req.headers, None);
+        openproxy_adapters::antigravity_headers::inject_antigravity_headers(&mut req.headers, None);
         req
     };
 
@@ -1301,7 +1302,7 @@ pub async fn execute_antigravity(
                 "finish_reason": serde_json::Value::Null
             }]
         });
-        let sse_frame = crate::sse::build_sse_frame(&serde_json::to_string(&role_chunk).unwrap());
+        let sse_frame = openproxy_pipeline::sse::build_sse_frame(&serde_json::to_string(&role_chunk).unwrap());
         let _ = sink.send(sse_frame).await;
     }
 
@@ -1374,7 +1375,7 @@ pub async fn execute_antigravity(
                         }]
                     });
                     let sse_frame =
-                        crate::sse::build_sse_frame(&serde_json::to_string(&text_delta).unwrap());
+                        openproxy_pipeline::sse::build_sse_frame(&serde_json::to_string(&text_delta).unwrap());
                     let _ = sink.send(sse_frame).await;
                 }
 
@@ -1390,7 +1391,7 @@ pub async fn execute_antigravity(
                             "finish_reason": serde_json::Value::Null
                         }]
                     });
-                    let sse_frame = crate::sse::build_sse_frame(
+                    let sse_frame = openproxy_pipeline::sse::build_sse_frame(
                         &serde_json::to_string(&thinking_delta).unwrap(),
                     );
                     let _ = sink.send(sse_frame).await;
@@ -1410,7 +1411,7 @@ pub async fn execute_antigravity(
                             "finish_reason": serde_json::Value::Null
                         }]
                     });
-                    let sse_frame = crate::sse::build_sse_frame(
+                    let sse_frame = openproxy_pipeline::sse::build_sse_frame(
                         &serde_json::to_string(&tool_call_delta).unwrap(),
                     );
                     let _ = sink.send(sse_frame).await;
@@ -1462,7 +1463,7 @@ pub async fn execute_antigravity(
                     }]
                 });
                 let sse_frame =
-                    crate::sse::build_sse_frame(&serde_json::to_string(&text_delta).unwrap());
+                    openproxy_pipeline::sse::build_sse_frame(&serde_json::to_string(&text_delta).unwrap());
                 let _ = sink.send(sse_frame).await;
             }
             if !thinking_chunk.is_empty() {
@@ -1478,7 +1479,7 @@ pub async fn execute_antigravity(
                     }]
                 });
                 let sse_frame =
-                    crate::sse::build_sse_frame(&serde_json::to_string(&thinking_delta).unwrap());
+                    openproxy_pipeline::sse::build_sse_frame(&serde_json::to_string(&thinking_delta).unwrap());
                 let _ = sink.send(sse_frame).await;
             }
             for tc in &tool_calls {
@@ -1496,7 +1497,7 @@ pub async fn execute_antigravity(
                     }]
                 });
                 let sse_frame =
-                    crate::sse::build_sse_frame(&serde_json::to_string(&tool_call_delta).unwrap());
+                    openproxy_pipeline::sse::build_sse_frame(&serde_json::to_string(&tool_call_delta).unwrap());
                 let _ = sink.send(sse_frame).await;
             }
         }
@@ -1524,7 +1525,7 @@ pub async fn execute_antigravity(
                 "finish_reason": "stop"
             }]
         });
-        let sse_frame = crate::sse::build_sse_frame(&serde_json::to_string(&final_chunk).unwrap());
+        let sse_frame = openproxy_pipeline::sse::build_sse_frame(&serde_json::to_string(&final_chunk).unwrap());
         let _ = sink.send(sse_frame).await;
 
         if let Some(ref u) = usage {
@@ -1541,11 +1542,11 @@ pub async fn execute_antigravity(
                 }
             });
             let sse_frame =
-                crate::sse::build_sse_frame(&serde_json::to_string(&usage_chunk).unwrap());
+                openproxy_pipeline::sse::build_sse_frame(&serde_json::to_string(&usage_chunk).unwrap());
             let _ = sink.send(sse_frame).await;
         }
 
-        let _ = sink.send(crate::pipeline::SSE_DONE_BYTES.clone()).await;
+        let _ = sink.send(openproxy_pipeline::SSE_DONE_BYTES.clone()).await;
     }
 
     // 5. Assemble final OpenAIResponse

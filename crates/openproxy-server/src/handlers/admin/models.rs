@@ -153,9 +153,10 @@ pub(crate) async fn run_test_for_model(
     opts: TestOptions,
     cancel_rx: Option<tokio::sync::watch::Receiver<bool>>,
 ) -> TestResult {
-    use openproxy_core::translation::{
-        OpenAIMessage, OpenAIRequest, openai_to_anthropic, openai_to_gemini,
+    use openproxy_pipeline::translation::{
+        openai_to_anthropic, openai_to_gemini,
     };
+    use openproxy_types::{OpenAIMessage, OpenAIRequest};
 
     let row_id = ModelRowId(model_row_id);
     let start = std::time::Instant::now();
@@ -511,7 +512,7 @@ pub(crate) async fn run_test_for_model(
                     http_client,
                     &format!(
                         "{}/v1internal:streamGenerateContent?alt=sse",
-                        openproxy_core::adapters::antigravity::DEFAULT_ANTIGRAVITY_BASE_URL
+                        openproxy_adapters::adapters::antigravity::DEFAULT_ANTIGRAVITY_BASE_URL
                     ),
                     &access_token,
                     &project_id,
@@ -667,7 +668,7 @@ pub(crate) async fn run_test_for_model(
         let mut responses_req = openai_req.clone();
         responses_req.max_tokens = None;
         let (_cancel_tx, client_disconnected) = tokio::sync::watch::channel(false);
-        let pipeline_req = openproxy_core::pipeline::PipelineRequest {
+        let pipeline_req = openproxy_pipeline::PipelineRequest {
             request_id: RequestId::new(),
             trace_id: TraceId::new(),
             combo_id: ComboId(0),
@@ -681,15 +682,15 @@ pub(crate) async fn run_test_for_model(
             request_headers: std::collections::BTreeMap::new(),
             request_body_json: None,
             race_cancelled: false,
-            endpoint_kind: openproxy_core::endpoint::EndpointKind::Chat,
+            endpoint_kind: openproxy_types::EndpointKind::Chat,
             compressed_messages: std::sync::Arc::new(std::sync::OnceLock::new()),
         };
-        let formatter = openproxy_core::pipeline::formatting::get_formatter(
+        let formatter = openproxy_pipeline::formatting::get_formatter(
             openproxy_core::models::TargetFormat::Responses,
         );
         match formatter.format_request(&pipeline_req, &model, &openai_req.messages, true, &adapter)
         {
-            Ok(bytes) => match serde_json::from_slice::<serde_json::Value>(&bytes) {
+            Ok(req_bytes) => match serde_json::from_slice::<serde_json::Value>(&req_bytes) {
                 Ok(v) => (url, v),
                 Err(e) => {
                     let err = CoreError::Internal(format!("serialize responses req: {}", e));
@@ -742,7 +743,7 @@ pub(crate) async fn run_test_for_model(
     //    clock cost — a hung upstream shouldn't pin a dashboard
     //    button indefinitely.
     let headers = adapter.build_headers(&api_key, effective_target_format, &model.model_id);
-    let mut req = openproxy_core::upstream::UpstreamRequest::post_json(
+    let mut req = openproxy_adapters::upstream::UpstreamRequest::post_json(
         url,
         match serde_json::to_vec(&body_value) {
             Ok(b) => bytes::Bytes::from(b),
@@ -785,7 +786,7 @@ pub(crate) async fn run_test_for_model(
     //    something useful when the upstream is unhappy.
     let start = std::time::Instant::now();
     let client = s.upstream_client();
-    let cancel = openproxy_core::upstream::CancellationToken::new();
+    let cancel = openproxy_adapters::upstream::CancellationToken::new();
 
     if let Some(mut rx) = cancel_rx.clone() {
         let rx_cancel = cancel.clone();
@@ -803,8 +804,8 @@ pub(crate) async fn run_test_for_model(
         });
     }
 
-    let profile = openproxy_core::upstream::TimeoutProfile::Custom(
-        openproxy_core::upstream::ResolvedTimeouts {
+    let profile = openproxy_adapters::upstream::TimeoutProfile::Custom(
+        openproxy_adapters::upstream::ResolvedTimeouts {
             dns_ms: 2000,
             dial_ms: 5000,
             tls_ms: 5000,

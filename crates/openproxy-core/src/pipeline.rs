@@ -7,14 +7,14 @@
 
 use crate::circuit_breaker::CircuitBreakerRegistry;
 use crate::combos::{Combo, SelectionRegistry};
-use crate::compression::stats::CompressionStats;
+use openproxy_compression::stats::CompressionStats;
 use crate::config::{RacingConfig, RetriesConfig};
 use crate::error::CoreError;
 use crate::ids::{ApiKeyId, ComboId, RequestId, TraceId};
-use crate::secrets::MasterKey;
-use crate::timeouts::Timeouts;
-use crate::translation::OpenAIResponse;
-use crate::upstream::UpstreamClient;
+use openproxy_db::secrets::MasterKey;
+use openproxy_pipeline::timeouts::Timeouts;
+use openproxy_pipeline::translation::OpenAIResponse;
+use openproxy_adapters::upstream::UpstreamClient;
 use parking_lot::RwLock;
 use rusqlite::Connection;
 use std::collections::HashMap;
@@ -52,16 +52,16 @@ pub struct PipelineConfig {
     pub retries: RetriesConfig,
     pub max_attempts: u8,
     pub master_key: Arc<MasterKey>,
-    pub adapters: Arc<Vec<crate::adapters::ProviderAdapterEnum>>,
+    pub adapters: Arc<Vec<openproxy_adapters::adapters::ProviderAdapterEnum>>,
     pub cooldown_secs: u64,
     pub cooldown_max_secs: u64,
     pub cooldown_factor: u32,
     pub upstream_client: Arc<UpstreamClient>,
     pub oauth_provider_registry: Option<Arc<crate::oauth::OAuthProviderRegistry>>,
-    pub compression_mode: crate::compression::CompressionMode,
+    pub compression_mode: openproxy_compression::CompressionMode,
     pub idle_chunk_retryable: bool,
     pub quota_protection: crate::config::QuotaProtectionConfig,
-    pub background_tx: tokio::sync::mpsc::Sender<crate::pipeline::worker::BackgroundJob>,
+    pub background_tx: tokio::sync::mpsc::Sender<openproxy_pipeline::worker::BackgroundJob>,
 }
 
 /// All the input needed to process a single chat completion.
@@ -70,11 +70,11 @@ pub struct PipelineRequest {
     pub request_id: RequestId,
     pub trace_id: TraceId,
     pub combo_id: ComboId,
-    pub openai_request: Arc<crate::translation::OpenAIRequest>,
+    pub openai_request: Arc<openproxy_types::OpenAIRequest>,
     pub client_disconnected: tokio::sync::watch::Receiver<bool>,
     pub stream_sink: Option<crate::race_sink::StreamSink>,
     pub api_key_id: Option<ApiKeyId>,
-    pub race_cancel: Option<crate::upstream::CancellationToken>,
+    pub race_cancel: Option<openproxy_adapters::upstream::CancellationToken>,
     pub combo_override: Option<Combo>,
     pub targets_override: Option<Vec<crate::combos::ComboTarget>>,
     pub request_headers: std::collections::BTreeMap<String, String>,
@@ -82,7 +82,7 @@ pub struct PipelineRequest {
     pub race_cancelled: bool,
     pub endpoint_kind: crate::endpoint::EndpointKind,
     pub compressed_messages:
-        Arc<std::sync::OnceLock<Option<Vec<crate::translation::OpenAIMessage>>>>,
+        Arc<std::sync::OnceLock<Option<Vec<openproxy_types::OpenAIMessage>>>>,
 }
 
 /// Outcome of a single `Pipeline::run()` call.

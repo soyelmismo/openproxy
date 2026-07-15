@@ -3,7 +3,7 @@ use axum::{
     Json,
     extract::{Path, Query, State},
 };
-use openproxy_core::upstream::is_private_or_reserved;
+use openproxy_adapters::upstream::is_private_or_reserved;
 
 pub async fn list_proxies(
     State(s): State<AppState>,

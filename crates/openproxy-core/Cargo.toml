@@ -21,6 +21,11 @@ upstream-stub = []
 ssrf-bypass = []
 
 [dependencies]
+openproxy-types = { path = "../openproxy-types" }
+openproxy-db = { path = "../openproxy-db" }
+openproxy-compression = { path = "../openproxy-compression" }
+openproxy-adapters = { path = "../openproxy-adapters" }
+openproxy-pipeline = { path = "../openproxy-pipeline" }
 tokio = { workspace = true }
 axum = { workspace = true }
 rusqlite = { workspace = true }
@@ -105,6 +110,3 @@ criterion = { version = "0.8", default-features = false, features = ["cargo_benc
 name = "sse_fast_path"
 harness = false
 
-[[bench]]
-name = "compression"
-harness = false

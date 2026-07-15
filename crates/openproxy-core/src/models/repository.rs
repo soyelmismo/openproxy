@@ -5,12 +5,12 @@
 //! production implementation backed by the `DbPool` connection pool.
 //!
 //! The trait follows the same pattern as
-//! [`crate::pipeline::repository::PipelineRepository`]: each method
+//! [`openproxy_pipeline::repository::PipelineRepository`]: each method
 //! opens its own connection internally, so callers don't manage
 //! connection lifetimes.
 
 use super::{DiscoveredModel, Model, TargetFormat, UpsertResult};
-use crate::db::DbPool;
+use openproxy_db::DbPool;
 use crate::error::Result;
 use crate::ids::{ModelId, ModelRowId, ProviderId};
 use std::sync::Arc;

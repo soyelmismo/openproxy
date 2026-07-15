@@ -10,7 +10,7 @@
 //! - All input is parsed here. Invalid enums (auth_type, format, strategy) are
 //!   surfaced as [`crate::error::CoreError::Validation`], which the server
 //!   maps to HTTP 400.
-//! - API keys are encrypted via [`crate::secrets::MasterKey`] before any
+//! - API keys are encrypted via [`openproxy_db::secrets::MasterKey`] before any
 //!   plaintext touches the `accounts` table.
 //! - `create_*` returns the newly-inserted id; `list_*` returns a typed view
 //!   of rows.
@@ -18,7 +18,6 @@
 //!   an error.
 
 use crate::accounts;
-use crate::adapters::ProviderAdapter;
 use crate::combos;
 use crate::cooldown;
 use crate::error::{CoreError, Result};
@@ -26,8 +25,8 @@ use crate::ids::{AccountId, ComboId, ComboTargetId, ModelId, ModelRowId, Provide
 use crate::models;
 use crate::providers::{self, AuthType, ProviderFormat};
 use crate::quota::AccountQuota;
-use crate::secrets::MasterKey;
-use crate::upstream::UpstreamClient;
+use openproxy_db::secrets::MasterKey;
+use openproxy_adapters::upstream::UpstreamClient;
 use rusqlite::{Connection, params};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
@@ -93,8 +92,8 @@ pub struct CreateProviderInput {
 pub fn create_provider(conn: &Connection, input: CreateProviderInput) -> Result<ProviderId> {
     validate_base_url(&input.base_url)?;
     let id = ProviderId::new(input.id);
-    let auth = AuthType::parse(&input.auth_type)?;
-    let format = ProviderFormat::parse(&input.format)?;
+    let auth = AuthType::parse(&input.auth_type).map_err(CoreError::Validation)?;
+    let format = ProviderFormat::parse(&input.format).map_err(CoreError::Validation)?;
     providers::create(
         conn,
         providers::NewProvider {
@@ -123,7 +122,7 @@ pub fn list_providers(conn: &Connection) -> Result<Vec<providers::Provider>> {
 /// Built-in providers (the ones seeded on first run — see
 /// [`crate::seed::builtin_provider_ids`]) are **not deletable**:
 /// removing the row would leave dangling references in
-/// [`crate::adapters::builtin_adapters`], and the operator can
+/// [`openproxy_adapters::adapters::builtin_adapters`], and the operator can
 /// always get the "this provider is no longer routed" effect
 /// cheaply via [`set_provider_active`] (a soft, reversible flag).
 /// This function therefore rejects built-in ids with
@@ -419,7 +418,7 @@ pub async fn fetch_account_quota(
         other => other,
     };
 
-    let adapters = crate::adapters::builtin_adapters();
+    let adapters = openproxy_adapters::adapters::builtin_adapters();
     if let Some(adapter) = adapters.iter().find(|a| a.id().as_str() == mapped_id)
         && let Some(res) = adapter
             .fetch_quota(upstream, api_key, access_token, provider_specific)
@@ -556,7 +555,7 @@ pub struct AddTargetInput {
 /// empty and the pipeline's `auto_populate` fallback will try again on
 /// the next chat request.
 pub fn create_combo(conn: &Connection, input: CreateComboInput) -> Result<ComboId> {
-    let strategy = combos::Strategy::parse(&input.strategy)?;
+    let strategy = combos::Strategy::parse(&input.strategy).map_err(CoreError::Validation)?;
     // Default of 1 is the "serial / one target at a time" race
     // window. NOTE: for `Strategy::Priority` the pipeline ignores
     // `race_size` entirely (the operator wants walk-the-row
@@ -863,7 +862,7 @@ pub fn create_custom_model(conn: &Connection, input: CreateCustomModelInput) -> 
 /// The caller is responsible for:
 /// - resolving the right adapter for `provider`,
 /// - decrypting an account's API key and passing it in plaintext,
-/// - supplying the shared [`crate::upstream::UpstreamClient`] (the
+/// - supplying the shared [`openproxy_adapters::upstream::UpstreamClient`] (the
 ///   hyper-based client, with per-phase timeouts driven by
 ///   `TimeoutProfile::ModelDiscovery`),
 /// - choosing `ttl_seconds` (typically the duration after which rows
@@ -887,12 +886,12 @@ pub fn create_custom_model(conn: &Connection, input: CreateCustomModelInput) -> 
 /// the production path: `DbPool::with_conn` plus a second open via the
 /// pool's writer mutex that we then drop before awaiting) and hand the
 /// owned handle in here, so the future stays `Send` end to end.
-pub async fn refresh_models<A: crate::adapters::ProviderAdapter>(
+pub async fn refresh_models<A: openproxy_adapters::adapters::ProviderAdapter>(
     conn: Connection,
     provider: &ProviderId,
     api_key: &str,
     adapter: &A,
-    upstream_client: &std::sync::Arc<crate::upstream::UpstreamClient>,
+    upstream_client: &std::sync::Arc<openproxy_adapters::upstream::UpstreamClient>,
     ttl_seconds: i64,
     account_label: &str,
 ) -> Result<models::UpsertResult> {
@@ -942,13 +941,11 @@ trait Pipe: Sized {
     }
 }
 impl<T> Pipe for T {}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::adapters::ProviderAdapter;
-    use crate::db::conn::DbPool;
-    use crate::db::migrations;
+    use openproxy_db::conn::DbPool;
+    use openproxy_db::migrations;
     use std::path::PathBuf;
 
     /// Build a fresh in-process pool: temp dir on disk, migrations applied.
@@ -1017,7 +1014,7 @@ mod tests {
 
     #[test]
     fn test_quota_capability_anti_drift() {
-        let adapters = crate::adapters::builtin_adapters();
+        let adapters = openproxy_adapters::adapters::builtin_adapters();
         let providers_with_quota = [
             "minimax",
             "minimax-cn",
@@ -1331,14 +1328,14 @@ mod tests {
 
         // We need a minimal adapter impl to satisfy the trait. We don't
         // call `fetch_models` on it.
-        let adapter = crate::adapters::ProviderAdapterEnum::Mock(
-            crate::pipeline::test_utils::MockAdapter::new(
+        let adapter = openproxy_adapters::adapters::ProviderAdapterEnum::Mock(
+            openproxy_pipeline::test_utils::MockAdapter::new(
                 "stub",
                 String::new(),
-                crate::adapters::AdapterFormat::Openai,
+                openproxy_adapters::adapters::AdapterFormat::Openai,
             ),
         );
-        let upstream = crate::upstream::UpstreamClient::new();
+        let upstream = openproxy_adapters::upstream::UpstreamClient::new();
 
         let rt = tokio::runtime::Builder::new_current_thread()
             .enable_all()
@@ -1361,7 +1358,7 @@ mod tests {
 
     // NOTE: integration tests that actually hit the network via
     // `refresh_models` are intentionally not included here. The signature
-    // takes a fully wired `&crate::adapters::ProviderAdapterEnum` and an
+    // takes a fully wired `&openproxy_adapters::adapters::ProviderAdapterEnum` and an
     // `&Arc<UpstreamClient>` precisely so the server crate can drive
     // it end-to-end; any wire-level exercise belongs in the server's
     // integration test suite.

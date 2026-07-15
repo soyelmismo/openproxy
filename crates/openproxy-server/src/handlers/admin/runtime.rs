@@ -72,7 +72,7 @@ pub async fn put_runtime_timeouts(
 pub async fn put_runtime_compression(
     State(s): State<AppState>,
     headers: HeaderMap,
-    Json(body): Json<openproxy_core::compression::CompressionMode>,
+    Json(body): Json<openproxy_compression::CompressionMode>,
 ) -> ApiResult<Json<serde_json::Value>> {
     if let Err(e) = authenticate_admin_ws(&s, &headers, None) {
         return e.into();
@@ -132,7 +132,7 @@ pub async fn put_idle_chunk_retryable(
 pub async fn put_runtime_quota_protection(
     State(s): State<AppState>,
     headers: HeaderMap,
-    Json(body): Json<openproxy_core::config::QuotaProtectionConfig>,
+    Json(body): Json<openproxy_types::config::QuotaProtectionConfig>,
 ) -> ApiResult<Json<serde_json::Value>> {
     if let Err(e) = authenticate_admin_ws(&s, &headers, None) {
         return e.into();
@@ -141,7 +141,7 @@ pub async fn put_runtime_quota_protection(
         {
             let w = s.db_pool().writer();
             let now = chrono::Utc::now().timestamp();
-            openproxy_core::db::app_config::save_quota_protection_to_db(&w, &body, now)?;
+            openproxy_db::app_config::save_quota_protection_to_db(&w, &body, now)?;
         }
         s.set_quota_protection(body.clone());
         tracing::info!(
@@ -170,7 +170,7 @@ pub async fn get_maintenance_config(
     let status = s.vacuum_status();
     ApiResult::ok(Json(serde_json::json!({
         "auto_vacuum": cfg.auto_vacuum,
-        "vacuum_interval_hours": cfg.vacuum_interval_hours,
+        "vacuum_interval_hours": cfg.interval_secs / 3600,
         "usage_retention_days": cfg.usage_retention_days,
         "vacuum_status": status,
     })))
@@ -189,7 +189,7 @@ pub async fn put_maintenance_config(
         cfg.auto_vacuum = v;
     }
     if let Some(v) = body.get("vacuum_interval_hours").and_then(|v| v.as_u64()) {
-        cfg.vacuum_interval_hours = v.max(1) as u32;
+        cfg.interval_secs = v.max(1) * 3600;
     }
     if let Some(v) = body.get("usage_retention_days").and_then(|v| v.as_u64()) {
         cfg.usage_retention_days = v as u32;
@@ -199,7 +199,7 @@ pub async fn put_maintenance_config(
         "updated": true,
         "config": {
             "auto_vacuum": cfg.auto_vacuum,
-            "vacuum_interval_hours": cfg.vacuum_interval_hours,
+            "vacuum_interval_hours": cfg.interval_secs / 3600,
             "usage_retention_days": cfg.usage_retention_days,
         }
     })))

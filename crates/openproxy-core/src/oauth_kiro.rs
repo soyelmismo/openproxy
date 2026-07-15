@@ -17,8 +17,8 @@ use serde::{Deserialize, Serialize};
 use crate::error::{CoreError, Result};
 use crate::ids::AccountId;
 use crate::oauth::{DeviceAuthorizationResponse, OAuthFlow, OAuthProvider, TokenResponse};
-use crate::secrets::MasterKey;
-use crate::upstream::{
+use openproxy_db::secrets::MasterKey;
+use openproxy_adapters::upstream::{
     CancellationToken, TimeoutProfile, UpstreamClient, UpstreamError, UpstreamRequest,
 };
 use std::sync::Arc;
@@ -678,7 +678,7 @@ impl OAuthProvider for KiroOAuthProvider {
     async fn post_exchange(
         &self,
         account_id: AccountId,
-        db_pool: &std::sync::Arc<crate::db::DbPool>,
+        db_pool: &std::sync::Arc<openproxy_db::DbPool>,
         master_key: &MasterKey,
         upstream: &Arc<UpstreamClient>,
     ) -> Result<()> {

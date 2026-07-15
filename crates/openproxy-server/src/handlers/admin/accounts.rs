@@ -53,7 +53,7 @@ pub async fn set_account_health(
             .get("health")
             .and_then(|v| v.as_str())
             .ok_or_else(|| CoreError::Validation("missing 'health' string".into()))?;
-        let health = core_accounts::HealthStatus::parse(health_str)?;
+        let health = core_accounts::HealthStatus::parse(health_str).map_err(CoreError::Validation)?;
         let w = s.db_pool().writer();
         core_accounts::set_health(&w, AccountId::new(id), health)?;
         Ok(Json(serde_json::json!({

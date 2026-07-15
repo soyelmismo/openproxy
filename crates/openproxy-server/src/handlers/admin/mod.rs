@@ -69,18 +69,18 @@ use axum::{
 };
 use futures::StreamExt;
 use openproxy_core::{
-    CoreError, adapters,
-    adapters::ProviderAdapter,
+    CoreError,
     analytics, api_keys as core_api_keys, combos as core_combos,
     config::{CircuitBreakerConfig, RacingConfig, RetriesConfig, TimeoutsConfig},
-    db as core_db,
-    db::conn::ADMIN_LOCK_TIMEOUT,
     ids::{
         AccountId, ApiKeyId, ComboId, ComboTargetId, ModelRowId, ProviderId, RequestId, TraceId,
     },
     models as core_models, oauth as core_oauth, seed,
     usage::UsageFilter,
 };
+use openproxy_adapters::adapters;
+use openproxy_db as core_db;
+use openproxy_db::conn::ADMIN_LOCK_TIMEOUT;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::sync::Arc;
@@ -158,11 +158,11 @@ pub struct RuntimeConfigResponse {
     /// headers. `0` means bodies are pruned immediately on the next
     /// prune tick.
     pub recording_ttl_secs: i64,
-    pub compression: openproxy_core::compression::CompressionMode,
+    pub compression: openproxy_compression::CompressionMode,
     /// When true, idle_chunk timeouts are treated as retryable
     /// (pipeline falls through to the next target).
     pub idle_chunk_retryable: bool,
-    pub quota_protection: openproxy_core::config::QuotaProtectionConfig,
+    pub quota_protection: openproxy_types::config::QuotaProtectionConfig,
 }
 
 // `GET /admin/config` — return the currently-loaded runtime

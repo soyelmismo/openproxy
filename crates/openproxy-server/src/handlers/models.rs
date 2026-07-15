@@ -181,7 +181,7 @@ fn authenticate_chat_or_anonymous(
 /// alias for an operator-chosen list of targets, not a real model;
 /// per-model metadata would be misleading.
 fn build_combo_entry(
-    c: &openproxy_core::combos::Combo,
+    c: &openproxy_types::Combo,
     effective_context_window: Option<i64>,
 ) -> serde_json::Value {
     let id = format!("combo:{}", c.name);

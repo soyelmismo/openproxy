@@ -17,8 +17,8 @@ use crate::error::{CoreError, Result};
 use crate::ids::AccountId;
 use crate::oauth::{OAuthFlow, OAuthProvider};
 use crate::oauth_generic::{GenericOAuthProvider, OAuthRequestEncoding, OAuthSpec};
-use crate::secrets::MasterKey;
-use crate::upstream::{CancellationToken, TimeoutProfile, UpstreamClient, UpstreamRequest};
+use openproxy_db::secrets::MasterKey;
+use openproxy_adapters::upstream::{CancellationToken, TimeoutProfile, UpstreamClient, UpstreamRequest};
 use std::sync::Arc;
 
 /// Google OAuth client_id for Cloud Code (Antigravity).
@@ -76,7 +76,7 @@ fn antigravity_oauth_spec() -> OAuthSpec {
         scopes: SCOPES,
         auth_extra_params: &[("access_type", "offline"), ("prompt", "consent")],
         request_encoding: OAuthRequestEncoding::FormUrlEncoded,
-        user_agent: Some(crate::antigravity_headers::oauth_user_agent),
+        user_agent: Some(openproxy_adapters::antigravity_headers::oauth_user_agent),
     }
 }
 
@@ -113,7 +113,7 @@ impl OAuthProvider for AntigravityOAuthProvider {
     async fn post_exchange(
         &self,
         account_id: AccountId,
-        db_pool: &std::sync::Arc<crate::db::DbPool>,
+        db_pool: &std::sync::Arc<openproxy_db::DbPool>,
         master_key: &MasterKey,
         upstream: &Arc<UpstreamClient>,
     ) -> Result<()> {
@@ -238,7 +238,7 @@ async fn load_code_assist(
     if let Ok(v) = http::HeaderValue::from_str(&format!("Bearer {access_token}")) {
         req.headers.insert(http::header::AUTHORIZATION, v);
     }
-    crate::antigravity_headers::inject_antigravity_headers(&mut req.headers, None);
+    openproxy_adapters::antigravity_headers::inject_antigravity_headers(&mut req.headers, None);
     req.is_streaming = false;
 
     let cancel = CancellationToken::new();
@@ -304,7 +304,7 @@ async fn onboard_user(
     if let Ok(v) = http::HeaderValue::from_str(&format!("Bearer {access_token}")) {
         req.headers.insert(http::header::AUTHORIZATION, v);
     }
-    crate::antigravity_headers::inject_antigravity_headers(&mut req.headers, None);
+    openproxy_adapters::antigravity_headers::inject_antigravity_headers(&mut req.headers, None);
     req.is_streaming = false;
 
     let cancel = CancellationToken::new();

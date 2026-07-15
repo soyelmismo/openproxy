@@ -1,0 +1,24 @@
+[package]
+name = "openproxy-compression"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[dependencies]
+openproxy-types = { path = "../openproxy-types" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+regex = { workspace = true }
+sha2 = { workspace = true }
+hex = { workspace = true }
+memchr = "2"
+once_cell = { workspace = true }
+
+[dev-dependencies]
+criterion = { version = "0.8", default-features = false, features = ["cargo_bench_support"] }
+
+[[bench]]
+name = "compression"
+harness = false

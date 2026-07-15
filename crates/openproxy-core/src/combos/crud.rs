@@ -1,6 +1,4 @@
 use super::*;
-use crate::error::*;
-use crate::ids::*;
 use rusqlite::{Connection, Row, params};
 pub fn create_combo(
     conn: &Connection,
@@ -859,7 +857,7 @@ pub fn update_priority_mode(conn: &Connection, id: ComboId, mode: Option<&str>) 
             // Validate the string before persisting so a typo doesn't
             // land in the DB only to surface as `Strict` on the next
             // read (silently masking the misconfiguration).
-            let parsed = PriorityMode::parse(s)?;
+            let parsed = PriorityMode::parse(s).map_err(CoreError::Validation)?;
             Some(parsed.as_str().to_string())
         }
     };
@@ -901,7 +899,7 @@ pub fn update_cooldown_settings(
     let mode_value: Option<String> = match mode {
         None => None,
         Some(s) => {
-            let parsed = CooldownMode::parse(s)?;
+            let parsed = CooldownMode::parse(s).map_err(CoreError::Validation)?;
             Some(parsed.as_str().to_string())
         }
     };
@@ -937,7 +935,7 @@ pub fn update_cooldown_mode(conn: &Connection, id: ComboId, mode: Option<&str>) 
     let mode_value: Option<String> = match mode {
         None => None,
         Some(s) => {
-            let parsed = CooldownMode::parse(s)?;
+            let parsed = CooldownMode::parse(s).map_err(CoreError::Validation)?;
             Some(parsed.as_str().to_string())
         }
     };
@@ -1238,8 +1236,8 @@ impl std::error::Error for FromStrError {}
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::db::conn::DbPool;
-    use crate::db::migrations;
+    use openproxy_db::conn::DbPool;
+    use openproxy_db::migrations;
     use std::path::PathBuf;
     use std::sync::atomic::AtomicU64;
 

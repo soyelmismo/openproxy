@@ -31,7 +31,7 @@
 //! ±10% of cl100k_base for mixed English/code content. This is
 //! sufficient for cost tracking and compression savings.
 
-use crate::translation::OpenAIMessage;
+use openproxy_types::OpenAIMessage;
 use once_cell::sync::Lazy;
 use tiktoken_rs::{CoreBPE, cl100k_base};
 
@@ -203,7 +203,7 @@ fn is_cjk(ch: char) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::translation::OpenAIMessage;
+    use openproxy_types::OpenAIMessage;
     use serde_json::Value;
 
     fn msg(role: &str, content: &str) -> OpenAIMessage {

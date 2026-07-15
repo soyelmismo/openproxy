@@ -15,65 +15,15 @@
 //! `quota_*` columns and the UI shows "not supported by provider".
 
 use crate::error::{CoreError, Result};
-use crate::upstream::{
+use openproxy_adapters::upstream::{
     CancellationToken, TimeoutProfile, UpstreamClient, UpstreamError, UpstreamRequest,
 };
 use dashmap::DashMap;
 use once_cell::sync::Lazy;
-use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
-/// Per-model quota detail. Returned inside `AccountQuota::model_details`
-/// for providers that expose per-model quota (Antigravity family).
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ModelQuotaDetail {
-    pub model_id: String,
-    pub session_used: i64,
-    pub session_limit: i64,
-    pub session_reset_at: Option<String>,
-    pub remaining_fraction: f64,
-}
+pub use openproxy_types::{AccountQuota, ModelQuotaDetail};
 
-/// Quota snapshot for a single account.
-///
-/// All numeric fields are `Option<i64>` because the upstream may omit
-/// them (e.g. an account with no rate limit). `last_fetched_at` is the
-/// so the UI can show "fetched 12 min ago" and so the operator can
-/// spot a stuck fetcher (a successful fetch updates the timestamp even
-/// when the body is empty).
-///
-/// `fetch_error` carries a short error message when the upstream
-/// returned a non-2xx or the body failed to parse. The other fields
-/// may still be populated in that case (partial parse), or all-NULL
-/// if nothing was recoverable. The UI treats `fetch_error != None` as
-/// the "this account's quota is unknown" signal and shows the message.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct AccountQuota {
-    pub session_used: Option<i64>,
-    pub session_limit: Option<i64>,
-    pub session_reset_at: Option<String>, // ISO-8601 or epoch seconds
-    pub weekly_used: Option<i64>,
-    pub weekly_limit: Option<i64>,
-    pub weekly_reset_at: Option<String>,
-    pub plan_name: Option<String>,
-    pub last_fetched_at: String,
-    pub fetch_error: Option<String>,
-    /// Per-model quota breakdown (Antigravity family providers).
-    /// When present, the UI renders a model-by-model list below the
-    /// aggregate progress bars.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub model_details: Option<Vec<ModelQuotaDetail>>,
-}
-
-impl AccountQuota {
-    /// True when no useful data is present: no usage counters, no
-    /// reset times, and no error message. The UI uses this to decide
-    /// between "not fetched yet" (no rows ever written) and "fetched,
-    /// but the upstream said nothing".
-    pub fn is_empty(&self) -> bool {
-        self.session_used.is_none() && self.weekly_used.is_none() && self.fetch_error.is_none()
-    }
-}
 
 /// Fetch MiniMax Coding Plan quota.
 ///
@@ -389,7 +339,7 @@ async fn fetch_antigravity_subscription_plan(
             http::header::CONTENT_TYPE,
             http::HeaderValue::from_static("application/json"),
         );
-        crate::antigravity_headers::inject_antigravity_headers(&mut req.headers, None);
+        openproxy_adapters::antigravity_headers::inject_antigravity_headers(&mut req.headers, None);
 
         let cancel = CancellationToken::new();
         let response = upstream.call(req, TimeoutProfile::Quota, cancel).await;
@@ -572,7 +522,7 @@ async fn fetch_antigravity_models_quota(
         // sent a hardcoded User-Agent and x-goog-api-client — the API
         // may reject requests missing the x-client-name / x-machine-id
         // headers. See `antigravity_headers` module.
-        crate::antigravity_headers::inject_antigravity_headers(&mut req.headers, None);
+        openproxy_adapters::antigravity_headers::inject_antigravity_headers(&mut req.headers, None);
 
         let cancel = CancellationToken::new();
         let response = upstream.call(req, TimeoutProfile::Quota, cancel).await;
@@ -700,7 +650,7 @@ async fn fetch_antigravity_user_quota(
             http::header::CONTENT_TYPE,
             http::HeaderValue::from_static("application/json"),
         );
-        crate::antigravity_headers::inject_antigravity_headers(&mut req.headers, None);
+        openproxy_adapters::antigravity_headers::inject_antigravity_headers(&mut req.headers, None);
 
         let cancel = CancellationToken::new();
         let response = match upstream.call(req, TimeoutProfile::Quota, cancel).await {
@@ -1409,11 +1359,11 @@ pub async fn fetch_codex_quota(
         http::header::HeaderName::from_static("originator"),
         http::HeaderValue::from_static("codex_cli_rs"),
     );
-    if let Ok(v) = http::HeaderValue::from_str(&crate::adapters::codex::codex_client_version()) {
+    if let Ok(v) = http::HeaderValue::from_str(&openproxy_adapters::adapters::codex::codex_client_version()) {
         req.headers
             .insert(http::HeaderName::from_static("version"), v);
     }
-    if let Ok(v) = http::HeaderValue::from_str(&crate::adapters::codex::codex_user_agent()) {
+    if let Ok(v) = http::HeaderValue::from_str(&openproxy_adapters::adapters::codex::codex_user_agent()) {
         req.headers.insert(http::header::USER_AGENT, v);
     }
     let workspace_header = workspace_id.and_then(codex_workspace_header);

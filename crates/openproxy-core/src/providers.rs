@@ -8,7 +8,7 @@
 use crate::error::{CoreError, Result};
 use crate::ids::ProviderId;
 use rusqlite::{Connection, OptionalExtension, params};
-use serde::{Deserialize, Serialize};
+pub use openproxy_types::providers::*;
 
 // Re-export the built-in predicates from `seed` so callers (and the
 // admin handlers) can use `providers::is_builtin(...)` without
@@ -17,189 +17,6 @@ use serde::{Deserialize, Serialize};
 // built-in providers is defined; the re-export is the
 // public-facing handle.
 pub use crate::seed::{builtin_provider_ids, is_builtin};
-
-/// Wire format spoken by a provider.
-///
-/// `Mixed` covers aggregators like OpenCode Zen that serve OpenAI-shaped
-/// `/chat/completions` for some models and Anthropic-shaped `/messages` for
-/// others; the per-model choice is stored in `models.target_format`.
-///
-/// `Gemini` covers Google's native Gemini API and Cloud Code (Antigravity)
-/// which use the Gemini `contents`/`generationConfig` wire format.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum ProviderFormat {
-    Openai,
-    Anthropic,
-    Mixed,
-    Gemini,
-    Responses,
-}
-
-impl ProviderFormat {
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            ProviderFormat::Openai => "openai",
-            ProviderFormat::Anthropic => "anthropic",
-            ProviderFormat::Mixed => "mixed",
-            ProviderFormat::Gemini => "gemini",
-            ProviderFormat::Responses => "responses",
-        }
-    }
-
-    pub fn parse(s: &str) -> Result<Self> {
-        match s {
-            "openai" => Ok(ProviderFormat::Openai),
-            "anthropic" => Ok(ProviderFormat::Anthropic),
-            "mixed" => Ok(ProviderFormat::Mixed),
-            "gemini" => Ok(ProviderFormat::Gemini),
-            "responses" => Ok(ProviderFormat::Responses),
-            other => Err(CoreError::Validation(format!(
-                "invalid provider format: {}",
-                other
-            ))),
-        }
-    }
-}
-
-/// How the upstream authenticates incoming requests.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum AuthType {
-    /// `Authorization: Bearer <key>`.
-    Bearer,
-    /// `x-api-key: <key>`. Used by Anthropic.
-    XApiKey,
-    /// `x-goog-api-key: <key>`. Used by Google Gemini API.
-    GoogApiKey,
-    /// OAuth 2.0 bearer token (obtained via PKCE or device-code flow).
-    OAuth,
-    /// Anonymous access — no auth header sent.
-    None,
-}
-
-impl AuthType {
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            AuthType::Bearer => "bearer",
-            AuthType::XApiKey => "x-api-key",
-            AuthType::GoogApiKey => "goog-api-key",
-            AuthType::OAuth => "oauth",
-            AuthType::None => "none",
-        }
-    }
-
-    pub fn parse(s: &str) -> Result<Self> {
-        match s {
-            "bearer" => Ok(AuthType::Bearer),
-            "x-api-key" => Ok(AuthType::XApiKey),
-            "goog-api-key" => Ok(AuthType::GoogApiKey),
-            "oauth" => Ok(AuthType::OAuth),
-            "none" => Ok(AuthType::None),
-            other => Err(CoreError::Validation(format!(
-                "invalid auth_type: {}",
-                other
-            ))),
-        }
-    }
-}
-
-/// How the provider's rate limits are scoped.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
-#[serde(rename_all = "lowercase")]
-pub enum RateLimitScope {
-    /// Quota/Rate limits apply to the entire account (default).
-    #[default]
-    Account,
-    /// Quota/Rate limits apply per-model.
-    Model,
-}
-
-impl RateLimitScope {
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            RateLimitScope::Account => "account",
-            RateLimitScope::Model => "model",
-        }
-    }
-
-    pub fn parse(s: &str) -> Result<Self> {
-        match s {
-            "account" => Ok(RateLimitScope::Account),
-            "model" => Ok(RateLimitScope::Model),
-            other => Err(CoreError::Validation(format!(
-                "invalid rate_limit_scope: {}",
-                other
-            ))),
-        }
-    }
-}
-
-/// Row view of the `providers` table. `created_at` is the SQLite datetime
-/// string (UTC) the DB stamped on insert.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Provider {
-    pub id: ProviderId,
-    pub name: String,
-    pub base_url: String,
-    pub auth_type: AuthType,
-    pub format: ProviderFormat,
-    pub extra_headers_json: Option<String>,
-    /// Optional substring the model-refresh path matches against each
-    /// discovered `model_id` to decide whether the new row is
-    /// `active = 1` (matched) or `active = 0` (unmatched). When `None`,
-    /// refresh leaves every discovered model active. Custom (hand-
-    /// created) models are never touched by this logic.
-    pub auto_activate_keyword: Option<String>,
-    /// Soft-disable flag. `true` means the provider is eligible for
-    /// routing; `false` means it has been deactivated — combo-target
-    /// lookups skip it, but the row (and its accounts/models) stays
-    /// in the DB so it can be reactivated later. Defaulted via
-    /// `#[serde(default = "default_true")]` so old clients that don't
-    /// send `active` (e.g. the built-in seed code, older frontend
-    /// snapshots) still see `true` when the row has it set.
-    #[serde(default = "default_true")]
-    pub active: bool,
-    pub created_at: String,
-    #[serde(default)]
-    pub use_proxies: bool,
-    #[serde(default)]
-    pub current_proxy_id: Option<String>,
-    #[serde(default = "default_proxy_rotation_errors")]
-    pub proxy_rotation_errors: String,
-    pub rate_limit_scope: RateLimitScope,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ProviderMetadata {
-    pub built_in: bool,
-    pub deletable: bool,
-    pub supports_quota: bool,
-    pub quota_refresh_supported: bool,
-    pub requires_oauth: bool,
-    pub oauth_refresh_lead_seconds: Option<u64>,
-}
-
-impl ProviderMetadata {
-    pub fn custom_default() -> Self {
-        Self {
-            built_in: false,
-            deletable: true,
-            supports_quota: false,
-            quota_refresh_supported: false,
-            requires_oauth: false,
-            oauth_refresh_lead_seconds: None,
-        }
-    }
-}
-
-fn default_proxy_rotation_errors() -> String {
-    "429,connect_error,timeout".to_string()
-}
-
-fn default_true() -> bool {
-    true
-}
 
 /// Inputs for [`providers::create`]. Bundled as a struct so the call site
 /// can use field names instead of positional args; the DB row is keyed on
@@ -565,8 +382,8 @@ impl std::error::Error for FromStrError {}
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::db::conn::DbPool;
-    use crate::db::migrations;
+    use openproxy_db::conn::DbPool;
+    use openproxy_db::migrations;
     use std::path::PathBuf;
 
     /// Build an in-memory pool for one test: temp dir on disk (rusqlite's

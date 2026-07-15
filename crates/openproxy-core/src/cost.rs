@@ -2,72 +2,12 @@
 //! tokens_per_sec guard (per C3): NULL if completion=0, ttft NULL, or (total-ttft)<=0.
 
 use crate::error::Result;
-use crate::ids::{
-    AccountId, ApiKeyId, ComboId, ComboTargetId, ModelRowId, ProviderId, RequestId, UsageId,
-};
+use crate::ids::UsageId;
 use crate::pricing;
 use once_cell::sync::Lazy;
 use rusqlite::{Connection, params};
 
-#[derive(Debug, Clone)]
-pub struct UsageInput {
-    pub request_id: RequestId,
-    pub trace_id: String,
-    pub attempt: u8,
-    pub provider_id: ProviderId,
-    pub account_id: Option<AccountId>,
-    pub combo_id: Option<ComboId>,
-    pub combo_target_id: Option<ComboTargetId>,
-    pub model_row_id: Option<ModelRowId>,
-    pub upstream_model_id: String,
-    pub prompt_tokens: Option<u32>,
-    pub completion_tokens: Option<u32>,
-    pub connect_ms: Option<u64>,
-    pub ttft_ms: Option<u64>,
-    pub total_ms: u64,
-    pub status_code: u16,
-    pub error_msg: Option<String>,
-    pub race_total: u8,
-    pub race_lost: bool,
-    /// The API key that produced this attempt, if the chat handler
-    /// authenticated the caller. Anonymous (no Authorization header)
-    /// traffic is `None`; the column is also `None` for rows
-    /// predating the 000015 migration.
-    pub api_key_id: Option<ApiKeyId>,
-    pub request_body_json: Option<bytes::Bytes>,
-    pub response_body_json: Option<serde_json::Value>,
-    pub request_headers: Option<std::collections::BTreeMap<String, String>>,
-    pub response_headers: Option<std::collections::BTreeMap<String, String>>,
-    pub error_message: Option<String>,
-    pub race_attempts: u8,
-    pub is_streaming: bool,
-    pub stream_complete: bool,
-    /// Upstream stop reason (e.g. "end_turn", "max_tokens",
-    /// "stop_sequence" for Anthropic; "stop", "length" for OpenAI).
-    pub stop_reason: Option<String>,
-    /// Compression savings (0.0–100.0) or None if off/no savings.
-    pub compression_savings_pct: Option<f64>,
-    /// Compression techniques applied (CSV), None if off.
-    pub compression_techniques: Option<String>,
-    /// True iff this row's response was actually delivered to the
-    /// HTTP client (the winning attempt in a combo walk, or the final
-    /// error). False for intermediate attempts that were retried
-    /// internally — their response never reached the client.
-    ///
-    /// Set to `false` at recording time for all attempts; the combo
-    /// walk's winner-decision point UPDATEs the winning row to `true`
-    /// after `Pipeline::run` decides which result to return.
-    pub client_response: bool,
-    /// True if prompt_tokens were estimated (upstream didn't report usage).
-    pub prompt_tokens_estimated: bool,
-    /// True if completion_tokens were estimated (upstream didn't report usage).
-    pub completion_tokens_estimated: bool,
-    /// The endpoint kind (chat, audio, image, etc.). Defaults to Chat.
-    pub endpoint_kind: crate::endpoint::EndpointKind,
-    pub proxy_url: Option<String>,
-    pub proxy_status: Option<String>,
-    pub is_proxy_rotated: bool,
-}
+pub use openproxy_types::usage::UsageInput;
 
 /// Computes (cost_usd, tokens_per_sec) from pricing + tokens + timing.
 /// Per C3: tokens_per_sec is None if any guard fails.
@@ -290,7 +230,7 @@ pub fn record(conn: &Connection, input: &UsageInput) -> Result<UsageId> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ids::TraceId;
+    use crate::ids::{ProviderId, RequestId, TraceId};
 
     fn make_input() -> UsageInput {
         UsageInput {

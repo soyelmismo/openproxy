@@ -6,7 +6,7 @@
 //! erroring. The existing sse::tests did not cover this case because
 //! their test fixtures omitted `role`.
 
-use openproxy_core::sse::parse_gemini_sse_line;
+use openproxy_pipeline::sse::parse_gemini_sse_line;
 
 #[test]
 fn gemini_probe_handles_role_sibling_in_content() {

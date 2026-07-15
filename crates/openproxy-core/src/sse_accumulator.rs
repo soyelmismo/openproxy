@@ -24,7 +24,7 @@
 
 use serde_json::{Map, Value, json};
 
-use crate::translation::OpenAIUsage;
+use openproxy_pipeline::translation::OpenAIUsage;
 
 /// Scan `payload` for `marker` (a JSON `"field":"` literal) and return the
 /// raw substring between the opening and closing quotes, honouring `\` escapes.

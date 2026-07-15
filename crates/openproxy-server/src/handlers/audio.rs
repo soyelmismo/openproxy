@@ -1,7 +1,7 @@
 //! `POST /v1/audio/transcriptions` — OpenAI-compatible Whisper endpoint.
 //!
 //! This is a *standalone* handler that does NOT route through the chat
-//! [`Pipeline`](openproxy_core::pipeline::Pipeline). The pipeline is
+//! [`Pipeline`](openproxy_pipeline::Pipeline). The pipeline is
 //! deeply coupled to JSON request bodies, SSE streaming, token-based
 //! usage, and retry/circuit-breaker semantics that don't fit the
 //! multipart Whisper flow. Instead, the handler reuses:
@@ -44,13 +44,13 @@ use axum::{
     response::Response,
 };
 use openproxy_core::{
-    CoreError, accounts, adapters,
-    adapters::ProviderAdapter,
+    CoreError, accounts,
     cost,
     ids::{AccountId, ApiKeyId, ComboId, ModelRowId, ProviderId, RequestId, TraceId},
     models, providers,
     routing::{self, RoutingPlan},
 };
+use openproxy_adapters::adapters;
 use std::time::Instant;
 
 use crate::{error::ApiError, middleware::auth::authenticate, state::AppState};
@@ -328,7 +328,7 @@ async fn dispatch_audio_request(
     api_key: &str,
     upstream_model_id: &str,
     body: ParsedAudioBody,
-) -> Result<openproxy_core::upstream::UpstreamResponse, ApiError> {
+) -> Result<openproxy_adapters::upstream::UpstreamResponse, ApiError> {
     let Some((auth_name, auth_value)) = adapter.build_auth_header(api_key) else {
         return Err(ApiError(CoreError::Validation("Invalid API Key".into())));
     };
@@ -370,7 +370,7 @@ async fn dispatch_audio_request(
     payload.extend_from_slice(format!("--{}--\r\n", boundary).as_bytes());
 
     let content_type = format!("multipart/form-data; boundary={}", boundary);
-    let mut req = openproxy_core::upstream::UpstreamRequest::post_multipart(
+    let mut req = openproxy_adapters::upstream::UpstreamRequest::post_multipart(
         upstream_url,
         content_type,
         bytes::Bytes::from(payload),
@@ -391,9 +391,9 @@ async fn dispatch_audio_request(
     }
 
     let client = state.upstream_client();
-    let cancel = openproxy_core::upstream::CancellationToken::new();
+    let cancel = openproxy_adapters::upstream::CancellationToken::new();
     client
-        .call(req, openproxy_core::upstream::TimeoutProfile::Quota, cancel)
+        .call(req, openproxy_adapters::upstream::TimeoutProfile::Quota, cancel)
         .await
         .map_err(|e| {
             ApiError(CoreError::UpstreamConnection(format!(
@@ -501,7 +501,7 @@ fn record_audio_usage_row(args: AudioUsageArgs<'_>) -> Result<(), ApiError> {
         error_msg,
         total_ms,
     } = args;
-    use openproxy_core::cost::UsageInput;
+    use openproxy_types::UsageInput;
     let input = UsageInput {
         proxy_url: None,
         proxy_status: None,
@@ -544,7 +544,7 @@ fn record_audio_usage_row(args: AudioUsageArgs<'_>) -> Result<(), ApiError> {
         client_response: true,
         prompt_tokens_estimated: false,
         completion_tokens_estimated: false,
-        endpoint_kind: openproxy_core::endpoint::EndpointKind::Audio,
+        endpoint_kind: openproxy_types::EndpointKind::Audio,
     };
     let w = match state
         .db_pool()

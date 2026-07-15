@@ -1,0 +1,46 @@
+[package]
+name = "openproxy-adapters"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[features]
+default = ["upstream-hyper"]
+upstream-hyper = ["dep:hyper", "dep:hyper-util", "dep:http-body", "dep:http-body-util", "dep:futures-util", "dep:tokio-rustls", "dep:rustls", "dep:rustls-pki-types", "dep:webpki-roots", "dep:socket2"]
+test-utils = []
+ssrf-bypass = []
+
+[dependencies]
+openproxy-types = { path = "../openproxy-types" }
+openproxy-db = { path = "../openproxy-db" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+rusqlite = { workspace = true }
+parking_lot = { workspace = true }
+bytes = "1"
+http = "1"
+tracing = { workspace = true }
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true }
+ahash = "0.8.12"
+once_cell = { workspace = true }
+regex = { workspace = true }
+dashmap = { workspace = true }
+tower-service = "0.3"
+tokio-util = { workspace = true, features = ["rt"] }
+uuid = { workspace = true }
+sha2 = { workspace = true }
+
+hyper = { version = "1.10", default-features = false, features = ["client", "http1", "http2"], optional = true }
+hyper-util = { version = "0.1", default-features = false, features = ["client-legacy", "tokio", "http1", "http2"], optional = true }
+http-body = { version = "1", optional = true }
+http-body-util = { version = "0.1", default-features = false, features = ["channel"], optional = true }
+futures-util = { version = "0.3", default-features = false, features = ["std"], optional = true }
+socket2 = { version = "0.6", features = ["all"], optional = true }
+tokio-rustls = { version = "0.26", optional = true }
+rustls = { version = "0.23", default-features = false, features = ["logging", "std", "tls12", "ring"], optional = true }
+rustls-pki-types = { version = "1", optional = true }
+webpki-roots = { version = "1", optional = true }

@@ -13,13 +13,15 @@
 //! cheap-to-clone and the type itself is `Send + Sync` by construction.
 
 use openproxy_core::{
-    AppConfig, adapters, db,
+    AppConfig,
     discovery_scheduler::{self, DiscoveryScheduler},
     oauth,
     secrets::MasterKey,
-    upstream::UpstreamClient,
     usage,
 };
+use openproxy_adapters::adapters;
+use openproxy_adapters::upstream::UpstreamClient;
+use openproxy_db as db;
 use parking_lot::RwLock;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
@@ -55,14 +57,14 @@ pub struct AppState {
     /// `Pipeline` it builds so the admin endpoint can flip the
     /// state for the whole process at once.
     record_bodies_and_headers: Arc<AtomicBool>,
-    /// Hot-swappable slot for [`openproxy_core::config::TimeoutsConfig`].
+    /// Hot-swappable slot for [`openproxy_types::config::TimeoutsConfig`].
     /// Reads in `chat.rs` go through [`AppState::timeouts`] which
     /// copies the 5-u64 struct atomically. Writes are done by the
     /// `PUT /admin/config/timeouts` handler after the DB
     /// row has been updated. See spec §5 / §7.
-    timeouts_cell: Arc<RwLock<openproxy_core::config::TimeoutsConfig>>,
-    /// Hot-swappable slot for [`openproxy_core::compression::CompressionMode`].
-    compression_mode_cell: Arc<RwLock<openproxy_core::compression::CompressionMode>>,
+    timeouts_cell: Arc<RwLock<openproxy_types::config::TimeoutsConfig>>,
+    /// Hot-swappable slot for [`openproxy_compression::CompressionMode`].
+    compression_mode_cell: Arc<RwLock<openproxy_compression::CompressionMode>>,
     /// Hot-swappable slot for the recording body TTL in seconds.
     /// This controls how long request/response bodies and headers
     /// remain in the `usage` table before being nullified.
@@ -93,7 +95,7 @@ pub struct AppState {
     /// target). Default false. Persisted in `app_config` table.
     idle_chunk_retryable_cell: Arc<AtomicBool>,
     /// Hot-swappable configuration for quota protection.
-    quota_protection_cell: Arc<parking_lot::RwLock<openproxy_core::config::QuotaProtectionConfig>>,
+    quota_protection_cell: Arc<parking_lot::RwLock<openproxy_types::config::QuotaProtectionConfig>>,
     /// In-memory selection registry for the LKGP / least_used /
     /// p2c priority modes (migration 000035). Tracks per-target
     /// recent success timestamps and request counts so the
@@ -103,7 +105,7 @@ pub struct AppState {
     /// every per-request `Pipeline` via
     /// [`Pipeline::with_selection_registry`] so LKGP state
     /// survives across requests.
-    selection_registry: Arc<openproxy_core::combos::SelectionRegistry>,
+    selection_registry: Arc<openproxy_pipeline::SelectionRegistry>,
     /// Shared circuit breaker registry. Created once at boot and
     /// cloned into every per-request `Pipeline` (the registry is
     /// `Clone` — its inner state is `Arc<Mutex<...>>`, so clones
@@ -111,17 +113,17 @@ pub struct AppState {
     /// actually functional: failures in one request affect the
     /// next, and the `prune_idle` sweep in the background task
     /// can clean up stale entries.
-    circuit_breaker: openproxy_core::circuit_breaker::CircuitBreakerRegistry,
+    circuit_breaker: openproxy_pipeline::circuit_breaker::CircuitBreakerRegistry,
     /// VACUUM maintenance settings (runtime-editable via the dashboard
     /// config view or `PUT /admin/api/config/maintenance`). The
     /// background task reads these on every tick.
-    maintenance_cell: Arc<RwLock<openproxy_core::config::MaintenanceConfig>>,
+    maintenance_cell: Arc<RwLock<openproxy_types::config::MaintenanceConfig>>,
     /// VACUUM status: last-run timestamp, last-run result, and whether
     /// a VACUUM is currently in progress. Read by the dashboard's
     /// config view to show the button state.
     vacuum_status: Arc<RwLock<VacuumStatus>>,
     /// Sender for background worker jobs (usage insertion, cooldowns)
-    background_tx: tokio::sync::mpsc::Sender<openproxy_core::pipeline::worker::BackgroundJob>,
+    background_tx: tokio::sync::mpsc::Sender<openproxy_pipeline::worker::BackgroundJob>,
 }
 
 /// VACUUM status reported to the dashboard. Updated by the background
@@ -158,7 +160,7 @@ impl AppState {
         let mut config = config;
         let mut recording_ttl_secs = db::app_config::RECORDING_TTL_DEFAULT_SECS;
         let mut idle_chunk_retryable = db::app_config::IDLE_CHUNK_RETRYABLE_DEFAULT;
-        let mut compression_mode = openproxy_core::compression::CompressionMode::Off;
+        let mut compression_mode = openproxy_compression::CompressionMode::Off;
 
         run_database_maintenance(
             &mut db_pool.writer(),
@@ -217,9 +219,9 @@ impl AppState {
         ));
         spawn_rate_limiter_cleanup(rate_limiter.clone());
 
-        let selection_registry = Arc::new(openproxy_core::combos::SelectionRegistry::new());
-        let circuit_breaker = openproxy_core::circuit_breaker::CircuitBreakerRegistry::new(
-            &openproxy_core::config::CircuitBreakerConfig {
+        let selection_registry = Arc::new(openproxy_pipeline::SelectionRegistry::new());
+        let circuit_breaker = openproxy_pipeline::circuit_breaker::CircuitBreakerRegistry::new(
+            &openproxy_types::config::CircuitBreakerConfig {
                 failure_threshold: 5,
                 unhealthy_duration_ms: 60_000,
             },
@@ -229,8 +231,10 @@ impl AppState {
         let quota_protection = config.quota_protection.clone();
 
         let (background_tx, background_rx) = tokio::sync::mpsc::channel(1024);
-        openproxy_core::pipeline::worker::spawn_worker(
+        let repo = Arc::new(openproxy_pipeline::SqlitePipelineRepository::new(db_pool.writer_arc()));
+        openproxy_pipeline::worker::spawn_worker(
             db_pool.writer_arc(),
+            repo,
             background_rx,
             selection_registry.clone(),
         );
@@ -286,7 +290,7 @@ impl AppState {
         let recording_ttl_secs_cell =
             Arc::new(RwLock::new(db::app_config::RECORDING_TTL_DEFAULT_SECS));
         let maintenance_cell = Arc::new(RwLock::new(
-            openproxy_core::config::MaintenanceConfig::default(),
+            openproxy_types::config::MaintenanceConfig::default(),
         ));
         let vacuum_status = Arc::new(RwLock::new(VacuumStatus::default()));
         let upstream_client = UpstreamClient::new();
@@ -323,9 +327,9 @@ impl AppState {
         ));
         spawn_rate_limiter_cleanup(rate_limiter.clone());
 
-        let selection_registry = Arc::new(openproxy_core::combos::SelectionRegistry::new());
-        let circuit_breaker = openproxy_core::circuit_breaker::CircuitBreakerRegistry::new(
-            &openproxy_core::config::CircuitBreakerConfig {
+        let selection_registry = Arc::new(openproxy_pipeline::SelectionRegistry::new());
+        let circuit_breaker = openproxy_pipeline::circuit_breaker::CircuitBreakerRegistry::new(
+            &openproxy_types::config::CircuitBreakerConfig {
                 failure_threshold: 5,
                 unhealthy_duration_ms: 60_000,
             },
@@ -349,7 +353,7 @@ impl AppState {
             record_bodies_and_headers: Arc::new(AtomicBool::new(false)),
             timeouts_cell: Arc::new(RwLock::new(config.timeouts)),
             compression_mode_cell: Arc::new(RwLock::new(
-                openproxy_core::compression::CompressionMode::Off,
+                openproxy_compression::CompressionMode::Off,
             )),
             recording_ttl_secs_cell,
             discovery_scheduler: Arc::new(discovery_scheduler),
@@ -532,18 +536,18 @@ impl AppState {
     /// (see `chat.rs`). It may differ from `config().timeouts` after a
     /// `PUT /admin/config/timeouts` — `config()` is the startup
     /// snapshot, this one is the live one.
-    pub fn timeouts(&self) -> openproxy_core::config::TimeoutsConfig {
+    pub fn timeouts(&self) -> openproxy_types::config::TimeoutsConfig {
         *self.timeouts_cell.read()
     }
 
     /// Return the current compression mode (hot-swappable).
-    pub fn compression_mode(&self) -> openproxy_core::compression::CompressionMode {
+    pub fn compression_mode(&self) -> openproxy_compression::CompressionMode {
         *self.compression_mode_cell.read()
     }
 
     /// Replace the live compression mode. Called by
     /// `PUT /admin/config/compression` after the DB UPSERT.
-    pub fn set_compression_mode(&self, mode: openproxy_core::compression::CompressionMode) {
+    pub fn set_compression_mode(&self, mode: openproxy_compression::CompressionMode) {
         *self.compression_mode_cell.write() = mode;
     }
 
@@ -551,7 +555,7 @@ impl AppState {
     /// `PUT /admin/config/timeouts` handler *after* the DB UPSERT
     /// has succeeded. Takes the write lock briefly; readers see the
     /// new value as soon as this returns.
-    pub fn set_timeouts(&self, t: openproxy_core::config::TimeoutsConfig) {
+    pub fn set_timeouts(&self, t: openproxy_types::config::TimeoutsConfig) {
         let mut cell = self.timeouts_cell.write();
         *cell = t;
     }
@@ -570,22 +574,22 @@ impl AppState {
     }
 
     /// Read the current live `quota_protection` configuration.
-    pub fn quota_protection(&self) -> openproxy_core::config::QuotaProtectionConfig {
+    pub fn quota_protection(&self) -> openproxy_types::config::QuotaProtectionConfig {
         self.quota_protection_cell.read().clone()
     }
 
     /// Replace the live `quota_protection` configuration. Called by the
     /// admin PUT endpoint after the DB UPSERT.
-    pub fn set_quota_protection(&self, config: openproxy_core::config::QuotaProtectionConfig) {
+    pub fn set_quota_protection(&self, config: openproxy_types::config::QuotaProtectionConfig) {
         *self.quota_protection_cell.write() = config;
     }
 
     /// Return a clone of the shared selection registry. The chat
     /// handler passes this into every `Pipeline` it builds via
-    /// [`openproxy_core::pipeline::Pipeline::with_selection_registry`]
+    /// [`openproxy_pipeline::Pipeline::with_selection_registry`]
     /// so the LKGP / least_used / p2c priority modes share state
     /// across all in-flight requests.
-    pub fn selection_registry(&self) -> Arc<openproxy_core::combos::SelectionRegistry> {
+    pub fn selection_registry(&self) -> Arc<openproxy_pipeline::SelectionRegistry> {
         Arc::clone(&self.selection_registry)
     }
 
@@ -593,26 +597,26 @@ impl AppState {
     /// per-request `Pipeline` so failures in one request affect the
     /// next. The registry is `Clone` (inner `Arc<Mutex<...>>`), so
     /// the clone shares the same underlying map.
-    pub fn circuit_breaker(&self) -> openproxy_core::circuit_breaker::CircuitBreakerRegistry {
+    pub fn circuit_breaker(&self) -> openproxy_pipeline::circuit_breaker::CircuitBreakerRegistry {
         self.circuit_breaker.clone()
     }
 
     pub fn background_tx(
         &self,
-    ) -> tokio::sync::mpsc::Sender<openproxy_core::pipeline::worker::BackgroundJob> {
+    ) -> tokio::sync::mpsc::Sender<openproxy_pipeline::worker::BackgroundJob> {
         self.background_tx.clone()
     }
 
     /// Read the current maintenance config (auto_vacuum, interval,
     /// retention). Returns a clone so callers don't hold the lock.
-    pub fn maintenance_config(&self) -> openproxy_core::config::MaintenanceConfig {
+    pub fn maintenance_config(&self) -> openproxy_types::config::MaintenanceConfig {
         self.maintenance_cell.read().clone()
     }
 
     /// Update the maintenance config at runtime. Persists to the
     /// in-memory cell; the background task picks up the new values
     /// on its next tick.
-    pub fn set_maintenance_config(&self, cfg: openproxy_core::config::MaintenanceConfig) {
+    pub fn set_maintenance_config(&self, cfg: openproxy_types::config::MaintenanceConfig) {
         *self.maintenance_cell.write() = cfg;
     }
 
@@ -639,26 +643,26 @@ impl AppState {
 
 // ── Private helpers for construction and background tasks ───────────
 
-fn init_database(config: &openproxy_core::AppConfig) -> anyhow::Result<openproxy_core::db::DbPool> {
+fn init_database(config: &openproxy_core::AppConfig) -> anyhow::Result<openproxy_db::DbPool> {
     let path = config.expanded_database_path();
     if let Some(parent) = path.parent()
         && !parent.as_os_str().is_empty()
     {
         std::fs::create_dir_all(parent)?;
     }
-    Ok(openproxy_core::db::DbPool::open(&path)?)
+    Ok(openproxy_db::DbPool::open(&path)?)
 }
 
 fn run_database_maintenance(
-    w: &mut openproxy_core::db::conn::WriterGuard<'_>,
+    w: &mut openproxy_db::conn::WriterGuard<'_>,
     config: &mut openproxy_core::AppConfig,
     recording_ttl_secs: &mut i64,
     idle_chunk_retryable: &mut bool,
-    compression_mode: &mut openproxy_core::compression::CompressionMode,
+    compression_mode: &mut openproxy_compression::CompressionMode,
 ) -> anyhow::Result<()> {
-    openproxy_core::db::migrations::run(w)?;
+    openproxy_db::migrations::run(w)?;
 
-    if let Some(override_cfg) = openproxy_core::db::app_config::load_timeouts_override_from_db(w)? {
+    if let Some(override_cfg) = openproxy_db::app_config::load_timeouts_override_from_db(w)? {
         tracing::info!(
             connect_ms = override_cfg.connect_ms,
             request_send_ms = override_cfg.request_send_ms,
@@ -670,7 +674,7 @@ fn run_database_maintenance(
         config.timeouts = override_cfg;
     }
 
-    if let Some(ttl) = openproxy_core::db::app_config::load_recording_ttl_from_db(w)? {
+    if let Some(ttl) = openproxy_db::app_config::load_recording_ttl_from_db(w)? {
         *recording_ttl_secs = ttl;
     }
     tracing::info!(
@@ -678,7 +682,7 @@ fn run_database_maintenance(
         "loaded recording TTL from app_config (default 300s)"
     );
 
-    if let Some(val) = openproxy_core::db::app_config::load_idle_chunk_retryable_from_db(w)? {
+    if let Some(val) = openproxy_db::app_config::load_idle_chunk_retryable_from_db(w)? {
         *idle_chunk_retryable = val;
     }
     tracing::info!(
@@ -686,7 +690,7 @@ fn run_database_maintenance(
         "loaded idle_chunk_retryable from app_config (default false)"
     );
 
-    if let Some(mode) = openproxy_core::db::app_config::load_compression_override_from_db(w)? {
+    if let Some(mode) = openproxy_db::app_config::load_compression_override_from_db(w)? {
         tracing::info!(
             ?mode,
             "loaded persisted compression override from app_config"
@@ -700,7 +704,7 @@ fn run_database_maintenance(
     }
 
     if let Some(quota_cfg) =
-        openproxy_core::db::app_config::load_quota_protection_override_from_db(w)?
+        openproxy_db::app_config::load_quota_protection_override_from_db(w)?
     {
         tracing::info!(
             enabled = quota_cfg.enabled,
@@ -755,14 +759,14 @@ fn run_database_maintenance(
 }
 
 struct SpawnBackgroundTasksArgs {
-    db_pool: Arc<openproxy_core::db::DbPool>,
+    db_pool: Arc<openproxy_db::DbPool>,
     config: openproxy_core::AppConfig,
     recording_ttl_secs_cell: Arc<RwLock<i64>>,
-    maintenance_cell: Arc<RwLock<openproxy_core::config::MaintenanceConfig>>,
+    maintenance_cell: Arc<RwLock<openproxy_types::config::MaintenanceConfig>>,
     vacuum_status: Arc<RwLock<crate::state::VacuumStatus>>,
-    master_key: Arc<openproxy_core::secrets::MasterKey>,
-    adapters: Arc<RwLock<Vec<openproxy_core::adapters::ProviderAdapterEnum>>>,
-    upstream_client: Arc<openproxy_core::upstream::UpstreamClient>,
+    master_key: Arc<openproxy_db::secrets::MasterKey>,
+    adapters: Arc<RwLock<Vec<openproxy_adapters::adapters::ProviderAdapterEnum>>>,
+    upstream_client: Arc<openproxy_adapters::upstream::UpstreamClient>,
     oauth_provider_registry: Arc<openproxy_core::oauth::OAuthProviderRegistry>,
 }
 
@@ -906,7 +910,7 @@ async fn spawn_background_tasks(args: SpawnBackgroundTasksArgs) {
                 let m = maint_cell.read();
                 (
                     m.auto_vacuum,
-                    m.vacuum_interval_hours,
+                    (m.interval_secs / 3600) as u32,
                     m.usage_retention_days,
                 )
             };
@@ -961,10 +965,10 @@ async fn spawn_background_tasks(args: SpawnBackgroundTasksArgs) {
 }
 
 async fn start_discovery_scheduler(
-    db_pool: Arc<openproxy_core::db::DbPool>,
-    master_key: Arc<openproxy_core::secrets::MasterKey>,
-    adapters: Arc<RwLock<Vec<openproxy_core::adapters::ProviderAdapterEnum>>>,
-    upstream_client: Arc<openproxy_core::upstream::UpstreamClient>,
+    db_pool: Arc<openproxy_db::DbPool>,
+    master_key: Arc<openproxy_db::secrets::MasterKey>,
+    adapters: Arc<RwLock<Vec<openproxy_adapters::adapters::ProviderAdapterEnum>>>,
+    upstream_client: Arc<openproxy_adapters::upstream::UpstreamClient>,
 ) -> openproxy_core::discovery_scheduler::DiscoveryScheduler {
     let adapters_clone = Arc::new(adapters.read().clone());
     openproxy_core::discovery_scheduler::start(
@@ -989,8 +993,8 @@ fn spawn_rate_limiter_cleanup(rate_limiter: Arc<crate::rate_limit::RateLimiter>)
 }
 
 fn spawn_memory_cleanup(
-    selection_registry: Arc<openproxy_core::combos::SelectionRegistry>,
-    circuit_breaker: openproxy_core::circuit_breaker::CircuitBreakerRegistry,
+    selection_registry: Arc<openproxy_pipeline::SelectionRegistry>,
+    circuit_breaker: openproxy_pipeline::circuit_breaker::CircuitBreakerRegistry,
 ) {
     tokio::spawn(async move {
         let mut fast_tick = tokio::time::interval(std::time::Duration::from_secs(60));
@@ -1026,10 +1030,11 @@ mod tests {
 
     use super::*;
     use crate::state::AppState;
-    use openproxy_core::adapters::ProviderAdapter;
     use openproxy_core::{
-        AppConfig, adapters, db as core_db, ids::ProviderId, providers, secrets::MasterKey,
+        AppConfig, ids::ProviderId, providers, secrets::MasterKey,
     };
+    use openproxy_adapters::adapters;
+    use openproxy_db as core_db;
     use std::path::PathBuf;
     use std::sync::Arc;
 

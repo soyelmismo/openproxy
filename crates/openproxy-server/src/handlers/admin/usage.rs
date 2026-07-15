@@ -619,7 +619,7 @@ pub(crate) fn run_analytics_query_with_filter<T, F>(
 ) -> Result<T, ApiError>
 where
     F: Fn(
-        &openproxy_core::db::conn::ReaderGuard<'_>,
+        &openproxy_db::conn::ReaderGuard<'_>,
         &core_usage::UsageFilter,
     ) -> Result<T, CoreError>,
 {

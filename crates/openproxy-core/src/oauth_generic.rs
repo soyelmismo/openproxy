@@ -14,7 +14,7 @@ use uuid::Uuid;
 use crate::error::{CoreError, Result};
 use crate::ids::AccountId;
 use crate::oauth::{DbRef, DeviceAuthorizationResponse, OAuthFlow, OAuthProvider, TokenResponse};
-use crate::upstream::{
+use openproxy_adapters::upstream::{
     CancellationToken, TimeoutProfile, UpstreamClient, UpstreamError, UpstreamRequest,
 };
 
@@ -338,7 +338,7 @@ macro_rules! delegate_oauth_to_generic {
             &self,
             code: &str,
             code_verifier: &str,
-            upstream_client: &std::sync::Arc<$crate::upstream::UpstreamClient>,
+            upstream_client: &std::sync::Arc<openproxy_adapters::upstream::UpstreamClient>,
             redirect_uri: &str,
         ) -> $crate::error::Result<$crate::oauth::TokenResponse> {
             self.generic
@@ -349,7 +349,7 @@ macro_rules! delegate_oauth_to_generic {
     (request_device_code) => {
         async fn request_device_code(
             &self,
-            upstream_client: &std::sync::Arc<$crate::upstream::UpstreamClient>,
+            upstream_client: &std::sync::Arc<openproxy_adapters::upstream::UpstreamClient>,
         ) -> $crate::error::Result<$crate::oauth::DeviceAuthorizationResponse> {
             self.generic.request_device_code(upstream_client).await
         }
@@ -358,7 +358,7 @@ macro_rules! delegate_oauth_to_generic {
         async fn poll_device_token(
             &self,
             device_code: &str,
-            upstream_client: &std::sync::Arc<$crate::upstream::UpstreamClient>,
+            upstream_client: &std::sync::Arc<openproxy_adapters::upstream::UpstreamClient>,
         ) -> $crate::error::Result<Option<$crate::oauth::TokenResponse>> {
             self.generic
                 .poll_device_token(device_code, upstream_client)
@@ -369,7 +369,7 @@ macro_rules! delegate_oauth_to_generic {
         async fn refresh_token(
             &self,
             refresh_token: &str,
-            upstream_client: &std::sync::Arc<$crate::upstream::UpstreamClient>,
+            upstream_client: &std::sync::Arc<openproxy_adapters::upstream::UpstreamClient>,
             account_id: $crate::ids::AccountId,
             db: $crate::oauth::DbRef<'_>,
         ) -> $crate::error::Result<$crate::oauth::TokenResponse> {

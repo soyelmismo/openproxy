@@ -1,7 +1,7 @@
 //! Auto-seed built-in providers on first run.
 //!
 //! The providers in this list correspond 1:1 to the built-in adapters
-//! registered in [`crate::adapters::builtin_adapters`]. Inserting a row for
+//! registered in [`openproxy_adapters::adapters::builtin_adapters`]. Inserting a row for
 //! each one on startup means the user can immediately see them in the
 //! dashboard (and reference them by id in API calls) without having to
 //! hand-create them.
@@ -11,7 +11,7 @@
 //! exists. This makes the function safe to call on every startup — it only
 //! ever *adds* new rows, never updates or duplicates.
 //!
-//! [`crate::adapters::builtin_adapters`]: crate::adapters
+//! [`openproxy_adapters::adapters::builtin_adapters`]: crate::adapters
 
 use crate::capabilities;
 use crate::error::Result;
@@ -169,7 +169,7 @@ const BUILTINS: &[Builtin<'static>] = &[
 /// These are the providers that ship with the binary and are seeded
 /// into the `providers` table on first run. They are **inborrables**
 /// (cannot be deleted) because removing the row would leave dangling
-/// references in [`crate::adapters::builtin_adapters`] — the adapter
+/// references in [`openproxy_adapters::adapters::builtin_adapters`] — the adapter
 /// registry still holds a clone of the id and would panic on a
 /// routing attempt for a provider that no longer exists. The
 /// `delete_provider` admin path therefore rejects built-in ids with
@@ -387,8 +387,8 @@ pub fn backfill_model_metadata(conn: &Connection) -> Result<u64> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::db::conn::DbPool;
-    use crate::db::migrations;
+    use openproxy_db::conn::DbPool;
+    use openproxy_db::migrations;
     use std::path::PathBuf;
 
     /// Build an in-process pool: temp dir on disk, migrations applied.

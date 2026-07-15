@@ -1,90 +1,15 @@
 //! Account CRUD. API keys are stored encrypted (BLOB) using a MasterKey.
 //!
 //! See docs/mvp-spec.md §3 (Provider configuration in the DB) and §8 (schema).
-//! The `api_key_encrypted` column is a BLOB produced by [`crate::secrets::MasterKey::encrypt`];
+//! The `api_key_encrypted` column is a BLOB produced by [`openproxy_db::secrets::MasterKey::encrypt`];
 //! plaintext keys never touch the database.
 
 use crate::error::{CoreError, Result};
 use crate::ids::{AccountId, ProviderId};
-use crate::secrets::MasterKey;
+use openproxy_db::secrets::MasterKey;
 use rusqlite::{Connection, OptionalExtension, params};
-use serde::{Deserialize, Serialize};
 
-/// Health flag tracked per account. `Healthy` is the default; `Degraded` and
-/// `Unhealthy` are sticky signals set by the runtime when an account repeatedly
-/// fails or returns 429s, and used by combo routing to skip bad accounts.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum HealthStatus {
-    Healthy,
-    Degraded,
-    Unhealthy,
-}
-
-impl HealthStatus {
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            Self::Healthy => "healthy",
-            Self::Degraded => "degraded",
-            Self::Unhealthy => "unhealthy",
-        }
-    }
-
-    pub fn parse(s: &str) -> Result<Self> {
-        match s {
-            "healthy" => Ok(Self::Healthy),
-            "degraded" => Ok(Self::Degraded),
-            "unhealthy" => Ok(Self::Unhealthy),
-            other => Err(CoreError::Validation(format!("invalid health: {}", other))),
-        }
-    }
-}
-
-/// Row view of the `accounts` table. `api_key_encrypted` is intentionally not
-/// exposed here — use [`decrypt_api_key`] to obtain the plaintext.
-///
-/// `quota_*` fields are populated by [`crate::quota::fetch_minimax_quota`]
-/// (or similar per-provider fetchers) and stamped onto the row by
-/// [`set_quota`]. They are NULL for providers that do not expose a quota
-/// endpoint.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Account {
-    pub id: AccountId,
-    pub provider_id: ProviderId,
-    pub label: Option<String>,
-    pub priority: i32,
-    pub extra_config_json: Option<String>,
-    pub health_status: HealthStatus,
-    pub rate_limited_until: Option<String>,
-    pub quota_session_used: Option<i64>,
-    pub quota_session_limit: Option<i64>,
-    pub quota_session_reset_at: Option<String>,
-    pub quota_weekly_used: Option<i64>,
-    pub quota_weekly_limit: Option<i64>,
-    pub quota_weekly_reset_at: Option<String>,
-    pub quota_plan_name: Option<String>,
-    pub quota_last_fetched_at: Option<String>,
-    pub quota_fetch_error: Option<String>,
-    /// Per-model quota details. Populated by providers that expose
-    /// per-model quota (Antigravity family). NULL for providers that
-    /// only expose aggregate quota. Stored in the DB as a JSON TEXT
-    /// column; deserialized into a `serde_json::Value` (Array) so the
-    /// API response sends a proper JSON array, not a stringified one.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub quota_model_details: Option<serde_json::Value>,
-    /// Account auth method: `api_key` (static key) or `oauth` (OAuth tokens).
-    pub auth_type: String,
-    /// Email associated with the OAuth account.
-    pub email: Option<String>,
-    /// OAuth scope string.
-    pub oauth_scope: Option<String>,
-    /// Provider-specific OAuth metadata (JSON).
-    #[serde(skip_serializing)]
-    pub oauth_provider_specific: Option<String>,
-    /// Token expiry timestamp (ISO-8601). NULL for non-OAuth accounts.
-    pub expires_at: Option<String>,
-    pub created_at: String,
-}
+pub use openproxy_types::accounts::*;
 
 /// Insert a new account. The API key is encrypted with `master_key` before it
 /// reaches the database; only the resulting BLOB is stored. Returns the new
@@ -768,8 +693,8 @@ impl std::error::Error for FromStrError {}
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::db::conn::DbPool;
-    use crate::db::migrations;
+    use openproxy_db::conn::DbPool;
+    use openproxy_db::migrations;
     use crate::providers::{self, AuthType, ProviderFormat};
     use std::path::PathBuf;
 

@@ -52,10 +52,7 @@
 //!   implementation [`SqliteModelRepository`].
 //! - **`discovery`** — [`DiscoveryService`] that orchestrates
 //!   fetch → upsert → auto-activate.
-
-use crate::error::{CoreError, Result};
-use crate::ids::{ModelId, ModelRowId, ProviderId};
-use serde::{Deserialize, Serialize};
+pub use openproxy_types::{TargetFormat, DiscoveredModel, Model};
 
 // ── Submodules ──────────────────────────────────────────────────────
 pub mod crud;
@@ -84,94 +81,8 @@ pub use repository::{ModelRepository, SqliteModelRepository};
 ///
 /// Persisted in `models.target_format`; the CHECK constraint allows only
 /// `"openai"`, `"anthropic"`, or `"gemini"`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum TargetFormat {
-    Openai,
-    Anthropic,
-    Gemini,
-    Responses,
-}
 
-impl TargetFormat {
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            TargetFormat::Openai => "openai",
-            TargetFormat::Anthropic => "anthropic",
-            TargetFormat::Gemini => "gemini",
-            TargetFormat::Responses => "responses",
-        }
-    }
 
-    pub fn parse(s: &str) -> Result<Self> {
-        match s {
-            "openai" => Ok(TargetFormat::Openai),
-            "anthropic" => Ok(TargetFormat::Anthropic),
-            "gemini" => Ok(TargetFormat::Gemini),
-            "responses" => Ok(TargetFormat::Responses),
-            other => Err(CoreError::Validation(format!(
-                "invalid target_format: {}",
-                other
-            ))),
-        }
-    }
-}
-
-/// A row in the `models` table.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Model {
-    pub row_id: ModelRowId,
-    pub provider_id: ProviderId,
-    pub model_id: ModelId,
-    pub display_name: Option<String>,
-    pub target_format: TargetFormat,
-    pub discovered_at: String,
-    pub expires_at: Option<String>,
-    pub timeout_overrides_json: Option<String>,
-    /// Soft-disable bit. `true` means the row participates in routing;
-    /// `false` hides it from [`list_active`] but keeps it in the table so
-    /// the admin can re-enable it without losing any data. The schema
-    /// stamps new rows with `active = 1` via the column default.
-    pub active: bool,
-    /// Most recent HTTP status code from the model-test endpoint.
-    /// `None` means the model has never been tested; `0` is reserved
-    /// for "request never reached the upstream" (DNS / connect / TLS
-    /// errors).
-    pub last_test_status: Option<i32>,
-    /// Wall-clock timestamp the most recent test result was stamped
-    /// at, in sqlite `datetime('now')` UTC form. `None` when the model
-    /// has never been tested.
-    pub last_test_at: Option<String>,
-    /// `true` for rows hand-created via [`create_custom`] (not produced
-    /// by an adapter's `/models` discovery). The auto-activation path
-    /// skips these so an operator's hand-picked entries survive a
-    /// refresh.
-    pub custom: bool,
-    /// Upstream context window in tokens (input + output). `None` when
-    /// neither the operator nor a discovery backfill has filled it in;
-    /// the public `GET /v1/models` handler falls back to a heuristic
-    /// derived from `model_id` in that case. Stored as a string in the
-    /// DB to keep the migration's `ALTER TABLE` to a plain `ADD COLUMN`.
-    pub context_length: Option<i64>,
-    /// Upstream max output tokens. Same fallback story as
-    /// `context_length`.
-    pub max_output_tokens: Option<i64>,
-    /// Serialized [`crate::capabilities::ModelCapabilities`]. The
-    /// endpoint also accepts the `null` JSON value and falls back to
-    /// a heuristic. Stored as a string for the same migration reason
-    /// as `context_length`.
-    pub capabilities_json: Option<String>,
-    /// Logical model family used by client UIs (e.g. Cursor's picker)
-    /// to group related entries. `None` for unknown families.
-    pub family: Option<String>,
-    /// High-level model kind: `"chat"`, `"embedding"`, `"image"`,
-    /// `"audio"`, or `"rerank"`. The DB default is `"chat"`.
-    pub model_type: String,
-    /// JSON array of input modalities (e.g. `["text", "image"]`).
-    pub input_modalities_json: Option<String>,
-    /// JSON array of output modalities (e.g. `["text"]`).
-    pub output_modalities_json: Option<String>,
-}
 
 /// Input shape for [`upsert_many`]: what a provider adapter reports.
 ///
@@ -186,32 +97,7 @@ pub struct Model {
 /// provider adapter that doesn't surface those fields leaves them
 /// `None` and the runtime fallback at the `GET /v1/models` handler
 /// takes over.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct DiscoveredModel {
-    pub model_id: ModelId,
-    pub display_name: Option<String>,
-    pub target_format: TargetFormat,
-    /// Context window in tokens (from OpenRouter's `context_length`).
-    pub context_length: Option<i64>,
-    /// Max output tokens (from OpenRouter's
-    /// `top_provider.max_completion_tokens`).
-    pub max_output_tokens: Option<i64>,
-    /// Input modalities (from OpenRouter's
-    /// `architecture.input_modalities`).
-    pub input_modalities: Option<Vec<String>>,
-    /// Output modalities (from OpenRouter's
-    /// `architecture.output_modalities`).
-    pub output_modalities: Option<Vec<String>>,
-    /// Model type: `"chat"`, `"embedding"`, `"image"`, `"audio"`,
-    /// `"rerank"`.
-    pub model_type: Option<String>,
-    /// Family (e.g. `"Qwen3"`, `"Llama-3.3"`, `"Claude-Sonnet-4"`).
-    pub family: Option<String>,
-    /// Capabilities (vision, tool_calling, reasoning, structured_output,
-    /// temperature). Derived from `supported_parameters` by the
-    /// OpenRouter adapter.
-    pub capabilities: Option<crate::capabilities::ModelCapabilities>,
-}
+
 
 /// Result of [`upsert_many`]. `touched` counts inserts + updates
 /// (the previous return value, kept stable for callers that only

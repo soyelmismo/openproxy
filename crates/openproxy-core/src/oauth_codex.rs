@@ -10,7 +10,7 @@ use std::sync::Arc;
 use crate::error::{CoreError, Result};
 use crate::oauth::{DeviceAuthorizationResponse, OAuthFlow, OAuthProvider, TokenResponse};
 use crate::oauth_generic::{GenericOAuthProvider, OAuthRequestEncoding, OAuthSpec};
-use crate::upstream::{
+use openproxy_adapters::upstream::{
     CancellationToken, TimeoutProfile, UpstreamClient, UpstreamError, UpstreamRequest,
 };
 
@@ -42,7 +42,7 @@ fn codex_oauth_spec() -> OAuthSpec {
         scopes: SCOPES,
         auth_extra_params: &[],
         request_encoding: OAuthRequestEncoding::FormUrlEncoded,
-        user_agent: Some(crate::adapters::codex::codex_user_agent),
+        user_agent: Some(openproxy_adapters::adapters::codex::codex_user_agent),
     }
 }
 

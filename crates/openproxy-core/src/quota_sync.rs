@@ -6,15 +6,15 @@
 
 use crate::AppConfig;
 use crate::accounts;
-use crate::adapters::{ProviderAdapter, ProviderAdapterEnum};
+use openproxy_adapters::adapters::ProviderAdapterEnum;
 use crate::admin;
-use crate::db::DbPool;
+use openproxy_db::DbPool;
 use crate::ids::AccountId;
 use crate::notifications;
 use crate::oauth::{DbRef, OAuthProvider, OAuthProviderRegistry};
 use crate::quota::AccountQuota;
-use crate::secrets::MasterKey;
-use crate::upstream::UpstreamClient;
+use openproxy_db::secrets::MasterKey;
+use openproxy_adapters::upstream::UpstreamClient;
 use parking_lot::RwLock;
 use std::sync::Arc;
 use tokio::time::{Duration, sleep};

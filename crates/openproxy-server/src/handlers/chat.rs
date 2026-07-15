@@ -29,9 +29,9 @@ use bytes::Bytes;
 use futures::stream::Stream;
 use openproxy_core::{
     ids::{ApiKeyId, RequestId, TraceId},
-    pipeline::{Pipeline, PipelineConfig, PipelineRequest},
     redact::redact_sensitive_headers,
 };
+use openproxy_pipeline::{Pipeline, PipelineConfig, PipelineRequest};
 use serde_json::json;
 use std::convert::Infallible;
 use std::pin::Pin;
@@ -165,9 +165,9 @@ async fn run_pipeline(
         rx: client_disconnected,
     } = cancel;
     let stream_sink = if openai_req.stream {
-        Some(openproxy_core::race_sink::StreamSink::Direct(tx))
+        Some(openproxy_pipeline::StreamSink::Direct(tx))
     } else {
-        Some(openproxy_core::race_sink::StreamSink::Discard)
+        Some(openproxy_pipeline::StreamSink::Discard)
     };
 
     let (done_tx, done_rx) = tokio::sync::oneshot::channel::<()>();
@@ -188,7 +188,7 @@ async fn run_pipeline(
         request_body_json: Some(raw_request_body),
         race_cancelled: false,
         race_cancel: None,
-        endpoint_kind: openproxy_core::endpoint::EndpointKind::Chat,
+        endpoint_kind: openproxy_types::EndpointKind::Chat,
         compressed_messages: Arc::new(std::sync::OnceLock::new()),
     };
 
@@ -201,7 +201,7 @@ async fn run_pipeline(
 
 fn build_pipeline(state: &AppState) -> Pipeline {
     let config = PipelineConfig {
-        defaults: openproxy_core::timeouts::Timeouts::from_config(&state.timeouts()),
+        defaults: openproxy_pipeline::timeouts::Timeouts::from_config(&state.timeouts()),
         racing: state.config().racing.clone(),
         retries: state.config().retries,
         max_attempts: state.config().retries.max_attempts,

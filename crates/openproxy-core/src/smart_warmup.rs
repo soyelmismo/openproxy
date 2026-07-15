@@ -7,12 +7,12 @@
 
 use crate::accounts;
 use crate::config::AppConfig;
-use crate::db::DbPool;
+use openproxy_db::DbPool;
 use crate::ids::ProviderId;
 use crate::quota::fetch_antigravity_quota;
-use crate::secrets::MasterKey;
-use crate::translation::{OpenAIMessage, OpenAIRequest};
-use crate::upstream::UpstreamClient;
+use openproxy_db::secrets::MasterKey;
+use openproxy_types::{OpenAIMessage, OpenAIRequest};
+use openproxy_adapters::upstream::UpstreamClient;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::time::sleep;
@@ -221,7 +221,7 @@ async fn ping_antigravity_model(
         upstream,
         &format!(
             "{}/v1internal:streamGenerateContent?alt=sse",
-            crate::adapters::antigravity::DEFAULT_ANTIGRAVITY_BASE_URL
+            openproxy_adapters::adapters::antigravity::DEFAULT_ANTIGRAVITY_BASE_URL
         ),
         access_token,
         project_id,

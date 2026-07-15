@@ -1,7 +1,7 @@
 //! Per-target cooldown registry, persisted in SQLite.
 //!
 //! When a target fails with a retryable error (5xx, 429, timeout, or
-//! connection error — see [`crate::retry::RetryPolicy::is_retryable`]),
+//! connection error — see [`openproxy_pipeline::retry::RetryPolicy::is_retryable`]),
 //! the pipeline records the failure here and skips the target on
 //! subsequent requests until `cooldown_until` is in the past.
 //!
@@ -24,7 +24,7 @@
 //! The cooldown is **target-scoped, not combo-scoped**: a sub-combo's
 //! children are independent. The "exhaust a sub-combo before
 //! marking the parent" semantic falls out of the existing flatten
-//! step in [`crate::pipeline::Pipeline::flatten_targets`] — each
+//! step in [`openproxy_pipeline::Pipeline::flatten_targets`] — each
 //! flattened child target can enter cooldown on its own, and the
 //! parent only surfaces `NoHealthyTargets` when every child of every
 //! sub-combo is in cooldown.
@@ -373,8 +373,8 @@ pub fn get_for_target(conn: &Connection, target_id: ComboTargetId) -> Result<Opt
 mod tests {
     use super::*;
     use crate::combos;
-    use crate::db::conn::DbPool;
-    use crate::db::migrations;
+    use openproxy_db::conn::DbPool;
+    use openproxy_db::migrations;
     use crate::ids::{AccountId, ComboId, ComboTargetId, ModelRowId, ProviderId};
     use crate::providers::{self, AuthType, ProviderFormat};
     use std::path::PathBuf;

@@ -311,7 +311,7 @@ async fn run_provider_refresh(
 fn enrich_provider_with_oauth(
     p: core_providers::Provider,
     registry: &openproxy_core::oauth::OAuthProviderRegistry,
-    adapters: &[openproxy_core::adapters::ProviderAdapterEnum],
+    adapters: &[openproxy_adapters::adapters::ProviderAdapterEnum],
     r: &rusqlite::Connection,
 ) -> ProviderWithOAuth {
     let flows = if p.auth_type == openproxy_core::providers::AuthType::OAuth {

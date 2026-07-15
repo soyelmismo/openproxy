@@ -4,10 +4,10 @@
 //! streaming scenario — simulating how the pipeline reads lines
 //! from upstream and translates them for the client.
 
-use openproxy_core::sse::{
+use openproxy_pipeline::sse::{
     SSE_DONE, UpstreamSseChunk, format_sse_line, parse_gemini_sse_line, parse_openai_sse_line,
 };
-use openproxy_core::translation::OpenAIUsage;
+use openproxy_pipeline::translation::OpenAIUsage;
 
 /// Helper: get the payload as a `Value`, whether it came via `raw_payload`
 /// (OpenAI pass-through) or `payload` (translated formats).

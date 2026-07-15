@@ -35,15 +35,14 @@
 //! accounting.
 
 use crate::accounts;
-use crate::adapters::ProviderAdapter;
 use crate::admin;
-use crate::db::DbPool;
+use openproxy_db::DbPool;
 use crate::ids::ProviderId;
 use crate::models;
 use crate::providers::{self, AuthType};
-use crate::secrets::MasterKey;
+use openproxy_db::secrets::MasterKey;
 use crate::seed;
-use crate::upstream::UpstreamClient;
+use openproxy_adapters::upstream::UpstreamClient;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::time::sleep;
@@ -142,7 +141,7 @@ impl std::fmt::Debug for DiscoveryScheduler {
 pub async fn start(
     db_pool: Arc<DbPool>,
     master_key: Arc<MasterKey>,
-    adapters: Arc<Vec<crate::adapters::ProviderAdapterEnum>>,
+    adapters: Arc<Vec<openproxy_adapters::adapters::ProviderAdapterEnum>>,
     upstream_client: Arc<UpstreamClient>,
     config: DiscoverySchedulerConfig,
 ) -> DiscoveryScheduler {
@@ -232,7 +231,7 @@ pub async fn start(
 /// ```
 struct RunProviderParams {
     provider: ProviderId,
-    adapter: crate::adapters::ProviderAdapterEnum,
+    adapter: openproxy_adapters::adapters::ProviderAdapterEnum,
     db_pool: Arc<DbPool>,
     master_key: Arc<MasterKey>,
     upstream_client: Arc<UpstreamClient>,
@@ -312,7 +311,7 @@ async fn run_one_provider(params: RunProviderParams) {
 ///    success; `error` on failure.
 async fn run_one_tick(
     provider: ProviderId,
-    adapter: crate::adapters::ProviderAdapterEnum,
+    adapter: openproxy_adapters::adapters::ProviderAdapterEnum,
     db_pool: &Arc<DbPool>,
     master_key: &Arc<MasterKey>,
     upstream_client: &Arc<UpstreamClient>,
@@ -579,7 +578,7 @@ async fn run_one_tick(
 mod tests {
     use super::*;
 
-    use crate::db::migrations;
+    use openproxy_db::migrations;
     use crate::ids::{AccountId, ModelId, ProviderId as CoreProviderId};
     use crate::models::{DiscoveredModel, TargetFormat};
     use crate::providers;
@@ -709,9 +708,9 @@ mod tests {
         // would fail to find a matching adapter if we tried to
         // register them.
         let (adapter, counter) =
-            crate::pipeline::test_utils::MockAdapter::with_discovery("openrouter", three_models());
-        let adapters: Arc<Vec<crate::adapters::ProviderAdapterEnum>> =
-            Arc::new(vec![crate::adapters::ProviderAdapterEnum::Mock(
+            openproxy_pipeline::test_utils::MockAdapter::with_discovery("openrouter", three_models());
+        let adapters: Arc<Vec<openproxy_adapters::adapters::ProviderAdapterEnum>> =
+            Arc::new(vec![openproxy_adapters::adapters::ProviderAdapterEnum::Mock(
                 adapter.clone(),
             )]);
 
@@ -804,9 +803,9 @@ mod tests {
         }
 
         let (adapter, counter) =
-            crate::pipeline::test_utils::MockAdapter::with_discovery("openrouter", three_models());
-        let adapters: Arc<Vec<crate::adapters::ProviderAdapterEnum>> =
-            Arc::new(vec![crate::adapters::ProviderAdapterEnum::Mock(
+            openproxy_pipeline::test_utils::MockAdapter::with_discovery("openrouter", three_models());
+        let adapters: Arc<Vec<openproxy_adapters::adapters::ProviderAdapterEnum>> =
+            Arc::new(vec![openproxy_adapters::adapters::ProviderAdapterEnum::Mock(
                 adapter.clone(),
             )]);
 
@@ -886,14 +885,14 @@ mod tests {
         // call counter so we can assert broadcast behavior at
         // the per-task granularity.
         let (adapters, counters): (
-            Vec<crate::adapters::ProviderAdapterEnum>,
+            Vec<openproxy_adapters::adapters::ProviderAdapterEnum>,
             Vec<Arc<AtomicUsize>>,
         ) = provider_ids
             .iter()
             .map(|pid| {
                 let (a, c) =
-                    crate::pipeline::test_utils::MockAdapter::with_discovery(pid, three_models());
-                (crate::adapters::ProviderAdapterEnum::Mock(a), c)
+                    openproxy_pipeline::test_utils::MockAdapter::with_discovery(pid, three_models());
+                (openproxy_adapters::adapters::ProviderAdapterEnum::Mock(a), c)
             })
             .unzip();
         let adapters = Arc::new(adapters);
@@ -998,7 +997,7 @@ mod tests {
         let (pool, _path) = fresh_pool();
         let mk = MasterKey::generate();
         // No provider rows seeded at all.
-        let adapters: Arc<Vec<crate::adapters::ProviderAdapterEnum>> = Arc::new(vec![]);
+        let adapters: Arc<Vec<openproxy_adapters::adapters::ProviderAdapterEnum>> = Arc::new(vec![]);
 
         // Should return successfully with zero tasks spawned
         // (every built-in has no adapter).
@@ -1228,9 +1227,9 @@ mod tests {
             },
         ];
         let (adapter, _counter) =
-            crate::pipeline::test_utils::MockAdapter::with_discovery("openrouter", models);
-        let adapters: Arc<Vec<crate::adapters::ProviderAdapterEnum>> =
-            Arc::new(vec![crate::adapters::ProviderAdapterEnum::Mock(
+            openproxy_pipeline::test_utils::MockAdapter::with_discovery("openrouter", models);
+        let adapters: Arc<Vec<openproxy_adapters::adapters::ProviderAdapterEnum>> =
+            Arc::new(vec![openproxy_adapters::adapters::ProviderAdapterEnum::Mock(
                 adapter.clone(),
             )]);
 
@@ -1350,10 +1349,10 @@ mod tests {
         // Adapter that ALWAYS fails on `fetch_models`. We can't
         // reuse `MockAdapter` because its `fetch_models` returns
         // `Ok`. Build a thin shim.
-        let adapter = crate::adapters::ProviderAdapterEnum::Mock(
-            crate::pipeline::test_utils::MockAdapter::failing_discovery("openrouter"),
+        let adapter = openproxy_adapters::adapters::ProviderAdapterEnum::Mock(
+            openproxy_pipeline::test_utils::MockAdapter::failing_discovery("openrouter"),
         );
-        let adapters: Arc<Vec<crate::adapters::ProviderAdapterEnum>> =
+        let adapters: Arc<Vec<openproxy_adapters::adapters::ProviderAdapterEnum>> =
             Arc::new(vec![adapter.clone()]);
 
         let sched = start(

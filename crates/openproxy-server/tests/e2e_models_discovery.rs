@@ -34,13 +34,13 @@ use axum::{
 };
 use openproxy_core::{
     AppConfig, accounts,
-    adapters::{AdapterAuthType, AdapterFormat, ProviderAdapter, ProviderAdapterConfig},
     admin, combos,
-    db::{self as core_db, migrations},
     ids::{AccountId, ComboId, ComboTargetId, ModelId, ModelRowId, ProviderId},
     models::{self, DiscoveredModel, TargetFormat},
     secrets::MasterKey,
 };
+use openproxy_adapters::adapters::{AdapterAuthType, AdapterFormat, ProviderAdapter, ProviderAdapterConfig};
+use openproxy_db::{self as core_db, migrations};
 use openproxy_server::state::AppState;
 use parking_lot::Mutex;
 use rusqlite::Connection;
@@ -192,15 +192,15 @@ impl ProviderAdapter for TestMockAdapter {
 
     async fn fetch_models(
         &self,
-        upstream_client: &std::sync::Arc<openproxy_core::upstream::UpstreamClient>,
+        upstream_client: &std::sync::Arc<openproxy_adapters::upstream::UpstreamClient>,
         api_key: &str,
     ) -> Result<Vec<DiscoveredModel>, openproxy_core::error::CoreError> {
         let url = self.models_url().expect("set above");
         let resp = upstream_client
             .call(
-                openproxy_core::upstream::UpstreamRequest::get(&url),
-                openproxy_core::upstream::TimeoutProfile::ModelDiscovery,
-                openproxy_core::upstream::CancellationToken::new(),
+                openproxy_adapters::upstream::UpstreamRequest::get(&url),
+                openproxy_adapters::upstream::TimeoutProfile::ModelDiscovery,
+                openproxy_adapters::upstream::CancellationToken::new(),
             )
             .await
             .map_err(|e| openproxy_core::error::CoreError::UpstreamConnection(e.to_string()))?;
@@ -310,7 +310,7 @@ async fn make_test_state(dir: &std::path::Path, adapter: &TestMockAdapter) -> Ap
     // says "do NOT modify the seed list", and the test is gated on
     // its own provider id, so a built-in refresh racing the test's
     // call can't affect this DB.
-    let adapters: Arc<parking_lot::RwLock<Vec<openproxy_core::adapters::ProviderAdapterEnum>>> =
+    let adapters: Arc<parking_lot::RwLock<Vec<openproxy_adapters::adapters::ProviderAdapterEnum>>> =
         Arc::new(parking_lot::RwLock::new(vec![]));
 
     AppState::for_test(AppConfig::default(), pool, mk, adapters).await
@@ -364,14 +364,23 @@ async fn call_refresh(
     state: &AppState,
     provider: &ProviderId,
     api_key: &str,
-    adapter: &TestMockAdapter,
 ) -> Option<models::UpsertResult> {
     let conn = state.db_pool().open_connection().expect("open_connection");
+    let provider_row = openproxy_core::providers::get(&conn, provider)
+        .unwrap()
+        .unwrap();
+    let mut provider_row = provider_row;
+    if !provider_row.base_url.ends_with("/v1") {
+        provider_row.base_url = format!("{}/v1", provider_row.base_url);
+    }
+    let custom_adapter = openproxy_adapters::adapters::CustomAdapter::from_provider_row(&provider_row);
+    let adapter_enum = openproxy_adapters::adapters::ProviderAdapterEnum::Custom(custom_adapter);
+
     admin::refresh_models(
         conn,
         provider,
         api_key,
-        adapter,
+        &adapter_enum,
         state.upstream_client(),
         3_600,
         "",
@@ -433,7 +442,7 @@ async fn e2e_discovery_and_delete_on_disappear() {
     // --- Step 5: assertion round 1 ------------------------------
     // Initial catalog from the upstream: [a, b, c].
     mock.replace(vec!["a".into(), "b".into(), "c".into()]);
-    let r1 = call_refresh(&state, &provider, "sk-e2e-fake", &adapter)
+    let r1 = call_refresh(&state, &provider, "sk-e2e-fake")
         .await
         .expect("refresh_models round 1");
     assert_eq!(r1.touched, 3, "first refresh must have inserted 3 rows");
@@ -495,7 +504,7 @@ async fn e2e_discovery_and_delete_on_disappear() {
     mock.replace(vec!["a".into(), "b".into()]);
 
     // --- Step 7: assertion round 2 ------------------------------
-    let r2 = call_refresh(&state, &provider, "sk-e2e-fake", &adapter)
+    let r2 = call_refresh(&state, &provider, "sk-e2e-fake")
         .await
         .expect("refresh_models round 2");
     // `r2.touched` is inserts + updates: both `a` and `b` were
@@ -549,7 +558,7 @@ async fn e2e_discovery_and_delete_on_disappear() {
 
     // Third refresh: catalog is still [a, b]. The custom row `z`
     // must NOT be touched.
-    let r3 = call_refresh(&state, &provider, "sk-e2e-fake", &adapter)
+    let r3 = call_refresh(&state, &provider, "sk-e2e-fake")
         .await
         .expect("refresh_models round 3");
     assert!(
@@ -617,7 +626,7 @@ async fn e2e_discovery_and_delete_on_disappear() {
     //       directly, so the test exercises the same code path
     //       a live scheduler would.
     mock.replace(vec!["a".into(), "b".into(), "c".into()]);
-    call_refresh(&state, &provider, "sk-e2e-fake", &adapter)
+    call_refresh(&state, &provider, "sk-e2e-fake")
         .await
         .expect("refresh_models 9.a (re-establish [a, b, c])");
 
@@ -689,7 +698,7 @@ async fn e2e_discovery_and_delete_on_disappear() {
     //       same transaction. We assert the refresh succeeds
     //       (i.e. Gate B and Gate D cooperate cleanly).
     mock.replace(vec!["a".into(), "b".into()]);
-    call_refresh(&state, &provider, "sk-e2e-fake", &adapter)
+    call_refresh(&state, &provider, "sk-e2e-fake")
         .await
         .expect(
             "refresh against a catalog that drops c must succeed \
@@ -775,7 +784,7 @@ async fn e2e_discovery_and_delete_on_disappear() {
     // assert that path still works.
     // ============================================================
     mock.replace(vec!["a".into(), "b".into(), "c".into()]);
-    let r4 = call_refresh(&state, &provider, "sk-e2e-fake", &adapter)
+    let r4 = call_refresh(&state, &provider, "sk-e2e-fake")
         .await
         .expect("refresh against a catalog that re-introduces c");
 

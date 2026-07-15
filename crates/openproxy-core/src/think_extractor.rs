@@ -61,8 +61,8 @@ const THINK_CLOSE_TAGS: &[&str] = &["</think>", "</thinking>", "</reasoning>", "
 ///    sent, since some providers emit the same reasoning in BOTH a
 ///    `reasoning_content` field AND `<think>` tags inside `content`).
 pub fn extract_think_from_response(
-    mut resp: crate::translation::OpenAIResponse,
-) -> crate::translation::OpenAIResponse {
+    mut resp: openproxy_pipeline::translation::OpenAIResponse,
+) -> openproxy_pipeline::translation::OpenAIResponse {
     for choice in resp.choices.iter_mut() {
         if choice.message.role != "assistant" {
             continue;
@@ -703,7 +703,8 @@ mod tests {
     // -----------------------------------------------------------------
     #[test]
     fn non_streaming_no_duplicate_when_native_reasoning_present() {
-        use crate::translation::{OpenAIChoice, OpenAIMessage, OpenAIResponse};
+        use openproxy_types::OpenAIMessage;
+        use openproxy_pipeline::translation::{OpenAIChoice, OpenAIResponse};
         let mut resp = OpenAIResponse {
             id: "test".to_string(),
             object: "chat.completion".to_string(),

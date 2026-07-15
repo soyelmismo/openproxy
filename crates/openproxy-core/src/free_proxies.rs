@@ -1,6 +1,6 @@
 //! staging table of free scraped/custom proxies + validation.
 
-use crate::db::DbPool;
+use openproxy_db::DbPool;
 use rusqlite::Connection;
 use std::sync::Arc;
 
@@ -355,10 +355,10 @@ struct ProxiflyItem {
 }
 
 async fn sync_proxifly() -> crate::error::Result<Vec<ScrapedProxy>> {
-    use crate::upstream::{TimeoutProfile, UpstreamClient, UpstreamRequest};
+    use openproxy_adapters::upstream::{TimeoutProfile, UpstreamClient, UpstreamRequest};
     let client = UpstreamClient::new();
     let req = UpstreamRequest::get("https://api.proxifly.dev/proxy?format=json&quantity=100");
-    let cancel = crate::upstream::CancellationToken::new();
+    let cancel = openproxy_adapters::upstream::CancellationToken::new();
     let res = client
         .call(req, TimeoutProfile::ModelDiscovery, cancel)
         .await
@@ -398,7 +398,7 @@ async fn sync_proxifly() -> crate::error::Result<Vec<ScrapedProxy>> {
 }
 
 async fn sync_iplocate() -> crate::error::Result<Vec<ScrapedProxy>> {
-    use crate::upstream::{TimeoutProfile, UpstreamClient, UpstreamRequest};
+    use openproxy_adapters::upstream::{TimeoutProfile, UpstreamClient, UpstreamRequest};
     let client = UpstreamClient::new();
     let mut list = Vec::new();
     let protocols = vec!["http", "https", "socks4", "socks5"];
@@ -409,7 +409,7 @@ async fn sync_iplocate() -> crate::error::Result<Vec<ScrapedProxy>> {
             proto
         );
         let req = UpstreamRequest::get(url);
-        let cancel = crate::upstream::CancellationToken::new();
+        let cancel = openproxy_adapters::upstream::CancellationToken::new();
         let res = match client
             .call(req, TimeoutProfile::ModelDiscovery, cancel)
             .await
@@ -477,10 +477,10 @@ struct OneProxyApiResponse {
 }
 
 async fn sync_oneproxy() -> crate::error::Result<Vec<ScrapedProxy>> {
-    use crate::upstream::{TimeoutProfile, UpstreamClient, UpstreamRequest};
+    use openproxy_adapters::upstream::{TimeoutProfile, UpstreamClient, UpstreamRequest};
     let client = UpstreamClient::new();
     let req = UpstreamRequest::get("https://1proxy-api.aitradepulse.com/api/v1/proxies/advanced");
-    let cancel = crate::upstream::CancellationToken::new();
+    let cancel = openproxy_adapters::upstream::CancellationToken::new();
     let res = client
         .call(req, TimeoutProfile::ModelDiscovery, cancel)
         .await
@@ -577,7 +577,7 @@ pub async fn sync_all_providers(db_pool: Arc<DbPool>) -> crate::error::Result<Sy
 
 // Proxy validation logic
 pub async fn test_proxy_connection(r#type: &str, host: &str, port: u16) -> Result<i64, String> {
-    use crate::upstream::{ResolvedTimeouts, TimeoutProfile, UpstreamClient, UpstreamRequest};
+    use openproxy_adapters::upstream::{ResolvedTimeouts, TimeoutProfile, UpstreamClient, UpstreamRequest};
     let proxy_url = format!("{}://{}:{}", r#type, host, port);
 
     let client = UpstreamClient::new();
@@ -594,7 +594,7 @@ pub async fn test_proxy_connection(r#type: &str, host: &str, port: u16) -> Resul
         body_chunk_ms: 2000,
         total_ms: 5000,
     });
-    let cancel = crate::upstream::CancellationToken::new();
+    let cancel = openproxy_adapters::upstream::CancellationToken::new();
 
     let start = std::time::Instant::now();
     let res = client.call(req, profile, cancel).await;

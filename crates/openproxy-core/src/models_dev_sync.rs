@@ -18,7 +18,7 @@
 //! triggered manually via `POST /admin/models/sync-models-dev`.
 
 use crate::error::{CoreError, Result};
-use crate::upstream::{CancellationToken, TimeoutProfile, UpstreamClient, UpstreamRequest};
+use openproxy_adapters::upstream::{CancellationToken, TimeoutProfile, UpstreamClient, UpstreamRequest};
 use rusqlite::Connection;
 use serde::Deserialize;
 use std::collections::HashMap;
@@ -275,13 +275,13 @@ async fn fetch_models_dev_once(upstream: &Arc<UpstreamClient>) -> Result<bytes::
         .call(req, TimeoutProfile::ModelDiscovery, cancel)
         .await
         .map_err(|e| match e {
-            crate::upstream::UpstreamError::Cancel => CoreError::ClientDisconnected,
+            openproxy_adapters::upstream::UpstreamError::Cancel => CoreError::ClientDisconnected,
             other => CoreError::UpstreamConnection(format!("models.dev fetch: {other}")),
         })?;
 
     let status = response.status;
     let body = response.collect().await.map_err(|e| match e {
-        crate::upstream::UpstreamError::Cancel => CoreError::ClientDisconnected,
+        openproxy_adapters::upstream::UpstreamError::Cancel => CoreError::ClientDisconnected,
         other => CoreError::UpstreamConnection(format!("models.dev body read: {other}")),
     })?;
 
@@ -839,7 +839,7 @@ pub fn auto_create_combos(conn: &Connection) -> Result<usize> {
 /// Background sync task: periodically fetch models.dev, enrich, and
 /// auto-create combos. Runs at the configured interval.
 pub async fn start_sync_scheduler(
-    db_pool: std::sync::Arc<crate::db::DbPool>,
+    db_pool: std::sync::Arc<openproxy_db::DbPool>,
     upstream_client: Arc<UpstreamClient>,
     check_interval_secs: u64,
 ) {
@@ -914,7 +914,7 @@ pub async fn start_sync_scheduler(
 
 /// One-shot sync + enrich + auto-combo, called from the admin handler.
 pub async fn run_one_shot(
-    db_pool: std::sync::Arc<crate::db::DbPool>,
+    db_pool: std::sync::Arc<openproxy_db::DbPool>,
     upstream_client: Arc<UpstreamClient>,
 ) -> Result<String> {
     let body = fetch_models_dev(&upstream_client).await?;
