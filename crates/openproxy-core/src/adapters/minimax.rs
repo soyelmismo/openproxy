@@ -85,4 +85,14 @@ impl ProviderAdapter for MiniMaxAdapter {
         )
         .await
     }
+
+    async fn fetch_quota(
+        &self,
+        upstream_client: &Arc<UpstreamClient>,
+        api_key: &str,
+        _: Option<&str>,
+        _: Option<&str>,
+    ) -> Option<Result<crate::quota::AccountQuota>> {
+        Some(crate::quota::fetch_minimax_quota(upstream_client, api_key).await)
+    }
 }

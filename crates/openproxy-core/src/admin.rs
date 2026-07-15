@@ -21,10 +21,11 @@ use crate::accounts;
 use crate::combos;
 use crate::cooldown;
 use crate::error::{CoreError, Result};
+use crate::adapters::ProviderAdapter;
 use crate::ids::{AccountId, ComboId, ComboTargetId, ModelId, ModelRowId, ProviderId};
 use crate::models;
 use crate::providers::{self, AuthType, ProviderFormat};
-use crate::quota::{self, AccountQuota};
+use crate::quota::AccountQuota;
 use crate::secrets::MasterKey;
 use crate::upstream::UpstreamClient;
 use rusqlite::{Connection, params};
@@ -410,62 +411,21 @@ pub async fn fetch_account_quota(
     access_token: Option<&str>,
     provider_specific: Option<&str>,
 ) -> AccountQuota {
-    match provider_id {
-        "minimax" | "minimax-cn" => match quota::fetch_minimax_quota(upstream, api_key).await {
-            Ok(q) => q,
-            Err(e) => AccountQuota {
-                session_used: None,
-                session_limit: None,
-                session_reset_at: None,
-                weekly_used: None,
-                weekly_limit: None,
-                weekly_reset_at: None,
-                plan_name: None,
-                last_fetched_at: now_unix_secs_str(),
-                fetch_error: Some(e.to_string()),
-                model_details: None,
-            },
-        },
-        "openrouter" => match quota::fetch_openrouter_quota(upstream, api_key).await {
-            // OpenRouter's fetcher already returns an AccountQuota
-            // (never a `CoreError`) — it catches its own network and
-            // parse errors and surfaces them via `fetch_error`. The
-            // outer `Err` arm is here for symmetry with the MiniMax
-            // branch and to absorb any future change to the fetcher's
-            // signature.
-            Ok(q) => q,
-            Err(e) => AccountQuota {
-                session_used: None,
-                session_limit: None,
-                session_reset_at: None,
-                weekly_used: None,
-                weekly_limit: None,
-                weekly_reset_at: None,
-                plan_name: None,
-                last_fetched_at: now_unix_secs_str(),
-                fetch_error: Some(e.to_string()),
-                model_details: None,
-            },
-        },
-        "antigravity" | "agy" => {
-            let token = match access_token {
-                Some(t) => t,
-                None => {
-                    return AccountQuota {
-                        session_used: None,
-                        session_limit: None,
-                        session_reset_at: None,
-                        weekly_used: None,
-                        weekly_limit: None,
-                        weekly_reset_at: None,
-                        plan_name: None,
-                        last_fetched_at: now_unix_secs_str(),
-                        fetch_error: Some("antigravity requires OAuth access token".into()),
-                        model_details: None,
-                    };
-                }
-            };
-            match quota::fetch_antigravity_quota(upstream, token).await {
+    let mut result_quota = None;
+
+    let mapped_id = match provider_id {
+        "minimax-cn" => "minimax",
+        "agy" => "antigravity",
+        other => other,
+    };
+
+    let adapters = crate::adapters::builtin_adapters();
+    if let Some(adapter) = adapters.iter().find(|a| a.id().as_str() == mapped_id) {
+        if let Some(res) = adapter
+            .fetch_quota(upstream, api_key, access_token, provider_specific)
+            .await
+        {
+            result_quota = Some(match res {
                 Ok(q) => q,
                 Err(e) => AccountQuota {
                     session_used: None,
@@ -479,77 +439,14 @@ pub async fn fetch_account_quota(
                     fetch_error: Some(e.to_string()),
                     model_details: None,
                 },
-            }
+            });
         }
-        "codex" => {
-            let token = match access_token {
-                Some(t) => t,
-                None => {
-                    return AccountQuota {
-                        session_used: None,
-                        session_limit: None,
-                        session_reset_at: None,
-                        weekly_used: None,
-                        weekly_limit: None,
-                        weekly_reset_at: None,
-                        plan_name: None,
-                        last_fetched_at: now_unix_secs_str(),
-                        fetch_error: Some("codex requires OAuth access token".into()),
-                        model_details: None,
-                    };
-                }
-            };
-            match quota::fetch_codex_quota(upstream, token, provider_specific).await {
-                Ok(q) => q,
-                Err(e) => AccountQuota {
-                    session_used: None,
-                    session_limit: None,
-                    session_reset_at: None,
-                    weekly_used: None,
-                    weekly_limit: None,
-                    weekly_reset_at: None,
-                    plan_name: None,
-                    last_fetched_at: now_unix_secs_str(),
-                    fetch_error: Some(e.to_string()),
-                    model_details: None,
-                },
-            }
-        }
-        "kiro" => {
-            let token = match access_token {
-                Some(t) => t,
-                None => {
-                    return AccountQuota {
-                        session_used: None,
-                        session_limit: None,
-                        session_reset_at: None,
-                        weekly_used: None,
-                        weekly_limit: None,
-                        weekly_reset_at: None,
-                        plan_name: None,
-                        last_fetched_at: now_unix_secs_str(),
-                        fetch_error: Some("kiro requires OAuth access token".into()),
-                        model_details: None,
-                    };
-                }
-            };
-            match quota::fetch_kiro_quota(upstream, token, provider_specific).await {
-                Ok(q) => q,
-                Err(e) => AccountQuota {
-                    session_used: None,
-                    session_limit: None,
-                    session_reset_at: None,
-                    weekly_used: None,
-                    weekly_limit: None,
-                    weekly_reset_at: None,
-                    plan_name: None,
-                    last_fetched_at: now_unix_secs_str(),
-                    fetch_error: Some(e.to_string()),
-                    model_details: None,
-                },
-            }
-        }
-        other => AccountQuota {
+    }
+
+    if let Some(q) = result_quota {
+        q
+    } else {
+        AccountQuota {
             session_used: None,
             session_limit: None,
             session_reset_at: None,
@@ -560,10 +457,10 @@ pub async fn fetch_account_quota(
             last_fetched_at: now_unix_secs_str(),
             fetch_error: Some(format!(
                 "quota fetching not implemented for provider '{}'",
-                other
+                provider_id
             )),
             model_details: None,
-        },
+        }
     }
 }
 
@@ -571,7 +468,7 @@ pub async fn fetch_account_quota(
 /// field. Mirrors [`quota::now_unix_secs_str`] but lives here so the
 /// `fetch_account_quota` fallback path can stamp an error-only quota
 /// without crossing the `quota` module boundary just for a helper.
-fn now_unix_secs_str() -> String {
+pub(crate) fn now_unix_secs_str() -> String {
     use std::time::{SystemTime, UNIX_EPOCH};
     let secs = SystemTime::now()
         .duration_since(UNIX_EPOCH)

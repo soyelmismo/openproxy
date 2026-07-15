@@ -256,6 +256,18 @@ pub trait ProviderAdapter: Send + Sync {
         async move { self.fetch_models(upstream_client, api_key).await }
     }
 
+    /// Fetch account quota from the provider.
+    /// By default, providers do not implement this and return None.
+    fn fetch_quota(
+        &self,
+        _: &Arc<UpstreamClient>,
+        _: &str,
+        _: Option<&str>,
+        _: Option<&str>,
+    ) -> impl std::future::Future<Output = Option<Result<crate::quota::AccountQuota>>> + Send {
+        async { None }
+    }
+
     /// Normalize an OpenAI request view before serialization.
     /// Default: pass through unchanged.
     fn normalize_openai_request(&self, _view: &mut crate::translation::OpenAIRequestView) {}
@@ -374,6 +386,15 @@ macro_rules! define_provider_adapter {
                 ctx: Option<$crate::adapters::CustomExecutionContext>,
             ) -> Option<std::result::Result<$crate::translation::OpenAIResponse, $crate::error::CoreError>> {
                 match self { $( $(#[$varmeta])* Self::$variant(inner) => inner.execute_custom(upstream_client, req, resolved_target, ctx).await, )+ }
+            }
+            async fn fetch_quota(
+                &self,
+                upstream_client: &std::sync::Arc<$crate::upstream::UpstreamClient>,
+                api_key: &str,
+                access_token: Option<&str>,
+                provider_specific: Option<&str>,
+            ) -> Option<$crate::error::Result<$crate::quota::AccountQuota>> {
+                match self { $( $(#[$varmeta])* Self::$variant(inner) => inner.fetch_quota(upstream_client, api_key, access_token, provider_specific).await, )+ }
             }
         }
     }

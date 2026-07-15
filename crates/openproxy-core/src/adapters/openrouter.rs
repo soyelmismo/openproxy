@@ -168,6 +168,18 @@ impl ProviderAdapter for OpenRouterAdapter {
 
         Ok(models)
     }
+
+    async fn fetch_quota(
+        &self,
+        upstream_client: &Arc<UpstreamClient>,
+        api_key: &str,
+        _: Option<&str>,
+        _: Option<&str>,
+    ) -> Option<Result<crate::quota::AccountQuota>> {
+        // OpenRouter's fetcher catches its own errors and maps them to AccountQuota fields.
+        // It never actually returns an `Err(CoreError)`.
+        Some(crate::quota::fetch_openrouter_quota(upstream_client, api_key).await.map_err(|e| e))
+    }
 }
 
 #[derive(Debug, Deserialize)]

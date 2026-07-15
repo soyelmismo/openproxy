@@ -219,4 +219,30 @@ impl ProviderAdapter for AntigravityAdapter {
             .await,
         )
     }
+
+    async fn fetch_quota(
+        &self,
+        upstream_client: &Arc<UpstreamClient>,
+        _: &str,
+        access_token: Option<&str>,
+        _: Option<&str>,
+    ) -> Option<Result<crate::quota::AccountQuota>> {
+        // Antigravity requires access_token to fetch quota
+        if let Some(token) = access_token {
+            Some(crate::quota::fetch_antigravity_quota(upstream_client, token).await)
+        } else {
+            Some(Ok(crate::quota::AccountQuota {
+                session_used: None,
+                session_limit: None,
+                session_reset_at: None,
+                weekly_used: None,
+                weekly_limit: None,
+                weekly_reset_at: None,
+                plan_name: None,
+                last_fetched_at: crate::admin::now_unix_secs_str(),
+                fetch_error: Some("missing access_token or project_id for antigravity quota".into()),
+                model_details: None,
+            }))
+        }
+    }
 }

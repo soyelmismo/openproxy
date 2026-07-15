@@ -149,4 +149,29 @@ impl ProviderAdapter for CodexAdapter {
     ) -> Result<Vec<DiscoveredModel>> {
         Ok(self.hardcoded_models())
     }
+
+    async fn fetch_quota(
+        &self,
+        upstream_client: &Arc<UpstreamClient>,
+        _: &str,
+        access_token: Option<&str>,
+        provider_specific: Option<&str>,
+    ) -> Option<Result<crate::quota::AccountQuota>> {
+        if let Some(token) = access_token {
+            Some(crate::quota::fetch_codex_quota(upstream_client, token, provider_specific).await)
+        } else {
+            Some(Ok(crate::quota::AccountQuota {
+                session_used: None,
+                session_limit: None,
+                session_reset_at: None,
+                weekly_used: None,
+                weekly_limit: None,
+                weekly_reset_at: None,
+                plan_name: None,
+                last_fetched_at: crate::admin::now_unix_secs_str(),
+                fetch_error: Some("codex requires OAuth access token".into()),
+                model_details: None,
+            }))
+        }
+    }
 }
