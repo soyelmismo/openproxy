@@ -1,5 +1,5 @@
 use openproxy_types::config::CooldownMode;
-use crate::SelectionRegistry;
+use openproxy_types::SelectionRegistry;
 use openproxy_types::usage::UsageInput;
 use openproxy_types::ids::{ComboId, ComboTargetId};
 use rusqlite::Connection;
@@ -30,16 +30,17 @@ pub fn spawn_worker(
     conn: Arc<parking_lot::Mutex<Connection>>,
     repo: Arc<dyn crate::repository::PipelineRepository>,
     mut rx: mpsc::Receiver<BackgroundJob>,
-    _selection_registry: Arc<SelectionRegistry>,
+    selection_registry: Arc<SelectionRegistry>,
 ) {
     tokio::spawn(async move {
         while let Some(job) = rx.recv().await {
             let conn_clone = conn.clone();
             let repo_clone = repo.clone();
+            let selection_registry_clone = selection_registry.clone();
 
             // Usar spawn_blocking para las queries de SQLite
             let _ = tokio::task::spawn_blocking(move || {
-                process_job(&conn_clone, repo_clone.as_ref(), job);
+                process_job(&conn_clone, repo_clone.as_ref(), job, selection_registry_clone);
             })
             .await;
         }
@@ -50,6 +51,7 @@ pub fn process_job(
     conn_clone: &Arc<parking_lot::Mutex<Connection>>,
     repo: &dyn crate::repository::PipelineRepository,
     job: BackgroundJob,
+    selection_registry: Arc<SelectionRegistry>,
 ) {
     match job {
         BackgroundJob::RecordAttempt {
@@ -69,8 +71,16 @@ pub fn process_job(
             if let Err(e) = openproxy_db::cost::record(&lock, &usage_input) {
                 tracing::warn!("failed to record usage in background: {}", e);
             }
+            drop(lock);
 
-            // 2. Cooldown
+            // 2. Update selection registry
+            if error_msg.is_none() {
+                selection_registry.record_success(target_id);
+            } else {
+                selection_registry.record_request(target_id);
+            }
+
+            // 3. Cooldown
             let cooldown_op = match error_msg {
                 None => Some("clear"),
                 Some(_) if is_upstream_health_issue => Some("record"),

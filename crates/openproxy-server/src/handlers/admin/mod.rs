@@ -69,14 +69,16 @@ use axum::{
 };
 use futures::StreamExt;
 use openproxy_core::{
-    CoreError,
     analytics, api_keys as core_api_keys, combos as core_combos,
     config::{CircuitBreakerConfig, RacingConfig, RetriesConfig, TimeoutsConfig},
+    models as core_models, oauth as core_oauth, seed,
+    usage::UsageFilter,
+};
+use openproxy_types::{
+    CoreError,
     ids::{
         AccountId, ApiKeyId, ComboId, ComboTargetId, ModelRowId, ProviderId, RequestId, TraceId,
     },
-    models as core_models, oauth as core_oauth, seed,
-    usage::UsageFilter,
 };
 use openproxy_adapters::adapters;
 use openproxy_db as core_db;

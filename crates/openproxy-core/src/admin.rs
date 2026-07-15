@@ -19,7 +19,6 @@
 
 use crate::accounts;
 use crate::combos;
-use crate::cooldown;
 use crate::error::{CoreError, Result};
 use crate::ids::{AccountId, ComboId, ComboTargetId, ModelId, ModelRowId, ProviderId};
 use crate::models;
@@ -566,7 +565,7 @@ pub fn create_combo(conn: &Connection, input: CreateComboInput) -> Result<ComboI
     let combo_id = combos::create_combo(conn, &input.name, strategy, race_size)?;
     // Best-effort auto-fill. Errors are non-fatal: the combo exists
     // already, and a later pipeline run can re-attempt the fill.
-    let _ = combos::auto_populate_empty_combo(conn, combo_id);
+    let _ = openproxy_pipeline::repository::auto_populate_empty_combo(conn, combo_id);
 
     // Apply the migration-000035 per-combo overrides. Each helper
     // validates its inputs (e.g. `priority_mode` must be a known
@@ -803,7 +802,7 @@ pub fn clear_combo_target_cooldown(
     // cooldown, not delete the target", so we use the explicit
     // DELETE rather than a no-op target delete.
     ensure_target_in_combo(conn, combo_id, target_id)?;
-    cooldown::clear(conn, target_id)
+    openproxy_pipeline::repository::clear_cooldown(conn, target_id)
 }
 
 // =====================================================================

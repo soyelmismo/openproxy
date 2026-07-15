@@ -439,7 +439,7 @@ impl tower::Service<PipelineState> for RoutingService {
                         {
                             let job = e.into_inner();
                             let conn = pipeline.conn.clone();
-                            crate::worker::process_job(&conn, pipeline.repo().as_ref(), job);
+                            crate::worker::process_job(&conn, pipeline.repo().as_ref(), job, pipeline.selection_registry().clone());
                         }
                     }
                     return Ok(race_result);
@@ -693,7 +693,7 @@ impl tower::Service<PipelineState> for RoutingService {
                         {
                             let job = e.into_inner();
                             let conn = pipeline.conn.clone();
-                            crate::worker::process_job(&conn, pipeline.repo().as_ref(), job);
+                            crate::worker::process_job(&conn, pipeline.repo().as_ref(), job, pipeline.selection_registry().clone());
                         }
                     }
                     tracing::info!(

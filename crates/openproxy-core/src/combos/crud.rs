@@ -1559,3 +1559,28 @@ mod tests {
         assert!(result, "C1 should be able to reach C4 via C3");
     }
 }
+
+pub fn compute_effective_context_window(
+    conn: &rusqlite::Connection,
+    combo_id: openproxy_types::ComboId,
+) -> openproxy_types::error::Result<Option<i64>> {
+    let mut visited = Vec::new();
+    let targets = openproxy_pipeline::repository::resolve_combo_to_targets(conn, combo_id, &mut visited, 0)?;
+    let mut min_window = None;
+    for t in targets {
+        if let Some(row_id) = t.model_row_id {
+            let maybe_cw: Option<i64> = conn.query_row(
+                "SELECT context_length FROM models WHERE id = ?1",
+                rusqlite::params![row_id.0],
+                |row| row.get(0)
+            ).unwrap_or(None);
+            if let Some(cw) = maybe_cw {
+                min_window = match min_window {
+                    Some(min) => Some(std::cmp::min(min, cw)),
+                    None => Some(cw),
+                };
+            }
+        }
+    }
+    Ok(min_window)
+}

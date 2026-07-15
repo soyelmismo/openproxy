@@ -9,13 +9,12 @@ pub mod circuit_breaker;
 pub mod context;
 pub mod oauth;
 pub mod credentials;
+pub mod load_balancing;
 pub mod execution;
 pub mod formatting;
 pub mod quotas;
 pub mod racing;
 pub mod repository;
-pub mod selection_registry;
-pub use selection_registry::SelectionRegistry;
 pub mod retry;
 pub use repository::SqlitePipelineRepository;
 pub mod timeouts;
@@ -36,3 +35,4 @@ pub mod redact;
 
 #[cfg(test)]
 pub mod tests;
+pub mod repository_tests;

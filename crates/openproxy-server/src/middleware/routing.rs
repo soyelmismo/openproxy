@@ -5,12 +5,14 @@ use axum::{
     response::Response,
 };
 use openproxy_core::{
-    CoreError,
     combos::{Combo, ComboTarget},
-    ids::{ApiKeyId, ComboId, RequestId},
     routing::{self, RoutingPlan, SYNTHETIC_COMBO_ID, build_synthetic_combo},
 };
-use openproxy_types::OpenAIRequest;
+use openproxy_types::{
+    CoreError,
+    OpenAIRequest,
+    ids::{ApiKeyId, ComboId, RequestId},
+};
 use std::sync::Arc;
 
 use crate::{
@@ -162,9 +164,7 @@ fn record_model_not_found_usage_row(
     api_key_id: Option<ApiKeyId>,
     upstream_model: &str,
 ) -> std::result::Result<(), ApiError> {
-    use openproxy_core::{
-        ids::{ProviderId, TraceId},
-    };
+    use openproxy_types::ids::{ProviderId, TraceId};
     use openproxy_types::UsageInput;
     let input = UsageInput {
         proxy_url: None,

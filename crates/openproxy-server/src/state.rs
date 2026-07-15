@@ -16,9 +16,9 @@ use openproxy_core::{
     AppConfig,
     discovery_scheduler::{self, DiscoveryScheduler},
     oauth,
-    secrets::MasterKey,
     usage,
 };
+use openproxy_db::MasterKey;
 use openproxy_adapters::adapters;
 use openproxy_adapters::upstream::UpstreamClient;
 use openproxy_db as db;
@@ -45,12 +45,12 @@ pub struct AppState {
     /// clone of this; the admin `run_test_for_model` endpoint
     /// pulls it from [`Self::upstream_client`].
     upstream_client: Arc<UpstreamClient>,
-    usage_tx: tokio::sync::broadcast::Sender<usage::RecentUsageRow>,
+    usage_tx: tokio::sync::broadcast::Sender<openproxy_types::usage::RecentUsageRow>,
     /// Secondary broadcast sender for in-flight stage events
     /// (`started`/`connecting`/`waiting_ttft`/`streaming`/`failed`).
     /// The live-log dashboard subscribes to both senders and
     /// multiplexes them into a single WS stream.
-    stage_tx: tokio::sync::broadcast::Sender<usage::StageEvent>,
+    stage_tx: tokio::sync::broadcast::Sender<openproxy_types::usage::StageEvent>,
     /// Shared toggle that controls whether the pipeline records full
     /// request/response bodies and headers in the `usage` table.
     /// The chat handler passes a clone of this `Arc` into every
@@ -105,7 +105,7 @@ pub struct AppState {
     /// every per-request `Pipeline` via
     /// [`Pipeline::with_selection_registry`] so LKGP state
     /// survives across requests.
-    selection_registry: Arc<openproxy_pipeline::SelectionRegistry>,
+    selection_registry: Arc<openproxy_types::SelectionRegistry>,
     /// Shared circuit breaker registry. Created once at boot and
     /// cloned into every per-request `Pipeline` (the registry is
     /// `Clone` — its inner state is `Arc<Mutex<...>>`, so clones
@@ -219,7 +219,7 @@ impl AppState {
         ));
         spawn_rate_limiter_cleanup(rate_limiter.clone());
 
-        let selection_registry = Arc::new(openproxy_pipeline::SelectionRegistry::new());
+        let selection_registry = Arc::new(openproxy_types::SelectionRegistry::new());
         let circuit_breaker = openproxy_pipeline::circuit_breaker::CircuitBreakerRegistry::new(
             &openproxy_types::config::CircuitBreakerConfig {
                 failure_threshold: 5,
@@ -327,7 +327,7 @@ impl AppState {
         ));
         spawn_rate_limiter_cleanup(rate_limiter.clone());
 
-        let selection_registry = Arc::new(openproxy_pipeline::SelectionRegistry::new());
+        let selection_registry = Arc::new(openproxy_types::SelectionRegistry::new());
         let circuit_breaker = openproxy_pipeline::circuit_breaker::CircuitBreakerRegistry::new(
             &openproxy_types::config::CircuitBreakerConfig {
                 failure_threshold: 5,
@@ -423,14 +423,14 @@ impl AppState {
     /// list from the DB fails. Admin callers log and continue
     /// (the DB write has already committed; a future admin action
     /// will retry the reload) rather than failing the request.
-    pub fn rebuild_adapters(&self) -> Result<(), openproxy_core::CoreError> {
+    pub fn rebuild_adapters(&self) -> Result<(), openproxy_types::CoreError> {
         // 1. Start with the static built-in adapter set.
         let mut new_adapters: Vec<adapters::ProviderAdapterEnum> = adapters::builtin_adapters();
         // 2. Layer in any custom providers the DB has.
         let all_providers = {
             let w = self.db_pool().writer();
             openproxy_core::providers::list(&w).map_err(|e| {
-                openproxy_core::CoreError::Internal(format!(
+                openproxy_types::CoreError::Internal(format!(
                     "rebuild_adapters: list providers: {e}"
                 ))
             })
@@ -483,7 +483,7 @@ impl AppState {
     }
 
     /// Borrow the usage broadcast sender.
-    pub fn usage_tx(&self) -> tokio::sync::broadcast::Sender<usage::RecentUsageRow> {
+    pub fn usage_tx(&self) -> tokio::sync::broadcast::Sender<openproxy_types::usage::RecentUsageRow> {
         self.usage_tx.clone()
     }
 
@@ -492,7 +492,7 @@ impl AppState {
     /// the operator each request's progress through
     /// `started → connecting → waiting_ttft → streaming → completed`
     /// in real time.
-    pub fn stage_tx(&self) -> tokio::sync::broadcast::Sender<usage::StageEvent> {
+    pub fn stage_tx(&self) -> tokio::sync::broadcast::Sender<openproxy_types::usage::StageEvent> {
         self.stage_tx.clone()
     }
 
@@ -589,7 +589,7 @@ impl AppState {
     /// [`openproxy_pipeline::Pipeline::with_selection_registry`]
     /// so the LKGP / least_used / p2c priority modes share state
     /// across all in-flight requests.
-    pub fn selection_registry(&self) -> Arc<openproxy_pipeline::SelectionRegistry> {
+    pub fn selection_registry(&self) -> Arc<openproxy_types::SelectionRegistry> {
         Arc::clone(&self.selection_registry)
     }
 
@@ -789,7 +789,7 @@ async fn spawn_background_tasks(args: SpawnBackgroundTasksArgs) {
         loop {
             tick.tick().await;
             let _w = prune_pool.writer();
-            let _ = openproxy_core::cooldown::prune_expired(&_w);
+            let _ = openproxy_pipeline::repository::prune_expired_cooldowns(&_w);
         }
     });
 
@@ -993,7 +993,7 @@ fn spawn_rate_limiter_cleanup(rate_limiter: Arc<crate::rate_limit::RateLimiter>)
 }
 
 fn spawn_memory_cleanup(
-    selection_registry: Arc<openproxy_pipeline::SelectionRegistry>,
+    selection_registry: Arc<openproxy_types::SelectionRegistry>,
     circuit_breaker: openproxy_pipeline::circuit_breaker::CircuitBreakerRegistry,
 ) {
     tokio::spawn(async move {
@@ -1031,8 +1031,10 @@ mod tests {
     use super::*;
     use crate::state::AppState;
     use openproxy_core::{
-        AppConfig, ids::ProviderId, providers, secrets::MasterKey,
+        AppConfig, providers,
     };
+    use openproxy_types::ids::ProviderId;
+    use openproxy_db::MasterKey;
     use openproxy_adapters::adapters;
     use openproxy_db as core_db;
     use std::path::PathBuf;

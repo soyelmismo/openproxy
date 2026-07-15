@@ -9,7 +9,7 @@ use axum::{
     http::StatusCode,
     response::{IntoResponse, Response},
 };
-use openproxy_core::CoreError;
+use openproxy_types::CoreError;
 use serde_json::json;
 
 /// Wrapper around [`CoreError`] that adapts a typed error into the

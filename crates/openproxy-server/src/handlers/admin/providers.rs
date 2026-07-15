@@ -287,7 +287,7 @@ async fn run_provider_refresh(
     //    semantic: an operator who disables a non-custom row by hand
     //    and then triggers a refresh will see it come back on, which
     //    matches the spec's expectation.
-    let activated = match (|| -> openproxy_core::Result<u64> {
+    let activated = match (|| -> openproxy_types::Result<u64> {
         // Re-load the provider so we see the up-to-date keyword;
         // doing this in a fresh writer keeps the lock short.
         let w = s.db_pool().writer();

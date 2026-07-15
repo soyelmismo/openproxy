@@ -1,6 +1,7 @@
 use crate::{error::ApiError, state::AppState};
 use axum::{extract::State, http::HeaderMap};
-use openproxy_core::{CoreError, api_keys as core_api_keys, ids::ApiKeyId};
+use openproxy_core::api_keys as core_api_keys;
+use openproxy_types::{CoreError, ids::ApiKeyId};
 use std::sync::Arc;
 
 /// Extracted parsed JSON payload for the chat endpoint.
@@ -181,7 +182,7 @@ pub async fn auth_middleware(
                     axum::http::StatusCode::PAYLOAD_TOO_LARGE,
                 ));
             } else {
-                return Err(crate::error::ApiError(openproxy_core::CoreError::Parse(
+                return Err(crate::error::ApiError(openproxy_types::CoreError::Parse(
                     e.to_string(),
                 )));
             }
@@ -189,7 +190,7 @@ pub async fn auth_middleware(
     };
 
     let parsed: openproxy_types::OpenAIRequest = serde_json::from_slice(&bytes)
-        .map_err(|e| crate::error::ApiError(openproxy_core::CoreError::Parse(e.to_string())))?;
+        .map_err(|e| crate::error::ApiError(openproxy_types::CoreError::Parse(e.to_string())))?;
 
     let requested_model = &parsed.model;
 

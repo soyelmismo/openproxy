@@ -6,8 +6,8 @@
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as BASE64;
 
-use openproxy_core::CoreError;
-use openproxy_core::secrets::MasterKey;
+use openproxy_types::CoreError;
+use openproxy_db::secrets::MasterKey;
 
 #[test]
 fn encrypt_then_decrypt_roundtrip() {

@@ -1,5 +1,5 @@
 use openproxy_types::{AccountId, ComboId, ModelRowId, UsageId, Result, Combo, ComboTarget, Model, UsageInput, ProviderId, ComboTargetId, CooldownMode, Account};
-use crate::SelectionRegistry;
+use openproxy_types::SelectionRegistry;
 use openproxy_db::secrets::MasterKey;
 use std::collections::HashMap;
 
@@ -67,6 +67,7 @@ pub trait PipelineRepository: Send + Sync {
         error_msg: &str,
     ) -> Result<()>;
     fn clear_cooldown(&self, target_id: ComboTargetId) -> Result<()>;
+    fn prune_expired_cooldowns(&self) -> Result<usize>;
     fn record_cooldown(
         &self,
         target_id: ComboTargetId,
@@ -177,68 +178,11 @@ impl PipelineRepository for SqlitePipelineRepository {
     }
 
     fn list_targets(&self, combo_id: ComboId) -> Result<Vec<ComboTarget>> {
-        let conn = self.conn.lock();
-        let mut stmt = conn.prepare(
-            "SELECT ct.id, ct.combo_id, ct.provider_id, ct.account_id, ct.model_row_id, \
-                    ct.sub_combo_id, ct.priority_order, ct.weight, p.rate_limit_scope \
-             FROM combo_targets ct \
-             INNER JOIN providers p ON p.id = ct.provider_id \
-             WHERE ct.combo_id = ?1 AND p.active = 1 \
-                 AND NOT (ct.model_row_id IS NULL AND ct.sub_combo_id IS NULL) \
-             ORDER BY ct.priority_order ASC, ct.id ASC"
-        ).map_err(|e| openproxy_types::error::CoreError::Internal(e.to_string()))?;
-        let rows = stmt.query_map(rusqlite::params![combo_id.0], |row| {
-            let id: i64 = row.get(0)?;
-            let combo_id: i64 = row.get(1)?;
-            let provider_id: String = row.get(2)?;
-            let account_id: Option<i64> = row.get(3)?;
-            let model_row_id: Option<i64> = row.get(4)?;
-            let sub_combo_id: Option<i64> = row.get(5)?;
-            let priority_order: i32 = row.get(6)?;
-            let weight: i32 = row.get::<_, Option<i64>>(7)?.unwrap_or(1) as i32;
-            let rate_limit_scope: String = row.get(8)?;
-
-            Ok(ComboTarget {
-                id: openproxy_types::ids::ComboTargetId(id),
-                combo_id: ComboId(combo_id),
-                provider_id: openproxy_types::ids::ProviderId::new(provider_id),
-                account_id: account_id.map(AccountId),
-                model_row_id: model_row_id.map(ModelRowId),
-                sub_combo_id: sub_combo_id.map(ComboId),
-                priority_order,
-                weight,
-                rate_limit_scope: openproxy_types::providers::RateLimitScope::parse(&rate_limit_scope)
-                    .unwrap_or_default(),
-            })
-        }).map_err(|e| openproxy_types::error::CoreError::Internal(e.to_string()))?;
-        let mut res = Vec::new();
-        for r in rows {
-            res.push(r.map_err(|e| openproxy_types::error::CoreError::Internal(e.to_string()))?);
-        }
-        Ok(res)
+        list_targets(&self.conn.lock(), combo_id)
     }
-
     fn auto_populate_empty_combo(&self, combo_id: ComboId) -> Result<usize> {
-        let conn = self.conn.lock();
-        let providers: Vec<String> = {
-            let mut stmt = conn.prepare("SELECT id FROM providers WHERE active = 1").unwrap();
-            let rows = stmt.query_map([], |r| r.get::<_, String>(0)).unwrap();
-            rows.collect::<std::result::Result<Vec<_>, _>>().unwrap()
-        };
-        let mut added = 0;
-        for (i, p) in providers.into_iter().enumerate() {
-            let res = conn.execute(
-                "INSERT INTO combo_targets(combo_id, provider_id, priority_order, active, weight) \
-                 VALUES (?1, ?2, ?3, 1, 100)",
-                rusqlite::params![combo_id.0, p, i as i64]
-            );
-            if res.is_ok() {
-                added += 1;
-            }
-        }
-        Ok(added)
+        auto_populate_empty_combo(&self.conn.lock(), combo_id)
     }
-
     fn get_account(
         &self,
         account_id: AccountId,
@@ -493,10 +437,7 @@ impl PipelineRepository for SqlitePipelineRepository {
 
     fn clear_cooldown(&self, target_id: ComboTargetId) -> Result<()> {
         let conn = self.conn.lock();
-        conn.execute(
-            "UPDATE combo_targets SET cooldown_until = NULL WHERE id = ?1",
-            rusqlite::params![target_id.0]
-        ).map(|_| ()).map_err(|e| openproxy_types::error::CoreError::Internal(e.to_string()))
+        clear_cooldown(&conn, target_id)
     }
 
     fn record_cooldown(
@@ -599,38 +540,11 @@ impl PipelineRepository for SqlitePipelineRepository {
     }
 
     fn resolve_combo_to_targets(&self, combo_id: ComboId, visited: &mut Vec<ComboId>, depth: u32) -> Result<Vec<ComboTarget>> {
-        let targets = self.list_targets(combo_id)?;
-        let mut flat = Vec::new();
-        for t in targets {
-            if let Some(sub_id) = t.sub_combo_id {
-                let sub = self.resolve_combo_to_targets(sub_id, visited, depth + 1)?;
-                flat.extend(sub);
-            } else {
-                flat.push(t);
-            }
-        }
-        Ok(flat)
+        resolve_combo_to_targets(&self.conn.lock(), combo_id, visited, depth)
     }
-
     fn expand_account_rotation(&self, targets: Vec<ComboTarget>) -> Result<Vec<ComboTarget>> {
-        let conn = self.conn.lock();
-        let mut out = Vec::new();
-        for t in targets {
-            if t.account_id.is_some() || t.sub_combo_id.is_some() {
-                out.push(t);
-                continue;
-            }
-            let mut stmt = conn.prepare("SELECT id FROM accounts WHERE provider_id = ?1 AND health_status = 'healthy' ORDER BY priority ASC, id ASC").unwrap();
-            let rows = stmt.query_map(rusqlite::params![t.provider_id.as_str()], |r| r.get::<_, i64>(0)).unwrap();
-            for r in rows {
-                let mut ct = t.clone();
-                ct.account_id = Some(AccountId(r.unwrap()));
-                out.push(ct);
-            }
-        }
-        Ok(out)
+        expand_account_rotation(&self.conn.lock(), targets)
     }
-
     fn resolve_target_order_with_mode(
         &self,
         combo: &Combo,
@@ -775,4 +689,121 @@ impl PipelineRepository for SqlitePipelineRepository {
         )
         .ok()
     }
+
+    fn prune_expired_cooldowns(&self) -> Result<usize> {
+        let conn = self.conn.lock();
+        prune_expired_cooldowns(&conn)
+    }
+}
+
+
+pub fn list_targets(conn: &rusqlite::Connection, combo_id: ComboId) -> Result<Vec<ComboTarget>> {        let mut stmt = conn.prepare(
+            "SELECT ct.id, ct.combo_id, ct.provider_id, ct.account_id, ct.model_row_id, \
+                    ct.sub_combo_id, ct.priority_order, ct.weight, p.rate_limit_scope \
+             FROM combo_targets ct \
+             INNER JOIN providers p ON p.id = ct.provider_id \
+             WHERE ct.combo_id = ?1 AND p.active = 1 \
+                 \
+             ORDER BY ct.priority_order ASC, ct.id ASC"
+        ).map_err(|e| openproxy_types::error::CoreError::Internal(e.to_string()))?;
+        let rows = stmt.query_map(rusqlite::params![combo_id.0], |row| {
+            let id: i64 = row.get(0)?;
+            let combo_id: i64 = row.get(1)?;
+            let provider_id: String = row.get(2)?;
+            let account_id: Option<i64> = row.get(3)?;
+            let model_row_id: Option<i64> = row.get(4)?;
+            let sub_combo_id: Option<i64> = row.get(5)?;
+            let priority_order: i32 = row.get(6)?;
+            let weight: i32 = row.get::<_, Option<i64>>(7)?.unwrap_or(1) as i32;
+            let rate_limit_scope: String = row.get(8)?;
+
+            Ok(ComboTarget {
+                id: openproxy_types::ids::ComboTargetId(id),
+                combo_id: ComboId(combo_id),
+                provider_id: openproxy_types::ids::ProviderId::new(provider_id),
+                account_id: account_id.map(AccountId),
+                model_row_id: model_row_id.map(ModelRowId),
+                sub_combo_id: sub_combo_id.map(ComboId),
+                priority_order,
+                weight,
+                rate_limit_scope: openproxy_types::providers::RateLimitScope::parse(&rate_limit_scope)
+                    .unwrap_or_default(),
+            })
+        }).map_err(|e| openproxy_types::error::CoreError::Internal(e.to_string()))?;
+        let mut res = Vec::new();
+        for r in rows {
+            res.push(r.map_err(|e| openproxy_types::error::CoreError::Internal(e.to_string()))?);
+        }
+        Ok(res)
+    }
+
+pub fn auto_populate_empty_combo(conn: &rusqlite::Connection, combo_id: ComboId) -> Result<usize> {        let providers: Vec<String> = {
+            let mut stmt = conn.prepare("SELECT id FROM providers WHERE active = 1").unwrap();
+            let rows = stmt.query_map([], |r| r.get::<_, String>(0)).unwrap();
+            rows.collect::<std::result::Result<Vec<_>, _>>().unwrap()
+        };
+        let mut added = 0;
+        for (i, p) in providers.into_iter().enumerate() {
+            let res = conn.execute(
+                "INSERT INTO combo_targets(combo_id, provider_id, priority_order, weight) \
+                 VALUES (?1, ?2, ?3, 100)",
+                rusqlite::params![combo_id.0, p, i as i64]
+            );
+            match res {
+                Ok(_) => {
+                added += 1;
+                }
+                Err(e) => panic!("SQL ERROR: {}", e),
+            }
+        }
+        Ok(added)
+    }
+
+pub fn expand_account_rotation(conn: &rusqlite::Connection, targets: Vec<ComboTarget>) -> Result<Vec<ComboTarget>> {        let mut out = Vec::new();
+        for t in targets {
+            if t.account_id.is_some() || t.sub_combo_id.is_some() {
+                out.push(t);
+                continue;
+            }
+            let mut stmt = conn.prepare("SELECT id FROM accounts WHERE provider_id = ?1 AND health_status = 'healthy' ORDER BY priority ASC, id ASC").unwrap();
+            let rows = stmt.query_map(rusqlite::params![t.provider_id.as_str()], |r| r.get::<_, i64>(0)).unwrap();
+            for r in rows {
+                let mut ct = t.clone();
+                ct.account_id = Some(AccountId(r.unwrap()));
+                out.push(ct);
+            }
+        }
+        Ok(out)
+    }
+
+pub fn resolve_combo_to_targets(conn: &rusqlite::Connection, combo_id: ComboId, visited: &mut Vec<ComboId>, depth: u32) -> Result<Vec<ComboTarget>> {
+        let targets = list_targets(conn, combo_id)?;
+        let mut flat = Vec::new();
+        for t in targets {
+            if let Some(sub_id) = t.sub_combo_id {
+                let sub = resolve_combo_to_targets(conn, sub_id, visited, depth + 1)?;
+                flat.extend(sub);
+            } else {
+                flat.push(t);
+            }
+        }
+        Ok(flat)
+    }
+
+
+pub fn prune_expired_cooldowns(conn: &rusqlite::Connection) -> Result<usize> {
+    let now = chrono::Utc::now().to_rfc3339();
+    conn.execute(
+        "DELETE FROM target_cooldowns WHERE datetime(cooldown_until) <= datetime(?1)",
+        rusqlite::params![now],
+    )
+    .map(|n| n as usize)
+    .map_err(|e| openproxy_types::error::CoreError::Internal(e.to_string()))
+}
+
+pub fn clear_cooldown(conn: &rusqlite::Connection, target_id: ComboTargetId) -> Result<()> {
+    conn.execute(
+        "UPDATE combo_targets SET cooldown_until = NULL WHERE id = ?1",
+        rusqlite::params![target_id.0]
+    ).map(|_| ()).map_err(|e| openproxy_types::error::CoreError::Internal(e.to_string()))
 }

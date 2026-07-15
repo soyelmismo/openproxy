@@ -710,52 +710,6 @@ pub fn errors(conn: &Connection, f: &UsageFilter, limit: u32) -> Result<Vec<Erro
 /// Mirrors the columns the spec calls out for the long-polling feed (and a
 /// couple more for convenience). Returned by [`recent`] in
 /// `(id ASC)` order, with `id > since_id` so the dashboard can paginate
-/// forward by remembering the last seen id.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct RecentUsageRow {
-    pub id: UsageId,
-    pub request_id: String,
-    pub trace_id: String,
-    pub provider_id: ProviderId,
-    pub upstream_model_id: String,
-    pub status_code: u16,
-    pub total_ms: u64,
-    pub prompt_tokens: Option<u32>,
-    pub completion_tokens: Option<u32>,
-    pub cost_usd: Option<f64>,
-    pub connect_ms: Option<u64>,
-    pub ttft_ms: Option<u64>,
-    pub request_body_json: Option<Value>,
-    pub response_body_json: Option<Value>,
-    pub request_headers: Option<BTreeMap<String, String>>,
-    pub response_headers: Option<BTreeMap<String, String>>,
-    pub error_message: Option<String>,
-    pub race_total: Option<u8>,
-    pub race_attempts: Option<u8>,
-    pub is_streaming: bool,
-    pub stream_complete: bool,
-    pub race_lost: bool,
-    /// Upstream stop reason (e.g. "end_turn", "max_tokens",
-    /// "stop_sequence" for Anthropic; "stop", "length" for OpenAI).
-    pub stop_reason: Option<String>,
-    /// Compression savings percentage.
-    pub compression_savings_pct: Option<f64>,
-    /// Compression techniques (CSV).
-    pub compression_techniques: Option<String>,
-    /// True iff this row's response was actually delivered to the HTTP
-    /// client (winning attempt). False for intermediate retries.
-    pub client_response: bool,
-    /// True if prompt_tokens were estimated (upstream didn't report usage).
-    pub prompt_tokens_estimated: bool,
-    /// True if completion_tokens were estimated (upstream didn't report usage).
-    pub completion_tokens_estimated: bool,
-    pub proxy_url: Option<String>,
-    pub proxy_status: Option<String>,
-    pub is_proxy_rotated: bool,
-    /// The endpoint kind (chat, audio, image, etc.). Defaults to Chat.
-    pub endpoint_kind: crate::endpoint::EndpointKind,
-    pub created_at: String,
-}
 
 /// Full `usage` row projection for live-log detail views.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -813,7 +767,7 @@ pub struct UsageDetailRow {
 /// last id it has seen, and we return everything that arrived since.
 ///
 /// `limit` is a hard cap and is forwarded verbatim to SQL.
-pub fn recent(conn: &Connection, since_id: i64, limit: u32) -> Result<Vec<RecentUsageRow>> {
+pub fn recent(conn: &Connection, since_id: i64, limit: u32) -> Result<Vec<openproxy_types::usage::RecentUsageRow>> {
     // Each retry within a single request writes a separate row to the
     // `usage` table. The dashboard's live-logs view shows EACH attempt
     // as its own row (keyed by `trace_id`), so the operator can inspect
@@ -971,7 +925,7 @@ pub fn recent(conn: &Connection, since_id: i64, limit: u32) -> Result<Vec<Recent
                 "video" => crate::endpoint::EndpointKind::Video,
                 _ => crate::endpoint::EndpointKind::Chat,
             };
-            Ok(RecentUsageRow {
+            Ok(openproxy_types::usage::RecentUsageRow {
                 id: UsageId(id),
                 request_id,
                 trace_id,
@@ -1020,7 +974,7 @@ pub fn recent(conn: &Connection, since_id: i64, limit: u32) -> Result<Vec<Recent
 /// fetching the head (`recent_desc`). Without this, the
 /// same 3-attempt request that `recent()` shows as 0.03
 /// cost would show as 0.01 in the admin table at the top.
-pub fn recent_desc(conn: &Connection, limit: u32) -> Result<Vec<RecentUsageRow>> {
+pub fn recent_desc(conn: &Connection, limit: u32) -> Result<Vec<openproxy_types::usage::RecentUsageRow>> {
     // Each attempt as its own row, no grouping. See `recent()` for the
     // full rationale — the short version is: grouping by `request_id`
     // and SUMming tokens across race attempts produced misleading
@@ -1159,7 +1113,7 @@ pub fn recent_desc(conn: &Connection, limit: u32) -> Result<Vec<RecentUsageRow>>
                 _ => crate::endpoint::EndpointKind::Chat,
             };
 
-            Ok(RecentUsageRow {
+            Ok(openproxy_types::usage::RecentUsageRow {
                 id: UsageId(id),
                 request_id,
                 trace_id,
@@ -1211,7 +1165,7 @@ pub fn recent_desc(conn: &Connection, limit: u32) -> Result<Vec<RecentUsageRow>>
 /// re-broadcast hard-coded them to `None`, which could clobber the
 /// dashboard's data if the frontend's merge didn't skip nulls
 /// correctly.
-pub fn row_for_broadcast_by_id(conn: &Connection, id: i64) -> Result<Option<RecentUsageRow>> {
+pub fn row_for_broadcast_by_id(conn: &Connection, id: i64) -> Result<Option<openproxy_types::usage::RecentUsageRow>> {
     let mut stmt = conn
         .prepare(
             "SELECT id, request_id, trace_id, provider_id, upstream_model_id, \
@@ -1330,7 +1284,7 @@ pub fn row_for_broadcast_by_id(conn: &Connection, id: i64) -> Result<Option<Rece
                 "video" => crate::endpoint::EndpointKind::Video,
                 _ => crate::endpoint::EndpointKind::Chat,
             };
-            Ok(RecentUsageRow {
+            Ok(openproxy_types::usage::RecentUsageRow {
                 id: UsageId(id),
                 request_id,
                 trace_id,
@@ -1731,3 +1685,37 @@ impl std::error::Error for SimpleErr {}
 // ---------------------------------------------------------------------------
 // Recording TTL cleanup
 // ---------------------------------------------------------------------------
+
+pub fn prune_expired_recording_bodies(conn: &rusqlite::Connection, ttl_secs: i64) -> crate::error::Result<usize> {
+    let ttl_secs = ttl_secs.max(0);
+    let n = conn
+        .execute(
+            "UPDATE usage \
+             SET request_body_json = NULL, \
+                 response_body_json = NULL, \
+                 request_headers = NULL, \
+                 response_headers = NULL \
+             WHERE datetime(created_at) <= datetime(?1, ?2)",
+            rusqlite::params![
+                chrono::Utc::now().to_rfc3339(),
+                format!("-{} seconds", ttl_secs)
+            ],
+        )
+        .map_err(crate::error::map_db_error)?;
+    Ok(n)
+}
+
+pub fn prune_expired_usage_rows(conn: &rusqlite::Connection, ttl_days: i64) -> crate::error::Result<usize> {
+    let ttl_days = ttl_days.max(0);
+    let n = conn
+        .execute(
+            "DELETE FROM usage \
+             WHERE datetime(created_at) <= datetime(?1, ?2)",
+            rusqlite::params![
+                chrono::Utc::now().to_rfc3339(),
+                format!("-{} days", ttl_days)
+            ],
+        )
+        .map_err(crate::error::map_db_error)?;
+    Ok(n)
+}

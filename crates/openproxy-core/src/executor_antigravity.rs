@@ -1210,7 +1210,7 @@ pub async fn execute_antigravity(
     project_id: &str,
     openai: &OpenAIRequest,
     client_disconnected: watch::Receiver<bool>,
-    stream_sink: Option<&crate::race_sink::StreamSink>,
+    stream_sink: Option<&openproxy_pipeline::StreamSink>,
     proxy: Option<String>,
 ) -> Result<OpenAIResponse, CoreError> {
     // 1. Session ID and fingerprint derivation

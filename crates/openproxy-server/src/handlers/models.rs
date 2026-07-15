@@ -28,6 +28,7 @@
 
 use axum::{Json, extract::State, http::HeaderMap};
 use openproxy_core::{capabilities, combos, models};
+use openproxy_types::{ApiKeyId, CoreError};
 
 use crate::{
     error::{ApiError, ApiResult},
@@ -65,7 +66,7 @@ pub async fn list_models(
             .db_pool()
             .try_writer_for(std::time::Duration::from_secs(5))
             .ok_or_else(|| {
-                ApiError(openproxy_core::CoreError::ServiceUnavailable(
+                ApiError(CoreError::ServiceUnavailable(
                     "database busy; retry in a few seconds".into(),
                 ))
             })?;
@@ -99,7 +100,7 @@ pub async fn list_models(
 fn authenticate_chat_or_anonymous(
     state: &AppState,
     headers: &HeaderMap,
-) -> Result<Option<openproxy_core::ids::ApiKeyId>, ApiError> {
+) -> Result<Option<ApiKeyId>, ApiError> {
     use openproxy_core::api_keys;
 
     let token = headers
@@ -117,13 +118,13 @@ fn authenticate_chat_or_anonymous(
         if active == 0 {
             return Ok(None); // anonymous
         }
-        return Err(ApiError(openproxy_core::CoreError::Auth(
+        return Err(ApiError(CoreError::Auth(
             "missing api key".into(),
         )));
     };
 
     if token.is_empty() {
-        return Err(ApiError(openproxy_core::CoreError::Auth(
+        return Err(ApiError(CoreError::Auth(
             "missing api key".into(),
         )));
     }
@@ -135,28 +136,28 @@ fn authenticate_chat_or_anonymous(
     let r = state.db_pool().reader();
     let key = api_keys::get_by_hash(&r, &key_hash).map_err(ApiError)?;
     let key =
-        key.ok_or_else(|| ApiError(openproxy_core::CoreError::Auth("invalid api key".into())))?;
+        key.ok_or_else(|| ApiError(CoreError::Auth("invalid api key".into())))?;
 
     if !key.is_active {
-        return Err(ApiError(openproxy_core::CoreError::Auth(
+        return Err(ApiError(CoreError::Auth(
             "api key revoked or inactive".into(),
         )));
     }
 
     if let Some(exp) = &key.expires_at
         && openproxy_core::api_keys::is_expired(Some(exp), chrono::Utc::now()).map_err(|e| {
-            ApiError(openproxy_core::CoreError::Internal(format!(
+            ApiError(CoreError::Internal(format!(
                 "expires_at check: {e}"
             )))
         })?
     {
-        return Err(ApiError(openproxy_core::CoreError::Auth(
+        return Err(ApiError(CoreError::Auth(
             "api key expired".into(),
         )));
     }
 
     if !key.scopes.iter().any(|s| s == "chat") {
-        return Err(ApiError(openproxy_core::CoreError::Auth(
+        return Err(ApiError(CoreError::Auth(
             "api key lacks required scope".into(),
         )));
     }
@@ -352,7 +353,7 @@ fn unix_now_secs() -> i64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use openproxy_core::ids::{ModelId, ModelRowId, ProviderId};
+    use openproxy_types::{ModelId, ModelRowId, ProviderId};
     use openproxy_core::models::{Model, TargetFormat};
 
     fn empty_model() -> Model {
@@ -470,7 +471,7 @@ mod tests {
         // provider/upstream separator; any later `/` is part of the
         // upstream model name.
         let mut m = empty_model();
-        m.model_id = openproxy_core::ids::ModelId::new("nex-agi/nex-n2-pro:free");
+        m.model_id = ModelId::new("nex-agi/nex-n2-pro:free");
         let v = build_model_entry(&m);
         let id = v
             .get("id")

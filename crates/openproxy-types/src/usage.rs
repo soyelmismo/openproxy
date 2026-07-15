@@ -114,3 +114,11 @@ pub fn publish_usage_row(row: RecentUsageRow) {
         publisher(row);
     }
 }
+
+pub fn redact_for_broadcast(mut row: RecentUsageRow) -> RecentUsageRow {
+    row.request_body_json = None;
+    row.response_body_json = None;
+    row.request_headers = None;
+    row.response_headers = None;
+    row
+}

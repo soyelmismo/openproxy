@@ -4,7 +4,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use openproxy_types::combos::{Combo, ComboTarget};
-use crate::SelectionRegistry;
+use openproxy_types::SelectionRegistry;
 use openproxy_compression::stats::CompressionStats;
 use openproxy_types::usage::UsageInput;
 use openproxy_types::error::{CoreError, Result};
@@ -50,7 +50,7 @@ impl UsageTracker {
             if matches!(e, tokio::sync::mpsc::error::TrySendError::Closed(_)) {
                 let job = e.into_inner();
                 let conn = self.conn.clone();
-                crate::worker::process_job(&conn, self.repo.as_ref(), job);
+                crate::worker::process_job(&conn, self.repo.as_ref(), job, self.selection_registry.clone());
             } else {
                 tracing::warn!(
                     "failed to send MarkClientResponse to background worker: {}",
@@ -519,7 +519,7 @@ impl<'a> UsageRecordBuilder<'a> {
             if matches!(e, tokio::sync::mpsc::error::TrySendError::Closed(_)) {
                 let job = e.into_inner();
                 let conn = self.tracker.conn.clone();
-                crate::worker::process_job(&conn, self.tracker.repo.as_ref(), job);
+                crate::worker::process_job(&conn, self.tracker.repo.as_ref(), job, self.tracker.selection_registry.clone());
             } else {
                 tracing::warn!("failed to send RecordAttempt to background worker: {}", e);
             }

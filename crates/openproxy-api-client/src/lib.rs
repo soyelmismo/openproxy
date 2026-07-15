@@ -42,16 +42,19 @@
 //! el patrón de extracción de `{"id": ...}`.
 
 use openproxy_core::{
-    CoreError, accounts,
+    accounts,
     admin::{
         AddTargetInput, CreateAccountInput, CreateComboInput, CreateProviderInput,
         UpdateAccountApiKeyInput,
     },
     analytics::{LatencyPercentiles, RaceStats},
     combos,
-    ids::{AccountId, ComboId, ModelRowId, ProviderId},
     providers,
     usage::{ByAccountRow, ByModelRow, ByStatusRow, ErrorRow, UsageFilter, UsageSummary},
+};
+use openproxy_types::{
+    CoreError,
+    ids::{AccountId, ComboId, ModelRowId, ProviderId},
 };
 use std::fmt::Write as _;
 

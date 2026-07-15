@@ -156,7 +156,7 @@ pub async fn recompute_usage_costs(
 pub async fn usage_recent(
     State(s): State<AppState>,
     Query(q): Query<RecentQuery>,
-) -> ApiResult<Json<Vec<core_usage::RecentUsageRow>>> {
+) -> ApiResult<Json<Vec<openproxy_types::usage::RecentUsageRow>>> {
     crate::api_try! {
         let since_id = q.since_id.unwrap_or(0).clamp(0, USAGE_RECENT_MAX_SINCE_ID);
         let limit = q
@@ -173,7 +173,7 @@ pub async fn usage_recent(
         // endpoint reads them straight from the database on demand.
         let rows = core_usage::recent(&r, since_id, limit)?
             .into_iter()
-            .map(core_usage::redact_for_broadcast)
+            .map(openproxy_types::usage::redact_for_broadcast)
             .collect();
         Ok(Json(rows))
     }
@@ -398,7 +398,7 @@ pub(crate) async fn stream_usage_rows(socket: WebSocket, state: AppState) {
             // batch must apply the same redaction so the initial rows
             // don't leak bodies/headers to the dashboard. The full
             // bodies are available on demand via /usage/detail.
-            "rows": rows.into_iter().map(core_usage::redact_for_broadcast).collect::<Vec<_>>()
+            "rows": rows.into_iter().map(openproxy_types::usage::redact_for_broadcast).collect::<Vec<_>>()
         })).await;
 
         // 4. Event loop — usage_rx, stage_rx, and notification_rx are
@@ -552,7 +552,7 @@ pub(crate) async fn stream_usage_rows(socket: WebSocket, state: AppState) {
                                         .since_id
                                         .unwrap_or(0)
                                         .clamp(0, USAGE_RECENT_MAX_SINCE_ID);
-                                    let rows: Vec<core_usage::RecentUsageRow> = {
+                                    let rows: Vec<openproxy_types::usage::RecentUsageRow> = {
                                         let r = state.db_pool().reader();
                                         let rows = match core_usage::recent(&r, since_id, 100) {
                                             Ok(v) => v,
@@ -563,7 +563,7 @@ pub(crate) async fn stream_usage_rows(socket: WebSocket, state: AppState) {
                                         };
                                         drop(r);
                                         rows.into_iter()
-                                            .map(core_usage::redact_for_broadcast)
+                                            .map(openproxy_types::usage::redact_for_broadcast)
                                             .collect()
                                     };
                                     if let Some(mx) = rows.iter().map(|r| r.id.0).max() {

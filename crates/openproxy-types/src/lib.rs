@@ -13,6 +13,8 @@ pub mod models;
 
 pub use accounts::{Account, HealthStatus};
 pub use models::Model;
+pub mod notifications;
+pub use notifications::{NotificationEvent, publish_notification};
 pub mod usage;
 pub use usage::{UsageInput, RecentUsageRow, publish_usage_row};
 pub mod endpoint;

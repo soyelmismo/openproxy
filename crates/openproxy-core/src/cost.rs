@@ -183,7 +183,7 @@ pub fn record(conn: &Connection, input: &UsageInput) -> Result<UsageId> {
 
     let rowid = conn.last_insert_rowid();
 
-    let row = crate::usage::RecentUsageRow {
+    let row = openproxy_types::usage::RecentUsageRow {
         id: UsageId(rowid),
         request_id,
         trace_id,
@@ -222,7 +222,7 @@ pub fn record(conn: &Connection, input: &UsageInput) -> Result<UsageId> {
         is_proxy_rotated: input.is_proxy_rotated,
         endpoint_kind: input.endpoint_kind,
     };
-    crate::usage::publish_usage_row(row);
+    openproxy_types::usage::publish_usage_row(row);
 
     Ok(UsageId(rowid))
 }

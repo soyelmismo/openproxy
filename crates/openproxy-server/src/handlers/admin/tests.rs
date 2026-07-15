@@ -916,7 +916,7 @@ fn insert_test_account(state: &AppState, provider_id: &str) -> i64 {
     let _ = openproxy_core::providers::create(
         &w,
         openproxy_core::providers::NewProvider {
-            id: &openproxy_core::ids::ProviderId::new(provider_id),
+            id: &ProviderId::new(provider_id),
             name: provider_id,
             base_url: "https://example.com",
             auth_type: openproxy_core::providers::AuthType::Bearer,
@@ -930,7 +930,7 @@ fn insert_test_account(state: &AppState, provider_id: &str) -> i64 {
     let mk = state.master_key();
     let aid = openproxy_core::accounts::create(
         &w,
-        &openproxy_core::ids::ProviderId::new(provider_id),
+        &ProviderId::new(provider_id),
         Some("sk-test-dummy-key"),
         mk.as_ref(),
         Some("test"),

@@ -316,13 +316,17 @@ pub fn get_or_assign_provider_proxy(
 }
 
 pub fn upsert_scraped_proxies(
-    conn: &Connection,
+    conn: &mut Connection,
     proxies: &[ScrapedProxy],
 ) -> crate::error::Result<()> {
     let now = chrono::Utc::now().to_rfc3339();
+    let tx = conn.transaction().map_err(|e| crate::error::CoreError::Database {
+        message: e.to_string(),
+        source: Some(Box::new(e)),
+    })?;
     for p in proxies {
         let id = uuid::Uuid::new_v4().to_string();
-        conn.execute(
+        tx.execute(
             "INSERT INTO free_proxies (id, source, host, port, type, country_code, status, latency_ms, last_validated, created_at, updated_at) \
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'unknown', NULL, NULL, ?7, ?8) \
              ON CONFLICT(host, port) DO UPDATE SET \
@@ -337,6 +341,10 @@ pub fn upsert_scraped_proxies(
             source: Some(Box::new(e)),
         })?;
     }
+    tx.commit().map_err(|e| crate::error::CoreError::Database {
+        message: e.to_string(),
+        source: Some(Box::new(e)),
+    })?;
     Ok(())
 }
 
@@ -557,14 +565,22 @@ pub async fn sync_all_providers(db_pool: Arc<DbPool>) -> crate::error::Result<Sy
 
     let mut added = 0;
     if !scraped.is_empty() {
-        let w = db_pool.writer();
-        let before_count: i64 = w
-            .query_row("SELECT COUNT(*) FROM free_proxies", [], |r| r.get(0))
-            .unwrap_or(0);
-        upsert_scraped_proxies(&w, &scraped)?;
-        let after_count: i64 = w
-            .query_row("SELECT COUNT(*) FROM free_proxies", [], |r| r.get(0))
-            .unwrap_or(0);
+        let scraped_clone = scraped.clone();
+        let db_pool = db_pool.clone();
+        let (before_count, after_count) = tokio::task::spawn_blocking(move || -> Result<(i64, i64), crate::error::CoreError> {
+            let mut w = db_pool.open_connection().unwrap();
+            let before: i64 = w
+                .query_row("SELECT COUNT(*) FROM free_proxies", [], |r| r.get(0))
+                .unwrap_or(0);
+            
+            upsert_scraped_proxies(&mut w, &scraped_clone)?;
+            
+            let after: i64 = w
+                .query_row("SELECT COUNT(*) FROM free_proxies", [], |r| r.get(0))
+                .unwrap_or(0);
+            Ok((before, after))
+        }).await.unwrap()?;
+
         added = (after_count - before_count) as usize;
     }
 
@@ -728,15 +744,19 @@ pub fn test_all_proxies_background(db_pool: Arc<DbPool>) {
                 let pool = pool_clone.clone();
                 async move {
                     let test_res = test_proxy_connection(&r#type, &host, port).await;
-                    let w = pool.writer();
-                    match test_res {
-                        Ok(latency) => {
-                            let _ = update_proxy_status(&w, &id, "alive", Some(latency));
+                    let db_pool = pool.clone();
+                    let id_clone = id.clone();
+                    tokio::task::spawn_blocking(move || {
+                        let w = db_pool.open_connection().unwrap();
+                        match test_res {
+                            Ok(latency) => {
+                                let _ = update_proxy_status(&w, &id_clone, "alive", Some(latency));
+                            }
+                            Err(_) => {
+                                let _ = update_proxy_status(&w, &id_clone, "dead", None);
+                            }
                         }
-                        Err(_) => {
-                            let _ = update_proxy_status(&w, &id, "dead", None);
-                        }
-                    }
+                    }).await.unwrap();
                 }
             })
             .buffer_unordered(20)
@@ -751,7 +771,7 @@ mod tests {
     use rusqlite::Connection;
 
     fn setup_test_db() -> Connection {
-        let conn = Connection::open_in_memory().unwrap();
+        let mut conn = Connection::open_in_memory().unwrap();
         conn.execute_batch(
             "CREATE TABLE free_proxies (
               id TEXT PRIMARY KEY,
@@ -791,7 +811,7 @@ mod tests {
 
     #[test]
     fn test_crud_custom_proxy() {
-        let conn = setup_test_db();
+        let mut conn = setup_test_db();
 
         let p = add_custom_proxy(
             &conn,
@@ -825,7 +845,7 @@ mod tests {
 
     #[test]
     fn test_upsert_scraped_proxies() {
-        let conn = setup_test_db();
+        let mut conn = setup_test_db();
 
         let scraped = vec![
             ScrapedProxy {
@@ -844,19 +864,19 @@ mod tests {
             },
         ];
 
-        upsert_scraped_proxies(&conn, &scraped).unwrap();
+        upsert_scraped_proxies(&mut conn, &scraped).unwrap();
 
         let list = list_proxies(&conn, None, None).unwrap();
         assert_eq!(list.len(), 2);
 
-        upsert_scraped_proxies(&conn, &scraped).unwrap();
+        upsert_scraped_proxies(&mut conn, &scraped).unwrap();
         let list2 = list_proxies(&conn, None, None).unwrap();
         assert_eq!(list2.len(), 2);
     }
 
     #[test]
     fn test_get_or_assign_provider_proxy_flow() {
-        let conn = setup_test_db();
+        let mut conn = setup_test_db();
 
         let provider_id = crate::ids::ProviderId::new("test-provider");
 

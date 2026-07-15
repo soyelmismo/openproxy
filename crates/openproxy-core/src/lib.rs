@@ -18,8 +18,9 @@
 
 pub mod capabilities;
 pub mod config;
-pub mod error;
-pub mod ids;
+#[allow(unused_imports)]
+pub(crate) use openproxy_types::error::{self, CoreError, ErrorContext, Result};
+pub(crate) use openproxy_types::ids;
 pub mod routing;
 
 pub mod accounts;
@@ -29,14 +30,12 @@ pub mod analytics;
 
 pub mod api_keys;
 pub mod bootstrap;
-pub mod circuit_breaker;
 pub mod combos;
 
-pub mod cooldown;
 pub mod cost;
 
 pub mod discovery_scheduler;
-pub mod endpoint;
+pub(crate) use openproxy_types::endpoint;
 pub mod executor_antigravity;
 pub mod schema_cleaner;
 
@@ -59,15 +58,12 @@ pub mod providers;
 pub mod quota;
 pub mod quota_sync;
 pub mod race;
-pub mod race_sink;
-pub mod redact;
 
-pub mod secrets;
+#[allow(unused_imports)]
+pub(crate) use openproxy_db::secrets;
 pub mod seed;
 pub mod smart_warmup;
 
-pub mod sse_accumulator;
-pub mod think_extractor;
 
 pub mod token_estimate;
 
@@ -80,7 +76,6 @@ pub mod usage;
 
 
 pub use config::AppConfig;
-pub use error::{CoreError, ErrorContext, Result};
 
 /// Install the rustls process-level crypto provider.
 ///
@@ -104,3 +99,4 @@ pub use error::{CoreError, ErrorContext, Result};
 pub fn install_rustls_crypto_provider() {
     let _ = rustls::crypto::ring::default_provider().install_default();
 }
+pub mod pipeline_repository_tests;

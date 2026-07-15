@@ -255,7 +255,7 @@ fn resolve_model_alias(conn: &rusqlite::Connection, alias: &str) -> String {
     if let Ok(Some(combo)) = crate::combos::crud::get_combo_by_name(conn, alias) {
         let mut visited = Vec::new();
         if let Ok(targets) =
-            crate::combos::resolution::resolve_combo_to_targets(conn, combo.id, &mut visited, 0)
+            openproxy_pipeline::repository::resolve_combo_to_targets(conn, combo.id, &mut visited, 0)
         {
             for target in targets {
                 if let Some(row_id) = target.model_row_id

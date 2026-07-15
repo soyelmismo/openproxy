@@ -1,7 +1,7 @@
 use crate::circuit_breaker::CircuitBreakerRegistry;
 use chrono;
 use openproxy_types::combos::Combo;
-use crate::SelectionRegistry;
+use openproxy_types::SelectionRegistry;
 use openproxy_compression::stats::CompressionStats;
 use openproxy_types::config::{RacingConfig, RetriesConfig};
 use openproxy_types::error::CoreError;

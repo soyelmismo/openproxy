@@ -35,10 +35,10 @@ use axum::{
 use openproxy_core::{
     AppConfig, accounts,
     admin, combos,
-    ids::{AccountId, ComboId, ComboTargetId, ModelId, ModelRowId, ProviderId},
     models::{self, DiscoveredModel, TargetFormat},
-    secrets::MasterKey,
 };
+use openproxy_types::ids::{AccountId, ComboId, ComboTargetId, ModelId, ModelRowId, ProviderId};
+use openproxy_db::secrets::MasterKey;
 use openproxy_adapters::adapters::{AdapterAuthType, AdapterFormat, ProviderAdapter, ProviderAdapterConfig};
 use openproxy_db::{self as core_db, migrations};
 use openproxy_server::state::AppState;
@@ -194,7 +194,7 @@ impl ProviderAdapter for TestMockAdapter {
         &self,
         upstream_client: &std::sync::Arc<openproxy_adapters::upstream::UpstreamClient>,
         api_key: &str,
-    ) -> Result<Vec<DiscoveredModel>, openproxy_core::error::CoreError> {
+    ) -> Result<Vec<DiscoveredModel>, openproxy_types::CoreError> {
         let url = self.models_url().expect("set above");
         let resp = upstream_client
             .call(
@@ -203,23 +203,23 @@ impl ProviderAdapter for TestMockAdapter {
                 openproxy_adapters::upstream::CancellationToken::new(),
             )
             .await
-            .map_err(|e| openproxy_core::error::CoreError::UpstreamConnection(e.to_string()))?;
+            .map_err(|e| openproxy_types::CoreError::UpstreamConnection(e.to_string()))?;
         if !resp.status.is_success() {
-            return Err(openproxy_core::error::CoreError::UpstreamConnection(
+            return Err(openproxy_types::CoreError::UpstreamConnection(
                 format!("mock returned status {}", resp.status),
             ));
         }
         let body = resp.collect().await.map_err(|e| {
-            openproxy_core::error::CoreError::UpstreamConnection(format!("collect body: {e}"))
+            openproxy_types::CoreError::UpstreamConnection(format!("collect body: {e}"))
         })?;
         let value: serde_json::Value = serde_json::from_slice(&body).map_err(|e| {
-            openproxy_core::error::CoreError::Parse(format!("mock returned non-JSON: {e}"))
+            openproxy_types::CoreError::Parse(format!("mock returned non-JSON: {e}"))
         })?;
         let arr = value
             .get("data")
             .and_then(|v| v.as_array())
             .ok_or_else(|| {
-                openproxy_core::error::CoreError::Parse("mock response missing 'data' array".into())
+                openproxy_types::CoreError::Parse("mock response missing 'data' array".into())
             })?;
         let mut out = Vec::with_capacity(arr.len());
         for entry in arr {
@@ -227,7 +227,7 @@ impl ProviderAdapter for TestMockAdapter {
                 .get("id")
                 .and_then(|v| v.as_str())
                 .ok_or_else(|| {
-                    openproxy_core::error::CoreError::Parse("mock entry missing 'id' string".into())
+                    openproxy_types::CoreError::Parse("mock entry missing 'id' string".into())
                 })?
                 .to_string();
             out.push(DiscoveredModel {

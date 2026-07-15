@@ -44,11 +44,14 @@ use axum::{
     response::Response,
 };
 use openproxy_core::{
-    CoreError, accounts,
+    accounts,
     cost,
-    ids::{AccountId, ApiKeyId, ComboId, ModelRowId, ProviderId, RequestId, TraceId},
     models, providers,
     routing::{self, RoutingPlan},
+};
+use openproxy_types::{
+    CoreError,
+    ids::{AccountId, ApiKeyId, ComboId, ModelRowId, ProviderId, RequestId, TraceId},
 };
 use openproxy_adapters::adapters;
 use std::time::Instant;

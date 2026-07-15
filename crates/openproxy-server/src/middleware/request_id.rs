@@ -11,7 +11,7 @@
 //! (request_id + trace_id, per spec §1 and §11).
 
 use axum::{extract::Request, http::HeaderValue, middleware::Next, response::Response};
-use openproxy_core::ids::RequestId;
+use openproxy_types::ids::RequestId;
 use uuid::Uuid;
 
 /// Canonical header name, lowercase per HTTP/1.1 §8.1.2.

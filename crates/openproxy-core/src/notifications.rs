@@ -99,6 +99,10 @@ pub static NOTIF_TX: OnceCell<broadcast::Sender<NotificationEvent>> = OnceCell::
 pub fn init_broadcast() -> &'static broadcast::Sender<NotificationEvent> {
     NOTIF_TX.get_or_init(|| {
         let (tx, _rx) = broadcast::channel(BROADCAST_CAPACITY);
+        let tx_clone = tx.clone();
+        let _ = openproxy_types::notifications::NOTIFICATION_PUBLISHER.set(Box::new(move |event| {
+            let _ = tx_clone.send(event);
+        }));
         tx
     })
 }
@@ -109,16 +113,7 @@ pub fn try_get_tx() -> Option<&'static broadcast::Sender<NotificationEvent>> {
     NOTIF_TX.get()
 }
 
-/// Real-time event pushed to WS clients. The `id` is the DB row id, which
-/// the client can use to fetch the full row if needed (rarely necessary —
-/// the payload has everything the tray needs to render).
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct NotificationEvent {
-    pub id: i64,
-    pub kind: String,
-    pub payload: serde_json::Value,
-    pub created_at: String,
-}
+pub use openproxy_types::NotificationEvent;
 
 // Per-kind payload structs. These are the contract between Rust and the
 // frontend — changes here MUST be reflected in the TypeScript types.

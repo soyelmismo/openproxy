@@ -143,7 +143,7 @@ fn fresh_pool() -> (DbPool, Arc<parking_lot::Mutex<Connection>>, PathBuf) {
         migrations::run(&mut w).expect("migrations");
     }
     // A second connection on the same file, owned by the Pipeline.
-    let extra = Connection::open(&path).expect("open extra");
+    let extra = pool.open_connection().expect("open extra connection");
     let conn = Arc::new(parking_lot::Mutex::new(extra));
     (pool, conn, path)
 }
@@ -432,7 +432,44 @@ async fn auto_populate_fills_combo_then_runs() {
     // adapter registry it falls through to a 500-ish failure
     // (no adapter). The key invariant is: NOT NoHealthyTargets.
     if let Some(CoreError::NoHealthyTargets(_)) = &result.error {
-        panic!("auto-populate should have prevented NoHealthyTargets");
+        let writer = pool.writer();
+        let combo_targets: Vec<(i64, String, Option<i64>, Option<i64>)> = writer
+            .prepare("SELECT id, provider_id, account_id, model_row_id FROM combo_targets")
+            .unwrap()
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))
+            .unwrap()
+            .map(|r| r.unwrap())
+            .collect();
+        let providers: Vec<(String, i64)> = writer
+            .prepare("SELECT id, active FROM providers")
+            .unwrap()
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
+            .unwrap()
+            .map(|r| r.unwrap())
+            .collect();
+        let accounts: Vec<(i64, String, String)> = writer
+            .prepare("SELECT id, provider_id, health_status FROM accounts")
+            .unwrap()
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+            .unwrap()
+            .map(|r| r.unwrap())
+            .collect();
+        let models: Vec<(i64, String, String)> = writer
+            .prepare("SELECT id, provider_id, model_id FROM models")
+            .unwrap()
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+            .unwrap()
+            .map(|r| r.unwrap())
+            .collect();
+        panic!(
+            "auto-populate should have prevented NoHealthyTargets.\n\
+             result: {:?}\n\
+             combo_targets in DB: {:?}\n\
+             providers in DB: {:?}\n\
+             accounts in DB: {:?}\n\
+             models in DB: {:?}",
+            result, combo_targets, providers, accounts, models
+        );
     }
 
     // And the combo now has 2 targets in the DB.
@@ -2079,7 +2116,8 @@ async fn adversarial_priority_combo_respects_max_attempts_for_same_provider() {
                 Ok(p) => p,
                 Err(_) => break,
             };
-            let _ = server_call_count.fetch_add(1, AtomicOrdering::SeqCst);
+            let c = server_call_count.fetch_add(1, AtomicOrdering::SeqCst) + 1;
+            eprintln!("[server] accepted connection #{c}");
             let mut buf = vec![0u8; 64 * 1024];
             let mut total = 0usize;
             while let Ok(Ok(n)) =
@@ -2093,6 +2131,7 @@ async fn adversarial_priority_combo_respects_max_attempts_for_same_provider() {
                     break;
                 }
             }
+            eprintln!("[server] connection #{c} read {} bytes, sending 503", total);
             let body = r#"{"error":{"message":"flaky","type":"server_error"}}"#.to_string();
             let response = format!(
                 "HTTP/1.1 503 Service Unavailable\r\n\
@@ -2105,6 +2144,7 @@ async fn adversarial_priority_combo_respects_max_attempts_for_same_provider() {
             );
             let _ = sock.write_all(response.as_bytes()).await;
             let _ = sock.flush().await;
+            eprintln!("[server] connection #{c} flushed response");
         }
     });
 
@@ -2184,9 +2224,11 @@ async fn adversarial_priority_combo_respects_max_attempts_for_same_provider() {
     };
     let p = Pipeline::new(conn, cfg);
     let (req, _cancel_tx) = make_request(combo_id);
+    eprintln!("[test] starting p.run(req)...");
     let result = tokio::time::timeout(Duration::from_secs(15), p.run(req))
         .await
         .expect("pipeline.run timed out");
+    eprintln!("[test] p.run(req) returned!");
 
     let calls = call_count.load(AtomicOrdering::SeqCst);
     assert_eq!(

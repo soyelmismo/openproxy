@@ -106,8 +106,8 @@ else
 fi
 
 # 2) Build del binario. --workspace cubre todo; el servicio sólo arranca
-#    openproxy, pero el resto del workspace debe compilar (openproxy-core,
-#    openproxy-server, openproxy-api-client).
+#    openproxy, pero el resto de las crates del workspace debe compilar
+#    (core, server, api-client, types, db, compression, adapters, pipeline).
 log "cargo build --workspace $FEATURES --release"
 cargo build --workspace $FEATURES --release
 
