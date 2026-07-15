@@ -618,10 +618,10 @@ pub fn pipeline_token_needs_refresh(db_expires_at: Option<&str>, provider_id: &s
 /// - **Special cases** (e.g. iflow): 24 hours before expiry.
 pub(crate) fn refresh_lead_seconds(provider_id: &str) -> u64 {
     let adapters = crate::adapters::builtin_adapters();
-    if let Some(adapter) = adapters.iter().find(|a| a.id().as_str() == provider_id) {
-        if let Some(lead) = adapter.metadata().oauth_refresh_lead_seconds {
-            return lead;
-        }
+    if let Some(adapter) = adapters.iter().find(|a| a.id().as_str() == provider_id)
+        && let Some(lead) = adapter.metadata().oauth_refresh_lead_seconds
+    {
+        return lead;
     }
     900 // 15 minutes default
 }

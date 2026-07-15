@@ -420,27 +420,26 @@ pub async fn fetch_account_quota(
     };
 
     let adapters = crate::adapters::builtin_adapters();
-    if let Some(adapter) = adapters.iter().find(|a| a.id().as_str() == mapped_id) {
-        if let Some(res) = adapter
+    if let Some(adapter) = adapters.iter().find(|a| a.id().as_str() == mapped_id)
+        && let Some(res) = adapter
             .fetch_quota(upstream, api_key, access_token, provider_specific)
             .await
-        {
-            result_quota = Some(match res {
-                Ok(q) => q,
-                Err(e) => AccountQuota {
-                    session_used: None,
-                    session_limit: None,
-                    session_reset_at: None,
-                    weekly_used: None,
-                    weekly_limit: None,
-                    weekly_reset_at: None,
-                    plan_name: None,
-                    last_fetched_at: now_unix_secs_str(),
-                    fetch_error: Some(e.to_string()),
-                    model_details: None,
-                },
-            });
-        }
+    {
+        result_quota = Some(match res {
+            Ok(q) => q,
+            Err(e) => AccountQuota {
+                session_used: None,
+                session_limit: None,
+                session_reset_at: None,
+                weekly_used: None,
+                weekly_limit: None,
+                weekly_reset_at: None,
+                plan_name: None,
+                last_fetched_at: now_unix_secs_str(),
+                fetch_error: Some(e.to_string()),
+                model_details: None,
+            },
+        });
     }
 
     if let Some(q) = result_quota {

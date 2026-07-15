@@ -922,6 +922,7 @@ fn insert_test_account(state: &AppState, provider_id: &str) -> i64 {
             format: openproxy_core::providers::ProviderFormat::Openai,
             extra_headers_json: None,
             auto_activate_keyword: None,
+            rate_limit_scope: None,
         },
     );
     // Now insert the account using the core helper.

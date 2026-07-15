@@ -287,6 +287,7 @@ async fn make_test_state(dir: &std::path::Path, adapter: &TestMockAdapter) -> Ap
                 auth_type: "bearer".into(),
                 format: "openai".into(),
                 extra_headers_json: None,
+                rate_limit_scope: None,
             },
         )
         .expect("create_provider (test provider)");
