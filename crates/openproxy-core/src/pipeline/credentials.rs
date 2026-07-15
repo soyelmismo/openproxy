@@ -1,10 +1,10 @@
+use crate::adapters::ProviderAdapter;
 use crate::combos::ComboTarget;
 use crate::error::CoreError;
 use crate::models::Model;
 use crate::pipeline::context::{CustomProviderMeta, ResolvedTarget};
 use crate::pipeline::repository::account::{KiroMeta, RawAccount};
 use crate::secrets::MasterKey;
-use crate::adapters::ProviderAdapter;
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -98,98 +98,97 @@ impl CredentialManager {
                     }
                     let label = raw_account.label.clone();
 
-                    let custom_meta =
-                        if requires_oauth {
-                            let access_token = match &raw_account.access_token_encrypted {
-                                Some(b) => match master_key.decrypt(b) {
-                                    Ok(k) => k,
-                                    Err(e) => {
-                                        tracing::error!(error=%e, "failed to decrypt access token");
-                                        continue;
-                                    }
-                                },
-                                None => {
-                                    tracing::error!(
-                                        "no access token found for account {}",
-                                        account_id.0
-                                    );
+                    let custom_meta = if requires_oauth {
+                        let access_token = match &raw_account.access_token_encrypted {
+                            Some(b) => match master_key.decrypt(b) {
+                                Ok(k) => k,
+                                Err(e) => {
+                                    tracing::error!(error=%e, "failed to decrypt access token");
                                     continue;
                                 }
-                            };
+                            },
+                            None => {
+                                tracing::error!(
+                                    "no access token found for account {}",
+                                    account_id.0
+                                );
+                                continue;
+                            }
+                        };
 
-                            let maybe_refresh: Option<String> = if oauth_registry.is_some() {
-                                if crate::oauth::pipeline_token_needs_refresh(
-                                    raw_account.expires_at.as_deref(),
-                                    t.provider_id.as_str(),
-                                ) {
-                                    if let Some(rt_enc) = &raw_account.refresh_token_encrypted {
-                                        master_key.decrypt(rt_enc).ok()
-                                    } else {
-                                        None
-                                    }
+                        let maybe_refresh: Option<String> = if oauth_registry.is_some() {
+                            if crate::oauth::pipeline_token_needs_refresh(
+                                raw_account.expires_at.as_deref(),
+                                t.provider_id.as_str(),
+                            ) {
+                                if let Some(rt_enc) = &raw_account.refresh_token_encrypted {
+                                    master_key.decrypt(rt_enc).ok()
                                 } else {
                                     None
                                 }
                             } else {
                                 None
-                            };
-
-                            let (
-                                kiro_region,
-                                kiro_profile_arn,
-                                antigravity_project,
-                                codex_workspace_id,
-                            ) = match t.provider_id.as_str() {
-                                "kiro" => {
-                                    let meta = kiro_map.get(&account_id.0);
-                                    (
-                                        meta.and_then(|m| m.region.clone()),
-                                        meta.and_then(|m| m.profile_arn.clone()),
-                                        None,
-                                        None,
-                                    )
-                                }
-                                "antigravity" => {
-                                    let proj =
-                                        antigravity_map.get(&account_id.0).cloned().or_else(|| {
-                                            Self::antigravity_project_from_account(raw_account)
-                                        });
-                                    if proj.is_none() {
-                                        tracing::error!("failed to read antigravity project");
-                                        continue;
-                                    }
-                                    (None, None, proj, None)
-                                }
-                                "codex" => {
-                                    let workspace_id = raw_account
-                                        .oauth_provider_specific
-                                        .as_deref()
-                                        .and_then(|raw| {
-                                            serde_json::from_str::<serde_json::Value>(raw).ok()
-                                        })
-                                        .and_then(|meta| {
-                                            meta.get("workspaceId")
-                                                .or_else(|| meta.get("workspace_id"))
-                                                .and_then(|v| v.as_str())
-                                                .filter(|v| !v.is_empty())
-                                                .map(ToString::to_string)
-                                        });
-                                    (None, None, None, workspace_id)
-                                }
-                                _ => (None, None, None, None),
-                            };
-
-                            Some(CustomProviderMeta {
-                                access_token,
-                                maybe_refresh,
-                                kiro_region,
-                                kiro_profile_arn,
-                                antigravity_project,
-                                codex_workspace_id,
-                            })
+                            }
                         } else {
                             None
                         };
+
+                        let (
+                            kiro_region,
+                            kiro_profile_arn,
+                            antigravity_project,
+                            codex_workspace_id,
+                        ) = match t.provider_id.as_str() {
+                            "kiro" => {
+                                let meta = kiro_map.get(&account_id.0);
+                                (
+                                    meta.and_then(|m| m.region.clone()),
+                                    meta.and_then(|m| m.profile_arn.clone()),
+                                    None,
+                                    None,
+                                )
+                            }
+                            "antigravity" => {
+                                let proj =
+                                    antigravity_map.get(&account_id.0).cloned().or_else(|| {
+                                        Self::antigravity_project_from_account(raw_account)
+                                    });
+                                if proj.is_none() {
+                                    tracing::error!("failed to read antigravity project");
+                                    continue;
+                                }
+                                (None, None, proj, None)
+                            }
+                            "codex" => {
+                                let workspace_id = raw_account
+                                    .oauth_provider_specific
+                                    .as_deref()
+                                    .and_then(|raw| {
+                                        serde_json::from_str::<serde_json::Value>(raw).ok()
+                                    })
+                                    .and_then(|meta| {
+                                        meta.get("workspaceId")
+                                            .or_else(|| meta.get("workspace_id"))
+                                            .and_then(|v| v.as_str())
+                                            .filter(|v| !v.is_empty())
+                                            .map(ToString::to_string)
+                                    });
+                                (None, None, None, workspace_id)
+                            }
+                            _ => (None, None, None, None),
+                        };
+
+                        Some(CustomProviderMeta {
+                            access_token,
+                            maybe_refresh,
+                            kiro_region,
+                            kiro_profile_arn,
+                            antigravity_project,
+                            codex_workspace_id,
+                        })
+                    } else {
+                        None
+                    };
 
                     (key, label, custom_meta)
                 }

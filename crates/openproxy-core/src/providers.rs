@@ -643,7 +643,7 @@ mod tests {
                 format: ProviderFormat::Anthropic,
                 extra_headers_json: None,
                 auto_activate_keyword: None,
-            rate_limit_scope: crate::providers::RateLimitScope::Account,
+                rate_limit_scope: crate::providers::RateLimitScope::Account,
             },
         )
         .expect("first create");
@@ -658,7 +658,7 @@ mod tests {
                 format: ProviderFormat::Openai,
                 extra_headers_json: None,
                 auto_activate_keyword: None,
-            rate_limit_scope: crate::providers::RateLimitScope::Account,
+                rate_limit_scope: crate::providers::RateLimitScope::Account,
             },
         )
         .expect_err("duplicate must fail");
@@ -684,7 +684,7 @@ mod tests {
                     format: ProviderFormat::Openai,
                     extra_headers_json: None,
                     auto_activate_keyword: None,
-            rate_limit_scope: crate::providers::RateLimitScope::Account,
+                    rate_limit_scope: crate::providers::RateLimitScope::Account,
                 },
             )
             .expect("create");
@@ -714,7 +714,7 @@ mod tests {
                 format: ProviderFormat::Openai,
                 extra_headers_json: None,
                 auto_activate_keyword: None,
-            rate_limit_scope: crate::providers::RateLimitScope::Account,
+                rate_limit_scope: crate::providers::RateLimitScope::Account,
             },
         )
         .expect("create");
@@ -768,13 +768,24 @@ mod tests {
                 format: ProviderFormat::Openai,
                 extra_headers_json: Some(r#"{"old":true}"#),
                 auto_activate_keyword: None,
-            rate_limit_scope: crate::providers::RateLimitScope::Account,
+                rate_limit_scope: crate::providers::RateLimitScope::Account,
             },
         )
         .expect("create");
 
         // Partial: only name.
-        update(&conn, &id, Some("Renamed"), None, None, None, None, None, None).expect("update name");
+        update(
+            &conn,
+            &id,
+            Some("Renamed"),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .expect("update name");
         let p = get(&conn, &id).expect("get").expect("present");
         assert_eq!(p.name, "Renamed");
         assert_eq!(p.base_url, "https://original.example", "untouched");
@@ -816,8 +827,18 @@ mod tests {
 
         // Update on a missing id: ProviderNotFound.
         let missing = ProviderId::new("nope");
-        let err = update(&conn, &missing, Some("X"), None, None, None, None, None, None)
-            .expect_err("missing id must error");
+        let err = update(
+            &conn,
+            &missing,
+            Some("X"),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .expect_err("missing id must error");
         assert!(matches!(err, CoreError::ProviderNotFound(_)));
     }
 
@@ -868,7 +889,7 @@ mod tests {
                 format: ProviderFormat::Openai,
                 extra_headers_json: None,
                 auto_activate_keyword: None,
-            rate_limit_scope: crate::providers::RateLimitScope::Account,
+                rate_limit_scope: crate::providers::RateLimitScope::Account,
             },
         )
         .expect("create");
@@ -891,7 +912,7 @@ mod tests {
                 format: ProviderFormat::Openai,
                 extra_headers_json: None,
                 auto_activate_keyword: None,
-            rate_limit_scope: crate::providers::RateLimitScope::Account,
+                rate_limit_scope: crate::providers::RateLimitScope::Account,
             },
         )
         .expect("create");
@@ -929,7 +950,7 @@ mod tests {
                     format: ProviderFormat::Openai,
                     extra_headers_json: None,
                     auto_activate_keyword: None,
-            rate_limit_scope: crate::providers::RateLimitScope::Account,
+                    rate_limit_scope: crate::providers::RateLimitScope::Account,
                 },
             )
             .expect("create");
@@ -982,7 +1003,7 @@ mod tests {
                     format: ProviderFormat::Openai,
                     extra_headers_json: None,
                     auto_activate_keyword: None,
-            rate_limit_scope: crate::providers::RateLimitScope::Account,
+                    rate_limit_scope: crate::providers::RateLimitScope::Account,
                 },
             )
             .expect("create");

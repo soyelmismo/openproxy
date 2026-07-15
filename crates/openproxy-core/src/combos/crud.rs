@@ -1166,7 +1166,8 @@ fn row_to_target(row: &Row<'_>) -> rusqlite::Result<ComboTarget> {
         sub_combo_id: sub_combo_id.map(ComboId),
         priority_order,
         weight,
-        rate_limit_scope: crate::providers::RateLimitScope::parse(&rate_limit_scope).unwrap_or_default(),
+        rate_limit_scope: crate::providers::RateLimitScope::parse(&rate_limit_scope)
+            .unwrap_or_default(),
     })
 }
 

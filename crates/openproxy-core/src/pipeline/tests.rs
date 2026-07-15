@@ -286,7 +286,7 @@ async fn pipeline_run_with_no_targets_returns_502() {
                 format: ProviderFormat::Openai,
                 extra_headers_json: None,
                 auto_activate_keyword: None,
-            rate_limit_scope: crate::providers::RateLimitScope::Account,
+                rate_limit_scope: crate::providers::RateLimitScope::Account,
             },
         )
         .expect("seed provider");
@@ -327,7 +327,7 @@ async fn pipeline_run_no_targets_records_usage_row() {
                 format: ProviderFormat::Openai,
                 extra_headers_json: None,
                 auto_activate_keyword: None,
-            rate_limit_scope: crate::providers::RateLimitScope::Account,
+                rate_limit_scope: crate::providers::RateLimitScope::Account,
             },
         )
         .expect("seed provider");
@@ -383,7 +383,7 @@ async fn auto_populate_fills_combo_then_runs() {
                 format: ProviderFormat::Openai,
                 extra_headers_json: None,
                 auto_activate_keyword: None,
-            rate_limit_scope: crate::providers::RateLimitScope::Account,
+                rate_limit_scope: crate::providers::RateLimitScope::Account,
             },
         )
         .expect("seed provider");
@@ -2526,7 +2526,7 @@ async fn combo_with_all_accounts_in_circuit_breaker_does_not_short_circuit() {
                     format: ProviderFormat::Openai,
                     extra_headers_json: None,
                     auto_activate_keyword: None,
-            rate_limit_scope: crate::providers::RateLimitScope::Account,
+                    rate_limit_scope: crate::providers::RateLimitScope::Account,
                 },
             )
             .expect("seed provider");
@@ -2586,12 +2586,14 @@ async fn combo_with_all_accounts_in_circuit_breaker_does_not_short_circuit() {
     // exact in-memory state the registry would reach after 5
     // consecutive retryable failures on each account.
     for (_pid, aid) in &account_ids {
-        p.circuit_breaker.force_unhealthy(crate::circuit_breaker::CircuitBreakerKey::Account(*aid));
+        p.circuit_breaker
+            .force_unhealthy(crate::circuit_breaker::CircuitBreakerKey::Account(*aid));
     }
     // Sanity-check: every account is now Unhealthy.
     for (_pid, aid) in &account_ids {
         assert_eq!(
-            p.circuit_breaker.is_healthy(crate::circuit_breaker::CircuitBreakerKey::Account(*aid)),
+            p.circuit_breaker
+                .is_healthy(crate::circuit_breaker::CircuitBreakerKey::Account(*aid)),
             crate::circuit_breaker::Health::Unhealthy,
             "account {:?} should be Unhealthy before the run",
             aid
@@ -2887,7 +2889,10 @@ async fn cancellation_does_not_park_target_in_cooldown_or_circuit_breaker() {
 
     // 2. The circuit breaker is still Healthy with 0 failures.
     assert_eq!(
-        p.circuit_breaker.is_healthy(crate::circuit_breaker::CircuitBreakerKey::Account(account_id)),
+        p.circuit_breaker
+            .is_healthy(crate::circuit_breaker::CircuitBreakerKey::Account(
+                account_id
+            )),
         Health::Healthy,
         "circuit breaker for account {account_id:?} was disturbed by a \
              client cancellation — ClientDisconnected must be excluded from \
@@ -5371,7 +5376,7 @@ fn test_quota_routing_and_protection() {
         sub_combo_id: None,
         priority_order: id as i32,
         weight: 1,
-            rate_limit_scope: crate::providers::RateLimitScope::Account,
+        rate_limit_scope: crate::providers::RateLimitScope::Account,
     };
 
     let to_resolved = |t: ComboTarget| crate::pipeline::context::ResolvedTarget {
@@ -5545,7 +5550,7 @@ fn test_opencode_zen_no_account_proxy_rotation() {
         sub_combo_id: None,
         priority_order: 1,
         weight: 1,
-            rate_limit_scope: crate::providers::RateLimitScope::Account,
+        rate_limit_scope: crate::providers::RateLimitScope::Account,
     };
 
     // 3. Enable use_proxies on opencode-zen and insert an alive proxy

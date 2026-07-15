@@ -214,7 +214,9 @@ impl CircuitBreakerRegistry {
 
 #[cfg(test)]
 mod tests {
-    fn aid(id: i64) -> CircuitBreakerKey { CircuitBreakerKey::Account(AccountId(id)) }
+    fn aid(id: i64) -> CircuitBreakerKey {
+        CircuitBreakerKey::Account(AccountId(id))
+    }
     use super::*;
     use std::thread;
     use std::time::Duration as StdDuration;

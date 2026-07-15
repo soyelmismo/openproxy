@@ -871,7 +871,7 @@ async fn spawn_background_tasks(args: SpawnBackgroundTasksArgs) {
         loop {
             tracing::info!("running scheduled background proxy sync");
             let mut next_sleep = interval_hours * 3600;
-            
+
             match openproxy_core::free_proxies::sync_all_providers(proxy_sync_pool.clone()).await {
                 Ok(summary) => {
                     tracing::info!(added = summary.added, "background proxy sync completed");
@@ -917,7 +917,9 @@ async fn spawn_background_tasks(args: SpawnBackgroundTasksArgs) {
                     retention_secs,
                 );
             }
-            let _ = prune_pool.writer().execute("DELETE FROM free_proxies WHERE status = 'dead'", []);
+            let _ = prune_pool
+                .writer()
+                .execute("DELETE FROM free_proxies WHERE status = 'dead'", []);
             let interval_ticks = interval_hours.max(1);
             vacuum_counter = vacuum_counter.wrapping_add(1);
             if auto_vacuum && vacuum_counter >= interval_ticks {
@@ -1109,7 +1111,7 @@ mod tests {
                     format: providers::ProviderFormat::Openai,
                     extra_headers_json: None,
                     auto_activate_keyword: None,
-                    rate_limit_scope: None,
+                    rate_limit_scope: providers::RateLimitScope::Account,
                 },
             )
             .expect("create custom provider");
@@ -1170,7 +1172,7 @@ mod tests {
                     format: providers::ProviderFormat::Openai,
                     extra_headers_json: None,
                     auto_activate_keyword: None,
-                    rate_limit_scope: None,
+                    rate_limit_scope: providers::RateLimitScope::Account,
                 },
             )
             .expect("create custom provider");

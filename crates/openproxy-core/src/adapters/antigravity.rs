@@ -205,7 +205,10 @@ impl ProviderAdapter for AntigravityAdapter {
         let mut custom_req = (*req.openai_request).clone();
         custom_req.model = resolved_target.model.model_id.as_str().to_string();
 
-        let url = format!("{}/v1internal:streamGenerateContent?alt=sse", self.config.base_url);
+        let url = format!(
+            "{}/v1internal:streamGenerateContent?alt=sse",
+            self.config.base_url
+        );
 
         Some(
             crate::executor_antigravity::execute_antigravity(
@@ -242,7 +245,9 @@ impl ProviderAdapter for AntigravityAdapter {
                 weekly_reset_at: None,
                 plan_name: None,
                 last_fetched_at: crate::admin::now_unix_secs_str(),
-                fetch_error: Some("missing access_token or project_id for antigravity quota".into()),
+                fetch_error: Some(
+                    "missing access_token or project_id for antigravity quota".into(),
+                ),
                 model_details: None,
             }))
         }

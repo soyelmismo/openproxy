@@ -7,8 +7,8 @@
 //! - A background refresh scheduler that proactively refreshes expiring tokens.
 
 use crate::accounts::HealthStatus;
-use crate::error::{CoreError, Result};
 use crate::adapters::ProviderAdapter;
+use crate::error::{CoreError, Result};
 use crate::ids::AccountId;
 use crate::secrets::MasterKey;
 use crate::upstream::UpstreamClient;

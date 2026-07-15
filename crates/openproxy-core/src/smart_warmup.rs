@@ -219,7 +219,10 @@ async fn ping_antigravity_model(
 
     match crate::executor_antigravity::execute_antigravity(
         upstream,
-        &format!("{}/v1internal:streamGenerateContent?alt=sse", crate::adapters::antigravity::DEFAULT_ANTIGRAVITY_BASE_URL),
+        &format!(
+            "{}/v1internal:streamGenerateContent?alt=sse",
+            crate::adapters::antigravity::DEFAULT_ANTIGRAVITY_BASE_URL
+        ),
         access_token,
         project_id,
         &request,

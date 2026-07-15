@@ -169,7 +169,10 @@ where
                 .filter(|t| match t.account_id {
                     Some(aid) => {
                         let key = if t.rate_limit_scope == crate::providers::RateLimitScope::Model {
-                            crate::circuit_breaker::CircuitBreakerKey::Model(aid, t.model_row_id.expect("flattened"))
+                            crate::circuit_breaker::CircuitBreakerKey::Model(
+                                aid,
+                                t.model_row_id.expect("flattened"),
+                            )
                         } else {
                             crate::circuit_breaker::CircuitBreakerKey::Account(aid)
                         };
@@ -230,8 +233,13 @@ where
                             .into_iter()
                             .filter(|t| match t.account_id {
                                 Some(aid) => {
-                                    let key = if t.rate_limit_scope == crate::providers::RateLimitScope::Model {
-                                        crate::circuit_breaker::CircuitBreakerKey::Model(aid, t.model_row_id.expect("flattened"))
+                                    let key = if t.rate_limit_scope
+                                        == crate::providers::RateLimitScope::Model
+                                    {
+                                        crate::circuit_breaker::CircuitBreakerKey::Model(
+                                            aid,
+                                            t.model_row_id.expect("flattened"),
+                                        )
                                     } else {
                                         crate::circuit_breaker::CircuitBreakerKey::Account(aid)
                                     };

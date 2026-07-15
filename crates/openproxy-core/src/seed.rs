@@ -262,7 +262,8 @@ pub fn seed_builtin_providers(conn: &Connection) -> Result<usize> {
                 format: fmt,
                 extra_headers_json: b.extra_headers_json,
                 auto_activate_keyword: b.auto_activate_keyword,
-                rate_limit_scope: providers::RateLimitScope::parse(b.rate_limit_scope).expect("builtin scope is valid"),
+                rate_limit_scope: providers::RateLimitScope::parse(b.rate_limit_scope)
+                    .expect("builtin scope is valid"),
             },
         )?;
         seeded += 1;
@@ -469,7 +470,7 @@ mod tests {
                 format: ProviderFormat::Openai,
                 extra_headers_json: None,
                 auto_activate_keyword: None,
-            rate_limit_scope: crate::providers::RateLimitScope::Account,
+                rate_limit_scope: crate::providers::RateLimitScope::Account,
             },
         )
         .expect("pre-seed");
