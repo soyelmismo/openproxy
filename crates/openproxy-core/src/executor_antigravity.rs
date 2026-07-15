@@ -1053,15 +1053,13 @@ pub(crate) async fn call_antigravity_v1internal(
     upstream_client: &Arc<UpstreamClient>,
     url: &str,
     access_token: &str,
-    project_id: &str,
     body_bytes: bytes::Bytes,
     timeout: TimeoutProfile,
     cancel: CancellationToken,
     accept_sse: bool,
     proxy: Option<String>,
-    log_context: &str,
 ) -> std::result::Result<UpstreamResponse, UpstreamError> {
-    let build_request = |project_id: Option<&str>| {
+    let build_request = || {
         let mut req = UpstreamRequest::post_json(url.to_string(), body_bytes.clone());
         req.proxy = proxy.clone();
         if let Ok(value) = http::HeaderValue::from_str(&format!("Bearer {access_token}")) {
@@ -1073,26 +1071,13 @@ pub(crate) async fn call_antigravity_v1internal(
                 http::HeaderValue::from_static("text/event-stream"),
             );
         }
-        crate::antigravity_headers::inject_antigravity_headers(&mut req.headers, project_id);
+        crate::antigravity_headers::inject_antigravity_headers(&mut req.headers, None);
         req
     };
 
-    let mut response = upstream_client
-        .call(build_request(Some(project_id)), timeout, cancel.clone())
+    let response = upstream_client
+        .call(build_request(), timeout, cancel)
         .await?;
-
-    if response.status == http::StatusCode::FORBIDDEN && !project_id.is_empty() {
-        tracing::warn!(
-            "{} got 403 with project header; retrying without x-goog-user-project",
-            log_context
-        );
-        if let Ok(retry_resp) = upstream_client
-            .call(build_request(None), timeout, cancel)
-            .await
-        {
-            response = retry_resp;
-        }
-    }
 
     Ok(response)
 }
@@ -1249,13 +1234,11 @@ pub async fn execute_antigravity(
         upstream_client,
         url,
         access_token,
-        project_id,
         bytes::Bytes::from(body_bytes),
         TimeoutProfile::Chat,
         cancel,
         true,
         proxy,
-        "Antigravity request",
     )
     .await
     {
