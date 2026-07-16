@@ -951,7 +951,11 @@ impl<'a> ChunkProcessor<'a> {
             ),
             openproxy_types::TargetFormat::Openai => crate::sse::parse_openai_sse_line(line),
             openproxy_types::TargetFormat::Gemini => {
-                crate::sse::parse_gemini_sse_line(line, &chunk_id, created, &model_name)
+                if target.provider_id.as_str() == "antigravity" {
+                    crate::executor_antigravity::parse_antigravity_sse_line(line, &chunk_id, created, &model_name)
+                } else {
+                    crate::sse::parse_gemini_sse_line(line, &chunk_id, created, &model_name)
+                }
             }
             openproxy_types::TargetFormat::Anthropic => {
                 // Anthropic SSE: track event type across lines

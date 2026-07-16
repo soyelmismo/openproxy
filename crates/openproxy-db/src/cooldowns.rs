@@ -73,3 +73,10 @@ pub fn get_for_target(
     .optional()
     .map_err(crate::error::map_db_error)
 }
+
+pub fn clear_cooldown(conn: &rusqlite::Connection, target_id: ComboTargetId) -> openproxy_types::error::Result<()> {
+    conn.execute(
+        "DELETE FROM target_cooldowns WHERE combo_target_id = ?1",
+        rusqlite::params![target_id.0]
+    ).map(|_| ()).map_err(crate::error::map_db_error)
+}

@@ -802,7 +802,7 @@ pub fn clear_combo_target_cooldown(
     // cooldown, not delete the target", so we use the explicit
     // DELETE rather than a no-op target delete.
     ensure_target_in_combo(conn, combo_id, target_id)?;
-    openproxy_pipeline::repository::clear_cooldown(conn, target_id)
+    openproxy_db::cooldowns::clear_cooldown(conn, target_id)
 }
 
 // =====================================================================

@@ -1076,6 +1076,77 @@ pub fn parse_antigravity_line(
     )
 }
 
+pub fn parse_antigravity_sse_line(
+    line: &str,
+    chunk_id: &str,
+    created: u64,
+    model: &str,
+) -> Result<Option<crate::sse::UpstreamSseChunk>, CoreError> {
+    let mut text_chunk = String::new();
+    let mut thinking_chunk = String::new();
+    let mut tool_calls = Vec::new();
+    let mut usage = None;
+    
+    let is_done = parse_antigravity_line_with_parts(
+        line,
+        &mut text_chunk,
+        &mut thinking_chunk,
+        &mut tool_calls,
+        &mut usage,
+        chunk_id, // we use chunk_id as session_id for simplicity since we don't track true session here
+        0,
+    )?;
+
+    if is_done {
+        return Ok(Some(crate::sse::UpstreamSseChunk {
+            raw_payload: None,
+            payload: serde_json::Value::Null,
+            done: true,
+            usage,
+            stop_reason: Some("stop".to_string()),
+            delta_reasoning: None,
+            delta_tool_calls: Vec::new(),
+            has_content: true,
+        }));
+    }
+
+    if text_chunk.is_empty() && thinking_chunk.is_empty() && tool_calls.is_empty() {
+        return Ok(None);
+    }
+
+    // Map to OpenAI chunk format internally, we just use the payload field so the serializer works.
+    let mut delta = serde_json::json!({});
+    if !text_chunk.is_empty() {
+        delta["content"] = serde_json::Value::String(text_chunk);
+    }
+    if !tool_calls.is_empty() {
+        delta["tool_calls"] = serde_json::Value::Array(tool_calls.clone());
+    }
+
+    let payload = serde_json::json!({
+        "id": chunk_id,
+        "object": "chat.completion.chunk",
+        "created": created,
+        "model": model,
+        "choices": [{
+            "index": 0,
+            "delta": delta,
+            "finish_reason": serde_json::Value::Null
+        }]
+    });
+
+    Ok(Some(crate::sse::UpstreamSseChunk {
+        raw_payload: None,
+        payload,
+        done: false,
+        usage,
+        stop_reason: None,
+        delta_reasoning: if thinking_chunk.is_empty() { None } else { Some(thinking_chunk) },
+        delta_tool_calls: tool_calls,
+        has_content: true,
+    }))
+}
+
 fn parse_antigravity_line_with_parts(
     line: &str,
     text_chunk: &mut String,

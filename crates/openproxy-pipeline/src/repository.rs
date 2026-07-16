@@ -454,7 +454,7 @@ impl PipelineRepository for SqlitePipelineRepository {
 
     fn clear_cooldown(&self, target_id: ComboTargetId) -> Result<()> {
         let conn = self.conn.lock();
-        clear_cooldown(&conn, target_id)
+        openproxy_db::cooldowns::clear_cooldown(&conn, target_id)
     }
 
     fn record_cooldown(
@@ -868,9 +868,4 @@ pub fn prune_expired_cooldowns(conn: &rusqlite::Connection) -> Result<usize> {
     .map_err(|e| openproxy_types::error::CoreError::Internal(e.to_string()))
 }
 
-pub fn clear_cooldown(conn: &rusqlite::Connection, target_id: ComboTargetId) -> Result<()> {
-    conn.execute(
-        "DELETE FROM target_cooldowns WHERE combo_target_id = ?1",
-        rusqlite::params![target_id.0]
-    ).map(|_| ()).map_err(|e| openproxy_types::error::CoreError::Internal(e.to_string()))
-}
+
