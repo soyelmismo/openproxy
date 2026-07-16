@@ -160,6 +160,7 @@ impl ProviderAdapter for AntigravityAdapter {
             let json = serde_json::from_slice::<serde_json::Value>(&body)
                 .map_err(|e| CoreError::Parse(format!("failed to parse gemini request: {e}")))?;
             let wrapped = serde_json::json!({
+                "project": "",
                 "model": model.as_str(),
                 "requestType": "agent",
                 "requestId": uuid::Uuid::new_v4().to_string(),
