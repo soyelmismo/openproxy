@@ -294,28 +294,12 @@ impl PipelineStage for DispatchStage {
             ));
         }
 
-        let (api_key, account_label) = match ctx.pipeline.resolve_target_api_key_and_label(target) {
-            Ok(v) => v,
-            Err(e) => {
-                return Ok(ctx.pipeline.record_and_fail(
-                    ctx.req.clone(),
-                    ctx.combo.as_ref().unwrap(),
-                    target,
-                    FailureContext {
-                        proxy_url: None,
-                        proxy_status: None,
-                        attempt,
-                        race_size,
-                        err: &e,
-                        started,
-                        model: Some(model),
-                        connect_ms: None,
-                        ttft_ms: None,
-                        status_code: 0,
-                    },
-                ));
-            }
-        };
+        let api_key = current
+            .custom_meta
+            .as_ref()
+            .map(|m| m.access_token.clone())
+            .unwrap_or_else(|| current.api_key.clone());
+        let account_label = current.api_key_label.clone();
 
         let target_format = ctx.target_format.unwrap();
         let account_label_str = account_label.as_deref().unwrap_or("");

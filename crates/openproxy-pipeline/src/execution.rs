@@ -271,32 +271,6 @@ impl Pipeline {
     }
 
 
-    pub(crate) fn resolve_target_api_key_and_label(
-        &self,
-        target: &ComboTarget,
-    ) -> Result<(String, Option<String>)> {
-        match target.account_id {
-            Some(account_id) => {
-                self.repo().decrypt_api_key_and_label(
-                    account_id,
-                    &self.config.master_key,
-                )
-            }
-            None => {
-                match self.repo().get_provider(&target.provider_id)? {
-                    Some(p) if matches!(p.auth_type, openproxy_types::providers::AuthType::None) => {
-                        Ok((String::new(), None))
-                    }
-                    Some(p) if p.id.0 == "opencode-zen" => Ok((String::new(), None)),
-                    _ => Err(CoreError::Auth(format!(
-                        "combo_target {} has no account_id after expansion",
-                        target.id.0
-                    ))),
-                }
-            }
-        }
-    }
-
     pub(crate) fn failure(
         &self,
         err: CoreError,

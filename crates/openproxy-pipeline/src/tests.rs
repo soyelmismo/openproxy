@@ -2958,7 +2958,7 @@ async fn cancellation_does_not_park_target_in_cooldown_or_circuit_breaker() {
     for tid in &target_ids {
         let count: i64 = w
             .query_row(
-                "SELECT COUNT(*) FROM target_cooldowns WHERE combo_combo_target_id = ?1",
+                "SELECT COUNT(*) FROM target_cooldowns WHERE combo_target_id = ?1",
                 [tid],
                 |r| r.get(0),
             )

@@ -742,21 +742,26 @@ pub fn list_targets(conn: &rusqlite::Connection, combo_id: ComboId) -> Result<Ve
         Ok(res)
     }
 
-pub fn auto_populate_empty_combo(conn: &rusqlite::Connection, combo_id: ComboId) -> Result<usize> {        let providers: Vec<String> = {
-            let mut stmt = conn.prepare("SELECT id FROM providers WHERE active = 1").unwrap();
-            let rows = stmt.query_map([], |r| r.get::<_, String>(0)).unwrap();
+pub fn auto_populate_empty_combo(conn: &rusqlite::Connection, combo_id: ComboId) -> Result<usize> {
+        let targets: Vec<(String, i64)> = {
+            let mut stmt = conn.prepare(
+                "SELECT p.id, m.id FROM providers p \
+                 INNER JOIN models m ON m.provider_id = p.id \
+                 WHERE p.active = 1"
+            ).unwrap();
+            let rows = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?))).unwrap();
             rows.collect::<std::result::Result<Vec<_>, _>>().unwrap()
         };
         let mut added = 0;
-        for (i, p) in providers.into_iter().enumerate() {
+        for (i, (p, m)) in targets.into_iter().enumerate() {
             let res = conn.execute(
-                "INSERT INTO combo_targets(combo_id, provider_id, priority_order, weight) \
-                 VALUES (?1, ?2, ?3, 100)",
-                rusqlite::params![combo_id.0, p, i as i64]
+                "INSERT INTO combo_targets(combo_id, provider_id, model_row_id, priority_order, weight) \
+                 VALUES (?1, ?2, ?3, ?4, 100)",
+                rusqlite::params![combo_id.0, p, m, i as i64]
             );
             match res {
                 Ok(_) => {
-                added += 1;
+                    added += 1;
                 }
                 Err(e) => panic!("SQL ERROR: {}", e),
             }
