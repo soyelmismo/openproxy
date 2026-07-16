@@ -306,7 +306,7 @@ macro_rules! define_provider_adapter {
                 &self,
                 body: bytes::Bytes,
                 target_format: TargetFormat,
-                model: &openproxy_types::ids::ModelId,
+                model: &openproxy_types::ModelId,
                 resolved_target: &openproxy_types::context::ResolvedTarget,
             ) -> std::result::Result<bytes::Bytes, openproxy_types::error::CoreError> {
                 match self { $( $(#[$varmeta])* Self::$variant(inner) => inner.wrap_request_body(body, target_format, model, resolved_target), )+ }
@@ -438,6 +438,15 @@ macro_rules! define_provider_adapter {
             }
             fn normalize_openai_request(&self, view: &mut openproxy_types::OpenAIRequestView) {
                 self.normalize_openai_request(view)
+            }
+            fn wrap_request_body(
+                &self,
+                body: bytes::Bytes,
+                target_format: openproxy_types::TargetFormat,
+                model: &openproxy_types::ModelId,
+                resolved_target: &openproxy_types::context::ResolvedTarget,
+            ) -> std::result::Result<bytes::Bytes, openproxy_types::error::CoreError> {
+                self.wrap_request_body(body, target_format, model, resolved_target)
             }
         }
     }

@@ -568,7 +568,7 @@ pub async fn sync_all_providers(db_pool: Arc<DbPool>) -> crate::error::Result<Sy
         let scraped_clone = scraped.clone();
         let db_pool = db_pool.clone();
         let (before_count, after_count) = tokio::task::spawn_blocking(move || -> Result<(i64, i64), crate::error::CoreError> {
-            let mut w = db_pool.open_connection().unwrap();
+            let mut w = db_pool.open_connection()?;
             let before: i64 = w
                 .query_row("SELECT COUNT(*) FROM free_proxies", [], |r| r.get(0))
                 .unwrap_or(0);
@@ -579,7 +579,7 @@ pub async fn sync_all_providers(db_pool: Arc<DbPool>) -> crate::error::Result<Sy
                 .query_row("SELECT COUNT(*) FROM free_proxies", [], |r| r.get(0))
                 .unwrap_or(0);
             Ok((before, after))
-        }).await.unwrap()?;
+        }).await.map_err(|e| crate::error::CoreError::Internal(e.to_string()))??;
 
         added = (after_count - before_count) as usize;
     }
@@ -746,8 +746,8 @@ pub fn test_all_proxies_background(db_pool: Arc<DbPool>) {
                     let test_res = test_proxy_connection(&r#type, &host, port).await;
                     let db_pool = pool.clone();
                     let id_clone = id.clone();
-                    tokio::task::spawn_blocking(move || {
-                        let w = db_pool.open_connection().unwrap();
+                    let _ = tokio::task::spawn_blocking(move || -> Result<(), crate::error::CoreError> {
+                        let w = db_pool.open_connection()?;
                         match test_res {
                             Ok(latency) => {
                                 let _ = update_proxy_status(&w, &id_clone, "alive", Some(latency));
@@ -756,7 +756,8 @@ pub fn test_all_proxies_background(db_pool: Arc<DbPool>) {
                                 let _ = update_proxy_status(&w, &id_clone, "dead", None);
                             }
                         }
-                    }).await.unwrap();
+                        Ok(())
+                    }).await;
                 }
             })
             .buffer_unordered(20)

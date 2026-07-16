@@ -24,7 +24,7 @@ ssrf-bypass = []
 openproxy-types = { path = "../openproxy-types" }
 openproxy-db = { path = "../openproxy-db" }
 openproxy-compression = { path = "../openproxy-compression" }
-openproxy-adapters = { path = "../openproxy-adapters" }
+openproxy-adapters = { path = "../openproxy-adapters", features = ["test-utils"] }
 openproxy-pipeline = { path = "../openproxy-pipeline" }
 tokio = { workspace = true }
 axum = { workspace = true }
