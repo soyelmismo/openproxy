@@ -443,41 +443,6 @@ impl PipelineStage for CustomAdapterStage {
             .as_mut()
             .expect("current_target must be set");
         let target = &current.target;
-        let provider_id = target.provider_id.as_str();
-
-        if provider_id == "antigravity" {
-            let meta = current.custom_meta.as_ref().expect("antigravity target requires custom_meta");
-            let url = "https://autopush-aiplatform.sandbox.googleapis.com/v1internal:streamGenerateContent?alt=sse".to_string();
-            let result = crate::executor_antigravity::execute_antigravity(
-                &ctx.pipeline.config.upstream_client,
-                &url,
-                &meta.access_token,
-                meta.antigravity_project.as_deref().unwrap_or(""),
-                &ctx.req.openai_request,
-                ctx.req.client_disconnected.clone(),
-                ctx.req.stream_sink.as_ref(),
-                None,
-            ).await;
-
-            let res = match result {
-                Ok(resp) => crate::PipelineResult {
-                    status_code: 200,
-                    error: None,
-                    final_response: Some(resp),
-                    attempts: ctx.current_target_attempt,
-                    usage_tuple: None,
-                },
-                Err(e) => crate::PipelineResult {
-                    status_code: e.http_status(),
-                    error: Some(e),
-                    final_response: None,
-                    attempts: ctx.current_target_attempt,
-                    usage_tuple: None,
-                }
-            };
-            return Ok(res);
-        }
-
         let _adapter = match ctx
             .pipeline
             .config

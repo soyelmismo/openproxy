@@ -893,25 +893,6 @@ impl UpstreamDispatcher {
                 unreachable!("Responses format is handled natively before dispatcher")
             }
             openproxy_types::TargetFormat::Openai => {
-                if target.provider_id.as_str() == "kiro" {
-                    match crate::executor_kiro::parse_kiro_response(&body_bytes, &req.openai_request.model) {
-                        Ok(r) => r,
-                        Err(e) => {
-                            let err = CoreError::Parse(format!("parse kiro response: {e}"));
-                            return self.record_and_fail(
-                                req,
-                                combo,
-                                target,
-                                dctx.fail_ctx_code(
-                                    &err,
-                                    Some(connect_and_send_ms),
-                                    Some(ttft_ms),
-                                    err.http_status(),
-                                ),
-                            );
-                        }
-                    }
-                } else {
                     match serde_json::from_value::<OpenAIResponse>(response_body_raw.clone()) {
                         Ok(r) => r,
                         Err(e) => {
@@ -929,7 +910,6 @@ impl UpstreamDispatcher {
                             );
                         }
                     }
-                }
             }
             openproxy_types::TargetFormat::Anthropic => {
                 let anthropic_resp: crate::translation::AnthropicResponse =

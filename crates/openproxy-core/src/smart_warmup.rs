@@ -216,24 +216,42 @@ async fn ping_antigravity_model(
     account_id: &str,
 ) -> bool {
     let request = build_warmup_request(model);
-    let (_cancel_tx, cancel_rx) = tokio::sync::watch::channel(false);
+    
+    let wrapped = serde_json::json!({
+        "project": project_id,
+        "model": model,
+        "requestType": "agent",
+        "requestId": uuid::Uuid::new_v4().to_string(),
+        "userAgent": "antigravity",
+        "request": request,
+        "enabledCreditTypes": ["GOOGLE_ONE_AI"]
+    });
 
-    match openproxy_pipeline::executor_antigravity::execute_antigravity(
-        upstream,
-        &format!(
-            "{}/v1internal:streamGenerateContent?alt=sse",
-            openproxy_adapters::adapters::antigravity::DEFAULT_ANTIGRAVITY_BASE_URL
-        ),
-        access_token,
-        project_id,
-        &request,
-        cancel_rx,
-        None,
-        None,
-    )
-    .await
-    {
-        Ok(_) => true,
+    let payload = match serde_json::to_vec(&wrapped) {
+        Ok(b) => bytes::Bytes::from(b),
+        Err(_) => return false,
+    };
+
+    let url = format!(
+        "{}/v1internal:generateContent",
+        openproxy_adapters::adapters::antigravity::DEFAULT_ANTIGRAVITY_BASE_URL
+    );
+
+    let mut req = openproxy_adapters::upstream::UpstreamRequest::post_json(url, payload);
+    if let Ok(v) = http::HeaderValue::from_str(&format!("Bearer {}", access_token)) {
+        req.headers.insert(http::header::AUTHORIZATION, v);
+    }
+    
+    let cancel = openproxy_adapters::upstream::CancellationToken::new();
+    match upstream.call(req, openproxy_adapters::upstream::TimeoutProfile::Chat, cancel).await {
+        Ok(resp) => {
+            if resp.status.is_success() {
+                true
+            } else {
+                tracing::warn!("[SmartWarmup] Ping failed with status {} for {} on {}", resp.status, model, account_id);
+                false
+            }
+        }
         Err(e) => {
             tracing::warn!(
                 "[SmartWarmup] Ping request failed for {} on {}: {}",
