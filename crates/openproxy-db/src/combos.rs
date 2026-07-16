@@ -430,7 +430,6 @@ pub fn reconnect_orphan_targets(
     Ok(updated)
 }
 
-
 /// Walk down the sub-combo chain from `start_combo_id` and return
 /// `true` if `target_combo_id` is reachable within `max_depth`
 /// steps. Used by [`add_target`] to reject inserts that would close

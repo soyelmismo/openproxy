@@ -77,7 +77,6 @@ pub use repository::{ModelRepository, SqliteModelRepository};
 
 // ── Domain types ────────────────────────────────────────────────────
 
-
 /// Result of [`upsert_many`]. `touched` counts inserts + updates
 /// (the previous return value, kept stable for callers that only
 /// need the size). `new_model_ids` lists the `model_id` values that
