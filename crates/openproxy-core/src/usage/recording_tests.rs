@@ -1,9 +1,9 @@
 #[cfg(test)]
 mod tests {
+    use crate::endpoint::EndpointKind;
+    use crate::ids::{ProviderId, UsageId};
     use crate::usage::analytics::RecentUsageRow;
     use crate::usage::recording::redact_for_broadcast;
-    use crate::ids::{ProviderId, UsageId};
-    use crate::endpoint::EndpointKind;
 
     #[test]
     fn test_redact_for_broadcast() {
