@@ -917,9 +917,7 @@ async fn spawn_background_tasks(args: SpawnBackgroundTasksArgs) {
                     retention_secs,
                 );
             }
-            let _ = prune_pool
-                .writer()
-                .execute("DELETE FROM free_proxies WHERE status = 'dead'", []);
+            let _ = prune_pool.writer().execute("DELETE FROM free_proxies WHERE status = 'dead'", []);
             let interval_ticks = interval_hours.max(1);
             vacuum_counter = vacuum_counter.wrapping_add(1);
             if auto_vacuum && vacuum_counter >= interval_ticks {
