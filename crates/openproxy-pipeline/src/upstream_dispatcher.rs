@@ -1711,7 +1711,7 @@ impl UpstreamDispatcher {
             race_size,
             created,
             connect_and_send_ms,
-            resolved_timeouts: &resolved_timeouts,
+            resolved_timeouts,
         };
 
         match state.run_stream_loop(&ctx, self, &mut stream).await {

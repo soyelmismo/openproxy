@@ -146,7 +146,7 @@ impl UsageTracker {
 
         let usage_tuple = match UsageRecordBuilder::new(self, req, combo, target)
             .model_opt(model)
-            .err(&err)
+            .err(err)
             .connect_ms_opt(connect_ms)
             .ttft_ms_opt(ttft_ms)
             .total_ms(total_ms)

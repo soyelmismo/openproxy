@@ -243,7 +243,7 @@ pub(crate) async fn run_test_for_model(
     // Capture the optional account_id AND its label. The label is
     // needed by providers whose URL embeds account-level metadata
     // (e.g. CloudFlare Workers AI uses the label as its account ID).
-    let (account_id_opt, _account_label, api_key) = if is_anonymous {
+    let (_account_id_opt, _account_label, api_key) = if is_anonymous {
         (None, String::new(), String::new()) // Anonymous: no account, empty key
     } else {
         let selected = match account_id {
@@ -399,202 +399,17 @@ pub(crate) async fn run_test_for_model(
         extra: serde_json::Map::new(),
     };
 
-    // 6. Custom providers (kiro, antigravity, antigravity-cli) need
-    //    their own executors that wrap the request in a provider-
-    //    specific envelope (Cloud Code, Kiro conversationState, etc.)
-    //    and parse the non-standard response. The standard adapter
-    //    path below would send raw Gemini/OpenAI format to an endpoint
-    //    that expects a different wire shape.
+    // 6. Custom providers (kiro, antigravity) are not supported by the simple test path yet.
     let is_custom_provider = matches!(model.provider_id.as_str(), "kiro" | "antigravity");
 
-    if is_custom_provider && !is_anonymous {
-        // Delegate to the provider-specific executor, same as the
-        // pipeline's `execute_single`. We need the access token and
-        // provider-specific metadata.
-
-        // Resolve the account for this test. The combo path already
-        // pinned one; the per-row path picks the first healthy one.
-        let test_account_id = account_id_opt.unwrap_or_else(|| {
-            // Re-pick from the accounts list that was already loaded.
-            // The list was consumed by `into_iter()` above, so we
-            // re-query. This only happens for the per-row path when
-            // the model has accounts but the caller didn't pin one.
-            let w = s.db_pool().writer();
-            core_accounts::list(&w, Some(&model.provider_id), s.master_key().as_ref())
-                .ok()
-                .and_then(|l| {
-                    l.iter()
-                        .find(|a| a.health_status == core_accounts::HealthStatus::Healthy)
-                        .or_else(|| {
-                            l.iter()
-                                .find(|a| a.health_status == core_accounts::HealthStatus::Degraded)
-                        })
-                        .or_else(|| l.first())
-                        .map(|a| a.id)
-                })
-                .unwrap_or(AccountId(0))
-        });
-
-        // Decrypt the access token, resolving/refreshing it if it's an OAuth account.
-        let access_token = {
-            let account = {
-                let w = s.db_pool().writer();
-                core_accounts::get(&w, test_account_id, s.master_key().as_ref())
-                    .ok()
-                    .flatten()
-            };
-            if let Some(ref acc) = account
-                && acc.auth_type == "oauth"
-            {
-                match core_oauth::resolve_oauth_token(
-                    s.db_pool().as_ref(),
-                    acc,
-                    model.provider_id.as_str(),
-                    s.oauth_provider_registry().as_ref(),
-                    s.upstream_client(),
-                    s.master_key().as_ref(),
-                )
-                .await
-                {
-                    Ok(t) => t,
-                    Err(e) => {
-                        let elapsed_ms = start.elapsed().as_millis() as u64;
-                        let err_msg = format!("resolve oauth token: {}", e);
-                        return TestResult {
-                            row_id: model_row_id,
-                            status: e.http_status(),
-                            elapsed_ms,
-                            error_msg: Some(err_msg),
-                            skipped: false,
-                            skip_reason: None,
-                        };
-                    }
-                }
-            } else {
-                let w = s.db_pool().writer();
-                match core_accounts::decrypt_access_token(
-                    &w,
-                    test_account_id,
-                    s.master_key().as_ref(),
-                ) {
-                    Ok(t) => t,
-                    Err(e) => {
-                        let elapsed_ms = start.elapsed().as_millis() as u64;
-                        let err_msg = format!("decrypt access token: {}", e);
-                        return TestResult {
-                            row_id: model_row_id,
-                            status: e.http_status(),
-                            elapsed_ms,
-                            error_msg: Some(err_msg),
-                            skipped: false,
-                            skip_reason: None,
-                        };
-                    }
-                }
-            }
-        };
-
-        // Read provider-specific metadata and fire the executor.
-        let executor_result = match model.provider_id.as_str() {
-            "antigravity" => {
-                let project_id = {
-                    let w = s.db_pool().writer();
-                    openproxy_core::oauth_antigravity::read_project_id(&w, test_account_id)
-                        .unwrap_or_default()
-                };
-                let http_client = s.upstream_client();
-                // No client connection of its own on the admin
-                // test path (it runs against a synthetic request);
-                // see the symmetric note on the kiro branch below.
-                let (_cancel_tx, dummy_cancel_rx) = tokio::sync::watch::channel(false);
-                let final_cancel_rx = cancel_rx.clone().unwrap_or(dummy_cancel_rx);
-                openproxy_pipeline::executor_antigravity::execute_antigravity(
-                    http_client,
-                    &format!(
-                        "{}/v1internal:streamGenerateContent?alt=sse",
-                        openproxy_adapters::adapters::antigravity::DEFAULT_ANTIGRAVITY_BASE_URL
-                    ),
-                    &access_token,
-                    project_id.as_deref().unwrap_or(""),
-                    &openai_req,
-                    final_cancel_rx,
-                    None,
-                    proxy_url.clone(),
-                )
-                .await
-            }
-            "kiro" => {
-                let (region, profile_arn) = {
-                    let w = s.db_pool().writer();
-                    let meta =
-                        openproxy_core::oauth_kiro::read_profile_meta(&w, test_account_id)
-                            .unwrap_or(None);
-                    (
-                        meta.as_ref()
-                            .map(|m| m.region.clone())
-                            .filter(|r| !r.is_empty())
-                            .unwrap_or_else(|| {
-                                openproxy_pipeline::executor_kiro::KIRO_DEFAULT_REGION.to_string()
-                            }),
-                        meta.as_ref().and_then(|m| m.profile_arn.clone()),
-                    )
-                };
-                let http_client = s.upstream_client();
-                // The admin test endpoint runs against a single
-                // short-lived request. It has no client connection
-                // of its own (no chat client), so the watch stays
-                // at `false` for the duration; the token is
-                // therefore effectively never-cancelled and the
-                // request is bounded by the executor's
-                // `TimeoutProfile::Chat` envelope (see
-                // `executor_kiro.rs:438-445`).
-                let (_cancel_tx, dummy_cancel_rx) = tokio::sync::watch::channel(false);
-                let final_cancel_rx = cancel_rx.clone().unwrap_or(dummy_cancel_rx);
-                openproxy_pipeline::executor_kiro::execute_kiro(
-                    http_client,
-                    &access_token,
-                    &region,
-                    profile_arn.as_deref(),
-                    &openai_req,
-                    final_cancel_rx,
-                    proxy_url.clone(),
-                )
-                .await
-            }
-            _ => unreachable!(),
-        };
-
-        let elapsed_ms = start.elapsed().as_millis() as u64;
-        let (status, error_msg) = match executor_result {
-            Ok(_response) => (200_u16, None),
-            Err(e) => (
-                e.http_status(),
-                Some(openproxy_core::cost::redact_error_msg(&e.to_string()).0),
-            ),
-        };
-
-        // Persist the result (per-row path only).
-        if !opts.in_combo_fanout {
-            let w = s.db_pool().writer();
-            if let Err(e) = core_models::set_test_status(&w, row_id, status as i32) {
-                return TestResult {
-                    row_id: model_row_id,
-                    status: e.http_status(),
-                    elapsed_ms,
-                    error_msg: Some(openproxy_core::cost::redact_error_msg(&e.to_string()).0),
-                    skipped: true,
-                    skip_reason: Some(openproxy_core::cost::redact_error_msg(&e.to_string()).0),
-                };
-            }
-        }
-
+    if is_custom_provider {
         return TestResult {
             row_id: model_row_id,
-            status,
-            elapsed_ms,
-            error_msg,
-            skipped: false,
-            skip_reason: None,
+            status: 501,
+            elapsed_ms: 0,
+            error_msg: Some("Test not supported for custom providers yet".into()),
+            skipped: true,
+            skip_reason: Some("Test not supported for custom providers yet".into()),
         };
     }
 

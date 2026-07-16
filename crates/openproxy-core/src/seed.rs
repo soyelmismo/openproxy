@@ -388,7 +388,7 @@ pub fn backfill_model_metadata(conn: &Connection) -> Result<u64> {
 mod tests {
     use super::*;
     use openproxy_db::conn::DbPool;
-    use openproxy_db::migrations;
+    
     use std::path::PathBuf;
 
     /// Build an in-process pool: temp dir on disk, migrations applied.

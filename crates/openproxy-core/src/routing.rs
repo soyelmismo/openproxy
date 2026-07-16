@@ -295,7 +295,7 @@ pub fn build_synthetic_combo(
 mod tests {
     use super::*;
     use openproxy_db::conn::DbPool;
-    use openproxy_db::migrations;
+    
     use crate::providers::{self, AuthType, ProviderFormat};
     use std::path::PathBuf;
     use std::sync::atomic::AtomicU64;

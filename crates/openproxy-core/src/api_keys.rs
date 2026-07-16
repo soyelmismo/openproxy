@@ -634,7 +634,7 @@ impl std::error::Error for SimpleErr {}
 #[cfg(test)]
 mod tests {
     use super::*;
-    use openproxy_db::migrations;
+    
     use std::path::PathBuf;
 
     fn fresh_pool() -> (Connection, PathBuf) {

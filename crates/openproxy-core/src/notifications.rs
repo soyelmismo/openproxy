@@ -413,7 +413,7 @@ pub fn delete(conn: &Connection, id: i64) -> Result<bool> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use openproxy_db::migrations;
+    
 
     fn fresh_db() -> Connection {
         let mut conn = Connection::open_in_memory().unwrap();

@@ -48,10 +48,10 @@ use openproxy_core::{
         UpdateAccountApiKeyInput,
     },
     analytics::{LatencyPercentiles, RaceStats},
-    combos,
     providers,
     usage::{ByAccountRow, ByModelRow, ByStatusRow, ErrorRow, UsageFilter, UsageSummary},
 };
+use openproxy_types::combos;
 use openproxy_types::{
     CoreError,
     ids::{AccountId, ComboId, ModelRowId, ProviderId},

@@ -327,21 +327,21 @@ fn row_to_provider(row: &rusqlite::Row<'_>) -> rusqlite::Result<Provider> {
         rusqlite::Error::FromSqlConversionFailure(
             3,
             rusqlite::types::Type::Text,
-            Box::new(FromStrError(format!("{}", e))),
+            Box::new(FromStrError(e.to_string())),
         )
     })?;
     let format = ProviderFormat::parse(&format).map_err(|e| {
         rusqlite::Error::FromSqlConversionFailure(
             4,
             rusqlite::types::Type::Text,
-            Box::new(FromStrError(format!("{}", e))),
+            Box::new(FromStrError(e.to_string())),
         )
     })?;
     let rate_limit_scope = RateLimitScope::parse(&rate_limit_scope).map_err(|e| {
         rusqlite::Error::FromSqlConversionFailure(
             12,
             rusqlite::types::Type::Text,
-            Box::new(FromStrError(format!("{}", e))),
+            Box::new(FromStrError(e.to_string())),
         )
     })?;
 
@@ -383,7 +383,7 @@ impl std::error::Error for FromStrError {}
 mod tests {
     use super::*;
     use openproxy_db::conn::DbPool;
-    use openproxy_db::migrations;
+    
     use std::path::PathBuf;
 
     /// Build an in-memory pool for one test: temp dir on disk (rusqlite's

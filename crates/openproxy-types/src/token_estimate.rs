@@ -158,7 +158,7 @@ mod tests {
     fn test_estimate_english_text() {
         let tokens = estimate_completion_tokens("Hello world");
         assert!(
-            tokens >= 1 && tokens <= 5,
+            (1..=5).contains(&tokens),
             "expected 1-5 tokens, got {}",
             tokens
         );
@@ -173,7 +173,7 @@ mod tests {
     fn test_estimate_cjk_text() {
         let tokens = estimate_completion_tokens("你好世界");
         assert!(
-            tokens >= 2 && tokens <= 6,
+            (2..=6).contains(&tokens),
             "expected 2-6 tokens, got {}",
             tokens
         );
@@ -184,7 +184,7 @@ mod tests {
         let code = "fn main() { println!(\"hello\"); }";
         let tokens = estimate_completion_tokens(code);
         assert!(
-            tokens >= 5 && tokens <= 30,
+            (5..=30).contains(&tokens),
             "expected 5-30 tokens, got {}",
             tokens
         );
@@ -195,7 +195,7 @@ mod tests {
         let messages = vec![msg("user", "Hello"), msg("assistant", "Hi there!")];
         let tokens = estimate_prompt_tokens(&messages);
         assert!(
-            tokens >= 10 && tokens <= 20,
+            (10..=20).contains(&tokens),
             "expected 10-20 tokens, got {}",
             tokens
         );
@@ -256,7 +256,7 @@ mod tests {
 
     #[test]
     fn test_estimate_whitespace_heavy() {
-        let text = "a".to_string() + &" ".repeat(100) + &"b";
+        let text = "a".to_string() + &" ".repeat(100) + "b";
         let tokens = estimate_completion_tokens(&text);
         assert!(
             tokens <= 30,
@@ -282,7 +282,7 @@ mod tests {
         let json = r#"{"id":1,"name":"test","status":"active"}"#;
         let tokens = estimate_completion_tokens(json);
         assert!(
-            tokens >= 5 && tokens <= 30,
+            (5..=30).contains(&tokens),
             "expected 5-30 tokens for JSON, got {}",
             tokens
         );

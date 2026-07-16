@@ -705,11 +705,6 @@ pub fn errors(conn: &Connection, f: &UsageFilter, limit: u32) -> Result<Vec<Erro
 // Recent rows (long-polling support)
 // ---------------------------------------------------------------------------
 
-/// A single `usage` row, projected for the dashboard's "live tail" view.
-///
-/// Mirrors the columns the spec calls out for the long-polling feed (and a
-/// couple more for convenience). Returned by [`recent`] in
-/// `(id ASC)` order, with `id > since_id` so the dashboard can paginate
 
 /// Full `usage` row projection for live-log detail views.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -755,7 +750,7 @@ pub struct UsageDetailRow {
     pub proxy_status: Option<String>,
     pub is_proxy_rotated: bool,
     /// The endpoint kind (chat, audio, image, etc.). Defaults to Chat.
-    pub endpoint_kind: crate::endpoint::EndpointKind,
+    pub endpoint_kind: openproxy_types::endpoint::EndpointKind,
     pub created_at: String,
 }
 
@@ -918,12 +913,12 @@ pub fn recent(conn: &Connection, since_id: i64, limit: u32) -> Result<Vec<openpr
             let is_streaming_bool = is_streaming != 0;
             let stream_complete_bool = stream_complete != 0;
             let endpoint_kind = match endpoint_kind_str.as_str() {
-                "chat" => crate::endpoint::EndpointKind::Chat,
-                "audio" => crate::endpoint::EndpointKind::Audio,
-                "image" => crate::endpoint::EndpointKind::Image,
-                "embedding" => crate::endpoint::EndpointKind::Embedding,
-                "video" => crate::endpoint::EndpointKind::Video,
-                _ => crate::endpoint::EndpointKind::Chat,
+                "chat" => openproxy_types::endpoint::EndpointKind::Chat,
+                "audio" => openproxy_types::endpoint::EndpointKind::Audio,
+                "image" => openproxy_types::endpoint::EndpointKind::Image,
+                "embedding" => openproxy_types::endpoint::EndpointKind::Embedding,
+                "video" => openproxy_types::endpoint::EndpointKind::Video,
+                _ => openproxy_types::endpoint::EndpointKind::Chat,
             };
             Ok(openproxy_types::usage::RecentUsageRow {
                 id: UsageId(id),
@@ -1105,12 +1100,12 @@ pub fn recent_desc(conn: &Connection, limit: u32) -> Result<Vec<openproxy_types:
             let is_streaming_bool = is_streaming != 0;
             let stream_complete_bool = stream_complete != 0;
             let endpoint_kind = match endpoint_kind_str.as_str() {
-                "chat" => crate::endpoint::EndpointKind::Chat,
-                "audio" => crate::endpoint::EndpointKind::Audio,
-                "image" => crate::endpoint::EndpointKind::Image,
-                "embedding" => crate::endpoint::EndpointKind::Embedding,
-                "video" => crate::endpoint::EndpointKind::Video,
-                _ => crate::endpoint::EndpointKind::Chat,
+                "chat" => openproxy_types::endpoint::EndpointKind::Chat,
+                "audio" => openproxy_types::endpoint::EndpointKind::Audio,
+                "image" => openproxy_types::endpoint::EndpointKind::Image,
+                "embedding" => openproxy_types::endpoint::EndpointKind::Embedding,
+                "video" => openproxy_types::endpoint::EndpointKind::Video,
+                _ => openproxy_types::endpoint::EndpointKind::Chat,
             };
 
             Ok(openproxy_types::usage::RecentUsageRow {
@@ -1277,12 +1272,12 @@ pub fn row_for_broadcast_by_id(conn: &Connection, id: i64) -> Result<Option<open
             let is_streaming_bool = is_streaming != 0;
             let stream_complete_bool = stream_complete != 0;
             let endpoint_kind = match endpoint_kind_str.as_str() {
-                "chat" => crate::endpoint::EndpointKind::Chat,
-                "audio" => crate::endpoint::EndpointKind::Audio,
-                "image" => crate::endpoint::EndpointKind::Image,
-                "embedding" => crate::endpoint::EndpointKind::Embedding,
-                "video" => crate::endpoint::EndpointKind::Video,
-                _ => crate::endpoint::EndpointKind::Chat,
+                "chat" => openproxy_types::endpoint::EndpointKind::Chat,
+                "audio" => openproxy_types::endpoint::EndpointKind::Audio,
+                "image" => openproxy_types::endpoint::EndpointKind::Image,
+                "embedding" => openproxy_types::endpoint::EndpointKind::Embedding,
+                "video" => openproxy_types::endpoint::EndpointKind::Video,
+                _ => openproxy_types::endpoint::EndpointKind::Chat,
             };
             Ok(openproxy_types::usage::RecentUsageRow {
                 id: UsageId(id),
@@ -1430,12 +1425,12 @@ pub fn detail_by_id(conn: &Connection, id: i64) -> Result<Option<UsageDetailRow>
             let request_headers = request_headers.and_then(|s| serde_json::from_str(&s).ok());
             let response_headers = response_headers.and_then(|s| serde_json::from_str(&s).ok());
             let endpoint_kind = match endpoint_kind_str.as_str() {
-                "chat" => crate::endpoint::EndpointKind::Chat,
-                "audio" => crate::endpoint::EndpointKind::Audio,
-                "image" => crate::endpoint::EndpointKind::Image,
-                "embedding" => crate::endpoint::EndpointKind::Embedding,
-                "video" => crate::endpoint::EndpointKind::Video,
-                _ => crate::endpoint::EndpointKind::Chat,
+                "chat" => openproxy_types::endpoint::EndpointKind::Chat,
+                "audio" => openproxy_types::endpoint::EndpointKind::Audio,
+                "image" => openproxy_types::endpoint::EndpointKind::Image,
+                "embedding" => openproxy_types::endpoint::EndpointKind::Embedding,
+                "video" => openproxy_types::endpoint::EndpointKind::Video,
+                _ => openproxy_types::endpoint::EndpointKind::Chat,
             };
 
             Ok(UsageDetailRow {
@@ -1584,12 +1579,12 @@ pub fn detail_by_trace_id(conn: &Connection, trace_id: &str) -> Result<Option<Us
             let request_headers = request_headers.and_then(|s| serde_json::from_str(&s).ok());
             let response_headers = response_headers.and_then(|s| serde_json::from_str(&s).ok());
             let endpoint_kind = match endpoint_kind_str.as_str() {
-                "chat" => crate::endpoint::EndpointKind::Chat,
-                "audio" => crate::endpoint::EndpointKind::Audio,
-                "image" => crate::endpoint::EndpointKind::Image,
-                "embedding" => crate::endpoint::EndpointKind::Embedding,
-                "video" => crate::endpoint::EndpointKind::Video,
-                _ => crate::endpoint::EndpointKind::Chat,
+                "chat" => openproxy_types::endpoint::EndpointKind::Chat,
+                "audio" => openproxy_types::endpoint::EndpointKind::Audio,
+                "image" => openproxy_types::endpoint::EndpointKind::Image,
+                "embedding" => openproxy_types::endpoint::EndpointKind::Embedding,
+                "video" => openproxy_types::endpoint::EndpointKind::Video,
+                _ => openproxy_types::endpoint::EndpointKind::Chat,
             };
 
             Ok(UsageDetailRow {

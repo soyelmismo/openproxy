@@ -338,6 +338,17 @@ fn normalize_model_and_effort(model: &str) -> (String, Option<&'static str>) {
     (model.to_string(), None)
 }
 
+fn normalize_effort(value: &str) -> &'static str {
+    match value {
+        "max" | "xhigh" => "xhigh",
+        "high" => "high",
+        "medium" => "medium",
+        "low" => "low",
+        "none" => "none",
+        _ => "medium",
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -381,16 +392,5 @@ mod tests {
         assert_eq!(super::normalize_effort("none"), "none");
         assert_eq!(super::normalize_effort("unknown"), "medium");
         assert_eq!(super::normalize_effort(""), "medium");
-    }
-}
-
-fn normalize_effort(value: &str) -> &'static str {
-    match value {
-        "max" | "xhigh" => "xhigh",
-        "high" => "high",
-        "medium" => "medium",
-        "low" => "low",
-        "none" => "none",
-        _ => "medium",
     }
 }

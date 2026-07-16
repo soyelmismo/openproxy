@@ -944,7 +944,7 @@ impl<T> Pipe for T {}
 mod tests {
     use super::*;
     use openproxy_db::conn::DbPool;
-    use openproxy_db::migrations;
+    
     use std::path::PathBuf;
 
     /// Build a fresh in-process pool: temp dir on disk, migrations applied.

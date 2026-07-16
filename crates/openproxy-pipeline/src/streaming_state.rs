@@ -279,9 +279,9 @@ impl StreamingState {
                         ttft_ms: processor.state.ttft_ms,
                         trace_id: ctx.trace_id.to_string(),
                         acc: processor.state.acc.as_mut(),
-                        chunk_id: &ctx.chunk_id,
+                        chunk_id: ctx.chunk_id,
                         created: ctx.created,
-                        model_name: &ctx.model_name,
+                        model_name: ctx.model_name,
                     },
                 ),
             ));
@@ -373,9 +373,9 @@ impl<'a> crate::streaming::ChunkInterceptor for ChunkProcessor<'a> {
                         ttft_ms: state.ttft_ms,
                         trace_id: ctx.trace_id.to_string(),
                         acc: state.acc.as_mut(),
-                        chunk_id: &ctx.chunk_id,
+                        chunk_id: ctx.chunk_id,
                         created: ctx.created,
-                        model_name: &ctx.model_name,
+                        model_name: ctx.model_name,
                     },
                 ),
             ));
@@ -455,9 +455,9 @@ impl<'a> ChunkProcessor<'a> {
                             ttft_ms: state.ttft_ms,
                             trace_id: trace_id.to_string(),
                             acc: state.acc.as_mut(),
-                            chunk_id: &chunk_id,
+                            chunk_id,
                             created,
-                            model_name: &model_name,
+                            model_name,
                         },
                     ),
                 ));
@@ -482,9 +482,9 @@ impl<'a> ChunkProcessor<'a> {
                             ttft_ms: state.ttft_ms,
                             trace_id: trace_id.to_string(),
                             acc: state.acc.as_mut(),
-                            chunk_id: &chunk_id,
+                            chunk_id,
                             created,
-                            model_name: &model_name,
+                            model_name,
                         },
                     ),
                 ));
@@ -570,9 +570,9 @@ impl<'a> ChunkProcessor<'a> {
                             },
                             trace_id.to_string(),
                             acc_ref,
-                            Some(&chunk_id),
+                            Some(chunk_id),
                             created,
-                            &model_name,
+                            model_name,
                         ),
                     ));
                 }
@@ -690,9 +690,9 @@ impl<'a> ChunkProcessor<'a> {
                                     ttft_ms: state.ttft_ms,
                                     trace_id: trace_id.to_string(),
                                     acc: state.acc.as_mut(),
-                                    chunk_id: &chunk_id,
+                                    chunk_id,
                                     created,
-                                    model_name: &model_name,
+                                    model_name,
                                 },
                             ),
                         ));
@@ -731,9 +731,9 @@ impl<'a> ChunkProcessor<'a> {
                                     ttft_ms: state.ttft_ms,
                                     trace_id: trace_id.to_string(),
                                     acc: state.acc.as_mut(),
-                                    chunk_id: &chunk_id,
+                                    chunk_id,
                                     created,
-                                    model_name: &model_name,
+                                    model_name,
                                 },
                             ),
                         ));
@@ -871,9 +871,9 @@ impl<'a> ChunkProcessor<'a> {
                             ttft_ms: state.ttft_ms,
                             trace_id: trace_id.to_string(),
                             acc: state.acc.as_mut(),
-                            chunk_id: &chunk_id,
+                            chunk_id,
                             created,
-                            model_name: &model_name,
+                            model_name,
                         },
                     ),
                 ));
@@ -907,9 +907,9 @@ impl<'a> ChunkProcessor<'a> {
                             ttft_ms: state.ttft_ms,
                             trace_id: trace_id.to_string(),
                             acc: state.acc.as_mut(),
-                            chunk_id: &chunk_id,
+                            chunk_id,
                             created,
-                            model_name: &model_name,
+                            model_name,
                         },
                     ),
                 ));
@@ -944,14 +944,14 @@ impl<'a> ChunkProcessor<'a> {
         let parsed = match target_format {
             openproxy_types::TargetFormat::Responses => crate::sse::parse_responses_sse_stream_line(
                 line,
-                &chunk_id,
+                chunk_id,
                 created,
-                &model_name,
+                model_name,
                 &mut state.responses_sse_state,
             ),
             openproxy_types::TargetFormat::Openai => crate::sse::parse_openai_sse_line(line),
             openproxy_types::TargetFormat::Gemini => {
-                crate::sse::parse_gemini_sse_line(line, &chunk_id, created, &model_name)
+                crate::sse::parse_gemini_sse_line(line, chunk_id, created, model_name)
             }
             openproxy_types::TargetFormat::Anthropic => {
                 // Anthropic SSE: track event type across lines
@@ -974,9 +974,9 @@ impl<'a> ChunkProcessor<'a> {
                         // deltas.
                         match crate::sse::translate_anthropic_sse_event(
                             &payload,
-                            &chunk_id,
+                            chunk_id,
                             created,
-                            &model_name,
+                            model_name,
                             &mut state.tool_use_acc,
                             &mut state.tool_call_index_counter,
                         ) {
@@ -1019,9 +1019,9 @@ impl<'a> ChunkProcessor<'a> {
                                     ttft_ms: state.ttft_ms,
                                     trace_id: trace_id.to_string(),
                                     acc: state.acc.as_mut(),
-                                    chunk_id: &chunk_id,
+                                    chunk_id,
                                     created,
-                                    model_name: &model_name,
+                                    model_name,
                                 },
                             ),
                         ));
@@ -1046,9 +1046,9 @@ impl<'a> ChunkProcessor<'a> {
                                     ttft_ms: state.ttft_ms,
                                     trace_id: trace_id.to_string(),
                                     acc: state.acc.as_mut(),
-                                    chunk_id: &chunk_id,
+                                    chunk_id,
                                     created,
-                                    model_name: &model_name,
+                                    model_name,
                                 },
                             ),
                         ));
@@ -1177,9 +1177,9 @@ impl<'a> ChunkProcessor<'a> {
                                     ttft_ms: state.ttft_ms,
                                     trace_id: trace_id.to_string(),
                                     acc: state.acc.as_mut(),
-                                    chunk_id: &chunk_id,
+                                    chunk_id,
                                     created,
-                                    model_name: &model_name,
+                                    model_name,
                                 },
                             ),
                         ));
@@ -1220,9 +1220,9 @@ impl<'a> ChunkProcessor<'a> {
                         },
                         trace_id.to_string(),
                         acc_ref,
-                        Some(&chunk_id),
+                        Some(chunk_id),
                         created,
-                        &model_name,
+                        model_name,
                     ),
                 ));
             }

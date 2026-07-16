@@ -82,23 +82,6 @@ pub use repository::{ModelRepository, SqliteModelRepository};
 /// Persisted in `models.target_format`; the CHECK constraint allows only
 /// `"openai"`, `"anthropic"`, or `"gemini"`.
 
-
-
-/// Input shape for [`upsert_many`]: what a provider adapter reports.
-///
-/// `row_id`, `discovered_at`, and `expires_at` are not supplied by the
-/// adapter — they are filled in by the storage layer.
-///
-/// The optional metadata fields (`context_length`, `max_output_tokens`,
-/// `input_modalities`, `output_modalities`, `model_type`, `family`,
-/// `capabilities`) come straight from the upstream `/models` response
-/// (e.g. OpenRouter's `context_length`, `architecture.*_modalities`,
-/// `top_provider.max_completion_tokens`, `supported_parameters`). A
-/// provider adapter that doesn't surface those fields leaves them
-/// `None` and the runtime fallback at the `GET /v1/models` handler
-/// takes over.
-
-
 /// Result of [`upsert_many`]. `touched` counts inserts + updates
 /// (the previous return value, kept stable for callers that only
 /// need the size). `new_model_ids` lists the `model_id` values that

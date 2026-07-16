@@ -24,7 +24,7 @@ mod tests {
     use crate::ids::*;
     use crate::usage::*;
 
-    use openproxy_db::migrations;
+    
 
     use rusqlite::{Connection, params};
     use std::path::PathBuf;

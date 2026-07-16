@@ -168,7 +168,7 @@ mod tests {
         // 3rd failure triggers Unhealthy
         let outcome = cb.record_failure_outcome(key.clone());
         assert_eq!(outcome.health, Health::Unhealthy);
-        assert_eq!(outcome.just_opened, true);
+        assert!(outcome.just_opened);
 
         assert_eq!(cb.is_healthy(key.clone()), Health::Unhealthy);
 

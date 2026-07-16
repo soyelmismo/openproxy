@@ -57,6 +57,8 @@ pub mod usage;
 pub(crate) use auth::{admin_auth_middleware, authenticate_admin_ws};
 pub(crate) use models::{resolve_adapter, run_test_for_model};
 pub(crate) use oauth::refresh_oauth_if_needed;
+pub(crate) use openproxy_db::combos as core_combos;
+pub(crate) use openproxy_types::combos as types_combos;
 
 pub mod auth;
 use openproxy_core::accounts as core_accounts;
@@ -69,7 +71,7 @@ use axum::{
 };
 use futures::StreamExt;
 use openproxy_core::{
-    analytics, api_keys as core_api_keys, combos as core_combos,
+    analytics, api_keys as core_api_keys,
     config::{CircuitBreakerConfig, RacingConfig, RetriesConfig, TimeoutsConfig},
     models as core_models, oauth as core_oauth, seed,
     usage::UsageFilter,

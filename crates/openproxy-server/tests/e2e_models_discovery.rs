@@ -34,13 +34,14 @@ use axum::{
 };
 use openproxy_core::{
     AppConfig, accounts,
-    admin, combos,
+    admin,
     models::{self, DiscoveredModel, TargetFormat},
 };
 use openproxy_types::ids::{AccountId, ComboId, ComboTargetId, ModelId, ModelRowId, ProviderId};
+use openproxy_types::combos::Strategy;
 use openproxy_db::secrets::MasterKey;
 use openproxy_adapters::adapters::{AdapterAuthType, AdapterFormat, ProviderAdapter, ProviderAdapterConfig};
-use openproxy_db::{self as core_db, migrations};
+use openproxy_db::{self as core_db, migrations, combos};
 use openproxy_server::state::AppState;
 use parking_lot::Mutex;
 use rusqlite::Connection;
@@ -657,7 +658,7 @@ async fn e2e_discovery_and_delete_on_disappear() {
     let (combo_id, c_target_id) = {
         let w = state.db_pool().writer();
         let combo_id: ComboId =
-            combos::create_combo(&w, "e2e-combo", combos::Strategy::Priority, 1)
+            combos::create_combo(&w, "e2e-combo", Strategy::Priority, 1)
                 .expect("create_combo");
         let target_id: ComboTargetId = combos::add_target(
             &w,

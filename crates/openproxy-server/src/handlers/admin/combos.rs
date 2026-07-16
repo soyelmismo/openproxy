@@ -6,7 +6,7 @@ use axum::{
 
 use openproxy_core::admin as core_admin;
 
-pub async fn list_combos(State(s): State<AppState>) -> ApiResult<Json<Vec<core_combos::Combo>>> {
+pub async fn list_combos(State(s): State<AppState>) -> ApiResult<Json<Vec<types_combos::Combo>>> {
     crate::api_try! {
         // Read-only SELECT — use the READER.
         let r = s.db_pool().reader();
@@ -29,7 +29,7 @@ pub async fn create_combo(
 pub async fn get_combo(
     State(s): State<AppState>,
     Path(id): Path<i64>,
-) -> ApiResult<Json<core_combos::Combo>> {
+) -> ApiResult<Json<types_combos::Combo>> {
     crate::api_try! {
         // Read-only SELECT — use the READER.
         let r = s.db_pool().reader();
@@ -213,7 +213,7 @@ pub async fn delete_combo(
 pub async fn list_combo_targets(
     State(s): State<AppState>,
     Path(id): Path<i64>,
-) -> ApiResult<Json<Vec<core_combos::ComboTargetWithModel>>> {
+) -> ApiResult<Json<Vec<types_combos::ComboTargetWithModel>>> {
     crate::api_try! {
         // Read-only SELECT — use the READER.
         let r = s.db_pool().reader();

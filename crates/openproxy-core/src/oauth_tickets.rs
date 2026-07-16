@@ -221,7 +221,7 @@ pub fn cleanup_expired(conn: &Connection) -> Result<usize> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use openproxy_db::migrations;
+    
     use rusqlite::Connection;
 
     fn fresh_conn() -> Connection {

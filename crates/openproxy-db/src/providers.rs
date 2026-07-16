@@ -113,21 +113,21 @@ fn row_to_provider(row: &rusqlite::Row<'_>) -> rusqlite::Result<Provider> {
         rusqlite::Error::FromSqlConversionFailure(
             3,
             rusqlite::types::Type::Text,
-            Box::new(FromStrError(format!("{}", e))),
+            Box::new(FromStrError(e.to_string())),
         )
     })?;
     let format = ProviderFormat::parse(&format_str).map_err(|e| {
         rusqlite::Error::FromSqlConversionFailure(
             4,
             rusqlite::types::Type::Text,
-            Box::new(FromStrError(format!("{}", e))),
+            Box::new(FromStrError(e.to_string())),
         )
     })?;
     let rate_limit_scope = RateLimitScope::parse(&rate_limit_scope_str).map_err(|e| {
         rusqlite::Error::FromSqlConversionFailure(
             12,
             rusqlite::types::Type::Text,
-            Box::new(FromStrError(format!("{}", e))),
+            Box::new(FromStrError(e.to_string())),
         )
     })?;
 

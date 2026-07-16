@@ -646,7 +646,7 @@ fn row_to_account(row: &rusqlite::Row<'_>, master_key: &MasterKey) -> rusqlite::
         rusqlite::Error::FromSqlConversionFailure(
             5,
             rusqlite::types::Type::Text,
-            Box::new(FromStrError(format!("{}", e))),
+            Box::new(FromStrError(e.to_string())),
         )
     })?;
 
@@ -694,7 +694,7 @@ impl std::error::Error for FromStrError {}
 mod tests {
     use super::*;
     use openproxy_db::conn::DbPool;
-    use openproxy_db::migrations;
+    
     use crate::providers::{self, AuthType, ProviderFormat};
     use std::path::PathBuf;
 

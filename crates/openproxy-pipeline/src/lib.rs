@@ -1,3 +1,4 @@
+#![allow(clippy::too_many_arguments)]
 
 pub mod pipeline;
 pub use pipeline::{PipelineConfig, PipelineRequest, PipelineResult, Pipeline, FailureContext, is_upstream_health_issue, ErrorPhase, SSE_DONE_BYTES, parse_retry_after_ms};

@@ -578,7 +578,7 @@ async fn run_one_tick(
 mod tests {
     use super::*;
 
-    use openproxy_db::migrations;
+    
     use crate::ids::{AccountId, ModelId, ProviderId as CoreProviderId};
     use crate::models::{DiscoveredModel, TargetFormat};
     use crate::providers;

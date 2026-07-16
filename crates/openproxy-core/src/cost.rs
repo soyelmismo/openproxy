@@ -270,7 +270,7 @@ mod tests {
             client_response: false,
             prompt_tokens_estimated: false,
             completion_tokens_estimated: false,
-            endpoint_kind: crate::endpoint::EndpointKind::Chat,
+            endpoint_kind: openproxy_types::endpoint::EndpointKind::Chat,
         }
     }
 

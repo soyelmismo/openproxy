@@ -12,18 +12,12 @@
 //! This module is the trait layer only; persistent CRUD for `providers` lives
 //! in [`crate::providers`].
 
-use openproxy_types::{CoreError, Result, ModelId, ProviderId, DiscoveredModel, TargetFormat, CooldownMode, ProviderMetadata};
+use openproxy_types::{CoreError, Result, ModelId, ProviderId, DiscoveredModel, TargetFormat, ProviderMetadata};
 use crate::upstream::{CancellationToken, TimeoutProfile, UpstreamClient, UpstreamRequest};
 use bytes::Bytes;
 use http::HeaderValue;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
-
-/// Extra state available to provider-specific executors.
-///
-/// Standard upstream dispatch persists cooldowns and usage centrally.
-/// Custom executors bypass that path, so providers that learn quota state
-/// from proprietary response headers need this small persistence hook.
 
 
 /// Static configuration for a single provider adapter.

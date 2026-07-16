@@ -556,8 +556,8 @@ impl PipelineRepository for SqlitePipelineRepository {
                 if let Some(ref em) = email {
                     ag_map.insert(id.0, em.clone());
                 }
-                if let Some(cfg_str) = extra_json {
-                    if let Ok(val) = serde_json::from_str::<serde_json::Value>(&cfg_str) {
+                if let Some(cfg_str) = extra_json
+                    && let Ok(val) = serde_json::from_str::<serde_json::Value>(&cfg_str) {
                         let region = val.get("region").or(val.get("aws_region")).and_then(|v| v.as_str()).map(|s| s.to_string());
                         let profile_arn = val.get("profile_arn").or(val.get("aws_role_arn")).and_then(|v| v.as_str()).map(|s| s.to_string());
                         if region.is_some() || profile_arn.is_some() {
@@ -567,7 +567,6 @@ impl PipelineRepository for SqlitePipelineRepository {
                             });
                         }
                     }
-                }
             } else {
                 return Err(openproxy_types::error::CoreError::Validation(format!("account {} not found", id.0)));
             }
@@ -805,7 +804,7 @@ pub fn auto_populate_empty_combo(conn: &rusqlite::Connection, combo_id: ComboId)
                 ).map_err(|e| openproxy_types::error::CoreError::Database { message: "insert combo_targets".into(), source: Some(Box::new(e)) })?;
                 added += res;
             }
-            Ok(added as usize)
+            Ok(added)
         } else {
             Ok(0)
         }
@@ -864,7 +863,6 @@ pub fn prune_expired_cooldowns(conn: &rusqlite::Connection) -> Result<usize> {
         "DELETE FROM target_cooldowns WHERE datetime(cooldown_until) <= datetime(?1)",
         rusqlite::params![now],
     )
-    .map(|n| n as usize)
     .map_err(|e| openproxy_types::error::CoreError::Internal(e.to_string()))
 }
 

@@ -772,7 +772,7 @@ mod tests {
     use rusqlite::Connection;
 
     fn setup_test_db() -> Connection {
-        let mut conn = Connection::open_in_memory().unwrap();
+        let conn = Connection::open_in_memory().unwrap();
         conn.execute_batch(
             "CREATE TABLE free_proxies (
               id TEXT PRIMARY KEY,
@@ -812,7 +812,7 @@ mod tests {
 
     #[test]
     fn test_crud_custom_proxy() {
-        let mut conn = setup_test_db();
+        let conn = setup_test_db();
 
         let p = add_custom_proxy(
             &conn,
@@ -877,7 +877,7 @@ mod tests {
 
     #[test]
     fn test_get_or_assign_provider_proxy_flow() {
-        let mut conn = setup_test_db();
+        let conn = setup_test_db();
 
         let provider_id = crate::ids::ProviderId::new("test-provider");
 

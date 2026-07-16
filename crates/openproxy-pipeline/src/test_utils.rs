@@ -23,17 +23,11 @@ pub mod combos {
     }
 
     pub fn add_target(conn: &Connection, input: AddTargetInput) -> Result<openproxy_types::ids::ComboTargetId, openproxy_types::error::CoreError> {
-        let upstream_model_id: Option<String> = if let Some(mrid) = input.model_row_id {
-            Some(
-                conn.query_row(
+        let upstream_model_id: Option<String> = input.model_row_id.map(|mrid| conn.query_row(
                     "SELECT model_id FROM models WHERE id = ?1",
                     rusqlite::params![mrid.0],
                     |r| r.get::<_, String>(0),
-                ).unwrap()
-            )
-        } else {
-            None
-        };
+                ).unwrap());
         conn.execute(
             "INSERT INTO combo_targets(combo_id, provider_id, account_id, model_row_id, sub_combo_id, upstream_model_id, priority_order) \
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",

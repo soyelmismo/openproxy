@@ -27,7 +27,8 @@
 //! resolves the alias to the combo's target list.
 
 use axum::{Json, extract::State, http::HeaderMap};
-use openproxy_core::{capabilities, combos, models};
+use openproxy_core::{capabilities, models};
+use openproxy_db::combos;
 use openproxy_types::{ApiKeyId, CoreError};
 
 use crate::{

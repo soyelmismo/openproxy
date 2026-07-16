@@ -422,7 +422,7 @@ pub fn race_stats(conn: &Connection, f: &UsageFilter) -> Result<RaceStats> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use openproxy_db::migrations;
+    
     use rusqlite::{Connection, params};
     use std::path::PathBuf;
     use std::time::{SystemTime, UNIX_EPOCH};

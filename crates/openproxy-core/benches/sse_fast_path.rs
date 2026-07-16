@@ -109,7 +109,7 @@ fn bench_old(c: &mut Criterion) {
 /// Also benchmark the Gemini probe-struct parse vs the old Value-based
 /// parse, to quantify the input-side improvement.
 fn bench_gemini_parse(c: &mut Criterion) {
-    use openproxy_core::sse::parse_gemini_sse_line;
+    use openproxy_pipeline::sse::parse_gemini_sse_line;
 
     // Valid Gemini chunks (note: `]}` closes parts array + content object
     // BEFORE the `,` that separates candidates array elements).

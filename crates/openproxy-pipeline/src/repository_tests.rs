@@ -1,7 +1,7 @@
 #[cfg(test)]
 mod tests {
     use crate::repository::*;
-    use openproxy_types::ids::{ComboId, ModelRowId, ProviderId, AccountId};
+    use openproxy_types::ids::{ComboId, AccountId};
     use crate::test_utils::fresh_pool;
 
     #[test]

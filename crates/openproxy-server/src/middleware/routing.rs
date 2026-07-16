@@ -5,9 +5,9 @@ use axum::{
     response::Response,
 };
 use openproxy_core::{
-    combos::{Combo, ComboTarget},
     routing::{self, RoutingPlan, SYNTHETIC_COMBO_ID, build_synthetic_combo},
 };
+use openproxy_types::combos::{Combo, ComboTarget};
 use openproxy_types::{
     CoreError,
     OpenAIRequest,
@@ -78,9 +78,9 @@ fn resolve_routing_plan(
     let plan = {
         let w = state.db_pool().writer();
         if let Some(name) = legacy_combo_name.as_deref() {
-            match openproxy_core::combos::get_combo_by_name(&w, name)? {
+            match openproxy_db::combos::get_combo_by_name(&w, name)? {
                 Some(combo) => {
-                    let targets = openproxy_core::combos::list_targets(&w, combo.id)?;
+                    let targets = openproxy_db::combos::list_targets(&w, combo.id)?;
                     RoutingPlan::Combo {
                         combo_id: combo.id,
                         combo_name: combo.name,
