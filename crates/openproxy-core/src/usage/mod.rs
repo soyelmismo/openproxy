@@ -1540,3 +1540,4 @@ mod tests {
         assert_eq!(s_other.total_rows, 0);
     }
 }
+mod recording_tests;
