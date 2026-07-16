@@ -96,5 +96,3 @@ pub use config::AppConfig;
 pub fn install_rustls_crypto_provider() {
     let _ = rustls::crypto::ring::default_provider().install_default();
 }
-#[cfg(test)]
-pub mod pipeline_repository_tests;

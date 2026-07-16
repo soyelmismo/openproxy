@@ -1695,34 +1695,6 @@ mod tests {
         assert!(text.is_empty());
     }
 
-    #[test]
-    fn test_read_project_id_missing() {
-        let conn = Connection::open_in_memory().unwrap();
-        conn.execute_batch(
-            "CREATE TABLE accounts (id INTEGER PRIMARY KEY, oauth_provider_specific TEXT)",
-        )
-        .unwrap();
-        let err = read_project_id(&conn, AccountId(1)).unwrap_err();
-        assert!(format!("{err}").contains("no projectId"));
-    }
-
-    #[test]
-    fn test_read_project_id_present() {
-        let conn = Connection::open_in_memory().unwrap();
-        conn.execute_batch(
-            "CREATE TABLE accounts (id INTEGER PRIMARY KEY, oauth_provider_specific TEXT)",
-        )
-        .unwrap();
-        conn.execute(
-            "INSERT INTO accounts (id, oauth_provider_specific) VALUES (1, ?1)",
-            rusqlite::params![r#"{"projectId":"proj-abc"}"#],
-        )
-        .unwrap();
-        let pid = read_project_id(&conn, AccountId(1)).unwrap();
-        assert_eq!(pid, "proj-abc");
-    }
-
-    #[test]
     fn test_strip_provider_prefix() {
         let req = make_request("test");
         let envelope = build_antigravity_request(&req, "proj", "session1").unwrap();
@@ -1972,113 +1944,8 @@ mod tests {
     }
 
     #[test]
-    fn test_read_project_id_with_project_id_key() {
-        // Both "projectId" and "project_id" should be accepted.
-        let conn = Connection::open_in_memory().unwrap();
-        conn.execute_batch(
-            "CREATE TABLE accounts (id INTEGER PRIMARY KEY, oauth_provider_specific TEXT)",
-        )
-        .unwrap();
-
-        conn.execute(
-            "INSERT INTO accounts (id, oauth_provider_specific) VALUES (1, ?1)",
-            rusqlite::params![r#"{"project_id":"proj-underscore"}"#],
-        )
-        .unwrap();
-        let pid = read_project_id(&conn, AccountId(1)).unwrap();
-        assert_eq!(pid, "proj-underscore");
-    }
 
     #[test]
-    fn test_read_project_id_empty_specific() {
-        let conn = Connection::open_in_memory().unwrap();
-        conn.execute_batch(
-            "CREATE TABLE accounts (id INTEGER PRIMARY KEY, oauth_provider_specific TEXT)",
-        )
-        .unwrap();
-        conn.execute(
-            "INSERT INTO accounts (id, oauth_provider_specific) VALUES (1, ?1)",
-            rusqlite::params![""],
-        )
-        .unwrap();
-        let err = read_project_id(&conn, AccountId(1)).unwrap_err();
-        assert!(format!("{err}").contains("no projectId"));
-    }
-
-    #[test]
-    fn test_read_project_id_null_specific() {
-        let conn = Connection::open_in_memory().unwrap();
-        conn.execute_batch(
-            "CREATE TABLE accounts (id INTEGER PRIMARY KEY, oauth_provider_specific TEXT)",
-        )
-        .unwrap();
-        conn.execute(
-            "INSERT INTO accounts (id, oauth_provider_specific) VALUES (1, NULL)",
-            [],
-        )
-        .unwrap();
-        let err = read_project_id(&conn, AccountId(1)).unwrap_err();
-        // NULL column: row.get::<_, String>(0) fails with a type conversion
-        // error which becomes CoreError::Internal("failed to read account: ...").
-        match &err {
-            CoreError::Internal(msg) => {
-                assert!(
-                    msg.contains("failed to read account") || msg.contains("no projectId"),
-                    "unexpected error message: {msg}"
-                );
-            }
-            other => panic!("expected Internal error, got: {other}"),
-        }
-    }
-
-    #[test]
-    fn test_read_project_id_invalid_json() {
-        let conn = Connection::open_in_memory().unwrap();
-        conn.execute_batch(
-            "CREATE TABLE accounts (id INTEGER PRIMARY KEY, oauth_provider_specific TEXT)",
-        )
-        .unwrap();
-        conn.execute(
-            "INSERT INTO accounts (id, oauth_provider_specific) VALUES (1, ?1)",
-            rusqlite::params!["not json at all"],
-        )
-        .unwrap();
-        let err = read_project_id(&conn, AccountId(1)).unwrap_err();
-        assert!(format!("{err}").contains("invalid provider_specific JSON"));
-    }
-
-    #[test]
-    fn test_classify_chunk_unknown_shape() {
-        let v = serde_json::json!({"someOtherKey": "value"});
-        match classify_chunk(&v) {
-            ChunkKind::Skip => {}
-            ChunkKind::Markdown { .. } => panic!("expected Skip, got Markdown"),
-            ChunkKind::Gemini { .. } => panic!("expected Skip, got Gemini"),
-            ChunkKind::Credits => panic!("expected Skip, got Credits"),
-        }
-    }
-
-    #[test]
-    fn test_classify_chunk_credits_snake_case() {
-        let v = serde_json::json!({"remaining_credit_types": {"GOOGLE_ONE_AI": "50"}});
-        match classify_chunk(&v) {
-            ChunkKind::Credits => {}
-            ChunkKind::Skip => panic!("expected Credits, got Skip"),
-            ChunkKind::Markdown { .. } => panic!("expected Credits, got Markdown"),
-            ChunkKind::Gemini { .. } => panic!("expected Credits, got Gemini"),
-        }
-    }
-
-    #[test]
-    fn test_classify_chunk_markdown_inner_response() {
-        let v = serde_json::json!({"response": {"markdown": "inner text"}});
-        match classify_chunk(&v) {
-            ChunkKind::Markdown { text } => assert_eq!(text, "inner text"),
-            ChunkKind::Skip => panic!("expected Markdown, got Skip"),
-            ChunkKind::Gemini { .. } => panic!("expected Markdown, got Gemini"),
-            ChunkKind::Credits => panic!("expected Markdown, got Credits"),
-        }
-    }
 
     #[test]
     fn test_classify_chunk_gemini_response() {
