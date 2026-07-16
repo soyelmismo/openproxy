@@ -1,5 +1,5 @@
-use openproxy_types::combos::Combo;
 use crate::{Pipeline, PipelineRequest};
+use openproxy_types::combos::Combo;
 
 pub use openproxy_types::context::{CustomProviderMeta, ResolvedTarget};
 

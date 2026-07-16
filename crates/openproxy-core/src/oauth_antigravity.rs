@@ -17,8 +17,10 @@ use crate::error::{CoreError, Result};
 use crate::ids::AccountId;
 use crate::oauth::{OAuthFlow, OAuthProvider};
 use crate::oauth_generic::{GenericOAuthProvider, OAuthRequestEncoding, OAuthSpec};
+use openproxy_adapters::upstream::{
+    CancellationToken, TimeoutProfile, UpstreamClient, UpstreamRequest,
+};
 use openproxy_db::secrets::MasterKey;
-use openproxy_adapters::upstream::{CancellationToken, TimeoutProfile, UpstreamClient, UpstreamRequest};
 use std::sync::Arc;
 
 /// Google OAuth client_id for Cloud Code (Antigravity).
@@ -458,4 +460,3 @@ mod tests {
         assert!(metadata.get("pluginType").is_none());
     }
 }
-

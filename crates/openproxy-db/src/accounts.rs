@@ -1,5 +1,5 @@
-use openproxy_types::{AccountId, ProviderId, Result, CoreError};
 use crate::secrets::MasterKey;
+use openproxy_types::{AccountId, CoreError, ProviderId, Result};
 use rusqlite::{Connection, params};
 
 pub fn create(

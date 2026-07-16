@@ -1,7 +1,7 @@
+use crate::PipelineRequest;
 use openproxy_types::error::CoreError;
 use openproxy_types::models::Model;
-use openproxy_types::{TargetFormat, OpenAIMessage, OpenAIRequestView};
-use crate::PipelineRequest;
+use openproxy_types::{OpenAIMessage, OpenAIRequestView, TargetFormat};
 use serde_json::{Value, json};
 
 pub trait TargetFormatter: Send + Sync {

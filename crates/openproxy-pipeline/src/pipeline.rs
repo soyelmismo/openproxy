@@ -1,15 +1,15 @@
 use crate::circuit_breaker::CircuitBreakerRegistry;
+use crate::timeouts::Timeouts;
+use crate::translation::OpenAIResponse;
 use chrono;
-use openproxy_types::combos::Combo;
-use openproxy_types::SelectionRegistry;
+use openproxy_adapters::upstream::UpstreamClient;
 use openproxy_compression::stats::CompressionStats;
+use openproxy_db::secrets::MasterKey;
+use openproxy_types::SelectionRegistry;
+use openproxy_types::combos::Combo;
 use openproxy_types::config::{RacingConfig, RetriesConfig};
 use openproxy_types::error::CoreError;
 use openproxy_types::ids::{ApiKeyId, ComboId, RequestId, TraceId};
-use openproxy_db::secrets::MasterKey;
-use crate::timeouts::Timeouts;
-use crate::translation::OpenAIResponse;
-use openproxy_adapters::upstream::UpstreamClient;
 use parking_lot::RwLock;
 use rusqlite::Connection;
 use std::collections::HashMap;
@@ -53,8 +53,7 @@ pub struct PipelineRequest {
     pub request_body_json: Option<bytes::Bytes>,
     pub race_cancelled: bool,
     pub endpoint_kind: openproxy_types::endpoint::EndpointKind,
-    pub compressed_messages:
-        Arc<std::sync::OnceLock<Option<Vec<openproxy_types::OpenAIMessage>>>>,
+    pub compressed_messages: Arc<std::sync::OnceLock<Option<Vec<openproxy_types::OpenAIMessage>>>>,
 }
 
 #[derive(Debug)]
@@ -127,7 +126,9 @@ impl Pipeline {
         circuit_breaker: CircuitBreakerRegistry,
     ) -> Self {
         let compression_stats_cell = Arc::new(RwLock::new(None));
-        let repo = Arc::new(crate::repository::SqlitePipelineRepository::new(conn.clone()));
+        let repo = Arc::new(crate::repository::SqlitePipelineRepository::new(
+            conn.clone(),
+        ));
         let tracker = crate::usage_tracker::UsageTracker {
             conn: conn.clone(),
             background_tx: config.background_tx.clone(),

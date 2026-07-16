@@ -57,7 +57,6 @@ pub(crate) use openproxy_db::secrets;
 pub mod seed;
 pub mod smart_warmup;
 
-
 pub mod token_estimate;
 
 pub mod usage;
@@ -66,7 +65,6 @@ pub mod usage;
 // architecture and the `upstream-hyper` feature flag in `Cargo.toml`.
 // This module coexists with the existing hyper-based call sites;
 // Gate 0 does NOT migrate any call site.
-
 
 pub use config::AppConfig;
 

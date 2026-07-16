@@ -1,6 +1,6 @@
-use serde::{Deserialize, Serialize};
-use crate::ids::{ModelRowId, ModelId, ProviderId};
+use crate::ids::{ModelId, ModelRowId, ProviderId};
 use crate::message::TargetFormat;
+use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Model {

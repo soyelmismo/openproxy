@@ -1,8 +1,8 @@
+use crate::ErrorPhase;
 use crate::circuit_breaker::Health;
+use crate::{Pipeline, PipelineRequest, PipelineResult};
 use openproxy_types::combos::{Combo, ComboTarget, Strategy};
 use openproxy_types::error::CoreError;
-use crate::ErrorPhase;
-use crate::{Pipeline, PipelineRequest, PipelineResult};
 use std::future::Future;
 use std::pin::Pin;
 use std::task::{Context, Poll};
@@ -167,7 +167,9 @@ where
                 .into_iter()
                 .filter(|t| match t.account_id {
                     Some(aid) => {
-                        let key = if t.rate_limit_scope == openproxy_types::providers::RateLimitScope::Model {
+                        let key = if t.rate_limit_scope
+                            == openproxy_types::providers::RateLimitScope::Model
+                        {
                             crate::circuit_breaker::CircuitBreakerKey::Model(
                                 aid,
                                 t.model_row_id.expect("flattened"),
@@ -439,7 +441,12 @@ impl tower::Service<PipelineState> for RoutingService {
                         {
                             let job = e.into_inner();
                             let conn = pipeline.conn.clone();
-                            crate::worker::process_job(&conn, pipeline.repo().as_ref(), job, pipeline.selection_registry().clone());
+                            crate::worker::process_job(
+                                &conn,
+                                pipeline.repo().as_ref(),
+                                job,
+                                pipeline.selection_registry().clone(),
+                            );
                         }
                     }
                     return Ok(race_result);
@@ -585,7 +592,8 @@ impl tower::Service<PipelineState> for RoutingService {
                                 .unwrap_or(pipeline.config.cooldown_secs);
 
                             // Align cooldown with exact quota reset time if possible
-                            if let Some(openproxy_types::error::CoreError::RateLimited { .. }) = &result.error
+                            if let Some(openproxy_types::error::CoreError::RateLimited { .. }) =
+                                &result.error
                             {
                                 let override_secs = (|| -> Option<u64> {
                                     let account_id = target.target.account_id?;
@@ -603,7 +611,9 @@ impl tower::Service<PipelineState> for RoutingService {
                                     {
                                         let req_model = &target.model.model_id.0;
                                         let norm_req =
-                                            openproxy_types::model_normalize::normalize_model_id(req_model);
+                                            openproxy_types::model_normalize::normalize_model_id(
+                                                req_model,
+                                            );
 
                                         if let Some(detail) = details.iter().find(|d| {
                                             let norm_detail =
@@ -693,7 +703,12 @@ impl tower::Service<PipelineState> for RoutingService {
                         {
                             let job = e.into_inner();
                             let conn = pipeline.conn.clone();
-                            crate::worker::process_job(&conn, pipeline.repo().as_ref(), job, pipeline.selection_registry().clone());
+                            crate::worker::process_job(
+                                &conn,
+                                pipeline.repo().as_ref(),
+                                job,
+                                pipeline.selection_registry().clone(),
+                            );
                         }
                     }
                     tracing::info!(

@@ -92,7 +92,10 @@ impl ProviderAdapter for MiniMaxAdapter {
         _: Option<&str>,
         _: Option<&str>,
     ) -> Option<Result<openproxy_types::AccountQuota>> {
-        Some(self.fetch_minimax_quota_local(upstream_client, api_key).await)
+        Some(
+            self.fetch_minimax_quota_local(upstream_client, api_key)
+                .await,
+        )
     }
 }
 
@@ -109,7 +112,10 @@ impl MiniMaxAdapter {
 
         let mut last_err: Option<String> = None;
         for url in &urls {
-            match self.fetch_minimax_from_url_local(upstream, api_key, url).await {
+            match self
+                .fetch_minimax_from_url_local(upstream, api_key, url)
+                .await
+            {
                 Ok(quota) => return Ok(quota),
                 Err(e) => last_err = Some(format!("{}: {}", url, e)),
             }
@@ -161,13 +167,16 @@ impl MiniMaxAdapter {
             .await
             .map_err(|e| CoreError::UpstreamConnection(format!("{}: {}", url, e)))?;
 
-        let json: serde_json::Value =
-            serde_json::from_slice(&body).map_err(|e| CoreError::Parse(format!("{}: {}", url, e)))?;
+        let json: serde_json::Value = serde_json::from_slice(&body)
+            .map_err(|e| CoreError::Parse(format!("{}: {}", url, e)))?;
         parse_minimax_quota(&json, url)
     }
 }
 
-fn parse_minimax_quota(body: &serde_json::Value, url: &str) -> Result<openproxy_types::AccountQuota> {
+fn parse_minimax_quota(
+    body: &serde_json::Value,
+    url: &str,
+) -> Result<openproxy_types::AccountQuota> {
     let plan_name = body
         .get("plan_name")
         .and_then(|v| v.as_str())

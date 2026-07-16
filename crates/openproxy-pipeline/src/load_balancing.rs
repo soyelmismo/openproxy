@@ -1,8 +1,8 @@
+use openproxy_types::SelectionRegistry;
 use openproxy_types::combos::{Combo, ComboTarget, PriorityMode, Strategy};
 use openproxy_types::ids::ComboId;
-use openproxy_types::SelectionRegistry;
-use rand::seq::SliceRandom;
 use rand::RngExt;
+use rand::seq::SliceRandom;
 use std::sync::Arc;
 
 /// Default selection window (1 hour) when the combo's

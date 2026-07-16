@@ -10,9 +10,9 @@
 //! connection lifetimes.
 
 use super::{DiscoveredModel, Model, TargetFormat, UpsertResult};
-use openproxy_db::DbPool;
 use crate::error::Result;
 use crate::ids::{ModelId, ModelRowId, ProviderId};
+use openproxy_db::DbPool;
 use std::sync::Arc;
 use std::time::Duration;
 

@@ -1,13 +1,13 @@
-use openproxy_types::combos::{Combo, ComboTarget};
-use openproxy_types::error::CoreError;
-use openproxy_types::models::Model;
 use crate::FailureContext;
-use crate::{PipelineRequest, PipelineResult, SSE_DONE_BYTES};
 use crate::race_sink::StreamSink;
 use crate::sse::AnthropicToolUseAccumulator;
 use crate::sse::SseParser;
 use crate::sse_accumulator::ResponseAccumulator;
 use crate::think_extractor::ThinkStreamExtractor;
+use crate::{PipelineRequest, PipelineResult, SSE_DONE_BYTES};
+use openproxy_types::combos::{Combo, ComboTarget};
+use openproxy_types::error::CoreError;
+use openproxy_types::models::Model;
 use std::time::Instant;
 
 use crate::translation::OpenAIUsage;
@@ -244,13 +244,9 @@ impl StreamingState {
             state: self,
             dispatcher,
         };
-        let pipeline_result = crate::streaming::pipeline::run_pipeline(
-            ctx,
-            stream,
-            sse_parser,
-            &mut processor,
-        )
-        .await?;
+        let pipeline_result =
+            crate::streaming::pipeline::run_pipeline(ctx, stream, sse_parser, &mut processor)
+                .await?;
         if let ChunkResult::Return(_) = pipeline_result {
             return Ok(pipeline_result);
         }
@@ -942,13 +938,15 @@ impl<'a> ChunkProcessor<'a> {
         let connect_and_send_ms = ctx.connect_and_send_ms;
 
         let parsed = match target_format {
-            openproxy_types::TargetFormat::Responses => crate::sse::parse_responses_sse_stream_line(
-                line,
-                chunk_id,
-                created,
-                model_name,
-                &mut state.responses_sse_state,
-            ),
+            openproxy_types::TargetFormat::Responses => {
+                crate::sse::parse_responses_sse_stream_line(
+                    line,
+                    chunk_id,
+                    created,
+                    model_name,
+                    &mut state.responses_sse_state,
+                )
+            }
             openproxy_types::TargetFormat::Openai => crate::sse::parse_openai_sse_line(line),
             openproxy_types::TargetFormat::Gemini => {
                 crate::sse::parse_gemini_sse_line(line, chunk_id, created, model_name)

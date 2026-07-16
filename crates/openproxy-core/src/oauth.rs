@@ -9,9 +9,9 @@
 use crate::accounts::HealthStatus;
 use crate::error::{CoreError, Result};
 use crate::ids::AccountId;
-use openproxy_db::secrets::MasterKey;
-use openproxy_adapters::upstream::UpstreamClient;
 use once_cell::sync::Lazy;
+use openproxy_adapters::upstream::UpstreamClient;
+use openproxy_db::secrets::MasterKey;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -410,12 +410,15 @@ impl openproxy_pipeline::oauth::PipelineOAuthRegistry for OAuthProviderRegistry 
         account_id: AccountId,
         conn: &'a parking_lot::Mutex<rusqlite::Connection>,
         master_key: &'a MasterKey,
-    ) -> futures_util::future::BoxFuture<'a, std::result::Result<openproxy_pipeline::oauth::TokenResponse, CoreError>> {
+    ) -> futures_util::future::BoxFuture<
+        'a,
+        std::result::Result<openproxy_pipeline::oauth::TokenResponse, CoreError>,
+    > {
         use futures_util::FutureExt;
         async move {
-            let provider = self.get(provider_id).ok_or_else(|| {
-                CoreError::ProviderNotFound(provider_id.to_string())
-            })?;
+            let provider = self
+                .get(provider_id)
+                .ok_or_else(|| CoreError::ProviderNotFound(provider_id.to_string()))?;
             let token = TokenRefreshCoordinator::global()
                 .refresh_and_store(
                     provider_id,

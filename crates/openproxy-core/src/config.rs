@@ -3,19 +3,13 @@
 //! Mirrors §10 of mvp-spec.md.
 
 use crate::error::{CoreError, Result};
-use serde::{Deserialize, Serialize};
 pub use openproxy_types::config::{
-    ServerConfig, StorageConfig, MaintenanceConfig, RacingConfig, TimeoutsConfig,
-    RetriesConfig, CooldownConfig, QuotaProtectionConfig, CircuitBreakerConfig,
-    EncryptionKeySource, CompressionMode, CooldownMode
+    CircuitBreakerConfig, CompressionMode, CooldownConfig, CooldownMode, EncryptionKeySource,
+    MaintenanceConfig, QuotaProtectionConfig, RacingConfig, RetriesConfig, ServerConfig,
+    StorageConfig, TimeoutsConfig,
 };
+use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
-
-
-
-
-
-
 
 /// Per-target cooldown duration. When a target fails with a
 /// retryable error (5xx, 429, timeout, or connection error — see
@@ -51,7 +45,6 @@ use std::path::PathBuf;
 ///   (1 hour).
 /// - `factor`: the exponential growth factor. Default 2 (each
 ///   failure doubles the cooldown window).
-
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LoggingConfig {
@@ -109,9 +102,6 @@ impl Default for CompressionConfig {
 /// works). The usage row prune task runs regardless (it prevents the
 /// `usage` table from growing without bound), but `usage_retention_days`
 /// controls how old rows must be before they're deleted.
-
-
-
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SmartWarmupConfig {

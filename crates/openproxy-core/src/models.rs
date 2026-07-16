@@ -52,7 +52,7 @@
 //!   implementation [`SqliteModelRepository`].
 //! - **`discovery`** — [`DiscoveryService`] that orchestrates
 //!   fetch → upsert → auto-activate.
-pub use openproxy_types::{TargetFormat, DiscoveredModel, Model};
+pub use openproxy_types::{DiscoveredModel, Model, TargetFormat};
 
 // ── Submodules ──────────────────────────────────────────────────────
 pub mod crud;

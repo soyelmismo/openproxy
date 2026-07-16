@@ -1,8 +1,8 @@
-use openproxy_types::error::CoreError;
+use crate::sse::SseParser;
 use crate::streaming::{ChunkEvent, ChunkInterceptor};
 use crate::streaming_state::{ChunkResult, StreamContext};
-use crate::sse::SseParser;
 use openproxy_adapters::upstream::{UpstreamBodyStream, UpstreamError, UpstreamPhase};
+use openproxy_types::error::CoreError;
 
 pub(crate) async fn run_pipeline(
     ctx: &StreamContext<'_>,
@@ -44,9 +44,7 @@ pub(crate) async fn run_pipeline(
                     UpstreamError::Timeout(_) => {
                         CoreError::UpstreamConnection(format!("stream read: {}", e))
                     }
-                    _ => {
-                        CoreError::UpstreamConnection(format!("stream read: {:?}", e))
-                    }
+                    _ => CoreError::UpstreamConnection(format!("stream read: {:?}", e)),
                 };
                 return Err(err);
             }

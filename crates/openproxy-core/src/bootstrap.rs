@@ -89,7 +89,7 @@ pub fn ensure_bootstrap_key(conn: &Connection, label: &str) -> Result<Option<Boo
 #[cfg(test)]
 mod tests {
     use super::*;
-    
+
     use std::path::PathBuf;
 
     fn fresh_conn() -> (Connection, PathBuf) {

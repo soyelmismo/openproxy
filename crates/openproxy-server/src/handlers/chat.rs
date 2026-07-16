@@ -28,8 +28,8 @@ use axum::{
 use bytes::Bytes;
 use futures::stream::Stream;
 use openproxy_pipeline::redact::redact_sensitive_headers;
-use openproxy_types::ids::{ApiKeyId, RequestId, TraceId};
 use openproxy_pipeline::{Pipeline, PipelineConfig, PipelineRequest};
+use openproxy_types::ids::{ApiKeyId, RequestId, TraceId};
 use serde_json::json;
 use std::convert::Infallible;
 use std::pin::Pin;

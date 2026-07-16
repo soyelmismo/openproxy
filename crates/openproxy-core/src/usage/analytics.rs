@@ -270,7 +270,9 @@ pub fn summary(conn: &Connection, f: &UsageFilter) -> Result<UsageSummary> {
         w.sql,
     );
 
-    let mut stmt = conn.prepare(&sql).map_err(openproxy_db::error::map_db_error)?;
+    let mut stmt = conn
+        .prepare(&sql)
+        .map_err(openproxy_db::error::map_db_error)?;
 
     let params_slice = to_params(&w.params);
     let summary = stmt
@@ -331,7 +333,9 @@ pub fn by_model(conn: &Connection, f: &UsageFilter) -> Result<Vec<ByModelRow>> {
         w.sql,
     );
 
-    let mut stmt = conn.prepare(&sql).map_err(openproxy_db::error::map_db_error)?;
+    let mut stmt = conn
+        .prepare(&sql)
+        .map_err(openproxy_db::error::map_db_error)?;
 
     let params_slice = to_params(&w.params);
     let rows = stmt
@@ -385,7 +389,9 @@ pub fn by_provider(conn: &Connection, f: &UsageFilter) -> Result<Vec<ByProviderR
         w.sql,
     );
 
-    let mut stmt = conn.prepare(&sql).map_err(openproxy_db::error::map_db_error)?;
+    let mut stmt = conn
+        .prepare(&sql)
+        .map_err(openproxy_db::error::map_db_error)?;
 
     let params_slice = to_params(&w.params);
     let rows = stmt
@@ -444,7 +450,9 @@ pub fn monthly_by_provider(
         w.sql,
     );
 
-    let mut stmt = conn.prepare(&sql).map_err(openproxy_db::error::map_db_error)?;
+    let mut stmt = conn
+        .prepare(&sql)
+        .map_err(openproxy_db::error::map_db_error)?;
 
     let params_slice = to_params(&w.params);
     let rows = stmt
@@ -496,7 +504,9 @@ pub fn by_day(conn: &Connection, f: &UsageFilter) -> Result<Vec<ByDayRow>> {
         w.sql,
     );
 
-    let mut stmt = conn.prepare(&sql).map_err(openproxy_db::error::map_db_error)?;
+    let mut stmt = conn
+        .prepare(&sql)
+        .map_err(openproxy_db::error::map_db_error)?;
 
     let params_slice = to_params(&w.params);
     let rows = stmt
@@ -549,7 +559,9 @@ pub fn by_account(conn: &Connection, f: &UsageFilter) -> Result<Vec<ByAccountRow
         w.sql,
     );
 
-    let mut stmt = conn.prepare(&sql).map_err(openproxy_db::error::map_db_error)?;
+    let mut stmt = conn
+        .prepare(&sql)
+        .map_err(openproxy_db::error::map_db_error)?;
 
     let params_slice = to_params(&w.params);
     let rows = stmt
@@ -601,7 +613,9 @@ pub fn by_status(conn: &Connection, f: &UsageFilter) -> Result<Vec<ByStatusRow>>
         w.sql,
     );
 
-    let mut stmt = conn.prepare(&sql).map_err(openproxy_db::error::map_db_error)?;
+    let mut stmt = conn
+        .prepare(&sql)
+        .map_err(openproxy_db::error::map_db_error)?;
 
     let params_slice = to_params(&w.params);
     let rows = stmt
@@ -665,7 +679,9 @@ pub fn errors(conn: &Connection, f: &UsageFilter, limit: u32) -> Result<Vec<Erro
     all_params.push(Box::new(limit_param));
     let params_slice = to_params(&all_params);
 
-    let mut stmt = conn.prepare(&sql).map_err(openproxy_db::error::map_db_error)?;
+    let mut stmt = conn
+        .prepare(&sql)
+        .map_err(openproxy_db::error::map_db_error)?;
 
     let rows = stmt
         .query_map(params_from_iter(params_slice), |row| {
@@ -704,7 +720,6 @@ pub fn errors(conn: &Connection, f: &UsageFilter, limit: u32) -> Result<Vec<Erro
 // ---------------------------------------------------------------------------
 // Recent rows (long-polling support)
 // ---------------------------------------------------------------------------
-
 
 /// Full `usage` row projection for live-log detail views.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -762,7 +777,11 @@ pub struct UsageDetailRow {
 /// last id it has seen, and we return everything that arrived since.
 ///
 /// `limit` is a hard cap and is forwarded verbatim to SQL.
-pub fn recent(conn: &Connection, since_id: i64, limit: u32) -> Result<Vec<openproxy_types::usage::RecentUsageRow>> {
+pub fn recent(
+    conn: &Connection,
+    since_id: i64,
+    limit: u32,
+) -> Result<Vec<openproxy_types::usage::RecentUsageRow>> {
     // Each retry within a single request writes a separate row to the
     // `usage` table. The dashboard's live-logs view shows EACH attempt
     // as its own row (keyed by `trace_id`), so the operator can inspect
@@ -969,7 +988,10 @@ pub fn recent(conn: &Connection, since_id: i64, limit: u32) -> Result<Vec<openpr
 /// fetching the head (`recent_desc`). Without this, the
 /// same 3-attempt request that `recent()` shows as 0.03
 /// cost would show as 0.01 in the admin table at the top.
-pub fn recent_desc(conn: &Connection, limit: u32) -> Result<Vec<openproxy_types::usage::RecentUsageRow>> {
+pub fn recent_desc(
+    conn: &Connection,
+    limit: u32,
+) -> Result<Vec<openproxy_types::usage::RecentUsageRow>> {
     // Each attempt as its own row, no grouping. See `recent()` for the
     // full rationale — the short version is: grouping by `request_id`
     // and SUMming tokens across race attempts produced misleading
@@ -1160,7 +1182,10 @@ pub fn recent_desc(conn: &Connection, limit: u32) -> Result<Vec<openproxy_types:
 /// re-broadcast hard-coded them to `None`, which could clobber the
 /// dashboard's data if the frontend's merge didn't skip nulls
 /// correctly.
-pub fn row_for_broadcast_by_id(conn: &Connection, id: i64) -> Result<Option<openproxy_types::usage::RecentUsageRow>> {
+pub fn row_for_broadcast_by_id(
+    conn: &Connection,
+    id: i64,
+) -> Result<Option<openproxy_types::usage::RecentUsageRow>> {
     let mut stmt = conn
         .prepare(
             "SELECT id, request_id, trace_id, provider_id, upstream_model_id, \
@@ -1681,7 +1706,10 @@ impl std::error::Error for SimpleErr {}
 // Recording TTL cleanup
 // ---------------------------------------------------------------------------
 
-pub fn prune_expired_recording_bodies(conn: &rusqlite::Connection, ttl_secs: i64) -> crate::error::Result<usize> {
+pub fn prune_expired_recording_bodies(
+    conn: &rusqlite::Connection,
+    ttl_secs: i64,
+) -> crate::error::Result<usize> {
     let ttl_secs = ttl_secs.max(0);
     let n = conn
         .execute(
@@ -1700,7 +1728,10 @@ pub fn prune_expired_recording_bodies(conn: &rusqlite::Connection, ttl_secs: i64
     Ok(n)
 }
 
-pub fn prune_expired_usage_rows(conn: &rusqlite::Connection, ttl_days: i64) -> crate::error::Result<usize> {
+pub fn prune_expired_usage_rows(
+    conn: &rusqlite::Connection,
+    ttl_days: i64,
+) -> crate::error::Result<usize> {
     let ttl_days = ttl_days.max(0);
     let n = conn
         .execute(

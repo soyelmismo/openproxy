@@ -25,13 +25,15 @@ pub(crate) fn evaluate_account_quota(
     }
 
     if let Some(ref details_val) = account.quota_model_details
-        && let Ok(details) =
-            serde_json::from_value::<Vec<openproxy_types::quota::ModelQuotaDetail>>(details_val.clone())
+        && let Ok(details) = serde_json::from_value::<Vec<openproxy_types::quota::ModelQuotaDetail>>(
+            details_val.clone(),
+        )
     {
         let norm_req = openproxy_types::model_normalize::normalize_model_id(requested_model);
 
         for detail in details {
-            let norm_detail = openproxy_types::model_normalize::normalize_model_id(&detail.model_id);
+            let norm_detail =
+                openproxy_types::model_normalize::normalize_model_id(&detail.model_id);
 
             let is_match = norm_req.to_lowercase() == norm_detail.to_lowercase()
                 || requested_model.to_lowercase() == detail.model_id.to_lowercase();
@@ -60,13 +62,15 @@ pub(crate) fn get_account_remaining_fraction(
 ) -> f64 {
     #[allow(clippy::ptr_arg)]
     if let Some(ref details_val) = account.quota_model_details
-        && let Ok(details) =
-            serde_json::from_value::<Vec<openproxy_types::quota::ModelQuotaDetail>>(details_val.clone())
+        && let Ok(details) = serde_json::from_value::<Vec<openproxy_types::quota::ModelQuotaDetail>>(
+            details_val.clone(),
+        )
     {
         let norm_req = openproxy_types::model_normalize::normalize_model_id(requested_model);
 
         for detail in details {
-            let norm_detail = openproxy_types::model_normalize::normalize_model_id(&detail.model_id);
+            let norm_detail =
+                openproxy_types::model_normalize::normalize_model_id(&detail.model_id);
 
             let is_match = norm_req.to_lowercase() == norm_detail.to_lowercase()
                 || requested_model.to_lowercase() == detail.model_id.to_lowercase();

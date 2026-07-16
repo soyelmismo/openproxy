@@ -7,11 +7,11 @@
 
 use crate::accounts;
 use crate::config::AppConfig;
-use openproxy_db::DbPool;
 use crate::ids::ProviderId;
+use openproxy_adapters::upstream::UpstreamClient;
+use openproxy_db::DbPool;
 use openproxy_db::secrets::MasterKey;
 use openproxy_types::{OpenAIMessage, OpenAIRequest};
-use openproxy_adapters::upstream::UpstreamClient;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::time::sleep;
@@ -97,7 +97,9 @@ async fn run_warmup_cycle(
             .filter(|a| !matches!(a.health_status, crate::accounts::HealthStatus::Unhealthy))
             .filter_map(|a| {
                 let token = accounts::decrypt_access_token(&conn, a.id, master_key).ok()?;
-                let project_id = crate::oauth_antigravity::read_project_id(&conn, a.id).ok().flatten()?;
+                let project_id = crate::oauth_antigravity::read_project_id(&conn, a.id)
+                    .ok()
+                    .flatten()?;
                 Some((a.id.0, a.id.0.to_string(), token, project_id))
             })
             .collect()
@@ -108,8 +110,13 @@ async fn run_warmup_cycle(
 
     for (account_id_i64, account_id_str, access_token, project_id) in account_list {
         // Fetch fresh quota
-        let adapter = openproxy_adapters::adapters::ProviderAdapterEnum::Antigravity(openproxy_adapters::adapters::AntigravityAdapter::new());
-        let quota = match adapter.fetch_quota(upstream, "", Some(&access_token), None).await {
+        let adapter = openproxy_adapters::adapters::ProviderAdapterEnum::Antigravity(
+            openproxy_adapters::adapters::AntigravityAdapter::new(),
+        );
+        let quota = match adapter
+            .fetch_quota(upstream, "", Some(&access_token), None)
+            .await
+        {
             Some(Ok(q)) => q,
             Some(Err(e)) => {
                 tracing::debug!(
@@ -216,7 +223,7 @@ async fn ping_antigravity_model(
     account_id: &str,
 ) -> bool {
     let request = build_warmup_request(model);
-    
+
     let wrapped = serde_json::json!({
         "project": project_id,
         "model": model,
@@ -241,14 +248,26 @@ async fn ping_antigravity_model(
     if let Ok(v) = http::HeaderValue::from_str(&format!("Bearer {}", access_token)) {
         req.headers.insert(http::header::AUTHORIZATION, v);
     }
-    
+
     let cancel = openproxy_adapters::upstream::CancellationToken::new();
-    match upstream.call(req, openproxy_adapters::upstream::TimeoutProfile::Chat, cancel).await {
+    match upstream
+        .call(
+            req,
+            openproxy_adapters::upstream::TimeoutProfile::Chat,
+            cancel,
+        )
+        .await
+    {
         Ok(resp) => {
             if resp.status.is_success() {
                 true
             } else {
-                tracing::warn!("[SmartWarmup] Ping failed with status {} for {} on {}", resp.status, model, account_id);
+                tracing::warn!(
+                    "[SmartWarmup] Ping failed with status {} for {} on {}",
+                    resp.status,
+                    model,
+                    account_id
+                );
                 false
             }
         }
@@ -273,9 +292,12 @@ fn resolve_model_alias(conn: &rusqlite::Connection, alias: &str) -> String {
     // Try to lookup as a combo
     if let Ok(Some(combo)) = openproxy_db::combos::get_combo_by_name(conn, alias) {
         let mut visited = Vec::new();
-        if let Ok(targets) =
-            openproxy_pipeline::repository::resolve_combo_to_targets(conn, combo.id, &mut visited, 0)
-        {
+        if let Ok(targets) = openproxy_pipeline::repository::resolve_combo_to_targets(
+            conn,
+            combo.id,
+            &mut visited,
+            0,
+        ) {
             for target in targets {
                 if let Some(row_id) = target.model_row_id
                     && let Ok(Some(model)) = crate::models::get_by_row_id(conn, row_id)

@@ -3,13 +3,13 @@ use rusqlite::Connection;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use openproxy_types::combos::{Combo, ComboTarget};
-use openproxy_types::SelectionRegistry;
+use crate::{FailureContext, PipelineRequest, PipelineResult, is_upstream_health_issue};
 use openproxy_compression::stats::CompressionStats;
-use openproxy_types::usage::UsageInput;
+use openproxy_types::SelectionRegistry;
+use openproxy_types::combos::{Combo, ComboTarget};
 use openproxy_types::error::{CoreError, Result};
 use openproxy_types::models::Model;
-use crate::{FailureContext, PipelineRequest, PipelineResult, is_upstream_health_issue};
+use openproxy_types::usage::UsageInput;
 
 #[derive(Clone)]
 pub struct UsageTracker {
@@ -50,7 +50,12 @@ impl UsageTracker {
             if matches!(e, tokio::sync::mpsc::error::TrySendError::Closed(_)) {
                 let job = e.into_inner();
                 let conn = self.conn.clone();
-                crate::worker::process_job(&conn, self.repo.as_ref(), job, self.selection_registry.clone());
+                crate::worker::process_job(
+                    &conn,
+                    self.repo.as_ref(),
+                    job,
+                    self.selection_registry.clone(),
+                );
             } else {
                 tracing::warn!(
                     "failed to send MarkClientResponse to background worker: {}",
@@ -374,7 +379,9 @@ impl<'a> UsageRecordBuilder<'a> {
                     })
                     .unwrap_or("");
                 if !completion_text.is_empty() {
-                    let est = openproxy_types::token_estimate::estimate_completion_tokens(completion_text);
+                    let est = openproxy_types::token_estimate::estimate_completion_tokens(
+                        completion_text,
+                    );
                     tracing::debug!(
                         request_id = %self.req.request_id,
                         estimated_completion_tokens = est,
@@ -519,7 +526,12 @@ impl<'a> UsageRecordBuilder<'a> {
             if matches!(e, tokio::sync::mpsc::error::TrySendError::Closed(_)) {
                 let job = e.into_inner();
                 let conn = self.tracker.conn.clone();
-                crate::worker::process_job(&conn, self.tracker.repo.as_ref(), job, self.tracker.selection_registry.clone());
+                crate::worker::process_job(
+                    &conn,
+                    self.tracker.repo.as_ref(),
+                    job,
+                    self.tracker.selection_registry.clone(),
+                );
             } else {
                 tracing::warn!("failed to send RecordAttempt to background worker: {}", e);
             }

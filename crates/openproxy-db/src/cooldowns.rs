@@ -20,17 +20,19 @@ pub fn list_for_combo(
          INNER JOIN combo_targets ct ON ct.id = tc.combo_target_id
          WHERE ct.combo_id = ?1",
     ).map_err(crate::error::map_db_error)?;
-    
-    let rows = stmt.query_map(rusqlite::params![combo_id.0], |row| {
-        Ok(Cooldown {
-            combo_target_id: ComboTargetId(row.get(0)?),
-            cooldown_until: row.get(1)?,
-            reason: row.get(2)?,
-            failure_count: row.get(3)?,
-            updated_at: row.get(4)?,
+
+    let rows = stmt
+        .query_map(rusqlite::params![combo_id.0], |row| {
+            Ok(Cooldown {
+                combo_target_id: ComboTargetId(row.get(0)?),
+                cooldown_until: row.get(1)?,
+                reason: row.get(2)?,
+                failure_count: row.get(3)?,
+                updated_at: row.get(4)?,
+            })
         })
-    }).map_err(crate::error::map_db_error)?;
-    
+        .map_err(crate::error::map_db_error)?;
+
     let mut out = Vec::new();
     for r in rows {
         out.push(r.map_err(crate::error::map_db_error)?);
@@ -68,15 +70,20 @@ pub fn get_for_target(
                 failure_count: row.get(3)?,
                 updated_at: row.get(4)?,
             })
-        }
+        },
     )
     .optional()
     .map_err(crate::error::map_db_error)
 }
 
-pub fn clear_cooldown(conn: &rusqlite::Connection, target_id: ComboTargetId) -> openproxy_types::error::Result<()> {
+pub fn clear_cooldown(
+    conn: &rusqlite::Connection,
+    target_id: ComboTargetId,
+) -> openproxy_types::error::Result<()> {
     conn.execute(
         "DELETE FROM target_cooldowns WHERE combo_target_id = ?1",
-        rusqlite::params![target_id.0]
-    ).map(|_| ()).map_err(crate::error::map_db_error)
+        rusqlite::params![target_id.0],
+    )
+    .map(|_| ())
+    .map_err(crate::error::map_db_error)
 }

@@ -3,8 +3,8 @@
 //! Provides parsers for OpenAI and Gemini upstream SSE formats, translating
 //! them into OpenAI-format SSE chunks that clients expect.
 
-use openproxy_types::error::{CoreError, Result};
 use crate::translation::OpenAIUsage;
+use openproxy_types::error::{CoreError, Result};
 use serde_json::Value;
 
 /// A single parsed SSE chunk from the upstream, ready to forward.

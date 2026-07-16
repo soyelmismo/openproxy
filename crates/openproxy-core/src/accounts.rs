@@ -127,7 +127,9 @@ pub fn list(
 
     let mut stmt = conn
         .prepare(sql)
-        .map_err(openproxy_db::error::map_db_error_ctx("list accounts prepare"))?;
+        .map_err(openproxy_db::error::map_db_error_ctx(
+            "list accounts prepare",
+        ))?;
 
     let accounts: Vec<Account> = match provider {
         Some(p) => stmt
@@ -694,7 +696,7 @@ impl std::error::Error for FromStrError {}
 mod tests {
     use super::*;
     use openproxy_db::conn::DbPool;
-    
+
     use crate::providers::{self, AuthType, ProviderFormat};
     use std::path::PathBuf;
 

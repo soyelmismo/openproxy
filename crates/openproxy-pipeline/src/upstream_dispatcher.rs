@@ -1,10 +1,10 @@
+use crate::timeouts::Timeouts;
+use crate::translation::OpenAIResponse;
+use crate::{FailureContext, PipelineRequest, PipelineResult, parse_retry_after_ms};
+use openproxy_adapters::upstream::{CancellationToken, UpstreamError, UpstreamRequest};
 use openproxy_types::combos::{Combo, ComboTarget};
 use openproxy_types::error::CoreError;
 use openproxy_types::models::Model;
-use crate::{FailureContext, PipelineRequest, PipelineResult, parse_retry_after_ms};
-use crate::timeouts::Timeouts;
-use crate::translation::OpenAIResponse;
-use openproxy_adapters::upstream::{CancellationToken, UpstreamError, UpstreamRequest};
 use std::sync::Arc;
 use std::time::Instant;
 use tokio::sync::watch;
@@ -146,9 +146,9 @@ impl UpstreamDispatcher {
                         proxy_id = %bad_proxy_id,
                         "proxy rotation triggered: marking proxy as dead and clearing binding"
                     );
+                    let _ = repo.update_proxy_status(bad_proxy_id, "dead", None);
                     let _ =
-                        repo.update_proxy_status(bad_proxy_id, "dead", None);
-                    let _ = openproxy_db::providers::update_current_proxy(&conn, &provider_id, None);
+                        openproxy_db::providers::update_current_proxy(&conn, &provider_id, None);
                     return true;
                 }
             }
@@ -244,11 +244,9 @@ impl UpstreamDispatcher {
         let proxy_result = {
             let repo = self.tracker.repo.clone();
             let provider_id = target.provider_id.clone();
-            tokio::task::spawn_blocking(move || {
-                repo.get_or_assign_provider_proxy(&provider_id)
-            })
-            .await
-            .unwrap()
+            tokio::task::spawn_blocking(move || repo.get_or_assign_provider_proxy(&provider_id))
+                .await
+                .unwrap()
         };
         let proxy_url = match proxy_result {
             Ok(url) => url,
@@ -263,9 +261,10 @@ impl UpstreamDispatcher {
         };
         upstream_request.proxy = proxy_url;
 
-        let proxy_status = upstream_request.proxy.as_ref().and_then(|url| {
-            self.tracker.repo.get_proxy_status_by_url(url)
-        });
+        let proxy_status = upstream_request
+            .proxy
+            .as_ref()
+            .and_then(|url| self.tracker.repo.get_proxy_status_by_url(url));
         upstream_request.proxy_status = proxy_status.clone();
         tracing::info!(
             proxy_used = ?upstream_request.proxy,
@@ -371,7 +370,9 @@ impl UpstreamDispatcher {
             .upstream_client
             .call(
                 upstream_request,
-                openproxy_adapters::upstream::TimeoutProfile::Custom(resolved_timeouts.as_resolved()),
+                openproxy_adapters::upstream::TimeoutProfile::Custom(
+                    resolved_timeouts.as_resolved(),
+                ),
                 cancel_token,
             )
             .await;
@@ -383,122 +384,111 @@ impl UpstreamDispatcher {
         // `e.to_string()` mapping 1-to-1, except we now have
         // per-phase `UpstreamPhase` attribution and the `Cancel`
         // variant.
-        let response_result: std::result::Result<openproxy_adapters::upstream::UpstreamResponse, UpstreamError> =
-            match result {
-                Ok(r) => Ok(r),
-                Err(UpstreamError::Cancel) => {
-                    tracing::warn!(
-                        combo_id = combo.id.0,
-                        target_id = target.id.0,
-                        provider = %target.provider_id,
-                        elapsed_ms = connect_and_send_ms,
-                        "client cancelled during upstream send; aborting attempt"
-                    );
-                    return self.record_and_fail(
-                        req,
-                        combo,
-                        target,
-                        dctx.fail_ctx_code(
-                            &CoreError::ClientDisconnected,
-                            Some(connect_and_send_ms),
-                            None,
-                            CoreError::ClientDisconnected.http_status(),
-                        ),
-                    );
-                }
-                Err(UpstreamError::Timeout(phase)) => {
-                    self.check_and_trigger_proxy_rotation(
-                        &target.provider_id,
-                        crate::upstream_dispatcher::ProxyRotationTrigger::ConnectError,
-                    )
-                    .await;
-                    // Bug fix: attribute the timeout to the CORRECT phase
-                    // instead of collapsing DNS/Dial/TLS/Write/Headers all
-                    // into "connect". The user configures per-phase budgets
-                    // (connect_ms, request_send_ms, ttft_ms) and the error
-                    // message must reflect which budget actually fired so
-                    // they can tune the right knob. The old mapping (all
-                    // → "connect") was a leftover from the pre-migration
-                    // legacy UpstreamClient path that couldn't separate phases.
-                    // Include the config field name so the operator
-                    // knows which timeout to adjust in the dashboard.
-                    let (phase_label, config_hint) = match phase {
-                        openproxy_adapters::upstream::UpstreamPhase::Dns => ("dns", "connect_ms"),
-                        openproxy_adapters::upstream::UpstreamPhase::Dial => ("dial", "connect_ms"),
-                        openproxy_adapters::upstream::UpstreamPhase::Tls => ("tls", "connect_ms"),
-                        openproxy_adapters::upstream::UpstreamPhase::Write => ("write", "request_send_ms"),
-                        openproxy_adapters::upstream::UpstreamPhase::Headers => ("headers", "ttft_ms"),
-                        openproxy_adapters::upstream::UpstreamPhase::Body => ("body", "idle_chunk_ms"),
-                        openproxy_adapters::upstream::UpstreamPhase::Total => ("total", "total_ms"),
-                    };
-                    tracing::warn!(
-                        combo_id = combo.id.0,
-                        target_id = target.id.0,
-                        provider = %target.provider_id,
-                        phase = %phase,
-                        elapsed_ms = connect_and_send_ms,
-                        config_hint = config_hint,
-                        "upstream phase timed out; aborting attempt"
-                    );
-                    let err = CoreError::UpstreamTimeout {
-                        phase: format!("{} (config: {})", phase_label, config_hint),
-                        ms: connect_and_send_ms,
-                    };
-                    return self.record_and_fail(
-                        req,
-                        combo,
-                        target,
-                        dctx.fail_ctx_code(
-                            &err,
-                            Some(connect_and_send_ms),
-                            None,
-                            err.http_status(),
-                        ),
-                    );
-                }
-                Err(UpstreamError::Connection(msg))
-                | Err(UpstreamError::Tls(msg))
-                | Err(UpstreamError::Http(msg))
-                | Err(UpstreamError::Decode(msg))
-                | Err(UpstreamError::Invalid(msg)) => {
-                    self.check_and_trigger_proxy_rotation(
-                        &target.provider_id,
-                        crate::upstream_dispatcher::ProxyRotationTrigger::ConnectError,
-                    )
-                    .await;
-                    let err = CoreError::UpstreamConnection(msg);
-                    return self.record_and_fail(
-                        req,
-                        combo,
-                        target,
-                        dctx.fail_ctx_code(
-                            &err,
-                            Some(connect_and_send_ms),
-                            None,
-                            err.http_status(),
-                        ),
-                    );
-                }
-                Err(_) => {
-                    self.check_and_trigger_proxy_rotation(
-                        &target.provider_id,
-                        crate::upstream_dispatcher::ProxyRotationTrigger::ConnectError,
-                    )
-                    .await;
-                    let err = CoreError::UpstreamConnection("unknown upstream error".to_string());
-                    return self.record_and_fail(
-                        req,
-                        combo,
-                        target,
-                        dctx.fail_ctx_code(
-                            &err,
-                            Some(connect_and_send_ms),
-                            None,
-                            err.http_status(),
-                        ),
-                    );
-                }
-            };
+        let response_result: std::result::Result<
+            openproxy_adapters::upstream::UpstreamResponse,
+            UpstreamError,
+        > = match result {
+            Ok(r) => Ok(r),
+            Err(UpstreamError::Cancel) => {
+                tracing::warn!(
+                    combo_id = combo.id.0,
+                    target_id = target.id.0,
+                    provider = %target.provider_id,
+                    elapsed_ms = connect_and_send_ms,
+                    "client cancelled during upstream send; aborting attempt"
+                );
+                return self.record_and_fail(
+                    req,
+                    combo,
+                    target,
+                    dctx.fail_ctx_code(
+                        &CoreError::ClientDisconnected,
+                        Some(connect_and_send_ms),
+                        None,
+                        CoreError::ClientDisconnected.http_status(),
+                    ),
+                );
+            }
+            Err(UpstreamError::Timeout(phase)) => {
+                self.check_and_trigger_proxy_rotation(
+                    &target.provider_id,
+                    crate::upstream_dispatcher::ProxyRotationTrigger::ConnectError,
+                )
+                .await;
+                // Bug fix: attribute the timeout to the CORRECT phase
+                // instead of collapsing DNS/Dial/TLS/Write/Headers all
+                // into "connect". The user configures per-phase budgets
+                // (connect_ms, request_send_ms, ttft_ms) and the error
+                // message must reflect which budget actually fired so
+                // they can tune the right knob. The old mapping (all
+                // → "connect") was a leftover from the pre-migration
+                // legacy UpstreamClient path that couldn't separate phases.
+                // Include the config field name so the operator
+                // knows which timeout to adjust in the dashboard.
+                let (phase_label, config_hint) = match phase {
+                    openproxy_adapters::upstream::UpstreamPhase::Dns => ("dns", "connect_ms"),
+                    openproxy_adapters::upstream::UpstreamPhase::Dial => ("dial", "connect_ms"),
+                    openproxy_adapters::upstream::UpstreamPhase::Tls => ("tls", "connect_ms"),
+                    openproxy_adapters::upstream::UpstreamPhase::Write => {
+                        ("write", "request_send_ms")
+                    }
+                    openproxy_adapters::upstream::UpstreamPhase::Headers => ("headers", "ttft_ms"),
+                    openproxy_adapters::upstream::UpstreamPhase::Body => ("body", "idle_chunk_ms"),
+                    openproxy_adapters::upstream::UpstreamPhase::Total => ("total", "total_ms"),
+                };
+                tracing::warn!(
+                    combo_id = combo.id.0,
+                    target_id = target.id.0,
+                    provider = %target.provider_id,
+                    phase = %phase,
+                    elapsed_ms = connect_and_send_ms,
+                    config_hint = config_hint,
+                    "upstream phase timed out; aborting attempt"
+                );
+                let err = CoreError::UpstreamTimeout {
+                    phase: format!("{} (config: {})", phase_label, config_hint),
+                    ms: connect_and_send_ms,
+                };
+                return self.record_and_fail(
+                    req,
+                    combo,
+                    target,
+                    dctx.fail_ctx_code(&err, Some(connect_and_send_ms), None, err.http_status()),
+                );
+            }
+            Err(UpstreamError::Connection(msg))
+            | Err(UpstreamError::Tls(msg))
+            | Err(UpstreamError::Http(msg))
+            | Err(UpstreamError::Decode(msg))
+            | Err(UpstreamError::Invalid(msg)) => {
+                self.check_and_trigger_proxy_rotation(
+                    &target.provider_id,
+                    crate::upstream_dispatcher::ProxyRotationTrigger::ConnectError,
+                )
+                .await;
+                let err = CoreError::UpstreamConnection(msg);
+                return self.record_and_fail(
+                    req,
+                    combo,
+                    target,
+                    dctx.fail_ctx_code(&err, Some(connect_and_send_ms), None, err.http_status()),
+                );
+            }
+            Err(_) => {
+                self.check_and_trigger_proxy_rotation(
+                    &target.provider_id,
+                    crate::upstream_dispatcher::ProxyRotationTrigger::ConnectError,
+                )
+                .await;
+                let err = CoreError::UpstreamConnection("unknown upstream error".to_string());
+                return self.record_and_fail(
+                    req,
+                    combo,
+                    target,
+                    dctx.fail_ctx_code(&err, Some(connect_and_send_ms), None, err.http_status()),
+                );
+            }
+        };
 
         // Live-log stage helper closure. Only fires when recording
         // is ON; OFF means the dashboard's "Record" toggle is off
@@ -893,23 +883,23 @@ impl UpstreamDispatcher {
                 unreachable!("Responses format is handled natively before dispatcher")
             }
             openproxy_types::TargetFormat::Openai => {
-                    match serde_json::from_value::<OpenAIResponse>(response_body_raw.clone()) {
-                        Ok(r) => r,
-                        Err(e) => {
-                            let err = CoreError::Parse(format!("parse openai response: {e}"));
-                            return self.record_and_fail(
-                                req,
-                                combo,
-                                target,
-                                dctx.fail_ctx_code(
-                                    &err,
-                                    Some(connect_and_send_ms),
-                                    Some(ttft_ms),
-                                    err.http_status(),
-                                ),
-                            );
-                        }
+                match serde_json::from_value::<OpenAIResponse>(response_body_raw.clone()) {
+                    Ok(r) => r,
+                    Err(e) => {
+                        let err = CoreError::Parse(format!("parse openai response: {e}"));
+                        return self.record_and_fail(
+                            req,
+                            combo,
+                            target,
+                            dctx.fail_ctx_code(
+                                &err,
+                                Some(connect_and_send_ms),
+                                Some(ttft_ms),
+                                err.http_status(),
+                            ),
+                        );
                     }
+                }
             }
             openproxy_types::TargetFormat::Anthropic => {
                 let anthropic_resp: crate::translation::AnthropicResponse =
@@ -1371,7 +1361,9 @@ impl UpstreamDispatcher {
             .upstream_client
             .call(
                 upstream_request,
-                openproxy_adapters::upstream::TimeoutProfile::Custom(resolved_timeouts.as_resolved()),
+                openproxy_adapters::upstream::TimeoutProfile::Custom(
+                    resolved_timeouts.as_resolved(),
+                ),
                 cancel_token,
             )
             .await;
@@ -1387,114 +1379,101 @@ impl UpstreamDispatcher {
         // `phase: "total"` from legacy whole-request timeout),
         // so `Body` here maps to the same `"total"` label to keep
         // the dashboards consistent.
-        let response_result: std::result::Result<openproxy_adapters::upstream::UpstreamResponse, UpstreamError> =
-            match result {
-                Ok(r) => Ok(r),
-                Err(UpstreamError::Cancel) => {
-                    tracing::warn!(
-                        combo_id = combo.id.0,
-                        target_id = target.id.0,
-                        provider = %target.provider_id,
-                        elapsed_ms = connect_and_send_ms,
-                        "client cancelled during upstream streaming send; aborting attempt"
-                    );
-                    return self.record_and_fail(
-                        req,
-                        combo,
-                        target,
-                        dctx.fail_ctx_code(
-                            &CoreError::ClientDisconnected,
-                            Some(connect_and_send_ms),
-                            None,
-                            CoreError::ClientDisconnected.http_status(),
-                        ),
-                    );
-                }
-                Err(UpstreamError::Timeout(phase)) => {
-                    self.check_and_trigger_proxy_rotation(
-                        &target.provider_id,
-                        crate::upstream_dispatcher::ProxyRotationTrigger::ConnectError,
-                    )
-                    .await;
-                    // Bug fix (PR #33): attribute the timeout to the
-                    // CORRECT phase instead of collapsing all into
-                    // "connect". Mirrors the non-streaming path's fix.
-                    let phase_label = match phase {
-                        openproxy_adapters::upstream::UpstreamPhase::Dns => "dns",
-                        openproxy_adapters::upstream::UpstreamPhase::Dial => "dial",
-                        openproxy_adapters::upstream::UpstreamPhase::Tls => "tls",
-                        openproxy_adapters::upstream::UpstreamPhase::Write => "write",
-                        openproxy_adapters::upstream::UpstreamPhase::Headers => "headers",
-                        openproxy_adapters::upstream::UpstreamPhase::Body => "body",
-                        openproxy_adapters::upstream::UpstreamPhase::Total => "total",
-                    };
-                    tracing::warn!(
-                        combo_id = combo.id.0,
-                        target_id = target.id.0,
-                        provider = %target.provider_id,
-                        phase = %phase,
-                        elapsed_ms = connect_and_send_ms,
-                        "upstream phase timed out; aborting streaming attempt"
-                    );
-                    let err = CoreError::UpstreamTimeout {
-                        phase: phase_label.to_string(),
-                        ms: connect_and_send_ms,
-                    };
-                    return self.record_and_fail(
-                        req,
-                        combo,
-                        target,
-                        dctx.fail_ctx_code(
-                            &err,
-                            Some(connect_and_send_ms),
-                            None,
-                            err.http_status(),
-                        ),
-                    );
-                }
-                Err(UpstreamError::Connection(msg))
-                | Err(UpstreamError::Tls(msg))
-                | Err(UpstreamError::Http(msg))
-                | Err(UpstreamError::Decode(msg))
-                | Err(UpstreamError::Invalid(msg)) => {
-                    self.check_and_trigger_proxy_rotation(
-                        &target.provider_id,
-                        crate::upstream_dispatcher::ProxyRotationTrigger::ConnectError,
-                    )
-                    .await;
-                    let err = CoreError::UpstreamConnection(msg);
-                    return self.record_and_fail(
-                        req,
-                        combo,
-                        target,
-                        dctx.fail_ctx_code(
-                            &err,
-                            Some(connect_and_send_ms),
-                            None,
-                            err.http_status(),
-                        ),
-                    );
-                }
-                Err(_) => {
-                    self.check_and_trigger_proxy_rotation(
-                        &target.provider_id,
-                        crate::upstream_dispatcher::ProxyRotationTrigger::ConnectError,
-                    )
-                    .await;
-                    let err = CoreError::UpstreamConnection("unknown upstream error".to_string());
-                    return self.record_and_fail(
-                        req,
-                        combo,
-                        target,
-                        dctx.fail_ctx_code(
-                            &err,
-                            Some(connect_and_send_ms),
-                            None,
-                            err.http_status(),
-                        ),
-                    );
-                }
-            };
+        let response_result: std::result::Result<
+            openproxy_adapters::upstream::UpstreamResponse,
+            UpstreamError,
+        > = match result {
+            Ok(r) => Ok(r),
+            Err(UpstreamError::Cancel) => {
+                tracing::warn!(
+                    combo_id = combo.id.0,
+                    target_id = target.id.0,
+                    provider = %target.provider_id,
+                    elapsed_ms = connect_and_send_ms,
+                    "client cancelled during upstream streaming send; aborting attempt"
+                );
+                return self.record_and_fail(
+                    req,
+                    combo,
+                    target,
+                    dctx.fail_ctx_code(
+                        &CoreError::ClientDisconnected,
+                        Some(connect_and_send_ms),
+                        None,
+                        CoreError::ClientDisconnected.http_status(),
+                    ),
+                );
+            }
+            Err(UpstreamError::Timeout(phase)) => {
+                self.check_and_trigger_proxy_rotation(
+                    &target.provider_id,
+                    crate::upstream_dispatcher::ProxyRotationTrigger::ConnectError,
+                )
+                .await;
+                // Bug fix (PR #33): attribute the timeout to the
+                // CORRECT phase instead of collapsing all into
+                // "connect". Mirrors the non-streaming path's fix.
+                let phase_label = match phase {
+                    openproxy_adapters::upstream::UpstreamPhase::Dns => "dns",
+                    openproxy_adapters::upstream::UpstreamPhase::Dial => "dial",
+                    openproxy_adapters::upstream::UpstreamPhase::Tls => "tls",
+                    openproxy_adapters::upstream::UpstreamPhase::Write => "write",
+                    openproxy_adapters::upstream::UpstreamPhase::Headers => "headers",
+                    openproxy_adapters::upstream::UpstreamPhase::Body => "body",
+                    openproxy_adapters::upstream::UpstreamPhase::Total => "total",
+                };
+                tracing::warn!(
+                    combo_id = combo.id.0,
+                    target_id = target.id.0,
+                    provider = %target.provider_id,
+                    phase = %phase,
+                    elapsed_ms = connect_and_send_ms,
+                    "upstream phase timed out; aborting streaming attempt"
+                );
+                let err = CoreError::UpstreamTimeout {
+                    phase: phase_label.to_string(),
+                    ms: connect_and_send_ms,
+                };
+                return self.record_and_fail(
+                    req,
+                    combo,
+                    target,
+                    dctx.fail_ctx_code(&err, Some(connect_and_send_ms), None, err.http_status()),
+                );
+            }
+            Err(UpstreamError::Connection(msg))
+            | Err(UpstreamError::Tls(msg))
+            | Err(UpstreamError::Http(msg))
+            | Err(UpstreamError::Decode(msg))
+            | Err(UpstreamError::Invalid(msg)) => {
+                self.check_and_trigger_proxy_rotation(
+                    &target.provider_id,
+                    crate::upstream_dispatcher::ProxyRotationTrigger::ConnectError,
+                )
+                .await;
+                let err = CoreError::UpstreamConnection(msg);
+                return self.record_and_fail(
+                    req,
+                    combo,
+                    target,
+                    dctx.fail_ctx_code(&err, Some(connect_and_send_ms), None, err.http_status()),
+                );
+            }
+            Err(_) => {
+                self.check_and_trigger_proxy_rotation(
+                    &target.provider_id,
+                    crate::upstream_dispatcher::ProxyRotationTrigger::ConnectError,
+                )
+                .await;
+                let err = CoreError::UpstreamConnection("unknown upstream error".to_string());
+                return self.record_and_fail(
+                    req,
+                    combo,
+                    target,
+                    dctx.fail_ctx_code(&err, Some(connect_and_send_ms), None, err.http_status()),
+                );
+            }
+        };
 
         // `response_result` is `Ok` here because every error arm
         // above already returned. The `match` is needed to satisfy

@@ -1,6 +1,9 @@
-use openproxy_types::{AccountId, ComboId, ModelRowId, UsageId, Result, Combo, ComboTarget, Model, UsageInput, ProviderId, ComboTargetId, CooldownMode, Account};
-use openproxy_types::SelectionRegistry;
 use openproxy_db::secrets::MasterKey;
+use openproxy_types::SelectionRegistry;
+use openproxy_types::{
+    Account, AccountId, Combo, ComboId, ComboTarget, ComboTargetId, CooldownMode, Model,
+    ModelRowId, ProviderId, Result, UsageId, UsageInput,
+};
 use std::collections::HashMap;
 
 pub struct RawAccount {
@@ -23,13 +26,11 @@ pub trait PipelineRepository: Send + Sync {
     fn load_combo(&self, combo_id: ComboId) -> Result<Option<Combo>>;
     fn list_targets(&self, combo_id: ComboId) -> Result<Vec<ComboTarget>>;
     fn auto_populate_empty_combo(&self, combo_id: ComboId) -> Result<usize>;
-    fn get_account(
-        &self,
-        account_id: AccountId,
-        master_key: &MasterKey,
-    ) -> Result<Option<Account>>;
+    fn get_account(&self, account_id: AccountId, master_key: &MasterKey)
+    -> Result<Option<Account>>;
     fn decrypt_account_key(&self, account_id: AccountId, master_key: &MasterKey) -> Result<String>;
-    fn decrypt_access_token(&self, account_id: AccountId, master_key: &MasterKey) -> Result<String>;
+    fn decrypt_access_token(&self, account_id: AccountId, master_key: &MasterKey)
+    -> Result<String>;
     #[allow(clippy::too_many_arguments)]
     fn store_oauth_tokens(
         &self,
@@ -56,7 +57,12 @@ pub trait PipelineRepository: Send + Sync {
     ) -> Result<Option<String>>;
     fn record_usage_row(&self, input: &UsageInput) -> Result<Option<UsageId>>;
     fn mark_client_response(&self, row_id: UsageId) -> Result<()>;
-    fn mark_winner_usage_row(&self, request_id: &str, attempt: u8, target_id: ComboTargetId) -> Result<()>;
+    fn mark_winner_usage_row(
+        &self,
+        request_id: &str,
+        attempt: u8,
+        target_id: ComboTargetId,
+    ) -> Result<()>;
     fn record_no_healthy_targets_row(
         &self,
         request_id: &str,
@@ -78,15 +84,17 @@ pub trait PipelineRepository: Send + Sync {
         factor: u32,
     ) -> Result<()>;
 
-    fn update_proxy_status(&self, proxy_id: &str, status: &str, error_msg: Option<&str>) -> Result<()>;
+    fn update_proxy_status(
+        &self,
+        proxy_id: &str,
+        status: &str,
+        error_msg: Option<&str>,
+    ) -> Result<()>;
     fn get_or_assign_provider_proxy(&self, provider_id: &ProviderId) -> Result<Option<String>>;
     fn get_proxy_status_by_url(&self, url: &str) -> Option<String>;
 
     // Batch Loading
-    fn get_models_by_row_ids(
-        &self,
-        model_row_ids: &[ModelRowId],
-    ) -> Result<HashMap<i64, Model>>;
+    fn get_models_by_row_ids(&self, model_row_ids: &[ModelRowId]) -> Result<HashMap<i64, Model>>;
     #[allow(clippy::type_complexity)]
     fn get_accounts_meta(
         &self,
@@ -102,7 +110,12 @@ pub trait PipelineRepository: Send + Sync {
     ) -> Result<HashMap<String, String>>;
 
     // Routing Logic
-    fn resolve_combo_to_targets(&self, combo_id: ComboId, visited: &mut Vec<ComboId>, depth: u32) -> Result<Vec<ComboTarget>>;
+    fn resolve_combo_to_targets(
+        &self,
+        combo_id: ComboId,
+        visited: &mut Vec<ComboId>,
+        depth: u32,
+    ) -> Result<Vec<ComboTarget>>;
     fn expand_account_rotation(&self, targets: Vec<ComboTarget>) -> Result<Vec<ComboTarget>>;
     fn resolve_target_order_with_mode(
         &self,
@@ -115,7 +128,10 @@ pub trait PipelineRepository: Send + Sync {
         id: AccountId,
         master_key: &MasterKey,
     ) -> Result<(String, Option<String>)>;
-    fn get_provider(&self, provider_id: &ProviderId) -> Result<Option<openproxy_types::providers::Provider>>;
+    fn get_provider(
+        &self,
+        provider_id: &ProviderId,
+    ) -> Result<Option<openproxy_types::providers::Provider>>;
 }
 
 #[derive(Clone)]
@@ -133,47 +149,56 @@ impl PipelineRepository for SqlitePipelineRepository {
     fn load_combo(&self, combo_id: ComboId) -> Result<Option<Combo>> {
         use rusqlite::OptionalExtension;
         let conn = self.conn.lock();
-        let combo = conn.query_row(
-            "SELECT id, name, strategy, race_size, created_at, context_window, \
+        let combo = conn
+            .query_row(
+                "SELECT id, name, strategy, race_size, created_at, context_window, \
                     priority_mode, cooldown_mode, cooldown_base_secs, cooldown_max_secs, \
                     cooldown_factor, lkgp_exploration_rate, selection_window_secs \
              FROM combos WHERE id = ?1",
-            rusqlite::params![combo_id.0],
-            |row| {
-                let strategy_str: String = row.get(2)?;
-                let strategy = openproxy_types::combos::Strategy::parse(&strategy_str)
-                    .map_err(|e| rusqlite::Error::FromSqlConversionFailure(2, rusqlite::types::Type::Text, Box::new(std::io::Error::new(std::io::ErrorKind::InvalidData, e))))?;
-                let priority_mode_str: Option<String> = row.get(6)?;
-                let priority_mode = priority_mode_str
-                    .map(|s| {
-                        openproxy_types::combos::PriorityMode::parse(&s)
-                            .unwrap_or(openproxy_types::combos::PriorityMode::Strict)
+                rusqlite::params![combo_id.0],
+                |row| {
+                    let strategy_str: String = row.get(2)?;
+                    let strategy = openproxy_types::combos::Strategy::parse(&strategy_str)
+                        .map_err(|e| {
+                            rusqlite::Error::FromSqlConversionFailure(
+                                2,
+                                rusqlite::types::Type::Text,
+                                Box::new(std::io::Error::new(std::io::ErrorKind::InvalidData, e)),
+                            )
+                        })?;
+                    let priority_mode_str: Option<String> = row.get(6)?;
+                    let priority_mode = priority_mode_str
+                        .map(|s| {
+                            openproxy_types::combos::PriorityMode::parse(&s)
+                                .unwrap_or(openproxy_types::combos::PriorityMode::Strict)
+                        })
+                        .unwrap_or(openproxy_types::combos::PriorityMode::Strict);
+                    let cooldown_mode_str: Option<String> = row.get(7)?;
+                    let cooldown_mode = cooldown_mode_str
+                        .map(|s| {
+                            openproxy_types::config::CooldownMode::parse(&s)
+                                .unwrap_or(openproxy_types::config::CooldownMode::Flat)
+                        })
+                        .unwrap_or(openproxy_types::config::CooldownMode::Flat);
+                    Ok(Combo {
+                        id: ComboId(row.get(0)?),
+                        name: row.get(1)?,
+                        strategy,
+                        race_size: row.get::<_, i64>(3)? as u8,
+                        created_at: row.get(4)?,
+                        context_window: row.get(5)?,
+                        priority_mode,
+                        cooldown_mode,
+                        cooldown_base_secs: row.get::<_, Option<i64>>(8)?.map(|v| v as u64),
+                        cooldown_max_secs: row.get::<_, Option<i64>>(9)?.map(|v| v as u64),
+                        cooldown_factor: row.get::<_, Option<i64>>(10)?.map(|v| v as u32),
+                        lkgp_exploration_rate: row.get(11)?,
+                        selection_window_secs: row.get::<_, Option<i64>>(12)?.map(|v| v as u64),
                     })
-                    .unwrap_or(openproxy_types::combos::PriorityMode::Strict);
-                let cooldown_mode_str: Option<String> = row.get(7)?;
-                let cooldown_mode = cooldown_mode_str
-                    .map(|s| {
-                        openproxy_types::config::CooldownMode::parse(&s)
-                            .unwrap_or(openproxy_types::config::CooldownMode::Flat)
-                    })
-                    .unwrap_or(openproxy_types::config::CooldownMode::Flat);
-                Ok(Combo {
-                    id: ComboId(row.get(0)?),
-                    name: row.get(1)?,
-                    strategy,
-                    race_size: row.get::<_, i64>(3)? as u8,
-                    created_at: row.get(4)?,
-                    context_window: row.get(5)?,
-                    priority_mode,
-                    cooldown_mode,
-                    cooldown_base_secs: row.get::<_, Option<i64>>(8)?.map(|v| v as u64),
-                    cooldown_max_secs: row.get::<_, Option<i64>>(9)?.map(|v| v as u64),
-                    cooldown_factor: row.get::<_, Option<i64>>(10)?.map(|v| v as u32),
-                    lkgp_exploration_rate: row.get(11)?,
-                    selection_window_secs: row.get::<_, Option<i64>>(12)?.map(|v| v as u64),
-                })
-            }
-        ).optional().map_err(|e| openproxy_types::error::CoreError::Internal(e.to_string()))?;
+                },
+            )
+            .optional()
+            .map_err(|e| openproxy_types::error::CoreError::Internal(e.to_string()))?;
         Ok(combo)
     }
 
@@ -190,67 +215,84 @@ impl PipelineRepository for SqlitePipelineRepository {
     ) -> Result<Option<Account>> {
         use rusqlite::OptionalExtension;
         let conn = self.conn.lock();
-        let row = conn.query_row(
-            "SELECT id, provider_id, label, priority, extra_config_json, health_status, \
+        let row = conn
+            .query_row(
+                "SELECT id, provider_id, label, priority, extra_config_json, health_status, \
                     rate_limited_until, expires_at, created_at, auth_type \
              FROM accounts WHERE id = ?1",
-            rusqlite::params![account_id.0],
-            |row| {
-                let health_str: String = row.get(5)?;
-                let health_status = openproxy_types::HealthStatus::parse(&health_str)
-                    .unwrap_or(openproxy_types::HealthStatus::Healthy);
-                Ok(Account {
-                    id: AccountId(row.get(0)?),
-                    provider_id: openproxy_types::ids::ProviderId::new(row.get::<_, String>(1)?),
-                    label: row.get(2)?,
-                    priority: row.get(3)?,
-                    extra_config_json: row.get(4)?,
-                    health_status,
-                    rate_limited_until: row.get(6)?,
-                    quota_session_used: None,
-                    quota_session_limit: None,
-                    quota_session_reset_at: None,
-                    quota_weekly_used: None,
-                    quota_weekly_limit: None,
-                    quota_weekly_reset_at: None,
-                    quota_plan_name: None,
-                    quota_last_fetched_at: None,
-                    quota_fetch_error: None,
-                    quota_model_details: None,
-                    auth_type: row.get(9)?,
-                    email: None,
-                    oauth_scope: None,
-                    oauth_provider_specific: None,
-                    expires_at: row.get(7)?,
-                    created_at: row.get(8)?,
-                })
-            }
-        ).optional().map_err(|e| openproxy_types::error::CoreError::Internal(e.to_string()))?;
+                rusqlite::params![account_id.0],
+                |row| {
+                    let health_str: String = row.get(5)?;
+                    let health_status = openproxy_types::HealthStatus::parse(&health_str)
+                        .unwrap_or(openproxy_types::HealthStatus::Healthy);
+                    Ok(Account {
+                        id: AccountId(row.get(0)?),
+                        provider_id: openproxy_types::ids::ProviderId::new(
+                            row.get::<_, String>(1)?,
+                        ),
+                        label: row.get(2)?,
+                        priority: row.get(3)?,
+                        extra_config_json: row.get(4)?,
+                        health_status,
+                        rate_limited_until: row.get(6)?,
+                        quota_session_used: None,
+                        quota_session_limit: None,
+                        quota_session_reset_at: None,
+                        quota_weekly_used: None,
+                        quota_weekly_limit: None,
+                        quota_weekly_reset_at: None,
+                        quota_plan_name: None,
+                        quota_last_fetched_at: None,
+                        quota_fetch_error: None,
+                        quota_model_details: None,
+                        auth_type: row.get(9)?,
+                        email: None,
+                        oauth_scope: None,
+                        oauth_provider_specific: None,
+                        expires_at: row.get(7)?,
+                        created_at: row.get(8)?,
+                    })
+                },
+            )
+            .optional()
+            .map_err(|e| openproxy_types::error::CoreError::Internal(e.to_string()))?;
         Ok(row)
     }
 
     fn decrypt_account_key(&self, account_id: AccountId, master_key: &MasterKey) -> Result<String> {
         use rusqlite::OptionalExtension;
         let conn = self.conn.lock();
-        let val: Option<Vec<u8>> = conn.query_row(
-            "SELECT api_key_encrypted FROM accounts WHERE id = ?1",
-            rusqlite::params![account_id.0],
-            |r| r.get(0)
-        ).optional().map_err(|e| openproxy_types::error::CoreError::Internal(e.to_string()))?.flatten();
+        let val: Option<Vec<u8>> = conn
+            .query_row(
+                "SELECT api_key_encrypted FROM accounts WHERE id = ?1",
+                rusqlite::params![account_id.0],
+                |r| r.get(0),
+            )
+            .optional()
+            .map_err(|e| openproxy_types::error::CoreError::Internal(e.to_string()))?
+            .flatten();
         match val {
             Some(b) => master_key.decrypt(&b),
             None => Ok(String::new()),
         }
     }
 
-    fn decrypt_access_token(&self, account_id: AccountId, master_key: &MasterKey) -> Result<String> {
+    fn decrypt_access_token(
+        &self,
+        account_id: AccountId,
+        master_key: &MasterKey,
+    ) -> Result<String> {
         use rusqlite::OptionalExtension;
         let conn = self.conn.lock();
-        let val: Option<Vec<u8>> = conn.query_row(
-            "SELECT access_token_encrypted FROM accounts WHERE id = ?1",
-            rusqlite::params![account_id.0],
-            |r| r.get(0)
-        ).optional().map_err(|e| openproxy_types::error::CoreError::Internal(e.to_string()))?.flatten();
+        let val: Option<Vec<u8>> = conn
+            .query_row(
+                "SELECT access_token_encrypted FROM accounts WHERE id = ?1",
+                rusqlite::params![account_id.0],
+                |r| r.get(0),
+            )
+            .optional()
+            .map_err(|e| openproxy_types::error::CoreError::Internal(e.to_string()))?
+            .flatten();
         match val {
             Some(b) => master_key.decrypt(&b),
             None => Ok(String::new()),
@@ -284,26 +326,34 @@ impl PipelineRepository for SqlitePipelineRepository {
         provider_id: Option<&str>,
     ) -> Result<()> {
         let conn = self.conn.lock();
-        let payload_str = serde_json::to_string(payload)
-            .map_err(|e| openproxy_types::error::CoreError::Database { message: "serialize notification payload".into(), source: Some(Box::new(e)) })?;
+        let payload_str = serde_json::to_string(payload).map_err(|e| {
+            openproxy_types::error::CoreError::Database {
+                message: "serialize notification payload".into(),
+                source: Some(Box::new(e)),
+            }
+        })?;
         conn.execute(
             "INSERT INTO notifications(kind, payload, dedup_key, provider_id) VALUES (?1, ?2, ?3, ?4)",
             rusqlite::params![kind, payload_str, dedup_key, provider_id]
         ).map_err(|e| openproxy_types::error::CoreError::Database { message: "insert notification".into(), source: Some(Box::new(e)) })?;
-        
+
         let id: i64 = conn.last_insert_rowid();
-        let created_at: String = conn.query_row(
-            "SELECT created_at FROM notifications WHERE id = ?1",
-            rusqlite::params![id],
-            |row| row.get(0)
-        ).unwrap_or_else(|_| chrono::Utc::now().to_rfc3339());
-        
-        openproxy_types::notifications::publish_notification(openproxy_types::notifications::NotificationEvent {
-            id,
-            kind: kind.to_string(),
-            payload: payload.clone(),
-            created_at,
-        });
+        let created_at: String = conn
+            .query_row(
+                "SELECT created_at FROM notifications WHERE id = ?1",
+                rusqlite::params![id],
+                |row| row.get(0),
+            )
+            .unwrap_or_else(|_| chrono::Utc::now().to_rfc3339());
+
+        openproxy_types::notifications::publish_notification(
+            openproxy_types::notifications::NotificationEvent {
+                id,
+                kind: kind.to_string(),
+                payload: payload.clone(),
+                created_at,
+            },
+        );
         Ok(())
     }
 
@@ -390,8 +440,9 @@ impl PipelineRepository for SqlitePipelineRepository {
                     input_modalities_json: row.get(17)?,
                     output_modalities_json: row.get(18)?,
                 })
-            }
-        ).map_err(|e| openproxy_types::error::CoreError::Internal(e.to_string()))
+            },
+        )
+        .map_err(|e| openproxy_types::error::CoreError::Internal(e.to_string()))
     }
 
     fn get_account_label(
@@ -401,11 +452,14 @@ impl PipelineRepository for SqlitePipelineRepository {
     ) -> Result<Option<String>> {
         use rusqlite::OptionalExtension;
         let conn = self.conn.lock();
-        let label = conn.query_row(
-            "SELECT label FROM accounts WHERE id = ?1",
-            rusqlite::params![account_id.0],
-            |r| r.get(0)
-        ).optional().map_err(|e| openproxy_types::error::CoreError::Internal(e.to_string()))?;
+        let label = conn
+            .query_row(
+                "SELECT label FROM accounts WHERE id = ?1",
+                rusqlite::params![account_id.0],
+                |r| r.get(0),
+            )
+            .optional()
+            .map_err(|e| openproxy_types::error::CoreError::Internal(e.to_string()))?;
         Ok(label)
     }
 
@@ -422,11 +476,18 @@ impl PipelineRepository for SqlitePipelineRepository {
         let conn = self.conn.lock();
         conn.execute(
             "UPDATE usage SET client_responded = 1 WHERE id = ?1",
-            rusqlite::params![row_id.0]
-        ).map(|_| ()).map_err(|e| openproxy_types::error::CoreError::Internal(e.to_string()))
+            rusqlite::params![row_id.0],
+        )
+        .map(|_| ())
+        .map_err(|e| openproxy_types::error::CoreError::Internal(e.to_string()))
     }
 
-    fn mark_winner_usage_row(&self, request_id: &str, attempt: u8, target_id: ComboTargetId) -> Result<()> {
+    fn mark_winner_usage_row(
+        &self,
+        request_id: &str,
+        attempt: u8,
+        target_id: ComboTargetId,
+    ) -> Result<()> {
         let conn = self.conn.lock();
         conn.execute(
             "UPDATE usage SET was_winner = 1 WHERE request_id = ?1 AND attempt = ?2 AND combo_target_id = ?3",
@@ -467,18 +528,21 @@ impl PipelineRepository for SqlitePipelineRepository {
         factor: u32,
     ) -> Result<()> {
         let conn = self.conn.lock();
-        let current_count: u32 = conn.query_row(
-            "SELECT failure_count FROM target_cooldowns WHERE combo_target_id = ?1",
-            rusqlite::params![target_id.0],
-            |row| row.get(0)
-        ).unwrap_or(0);
-        
+        let current_count: u32 = conn
+            .query_row(
+                "SELECT failure_count FROM target_cooldowns WHERE combo_target_id = ?1",
+                rusqlite::params![target_id.0],
+                |row| row.get(0),
+            )
+            .unwrap_or(0);
+
         let new_count = current_count + 1;
-        
+
         let cooldown_secs = match mode {
             CooldownMode::Flat => base_secs,
             CooldownMode::Exponential => {
-                let mut exp_secs = base_secs.saturating_mul((factor as u64).saturating_pow(current_count));
+                let mut exp_secs =
+                    base_secs.saturating_mul((factor as u64).saturating_pow(current_count));
                 if exp_secs > max_secs {
                     exp_secs = max_secs;
                 }
@@ -500,10 +564,7 @@ impl PipelineRepository for SqlitePipelineRepository {
         ).map(|_| ()).map_err(|e| openproxy_types::error::CoreError::Internal(e.to_string()))
     }
 
-    fn get_models_by_row_ids(
-        &self,
-        model_row_ids: &[ModelRowId],
-    ) -> Result<HashMap<i64, Model>> {
+    fn get_models_by_row_ids(&self, model_row_ids: &[ModelRowId]) -> Result<HashMap<i64, Model>> {
         let mut map = HashMap::new();
         for id in model_row_ids {
             let m = self.load_model(*id)?;
@@ -542,33 +603,53 @@ impl PipelineRepository for SqlitePipelineRepository {
                     ))
                 }
             ).optional().map_err(|e| openproxy_types::error::CoreError::Database { message: "query accounts".into(), source: Some(Box::new(e)) })?;
-            if let Some((api_key, label, access, refresh, expires, oauth_prov, email, extra_json)) = row {
-                raw_map.insert(id.0, RawAccount {
-                    api_key_encrypted: api_key,
-                    label,
-                    access_token_encrypted: access,
-                    refresh_token_encrypted: refresh,
-                    expires_at: expires,
-                    oauth_provider_specific: oauth_prov,
-                    quota_session_reset_at: None,
-                    quota_model_details: None,
-                });
+            if let Some((api_key, label, access, refresh, expires, oauth_prov, email, extra_json)) =
+                row
+            {
+                raw_map.insert(
+                    id.0,
+                    RawAccount {
+                        api_key_encrypted: api_key,
+                        label,
+                        access_token_encrypted: access,
+                        refresh_token_encrypted: refresh,
+                        expires_at: expires,
+                        oauth_provider_specific: oauth_prov,
+                        quota_session_reset_at: None,
+                        quota_model_details: None,
+                    },
+                );
                 if let Some(ref em) = email {
                     ag_map.insert(id.0, em.clone());
                 }
                 if let Some(cfg_str) = extra_json
-                    && let Ok(val) = serde_json::from_str::<serde_json::Value>(&cfg_str) {
-                        let region = val.get("region").or(val.get("aws_region")).and_then(|v| v.as_str()).map(|s| s.to_string());
-                        let profile_arn = val.get("profile_arn").or(val.get("aws_role_arn")).and_then(|v| v.as_str()).map(|s| s.to_string());
-                        if region.is_some() || profile_arn.is_some() {
-                            kiro_map.insert(id.0, KiroMeta {
+                    && let Ok(val) = serde_json::from_str::<serde_json::Value>(&cfg_str)
+                {
+                    let region = val
+                        .get("region")
+                        .or(val.get("aws_region"))
+                        .and_then(|v| v.as_str())
+                        .map(|s| s.to_string());
+                    let profile_arn = val
+                        .get("profile_arn")
+                        .or(val.get("aws_role_arn"))
+                        .and_then(|v| v.as_str())
+                        .map(|s| s.to_string());
+                    if region.is_some() || profile_arn.is_some() {
+                        kiro_map.insert(
+                            id.0,
+                            KiroMeta {
                                 region,
                                 profile_arn,
-                            });
-                        }
+                            },
+                        );
                     }
+                }
             } else {
-                return Err(openproxy_types::error::CoreError::Validation(format!("account {} not found", id.0)));
+                return Err(openproxy_types::error::CoreError::Validation(format!(
+                    "account {} not found",
+                    id.0
+                )));
             }
         }
         Ok((raw_map, kiro_map, ag_map))
@@ -582,11 +663,17 @@ impl PipelineRepository for SqlitePipelineRepository {
         let conn = self.conn.lock();
         let mut map = HashMap::new();
         for id in provider_ids {
-            let auth: Option<String> = conn.query_row(
-                "SELECT auth_type FROM providers WHERE id = ?1",
-                rusqlite::params![id.as_str()],
-                |r| r.get(0)
-            ).optional().map_err(|e| openproxy_types::error::CoreError::Database { message: "query providers".into(), source: Some(Box::new(e)) })?;
+            let auth: Option<String> = conn
+                .query_row(
+                    "SELECT auth_type FROM providers WHERE id = ?1",
+                    rusqlite::params![id.as_str()],
+                    |r| r.get(0),
+                )
+                .optional()
+                .map_err(|e| openproxy_types::error::CoreError::Database {
+                    message: "query providers".into(),
+                    source: Some(Box::new(e)),
+                })?;
             if let Some(a) = auth {
                 map.insert(id.as_str().to_string(), a);
             }
@@ -594,7 +681,12 @@ impl PipelineRepository for SqlitePipelineRepository {
         Ok(map)
     }
 
-    fn resolve_combo_to_targets(&self, combo_id: ComboId, visited: &mut Vec<ComboId>, depth: u32) -> Result<Vec<ComboTarget>> {
+    fn resolve_combo_to_targets(
+        &self,
+        combo_id: ComboId,
+        visited: &mut Vec<ComboId>,
+        depth: u32,
+    ) -> Result<Vec<ComboTarget>> {
         resolve_combo_to_targets(&self.conn.lock(), combo_id, visited, depth)
     }
     fn expand_account_rotation(&self, targets: Vec<ComboTarget>) -> Result<Vec<ComboTarget>> {
@@ -607,7 +699,12 @@ impl PipelineRepository for SqlitePipelineRepository {
         selection_registry: &SelectionRegistry,
     ) -> Result<Vec<ComboTarget>> {
         let targets = self.list_targets(combo.id)?;
-        Ok(crate::load_balancing::execute_load_balancing(targets, combo, rr_counters, selection_registry))
+        Ok(crate::load_balancing::execute_load_balancing(
+            targets,
+            combo,
+            rr_counters,
+            selection_registry,
+        ))
     }
 
     fn decrypt_api_key_and_label(
@@ -620,12 +717,20 @@ impl PipelineRepository for SqlitePipelineRepository {
         Ok((key, label))
     }
 
-    fn get_provider(&self, provider_id: &ProviderId) -> Result<Option<openproxy_types::providers::Provider>> {
+    fn get_provider(
+        &self,
+        provider_id: &ProviderId,
+    ) -> Result<Option<openproxy_types::providers::Provider>> {
         let conn = self.conn.lock();
         openproxy_db::providers::get(&conn, provider_id)
     }
 
-    fn update_proxy_status(&self, proxy_id: &str, status: &str, _error_msg: Option<&str>) -> Result<()> {
+    fn update_proxy_status(
+        &self,
+        proxy_id: &str,
+        status: &str,
+        _error_msg: Option<&str>,
+    ) -> Result<()> {
         let conn = self.conn.lock();
         let now = chrono::Utc::now().to_rfc3339();
         conn.execute(
@@ -737,17 +842,20 @@ impl PipelineRepository for SqlitePipelineRepository {
     }
 }
 
-
-pub fn list_targets(conn: &rusqlite::Connection, combo_id: ComboId) -> Result<Vec<ComboTarget>> {        let mut stmt = conn.prepare(
+pub fn list_targets(conn: &rusqlite::Connection, combo_id: ComboId) -> Result<Vec<ComboTarget>> {
+    let mut stmt = conn
+        .prepare(
             "SELECT ct.id, ct.combo_id, ct.provider_id, ct.account_id, ct.model_row_id, \
                     ct.sub_combo_id, ct.priority_order, ct.weight, p.rate_limit_scope \
              FROM combo_targets ct \
              INNER JOIN providers p ON p.id = ct.provider_id \
              WHERE ct.combo_id = ?1 AND p.active = 1 \
                  \
-             ORDER BY ct.priority_order ASC, ct.id ASC"
-        ).map_err(|e| openproxy_types::error::CoreError::Internal(e.to_string()))?;
-        let rows = stmt.query_map(rusqlite::params![combo_id.0], |row| {
+             ORDER BY ct.priority_order ASC, ct.id ASC",
+        )
+        .map_err(|e| openproxy_types::error::CoreError::Internal(e.to_string()))?;
+    let rows = stmt
+        .query_map(rusqlite::params![combo_id.0], |row| {
             let id: i64 = row.get(0)?;
             let combo_id: i64 = row.get(1)?;
             let provider_id: String = row.get(2)?;
@@ -767,19 +875,22 @@ pub fn list_targets(conn: &rusqlite::Connection, combo_id: ComboId) -> Result<Ve
                 sub_combo_id: sub_combo_id.map(ComboId),
                 priority_order,
                 weight,
-                rate_limit_scope: openproxy_types::providers::RateLimitScope::parse(&rate_limit_scope)
-                    .unwrap_or_default(),
+                rate_limit_scope: openproxy_types::providers::RateLimitScope::parse(
+                    &rate_limit_scope,
+                )
+                .unwrap_or_default(),
             })
-        }).map_err(|e| openproxy_types::error::CoreError::Internal(e.to_string()))?;
-        let mut res = Vec::new();
-        for r in rows {
-            res.push(r.map_err(|e| openproxy_types::error::CoreError::Internal(e.to_string()))?);
-        }
-        Ok(res)
+        })
+        .map_err(|e| openproxy_types::error::CoreError::Internal(e.to_string()))?;
+    let mut res = Vec::new();
+    for r in rows {
+        res.push(r.map_err(|e| openproxy_types::error::CoreError::Internal(e.to_string()))?);
     }
+    Ok(res)
+}
 
 pub fn auto_populate_empty_combo(conn: &rusqlite::Connection, combo_id: ComboId) -> Result<usize> {
-        let provider_id: Option<String> = conn.query_row(
+    let provider_id: Option<String> = conn.query_row(
             "SELECT p.id FROM providers p \
              WHERE p.active = 1 AND p.id != 'virtual' \
              AND EXISTS (SELECT 1 FROM accounts a WHERE a.provider_id = p.id AND a.health_status = 'healthy') \
@@ -789,73 +900,113 @@ pub fn auto_populate_empty_combo(conn: &rusqlite::Connection, combo_id: ComboId)
             |row| row.get(0)
         ).unwrap_or(None);
 
-        if let Some(pid) = provider_id {
-            let mut added = 0;
-            let mut stmt = conn.prepare("SELECT id FROM models WHERE provider_id = ?1 AND active = 1")
-                .map_err(|e| openproxy_types::error::CoreError::Database { message: "prepare models".into(), source: Some(Box::new(e)) })?;
-            let mut rows = stmt.query(rusqlite::params![pid])
-                .map_err(|e| openproxy_types::error::CoreError::Database { message: "query models".into(), source: Some(Box::new(e)) })?;
-            while let Some(r) = rows.next().map_err(|e| openproxy_types::error::CoreError::Database { message: "next model".into(), source: Some(Box::new(e)) })? {
-                let mid = r.get::<_, i64>(0).map_err(|e| openproxy_types::error::CoreError::Database { message: "get mid".into(), source: Some(Box::new(e)) })?;
-                let res = conn.execute(
+    if let Some(pid) = provider_id {
+        let mut added = 0;
+        let mut stmt = conn
+            .prepare("SELECT id FROM models WHERE provider_id = ?1 AND active = 1")
+            .map_err(|e| openproxy_types::error::CoreError::Database {
+                message: "prepare models".into(),
+                source: Some(Box::new(e)),
+            })?;
+        let mut rows = stmt.query(rusqlite::params![pid]).map_err(|e| {
+            openproxy_types::error::CoreError::Database {
+                message: "query models".into(),
+                source: Some(Box::new(e)),
+            }
+        })?;
+        while let Some(r) =
+            rows.next()
+                .map_err(|e| openproxy_types::error::CoreError::Database {
+                    message: "next model".into(),
+                    source: Some(Box::new(e)),
+                })?
+        {
+            let mid =
+                r.get::<_, i64>(0)
+                    .map_err(|e| openproxy_types::error::CoreError::Database {
+                        message: "get mid".into(),
+                        source: Some(Box::new(e)),
+                    })?;
+            let res = conn.execute(
                     "INSERT OR IGNORE INTO combo_targets(combo_id, provider_id, model_row_id, priority_order, weight) \
                      VALUES (?1, ?2, ?3, ?4, 100)",
                     rusqlite::params![combo_id.0, pid, mid, mid]
                 ).map_err(|e| openproxy_types::error::CoreError::Database { message: "insert combo_targets".into(), source: Some(Box::new(e)) })?;
-                added += res;
-            }
-            Ok(added)
-        } else {
-            Ok(0)
+            added += res;
         }
+        Ok(added)
+    } else {
+        Ok(0)
     }
-
-pub fn expand_account_rotation(conn: &rusqlite::Connection, targets: Vec<ComboTarget>) -> Result<Vec<ComboTarget>> {
-        let mut out = Vec::new();
-        for t in targets {
-            if t.account_id.is_some() || t.sub_combo_id.is_some() {
-                out.push(t);
-                continue;
-            }
-            let mut stmt = conn.prepare("SELECT id FROM accounts WHERE provider_id = ?1 AND health_status = 'healthy' ORDER BY priority ASC, id ASC").map_err(|e| openproxy_types::error::CoreError::Internal(e.to_string()))?;
-            let mut rows = stmt.query(rusqlite::params![t.provider_id.as_str()]).map_err(|e| openproxy_types::error::CoreError::Internal(e.to_string()))?;
-            let mut count = 0;
-            while let Some(r) = rows.next().map_err(|e| openproxy_types::error::CoreError::Internal(e.to_string()))? {
-                let mut ct = t.clone();
-                ct.account_id = Some(AccountId(r.get::<_, i64>(0).map_err(|e| openproxy_types::error::CoreError::Internal(e.to_string()))?));
-                out.push(ct);
-                count += 1;
-            }
-            if count == 0 {
-                out.push(t);
-            }
-        }
-        Ok(out)
-    }
-
-pub fn resolve_combo_to_targets(conn: &rusqlite::Connection, combo_id: ComboId, visited: &mut Vec<ComboId>, depth: u32) -> Result<Vec<ComboTarget>> {
-        if depth > 5 {
-            return Err(openproxy_types::error::CoreError::Validation(format!("max sub-combo depth ({}) exceeded", 5)));
-        }
-        if visited.contains(&combo_id) {
-            return Err(openproxy_types::error::CoreError::Validation(format!("cyclic combo detected at id {}", combo_id.0)));
-        }
-        visited.push(combo_id);
-        
-        let targets = list_targets(conn, combo_id)?;
-        let mut flat = Vec::new();
-        for t in targets {
-            if let Some(sub_id) = t.sub_combo_id {
-                let sub = resolve_combo_to_targets(conn, sub_id, visited, depth + 1)?;
-                flat.extend(sub);
-            } else {
-                flat.push(t);
-            }
-        }
-        visited.pop();
-        Ok(flat)
 }
 
+pub fn expand_account_rotation(
+    conn: &rusqlite::Connection,
+    targets: Vec<ComboTarget>,
+) -> Result<Vec<ComboTarget>> {
+    let mut out = Vec::new();
+    for t in targets {
+        if t.account_id.is_some() || t.sub_combo_id.is_some() {
+            out.push(t);
+            continue;
+        }
+        let mut stmt = conn.prepare("SELECT id FROM accounts WHERE provider_id = ?1 AND health_status = 'healthy' ORDER BY priority ASC, id ASC").map_err(|e| openproxy_types::error::CoreError::Internal(e.to_string()))?;
+        let mut rows = stmt
+            .query(rusqlite::params![t.provider_id.as_str()])
+            .map_err(|e| openproxy_types::error::CoreError::Internal(e.to_string()))?;
+        let mut count = 0;
+        while let Some(r) = rows
+            .next()
+            .map_err(|e| openproxy_types::error::CoreError::Internal(e.to_string()))?
+        {
+            let mut ct = t.clone();
+            ct.account_id =
+                Some(AccountId(r.get::<_, i64>(0).map_err(|e| {
+                    openproxy_types::error::CoreError::Internal(e.to_string())
+                })?));
+            out.push(ct);
+            count += 1;
+        }
+        if count == 0 {
+            out.push(t);
+        }
+    }
+    Ok(out)
+}
+
+pub fn resolve_combo_to_targets(
+    conn: &rusqlite::Connection,
+    combo_id: ComboId,
+    visited: &mut Vec<ComboId>,
+    depth: u32,
+) -> Result<Vec<ComboTarget>> {
+    if depth > 5 {
+        return Err(openproxy_types::error::CoreError::Validation(format!(
+            "max sub-combo depth ({}) exceeded",
+            5
+        )));
+    }
+    if visited.contains(&combo_id) {
+        return Err(openproxy_types::error::CoreError::Validation(format!(
+            "cyclic combo detected at id {}",
+            combo_id.0
+        )));
+    }
+    visited.push(combo_id);
+
+    let targets = list_targets(conn, combo_id)?;
+    let mut flat = Vec::new();
+    for t in targets {
+        if let Some(sub_id) = t.sub_combo_id {
+            let sub = resolve_combo_to_targets(conn, sub_id, visited, depth + 1)?;
+            flat.extend(sub);
+        } else {
+            flat.push(t);
+        }
+    }
+    visited.pop();
+    Ok(flat)
+}
 
 pub fn prune_expired_cooldowns(conn: &rusqlite::Connection) -> Result<usize> {
     let now = chrono::Utc::now().to_rfc3339();
@@ -865,5 +1016,3 @@ pub fn prune_expired_cooldowns(conn: &rusqlite::Connection) -> Result<usize> {
     )
     .map_err(|e| openproxy_types::error::CoreError::Internal(e.to_string()))
 }
-
-

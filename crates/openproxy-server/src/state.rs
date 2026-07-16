@@ -12,16 +12,15 @@
 //! All heavy fields are wrapped in `Arc` so handler signatures stay
 //! cheap-to-clone and the type itself is `Send + Sync` by construction.
 
+use openproxy_adapters::adapters;
+use openproxy_adapters::upstream::UpstreamClient;
 use openproxy_core::{
     AppConfig,
     discovery_scheduler::{self, DiscoveryScheduler},
-    oauth,
-    usage,
+    oauth, usage,
 };
-use openproxy_db::MasterKey;
-use openproxy_adapters::adapters;
-use openproxy_adapters::upstream::UpstreamClient;
 use openproxy_db as db;
+use openproxy_db::MasterKey;
 use parking_lot::RwLock;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
@@ -231,7 +230,9 @@ impl AppState {
         let quota_protection = config.quota_protection.clone();
 
         let (background_tx, background_rx) = tokio::sync::mpsc::channel(1024);
-        let repo = Arc::new(openproxy_pipeline::SqlitePipelineRepository::new(db_pool.writer_arc()));
+        let repo = Arc::new(openproxy_pipeline::SqlitePipelineRepository::new(
+            db_pool.writer_arc(),
+        ));
         openproxy_pipeline::worker::spawn_worker(
             db_pool.writer_arc(),
             repo,
@@ -483,7 +484,9 @@ impl AppState {
     }
 
     /// Borrow the usage broadcast sender.
-    pub fn usage_tx(&self) -> tokio::sync::broadcast::Sender<openproxy_types::usage::RecentUsageRow> {
+    pub fn usage_tx(
+        &self,
+    ) -> tokio::sync::broadcast::Sender<openproxy_types::usage::RecentUsageRow> {
         self.usage_tx.clone()
     }
 
@@ -703,9 +706,7 @@ fn run_database_maintenance(
         );
     }
 
-    if let Some(quota_cfg) =
-        openproxy_db::app_config::load_quota_protection_override_from_db(w)?
-    {
+    if let Some(quota_cfg) = openproxy_db::app_config::load_quota_protection_override_from_db(w)? {
         tracing::info!(
             enabled = quota_cfg.enabled,
             threshold_percentage = quota_cfg.threshold_percentage,
@@ -1030,13 +1031,11 @@ mod tests {
 
     use super::*;
     use crate::state::AppState;
-    use openproxy_core::{
-        AppConfig, providers,
-    };
-    use openproxy_types::ids::ProviderId;
-    use openproxy_db::MasterKey;
     use openproxy_adapters::adapters;
+    use openproxy_core::{AppConfig, providers};
     use openproxy_db as core_db;
+    use openproxy_db::MasterKey;
+    use openproxy_types::ids::ProviderId;
     use std::path::PathBuf;
     use std::sync::Arc;
 

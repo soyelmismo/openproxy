@@ -570,10 +570,10 @@ mod tests {
     use super::*;
     use axum::http::{Request, StatusCode};
     use http_body_util::BodyExt;
-    use openproxy_core::AppConfig;
-    use openproxy_db::MasterKey;
     use openproxy_adapters::adapters;
+    use openproxy_core::AppConfig;
     use openproxy_db as core_db;
+    use openproxy_db::MasterKey;
     use parking_lot::RwLock;
     use std::path::PathBuf;
     use std::sync::Arc;

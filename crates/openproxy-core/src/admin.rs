@@ -18,14 +18,14 @@
 //!   an error.
 
 use crate::accounts;
-use openproxy_db::combos;
 use crate::error::{CoreError, Result};
 use crate::ids::{AccountId, ComboId, ComboTargetId, ModelId, ModelRowId, ProviderId};
 use crate::models;
 use crate::providers::{self, AuthType, ProviderFormat};
 use crate::quota::AccountQuota;
-use openproxy_db::secrets::MasterKey;
 use openproxy_adapters::upstream::UpstreamClient;
+use openproxy_db::combos;
+use openproxy_db::secrets::MasterKey;
 use rusqlite::{Connection, params};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
@@ -554,7 +554,8 @@ pub struct AddTargetInput {
 /// empty and the pipeline's `auto_populate` fallback will try again on
 /// the next chat request.
 pub fn create_combo(conn: &Connection, input: CreateComboInput) -> Result<ComboId> {
-    let strategy = openproxy_types::combos::Strategy::parse(&input.strategy).map_err(CoreError::Validation)?;
+    let strategy =
+        openproxy_types::combos::Strategy::parse(&input.strategy).map_err(CoreError::Validation)?;
     // Default of 1 is the "serial / one target at a time" race
     // window. NOTE: for `Strategy::Priority` the pipeline ignores
     // `race_size` entirely (the operator wants walk-the-row
@@ -647,7 +648,12 @@ pub fn list_valid_sub_combos(conn: &Connection, combo_id: ComboId) -> Result<Vec
         // in the sub-combo graph (i.e. `c` already contains
         // `combo_id` somewhere downstream). The probe walks down
         // from `c`; see [`combos::combo_in_chain`].
-        if combos::combo_in_chain(conn, combo_id, c.id, openproxy_types::combos::MAX_SUB_COMBO_DEPTH)? {
+        if combos::combo_in_chain(
+            conn,
+            combo_id,
+            c.id,
+            openproxy_types::combos::MAX_SUB_COMBO_DEPTH,
+        )? {
             continue;
         }
         out.push(ComboSummary {
@@ -944,7 +950,7 @@ impl<T> Pipe for T {}
 mod tests {
     use super::*;
     use openproxy_db::conn::DbPool;
-    
+
     use std::path::PathBuf;
 
     /// Build a fresh in-process pool: temp dir on disk, migrations applied.
@@ -1204,7 +1210,10 @@ mod tests {
         let listed = list_combos(&conn).expect("list combos");
         assert_eq!(listed.len(), 1);
         assert_eq!(listed[0].id, combo_id);
-        assert_eq!(listed[0].strategy, openproxy_types::combos::Strategy::Priority);
+        assert_eq!(
+            listed[0].strategy,
+            openproxy_types::combos::Strategy::Priority
+        );
         assert_eq!(listed[0].race_size, 1, "default race_size is 1");
 
         // Custom race_size is honored.
@@ -1230,7 +1239,10 @@ mod tests {
             .find(|c| c.id == combo_rr)
             .expect("present");
         assert_eq!(combo_rr_got.race_size, 3);
-        assert_eq!(combo_rr_got.strategy, openproxy_types::combos::Strategy::RoundRobin);
+        assert_eq!(
+            combo_rr_got.strategy,
+            openproxy_types::combos::Strategy::RoundRobin
+        );
 
         // Add two targets.
         let t1 = add_target_to_combo(

@@ -1,30 +1,33 @@
 use super::*;
 use crate::circuit_breaker::Health;
-use openproxy_types::combos::{ComboTarget, Strategy};
+use crate::quotas::QuotaStatus;
+use crate::repository::PipelineRepository;
 use crate::test_utils::combos;
-use openproxy_types::CoreError;
-use openproxy_types::config::{TimeoutsConfig, RacingConfig, RetriesConfig};
+use crate::timeouts::Timeouts;
+use crate::translation::OpenAIResponse;
+use openproxy_adapters::UpstreamClient;
 use openproxy_db::conn::DbPool;
 use openproxy_db::migrations;
-use openproxy_adapters::UpstreamClient;
-use rusqlite::Connection;
-use crate::repository::PipelineRepository;
-use openproxy_types::ids::{AccountId, ComboId, ComboTargetId, ModelRowId, ProviderId, RequestId, TraceId};
-use openproxy_types::TargetFormat;
-use crate::quotas::QuotaStatus;
-use openproxy_types::providers::{AuthType, ProviderFormat};
 use openproxy_db::secrets::MasterKey;
-use crate::translation::OpenAIResponse;
-use crate::timeouts::Timeouts;
+use openproxy_types::CoreError;
+use openproxy_types::TargetFormat;
+use openproxy_types::combos::{ComboTarget, Strategy};
+use openproxy_types::config::{RacingConfig, RetriesConfig, TimeoutsConfig};
+use openproxy_types::ids::{
+    AccountId, ComboId, ComboTargetId, ModelRowId, ProviderId, RequestId, TraceId,
+};
+use openproxy_types::providers::{AuthType, ProviderFormat};
 use openproxy_types::{OpenAIMessage, OpenAIRequest};
+use rusqlite::Connection;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::AtomicU64;
 use std::time::Duration;
 use tokio::sync::{mpsc, watch};
 
-static STAGE_TX: once_cell::sync::Lazy<parking_lot::Mutex<Option<tokio::sync::broadcast::Sender<openproxy_types::usage::StageEvent>>>> =
-    once_cell::sync::Lazy::new(|| parking_lot::Mutex::new(None));
+static STAGE_TX: once_cell::sync::Lazy<
+    parking_lot::Mutex<Option<tokio::sync::broadcast::Sender<openproxy_types::usage::StageEvent>>>,
+> = once_cell::sync::Lazy::new(|| parking_lot::Mutex::new(None));
 
 fn global_publisher(event: openproxy_types::usage::StageEvent) {
     if let Some(tx) = STAGE_TX.lock().as_ref() {
@@ -676,7 +679,15 @@ async fn pipeline_probes_parked_target_when_only_option() {
     };
     // Park the only target for 60s.
     {
-        repo.record_cooldown(target_id, "test seeded", openproxy_types::config::CooldownMode::Flat, 60, 60, 1).expect("park");
+        repo.record_cooldown(
+            target_id,
+            "test seeded",
+            openproxy_types::config::CooldownMode::Flat,
+            60,
+            60,
+            1,
+        )
+        .expect("park");
     }
 
     let cfg = test_config(mk);
@@ -815,7 +826,15 @@ async fn pipeline_walks_full_row_when_all_targets_in_cooldown() {
     {
         let _w = pool.writer();
         for tid in &target_ids {
-            repo.record_cooldown(*tid, "test seeded", openproxy_types::config::CooldownMode::Flat, 60, 60, 1).expect("park");
+            repo.record_cooldown(
+                *tid,
+                "test seeded",
+                openproxy_types::config::CooldownMode::Flat,
+                60,
+                60,
+                1,
+            )
+            .expect("park");
         }
     }
 
@@ -926,8 +945,8 @@ async fn pipeline_walks_full_row_when_all_targets_in_cooldown() {
 ///     (`choices[0].message.content == "from model 2"`).
 #[tokio::test(flavor = "multi_thread")]
 async fn priority_combo_walks_row_after_first_5xx() {
-    use openproxy_adapters::adapters::AdapterFormat;
     use crate::test_utils::combos::AddTargetInput;
+    use openproxy_adapters::adapters::AdapterFormat;
     use std::sync::atomic::{AtomicU32, Ordering as AtomicOrdering};
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::TcpListener;
@@ -1102,7 +1121,9 @@ async fn priority_combo_walks_row_after_first_5xx() {
         // only ONE HTTP call, not two.
         max_attempts: 1,
         master_key: mk,
-        adapters: Arc::new(vec![openproxy_adapters::adapters::ProviderAdapterEnum::Mock(mock)]),
+        adapters: Arc::new(vec![
+            openproxy_adapters::adapters::ProviderAdapterEnum::Mock(mock),
+        ]),
         cooldown_secs: 60,
         cooldown_max_secs: 3600,
         cooldown_factor: 2,
@@ -1342,7 +1363,9 @@ async fn adversarial_priority_combo_with_5_targets_walks_to_5th_when_all_fail() 
         },
         max_attempts: 1,
         master_key: mk,
-        adapters: Arc::new(vec![openproxy_adapters::adapters::ProviderAdapterEnum::Mock(mock)]),
+        adapters: Arc::new(vec![
+            openproxy_adapters::adapters::ProviderAdapterEnum::Mock(mock),
+        ]),
         cooldown_secs: 60,
         cooldown_max_secs: 3600,
         cooldown_factor: 2,
@@ -1536,7 +1559,9 @@ async fn adversarial_priority_combo_with_mixed_4xx_5xx_walks_to_first_2xx() {
         retries: RetriesConfig::default(),
         max_attempts: 1,
         master_key: mk,
-        adapters: Arc::new(vec![openproxy_adapters::adapters::ProviderAdapterEnum::Mock(mock)]),
+        adapters: Arc::new(vec![
+            openproxy_adapters::adapters::ProviderAdapterEnum::Mock(mock),
+        ]),
         cooldown_secs: 60,
         cooldown_max_secs: 3600,
         cooldown_factor: 2,
@@ -1717,18 +1742,17 @@ data: [DONE]
 
     // 3. Wire the mock + run.
     let defaults = Timeouts::from_config(&TimeoutsConfig::default());
-    let mock = crate::test_utils::MockAdapter::new(
-        "rr-mock",
-        upstream_url.clone(),
-        AdapterFormat::Openai,
-    );
+    let mock =
+        crate::test_utils::MockAdapter::new("rr-mock", upstream_url.clone(), AdapterFormat::Openai);
     let cfg = PipelineConfig {
         defaults,
         racing: RacingConfig::default(),
         retries: RetriesConfig::default(),
         max_attempts: 1,
         master_key: mk,
-        adapters: Arc::new(vec![openproxy_adapters::adapters::ProviderAdapterEnum::Mock(mock)]),
+        adapters: Arc::new(vec![
+            openproxy_adapters::adapters::ProviderAdapterEnum::Mock(mock),
+        ]),
         cooldown_secs: 60,
         cooldown_max_secs: 3600,
         cooldown_factor: 2,
@@ -1937,7 +1961,9 @@ async fn nested_combo_falls_through_to_parent_sibling_on_subcombo_failure() {
         retries: RetriesConfig::default(),
         max_attempts: 1,
         master_key: mk,
-        adapters: Arc::new(vec![openproxy_adapters::adapters::ProviderAdapterEnum::Mock(mock)]),
+        adapters: Arc::new(vec![
+            openproxy_adapters::adapters::ProviderAdapterEnum::Mock(mock),
+        ]),
         cooldown_secs: 60,
         cooldown_max_secs: 3600,
         cooldown_factor: 2,
@@ -2048,7 +2074,15 @@ async fn adversarial_priority_combo_with_zero_eligible_targets_fails_fast() {
             ids.into_iter().map(ComboTargetId).collect()
         };
         for tid in &all_tids {
-            repo.record_cooldown(*tid, "adv seeded", openproxy_types::config::CooldownMode::Flat, 60, 60, 1).expect("park");
+            repo.record_cooldown(
+                *tid,
+                "adv seeded",
+                openproxy_types::config::CooldownMode::Flat,
+                60,
+                60,
+                1,
+            )
+            .expect("park");
         }
         assert_eq!(all_tids.len(), 3, "expected 3 targets in the combo");
         // Sanity: the 3 IDs we hold match.
@@ -2203,7 +2237,9 @@ async fn adversarial_priority_combo_respects_max_attempts_for_same_provider() {
         // CRITICAL: max_attempts = 3 so the outer loop fires 3 times.
         max_attempts: 3,
         master_key: mk,
-        adapters: Arc::new(vec![openproxy_adapters::adapters::ProviderAdapterEnum::Mock(mock)]),
+        adapters: Arc::new(vec![
+            openproxy_adapters::adapters::ProviderAdapterEnum::Mock(mock),
+        ]),
         cooldown_secs: 60,
         cooldown_max_secs: 3600,
         cooldown_factor: 2,
@@ -2423,7 +2459,9 @@ async fn bug4_per_target_retry_exhausts_then_falls_through_to_next_target() {
         // outer loop.
         max_attempts: 1,
         master_key: mk,
-        adapters: Arc::new(vec![openproxy_adapters::adapters::ProviderAdapterEnum::Mock(mock)]),
+        adapters: Arc::new(vec![
+            openproxy_adapters::adapters::ProviderAdapterEnum::Mock(mock),
+        ]),
         cooldown_secs: 60,
         cooldown_max_secs: 3600,
         cooldown_factor: 2,
@@ -2529,7 +2567,15 @@ async fn pipeline_clears_cooldown_on_success_path() {
     };
     {
         let w = pool.writer();
-        repo.record_cooldown(target_id, "before", openproxy_types::config::CooldownMode::Flat, 60, 60, 1).expect("park");
+        repo.record_cooldown(
+            target_id,
+            "before",
+            openproxy_types::config::CooldownMode::Flat,
+            60,
+            60,
+            1,
+        )
+        .expect("park");
 
         let is_in_cooldown = w.query_row(
             "SELECT COUNT(*) FROM target_cooldowns WHERE combo_target_id = ?1 AND datetime(cooldown_until) > datetime(?2)",
@@ -3091,7 +3137,9 @@ async fn non_streaming_dispatch_uses_upstream_client_end_to_end() {
         retries: RetriesConfig::default(),
         max_attempts: 1,
         master_key: mk,
-        adapters: Arc::new(vec![openproxy_adapters::adapters::ProviderAdapterEnum::Mock(mock)]),
+        adapters: Arc::new(vec![
+            openproxy_adapters::adapters::ProviderAdapterEnum::Mock(mock),
+        ]),
         cooldown_secs: 60,
         cooldown_max_secs: 3600,
         cooldown_factor: 2,
@@ -3238,7 +3286,9 @@ async fn bug_a_body_reaches_upstream() {
         retries: RetriesConfig::default(),
         max_attempts: 1,
         master_key: mk,
-        adapters: Arc::new(vec![openproxy_adapters::adapters::ProviderAdapterEnum::Mock(mock)]),
+        adapters: Arc::new(vec![
+            openproxy_adapters::adapters::ProviderAdapterEnum::Mock(mock),
+        ]),
         cooldown_secs: 60,
         cooldown_max_secs: 3600,
         cooldown_factor: 2,
@@ -3432,7 +3482,9 @@ async fn streaming_dispatch_uses_upstream_client_end_to_end() {
         retries: RetriesConfig::default(),
         max_attempts: 1,
         master_key: mk,
-        adapters: Arc::new(vec![openproxy_adapters::adapters::ProviderAdapterEnum::Mock(mock)]),
+        adapters: Arc::new(vec![
+            openproxy_adapters::adapters::ProviderAdapterEnum::Mock(mock),
+        ]),
         cooldown_secs: 60,
         cooldown_max_secs: 3600,
         cooldown_factor: 2,
@@ -3696,7 +3748,9 @@ async fn cancellation_mid_sse_stream_aborts_immediately() {
             retries: RetriesConfig::default(),
             max_attempts: 1,
             master_key,
-            adapters: Arc::new(vec![openproxy_adapters::adapters::ProviderAdapterEnum::Mock(mock)]),
+            adapters: Arc::new(vec![
+                openproxy_adapters::adapters::ProviderAdapterEnum::Mock(mock),
+            ]),
             cooldown_secs: 60,
             cooldown_max_secs: 3600,
             cooldown_factor: 2,
@@ -4030,7 +4084,11 @@ async fn run_with_fake_upstream_and_capture_stages(
     body: &'static str,
     content_type: &'static str,
     streaming: bool,
-) -> (Vec<openproxy_types::usage::StageEvent>, PipelineResult, RequestId) {
+) -> (
+    Vec<openproxy_types::usage::StageEvent>,
+    PipelineResult,
+    RequestId,
+) {
     use openproxy_adapters::adapters::AdapterFormat;
     use std::sync::Arc;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -4117,7 +4175,9 @@ async fn run_with_fake_upstream_and_capture_stages(
         retries: RetriesConfig::default(),
         max_attempts: 1,
         master_key: mk,
-        adapters: Arc::new(vec![openproxy_adapters::adapters::ProviderAdapterEnum::Mock(mock)]),
+        adapters: Arc::new(vec![
+            openproxy_adapters::adapters::ProviderAdapterEnum::Mock(mock),
+        ]),
         cooldown_secs: 60,
         cooldown_max_secs: 3600,
         cooldown_factor: 2,
@@ -4673,7 +4733,9 @@ async fn run_streaming_and_get_response_body(
         retries: RetriesConfig::default(),
         max_attempts: 1,
         master_key: mk,
-        adapters: Arc::new(vec![openproxy_adapters::adapters::ProviderAdapterEnum::Mock(mock)]),
+        adapters: Arc::new(vec![
+            openproxy_adapters::adapters::ProviderAdapterEnum::Mock(mock),
+        ]),
         cooldown_secs: 60,
         cooldown_max_secs: 3600,
         cooldown_factor: 2,
@@ -4704,11 +4766,13 @@ async fn run_streaming_and_get_response_body(
     // — the test fixture inserts exactly one).
     let response_body_json = {
         let writer = pool.writer();
-        let body_str: Option<String> = writer.query_row(
-            "SELECT response_body_json FROM usage ORDER BY id DESC LIMIT 1",
-            [],
-            |r| r.get(0),
-        ).ok();
+        let body_str: Option<String> = writer
+            .query_row(
+                "SELECT response_body_json FROM usage ORDER BY id DESC LIMIT 1",
+                [],
+                |r| r.get(0),
+            )
+            .ok();
         body_str.and_then(|s| serde_json::from_str(&s).ok())
     };
 
@@ -5330,13 +5394,19 @@ fn test_quota_routing_and_protection() {
 
     {
         let lock_guard = conn.lock();
-        let acc1 = pipeline.repo().get_account(AccountId(1), &master_key)
+        let acc1 = pipeline
+            .repo()
+            .get_account(AccountId(1), &master_key)
             .unwrap()
             .unwrap();
-        let acc2 = pipeline.repo().get_account(AccountId(2), &master_key)
+        let acc2 = pipeline
+            .repo()
+            .get_account(AccountId(2), &master_key)
             .unwrap()
             .unwrap();
-        let acc3 = pipeline.repo().get_account(AccountId(3), &master_key)
+        let acc3 = pipeline
+            .repo()
+            .get_account(AccountId(3), &master_key)
             .unwrap()
             .unwrap();
 
@@ -5404,13 +5474,19 @@ fn test_quota_routing_and_protection() {
 
     {
         let lock_guard = conn.lock();
-        let acc4 = pipeline.repo().get_account(AccountId(4), &master_key)
+        let acc4 = pipeline
+            .repo()
+            .get_account(AccountId(4), &master_key)
             .unwrap()
             .unwrap();
-        let acc5 = pipeline.repo().get_account(AccountId(5), &master_key)
+        let acc5 = pipeline
+            .repo()
+            .get_account(AccountId(5), &master_key)
             .unwrap()
             .unwrap();
-        let acc6 = pipeline.repo().get_account(AccountId(6), &master_key)
+        let acc6 = pipeline
+            .repo()
+            .get_account(AccountId(6), &master_key)
             .unwrap()
             .unwrap();
 
@@ -5663,13 +5739,13 @@ fn test_opencode_zen_no_account_proxy_rotation() {
     }
 
     // Should return the assigned proxy
-    let proxy2 = repo.get_or_assign_provider_proxy(&target.provider_id).unwrap();
+    let proxy2 = repo
+        .get_or_assign_provider_proxy(&target.provider_id)
+        .unwrap();
     assert_eq!(proxy2, Some("socks5://1.1.1.1:80".to_string()));
 
     // 4. Trigger rotation manually by resetting the proxy binding and marking it as dead
-    let provider = repo.get_provider(&target.provider_id)
-        .unwrap()
-        .unwrap();
+    let provider = repo.get_provider(&target.provider_id).unwrap().unwrap();
     assert_eq!(provider.current_proxy_id, Some("p-ok".to_string()));
 
     // Mark it as dead and clear binding
@@ -5680,6 +5756,8 @@ fn test_opencode_zen_no_account_proxy_rotation() {
     }
 
     // Fetching again should yield None (as there are no other alive proxies)
-    let proxy3 = repo.get_or_assign_provider_proxy(&target.provider_id).unwrap();
+    let proxy3 = repo
+        .get_or_assign_provider_proxy(&target.provider_id)
+        .unwrap();
     assert_eq!(proxy3, None);
 }

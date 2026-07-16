@@ -24,8 +24,6 @@ mod tests {
     use crate::ids::*;
     use crate::usage::*;
 
-    
-
     use rusqlite::{Connection, params};
     use std::path::PathBuf;
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -1539,10 +1537,13 @@ mod tests {
     }
 }
 
-
 // Globals for broadcast
-static USAGE_SENDER: once_cell::sync::OnceCell<tokio::sync::broadcast::Sender<openproxy_types::RecentUsageRow>> = once_cell::sync::OnceCell::new();
-static STAGE_SENDER: once_cell::sync::OnceCell<tokio::sync::broadcast::Sender<openproxy_types::usage::StageEvent>> = once_cell::sync::OnceCell::new();
+static USAGE_SENDER: once_cell::sync::OnceCell<
+    tokio::sync::broadcast::Sender<openproxy_types::RecentUsageRow>,
+> = once_cell::sync::OnceCell::new();
+static STAGE_SENDER: once_cell::sync::OnceCell<
+    tokio::sync::broadcast::Sender<openproxy_types::usage::StageEvent>,
+> = once_cell::sync::OnceCell::new();
 
 pub fn init_usage_broadcast() -> tokio::sync::broadcast::Sender<openproxy_types::RecentUsageRow> {
     let (tx, _rx) = tokio::sync::broadcast::channel(1024);
@@ -1551,7 +1552,8 @@ pub fn init_usage_broadcast() -> tokio::sync::broadcast::Sender<openproxy_types:
     tx
 }
 
-pub fn init_stage_broadcast() -> tokio::sync::broadcast::Sender<openproxy_types::usage::StageEvent> {
+pub fn init_stage_broadcast() -> tokio::sync::broadcast::Sender<openproxy_types::usage::StageEvent>
+{
     let (tx, _rx) = tokio::sync::broadcast::channel(200);
     let _ = STAGE_SENDER.set(tx.clone());
     let _ = openproxy_types::usage::STAGE_EVENT_PUBLISHER.set(publish_stage_global);

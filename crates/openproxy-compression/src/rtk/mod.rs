@@ -7,8 +7,8 @@ pub mod command_detector;
 pub mod line_filter;
 pub mod smart_truncate;
 
-use openproxy_types::OpenAIMessage;
 use line_filter::{apply_line_filter, get_builtin_filter, get_generic_filter};
+use openproxy_types::OpenAIMessage;
 
 /// Aplica compresión RTK a los mensajes. Retorna las técnicas aplicadas.
 ///

@@ -44,7 +44,8 @@ pub fn apply_compression(
         CompressionMode::Off => CompressionStats::empty(),
         CompressionMode::Lite => {
             let original_chars = count_content_chars(messages);
-            let original_tokens = openproxy_types::token_estimate::estimate_prompt_tokens(messages) as usize;
+            let original_tokens =
+                openproxy_types::token_estimate::estimate_prompt_tokens(messages) as usize;
             // Content routing runs FIRST so SmartCrusher/LogCompressor/
             // DiffCompressor see the full content before lite's brute
             // truncation (compress_tool_results) kicks in as a fallback.
@@ -68,7 +69,8 @@ pub fn apply_compression(
         }
         CompressionMode::Rtk => {
             let original_chars = count_content_chars(messages);
-            let original_tokens = openproxy_types::token_estimate::estimate_prompt_tokens(messages) as usize;
+            let original_tokens =
+                openproxy_types::token_estimate::estimate_prompt_tokens(messages) as usize;
             let techniques = rtk::apply_rtk(messages);
             let compressed_chars = count_content_chars(messages);
             let compressed_tokens =
@@ -83,7 +85,8 @@ pub fn apply_compression(
         }
         CompressionMode::LiteRtk => {
             let original_chars = count_content_chars(messages);
-            let original_tokens = openproxy_types::token_estimate::estimate_prompt_tokens(messages) as usize;
+            let original_tokens =
+                openproxy_types::token_estimate::estimate_prompt_tokens(messages) as usize;
             // Content routing first (smart compression), then lite
             // (normalization + fallback truncation), then rtk
             // (command-aware CLI filtering).

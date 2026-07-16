@@ -1,5 +1,7 @@
-use openproxy_types::{ProviderId, ProviderFormat, AuthType, RateLimitScope, Provider, CoreError, Result};
-use rusqlite::{Connection, params, OptionalExtension};
+use openproxy_types::{
+    AuthType, CoreError, Provider, ProviderFormat, ProviderId, RateLimitScope, Result,
+};
+use rusqlite::{Connection, OptionalExtension, params};
 
 #[derive(Debug)]
 struct FromStrError(String);

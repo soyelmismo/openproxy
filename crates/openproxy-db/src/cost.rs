@@ -1,7 +1,7 @@
-use openproxy_types::ids::UsageId;
-use openproxy_types::usage::{UsageInput, RecentUsageRow, publish_usage_row};
 use crate::pricing;
 use once_cell::sync::Lazy;
+use openproxy_types::ids::UsageId;
+use openproxy_types::usage::{RecentUsageRow, UsageInput, publish_usage_row};
 use rusqlite::{Connection, params};
 
 pub fn compute(price: Option<pricing::Price>, input: &UsageInput) -> (f64, Option<f64>) {

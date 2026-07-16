@@ -31,8 +31,8 @@
 //! ±10% of cl100k_base for mixed English/code content. This is
 //! sufficient for cost tracking and compression savings.
 
-use openproxy_types::OpenAIMessage;
 use once_cell::sync::Lazy;
+use openproxy_types::OpenAIMessage;
 use tiktoken_rs::{CoreBPE, cl100k_base};
 
 /// Thread-safe singleton BPE encoder. Loaded once at first use.

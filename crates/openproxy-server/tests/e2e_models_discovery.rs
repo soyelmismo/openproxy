@@ -32,17 +32,18 @@ use axum::{
     response::{IntoResponse, Json as AxumJson},
     routing::get,
 };
+use openproxy_adapters::adapters::{
+    AdapterAuthType, AdapterFormat, ProviderAdapter, ProviderAdapterConfig,
+};
 use openproxy_core::{
-    AppConfig, accounts,
-    admin,
+    AppConfig, accounts, admin,
     models::{self, DiscoveredModel, TargetFormat},
 };
-use openproxy_types::ids::{AccountId, ComboId, ComboTargetId, ModelId, ModelRowId, ProviderId};
-use openproxy_types::combos::Strategy;
 use openproxy_db::secrets::MasterKey;
-use openproxy_adapters::adapters::{AdapterAuthType, AdapterFormat, ProviderAdapter, ProviderAdapterConfig};
-use openproxy_db::{self as core_db, migrations, combos};
+use openproxy_db::{self as core_db, combos, migrations};
 use openproxy_server::state::AppState;
+use openproxy_types::combos::Strategy;
+use openproxy_types::ids::{AccountId, ComboId, ComboTargetId, ModelId, ModelRowId, ProviderId};
 use parking_lot::Mutex;
 use rusqlite::Connection;
 use serde_json::json;
@@ -206,9 +207,10 @@ impl ProviderAdapter for TestMockAdapter {
             .await
             .map_err(|e| openproxy_types::CoreError::UpstreamConnection(e.to_string()))?;
         if !resp.status.is_success() {
-            return Err(openproxy_types::CoreError::UpstreamConnection(
-                format!("mock returned status {}", resp.status),
-            ));
+            return Err(openproxy_types::CoreError::UpstreamConnection(format!(
+                "mock returned status {}",
+                resp.status
+            )));
         }
         let body = resp.collect().await.map_err(|e| {
             openproxy_types::CoreError::UpstreamConnection(format!("collect body: {e}"))
@@ -374,7 +376,8 @@ async fn call_refresh(
     if !provider_row.base_url.ends_with("/v1") {
         provider_row.base_url = format!("{}/v1", provider_row.base_url);
     }
-    let custom_adapter = openproxy_adapters::adapters::CustomAdapter::from_provider_row(&provider_row);
+    let custom_adapter =
+        openproxy_adapters::adapters::CustomAdapter::from_provider_row(&provider_row);
     let adapter_enum = openproxy_adapters::adapters::ProviderAdapterEnum::Custom(custom_adapter);
 
     admin::refresh_models(
@@ -658,8 +661,7 @@ async fn e2e_discovery_and_delete_on_disappear() {
     let (combo_id, c_target_id) = {
         let w = state.db_pool().writer();
         let combo_id: ComboId =
-            combos::create_combo(&w, "e2e-combo", Strategy::Priority, 1)
-                .expect("create_combo");
+            combos::create_combo(&w, "e2e-combo", Strategy::Priority, 1).expect("create_combo");
         let target_id: ComboTargetId = combos::add_target(
             &w,
             combos::AddTargetInput {
@@ -699,14 +701,12 @@ async fn e2e_discovery_and_delete_on_disappear() {
     //       same transaction. We assert the refresh succeeds
     //       (i.e. Gate B and Gate D cooperate cleanly).
     mock.replace(vec!["a".into(), "b".into()]);
-    call_refresh(&state, &provider, "sk-e2e-fake")
-        .await
-        .expect(
-            "refresh against a catalog that drops c must succeed \
+    call_refresh(&state, &provider, "sk-e2e-fake").await.expect(
+        "refresh against a catalog that drops c must succeed \
              now that combo_targets.model_row_id has \
              ON DELETE SET NULL (Gate D / migration 000025); \
              a failure here means Gate B ↔ Gate D regressed.",
-        );
+    );
 
     // 9.f. After the refresh:
     //   - the catalog row for `c` is gone,

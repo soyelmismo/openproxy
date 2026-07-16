@@ -1,9 +1,9 @@
-use openproxy_types::combos::ComboTarget;
-use openproxy_types::error::CoreError;
-use openproxy_types::models::Model;
 use crate::context::{CustomProviderMeta, ResolvedTarget};
 use crate::repository::{KiroMeta, RawAccount};
 use openproxy_db::secrets::MasterKey;
+use openproxy_types::combos::ComboTarget;
+use openproxy_types::error::CoreError;
+use openproxy_types::models::Model;
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -110,7 +110,7 @@ impl CredentialManager {
                                 tracing::error!(
                                     "no access token found for account {}",
                                     account_id.0
-                                  );
+                                );
                                 continue;
                             }
                         };

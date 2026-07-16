@@ -8,7 +8,9 @@ pub struct NotificationEvent {
     pub created_at: String,
 }
 
-pub static NOTIFICATION_PUBLISHER: once_cell::sync::OnceCell<Box<dyn Fn(NotificationEvent) + Send + Sync>> = once_cell::sync::OnceCell::new();
+pub static NOTIFICATION_PUBLISHER: once_cell::sync::OnceCell<
+    Box<dyn Fn(NotificationEvent) + Send + Sync>,
+> = once_cell::sync::OnceCell::new();
 
 pub fn publish_notification(event: NotificationEvent) {
     if let Some(publisher) = NOTIFICATION_PUBLISHER.get() {

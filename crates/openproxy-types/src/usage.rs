@@ -1,6 +1,6 @@
-use serde::{Deserialize, Serialize};
-use crate::ids::{AccountId, ApiKeyId, ComboId, ComboTargetId, ModelRowId, ProviderId, RequestId};
 use crate::endpoint::EndpointKind;
+use crate::ids::{AccountId, ApiKeyId, ComboId, ComboTargetId, ModelRowId, ProviderId, RequestId};
+use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone)]
 pub struct UsageInput {
@@ -62,7 +62,8 @@ pub struct StageEvent {
     pub endpoint_kind: EndpointKind,
 }
 
-pub static STAGE_EVENT_PUBLISHER: once_cell::sync::OnceCell<fn(StageEvent)> = once_cell::sync::OnceCell::new();
+pub static STAGE_EVENT_PUBLISHER: once_cell::sync::OnceCell<fn(StageEvent)> =
+    once_cell::sync::OnceCell::new();
 
 pub fn publish_stage_event(event: StageEvent) {
     if let Some(publisher) = STAGE_EVENT_PUBLISHER.get() {
@@ -107,7 +108,8 @@ pub struct RecentUsageRow {
     pub created_at: String,
 }
 
-pub static USAGE_ROW_PUBLISHER: once_cell::sync::OnceCell<fn(RecentUsageRow)> = once_cell::sync::OnceCell::new();
+pub static USAGE_ROW_PUBLISHER: once_cell::sync::OnceCell<fn(RecentUsageRow)> =
+    once_cell::sync::OnceCell::new();
 
 pub fn publish_usage_row(row: RecentUsageRow) {
     if let Some(publisher) = USAGE_ROW_PUBLISHER.get() {

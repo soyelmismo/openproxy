@@ -1,8 +1,8 @@
 use once_cell::sync::Lazy;
+use openproxy_types::normalize_model_id;
 use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use openproxy_types::normalize_model_id;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Price {
@@ -364,9 +364,7 @@ pub fn compute_cost(price: Option<Price>, prompt_tokens: u32, completion_tokens:
             let seconds = prompt_tokens as f64 / 1000.0;
             price.input_per_1m * seconds / 1_000_000.0
         }
-        "image" => {
-            price.input_per_1m * prompt_tokens as f64 / 1_000_000.0
-        }
+        "image" => price.input_per_1m * prompt_tokens as f64 / 1_000_000.0,
         _ => {
             let input_cost = price.input_per_1m * (prompt_tokens as f64) / 1_000_000.0;
             let output_cost = price.output_per_1m * (completion_tokens as f64) / 1_000_000.0;

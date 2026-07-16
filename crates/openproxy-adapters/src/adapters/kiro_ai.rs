@@ -1,6 +1,6 @@
-use serde_json::Value;
-use openproxy_types::{OpenAIMessage, OpenAIRequest};
 use super::*;
+use openproxy_types::{OpenAIMessage, OpenAIRequest};
+use serde_json::Value;
 
 // =====================================================================
 // Kiro AI (AWS CodeWhisperer)
@@ -133,7 +133,10 @@ impl ProviderAdapter for KiroAdapter {
     ) -> Vec<(String, String)> {
         let mut headers = vec![
             ("Content-Type".into(), "application/json".into()),
-            ("x-amz-user-agent".into(), "aws-sdk-js/3.0.0 kiro/0.1".into()),
+            (
+                "x-amz-user-agent".into(),
+                "aws-sdk-js/3.0.0 kiro/0.1".into(),
+            ),
         ];
         if let Some(auth) = self.build_auth_header(api_key) {
             headers.push(auth);
@@ -148,8 +151,9 @@ impl ProviderAdapter for KiroAdapter {
         _model: &ModelId,
         resolved_target: &openproxy_types::context::ResolvedTarget,
     ) -> std::result::Result<bytes::Bytes, openproxy_types::error::CoreError> {
-        let req: openproxy_types::OpenAIRequest = serde_json::from_slice(&body)
-            .map_err(|e| openproxy_types::error::CoreError::Validation(format!("Invalid OpenAI request: {}", e)))?;
+        let req: openproxy_types::OpenAIRequest = serde_json::from_slice(&body).map_err(|e| {
+            openproxy_types::error::CoreError::Validation(format!("Invalid OpenAI request: {}", e))
+        })?;
 
         let profile_arn = resolved_target
             .custom_meta
@@ -157,8 +161,12 @@ impl ProviderAdapter for KiroAdapter {
             .and_then(|m| m.kiro_profile_arn.as_deref());
 
         let kiro_req = build_kiro_request(&req, profile_arn);
-        let kiro_bytes = serde_json::to_vec(&kiro_req)
-            .map_err(|e| openproxy_types::error::CoreError::Validation(format!("Failed to serialize Kiro request: {}", e)))?;
+        let kiro_bytes = serde_json::to_vec(&kiro_req).map_err(|e| {
+            openproxy_types::error::CoreError::Validation(format!(
+                "Failed to serialize Kiro request: {}",
+                e
+            ))
+        })?;
 
         Ok(kiro_bytes.into())
     }
@@ -241,7 +249,10 @@ impl ProviderAdapter for KiroAdapter {
         provider_specific: Option<&str>,
     ) -> Option<Result<openproxy_types::AccountQuota>> {
         if let Some(token) = access_token {
-            Some(self.fetch_kiro_quota_local(upstream_client, token, provider_specific).await)
+            Some(
+                self.fetch_kiro_quota_local(upstream_client, token, provider_specific)
+                    .await,
+            )
         } else {
             Some(Ok(openproxy_types::AccountQuota {
                 session_used: None,
@@ -315,7 +326,9 @@ impl KiroAdapter {
                 }
                 req.headers.insert(
                     http::header::HeaderName::from_static("x-amz-target"),
-                    http::HeaderValue::from_static("AmazonCodeWhispererService.ListAvailableProfiles"),
+                    http::HeaderValue::from_static(
+                        "AmazonCodeWhispererService.ListAvailableProfiles",
+                    ),
                 );
                 req.headers.insert(
                     http::header::HeaderName::from_static("x-amz-user-agent"),
@@ -327,7 +340,8 @@ impl KiroAdapter {
                 match upstream.call(req, TimeoutProfile::OAuth, cancel).await {
                     Ok(resp) if resp.status.is_success() => {
                         if let Ok(body_bytes) = resp.collect().await {
-                            if let Ok(value) = serde_json::from_slice::<serde_json::Value>(&body_bytes)
+                            if let Ok(value) =
+                                serde_json::from_slice::<serde_json::Value>(&body_bytes)
                             {
                                 value
                                     .get("profiles")
@@ -683,4 +697,3 @@ fn split_history(req: &OpenAIRequest) -> (Vec<&OpenAIMessage>, Option<OpenAIMess
     let current = req.messages[last_user_idx].clone();
     (history, Some(current))
 }
-

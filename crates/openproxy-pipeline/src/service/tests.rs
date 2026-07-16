@@ -1,8 +1,8 @@
-use openproxy_types::combos::Strategy;
 use crate::service::*;
 use crate::test_utils::*;
 use crate::*;
 use openproxy_db::secrets::MasterKey;
+use openproxy_types::combos::Strategy;
 use std::sync::Arc;
 use tower::Service;
 

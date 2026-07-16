@@ -1,7 +1,7 @@
 //! Per-phase timeouts for upstream requests with 2-level precedence.
 
-use openproxy_types::error::{CoreError, Result};
 use openproxy_adapters::upstream::ResolvedTimeouts;
+use openproxy_types::error::{CoreError, Result};
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
 

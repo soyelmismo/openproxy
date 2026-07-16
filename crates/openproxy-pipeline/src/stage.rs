@@ -1,6 +1,6 @@
-use openproxy_types::error::CoreError;
 use crate::PipelineResult;
 use crate::context::PipelineContext;
+use openproxy_types::error::CoreError;
 
 pub struct PipelineNext<'a> {
     chain: &'a PipelineChain,

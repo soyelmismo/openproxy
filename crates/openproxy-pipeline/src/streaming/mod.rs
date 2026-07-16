@@ -1,7 +1,7 @@
 pub mod pipeline;
 
-use openproxy_types::error::CoreError;
 use bytes::Bytes;
+use openproxy_types::error::CoreError;
 
 /// Represents an event in the streaming pipeline.
 #[allow(clippy::large_enum_variant)]

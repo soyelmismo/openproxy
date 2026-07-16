@@ -18,7 +18,9 @@
 //! triggered manually via `POST /admin/models/sync-models-dev`.
 
 use crate::error::{CoreError, Result};
-use openproxy_adapters::upstream::{CancellationToken, TimeoutProfile, UpstreamClient, UpstreamRequest};
+use openproxy_adapters::upstream::{
+    CancellationToken, TimeoutProfile, UpstreamClient, UpstreamRequest,
+};
 use rusqlite::Connection;
 use serde::Deserialize;
 use std::collections::HashMap;
@@ -713,7 +715,9 @@ pub fn auto_create_combos(conn: &Connection) -> Result<usize> {
                     "SELECT combo_id, account_id, model_row_id FROM combo_targets WHERE combo_id IN ({})",
                     placeholders
                 );
-                let mut stmt = conn.prepare(&query).map_err(openproxy_db::error::map_db_error)?;
+                let mut stmt = conn
+                    .prepare(&query)
+                    .map_err(openproxy_db::error::map_db_error)?;
                 let params = rusqlite::params_from_iter(chunk.iter());
                 let rows = stmt
                     .query_map(params, |row| {
@@ -743,7 +747,9 @@ pub fn auto_create_combos(conn: &Connection) -> Result<usize> {
                     "SELECT combo_id, MAX(priority_order) FROM combo_targets WHERE combo_id IN ({}) GROUP BY combo_id",
                     placeholders
                 );
-                let mut stmt = conn.prepare(&query).map_err(openproxy_db::error::map_db_error)?;
+                let mut stmt = conn
+                    .prepare(&query)
+                    .map_err(openproxy_db::error::map_db_error)?;
                 let params = rusqlite::params_from_iter(chunk.iter());
                 let rows = stmt
                     .query_map(params, |row| {

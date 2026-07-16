@@ -174,8 +174,9 @@ impl ProviderAdapter for AntigravityAdapter {
                 "request": json,
                 "enabledCreditTypes": ["GOOGLE_ONE_AI"]
             });
-            let wrapped_bytes = serde_json::to_vec(&wrapped)
-                .map_err(|e| CoreError::Parse(format!("failed to serialize wrapped request: {e}")))?;
+            let wrapped_bytes = serde_json::to_vec(&wrapped).map_err(|e| {
+                CoreError::Parse(format!("failed to serialize wrapped request: {e}"))
+            })?;
             return Ok(bytes::Bytes::from(wrapped_bytes));
         }
         Ok(body)
@@ -231,7 +232,10 @@ impl ProviderAdapter for AntigravityAdapter {
     ) -> Option<Result<openproxy_types::AccountQuota>> {
         // Antigravity requires access_token to fetch quota
         if let Some(token) = access_token {
-            Some(self.fetch_antigravity_quota_local(upstream_client, token).await)
+            Some(
+                self.fetch_antigravity_quota_local(upstream_client, token)
+                    .await,
+            )
         } else {
             Some(Ok(openproxy_types::AccountQuota {
                 session_used: None,
@@ -251,8 +255,9 @@ impl ProviderAdapter for AntigravityAdapter {
     }
 }
 
-static PLAN_CACHE: once_cell::sync::Lazy<parking_lot::Mutex<std::collections::HashMap<String, String>>> =
-    once_cell::sync::Lazy::new(|| parking_lot::Mutex::new(std::collections::HashMap::new()));
+static PLAN_CACHE: once_cell::sync::Lazy<
+    parking_lot::Mutex<std::collections::HashMap<String, String>>,
+> = once_cell::sync::Lazy::new(|| parking_lot::Mutex::new(std::collections::HashMap::new()));
 
 impl AntigravityAdapter {
     async fn fetch_antigravity_quota_local(
@@ -480,7 +485,8 @@ impl AntigravityAdapter {
                         if !is_ineligible {
                             let current_name =
                                 json.pointer("/currentTier/name").and_then(|v| v.as_str());
-                            let current_id = json.pointer("/currentTier/id").and_then(|v| v.as_str());
+                            let current_id =
+                                json.pointer("/currentTier/id").and_then(|v| v.as_str());
                             tier = current_name.or(current_id);
                         } else if let Some(allowed) =
                             json.pointer("/allowedTiers").and_then(|v| v.as_array())
@@ -527,7 +533,9 @@ impl AntigravityAdapter {
                             t.to_string()
                         };
 
-                        PLAN_CACHE.lock().insert(access_token.to_string(), plan_name.clone());
+                        PLAN_CACHE
+                            .lock()
+                            .insert(access_token.to_string(), plan_name.clone());
                         return Some(plan_name);
                     }
                 }
@@ -538,7 +546,9 @@ impl AntigravityAdapter {
     }
 }
 
-fn parse_antigravity_models_response(body: &serde_json::Value) -> Result<openproxy_types::AccountQuota> {
+fn parse_antigravity_models_response(
+    body: &serde_json::Value,
+) -> Result<openproxy_types::AccountQuota> {
     const NORMALIZED_BASE: i64 = 1000;
 
     let models = body
@@ -611,7 +621,9 @@ fn parse_antigravity_models_response(body: &serde_json::Value) -> Result<openpro
     })
 }
 
-fn parse_antigravity_user_quota_summary(body: &serde_json::Value) -> Result<openproxy_types::AccountQuota> {
+fn parse_antigravity_user_quota_summary(
+    body: &serde_json::Value,
+) -> Result<openproxy_types::AccountQuota> {
     const NORMALIZED_BASE: i64 = 1000;
 
     let groups = body

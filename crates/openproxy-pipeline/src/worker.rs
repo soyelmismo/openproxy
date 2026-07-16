@@ -1,7 +1,7 @@
-use openproxy_types::config::CooldownMode;
 use openproxy_types::SelectionRegistry;
-use openproxy_types::usage::UsageInput;
+use openproxy_types::config::CooldownMode;
 use openproxy_types::ids::{ComboId, ComboTargetId};
+use openproxy_types::usage::UsageInput;
 use rusqlite::Connection;
 use std::sync::Arc;
 use tokio::sync::mpsc;
@@ -40,7 +40,12 @@ pub fn spawn_worker(
 
             // Usar spawn_blocking para las queries de SQLite
             let _ = tokio::task::spawn_blocking(move || {
-                process_job(&conn_clone, repo_clone.as_ref(), job, selection_registry_clone);
+                process_job(
+                    &conn_clone,
+                    repo_clone.as_ref(),
+                    job,
+                    selection_registry_clone,
+                );
             })
             .await;
         }
@@ -104,10 +109,7 @@ pub fn process_job(
                             cooldown_max_secs,
                             cooldown_factor,
                         ) {
-                            tracing::warn!(
-                                "cooldown::record failed in background: {}",
-                                e
-                            );
+                            tracing::warn!("cooldown::record failed in background: {}", e);
                         }
                     }
                     _ => {}

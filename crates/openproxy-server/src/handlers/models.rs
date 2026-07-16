@@ -119,15 +119,11 @@ fn authenticate_chat_or_anonymous(
         if active == 0 {
             return Ok(None); // anonymous
         }
-        return Err(ApiError(CoreError::Auth(
-            "missing api key".into(),
-        )));
+        return Err(ApiError(CoreError::Auth("missing api key".into())));
     };
 
     if token.is_empty() {
-        return Err(ApiError(CoreError::Auth(
-            "missing api key".into(),
-        )));
+        return Err(ApiError(CoreError::Auth("missing api key".into())));
     }
 
     let key_hash = api_keys::hash_key(token);
@@ -136,8 +132,7 @@ fn authenticate_chat_or_anonymous(
     // admin and chat auth paths).
     let r = state.db_pool().reader();
     let key = api_keys::get_by_hash(&r, &key_hash).map_err(ApiError)?;
-    let key =
-        key.ok_or_else(|| ApiError(CoreError::Auth("invalid api key".into())))?;
+    let key = key.ok_or_else(|| ApiError(CoreError::Auth("invalid api key".into())))?;
 
     if !key.is_active {
         return Err(ApiError(CoreError::Auth(
@@ -146,15 +141,10 @@ fn authenticate_chat_or_anonymous(
     }
 
     if let Some(exp) = &key.expires_at
-        && openproxy_core::api_keys::is_expired(Some(exp), chrono::Utc::now()).map_err(|e| {
-            ApiError(CoreError::Internal(format!(
-                "expires_at check: {e}"
-            )))
-        })?
+        && openproxy_core::api_keys::is_expired(Some(exp), chrono::Utc::now())
+            .map_err(|e| ApiError(CoreError::Internal(format!("expires_at check: {e}"))))?
     {
-        return Err(ApiError(CoreError::Auth(
-            "api key expired".into(),
-        )));
+        return Err(ApiError(CoreError::Auth("api key expired".into())));
     }
 
     if !key.scopes.iter().any(|s| s == "chat") {
@@ -354,8 +344,8 @@ fn unix_now_secs() -> i64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use openproxy_types::{ModelId, ModelRowId, ProviderId};
     use openproxy_core::models::{Model, TargetFormat};
+    use openproxy_types::{ModelId, ModelRowId, ProviderId};
 
     fn empty_model() -> Model {
         Model {

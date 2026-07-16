@@ -1,7 +1,7 @@
+use crate::{PipelineRequest, PipelineResult};
 use openproxy_types::combos::Combo;
 use openproxy_types::error::CoreError;
 use openproxy_types::ids::TraceId;
-use crate::{PipelineRequest, PipelineResult};
 use std::sync::Arc;
 
 pub(crate) async fn run_race(

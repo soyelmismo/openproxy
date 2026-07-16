@@ -134,8 +134,8 @@ fn estimate_tokens_heuristic(text: &str) -> u32 {
 fn is_cjk(ch: char) -> bool {
     let code = ch as u32;
     (0x4E00..=0x9FFF).contains(&code)
-    || (0x3040..=0x30FF).contains(&code)
-    || (0xAC00..=0xD7AF).contains(&code)
+        || (0x3040..=0x30FF).contains(&code)
+        || (0xAC00..=0xD7AF).contains(&code)
 }
 
 #[cfg(test)]

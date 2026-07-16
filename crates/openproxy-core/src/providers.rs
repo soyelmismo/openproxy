@@ -7,8 +7,8 @@
 
 use crate::error::{CoreError, Result};
 use crate::ids::ProviderId;
-use rusqlite::{Connection, OptionalExtension, params};
 pub use openproxy_types::providers::*;
+use rusqlite::{Connection, OptionalExtension, params};
 
 // Re-export the built-in predicates from `seed` so callers (and the
 // admin handlers) can use `providers::is_builtin(...)` without
@@ -383,7 +383,7 @@ impl std::error::Error for FromStrError {}
 mod tests {
     use super::*;
     use openproxy_db::conn::DbPool;
-    
+
     use std::path::PathBuf;
 
     /// Build an in-memory pool for one test: temp dir on disk (rusqlite's

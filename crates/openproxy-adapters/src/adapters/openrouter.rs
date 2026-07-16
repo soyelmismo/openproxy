@@ -99,7 +99,9 @@ impl ProviderAdapter for OpenRouterAdapter {
         .map_err(|e| openproxy_types::error::CoreError::UpstreamConnection(e.to_string()))?;
 
         let arr = body.get("data").and_then(|v| v.as_array()).ok_or_else(|| {
-            openproxy_types::error::CoreError::Parse("openrouter response missing 'data' array".into())
+            openproxy_types::error::CoreError::Parse(
+                "openrouter response missing 'data' array".into(),
+            )
         })?;
 
         let models: Vec<DiscoveredModel> = arr
@@ -178,7 +180,10 @@ impl ProviderAdapter for OpenRouterAdapter {
     ) -> Option<Result<openproxy_types::AccountQuota>> {
         // OpenRouter's fetcher catches its own errors and maps them to AccountQuota fields.
         // It never actually returns an `Err(CoreError)`.
-        Some(self.fetch_openrouter_quota_local(upstream_client, api_key).await)
+        Some(
+            self.fetch_openrouter_quota_local(upstream_client, api_key)
+                .await,
+        )
     }
 }
 
@@ -271,11 +276,17 @@ impl OpenRouterAdapter {
             }
         };
 
-        Ok(parse_openrouter_quota(&json, openproxy_types::now_unix_secs_str()))
+        Ok(parse_openrouter_quota(
+            &json,
+            openproxy_types::now_unix_secs_str(),
+        ))
     }
 }
 
-fn parse_openrouter_quota(body: &serde_json::Value, last_fetched_at: String) -> openproxy_types::AccountQuota {
+fn parse_openrouter_quota(
+    body: &serde_json::Value,
+    last_fetched_at: String,
+) -> openproxy_types::AccountQuota {
     let data = body.get("data");
 
     let raw_usage = data.and_then(|d| d.get("usage")).and_then(|v| v.as_f64());

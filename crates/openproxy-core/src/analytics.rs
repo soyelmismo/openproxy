@@ -223,7 +223,9 @@ pub fn latency_percentiles(conn: &Connection, f: &UsageFilter) -> Result<Latency
     )
     .expect("writing to String never fails");
 
-    let mut stmt = conn.prepare(&sql).map_err(openproxy_db::error::map_db_error)?;
+    let mut stmt = conn
+        .prepare(&sql)
+        .map_err(openproxy_db::error::map_db_error)?;
 
     let params_slice = to_params(&w.params);
 
@@ -345,7 +347,9 @@ pub fn race_stats(conn: &Connection, f: &UsageFilter) -> Result<RaceStats> {
     )
     .expect("writing to String never fails");
 
-    let mut stmt = conn.prepare(&sql).map_err(openproxy_db::error::map_db_error)?;
+    let mut stmt = conn
+        .prepare(&sql)
+        .map_err(openproxy_db::error::map_db_error)?;
 
     let params_slice = to_params(&w.params);
 
@@ -422,7 +426,7 @@ pub fn race_stats(conn: &Connection, f: &UsageFilter) -> Result<RaceStats> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    
+
     use rusqlite::{Connection, params};
     use std::path::PathBuf;
     use std::time::{SystemTime, UNIX_EPOCH};

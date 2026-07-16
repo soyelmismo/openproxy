@@ -1,6 +1,6 @@
-use serde::{Deserialize, Serialize};
-use crate::ids::{AccountId, ComboId, ComboTargetId, ModelRowId, ProviderId};
 use crate::config::CooldownMode;
+use crate::ids::{AccountId, ComboId, ComboTargetId, ModelRowId, ProviderId};
+use serde::{Deserialize, Serialize};
 
 pub const MAX_SUB_COMBO_DEPTH: u32 = 5;
 

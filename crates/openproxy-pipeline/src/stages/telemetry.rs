@@ -1,7 +1,7 @@
-use openproxy_types::error::CoreError;
 use crate::context::PipelineContext;
 use crate::stage::PipelineStage;
 use crate::{ErrorPhase, PipelineResult};
+use openproxy_types::error::CoreError;
 
 #[derive(Clone, Copy)]
 pub struct TelemetryRecorderStage;

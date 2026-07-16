@@ -1,9 +1,9 @@
-use crate::circuit_breaker::Health;
-use openproxy_types::combos::ComboTarget;
-use openproxy_types::error::CoreError;
 use crate::PipelineResult;
+use crate::circuit_breaker::Health;
 use crate::context::PipelineContext;
 use crate::stage::PipelineStage;
+use openproxy_types::combos::ComboTarget;
+use openproxy_types::error::CoreError;
 
 #[derive(Clone, Copy)]
 pub struct RouterStage;
@@ -45,7 +45,9 @@ impl PipelineStage for RouterStage {
             .into_iter()
             .filter(|t| match t.account_id {
                 Some(aid) => {
-                    let key = if t.rate_limit_scope == openproxy_types::providers::RateLimitScope::Model {
+                    let key = if t.rate_limit_scope
+                        == openproxy_types::providers::RateLimitScope::Model
+                    {
                         crate::circuit_breaker::CircuitBreakerKey::Model(
                             aid,
                             t.model_row_id.expect("flattened"),

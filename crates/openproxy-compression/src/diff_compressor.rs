@@ -16,8 +16,8 @@
 //! - Only applies the compressed output when it is strictly smaller than
 //!   the original (never produces a larger message).
 
-use openproxy_types::OpenAIMessage;
 use once_cell::sync::Lazy;
+use openproxy_types::OpenAIMessage;
 use regex::Regex;
 use serde_json::Value;
 

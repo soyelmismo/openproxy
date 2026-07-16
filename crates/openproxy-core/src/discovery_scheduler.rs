@@ -36,13 +36,13 @@
 
 use crate::accounts;
 use crate::admin;
-use openproxy_db::DbPool;
 use crate::ids::ProviderId;
 use crate::models;
 use crate::providers::{self, AuthType};
-use openproxy_db::secrets::MasterKey;
 use crate::seed;
 use openproxy_adapters::upstream::UpstreamClient;
+use openproxy_db::DbPool;
+use openproxy_db::secrets::MasterKey;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::time::sleep;
@@ -578,7 +578,6 @@ async fn run_one_tick(
 mod tests {
     use super::*;
 
-    
     use crate::ids::{AccountId, ModelId, ProviderId as CoreProviderId};
     use crate::models::{DiscoveredModel, TargetFormat};
     use crate::providers;
@@ -709,10 +708,9 @@ mod tests {
         // register them.
         let (adapter, counter) =
             openproxy_adapters::adapters::MockAdapter::with_discovery("openrouter", three_models());
-        let adapters: Arc<Vec<openproxy_adapters::adapters::ProviderAdapterEnum>> =
-            Arc::new(vec![openproxy_adapters::adapters::ProviderAdapterEnum::Mock(
-                adapter.clone(),
-            )]);
+        let adapters: Arc<Vec<openproxy_adapters::adapters::ProviderAdapterEnum>> = Arc::new(vec![
+            openproxy_adapters::adapters::ProviderAdapterEnum::Mock(adapter.clone()),
+        ]);
 
         // Run with paused time + 1s ticks. We expect the first
         // tick to fire after 1s (the staggered sleep) and
@@ -804,10 +802,9 @@ mod tests {
 
         let (adapter, counter) =
             openproxy_adapters::adapters::MockAdapter::with_discovery("openrouter", three_models());
-        let adapters: Arc<Vec<openproxy_adapters::adapters::ProviderAdapterEnum>> =
-            Arc::new(vec![openproxy_adapters::adapters::ProviderAdapterEnum::Mock(
-                adapter.clone(),
-            )]);
+        let adapters: Arc<Vec<openproxy_adapters::adapters::ProviderAdapterEnum>> = Arc::new(vec![
+            openproxy_adapters::adapters::ProviderAdapterEnum::Mock(adapter.clone()),
+        ]);
 
         let sched = start(
             pool.clone(),
@@ -892,7 +889,10 @@ mod tests {
             .map(|pid| {
                 let (a, c) =
                     openproxy_adapters::adapters::MockAdapter::with_discovery(pid, three_models());
-                (openproxy_adapters::adapters::ProviderAdapterEnum::Mock(a), c)
+                (
+                    openproxy_adapters::adapters::ProviderAdapterEnum::Mock(a),
+                    c,
+                )
             })
             .unzip();
         let adapters = Arc::new(adapters);
@@ -997,7 +997,8 @@ mod tests {
         let (pool, _path) = fresh_pool();
         let mk = MasterKey::generate();
         // No provider rows seeded at all.
-        let adapters: Arc<Vec<openproxy_adapters::adapters::ProviderAdapterEnum>> = Arc::new(vec![]);
+        let adapters: Arc<Vec<openproxy_adapters::adapters::ProviderAdapterEnum>> =
+            Arc::new(vec![]);
 
         // Should return successfully with zero tasks spawned
         // (every built-in has no adapter).
@@ -1228,10 +1229,9 @@ mod tests {
         ];
         let (adapter, _counter) =
             openproxy_adapters::adapters::MockAdapter::with_discovery("openrouter", models);
-        let adapters: Arc<Vec<openproxy_adapters::adapters::ProviderAdapterEnum>> =
-            Arc::new(vec![openproxy_adapters::adapters::ProviderAdapterEnum::Mock(
-                adapter.clone(),
-            )]);
+        let adapters: Arc<Vec<openproxy_adapters::adapters::ProviderAdapterEnum>> = Arc::new(vec![
+            openproxy_adapters::adapters::ProviderAdapterEnum::Mock(adapter.clone()),
+        ]);
 
         let sched = start(
             pool.clone(),

@@ -1,8 +1,8 @@
+use crate::{ErrorPhase, FailureContext, Pipeline, PipelineRequest, PipelineResult};
+use openproxy_adapters::upstream::CancellationToken;
 use openproxy_types::combos::{Combo, ComboTarget};
 use openproxy_types::error::{CoreError, Result};
 use openproxy_types::ids::ComboId;
-use crate::{ErrorPhase, FailureContext, Pipeline, PipelineRequest, PipelineResult};
-use openproxy_adapters::upstream::CancellationToken;
 use tokio::sync::watch;
 
 impl Pipeline {
@@ -48,8 +48,7 @@ impl Pipeline {
             let mut visited: Vec<ComboId> = vec![root_combo_id];
             for t in targets {
                 if let Some(sub_id) = t.sub_combo_id {
-                    let sub_flat =
-                        repo.resolve_combo_to_targets(sub_id, &mut visited, 0)?;
+                    let sub_flat = repo.resolve_combo_to_targets(sub_id, &mut visited, 0)?;
                     out.extend(sub_flat);
                 } else {
                     out.push(t);
@@ -73,9 +72,7 @@ impl Pipeline {
                 }
             }
 
-            let added = {
-                repo.auto_populate_empty_combo(combo_id)?
-            };
+            let added = { repo.auto_populate_empty_combo(combo_id)? };
 
             if added > 0 {
                 tracing::info!(
@@ -197,9 +194,7 @@ impl Pipeline {
         let chain = crate::stage::PipelineChain::new(vec![
             PipelineStageEnum::OAuthRefresh(crate::stages::target::OAuthRefreshStage),
             PipelineStageEnum::CustomAdapter(crate::stages::target::CustomAdapterStage),
-            PipelineStageEnum::TimeoutResolution(
-                crate::stages::target::TimeoutResolutionStage,
-            ),
+            PipelineStageEnum::TimeoutResolution(crate::stages::target::TimeoutResolutionStage),
             PipelineStageEnum::Formatting(crate::stages::target::FormattingStage),
             PipelineStageEnum::Dispatch(crate::stages::target::DispatchStage),
         ]);
@@ -237,7 +232,8 @@ impl Pipeline {
         let repo = self.repo();
         let combo_id = req.combo_id;
         tokio::task::spawn_blocking(move || {
-            repo.load_combo(combo_id)?.ok_or(CoreError::ComboNotFound(combo_id.0))
+            repo.load_combo(combo_id)?
+                .ok_or(CoreError::ComboNotFound(combo_id.0))
         })
         .await
         .unwrap()
@@ -269,7 +265,6 @@ impl Pipeline {
         .await
         .unwrap()
     }
-
 
     pub(crate) fn failure(
         &self,

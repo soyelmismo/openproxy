@@ -125,14 +125,8 @@ impl ProviderAdapter for CodexAdapter {
             ("Content-Type".into(), "application/json".into()),
             ("Origin".into(), "https://chatgpt.com".into()),
             ("originator".into(), "codex_cli_rs".into()),
-            (
-                "Version".into(),
-                codex_client_version(),
-            ),
-            (
-                "User-Agent".into(),
-                codex_user_agent(),
-            ),
+            ("Version".into(), codex_client_version()),
+            ("User-Agent".into(), codex_user_agent()),
         ];
         if let Some(auth) = self.build_auth_header(api_key) {
             headers.push(auth);
@@ -160,7 +154,10 @@ impl ProviderAdapter for CodexAdapter {
         provider_specific: Option<&str>,
     ) -> Option<Result<openproxy_types::AccountQuota>> {
         if let Some(token) = access_token {
-            Some(self.fetch_codex_quota_local(upstream_client, token, provider_specific).await)
+            Some(
+                self.fetch_codex_quota_local(upstream_client, token, provider_specific)
+                    .await,
+            )
         } else {
             Some(Ok(openproxy_types::AccountQuota {
                 session_used: None,

@@ -62,10 +62,18 @@ pub struct MaintenanceConfig {
     pub recording_ttl_secs: i64,
 }
 
-fn default_auto_vacuum() -> bool { true }
-fn default_maintenance_interval_secs() -> u64 { 6 * 3600 }
-fn default_usage_retention_days() -> u32 { 7 }
-fn default_recording_ttl_secs() -> i64 { 300 }
+fn default_auto_vacuum() -> bool {
+    true
+}
+fn default_maintenance_interval_secs() -> u64 {
+    6 * 3600
+}
+fn default_usage_retention_days() -> u32 {
+    7
+}
+fn default_recording_ttl_secs() -> i64 {
+    300
+}
 
 impl Default for MaintenanceConfig {
     fn default() -> Self {
@@ -175,8 +183,12 @@ pub struct CooldownConfig {
     pub factor: u32,
 }
 
-fn default_cooldown_max_secs() -> u64 { 3600 }
-fn default_cooldown_factor() -> u32 { 2 }
+fn default_cooldown_max_secs() -> u64 {
+    3600
+}
+fn default_cooldown_factor() -> u32 {
+    2
+}
 
 impl Default for CooldownConfig {
     fn default() -> Self {
@@ -275,4 +287,3 @@ impl CooldownMode {
         }
     }
 }
-

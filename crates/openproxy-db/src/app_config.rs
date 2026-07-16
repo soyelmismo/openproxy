@@ -1,8 +1,6 @@
 //! Persistent runtime config KV store.
 
-use openproxy_types::{
-    CoreError, Result, CompressionMode, TimeoutsConfig, QuotaProtectionConfig,
-};
+use openproxy_types::{CompressionMode, CoreError, QuotaProtectionConfig, Result, TimeoutsConfig};
 use rusqlite::{Connection, params};
 
 /// Key under which the [`TimeoutsConfig`] override is stored.
@@ -118,7 +116,7 @@ pub fn save_idle_chunk_retryable_to_db(
         "INSERT INTO app_config (key, value, updated_at) VALUES (?1, ?2, ?3)
          ON CONFLICT(key) DO UPDATE SET value = excluded.value,
                                          updated_at = excluded.updated_at",
-         params![IDLE_CHUNK_RETRYABLE_KEY, json, now_unix_secs],
+        params![IDLE_CHUNK_RETRYABLE_KEY, json, now_unix_secs],
     )
     .map_err(crate::error::map_db_error)?;
     Ok(())

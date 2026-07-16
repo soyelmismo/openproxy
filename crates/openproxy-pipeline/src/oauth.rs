@@ -1,10 +1,10 @@
-use std::sync::Arc;
-use rusqlite::Connection;
-use openproxy_db::secrets::MasterKey;
-use openproxy_types::ids::AccountId;
-use openproxy_types::error::CoreError;
 use openproxy_adapters::adapters::ProviderAdapterEnum;
+use openproxy_db::secrets::MasterKey;
+use openproxy_types::error::CoreError;
+use openproxy_types::ids::AccountId;
+use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
+use std::sync::Arc;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TokenResponse {

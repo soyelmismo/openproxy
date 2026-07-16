@@ -2,7 +2,7 @@
 //! Also includes streaming SSE translation for Anthropic -> OpenAI.
 
 use openproxy_types::error::{CoreError, Result};
-use openproxy_types::{OpenAIRequest, OpenAIMessage};
+use openproxy_types::{OpenAIMessage, OpenAIRequest};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 

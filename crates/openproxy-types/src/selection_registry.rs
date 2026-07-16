@@ -1,6 +1,6 @@
-use std::collections::HashMap;
-use parking_lot::Mutex;
 use crate::ids::ComboTargetId;
+use parking_lot::Mutex;
+use std::collections::HashMap;
 
 #[derive(Default)]
 pub struct SelectionRegistry {

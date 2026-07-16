@@ -1,5 +1,5 @@
-use crate::adapters::{ProviderAdapter, ProviderAdapterConfig, AdapterAuthType, AdapterFormat};
-use openproxy_types::{ProviderId, TargetFormat, ModelId, DiscoveredModel};
+use crate::adapters::{AdapterAuthType, AdapterFormat, ProviderAdapter, ProviderAdapterConfig};
+use openproxy_types::{DiscoveredModel, ModelId, ProviderId, TargetFormat};
 
 #[derive(Clone, serde::Serialize, serde::Deserialize)]
 pub struct MockAdapter {

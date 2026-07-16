@@ -1,7 +1,7 @@
-use serde::{Deserialize, Serialize};
+use crate::capabilities::ModelCapabilities;
 use crate::ids::ModelId;
 use crate::message::TargetFormat;
-use crate::capabilities::ModelCapabilities;
+use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DiscoveredModel {

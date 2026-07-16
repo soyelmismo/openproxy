@@ -320,10 +320,12 @@ pub fn upsert_scraped_proxies(
     proxies: &[ScrapedProxy],
 ) -> crate::error::Result<()> {
     let now = chrono::Utc::now().to_rfc3339();
-    let tx = conn.transaction().map_err(|e| crate::error::CoreError::Database {
-        message: e.to_string(),
-        source: Some(Box::new(e)),
-    })?;
+    let tx = conn
+        .transaction()
+        .map_err(|e| crate::error::CoreError::Database {
+            message: e.to_string(),
+            source: Some(Box::new(e)),
+        })?;
     for p in proxies {
         let id = uuid::Uuid::new_v4().to_string();
         tx.execute(
@@ -567,19 +569,22 @@ pub async fn sync_all_providers(db_pool: Arc<DbPool>) -> crate::error::Result<Sy
     if !scraped.is_empty() {
         let scraped_clone = scraped.clone();
         let db_pool = db_pool.clone();
-        let (before_count, after_count) = tokio::task::spawn_blocking(move || -> Result<(i64, i64), crate::error::CoreError> {
-            let mut w = db_pool.open_connection()?;
-            let before: i64 = w
-                .query_row("SELECT COUNT(*) FROM free_proxies", [], |r| r.get(0))
-                .unwrap_or(0);
-            
-            upsert_scraped_proxies(&mut w, &scraped_clone)?;
-            
-            let after: i64 = w
-                .query_row("SELECT COUNT(*) FROM free_proxies", [], |r| r.get(0))
-                .unwrap_or(0);
-            Ok((before, after))
-        }).await.map_err(|e| crate::error::CoreError::Internal(e.to_string()))??;
+        let (before_count, after_count) =
+            tokio::task::spawn_blocking(move || -> Result<(i64, i64), crate::error::CoreError> {
+                let mut w = db_pool.open_connection()?;
+                let before: i64 = w
+                    .query_row("SELECT COUNT(*) FROM free_proxies", [], |r| r.get(0))
+                    .unwrap_or(0);
+
+                upsert_scraped_proxies(&mut w, &scraped_clone)?;
+
+                let after: i64 = w
+                    .query_row("SELECT COUNT(*) FROM free_proxies", [], |r| r.get(0))
+                    .unwrap_or(0);
+                Ok((before, after))
+            })
+            .await
+            .map_err(|e| crate::error::CoreError::Internal(e.to_string()))??;
 
         added = (after_count - before_count) as usize;
     }
@@ -593,7 +598,9 @@ pub async fn sync_all_providers(db_pool: Arc<DbPool>) -> crate::error::Result<Sy
 
 // Proxy validation logic
 pub async fn test_proxy_connection(r#type: &str, host: &str, port: u16) -> Result<i64, String> {
-    use openproxy_adapters::upstream::{ResolvedTimeouts, TimeoutProfile, UpstreamClient, UpstreamRequest};
+    use openproxy_adapters::upstream::{
+        ResolvedTimeouts, TimeoutProfile, UpstreamClient, UpstreamRequest,
+    };
     let proxy_url = format!("{}://{}:{}", r#type, host, port);
 
     let client = UpstreamClient::new();
@@ -746,18 +753,22 @@ pub fn test_all_proxies_background(db_pool: Arc<DbPool>) {
                     let test_res = test_proxy_connection(&r#type, &host, port).await;
                     let db_pool = pool.clone();
                     let id_clone = id.clone();
-                    let _ = tokio::task::spawn_blocking(move || -> Result<(), crate::error::CoreError> {
-                        let w = db_pool.open_connection()?;
-                        match test_res {
-                            Ok(latency) => {
-                                let _ = update_proxy_status(&w, &id_clone, "alive", Some(latency));
+                    let _ = tokio::task::spawn_blocking(
+                        move || -> Result<(), crate::error::CoreError> {
+                            let w = db_pool.open_connection()?;
+                            match test_res {
+                                Ok(latency) => {
+                                    let _ =
+                                        update_proxy_status(&w, &id_clone, "alive", Some(latency));
+                                }
+                                Err(_) => {
+                                    let _ = update_proxy_status(&w, &id_clone, "dead", None);
+                                }
                             }
-                            Err(_) => {
-                                let _ = update_proxy_status(&w, &id_clone, "dead", None);
-                            }
-                        }
-                        Ok(())
-                    }).await;
+                            Ok(())
+                        },
+                    )
+                    .await;
                 }
             })
             .buffer_unordered(20)

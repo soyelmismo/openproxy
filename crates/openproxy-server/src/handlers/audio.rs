@@ -43,17 +43,15 @@ use axum::{
     http::{HeaderMap, HeaderValue, StatusCode},
     response::Response,
 };
+use openproxy_adapters::adapters;
 use openproxy_core::{
-    accounts,
-    cost,
-    models, providers,
+    accounts, cost, models, providers,
     routing::{self, RoutingPlan},
 };
 use openproxy_types::{
     CoreError,
     ids::{AccountId, ApiKeyId, ComboId, ModelRowId, ProviderId, RequestId, TraceId},
 };
-use openproxy_adapters::adapters;
 use std::time::Instant;
 
 use crate::{error::ApiError, middleware::auth::authenticate, state::AppState};
@@ -396,7 +394,11 @@ async fn dispatch_audio_request(
     let client = state.upstream_client();
     let cancel = openproxy_adapters::upstream::CancellationToken::new();
     client
-        .call(req, openproxy_adapters::upstream::TimeoutProfile::Quota, cancel)
+        .call(
+            req,
+            openproxy_adapters::upstream::TimeoutProfile::Quota,
+            cancel,
+        )
         .await
         .map_err(|e| {
             ApiError(CoreError::UpstreamConnection(format!(

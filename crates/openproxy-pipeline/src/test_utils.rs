@@ -1,5 +1,5 @@
-use openproxy_adapters::adapters::{AdapterAuthType, AdapterFormat, ProviderAdapterConfig};
 pub use openproxy_adapters::MockAdapter;
+use openproxy_adapters::adapters::{AdapterAuthType, AdapterFormat, ProviderAdapterConfig};
 pub mod combos {
     use super::*;
     pub use openproxy_types::combos::Strategy;
@@ -13,21 +13,35 @@ pub mod combos {
         pub sub_combo_id: Option<ComboId>,
     }
 
-    pub fn create_combo(conn: &Connection, name: &str, strategy: Strategy, race_size: u8) -> Result<ComboId, openproxy_types::error::CoreError> {
+    pub fn create_combo(
+        conn: &Connection,
+        name: &str,
+        strategy: Strategy,
+        race_size: u8,
+    ) -> Result<ComboId, openproxy_types::error::CoreError> {
         conn.execute(
             "INSERT INTO combos(name, strategy, race_size) VALUES (?1, ?2, ?3)",
             rusqlite::params![name, strategy.as_str(), race_size as i64],
-        ).unwrap();
-        let id: i64 = conn.query_row("SELECT last_insert_rowid()", [], |r| r.get(0)).unwrap();
+        )
+        .unwrap();
+        let id: i64 = conn
+            .query_row("SELECT last_insert_rowid()", [], |r| r.get(0))
+            .unwrap();
         Ok(ComboId(id))
     }
 
-    pub fn add_target(conn: &Connection, input: AddTargetInput) -> Result<openproxy_types::ids::ComboTargetId, openproxy_types::error::CoreError> {
-        let upstream_model_id: Option<String> = input.model_row_id.map(|mrid| conn.query_row(
-                    "SELECT model_id FROM models WHERE id = ?1",
-                    rusqlite::params![mrid.0],
-                    |r| r.get::<_, String>(0),
-                ).unwrap());
+    pub fn add_target(
+        conn: &Connection,
+        input: AddTargetInput,
+    ) -> Result<openproxy_types::ids::ComboTargetId, openproxy_types::error::CoreError> {
+        let upstream_model_id: Option<String> = input.model_row_id.map(|mrid| {
+            conn.query_row(
+                "SELECT model_id FROM models WHERE id = ?1",
+                rusqlite::params![mrid.0],
+                |r| r.get::<_, String>(0),
+            )
+            .unwrap()
+        });
         conn.execute(
             "INSERT INTO combo_targets(combo_id, provider_id, account_id, model_row_id, sub_combo_id, upstream_model_id, priority_order) \
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
@@ -41,22 +55,24 @@ pub mod combos {
                 input.priority_order,
             ],
         ).unwrap();
-        let id: i64 = conn.query_row("SELECT last_insert_rowid()", [], |r| r.get(0)).unwrap();
+        let id: i64 = conn
+            .query_row("SELECT last_insert_rowid()", [], |r| r.get(0))
+            .unwrap();
         Ok(openproxy_types::ids::ComboTargetId(id))
     }
 }
-use openproxy_types::config::{RacingConfig, RetriesConfig, TimeoutsConfig};
+use crate::timeouts::Timeouts;
+use crate::{PipelineConfig, PipelineRequest};
+use openproxy_adapters::upstream::UpstreamClient;
 use openproxy_db::conn::DbPool;
 use openproxy_db::migrations;
-use openproxy_types::ids::{AccountId, ComboId, ModelRowId, ProviderId, RequestId, TraceId};
-use openproxy_types::TargetFormat;
-use crate::{PipelineConfig, PipelineRequest};
-use openproxy_types::providers::{AuthType, ProviderFormat};
 use openproxy_db::providers;
 use openproxy_db::secrets::MasterKey;
-use crate::timeouts::Timeouts;
+use openproxy_types::TargetFormat;
+use openproxy_types::config::{RacingConfig, RetriesConfig, TimeoutsConfig};
+use openproxy_types::ids::{AccountId, ComboId, ModelRowId, ProviderId, RequestId, TraceId};
+use openproxy_types::providers::{AuthType, ProviderFormat};
 use openproxy_types::{OpenAIMessage, OpenAIRequest};
-use openproxy_adapters::upstream::UpstreamClient;
 use rusqlite::Connection;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -249,7 +265,6 @@ pub fn make_request_with_model(model: &str) -> OpenAIRequest {
     }
 }
 
-
 pub fn test_config_with_adapters(master_key: Arc<MasterKey>) -> PipelineConfig {
     let mut cfg = test_config(master_key);
     cfg.adapters = Arc::new(openproxy_adapters::adapters::builtin_adapters());
@@ -332,7 +347,9 @@ pub fn test_config_with_mock(master_key: Arc<MasterKey>, base_url: String) -> Pi
         retries: RetriesConfig::default(),
         max_attempts: 1,
         master_key,
-        adapters: Arc::new(vec![openproxy_adapters::adapters::ProviderAdapterEnum::Mock(mock)]),
+        adapters: Arc::new(vec![
+            openproxy_adapters::adapters::ProviderAdapterEnum::Mock(mock),
+        ]),
         cooldown_secs: 60,
         cooldown_max_secs: 3600,
         cooldown_factor: 2,
@@ -342,7 +359,7 @@ pub fn test_config_with_mock(master_key: Arc<MasterKey>, base_url: String) -> Pi
         idle_chunk_retryable: true,
         quota_protection: openproxy_types::config::QuotaProtectionConfig::default(),
         background_tx: tokio::sync::mpsc::channel(1).0,
-     }
+    }
 }
 
 pub fn seed_target_with_account(
@@ -353,7 +370,12 @@ pub fn seed_target_with_account(
     api_key: Option<&str>,
     master_key: &MasterKey,
     priority: u32,
-) -> (ComboId, openproxy_types::ids::ComboTargetId, AccountId, ModelRowId) {
+) -> (
+    ComboId,
+    openproxy_types::ids::ComboTargetId,
+    AccountId,
+    ModelRowId,
+) {
     let model_rowid = seed_provider_and_model(conn, provider_id, model_id, TargetFormat::Openai);
     let account_id = openproxy_db::accounts::create(
         conn,

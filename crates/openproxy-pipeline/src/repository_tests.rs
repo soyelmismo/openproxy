@@ -1,8 +1,8 @@
 #[cfg(test)]
 mod tests {
     use crate::repository::*;
-    use openproxy_types::ids::{ComboId, AccountId};
     use crate::test_utils::fresh_pool;
+    use openproxy_types::ids::{AccountId, ComboId};
 
     #[test]
     fn test_auto_populate_empty_combo() {
@@ -15,8 +15,12 @@ mod tests {
         w.execute("INSERT INTO models(provider_id, model_id, target_format) VALUES ('openrouter', 'm2', 'openai')", []).unwrap();
 
         w.execute("INSERT INTO accounts(provider_id, api_key_type, name) VALUES ('openrouter', 'plaintext', 'test')", []).unwrap();
-        
-        w.execute("INSERT INTO combos(id, strategy, retries) VALUES (1, 'priority', 1)", []).unwrap();
+
+        w.execute(
+            "INSERT INTO combos(id, strategy, retries) VALUES (1, 'priority', 1)",
+            [],
+        )
+        .unwrap();
         let combo_id = ComboId(1);
 
         // Auto-populate
@@ -33,19 +37,38 @@ mod tests {
         let w = pool.writer();
 
         w.execute("INSERT INTO providers(id, name, base_url, auth_type, format, rate_limit_scope, active) VALUES ('p', 'p', 'https://example.com', 'bearer', 'openai', 'account', 1)", []).unwrap();
-        w.execute("INSERT INTO models(provider_id, model_id, target_format) VALUES ('p', 'm', 'openai')", []).unwrap();
-        let model_rowid: i64 = w.query_row("SELECT last_insert_rowid()", [], |r| r.get(0)).unwrap();
+        w.execute(
+            "INSERT INTO models(provider_id, model_id, target_format) VALUES ('p', 'm', 'openai')",
+            [],
+        )
+        .unwrap();
+        let model_rowid: i64 = w
+            .query_row("SELECT last_insert_rowid()", [], |r| r.get(0))
+            .unwrap();
 
         w.execute("INSERT INTO accounts(provider_id, api_key_type, name) VALUES ('p', 'plaintext', 'sk-1')", []).unwrap();
-        let account_id1 = AccountId(w.query_row("SELECT last_insert_rowid()", [], |r| r.get(0)).unwrap());
+        let account_id1 = AccountId(
+            w.query_row("SELECT last_insert_rowid()", [], |r| r.get(0))
+                .unwrap(),
+        );
         w.execute("INSERT INTO accounts(provider_id, api_key_type, name) VALUES ('p', 'plaintext', 'sk-2')", []).unwrap();
-        let account_id2 = AccountId(w.query_row("SELECT last_insert_rowid()", [], |r| r.get(0)).unwrap());
+        let account_id2 = AccountId(
+            w.query_row("SELECT last_insert_rowid()", [], |r| r.get(0))
+                .unwrap(),
+        );
         w.execute("INSERT INTO accounts(provider_id, api_key_type, name) VALUES ('p', 'plaintext', 'sk-3')", []).unwrap();
-        let account_id3 = AccountId(w.query_row("SELECT last_insert_rowid()", [], |r| r.get(0)).unwrap());
+        let account_id3 = AccountId(
+            w.query_row("SELECT last_insert_rowid()", [], |r| r.get(0))
+                .unwrap(),
+        );
 
-        w.execute("INSERT INTO combos(id, strategy, retries) VALUES (1, 'priority', 1)", []).unwrap();
+        w.execute(
+            "INSERT INTO combos(id, strategy, retries) VALUES (1, 'priority', 1)",
+            [],
+        )
+        .unwrap();
         let combo_id = ComboId(1);
-        
+
         w.execute("INSERT INTO combo_targets(combo_id, provider_id, model_row_id, priority_order) VALUES (1, 'p', ?1, 10)", [model_rowid]).unwrap();
 
         let mut targets = list_targets(&w, combo_id).unwrap();

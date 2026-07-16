@@ -1,6 +1,6 @@
-use serde::{Deserialize, Serialize, Deserializer};
-use serde_json::Value;
 use crate::error::{CoreError, Result};
+use serde::{Deserialize, Deserializer, Serialize};
+use serde_json::Value;
 
 /// Output wire format the upstream model natively speaks.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Hash)]
@@ -135,4 +135,3 @@ impl<'a> OpenAIRequestView<'a> {
         }
     }
 }
-

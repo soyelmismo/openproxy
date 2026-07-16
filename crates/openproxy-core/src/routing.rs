@@ -19,11 +19,11 @@
 //! `&Connection`. Side effects (insert into the DB, mutate state) are
 //! pushed to the chat handler, which is the only caller.
 
-use openproxy_db::combos;
-use openproxy_types::combos::{Combo, ComboTarget, Strategy};
 use crate::error::Result;
 use crate::ids::{AccountId, ComboId, ComboTargetId, ModelRowId, ProviderId};
 use crate::models::{self, Model};
+use openproxy_db::combos;
+use openproxy_types::combos::{Combo, ComboTarget, Strategy};
 use rusqlite::{Connection, OptionalExtension};
 
 /// Sentinel combo id used for synthetic, in-memory combos. The id is
@@ -295,7 +295,7 @@ pub fn build_synthetic_combo(
 mod tests {
     use super::*;
     use openproxy_db::conn::DbPool;
-    
+
     use crate::providers::{self, AuthType, ProviderFormat};
     use std::path::PathBuf;
     use std::sync::atomic::AtomicU64;

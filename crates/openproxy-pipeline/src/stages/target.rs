@@ -1,11 +1,11 @@
-use openproxy_adapters::adapters::AdapterFormat;
-use openproxy_types::error::CoreError;
 use crate::context::PipelineContext;
-use crate::stage::{PipelineNext, PipelineStage};
-use crate::{FailureContext, PipelineResult};
 use crate::retry::RetryPolicy;
+use crate::stage::{PipelineNext, PipelineStage};
 use crate::timeouts;
 use crate::timeouts::ModelTimeoutOverrides;
+use crate::{FailureContext, PipelineResult};
+use openproxy_adapters::adapters::AdapterFormat;
+use openproxy_types::error::CoreError;
 
 #[derive(Clone, Copy)]
 pub struct OAuthRefreshStage;
@@ -189,13 +189,11 @@ impl PipelineStage for FormattingStage {
             .unwrap_or(&ctx.req.openai_request.messages);
 
         let formatter = crate::formatting::get_formatter(target_format);
-        let body_bytes = match formatter.format_request(
-            &ctx.req,
-            &current.model,
-            messages_ref,
-            stream,
-            &adapter,
-        ).and_then(|body| adapter.wrap_request_body(body, target_format, &current.model.model_id, current)) {
+        let body_bytes = match formatter
+            .format_request(&ctx.req, &current.model, messages_ref, stream, &adapter)
+            .and_then(|body| {
+                adapter.wrap_request_body(body, target_format, &current.model.model_id, current)
+            }) {
             Ok(b) => b,
             Err(e) => {
                 return Ok(ctx.pipeline.record_and_fail(
@@ -364,7 +362,8 @@ impl PipelineStage for DispatchStage {
                 Some(e)
                     if RetryPolicy::is_retryable(e, ctx.pipeline.config.idle_chunk_retryable) =>
                 {
-                    let key = if target.rate_limit_scope == openproxy_types::providers::RateLimitScope::Model
+                    let key = if target.rate_limit_scope
+                        == openproxy_types::providers::RateLimitScope::Model
                     {
                         crate::circuit_breaker::CircuitBreakerKey::Model(
                             aid,
@@ -378,8 +377,7 @@ impl PipelineStage for DispatchStage {
                         let provider_id_str = target.provider_id.to_string();
                         let model_id_str = model.model_id.as_str().to_string();
                         let combo_target_id = target.id.0;
-                        let dedup_key =
-                            format!("circuit_open:{}", aid.0);
+                        let dedup_key = format!("circuit_open:{}", aid.0);
                         let payload = serde_json::json!({
                             "code": "circuit_open",
                             "message": format!(
@@ -410,7 +408,8 @@ impl PipelineStage for DispatchStage {
                     }
                 }
                 _ => {
-                    let key = if target.rate_limit_scope == openproxy_types::providers::RateLimitScope::Model
+                    let key = if target.rate_limit_scope
+                        == openproxy_types::providers::RateLimitScope::Model
                     {
                         crate::circuit_breaker::CircuitBreakerKey::Model(
                             aid,

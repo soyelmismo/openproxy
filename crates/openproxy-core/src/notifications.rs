@@ -100,9 +100,10 @@ pub fn init_broadcast() -> &'static broadcast::Sender<NotificationEvent> {
     NOTIF_TX.get_or_init(|| {
         let (tx, _rx) = broadcast::channel(BROADCAST_CAPACITY);
         let tx_clone = tx.clone();
-        let _ = openproxy_types::notifications::NOTIFICATION_PUBLISHER.set(Box::new(move |event| {
-            let _ = tx_clone.send(event);
-        }));
+        let _ =
+            openproxy_types::notifications::NOTIFICATION_PUBLISHER.set(Box::new(move |event| {
+                let _ = tx_clone.send(event);
+            }));
         tx
     })
 }
@@ -413,7 +414,6 @@ pub fn delete(conn: &Connection, id: i64) -> Result<bool> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    
 
     fn fresh_db() -> Connection {
         let mut conn = Connection::open_in_memory().unwrap();

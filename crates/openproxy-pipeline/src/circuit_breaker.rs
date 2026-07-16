@@ -135,9 +135,7 @@ impl CircuitBreakerRegistry {
         let mut g = self.inner.lock();
         let cutoff = now_ms().saturating_sub(max_idle.as_millis() as u64);
         let before = g.len();
-        g.retain(|_, e| {
-            e.state == Health::Unhealthy || e.last_activity_ms >= cutoff
-        });
+        g.retain(|_, e| e.state == Health::Unhealthy || e.last_activity_ms >= cutoff);
         before - g.len()
     }
 
@@ -156,7 +154,10 @@ mod tests {
 
     #[test]
     fn test_circuit_breaker_transitions() {
-        let config = CircuitBreakerConfig { failure_threshold: 3, unhealthy_duration_ms: 100 };
+        let config = CircuitBreakerConfig {
+            failure_threshold: 3,
+            unhealthy_duration_ms: 100,
+        };
         let cb = CircuitBreakerRegistry::new(&config);
         let key = CircuitBreakerKey::Account(AccountId(1));
 
@@ -164,7 +165,7 @@ mod tests {
 
         assert_eq!(cb.record_failure(key.clone()), Health::Healthy);
         assert_eq!(cb.record_failure(key.clone()), Health::Healthy);
-        
+
         // 3rd failure triggers Unhealthy
         let outcome = cb.record_failure_outcome(key.clone());
         assert_eq!(outcome.health, Health::Unhealthy);

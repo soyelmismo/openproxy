@@ -17,10 +17,10 @@ use serde::{Deserialize, Serialize};
 use crate::error::{CoreError, Result};
 use crate::ids::AccountId;
 use crate::oauth::{DeviceAuthorizationResponse, OAuthFlow, OAuthProvider, TokenResponse};
-use openproxy_db::secrets::MasterKey;
 use openproxy_adapters::upstream::{
     CancellationToken, TimeoutProfile, UpstreamClient, UpstreamError, UpstreamRequest,
 };
+use openproxy_db::secrets::MasterKey;
 use std::sync::Arc;
 
 /// AWS SSO OIDC endpoints.

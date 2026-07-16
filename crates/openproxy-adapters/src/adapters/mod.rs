@@ -12,13 +12,14 @@
 //! This module is the trait layer only; persistent CRUD for `providers` lives
 //! in [`crate::providers`].
 
-use openproxy_types::{CoreError, Result, ModelId, ProviderId, DiscoveredModel, TargetFormat, ProviderMetadata};
 use crate::upstream::{CancellationToken, TimeoutProfile, UpstreamClient, UpstreamRequest};
 use bytes::Bytes;
 use http::HeaderValue;
+use openproxy_types::{
+    CoreError, DiscoveredModel, ModelId, ProviderId, ProviderMetadata, Result, TargetFormat,
+};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
-
 
 /// Static configuration for a single provider adapter.
 ///
@@ -251,7 +252,8 @@ pub trait ProviderAdapter: Send + Sync {
         _: &str,
         _: Option<&str>,
         _: Option<&str>,
-    ) -> impl std::future::Future<Output = Option<Result<openproxy_types::AccountQuota>>> + Send {
+    ) -> impl std::future::Future<Output = Option<Result<openproxy_types::AccountQuota>>> + Send
+    {
         async { None }
     }
 
@@ -485,13 +487,13 @@ pub mod gemini;
 pub mod kilocode;
 pub mod kiro_ai;
 pub mod minimax;
+#[cfg(any(test, feature = "test-utils"))]
+pub mod mock;
 pub mod nous_research;
 pub mod nvidia_nim;
 pub mod ollama_cloud;
 pub mod opencode_zen;
 pub mod openrouter;
-#[cfg(any(test, feature = "test-utils"))]
-pub mod mock;
 
 #[cfg(any(test, feature = "test-utils"))]
 pub use mock::MockAdapter;

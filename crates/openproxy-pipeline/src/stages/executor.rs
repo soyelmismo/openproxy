@@ -1,10 +1,10 @@
-use openproxy_types::combos::Strategy;
-use openproxy_types::error::CoreError;
 use crate::PipelineResult;
 use crate::context::PipelineContext;
-use crate::stage::PipelineStage;
 use crate::retry::RetryPolicy;
+use crate::stage::PipelineStage;
 use openproxy_adapters::upstream::CancellationToken;
+use openproxy_types::combos::Strategy;
+use openproxy_types::error::CoreError;
 
 #[derive(Clone, Copy)]
 pub struct UpstreamExecutorStage;

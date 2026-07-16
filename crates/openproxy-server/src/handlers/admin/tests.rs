@@ -10,11 +10,11 @@ use axum::{
     http::{Request, StatusCode},
     routing::{get, post, put},
 };
-use openproxy_types::config::TimeoutsConfig;
+use openproxy_adapters::adapters;
+use openproxy_core::api_keys as core_api_keys;
 use openproxy_db as core_db;
 use openproxy_db::secrets::MasterKey;
-use openproxy_core::api_keys as core_api_keys;
-use openproxy_adapters::adapters;
+use openproxy_types::config::TimeoutsConfig;
 use std::path::PathBuf;
 use tower::ServiceExt;
 

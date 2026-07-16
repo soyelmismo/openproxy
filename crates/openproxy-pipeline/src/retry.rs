@@ -44,7 +44,10 @@ impl RetryPolicy {
     }
 
     /// True if the error is retryable per spec §5.4.
-    pub fn is_retryable(err: &openproxy_types::error::CoreError, idle_chunk_retryable: bool) -> bool {
+    pub fn is_retryable(
+        err: &openproxy_types::error::CoreError,
+        idle_chunk_retryable: bool,
+    ) -> bool {
         use openproxy_types::error::CoreError::*;
         match err {
             UpstreamTimeout { phase, .. } => match phase.as_str() {
@@ -86,9 +89,15 @@ mod tests {
         let policy = RetryPolicy::from_config(&config);
 
         // Attempt 1 fails -> wait for 2nd attempt = base (100ms)
-        assert_eq!(policy.delay_after_attempt(1), Some(Duration::from_millis(100)));
+        assert_eq!(
+            policy.delay_after_attempt(1),
+            Some(Duration::from_millis(100))
+        );
         // Attempt 2 fails -> wait for 3rd attempt = base * factor (200ms)
-        assert_eq!(policy.delay_after_attempt(2), Some(Duration::from_millis(200)));
+        assert_eq!(
+            policy.delay_after_attempt(2),
+            Some(Duration::from_millis(200))
+        );
         // Attempt 3 fails -> max attempts reached
         assert_eq!(policy.delay_after_attempt(3), None);
     }

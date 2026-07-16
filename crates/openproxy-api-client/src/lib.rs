@@ -72,7 +72,10 @@ pub struct Client {
 impl Client {
     /// Construye un cliente con un `UpstreamClient` por defecto.
     pub fn new(base_url: impl Into<String>) -> Self {
-        Self::with_client(base_url, openproxy_adapters::upstream::UpstreamClient::new())
+        Self::with_client(
+            base_url,
+            openproxy_adapters::upstream::UpstreamClient::new(),
+        )
     }
 
     /// Construye un cliente compartiendo un `UpstreamClient` propio.
@@ -98,7 +101,11 @@ impl Client {
     ) -> Result<openproxy_adapters::upstream::UpstreamResponse, ClientError> {
         let cancel = openproxy_adapters::upstream::CancellationToken::new();
         self.http
-            .call(req, openproxy_adapters::upstream::TimeoutProfile::Quota, cancel)
+            .call(
+                req,
+                openproxy_adapters::upstream::TimeoutProfile::Quota,
+                cancel,
+            )
             .await
             .map_err(|e| ClientError::Http(e.to_string()))
     }
@@ -518,7 +525,9 @@ async fn parse_json<T: serde::de::DeserializeOwned>(
 /// Variante para endpoints que devuelven `{"deleted": ...}` u otro body
 /// informativo. No necesitamos el body, solo verificar que el status
 /// sea 2xx y que, si no lo es, el body se traduzca a `ClientError`.
-async fn parse_unit(resp: openproxy_adapters::upstream::UpstreamResponse) -> Result<(), ClientError> {
+async fn parse_unit(
+    resp: openproxy_adapters::upstream::UpstreamResponse,
+) -> Result<(), ClientError> {
     let status = resp.status;
     if status.is_success() {
         // Drenamos el body para liberar la conexión al pool, pero no lo

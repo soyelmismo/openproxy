@@ -618,10 +618,7 @@ pub(crate) fn run_analytics_query_with_filter<T, F>(
     query_fn: F,
 ) -> Result<T, ApiError>
 where
-    F: Fn(
-        &openproxy_db::conn::ReaderGuard<'_>,
-        &core_usage::UsageFilter,
-    ) -> Result<T, CoreError>,
+    F: Fn(&openproxy_db::conn::ReaderGuard<'_>, &core_usage::UsageFilter) -> Result<T, CoreError>,
 {
     // First attempt: use the reader connection.
     let r = s
