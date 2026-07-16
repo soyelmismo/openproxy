@@ -87,7 +87,7 @@ impl ProviderAdapter for OpenRouterAdapter {
         api_key: &str,
     ) -> Result<Vec<DiscoveredModel>> {
         let url = self.models_url().ok_or_else(|| {
-            openproxy_types::CoreError::Internal("openrouter has no models_url".into())
+            openproxy_types::error::CoreError::Internal("openrouter has no models_url".into())
         })?;
 
         let body = upstream_get_json(
@@ -96,10 +96,10 @@ impl ProviderAdapter for OpenRouterAdapter {
             &[("Authorization", format!("Bearer {api_key}"))],
         )
         .await
-        .map_err(|e| openproxy_types::CoreError::UpstreamConnection(e.to_string()))?;
+        .map_err(|e| openproxy_types::error::CoreError::UpstreamConnection(e.to_string()))?;
 
         let arr = body.get("data").and_then(|v| v.as_array()).ok_or_else(|| {
-            openproxy_types::CoreError::Parse("openrouter response missing 'data' array".into())
+            openproxy_types::error::CoreError::Parse("openrouter response missing 'data' array".into())
         })?;
 
         let models: Vec<DiscoveredModel> = arr

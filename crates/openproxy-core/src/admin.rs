@@ -1328,7 +1328,7 @@ mod tests {
         // We need a minimal adapter impl to satisfy the trait. We don't
         // call `fetch_models` on it.
         let adapter = openproxy_adapters::adapters::ProviderAdapterEnum::Mock(
-            openproxy_pipeline::test_utils::MockAdapter::new(
+            openproxy_adapters::adapters::MockAdapter::new(
                 "stub",
                 String::new(),
                 openproxy_adapters::adapters::AdapterFormat::Openai,
