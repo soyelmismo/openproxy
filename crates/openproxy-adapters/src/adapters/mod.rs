@@ -271,6 +271,16 @@ pub trait ProviderAdapter: Send + Sync {
     /// Normalize an OpenAI request view before serialization.
     /// Default: pass through unchanged.
     fn normalize_openai_request(&self, _view: &mut openproxy_types::OpenAIRequestView) {}
+
+    /// Allows the adapter to wrap or mutate the final request body before it is dispatched upstream.
+    fn wrap_request_body(
+        &self,
+        body: bytes::Bytes,
+        _target_format: TargetFormat,
+        _model: &ModelId,
+    ) -> std::result::Result<bytes::Bytes, openproxy_types::error::CoreError> {
+        Ok(body)
+    }
 }
 
 #[macro_export]
@@ -297,6 +307,14 @@ macro_rules! define_provider_adapter {
             }
             pub fn metadata(&self) -> openproxy_types::ProviderMetadata {
                 match self { $( $(#[$varmeta])* Self::$variant(inner) => inner.metadata(), )+ }
+            }
+            pub fn wrap_request_body(
+                &self,
+                body: bytes::Bytes,
+                target_format: TargetFormat,
+                model: &openproxy_types::ids::ModelId,
+            ) -> std::result::Result<bytes::Bytes, openproxy_types::error::CoreError> {
+                match self { $( $(#[$varmeta])* Self::$variant(inner) => inner.wrap_request_body(body, target_format, model), )+ }
             }
             pub fn auth_type(&self) -> $crate::adapters::AdapterAuthType {
                 match self { $( $(#[$varmeta])* Self::$variant(inner) => inner.auth_type(), )+ }

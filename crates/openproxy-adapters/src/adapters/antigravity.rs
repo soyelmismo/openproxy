@@ -150,6 +150,30 @@ impl ProviderAdapter for AntigravityAdapter {
         None
     }
 
+    fn wrap_request_body(
+        &self,
+        body: bytes::Bytes,
+        target_format: TargetFormat,
+        model: &ModelId,
+    ) -> Result<bytes::Bytes> {
+        if target_format == TargetFormat::Gemini {
+            let json = serde_json::from_slice::<serde_json::Value>(&body)
+                .map_err(|e| CoreError::Parse(format!("failed to parse gemini request: {e}")))?;
+            let wrapped = serde_json::json!({
+                "model": model.as_str(),
+                "requestType": "agent",
+                "requestId": uuid::Uuid::new_v4().to_string(),
+                "userAgent": "antigravity",
+                "request": json,
+                "enabledCreditTypes": ["GOOGLE_ONE_AI"]
+            });
+            let wrapped_bytes = serde_json::to_vec(&wrapped)
+                .map_err(|e| CoreError::Parse(format!("failed to serialize wrapped request: {e}")))?;
+            return Ok(bytes::Bytes::from(wrapped_bytes));
+        }
+        Ok(body)
+    }
+
     async fn fetch_models(
         &self,
         upstream_client: &Arc<UpstreamClient>,

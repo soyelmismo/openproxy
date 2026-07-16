@@ -195,7 +195,7 @@ impl PipelineStage for FormattingStage {
             messages_ref,
             stream,
             &adapter,
-        ) {
+        ).and_then(|body| adapter.wrap_request_body(body, target_format, &current.model.model_id)) {
             Ok(b) => b,
             Err(e) => {
                 return Ok(ctx.pipeline.record_and_fail(
