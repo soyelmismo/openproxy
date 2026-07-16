@@ -16,3 +16,6 @@
 ## 2024-03-20 - [N+1 SQLite Queries in sync loops]
 **Learning:** Checking for row existence (`SELECT EXISTS`) iteratively within a rust loop creates massive single query overheads, and using `transaction()` is invalid on a `&Connection` borrowing context without refactoring to `&mut`.
 **Action:** Move query statements ahead of loops using `IN` or fetching pre-filtered `HashSet`s. Manually execute `BEGIN` and `COMMIT` through SQL strings if you cannot mutate the connection structure directly. Use `vec!["?"; len].join(",")` to generate `IN` clauses without depending on external crates like `itertools`.
+## 2026-07-16 - Prevent repeated Regex compilation in kiro_ai adapter
+**Learning:** Found instances where `regex::Regex::new()` was called on every request in the `kiro_ai` adapter for identifying regions from account labels. Compiling regexes in the hot path is a common performance anti-pattern in Rust that introduces unnecessary allocation and parsing overhead.
+**Action:** Use `once_cell::sync::Lazy` to declare a static compiled `Regex` (e.g. `static REGION_RE: Lazy<regex::Regex> = Lazy::new(|| regex::Regex::new(r"...").unwrap());`) and use `.find()` on it to reuse the compiled state across requests.
