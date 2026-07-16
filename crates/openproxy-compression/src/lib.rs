@@ -1,3 +1,7 @@
+#![allow(clippy::ptr_arg)]
+#![allow(clippy::needless_range_loop)]
+#![allow(clippy::vec_init_then_push)]
+
 mod compression;
 pub mod content_router;
 pub mod diff_compressor;

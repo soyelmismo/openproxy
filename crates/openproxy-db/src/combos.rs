@@ -430,12 +430,6 @@ pub fn reconnect_orphan_targets(
     Ok(updated)
 }
 
-/// Maximum depth of sub-combo nesting (root combo → sub → sub → …).
-/// Enforced both at insert time ([`add_target`], via
-/// [`combo_in_chain`]) and at runtime resolution time
-/// ([`resolve_combo_to_targets`]). The cap is the same constant in
-/// both places so an attacker who hand-writes a row past the insert
-/// check still gets a clean runtime error.
 
 /// Walk down the sub-combo chain from `start_combo_id` and return
 /// `true` if `target_combo_id` is reachable within `max_depth`

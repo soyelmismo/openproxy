@@ -77,10 +77,6 @@ pub use repository::{ModelRepository, SqliteModelRepository};
 
 // ── Domain types ────────────────────────────────────────────────────
 
-/// Output wire format the upstream model natively speaks.
-///
-/// Persisted in `models.target_format`; the CHECK constraint allows only
-/// `"openai"`, `"anthropic"`, or `"gemini"`.
 
 /// Result of [`upsert_many`]. `touched` counts inserts + updates
 /// (the previous return value, kept stable for callers that only

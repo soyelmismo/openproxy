@@ -46,9 +46,8 @@ pub fn estimate_completion_tokens(text: &str) -> u32 {
 /// Count tokens in a text string using cl100k_base BPE.
 fn count_tokens(text: &str) -> u32 {
     if let Some(ref bpe) = *ENCODER {
-        match bpe.encode_with_special_tokens(text) {
-            tokens => tokens.len() as u32,
-        }
+        let tokens = bpe.encode_with_special_tokens(text);
+        tokens.len() as u32
     } else {
         estimate_tokens_heuristic(text)
     }
