@@ -217,14 +217,26 @@ impl PipelineRepository for SqlitePipelineRepository {
         let conn = self.conn.lock();
         let row = conn
             .query_row(
-                "SELECT id, provider_id, label, priority, extra_config_json, health_status, \
-                    rate_limited_until, expires_at, created_at, auth_type \
-             FROM accounts WHERE id = ?1",
+                "SELECT a.id, a.provider_id, a.label, a.priority, a.extra_config_json, a.health_status, \
+                    a.rate_limited_until, a.expires_at, a.created_at, \
+                    a.quota_session_used, a.quota_session_limit, a.quota_session_reset_at, \
+                    a.quota_weekly_used, a.quota_weekly_limit, a.quota_weekly_reset_at, \
+                    a.quota_plan_name, a.quota_last_fetched_at, a.quota_fetch_error, a.quota_model_details, \
+                    p.auth_type \
+             FROM accounts a \
+             JOIN providers p ON a.provider_id = p.id \
+             WHERE a.id = ?1",
                 rusqlite::params![account_id.0],
                 |row| {
                     let health_str: String = row.get(5)?;
                     let health_status = openproxy_types::HealthStatus::parse(&health_str)
                         .unwrap_or(openproxy_types::HealthStatus::Healthy);
+
+                    let quota_model_details_str: Option<String> = row.get(18)?;
+                    let quota_model_details = quota_model_details_str.and_then(|s| {
+                        serde_json::from_str(&s).ok()
+                    });
+
                     Ok(Account {
                         id: AccountId(row.get(0)?),
                         provider_id: openproxy_types::ids::ProviderId::new(
@@ -235,17 +247,17 @@ impl PipelineRepository for SqlitePipelineRepository {
                         extra_config_json: row.get(4)?,
                         health_status,
                         rate_limited_until: row.get(6)?,
-                        quota_session_used: None,
-                        quota_session_limit: None,
-                        quota_session_reset_at: None,
-                        quota_weekly_used: None,
-                        quota_weekly_limit: None,
-                        quota_weekly_reset_at: None,
-                        quota_plan_name: None,
-                        quota_last_fetched_at: None,
-                        quota_fetch_error: None,
-                        quota_model_details: None,
-                        auth_type: row.get(9)?,
+                        quota_session_used: row.get(9)?,
+                        quota_session_limit: row.get(10)?,
+                        quota_session_reset_at: row.get(11)?,
+                        quota_weekly_used: row.get(12)?,
+                        quota_weekly_limit: row.get(13)?,
+                        quota_weekly_reset_at: row.get(14)?,
+                        quota_plan_name: row.get(15)?,
+                        quota_last_fetched_at: row.get(16)?,
+                        quota_fetch_error: row.get(17)?,
+                        quota_model_details,
+                        auth_type: row.get(19)?,
                         email: None,
                         oauth_scope: None,
                         oauth_provider_specific: None,

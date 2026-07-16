@@ -5393,7 +5393,6 @@ fn test_quota_routing_and_protection() {
     insert_mock_account(3, 1, None, None, None); // Available (no limit)
 
     {
-        let lock_guard = conn.lock();
         let acc1 = pipeline
             .repo()
             .get_account(AccountId(1), &master_key)
@@ -5437,7 +5436,6 @@ fn test_quota_routing_and_protection() {
             ),
             QuotaStatus::Available
         );
-        std::mem::drop(lock_guard);
     }
 
     // 2. Test evaluate_account_quota - Model-specific quota with protection
@@ -5473,7 +5471,6 @@ fn test_quota_routing_and_protection() {
     );
 
     {
-        let lock_guard = conn.lock();
         let acc4 = pipeline
             .repo()
             .get_account(AccountId(4), &master_key)
@@ -5528,7 +5525,6 @@ fn test_quota_routing_and_protection() {
             ),
             QuotaStatus::Available
         );
-        std::mem::drop(lock_guard);
     }
 
     // 3. Test apply_quota_routing - Filtering and sorting

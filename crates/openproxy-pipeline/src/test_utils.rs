@@ -98,6 +98,7 @@ pub fn fresh_pool() -> (DbPool, Arc<parking_lot::Mutex<Connection>>, PathBuf) {
     // A second connection on the same file, owned by the Pipeline.
     let extra = Connection::open(&path).expect("open extra");
     let conn = Arc::new(parking_lot::Mutex::new(extra));
+    unsafe { std::env::set_var("OPENPROXY_ALLOW_PRIVATE_UPSTREAMS", "true"); }
     (pool, conn, path)
 }
 
