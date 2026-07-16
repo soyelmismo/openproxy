@@ -6,7 +6,8 @@ use once_cell::sync::Lazy;
 // =====================================================================
 
 // ⚡ Bolt Optimization: Compile regex once using Lazy to avoid expensive per-request regex compilation overhead
-static REGION_RE: Lazy<regex::Regex> = Lazy::new(|| regex::Regex::new(r"[a-z]{2}-[a-z]+-[0-9]").unwrap());
+static REGION_RE: Lazy<regex::Regex> =
+    Lazy::new(|| regex::Regex::new(r"[a-z]{2}-[a-z]+-[0-9]").unwrap());
 
 /// Adapter for Kiro AI (AWS CodeWhisperer).
 #[derive(Clone)]
