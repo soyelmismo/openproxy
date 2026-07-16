@@ -12,7 +12,7 @@
     "test:e2e": "cp tests/e2e/data-test.seed.db tests/e2e/data-test.db && playwright test"
   },
   "devDependencies": {
-    "@playwright/test": "^1.60.0",
+    "@playwright/test": "^1.61.1",
     "@types/node": "^22.19.21",
     "esbuild": "^0.28.1",
     "typescript": "6.0.3"
