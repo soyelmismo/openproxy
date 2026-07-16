@@ -116,7 +116,7 @@ impl ProviderAdapter for KiroAdapter {
         {
             region = m.as_str().to_string();
         }
-        kiro_runtime_url_local(&region)
+        kiro_runtime_url(&region)
     }
 
     fn build_auth_header(&self, api_key: &str) -> Option<(String, String)> {
@@ -235,7 +235,7 @@ impl ProviderAdapter for KiroAdapter {
     }
 }
 
-pub fn kiro_runtime_url_local(region: &str) -> String {
+pub fn kiro_runtime_url(region: &str) -> String {
     let region = if region.is_empty() {
         "us-east-1"
     } else {

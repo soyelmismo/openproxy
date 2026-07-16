@@ -458,3 +458,4 @@ mod tests {
         assert!(metadata.get("pluginType").is_none());
     }
 }
+

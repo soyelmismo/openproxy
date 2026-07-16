@@ -28,10 +28,10 @@
 //! markdown chunk, a Gemini-format chunk, a credits update, or a
 //! `[DONE]` sentinel.
 
-use crate::error::CoreError;
-use crate::ids::AccountId;
+use openproxy_types::error::CoreError;
+use openproxy_types::ids::AccountId;
 use openproxy_types::{OpenAIMessage, OpenAIRequest};
-use openproxy_pipeline::translation::{OpenAIChoice, OpenAIResponse, OpenAIUsage};
+use crate::translation::{OpenAIChoice, OpenAIResponse, OpenAIUsage};
 use openproxy_adapters::upstream::{
     CancellationToken, TimeoutProfile, UpstreamClient, UpstreamError, UpstreamRequest,
     UpstreamResponse,
@@ -420,36 +420,6 @@ fn classify_chunk(v: &serde_json::Value) -> ChunkKind {
 // Account metadata
 // ---------------------------------------------------------------------------
 
-pub fn read_project_id(conn: &Connection, account_id: AccountId) -> Result<String, CoreError> {
-    use rusqlite::OptionalExtension;
-
-    let specific: Option<String> = conn
-        .query_row(
-            "SELECT oauth_provider_specific FROM accounts WHERE id = ?1",
-            rusqlite::params![account_id.0],
-            |row| row.get(0),
-        )
-        .optional()
-        .map_err(|e| CoreError::Internal(format!("failed to read account: {e}")))?;
-
-    let specific = specific
-        .ok_or_else(|| CoreError::Internal("antigravity account has no projectId".into()))?;
-
-    if specific.is_empty() {
-        return Err(CoreError::Internal(
-            "antigravity account has no projectId".into(),
-        ));
-    }
-
-    let meta: serde_json::Value = serde_json::from_str(&specific)
-        .map_err(|e| CoreError::Internal(format!("invalid provider_specific JSON: {e}")))?;
-
-    meta.get("projectId")
-        .or_else(|| meta.get("project_id"))
-        .and_then(|v| v.as_str())
-        .map(|s| s.to_string())
-        .ok_or_else(|| CoreError::Internal("antigravity account has no projectId".into()))
-}
 
 // ---------------------------------------------------------------------------
 // Helpers for Tool Formatting
@@ -1210,7 +1180,7 @@ pub async fn execute_antigravity(
     project_id: &str,
     openai: &OpenAIRequest,
     client_disconnected: watch::Receiver<bool>,
-    stream_sink: Option<&openproxy_pipeline::StreamSink>,
+    stream_sink: Option<&crate::StreamSink>,
     proxy: Option<String>,
 ) -> Result<OpenAIResponse, CoreError> {
     // 1. Session ID and fingerprint derivation
@@ -1302,7 +1272,7 @@ pub async fn execute_antigravity(
                 "finish_reason": serde_json::Value::Null
             }]
         });
-        let sse_frame = openproxy_pipeline::sse::build_sse_frame(&serde_json::to_string(&role_chunk).unwrap());
+        let sse_frame = crate::sse::build_sse_frame(&serde_json::to_string(&role_chunk).unwrap());
         let _ = sink.send(sse_frame).await;
     }
 
@@ -1375,7 +1345,7 @@ pub async fn execute_antigravity(
                         }]
                     });
                     let sse_frame =
-                        openproxy_pipeline::sse::build_sse_frame(&serde_json::to_string(&text_delta).unwrap());
+                        crate::sse::build_sse_frame(&serde_json::to_string(&text_delta).unwrap());
                     let _ = sink.send(sse_frame).await;
                 }
 
@@ -1391,7 +1361,7 @@ pub async fn execute_antigravity(
                             "finish_reason": serde_json::Value::Null
                         }]
                     });
-                    let sse_frame = openproxy_pipeline::sse::build_sse_frame(
+                    let sse_frame = crate::sse::build_sse_frame(
                         &serde_json::to_string(&thinking_delta).unwrap(),
                     );
                     let _ = sink.send(sse_frame).await;
@@ -1411,7 +1381,7 @@ pub async fn execute_antigravity(
                             "finish_reason": serde_json::Value::Null
                         }]
                     });
-                    let sse_frame = openproxy_pipeline::sse::build_sse_frame(
+                    let sse_frame = crate::sse::build_sse_frame(
                         &serde_json::to_string(&tool_call_delta).unwrap(),
                     );
                     let _ = sink.send(sse_frame).await;
@@ -1463,7 +1433,7 @@ pub async fn execute_antigravity(
                     }]
                 });
                 let sse_frame =
-                    openproxy_pipeline::sse::build_sse_frame(&serde_json::to_string(&text_delta).unwrap());
+                    crate::sse::build_sse_frame(&serde_json::to_string(&text_delta).unwrap());
                 let _ = sink.send(sse_frame).await;
             }
             if !thinking_chunk.is_empty() {
@@ -1479,7 +1449,7 @@ pub async fn execute_antigravity(
                     }]
                 });
                 let sse_frame =
-                    openproxy_pipeline::sse::build_sse_frame(&serde_json::to_string(&thinking_delta).unwrap());
+                    crate::sse::build_sse_frame(&serde_json::to_string(&thinking_delta).unwrap());
                 let _ = sink.send(sse_frame).await;
             }
             for tc in &tool_calls {
@@ -1497,7 +1467,7 @@ pub async fn execute_antigravity(
                     }]
                 });
                 let sse_frame =
-                    openproxy_pipeline::sse::build_sse_frame(&serde_json::to_string(&tool_call_delta).unwrap());
+                    crate::sse::build_sse_frame(&serde_json::to_string(&tool_call_delta).unwrap());
                 let _ = sink.send(sse_frame).await;
             }
         }
@@ -1525,7 +1495,7 @@ pub async fn execute_antigravity(
                 "finish_reason": "stop"
             }]
         });
-        let sse_frame = openproxy_pipeline::sse::build_sse_frame(&serde_json::to_string(&final_chunk).unwrap());
+        let sse_frame = crate::sse::build_sse_frame(&serde_json::to_string(&final_chunk).unwrap());
         let _ = sink.send(sse_frame).await;
 
         if let Some(ref u) = usage {
@@ -1542,11 +1512,11 @@ pub async fn execute_antigravity(
                 }
             });
             let sse_frame =
-                openproxy_pipeline::sse::build_sse_frame(&serde_json::to_string(&usage_chunk).unwrap());
+                crate::sse::build_sse_frame(&serde_json::to_string(&usage_chunk).unwrap());
             let _ = sink.send(sse_frame).await;
         }
 
-        let _ = sink.send(openproxy_pipeline::SSE_DONE_BYTES.clone()).await;
+        let _ = sink.send(crate::SSE_DONE_BYTES.clone()).await;
     }
 
     // 5. Assemble final OpenAIResponse

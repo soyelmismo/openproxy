@@ -2,6 +2,8 @@ use serde::{Deserialize, Serialize};
 use crate::ids::{AccountId, ComboId, ComboTargetId, ModelRowId, ProviderId};
 use crate::config::CooldownMode;
 
+pub const MAX_SUB_COMBO_DEPTH: u32 = 5;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Strategy {

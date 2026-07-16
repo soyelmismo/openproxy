@@ -35,10 +35,10 @@
 //! surfaced as the body of an `OpenAIResponse` so the caller can
 //! at least see *something* on the wire.
 
-use crate::error::{CoreError, Result};
-use crate::ids::AccountId;
+use openproxy_types::error::{CoreError, Result};
+use openproxy_types::ids::AccountId;
 use openproxy_types::{OpenAIMessage, OpenAIRequest};
-use openproxy_pipeline::translation::{OpenAIChoice, OpenAIResponse};
+use crate::translation::{OpenAIChoice, OpenAIResponse};
 use openproxy_adapters::upstream::{
     CancellationToken, TimeoutProfile, UpstreamClient, UpstreamError, UpstreamRequest,
 };
@@ -66,33 +66,7 @@ pub const KIRO_USER_AGENT: &str = "aws-sdk-js/3.0.0 kiro/0.1";
 /// endpoint, picking the regional host for non-us-east-1
 /// regions (Amazon Q uses `q.{region}.amazonaws.com` outside
 /// us-east-1).
-pub fn kiro_runtime_url(region: &str) -> String {
-    let region = if region.is_empty() {
-        KIRO_DEFAULT_REGION
-    } else {
-        region
-    };
-    let host = if region == KIRO_DEFAULT_REGION {
-        format!("https://codewhisperer.{}.amazonaws.com", region)
-    } else {
-        format!("https://q.{}.amazonaws.com", region)
-    };
-    format!("{}/generateAssistantResponse", host)
-}
 
-/// Read the per-account `profileArn` + `region` persisted by the
-/// Kiro OAuth provider's `post_exchange` hook. Returns
-/// `Ok(None)` when the row has no `oauth_provider_specific` JSON
-/// or the JSON omits `profileArn` (the user is mid-OAuth or
-/// re-linking); the executor then uses a placeholder so the
-/// request still goes out and the failure surfaces an
-/// actionable error message.
-pub fn read_account_meta(
-    conn: &Connection,
-    account_id: AccountId,
-) -> Result<Option<crate::oauth_kiro::KiroProviderMeta>> {
-    crate::oauth_kiro::read_profile_meta(conn, account_id)
-}
 
 /// Request body envelope used by `generateAssistantResponse`.
 ///
@@ -413,7 +387,7 @@ pub async fn execute_kiro(
     // 2. Build the upstream request. The body is JSON; the URL
     //    is the regional Kiro endpoint; the auth header is the
     //    bearer token.
-    let url = kiro_runtime_url(region);
+    let url = openproxy_adapters::adapters::kiro_ai::kiro_runtime_url(region);
     let body_bytes = serde_json::to_vec(&req)
         .map_err(|e| CoreError::Parse(format!("kiro request serialize: {e}")))?;
     let mut upstream_request = UpstreamRequest::post_json(url, bytes::Bytes::from(body_bytes));
@@ -528,7 +502,7 @@ mod tests {
     #[test]
     fn kiro_runtime_url_us_east_1() {
         assert_eq!(
-            kiro_runtime_url("us-east-1"),
+            openproxy_adapters::adapters::kiro_ai::kiro_runtime_url("us-east-1"),
             "https://codewhisperer.us-east-1.amazonaws.com/generateAssistantResponse"
         );
     }
@@ -536,7 +510,7 @@ mod tests {
     #[test]
     fn kiro_runtime_url_other_region() {
         assert_eq!(
-            kiro_runtime_url("eu-central-1"),
+            openproxy_adapters::adapters::kiro_ai::kiro_runtime_url("eu-central-1"),
             "https://q.eu-central-1.amazonaws.com/generateAssistantResponse"
         );
     }

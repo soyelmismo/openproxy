@@ -18,40 +18,73 @@ impl PipelineStage for OAuthRefreshStage {
     ) -> Result<PipelineResult, CoreError> {
         let current = ctx
             .current_target
-            .as_mut()
+            .as_ref()
             .expect("current_target must be set");
         let target = &current.target;
+        let provider_id = target.provider_id.as_str();
 
-        if let Some(account_id) = target.account_id
-            && let Some(custom_meta) = &mut current.custom_meta
-            && let Some(refresh_token) = &custom_meta.maybe_refresh
-            && let Some(registry) = ctx.pipeline.config.oauth_provider_registry.as_ref()
-        {
-            let provider_id_str = target.provider_id.as_str();
-            tracing::info!(
-                account = account_id.0,
-                provider = provider_id_str,
-                "pipeline: proactive OAuth token refresh"
-            );
-            match registry
-                .refresh_and_store(
-                    provider_id_str,
-                    refresh_token,
-                    &ctx.pipeline.config.upstream_client,
-                    account_id,
-                    &ctx.pipeline.conn,
-                    &ctx.pipeline.config.master_key,
-                )
-                .await
-            {
-                Ok(token) => {
-                    custom_meta.access_token = token.access_token;
+        if provider_id == "kiro" || provider_id == "kiro-ai" {
+            let meta = current.custom_meta.as_ref().expect("kiro target requires custom_meta");
+            let result = crate::executor_kiro::execute_kiro(
+                &ctx.pipeline.config.upstream_client,
+                &meta.access_token,
+                meta.kiro_region.as_deref().unwrap_or("us-east-1"),
+                meta.kiro_profile_arn.as_deref(),
+                &ctx.req.openai_request,
+                ctx.req.client_disconnected.clone(),
+                None,
+            ).await;
+            
+            let res = match result {
+                Ok(resp) => crate::PipelineResult {
+                    status_code: 200,
+                    error: None,
+                    final_response: Some(resp),
+                    attempts: ctx.current_target_attempt,
+                    usage_tuple: None,
+                },
+                Err(e) => crate::PipelineResult {
+                    status_code: e.http_status(),
+                    error: Some(e),
+                    final_response: None,
+                    attempts: ctx.current_target_attempt,
+                    usage_tuple: None,
                 }
-                Err(e) => {
-                    tracing::warn!(account = account_id.0, provider = provider_id_str, error = %e, "pipeline: proactive OAuth refresh failed, continuing with existing token");
+            };
+            return Ok(res);
+        } else if provider_id == "antigravity" {
+            let meta = current.custom_meta.as_ref().expect("antigravity target requires custom_meta");
+            let url = "https://autopush-aiplatform.sandbox.googleapis.com/v1internal:streamGenerateContent?alt=sse".to_string();
+            let result = crate::executor_antigravity::execute_antigravity(
+                &ctx.pipeline.config.upstream_client,
+                &url,
+                &meta.access_token,
+                meta.antigravity_project.as_deref().unwrap_or(""),
+                &ctx.req.openai_request,
+                ctx.req.client_disconnected.clone(),
+                ctx.req.stream_sink.as_ref(),
+                None,
+            ).await;
+            
+            let res = match result {
+                Ok(resp) => crate::PipelineResult {
+                    status_code: 200,
+                    error: None,
+                    final_response: Some(resp),
+                    attempts: ctx.current_target_attempt,
+                    usage_tuple: None,
+                },
+                Err(e) => crate::PipelineResult {
+                    status_code: e.http_status(),
+                    error: Some(e),
+                    final_response: None,
+                    attempts: ctx.current_target_attempt,
+                    usage_tuple: None,
                 }
-            }
+            };
+            return Ok(res);
         }
+
         next.execute(ctx).await
     }
 }

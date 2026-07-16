@@ -36,10 +36,7 @@ pub mod cost;
 
 pub mod discovery_scheduler;
 pub(crate) use openproxy_types::endpoint;
-pub mod executor_antigravity;
-pub mod schema_cleaner;
 
-pub mod executor_kiro;
 pub mod free_proxies;
 pub mod model_normalize;
 pub mod models;
@@ -99,4 +96,5 @@ pub use config::AppConfig;
 pub fn install_rustls_crypto_provider() {
     let _ = rustls::crypto::ring::default_provider().install_default();
 }
+#[cfg(test)]
 pub mod pipeline_repository_tests;

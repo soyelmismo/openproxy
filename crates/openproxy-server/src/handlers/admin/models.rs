@@ -499,7 +499,7 @@ pub(crate) async fn run_test_for_model(
             "antigravity" => {
                 let project_id = {
                     let w = s.db_pool().writer();
-                    openproxy_core::executor_antigravity::read_project_id(&w, test_account_id)
+                    openproxy_core::oauth_antigravity::read_project_id(&w, test_account_id)
                         .unwrap_or_default()
                 };
                 let http_client = s.upstream_client();
@@ -508,14 +508,14 @@ pub(crate) async fn run_test_for_model(
                 // see the symmetric note on the kiro branch below.
                 let (_cancel_tx, dummy_cancel_rx) = tokio::sync::watch::channel(false);
                 let final_cancel_rx = cancel_rx.clone().unwrap_or(dummy_cancel_rx);
-                openproxy_core::executor_antigravity::execute_antigravity(
+                openproxy_pipeline::executor_antigravity::execute_antigravity(
                     http_client,
                     &format!(
                         "{}/v1internal:streamGenerateContent?alt=sse",
                         openproxy_adapters::adapters::antigravity::DEFAULT_ANTIGRAVITY_BASE_URL
                     ),
                     &access_token,
-                    &project_id,
+                    project_id.as_deref().unwrap_or(""),
                     &openai_req,
                     final_cancel_rx,
                     None,
@@ -527,14 +527,14 @@ pub(crate) async fn run_test_for_model(
                 let (region, profile_arn) = {
                     let w = s.db_pool().writer();
                     let meta =
-                        openproxy_core::executor_kiro::read_account_meta(&w, test_account_id)
+                        openproxy_core::oauth_kiro::read_profile_meta(&w, test_account_id)
                             .unwrap_or(None);
                     (
                         meta.as_ref()
                             .map(|m| m.region.clone())
                             .filter(|r| !r.is_empty())
                             .unwrap_or_else(|| {
-                                openproxy_core::executor_kiro::KIRO_DEFAULT_REGION.to_string()
+                                openproxy_pipeline::executor_kiro::KIRO_DEFAULT_REGION.to_string()
                             }),
                         meta.as_ref().and_then(|m| m.profile_arn.clone()),
                     )
@@ -550,7 +550,7 @@ pub(crate) async fn run_test_for_model(
                 // `executor_kiro.rs:438-445`).
                 let (_cancel_tx, dummy_cancel_rx) = tokio::sync::watch::channel(false);
                 let final_cancel_rx = cancel_rx.clone().unwrap_or(dummy_cancel_rx);
-                openproxy_core::executor_kiro::execute_kiro(
+                openproxy_pipeline::executor_kiro::execute_kiro(
                     http_client,
                     &access_token,
                     &region,

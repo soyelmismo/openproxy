@@ -417,7 +417,7 @@ mod tests {
 
     fn fresh_db() -> Connection {
         let mut conn = Connection::open_in_memory().unwrap();
-        migrations::run(&mut conn).unwrap();
+        openproxy_db::migrations::run(&mut conn).unwrap();
         conn
     }
 

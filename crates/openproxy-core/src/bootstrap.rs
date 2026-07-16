@@ -105,7 +105,7 @@ mod tests {
         std::fs::create_dir_all(&dir).expect("mkdir");
         let path = dir.join("bootstrap.db");
         let mut conn = Connection::open(&path).expect("open");
-        migrations::run(&mut conn).expect("migrate");
+        openproxy_db::migrations::run(&mut conn).expect("migrate");
         (conn, path)
     }
 

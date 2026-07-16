@@ -612,7 +612,7 @@ mod tests {
         let pool = DbPool::open(&path).expect("open pool");
         {
             let mut w = pool.writer();
-            migrations::run(&mut w).expect("migrations");
+            openproxy_db::migrations::run(&mut w).expect("migrations");
             // Seed the provider rows so the discovery tick's
             // `providers::get` check passes for the ids we test
             // with. We can't use the real `builtin_provider_ids`

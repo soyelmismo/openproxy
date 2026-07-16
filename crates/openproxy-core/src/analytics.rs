@@ -443,7 +443,7 @@ mod tests {
         let dir = tempdir();
         let path = dir.join("analytics-test.db");
         let mut conn = Connection::open(&path).expect("open");
-        migrations::run(&mut conn).expect("migrate");
+        openproxy_db::migrations::run(&mut conn).expect("migrate");
         (conn, path)
     }
 

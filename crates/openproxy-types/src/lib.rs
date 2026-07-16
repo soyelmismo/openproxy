@@ -31,7 +31,7 @@ pub use providers::{
     AuthType, RateLimitScope, Provider,
 };
 pub mod combos;
-pub use combos::{Strategy, PriorityMode, Combo, ComboTarget, ComboTargetWithModel};
+pub use combos::{Strategy, PriorityMode, Combo, ComboTarget, ComboTargetWithModel, MAX_SUB_COMBO_DEPTH};
 pub use config::{
     CircuitBreakerConfig, CooldownConfig, EncryptionKeySource, MaintenanceConfig,
     QuotaProtectionConfig, RacingConfig, RetriesConfig, ServerConfig, SmartWarmupConfig,

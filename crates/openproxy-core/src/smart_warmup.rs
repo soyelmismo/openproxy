@@ -9,7 +9,6 @@ use crate::accounts;
 use crate::config::AppConfig;
 use openproxy_db::DbPool;
 use crate::ids::ProviderId;
-use crate::quota::fetch_antigravity_quota;
 use openproxy_db::secrets::MasterKey;
 use openproxy_types::{OpenAIMessage, OpenAIRequest};
 use openproxy_adapters::upstream::UpstreamClient;
@@ -98,7 +97,7 @@ async fn run_warmup_cycle(
             .filter(|a| !matches!(a.health_status, crate::accounts::HealthStatus::Unhealthy))
             .filter_map(|a| {
                 let token = accounts::decrypt_access_token(&conn, a.id, master_key).ok()?;
-                let project_id = crate::executor_antigravity::read_project_id(&conn, a.id).ok()?;
+                let project_id = crate::oauth_antigravity::read_project_id(&conn, a.id).ok().flatten()?;
                 Some((a.id.0, a.id.0.to_string(), token, project_id))
             })
             .collect()
@@ -109,9 +108,10 @@ async fn run_warmup_cycle(
 
     for (account_id_i64, account_id_str, access_token, project_id) in account_list {
         // Fetch fresh quota
-        let quota = match fetch_antigravity_quota(upstream, &access_token).await {
-            Ok(q) => q,
-            Err(e) => {
+        let adapter = openproxy_adapters::adapters::ProviderAdapterEnum::Antigravity(openproxy_adapters::adapters::AntigravityAdapter::new());
+        let quota = match adapter.fetch_quota(upstream, "", Some(&access_token), None).await {
+            Some(Ok(q)) => q,
+            Some(Err(e)) => {
                 tracing::debug!(
                     "[SmartWarmup] Failed to fetch quota for account {}: {}",
                     account_id_str,
@@ -119,6 +119,7 @@ async fn run_warmup_cycle(
                 );
                 continue;
             }
+            None => continue,
         };
 
         // Persist the fresh quota so the UI / frontend sees it
@@ -217,7 +218,7 @@ async fn ping_antigravity_model(
     let request = build_warmup_request(model);
     let (_cancel_tx, cancel_rx) = tokio::sync::watch::channel(false);
 
-    match crate::executor_antigravity::execute_antigravity(
+    match openproxy_pipeline::executor_antigravity::execute_antigravity(
         upstream,
         &format!(
             "{}/v1internal:streamGenerateContent?alt=sse",

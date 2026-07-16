@@ -404,7 +404,7 @@ mod tests {
         let pool = DbPool::open(&path).expect("open pool");
         {
             let mut w = pool.writer();
-            migrations::run(&mut w).expect("migrations");
+            openproxy_db::migrations::run(&mut w).expect("migrations");
         }
         (pool, path)
     }

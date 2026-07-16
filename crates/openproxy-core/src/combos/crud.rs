@@ -430,7 +430,6 @@ pub fn reconnect_orphan_targets(
 /// ([`resolve_combo_to_targets`]). The cap is the same constant in
 /// both places so an attacker who hand-writes a row past the insert
 /// check still gets a clean runtime error.
-pub const MAX_SUB_COMBO_DEPTH: u32 = 8;
 
 /// Walk down the sub-combo chain from `start_combo_id` and return
 /// `true` if `target_combo_id` is reachable within `max_depth`
@@ -1255,7 +1254,7 @@ mod tests {
         let pool = DbPool::open(&path).expect("open pool");
         {
             let mut w = pool.writer();
-            migrations::run(&mut w).expect("migrations");
+            openproxy_db::migrations::run(&mut w).expect("migrations");
         }
         (pool, path)
     }
@@ -1566,8 +1565,8 @@ fn compute_effective_context_window_recursive(
     visited: &mut Vec<openproxy_types::ComboId>,
     depth: u32,
 ) -> openproxy_types::error::Result<Option<i64>> {
-    if depth > 5 {
-        return Err(openproxy_types::error::CoreError::Validation(format!("max sub-combo depth ({}) exceeded", 5)));
+    if depth > openproxy_types::MAX_SUB_COMBO_DEPTH {
+        return Err(openproxy_types::error::CoreError::Validation(format!("max sub-combo depth ({}) exceeded", openproxy_types::MAX_SUB_COMBO_DEPTH)));
     }
     if visited.contains(&combo_id) {
         return Err(openproxy_types::error::CoreError::Validation(format!("cyclic combo detected at id {}", combo_id.0)));

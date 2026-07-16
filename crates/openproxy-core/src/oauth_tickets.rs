@@ -229,7 +229,7 @@ mod tests {
         // without going through DbPool's writer guard (which holds
         // the connection). Migrations run directly on this handle.
         let mut conn = Connection::open_in_memory().expect("in-memory rusqlite conn");
-        migrations::run(&mut conn).expect("migrations");
+        openproxy_db::migrations::run(&mut conn).expect("migrations");
         conn
     }
 
