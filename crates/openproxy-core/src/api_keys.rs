@@ -185,7 +185,7 @@ pub fn create(
             created_by,
         ],
     )
-    .map_err(crate::error::map_db_error)?;
+    .map_err(openproxy_db::error::map_db_error)?;
 
     let id = ApiKeyId(conn.last_insert_rowid());
     let row = get_by_id(conn, id)?
@@ -226,7 +226,7 @@ pub fn get_by_hash(conn: &Connection, key_hash: &str) -> Result<Option<ApiKey>> 
             row_to_api_key,
         )
         .optional()
-        .map_err(crate::error::map_db_error)?;
+        .map_err(openproxy_db::error::map_db_error)?;
     Ok(row)
 }
 
@@ -243,7 +243,7 @@ pub fn count_active(conn: &Connection) -> Result<u64> {
             [],
             |row| row.get(0),
         )
-        .map_err(crate::error::map_db_error)?;
+        .map_err(openproxy_db::error::map_db_error)?;
     Ok(n.max(0) as u64)
 }
 
@@ -256,13 +256,13 @@ pub fn list(conn: &Connection) -> Result<Vec<ApiKey>> {
                     revoked_at, expires_at, last_used_at, created_at, created_by \
              FROM api_keys ORDER BY id DESC",
         )
-        .map_err(crate::error::map_db_error)?;
+        .map_err(openproxy_db::error::map_db_error)?;
     let rows = stmt
         .query_map([], row_to_api_key)
-        .map_err(crate::error::map_db_error)?;
+        .map_err(openproxy_db::error::map_db_error)?;
     let mut out = Vec::new();
     for r in rows {
-        out.push(r.map_err(crate::error::map_db_error)?);
+        out.push(r.map_err(openproxy_db::error::map_db_error)?);
     }
     Ok(out)
 }

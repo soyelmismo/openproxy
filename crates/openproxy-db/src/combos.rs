@@ -1,3 +1,12 @@
+use openproxy_types::error::CoreError;
+use openproxy_types::ids::*;
+use openproxy_types::error::Result;
+use openproxy_types::config::CooldownMode;
+use openproxy_types::providers::RateLimitScope;
+use openproxy_types::providers::*;
+use rusqlite::OptionalExtension;
+use openproxy_types::combos::*;
+use openproxy_types::ProviderId;
 use super::*;
 use rusqlite::{Connection, Row, params};
 pub fn create_combo(
@@ -370,7 +379,7 @@ pub fn add_target(conn: &Connection, input: AddTargetInput) -> Result<ComboTarge
 /// This helper is the heart of the reconnect path. The call shape is
 /// `reconnect_orphan_targets(conn, provider, upstream_model_id,
 /// new_model_row_id)` and is intended to be called from
-/// [`crate::models::upsert_many`] *inside the same transaction* that
+/// [`openproxy_types::models::upsert_many`] *inside the same transaction* that
 /// just deleted the old `models` row and inserted the new one. The
 /// atomicity is the whole point: the re-bind cannot survive a
 /// crash between the model INSERT and the UPDATE here.
@@ -1163,7 +1172,7 @@ fn row_to_target(row: &Row<'_>) -> rusqlite::Result<ComboTarget> {
         sub_combo_id: sub_combo_id.map(ComboId),
         priority_order,
         weight,
-        rate_limit_scope: crate::providers::RateLimitScope::parse(&rate_limit_scope)
+        rate_limit_scope: openproxy_types::providers::RateLimitScope::parse(&rate_limit_scope)
             .unwrap_or_default(),
     })
 }

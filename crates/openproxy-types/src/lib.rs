@@ -24,7 +24,7 @@ pub use ids::{
     AccountId, ApiKeyId, ComboId, ComboTargetId, ModelId, ModelRowId, ProviderId, RequestId,
     TraceId, UsageId,
 };
-pub use error::{CoreError, ErrorContext, Result, map_db_error, map_db_error_ctx};
+pub use error::{CoreError, ErrorContext, Result};
 pub use message::{OpenAIMessage, TargetFormat, OpenAIRequest, OpenAIRequestView};
 pub use providers::{
     ProviderMetadata, builtin_provider_ids, is_builtin, DiscoveredModel, ProviderFormat,
@@ -48,3 +48,5 @@ pub use model_normalize::normalize_model_id;
 
 pub mod selection_registry;
 pub use selection_registry::SelectionRegistry;
+pub mod context;
+pub use context::{ResolvedTarget, CustomProviderMeta};

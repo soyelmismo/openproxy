@@ -253,7 +253,7 @@ fn resolve_model_alias(conn: &rusqlite::Connection, alias: &str) -> String {
     use crate::ids::ProviderId;
 
     // Try to lookup as a combo
-    if let Ok(Some(combo)) = crate::combos::crud::get_combo_by_name(conn, alias) {
+    if let Ok(Some(combo)) = openproxy_db::combos::get_combo_by_name(conn, alias) {
         let mut visited = Vec::new();
         if let Ok(targets) =
             openproxy_pipeline::repository::resolve_combo_to_targets(conn, combo.id, &mut visited, 0)

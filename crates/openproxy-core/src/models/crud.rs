@@ -173,15 +173,15 @@ pub fn list_active(conn: &Connection, provider: &ProviderId) -> Result<Vec<Model
              WHERE provider_id = ? \
                AND active = 1",
         )
-        .map_err(crate::error::map_db_error)?;
+        .map_err(openproxy_db::error::map_db_error)?;
 
     let rows = stmt
         .query_map([provider.as_str()], map_row)
-        .map_err(crate::error::map_db_error)?;
+        .map_err(openproxy_db::error::map_db_error)?;
 
     let mut out = Vec::new();
     for r in rows {
-        out.push(r.map_err(crate::error::map_db_error)?);
+        out.push(r.map_err(openproxy_db::error::map_db_error)?);
     }
     Ok(out)
 }
@@ -214,15 +214,15 @@ pub fn list_active_all(conn: &Connection) -> Result<Vec<Model>> {
              FROM models \
              WHERE active = 1",
         )
-        .map_err(crate::error::map_db_error)?;
+        .map_err(openproxy_db::error::map_db_error)?;
 
     let rows = stmt
         .query_map([], map_row)
-        .map_err(crate::error::map_db_error)?;
+        .map_err(openproxy_db::error::map_db_error)?;
 
     let mut out = Vec::new();
     for r in rows {
-        out.push(r.map_err(crate::error::map_db_error)?);
+        out.push(r.map_err(openproxy_db::error::map_db_error)?);
     }
     Ok(out)
 }
@@ -241,15 +241,15 @@ pub fn list_all(conn: &Connection) -> Result<Vec<Model>> {
                     output_modalities_json \
              FROM models",
         )
-        .map_err(crate::error::map_db_error)?;
+        .map_err(openproxy_db::error::map_db_error)?;
 
     let rows = stmt
         .query_map([], map_row)
-        .map_err(crate::error::map_db_error)?;
+        .map_err(openproxy_db::error::map_db_error)?;
 
     let mut out = Vec::new();
     for r in rows {
-        out.push(r.map_err(crate::error::map_db_error)?);
+        out.push(r.map_err(openproxy_db::error::map_db_error)?);
     }
     Ok(out)
 }
@@ -286,7 +286,7 @@ pub fn mark_expired(conn: &Connection) -> Result<usize> {
                AND expires_at < datetime('now', '-7 days')",
             [],
         )
-        .map_err(crate::error::map_db_error)?;
+        .map_err(openproxy_db::error::map_db_error)?;
     Ok(n)
 }
 
@@ -303,7 +303,7 @@ pub fn set_active(conn: &Connection, id: ModelRowId, active: bool) -> Result<()>
         "UPDATE models SET active = ?1 WHERE id = ?2",
         params![bit, id.0],
     )
-    .map_err(crate::error::map_db_error_ctx(format!(
+    .map_err(openproxy_db::error::map_db_error_ctx(format!(
         "update active for model {}",
         id.0
     )))?;
@@ -322,7 +322,7 @@ pub fn set_active_bulk(conn: &Connection, provider: &ProviderId, active: bool) -
             "UPDATE models SET active = ?1 WHERE provider_id = ?2 AND custom = 0",
             params![bit, provider.as_str()],
         )
-        .map_err(crate::error::map_db_error_ctx(format!(
+        .map_err(openproxy_db::error::map_db_error_ctx(format!(
             "set_active_bulk for {}",
             provider
         )))?;
@@ -344,7 +344,7 @@ pub fn get_by_row_id(conn: &Connection, row_id: ModelRowId) -> Result<Option<Mod
             map_row,
         )
         .optional()
-        .map_err(crate::error::map_db_error)?;
+        .map_err(openproxy_db::error::map_db_error)?;
     Ok(res)
 }
 
@@ -368,17 +368,17 @@ pub fn get_by_row_ids(conn: &Connection, row_ids: &[ModelRowId]) -> Result<Vec<M
     );
     let mut stmt = conn
         .prepare_cached(&query)
-        .map_err(crate::error::map_db_error)?;
+        .map_err(openproxy_db::error::map_db_error)?;
     let ids: Vec<&dyn rusqlite::ToSql> = row_ids
         .iter()
         .map(|id| &id.0 as &dyn rusqlite::ToSql)
         .collect();
     let rows = stmt
         .query_map(&*ids, map_row)
-        .map_err(crate::error::map_db_error)?;
+        .map_err(openproxy_db::error::map_db_error)?;
     let mut models = Vec::with_capacity(row_ids.len());
     for row in rows {
-        models.push(row.map_err(crate::error::map_db_error)?);
+        models.push(row.map_err(openproxy_db::error::map_db_error)?);
     }
     Ok(models)
 }
@@ -419,12 +419,12 @@ pub fn find_active_by_name(conn: &Connection, model_id: &str) -> Result<Option<M
              ORDER BY id ASC \
              LIMIT 1",
         )
-        .map_err(crate::error::map_db_error)?;
+        .map_err(openproxy_db::error::map_db_error)?;
     let mut rows = stmt
         .query_map([model_id], map_row)
-        .map_err(crate::error::map_db_error)?;
+        .map_err(openproxy_db::error::map_db_error)?;
     match rows.next() {
-        Some(row) => Ok(Some(row.map_err(crate::error::map_db_error)?)),
+        Some(row) => Ok(Some(row.map_err(openproxy_db::error::map_db_error)?)),
         None => Ok(None),
     }
 }
@@ -455,12 +455,12 @@ pub fn find_active_by_provider_and_name(
              ORDER BY id ASC \
              LIMIT 1",
         )
-        .map_err(crate::error::map_db_error)?;
+        .map_err(openproxy_db::error::map_db_error)?;
     let mut rows = stmt
         .query_map(rusqlite::params![provider_id.as_str(), model_id], map_row)
-        .map_err(crate::error::map_db_error)?;
+        .map_err(openproxy_db::error::map_db_error)?;
     match rows.next() {
-        Some(row) => Ok(Some(row.map_err(crate::error::map_db_error)?)),
+        Some(row) => Ok(Some(row.map_err(openproxy_db::error::map_db_error)?)),
         None => Ok(None),
     }
 }
@@ -479,7 +479,7 @@ pub fn set_test_status(conn: &Connection, id: ModelRowId, status: i32) -> Result
          WHERE id = ?2",
         params![status, id.0],
     )
-    .map_err(crate::error::map_db_error_ctx(format!(
+    .map_err(openproxy_db::error::map_db_error_ctx(format!(
         "update test status for model {}",
         id.0
     )))?;
@@ -498,19 +498,19 @@ pub fn set_test_status(conn: &Connection, id: ModelRowId, status: i32) -> Result
 pub fn delete(conn: &Connection, id: ModelRowId) -> Result<u64> {
     let tx = conn
         .unchecked_transaction()
-        .map_err(crate::error::map_db_error)?;
+        .map_err(openproxy_db::error::map_db_error)?;
 
     // combo_targets.model_row_id has ON DELETE CASCADE (migration 000030);
     // the target row is cascade-deleted alongside the model.
     // No pre-emptive cleanup needed.
     let removed = tx
         .execute("DELETE FROM models WHERE id = ?1", params![id.0])
-        .map_err(crate::error::map_db_error_ctx(format!(
+        .map_err(openproxy_db::error::map_db_error_ctx(format!(
             "delete model {}",
             id.0
         )))?;
 
-    tx.commit().map_err(crate::error::map_db_error)?;
+    tx.commit().map_err(openproxy_db::error::map_db_error)?;
 
     Ok(removed as u64)
 }
@@ -625,7 +625,7 @@ pub fn apply_auto_activation(
     // `active` bit half-flipped for the rows we'd already UPDATEd.
     let tx = conn
         .unchecked_transaction()
-        .map_err(crate::error::map_db_error)?;
+        .map_err(openproxy_db::error::map_db_error)?;
 
     // ----------------------------------------------------------------
     // Step 1: identify rows that will be flipped from `active = 0` to
@@ -654,15 +654,15 @@ pub fn apply_auto_activation(
                        AND active = 0 \
                        AND model_id LIKE '%' || ?2 || '%'",
                 )
-                .map_err(crate::error::map_db_error)?;
+                .map_err(openproxy_db::error::map_db_error)?;
             let rows = stmt
                 .query_map(params![provider.as_str(), k], |r| {
                     Ok((r.get::<_, String>(0)?, r.get::<_, Option<String>>(1)?))
                 })
-                .map_err(crate::error::map_db_error)?;
+                .map_err(openproxy_db::error::map_db_error)?;
             let mut out = Vec::new();
             for r in rows {
-                out.push(r.map_err(crate::error::map_db_error)?);
+                out.push(r.map_err(openproxy_db::error::map_db_error)?);
             }
             out
         }
@@ -674,15 +674,15 @@ pub fn apply_auto_activation(
                        AND discovered_at >= datetime('now', '-60 seconds') \
                        AND active = 0",
                 )
-                .map_err(crate::error::map_db_error)?;
+                .map_err(openproxy_db::error::map_db_error)?;
             let rows = stmt
                 .query_map(params![provider.as_str()], |r| {
                     Ok((r.get::<_, String>(0)?, r.get::<_, Option<String>>(1)?))
                 })
-                .map_err(crate::error::map_db_error)?;
+                .map_err(openproxy_db::error::map_db_error)?;
             let mut out = Vec::new();
             for r in rows {
-                out.push(r.map_err(crate::error::map_db_error)?);
+                out.push(r.map_err(openproxy_db::error::map_db_error)?);
             }
             out
         }
@@ -712,7 +712,7 @@ pub fn apply_auto_activation(
             params![provider.as_str()],
         ),
     }
-    .map_err(crate::error::map_db_error_ctx(format!(
+    .map_err(openproxy_db::error::map_db_error_ctx(format!(
         "apply_auto_activation for {}",
         provider
     )))?;
@@ -751,7 +751,7 @@ pub fn apply_auto_activation(
         }
     }
 
-    tx.commit().map_err(crate::error::map_db_error)?;
+    tx.commit().map_err(openproxy_db::error::map_db_error)?;
 
     // After commit: broadcast each newly-inserted notification to any
     // connected WS clients. Failures here are swallowed — broadcast

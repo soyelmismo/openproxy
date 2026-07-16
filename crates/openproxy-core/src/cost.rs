@@ -179,7 +179,7 @@ pub fn record(conn: &Connection, input: &UsageInput) -> Result<UsageId> {
             input.is_proxy_rotated as i64,
         ],
     )
-    .map_err(crate::error::map_db_error)?;
+    .map_err(openproxy_db::error::map_db_error)?;
 
     let rowid = conn.last_insert_rowid();
 

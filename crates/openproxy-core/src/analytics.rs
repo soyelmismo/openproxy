@@ -223,7 +223,7 @@ pub fn latency_percentiles(conn: &Connection, f: &UsageFilter) -> Result<Latency
     )
     .expect("writing to String never fails");
 
-    let mut stmt = conn.prepare(&sql).map_err(crate::error::map_db_error)?;
+    let mut stmt = conn.prepare(&sql).map_err(openproxy_db::error::map_db_error)?;
 
     let params_slice = to_params(&w.params);
 
@@ -235,9 +235,9 @@ pub fn latency_percentiles(conn: &Connection, f: &UsageFilter) -> Result<Latency
 
     let mut rows = stmt
         .query(params_from_iter(params_slice))
-        .map_err(crate::error::map_db_error)?;
+        .map_err(openproxy_db::error::map_db_error)?;
 
-    while let Some(row) = rows.next().map_err(crate::error::map_db_error)? {
+    while let Some(row) = rows.next().map_err(openproxy_db::error::map_db_error)? {
         rows_seen += 1;
         // Each metric is independently nullable; we simply skip nulls per
         // column. We never abort on nulls because the schema allows them
@@ -345,7 +345,7 @@ pub fn race_stats(conn: &Connection, f: &UsageFilter) -> Result<RaceStats> {
     )
     .expect("writing to String never fails");
 
-    let mut stmt = conn.prepare(&sql).map_err(crate::error::map_db_error)?;
+    let mut stmt = conn.prepare(&sql).map_err(openproxy_db::error::map_db_error)?;
 
     let params_slice = to_params(&w.params);
 
@@ -370,13 +370,13 @@ pub fn race_stats(conn: &Connection, f: &UsageFilter) -> Result<RaceStats> {
 
     let mut rows = stmt
         .query(params_from_iter(params_slice))
-        .map_err(crate::error::map_db_error)?;
+        .map_err(openproxy_db::error::map_db_error)?;
 
-    while let Some(row) = rows.next().map_err(crate::error::map_db_error)? {
-        let request_id: String = row.get(0).map_err(crate::error::map_db_error)?;
-        let race_lost: i64 = row.get(1).map_err(crate::error::map_db_error)?;
-        let combo_target_id: Option<i64> = row.get(2).map_err(crate::error::map_db_error)?;
-        let priority_order: Option<i64> = row.get(3).map_err(crate::error::map_db_error)?;
+    while let Some(row) = rows.next().map_err(openproxy_db::error::map_db_error)? {
+        let request_id: String = row.get(0).map_err(openproxy_db::error::map_db_error)?;
+        let race_lost: i64 = row.get(1).map_err(openproxy_db::error::map_db_error)?;
+        let combo_target_id: Option<i64> = row.get(2).map_err(openproxy_db::error::map_db_error)?;
+        let priority_order: Option<i64> = row.get(3).map_err(openproxy_db::error::map_db_error)?;
 
         race_ids.insert(request_id);
 

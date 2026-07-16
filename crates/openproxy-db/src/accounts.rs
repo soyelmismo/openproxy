@@ -39,7 +39,7 @@ pub fn create(
             if msg.contains("FOREIGN KEY") {
                 Err(CoreError::Validation("unknown provider".into()))
             } else {
-                Err(openproxy_types::error::map_db_error_ctx(format!(
+                Err(crate::error::map_db_error_ctx(format!(
                     "insert account for provider {}",
                     provider_id
                 ))(e))

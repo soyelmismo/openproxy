@@ -19,7 +19,8 @@
 //! `&Connection`. Side effects (insert into the DB, mutate state) are
 //! pushed to the chat handler, which is the only caller.
 
-use crate::combos::{self, Combo, ComboTarget, Strategy};
+use openproxy_db::combos;
+use openproxy_types::combos::{Combo, ComboTarget, Strategy};
 use crate::error::Result;
 use crate::ids::{AccountId, ComboId, ComboTargetId, ModelRowId, ProviderId};
 use crate::models::{self, Model};
@@ -176,7 +177,7 @@ fn provider_active_and_scope(
             |row| Ok((row.get(0)?, row.get(1)?)),
         )
         .optional()
-        .map_err(crate::error::map_db_error_ctx(format!(
+        .map_err(openproxy_db::error::map_db_error_ctx(format!(
             "provider_active_and_scope({})",
             provider_id
         )))?;
@@ -275,8 +276,8 @@ pub fn build_synthetic_combo(
         // Synthetic combos use the legacy defaults (strict priority,
         // flat cooldown) so a direct-model dispatch behaves exactly
         // like a single-target user combo.
-        priority_mode: crate::combos::PriorityMode::Strict,
-        cooldown_mode: crate::combos::CooldownMode::Flat,
+        priority_mode: openproxy_types::combos::PriorityMode::Strict,
+        cooldown_mode: openproxy_types::config::CooldownMode::Flat,
         cooldown_base_secs: None,
         cooldown_max_secs: None,
         cooldown_factor: None,

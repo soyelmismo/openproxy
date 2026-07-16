@@ -24,14 +24,7 @@ use std::sync::Arc;
 /// Standard upstream dispatch persists cooldowns and usage centrally.
 /// Custom executors bypass that path, so providers that learn quota state
 /// from proprietary response headers need this small persistence hook.
-#[derive(Clone)]
-pub struct CustomExecutionContext {
-    pub conn: Arc<parking_lot::Mutex<rusqlite::Connection>>,
-    pub cooldown_mode: CooldownMode,
-    pub cooldown_base_secs: u64,
-    pub cooldown_max_secs: u64,
-    pub cooldown_factor: u32,
-}
+
 
 /// Static configuration for a single provider adapter.
 ///
@@ -278,6 +271,7 @@ pub trait ProviderAdapter: Send + Sync {
         body: bytes::Bytes,
         _target_format: TargetFormat,
         _model: &ModelId,
+        _resolved_target: &openproxy_types::context::ResolvedTarget,
     ) -> std::result::Result<bytes::Bytes, openproxy_types::error::CoreError> {
         Ok(body)
     }
@@ -313,8 +307,9 @@ macro_rules! define_provider_adapter {
                 body: bytes::Bytes,
                 target_format: TargetFormat,
                 model: &openproxy_types::ids::ModelId,
+                resolved_target: &openproxy_types::context::ResolvedTarget,
             ) -> std::result::Result<bytes::Bytes, openproxy_types::error::CoreError> {
-                match self { $( $(#[$varmeta])* Self::$variant(inner) => inner.wrap_request_body(body, target_format, model), )+ }
+                match self { $( $(#[$varmeta])* Self::$variant(inner) => inner.wrap_request_body(body, target_format, model, resolved_target), )+ }
             }
             pub fn auth_type(&self) -> $crate::adapters::AdapterAuthType {
                 match self { $( $(#[$varmeta])* Self::$variant(inner) => inner.auth_type(), )+ }

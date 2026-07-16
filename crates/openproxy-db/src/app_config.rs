@@ -30,13 +30,13 @@ pub const IDLE_CHUNK_RETRYABLE_DEFAULT: bool = openproxy_types::IDLE_CHUNK_RETRY
 pub fn load_compression_override_from_db(conn: &Connection) -> Result<Option<CompressionMode>> {
     let mut stmt = conn
         .prepare("SELECT value FROM app_config WHERE key = ?1")
-        .map_err(openproxy_types::map_db_error)?;
+        .map_err(crate::error::map_db_error)?;
     let mut rows = stmt
         .query(params![COMPRESSION_KEY])
-        .map_err(openproxy_types::map_db_error)?;
+        .map_err(crate::error::map_db_error)?;
     match rows.next() {
         Ok(Some(row)) => {
-            let raw: String = row.get(0).map_err(openproxy_types::map_db_error)?;
+            let raw: String = row.get(0).map_err(crate::error::map_db_error)?;
             match serde_json::from_str::<CompressionMode>(&raw) {
                 Ok(cfg) => Ok(Some(cfg)),
                 Err(e) => {
@@ -51,7 +51,7 @@ pub fn load_compression_override_from_db(conn: &Connection) -> Result<Option<Com
             }
         }
         Ok(None) => Ok(None),
-        Err(e) => Err(openproxy_types::map_db_error_ctx(
+        Err(e) => Err(crate::error::map_db_error_ctx(
             "iterate load_compression_override",
         )(e)),
     }
@@ -71,7 +71,7 @@ pub fn save_compression_to_db(
                                          updated_at = excluded.updated_at",
         params![COMPRESSION_KEY, json, now_unix_secs],
     )
-    .map_err(openproxy_types::map_db_error)?;
+    .map_err(crate::error::map_db_error)?;
     Ok(())
 }
 
@@ -79,13 +79,13 @@ pub fn save_compression_to_db(
 pub fn load_idle_chunk_retryable_from_db(conn: &Connection) -> Result<Option<bool>> {
     let mut stmt = conn
         .prepare("SELECT value FROM app_config WHERE key = ?1")
-        .map_err(openproxy_types::map_db_error)?;
+        .map_err(crate::error::map_db_error)?;
     let mut rows = stmt
         .query(params![IDLE_CHUNK_RETRYABLE_KEY])
-        .map_err(openproxy_types::map_db_error)?;
+        .map_err(crate::error::map_db_error)?;
     match rows.next() {
         Ok(Some(row)) => {
-            let raw: String = row.get(0).map_err(openproxy_types::map_db_error)?;
+            let raw: String = row.get(0).map_err(crate::error::map_db_error)?;
             match serde_json::from_str::<bool>(&raw) {
                 Ok(val) => Ok(Some(val)),
                 Err(e) => {
@@ -100,7 +100,7 @@ pub fn load_idle_chunk_retryable_from_db(conn: &Connection) -> Result<Option<boo
             }
         }
         Ok(None) => Ok(None),
-        Err(e) => Err(openproxy_types::map_db_error_ctx(
+        Err(e) => Err(crate::error::map_db_error_ctx(
             "iterate load_idle_chunk_retryable",
         )(e)),
     }
@@ -120,7 +120,7 @@ pub fn save_idle_chunk_retryable_to_db(
                                          updated_at = excluded.updated_at",
          params![IDLE_CHUNK_RETRYABLE_KEY, json, now_unix_secs],
     )
-    .map_err(openproxy_types::map_db_error)?;
+    .map_err(crate::error::map_db_error)?;
     Ok(())
 }
 
@@ -128,13 +128,13 @@ pub fn save_idle_chunk_retryable_to_db(
 pub fn load_timeouts_override_from_db(conn: &Connection) -> Result<Option<TimeoutsConfig>> {
     let mut stmt = conn
         .prepare("SELECT value FROM app_config WHERE key = ?1")
-        .map_err(openproxy_types::map_db_error)?;
+        .map_err(crate::error::map_db_error)?;
     let mut rows = stmt
         .query(params![TIMEOUTS_KEY])
-        .map_err(openproxy_types::map_db_error)?;
+        .map_err(crate::error::map_db_error)?;
     match rows.next() {
         Ok(Some(row)) => {
-            let raw: String = row.get(0).map_err(openproxy_types::map_db_error)?;
+            let raw: String = row.get(0).map_err(crate::error::map_db_error)?;
             match serde_json::from_str::<TimeoutsConfig>(&raw) {
                 Ok(cfg) => Ok(Some(cfg)),
                 Err(e) => {
@@ -149,7 +149,7 @@ pub fn load_timeouts_override_from_db(conn: &Connection) -> Result<Option<Timeou
             }
         }
         Ok(None) => Ok(None),
-        Err(e) => Err(openproxy_types::map_db_error_ctx(
+        Err(e) => Err(crate::error::map_db_error_ctx(
             "iterate load_timeouts_override",
         )(e)),
     }
@@ -169,7 +169,7 @@ pub fn save_timeouts_to_db(
                                          updated_at = excluded.updated_at",
         params![TIMEOUTS_KEY, json, now_unix_secs],
     )
-    .map_err(openproxy_types::map_db_error)?;
+    .map_err(crate::error::map_db_error)?;
     Ok(())
 }
 
@@ -177,13 +177,13 @@ pub fn save_timeouts_to_db(
 pub fn load_recording_ttl_from_db(conn: &Connection) -> Result<Option<i64>> {
     let mut stmt = conn
         .prepare("SELECT value FROM app_config WHERE key = ?1")
-        .map_err(openproxy_types::map_db_error)?;
+        .map_err(crate::error::map_db_error)?;
     let mut rows = stmt
         .query(params![RECORDING_TTL_KEY])
-        .map_err(openproxy_types::map_db_error)?;
+        .map_err(crate::error::map_db_error)?;
     match rows.next() {
         Ok(Some(row)) => {
-            let raw: String = row.get(0).map_err(openproxy_types::map_db_error)?;
+            let raw: String = row.get(0).map_err(crate::error::map_db_error)?;
             match serde_json::from_str::<i64>(&raw) {
                 Ok(ttl) => Ok(Some(ttl)),
                 Err(e) => {
@@ -198,7 +198,7 @@ pub fn load_recording_ttl_from_db(conn: &Connection) -> Result<Option<i64>> {
             }
         }
         Ok(None) => Ok(None),
-        Err(e) => Err(openproxy_types::map_db_error_ctx("iterate load_recording_ttl")(e)),
+        Err(e) => Err(crate::error::map_db_error_ctx("iterate load_recording_ttl")(e)),
     }
 }
 
@@ -216,7 +216,7 @@ pub fn save_recording_ttl_to_db(
                                          updated_at = excluded.updated_at",
         params![RECORDING_TTL_KEY, json, now_unix_secs],
     )
-    .map_err(openproxy_types::map_db_error)?;
+    .map_err(crate::error::map_db_error)?;
     Ok(())
 }
 
@@ -226,13 +226,13 @@ pub fn load_quota_protection_override_from_db(
 ) -> Result<Option<QuotaProtectionConfig>> {
     let mut stmt = conn
         .prepare("SELECT value FROM app_config WHERE key = ?1")
-        .map_err(openproxy_types::map_db_error)?;
+        .map_err(crate::error::map_db_error)?;
     let mut rows = stmt
         .query(params![QUOTA_PROTECTION_KEY])
-        .map_err(openproxy_types::map_db_error)?;
+        .map_err(crate::error::map_db_error)?;
     match rows.next() {
         Ok(Some(row)) => {
-            let raw: String = row.get(0).map_err(openproxy_types::map_db_error)?;
+            let raw: String = row.get(0).map_err(crate::error::map_db_error)?;
             match serde_json::from_str::<QuotaProtectionConfig>(&raw) {
                 Ok(cfg) => Ok(Some(cfg)),
                 Err(e) => {
@@ -246,7 +246,7 @@ pub fn load_quota_protection_override_from_db(
             }
         }
         Ok(None) => Ok(None),
-        Err(e) => Err(openproxy_types::map_db_error_ctx(
+        Err(e) => Err(crate::error::map_db_error_ctx(
             "iterate load_quota_protection",
         )(e)),
     }
@@ -266,7 +266,7 @@ pub fn save_quota_protection_to_db(
                                          updated_at = excluded.updated_at",
         params![QUOTA_PROTECTION_KEY, json, now_unix_secs],
     )
-    .map_err(openproxy_types::map_db_error)?;
+    .map_err(crate::error::map_db_error)?;
     Ok(())
 }
 

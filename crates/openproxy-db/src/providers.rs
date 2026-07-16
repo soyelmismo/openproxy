@@ -56,7 +56,7 @@ pub fn create(conn: &Connection, new: NewProvider<'_>) -> Result<()> {
             if msg.contains("UNIQUE") || msg.contains("PRIMARY KEY") {
                 Err(CoreError::Validation("provider id already exists".into()))
             } else {
-                Err(openproxy_types::error::map_db_error_ctx(format!(
+                Err(crate::error::map_db_error_ctx(format!(
                     "insert provider {}",
                     id
                 ))(e))
@@ -74,7 +74,7 @@ pub fn get(conn: &Connection, id: &ProviderId) -> Result<Option<Provider>> {
             row_to_provider,
         )
         .optional()
-        .map_err(openproxy_types::error::map_db_error_ctx(format!("get provider {}", id)))?;
+        .map_err(crate::error::map_db_error_ctx(format!("get provider {}", id)))?;
     Ok(row)
 }
 
@@ -87,7 +87,7 @@ pub fn update_current_proxy(
         "UPDATE providers SET current_proxy_id = ?1 WHERE id = ?2",
         params![proxy_id, id.as_str()],
     )
-    .map_err(openproxy_types::error::map_db_error_ctx(format!(
+    .map_err(crate::error::map_db_error_ctx(format!(
         "update current proxy for provider {}",
         id
     )))?;

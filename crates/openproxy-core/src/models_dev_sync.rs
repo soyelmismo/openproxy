@@ -159,7 +159,7 @@ pub fn upsert_models_dev(body: &[u8], conn: &Connection) -> Result<usize> {
               status        = coalesce(excluded.status,        model_capabilities_sync.status),
               model_id_normalized = coalesce(excluded.model_id_normalized, model_capabilities_sync.model_id_normalized),
               fetched_at    = strftime('%Y-%m-%dT%H:%M:%SZ','now')"
-        ).map_err(crate::error::map_db_error)?;
+        ).map_err(openproxy_db::error::map_db_error)?;
 
         for model_val in models_obj.values() {
             let model: ModelsDevModel = match serde_json::from_value(model_val.clone()) {
@@ -206,7 +206,7 @@ pub fn upsert_models_dev(body: &[u8], conn: &Connection) -> Result<usize> {
                     model.status.as_deref(),
                     &normalized,
                 ])
-                .map_err(crate::error::map_db_error)?;
+                .map_err(openproxy_db::error::map_db_error)?;
                 total += 1;
             }
         }
@@ -324,12 +324,12 @@ pub fn backfill_model_id_normalized(conn: &Connection) -> Result<usize> {
     let model_rows: Vec<(String, String)> = {
         let mut stmt = conn
             .prepare("SELECT provider_id, model_id FROM models WHERE model_id_normalized IS NULL")
-            .map_err(crate::error::map_db_error)?;
+            .map_err(openproxy_db::error::map_db_error)?;
         let rows = stmt
             .query_map([], |row| {
                 Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
             })
-            .map_err(crate::error::map_db_error)?;
+            .map_err(openproxy_db::error::map_db_error)?;
         rows.filter_map(|r| r.ok()).collect()
     };
     {
@@ -338,11 +338,11 @@ pub fn backfill_model_id_normalized(conn: &Connection) -> Result<usize> {
                 "UPDATE models SET model_id_normalized = ?1 \
                  WHERE provider_id = ?2 AND model_id = ?3",
             )
-            .map_err(crate::error::map_db_error)?;
+            .map_err(openproxy_db::error::map_db_error)?;
         for (provider_id, model_id) in &model_rows {
             let normalized = crate::model_normalize::normalize_model_id(model_id);
             stmt.execute(rusqlite::params![&normalized, provider_id, model_id])
-                .map_err(crate::error::map_db_error)?;
+                .map_err(openproxy_db::error::map_db_error)?;
             total += 1;
         }
     }
@@ -358,12 +358,12 @@ pub fn backfill_model_id_normalized(conn: &Connection) -> Result<usize> {
                 "SELECT provider_id, model_id FROM model_capabilities_sync \
                  WHERE model_id_normalized IS NULL",
             )
-            .map_err(crate::error::map_db_error)?;
+            .map_err(openproxy_db::error::map_db_error)?;
         let rows = stmt
             .query_map([], |row| {
                 Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
             })
-            .map_err(crate::error::map_db_error)?;
+            .map_err(openproxy_db::error::map_db_error)?;
         rows.filter_map(|r| r.ok()).collect()
     };
     {
@@ -372,11 +372,11 @@ pub fn backfill_model_id_normalized(conn: &Connection) -> Result<usize> {
                 "UPDATE model_capabilities_sync SET model_id_normalized = ?1 \
                  WHERE provider_id = ?2 AND model_id = ?3",
             )
-            .map_err(crate::error::map_db_error)?;
+            .map_err(openproxy_db::error::map_db_error)?;
         for (provider_id, model_id) in &sync_rows {
             let normalized = crate::model_normalize::normalize_model_id(model_id);
             stmt.execute(rusqlite::params![&normalized, provider_id, model_id])
-                .map_err(crate::error::map_db_error)?;
+                .map_err(openproxy_db::error::map_db_error)?;
             total += 1;
         }
     }
@@ -412,7 +412,7 @@ pub fn recompute_costs(conn: &Connection) -> Result<usize> {
                  WHERE cost_usd = 0.0 \
                    AND (prompt_tokens > 0 OR completion_tokens > 0)",
             )
-            .map_err(crate::error::map_db_error)?;
+            .map_err(openproxy_db::error::map_db_error)?;
         let result = stmt
             .query_map([], |row| {
                 Ok((
@@ -423,7 +423,7 @@ pub fn recompute_costs(conn: &Connection) -> Result<usize> {
                     row.get::<_, Option<u32>>(4)?,
                 ))
             })
-            .map_err(crate::error::map_db_error)?;
+            .map_err(openproxy_db::error::map_db_error)?;
         result.filter_map(|r| r.ok()).collect()
     };
 
@@ -431,7 +431,7 @@ pub fn recompute_costs(conn: &Connection) -> Result<usize> {
     {
         let mut stmt = conn
             .prepare("UPDATE usage SET cost_usd = ?1 WHERE id = ?2")
-            .map_err(crate::error::map_db_error)?;
+            .map_err(openproxy_db::error::map_db_error)?;
         for (id, provider_id, model_id, prompt_tokens, completion_tokens) in &rows {
             let price = crate::pricing::lookup_with_db(conn, provider_id, model_id);
             // If the model is a "free" variant (suffix `:free`, `-free`,
@@ -458,7 +458,7 @@ pub fn recompute_costs(conn: &Connection) -> Result<usize> {
                     + p.output_per_1m * completion / 1_000_000.0;
                 if cost > 0.0 {
                     stmt.execute(rusqlite::params![cost, id])
-                        .map_err(crate::error::map_db_error)?;
+                        .map_err(openproxy_db::error::map_db_error)?;
                     updated += 1;
                 }
             }
@@ -527,7 +527,7 @@ pub fn enrich_models_from_sync(conn: &Connection) -> Result<usize> {
            )",
             [],
         )
-        .map_err(crate::error::map_db_error)?;
+        .map_err(openproxy_db::error::map_db_error)?;
 
     // ── max_output_tokens: refresh from sync on normalized match ────
     let tok = conn
@@ -548,7 +548,7 @@ pub fn enrich_models_from_sync(conn: &Connection) -> Result<usize> {
            )",
             [],
         )
-        .map_err(crate::error::map_db_error)?;
+        .map_err(openproxy_db::error::map_db_error)?;
 
     // ── capabilities_json: refresh from sync on normalized match ────
     //
@@ -586,7 +586,7 @@ pub fn enrich_models_from_sync(conn: &Connection) -> Result<usize> {
            )",
             [],
         )
-        .map_err(crate::error::map_db_error)?;
+        .map_err(openproxy_db::error::map_db_error)?;
 
     Ok(ctx + tok + cap)
 }
@@ -612,15 +612,15 @@ pub fn auto_create_combos(conn: &Connection) -> Result<usize> {
              HAVING COUNT(DISTINCT m.provider_id) >= 2
              ORDER BY m.model_id_normalized",
         )
-        .map_err(crate::error::map_db_error)?;
+        .map_err(openproxy_db::error::map_db_error)?;
 
     let normalized_ids: Vec<String> = {
         let rows = stmt
             .query_map([], |row| row.get::<_, String>(0))
-            .map_err(crate::error::map_db_error)?;
+            .map_err(openproxy_db::error::map_db_error)?;
         let mut ids = Vec::new();
         for row in rows {
-            ids.push(row.map_err(crate::error::map_db_error)?);
+            ids.push(row.map_err(openproxy_db::error::map_db_error)?);
         }
         ids
     };
@@ -644,7 +644,7 @@ pub fn auto_create_combos(conn: &Connection) -> Result<usize> {
                        AND m.model_id_normalized != ''
                      ORDER BY m.model_id_normalized, m.provider_id",
                 )
-                .map_err(crate::error::map_db_error)?;
+                .map_err(openproxy_db::error::map_db_error)?;
 
             let rows = stmt
                 .query_map([], |row| {
@@ -655,14 +655,14 @@ pub fn auto_create_combos(conn: &Connection) -> Result<usize> {
                         row.get::<_, Option<i64>>(3)?.unwrap_or(-1),
                     ))
                 })
-                .map_err(crate::error::map_db_error)?;
+                .map_err(openproxy_db::error::map_db_error)?;
 
             let mut map: std::collections::HashMap<String, Vec<(i64, String, i64)>> =
                 std::collections::HashMap::new();
             // We can optionally filter here, but we iterate over `normalized_ids` later anyway.
             for row in rows {
                 let (norm_id, row_id, provider_id, account_id) =
-                    row.map_err(crate::error::map_db_error)?;
+                    row.map_err(openproxy_db::error::map_db_error)?;
                 map.entry(norm_id)
                     .or_default()
                     .push((row_id, provider_id, account_id));
@@ -683,11 +683,11 @@ pub fn auto_create_combos(conn: &Connection) -> Result<usize> {
         } else {
             let mut stmt = conn
                 .prepare("SELECT name, id FROM combos")
-                .map_err(crate::error::map_db_error)?;
+                .map_err(openproxy_db::error::map_db_error)?;
             stmt.query_map([], |row| {
                 Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
             })
-            .map_err(crate::error::map_db_error)?
+            .map_err(openproxy_db::error::map_db_error)?
             .filter_map(|r| r.ok())
             .filter(|(name, _)| combo_names.contains(name)) // only load what we care about
             .collect()
@@ -713,7 +713,7 @@ pub fn auto_create_combos(conn: &Connection) -> Result<usize> {
                     "SELECT combo_id, account_id, model_row_id FROM combo_targets WHERE combo_id IN ({})",
                     placeholders
                 );
-                let mut stmt = conn.prepare(&query).map_err(crate::error::map_db_error)?;
+                let mut stmt = conn.prepare(&query).map_err(openproxy_db::error::map_db_error)?;
                 let params = rusqlite::params_from_iter(chunk.iter());
                 let rows = stmt
                     .query_map(params, |row| {
@@ -723,7 +723,7 @@ pub fn auto_create_combos(conn: &Connection) -> Result<usize> {
                             row.get::<_, i64>(2)?,
                         ))
                     })
-                    .map_err(crate::error::map_db_error)?;
+                    .map_err(openproxy_db::error::map_db_error)?;
                 for row in rows.filter_map(|r| r.ok()) {
                     set.insert(row);
                 }
@@ -743,13 +743,13 @@ pub fn auto_create_combos(conn: &Connection) -> Result<usize> {
                     "SELECT combo_id, MAX(priority_order) FROM combo_targets WHERE combo_id IN ({}) GROUP BY combo_id",
                     placeholders
                 );
-                let mut stmt = conn.prepare(&query).map_err(crate::error::map_db_error)?;
+                let mut stmt = conn.prepare(&query).map_err(openproxy_db::error::map_db_error)?;
                 let params = rusqlite::params_from_iter(chunk.iter());
                 let rows = stmt
                     .query_map(params, |row| {
                         Ok((row.get::<_, i64>(0)?, row.get::<_, i32>(1)?))
                     })
-                    .map_err(crate::error::map_db_error)?;
+                    .map_err(openproxy_db::error::map_db_error)?;
                 for (id, max_order) in rows.filter_map(|r| r.ok()) {
                     map.insert(id, max_order);
                 }
@@ -763,7 +763,7 @@ pub fn auto_create_combos(conn: &Connection) -> Result<usize> {
     let is_in_tx = !conn.is_autocommit();
     if !is_in_tx {
         conn.execute("BEGIN", [])
-            .map_err(crate::error::map_db_error)?;
+            .map_err(openproxy_db::error::map_db_error)?;
     }
 
     let mut created = 0usize;
@@ -771,13 +771,13 @@ pub fn auto_create_combos(conn: &Connection) -> Result<usize> {
     // Prepare statements outside the loop for insertions.
     let mut insert_combo_stmt = conn
         .prepare("INSERT INTO combos (name, strategy, race_size) VALUES (?1, 'priority', ?2)")
-        .map_err(crate::error::map_db_error)?;
+        .map_err(openproxy_db::error::map_db_error)?;
 
     let mut insert_target_stmt = conn
         .prepare(
             "INSERT INTO combo_targets (combo_id, provider_id, account_id, model_row_id, priority_order) VALUES (?1, ?2, ?3, ?4, ?5)",
         )
-        .map_err(crate::error::map_db_error)?;
+        .map_err(openproxy_db::error::map_db_error)?;
 
     for norm_id in &normalized_ids {
         let combo_name = format!("auto:{}", norm_id);
@@ -799,7 +799,7 @@ pub fn auto_create_combos(conn: &Connection) -> Result<usize> {
                 let race_size = (targets.len() as u8).min(3);
                 insert_combo_stmt
                     .execute(rusqlite::params![&combo_name, race_size])
-                    .map_err(crate::error::map_db_error)?;
+                    .map_err(openproxy_db::error::map_db_error)?;
 
                 created += 1;
                 conn.last_insert_rowid()
@@ -823,14 +823,14 @@ pub fn auto_create_combos(conn: &Connection) -> Result<usize> {
                         row_id,
                         next_order
                     ])
-                    .map_err(crate::error::map_db_error)?;
+                    .map_err(openproxy_db::error::map_db_error)?;
             }
         }
     }
 
     if !is_in_tx {
         conn.execute("COMMIT", [])
-            .map_err(crate::error::map_db_error)?;
+            .map_err(openproxy_db::error::map_db_error)?;
     }
 
     Ok(created)

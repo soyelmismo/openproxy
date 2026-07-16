@@ -1,3 +1,5 @@
+use serde_json::Value;
+use openproxy_types::{OpenAIMessage, OpenAIRequest};
 use super::*;
 
 // =====================================================================
@@ -131,12 +133,34 @@ impl ProviderAdapter for KiroAdapter {
     ) -> Vec<(String, String)> {
         let mut headers = vec![
             ("Content-Type".into(), "application/json".into()),
-            ("x-goog-api-client".into(), "kiro_ai".into()),
+            ("x-amz-user-agent".into(), "aws-sdk-js/3.0.0 kiro/0.1".into()),
         ];
         if let Some(auth) = self.build_auth_header(api_key) {
             headers.push(auth);
         }
         headers
+    }
+
+    fn wrap_request_body(
+        &self,
+        body: bytes::Bytes,
+        _target_format: TargetFormat,
+        _model: &ModelId,
+        resolved_target: &openproxy_types::context::ResolvedTarget,
+    ) -> std::result::Result<bytes::Bytes, openproxy_types::error::CoreError> {
+        let req: openproxy_types::OpenAIRequest = serde_json::from_slice(&body)
+            .map_err(|e| openproxy_types::error::CoreError::Validation(format!("Invalid OpenAI request: {}", e)))?;
+
+        let profile_arn = resolved_target
+            .custom_meta
+            .as_ref()
+            .and_then(|m| m.kiro_profile_arn.as_deref());
+
+        let kiro_req = build_kiro_request(&req, profile_arn);
+        let kiro_bytes = serde_json::to_vec(&kiro_req)
+            .map_err(|e| openproxy_types::error::CoreError::Validation(format!("Failed to serialize Kiro request: {}", e)))?;
+
+        Ok(kiro_bytes.into())
     }
 
     fn models_url(&self) -> Option<String> {
@@ -491,3 +515,172 @@ impl KiroAdapter {
         })
     }
 }
+/// Request body envelope used by `generateAssistantResponse`.
+///
+/// Only `conversationState` and (optionally) `profileArn` +
+/// `inferenceConfig` are required. The executor builds the
+/// `currentMessage` from the most recent `user` message in the
+/// OpenAI request, and folds prior turns into
+/// `conversationState.history` so multi-turn conversations work.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct KiroRequest {
+    #[serde(rename = "conversationState")]
+    pub conversation_state: KiroConversationState,
+    #[serde(rename = "profileArn", skip_serializing_if = "Option::is_none")]
+    pub profile_arn: Option<String>,
+    #[serde(rename = "inferenceConfig", skip_serializing_if = "Option::is_none")]
+    pub inference_config: Option<KiroInferenceConfig>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct KiroConversationState {
+    #[serde(rename = "currentMessage")]
+    pub current_message: KiroCurrentMessage,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub history: Option<Vec<KiroHistoryItem>>,
+    #[serde(rename = "chatTriggerType")]
+    pub chat_trigger_type: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct KiroCurrentMessage {
+    #[serde(rename = "userInputMessage")]
+    pub user_input_message: KiroUserInputMessage,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct KiroUserInputMessage {
+    pub content: String,
+    #[serde(rename = "modelId")]
+    pub model_id: String,
+    pub origin: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct KiroHistoryItem {
+    #[serde(rename = "userInputMessage")]
+    pub user_input_message: KiroUserInputMessage,
+    #[serde(rename = "assistantResponseMessage")]
+    pub assistant_response_message: KiroAssistantResponseMessage,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct KiroAssistantResponseMessage {
+    pub content: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct KiroInferenceConfig {
+    #[serde(rename = "maxTokens", skip_serializing_if = "Option::is_none")]
+    pub max_tokens: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub temperature: Option<f32>,
+    #[serde(rename = "topP", skip_serializing_if = "Option::is_none")]
+    pub top_p: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stop: Option<Vec<String>>,
+}
+
+/// Build a [`KiroRequest`] from an OpenAI [`OpenAIRequest`].
+///
+/// The conversion rules:
+/// - `model` → `conversationState.currentMessage.userInputMessage.modelId`
+/// - Last `user` message → `currentMessage.userInputMessage.content`
+/// - Preceding `user`/`assistant` turns → `conversationState.history`
+/// - `max_tokens` / `temperature` / `top_p` / `stop` → `inferenceConfig`
+/// - `stream` is dropped (Kiro is always-on for the protocol
+///   variant we use; the streaming variant is the EventStream
+///   binary format and is a follow-up)
+pub const KIRO_DEFAULT_MODEL: &str = "kiro-default-model";
+
+fn build_kiro_request(openai: &OpenAIRequest, profile_arn: Option<&str>) -> KiroRequest {
+    let (history_msgs, current_msg) = split_history(openai);
+
+    let history: Vec<KiroHistoryItem> = history_msgs
+        .chunks(2)
+        .filter_map(|pair| {
+            if let [user, assistant] = pair {
+                Some(KiroHistoryItem {
+                    user_input_message: KiroUserInputMessage {
+                        content: user
+                            .content
+                            .as_ref()
+                            .and_then(Value::as_str)
+                            .unwrap_or_default()
+                            .to_string(),
+                        model_id: KIRO_DEFAULT_MODEL.to_string(),
+                        origin: "AI_EDITOR".to_string(),
+                    },
+                    assistant_response_message: KiroAssistantResponseMessage {
+                        content: assistant
+                            .content
+                            .as_ref()
+                            .and_then(Value::as_str)
+                            .unwrap_or_default()
+                            .to_string(),
+                    },
+                })
+            } else {
+                None
+            }
+        })
+        .collect();
+
+    let inference_config = if openai.max_tokens.is_some()
+        || openai.temperature.is_some()
+        || openai.top_p.is_some()
+        || openai.stop.is_some()
+    {
+        Some(KiroInferenceConfig {
+            max_tokens: openai.max_tokens,
+            temperature: openai.temperature,
+            top_p: openai.top_p,
+            stop: openai.stop.clone(),
+        })
+    } else {
+        None
+    };
+
+    KiroRequest {
+        conversation_state: KiroConversationState {
+            current_message: KiroCurrentMessage {
+                user_input_message: KiroUserInputMessage {
+                    content: current_msg
+                        .as_ref()
+                        .and_then(|m| m.content.as_ref())
+                        .and_then(Value::as_str)
+                        .unwrap_or_default()
+                        .to_string(),
+                    model_id: openai.model.clone(),
+                    origin: "AI_EDITOR".to_string(),
+                },
+            },
+            history: if history.is_empty() {
+                None
+            } else {
+                Some(history)
+            },
+            chat_trigger_type: "MANUAL".to_string(),
+        },
+        profile_arn: profile_arn.map(|s| s.to_string()),
+        inference_config,
+    }
+}
+
+/// Split the OpenAI messages into the (history, current_user_message)
+/// pair. Kiro's `currentMessage` is always a single user turn, so
+/// we keep the most recent user message out of the history list.
+fn split_history(req: &OpenAIRequest) -> (Vec<&OpenAIMessage>, Option<OpenAIMessage>) {
+    if req.messages.is_empty() {
+        return (Vec::new(), None);
+    }
+    let last_user_idx = req
+        .messages
+        .iter()
+        .rposition(|m| m.role == "user")
+        .unwrap_or(req.messages.len() - 1);
+    let history: Vec<&OpenAIMessage> = req.messages[..last_user_idx].iter().collect();
+    let current = req.messages[last_user_idx].clone();
+    (history, Some(current))
+}
+

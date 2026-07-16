@@ -2,24 +2,7 @@ use openproxy_types::combos::{Combo, ComboTarget};
 use openproxy_types::models::Model;
 use crate::{Pipeline, PipelineRequest};
 
-#[derive(Clone, Debug)]
-pub struct CustomProviderMeta {
-    pub access_token: String,
-    pub maybe_refresh: Option<String>,
-    pub kiro_region: Option<String>,
-    pub kiro_profile_arn: Option<String>,
-    pub antigravity_project: Option<String>,
-    pub codex_workspace_id: Option<String>,
-}
-
-#[derive(Clone, Debug)]
-pub struct ResolvedTarget {
-    pub target: ComboTarget,
-    pub model: Model,
-    pub api_key: String,
-    pub api_key_label: Option<String>,
-    pub custom_meta: Option<CustomProviderMeta>,
-}
+pub use openproxy_types::context::{CustomProviderMeta, ResolvedTarget};
 
 /// The execution context passed through the pipeline stages.
 #[derive(Clone)]

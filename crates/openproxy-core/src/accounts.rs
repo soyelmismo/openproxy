@@ -60,7 +60,7 @@ pub fn create(
 
     let id: i64 = conn
         .query_row("SELECT last_insert_rowid()", [], |r| r.get(0))
-        .map_err(crate::error::map_db_error)?;
+        .map_err(openproxy_db::error::map_db_error)?;
     Ok(AccountId(id))
 }
 
@@ -82,7 +82,7 @@ pub fn get(conn: &Connection, id: AccountId, master_key: &MasterKey) -> Result<O
             |row| row_to_account(row, master_key),
         )
         .optional()
-        .map_err(crate::error::map_db_error_ctx(format!(
+        .map_err(openproxy_db::error::map_db_error_ctx(format!(
             "get account {}",
             id.0
         )))?;
@@ -127,18 +127,18 @@ pub fn list(
 
     let mut stmt = conn
         .prepare(sql)
-        .map_err(crate::error::map_db_error_ctx("list accounts prepare"))?;
+        .map_err(openproxy_db::error::map_db_error_ctx("list accounts prepare"))?;
 
     let accounts: Vec<Account> = match provider {
         Some(p) => stmt
             .query_map(params![p.as_str()], |row| row_to_account(row, master_key))
-            .map_err(crate::error::map_db_error)?
-            .map(|r| r.map_err(crate::error::map_db_error_ctx("list accounts row")))
+            .map_err(openproxy_db::error::map_db_error)?
+            .map(|r| r.map_err(openproxy_db::error::map_db_error_ctx("list accounts row")))
             .collect::<Result<Vec<Account>>>()?,
         None => stmt
             .query_map(params![], |row| row_to_account(row, master_key))
-            .map_err(crate::error::map_db_error)?
-            .map(|r| r.map_err(crate::error::map_db_error_ctx("list accounts row")))
+            .map_err(openproxy_db::error::map_db_error)?
+            .map(|r| r.map_err(openproxy_db::error::map_db_error_ctx("list accounts row")))
             .collect::<Result<Vec<Account>>>()?,
     };
     Ok(accounts)
@@ -156,7 +156,7 @@ pub fn decrypt_api_key(conn: &Connection, id: AccountId, master_key: &MasterKey)
             |r| r.get(0),
         )
         .optional()
-        .map_err(crate::error::map_db_error_ctx(format!(
+        .map_err(openproxy_db::error::map_db_error_ctx(format!(
             "select api_key_encrypted for account {}",
             id.0
         )))?
@@ -194,7 +194,7 @@ pub fn decrypt_api_key_and_label(
             |r| Ok((r.get(0)?, r.get(1)?)),
         )
         .optional()
-        .map_err(crate::error::map_db_error_ctx(format!(
+        .map_err(openproxy_db::error::map_db_error_ctx(format!(
             "select api_key+label for account {}",
             id.0
         )))?;
@@ -216,7 +216,7 @@ pub fn set_health(conn: &Connection, id: AccountId, health: HealthStatus) -> Res
             "UPDATE accounts SET health_status = ?1 WHERE id = ?2",
             params![health.as_str(), id.0],
         )
-        .map_err(crate::error::map_db_error_ctx(format!(
+        .map_err(openproxy_db::error::map_db_error_ctx(format!(
             "update health for account {}",
             id.0
         )))?;
@@ -239,7 +239,7 @@ pub fn set_rate_limited_until(
             "UPDATE accounts SET rate_limited_until = ?1 WHERE id = ?2",
             params![iso_ts, id.0],
         )
-        .map_err(crate::error::map_db_error_ctx(format!(
+        .map_err(openproxy_db::error::map_db_error_ctx(format!(
             "update rate_limited_until for account {}",
             id.0
         )))?;
@@ -295,7 +295,7 @@ pub fn set_quota(conn: &Connection, id: AccountId, q: &crate::quota::AccountQuot
                 id.0,
             ],
         )
-        .map_err(crate::error::map_db_error_ctx(format!(
+        .map_err(openproxy_db::error::map_db_error_ctx(format!(
             "update quota for account {}",
             id.0
         )))?;
@@ -328,7 +328,7 @@ pub fn update_api_key(
             "UPDATE accounts SET api_key_encrypted = ?1 WHERE id = ?2",
             params![blob, id.0],
         )
-        .map_err(crate::error::map_db_error_ctx(format!(
+        .map_err(openproxy_db::error::map_db_error_ctx(format!(
             "update api_key for account {}",
             id.0
         )))?;
@@ -359,12 +359,12 @@ pub fn delete(conn: &Connection, id: AccountId) -> Result<()> {
         "UPDATE combo_targets SET account_id = NULL WHERE account_id = ?1",
         params![id.0],
     )
-    .map_err(crate::error::map_db_error_ctx(format!(
+    .map_err(openproxy_db::error::map_db_error_ctx(format!(
         "null combo_targets.account_id for account {}",
         id.0
     )))?;
     conn.execute("DELETE FROM accounts WHERE id = ?1", params![id.0])
-        .map_err(crate::error::map_db_error_ctx(format!(
+        .map_err(openproxy_db::error::map_db_error_ctx(format!(
             "delete account {}",
             id.0
         )))?;
@@ -468,7 +468,7 @@ pub fn store_oauth_tokens(
                 id.0,
             ],
         )
-        .map_err(crate::error::map_db_error_ctx(format!(
+        .map_err(openproxy_db::error::map_db_error_ctx(format!(
             "store_oauth_tokens for account {}",
             id.0
         )))?;
@@ -491,7 +491,7 @@ pub fn decrypt_access_token(
             |r| r.get(0),
         )
         .optional()
-        .map_err(crate::error::map_db_error_ctx(format!(
+        .map_err(openproxy_db::error::map_db_error_ctx(format!(
             "select access_token for account {}",
             id.0
         )))?
@@ -517,7 +517,7 @@ pub fn decrypt_refresh_token(
             |r| r.get(0),
         )
         .optional()
-        .map_err(crate::error::map_db_error_ctx(format!(
+        .map_err(openproxy_db::error::map_db_error_ctx(format!(
             "select refresh_token for account {}",
             id.0
         )))?
@@ -557,15 +557,15 @@ pub fn list_expiring_oauth_accounts(
                AND expires_at <= ?1 \
              ORDER BY priority ASC, id ASC",
         )
-        .map_err(crate::error::map_db_error)?;
+        .map_err(openproxy_db::error::map_db_error)?;
 
     let rows = stmt
         .query_map(params![threshold], |row| row_to_account(row, master_key))
-        .map_err(crate::error::map_db_error)?;
+        .map_err(openproxy_db::error::map_db_error)?;
 
     let mut out = Vec::new();
     for r in rows {
-        out.push(r.map_err(crate::error::map_db_error)?);
+        out.push(r.map_err(openproxy_db::error::map_db_error)?);
     }
 
     // Silence the unused-variable lint for the now variable.
@@ -580,13 +580,13 @@ pub fn list_expiring_oauth_accounts(
 pub fn list_oauth_account_ids(conn: &Connection) -> Result<Vec<i64>> {
     let mut stmt = conn
         .prepare("SELECT id FROM accounts WHERE auth_type = 'oauth'")
-        .map_err(crate::error::map_db_error)?;
+        .map_err(openproxy_db::error::map_db_error)?;
     let rows = stmt
         .query_map([], |r| r.get::<_, i64>(0))
-        .map_err(crate::error::map_db_error)?;
+        .map_err(openproxy_db::error::map_db_error)?;
     let mut out = Vec::new();
     for r in rows {
-        out.push(r.map_err(crate::error::map_db_error)?);
+        out.push(r.map_err(openproxy_db::error::map_db_error)?);
     }
     Ok(out)
 }
@@ -597,13 +597,13 @@ pub fn list_oauth_account_ids(conn: &Connection) -> Result<Vec<i64>> {
 pub fn list_oauth_provider_ids(conn: &Connection) -> Result<Vec<String>> {
     let mut stmt = conn
         .prepare("SELECT DISTINCT provider_id FROM accounts WHERE auth_type = 'oauth'")
-        .map_err(crate::error::map_db_error)?;
+        .map_err(openproxy_db::error::map_db_error)?;
     let rows = stmt
         .query_map([], |r| r.get::<_, String>(0))
-        .map_err(crate::error::map_db_error)?;
+        .map_err(openproxy_db::error::map_db_error)?;
     let mut out = Vec::new();
     for r in rows {
-        out.push(r.map_err(crate::error::map_db_error)?);
+        out.push(r.map_err(openproxy_db::error::map_db_error)?);
     }
     Ok(out)
 }

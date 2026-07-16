@@ -75,7 +75,7 @@ impl DbPool {
         let flags = OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_CREATE;
 
         let writer = Connection::open_with_flags(path, flags).map_err(
-            openproxy_types::map_db_error_ctx(format!("open {}", path.display())),
+            crate::error::map_db_error_ctx(format!("open {}", path.display())),
         )?;
 
         // SQLite defaults to creating temporary files in /tmp or /var/tmp which might
@@ -99,7 +99,7 @@ impl DbPool {
         // would also work, but a fresh open is explicit and avoids sharing any
         // per-connection state that might be written during the writer setup.
         let reader = Connection::open_with_flags(path, flags).map_err(
-            openproxy_types::map_db_error_ctx(format!("open reader {}", path.display())),
+            crate::error::map_db_error_ctx(format!("open reader {}", path.display())),
         )?;
 
         configure_connection(&reader)?;
@@ -192,13 +192,13 @@ impl DbPool {
         // new one. rusqlite::Connection::drop closes the SQLite
         // handle.
         let new_writer = Connection::open_with_flags(&*self.path, flags).map_err(
-            openproxy_types::map_db_error_ctx(format!("reopen writer {}", self.path.display())),
+            crate::error::map_db_error_ctx(format!("reopen writer {}", self.path.display())),
         )?;
         configure_connection(&new_writer)?;
 
         // Reopen the reader. We need to take the reader lock too.
         let new_reader = Connection::open_with_flags(&*self.path, flags).map_err(
-            openproxy_types::map_db_error_ctx(format!("reopen reader {}", self.path.display())),
+            crate::error::map_db_error_ctx(format!("reopen reader {}", self.path.display())),
         )?;
         configure_connection(&new_reader)?;
 
@@ -230,21 +230,21 @@ impl DbPool {
 fn configure_connection(conn: &Connection) -> Result<()> {
     let _ = conn.pragma_update(None, "auto_vacuum", "INCREMENTAL");
     conn.pragma_update(None, "journal_mode", "WAL")
-        .map_err(openproxy_types::map_db_error)?;
+        .map_err(crate::error::map_db_error)?;
     conn.pragma_update(None, "foreign_keys", "ON")
-        .map_err(openproxy_types::map_db_error)?;
+        .map_err(crate::error::map_db_error)?;
     conn.pragma_update(None, "busy_timeout", 5000)
-        .map_err(openproxy_types::map_db_error)?;
+        .map_err(crate::error::map_db_error)?;
     conn.pragma_update(None, "synchronous", "NORMAL")
-        .map_err(openproxy_types::map_db_error)?;
+        .map_err(crate::error::map_db_error)?;
     conn.pragma_update(None, "wal_autocheckpoint", 1000)
-        .map_err(openproxy_types::map_db_error)?;
+        .map_err(crate::error::map_db_error)?;
     conn.pragma_update(None, "mmap_size", 8 * 1024 * 1024)
-        .map_err(openproxy_types::map_db_error)?;
+        .map_err(crate::error::map_db_error)?;
     conn.pragma_update(None, "cache_size", -2000)
-        .map_err(openproxy_types::map_db_error)?;
+        .map_err(crate::error::map_db_error)?;
     conn.pragma_update(None, "temp_store", "MEMORY")
-        .map_err(openproxy_types::map_db_error)?;
+        .map_err(crate::error::map_db_error)?;
     Ok(())
 }
 

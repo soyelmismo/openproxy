@@ -334,7 +334,7 @@ fn ensure_tracking_table(conn: &Connection) -> Result<()> {
          )",
         [],
     )
-    .map_err(openproxy_types::map_db_error)?;
+    .map_err(crate::error::map_db_error)?;
     Ok(())
 }
 
@@ -342,13 +342,13 @@ fn ensure_tracking_table(conn: &Connection) -> Result<()> {
 fn load_applied_versions(conn: &Connection) -> Result<std::collections::HashSet<i64>> {
     let mut stmt = conn
         .prepare("SELECT version FROM schema_migrations")
-        .map_err(openproxy_types::map_db_error)?;
+        .map_err(crate::error::map_db_error)?;
     let rows = stmt
         .query_map([], |row| row.get::<_, i64>(0))
-        .map_err(openproxy_types::map_db_error)?;
+        .map_err(crate::error::map_db_error)?;
     let mut set = std::collections::HashSet::new();
     for r in rows {
-        let v = r.map_err(openproxy_types::map_db_error)?;
+        let v = r.map_err(crate::error::map_db_error)?;
         set.insert(v);
     }
     Ok(set)

@@ -155,12 +155,18 @@ impl ProviderAdapter for AntigravityAdapter {
         body: bytes::Bytes,
         target_format: TargetFormat,
         model: &ModelId,
+        resolved_target: &openproxy_types::context::ResolvedTarget,
     ) -> Result<bytes::Bytes> {
         if target_format == TargetFormat::Gemini {
             let json = serde_json::from_slice::<serde_json::Value>(&body)
                 .map_err(|e| CoreError::Parse(format!("failed to parse gemini request: {e}")))?;
+            let project = resolved_target
+                .custom_meta
+                .as_ref()
+                .and_then(|m| m.antigravity_project.clone())
+                .unwrap_or_default();
             let wrapped = serde_json::json!({
-                "project": "",
+                "project": project,
                 "model": model.as_str(),
                 "requestType": "agent",
                 "requestId": uuid::Uuid::new_v4().to_string(),

@@ -624,7 +624,7 @@ impl OAuthProvider for KiroOAuthProvider {
                                 "UPDATE accounts SET oauth_provider_specific = ?1 WHERE id = ?2",
                                 rusqlite::params![meta_json, account_id.0],
                             )
-                            .map_err(crate::error::map_db_error)
+                            .map_err(openproxy_db::error::map_db_error)
                         })?;
                         success_body = Some(retry_bytes);
                     }
@@ -892,7 +892,7 @@ pub fn read_profile_meta(
             |r| r.get::<_, Option<String>>(0),
         )
         .optional()
-        .map_err(crate::error::map_db_error_ctx(format!(
+        .map_err(openproxy_db::error::map_db_error_ctx(format!(
             "kiro read meta for account {}",
             account_id.0
         )))?;

@@ -19,7 +19,7 @@ pub fn list_for_combo(
          FROM target_cooldowns tc
          INNER JOIN combo_targets ct ON ct.id = tc.combo_target_id
          WHERE ct.combo_id = ?1",
-    ).map_err(openproxy_types::error::map_db_error)?;
+    ).map_err(crate::error::map_db_error)?;
     
     let rows = stmt.query_map(rusqlite::params![combo_id.0], |row| {
         Ok(Cooldown {
@@ -29,11 +29,11 @@ pub fn list_for_combo(
             failure_count: row.get(3)?,
             updated_at: row.get(4)?,
         })
-    }).map_err(openproxy_types::error::map_db_error)?;
+    }).map_err(crate::error::map_db_error)?;
     
     let mut out = Vec::new();
     for r in rows {
-        out.push(r.map_err(openproxy_types::error::map_db_error)?);
+        out.push(r.map_err(crate::error::map_db_error)?);
     }
     Ok(out)
 }
@@ -71,5 +71,5 @@ pub fn get_for_target(
         }
     )
     .optional()
-    .map_err(openproxy_types::error::map_db_error)
+    .map_err(crate::error::map_db_error)
 }

@@ -357,7 +357,7 @@ pub fn read_project_id(conn: &Connection, account_id: AccountId) -> Result<Optio
             |r| r.get::<_, Option<String>>(0),
         )
         .optional()
-        .map_err(crate::error::map_db_error_ctx(format!(
+        .map_err(openproxy_db::error::map_db_error_ctx(format!(
             "read_project_id for account {}",
             account_id.0
         )))?;

@@ -28,7 +28,7 @@ pub fn compute_diff<'a>(
     let existing_rows: Vec<(String, i64, Option<String>)> = {
         let mut stmt = conn
             .prepare("SELECT model_id, id, display_name FROM models WHERE provider_id = ?")
-            .map_err(crate::error::map_db_error)?;
+            .map_err(openproxy_db::error::map_db_error)?;
         let rows = stmt
             .query_map([provider.as_str()], |r| {
                 Ok((
@@ -37,10 +37,10 @@ pub fn compute_diff<'a>(
                     r.get::<_, Option<String>>(2)?,
                 ))
             })
-            .map_err(crate::error::map_db_error)?;
+            .map_err(openproxy_db::error::map_db_error)?;
         let mut out = Vec::new();
         for id in rows {
-            out.push(id.map_err(crate::error::map_db_error)?);
+            out.push(id.map_err(openproxy_db::error::map_db_error)?);
         }
         out
     };
@@ -80,7 +80,7 @@ pub fn execute_sync_transaction(
 
     let tx = conn
         .unchecked_transaction()
-        .map_err(crate::error::map_db_error)?;
+        .map_err(openproxy_db::error::map_db_error)?;
 
     {
         let mut stmt = tx
@@ -106,7 +106,7 @@ pub fn execute_sync_transaction(
                     capabilities_json = COALESCE(excluded.capabilities_json, capabilities_json), \
                     model_id_normalized = COALESCE(excluded.model_id_normalized, model_id_normalized)",
             )
-            .map_err(crate::error::map_db_error)?;
+            .map_err(openproxy_db::error::map_db_error)?;
 
         for d in discovered {
             let caps_json = d.capabilities.as_ref().and_then(|c| c.to_json());
@@ -143,7 +143,7 @@ pub fn execute_sync_transaction(
                     caps_json,                // 12. capabilities_json
                     &normalized,              // 13. model_id_normalized
                 ])
-                .map_err(crate::error::map_db_error)?;
+                .map_err(openproxy_db::error::map_db_error)?;
             total += changed;
         }
     }
@@ -153,7 +153,7 @@ pub fn execute_sync_transaction(
             "DELETE FROM models WHERE provider_id = ?1 AND custom = 0",
             params![provider.as_str()],
         )
-        .map_err(crate::error::map_db_error)?;
+        .map_err(openproxy_db::error::map_db_error)?;
     } else {
         let discovered_ids: Vec<&str> = discovered.iter().map(|d| d.model_id.as_str()).collect();
         let discovered_json =
@@ -162,7 +162,7 @@ pub fn execute_sync_transaction(
              WHERE provider_id = ? AND custom = 0 \
                AND model_id NOT IN (SELECT value FROM json_each(?))";
         tx.execute(sql, params![provider.as_str(), discovered_json])
-            .map_err(crate::error::map_db_error)?;
+            .map_err(openproxy_db::error::map_db_error)?;
     }
 
     let events = generate_events(&tx, provider, diff)?;
@@ -172,15 +172,15 @@ pub fn execute_sync_transaction(
             serde_json::to_string(&inserted_model_ids).unwrap_or_else(|_| "[]".to_string());
         let sql = "SELECT id, model_id FROM models \
              WHERE provider_id = ? AND model_id IN (SELECT value FROM json_each(?))";
-        let mut stmt = tx.prepare(sql).map_err(crate::error::map_db_error)?;
+        let mut stmt = tx.prepare(sql).map_err(openproxy_db::error::map_db_error)?;
         let rows = stmt
             .query_map(params![provider.as_str(), inserted_json], |r| {
                 Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?))
             })
-            .map_err(crate::error::map_db_error)?;
+            .map_err(openproxy_db::error::map_db_error)?;
         let mut new_rows: Vec<(i64, String)> = Vec::new();
         for row in rows {
-            new_rows.push(row.map_err(crate::error::map_db_error)?);
+            new_rows.push(row.map_err(openproxy_db::error::map_db_error)?);
         }
         drop(stmt);
 
@@ -196,7 +196,7 @@ pub fn execute_sync_transaction(
 
         if combo_targets_present {
             for (new_id, upstream) in &new_rows {
-                let updated = crate::combos::reconnect_orphan_targets(
+                let updated = openproxy_db::combos::reconnect_orphan_targets(
                     &tx,
                     provider,
                     upstream,
@@ -216,7 +216,7 @@ pub fn execute_sync_transaction(
         }
     }
 
-    tx.commit().map_err(crate::error::map_db_error)?;
+    tx.commit().map_err(openproxy_db::error::map_db_error)?;
 
     Ok((
         UpsertResult {

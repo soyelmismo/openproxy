@@ -270,7 +270,7 @@ pub fn summary(conn: &Connection, f: &UsageFilter) -> Result<UsageSummary> {
         w.sql,
     );
 
-    let mut stmt = conn.prepare(&sql).map_err(crate::error::map_db_error)?;
+    let mut stmt = conn.prepare(&sql).map_err(openproxy_db::error::map_db_error)?;
 
     let params_slice = to_params(&w.params);
     let summary = stmt
@@ -307,7 +307,7 @@ pub fn summary(conn: &Connection, f: &UsageFilter) -> Result<UsageSummary> {
                 rows_with_null_pricing: as_u64(rows_with_null_pricing, "rows_with_null_pricing")?,
             })
         })
-        .map_err(crate::error::map_db_error)?;
+        .map_err(openproxy_db::error::map_db_error)?;
 
     Ok(summary)
 }
@@ -331,7 +331,7 @@ pub fn by_model(conn: &Connection, f: &UsageFilter) -> Result<Vec<ByModelRow>> {
         w.sql,
     );
 
-    let mut stmt = conn.prepare(&sql).map_err(crate::error::map_db_error)?;
+    let mut stmt = conn.prepare(&sql).map_err(openproxy_db::error::map_db_error)?;
 
     let params_slice = to_params(&w.params);
     let rows = stmt
@@ -356,7 +356,7 @@ pub fn by_model(conn: &Connection, f: &UsageFilter) -> Result<Vec<ByModelRow>> {
                 total_cost_usd,
             })
         })
-        .map_err(crate::error::map_db_error)?;
+        .map_err(openproxy_db::error::map_db_error)?;
 
     collect_rows(rows, "by_model")
 }
@@ -385,7 +385,7 @@ pub fn by_provider(conn: &Connection, f: &UsageFilter) -> Result<Vec<ByProviderR
         w.sql,
     );
 
-    let mut stmt = conn.prepare(&sql).map_err(crate::error::map_db_error)?;
+    let mut stmt = conn.prepare(&sql).map_err(openproxy_db::error::map_db_error)?;
 
     let params_slice = to_params(&w.params);
     let rows = stmt
@@ -411,7 +411,7 @@ pub fn by_provider(conn: &Connection, f: &UsageFilter) -> Result<Vec<ByProviderR
                 total_cost_usd,
             })
         })
-        .map_err(crate::error::map_db_error)?;
+        .map_err(openproxy_db::error::map_db_error)?;
 
     collect_rows(rows, "by_provider")
 }
@@ -444,7 +444,7 @@ pub fn monthly_by_provider(
         w.sql,
     );
 
-    let mut stmt = conn.prepare(&sql).map_err(crate::error::map_db_error)?;
+    let mut stmt = conn.prepare(&sql).map_err(openproxy_db::error::map_db_error)?;
 
     let params_slice = to_params(&w.params);
     let rows = stmt
@@ -470,7 +470,7 @@ pub fn monthly_by_provider(
                 total_cost_usd,
             })
         })
-        .map_err(crate::error::map_db_error)?;
+        .map_err(openproxy_db::error::map_db_error)?;
 
     collect_rows(rows, "monthly_by_provider")
 }
@@ -496,7 +496,7 @@ pub fn by_day(conn: &Connection, f: &UsageFilter) -> Result<Vec<ByDayRow>> {
         w.sql,
     );
 
-    let mut stmt = conn.prepare(&sql).map_err(crate::error::map_db_error)?;
+    let mut stmt = conn.prepare(&sql).map_err(openproxy_db::error::map_db_error)?;
 
     let params_slice = to_params(&w.params);
     let rows = stmt
@@ -522,7 +522,7 @@ pub fn by_day(conn: &Connection, f: &UsageFilter) -> Result<Vec<ByDayRow>> {
                 errors: as_u64(errors, "errors")?,
             })
         })
-        .map_err(crate::error::map_db_error)?;
+        .map_err(openproxy_db::error::map_db_error)?;
 
     collect_rows(rows, "by_day")
 }
@@ -549,7 +549,7 @@ pub fn by_account(conn: &Connection, f: &UsageFilter) -> Result<Vec<ByAccountRow
         w.sql,
     );
 
-    let mut stmt = conn.prepare(&sql).map_err(crate::error::map_db_error)?;
+    let mut stmt = conn.prepare(&sql).map_err(openproxy_db::error::map_db_error)?;
 
     let params_slice = to_params(&w.params);
     let rows = stmt
@@ -584,7 +584,7 @@ pub fn by_account(conn: &Connection, f: &UsageFilter) -> Result<Vec<ByAccountRow
                 total_cost_usd,
             })
         })
-        .map_err(crate::error::map_db_error)?;
+        .map_err(openproxy_db::error::map_db_error)?;
 
     collect_rows(rows, "by_account")
 }
@@ -601,7 +601,7 @@ pub fn by_status(conn: &Connection, f: &UsageFilter) -> Result<Vec<ByStatusRow>>
         w.sql,
     );
 
-    let mut stmt = conn.prepare(&sql).map_err(crate::error::map_db_error)?;
+    let mut stmt = conn.prepare(&sql).map_err(openproxy_db::error::map_db_error)?;
 
     let params_slice = to_params(&w.params);
     let rows = stmt
@@ -623,7 +623,7 @@ pub fn by_status(conn: &Connection, f: &UsageFilter) -> Result<Vec<ByStatusRow>>
                 count: as_u64(count, "count")?,
             })
         })
-        .map_err(crate::error::map_db_error)?;
+        .map_err(openproxy_db::error::map_db_error)?;
 
     collect_rows(rows, "by_status")
 }
@@ -665,7 +665,7 @@ pub fn errors(conn: &Connection, f: &UsageFilter, limit: u32) -> Result<Vec<Erro
     all_params.push(Box::new(limit_param));
     let params_slice = to_params(&all_params);
 
-    let mut stmt = conn.prepare(&sql).map_err(crate::error::map_db_error)?;
+    let mut stmt = conn.prepare(&sql).map_err(openproxy_db::error::map_db_error)?;
 
     let rows = stmt
         .query_map(params_from_iter(params_slice), |row| {
@@ -696,7 +696,7 @@ pub fn errors(conn: &Connection, f: &UsageFilter, limit: u32) -> Result<Vec<Erro
                 created_at,
             })
         })
-        .map_err(crate::error::map_db_error)?;
+        .map_err(openproxy_db::error::map_db_error)?;
 
     collect_rows(rows, "errors")
 }
@@ -811,7 +811,7 @@ pub fn recent(conn: &Connection, since_id: i64, limit: u32) -> Result<Vec<openpr
              ORDER BY id ASC \
              LIMIT ?2",
         )
-        .map_err(crate::error::map_db_error)?;
+        .map_err(openproxy_db::error::map_db_error)?;
 
     let rows = stmt
         .query_map(params![since_id, limit_param], |row| {
@@ -961,7 +961,7 @@ pub fn recent(conn: &Connection, since_id: i64, limit: u32) -> Result<Vec<openpr
                 created_at,
             })
         })
-        .map_err(crate::error::map_db_error)?;
+        .map_err(openproxy_db::error::map_db_error)?;
 
     collect_rows(rows, "recent")
 }
@@ -998,7 +998,7 @@ pub fn recent_desc(conn: &Connection, limit: u32) -> Result<Vec<openproxy_types:
              ORDER BY id DESC \
              LIMIT ?1",
         )
-        .map_err(crate::error::map_db_error)?;
+        .map_err(openproxy_db::error::map_db_error)?;
 
     let rows = stmt
         .query_map(params![limit_param], |row| {
@@ -1149,7 +1149,7 @@ pub fn recent_desc(conn: &Connection, limit: u32) -> Result<Vec<openproxy_types:
                 created_at,
             })
         })
-        .map_err(crate::error::map_db_error)?;
+        .map_err(openproxy_db::error::map_db_error)?;
 
     collect_rows(rows, "recent_desc")
 }
@@ -1180,7 +1180,7 @@ pub fn row_for_broadcast_by_id(conn: &Connection, id: i64) -> Result<Option<open
              FROM usage \
              WHERE id = ?1",
         )
-        .map_err(crate::error::map_db_error)?;
+        .map_err(openproxy_db::error::map_db_error)?;
 
     let row = stmt
         .query_row(params![id], |row| {
@@ -1325,7 +1325,7 @@ pub fn row_for_broadcast_by_id(conn: &Connection, id: i64) -> Result<Option<open
     match row {
         Ok(r) => Ok(r),
         Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
-        Err(e) => Err(crate::error::map_db_error_ctx(
+        Err(e) => Err(openproxy_db::error::map_db_error_ctx(
             "query row_for_broadcast_by_id",
         )(e)),
     }
@@ -1348,7 +1348,7 @@ pub fn detail_by_id(conn: &Connection, id: i64) -> Result<Option<UsageDetailRow>
              FROM usage \
              WHERE id = ?1",
         )
-        .map_err(crate::error::map_db_error)?;
+        .map_err(openproxy_db::error::map_db_error)?;
 
     let row = stmt
         .query_row(params![id], |row| {
@@ -1480,7 +1480,7 @@ pub fn detail_by_id(conn: &Connection, id: i64) -> Result<Option<UsageDetailRow>
             })
         })
         .optional()
-        .map_err(crate::error::map_db_error)?;
+        .map_err(openproxy_db::error::map_db_error)?;
 
     Ok(row)
 }
@@ -1502,7 +1502,7 @@ pub fn detail_by_trace_id(conn: &Connection, trace_id: &str) -> Result<Option<Us
              FROM usage \
              WHERE trace_id = ?1",
         )
-        .map_err(crate::error::map_db_error)?;
+        .map_err(openproxy_db::error::map_db_error)?;
 
     let row = stmt
         .query_row(params![trace_id], |row| {
@@ -1634,7 +1634,7 @@ pub fn detail_by_trace_id(conn: &Connection, trace_id: &str) -> Result<Option<Us
             })
         })
         .optional()
-        .map_err(crate::error::map_db_error)?;
+        .map_err(openproxy_db::error::map_db_error)?;
 
     Ok(row)
 }
@@ -1651,7 +1651,7 @@ fn collect_rows<T>(
 ) -> Result<Vec<T>> {
     let mut out = Vec::new();
     for r in iter {
-        out.push(r.map_err(crate::error::map_db_error_ctx(format!(
+        out.push(r.map_err(openproxy_db::error::map_db_error_ctx(format!(
             "read {} row",
             query_name
         )))?);
@@ -1701,7 +1701,7 @@ pub fn prune_expired_recording_bodies(conn: &rusqlite::Connection, ttl_secs: i64
                 format!("-{} seconds", ttl_secs)
             ],
         )
-        .map_err(crate::error::map_db_error)?;
+        .map_err(openproxy_db::error::map_db_error)?;
     Ok(n)
 }
 
@@ -1716,6 +1716,6 @@ pub fn prune_expired_usage_rows(conn: &rusqlite::Connection, ttl_days: i64) -> c
                 format!("-{} days", ttl_days)
             ],
         )
-        .map_err(crate::error::map_db_error)?;
+        .map_err(openproxy_db::error::map_db_error)?;
     Ok(n)
 }

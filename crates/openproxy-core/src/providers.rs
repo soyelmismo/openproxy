@@ -71,7 +71,7 @@ pub fn create(conn: &Connection, new: NewProvider<'_>) -> Result<()> {
             if msg.contains("UNIQUE") || msg.contains("PRIMARY KEY") {
                 Err(CoreError::Validation("provider id already exists".into()))
             } else {
-                Err(crate::error::map_db_error_ctx(format!(
+                Err(openproxy_db::error::map_db_error_ctx(format!(
                     "insert provider {}",
                     id
                 ))(e))
@@ -94,7 +94,7 @@ pub fn get(conn: &Connection, id: &ProviderId) -> Result<Option<Provider>> {
             row_to_provider,
         )
         .optional()
-        .map_err(crate::error::map_db_error_ctx(format!("get provider {}", id)))?;
+        .map_err(openproxy_db::error::map_db_error_ctx(format!("get provider {}", id)))?;
     Ok(row)
 }
 
@@ -122,16 +122,16 @@ pub fn list(conn: &Connection) -> Result<Vec<Provider>> {
             "SELECT id, name, base_url, auth_type, format, extra_headers_json, auto_activate_keyword, active, created_at, use_proxies, current_proxy_id, proxy_rotation_errors, rate_limit_scope \
              FROM providers WHERE id != ?1 ORDER BY id",
         )
-        .map_err(crate::error::map_db_error)?;
+        .map_err(openproxy_db::error::map_db_error)?;
     let rows = stmt
         .query_map(
             params![crate::seed::VIRTUAL_COMBO_PROVIDER_ID],
             row_to_provider,
         )
-        .map_err(crate::error::map_db_error)?;
+        .map_err(openproxy_db::error::map_db_error)?;
     let mut out = Vec::new();
     for r in rows {
-        out.push(r.map_err(crate::error::map_db_error)?);
+        out.push(r.map_err(openproxy_db::error::map_db_error)?);
     }
     Ok(out)
 }
@@ -153,16 +153,16 @@ pub fn list_active(conn: &Connection) -> Result<Vec<Provider>> {
             "SELECT id, name, base_url, auth_type, format, extra_headers_json, auto_activate_keyword, active, created_at, use_proxies, current_proxy_id, proxy_rotation_errors, rate_limit_scope \
              FROM providers WHERE active = 1 AND id != ?1 ORDER BY id",
         )
-        .map_err(crate::error::map_db_error)?;
+        .map_err(openproxy_db::error::map_db_error)?;
     let rows = stmt
         .query_map(
             params![crate::seed::VIRTUAL_COMBO_PROVIDER_ID],
             row_to_provider,
         )
-        .map_err(crate::error::map_db_error)?;
+        .map_err(openproxy_db::error::map_db_error)?;
     let mut out = Vec::new();
     for r in rows {
-        out.push(r.map_err(crate::error::map_db_error)?);
+        out.push(r.map_err(openproxy_db::error::map_db_error)?);
     }
     Ok(out)
 }
@@ -176,7 +176,7 @@ pub fn set_active(conn: &Connection, id: &ProviderId, active: bool) -> Result<()
         "UPDATE providers SET active = ?1 WHERE id = ?2",
         params![active as i64, id.as_str()],
     )
-    .map_err(crate::error::map_db_error_ctx(format!(
+    .map_err(openproxy_db::error::map_db_error_ctx(format!(
         "set active for provider {}",
         id
     )))?;
@@ -188,7 +188,7 @@ pub fn set_active(conn: &Connection, id: &ProviderId, active: bool) -> Result<()
 /// idempotent.
 pub fn delete(conn: &Connection, id: &ProviderId) -> Result<()> {
     conn.execute("DELETE FROM providers WHERE id = ?1", params![id.as_str()])
-        .map_err(crate::error::map_db_error_ctx(format!(
+        .map_err(openproxy_db::error::map_db_error_ctx(format!(
             "delete provider {}",
             id
         )))?;
@@ -273,7 +273,7 @@ pub fn update(
 
     let affected = conn
         .execute(&sql, rusqlite::params_from_iter(bound.iter().copied()))
-        .map_err(crate::error::map_db_error_ctx(format!(
+        .map_err(openproxy_db::error::map_db_error_ctx(format!(
             "update provider {}",
             id
         )))?;
@@ -294,7 +294,7 @@ pub fn update_current_proxy(
         "UPDATE providers SET current_proxy_id = ?1 WHERE id = ?2",
         params![proxy_id, id.as_str()],
     )
-    .map_err(crate::error::map_db_error_ctx(format!(
+    .map_err(openproxy_db::error::map_db_error_ctx(format!(
         "update current proxy for provider {}",
         id
     )))?;
