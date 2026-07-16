@@ -1560,27 +1560,69 @@ mod tests {
     }
 }
 
+fn compute_effective_context_window_recursive(
+    conn: &rusqlite::Connection,
+    combo_id: openproxy_types::ComboId,
+    visited: &mut Vec<openproxy_types::ComboId>,
+    depth: u32,
+) -> openproxy_types::error::Result<Option<i64>> {
+    if depth > 5 {
+        return Err(openproxy_types::error::CoreError::Validation(format!("max sub-combo depth ({}) exceeded", 5)));
+    }
+    if visited.contains(&combo_id) {
+        return Err(openproxy_types::error::CoreError::Validation(format!("cyclic combo detected at id {}", combo_id.0)));
+    }
+    visited.push(combo_id);
+
+    let cw: Option<i64> = conn.query_row(
+        "SELECT context_window FROM combos WHERE id = ?1",
+        rusqlite::params![combo_id.0],
+        |row| row.get(0)
+    ).map_err(crate::error::map_db_error_ctx(format!("get context_window for combo {}", combo_id.0)))?;
+    if cw.is_some() {
+        visited.pop();
+        return Ok(cw);
+    }
+
+    let mut stmt = conn.prepare(
+        "SELECT ct.model_row_id, ct.sub_combo_id FROM combo_targets ct WHERE ct.combo_id = ?1"
+    ).map_err(crate::error::map_db_error)?;
+    let mut rows = stmt.query(rusqlite::params![combo_id.0]).map_err(crate::error::map_db_error)?;
+    
+    let mut min_window: Option<i64> = None;
+    while let Some(row) = rows.next().map_err(crate::error::map_db_error)? {
+        let model_row_id: Option<i64> = row.get(0).map_err(crate::error::map_db_error)?;
+        let sub_combo_id: Option<i64> = row.get(1).map_err(crate::error::map_db_error)?;
+        
+        let target_cw = if let Some(sub_id) = sub_combo_id {
+            compute_effective_context_window_recursive(conn, openproxy_types::ComboId(sub_id), visited, depth + 1)?
+        } else if let Some(row_id) = model_row_id {
+            let model_cw: Option<i64> = conn.query_row(
+                "SELECT context_length FROM models WHERE id = ?1",
+                rusqlite::params![row_id],
+                |row| row.get(0)
+            ).map_err(crate::error::map_db_error_ctx(format!("get context_length for model {}", row_id)))?;
+            model_cw
+        } else {
+            None
+        };
+        
+        if let Some(cw) = target_cw {
+            min_window = match min_window {
+                Some(min) => Some(std::cmp::min(min, cw)),
+                None => Some(cw),
+            };
+        }
+    }
+    
+    visited.pop();
+    Ok(min_window)
+}
+
 pub fn compute_effective_context_window(
     conn: &rusqlite::Connection,
     combo_id: openproxy_types::ComboId,
 ) -> openproxy_types::error::Result<Option<i64>> {
     let mut visited = Vec::new();
-    let targets = openproxy_pipeline::repository::resolve_combo_to_targets(conn, combo_id, &mut visited, 0)?;
-    let mut min_window = None;
-    for t in targets {
-        if let Some(row_id) = t.model_row_id {
-            let maybe_cw: Option<i64> = conn.query_row(
-                "SELECT context_length FROM models WHERE id = ?1",
-                rusqlite::params![row_id.0],
-                |row| row.get(0)
-            ).unwrap_or(None);
-            if let Some(cw) = maybe_cw {
-                min_window = match min_window {
-                    Some(min) => Some(std::cmp::min(min, cw)),
-                    None => Some(cw),
-                };
-            }
-        }
-    }
-    Ok(min_window)
+    compute_effective_context_window_recursive(conn, combo_id, &mut visited, 0)
 }

@@ -1545,7 +1545,7 @@ static USAGE_SENDER: once_cell::sync::OnceCell<tokio::sync::broadcast::Sender<op
 static STAGE_SENDER: once_cell::sync::OnceCell<tokio::sync::broadcast::Sender<openproxy_types::usage::StageEvent>> = once_cell::sync::OnceCell::new();
 
 pub fn init_usage_broadcast() -> tokio::sync::broadcast::Sender<openproxy_types::RecentUsageRow> {
-    let (tx, _rx) = tokio::sync::broadcast::channel(200);
+    let (tx, _rx) = tokio::sync::broadcast::channel(1024);
     let _ = USAGE_SENDER.set(tx.clone());
     let _ = openproxy_types::usage::USAGE_ROW_PUBLISHER.set(publish_usage_global);
     tx
@@ -1560,7 +1560,7 @@ pub fn init_stage_broadcast() -> tokio::sync::broadcast::Sender<openproxy_types:
 
 fn publish_usage_global(row: openproxy_types::RecentUsageRow) {
     if let Some(tx) = USAGE_SENDER.get() {
-        let _ = tx.send(row);
+        let _ = tx.send(openproxy_types::usage::redact_for_broadcast(row));
     }
 }
 

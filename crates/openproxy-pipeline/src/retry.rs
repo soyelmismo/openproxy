@@ -68,3 +68,28 @@ impl RetryPolicy {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_retry_policy_delay() {
+        let config = RetriesConfig {
+            max_attempts: 3,
+            backoff_base_ms: 100,
+            backoff_factor: 2,
+            backoff_jitter_pct: 0, // no jitter for deterministic test
+            idle_chunk_retryable: false,
+            combo_max_attempts: 1,
+        };
+        let policy = RetryPolicy::from_config(&config);
+
+        // Attempt 1 fails -> wait for 2nd attempt = base (100ms)
+        assert_eq!(policy.delay_after_attempt(1), Some(Duration::from_millis(100)));
+        // Attempt 2 fails -> wait for 3rd attempt = base * factor (200ms)
+        assert_eq!(policy.delay_after_attempt(2), Some(Duration::from_millis(200)));
+        // Attempt 3 fails -> max attempts reached
+        assert_eq!(policy.delay_after_attempt(3), None);
+    }
+}

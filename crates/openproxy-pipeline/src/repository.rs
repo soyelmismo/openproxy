@@ -284,11 +284,27 @@ impl PipelineRepository for SqlitePipelineRepository {
         provider_id: Option<&str>,
     ) -> Result<()> {
         let conn = self.conn.lock();
-        let payload_str = serde_json::to_string(payload).unwrap();
+        let payload_str = serde_json::to_string(payload)
+            .map_err(|e| openproxy_types::error::CoreError::Database { message: "serialize notification payload".into(), source: Some(Box::new(e)) })?;
         conn.execute(
             "INSERT INTO notifications(kind, payload, dedup_key, provider_id) VALUES (?1, ?2, ?3, ?4)",
             rusqlite::params![kind, payload_str, dedup_key, provider_id]
-        ).map(|_| ()).map_err(|e| openproxy_types::error::CoreError::Internal(e.to_string()))
+        ).map_err(|e| openproxy_types::error::CoreError::Database { message: "insert notification".into(), source: Some(Box::new(e)) })?;
+        
+        let id: i64 = conn.last_insert_rowid();
+        let created_at: String = conn.query_row(
+            "SELECT created_at FROM notifications WHERE id = ?1",
+            rusqlite::params![id],
+            |row| row.get(0)
+        ).unwrap_or_else(|_| chrono::Utc::now().to_rfc3339());
+        
+        openproxy_types::notifications::publish_notification(openproxy_types::notifications::NotificationEvent {
+            id,
+            kind: kind.to_string(),
+            payload: payload.clone(),
+            created_at,
+        });
+        Ok(())
     }
 
     fn load_model(&self, row_id: ModelRowId) -> Result<Model> {
@@ -429,10 +445,11 @@ impl PipelineRepository for SqlitePipelineRepository {
     ) -> Result<()> {
         let conn = self.conn.lock();
         conn.execute(
-            "INSERT INTO usage(request_id, trace_id, combo_id, elapsed_ms, created_at, status_code, error_message, was_winner, client_responded, prompt_tokens, completion_tokens) \
-             VALUES (?1, ?2, ?3, ?4, ?5, 503, ?6, 0, 0, 0, 0)",
+            "INSERT INTO usage(request_id, trace_id, combo_id, total_ms, created_at, status_code, error_msg, error_message, was_winner, client_response, prompt_tokens, completion_tokens, provider_id, upstream_model_id, attempt, race_total, race_lost) \
+             VALUES (?1, ?2, ?3, ?4, ?5, 502, ?6, ?6, 1, 0, 0, 0, 'virtual', 'none', 1, 1, 0)",
             rusqlite::params![request_id, trace_id, combo.id.0, elapsed as i64, created_str, error_msg]
-        ).map(|_| ()).map_err(|e| openproxy_types::error::CoreError::Internal(e.to_string()))
+        ).map_err(|e| openproxy_types::error::CoreError::Database { message: "insert no_healthy_targets usage".into(), source: Some(Box::new(e)) })?;
+        Ok(())
     }
 
     fn clear_cooldown(&self, target_id: ComboTargetId) -> Result<()> {
@@ -444,22 +461,42 @@ impl PipelineRepository for SqlitePipelineRepository {
         &self,
         target_id: ComboTargetId,
         reason: &str,
-        _mode: CooldownMode,
+        mode: CooldownMode,
         base_secs: u64,
-        _max_secs: u64,
-        _factor: u32,
+        max_secs: u64,
+        factor: u32,
     ) -> Result<()> {
         let conn = self.conn.lock();
-        let cooldown_until = chrono::Utc::now() + chrono::Duration::seconds(base_secs as i64);
+        let current_count: u32 = conn.query_row(
+            "SELECT failure_count FROM target_cooldowns WHERE combo_target_id = ?1",
+            rusqlite::params![target_id.0],
+            |row| row.get(0)
+        ).unwrap_or(0);
+        
+        let new_count = current_count + 1;
+        
+        let cooldown_secs = match mode {
+            CooldownMode::Flat => base_secs,
+            CooldownMode::Exponential => {
+                let mut exp_secs = base_secs.saturating_mul((factor as u64).saturating_pow(current_count));
+                if exp_secs > max_secs {
+                    exp_secs = max_secs;
+                }
+                exp_secs
+            }
+        };
+
+        let cooldown_until = chrono::Utc::now() + chrono::Duration::seconds(cooldown_secs as i64);
         let cooldown_until_str = cooldown_until.to_rfc3339();
         conn.execute(
-            "INSERT INTO target_cooldowns (combo_target_id, cooldown_until, reason, updated_at) \
-             VALUES (?1, ?2, ?3, datetime('now')) \
+            "INSERT INTO target_cooldowns (combo_target_id, cooldown_until, reason, failure_count, updated_at) \
+             VALUES (?1, ?2, ?3, ?4, datetime('now')) \
              ON CONFLICT(combo_target_id) DO UPDATE SET \
                  cooldown_until = excluded.cooldown_until, \
                  reason = excluded.reason, \
+                 failure_count = excluded.failure_count, \
                  updated_at = excluded.updated_at",
-            rusqlite::params![target_id.0, cooldown_until_str, reason]
+            rusqlite::params![target_id.0, cooldown_until_str, reason, new_count]
         ).map(|_| ()).map_err(|e| openproxy_types::error::CoreError::Internal(e.to_string()))
     }
 
@@ -469,9 +506,8 @@ impl PipelineRepository for SqlitePipelineRepository {
     ) -> Result<HashMap<i64, Model>> {
         let mut map = HashMap::new();
         for id in model_row_ids {
-            if let Ok(m) = self.load_model(*id) {
-                map.insert(id.0, m);
-            }
+            let m = self.load_model(*id)?;
+            map.insert(id.0, m);
         }
         Ok(map)
     }
@@ -487,11 +523,11 @@ impl PipelineRepository for SqlitePipelineRepository {
         use rusqlite::OptionalExtension;
         let conn = self.conn.lock();
         let mut raw_map = HashMap::new();
-        let kiro_map = HashMap::new();
+        let mut kiro_map = HashMap::new();
         let mut ag_map = HashMap::new();
         for id in account_ids {
             let row = conn.query_row(
-                "SELECT api_key_encrypted, label, access_token_encrypted, refresh_token_encrypted, expires_at, oauth_provider_specific, email FROM accounts WHERE id = ?1",
+                "SELECT api_key_encrypted, label, access_token_encrypted, refresh_token_encrypted, expires_at, oauth_provider_specific, email, extra_config_json FROM accounts WHERE id = ?1",
                 rusqlite::params![id.0],
                 |r| {
                     Ok((
@@ -502,10 +538,11 @@ impl PipelineRepository for SqlitePipelineRepository {
                         r.get::<_, Option<String>>(4)?,
                         r.get::<_, Option<String>>(5)?,
                         r.get::<_, Option<String>>(6)?,
+                        r.get::<_, Option<String>>(7)?,
                     ))
                 }
-            ).optional().unwrap();
-            if let Some((api_key, label, access, refresh, expires, oauth_prov, email)) = row {
+            ).optional().map_err(|e| openproxy_types::error::CoreError::Database { message: "query accounts".into(), source: Some(Box::new(e)) })?;
+            if let Some((api_key, label, access, refresh, expires, oauth_prov, email, extra_json)) = row {
                 raw_map.insert(id.0, RawAccount {
                     api_key_encrypted: api_key,
                     label,
@@ -519,6 +556,20 @@ impl PipelineRepository for SqlitePipelineRepository {
                 if let Some(ref em) = email {
                     ag_map.insert(id.0, em.clone());
                 }
+                if let Some(cfg_str) = extra_json {
+                    if let Ok(val) = serde_json::from_str::<serde_json::Value>(&cfg_str) {
+                        let region = val.get("region").or(val.get("aws_region")).and_then(|v| v.as_str()).map(|s| s.to_string());
+                        let profile_arn = val.get("profile_arn").or(val.get("aws_role_arn")).and_then(|v| v.as_str()).map(|s| s.to_string());
+                        if region.is_some() || profile_arn.is_some() {
+                            kiro_map.insert(id.0, KiroMeta {
+                                region,
+                                profile_arn,
+                            });
+                        }
+                    }
+                }
+            } else {
+                return Err(openproxy_types::error::CoreError::Validation(format!("account {} not found", id.0)));
             }
         }
         Ok((raw_map, kiro_map, ag_map))
@@ -536,7 +587,7 @@ impl PipelineRepository for SqlitePipelineRepository {
                 "SELECT auth_type FROM providers WHERE id = ?1",
                 rusqlite::params![id.as_str()],
                 |r| r.get(0)
-            ).optional().unwrap();
+            ).optional().map_err(|e| openproxy_types::error::CoreError::Database { message: "query providers".into(), source: Some(Box::new(e)) })?;
             if let Some(a) = auth {
                 map.insert(id.as_str().to_string(), a);
             }
@@ -554,24 +605,10 @@ impl PipelineRepository for SqlitePipelineRepository {
         &self,
         combo: &Combo,
         rr_counters: &std::sync::Arc<parking_lot::Mutex<std::collections::HashMap<ComboId, u64>>>,
-        _selection_registry: &SelectionRegistry,
+        selection_registry: &SelectionRegistry,
     ) -> Result<Vec<ComboTarget>> {
         let targets = self.list_targets(combo.id)?;
-        if targets.len() <= 1 {
-            return Ok(targets);
-        }
-        let n = targets.len();
-        let shift = {
-            let mut counters = rr_counters.lock();
-            let counter = counters.entry(combo.id).or_insert(0);
-            let s = (*counter % n as u64) as usize;
-            *counter = counter.wrapping_add(1);
-            s
-        };
-        let mut rotated = Vec::new();
-        rotated.extend_from_slice(&targets[shift..]);
-        rotated.extend_from_slice(&targets[..shift]);
-        Ok(rotated)
+        Ok(crate::load_balancing::execute_load_balancing(targets, combo, rr_counters, selection_registry))
     }
 
     fn decrypt_api_key_and_label(
@@ -743,50 +780,69 @@ pub fn list_targets(conn: &rusqlite::Connection, combo_id: ComboId) -> Result<Ve
     }
 
 pub fn auto_populate_empty_combo(conn: &rusqlite::Connection, combo_id: ComboId) -> Result<usize> {
-        let targets: Vec<(String, i64)> = {
-            let mut stmt = conn.prepare(
-                "SELECT p.id, m.id FROM providers p \
-                 INNER JOIN models m ON m.provider_id = p.id \
-                 WHERE p.active = 1"
-            ).unwrap();
-            let rows = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?))).unwrap();
-            rows.collect::<std::result::Result<Vec<_>, _>>().unwrap()
-        };
-        let mut added = 0;
-        for (i, (p, m)) in targets.into_iter().enumerate() {
-            let res = conn.execute(
-                "INSERT INTO combo_targets(combo_id, provider_id, model_row_id, priority_order, weight) \
-                 VALUES (?1, ?2, ?3, ?4, 100)",
-                rusqlite::params![combo_id.0, p, m, i as i64]
-            );
-            match res {
-                Ok(_) => {
-                    added += 1;
-                }
-                Err(e) => panic!("SQL ERROR: {}", e),
+        let provider_id: Option<String> = conn.query_row(
+            "SELECT p.id FROM providers p \
+             WHERE p.active = 1 AND p.id != 'virtual' \
+             AND EXISTS (SELECT 1 FROM accounts a WHERE a.provider_id = p.id AND a.health_status = 'healthy') \
+             AND EXISTS (SELECT 1 FROM models m WHERE m.provider_id = p.id AND m.active = 1) \
+             ORDER BY p.id ASC LIMIT 1",
+            [],
+            |row| row.get(0)
+        ).unwrap_or(None);
+
+        if let Some(pid) = provider_id {
+            let mut added = 0;
+            let mut stmt = conn.prepare("SELECT id FROM models WHERE provider_id = ?1 AND active = 1")
+                .map_err(|e| openproxy_types::error::CoreError::Database { message: "prepare models".into(), source: Some(Box::new(e)) })?;
+            let mut rows = stmt.query(rusqlite::params![pid])
+                .map_err(|e| openproxy_types::error::CoreError::Database { message: "query models".into(), source: Some(Box::new(e)) })?;
+            while let Some(r) = rows.next().map_err(|e| openproxy_types::error::CoreError::Database { message: "next model".into(), source: Some(Box::new(e)) })? {
+                let mid = r.get::<_, i64>(0).map_err(|e| openproxy_types::error::CoreError::Database { message: "get mid".into(), source: Some(Box::new(e)) })?;
+                let res = conn.execute(
+                    "INSERT OR IGNORE INTO combo_targets(combo_id, provider_id, model_row_id, priority_order, weight) \
+                     VALUES (?1, ?2, ?3, ?4, 100)",
+                    rusqlite::params![combo_id.0, pid, mid, mid]
+                ).map_err(|e| openproxy_types::error::CoreError::Database { message: "insert combo_targets".into(), source: Some(Box::new(e)) })?;
+                added += res;
             }
+            Ok(added as usize)
+        } else {
+            Ok(0)
         }
-        Ok(added)
     }
 
-pub fn expand_account_rotation(conn: &rusqlite::Connection, targets: Vec<ComboTarget>) -> Result<Vec<ComboTarget>> {        let mut out = Vec::new();
+pub fn expand_account_rotation(conn: &rusqlite::Connection, targets: Vec<ComboTarget>) -> Result<Vec<ComboTarget>> {
+        let mut out = Vec::new();
         for t in targets {
             if t.account_id.is_some() || t.sub_combo_id.is_some() {
                 out.push(t);
                 continue;
             }
-            let mut stmt = conn.prepare("SELECT id FROM accounts WHERE provider_id = ?1 AND health_status = 'healthy' ORDER BY priority ASC, id ASC").unwrap();
-            let rows = stmt.query_map(rusqlite::params![t.provider_id.as_str()], |r| r.get::<_, i64>(0)).unwrap();
-            for r in rows {
+            let mut stmt = conn.prepare("SELECT id FROM accounts WHERE provider_id = ?1 AND health_status = 'healthy' ORDER BY priority ASC, id ASC").map_err(|e| openproxy_types::error::CoreError::Internal(e.to_string()))?;
+            let mut rows = stmt.query(rusqlite::params![t.provider_id.as_str()]).map_err(|e| openproxy_types::error::CoreError::Internal(e.to_string()))?;
+            let mut count = 0;
+            while let Some(r) = rows.next().map_err(|e| openproxy_types::error::CoreError::Internal(e.to_string()))? {
                 let mut ct = t.clone();
-                ct.account_id = Some(AccountId(r.unwrap()));
+                ct.account_id = Some(AccountId(r.get::<_, i64>(0).map_err(|e| openproxy_types::error::CoreError::Internal(e.to_string()))?));
                 out.push(ct);
+                count += 1;
+            }
+            if count == 0 {
+                out.push(t);
             }
         }
         Ok(out)
     }
 
 pub fn resolve_combo_to_targets(conn: &rusqlite::Connection, combo_id: ComboId, visited: &mut Vec<ComboId>, depth: u32) -> Result<Vec<ComboTarget>> {
+        if depth > 5 {
+            return Err(openproxy_types::error::CoreError::Validation(format!("max sub-combo depth ({}) exceeded", 5)));
+        }
+        if visited.contains(&combo_id) {
+            return Err(openproxy_types::error::CoreError::Validation(format!("cyclic combo detected at id {}", combo_id.0)));
+        }
+        visited.push(combo_id);
+        
         let targets = list_targets(conn, combo_id)?;
         let mut flat = Vec::new();
         for t in targets {
@@ -797,8 +853,9 @@ pub fn resolve_combo_to_targets(conn: &rusqlite::Connection, combo_id: ComboId, 
                 flat.push(t);
             }
         }
+        visited.pop();
         Ok(flat)
-    }
+}
 
 
 pub fn prune_expired_cooldowns(conn: &rusqlite::Connection) -> Result<usize> {

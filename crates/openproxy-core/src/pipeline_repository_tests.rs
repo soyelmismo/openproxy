@@ -29,16 +29,19 @@ mod tests {
         ).unwrap();
         w.execute("INSERT INTO models(provider_id, model_id, target_format) VALUES ('openrouter', 'm1', 'openai')", []).unwrap();
         w.execute("INSERT INTO models(provider_id, model_id, target_format) VALUES ('openrouter', 'm2', 'openai')", []).unwrap();
+        
+        let mk = openproxy_db::secrets::MasterKey::generate();
+        crate::accounts::create(&w, &ProviderId::new("openrouter"), Some("sk-test"), &mk, None, 10, None).unwrap();
 
         let combo_id = combos::create_combo(&w, "c", Strategy::Priority, 1).unwrap();
 
         // Auto-populate
         let p: i32 = w.query_row("SELECT count(*) FROM providers WHERE active=1", [], |r| r.get(0)).unwrap(); println!("active providers: {}", p);
         let added = auto_populate_empty_combo(&w, combo_id).unwrap();
-        assert_eq!(added, 1);
+        assert_eq!(added, 2);
 
         let targets = list_targets(&w, combo_id).unwrap();
-        assert_eq!(targets.len(), 1);
+        assert_eq!(targets.len(), 2);
     }
 
     #[test]

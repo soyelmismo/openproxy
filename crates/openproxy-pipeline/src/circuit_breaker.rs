@@ -149,3 +149,31 @@ impl CircuitBreakerRegistry {
         self.inner.lock().is_empty()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_circuit_breaker_transitions() {
+        let config = CircuitBreakerConfig { failure_threshold: 3, unhealthy_duration_ms: 100 };
+        let cb = CircuitBreakerRegistry::new(&config);
+        let key = CircuitBreakerKey::Account(AccountId(1));
+
+        assert_eq!(cb.is_healthy(key.clone()), Health::Healthy);
+
+        assert_eq!(cb.record_failure(key.clone()), Health::Healthy);
+        assert_eq!(cb.record_failure(key.clone()), Health::Healthy);
+        
+        // 3rd failure triggers Unhealthy
+        let outcome = cb.record_failure_outcome(key.clone());
+        assert_eq!(outcome.health, Health::Unhealthy);
+        assert_eq!(outcome.just_opened, true);
+
+        assert_eq!(cb.is_healthy(key.clone()), Health::Unhealthy);
+
+        // Sleep to let it recover
+        std::thread::sleep(Duration::from_millis(150));
+        assert_eq!(cb.is_healthy(key.clone()), Health::Healthy);
+    }
+}

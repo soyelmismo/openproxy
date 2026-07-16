@@ -7,6 +7,7 @@ pub mod cost;
 pub mod pricing;
 pub mod providers;
 pub mod accounts;
+pub mod cooldowns;
 
 pub use conn::{DbPool, ReaderGuard, WriterGuard};
 pub use secrets::MasterKey;

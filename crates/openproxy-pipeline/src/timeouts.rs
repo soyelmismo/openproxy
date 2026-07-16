@@ -78,3 +78,33 @@ pub fn resolve(defaults: &Timeouts, model_overrides: Option<&ModelTimeoutOverrid
     }
     t
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_timeout_resolution() {
+        let defaults = Timeouts {
+            connect: Duration::from_millis(100),
+            request_send: Duration::from_millis(200),
+            ttft: Duration::from_millis(300),
+            idle_chunk: Duration::from_millis(400),
+            total: Duration::from_millis(500),
+        };
+
+        // No overrides
+        let resolved = resolve(&defaults, None);
+        assert_eq!(resolved.ttft, Duration::from_millis(300));
+        assert_eq!(resolved.idle_chunk, Duration::from_millis(400));
+
+        // With overrides
+        let overrides = ModelTimeoutOverrides {
+            ttft_ms: Some(1000),
+            idle_chunk_ms: None,
+        };
+        let resolved2 = resolve(&defaults, Some(&overrides));
+        assert_eq!(resolved2.ttft, Duration::from_millis(1000));
+        assert_eq!(resolved2.idle_chunk, Duration::from_millis(400));
+    }
+}
