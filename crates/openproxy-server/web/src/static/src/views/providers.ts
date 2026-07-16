@@ -35,7 +35,7 @@ import {
   type ModelSort,
   type SortableColumn,
 } from "../components/model-table.js";
-import type { Account, Model, Provider, HealthStatus } from "../lib/types/api.js";
+import type { Account, Model, Provider, HealthStatus, FreeProxy } from "../lib/types/api.js";
 
 // ---- Constants ----
 
@@ -1077,7 +1077,7 @@ export async function mountProviders(opts: MountProvidersOpts = {}): Promise<(()
       // Cold paint: fetch providers/accounts/models. Warm re-render
       // (from cache after navigate()) skips the network initially, but
       // does a background refresh to prevent frozen quotas and statuses.
-      const proxiesPromise = api("/proxies?status=alive") as Promise<any[]>;
+      const proxiesPromise = api("/proxies?status=alive") as Promise<FreeProxy[]>;
       if (state.providers.length === 0) {
         const [providers, accounts, models, proxies] = await Promise.all([
           api("/providers") as Promise<Provider[]>,
@@ -1121,7 +1121,7 @@ export async function mountProviders(opts: MountProvidersOpts = {}): Promise<(()
     const [providers, accounts, proxies] = await Promise.all([
       hasCache ? Promise.resolve(state.providers) : api("/providers") as Promise<Provider[]>,
       hasCache && state.accounts ? Promise.resolve(state.accounts) : api("/accounts") as Promise<Account[]>,
-      api("/proxies?status=alive") as Promise<any[]>,
+      api("/proxies?status=alive") as Promise<FreeProxy[]>,
     ]);
     state.providers = providers;
     state.accounts = accounts;

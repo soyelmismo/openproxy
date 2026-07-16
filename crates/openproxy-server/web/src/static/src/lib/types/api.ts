@@ -735,3 +735,20 @@ export interface DebugLogsResponse {
    *  is at a glance. */
   total_in_buffer: number;
 }
+
+/** Model matching `openproxy_core::free_proxies::FreeProxy`
+ *  @see crates/openproxy-core/src/free_proxies.rs
+ */
+export interface FreeProxy {
+  id: string;
+  source: string;
+  host: string;
+  port: number;
+  type: string;
+  country_code: string | null;
+  status: string;
+  latency_ms: number | null;
+  last_validated: string | null;
+  created_at: string;
+  updated_at: string;
+}
