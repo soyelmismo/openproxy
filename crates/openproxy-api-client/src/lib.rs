@@ -11,7 +11,7 @@
 //! # async fn run() -> Result<(), Box<dyn std::error::Error>> {
 //! use openproxy_api_client::Client;
 //! use openproxy_core::usage::UsageFilter;
-//! use openproxy_core::ids::ProviderId;
+//! use openproxy_types::ids::ProviderId;
 //!
 //! let client = Client::new("http://127.0.0.1:8080");
 //! let providers = client.list_providers().await?;
