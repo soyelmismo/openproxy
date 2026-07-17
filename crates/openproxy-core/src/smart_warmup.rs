@@ -241,7 +241,7 @@ async fn ping_antigravity_model(
     };
 
     let url = format!(
-        "{}/v1internal:streamGenerateContent?alt=sse",
+        "{}/v1internal:generateContent",
         openproxy_adapters::adapters::antigravity::DEFAULT_ANTIGRAVITY_BASE_URL
     );
 
