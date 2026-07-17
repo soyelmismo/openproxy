@@ -249,6 +249,7 @@ async fn ping_antigravity_model(
     if let Ok(v) = http::HeaderValue::from_str(&format!("Bearer {}", access_token)) {
         req.headers.insert(http::header::AUTHORIZATION, v);
     }
+    openproxy_adapters::antigravity_headers::inject_antigravity_headers(&mut req.headers, Some(project_id));
 
     let cancel = openproxy_adapters::upstream::CancellationToken::new();
     match upstream
