@@ -228,7 +228,21 @@ async fn ping_antigravity_model(
     account_id: &str,
 ) -> bool {
     let request = build_warmup_request(model);
-    let gemini_request = openproxy_pipeline::translation::openai_to_gemini(&request, &request.messages);
+    let request_payload = if model.starts_with("claude") {
+        serde_json::to_value(openproxy_pipeline::translation::openai_to_anthropic(
+            &request,
+            model,
+            &request.messages,
+            true,
+        ))
+        .unwrap_or_else(|_| serde_json::json!({}))
+    } else {
+        serde_json::to_value(openproxy_pipeline::translation::openai_to_gemini(
+            &request,
+            &request.messages,
+        ))
+        .unwrap_or_else(|_| serde_json::json!({}))
+    };
 
     let wrapped = serde_json::json!({
         "project": project_id,
@@ -236,7 +250,7 @@ async fn ping_antigravity_model(
         "requestType": "agent",
         "requestId": uuid::Uuid::new_v4().to_string(),
         "userAgent": "antigravity",
-        "request": gemini_request,
+        "request": request_payload,
         "enabledCreditTypes": ["GOOGLE_ONE_AI"]
     });
 
@@ -254,7 +268,7 @@ async fn ping_antigravity_model(
     if let Ok(v) = http::HeaderValue::from_str(&format!("Bearer {}", access_token)) {
         req.headers.insert(http::header::AUTHORIZATION, v);
     }
-    openproxy_adapters::antigravity_headers::inject_antigravity_headers(&mut req.headers, Some(project_id));
+    openproxy_adapters::antigravity_headers::inject_antigravity_headers(&mut req.headers, None);
 
     let cancel = openproxy_adapters::upstream::CancellationToken::new();
     match upstream
