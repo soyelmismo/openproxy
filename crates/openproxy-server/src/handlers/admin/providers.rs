@@ -10,16 +10,20 @@ use openproxy_core::providers as core_providers;
 
 pub async fn list_providers(State(s): State<AppState>) -> ApiResult<Json<Vec<ProviderWithOAuth>>> {
     crate::api_try! {
-        // Read-only SELECT — use the READER so the dashboard's catalog
-        // polling doesn't serialize through the writer mutex.
-        let r = s.db_pool().reader();
-        let list = core_admin::list_providers(&r)?;
-        let registry = s.oauth_provider_registry();
-        let adapters = s.adapters();
-        let enriched = list
-            .into_iter()
-            .map(|p| enrich_provider_with_oauth(p, registry.as_ref(), &adapters, &r))
-            .collect();
+        let enriched = tokio::task::spawn_blocking({
+            let pool = s.db_pool().clone();
+            let registry = s.oauth_provider_registry().clone();
+            let adapters = s.adapters().clone();
+            move || {
+                let r = pool.reader();
+                let list = core_admin::list_providers(&r)?;
+                let enriched: Vec<ProviderWithOAuth> = list
+                    .into_iter()
+                    .map(|p| enrich_provider_with_oauth(p, registry.as_ref(), &adapters, &r))
+                    .collect();
+                Ok::<_, ApiError>(enriched)
+            }
+        }).await.unwrap()?;
         Ok(Json(enriched))
     }
 }
@@ -33,10 +37,13 @@ pub async fn create_provider(
         // rebuild_adapters re-acquires the same non-reentrant
         // parking_lot::Mutex. Holding the guard across
         // rebuild_adapters deadlocks the Tokio worker thread.
-        let id = {
-            let w = s.db_pool().writer();
-            core_admin::create_provider(&w, input)?
-        };
+        let id = tokio::task::spawn_blocking({
+            let pool = s.db_pool().clone();
+            move || {
+                let w = pool.writer();
+                core_admin::create_provider(&w, input)
+            }
+        }).await.unwrap()?;
         // Hot-reload the in-memory adapter registry so the chat
         // pipeline can dispatch to the new provider without a
         // process restart. A failure here is logged but does NOT
@@ -67,14 +74,18 @@ pub async fn get_provider(
     Path(id): Path<String>,
 ) -> ApiResult<Json<ProviderWithOAuth>> {
     crate::api_try! {
-        // Read-only SELECT — use the READER.
-        let r = s.db_pool().reader();
-        let id = ProviderId::new(id);
-        let provider = core_providers::get(&r, &id)?
-            .ok_or_else(|| CoreError::ProviderNotFound(id.to_string()))?;
-        let registry = s.oauth_provider_registry();
-        let adapters = s.adapters();
-        let enriched = enrich_provider_with_oauth(provider, registry.as_ref(), &adapters, &r);
+        let enriched = tokio::task::spawn_blocking({
+            let pool = s.db_pool().clone();
+            let registry = s.oauth_provider_registry().clone();
+            let adapters = s.adapters().clone();
+            move || {
+                let r = pool.reader();
+                let id = ProviderId::new(id);
+                let provider = core_providers::get(&r, &id)?
+                    .ok_or_else(|| CoreError::ProviderNotFound(id.to_string()))?;
+                Ok::<_, ApiError>(enrich_provider_with_oauth(provider, registry.as_ref(), &adapters, &r))
+            }
+        }).await.unwrap()?;
         Ok(Json(enriched))
     }
 }

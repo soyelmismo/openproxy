@@ -12,7 +12,7 @@ pub async fn get_runtime_config(
     State(s): State<AppState>,
     headers: HeaderMap,
 ) -> ApiResult<Json<RuntimeConfigResponse>> {
-    if let Err(e) = authenticate_admin_ws(&s, &headers, None) {
+    if let Err(e) = authenticate_admin_ws(&s, &headers, None).await {
         return e.into();
     }
     crate::api_try! {
@@ -37,7 +37,7 @@ pub async fn put_runtime_timeouts(
     headers: HeaderMap,
     Json(body): Json<TimeoutsConfig>,
 ) -> ApiResult<Json<serde_json::Value>> {
-    if let Err(e) = authenticate_admin_ws(&s, &headers, None) {
+    if let Err(e) = authenticate_admin_ws(&s, &headers, None).await {
         return e.into();
     }
     let inner: Result<Json<serde_json::Value>, ApiError> = async {
@@ -74,7 +74,7 @@ pub async fn put_runtime_compression(
     headers: HeaderMap,
     Json(body): Json<openproxy_compression::CompressionMode>,
 ) -> ApiResult<Json<serde_json::Value>> {
-    if let Err(e) = authenticate_admin_ws(&s, &headers, None) {
+    if let Err(e) = authenticate_admin_ws(&s, &headers, None).await {
         return e.into();
     }
     let inner: Result<Json<serde_json::Value>, ApiError> = async {
@@ -98,7 +98,7 @@ pub async fn put_idle_chunk_retryable(
     headers: HeaderMap,
     Json(body): Json<serde_json::Value>,
 ) -> ApiResult<Json<serde_json::Value>> {
-    if let Err(e) = authenticate_admin_ws(&s, &headers, None) {
+    if let Err(e) = authenticate_admin_ws(&s, &headers, None).await {
         return e.into();
     }
     let inner: Result<Json<serde_json::Value>, ApiError> = async {
@@ -134,7 +134,7 @@ pub async fn put_runtime_quota_protection(
     headers: HeaderMap,
     Json(body): Json<openproxy_types::config::QuotaProtectionConfig>,
 ) -> ApiResult<Json<serde_json::Value>> {
-    if let Err(e) = authenticate_admin_ws(&s, &headers, None) {
+    if let Err(e) = authenticate_admin_ws(&s, &headers, None).await {
         return e.into();
     }
     let inner: Result<Json<serde_json::Value>, ApiError> = async {
@@ -163,7 +163,7 @@ pub async fn get_maintenance_config(
     State(s): State<AppState>,
     headers: HeaderMap,
 ) -> ApiResult<Json<serde_json::Value>> {
-    if let Err(e) = authenticate_admin_ws(&s, &headers, None) {
+    if let Err(e) = authenticate_admin_ws(&s, &headers, None).await {
         return e.into();
     }
     let cfg = s.maintenance_config();
@@ -181,7 +181,7 @@ pub async fn put_maintenance_config(
     headers: HeaderMap,
     Json(body): Json<serde_json::Value>,
 ) -> ApiResult<Json<serde_json::Value>> {
-    if let Err(e) = authenticate_admin_ws(&s, &headers, None) {
+    if let Err(e) = authenticate_admin_ws(&s, &headers, None).await {
         return e.into();
     }
     let mut cfg = s.maintenance_config();
@@ -209,7 +209,7 @@ pub async fn get_vacuum_status(
     State(s): State<AppState>,
     headers: HeaderMap,
 ) -> ApiResult<Json<crate::state::VacuumStatus>> {
-    if let Err(e) = authenticate_admin_ws(&s, &headers, None) {
+    if let Err(e) = authenticate_admin_ws(&s, &headers, None).await {
         return e.into();
     }
     ApiResult::ok(Json(s.vacuum_status()))
@@ -219,7 +219,7 @@ pub async fn get_recording_ttl(
     State(s): State<AppState>,
     headers: HeaderMap,
 ) -> ApiResult<Json<serde_json::Value>> {
-    if let Err(e) = authenticate_admin_ws(&s, &headers, None) {
+    if let Err(e) = authenticate_admin_ws(&s, &headers, None).await {
         return e.into();
     }
     crate::api_try! {
@@ -234,7 +234,7 @@ pub async fn put_recording_ttl(
     headers: HeaderMap,
     Json(body): Json<serde_json::Value>,
 ) -> ApiResult<Json<serde_json::Value>> {
-    if let Err(e) = authenticate_admin_ws(&s, &headers, None) {
+    if let Err(e) = authenticate_admin_ws(&s, &headers, None).await {
         return e.into();
     }
     let inner: Result<Json<serde_json::Value>, ApiError> = async {

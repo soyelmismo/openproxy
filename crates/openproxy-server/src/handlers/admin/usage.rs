@@ -13,9 +13,15 @@ pub async fn usage_summary(
 ) -> ApiResult<Json<core_usage::UsageSummary>> {
     crate::api_try! {
         let f = q.into_filter()?;
-        let result = run_analytics_query_with_filter(&s, &f, "summary", |conn, fl| {
-            core_usage::summary(conn, fl)
-        })?;
+        let result = tokio::task::spawn_blocking({
+            let pool = s.db_pool().clone();
+            move || {
+                let r = pool.try_reader_for(ADMIN_LOCK_TIMEOUT).ok_or_else(|| {
+                    ApiError(CoreError::ServiceUnavailable("reader lock busy".into()))
+                })?;
+                core_usage::summary(&r, &f).map_err(ApiError)
+            }
+        }).await.unwrap()?;
         Ok(Json(result))
     }
 }
@@ -26,9 +32,15 @@ pub async fn usage_by_model(
 ) -> ApiResult<Json<Vec<core_usage::ByModelRow>>> {
     crate::api_try! {
         let f = q.into_filter()?;
-        let result = run_analytics_query_with_filter(&s, &f, "by_model", |conn, fl| {
-            core_usage::by_model(conn, fl)
-        })?;
+        let result = tokio::task::spawn_blocking({
+            let pool = s.db_pool().clone();
+            move || {
+                let r = pool.try_reader_for(ADMIN_LOCK_TIMEOUT).ok_or_else(|| {
+                    ApiError(CoreError::ServiceUnavailable("reader lock busy".into()))
+                })?;
+                core_usage::by_model(&r, &f).map_err(ApiError)
+            }
+        }).await.unwrap()?;
         Ok(Json(result))
     }
 }
@@ -39,9 +51,15 @@ pub async fn usage_by_provider(
 ) -> ApiResult<Json<Vec<core_usage::ByProviderRow>>> {
     crate::api_try! {
         let f = q.into_filter()?;
-        let result = run_analytics_query_with_filter(&s, &f, "by_provider", |conn, fl| {
-            core_usage::by_provider(conn, fl)
-        })?;
+        let result = tokio::task::spawn_blocking({
+            let pool = s.db_pool().clone();
+            move || {
+                let r = pool.try_reader_for(ADMIN_LOCK_TIMEOUT).ok_or_else(|| {
+                    ApiError(CoreError::ServiceUnavailable("reader lock busy".into()))
+                })?;
+                core_usage::by_provider(&r, &f).map_err(ApiError)
+            }
+        }).await.unwrap()?;
         Ok(Json(result))
     }
 }
@@ -52,9 +70,15 @@ pub async fn usage_monthly_by_provider(
 ) -> ApiResult<Json<Vec<core_usage::MonthlyByProviderRow>>> {
     crate::api_try! {
         let f = q.into_filter()?;
-        let result = run_analytics_query_with_filter(&s, &f, "monthly_by_provider", |conn, fl| {
-            core_usage::monthly_by_provider(conn, fl)
-        })?;
+        let result = tokio::task::spawn_blocking({
+            let pool = s.db_pool().clone();
+            move || {
+                let r = pool.try_reader_for(ADMIN_LOCK_TIMEOUT).ok_or_else(|| {
+                    ApiError(CoreError::ServiceUnavailable("reader lock busy".into()))
+                })?;
+                core_usage::monthly_by_provider(&r, &f).map_err(ApiError)
+            }
+        }).await.unwrap()?;
         Ok(Json(result))
     }
 }
@@ -65,9 +89,15 @@ pub async fn usage_by_day(
 ) -> ApiResult<Json<Vec<core_usage::ByDayRow>>> {
     crate::api_try! {
         let f = q.into_filter()?;
-        let result = run_analytics_query_with_filter(&s, &f, "by_day", |conn, fl| {
-            core_usage::by_day(conn, fl)
-        })?;
+        let result = tokio::task::spawn_blocking({
+            let pool = s.db_pool().clone();
+            move || {
+                let r = pool.try_reader_for(ADMIN_LOCK_TIMEOUT).ok_or_else(|| {
+                    ApiError(CoreError::ServiceUnavailable("reader lock busy".into()))
+                })?;
+                core_usage::by_day(&r, &f).map_err(ApiError)
+            }
+        }).await.unwrap()?;
         Ok(Json(result))
     }
 }
@@ -78,9 +108,15 @@ pub async fn usage_by_account(
 ) -> ApiResult<Json<Vec<core_usage::ByAccountRow>>> {
     crate::api_try! {
         let f = q.into_filter()?;
-        let result = run_analytics_query_with_filter(&s, &f, "by_account", |conn, fl| {
-            core_usage::by_account(conn, fl)
-        })?;
+        let result = tokio::task::spawn_blocking({
+            let pool = s.db_pool().clone();
+            move || {
+                let r = pool.try_reader_for(ADMIN_LOCK_TIMEOUT).ok_or_else(|| {
+                    ApiError(CoreError::ServiceUnavailable("reader lock busy".into()))
+                })?;
+                core_usage::by_account(&r, &f).map_err(ApiError)
+            }
+        }).await.unwrap()?;
         Ok(Json(result))
     }
 }
@@ -91,9 +127,15 @@ pub async fn usage_by_status(
 ) -> ApiResult<Json<Vec<core_usage::ByStatusRow>>> {
     crate::api_try! {
         let f = q.into_filter()?;
-        let result = run_analytics_query_with_filter(&s, &f, "by_status", |conn, fl| {
-            core_usage::by_status(conn, fl)
-        })?;
+        let result = tokio::task::spawn_blocking({
+            let pool = s.db_pool().clone();
+            move || {
+                let r = pool.try_reader_for(ADMIN_LOCK_TIMEOUT).ok_or_else(|| {
+                    ApiError(CoreError::ServiceUnavailable("reader lock busy".into()))
+                })?;
+                core_usage::by_status(&r, &f).map_err(ApiError)
+            }
+        }).await.unwrap()?;
         Ok(Json(result))
     }
 }
@@ -236,7 +278,7 @@ pub async fn usage_stream(
         }
     }
 
-    match authenticate_admin_ws(&s, &headers, q.token.as_deref()) {
+    match authenticate_admin_ws(&s, &headers, q.token.as_deref().await) {
         Ok(()) => ws
             .on_upgrade(move |socket| stream_usage_rows(socket, s))
             .into_response(),
@@ -249,7 +291,7 @@ pub async fn usage_detail(
     headers: HeaderMap,
     Query(q): Query<DetailQuery>,
 ) -> ApiResult<Json<UsageDetailResponse>> {
-    if let Err(e) = authenticate_admin_ws(&s, &headers, None) {
+    if let Err(e) = authenticate_admin_ws(&s, &headers, None).await {
         return e.into();
     }
     crate::api_try! {

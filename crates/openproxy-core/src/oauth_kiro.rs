@@ -359,15 +359,13 @@ impl OAuthProvider for KiroOAuthProvider {
         // 60-second TTL means a stale entry from an abandoned
         // browser tab cannot be picked up by a different user's
         // poll.
-        tokio::task::block_in_place(|| {
-            if let Ok(mut slot) = LAST_KIRO_CLIENT.lock() {
-                *slot = Some(LastKiroClient {
-                    client_id: client.client_id,
-                    client_secret: client.client_secret,
-                    stored_at: std::time::Instant::now(),
-                });
-            }
-        });
+        if let Ok(mut slot) = LAST_KIRO_CLIENT.lock() {
+            *slot = Some(LastKiroClient {
+                client_id: client.client_id,
+                client_secret: client.client_secret,
+                stored_at: std::time::Instant::now(),
+            });
+        }
 
         Ok(dar)
     }

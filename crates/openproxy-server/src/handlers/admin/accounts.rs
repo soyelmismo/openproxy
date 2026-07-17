@@ -12,10 +12,15 @@ pub async fn list_accounts(
     Query(q): Query<AccountListQuery>,
 ) -> ApiResult<Json<Vec<core_accounts::Account>>> {
     crate::api_try! {
-        // Read-only SELECT — use the READER.
-        let r = s.db_pool().reader();
-        let provider = q.provider_id.map(ProviderId::new);
-        let list = core_admin::list_accounts(&r, provider.as_ref(), s.master_key().as_ref())?;
+        let list = tokio::task::spawn_blocking({
+            let pool = s.db_pool().clone();
+            let master_key = s.master_key().clone();
+            move || {
+                let r = pool.reader();
+                let provider = q.provider_id.map(ProviderId::new);
+                core_admin::list_accounts(&r, provider.as_ref(), master_key.as_ref())
+            }
+        }).await.unwrap()?;
         Ok(Json(list))
     }
 }
@@ -25,8 +30,14 @@ pub async fn create_account(
     Json(input): Json<core_admin::CreateAccountInput>,
 ) -> ApiResult<Json<serde_json::Value>> {
     crate::api_try! {
-        let w = s.db_pool().writer();
-        let id = core_admin::create_account(&w, s.master_key().as_ref(), input)?;
+        let id = tokio::task::spawn_blocking({
+            let pool = s.db_pool().clone();
+            let master_key = s.master_key().clone();
+            move || {
+                let w = pool.writer();
+                core_admin::create_account(&w, master_key.as_ref(), input)
+            }
+        }).await.unwrap()?;
         Ok(Json(serde_json::json!({ "id": id.0 })))
     }
 }
@@ -36,10 +47,15 @@ pub async fn delete_account(
     Path(id): Path<i64>,
 ) -> ApiResult<Json<serde_json::Value>> {
     crate::api_try! {
-        let w = s.db_pool().writer();
-        let id = AccountId::new(id);
-        core_admin::delete_account(&w, id)?;
-        Ok(Json(serde_json::json!({ "deleted": id.0 })))
+        tokio::task::spawn_blocking({
+            let pool = s.db_pool().clone();
+            move || {
+                let w = pool.writer();
+                let id = AccountId::new(id);
+                core_admin::delete_account(&w, id)
+            }
+        }).await.unwrap()?;
+        Ok(Json(serde_json::json!({ "deleted": id })))
     }
 }
 
@@ -52,10 +68,17 @@ pub async fn set_account_health(
         let health_str = body
             .get("health")
             .and_then(|v| v.as_str())
+            .map(|s| s.to_string())
             .ok_or_else(|| CoreError::Validation("missing 'health' string".into()))?;
-        let health = core_accounts::HealthStatus::parse(health_str).map_err(CoreError::Validation)?;
-        let w = s.db_pool().writer();
-        core_accounts::set_health(&w, AccountId::new(id), health)?;
+        tokio::task::spawn_blocking({
+            let pool = s.db_pool().clone();
+            let health_str = health_str.clone();
+            move || {
+                let health = core_accounts::HealthStatus::parse(&health_str).map_err(CoreError::Validation)?;
+                let w = pool.writer();
+                core_accounts::set_health(&w, AccountId::new(id), health)
+            }
+        }).await.unwrap()?;
         Ok(Json(serde_json::json!({
             "id": id,
             "health": health_str,
@@ -69,8 +92,14 @@ pub async fn update_account_api_key(
     Json(body): Json<core_admin::UpdateAccountApiKeyInput>,
 ) -> ApiResult<Json<serde_json::Value>> {
     crate::api_try! {
-        let w = s.db_pool().writer();
-        core_admin::update_account_api_key(&w, s.master_key().as_ref(), AccountId::new(id), body)?;
+        tokio::task::spawn_blocking({
+            let pool = s.db_pool().clone();
+            let master_key = s.master_key().clone();
+            move || {
+                let w = pool.writer();
+                core_admin::update_account_api_key(&w, master_key.as_ref(), AccountId::new(id), body)
+            }
+        }).await.unwrap()?;
         Ok(Json(serde_json::json!({ "id": id })))
     }
 }
@@ -122,21 +151,31 @@ pub(crate) async fn resolve_refresh_account(
     provider: &ProviderId,
     q: &ProviderRefreshQuery,
 ) -> Result<(Option<AccountId>, String), ApiError> {
-    let w = s.db_pool().writer();
-    let provider_row = match core_providers::get(&w, provider) {
-        Ok(p) => p,
-        Err(e) => return Err(ApiError(e)),
-    };
-    let accounts_list = match core_accounts::list(&w, Some(provider), s.master_key().as_ref()) {
-        Ok(l) => l,
-        Err(e) => return Err(ApiError(e)),
-    };
+    let provider_row = tokio::task::spawn_blocking({
+        let pool = s.db_pool().clone();
+        let provider = provider.clone();
+        move || {
+            let w = pool.writer();
+            core_providers::get(&w, &provider).map_err(ApiError)
+        }
+    }).await.unwrap()?;
+    
+    let accounts_list = tokio::task::spawn_blocking({
+        let pool = s.db_pool().clone();
+        let master_key = s.master_key().clone();
+        let provider = provider.clone();
+        move || {
+            let w = pool.writer();
+            core_accounts::list(&w, Some(&provider), master_key.as_ref()).map_err(ApiError)
+        }
+    }).await.unwrap()?;
 
     let is_anonymous = match &provider_row {
         Some(p) if matches!(p.auth_type, core_providers::AuthType::None) => true,
         _ if accounts_list.is_empty() => true,
         _ => false,
     };
+
 
     if is_anonymous {
         return Ok((None, String::new()));

@@ -16,8 +16,13 @@ pub async fn toggle_model(
             .get("active")
             .and_then(|v| v.as_bool())
             .ok_or_else(|| CoreError::Validation("missing 'active' bool".into()))?;
-        let w = s.db_pool().writer();
-        core_models::set_active(&w, ModelRowId(id), active)?;
+        tokio::task::spawn_blocking({
+            let pool = s.db_pool().clone();
+            move || {
+                let w = pool.writer();
+                core_models::set_active(&w, ModelRowId(id), active)
+            }
+        }).await.unwrap()?;
         Ok(Json(serde_json::json!({ "id": id, "active": active })))
     }
 }
@@ -27,8 +32,13 @@ pub async fn bulk_toggle_models(
     Json(body): Json<core_admin::BulkToggleInput>,
 ) -> ApiResult<Json<serde_json::Value>> {
     crate::api_try! {
-        let w = s.db_pool().writer();
-        let updated = core_admin::set_active_bulk(&w, body)?;
+        let updated = tokio::task::spawn_blocking({
+            let pool = s.db_pool().clone();
+            move || {
+                let w = pool.writer();
+                core_admin::set_active_bulk(&w, body)
+            }
+        }).await.unwrap()?;
         Ok(Json(serde_json::json!({
             "updated": updated,
         })))
@@ -40,8 +50,13 @@ pub async fn delete_model(
     Path(id): Path<i64>,
 ) -> ApiResult<Json<serde_json::Value>> {
     crate::api_try! {
-        let w = s.db_pool().writer();
-        let removed = core_models::delete(&w, ModelRowId(id))?;
+        let removed = tokio::task::spawn_blocking({
+            let pool = s.db_pool().clone();
+            move || {
+                let w = pool.writer();
+                core_models::delete(&w, ModelRowId(id))
+            }
+        }).await.unwrap()?;
         Ok(Json(serde_json::json!({ "id": id, "deleted": removed })))
     }
 }
@@ -51,8 +66,13 @@ pub async fn create_custom_model(
     Json(input): Json<core_admin::CreateCustomModelInput>,
 ) -> ApiResult<Json<serde_json::Value>> {
     crate::api_try! {
-        let w = s.db_pool().writer();
-        let row_id = core_admin::create_custom_model(&w, input)?;
+        let row_id = tokio::task::spawn_blocking({
+            let pool = s.db_pool().clone();
+            move || {
+                let w = pool.writer();
+                core_admin::create_custom_model(&w, input)
+            }
+        }).await.unwrap()?;
         Ok(Json(serde_json::json!({ "row_id": row_id.0 })))
     }
 }
@@ -72,17 +92,21 @@ pub async fn test_model(
             Ok(input) => {
                 let aid = input.account_id.map(AccountId::new);
                 let purl = if let Some(ref pid) = input.proxy_id {
-                    let r = s.db_pool().reader();
-                    if let Ok(Some(p)) = openproxy_core::free_proxies::get_proxy(&r, pid) {
-                        Some(format!(
-                            "{}://{}:{}",
-                            p.r#type.to_lowercase(),
-                            p.host,
-                            p.port
-                        ))
-                    } else {
-                        None
-                    }
+                    let db_pool = s.db_pool().clone();
+                    let pid_clone = pid.clone();
+                    tokio::task::spawn_blocking(move || {
+                        let r = db_pool.reader();
+                        if let Ok(Some(p)) = openproxy_core::free_proxies::get_proxy(&r, &pid_clone) {
+                            Some(format!(
+                                "{}://{}:{}",
+                                p.r#type.to_lowercase(),
+                                p.host,
+                                p.port
+                            ))
+                        } else {
+                            None
+                        }
+                    }).await.unwrap()
                 } else {
                     None
                 };
@@ -111,17 +135,58 @@ pub async fn test_model(
     })))
 }
 
+pub async fn list_models(
+    State(s): State<AppState>,
+    axum::extract::Query(query): axum::extract::Query<ListModelsQuery>,
+) -> ApiResult<Json<Vec<types_models::Model>>> {
+    crate::api_try! {
+        let models = tokio::task::spawn_blocking({
+            let pool = s.db_pool().clone();
+            move || {
+                let r = pool.reader();
+                let limit = query.limit.unwrap_or(200);
+                if limit == 0 {
+                    return Ok::<_, ApiError>(vec![]);
+                }
+                
+                if let Some(ref pid_str) = query.provider_id {
+                    let provider_id = openproxy_types::ids::ProviderId::new(pid_str);
+                    core_models::list_models_for_provider(&r, &provider_id, limit)
+                } else if let Some(ref aid_str) = query.account_id {
+                    let account_id = AccountId(
+                        aid_str
+                            .parse::<i64>()
+                            .map_err(|_| CoreError::Validation("invalid account_id".into()))?,
+                    );
+                    core_models::list_models_for_account(&r, account_id, limit)
+                } else if let Some(ref status) = query.status {
+                    core_models::list_models_by_status(&r, *status, limit)
+                } else {
+                    core_models::list_all_models(&r, limit)
+                }
+            }
+        }).await.unwrap()?;
+
+        Ok(Json(models))
+    }
+}
+
 pub async fn list_models_admin(
     State(s): State<AppState>,
     axum::extract::Query(q): axum::extract::Query<ListModelsQuery>,
 ) -> ApiResult<Json<Vec<core_models::Model>>> {
     crate::api_try! {
-        // Read-only SELECT — use the READER.
-        let r = s.db_pool().reader();
-        let mut list = core_models::list_all(&r)?;
-        if let Some(p) = q.provider_id {
-            list.retain(|m| m.provider_id.as_str() == p);
-        }
+        let list = tokio::task::spawn_blocking({
+            let pool = s.db_pool().clone();
+            move || {
+                let r = pool.reader();
+                let mut list = core_models::list_all(&r)?;
+                if let Some(p) = q.provider_id {
+                    list.retain(|m| m.provider_id.as_str() == p);
+                }
+                Ok::<_, ApiError>(list)
+            }
+        }).await.unwrap()?;
         Ok(Json(list))
     }
 }
@@ -160,15 +225,16 @@ pub(crate) async fn run_test_for_model(
     let start = std::time::Instant::now();
 
     // 1. Load the model row.
-    let model = match (|| -> Result<core_models::Model, ApiError> {
-        let w = s.db_pool().writer();
+    let db_pool = s.db_pool().clone();
+    let model = match tokio::task::spawn_blocking(move || -> Result<core_models::Model, ApiError> {
+        let w = db_pool.writer();
         core_models::get_by_row_id(&w, row_id)?.ok_or_else(|| {
             ApiError(CoreError::ModelNotFound {
                 provider: "<unknown>".into(),
                 model: format!("row_id={}", model_row_id),
             })
         })
-    })() {
+    }).await.unwrap() {
         Ok(m) => m,
         Err(ApiError(e)) => {
             return TestResult {
@@ -225,10 +291,13 @@ pub(crate) async fn run_test_for_model(
     //      - provider has no accounts configured (fallback to anonymous)
     //    This lets bearer providers like opencode-zen work without
     //    accounts while still using accounts when they exist.
-    let (is_anonymous, accounts_list) = {
-        let w = s.db_pool().writer();
-        let provider_row = core_providers::get(&w, &model.provider_id).unwrap_or_default();
-        let accs = core_accounts::list(&w, Some(&model.provider_id), s.master_key().as_ref())
+    let db_pool = s.db_pool().clone();
+    let provider_id = model.provider_id.clone();
+    let master_key = s.master_key().clone();
+    let (is_anonymous, accounts_list) = tokio::task::spawn_blocking(move || {
+        let w = db_pool.writer();
+        let provider_row = core_providers::get(&w, &provider_id).unwrap_or_default();
+        let accs = core_accounts::list(&w, Some(&provider_id), master_key.as_ref())
             .unwrap_or_default();
         let anon = match &provider_row {
             Some(p) if matches!(p.auth_type, core_providers::AuthType::None) => true,
@@ -236,7 +305,7 @@ pub(crate) async fn run_test_for_model(
             _ => false,
         };
         (anon, accs)
-    };
+    }).await.unwrap();
 
     // Capture the optional account_id AND its label. The label is
     // needed by providers whose URL embeds account-level metadata
@@ -247,10 +316,14 @@ pub(crate) async fn run_test_for_model(
         let selected = match account_id {
             Some(id) => {
                 // Per-model path: look up the already-pinned account.
-                let w = s.db_pool().writer();
-                core_accounts::get(&w, id, s.master_key().as_ref())
-                    .ok()
-                    .flatten()
+                let db_pool = s.db_pool().clone();
+                let master_key = s.master_key().clone();
+                tokio::task::spawn_blocking(move || {
+                    let w = db_pool.writer();
+                    core_accounts::get(&w, id, master_key.as_ref())
+                        .ok()
+                        .flatten()
+                }).await.unwrap()
             }
             None => {
                 let healthy = accounts_list
@@ -281,12 +354,14 @@ pub(crate) async fn run_test_for_model(
         //    primary decrypt fails (e.g. NULL column).
         let api_key = match account_id {
             Some(aid) => {
-                let account = {
-                    let w = s.db_pool().writer();
-                    core_accounts::get(&w, aid, s.master_key().as_ref())
+                let db_pool = s.db_pool().clone();
+                let master_key = s.master_key().clone();
+                let account = tokio::task::spawn_blocking(move || {
+                    let w = db_pool.writer();
+                    core_accounts::get(&w, aid, master_key.as_ref())
                         .ok()
                         .flatten()
-                };
+                }).await.unwrap();
                 if let Some(ref acc) = account
                     && acc.auth_type == "oauth"
                 {
@@ -315,12 +390,15 @@ pub(crate) async fn run_test_for_model(
                         }
                     }
                 } else {
-                    let w = s.db_pool().writer();
-                    match core_accounts::decrypt_api_key(&w, aid, s.master_key().as_ref())
-                        .or_else(|_| {
-                            core_accounts::decrypt_access_token(&w, aid, s.master_key().as_ref())
-                        })
-                        .map_err(ApiError)
+                    let db_pool = s.db_pool().clone();
+                    let master_key = s.master_key().clone();
+                    match tokio::task::spawn_blocking(move || {
+                        let w = db_pool.writer();
+                        core_accounts::decrypt_api_key(&w, aid, master_key.as_ref())
+                            .or_else(|_| {
+                                core_accounts::decrypt_access_token(&w, aid, master_key.as_ref())
+                            })
+                    }).await.unwrap().map_err(ApiError)
                     {
                         Ok(k) => k,
                         Err(ApiError(e)) => {
@@ -659,8 +737,12 @@ pub(crate) async fn run_test_for_model(
     //     per-row path only; the combo fan-out does not want its
     //     transient probe to overwrite the row's last-test status.
     if !opts.in_combo_fanout {
-        let w = s.db_pool().writer();
-        if let Err(e) = core_models::set_test_status(&w, row_id, status as i32) {
+        let status = status as i32;
+        let db_pool = s.db_pool().clone();
+        if let Err(e) = tokio::task::spawn_blocking(move || {
+            let w = db_pool.writer();
+            core_models::set_test_status(&w, row_id, status)
+        }).await.unwrap() {
             return TestResult {
                 row_id: model_row_id,
                 status: e.http_status(),
@@ -690,13 +772,15 @@ pub(crate) async fn run_refresh(
     let row_id = ModelRowId(id);
     let ttl_seconds = q.ttl_seconds.unwrap_or(3_600);
 
-    // 1. Look up the model to find the provider.
     let provider_id = {
-        let w = s.db_pool().writer();
-        let found = match core_models::get_by_row_id(&w, row_id) {
-            Ok(opt) => opt,
-            Err(e) => return ApiResult::err(ApiError(e)),
-        };
+        let found = tokio::task::spawn_blocking({
+            let pool = s.db_pool().clone();
+            move || {
+                let w = pool.writer();
+                core_models::get_by_row_id(&w, row_id)
+            }
+        }).await.unwrap().map_err(ApiError)?;
+        
         match found {
             Some(m) => m.provider_id,
             None => {

@@ -8,9 +8,13 @@ use openproxy_core::admin as core_admin;
 
 pub async fn list_combos(State(s): State<AppState>) -> ApiResult<Json<Vec<types_combos::Combo>>> {
     crate::api_try! {
-        // Read-only SELECT — use the READER.
-        let r = s.db_pool().reader();
-        let list = core_admin::list_combos(&r)?;
+        let list = tokio::task::spawn_blocking({
+            let pool = s.db_pool().clone();
+            move || {
+                let r = pool.reader();
+                core_admin::list_combos(&r)
+            }
+        }).await.unwrap()?;
         Ok(Json(list))
     }
 }
@@ -20,8 +24,13 @@ pub async fn create_combo(
     Json(input): Json<core_admin::CreateComboInput>,
 ) -> ApiResult<Json<serde_json::Value>> {
     crate::api_try! {
-        let w = s.db_pool().writer();
-        let id = core_admin::create_combo(&w, input)?;
+        let id = tokio::task::spawn_blocking({
+            let pool = s.db_pool().clone();
+            move || {
+                let w = pool.writer();
+                core_admin::create_combo(&w, input)
+            }
+        }).await.unwrap()?;
         Ok(Json(serde_json::json!({ "id": id.0 })))
     }
 }
@@ -31,11 +40,14 @@ pub async fn get_combo(
     Path(id): Path<i64>,
 ) -> ApiResult<Json<types_combos::Combo>> {
     crate::api_try! {
-        // Read-only SELECT — use the READER.
-        let r = s.db_pool().reader();
-        let id = ComboId(id);
-        let combo =
-            core_combos::get_combo(&r, id)?.ok_or_else(|| CoreError::ComboNotFound(id.0))?;
+        let combo = tokio::task::spawn_blocking({
+            let pool = s.db_pool().clone();
+            move || {
+                let r = pool.reader();
+                let id = ComboId(id);
+                core_combos::get_combo(&r, id)?.ok_or_else(|| CoreError::ComboNotFound(id.0))
+            }
+        }).await.unwrap()?;
         Ok(Json(combo))
     }
 }
@@ -209,10 +221,15 @@ pub async fn delete_combo(
     Path(id): Path<i64>,
 ) -> ApiResult<Json<serde_json::Value>> {
     crate::api_try! {
-        let w = s.db_pool().writer();
-        let id = ComboId(id);
-        core_admin::delete_combo(&w, id)?;
-        Ok(Json(serde_json::json!({ "deleted": id.0 })))
+        tokio::task::spawn_blocking({
+            let pool = s.db_pool().clone();
+            move || {
+                let w = pool.writer();
+                let id = ComboId(id);
+                core_admin::delete_combo(&w, id)
+            }
+        }).await.unwrap()?;
+        Ok(Json(serde_json::json!({ "deleted": id })))
     }
 }
 
@@ -221,10 +238,14 @@ pub async fn list_combo_targets(
     Path(id): Path<i64>,
 ) -> ApiResult<Json<Vec<types_combos::ComboTargetWithModel>>> {
     crate::api_try! {
-        // Read-only SELECT — use the READER.
-        let r = s.db_pool().reader();
-        let id = ComboId(id);
-        let targets = core_admin::list_combo_targets_with_model(&r, id)?;
+        let targets = tokio::task::spawn_blocking({
+            let pool = s.db_pool().clone();
+            move || {
+                let r = pool.reader();
+                let id = ComboId(id);
+                core_admin::list_combo_targets_with_model(&r, id)
+            }
+        }).await.unwrap()?;
         Ok(Json(targets))
     }
 }
@@ -235,9 +256,14 @@ pub async fn add_target(
     Json(input): Json<core_admin::AddTargetInput>,
 ) -> ApiResult<Json<serde_json::Value>> {
     crate::api_try! {
-        let w = s.db_pool().writer();
-        let combo_id = ComboId(id);
-        let new_id = core_admin::add_target_to_combo(&w, combo_id, input)?;
+        let new_id = tokio::task::spawn_blocking({
+            let pool = s.db_pool().clone();
+            move || {
+                let w = pool.writer();
+                let combo_id = ComboId(id);
+                core_admin::add_target_to_combo(&w, combo_id, input)
+            }
+        }).await.unwrap()?;
         Ok(Json(serde_json::json!({ "id": new_id.0 })))
     }
 }
@@ -247,10 +273,14 @@ pub async fn list_valid_sub_combos(
     Path(id): Path<i64>,
 ) -> ApiResult<Json<Vec<core_admin::ComboSummary>>> {
     crate::api_try! {
-        // Read-only SELECT — use the READER.
-        let r = s.db_pool().reader();
-        let id = ComboId(id);
-        let list = core_admin::list_valid_sub_combos(&r, id)?;
+        let list = tokio::task::spawn_blocking({
+            let pool = s.db_pool().clone();
+            move || {
+                let r = pool.reader();
+                let id = ComboId(id);
+                core_admin::list_valid_sub_combos(&r, id)
+            }
+        }).await.unwrap()?;
         Ok(Json(list))
     }
 }
@@ -261,126 +291,118 @@ pub async fn update_combo(
     Json(body): Json<serde_json::Value>,
 ) -> ApiResult<Json<serde_json::Value>> {
     crate::api_try! {
-        let w = s.db_pool().writer();
-        // Optional race_size update.
-        if let Some(n) = body.get("race_size").and_then(|v| v.as_u64()) {
-            let rs = u8::try_from(n).unwrap_or(0);
-            core_combos::update_combo(&w, ComboId(id), Some(rs))?;
-        }
-        // Optional context_window update. `null` or missing means
-        // "auto-compute from targets". A positive integer pins the
-        // reported context window.
-        if let Some(cw_val) = body.get("context_window") {
-            let cw = if cw_val.is_null() {
-                None
-            } else {
-                Some(cw_val.as_i64().ok_or_else(|| {
-                    ApiError(CoreError::Validation(
-                        "context_window must be null or an integer".into(),
-                    ))
-                })?)
-            };
-            core_combos::update_context_window(&w, ComboId(id), cw)?;
-        }
-        // Optional `priority_mode` update. `null` clears the column
-        // back to `strict` (the legacy default).
-        if let Some(v) = body.get("priority_mode") {
-            let mode = match v {
-                serde_json::Value::Null => None,
-                serde_json::Value::String(s) => Some(s.as_str()),
-                other => {
-                    return Err(ApiError(CoreError::Validation(format!(
-                        "priority_mode must be a string or null, got {}",
-                        other
-                    ))));
+        tokio::task::spawn_blocking({
+            let pool = s.db_pool().clone();
+            move || {
+                let w = pool.writer();
+                // Optional race_size update.
+                if let Some(n) = body.get("race_size").and_then(|v| v.as_u64()) {
+                    let rs = u8::try_from(n).unwrap_or(0);
+                    core_combos::update_combo(&w, ComboId(id), Some(rs))?;
                 }
-            };
-            core_combos::update_priority_mode(&w, ComboId(id), mode)?;
-        }
-        // Optional cooldown settings update. Each field is updated
-        // INDEPENDENTLY — if only `cooldown_base_secs` is in the body,
-        // only that column is written, leaving `cooldown_mode` etc.
-        // untouched. This prevents the "changing base resets mode to
-        // flat" bug.
-        //
-        // The frontend sends one field at a time (e.g. `{cooldown_base_secs: 30}`)
-        // so we must NOT batch them into a single UPDATE that would
-        // NULL out the absent fields.
-        if let Some(v) = body.get("cooldown_mode") {
-            let mode = match v {
-                serde_json::Value::Null => None,
-                serde_json::Value::String(s) => Some(s.as_str()),
-                other => {
-                    return Err(ApiError(CoreError::Validation(format!(
-                        "cooldown_mode must be a string or null, got {}",
-                        other
-                    ))));
+                // Optional context_window update.
+                if let Some(cw_val) = body.get("context_window") {
+                    let cw = if cw_val.is_null() {
+                        None
+                    } else {
+                        Some(cw_val.as_i64().ok_or_else(|| {
+                            ApiError(CoreError::Validation(
+                                "context_window must be null or an integer".into(),
+                            ))
+                        })?)
+                    };
+                    core_combos::update_context_window(&w, ComboId(id), cw)?;
                 }
-            };
-            core_combos::update_cooldown_mode(&w, ComboId(id), mode)?;
-        }
-        if let Some(v) = body.get("cooldown_base_secs") {
-            let base = if v.is_null() {
-                None
-            } else {
-                Some(v.as_u64().ok_or_else(|| {
-                    ApiError(CoreError::Validation(
-                        "cooldown_base_secs must be a non-negative integer or null".into(),
-                    ))
-                })?)
-            };
-            core_combos::update_cooldown_base(&w, ComboId(id), base)?;
-        }
-        if let Some(v) = body.get("cooldown_max_secs") {
-            let max = if v.is_null() {
-                None
-            } else {
-                Some(v.as_u64().ok_or_else(|| {
-                    ApiError(CoreError::Validation(
-                        "cooldown_max_secs must be a non-negative integer or null".into(),
-                    ))
-                })?)
-            };
-            core_combos::update_cooldown_max(&w, ComboId(id), max)?;
-        }
-        if let Some(v) = body.get("cooldown_factor") {
-            let factor = if v.is_null() {
-                None
-            } else {
-                Some(v.as_u64().ok_or_else(|| {
-                    ApiError(CoreError::Validation(
-                        "cooldown_factor must be a non-negative integer or null".into(),
-                    ))
-                })? as u32)
-            };
-            core_combos::update_cooldown_factor(&w, ComboId(id), factor)?;
-        }
-        // Optional LKGP exploration rate update.
-        if let Some(v) = body.get("lkgp_exploration_rate") {
-            let rate = if v.is_null() {
-                None
-            } else {
-                Some(v.as_f64().ok_or_else(|| {
-                    ApiError(CoreError::Validation(
-                        "lkgp_exploration_rate must be a number in [0.0, 1.0] or null".into(),
-                    ))
-                })?)
-            };
-            core_combos::update_lkgp_settings(&w, ComboId(id), rate)?;
-        }
-        // Optional selection window update.
-        if let Some(v) = body.get("selection_window_secs") {
-            let window = if v.is_null() {
-                None
-            } else {
-                Some(v.as_u64().ok_or_else(|| {
-                    ApiError(CoreError::Validation(
-                        "selection_window_secs must be a non-negative integer or null".into(),
-                    ))
-                })?)
-            };
-            core_combos::update_selection_window(&w, ComboId(id), window)?;
-        }
+                // Optional `priority_mode` update.
+                if let Some(v) = body.get("priority_mode") {
+                    let mode = match v {
+                        serde_json::Value::Null => None,
+                        serde_json::Value::String(s) => Some(s.as_str()),
+                        other => {
+                            return Err(ApiError(CoreError::Validation(format!(
+                                "priority_mode must be a string or null, got {}",
+                                other
+                            ))));
+                        }
+                    };
+                    core_combos::update_priority_mode(&w, ComboId(id), mode)?;
+                }
+                if let Some(v) = body.get("cooldown_mode") {
+                    let mode = match v {
+                        serde_json::Value::Null => None,
+                        serde_json::Value::String(s) => Some(s.as_str()),
+                        other => {
+                            return Err(ApiError(CoreError::Validation(format!(
+                                "cooldown_mode must be a string or null, got {}",
+                                other
+                            ))));
+                        }
+                    };
+                    core_combos::update_cooldown_mode(&w, ComboId(id), mode)?;
+                }
+                if let Some(v) = body.get("cooldown_base_secs") {
+                    let base = if v.is_null() {
+                        None
+                    } else {
+                        Some(v.as_u64().ok_or_else(|| {
+                            ApiError(CoreError::Validation(
+                                "cooldown_base_secs must be a non-negative integer or null".into(),
+                            ))
+                        })?)
+                    };
+                    core_combos::update_cooldown_base(&w, ComboId(id), base)?;
+                }
+                if let Some(v) = body.get("cooldown_max_secs") {
+                    let max = if v.is_null() {
+                        None
+                    } else {
+                        Some(v.as_u64().ok_or_else(|| {
+                            ApiError(CoreError::Validation(
+                                "cooldown_max_secs must be a non-negative integer or null".into(),
+                            ))
+                        })?)
+                    };
+                    core_combos::update_cooldown_max(&w, ComboId(id), max)?;
+                }
+                if let Some(v) = body.get("cooldown_factor") {
+                    let factor = if v.is_null() {
+                        None
+                    } else {
+                        Some(v.as_u64().ok_or_else(|| {
+                            ApiError(CoreError::Validation(
+                                "cooldown_factor must be a non-negative integer or null".into(),
+                            ))
+                        })? as u32)
+                    };
+                    core_combos::update_cooldown_factor(&w, ComboId(id), factor)?;
+                }
+                if let Some(v) = body.get("lkgp_exploration_rate") {
+                    let rate = if v.is_null() {
+                        None
+                    } else {
+                        Some(v.as_f64().ok_or_else(|| {
+                            ApiError(CoreError::Validation(
+                                "lkgp_exploration_rate must be a number in [0.0, 1.0] or null".into(),
+                            ))
+                        })?)
+                    };
+                    core_combos::update_lkgp_settings(&w, ComboId(id), rate)?;
+                }
+                if let Some(v) = body.get("selection_window_secs") {
+                    let window = if v.is_null() {
+                        None
+                    } else {
+                        Some(v.as_u64().ok_or_else(|| {
+                            ApiError(CoreError::Validation(
+                                "selection_window_secs must be a non-negative integer or null".into(),
+                            ))
+                        })?)
+                    };
+                    core_combos::update_selection_window(&w, ComboId(id), window)?;
+                }
+                Ok::<(), ApiError>(())
+            }
+        }).await.unwrap()?;
         Ok(Json(serde_json::json!({ "id": id })))
     }
 }
@@ -391,67 +413,59 @@ pub async fn update_combo_target(
     Json(body): Json<serde_json::Value>,
 ) -> ApiResult<Json<serde_json::Value>> {
     crate::api_try! {
-        // Optional `priority_order` — the historical primary field.
-        // Kept optional so a future dashboard that only wants to
-        // PATCH `weight` can do so without round-tripping the order.
-        let priority_order: Option<i64> = match body.get("priority_order") {
-            None => None,
-            Some(v) => Some(v.as_i64().ok_or_else(|| {
-                ApiError(CoreError::Validation(
-                    "priority_order must be an integer when present".into(),
-                ))
-            })?),
-        };
-        if let Some(priority_order) = priority_order {
-            // Cast: i32 is well under i64::MAX in practice; the SQL
-            // column is INTEGER (i64 in rusqlite) so a non-negative
-            // i32 is safe.
-            if priority_order < i32::MIN as i64 || priority_order > i32::MAX as i64 {
-                return Err(ApiError(CoreError::Validation(format!(
-                    "priority_order out of i32 range: {}",
-                    priority_order
-                ))));
+        let (priority_order, weight) = tokio::task::spawn_blocking({
+            let pool = s.db_pool().clone();
+            move || {
+                let priority_order: Option<i64> = match body.get("priority_order") {
+                    None => None,
+                    Some(v) => Some(v.as_i64().ok_or_else(|| {
+                        ApiError(CoreError::Validation(
+                            "priority_order must be an integer when present".into(),
+                        ))
+                    })?),
+                };
+                if let Some(priority_order) = priority_order {
+                    if priority_order < i32::MIN as i64 || priority_order > i32::MAX as i64 {
+                        return Err(ApiError(CoreError::Validation(format!(
+                            "priority_order out of i32 range: {}",
+                            priority_order
+                        ))));
+                    }
+                    let w = pool.writer();
+                    core_combos::update_target_priority(
+                        &w,
+                        ComboTargetId(target_id),
+                        priority_order as i32,
+                    )?;
+                }
+                
+                let weight = body.get("weight").and_then(|v| v.as_i64());
+                if let Some(weight_i64) = weight {
+                    if weight_i64 < 1 || weight_i64 > i32::MAX as i64 {
+                        return Err(ApiError(CoreError::Validation(format!(
+                            "weight must be a positive i32 (1..={}), got {}",
+                            i32::MAX,
+                            weight_i64
+                        ))));
+                    }
+                    let w = pool.writer();
+                    core_combos::update_target_weight(&w, ComboTargetId(target_id), weight_i64 as i32)?;
+                }
+                
+                if priority_order.is_none() && weight.is_none() {
+                    return Err(ApiError(CoreError::Validation(
+                        "missing 'priority_order' or 'weight'".into(),
+                    )));
+                }
+                Ok::<_, ApiError>((priority_order, weight))
             }
-            let w = s.db_pool().writer();
-            core_combos::update_target_priority(
-                &w,
-                ComboTargetId(target_id),
-                priority_order as i32,
-            )?;
-        }
-        // Optional `weight` (migration 000035).
-        if let Some(v) = body.get("weight") {
-            let weight_i64 = v.as_i64().ok_or_else(|| {
-                ApiError(CoreError::Validation(
-                    "weight must be an integer when present".into(),
-                ))
-            })?;
-            // Range-check before the i32 cast so an out-of-range
-            // value surfaces as a 400 instead of a silent wrap.
-            if weight_i64 < 1 || weight_i64 > i32::MAX as i64 {
-                return Err(ApiError(CoreError::Validation(format!(
-                    "weight must be a positive i32 (1..={}), got {}",
-                    i32::MAX,
-                    weight_i64
-                ))));
-            }
-            let w = s.db_pool().writer();
-            core_combos::update_target_weight(&w, ComboTargetId(target_id), weight_i64 as i32)?;
-        }
-        // Backwards-compat: if neither field was present, surface
-        // the historical "missing 'priority_order'" error so a
-        // legacy caller still gets a useful 400 instead of a silent
-        // 200 with no work done.
-        if priority_order.is_none() && body.get("weight").is_none() {
-            return Err(ApiError(CoreError::Validation(
-                "missing 'priority_order' or 'weight'".into(),
-            )));
-        }
+        }).await.unwrap()?;
+        
         Ok(Json(serde_json::json!({
             "combo_id": combo_id,
             "id": target_id,
             "priority_order": priority_order,
-            "weight": body.get("weight").and_then(|v| v.as_i64()),
+            "weight": weight,
         })))
     }
 }
@@ -461,8 +475,13 @@ pub async fn delete_combo_target(
     Path((combo_id, target_id)): Path<(i64, i64)>,
 ) -> ApiResult<Json<serde_json::Value>> {
     crate::api_try! {
-        let w = s.db_pool().writer();
-        core_admin::delete_combo_target(&w, ComboId(combo_id), ComboTargetId(target_id))?;
+        tokio::task::spawn_blocking({
+            let pool = s.db_pool().clone();
+            move || {
+                let w = pool.writer();
+                core_admin::delete_combo_target(&w, ComboId(combo_id), ComboTargetId(target_id))
+            }
+        }).await.unwrap()?;
         Ok(Json(serde_json::json!({ "deleted": target_id })))
     }
 }
@@ -472,8 +491,13 @@ pub async fn clear_combo_target_cooldown(
     Path((combo_id, target_id)): Path<(i64, i64)>,
 ) -> ApiResult<Json<serde_json::Value>> {
     crate::api_try! {
-        let w = s.db_pool().writer();
-        core_admin::clear_combo_target_cooldown(&w, ComboId(combo_id), ComboTargetId(target_id))?;
+        tokio::task::spawn_blocking({
+            let pool = s.db_pool().clone();
+            move || {
+                let w = pool.writer();
+                core_admin::clear_combo_target_cooldown(&w, ComboId(combo_id), ComboTargetId(target_id))
+            }
+        }).await.unwrap()?;
         Ok(Json(
             serde_json::json!({ "ok": true, "cleared": target_id }),
         ))
@@ -486,12 +510,18 @@ pub async fn reorder_combo_targets(
     Json(body): Json<ReorderComboTargetsInput>,
 ) -> ApiResult<Json<serde_json::Value>> {
     crate::api_try! {
-        let mut w = s.db_pool().writer();
-        let ordered: Vec<ComboTargetId> = body.target_ids.into_iter().map(ComboTargetId).collect();
-        core_admin::reorder_combo_targets(&mut w, ComboId(combo_id), &ordered)?;
+        let count = tokio::task::spawn_blocking({
+            let pool = s.db_pool().clone();
+            move || {
+                let mut w = pool.writer();
+                let ordered: Vec<ComboTargetId> = body.target_ids.into_iter().map(ComboTargetId).collect();
+                core_admin::reorder_combo_targets(&mut w, ComboId(combo_id), &ordered)?;
+                Ok::<_, ApiError>(ordered.len())
+            }
+        }).await.unwrap()?;
         Ok(Json(serde_json::json!({
             "reordered": combo_id,
-            "count": ordered.len(),
+            "count": count,
         })))
     }
 }

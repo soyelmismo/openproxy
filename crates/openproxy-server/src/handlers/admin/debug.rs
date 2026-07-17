@@ -346,7 +346,7 @@ pub async fn get_recording(
     State(s): State<AppState>,
     headers: HeaderMap,
 ) -> ApiResult<Json<serde_json::Value>> {
-    if let Err(e) = authenticate_admin_ws(&s, &headers, None) {
+    if let Err(e) = authenticate_admin_ws(&s, &headers, None).await {
         return e.into();
     }
     crate::api_try! { Ok(Json(serde_json::json!({ "recording": s.is_recording() }))) }
@@ -357,7 +357,7 @@ pub async fn set_recording(
     headers: HeaderMap,
     Json(body): Json<serde_json::Value>,
 ) -> ApiResult<Json<serde_json::Value>> {
-    if let Err(e) = authenticate_admin_ws(&s, &headers, None) {
+    if let Err(e) = authenticate_admin_ws(&s, &headers, None).await {
         return e.into();
     }
     crate::api_try! {

@@ -247,7 +247,7 @@ async fn auth_bypass_sentinel_1_admits_admin_request_without_key() {
     let prev = std::env::var("OPENPROXY_DASHBOARD_AUTH_BYPASS").ok();
     unsafe { std::env::set_var("OPENPROXY_DASHBOARD_AUTH_BYPASS", "1") };
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        authenticate_admin_ws(&state, &headers, None)
+        authenticate_admin_ws(&state, &headers, None).await
     }));
     match prev {
         Some(v) => unsafe { std::env::set_var("OPENPROXY_DASHBOARD_AUTH_BYPASS", v) },
@@ -282,7 +282,7 @@ async fn auth_bypass_does_not_admit_on_non_sentinel_values() {
         let prev = std::env::var("OPENPROXY_DASHBOARD_AUTH_BYPASS").ok();
         unsafe { std::env::set_var("OPENPROXY_DASHBOARD_AUTH_BYPASS", sentinel) };
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            authenticate_admin_ws(&state, &headers, None)
+            authenticate_admin_ws(&state, &headers, None).await
         }));
         match prev {
             Some(v) => unsafe { std::env::set_var("OPENPROXY_DASHBOARD_AUTH_BYPASS", v) },

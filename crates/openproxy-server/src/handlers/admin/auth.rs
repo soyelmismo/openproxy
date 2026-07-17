@@ -1,10 +1,10 @@
 use super::*;
 
-pub(crate) fn authenticate_admin_ws(
+pub(crate) async fn authenticate_admin_ws(
     state: &AppState,
     headers: &HeaderMap,
     query_token: Option<&str>,
-) -> Result<(), ApiError> {
+).await -> Result<(), ApiError> {
     // Dev convenience: when the operator explicitly opts in by setting
     // OPENPROXY_DASHBOARD_AUTH_BYPASS=1 in the server's environment, every
     // admin request is accepted without an Authorization header or query
@@ -50,17 +50,15 @@ pub(crate) fn authenticate_admin_ws(
     }
 
     let key_hash = core_api_keys::hash_key(t);
-    // Auth is a SELECT by hash — use the READER so admin requests don't
-    // serialize through the writer mutex. The reader has its own
-    // `Mutex<Connection>` (see `db::conn::DbPool`), so auth no longer
-    // contends with `cost::record` writes or admin mutations.
-    let r = state.db_pool().reader();
-    let key = match core_api_keys::get_by_hash(&r, &key_hash).map_err(ApiError)? {
-        Some(k) => k,
-        None => {
-            return Err(ApiError(CoreError::Auth("invalid api key".into())));
+    let key = tokio::task::spawn_blocking({
+        let pool = state.db_pool().clone();
+        move || {
+            let r = pool.reader();
+            core_api_keys::get_by_hash(&r, &key_hash).map_err(ApiError)
         }
-    };
+    }).await.unwrap()?.ok_or_else(|| {
+        ApiError(CoreError::Auth("invalid api key".into()))
+    })?;
 
     if !key.is_active {
         return Err(ApiError(CoreError::Auth(
@@ -111,7 +109,7 @@ pub async fn admin_auth_middleware(
     next: axum::middleware::Next,
 ) -> axum::response::Response {
     let headers = req.headers().clone();
-    if let Err(e) = authenticate_admin_ws(&state, &headers, None) {
+    if let Err(e) = authenticate_admin_ws(&state, &headers, None).await {
         return e.into_response();
     }
     next.run(req).await
