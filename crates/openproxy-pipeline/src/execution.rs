@@ -118,23 +118,18 @@ impl Pipeline {
         provider_ids_no_account.sort_unstable_by_key(|id| id.0.clone());
         provider_ids_no_account.dedup_by_key(|id| id.0.clone());
 
-        let models_map = self
-            .repo()
-            .get_models_by_row_ids(&model_row_ids)
-            .unwrap_or_default();
-        let (accounts_map, kiro_map, antigravity_map) = self
-            .repo()
-            .get_accounts_meta(&account_ids)
-            .unwrap_or_default();
-        let providers_map = self
-            .repo()
-            .get_providers_auth_type(&provider_ids_no_account)
-            .unwrap_or_default();
-
+        let repo = self.repo();
         let master_key = self.config.master_key.clone();
         let oauth_registry = self.config.oauth_provider_registry.clone();
 
         tokio::task::spawn_blocking(move || {
+            let models_map = repo.get_models_by_row_ids(&model_row_ids).unwrap_or_default();
+            let (accounts_map, kiro_map, antigravity_map) =
+                repo.get_accounts_meta(&account_ids).unwrap_or_default();
+            let providers_map = repo
+                .get_providers_auth_type(&provider_ids_no_account)
+                .unwrap_or_default();
+
             crate::credentials::CredentialManager::resolve_credentials(
                 eligible,
                 models_map,

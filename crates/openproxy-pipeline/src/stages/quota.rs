@@ -17,17 +17,24 @@ impl PipelineStage for QuotaEnforcerStage {
             return next.execute(ctx).await;
         }
 
-        let filtered = {
-            let master_key = ctx.pipeline.config.master_key.clone();
+        let repo = ctx.pipeline.repo();
+        let master_key = ctx.pipeline.config.master_key.clone();
+        let enabled = ctx.pipeline.config.quota_protection.enabled;
+        let threshold = ctx.pipeline.config.quota_protection.threshold_percentage;
+        let model = ctx.req.openai_request.model.clone();
+
+        let filtered = tokio::task::spawn_blocking(move || {
             crate::quotas::apply_quota_routing(
-                ctx.pipeline.config.quota_protection.enabled,
-                ctx.pipeline.config.quota_protection.threshold_percentage,
-                ctx.pipeline.repo().as_ref(),
+                enabled,
+                threshold,
+                repo.as_ref(),
                 &master_key,
                 eligible,
-                &ctx.req.openai_request.model,
+                &model,
             )
-        };
+        })
+        .await
+        .unwrap();
         if filtered.is_empty()
             && let Some(ref combo) = ctx.combo
         {
