@@ -223,6 +223,7 @@ async fn ping_antigravity_model(
     account_id: &str,
 ) -> bool {
     let request = build_warmup_request(model);
+    let gemini_request = openproxy_pipeline::translation::openai_to_gemini(&request, &request.messages);
 
     let wrapped = serde_json::json!({
         "project": project_id,
@@ -230,7 +231,7 @@ async fn ping_antigravity_model(
         "requestType": "agent",
         "requestId": uuid::Uuid::new_v4().to_string(),
         "userAgent": "antigravity",
-        "request": request,
+        "request": gemini_request,
         "enabledCreditTypes": ["GOOGLE_ONE_AI"]
     });
 
