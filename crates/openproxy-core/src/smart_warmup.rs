@@ -152,6 +152,11 @@ async fn run_warmup_cycle(
                 resolve_model_alias(&conn, model_alias)
             };
 
+            let true_model_id = match true_model_id {
+                Some(id) => id,
+                None => continue,
+            };
+
             let history_key = format!("{}:{}", account_id_str, true_model_id);
 
             // Check cooldown
@@ -288,7 +293,7 @@ async fn ping_antigravity_model(
 /// Helper: maps a config string (like "gpt-oss-120b-medium") into the true provider model_id
 /// (like "gemini-3.1-pro-low") by resolving it against the `combos` and `models` tables.
 /// If it can't find a combo or model, it assumes the string itself is the target.
-fn resolve_model_alias(conn: &rusqlite::Connection, alias: &str) -> String {
+fn resolve_model_alias(conn: &rusqlite::Connection, alias: &str) -> Option<String> {
     use crate::ids::ProviderId;
 
     // Try to lookup as a combo
@@ -305,7 +310,7 @@ fn resolve_model_alias(conn: &rusqlite::Connection, alias: &str) -> String {
                     && let Ok(Some(model)) = crate::models::get_by_row_id(conn, row_id)
                     && model.provider_id.as_str() == "antigravity"
                 {
-                    return model.model_id.0;
+                    return Some(model.model_id.0);
                 }
             }
         }
@@ -317,11 +322,10 @@ fn resolve_model_alias(conn: &rusqlite::Connection, alias: &str) -> String {
         &ProviderId::new("antigravity"),
         alias,
     ) {
-        return model.model_id.0;
+        return Some(model.model_id.0);
     }
 
-    // Fallback: return the raw alias string
-    alias.to_string()
+    None
 }
 
 #[cfg(test)]

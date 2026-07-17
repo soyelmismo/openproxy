@@ -6,7 +6,7 @@ use crate::error::{CoreError, Result};
 pub use openproxy_types::config::{
     CircuitBreakerConfig, CompressionMode, CooldownConfig, CooldownMode, EncryptionKeySource,
     MaintenanceConfig, QuotaProtectionConfig, RacingConfig, RetriesConfig, ServerConfig,
-    StorageConfig, TimeoutsConfig,
+    SmartWarmupConfig, StorageConfig, TimeoutsConfig,
 };
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
@@ -103,40 +103,6 @@ impl Default for CompressionConfig {
 /// `usage` table from growing without bound), but `usage_retention_days`
 /// controls how old rows must be before they're deleted.
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SmartWarmupConfig {
-    #[serde(default = "default_smart_warmup_enabled")]
-    pub enabled: bool,
-    #[serde(default = "default_smart_warmup_interval")]
-    pub interval_secs: u64,
-    #[serde(default = "default_smart_warmup_models")]
-    pub models: Vec<String>,
-}
-
-fn default_smart_warmup_enabled() -> bool {
-    true
-}
-
-fn default_smart_warmup_interval() -> u64 {
-    600
-}
-
-fn default_smart_warmup_models() -> Vec<String> {
-    vec![
-        "gemini-3.5-flash-low".to_string(),
-        "gpt-oss-120b-medium".to_string(),
-    ]
-}
-
-impl Default for SmartWarmupConfig {
-    fn default() -> Self {
-        Self {
-            enabled: default_smart_warmup_enabled(),
-            interval_secs: default_smart_warmup_interval(),
-            models: default_smart_warmup_models(),
-        }
-    }
-}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct QuotaSyncConfig {

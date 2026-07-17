@@ -243,8 +243,8 @@ fn default_smart_warmup_interval() -> u64 {
 
 fn default_smart_warmup_models() -> Vec<String> {
     vec![
-        "gemini-3.5-flash-low".to_string(),
-        "gpt-oss-120b-medium".to_string(),
+        "gemini-3.5-flash-extra-low".to_string(),
+        "claude-sonnet-4-6".to_string(),
     ]
 }
 
