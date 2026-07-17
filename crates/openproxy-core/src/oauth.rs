@@ -532,19 +532,21 @@ impl TokenRefreshCoordinator {
                     )
                     .await?;
                 let expires_at = token_expires_at(token.expires_in);
-                let conn = conn_mutex.lock();
-                store_oauth_tokens(
-                    &conn,
-                    account_id,
-                    &token.access_token,
-                    token.refresh_token.as_deref(),
-                    master_key,
-                    &token.token_type,
-                    expires_at.as_deref(),
-                    token.scope.as_deref(),
-                    provider.provider_specific_from_token(&token).as_deref(),
-                    provider.email_from_token(&token).as_deref(),
-                )?;
+                tokio::task::block_in_place(|| {
+                    let conn = conn_mutex.lock();
+                    store_oauth_tokens(
+                        &conn,
+                        account_id,
+                        &token.access_token,
+                        token.refresh_token.as_deref(),
+                        master_key,
+                        &token.token_type,
+                        expires_at.as_deref(),
+                        token.scope.as_deref(),
+                        provider.provider_specific_from_token(&token).as_deref(),
+                        provider.email_from_token(&token).as_deref(),
+                    )
+                })?;
                 Ok(token)
             }
         }
