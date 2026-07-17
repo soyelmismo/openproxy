@@ -228,21 +228,11 @@ async fn ping_antigravity_model(
     account_id: &str,
 ) -> bool {
     let request = build_warmup_request(model);
-    let request_payload = if model.starts_with("claude") {
-        serde_json::to_value(openproxy_pipeline::translation::openai_to_anthropic(
-            &request,
-            model,
-            &request.messages,
-            true,
-        ))
-        .unwrap_or_else(|_| serde_json::json!({}))
-    } else {
-        serde_json::to_value(openproxy_pipeline::translation::openai_to_gemini(
-            &request,
-            &request.messages,
-        ))
-        .unwrap_or_else(|_| serde_json::json!({}))
-    };
+    let request_payload = serde_json::to_value(openproxy_pipeline::translation::openai_to_gemini(
+        &request,
+        &request.messages,
+    ))
+    .unwrap_or_else(|_| serde_json::json!({}));
 
     let wrapped = serde_json::json!({
         "project": project_id,

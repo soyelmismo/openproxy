@@ -58,13 +58,7 @@ impl AntigravityAdapter {
                 .map(|v| v as i64)
                 .or(Some(8192));
 
-            let target_format = if client_id.starts_with("claude") {
-                TargetFormat::Anthropic
-            } else if client_id.starts_with("gemini") || client_id.starts_with("gpt-oss") {
-                TargetFormat::Gemini
-            } else {
-                TargetFormat::Openai
-            };
+            let target_format = TargetFormat::Gemini;
 
             // Infer capabilities from upstream fields
             let supports_thinking = model_data
