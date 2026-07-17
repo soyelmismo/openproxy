@@ -68,16 +68,21 @@ pub async fn test_combo_targets(
     // productive* because it would outlive the handler and never
     // observe the drop. The 180s `tokio::time::timeout` below
     // remains the upper bound for the happy path.
-    crate::api_try! {
+    let res: Result<Json<Vec<serde_json::Value>>, crate::error::ApiError> = async {
         let cancel_rx = cancel_rx.clone();
         // Snapshot the targets up-front and drop the writer guard.
         // The per-target test below does its own short DB
         // transactions (writer lock + drop), so the long-running
         // HTTP calls don't block other handlers from writing.
-        let targets = {
-            let w = s.db_pool().writer();
-            core_combos::list_targets_with_model(&w, ComboId(id))?
-        };
+        let targets = tokio::task::spawn_blocking({
+            let pool = s.db_pool().clone();
+            move || {
+                let w = pool.writer();
+                core_combos::list_targets_with_model(&w, ComboId(id))
+            }
+        })
+        .await
+        .unwrap()?;
 
         // The fan-out is intentionally serial. The prompt explicitly
         // asked for no parallelization in the MVP ("NO paralelizar.
@@ -188,14 +193,15 @@ pub async fn test_combo_targets(
                 // uniformly; a 504 here would just wipe the
                 // button state with no data.
                 tracing::warn!(combo_id = id, "test-all fan-out exceeded 180s budget");
-                return Err(ApiError(CoreError::Internal(
+                return Err(crate::error::ApiError(openproxy_types::CoreError::Internal(
                     "test-all exceeded 180s budget; partial results dropped".into(),
                 )));
             }
         };
 
         Ok(Json(results))
-    }
+    }.await;
+    res.into()
 }
 
 pub async fn delete_combo(

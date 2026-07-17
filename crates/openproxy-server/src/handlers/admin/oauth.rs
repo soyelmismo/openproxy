@@ -11,7 +11,7 @@ pub async fn oauth_authorize(
     State(s): State<AppState>,
     Path(provider): Path<String>,
 ) -> ApiResult<Json<serde_json::Value>> {
-    crate::api_try! {
+    let res: Result<Json<serde_json::Value>, crate::error::ApiError> = async move {
         let registry = s.oauth_provider_registry();
         let provider_impl = registry.get(&provider).ok_or_else(|| {
             ApiError(CoreError::Validation(format!(
@@ -54,7 +54,8 @@ pub async fn oauth_authorize(
             "redirect_uri": redirect_uri,
             "state": state,
         })))
-    }
+    }.await;
+    res.into()
 }
 
 pub async fn oauth_exchange(
@@ -62,7 +63,7 @@ pub async fn oauth_exchange(
     Path(provider): Path<String>,
     Json(input): Json<serde_json::Value>,
 ) -> ApiResult<Json<serde_json::Value>> {
-    crate::api_try! {
+    let res: Result<Json<serde_json::Value>, crate::error::ApiError> = async move {
         let code = input
             .get("code")
             .and_then(|v| v.as_str())
@@ -94,17 +95,22 @@ pub async fn oauth_exchange(
         let account_id = match account_id_input {
             Some(id) => AccountId(id),
             None => {
-                let w = s.db_pool().writer();
-                let provider_id = ProviderId::new(&provider);
-                core_accounts::create(
-                    &w,
-                    &provider_id,
-                    None, // no API key — OAuth account
-                    s.master_key(),
-                    None, // label
-                    10,   // default priority
-                    None, // extra_config_json
-                )?
+                let pool = s.db_pool().clone();
+                let master_key = s.master_key().clone();
+                let provider_name = provider.clone();
+                tokio::task::spawn_blocking(move || {
+                    let w = pool.writer();
+                    let provider_id = ProviderId::new(&provider_name);
+                    core_accounts::create(
+                        &w,
+                        &provider_id,
+                        None, // no API key — OAuth account
+                        &master_key,
+                        None, // label
+                        10,   // default priority
+                        None, // extra_config_json
+                    )
+                }).await.unwrap()?
             }
         };
         let expires_at = token.expires_in.map(|secs| {
@@ -113,21 +119,32 @@ pub async fn oauth_exchange(
                 .to_string()
         });
         {
-            let w = s.db_pool().writer();
+            let pool = s.db_pool().clone();
             let provider_specific = provider_impl.provider_specific_from_token(&token);
             let email = provider_impl.email_from_token(&token);
-            openproxy_core::accounts::store_oauth_tokens(
-                &w,
-                account_id,
-                &token.access_token,
-                token.refresh_token.as_deref(),
-                s.master_key(),
-                &token.token_type,
-                expires_at.as_deref(),
-                token.scope.as_deref(),
-                provider_specific.as_deref(),
-                email.as_deref(),
-            )?;
+            let master_key = s.master_key().clone();
+            
+            // Clone token fields since they'll move into the closure
+            let access_token = token.access_token.clone();
+            let refresh_token = token.refresh_token.clone();
+            let token_type = token.token_type.clone();
+            let scope = token.scope.clone();
+
+            tokio::task::spawn_blocking(move || {
+                let w = pool.writer();
+                openproxy_core::accounts::store_oauth_tokens(
+                    &w,
+                    account_id,
+                    &access_token,
+                    refresh_token.as_deref(),
+                    &master_key,
+                    &token_type,
+                    expires_at.as_deref(),
+                    scope.as_deref(),
+                    provider_specific.as_deref(),
+                    email.as_deref(),
+                )
+            }).await.unwrap()?;
         }
 
         // Post-exchange hook. For Antigravity this calls
@@ -153,14 +170,15 @@ pub async fn oauth_exchange(
             "account_id": account_id.0,
             "token_type": token.token_type,
         })))
-    }
+    }.await;
+    res.into()
 }
 
 pub async fn oauth_device_code(
     State(s): State<AppState>,
     Path(provider): Path<String>,
 ) -> ApiResult<Json<serde_json::Value>> {
-    crate::api_try! {
+    let res: Result<Json<serde_json::Value>, crate::error::ApiError> = async move {
         let registry = s.oauth_provider_registry();
         let provider_impl = registry.get(&provider).ok_or_else(|| {
             ApiError(CoreError::Validation(format!(
@@ -179,10 +197,15 @@ pub async fn oauth_device_code(
         // payload — a reload / state eviction / server restart
         // would force the user to restart the whole flow. See
         // `openproxy_core::oauth_tickets` for the storage shape.
-        {
-            let w = s.db_pool().writer();
-            openproxy_core::oauth_tickets::create_ticket(&w, &provider, &dar)?;
-        }
+        tokio::task::spawn_blocking({
+            let pool = s.db_pool().clone();
+            let provider = provider.clone();
+            let dar = dar.clone();
+            move || {
+                let w = pool.writer();
+                openproxy_core::oauth_tickets::create_ticket(&w, &provider, &dar)
+            }
+        }).await.unwrap()?;
 
         Ok(Json(serde_json::json!({
             "device_code": dar.device_code,
@@ -192,7 +215,8 @@ pub async fn oauth_device_code(
             "expires_in": dar.expires_in,
             "interval": dar.interval,
         })))
-    }
+    }.await;
+    res.into()
 }
 
 pub async fn oauth_device_poll(
@@ -200,7 +224,7 @@ pub async fn oauth_device_poll(
     Path(provider): Path<String>,
     Json(input): Json<serde_json::Value>,
 ) -> ApiResult<Json<serde_json::Value>> {
-    crate::api_try! {
+    let res: Result<Json<serde_json::Value>, crate::error::ApiError> = async move {
         let device_code = input
             .get("device_code")
             .and_then(|v| v.as_str())
@@ -217,27 +241,31 @@ pub async fn oauth_device_poll(
         // not mutate state, so a stalled poll never burns the
         // ticket — only `mark_consumed` on success.
         {
-            let w = s.db_pool().writer();
-            match openproxy_core::oauth_tickets::lookup_active(&w, device_code)? {
-                openproxy_core::oauth_tickets::TicketStatus::Active(_) => {}
-                openproxy_core::oauth_tickets::TicketStatus::Expired => {
-                    return Err(ApiError(CoreError::Validation(
-                        "device_code has expired; restart the OAuth flow".into(),
-                    )));
+            let pool = s.db_pool().clone();
+            let device_code_clone = device_code.to_string();
+            tokio::task::spawn_blocking(move || {
+                let w = pool.writer();
+                match openproxy_core::oauth_tickets::lookup_active(&w, &device_code_clone)? {
+                    openproxy_core::oauth_tickets::TicketStatus::Active(_) => Ok(()),
+                    openproxy_core::oauth_tickets::TicketStatus::Expired => {
+                        Err(ApiError(CoreError::Validation(
+                            "device_code has expired; restart the OAuth flow".into(),
+                        )))
+                    }
+                    openproxy_core::oauth_tickets::TicketStatus::Consumed => {
+                        Err(ApiError(CoreError::NotFound {
+                            what: "oauth_device_ticket".into(),
+                            id: device_code_clone.into(),
+                        }))
+                    }
+                    openproxy_core::oauth_tickets::TicketStatus::Unknown => {
+                        Err(ApiError(CoreError::NotFound {
+                            what: "oauth_device_ticket".into(),
+                            id: device_code_clone.into(),
+                        }))
+                    }
                 }
-                openproxy_core::oauth_tickets::TicketStatus::Consumed => {
-                    return Err(ApiError(CoreError::NotFound {
-                        what: "oauth_device_ticket".into(),
-                        id: device_code.into(),
-                    }));
-                }
-                openproxy_core::oauth_tickets::TicketStatus::Unknown => {
-                    return Err(ApiError(CoreError::NotFound {
-                        what: "oauth_device_ticket".into(),
-                        id: device_code.into(),
-                    }));
-                }
-            }
+            }).await.unwrap()?;
         }
 
         let registry = s.oauth_provider_registry();
@@ -258,17 +286,22 @@ pub async fn oauth_device_poll(
                 let account_id = match account_id_input {
                     Some(id) => AccountId(id),
                     None => {
-                        let w = s.db_pool().writer();
-                        let provider_id = ProviderId::new(&provider);
-                        core_accounts::create(
-                            &w,
-                            &provider_id,
-                            None, // no API key — OAuth account
-                            s.master_key(),
-                            None,   // label
-                            10,     // default priority
-                            None,   // extra_config_json
-                        )?
+                        let pool = s.db_pool().clone();
+                        let master_key = s.master_key().clone();
+                        let provider_name = provider.clone();
+                        tokio::task::spawn_blocking(move || {
+                            let w = pool.writer();
+                            let provider_id = ProviderId::new(&provider_name);
+                            core_accounts::create(
+                                &w,
+                                &provider_id,
+                                None, // no API key — OAuth account
+                                &master_key,
+                                None,   // label
+                                10,     // default priority
+                                None,   // extra_config_json
+                            )
+                        }).await.unwrap()?
                     }
                 };
                 let expires_at = token.expires_in.map(|secs| {
@@ -299,19 +332,28 @@ pub async fn oauth_device_poll(
                 let email = provider_impl.email_from_token(&token);
 
                 {
-                    let w = s.db_pool().writer();
-                    openproxy_core::accounts::store_oauth_tokens(
-                        &w,
-                        account_id,
-                        &token.access_token,
-                        token.refresh_token.as_deref(),
-                        s.master_key(),
-                        &token.token_type,
-                        expires_at.as_deref(),
-                        token.scope.as_deref(),
-                        provider_specific.as_deref(),
-                        email.as_deref(),
-                    )?;
+                    let pool = s.db_pool().clone();
+                    let master_key = s.master_key().clone();
+                    let access_token = token.access_token.clone();
+                    let refresh_token = token.refresh_token.clone();
+                    let token_type = token.token_type.clone();
+                    let scope = token.scope.clone();
+                    let expires_at_clone = expires_at.clone();
+                    tokio::task::spawn_blocking(move || {
+                        let w = pool.writer();
+                        openproxy_core::accounts::store_oauth_tokens(
+                            &w,
+                            account_id,
+                            &access_token,
+                            refresh_token.as_deref(),
+                            &master_key,
+                            &token_type,
+                            expires_at_clone.as_deref(),
+                            scope.as_deref(),
+                            provider_specific.as_deref(),
+                            email.as_deref(),
+                        )
+                    }).await.unwrap()?;
                 }
 
                 // LOW fix (#12): single-use enforcement. After a
@@ -321,12 +363,14 @@ pub async fn oauth_device_poll(
                 // `mark_consumed` is atomic, so a racing second
                 // poll will see the first redeem as Consumed and
                 // fail here too.
-                if let Err(e) = (|| -> Result<(), ApiError> {
-                    let w = s.db_pool().writer();
-                    openproxy_core::oauth_tickets::mark_consumed(&w, device_code)
+                let pool2 = s.db_pool().clone();
+                let device_code_clone2 = device_code.to_string();
+                if let Err(e) = tokio::task::spawn_blocking(move || -> Result<(), ApiError> {
+                    let w = pool2.writer();
+                    openproxy_core::oauth_tickets::mark_consumed(&w, &device_code_clone2)
                         .map_err(ApiError)?;
                     Ok(())
-                })() {
+                }).await.unwrap() {
                     tracing::warn!(
                         device_code = %device_code,
                         error = %e.0,
@@ -361,7 +405,8 @@ pub async fn oauth_device_poll(
                 "status": "pending",
             }))),
         }
-    }
+    }.await;
+    res.into()
 }
 
 pub async fn oauth_callback(

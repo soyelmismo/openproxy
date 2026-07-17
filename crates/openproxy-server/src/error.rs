@@ -25,6 +25,12 @@ impl From<CoreError> for ApiError {
     }
 }
 
+impl From<tokio::task::JoinError> for ApiError {
+    fn from(err: tokio::task::JoinError) -> Self {
+        ApiError(CoreError::Internal(err.to_string()))
+    }
+}
+
 impl std::fmt::Display for ApiError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         self.0.fmt(f)
@@ -195,13 +201,18 @@ impl<T> From<ApiError> for ApiResult<T> {
     }
 }
 
-/// Helper macro to reduce boilerplate in admin handlers
+/// Helper macro to reduce boilerplate in admin handlers and avoid reactor starvation
 #[macro_export]
 macro_rules! api_try {
     ($($body:tt)*) => {{
-        let res: Result<_, $crate::error::ApiError> = async {
-            $($body)*
-        }.await;
+        let res: Result<_, $crate::error::ApiError> = ::tokio::task::spawn_blocking(move || {
+            let inner_res: Result<_, $crate::error::ApiError> = {
+                $($body)*
+            };
+            inner_res
+        }).await.unwrap_or_else(|e| {
+            Err($crate::error::ApiError::from(e))
+        });
         res.into()
     }};
 }
