@@ -19,6 +19,7 @@ const PREVIOUS_ENV_VAR: &str = "OPENPROXY_MASTER_KEY_PREVIOUS";
 
 /// AES-256 master key. Owns its 32 raw bytes; zeroized on drop via
 /// the [`Drop`] implementation below.
+#[derive(Clone)]
 pub struct MasterKey {
     current: [u8; KEY_LEN],
     /// Optional previous key for rotation. If decryption with the

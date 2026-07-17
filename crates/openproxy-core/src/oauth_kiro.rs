@@ -688,44 +688,45 @@ impl OAuthProvider for KiroOAuthProvider {
         //    next `.await` (the listAvailableProfiles HTTP call)
         //    is `Send`.
         let (access_token, mut meta) = {
-            let conn = db_pool.writer();
-            let access_token =
-                crate::accounts::decrypt_access_token(&conn, account_id, master_key)?;
+            let db_pool = db_pool.clone();
+            let master_key = master_key.clone();
+            let res = tokio::task::spawn_blocking(move || {
+                let conn = db_pool.writer();
+                let access_token =
+                    crate::accounts::decrypt_access_token(&conn, account_id, &master_key)?;
 
-            // Read the OIDC credentials that the device-code flow
-            // stashed in `oauth_provider_specific`. They are
-            // required for the `x-amz-user-agent` header and the
-            // chat executor's eventual request envelope.
-            let raw: Option<Option<String>> = conn
-                .query_row(
-                    "SELECT oauth_provider_specific FROM accounts WHERE id = ?1",
-                    params![account_id.0],
-                    |r| r.get::<_, Option<String>>(0),
-                )
-                .optional()
-                .map_err(|e| CoreError::Database {
-                    message: format!(
-                        "kiro post_exchange read meta for account {}: {}",
-                        account_id.0, e
-                    ),
-                    source: Some(Box::new(e)),
-                })?;
-            let raw = raw.flatten();
+                // Read the OIDC credentials that the device-code flow
+                // stashed in `oauth_provider_specific`. They are
+                // required for the `x-amz-user-agent` header and the
+                // chat executor's eventual request envelope.
+                let raw: Option<Option<String>> = conn
+                    .query_row(
+                        "SELECT oauth_provider_specific FROM accounts WHERE id = ?1",
+                        params![account_id.0],
+                        |r| r.get::<_, Option<String>>(0),
+                    )
+                    .optional()
+                    .map_err(|e| CoreError::Database {
+                        message: format!(
+                            "kiro post_exchange read meta for account {}: {}",
+                            account_id.0, e
+                        ),
+                        source: Some(Box::new(e)),
+                    })?;
+                let raw = raw.flatten();
 
-            let meta: KiroProviderMeta = match raw {
-                Some(s) => serde_json::from_str(&s)
-                    .map_err(|e| CoreError::Parse(format!("kiro meta parse: {e}")))?,
-                None => {
-                    // The device-code flow normally writes the meta first
-                    // (with `client_id` / `client_secret` but no
-                    // `profile_arn`). Defensive: if the column is NULL
-                    // we treat it as an empty meta so the post-exchange
-                    // surface stays well-defined.
-                    KiroProviderMeta::default()
-                }
-            };
+                let meta: KiroProviderMeta = match raw {
+                    Some(s) => serde_json::from_str(&s)
+                        .map_err(|e| CoreError::Parse(format!("kiro meta parse: {e}")))?,
+                    None => KiroProviderMeta::default(),
+                };
 
-            (access_token, meta)
+                Ok((access_token, meta))
+            })
+            .await
+            .map_err(|e| CoreError::Internal(e.to_string()))??;
+
+            res
         };
 
         // 2. Hit `ListAvailableProfiles` and pick the first profile
@@ -757,18 +758,25 @@ impl OAuthProvider for KiroOAuthProvider {
         //    executor can read them later.
         let meta_json = serde_json::to_string(&meta)
             .map_err(|e| CoreError::Internal(format!("kiro meta serialize: {e}")))?;
-        let conn = db_pool.writer();
-        conn.execute(
-            "UPDATE accounts SET oauth_provider_specific = ?1 WHERE id = ?2",
-            params![meta_json, account_id.0],
-        )
-        .map_err(|e| CoreError::Database {
-            message: format!(
-                "kiro post_exchange update meta for account {}: {}",
-                account_id.0, e
-            ),
-            source: Some(Box::new(e)),
-        })?;
+        let db_pool = db_pool.clone();
+        let res = tokio::task::spawn_blocking(move || {
+            let conn = db_pool.writer();
+            conn.execute(
+                "UPDATE accounts SET oauth_provider_specific = ?1 WHERE id = ?2",
+                params![meta_json, account_id.0],
+            )
+            .map_err(|e| CoreError::Database {
+                message: format!(
+                    "kiro post_exchange update meta for account {}: {}",
+                    account_id.0, e
+                ),
+                source: Some(Box::new(e)),
+            })?;
+            Ok(())
+        })
+        .await
+        .map_err(|e| CoreError::Internal(e.to_string()))?;
+        res?;
 
         Ok(())
     }

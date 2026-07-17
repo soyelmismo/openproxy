@@ -88,19 +88,26 @@ async fn run_quota_sync_cycle(
 
     // 2. Fetch all healthy accounts for these providers
     let accounts_to_sync: Vec<AccountId> = {
-        let conn = db_pool.reader();
-        let mut target_accounts = Vec::new();
-        for provider_str in &supported_providers {
-            let pid = crate::ids::ProviderId::new(provider_str.clone());
-            if let Ok(accs) = accounts::list(&conn, Some(&pid), master_key) {
-                for acc in accs {
-                    if acc.health_status != accounts::HealthStatus::Unhealthy {
-                        target_accounts.push(acc.id);
+        let db_pool = db_pool.clone();
+        let master_key = master_key.clone();
+        let supported_providers = supported_providers.clone();
+        tokio::task::spawn_blocking(move || {
+            let conn = db_pool.reader();
+            let mut target_accounts = Vec::new();
+            for provider_str in &supported_providers {
+                let pid = crate::ids::ProviderId::new(provider_str.clone());
+                if let Ok(accs) = accounts::list(&conn, Some(&pid), &master_key) {
+                    for acc in accs {
+                        if acc.health_status != accounts::HealthStatus::Unhealthy {
+                            target_accounts.push(acc.id);
+                        }
                     }
                 }
             }
-        }
-        target_accounts
+            target_accounts
+        })
+        .await
+        .unwrap_or_default()
     };
 
     let delay_ms = config.quota_sync.delay_between_accounts_ms;
@@ -148,31 +155,43 @@ pub async fn refresh_single_account_quota(
     oauth_registry: &Arc<OAuthProviderRegistry>,
 ) -> crate::error::Result<Option<AccountQuota>> {
     let (provider_id_str, api_key, access_token, provider_specific) = {
-        let w = db_pool.writer();
-        let acc = admin::account_for_quota_refresh(&w, account_id, master_key.as_ref())?;
+        let db_pool = db_pool.clone();
+        let master_key = master_key.clone();
+        let adapters_list: Vec<_> = adapters.iter().map(|a| (a.id().to_string(), a.metadata().quota_refresh_supported)).collect();
+        let res = tokio::task::spawn_blocking(move || {
+            let w = db_pool.writer();
+            let acc = admin::account_for_quota_refresh(&w, account_id, master_key.as_ref())?;
 
-        let supports_quota = adapters
-            .iter()
-            .find(|a| a.id().as_str() == acc.provider_id.as_str())
-            .map(|a| a.metadata().quota_refresh_supported)
-            .unwrap_or(false);
+            let supports_quota = adapters_list
+                .iter()
+                .find(|(id, _)| id.as_str() == acc.provider_id.as_str())
+                .map(|(_, supported)| *supported)
+                .unwrap_or(false);
 
-        if !supports_quota {
-            return Ok(None);
+            if !supports_quota {
+                return Ok(None);
+            }
+
+            let provider_str = acc.provider_id.to_string();
+            let is_oauth = acc.auth_type == "oauth";
+            let provider_specific = acc.oauth_provider_specific.clone();
+
+            let (k, token) = if is_oauth {
+                let t = accounts::decrypt_access_token(&w, account_id, &master_key)?;
+                (String::new(), Some(t))
+            } else {
+                let k = admin::decrypt_api_key_for_account(&w, account_id, &master_key)?;
+                (k, None)
+            };
+            Ok(Some((provider_str, k, token, provider_specific)))
+        })
+        .await
+        .map_err(|e| crate::error::CoreError::Internal(e.to_string()))??;
+
+        match res {
+            Some(data) => data,
+            None => return Ok(None),
         }
-
-        let provider_str = acc.provider_id.to_string();
-        let is_oauth = acc.auth_type == "oauth";
-        let provider_specific = acc.oauth_provider_specific.clone();
-
-        let (k, token) = if is_oauth {
-            let t = accounts::decrypt_access_token(&w, account_id, master_key)?;
-            (String::new(), Some(t))
-        } else {
-            let k = admin::decrypt_api_key_for_account(&w, account_id, master_key)?;
-            (k, None)
-        };
-        (provider_str, k, token, provider_specific)
     };
 
     let q = admin::fetch_account_quota(
@@ -187,10 +206,16 @@ pub async fn refresh_single_account_quota(
     let q = if q.fetch_error.as_deref().is_some_and(|e| e.contains("401")) && access_token.is_some()
     {
         let refresh_result = {
-            let w = db_pool.writer();
-            accounts::decrypt_refresh_token(&w, account_id, master_key.as_ref())
-                .ok()
-                .flatten()
+            let db_pool = db_pool.clone();
+            let master_key = master_key.clone();
+            tokio::task::spawn_blocking(move || {
+                let w = db_pool.writer();
+                accounts::decrypt_refresh_token(&w, account_id, master_key.as_ref())
+                    .ok()
+                    .flatten()
+            })
+            .await
+            .unwrap_or(None)
         };
         if let Some(refresh_token) = refresh_result
             && let Some(provider) = oauth_registry.get(&provider_id_str)
@@ -212,19 +237,28 @@ pub async fn refresh_single_account_quota(
                     });
                     // Store the refreshed tokens.
                     {
-                        let w = db_pool.writer();
-                        let _ = accounts::store_oauth_tokens(
-                            &w,
-                            account_id,
-                            &new_tokens.access_token,
-                            new_tokens.refresh_token.as_deref(),
-                            master_key,
-                            &new_tokens.token_type,
-                            expires_at.as_deref(),
-                            new_tokens.scope.as_deref(),
-                            None,
-                            None,
-                        );
+                        let db_pool = db_pool.clone();
+                        let master_key = master_key.clone();
+                        let access_token = new_tokens.access_token.clone();
+                        let refresh_token = new_tokens.refresh_token.clone();
+                        let token_type = new_tokens.token_type.clone();
+                        let expires_at = expires_at.clone();
+                        let scope = new_tokens.scope.clone();
+                        let _ = tokio::task::spawn_blocking(move || {
+                            let w = db_pool.writer();
+                            let _ = accounts::store_oauth_tokens(
+                                &w,
+                                account_id,
+                                &access_token,
+                                refresh_token.as_deref(),
+                                &master_key,
+                                &token_type,
+                                expires_at.as_deref(),
+                                scope.as_deref(),
+                                None,
+                                None,
+                            );
+                        }).await;
                     }
                     // Retry the quota call with the new access token.
                     admin::fetch_account_quota(
@@ -257,8 +291,15 @@ pub async fn refresh_single_account_quota(
     };
 
     {
-        let w = db_pool.writer();
-        admin::persist_account_quota(&w, account_id, &q)?;
+        let db_pool = db_pool.clone();
+        let q = q.clone();
+        let res = tokio::task::spawn_blocking(move || {
+            let w = db_pool.writer();
+            admin::persist_account_quota(&w, account_id, &q)
+        })
+        .await
+        .map_err(|e| crate::error::CoreError::Internal(e.to_string()))?;
+        res?;
     }
 
     if q.fetch_error.is_none() {
@@ -286,14 +327,18 @@ pub async fn refresh_single_account_quota(
                     "percent": percent,
                 },
             });
-            let w = db_pool.writer();
-            let _ = notifications::insert_and_broadcast(
-                &w,
-                notifications::KIND_SYSTEM,
-                &payload,
-                Some(&dedup_key),
-                Some(&provider_id_str),
-            );
+            let db_pool = db_pool.clone();
+            let provider_id_str = provider_id_str.clone();
+            let _ = tokio::task::spawn_blocking(move || {
+                let w = db_pool.writer();
+                let _ = notifications::insert_and_broadcast(
+                    &w,
+                    notifications::KIND_SYSTEM,
+                    &payload,
+                    Some(&dedup_key),
+                    Some(&provider_id_str),
+                );
+            }).await;
         }
     }
 

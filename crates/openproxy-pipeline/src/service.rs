@@ -65,14 +65,22 @@ where
                 && matches!(err, CoreError::NoHealthyTargets(_))
             {
                 if let Some(c) = combo {
-                    let _ = pipeline.repo().record_no_healthy_targets_row(
-                        &request_id,
-                        &trace_id,
-                        &c,
-                        started.elapsed().as_millis() as u64,
-                        &chrono::Utc::now().naive_utc().to_string(),
-                        "No healthy targets available",
-                    );
+                    let repo = pipeline.repo().clone();
+                    let req_id = request_id.clone();
+                    let tr_id = trace_id.clone();
+                    let c = c.clone();
+                    let elapsed = started.elapsed().as_millis() as u64;
+                    let created = chrono::Utc::now().naive_utc().to_string();
+                    let _ = tokio::task::spawn_blocking(move || {
+                        let _ = repo.record_no_healthy_targets_row(
+                            &req_id,
+                            &tr_id,
+                            &c,
+                            elapsed,
+                            &created,
+                            "No healthy targets available",
+                        );
+                    }).await;
                 } else {
                     // If combo wasn't populated yet, we can't record it identically,
                     // but NoHealthyTargets only occurs after combo is resolved.
@@ -336,14 +344,22 @@ where
 
             let filtered = {
                 let master_key = pipeline.config.master_key.clone();
-                crate::quotas::apply_quota_routing(
-                    pipeline.config.quota_protection.enabled,
-                    pipeline.config.quota_protection.threshold_percentage,
-                    pipeline.repo().as_ref(),
-                    &master_key,
-                    eligible,
-                    &state.req.openai_request.model,
-                )
+                let repo = pipeline.repo().clone();
+                let enabled = pipeline.config.quota_protection.enabled;
+                let threshold = pipeline.config.quota_protection.threshold_percentage;
+                let req_model = state.req.openai_request.model.clone();
+                tokio::task::spawn_blocking(move || {
+                    crate::quotas::apply_quota_routing(
+                        enabled,
+                        threshold,
+                        repo.as_ref(),
+                        &master_key,
+                        eligible,
+                        &req_model,
+                    )
+                })
+                .await
+                .unwrap_or_default()
             };
             if filtered.is_empty() {
                 let err = CoreError::NoHealthyTargets(combo.id.0);
@@ -441,12 +457,16 @@ impl tower::Service<PipelineState> for RoutingService {
                         {
                             let job = e.into_inner();
                             let conn = pipeline.conn.clone();
-                            crate::worker::process_job(
-                                &conn,
-                                pipeline.repo().as_ref(),
-                                job,
-                                pipeline.selection_registry().clone(),
-                            );
+                            let repo = pipeline.repo().clone();
+                            let sel = pipeline.selection_registry().clone();
+                            let _ = tokio::task::spawn_blocking(move || {
+                                crate::worker::process_job(
+                                    &conn,
+                                    repo.as_ref(),
+                                    job,
+                                    sel,
+                                );
+                            }).await;
                         }
                     }
                     return Ok(race_result);
@@ -571,14 +591,19 @@ impl tower::Service<PipelineState> for RoutingService {
                 if let Some(op) = cooldown_op {
                     match op {
                         "clear" => {
-                            if let Err(e) = pipeline.repo().clear_cooldown(target.target.id) {
-                                tracing::warn!(
-                                    combo_id = combo.id.0,
-                                    target_id = target.target.id.0,
-                                    error = %e,
-                                    "cooldown::clear failed; non-fatal"
-                                );
-                            }
+                            let repo = pipeline.repo().clone();
+                            let target_id = target.target.id;
+                            let combo_id = combo.id.0;
+                            let _ = tokio::task::spawn_blocking(move || {
+                                if let Err(e) = repo.clear_cooldown(target_id) {
+                                    tracing::warn!(
+                                        combo_id,
+                                        target_id = target_id.0,
+                                        error = %e,
+                                        "cooldown::clear failed; non-fatal"
+                                    );
+                                }
+                            }).await;
                         }
                         "record" => {
                             let reason = result
@@ -587,78 +612,84 @@ impl tower::Service<PipelineState> for RoutingService {
                                 .map(|e| e.to_string())
                                 .unwrap_or_else(|| "retryable failure".to_string());
                             let mode = combo.cooldown_mode;
-                            let mut base_secs = combo
+                            let base_secs = combo
                                 .cooldown_base_secs
                                 .unwrap_or(pipeline.config.cooldown_secs);
-
-                            // Align cooldown with exact quota reset time if possible
-                            if let Some(openproxy_types::error::CoreError::RateLimited { .. }) =
-                                &result.error
-                            {
-                                let override_secs = (|| -> Option<u64> {
-                                    let account_id = target.target.account_id?;
-                                    let (accounts, _, _) =
-                                        pipeline.repo().get_accounts_meta(&[account_id]).ok()?;
-                                    let account = accounts.get(&account_id.0)?;
-
-                                    let mut reset_str = account.quota_session_reset_at.clone();
-
-                                    if let Some(json) = &account.quota_model_details
-                                        && let Ok(details) =
-                                            serde_json::from_str::<
-                                                Vec<openproxy_types::quota::ModelQuotaDetail>,
-                                            >(json)
-                                    {
-                                        let req_model = &target.model.model_id.0;
-                                        let norm_req =
-                                            openproxy_types::model_normalize::normalize_model_id(
-                                                req_model,
-                                            );
-
-                                        if let Some(detail) = details.iter().find(|d| {
-                                            let norm_detail =
-                                                openproxy_types::model_normalize::normalize_model_id(
-                                                    &d.model_id,
-                                                );
-                                            norm_req.eq_ignore_ascii_case(&norm_detail)
-                                                || req_model.eq_ignore_ascii_case(&d.model_id)
-                                        }) && detail.session_reset_at.is_some()
-                                        {
-                                            reset_str = detail.session_reset_at.clone();
-                                        }
-                                    }
-
-                                    openproxy_types::quota::parse_reset_time(&reset_str?)
-                                })();
-
-                                if let Some(secs) = override_secs
-                                    && secs > base_secs
-                                {
-                                    base_secs = secs;
-                                }
-                            }
-
                             let max_secs = combo
                                 .cooldown_max_secs
                                 .unwrap_or(pipeline.config.cooldown_max_secs);
                             let factor = combo
                                 .cooldown_factor
                                 .unwrap_or(pipeline.config.cooldown_factor);
-                            if let Err(e) = pipeline.repo().record_cooldown(
-                                target.target.id,
-                                &reason,
-                                mode,
-                                base_secs,
-                                max_secs,
-                                factor,
-                            ) {
-                                tracing::warn!(
-                                    combo_id = combo.id.0,
-                                    target_id = target.target.id.0,
-                                    error = %e,
-                                    "cooldown::record failed; non-fatal"
-                                );
-                            }
+                            let is_rate_limited = matches!(
+                                result.error,
+                                Some(openproxy_types::error::CoreError::RateLimited { .. })
+                            );
+                            let repo = pipeline.repo().clone();
+                            let target_id = target.target.id;
+                            let account_id_opt = target.target.account_id;
+                            let req_model = target.model.model_id.0.clone();
+                            let combo_id = combo.id.0;
+                            let _ = tokio::task::spawn_blocking(move || {
+                                let mut final_base_secs = base_secs;
+                                if is_rate_limited && let Some(account_id) = account_id_opt {
+                                    let override_secs = (|| -> Option<u64> {
+                                        let (accounts, _, _) =
+                                            repo.get_accounts_meta(&[account_id]).ok()?;
+                                        let account = accounts.get(&account_id.0)?;
+
+                                        let mut reset_str = account.quota_session_reset_at.clone();
+
+                                        if let Some(json) = &account.quota_model_details
+                                            && let Ok(details) =
+                                                serde_json::from_str::<
+                                                    Vec<openproxy_types::quota::ModelQuotaDetail>,
+                                                >(json)
+                                        {
+                                            let norm_req =
+                                                openproxy_types::model_normalize::normalize_model_id(
+                                                    &req_model,
+                                                );
+
+                                            if let Some(detail) = details.iter().find(|d| {
+                                                let norm_detail =
+                                                    openproxy_types::model_normalize::normalize_model_id(
+                                                        &d.model_id,
+                                                    );
+                                                norm_req.eq_ignore_ascii_case(&norm_detail)
+                                                    || req_model.eq_ignore_ascii_case(&d.model_id)
+                                            }) && detail.session_reset_at.is_some()
+                                            {
+                                                reset_str = detail.session_reset_at.clone();
+                                            }
+                                        }
+
+                                        openproxy_types::quota::parse_reset_time(&reset_str?)
+                                    })();
+
+                                    if let Some(secs) = override_secs
+                                        && secs > final_base_secs
+                                    {
+                                        final_base_secs = secs;
+                                    }
+                                }
+
+                                if let Err(e) = repo.record_cooldown(
+                                    target_id,
+                                    &reason,
+                                    mode,
+                                    final_base_secs,
+                                    max_secs,
+                                    factor,
+                                ) {
+                                    tracing::warn!(
+                                        combo_id,
+                                        target_id = target_id.0,
+                                        error = %e,
+                                        "cooldown::record failed; non-fatal"
+                                    );
+                                }
+                            }).await;
                         }
                         _ => {}
                     }
@@ -703,12 +734,16 @@ impl tower::Service<PipelineState> for RoutingService {
                         {
                             let job = e.into_inner();
                             let conn = pipeline.conn.clone();
-                            crate::worker::process_job(
-                                &conn,
-                                pipeline.repo().as_ref(),
-                                job,
-                                pipeline.selection_registry().clone(),
-                            );
+                            let repo = pipeline.repo().clone();
+                            let sel = pipeline.selection_registry().clone();
+                            let _ = tokio::task::spawn_blocking(move || {
+                                crate::worker::process_job(
+                                    &conn,
+                                    repo.as_ref(),
+                                    job,
+                                    sel,
+                                );
+                            }).await;
                         }
                     }
                     tracing::info!(

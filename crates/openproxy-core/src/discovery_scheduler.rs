@@ -449,15 +449,21 @@ async fn run_one_tick(
                         // dedup index collapses repeat identical codes
                         // within 24h so a persistently bad key doesn't
                         // flood the tray.
-                        if let Ok(notif_conn) = db_pool.open_connection() {
-                            let _ = crate::notifications::record_system(
-                                &notif_conn,
-                                crate::notifications::CODE_ACCOUNT_KEY_DECRYPT_FAILED,
-                                &format!("account_id={}: {}", acc.id.0, e),
-                                Some(provider.as_str()),
-                                None,
-                            );
-                        }
+                        let db_pool = db_pool.clone();
+                        let provider_str = provider.as_str().to_string();
+                        let acc_id = acc.id.0;
+                        let err_str = e.to_string();
+                        let _ = tokio::task::spawn_blocking(move || {
+                            if let Ok(notif_conn) = db_pool.open_connection() {
+                                let _ = crate::notifications::record_system(
+                                    &notif_conn,
+                                    crate::notifications::CODE_ACCOUNT_KEY_DECRYPT_FAILED,
+                                    &format!("account_id={}: {}", acc_id, err_str),
+                                    Some(&provider_str),
+                                    None,
+                                );
+                            }
+                        }).await;
                         return;
                     }
                 }
@@ -470,13 +476,22 @@ async fn run_one_tick(
     // borrow of `db_pool` is over — the `&Arc<DbPool>` argument
     // is fine to keep borrowing because the spawned task owns
     // an `Arc` clone anyway.
-    let conn = match db_pool.open_connection() {
-        Ok(c) => c,
-        Err(e) => {
+    let db_pool_clone = db_pool.clone();
+    let conn = match tokio::task::spawn_blocking(move || db_pool_clone.open_connection()).await {
+        Ok(Ok(c)) => c,
+        Ok(Err(e)) => {
             tracing::warn!(
                 provider = %provider,
                 error = %e,
                 "discovery tick: failed to open db connection; skipping cycle",
+            );
+            return;
+        }
+        Err(e) => {
+            tracing::warn!(
+                provider = %provider,
+                error = %e,
+                "discovery tick: failed to open db connection task; skipping cycle",
             );
             return;
         }
@@ -520,28 +535,32 @@ async fn run_one_tick(
             // rows the operator just hand-toggled since the
             // last successful tick. Failures are logged at WARN
             // and swallowed — the next tick tries again.
-            match db_pool.open_connection() {
-                Ok(aa_conn) => {
-                    let keyword_ref: Option<&str> = provider_row
-                        .as_ref()
-                        .and_then(|p| p.auto_activate_keyword.as_deref());
-                    if let Err(e) = models::apply_auto_activation(&aa_conn, &provider, keyword_ref)
-                    {
+            let db_pool_clone = db_pool.clone();
+            let provider_clone = provider.clone();
+            let keyword = provider_row
+                .as_ref()
+                .and_then(|p| p.auto_activate_keyword.clone());
+            let _ = tokio::task::spawn_blocking(move || {
+                match db_pool_clone.open_connection() {
+                    Ok(aa_conn) => {
+                        if let Err(e) = models::apply_auto_activation(&aa_conn, &provider_clone, keyword.as_deref())
+                        {
+                            tracing::warn!(
+                                provider = %provider_clone,
+                                error = %e,
+                                "discovery tick: auto-activation failed",
+                            );
+                        }
+                    }
+                    Err(e) => {
                         tracing::warn!(
-                            provider = %provider,
+                            provider = %provider_clone,
                             error = %e,
-                            "discovery tick: auto-activation failed",
+                            "discovery tick: failed to open db connection for auto-activation",
                         );
                     }
                 }
-                Err(e) => {
-                    tracing::warn!(
-                        provider = %provider,
-                        error = %e,
-                        "discovery tick: failed to open db connection for auto-activation",
-                    );
-                }
-            }
+            }).await;
         }
         Err(e) => {
             // Errors must not kill the loop. WARN, not ERROR, so
@@ -561,15 +580,20 @@ async fn run_one_tick(
             // because the one used for `refresh_models` may be in a
             // half-finished state; `open_connection` is cheap and
             // the writer mutex is unaffected.
-            if let Ok(notif_conn) = db_pool.open_connection() {
-                let _ = crate::notifications::record_system(
-                    &notif_conn,
-                    crate::notifications::CODE_DISCOVERY_FAILED,
-                    &e.to_string(),
-                    Some(provider.as_str()),
-                    None,
-                );
-            }
+            let db_pool = db_pool.clone();
+            let provider_str = provider.as_str().to_string();
+            let err_str = e.to_string();
+            let _ = tokio::task::spawn_blocking(move || {
+                if let Ok(notif_conn) = db_pool.open_connection() {
+                    let _ = crate::notifications::record_system(
+                        &notif_conn,
+                        crate::notifications::CODE_DISCOVERY_FAILED,
+                        &err_str,
+                        Some(&provider_str),
+                        None,
+                    );
+                }
+            }).await;
         }
     }
 }

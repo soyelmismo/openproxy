@@ -495,19 +495,31 @@ impl TokenRefreshCoordinator {
                     )
                     .await?;
                 let expires_at = token_expires_at(token.expires_in);
-                let conn = pool.writer();
-                store_oauth_tokens(
-                    &conn,
-                    account_id,
-                    &token.access_token,
-                    token.refresh_token.as_deref(),
-                    master_key,
-                    &token.token_type,
-                    expires_at.as_deref(),
-                    token.scope.as_deref(),
-                    provider.provider_specific_from_token(&token).as_deref(),
-                    provider.email_from_token(&token).as_deref(),
-                )?;
+                let pool = pool.clone();
+                let master_key = master_key.clone();
+                let access_token = token.access_token.clone();
+                let refresh_token = token.refresh_token.clone();
+                let token_type = token.token_type.clone();
+                let scope = token.scope.clone();
+                let provider_specific = provider.provider_specific_from_token(&token);
+                let email = provider.email_from_token(&token);
+                tokio::task::spawn_blocking(move || {
+                    let conn = pool.writer();
+                    store_oauth_tokens(
+                        &conn,
+                        account_id,
+                        &access_token,
+                        refresh_token.as_deref(),
+                        &master_key,
+                        &token_type,
+                        expires_at.as_deref(),
+                        scope.as_deref(),
+                        provider_specific.as_deref(),
+                        email.as_deref(),
+                    )
+                })
+                .await
+                .map_err(|e| CoreError::Internal(e.to_string()))??;
                 Ok(token)
             }
             DbRef::Connection(conn_mutex) => {
@@ -572,8 +584,15 @@ pub async fn resolve_oauth_token(
 
     // 1. Decrypt current access token.
     let access_token = {
-        let conn = db_pool.writer();
-        decrypt_access_token(&conn, account.id, master_key)?
+        let db_pool = db_pool.clone();
+        let master_key = master_key.clone();
+        let acc_id = account.id;
+        tokio::task::spawn_blocking(move || {
+            let conn = db_pool.writer();
+            decrypt_access_token(&conn, acc_id, &master_key)
+        })
+        .await
+        .map_err(|e| CoreError::Internal(e.to_string()))??
     };
 
     // 2. Check expiry — if still fresh, return as-is.
@@ -583,8 +602,16 @@ pub async fn resolve_oauth_token(
 
     // 3. Decrypt refresh token under a fresh connection.
     let refresh_token = {
-        let conn = db_pool.writer();
-        decrypt_refresh_token(&conn, account.id, master_key)?.ok_or_else(|| {
+        let db_pool = db_pool.clone();
+        let master_key = master_key.clone();
+        let acc_id = account.id;
+        tokio::task::spawn_blocking(move || {
+            let conn = db_pool.writer();
+            decrypt_refresh_token(&conn, acc_id, &master_key)
+        })
+        .await
+        .map_err(|e| CoreError::Internal(e.to_string()))??
+        .ok_or_else(|| {
             CoreError::Auth(format!(
                 "account {} has no refresh token, cannot refresh",
                 account.id.0
@@ -734,18 +761,22 @@ pub async fn start_refresh_scheduler(
         // Query with the maximum lead time (15 min) so we don't miss
         // any accounts; per-provider filtering happens in Rust below.
         let accounts = {
-            let conn = db_pool.writer();
-            match crate::accounts::list_expiring_oauth_accounts(
-                &conn,
-                MAX_REFRESH_LEAD_SECS,
-                master_key.as_ref(),
-            ) {
-                Ok(accs) => accs,
-                Err(e) => {
-                    tracing::warn!(error = %e, "oauth refresh scheduler: failed to list expiring accounts");
-                    continue;
-                }
-            }
+            let db_pool = db_pool.clone();
+            let master_key = master_key.clone();
+            tokio::task::spawn_blocking(move || {
+                let conn = db_pool.writer();
+                crate::accounts::list_expiring_oauth_accounts(
+                    &conn,
+                    MAX_REFRESH_LEAD_SECS,
+                    master_key.as_ref(),
+                )
+            })
+            .await
+            .unwrap_or_else(|_| Ok(Vec::new()))
+            .unwrap_or_else(|e| {
+                tracing::warn!(error = %e, "oauth refresh scheduler: failed to list expiring accounts");
+                Vec::new()
+            })
         };
 
         // Filter by per-provider lead time.
@@ -805,24 +836,35 @@ pub async fn start_refresh_scheduler(
             }
 
             let refresh_token = {
-                let conn = db_pool.writer();
-                match crate::accounts::decrypt_refresh_token(&conn, account.id, &master_key) {
-                    Ok(Some(rt)) => rt,
-                    Ok(None) => {
-                        tracing::debug!(
-                            account = account_id,
-                            "oauth refresh: no refresh token stored, skipping"
-                        );
-                        continue;
-                    }
-                    Err(e) => {
-                        tracing::warn!(
-                            account = account_id,
-                            error = %e,
-                            "oauth refresh: failed to decrypt refresh token"
-                        );
-                        continue;
-                    }
+                let db_pool = db_pool.clone();
+                let master_key = master_key.clone();
+                let acc_id = account.id;
+                match tokio::task::spawn_blocking(move || {
+                    let conn = db_pool.writer();
+                    crate::accounts::decrypt_refresh_token(&conn, acc_id, &master_key)
+                })
+                .await
+                {
+                    Ok(res) => res,
+                    Err(e) => Err(CoreError::Internal(e.to_string())),
+                }
+            };
+            let refresh_token = match refresh_token {
+                Ok(Some(rt)) => rt,
+                Ok(None) => {
+                    tracing::debug!(
+                        account = account_id,
+                        "oauth refresh: no refresh token stored, skipping"
+                    );
+                    continue;
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        account = account_id,
+                        error = %e,
+                        "oauth refresh: failed to decrypt refresh token"
+                    );
+                    continue;
                 }
             };
 
@@ -845,18 +887,20 @@ pub async fn start_refresh_scheduler(
                     failure_counts.remove(&account_id);
                     last_refresh_attempts.remove(&account_id);
 
-                    let conn = db_pool.writer();
-
-                    // Set health_status back to healthy.
-                    if let Err(e) =
-                        crate::accounts::set_health(&conn, account.id, HealthStatus::Healthy)
-                    {
-                        tracing::warn!(
-                            account = account_id,
-                            error = %e,
-                            "oauth refresh: failed to set health to healthy"
-                        );
-                    }
+                    let db_pool = db_pool.clone();
+                    let acc_id = account.id;
+                    let _ = tokio::task::spawn_blocking(move || {
+                        let conn = db_pool.writer();
+                        if let Err(e) =
+                            crate::accounts::set_health(&conn, acc_id, HealthStatus::Healthy)
+                        {
+                            tracing::warn!(
+                                account = account_id,
+                                error = %e,
+                                "oauth refresh: failed to set health to healthy"
+                            );
+                        }
+                    }).await;
 
                     tracing::info!(
                         account = account_id,
@@ -876,63 +920,51 @@ pub async fn start_refresh_scheduler(
                         HealthStatus::Degraded
                     };
 
-                    let conn = db_pool.writer();
-                    if let Err(update_err) =
-                        crate::accounts::set_health(&conn, account.id, new_health)
-                    {
-                        tracing::warn!(
-                            account = account_id,
-                            error = %update_err,
-                            "oauth refresh: failed to update health status"
-                        );
-                    }
+                    let db_pool = db_pool.clone();
+                    let acc_id = account.id;
+                    let count_val = *count;
+                    let provider_id_str = account.provider_id.as_str().to_string();
+                    let _ = tokio::task::spawn_blocking(move || {
+                        let conn = db_pool.writer();
+                        if let Err(update_err) =
+                            crate::accounts::set_health(&conn, acc_id, new_health)
+                        {
+                            tracing::warn!(
+                                account = account_id,
+                                error = %update_err,
+                                "oauth refresh: failed to update health status"
+                            );
+                        }
 
-                    // G2.2: surface an `oauth_expired` system
-                    // notification when the refresh has failed
-                    // `UNHEALTHY_THRESHOLD` times in a row — at that
-                    // point the account is marked Unhealthy and the
-                    // next chat request routed to it will fail with a
-                    // 401. Firing on the threshold (rather than on
-                    // every failure) keeps the tray quiet during
-                    // transient blips while still surfacing
-                    // persistently broken accounts.
-                    //
-                    // Per-account dedup (`oauth_expired:{account_id}`)
-                    // collapses repeats within 24h so a stuck account
-                    // doesn't spam the tray on every scheduler tick.
-                    // The same dedup key is used by the pipeline's
-                    // OAuth-executor 401 hook, so the two paths
-                    // coalesce into at most one row per account per
-                    // day.
-                    if *count >= UNHEALTHY_THRESHOLD {
-                        let provider_id_str = account.provider_id.as_str().to_string();
-                        let dedup_key = format!(
-                            "{}:{}",
-                            crate::notifications::CODE_OAUTH_EXPIRED,
-                            account_id
-                        );
-                        let payload = serde_json::json!({
-                            "code": crate::notifications::CODE_OAUTH_EXPIRED,
-                            "message": format!(
-                                "OAuth token for account {} on {} expired or could not be refreshed ({} consecutive failures)",
-                                account_id, provider_id_str, *count,
-                            ),
-                            "provider_id": &provider_id_str,
-                            "details": {
-                                "account_id": account_id,
+                        if count_val >= UNHEALTHY_THRESHOLD {
+                            let dedup_key = format!(
+                                "{}:{}",
+                                crate::notifications::CODE_OAUTH_EXPIRED,
+                                account_id
+                            );
+                            let payload = serde_json::json!({
+                                "code": crate::notifications::CODE_OAUTH_EXPIRED,
+                                "message": format!(
+                                    "OAuth token for account {} on {} expired or could not be refreshed ({} consecutive failures)",
+                                    account_id, provider_id_str, count_val,
+                                ),
                                 "provider_id": &provider_id_str,
-                                "reason": "refresh_failed",
-                                "consecutive_failures": *count,
-                            },
-                        });
-                        let _ = crate::notifications::insert_and_broadcast(
-                            &conn,
-                            crate::notifications::KIND_SYSTEM,
-                            &payload,
-                            Some(&dedup_key),
-                            Some(&provider_id_str),
-                        );
-                    }
+                                "details": {
+                                    "account_id": account_id,
+                                    "provider_id": &provider_id_str,
+                                    "reason": "refresh_failed",
+                                    "consecutive_failures": count_val,
+                                },
+                            });
+                            let _ = crate::notifications::insert_and_broadcast(
+                                &conn,
+                                crate::notifications::KIND_SYSTEM,
+                                &payload,
+                                Some(&dedup_key),
+                                Some(&provider_id_str),
+                            );
+                        }
+                    }).await;
 
                     tracing::warn!(
                         account = account_id,

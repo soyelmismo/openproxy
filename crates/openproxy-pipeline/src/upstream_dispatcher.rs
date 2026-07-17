@@ -261,10 +261,16 @@ impl UpstreamDispatcher {
         };
         upstream_request.proxy = proxy_url;
 
-        let proxy_status = upstream_request
-            .proxy
-            .as_ref()
-            .and_then(|url| self.tracker.repo.get_proxy_status_by_url(url));
+        let proxy_status = match upstream_request.proxy.as_ref() {
+            Some(url) => {
+                let repo = self.tracker.repo.clone();
+                let u = url.clone();
+                tokio::task::spawn_blocking(move || repo.get_proxy_status_by_url(&u))
+                    .await
+                    .unwrap_or(None)
+            }
+            None => None,
+        };
         upstream_request.proxy_status = proxy_status.clone();
         tracing::info!(
             proxy_used = ?upstream_request.proxy,

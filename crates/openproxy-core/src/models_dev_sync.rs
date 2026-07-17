@@ -871,45 +871,51 @@ pub async fn start_sync_scheduler(
             }
         };
 
-        // Then upsert under the connection lock.
-        let count = {
-            let conn = db_pool.writer();
-            match upsert_models_dev(&body, &conn) {
-                Ok(n) => {
-                    tracing::info!("models.dev sync: {} rows upserted", n);
-                    n
+        // Then upsert, enrich, and auto-create combos under the connection lock in a blocking task.
+        let db_pool_clone = db_pool.clone();
+        let body_clone = body.clone();
+        let count = tokio::task::spawn_blocking(move || {
+            let count = {
+                let conn = db_pool_clone.writer();
+                match upsert_models_dev(&body_clone, &conn) {
+                    Ok(n) => {
+                        tracing::info!("models.dev sync: {} rows upserted", n);
+                        n
+                    }
+                    Err(e) => {
+                        tracing::warn!(error = %e, "models.dev sync upsert failed");
+                        return 0;
+                    }
                 }
-                Err(e) => {
-                    tracing::warn!(error = %e, "models.dev sync upsert failed");
-                    continue;
+            };
+
+            if count > 0 {
+                {
+                    let conn = db_pool_clone.writer();
+                    match enrich_models_from_sync(&conn) {
+                        Ok(n) => tracing::info!("models.dev sync: enriched {} model rows", n),
+                        Err(e) => tracing::warn!(error = %e, "models.dev sync enrich failed"),
+                    }
+                }
+                {
+                    let conn = db_pool_clone.writer();
+                    match auto_create_combos(&conn) {
+                        Ok(n) => {
+                            if n > 0 {
+                                tracing::info!("models.dev sync: created {} auto-combos", n);
+                            }
+                        }
+                        Err(e) => tracing::warn!(error = %e, "models.dev sync auto-combo failed"),
+                    }
                 }
             }
-        };
+            count
+        })
+        .await
+        .unwrap_or(0);
 
         if count == 0 {
             continue;
-        }
-
-        // Enrich models table.
-        {
-            let conn = db_pool.writer();
-            match enrich_models_from_sync(&conn) {
-                Ok(n) => tracing::info!("models.dev sync: enriched {} model rows", n),
-                Err(e) => tracing::warn!(error = %e, "models.dev sync enrich failed"),
-            }
-        }
-
-        // Auto-create combos.
-        {
-            let conn = db_pool.writer();
-            match auto_create_combos(&conn) {
-                Ok(n) => {
-                    if n > 0 {
-                        tracing::info!("models.dev sync: created {} auto-combos", n);
-                    }
-                }
-                Err(e) => tracing::warn!(error = %e, "models.dev sync auto-combo failed"),
-            }
         }
 
         tracing::info!("models.dev sync: complete");
@@ -925,33 +931,39 @@ pub async fn run_one_shot(
 ) -> Result<String> {
     let body = fetch_models_dev(&upstream_client).await?;
 
-    let count = {
-        let conn = db_pool.writer();
-        upsert_models_dev(&body, &conn)?
-    };
+    let res = tokio::task::spawn_blocking(move || -> Result<(usize, usize, usize, usize)> {
+        let count = {
+            let conn = db_pool.writer();
+            upsert_models_dev(&body, &conn)?
+        };
+        if count == 0 {
+            return Ok((0, 0, 0, 0));
+        }
+
+        let enriched = {
+            let conn = db_pool.writer();
+            enrich_models_from_sync(&conn)?
+        };
+
+        let combos = {
+            let conn = db_pool.writer();
+            auto_create_combos(&conn)?
+        };
+
+        let repriced = {
+            let conn = db_pool.writer();
+            recompute_costs(&conn)?
+        };
+
+        Ok((count, enriched, combos, repriced))
+    })
+    .await
+    .map_err(|e| openproxy_types::error::CoreError::Internal(e.to_string()))??;
+
+    let (count, enriched, combos, repriced) = res;
     if count == 0 {
         return Ok("No new models.dev data".into());
     }
-
-    let enriched = {
-        let conn = db_pool.writer();
-        enrich_models_from_sync(&conn)?
-    };
-
-    let combos = {
-        let conn = db_pool.writer();
-        auto_create_combos(&conn)?
-    };
-
-    // Re-price historical usage rows that had no pricing at record time.
-    // After the sync populates pricing in model_capabilities_sync, this
-    // walks every usage row with cost_usd = 0 AND tokens > 0 and
-    // re-applies pricing::lookup_with_db. This fixes the "3147 rows had
-    // no pricing data" warning after the operator runs a sync.
-    let repriced = {
-        let conn = db_pool.writer();
-        recompute_costs(&conn)?
-    };
 
     Ok(format!(
         "Synced {} models, enriched {} model rows, created {} auto-combos, re-priced {} usage rows",

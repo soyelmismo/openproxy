@@ -81,28 +81,34 @@ async fn run_warmup_cycle(
 ) {
     // Extract necessary data so we can drop the DB lock before the network call
     let account_list: Vec<(i64, String, String, String)> = {
-        let conn = db_pool.writer();
+        let db_pool = db_pool.clone();
+        let master_key = master_key.clone();
+        tokio::task::spawn_blocking(move || {
+            let conn = db_pool.writer();
 
-        let provider_id = ProviderId::new("antigravity");
-        let accounts = match accounts::list(&conn, Some(&provider_id), master_key) {
-            Ok(accs) => accs,
-            Err(e) => {
-                tracing::warn!("[SmartWarmup] Failed to list accounts: {}", e);
-                return;
-            }
-        };
+            let provider_id = ProviderId::new("antigravity");
+            let accounts = match accounts::list(&conn, Some(&provider_id), &master_key) {
+                Ok(accs) => accs,
+                Err(e) => {
+                    tracing::warn!("[SmartWarmup] Failed to list accounts: {}", e);
+                    return Vec::new();
+                }
+            };
 
-        accounts
-            .into_iter()
-            .filter(|a| !matches!(a.health_status, crate::accounts::HealthStatus::Unhealthy))
-            .filter_map(|a| {
-                let token = accounts::decrypt_access_token(&conn, a.id, master_key).ok()?;
-                let project_id = crate::oauth_antigravity::read_project_id(&conn, a.id)
-                    .ok()
-                    .flatten()?;
-                Some((a.id.0, a.id.0.to_string(), token, project_id))
-            })
-            .collect()
+            accounts
+                .into_iter()
+                .filter(|a| !matches!(a.health_status, crate::accounts::HealthStatus::Unhealthy))
+                .filter_map(|a| {
+                    let token = accounts::decrypt_access_token(&conn, a.id, &master_key).ok()?;
+                    let project_id = crate::oauth_antigravity::read_project_id(&conn, a.id)
+                        .ok()
+                        .flatten()?;
+                    Some((a.id.0, a.id.0.to_string(), token, project_id))
+                })
+                .collect()
+        })
+        .await
+        .unwrap_or_default()
     };
 
     let now = chrono::Utc::now().timestamp();
@@ -131,9 +137,12 @@ async fn run_warmup_cycle(
 
         // Persist the fresh quota so the UI / frontend sees it
         {
-            let conn = db_pool.writer();
-            let _ =
-                crate::accounts::set_quota(&conn, crate::ids::AccountId(account_id_i64), &quota);
+            let db_pool = db_pool.clone();
+            let quota = quota.clone();
+            let _ = tokio::task::spawn_blocking(move || {
+                let conn = db_pool.writer();
+                let _ = crate::accounts::set_quota(&conn, crate::ids::AccountId(account_id_i64), &quota);
+            }).await;
         }
 
         // Check if 100% capacity
@@ -148,8 +157,14 @@ async fn run_warmup_cycle(
 
         for model_alias in models_to_ping {
             let true_model_id = {
-                let conn = db_pool.reader();
-                resolve_model_alias(&conn, model_alias)
+                let db_pool = db_pool.clone();
+                let alias = model_alias.clone();
+                tokio::task::spawn_blocking(move || {
+                    let conn = db_pool.reader();
+                    resolve_model_alias(&conn, &alias)
+                })
+                .await
+                .unwrap_or(None)
             };
 
             let true_model_id = match true_model_id {
@@ -161,13 +176,19 @@ async fn run_warmup_cycle(
 
             // Check cooldown
             let last_ts = {
-                let conn = db_pool.reader();
-                conn.query_row(
-                    "SELECT last_ts FROM smart_warmup_history WHERE history_key = ?1",
-                    rusqlite::params![history_key],
-                    |r| r.get::<_, i64>(0),
-                )
-                .ok()
+                let db_pool = db_pool.clone();
+                let history_key = history_key.clone();
+                tokio::task::spawn_blocking(move || {
+                    let conn = db_pool.reader();
+                    conn.query_row(
+                        "SELECT last_ts FROM smart_warmup_history WHERE history_key = ?1",
+                        rusqlite::params![history_key],
+                        |r| r.get::<_, i64>(0),
+                    )
+                    .ok()
+                })
+                .await
+                .unwrap_or(None)
             };
 
             if let Some(ts) = last_ts
@@ -193,12 +214,16 @@ async fn run_warmup_cycle(
             .await;
 
             if success {
-                let conn = db_pool.writer();
-                let _ = conn.execute(
-                    "INSERT INTO smart_warmup_history (history_key, last_ts) VALUES (?1, ?2) \
-                     ON CONFLICT(history_key) DO UPDATE SET last_ts = excluded.last_ts",
-                    rusqlite::params![history_key, now],
-                );
+                let db_pool = db_pool.clone();
+                let history_key = history_key.clone();
+                let _ = tokio::task::spawn_blocking(move || {
+                    let conn = db_pool.writer();
+                    let _ = conn.execute(
+                        "INSERT INTO smart_warmup_history (history_key, last_ts) VALUES (?1, ?2) \
+                         ON CONFLICT(history_key) DO UPDATE SET last_ts = excluded.last_ts",
+                        rusqlite::params![history_key, now],
+                    );
+                }).await;
             }
 
             // Pequeña pausa entre modelos para no acribillar la API
@@ -212,11 +237,14 @@ async fn run_warmup_cycle(
     // Cleanup history older than 24h to prevent table growth
     let cutoff = now - 86_400;
     {
-        let conn = db_pool.writer();
-        let _ = conn.execute(
-            "DELETE FROM smart_warmup_history WHERE last_ts <= ?1",
-            rusqlite::params![cutoff],
-        );
+        let db_pool = db_pool.clone();
+        let _ = tokio::task::spawn_blocking(move || {
+            let conn = db_pool.writer();
+            let _ = conn.execute(
+                "DELETE FROM smart_warmup_history WHERE last_ts <= ?1",
+                rusqlite::params![cutoff],
+            );
+        }).await;
     }
 }
 
