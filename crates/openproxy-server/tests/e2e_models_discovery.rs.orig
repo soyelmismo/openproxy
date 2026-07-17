@@ -399,10 +399,6 @@ async fn call_refresh(
 
 #[tokio::test]
 async fn e2e_discovery_and_delete_on_disappear() {
-    unsafe {
-        std::env::set_var("OPENPROXY_ALLOW_PRIVATE_UPSTREAMS", "true");
-    }
-
     // --- Step 1: spin up the mock server on 127.0.0.1:0 ---------
     let (addr, mock) = spawn_mock(vec![]).await;
     let base_url = format!("http://{addr}");

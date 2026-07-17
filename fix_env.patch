@@ -1,0 +1,10 @@
+--- crates/openproxy-server/tests/e2e_models_discovery.rs
++++ crates/openproxy-server/tests/e2e_models_discovery.rs
+@@ -400,2 +400,6 @@
+ #[tokio::test]
+ async fn e2e_discovery_and_delete_on_disappear() {
++    unsafe {
++        std::env::set_var("OPENPROXY_ALLOW_PRIVATE_UPSTREAMS", "true");
++    }
++
+     // --- Step 1: spin up the mock server on 127.0.0.1:0 ---------
