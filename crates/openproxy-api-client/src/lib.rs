@@ -11,7 +11,7 @@
 //! # async fn run() -> Result<(), Box<dyn std::error::Error>> {
 //! use openproxy_api_client::Client;
 //! use openproxy_core::usage::UsageFilter;
-//! use openproxy_core::ids::ProviderId;
+//! use openproxy_types::ids::ProviderId;
 //!
 //! let client = Client::new("http://127.0.0.1:8080");
 //! let providers = client.list_providers().await?;
@@ -811,7 +811,9 @@ mod tests {
 
     #[test]
     fn test_list_providers() {
-        unsafe { std::env::set_var("OPENPROXY_ALLOW_PRIVATE_UPSTREAMS", "true"); }
+        unsafe {
+            std::env::set_var("OPENPROXY_ALLOW_PRIVATE_UPSTREAMS", "true");
+        }
         let server = httpmock::MockServer::start();
         let client = Client::new(server.base_url());
 
@@ -839,7 +841,9 @@ mod tests {
 
     #[test]
     fn test_refresh_models() {
-        unsafe { std::env::set_var("OPENPROXY_ALLOW_PRIVATE_UPSTREAMS", "true"); }
+        unsafe {
+            std::env::set_var("OPENPROXY_ALLOW_PRIVATE_UPSTREAMS", "true");
+        }
         let server = httpmock::MockServer::start();
         let client = Client::new(server.base_url());
 
@@ -867,7 +871,9 @@ mod tests {
 
     #[test]
     fn test_list_combo_targets() {
-        unsafe { std::env::set_var("OPENPROXY_ALLOW_PRIVATE_UPSTREAMS", "true"); }
+        unsafe {
+            std::env::set_var("OPENPROXY_ALLOW_PRIVATE_UPSTREAMS", "true");
+        }
         let server = httpmock::MockServer::start();
         let client = Client::new(server.base_url());
 

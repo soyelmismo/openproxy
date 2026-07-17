@@ -702,3 +702,44 @@ fn parse_antigravity_user_quota_summary(
         model_details: None,
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn test_parse_antigravity_models_response_missing_models() {
+        let body = json!({});
+        let result = parse_antigravity_models_response(&body);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_parse_antigravity_models_response_valid() {
+        let body = json!({
+            "models": {
+                "model-a": {
+                    "quotaInfo": {
+                        "resetTime": "2023-01-01T00:00:00Z",
+                        "remainingFraction": 0.5
+                    }
+                },
+                "model-b": {
+                    "quotaInfo": {
+                        "resetTime": "2023-01-01T00:00:00Z",
+                        "remainingFraction": 0.2
+                    }
+                }
+            }
+        });
+
+        let result = parse_antigravity_models_response(&body).expect("should parse");
+        assert_eq!(result.plan_name.unwrap(), "Antigravity");
+        assert_eq!(result.session_limit.unwrap(), 1000);
+        assert_eq!(result.session_used.unwrap(), 800);
+
+        let details = result.model_details.unwrap();
+        assert_eq!(details.len(), 2);
+    }
+}
