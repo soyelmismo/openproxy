@@ -54,13 +54,13 @@ pub(crate) fn authenticate_admin_ws(
     // serialize through the writer mutex. The reader has its own
     // `Mutex<Connection>` (see `db::conn::DbPool`), so auth no longer
     // contends with `cost::record` writes or admin mutations.
-    let r = state.db_pool().reader();
-    let key = match core_api_keys::get_by_hash(&r, &key_hash).map_err(ApiError)? {
-        Some(k) => k,
-        None => {
-            return Err(ApiError(CoreError::Auth("invalid api key".into())));
+    let key = tokio::task::block_in_place(|| {
+        let r = state.db_pool().reader();
+        match core_api_keys::get_by_hash(&r, &key_hash).map_err(ApiError)? {
+            Some(k) => Ok(k),
+            None => Err(ApiError(CoreError::Auth("invalid api key".into()))),
         }
-    };
+    })?;
 
     if !key.is_active {
         return Err(ApiError(CoreError::Auth(

@@ -72,17 +72,19 @@ pub async fn test_model(
             Ok(input) => {
                 let aid = input.account_id.map(AccountId::new);
                 let purl = if let Some(ref pid) = input.proxy_id {
-                    let r = s.db_pool().reader();
-                    if let Ok(Some(p)) = openproxy_core::free_proxies::get_proxy(&r, pid) {
-                        Some(format!(
-                            "{}://{}:{}",
-                            p.r#type.to_lowercase(),
-                            p.host,
-                            p.port
-                        ))
-                    } else {
-                        None
-                    }
+                    tokio::task::block_in_place(|| {
+                        let r = s.db_pool().reader();
+                        if let Ok(Some(p)) = openproxy_core::free_proxies::get_proxy(&r, pid) {
+                            Some(format!(
+                                "{}://{}:{}",
+                                p.r#type.to_lowercase(),
+                                p.host,
+                                p.port
+                            ))
+                        } else {
+                            None
+                        }
+                    })
                 } else {
                     None
                 };
@@ -160,7 +162,7 @@ pub(crate) async fn run_test_for_model(
     let start = std::time::Instant::now();
 
     // 1. Load the model row.
-    let model = match (|| -> Result<core_models::Model, ApiError> {
+    let model = match tokio::task::block_in_place(|| {
         let w = s.db_pool().writer();
         core_models::get_by_row_id(&w, row_id)?.ok_or_else(|| {
             ApiError(CoreError::ModelNotFound {
@@ -168,7 +170,7 @@ pub(crate) async fn run_test_for_model(
                 model: format!("row_id={}", model_row_id),
             })
         })
-    })() {
+    }) {
         Ok(m) => m,
         Err(ApiError(e)) => {
             return TestResult {
@@ -225,7 +227,7 @@ pub(crate) async fn run_test_for_model(
     //      - provider has no accounts configured (fallback to anonymous)
     //    This lets bearer providers like opencode-zen work without
     //    accounts while still using accounts when they exist.
-    let (is_anonymous, accounts_list) = {
+    let (is_anonymous, accounts_list) = tokio::task::block_in_place(|| {
         let w = s.db_pool().writer();
         let provider_row = core_providers::get(&w, &model.provider_id).unwrap_or_default();
         let accs = core_accounts::list(&w, Some(&model.provider_id), s.master_key().as_ref())
@@ -236,7 +238,7 @@ pub(crate) async fn run_test_for_model(
             _ => false,
         };
         (anon, accs)
-    };
+    });
 
     // Capture the optional account_id AND its label. The label is
     // needed by providers whose URL embeds account-level metadata
@@ -248,9 +250,11 @@ pub(crate) async fn run_test_for_model(
             Some(id) => {
                 // Per-model path: look up the already-pinned account.
                 let w = s.db_pool().writer();
-                core_accounts::get(&w, id, s.master_key().as_ref())
-                    .ok()
-                    .flatten()
+                tokio::task::block_in_place(|| {
+                    core_accounts::get(&w, id, s.master_key().as_ref())
+                        .ok()
+                        .flatten()
+                })
             }
             None => {
                 let healthy = accounts_list
@@ -281,12 +285,12 @@ pub(crate) async fn run_test_for_model(
         //    primary decrypt fails (e.g. NULL column).
         let api_key = match account_id {
             Some(aid) => {
-                let account = {
+                let account = tokio::task::block_in_place(|| {
                     let w = s.db_pool().writer();
                     core_accounts::get(&w, aid, s.master_key().as_ref())
                         .ok()
                         .flatten()
-                };
+                });
                 if let Some(ref acc) = account
                     && acc.auth_type == "oauth"
                 {
@@ -315,12 +319,12 @@ pub(crate) async fn run_test_for_model(
                         }
                     }
                 } else {
-                    let w = s.db_pool().writer();
-                    match core_accounts::decrypt_api_key(&w, aid, s.master_key().as_ref())
-                        .or_else(|_| {
+                    match tokio::task::block_in_place(|| {
+                        let w = s.db_pool().writer();
+                        core_accounts::decrypt_api_key(&w, aid, s.master_key().as_ref()).or_else(|_| {
                             core_accounts::decrypt_access_token(&w, aid, s.master_key().as_ref())
                         })
-                        .map_err(ApiError)
+                    }).map_err(ApiError)
                     {
                         Ok(k) => k,
                         Err(ApiError(e)) => {
@@ -659,8 +663,11 @@ pub(crate) async fn run_test_for_model(
     //     per-row path only; the combo fan-out does not want its
     //     transient probe to overwrite the row's last-test status.
     if !opts.in_combo_fanout {
-        let w = s.db_pool().writer();
-        if let Err(e) = core_models::set_test_status(&w, row_id, status as i32) {
+        let status_i32 = status as i32;
+        if let Err(e) = tokio::task::block_in_place(|| {
+            let w = s.db_pool().writer();
+            core_models::set_test_status(&w, row_id, status_i32)
+        }) {
             return TestResult {
                 row_id: model_row_id,
                 status: e.http_status(),

@@ -116,40 +116,46 @@ impl UpstreamDispatcher {
         let provider_id = provider_id.clone();
         let repo = self.tracker.repo.clone();
         tokio::task::spawn_blocking(move || {
-            let conn = conn_clone.lock();
-            if let Ok(Some(provider)) = openproxy_db::providers::get(&conn, &provider_id)
-                && provider.use_proxies
-            {
-                let should_rotate = match trigger {
-                    crate::upstream_dispatcher::ProxyRotationTrigger::RateLimited => true,
-                    crate::upstream_dispatcher::ProxyRotationTrigger::Status(sc) => {
-                        let errors_list: Vec<&str> = provider
-                            .proxy_rotation_errors
-                            .split(',')
-                            .map(|s| s.trim())
-                            .collect();
-                        errors_list.contains(&sc.to_string().as_str())
-                    }
-                    crate::upstream_dispatcher::ProxyRotationTrigger::ConnectError => {
-                        let errors_list: Vec<&str> = provider
-                            .proxy_rotation_errors
-                            .split(',')
-                            .map(|s| s.trim())
-                            .collect();
-                        errors_list.contains(&"connect_error") || errors_list.contains(&"timeout")
-                    }
-                };
+            let provider = {
+                let conn = conn_clone.lock();
+                openproxy_db::providers::get(&conn, &provider_id).unwrap_or(None)
+            };
 
-                if should_rotate && let Some(ref bad_proxy_id) = provider.current_proxy_id {
-                    tracing::warn!(
-                        provider = %provider_id,
-                        proxy_id = %bad_proxy_id,
-                        "proxy rotation triggered: marking proxy as dead and clearing binding"
-                    );
-                    let _ = repo.update_proxy_status(bad_proxy_id, "dead", None);
-                    let _ =
-                        openproxy_db::providers::update_current_proxy(&conn, &provider_id, None);
-                    return true;
+            if let Some(provider) = provider {
+                if provider.use_proxies {
+                    let should_rotate = match trigger {
+                        crate::upstream_dispatcher::ProxyRotationTrigger::RateLimited => true,
+                        crate::upstream_dispatcher::ProxyRotationTrigger::Status(sc) => {
+                            let errors_list: Vec<&str> = provider
+                                .proxy_rotation_errors
+                                .split(',')
+                                .map(|s| s.trim())
+                                .collect();
+                            errors_list.contains(&sc.to_string().as_str())
+                        }
+                        crate::upstream_dispatcher::ProxyRotationTrigger::ConnectError => {
+                            let errors_list: Vec<&str> = provider
+                                .proxy_rotation_errors
+                                .split(',')
+                                .map(|s| s.trim())
+                                .collect();
+                            errors_list.contains(&"connect_error") || errors_list.contains(&"timeout")
+                        }
+                    };
+
+                    if should_rotate && let Some(ref bad_proxy_id) = provider.current_proxy_id {
+                        tracing::warn!(
+                            provider = %provider_id,
+                            proxy_id = %bad_proxy_id,
+                            "proxy rotation triggered: marking proxy as dead and clearing binding"
+                        );
+                        let _ = repo.update_proxy_status(bad_proxy_id, "dead", None);
+                        
+                        let conn = conn_clone.lock();
+                        let _ =
+                            openproxy_db::providers::update_current_proxy(&conn, &provider_id, None);
+                        return true;
+                    }
                 }
             }
             false

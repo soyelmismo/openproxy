@@ -361,7 +361,7 @@ pub(crate) async fn stream_usage_rows(socket: WebSocket, state: AppState) {
         // Read-only SELECT — use the READER. The dashboard's WS
         // reconnects would otherwise serialize every history
         // fetch through the writer mutex.
-        let rows = {
+        let rows = tokio::task::block_in_place(|| {
             let r = state.db_pool().reader();
             match core_usage::recent_desc(&r, 100) {
                 Ok(r) => r,
@@ -374,7 +374,7 @@ pub(crate) async fn stream_usage_rows(socket: WebSocket, state: AppState) {
                     Vec::new()
                 }
             }
-        };
+        });
         // H7 fix: track the highest usage `id` we have
         // streamed to the dashboard so a `Lagged` broadcast
         // error can be answered with a targeted resync
@@ -552,7 +552,7 @@ pub(crate) async fn stream_usage_rows(socket: WebSocket, state: AppState) {
                                         .since_id
                                         .unwrap_or(0)
                                         .clamp(0, USAGE_RECENT_MAX_SINCE_ID);
-                                    let rows: Vec<openproxy_types::usage::RecentUsageRow> = {
+                                    let rows: Vec<openproxy_types::usage::RecentUsageRow> = tokio::task::block_in_place(|| {
                                         let r = state.db_pool().reader();
                                         let rows = match core_usage::recent(&r, since_id, 100) {
                                             Ok(v) => v,
@@ -565,7 +565,7 @@ pub(crate) async fn stream_usage_rows(socket: WebSocket, state: AppState) {
                                         rows.into_iter()
                                             .map(openproxy_types::usage::redact_for_broadcast)
                                             .collect()
-                                    };
+                                    });
                                     if let Some(mx) = rows.iter().map(|r| r.id.0).max() {
                                         last_known_id = last_known_id.max(mx);
                                     }
