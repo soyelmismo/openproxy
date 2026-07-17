@@ -811,7 +811,9 @@ mod tests {
 
     #[test]
     fn test_list_providers() {
-        unsafe { std::env::set_var("OPENPROXY_ALLOW_PRIVATE_UPSTREAMS", "true"); }
+        unsafe {
+            std::env::set_var("OPENPROXY_ALLOW_PRIVATE_UPSTREAMS", "true");
+        }
         let server = httpmock::MockServer::start();
         let client = Client::new(server.base_url());
 
@@ -839,7 +841,9 @@ mod tests {
 
     #[test]
     fn test_refresh_models() {
-        unsafe { std::env::set_var("OPENPROXY_ALLOW_PRIVATE_UPSTREAMS", "true"); }
+        unsafe {
+            std::env::set_var("OPENPROXY_ALLOW_PRIVATE_UPSTREAMS", "true");
+        }
         let server = httpmock::MockServer::start();
         let client = Client::new(server.base_url());
 
@@ -867,7 +871,9 @@ mod tests {
 
     #[test]
     fn test_list_combo_targets() {
-        unsafe { std::env::set_var("OPENPROXY_ALLOW_PRIVATE_UPSTREAMS", "true"); }
+        unsafe {
+            std::env::set_var("OPENPROXY_ALLOW_PRIVATE_UPSTREAMS", "true");
+        }
         let server = httpmock::MockServer::start();
         let client = Client::new(server.base_url());
 

@@ -14,7 +14,11 @@ mod tests {
         w.execute("INSERT INTO models(provider_id, model_id, target_format) VALUES ('openrouter', 'm1', 'openai')", []).unwrap();
         w.execute("INSERT INTO models(provider_id, model_id, target_format) VALUES ('openrouter', 'm2', 'openai')", []).unwrap();
 
-        w.execute("INSERT INTO accounts(provider_id, label) VALUES ('openrouter', 'test')", []).unwrap();
+        w.execute(
+            "INSERT INTO accounts(provider_id, label) VALUES ('openrouter', 'test')",
+            [],
+        )
+        .unwrap();
 
         w.execute(
             "INSERT INTO combos(id, name, strategy) VALUES (1, 'c1', 'priority')",
@@ -46,17 +50,29 @@ mod tests {
             .query_row("SELECT last_insert_rowid()", [], |r| r.get(0))
             .unwrap();
 
-        w.execute("INSERT INTO accounts(provider_id, label) VALUES ('p', 'sk-1')", []).unwrap();
+        w.execute(
+            "INSERT INTO accounts(provider_id, label) VALUES ('p', 'sk-1')",
+            [],
+        )
+        .unwrap();
         let account_id1 = AccountId(
             w.query_row("SELECT last_insert_rowid()", [], |r| r.get(0))
                 .unwrap(),
         );
-        w.execute("INSERT INTO accounts(provider_id, label) VALUES ('p', 'sk-2')", []).unwrap();
+        w.execute(
+            "INSERT INTO accounts(provider_id, label) VALUES ('p', 'sk-2')",
+            [],
+        )
+        .unwrap();
         let account_id2 = AccountId(
             w.query_row("SELECT last_insert_rowid()", [], |r| r.get(0))
                 .unwrap(),
         );
-        w.execute("INSERT INTO accounts(provider_id, label) VALUES ('p', 'sk-3')", []).unwrap();
+        w.execute(
+            "INSERT INTO accounts(provider_id, label) VALUES ('p', 'sk-3')",
+            [],
+        )
+        .unwrap();
         let account_id3 = AccountId(
             w.query_row("SELECT last_insert_rowid()", [], |r| r.get(0))
                 .unwrap(),
