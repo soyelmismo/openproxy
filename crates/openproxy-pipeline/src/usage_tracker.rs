@@ -53,12 +53,7 @@ impl UsageTracker {
                 let repo = self.repo.clone();
                 let selection_registry = self.selection_registry.clone();
                 drop(tokio::task::spawn_blocking(move || {
-                    crate::worker::process_job(
-                        &conn,
-                        repo.as_ref(),
-                        job,
-                        selection_registry,
-                    );
+                    crate::worker::process_job(&conn, repo.as_ref(), job, selection_registry);
                 }));
             } else {
                 tracing::warn!(
@@ -536,12 +531,7 @@ impl<'a> UsageRecordBuilder<'a> {
                 let repo = self.tracker.repo.clone();
                 let selection_registry = self.tracker.selection_registry.clone();
                 drop(tokio::task::spawn_blocking(move || {
-                    crate::worker::process_job(
-                        &conn,
-                        repo.as_ref(),
-                        job,
-                        selection_registry,
-                    );
+                    crate::worker::process_job(&conn, repo.as_ref(), job, selection_registry);
                 }));
             } else {
                 tracing::warn!("failed to send RecordAttempt to background worker: {}", e);
