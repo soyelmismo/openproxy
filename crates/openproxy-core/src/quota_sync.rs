@@ -157,7 +157,10 @@ pub async fn refresh_single_account_quota(
     let (provider_id_str, api_key, access_token, provider_specific) = {
         let db_pool = db_pool.clone();
         let master_key = master_key.clone();
-        let adapters_list: Vec<_> = adapters.iter().map(|a| (a.id().to_string(), a.metadata().quota_refresh_supported)).collect();
+        let adapters_list: Vec<_> = adapters
+            .iter()
+            .map(|a| (a.id().to_string(), a.metadata().quota_refresh_supported))
+            .collect();
         let res = tokio::task::spawn_blocking(move || {
             let w = db_pool.writer();
             let acc = admin::account_for_quota_refresh(&w, account_id, master_key.as_ref())?;
@@ -258,7 +261,8 @@ pub async fn refresh_single_account_quota(
                                 None,
                                 None,
                             );
-                        }).await;
+                        })
+                        .await;
                     }
                     // Retry the quota call with the new access token.
                     admin::fetch_account_quota(
@@ -338,7 +342,8 @@ pub async fn refresh_single_account_quota(
                     Some(&dedup_key),
                     Some(&provider_id_str),
                 );
-            }).await;
+            })
+            .await;
         }
     }
 

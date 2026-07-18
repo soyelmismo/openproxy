@@ -80,7 +80,8 @@ where
                             &created,
                             "No healthy targets available",
                         );
-                    }).await;
+                    })
+                    .await;
                 } else {
                     // If combo wasn't populated yet, we can't record it identically,
                     // but NoHealthyTargets only occurs after combo is resolved.
@@ -460,13 +461,9 @@ impl tower::Service<PipelineState> for RoutingService {
                             let repo = pipeline.repo().clone();
                             let sel = pipeline.selection_registry().clone();
                             let _ = tokio::task::spawn_blocking(move || {
-                                crate::worker::process_job(
-                                    &conn,
-                                    repo.as_ref(),
-                                    job,
-                                    sel,
-                                );
-                            }).await;
+                                crate::worker::process_job(&conn, repo.as_ref(), job, sel);
+                            })
+                            .await;
                         }
                     }
                     return Ok(race_result);
@@ -603,7 +600,8 @@ impl tower::Service<PipelineState> for RoutingService {
                                         "cooldown::clear failed; non-fatal"
                                     );
                                 }
-                            }).await;
+                            })
+                            .await;
                         }
                         "record" => {
                             let reason = result
@@ -737,13 +735,9 @@ impl tower::Service<PipelineState> for RoutingService {
                             let repo = pipeline.repo().clone();
                             let sel = pipeline.selection_registry().clone();
                             let _ = tokio::task::spawn_blocking(move || {
-                                crate::worker::process_job(
-                                    &conn,
-                                    repo.as_ref(),
-                                    job,
-                                    sel,
-                                );
-                            }).await;
+                                crate::worker::process_job(&conn, repo.as_ref(), job, sel);
+                            })
+                            .await;
                         }
                     }
                     tracing::info!(

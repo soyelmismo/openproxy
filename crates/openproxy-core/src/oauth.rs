@@ -902,7 +902,8 @@ pub async fn start_refresh_scheduler(
                                 "oauth refresh: failed to set health to healthy"
                             );
                         }
-                    }).await;
+                    })
+                    .await;
 
                     tracing::info!(
                         account = account_id,

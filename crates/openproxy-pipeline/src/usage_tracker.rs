@@ -52,13 +52,8 @@ impl UsageTracker {
                 let conn = self.conn.clone();
                 let repo = self.repo.clone();
                 let selection_registry = self.selection_registry.clone();
-                let _ = tokio::task::spawn_blocking(move || {
-                    crate::worker::process_job(
-                        &conn,
-                        repo.as_ref(),
-                        job,
-                        selection_registry,
-                    );
+                tokio::task::spawn_blocking(move || {
+                    crate::worker::process_job(&conn, repo.as_ref(), job, selection_registry);
                 });
             } else {
                 tracing::warn!(
@@ -115,7 +110,7 @@ impl UsageTracker {
             endpoint_kind: openproxy_types::endpoint::EndpointKind::Chat,
         };
         let conn = self.conn.clone();
-        let _ = tokio::task::spawn_blocking(move || {
+        tokio::task::spawn_blocking(move || {
             let lock = conn.lock();
             let _ = openproxy_db::cost::record(&lock, &input);
         });
@@ -535,13 +530,8 @@ impl<'a> UsageRecordBuilder<'a> {
                 let conn = self.tracker.conn.clone();
                 let repo = self.tracker.repo.clone();
                 let selection_registry = self.tracker.selection_registry.clone();
-                let _ = tokio::task::spawn_blocking(move || {
-                    crate::worker::process_job(
-                        &conn,
-                        repo.as_ref(),
-                        job,
-                        selection_registry,
-                    );
+                tokio::task::spawn_blocking(move || {
+                    crate::worker::process_job(&conn, repo.as_ref(), job, selection_registry);
                 });
             } else {
                 tracing::warn!("failed to send RecordAttempt to background worker: {}", e);

@@ -1,0 +1,1 @@
+sed -i 's/let w = db_pool.writer();\n                match accounts::decrypt_access_token(&w, acc.id, master_key.as_ref()) {/let key_res = {\n                    let w = db_pool.writer();\n                    accounts::decrypt_access_token(\&w, acc.id, master_key.as_ref())\n                };\n                match key_res {/g' crates/openproxy-core/src/discovery_scheduler.rs
