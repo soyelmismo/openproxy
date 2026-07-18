@@ -121,8 +121,8 @@ impl UpstreamDispatcher {
                 openproxy_db::providers::get(&conn, &provider_id).unwrap_or(None)
             };
 
-            if let Some(provider) = provider {
-                if provider.use_proxies {
+            if let Some(provider) = provider
+                && provider.use_proxies {
                     let should_rotate = match trigger {
                         crate::upstream_dispatcher::ProxyRotationTrigger::RateLimited => true,
                         crate::upstream_dispatcher::ProxyRotationTrigger::Status(sc) => {
@@ -139,7 +139,8 @@ impl UpstreamDispatcher {
                                 .split(',')
                                 .map(|s| s.trim())
                                 .collect();
-                            errors_list.contains(&"connect_error") || errors_list.contains(&"timeout")
+                            errors_list.contains(&"connect_error")
+                                || errors_list.contains(&"timeout")
                         }
                     };
 
@@ -150,14 +151,16 @@ impl UpstreamDispatcher {
                             "proxy rotation triggered: marking proxy as dead and clearing binding"
                         );
                         let _ = repo.update_proxy_status(bad_proxy_id, "dead", None);
-                        
+
                         let conn = conn_clone.lock();
-                        let _ =
-                            openproxy_db::providers::update_current_proxy(&conn, &provider_id, None);
+                        let _ = openproxy_db::providers::update_current_proxy(
+                            &conn,
+                            &provider_id,
+                            None,
+                        );
                         return true;
                     }
                 }
-            }
             false
         })
         .await
