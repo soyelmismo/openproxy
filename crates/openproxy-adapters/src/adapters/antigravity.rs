@@ -743,3 +743,41 @@ mod tests {
         assert_eq!(details.len(), 2);
     }
 }
+
+#[cfg(test)]
+mod user_quota_tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn test_parse_antigravity_user_quota_summary_missing_groups() {
+        let body = json!({});
+        let result = parse_antigravity_user_quota_summary(&body);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_parse_antigravity_user_quota_summary_valid() {
+        let body = json!({
+            "groups": [{
+                "displayName": "Pro",
+                "buckets": [{
+                    "window": "WEEK",
+                    "resetTime": "2023-01-01T00:00:00Z",
+                    "remainingFraction": 0.5
+                }, {
+                    "window": "DAY",
+                    "resetTime": "2023-01-01T00:00:00Z",
+                    "remainingFraction": 0.8
+                }]
+            }]
+        });
+
+        let result = parse_antigravity_user_quota_summary(&body).expect("should parse");
+        assert_eq!(result.plan_name.unwrap(), "Pro");
+        assert_eq!(result.weekly_limit.unwrap(), 1000);
+        assert_eq!(result.weekly_used.unwrap(), 500);
+        assert_eq!(result.session_limit.unwrap(), 1000);
+        assert_eq!(result.session_used.unwrap(), 200);
+    }
+}
