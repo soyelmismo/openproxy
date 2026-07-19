@@ -407,65 +407,81 @@ async fn sync_proxifly() -> crate::error::Result<Vec<ScrapedProxy>> {
     Ok(list)
 }
 
-async fn sync_iplocate() -> crate::error::Result<Vec<ScrapedProxy>> {
+async fn sync_github_lists() -> crate::error::Result<Vec<ScrapedProxy>> {
     use openproxy_adapters::upstream::{TimeoutProfile, UpstreamClient, UpstreamRequest};
     let client = UpstreamClient::new();
     let mut list = Vec::new();
-    let protocols = vec!["http", "https", "socks4", "socks5"];
 
-    for proto in protocols {
-        let url = format!(
+    let sources = vec![
+        (
+            "iplocate",
             "https://raw.githubusercontent.com/iplocate/free-proxy-list/main/protocols/{}.txt",
-            proto
-        );
-        let req = UpstreamRequest::get(url);
-        let cancel = openproxy_adapters::upstream::CancellationToken::new();
-        let res = match client
-            .call(req, TimeoutProfile::ModelDiscovery, cancel)
-            .await
-        {
-            Ok(r) => r,
-            Err(e) => {
-                tracing::warn!("iplocate fetch error for {}: {:?}", proto, e);
+            vec!["http", "https", "socks4", "socks5"],
+        ),
+        (
+            "thespeedx",
+            "https://raw.githubusercontent.com/TheSpeedX/SOCKS-List/master/{}.txt",
+            vec!["http", "socks4", "socks5"],
+        ),
+        (
+            "thordata",
+            "https://raw.githubusercontent.com/Thordata/awesome-free-proxy-list/main/proxies/{}.txt",
+            vec!["http", "https", "socks4", "socks5"],
+        ),
+    ];
+
+    for (src_name, url_template, protocols) in sources {
+        for proto in protocols {
+            let url = url_template.replace("{}", proto);
+            let req = UpstreamRequest::get(&url);
+            let cancel = openproxy_adapters::upstream::CancellationToken::new();
+            let res = match client
+                .call(req, TimeoutProfile::ModelDiscovery, cancel)
+                .await
+            {
+                Ok(r) => r,
+                Err(e) => {
+                    tracing::warn!("{} fetch error for {}: {:?}", src_name, proto, e);
+                    continue;
+                }
+            };
+            if res.status != 200 {
+                tracing::warn!("{} status error for {}: {}", src_name, proto, res.status);
                 continue;
             }
-        };
-        if res.status != 200 {
-            tracing::warn!("iplocate status error for {}: {}", proto, res.status);
-            continue;
-        }
-        let body_bytes = match res.collect().await {
-            Ok(b) => b,
-            Err(e) => {
-                tracing::warn!("iplocate body error for {}: {:?}", proto, e);
-                continue;
-            }
-        };
-        let text = match String::from_utf8(body_bytes.to_vec()) {
-            Ok(t) => t,
-            Err(e) => {
-                tracing::warn!("iplocate decode error for {}: {}", proto, e);
-                continue;
-            }
-        };
-        for line in text.lines() {
-            let trimmed = line.trim();
-            if trimmed.is_empty() || trimmed.starts_with('#') {
-                continue;
-            }
-            if let Some(pos) = trimmed.rfind(':') {
-                let host = trimmed[..pos].trim().to_string();
-                if let Ok(port) = trimmed[pos + 1..].trim().parse::<u16>()
-                    && !host.is_empty()
-                    && port > 0
-                {
-                    list.push(ScrapedProxy {
-                        source: "iplocate".to_string(),
-                        host,
-                        port,
-                        r#type: proto.to_string(),
-                        country_code: None,
-                    });
+            let body_bytes = match res.collect().await {
+                Ok(b) => b,
+                Err(e) => {
+                    tracing::warn!("{} body error for {}: {:?}", src_name, proto, e);
+                    continue;
+                }
+            };
+            let text = match String::from_utf8(body_bytes.to_vec()) {
+                Ok(t) => t,
+                Err(e) => {
+                    tracing::warn!("{} decode error for {}: {}", src_name, proto, e);
+                    continue;
+                }
+            };
+            for line in text.lines() {
+                let trimmed = line.trim();
+                if trimmed.is_empty() || trimmed.starts_with('#') {
+                    continue;
+                }
+                if let Some(pos) = trimmed.rfind(':') {
+                    let host = trimmed[..pos].trim().to_string();
+                    if let Ok(port) = trimmed[pos + 1..].trim().parse::<u16>()
+                        && !host.is_empty()
+                        && port > 0
+                    {
+                        list.push(ScrapedProxy {
+                            source: src_name.to_string(),
+                            host,
+                            port,
+                            r#type: proto.to_string(),
+                            country_code: None,
+                        });
+                    }
                 }
             }
         }
@@ -543,14 +559,14 @@ pub async fn sync_all_providers(db_pool: Arc<DbPool>) -> crate::error::Result<Sy
         }
     }
 
-    // 2. IPLocate
-    match sync_iplocate().await {
+    // 2. GitHub Lists (IPLocate, TheSpeedX, Thordata)
+    match sync_github_lists().await {
         Ok(mut list) => {
             fetched += list.len();
             scraped.append(&mut list);
         }
         Err(e) => {
-            errors.push(format!("IPLocate sync failed: {}", e));
+            errors.push(format!("GitHub lists sync failed: {}", e));
         }
     }
 
