@@ -43,8 +43,15 @@ pub(crate) fn authenticate(
         .get("authorization")
         .and_then(|v| v.to_str().ok())
         .and_then(|s| s.strip_prefix("Bearer "))
+        .map(|s| s.trim())
+        .or_else(|| {
+            headers
+                .get("x-api-key")
+                .and_then(|v| v.to_str().ok())
+                .map(|s| s.trim())
+        })
     {
-        Some(t) => t.trim(),
+        Some(t) => t,
         None => {
             // MEDIUM fix (audit finding #5): the previous behaviour
             // silently admitted anonymous traffic, so an open proxy
