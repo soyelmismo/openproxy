@@ -190,7 +190,7 @@ impl<S: Stream<Item = Bytes> + Unpin> Stream for OpenAIToAnthropicSseStream<S> {
     type Item = Result<Bytes, std::convert::Infallible>;
 
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        let mut this = self.get_mut();
+        let this = self.get_mut();
         
         loop {
             match Pin::new(&mut this.inner).poll_next(cx) {
