@@ -1,4 +1,4 @@
-use serde_json::{json, Value};
+use serde_json::json;
 use serde::{Deserialize, Serialize};
 use openproxy_types::error::{CoreError, Result};
 use crate::translation::types::*;

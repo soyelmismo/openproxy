@@ -1,5 +1,4 @@
 use serde_json::Value;
-use serde_json::json;
 use openproxy_types::{OpenAIMessage, OpenAIRequest};
 use crate::translation::types::*;
 use crate::translation::helpers::*;

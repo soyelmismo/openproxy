@@ -1,4 +1,4 @@
-use openproxy_types::{OpenAIMessage, OpenAIRequest};
+use openproxy_types::OpenAIMessage;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
