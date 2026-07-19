@@ -104,6 +104,25 @@ pub fn build_router(state: AppState) -> Router {
                 )),
         )
         .route(
+            "/v1/messages",
+            post(handlers::messages::anthropic_messages)
+                .route_layer(middleware::from_fn(
+                    crate::disconnect::client_disconnect_middleware,
+                ))
+                .route_layer(middleware::from_fn_with_state(
+                    state.clone(),
+                    crate::middleware::rate_limit::rate_limit_middleware,
+                ))
+                .route_layer(middleware::from_fn_with_state(
+                    state.clone(),
+                    crate::middleware::routing::routing_middleware,
+                ))
+                .route_layer(middleware::from_fn_with_state(
+                    state.clone(),
+                    crate::middleware::auth::auth_middleware,
+                )),
+        )
+        .route(
             "/v1/audio/transcriptions",
             post(handlers::audio::transcribe),
         );

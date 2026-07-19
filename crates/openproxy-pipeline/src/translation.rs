@@ -2144,3 +2144,106 @@ mod tests {
         assert!(super::parse_image_url_to_inline_data(&invalid_url).is_none());
     }
 }
+
+pub fn anthropic_request_to_openai(req: AnthropicRequest) -> OpenAIRequest {
+    let mut messages = Vec::with_capacity(req.messages.len() + req.system.is_some() as usize);
+    if let Some(sys) = req.system {
+        messages.push(OpenAIMessage {
+            role: "system".to_string(),
+            content: Some(serde_json::Value::String(sys)),
+            name: None,
+            tool_call_id: None,
+            tool_calls: None,
+            extra: Default::default(),
+        });
+    }
+    for m in req.messages {
+        messages.push(OpenAIMessage {
+            role: m.role,
+            content: Some(m.content),
+            name: None,
+            tool_call_id: None,
+            tool_calls: None,
+            extra: Default::default(),
+        });
+    }
+
+    let tools = req.tools.map(|ts| ts.into_iter().map(|t| {
+        if let Some(obj) = t.as_object() {
+            let mut f = serde_json::Map::new();
+            if let Some(n) = obj.get("name") { f.insert("name".to_string(), n.clone()); }
+            if let Some(d) = obj.get("description") { f.insert("description".to_string(), d.clone()); }
+            if let Some(s) = obj.get("input_schema") { f.insert("parameters".to_string(), s.clone()); }
+            serde_json::json!({
+                "type": "function",
+                "function": f
+            })
+        } else {
+            t
+        }
+    }).collect());
+
+    let tool_choice = req.tool_choice.map(|tc| {
+        if let Some(obj) = tc.as_object() {
+            if obj.get("type").and_then(|v| v.as_str()) == Some("tool") {
+                if let Some(name) = obj.get("name") {
+                    return serde_json::json!({
+                        "type": "function",
+                        "function": { "name": name }
+                    });
+                }
+            }
+        }
+        tc
+    });
+
+    OpenAIRequest {
+        model: req.model,
+        messages,
+        stream: req.stream,
+        temperature: req.temperature,
+        max_tokens: Some(req.max_tokens),
+        top_p: req.top_p,
+        stop: req.stop_sequences,
+        tools,
+        tool_choice,
+        top_k: req.top_k,
+        user: None,
+        extra: req.metadata.map(|m| {
+            let mut map = serde_json::Map::new();
+            map.insert("metadata".to_string(), m);
+            map
+        }).unwrap_or_default(),
+    }
+}
+
+pub fn openai_response_to_anthropic(resp: OpenAIResponse) -> AnthropicResponse {
+    let mut content = Vec::new();
+    if let Some(msg_content) = resp.choices.first().and_then(|c| c.message.content.as_ref()) {
+        if let Some(s) = msg_content.as_str() {
+            content.push(AnthropicContentBlock {
+                block_type: "text".to_string(),
+                text: s.to_string(),
+            });
+        }
+    }
+    
+    let usage = resp.usage.unwrap_or(OpenAIUsage {
+        prompt_tokens: 0,
+        completion_tokens: 0,
+        total_tokens: 0,
+    });
+
+    AnthropicResponse {
+        id: resp.id,
+        response_type: "message".to_string(),
+        role: "assistant".to_string(),
+        content,
+        model: resp.model,
+        stop_reason: resp.choices.first().and_then(|c| c.finish_reason.clone()),
+        usage: AnthropicUsage {
+            input_tokens: usage.prompt_tokens,
+            output_tokens: usage.completion_tokens,
+        },
+    }
+}
