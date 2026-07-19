@@ -58,6 +58,8 @@ pub struct AnthropicRequest {
     pub metadata: Option<serde_json::Value>,
     #[serde(default)]
     pub stream: bool,
+    #[serde(flatten)]
+    pub extra: serde_json::Map<String, serde_json::Value>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -594,6 +596,7 @@ pub fn openai_to_anthropic(
             .as_ref()
             .map(|u| serde_json::json!({ "user_id": u })),
         stream: override_stream,
+        extra: Default::default(),
     }
 }
 
@@ -2207,6 +2210,30 @@ pub fn anthropic_request_to_openai(req: AnthropicRequest) -> OpenAIRequest {
         tc
     });
 
+    let mut extra = req.metadata.map(|m| {
+        let mut map = serde_json::Map::new();
+        map.insert("metadata".to_string(), m);
+        map
+    }).unwrap_or_default();
+
+    if let Some(output_config) = req.extra.get("output_config") {
+        if let Some(format) = output_config.get("format") {
+            if format.get("type").and_then(|v| v.as_str()) == Some("json_schema") {
+                if let Some(schema) = format.get("schema") {
+                    let response_format = serde_json::json!({
+                        "type": "json_schema",
+                        "json_schema": {
+                            "name": "json_response",
+                            "strict": true,
+                            "schema": schema
+                        }
+                    });
+                    extra.insert("response_format".to_string(), response_format);
+                }
+            }
+        }
+    }
+
     OpenAIRequest {
         model: req.model,
         messages,
@@ -2219,11 +2246,7 @@ pub fn anthropic_request_to_openai(req: AnthropicRequest) -> OpenAIRequest {
         tool_choice,
         top_k: req.top_k,
         user: None,
-        extra: req.metadata.map(|m| {
-            let mut map = serde_json::Map::new();
-            map.insert("metadata".to_string(), m);
-            map
-        }).unwrap_or_default(),
+        extra,
     }
 }
 

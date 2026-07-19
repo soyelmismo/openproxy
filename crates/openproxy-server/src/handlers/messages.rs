@@ -239,14 +239,16 @@ impl<S: Stream<Item = Bytes> + Unpin> Stream for OpenAIToAnthropicSseStream<S> {
                                 if let Some(first) = choices.first() {
                                     if let Some(delta) = &first.delta {
                                         if let Some(content) = &delta.content {
-                                            let block_delta = serde_json::json!({
-                                                "type": "content_block_delta",
-                                                "index": 0,
-                                                "delta": {"type": "text_delta", "text": content}
-                                            });
-                                            out.extend_from_slice(b"event: content_block_delta\ndata: ");
-                                            out.extend_from_slice(serde_json::to_string(&block_delta).unwrap().as_bytes());
-                                            out.extend_from_slice(b"\n\n");
+                                            if !content.is_empty() {
+                                                let block_delta = serde_json::json!({
+                                                    "type": "content_block_delta",
+                                                    "index": 0,
+                                                    "delta": {"type": "text_delta", "text": content}
+                                                });
+                                                out.extend_from_slice(b"event: content_block_delta\ndata: ");
+                                                out.extend_from_slice(serde_json::to_string(&block_delta).unwrap().as_bytes());
+                                                out.extend_from_slice(b"\n\n");
+                                            }
                                         }
                                     }
                                     
@@ -259,9 +261,16 @@ impl<S: Stream<Item = Bytes> + Unpin> Stream for OpenAIToAnthropicSseStream<S> {
                                         out.extend_from_slice(serde_json::to_string(&stop).unwrap().as_bytes());
                                         out.extend_from_slice(b"\n\n");
                                         
+                                        let anthropic_stop = match finish_reason.as_str() {
+                                            "length" => "max_tokens",
+                                            "tool_calls" | "function_call" => "tool_use",
+                                            "content_filter" => "stop_sequence",
+                                            _ => "end_turn",
+                                        };
+
                                         let msg_delta = serde_json::json!({
                                             "type": "message_delta",
-                                            "delta": {"stop_reason": finish_reason},
+                                            "delta": {"stop_reason": anthropic_stop},
                                             "usage": {"output_tokens": 0}
                                         });
                                         out.extend_from_slice(b"event: message_delta\ndata: ");
