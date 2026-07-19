@@ -233,7 +233,7 @@ impl<S: Stream<Item = Bytes> + Unpin> Stream for OpenAIToAnthropicSseStream<S> {
                             if let Some(choices) = v.choices {
                                 if let Some(first) = choices.first() {
                                     if let Some(delta) = &first.delta {
-                                        if let Some(content) = delta.content {
+                                        if let Some(content) = &delta.content {
                                             let block_delta = serde_json::json!({
                                                 "type": "content_block_delta",
                                                 "index": 0,
@@ -245,7 +245,7 @@ impl<S: Stream<Item = Bytes> + Unpin> Stream for OpenAIToAnthropicSseStream<S> {
                                         }
                                     }
                                     
-                                    if let Some(finish_reason) = first.finish_reason {
+                                    if let Some(finish_reason) = &first.finish_reason {
                                         let stop = serde_json::json!({
                                             "type": "content_block_stop",
                                             "index": 0
@@ -286,21 +286,17 @@ impl<S: Stream<Item = Bytes> + Unpin> Stream for OpenAIToAnthropicSseStream<S> {
 }
 
 #[derive(serde::Deserialize)]
-struct OpenAISseProbe<'a> {
-    #[serde(borrow)]
-    choices: Option<Vec<OpenAIChoiceProbe<'a>>>,
+struct OpenAISseProbe {
+    choices: Option<Vec<OpenAIChoiceProbe>>,
 }
 
 #[derive(serde::Deserialize)]
-struct OpenAIChoiceProbe<'a> {
-    #[serde(borrow)]
-    delta: Option<OpenAIDeltaProbe<'a>>,
-    #[serde(borrow)]
-    finish_reason: Option<&'a str>,
+struct OpenAIChoiceProbe {
+    delta: Option<OpenAIDeltaProbe>,
+    finish_reason: Option<String>,
 }
 
 #[derive(serde::Deserialize)]
-struct OpenAIDeltaProbe<'a> {
-    #[serde(borrow)]
-    content: Option<&'a str>,
+struct OpenAIDeltaProbe {
+    content: Option<String>,
 }
