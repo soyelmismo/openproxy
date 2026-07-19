@@ -95,6 +95,9 @@ function formatJson(value: unknown): string {
   let s: string;
   try { s = typeof value === "string" ? value : JSON.stringify(value, null, 2); }
   catch (_e: unknown) { s = String(value); }
+  if (s.length > 50000) {
+    return s.slice(0, 50000) + `\n… [UI truncated, ${s.length - 50000} more chars]`;
+  }
   return s;
 }
 
@@ -124,7 +127,7 @@ const NO_RESPONSE_PLACEHOLDER_TEXT =
  *  this fixed order, and given the `log-detail-key-pinned` class so
  *  operators can spot them quickly. */
 const PINNED_REQUEST_KEYS: readonly string[] = [
-  "model", "messages", "tools", "temperature", "stream", "max_tokens",
+  "model", "system", "messages", "tools", "temperature", "stream", "max_tokens",
 ];
 
 /** A single tool call extracted from an OpenAI chat-completion
@@ -855,10 +858,37 @@ function renderRequestTab(requestBody: unknown, createdAt?: string): TemplateRes
             : role === "user" ? "log-detail-role-user"
             : role === "tool" ? "log-detail-role-tool"
             : "";
+          let anthropicToolUses = 0;
+          let anthropicToolResults = 0;
+          let anthropicToolResultIds: string[] = [];
+          if (Array.isArray(content)) {
+            for (const block of content) {
+              if (block && typeof block === "object") {
+                const b = block as Record<string, unknown>;
+                if (b["type"] === "tool_use") anthropicToolUses++;
+                if (b["type"] === "tool_result") {
+                  anthropicToolResults++;
+                  if (typeof b["tool_use_id"] === "string") anthropicToolResultIds.push(b["tool_use_id"]);
+                }
+              }
+            }
+          }
+
           const extras: string[] = [];
           if (typeof name === "string") extras.push(name);
           if (typeof toolCallId === "string") extras.push(`tool_call_id: ${toolCallId}`);
           if (Array.isArray(toolCalls) && toolCalls.length > 0) extras.push(`${toolCalls.length} tool call(s)`);
+          
+          if (anthropicToolUses > 0) extras.push(`${anthropicToolUses} tool call(s)`);
+          if (anthropicToolResults > 0) {
+            let resStr = `${anthropicToolResults} tool result(s)`;
+            if (anthropicToolResultIds.length > 0) {
+              const ids = anthropicToolResultIds.map(id => id.split("-")[0] + "…").join(", ");
+              resStr += ` (${ids})`;
+            }
+            extras.push(resStr);
+          }
+
           const extraStr: TemplateResult | null = extras.length > 0
             ? html` <span class="log-detail-key-meta">${extras.join(" · ")}</span>`
             : null;
@@ -866,8 +896,21 @@ function renderRequestTab(requestBody: unknown, createdAt?: string): TemplateRes
           let preview = "";
           if (typeof content === "string") {
             preview = content.length > 80 ? content.slice(0, 80) + "…" : content;
+          } else if (Array.isArray(content)) {
+            const textBlock = content.find(b => b && typeof b === "object" && b["type"] === "text" && typeof b["text"] === "string") as Record<string, unknown> | undefined;
+            if (textBlock) {
+              const text = textBlock["text"] as string;
+              preview = text.length > 80 ? text.slice(0, 80) + "…" : text;
+            } else if (anthropicToolUses > 0) {
+              preview = "[tool_use]";
+            } else if (anthropicToolResults > 0) {
+              preview = "[tool_result]";
+            } else {
+              const s = JSON.stringify(content);
+              preview = s.length > 80 ? s.slice(0, 80) + "…" : s;
+            }
           } else if (content != null) {
-            const s = typeof content === "string" ? content : JSON.stringify(content);
+            const s = JSON.stringify(content);
             preview = s.length > 80 ? s.slice(0, 80) + "…" : s;
           }
           const previewStr: TemplateResult | null = preview.length > 0
@@ -1604,6 +1647,34 @@ function summarizeRequestBody(body: unknown): string {
       truncatedMessages.push(`… [${arr.length - MAX_MESSAGES} more messages omitted]`);
     }
     obj["messages"] = truncatedMessages;
+  }
+  // Also truncate the `system` field if present
+  if (obj["system"] != null) {
+    const sys = obj["system"];
+    const MAX_MSG_LEN = 500;
+    if (typeof sys === "string" && sys.length > MAX_MSG_LEN) {
+      obj["system"] = sys.slice(0, MAX_MSG_LEN) + `… [truncated, ${sys.length - MAX_MSG_LEN} more chars]`;
+    } else if (Array.isArray(sys)) {
+      const truncatedSys: unknown[] = [];
+      const showCount = Math.min(sys.length, 10);
+      for (let i = 0; i < showCount; i++) {
+        const block = sys[i];
+        if (block && typeof block === "object" && !Array.isArray(block)) {
+          const b = { ...(block as Record<string, unknown>) };
+          const text = b["text"];
+          if (typeof text === "string" && text.length > MAX_MSG_LEN) {
+            b["text"] = text.slice(0, MAX_MSG_LEN) + `… [truncated, ${text.length - MAX_MSG_LEN} more chars]`;
+          }
+          truncatedSys.push(b);
+        } else {
+          truncatedSys.push(block);
+        }
+      }
+      if (sys.length > 10) {
+        truncatedSys.push(`… [${sys.length - 10} more system blocks omitted]`);
+      }
+      obj["system"] = truncatedSys;
+    }
   }
   // Also truncate the `tools` array if present — can be large.
   const tools: unknown = obj["tools"];

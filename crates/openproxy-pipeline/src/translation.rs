@@ -2171,14 +2171,108 @@ pub fn anthropic_request_to_openai(req: AnthropicRequest) -> OpenAIRequest {
         });
     }
     for m in req.messages {
-        messages.push(OpenAIMessage {
-            role: m.role,
-            content: Some(m.content),
-            name: None,
-            tool_call_id: None,
-            tool_calls: None,
-            extra: Default::default(),
-        });
+        let mut text_blocks = Vec::new();
+        let mut tool_calls = Vec::new();
+        let mut tool_results = Vec::new();
+
+        if let Some(arr) = m.content.as_array() {
+            for block in arr {
+                if let Some(typ) = block.get("type").and_then(|v| v.as_str()) {
+                    match typ {
+                        "text" => {
+                            if let Some(t) = block.get("text").and_then(|v| v.as_str()) {
+                                text_blocks.push(t.to_string());
+                            }
+                        }
+                        "tool_use" => {
+                            if let (Some(id), Some(name), Some(input)) = (
+                                block.get("id").and_then(|v| v.as_str()),
+                                block.get("name").and_then(|v| v.as_str()),
+                                block.get("input"),
+                            ) {
+                                tool_calls.push(serde_json::json!({
+                                    "id": id,
+                                    "type": "function",
+                                    "function": {
+                                        "name": name,
+                                        "arguments": serde_json::to_string(input).unwrap_or_else(|_| "{}".to_string())
+                                    }
+                                }));
+                            }
+                        }
+                        "tool_result" => {
+                            if let Some(id) = block.get("tool_use_id").and_then(|v| v.as_str()) {
+                                let res_content = block.get("content").unwrap_or(&serde_json::Value::Null);
+                                tool_results.push((id.to_string(), res_content.clone()));
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+            }
+        } else if let Some(s) = m.content.as_str() {
+            text_blocks.push(s.to_string());
+        }
+
+        if m.role == "assistant" {
+            let tc = if tool_calls.is_empty() { None } else { Some(tool_calls) };
+            let content = if text_blocks.is_empty() && tc.is_some() {
+                // If there are only tool calls, OpenAI allows content to be null/empty string.
+                Some(serde_json::Value::Null)
+            } else {
+                Some(serde_json::Value::String(text_blocks.join("\n\n")))
+            };
+            messages.push(OpenAIMessage {
+                role: m.role.clone(),
+                content,
+                name: None,
+                tool_call_id: None,
+                tool_calls: tc,
+                extra: Default::default(),
+            });
+        } else if m.role == "user" {
+            // Anthropic allows tool_result in user messages.
+            for (id, content) in tool_results {
+                let text_res = if let Some(s) = content.as_str() {
+                    s.to_string()
+                } else if let Some(arr) = content.as_array() {
+                    arr.iter()
+                        .filter_map(|v| v.get("text").and_then(|t| t.as_str()))
+                        .collect::<Vec<_>>()
+                        .join("\n")
+                } else {
+                    content.to_string()
+                };
+                messages.push(OpenAIMessage {
+                    role: "tool".to_string(),
+                    content: Some(serde_json::Value::String(text_res)),
+                    name: None,
+                    tool_call_id: Some(id),
+                    tool_calls: None,
+                    extra: Default::default(),
+                });
+            }
+            if !text_blocks.is_empty() {
+                messages.push(OpenAIMessage {
+                    role: m.role.clone(),
+                    content: Some(serde_json::Value::String(text_blocks.join("\n\n"))),
+                    name: None,
+                    tool_call_id: None,
+                    tool_calls: None,
+                    extra: Default::default(),
+                });
+            }
+        } else {
+            // Fallback for any other role
+            messages.push(OpenAIMessage {
+                role: m.role,
+                content: Some(m.content),
+                name: None,
+                tool_call_id: None,
+                tool_calls: None,
+                extra: Default::default(),
+            });
+        }
     }
 
     let tools = req.tools.map(|ts| ts.into_iter().map(|t| {
