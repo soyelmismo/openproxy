@@ -150,6 +150,7 @@ pub async fn anthropic_messages(
         let sse_stream = OpenAIToAnthropicSseStream {
             inner: merged,
             has_started: false,
+            has_finished: false,
             message_id: format!("msg_{}", request_id),
             model: openai_req.model.clone(),
         };
@@ -182,6 +183,7 @@ pub async fn anthropic_messages(
 struct OpenAIToAnthropicSseStream<S> {
     inner: S,
     has_started: bool,
+    has_finished: bool,
     message_id: String,
     model: String,
 }
@@ -248,31 +250,35 @@ impl<S: Stream<Item = Bytes> + Unpin> Stream for OpenAIToAnthropicSseStream<S> {
                                     }
                                     
                                     if let Some(finish_reason) = &first.finish_reason {
-                                        let stop = serde_json::json!({
-                                            "type": "content_block_stop",
-                                            "index": 0
-                                        });
-                                        out.extend_from_slice(b"event: content_block_stop\ndata: ");
-                                        out.extend_from_slice(serde_json::to_string(&stop).unwrap().as_bytes());
-                                        out.extend_from_slice(b"\n\n");
-                                        
-                                        let anthropic_stop = match finish_reason.as_str() {
-                                            "length" => "max_tokens",
-                                            "tool_calls" | "function_call" => "tool_use",
-                                            "content_filter" => "stop_sequence",
-                                            _ => "end_turn",
-                                        };
+                                        if !this.has_finished {
+                                            this.has_finished = true;
+                                            
+                                            let stop = serde_json::json!({
+                                                "type": "content_block_stop",
+                                                "index": 0
+                                            });
+                                            out.extend_from_slice(b"event: content_block_stop\ndata: ");
+                                            out.extend_from_slice(serde_json::to_string(&stop).unwrap().as_bytes());
+                                            out.extend_from_slice(b"\n\n");
+                                            
+                                            let anthropic_stop = match finish_reason.as_str() {
+                                                "length" => "max_tokens",
+                                                "tool_calls" | "function_call" => "tool_use",
+                                                "content_filter" => "stop_sequence",
+                                                _ => "end_turn",
+                                            };
 
-                                        let msg_delta = serde_json::json!({
-                                            "type": "message_delta",
-                                            "delta": {"stop_reason": anthropic_stop},
-                                            "usage": {"output_tokens": 0}
-                                        });
-                                        out.extend_from_slice(b"event: message_delta\ndata: ");
-                                        out.extend_from_slice(serde_json::to_string(&msg_delta).unwrap().as_bytes());
-                                        out.extend_from_slice(b"\n\n");
-                                        
-                                        out.extend_from_slice(b"event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n");
+                                            let msg_delta = serde_json::json!({
+                                                "type": "message_delta",
+                                                "delta": {"stop_reason": anthropic_stop},
+                                                "usage": {"output_tokens": 0}
+                                            });
+                                            out.extend_from_slice(b"event: message_delta\ndata: ");
+                                            out.extend_from_slice(serde_json::to_string(&msg_delta).unwrap().as_bytes());
+                                            out.extend_from_slice(b"\n\n");
+                                            
+                                            out.extend_from_slice(b"event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n");
+                                        }
                                     }
                                 }
                             }
