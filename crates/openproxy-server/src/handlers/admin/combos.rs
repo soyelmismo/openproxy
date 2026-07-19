@@ -193,14 +193,17 @@ pub async fn test_combo_targets(
                 // uniformly; a 504 here would just wipe the
                 // button state with no data.
                 tracing::warn!(combo_id = id, "test-all fan-out exceeded 180s budget");
-                return Err(crate::error::ApiError(openproxy_types::CoreError::Internal(
-                    "test-all exceeded 180s budget; partial results dropped".into(),
-                )));
+                return Err(crate::error::ApiError(
+                    openproxy_types::CoreError::Internal(
+                        "test-all exceeded 180s budget; partial results dropped".into(),
+                    ),
+                ));
             }
         };
 
         Ok(Json(results))
-    }.await;
+    }
+    .await;
     res.into()
 }
 

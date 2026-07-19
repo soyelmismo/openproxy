@@ -172,7 +172,10 @@ mod tests {
         assert_eq!(PriorityMode::parse("strict"), Ok(PriorityMode::Strict));
         assert_eq!(PriorityMode::parse("lkgp"), Ok(PriorityMode::Lkgp));
         assert_eq!(PriorityMode::parse("weighted"), Ok(PriorityMode::Weighted));
-        assert_eq!(PriorityMode::parse("least_used"), Ok(PriorityMode::LeastUsed));
+        assert_eq!(
+            PriorityMode::parse("least_used"),
+            Ok(PriorityMode::LeastUsed)
+        );
         assert_eq!(PriorityMode::parse("p2c"), Ok(PriorityMode::P2c));
         assert!(PriorityMode::parse("unknown").is_err());
     }

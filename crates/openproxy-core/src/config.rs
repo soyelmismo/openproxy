@@ -103,7 +103,6 @@ impl Default for CompressionConfig {
 /// `usage` table from growing without bound), but `usage_retention_days`
 /// controls how old rows must be before they're deleted.
 
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct QuotaSyncConfig {
     #[serde(default = "default_quota_sync_enabled")]

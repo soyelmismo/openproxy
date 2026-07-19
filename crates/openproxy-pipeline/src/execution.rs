@@ -123,7 +123,9 @@ impl Pipeline {
         let oauth_registry = self.config.oauth_provider_registry.clone();
 
         tokio::task::spawn_blocking(move || {
-            let models_map = repo.get_models_by_row_ids(&model_row_ids).unwrap_or_default();
+            let models_map = repo
+                .get_models_by_row_ids(&model_row_ids)
+                .unwrap_or_default();
             let (accounts_map, kiro_map, antigravity_map) =
                 repo.get_accounts_meta(&account_ids).unwrap_or_default();
             let providers_map = repo

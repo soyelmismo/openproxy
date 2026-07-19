@@ -321,10 +321,17 @@ pub(crate) async fn run_test_for_model(
                 } else {
                     match tokio::task::block_in_place(|| {
                         let w = s.db_pool().writer();
-                        core_accounts::decrypt_api_key(&w, aid, s.master_key().as_ref()).or_else(|_| {
-                            core_accounts::decrypt_access_token(&w, aid, s.master_key().as_ref())
-                        })
-                    }).map_err(ApiError)
+                        core_accounts::decrypt_api_key(&w, aid, s.master_key().as_ref()).or_else(
+                            |_| {
+                                core_accounts::decrypt_access_token(
+                                    &w,
+                                    aid,
+                                    s.master_key().as_ref(),
+                                )
+                            },
+                        )
+                    })
+                    .map_err(ApiError)
                     {
                         Ok(k) => k,
                         Err(ApiError(e)) => {
