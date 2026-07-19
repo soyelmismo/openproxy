@@ -54,7 +54,8 @@ pub async fn oauth_authorize(
             "redirect_uri": redirect_uri,
             "state": state,
         })))
-    }.await;
+    }
+    .await;
     res.into()
 }
 
@@ -110,7 +111,9 @@ pub async fn oauth_exchange(
                         10,   // default priority
                         None, // extra_config_json
                     )
-                }).await.unwrap()?
+                })
+                .await
+                .unwrap()?
             }
         };
         let expires_at = token.expires_in.map(|secs| {
@@ -123,7 +126,7 @@ pub async fn oauth_exchange(
             let provider_specific = provider_impl.provider_specific_from_token(&token);
             let email = provider_impl.email_from_token(&token);
             let master_key = s.master_key().clone();
-            
+
             // Clone token fields since they'll move into the closure
             let access_token = token.access_token.clone();
             let refresh_token = token.refresh_token.clone();
@@ -144,7 +147,9 @@ pub async fn oauth_exchange(
                     provider_specific.as_deref(),
                     email.as_deref(),
                 )
-            }).await.unwrap()?;
+            })
+            .await
+            .unwrap()?;
         }
 
         // Post-exchange hook. For Antigravity this calls
@@ -170,7 +175,8 @@ pub async fn oauth_exchange(
             "account_id": account_id.0,
             "token_type": token.token_type,
         })))
-    }.await;
+    }
+    .await;
     res.into()
 }
 
@@ -205,7 +211,9 @@ pub async fn oauth_device_code(
                 let w = pool.writer();
                 openproxy_core::oauth_tickets::create_ticket(&w, &provider, &dar)
             }
-        }).await.unwrap()?;
+        })
+        .await
+        .unwrap()?;
 
         Ok(Json(serde_json::json!({
             "device_code": dar.device_code,
@@ -215,7 +223,8 @@ pub async fn oauth_device_code(
             "expires_in": dar.expires_in,
             "interval": dar.interval,
         })))
-    }.await;
+    }
+    .await;
     res.into()
 }
 
