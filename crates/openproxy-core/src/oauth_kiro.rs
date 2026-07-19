@@ -693,7 +693,6 @@ impl OAuthProvider for KiroOAuthProvider {
             let db_pool = db_pool.clone();
             let master_key = master_key.clone();
 
-
             tokio::task::spawn_blocking(move || {
                 let conn = db_pool.writer();
                 let access_token =
