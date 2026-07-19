@@ -400,10 +400,7 @@ struct OpenAIDeltaProbe {
 
 #[derive(serde::Deserialize)]
 struct OpenAIToolCallProbe {
-    index: u32,
     id: Option<String>,
-    #[serde(rename = "type")]
-    call_type: Option<String>,
     function: Option<OpenAIFunctionCallProbe>,
 }
 
