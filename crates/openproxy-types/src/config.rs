@@ -14,6 +14,12 @@ pub enum CompressionMode {
 pub struct ServerConfig {
     pub bind: String,
     pub request_max_body_bytes: usize,
+    #[serde(default = "default_rate_limit_requests")]
+    pub rate_limit_requests_per_minute: u32,
+}
+
+fn default_rate_limit_requests() -> u32 {
+    1000
 }
 
 impl Default for ServerConfig {
@@ -21,6 +27,7 @@ impl Default for ServerConfig {
         Self {
             bind: "0.0.0.0:8787".into(),
             request_max_body_bytes: 10 * 1024 * 1024,
+            rate_limit_requests_per_minute: 1000,
         }
     }
 }
