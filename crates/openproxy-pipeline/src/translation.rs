@@ -41,7 +41,7 @@ pub struct AnthropicRequest {
     pub messages: Vec<AnthropicMessage>,
     pub max_tokens: u32,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub system: Option<String>,
+    pub system: Option<serde_json::Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub temperature: Option<f32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -551,7 +551,7 @@ pub fn openai_to_anthropic(
     let system = if system_parts.is_empty() {
         None
     } else {
-        Some(system_parts.join("\n\n"))
+        Some(serde_json::Value::String(system_parts.join("\n\n")))
     };
 
     AnthropicRequest {
@@ -2148,9 +2148,19 @@ mod tests {
 pub fn anthropic_request_to_openai(req: AnthropicRequest) -> OpenAIRequest {
     let mut messages = Vec::with_capacity(req.messages.len() + req.system.is_some() as usize);
     if let Some(sys) = req.system {
+        let sys_str = if let Some(s) = sys.as_str() {
+            s.to_string()
+        } else if let Some(arr) = sys.as_array() {
+            arr.iter()
+                .filter_map(|v| v.get("text").and_then(|t| t.as_str()))
+                .collect::<Vec<_>>()
+                .join("\n")
+        } else {
+            sys.to_string()
+        };
         messages.push(OpenAIMessage {
             role: "system".to_string(),
-            content: Some(serde_json::Value::String(sys)),
+            content: Some(serde_json::Value::String(sys_str)),
             name: None,
             tool_call_id: None,
             tool_calls: None,
