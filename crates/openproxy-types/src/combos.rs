@@ -147,3 +147,42 @@ pub struct ComboTargetWithModel {
     #[serde(default = "default_true")]
     pub provider_active: bool,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_strategy_parse() {
+        assert_eq!(Strategy::parse("priority"), Ok(Strategy::Priority));
+        assert_eq!(Strategy::parse("round_robin"), Ok(Strategy::RoundRobin));
+        assert_eq!(Strategy::parse("shuffle"), Ok(Strategy::Shuffle));
+        assert!(Strategy::parse("unknown").is_err());
+    }
+
+    #[test]
+    fn test_strategy_as_str() {
+        assert_eq!(Strategy::Priority.as_str(), "priority");
+        assert_eq!(Strategy::RoundRobin.as_str(), "round_robin");
+        assert_eq!(Strategy::Shuffle.as_str(), "shuffle");
+    }
+
+    #[test]
+    fn test_priority_mode_parse() {
+        assert_eq!(PriorityMode::parse("strict"), Ok(PriorityMode::Strict));
+        assert_eq!(PriorityMode::parse("lkgp"), Ok(PriorityMode::Lkgp));
+        assert_eq!(PriorityMode::parse("weighted"), Ok(PriorityMode::Weighted));
+        assert_eq!(PriorityMode::parse("least_used"), Ok(PriorityMode::LeastUsed));
+        assert_eq!(PriorityMode::parse("p2c"), Ok(PriorityMode::P2c));
+        assert!(PriorityMode::parse("unknown").is_err());
+    }
+
+    #[test]
+    fn test_priority_mode_as_str() {
+        assert_eq!(PriorityMode::Strict.as_str(), "strict");
+        assert_eq!(PriorityMode::Lkgp.as_str(), "lkgp");
+        assert_eq!(PriorityMode::Weighted.as_str(), "weighted");
+        assert_eq!(PriorityMode::LeastUsed.as_str(), "least_used");
+        assert_eq!(PriorityMode::P2c.as_str(), "p2c");
+    }
+}
