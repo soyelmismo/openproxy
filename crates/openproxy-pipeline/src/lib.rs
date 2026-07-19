@@ -38,8 +38,6 @@ pub mod usage_tracker;
 pub mod worker;
 
 pub mod schema_cleaner;
-#[cfg(test)]
-pub mod tests;
 
 #[cfg(test)]
 mod repository_tests;
