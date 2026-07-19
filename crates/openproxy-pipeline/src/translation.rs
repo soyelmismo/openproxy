@@ -86,7 +86,7 @@ pub struct AnthropicResponse {
     pub response_type: String,
     /// "assistant"
     pub role: String,
-    pub content: Vec<AnthropicContentBlock>,
+    pub content: Vec<serde_json::Value>,
     pub model: String,
     #[serde(default)]
     pub stop_reason: Option<String>,
@@ -683,8 +683,8 @@ pub fn anthropic_to_openai(resp: &AnthropicResponse) -> OpenAIResponse {
     let combined: String = resp
         .content
         .iter()
-        .filter(|b| b.block_type == "text")
-        .map(|b| b.text.as_str())
+        .filter(|b| b.get("type").and_then(|t| t.as_str()) == Some("text"))
+        .filter_map(|b| b.get("text").and_then(|t| t.as_str()))
         .collect::<Vec<_>>()
         .join("");
 
@@ -896,7 +896,7 @@ pub enum AnthropicSseEvent {
     },
     ContentBlockStart {
         index: u32,
-        content_block: AnthropicContentBlock,
+        content_block: serde_json::Value,
     },
     ContentBlockDelta {
         index: u32,
@@ -1199,10 +1199,10 @@ mod tests {
             id: "msg_1".to_string(),
             response_type: "message".to_string(),
             role: "assistant".to_string(),
-            content: vec![AnthropicContentBlock {
-                block_type: "text".to_string(),
-                text: "ok".to_string(),
-            }],
+            content: vec![json!({
+                "type": "text",
+                "text": "ok",
+            })],
             model: "claude-test".to_string(),
             stop_reason: Some("max_tokens".to_string()),
             usage: AnthropicUsage {
@@ -2252,14 +2252,45 @@ pub fn anthropic_request_to_openai(req: AnthropicRequest) -> OpenAIRequest {
 
 pub fn openai_response_to_anthropic(resp: OpenAIResponse) -> AnthropicResponse {
     let mut content = Vec::new();
-    if let Some(msg_content) = resp.choices.first().and_then(|c| c.message.content.as_ref()) {
-        if let Some(s) = msg_content.as_str() {
-            content.push(AnthropicContentBlock {
-                block_type: "text".to_string(),
-                text: s.to_string(),
-            });
+    let mut finish_reason = None;
+    if let Some(first_choice) = resp.choices.first() {
+        if let Some(msg_content) = first_choice.message.content.as_ref() {
+            if let Some(s) = msg_content.as_str() {
+                if !s.is_empty() {
+                    content.push(serde_json::json!({
+                        "type": "text",
+                        "text": s.to_string()
+                    }));
+                }
+            }
         }
+        
+        if let Some(tool_calls) = &first_choice.message.tool_calls {
+            for tc in tool_calls {
+                if let (Some(id), Some(function)) = (tc.get("id"), tc.get("function")) {
+                    let name = function.get("name").and_then(|n| n.as_str()).unwrap_or_default();
+                    let arguments_str = function.get("arguments").and_then(|a| a.as_str()).unwrap_or("{}");
+                    let input = serde_json::from_str::<serde_json::Value>(arguments_str).unwrap_or_else(|_| serde_json::json!({}));
+                    content.push(serde_json::json!({
+                        "type": "tool_use",
+                        "id": id,
+                        "name": name,
+                        "input": input
+                    }));
+                }
+            }
+        }
+        
+        finish_reason = first_choice.finish_reason.clone();
     }
+    
+    let anthropic_stop = match finish_reason.as_deref() {
+        Some("length") => Some("max_tokens".to_string()),
+        Some("tool_calls") | Some("function_call") => Some("tool_use".to_string()),
+        Some("content_filter") => Some("stop_sequence".to_string()),
+        Some(_) => Some("end_turn".to_string()),
+        None => None,
+    };
     
     let usage = resp.usage.unwrap_or(OpenAIUsage {
         prompt_tokens: 0,
@@ -2273,7 +2304,7 @@ pub fn openai_response_to_anthropic(resp: OpenAIResponse) -> AnthropicResponse {
         role: "assistant".to_string(),
         content,
         model: resp.model,
-        stop_reason: resp.choices.first().and_then(|c| c.finish_reason.clone()),
+        stop_reason: anthropic_stop,
         usage: AnthropicUsage {
             input_tokens: usage.prompt_tokens,
             output_tokens: usage.completion_tokens,

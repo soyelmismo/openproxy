@@ -153,6 +153,9 @@ pub async fn anthropic_messages(
             has_finished: false,
             message_id: format!("msg_{}", request_id),
             model: openai_req.model.clone(),
+            block_index: 0,
+            in_text_block: false,
+            in_tool_block: false,
         };
         
         let body = axum::body::Body::from_stream(sse_stream);
@@ -186,6 +189,9 @@ struct OpenAIToAnthropicSseStream<S> {
     has_finished: bool,
     message_id: String,
     model: String,
+    block_index: u32,
+    in_text_block: bool,
+    in_tool_block: bool,
 }
 
 impl<S: Stream<Item = Bytes> + Unpin> Stream for OpenAIToAnthropicSseStream<S> {
@@ -222,9 +228,11 @@ impl<S: Stream<Item = Bytes> + Unpin> Stream for OpenAIToAnthropicSseStream<S> {
                                 out.extend_from_slice(serde_json::to_string(&start_event).unwrap().as_bytes());
                                 out.extend_from_slice(b"\n\n");
                                 
+                                this.in_text_block = true;
+                                this.block_index = 0;
                                 let block_start = serde_json::json!({
                                     "type": "content_block_start",
-                                    "index": 0,
+                                    "index": this.block_index,
                                     "content_block": {"type": "text", "text": ""}
                                 });
                                 out.extend_from_slice(b"event: content_block_start\ndata: ");
@@ -237,14 +245,85 @@ impl<S: Stream<Item = Bytes> + Unpin> Stream for OpenAIToAnthropicSseStream<S> {
                                     if let Some(delta) = &first.delta {
                                         if let Some(content) = &delta.content {
                                             if !content.is_empty() {
+                                                if this.in_tool_block {
+                                                    let stop = serde_json::json!({"type": "content_block_stop", "index": this.block_index});
+                                                    out.extend_from_slice(b"event: content_block_stop\ndata: ");
+                                                    out.extend_from_slice(serde_json::to_string(&stop).unwrap().as_bytes());
+                                                    out.extend_from_slice(b"\n\n");
+                                                    this.in_tool_block = false;
+                                                    this.block_index += 1;
+                                                }
+                                                if !this.in_text_block {
+                                                    this.in_text_block = true;
+                                                    let start = serde_json::json!({
+                                                        "type": "content_block_start",
+                                                        "index": this.block_index,
+                                                        "content_block": {"type": "text", "text": ""}
+                                                    });
+                                                    out.extend_from_slice(b"event: content_block_start\ndata: ");
+                                                    out.extend_from_slice(serde_json::to_string(&start).unwrap().as_bytes());
+                                                    out.extend_from_slice(b"\n\n");
+                                                }
                                                 let block_delta = serde_json::json!({
                                                     "type": "content_block_delta",
-                                                    "index": 0,
+                                                    "index": this.block_index,
                                                     "delta": {"type": "text_delta", "text": content}
                                                 });
                                                 out.extend_from_slice(b"event: content_block_delta\ndata: ");
                                                 out.extend_from_slice(serde_json::to_string(&block_delta).unwrap().as_bytes());
                                                 out.extend_from_slice(b"\n\n");
+                                            }
+                                        }
+                                        
+                                        if let Some(tool_calls) = &delta.tool_calls {
+                                            for tc in tool_calls {
+                                                if let Some(id) = &tc.id {
+                                                    if this.in_text_block {
+                                                        let stop = serde_json::json!({"type": "content_block_stop", "index": this.block_index});
+                                                        out.extend_from_slice(b"event: content_block_stop\ndata: ");
+                                                        out.extend_from_slice(serde_json::to_string(&stop).unwrap().as_bytes());
+                                                        out.extend_from_slice(b"\n\n");
+                                                        this.in_text_block = false;
+                                                        this.block_index += 1;
+                                                    }
+                                                    if this.in_tool_block {
+                                                        let stop = serde_json::json!({"type": "content_block_stop", "index": this.block_index});
+                                                        out.extend_from_slice(b"event: content_block_stop\ndata: ");
+                                                        out.extend_from_slice(serde_json::to_string(&stop).unwrap().as_bytes());
+                                                        out.extend_from_slice(b"\n\n");
+                                                        this.block_index += 1;
+                                                    }
+                                                    this.in_tool_block = true;
+                                                    let name = tc.function.as_ref().and_then(|f| f.name.clone()).unwrap_or_default();
+                                                    let start = serde_json::json!({
+                                                        "type": "content_block_start",
+                                                        "index": this.block_index,
+                                                        "content_block": {
+                                                            "type": "tool_use",
+                                                            "id": id,
+                                                            "name": name,
+                                                            "input": {}
+                                                        }
+                                                    });
+                                                    out.extend_from_slice(b"event: content_block_start\ndata: ");
+                                                    out.extend_from_slice(serde_json::to_string(&start).unwrap().as_bytes());
+                                                    out.extend_from_slice(b"\n\n");
+                                                }
+                                                
+                                                if let Some(func) = &tc.function {
+                                                    if let Some(args) = &func.arguments {
+                                                        if !args.is_empty() {
+                                                            let block_delta = serde_json::json!({
+                                                                "type": "content_block_delta",
+                                                                "index": this.block_index,
+                                                                "delta": {"type": "input_json_delta", "partial_json": args}
+                                                            });
+                                                            out.extend_from_slice(b"event: content_block_delta\ndata: ");
+                                                            out.extend_from_slice(serde_json::to_string(&block_delta).unwrap().as_bytes());
+                                                            out.extend_from_slice(b"\n\n");
+                                                        }
+                                                    }
+                                                }
                                             }
                                         }
                                     }
@@ -253,13 +332,15 @@ impl<S: Stream<Item = Bytes> + Unpin> Stream for OpenAIToAnthropicSseStream<S> {
                                         if !this.has_finished {
                                             this.has_finished = true;
                                             
-                                            let stop = serde_json::json!({
-                                                "type": "content_block_stop",
-                                                "index": 0
-                                            });
-                                            out.extend_from_slice(b"event: content_block_stop\ndata: ");
-                                            out.extend_from_slice(serde_json::to_string(&stop).unwrap().as_bytes());
-                                            out.extend_from_slice(b"\n\n");
+                                            if this.in_text_block || this.in_tool_block {
+                                                let stop = serde_json::json!({
+                                                    "type": "content_block_stop",
+                                                    "index": this.block_index
+                                                });
+                                                out.extend_from_slice(b"event: content_block_stop\ndata: ");
+                                                out.extend_from_slice(serde_json::to_string(&stop).unwrap().as_bytes());
+                                                out.extend_from_slice(b"\n\n");
+                                            }
                                             
                                             let anthropic_stop = match finish_reason.as_str() {
                                                 "length" => "max_tokens",
@@ -314,4 +395,20 @@ struct OpenAIChoiceProbe {
 #[derive(serde::Deserialize)]
 struct OpenAIDeltaProbe {
     content: Option<String>,
+    tool_calls: Option<Vec<OpenAIToolCallProbe>>,
+}
+
+#[derive(serde::Deserialize)]
+struct OpenAIToolCallProbe {
+    index: u32,
+    id: Option<String>,
+    #[serde(rename = "type")]
+    call_type: Option<String>,
+    function: Option<OpenAIFunctionCallProbe>,
+}
+
+#[derive(serde::Deserialize)]
+struct OpenAIFunctionCallProbe {
+    name: Option<String>,
+    arguments: Option<String>,
 }
