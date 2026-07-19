@@ -147,14 +147,15 @@ pub async fn anthropic_messages(
         merged.push(main_stream);
         merged.push(error_stream);
 
-        let translated_stream = OpenAIToAnthropicSseStream {
+        let sse_stream = OpenAIToAnthropicSseStream {
             inner: merged,
             has_started: false,
+            is_done: false,
             message_id: format!("msg_{}", request_id),
             model: openai_req.model.clone(),
         };
         
-        let body = axum::body::Body::from_stream(translated_stream);
+        let body = axum::body::Body::from_stream(sse_stream);
         Ok((
             [(
                 axum::http::header::CONTENT_TYPE,
@@ -182,6 +183,7 @@ pub async fn anthropic_messages(
 struct OpenAIToAnthropicSseStream<S> {
     inner: S,
     has_started: bool,
+    is_done: bool,
     message_id: String,
     model: String,
 }
@@ -191,6 +193,9 @@ impl<S: Stream<Item = Bytes> + Unpin> Stream for OpenAIToAnthropicSseStream<S> {
 
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         let this = self.get_mut();
+        if this.is_done {
+            return Poll::Ready(None);
+        }
         
         loop {
             match Pin::new(&mut this.inner).poll_next(cx) {
@@ -264,6 +269,7 @@ impl<S: Stream<Item = Bytes> + Unpin> Stream for OpenAIToAnthropicSseStream<S> {
                                         out.extend_from_slice(b"\n\n");
                                         
                                         out.extend_from_slice(b"event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n");
+                                        this.is_done = true;
                                     }
                                 }
                             }
