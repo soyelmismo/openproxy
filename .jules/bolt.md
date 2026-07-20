@@ -16,3 +16,6 @@
 ## 2024-03-20 - [N+1 SQLite Queries in sync loops]
 **Learning:** Checking for row existence (`SELECT EXISTS`) iteratively within a rust loop creates massive single query overheads, and using `transaction()` is invalid on a `&Connection` borrowing context without refactoring to `&mut`.
 **Action:** Move query statements ahead of loops using `IN` or fetching pre-filtered `HashSet`s. Manually execute `BEGIN` and `COMMIT` through SQL strings if you cannot mutate the connection structure directly. Use `vec!["?"; len].join(",")` to generate `IN` clauses without depending on external crates like `itertools`.
+## 2025-02-23 - Sort and Dedup key allocations
+**Learning:** Using `sort_unstable_by_key(|id| id.0.clone())` and `dedup_by_key(|id| id.0.clone())` allocates a new `String` for every single comparison during the sorting/deduping process. This creates a massive number of temporary heap allocations on hot paths.
+**Action:** Replace `by_key` with `.clone()` closures with the more explicit `sort_unstable_by(|a, b| a.0.cmp(&b.0))` and `dedup_by(|a, b| a.0 == b.0)`. This performs the exact same operation without any allocations.
