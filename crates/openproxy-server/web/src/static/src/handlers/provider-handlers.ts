@@ -18,32 +18,11 @@ import { html, render, type TemplateResult } from "lit-html";
 import { extractApiErrorMessage } from "../lib/escape.js";
 import { syncModelRowActive, updateFilterTabCounts } from "../components/model-table.js";
 import { requestUpdate } from "../state/reactive.js";
-import { showToast } from "../components/toast.js";
+import { ensureModalRoot, flashButton, showApiError } from "../lib/ui-utils.js";
 
 interface RefreshResult {
   models_refreshed?: number;
   new_model_ids?: string[];
-}
-
-function ensureModalRoot(): HTMLElement {
-  let root = document.getElementById("modal-root");
-  if (!root) {
-    root = document.createElement("div");
-    root.id = "modal-root";
-    root.style.cssText = "position:relative;z-index:1000;";
-    document.body.appendChild(root);
-  }
-  return root;
-}
-
-// Briefly paint a button a colour to confirm a click landed.
-// 1.5s is enough for the user to see the result before the label
-// reverts. Mirrors the old `flashButton()` helper in app.js.
-function flashButton(btn: HTMLButtonElement | null, text: string, color: string): void {
-  if (!btn) return;
-  btn.textContent = text;
-  btn.style.background = color;
-  setTimeout(() => { btn.style.background = ""; }, 1500);
 }
 
 // POST /admin/providers/:id/refresh — re-discover the model
@@ -91,8 +70,7 @@ export async function refreshProvider(providerId: string, e: Event | null): Prom
     state.modelsComplete = true;
     requestUpdate();
   } catch (err: unknown) {
-    const msg = err instanceof Error ? err.message : String(err);
-    showToast("Error: " + msg, "error");
+    showApiError(err, "Error");
   } finally {
     if (btn) {
       btn.disabled = false;
@@ -119,8 +97,7 @@ export async function refreshAllProviders(): Promise<void> {
     state.modelsComplete = true;
     requestUpdate();
   } catch (err: unknown) {
-    const msg = err instanceof Error ? err.message : String(err);
-    showToast("Error: " + msg, "error");
+    showApiError(err, "Error");
   }
 }
 
@@ -208,8 +185,7 @@ export async function createProvider(e: Event, wrapper?: HTMLElement): Promise<v
     state.providers = await api("/providers") as typeof state.providers;
     navigate();
   } catch (err: unknown) {
-    const msg = err instanceof Error ? err.message : String(err);
-    showToast("Error: " + msg, "error");
+    showApiError(err, "Error");
   }
 }
 
@@ -227,8 +203,7 @@ export async function deleteProvider(id: string): Promise<void> {
     state.accounts = state.accounts.filter((a) => a.provider_id !== id);
     navigate();
   } catch (err: unknown) {
-    const msg = err instanceof Error ? err.message : String(err);
-    showToast("Error: " + msg, "error");
+    showApiError(err, "Error");
   }
 }
 
@@ -294,8 +269,7 @@ export async function toggleProviderActive(providerId: string, newActive: boolea
     state.providers = await api("/providers") as typeof state.providers;
     navigate();
   } catch (err: unknown) {
-    const msg = err instanceof Error ? err.message : String(err);
-    showToast("Error: " + msg, "error");
+    showApiError(err, "Error");
   }
 }
 
@@ -334,8 +308,7 @@ export async function renameProviderPrompt(providerId: string, currentName: stri
     state.providers = await api("/providers") as typeof state.providers;
     navigate();
   } catch (err: unknown) {
-    const msg = err instanceof Error ? err.message : String(err);
-    showToast("Error: " + msg, "error");
+    showApiError(err, "Error");
   }
 }
 
@@ -374,8 +347,7 @@ export async function bulkToggleModels(providerId: string, active: boolean): Pro
     // tabs so the totals reflect the new state.
     updateFilterTabCounts(providerId, allProviderModels);
   } catch (err: unknown) {
-    const msg2 = err instanceof Error ? err.message : String(err);
-    showToast("Error: " + msg2, "error");
+    showApiError(err, "Error");
   }
 }
 
@@ -398,8 +370,7 @@ export async function setHealth(id: number, e: Event | null): Promise<void> {
     const a = (state.accounts || []).find((x) => x.id === id);
     if (a) a.health_status = health as typeof a.health_status;
   } catch (err: unknown) {
-    const msg = err instanceof Error ? err.message : String(err);
-    showToast("Error: " + msg, "error");
+    showApiError(err, "Error");
     // Don't re-render on error — see patchComboField in
     // combo-handlers.ts for the rationale. The user's select
     // already shows their choice; a re-render would close any
@@ -441,8 +412,7 @@ export async function refreshAccountQuota(accountId: number, e: Event | null): P
     requestUpdate();
   } catch (err: unknown) {
     if (btn) flashButton(btn, "✗", "#f38ba8");
-    const msg = err instanceof Error ? err.message : String(err);
-    setTimeout(() => showToast("Error: " + msg, "error"), 100);
+    showApiError(err, "Error");
   } finally {
     if (btn) {
       setTimeout(() => { btn.disabled = false; btn.textContent = oldText; }, 1500);

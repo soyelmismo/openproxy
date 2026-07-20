@@ -13,6 +13,7 @@
 import { html, render, type TemplateResult } from "lit-html";
 import { state } from "../state/index.js";
 import { showToast } from "./toast.js";
+import { ensureModalRoot } from "../lib/ui-utils.js";
 import { liveLogsStore } from "../state/live-logs-store.js";
 import { api } from "../lib/api.js";
 
@@ -1123,23 +1124,6 @@ function logDetailTabClick(which: string, _e: Event): void {
 function initializeLogDetailTabs(): void {
   currentActiveTab = "request";
   renderModal();
-}
-
-/** Get or create the `#modal-root` container that holds all
- *  dashboard modals. Lives at `<body>` level so a re-render of
- *  `#main` doesn't destroy the modal. */
-function ensureModalRoot(): HTMLElement {
-  let root = document.getElementById("modal-root");
-  if (!root) {
-    root = document.createElement("div");
-    root.id = "modal-root";
-    // z-index 1000 puts modals above the page chrome without
-    // needing !important hacks. The .modal-bg rule in CSS already
-    // uses position: fixed; this just ensures stacking order.
-    root.style.cssText = "position:relative;z-index:1000;";
-    document.body.appendChild(root);
-  }
-  return root;
 }
 
 /** Remove a `.log-detail-modal` element AND its wrapper parent (the

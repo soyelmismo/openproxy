@@ -5,18 +5,8 @@ import { state } from "../state/index.js";
 import { api } from "../state/api.js";
 import { requestUpdate } from "../state/reactive.js";
 import { showToast } from "../components/toast.js";
+import { ensureModalRoot, showApiError } from "../lib/ui-utils.js";
 import { t } from "../i18n/index.js";
-
-function ensureModalRoot(): HTMLElement {
-  let root = document.getElementById("modal-root");
-  if (!root) {
-    root = document.createElement("div");
-    root.id = "modal-root";
-    root.style.cssText = "position:relative;z-index:1000;";
-    document.body.appendChild(root);
-  }
-  return root;
-}
 
 export async function reloadProxies(): Promise<void> {
   try {
@@ -44,8 +34,7 @@ export async function syncProxies(): Promise<void> {
     }
     await reloadProxies();
   } catch (e: unknown) {
-    const msg = e instanceof Error ? e.message : String(e);
-    showToast("Sync failed: " + msg, "error");
+    showApiError(e, "Sync failed");
   }
 }
 
@@ -72,8 +61,7 @@ export async function testProxy(id: string): Promise<void> {
     }
     await reloadProxies();
   } catch (e: unknown) {
-    const msg = e instanceof Error ? e.message : String(e);
-    showToast("Test failed: " + msg, "error");
+    showApiError(e, "Test failed");
   }
 }
 
@@ -82,8 +70,7 @@ export async function testAllProxies(): Promise<void> {
     await api("/proxies/test-all", { method: "POST" });
     showToast(t("proxies.toast.test_all_started"), "info");
   } catch (e: unknown) {
-    const msg = e instanceof Error ? e.message : String(e);
-    showToast("Test All failed: " + msg, "error");
+    showApiError(e, "Test All failed");
   }
 }
 
@@ -94,8 +81,7 @@ export async function deleteProxy(id: string): Promise<void> {
     showToast(t("proxies.toast.delete_success"), "success");
     await reloadProxies();
   } catch (e: unknown) {
-    const msg = e instanceof Error ? e.message : String(e);
-    showToast("Delete failed: " + msg, "error");
+    showApiError(e, "Delete failed");
   }
 }
 
@@ -209,7 +195,6 @@ export async function createCustomProxy(e: Event, wrapper: HTMLElement): Promise
     wrapper.remove();
     await reloadProxies();
   } catch (err: unknown) {
-    const msg = err instanceof Error ? err.message : String(err);
-    showToast("Error: " + msg, "error");
+    showApiError(err, "Error");
   }
 }

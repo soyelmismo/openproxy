@@ -16,17 +16,7 @@ import { state } from "../state/index.js";
 import { api } from "../state/api.js";
 import { requestUpdate } from "../state/reactive.js";
 import { showToast } from "../components/toast.js";
-
-function ensureModalRoot(): HTMLElement {
-  let root = document.getElementById("modal-root");
-  if (!root) {
-    root = document.createElement("div");
-    root.id = "modal-root";
-    root.style.cssText = "position:relative;z-index:1000;";
-    document.body.appendChild(root);
-  }
-  return root;
-}
+import { ensureModalRoot, showApiError } from "../lib/ui-utils.js";
 
 export function showCreateAccount(providerId: string): void {
   const wrapper = document.createElement("div");
@@ -95,8 +85,7 @@ export async function createAccount(providerId: string, e: Event, wrapper?: HTML
     if (wrapper) wrapper.remove(); else closeCreateAccount();
     requestUpdate();
   } catch (err: unknown) {
-    const msg = err instanceof Error ? err.message : String(err);
-    showToast("Error: " + msg, "error");
+    showApiError(err, "Error");
   }
 }
 
@@ -107,8 +96,7 @@ export async function deleteAccount(id: number): Promise<void> {
     state.accounts = await api("/accounts") as typeof state.accounts;
     requestUpdate();
   } catch (e: unknown) {
-    const msg = e instanceof Error ? e.message : String(e);
-    showToast("Error: " + msg, "error");
+    showApiError(e, "Error");
   }
 }
 
@@ -117,8 +105,7 @@ export async function testAccount(id: number): Promise<void> {
     const res = await api("/accounts/" + id + "/test", { method: "POST" }) as { status?: string; ok?: boolean } | null;
     showToast(`Account #${id}: ${res && res.status ? res.status : "tested"}`, res && res.ok ? "success" : "info");
   } catch (e: unknown) {
-    const msg = e instanceof Error ? e.message : String(e);
-    showToast(`Account test failed: ${msg}`, "error");
+    showApiError(e, "Account test failed");
   }
 }
 
@@ -181,7 +168,6 @@ export async function updateAccountKey(id: number, e: Event, wrapper?: HTMLEleme
     // sibling row) and steal focus from any input the user might
     // still be editing. Mirrors patchComboField in combo-handlers.ts.
   } catch (err: unknown) {
-    const msg = err instanceof Error ? err.message : String(err);
-    showToast("Error: " + msg, "error");
+    showApiError(err, "Error");
   }
 }

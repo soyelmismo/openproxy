@@ -18,21 +18,7 @@ import type { Combo, CreateComboInput, PriorityMode, CooldownMode } from "../lib
 import { requestUpdate } from "../state/reactive.js";
 import { showToast } from "../components/toast.js";
 
-// ---- Tooltips (English explanations, kept in one place so they
-// can be reused between the create form and the detail view). ----
-
-export const PRIORITY_MODE_TOOLTIPS: Record<PriorityMode, string> = {
-  strict: "Walk targets in manual priority order. The first healthy target is always tried first.",
-  lkgp: "Least Known Good Provider — prefer the target with the most recent successful request. Falls back to priority order for never-tried targets. An exploration rate adds priority-weighted randomness: earlier targets (which the operator positioned first for speed/intelligence) are more likely to be explored than later fallback targets.",
-  weighted: "Weighted random selection — each target's probability is proportional to its weight. Set weights in the targets table below.",
-  least_used: "Prefer the target with the fewest total requests in the selection window. Useful for distributing load evenly.",
-  p2c: "Power of Two Choices — pick two random targets, choose the one with fewer recent failures. Good balance of simplicity and load distribution.",
-};
-
-export const COOLDOWN_MODE_TOOLTIPS: Record<CooldownMode, string> = {
-  flat: "Fixed cooldown duration after each failure. The target is parked for the same amount of time regardless of how many times it has failed.",
-  exponential: "Cooldown grows with each failure: base × factor^(failures-1), capped at max. A flapping target gets progressively longer cooldowns, giving it time to recover.",
-};
+import { PRIORITY_MODE_TOOLTIPS, PRIORITY_MODE_LABELS, COOLDOWN_MODE_TOOLTIPS } from "../lib/constants.js";
 
 export const PARAM_TOOLTIPS = {
   exploration_rate: "Probability (0.0–1.0) of trying a different target instead of the best-known one. 0.1 = 10% exploration. The exploration is priority-weighted: targets positioned first in the combo (lower priority order) are more likely to be explored, respecting the operator's intent that earlier = preferred for speed/intelligence, later = fallback with less desired concurrency. Higher exploration rates discover alternatives faster but may pick suboptimal targets.",
@@ -42,14 +28,6 @@ export const PARAM_TOOLTIPS = {
   window_secs: "How far back to look at usage data for the selection algorithm. 3600 = 1 hour.",
   weight: "Relative weight for weighted random selection. Higher = more likely to be selected. Default 1.",
 } as const;
-
-const PRIORITY_MODE_LABELS: Record<PriorityMode, string> = {
-  strict: "Strict",
-  lkgp: "LKGP",
-  weighted: "Weighted",
-  least_used: "Least Used",
-  p2c: "P2C",
-};
 
 const COOLDOWN_MODE_LABELS: Record<CooldownMode, string> = {
   flat: "Flat",
@@ -66,17 +44,6 @@ export function priorityModeOptions(selected: PriorityMode): TemplateResult {
 export function cooldownModeOptions(selected: CooldownMode): TemplateResult {
   const modes: CooldownMode[] = ["flat", "exponential"];
   return html`${modes.map((m) => html`<option value=${m} ?selected=${m === selected}>${COOLDOWN_MODE_LABELS[m]}</option>`)}`;
-}
-
-function ensureModalRoot(): HTMLElement {
-  let root = document.getElementById("modal-root");
-  if (!root) {
-    root = document.createElement("div");
-    root.id = "modal-root";
-    root.style.cssText = "position:relative;z-index:1000;";
-    document.body.appendChild(root);
-  }
-  return root;
 }
 
 function createComboTemplate(wrapper: HTMLElement): TemplateResult {
@@ -241,8 +208,7 @@ export async function createCombo(e: Event, wrapper?: HTMLElement): Promise<void
     if (wrapper) wrapper.remove(); else closeCreateCombo();
     requestUpdate();
   } catch (err: unknown) {
-    const msg = err instanceof Error ? err.message : String(err);
-    alert("Error: " + msg);
+    showApiError(err, "Error");
   }
 }
 
@@ -252,8 +218,7 @@ export async function deleteCombo(id: number): Promise<void> {
     await api("/combos/" + id, { method: "DELETE" });
     requestUpdate();
   } catch (e: unknown) {
-    const msg = e instanceof Error ? e.message : String(e);
-    alert("Error: " + msg);
+    showApiError(e, "Error");
   }
 }
 
@@ -428,8 +393,7 @@ export async function testAllTargets(comboId: number, e: Event | null): Promise<
     state.comboTestResults[comboId] = Array.isArray(results) ? results : [];
     requestUpdate();
   } catch (err: unknown) {
-    const msg = err instanceof Error ? err.message : String(err);
-    alert("Test all failed: " + msg);
+    showApiError(err, "Test all failed");
   } finally {
     if (btn) { btn.disabled = false; btn.textContent = oldText || "🧪 Test all"; }
   }

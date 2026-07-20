@@ -18,21 +18,8 @@
 import { html, render, type TemplateResult } from "lit-html";
 import { state } from "../state/index.js";
 import { createCustomModel } from "../handlers/model-handlers.js";
+import { ensureModalRoot } from "../lib/ui-utils.js";
 import type { Provider } from "../lib/types/api.js";
-
-function ensureModalRoot(): HTMLElement {
-  let root = document.getElementById("modal-root");
-  if (!root) {
-    root = document.createElement("div");
-    root.id = "modal-root";
-    // z-index 1000 puts modals above the page chrome without
-    // needing !important hacks. The .modal-bg rule in CSS already
-    // uses position: fixed; this just ensures stacking order.
-    root.style.cssText = "position:relative;z-index:1000;";
-    document.body.appendChild(root);
-  }
-  return root;
-}
 
 function customModelFormTemplate(providerId: string): TemplateResult {
   const provider: Provider | undefined = state.providers.find((p) => p.id === providerId);

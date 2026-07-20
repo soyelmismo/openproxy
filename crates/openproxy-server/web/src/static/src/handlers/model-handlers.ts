@@ -29,17 +29,7 @@ import { statusPillClass } from "../lib/constants.js";
 import type { Model } from "../lib/types/api.js";
 import { requestUpdate } from "../state/reactive.js";
 import { showToast } from "../components/toast.js";
-
-function ensureModalRoot(): HTMLElement {
-  let root = document.getElementById("modal-root");
-  if (!root) {
-    root = document.createElement("div");
-    root.id = "modal-root";
-    root.style.cssText = "position:relative;z-index:1000;";
-    document.body.appendChild(root);
-  }
-  return root;
-}
+import { ensureModalRoot, flashButton, showApiError } from "../lib/ui-utils.js";
 
 interface TestResult {
   status: number;
@@ -120,8 +110,7 @@ export async function updateModel(rowId: number, e: Event, wrapper?: HTMLElement
     }
     requestUpdate();
   } catch (err: unknown) {
-    const msg = err instanceof Error ? err.message : String(err);
-    showToast("Error: " + msg, "error");
+    showApiError(err, "Error");
   }
 }
 
@@ -158,8 +147,7 @@ export async function toggleModel(rowId: number, newActive: boolean | unknown, e
       updateFilterTabCounts(ctx, allProviderModels);
     }
   } catch (err: unknown) {
-    const msg = err instanceof Error ? err.message : String(err);
-    showToast("Error: " + msg, "error");
+    showApiError(err, "Error");
   }
 }
 
@@ -202,24 +190,13 @@ export async function testModel(rowId: number, _modelId: string, _e: Event | nul
     }
   } catch (err: unknown) {
     flashButton(btn, "✗", "#f38ba8");
-    const msg = err instanceof Error ? err.message : String(err);
-    setTimeout(() => showToast("Test failed: " + msg, "error"), 100);
+    setTimeout(() => showApiError(err, "Test failed"), 100);
   } finally {
     setTimeout(() => {
       btn.disabled = false;
       btn.textContent = oldText;
     }, 1500);
   }
-}
-
-// Brief button colour flash. Same shape as the one in
-// provider-handlers.ts — duplicated here to keep the modules
-// dependency-free.
-function flashButton(btn: HTMLButtonElement | null, text: string, color: string): void {
-  if (!btn) return;
-  btn.textContent = text;
-  btn.style.background = color;
-  setTimeout(() => { btn.style.background = ""; }, 1500);
 }
 
 export async function deleteModel(rowId: number): Promise<void> {
@@ -229,8 +206,7 @@ export async function deleteModel(rowId: number): Promise<void> {
     state.models = state.models.filter((m) => m.row_id !== rowId);
     requestUpdate();
   } catch (err: unknown) {
-    const msg = err instanceof Error ? err.message : String(err);
-    showToast("Error: " + msg, "error");
+    showApiError(err, "Error");
   }
 }
 
@@ -593,8 +569,7 @@ export async function updateAutoActivate(providerId: string, e: Event | null): P
     // normalized the string) reflects the truth.
     state.providers = await api("/providers") as typeof state.providers;
   } catch (err: unknown) {
-    const msg = err instanceof Error ? err.message : String(err);
-    showToast("Error: " + msg, "error");
+    showApiError(err, "Error");
     // Don't re-render on error — see patchComboField in
     // combo-handlers.ts for the rationale. The user's input
     // already shows their text; a re-render would close any
@@ -633,8 +608,7 @@ export async function createCustomModel(providerId: string, e: Event): Promise<v
     state.modelsComplete = true;
     requestUpdate();
   } catch (err: unknown) {
-    const msg = err instanceof Error ? err.message : String(err);
-    showToast("Error: " + msg, "error");
+    showApiError(err, "Error");
   }
 }
 

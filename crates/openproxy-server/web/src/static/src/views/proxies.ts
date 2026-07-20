@@ -2,7 +2,8 @@
 
 import { html, type TemplateResult } from 'lit-html';
 import { state } from "../state/index.js";
-import { mountView, requestUpdate } from "../state/reactive.js";
+import { requestUpdate } from "../state/reactive.js";
+import { createView } from "../lib/view-utils.js";
 import {
   syncProxies,
   testProxy,
@@ -279,15 +280,10 @@ function renderProxies(): TemplateResult {
 }
 
 export async function mountProxies(): Promise<(() => void) | void> {
-  const main = document.getElementById("main");
-  if (!main) return;
   loadError = null;
-  const cleanup = mountView(main, renderProxies);
-  try {
-    await reloadProxies();
-  } catch (e: unknown) {
-    loadError = e instanceof Error ? e.message : String(e);
-    requestUpdate();
-  }
-  return cleanup;
+  return createView(
+    renderProxies,
+    async () => { await reloadProxies(); },
+    (msg) => { loadError = msg; },
+  );
 }
