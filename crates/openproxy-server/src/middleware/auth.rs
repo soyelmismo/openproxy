@@ -184,20 +184,26 @@ pub async fn auth_middleware(
     let bytes = match axum::body::to_bytes(body, 32 * 1024 * 1024).await {
         Ok(b) => b,
         Err(e) => {
-            if e.to_string().contains("length limit exceeded") {
+            let err_str = e.to_string();
+            if err_str.contains("length limit exceeded") {
                 return Ok(axum::response::IntoResponse::into_response(
                     axum::http::StatusCode::PAYLOAD_TOO_LARGE,
                 ));
             } else {
-                return Err(crate::error::ApiError(openproxy_types::CoreError::Parse(
-                    e.to_string(),
-                )));
+                let redacted = openproxy_core::cost::redact_error_msg(&err_str);
+                let message = crate::error::truncate_error_message(&redacted.0);
+                return Err(crate::error::ApiError(openproxy_types::CoreError::Parse(message)));
             }
         }
     };
 
     let parsed: openproxy_types::OpenAIRequest = serde_json::from_slice(&bytes)
-        .map_err(|e| crate::error::ApiError(openproxy_types::CoreError::Parse(e.to_string())))?;
+        .map_err(|e| {
+            let raw_err = e.to_string();
+            let redacted = openproxy_core::cost::redact_error_msg(&raw_err);
+            let message = crate::error::truncate_error_message(&redacted.0);
+            crate::error::ApiError(openproxy_types::CoreError::Parse(message))
+        })?;
 
     let requested_model = &parsed.model;
 

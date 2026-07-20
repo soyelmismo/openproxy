@@ -175,7 +175,12 @@ pub async fn anthropic_messages(
         let body_value = match result.final_response {
             Some(resp) => {
                 let anthropic_resp = openai_response_to_anthropic(resp);
-                serde_json::to_value(&anthropic_resp).unwrap_or_else(|e| serde_json::json!({"error": {"message": e.to_string()}}))
+                serde_json::to_value(&anthropic_resp).unwrap_or_else(|e| {
+                    let raw_err = e.to_string();
+                    let redacted = openproxy_core::cost::redact_error_msg(&raw_err);
+                    let message = crate::error::truncate_error_message(&redacted.0);
+                    serde_json::json!({"error": {"message": message}})
+                })
             },
             None => serde_json::json!({"error": {"message": "no response"}}),
         };
