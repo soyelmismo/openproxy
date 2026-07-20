@@ -410,6 +410,15 @@ src/utils.rs:25:    let x = 5;\n";
         assert_eq!(detect(""), ContentType::PlainText);
     }
 
+    #[test]
+    fn test_detect_tabular() {
+        let csv_content = "name, age, city\nAlice, 30, New York\nBob, 25, London";
+        assert_eq!(detect(csv_content), ContentType::Tabular);
+
+        let markdown_content = "| header 1 | header 2 |\n|---|---|\n| val 1 | val 2 |";
+        assert_eq!(detect(markdown_content), ContentType::Tabular);
+    }
+
     // ─── route_content() tests ─────────────────────────────────────────────
 
     #[test]
