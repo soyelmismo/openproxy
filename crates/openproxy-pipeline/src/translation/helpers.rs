@@ -1,5 +1,5 @@
-use serde_json::Value;
 use crate::translation::types::*;
+use serde_json::Value;
 
 pub fn message_content_to_text(content: &Option<serde_json::Value>) -> String {
     match content {
@@ -84,4 +84,3 @@ pub fn message_content_to_gemini_parts(content: &Option<serde_json::Value>) -> V
         }],
     }
 }
-

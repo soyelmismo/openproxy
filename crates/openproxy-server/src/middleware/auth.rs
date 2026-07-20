@@ -49,8 +49,7 @@ pub(crate) fn authenticate(
                 .get("x-api-key")
                 .and_then(|v| v.to_str().ok())
                 .map(|s| s.trim())
-        })
-    {
+        }) {
         Some(t) => t,
         None => {
             // MEDIUM fix (audit finding #5): the previous behaviour

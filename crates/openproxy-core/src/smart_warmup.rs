@@ -141,8 +141,13 @@ async fn run_warmup_cycle(
             let quota = quota.clone();
             let _ = tokio::task::spawn_blocking(move || {
                 let conn = db_pool.writer();
-                let _ = crate::accounts::set_quota(&conn, crate::ids::AccountId(account_id_i64), &quota);
-            }).await;
+                let _ = crate::accounts::set_quota(
+                    &conn,
+                    crate::ids::AccountId(account_id_i64),
+                    &quota,
+                );
+            })
+            .await;
         }
 
         // Check if 100% capacity
@@ -223,7 +228,8 @@ async fn run_warmup_cycle(
                          ON CONFLICT(history_key) DO UPDATE SET last_ts = excluded.last_ts",
                         rusqlite::params![history_key, now],
                     );
-                }).await;
+                })
+                .await;
             }
 
             // Pequeña pausa entre modelos para no acribillar la API
@@ -244,7 +250,8 @@ async fn run_warmup_cycle(
                 "DELETE FROM smart_warmup_history WHERE last_ts <= ?1",
                 rusqlite::params![cutoff],
             );
-        }).await;
+        })
+        .await;
     }
 }
 

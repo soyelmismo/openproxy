@@ -194,4 +194,3 @@ pub struct GeminiUsageMetadata {
 // =====================
 // Conversion functions
 // =====================
-
