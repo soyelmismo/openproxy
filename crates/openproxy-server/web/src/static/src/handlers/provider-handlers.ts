@@ -19,6 +19,7 @@ import { extractApiErrorMessage } from "../lib/escape.js";
 import { syncModelRowActive, updateFilterTabCounts } from "../components/model-table.js";
 import { requestUpdate } from "../state/reactive.js";
 import { ensureModalRoot, flashButton, showApiError } from "../lib/ui-utils.js";
+import { showToast } from "../components/toast.js";
 
 interface RefreshResult {
   models_refreshed?: number;

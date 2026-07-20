@@ -17,6 +17,7 @@ import { html, render, type TemplateResult } from "lit-html";
 import type { Combo, CreateComboInput, PriorityMode, CooldownMode } from "../lib/types/api.js";
 import { requestUpdate } from "../state/reactive.js";
 import { showToast } from "../components/toast.js";
+import { ensureModalRoot, showApiError } from "../lib/ui-utils.js";
 
 import { PRIORITY_MODE_TOOLTIPS, PRIORITY_MODE_LABELS, COOLDOWN_MODE_TOOLTIPS } from "../lib/constants.js";
 

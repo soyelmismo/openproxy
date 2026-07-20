@@ -5,4 +5,4 @@
 // Re-exports `chip()` from badge.ts for backwards compatibility.
 // New code should import `pill` (or `chip`) from badge.ts directly.
 
-export { chip } from "./badge.ts";
+export { chip } from "./badge.js";
