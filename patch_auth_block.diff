@@ -1,0 +1,18 @@
+<<<<<<< SEARCH
+    let pool = state.db_pool().clone();
+    let key = tokio::task::block_in_place(|| {
+        let r = pool.reader();
+        match core_api_keys::get_by_hash(&r, &key_hash).map_err(ApiError)? {
+            Some(k) => Ok(k),
+            None => Err(ApiError(CoreError::Auth("invalid api key".into()))),
+        }
+    })?;
+=======
+    let key = {
+        let r = state.db_pool().reader();
+        match core_api_keys::get_by_hash(&r, &key_hash).map_err(ApiError)? {
+            Some(k) => k,
+            None => return Err(ApiError(CoreError::Auth("invalid api key".into()))),
+        }
+    };
+>>>>>>> REPLACE

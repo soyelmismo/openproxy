@@ -49,8 +49,7 @@ pub(crate) fn authenticate(
                 .get("x-api-key")
                 .and_then(|v| v.to_str().ok())
                 .map(|s| s.trim())
-        })
-    {
+        }) {
         Some(t) => t,
         None => {
             // MEDIUM fix (audit finding #5): the previous behaviour
@@ -192,18 +191,19 @@ pub async fn auth_middleware(
             } else {
                 let redacted = openproxy_core::cost::redact_error_msg(&err_str);
                 let message = crate::error::truncate_error_message(&redacted.0);
-                return Err(crate::error::ApiError(openproxy_types::CoreError::Parse(message)));
+                return Err(crate::error::ApiError(openproxy_types::CoreError::Parse(
+                    message,
+                )));
             }
         }
     };
 
-    let parsed: openproxy_types::OpenAIRequest = serde_json::from_slice(&bytes)
-        .map_err(|e| {
-            let raw_err = e.to_string();
-            let redacted = openproxy_core::cost::redact_error_msg(&raw_err);
-            let message = crate::error::truncate_error_message(&redacted.0);
-            crate::error::ApiError(openproxy_types::CoreError::Parse(message))
-        })?;
+    let parsed: openproxy_types::OpenAIRequest = serde_json::from_slice(&bytes).map_err(|e| {
+        let raw_err = e.to_string();
+        let redacted = openproxy_core::cost::redact_error_msg(&raw_err);
+        let message = crate::error::truncate_error_message(&redacted.0);
+        crate::error::ApiError(openproxy_types::CoreError::Parse(message))
+    })?;
 
     let requested_model = &parsed.model;
 

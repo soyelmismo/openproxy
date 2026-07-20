@@ -139,7 +139,8 @@ impl UpstreamDispatcher {
                                 .split(',')
                                 .map(|s| s.trim())
                                 .collect();
-                            errors_list.contains(&"connect_error") || errors_list.contains(&"timeout")
+                            errors_list.contains(&"connect_error")
+                                || errors_list.contains(&"timeout")
                         }
                     };
 
@@ -150,10 +151,13 @@ impl UpstreamDispatcher {
                             "proxy rotation triggered: marking proxy as dead and clearing binding"
                         );
                         let _ = repo.update_proxy_status(bad_proxy_id, "dead", None);
-                        
+
                         let conn = conn_clone.lock();
-                        let _ =
-                            openproxy_db::providers::update_current_proxy(&conn, &provider_id, None);
+                        let _ = openproxy_db::providers::update_current_proxy(
+                            &conn,
+                            &provider_id,
+                            None,
+                        );
                         return true;
                     }
                 }
