@@ -615,7 +615,7 @@ impl PipelineRepository for SqlitePipelineRepository {
                     ))
                 }
             ).optional().map_err(|e| openproxy_types::error::CoreError::Database { message: "query accounts".into(), source: Some(Box::new(e)) })?;
-            if let Some((api_key, label, access, refresh, expires, oauth_prov, email, extra_json)) =
+            if let Some((api_key, label, access, refresh, expires, oauth_prov, _email, extra_json)) =
                 row
             {
                 raw_map.insert(
@@ -626,7 +626,7 @@ impl PipelineRepository for SqlitePipelineRepository {
                         access_token_encrypted: access,
                         refresh_token_encrypted: refresh,
                         expires_at: expires,
-                        oauth_provider_specific: oauth_prov,
+                        oauth_provider_specific: oauth_prov.clone(),
                         quota_session_reset_at: None,
                         quota_model_details: None,
                     },
