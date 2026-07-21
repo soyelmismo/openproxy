@@ -20,7 +20,7 @@ importers:
         version: 1.61.1
       '@types/node':
         specifier: ^22.19.21
-        version: 22.20.1
+        version: 22.19.21
       esbuild:
         specifier: ^0.28.1
         version: 0.28.1
@@ -191,8 +191,8 @@ packages:
     engines: {node: '>=18'}
     hasBin: true
 
-  '@types/node@22.20.1':
-    resolution: {integrity: sha512-EANqOCF9QFyra+4pfxUcX9STKJpCLjMbObVzljIJomAWSnuSIEAvyzEU53GaajbXJEgdh0iEcPL+DGvpUd4k1Q==}
+  '@types/node@22.19.21':
+    resolution: {integrity: sha512-VMeFBSCKQKmm2swI2kW51SFusDqekC6q9trBCvJ/JliDchFSuoYYKN7yVNjPthP1HKZcx3U1gI/wTcEBjEFKTA==}
 
   '@types/trusted-types@2.0.7':
     resolution: {integrity: sha512-ScaPdn1dQczgbl0QFTeTOmVHFULt394XJgOQNoyVhZ6r2vLnMLJfBPd53SB52T/3G36VI1/g2MZaX0cwDuXsfw==}
@@ -435,7 +435,7 @@ snapshots:
     dependencies:
       playwright: 1.61.1
 
-  '@types/node@22.20.1':
+  '@types/node@22.19.21':
     dependencies:
       undici-types: 6.21.0
 
