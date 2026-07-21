@@ -1769,7 +1769,10 @@ impl UpstreamDispatcher {
         // providers like nvidia-nim/minimax-m3 (Anthropic format)
         // that return 200 + empty content + null finish_reason.
         // Treat as error so the pipeline retries the next target.
-        let is_empty_stream = acc.as_ref().is_some_and(|a| a.is_empty());
+        // We only do this if stop_reason is None, because an empty
+        // stream with finish_reason="length" (max_tokens=1 cut it off)
+        // is perfectly valid.
+        let is_empty_stream = acc.as_ref().is_some_and(|a| a.is_empty()) && stop_reason.is_none();
         if is_empty_stream {
             let err = CoreError::UpstreamConnection(
                 "streaming response was empty (no content, no reasoning, no tool_calls) — treating as error for retry".to_string(),
