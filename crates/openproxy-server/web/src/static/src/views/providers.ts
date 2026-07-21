@@ -25,7 +25,7 @@ import { mountView, requestUpdate } from "../state/reactive.js";
 import { showToast } from "../components/toast.js";
 import { flashButton, showApiError } from "../lib/ui-utils.js";
 import { showCreateProvider } from "../handlers/provider-handlers.js";
-import { showCreateAccount, showUpdateAccountKey } from "../handlers/account-handlers.js";
+import { showCreateAccount, showUpdateAccountKey, updateAccountLabel, copyAccountApiKey } from "../handlers/account-handlers.js";
 import { showCustomModelForm } from "../components/model-custom-form.js";
 import { OAuthLogin } from "../handlers/oauth-handlers.js";
 import { renderQuotaCell } from "./quota-cell.js";
@@ -819,7 +819,12 @@ function renderConnectionsSection(provider: Provider, accounts: Account[]): Temp
             ? html`<td>${renderQuotaCell(a)}</td>`
             : html`<td><div class="quota-cell muted"><small>not supported by this provider</small></div></td>`;
           return html`<tr>
-            <td>${a.label || a.email || "—"}</td>
+            <td>
+              <span class="editable" title="Click to rename label" @click=${() => updateAccountLabel(a.id, a.label || a.email || "")}>
+                ${a.label || a.email || "—"}
+              </span>
+              <small>✎</small>
+            </td>
             <td>${a.priority}</td>
             <td>
               <select class=${"health-select " + (a.health_status || "unknown")} @change=${(e: Event) => onSetHealth(a.id, e)}>
@@ -833,6 +838,7 @@ function renderConnectionsSection(provider: Provider, accounts: Account[]): Temp
             <td>
               ${hasQuota ? html`<button class="small" @click=${(e: Event) => onRefreshAccountQuota(a.id, e)}>↻ Quota</button>` : html``}
               ${provider.id === 'antigravity' ? html`<button class="small" @click=${() => onApplyLocalCli(a.id)}>🖥️ Apply Local</button>` : html``}
+              <button class="small" title="Copy API Key" @click=${() => copyAccountApiKey(a.id)}>📋 Copy</button>
               <button class="small" @click=${() => onShowUpdateAccountKey(a.id)}>🔑 Key</button>
               <button class="small danger" @click=${() => onDeleteAccount(a.id)}>Delete</button>
             </td>

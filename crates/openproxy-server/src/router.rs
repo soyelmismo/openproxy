@@ -37,7 +37,7 @@
 
 use axum::{
     Json, Router, middleware,
-    routing::{delete, get, post, put},
+    routing::{delete, get, patch, post, put},
 };
 use serde_json::json;
 
@@ -211,7 +211,12 @@ pub fn build_router(state: AppState) -> Router {
         )
         .route(
             "/accounts/{id}/api-key",
-            put(handlers::admin::accounts::update_account_api_key),
+            get(handlers::admin::accounts::get_account_api_key)
+                .put(handlers::admin::accounts::update_account_api_key),
+        )
+        .route(
+            "/accounts/{id}/label",
+            patch(handlers::admin::accounts::update_account_label),
         )
         .route(
             "/accounts/{id}/refresh-quota",

@@ -74,6 +74,30 @@ pub async fn update_account_api_key(
         Ok(Json(serde_json::json!({ "id": id })))
     }
 }
+
+pub async fn get_account_api_key(
+    State(s): State<AppState>,
+    Path(id): Path<i64>,
+) -> ApiResult<Json<serde_json::Value>> {
+    crate::api_try! {
+        let r = s.db_pool().reader();
+        let key = core_admin::get_account_api_key(&r, s.master_key().as_ref(), AccountId::new(id))?;
+        Ok(Json(serde_json::json!({ "api_key": key })))
+    }
+}
+
+pub async fn update_account_label(
+    State(s): State<AppState>,
+    Path(id): Path<i64>,
+    Json(body): Json<core_admin::UpdateAccountLabelInput>,
+) -> ApiResult<Json<serde_json::Value>> {
+    crate::api_try! {
+        let w = s.db_pool().writer();
+        core_admin::update_account_label(&w, AccountId::new(id), body)?;
+        Ok(Json(serde_json::json!({ "id": id })))
+    }
+}
+
 pub async fn refresh_account_quota(
     State(s): State<AppState>,
     Path(account_id): Path<i64>,

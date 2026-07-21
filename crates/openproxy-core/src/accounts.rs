@@ -340,6 +340,29 @@ pub fn update_api_key(
     Ok(())
 }
 
+/// Update the label of an existing account.
+///
+/// Returns [`CoreError::AccountNotFound`] if no row matches `id`.
+pub fn update_label(
+    conn: &Connection,
+    id: AccountId,
+    label: Option<&str>,
+) -> Result<()> {
+    let affected = conn
+        .execute(
+            "UPDATE accounts SET label = ?1 WHERE id = ?2",
+            params![label, id.0],
+        )
+        .map_err(openproxy_db::error::map_db_error_ctx(format!(
+            "update label for account {}",
+            id.0
+        )))?;
+    if affected == 0 {
+        return Err(CoreError::AccountNotFound(id.0));
+    }
+    Ok(())
+}
+
 /// Delete an account by id. Idempotent: a missing id is a no-op (0 rows
 /// affected) and not an error, matching the providers module's delete policy.
 ///
