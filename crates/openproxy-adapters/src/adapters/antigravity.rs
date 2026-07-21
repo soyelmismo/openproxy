@@ -188,9 +188,15 @@ impl ProviderAdapter for AntigravityAdapter {
                 .as_ref()
                 .and_then(|m| m.antigravity_project.clone())
                 .unwrap_or_default();
+            let physical_model = match model.as_str() {
+                "gemini-3.1-pro-high" | "gemini-3.1-pro-medium" => "gemini-pro-agent",
+                "gemini-3.5-flash-high" => "gemini-3-flash-agent",
+                other => other,
+            };
+
             let wrapped = serde_json::json!({
                 "project": project,
-                "model": model.as_str(),
+                "model": physical_model,
                 "requestType": "agent",
                 "requestId": uuid::Uuid::new_v4().to_string(),
                 "userAgent": "antigravity",
