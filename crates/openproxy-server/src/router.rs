@@ -218,6 +218,10 @@ pub fn build_router(state: AppState) -> Router {
             post(handlers::admin::accounts::refresh_account_quota),
         )
         .route(
+            "/accounts/{id}/apply-local-cli",
+            post(handlers::admin::accounts::apply_account_local_cli),
+        )
+        .route(
             "/combos",
             get(handlers::admin::combos::list_combos).post(handlers::admin::combos::create_combo),
         )

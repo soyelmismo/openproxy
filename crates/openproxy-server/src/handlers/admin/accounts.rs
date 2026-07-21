@@ -170,3 +170,52 @@ pub(crate) async fn resolve_refresh_account(
         Ok((account_id, String::new()))
     }
 }
+
+pub async fn apply_account_local_cli(
+    State(s): State<AppState>,
+    Path(id): Path<i64>,
+) -> ApiResult<Json<serde_json::Value>> {
+    crate::api_try! {
+        let r = s.db_pool().reader();
+        let account_id = AccountId::new(id);
+        
+        let account = core_accounts::get(&r, account_id, s.master_key().as_ref())?
+            .ok_or_else(|| CoreError::AccountNotFound(account_id.0))?;
+
+        if account.provider_id.as_str() != "antigravity" {
+            return Err(CoreError::Validation("Only antigravity accounts can be injected into agy-cli".into()).into());
+        }
+
+        let access_token = core_accounts::decrypt_access_token(&r, account_id, s.master_key().as_ref())?;
+        let refresh_token = core_accounts::decrypt_refresh_token(&r, account_id, s.master_key().as_ref())?;
+
+        let payload = serde_json::json!({
+            "token": {
+                "access_token": access_token,
+                "token_type": "Bearer",
+                "refresh_token": refresh_token.unwrap_or_default(),
+                "expiry": account.expires_at.unwrap_or_default(),
+            },
+            "auth_method": "consumer"
+        });
+
+        // Ensure ~/.gemini/antigravity-cli directory exists
+        let cli_dir = dirs::home_dir()
+            .ok_or_else(|| CoreError::Validation("Could not determine home directory".into()))?
+            .join(".gemini")
+            .join("antigravity-cli");
+        
+        std::fs::create_dir_all(&cli_dir)
+            .map_err(|e| CoreError::Validation(format!("Failed to create ~/.gemini/antigravity-cli: {}", e)))?;
+
+        let token_file = cli_dir.join("antigravity-oauth-token");
+        
+        std::fs::write(&token_file, serde_json::to_string(&payload).unwrap())
+            .map_err(|e| CoreError::Validation(format!("Failed to write to {}: {}", token_file.display(), e)))?;
+
+        Ok(Json(serde_json::json!({
+            "success": true,
+            "path": token_file.to_string_lossy(),
+        })))
+    }
+}

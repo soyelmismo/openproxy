@@ -587,7 +587,7 @@ pub(crate) async fn run_test_for_model(
         });
     }
     
-    let mut headers = adapter.build_headers(&api_key, effective_target_format, &model.model_id);
+    let headers = adapter.build_headers(&api_key, effective_target_format, &model.model_id);
     
     let dummy_target = openproxy_types::context::ResolvedTarget {
         target: openproxy_types::combos::ComboTarget {

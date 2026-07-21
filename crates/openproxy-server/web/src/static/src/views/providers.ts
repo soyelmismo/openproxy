@@ -338,6 +338,17 @@ async function onDeleteAccount(id: number): Promise<void> {
   }
 }
 
+async function onApplyLocalCli(accountId: number): Promise<void> {
+  try {
+    const res = await api(`/accounts/${accountId}/apply-local-cli`, { method: "POST" }) as any;
+    if (res && res.success) {
+      showToast(`Credentials applied locally to ${res.path}`, "success");
+    }
+  } catch (err: unknown) {
+    showApiError(err, "Error applying credentials to local CLI");
+  }
+}
+
 // ---- Handlers: models section ----
 
 // THE BULK TOGGLE — the lag the operator reported. The previous
@@ -821,6 +832,7 @@ function renderConnectionsSection(provider: Provider, accounts: Account[]): Temp
             <td>${a.created_at || "—"}</td>
             <td>
               ${hasQuota ? html`<button class="small" @click=${(e: Event) => onRefreshAccountQuota(a.id, e)}>↻ Quota</button>` : html``}
+              ${provider.id === 'antigravity' ? html`<button class="small" @click=${() => onApplyLocalCli(a.id)}>🖥️ Apply Local</button>` : html``}
               <button class="small" @click=${() => onShowUpdateAccountKey(a.id)}>🔑 Key</button>
               <button class="small danger" @click=${() => onDeleteAccount(a.id)}>Delete</button>
             </td>
