@@ -1,9 +1,10 @@
 use super::*;
-use openproxy_types::{OpenAIMessage, OpenAIRequest};
 use once_cell::sync::Lazy;
+use openproxy_types::{OpenAIMessage, OpenAIRequest};
 use serde_json::Value;
 
-static REGION_RE: Lazy<regex::Regex> = Lazy::new(|| regex::Regex::new(r"[a-z]{2}-[a-z]+-[0-9]").unwrap());
+static REGION_RE: Lazy<regex::Regex> =
+    Lazy::new(|| regex::Regex::new(r"[a-z]{2}-[a-z]+-[0-9]").unwrap());
 
 // =====================================================================
 // Kiro AI (AWS CodeWhisperer)
