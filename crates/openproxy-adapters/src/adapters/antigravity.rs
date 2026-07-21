@@ -32,6 +32,7 @@ impl AntigravityAdapter {
 
     /// Parse fetchAvailableModels response into DiscoveredModel list.
     fn parse_models_response(&self, body: &serde_json::Value) -> Option<Vec<DiscoveredModel>> {
+        tracing::info!("Antigravity fetchAvailableModels response: {}", serde_json::to_string(body).unwrap_or_default());
         let models_obj = body.get("models")?.as_object()?;
 
         let mut models = Vec::new();
@@ -168,10 +169,11 @@ impl ProviderAdapter for AntigravityAdapter {
                 "request": json,
                 "enabledCreditTypes": ["GOOGLE_ONE_AI"]
             });
-            let wrapped_bytes = serde_json::to_vec(&wrapped).map_err(|e| {
-                CoreError::Parse(format!("failed to serialize wrapped request: {e}"))
-            })?;
-            return Ok(bytes::Bytes::from(wrapped_bytes));
+            let wrapped_bytes = bytes::Bytes::from(serde_json::to_vec(&wrapped).map_err(|e| {
+                CoreError::Parse(format!("failed to serialize wrapped gemini request: {e}"))
+            })?);
+            tracing::info!("Antigravity test payload: {}", serde_json::to_string(&wrapped).unwrap_or_default());
+            return Ok(wrapped_bytes);
         }
         Ok(body)
     }

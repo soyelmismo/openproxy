@@ -403,8 +403,13 @@ pub fn decrypt_oauth_provider_specific(
     master_key: &MasterKey,
 ) -> Option<String> {
     let b64 = encrypted_b64?;
-    let blob = base64::Engine::decode(&base64::engine::general_purpose::STANDARD, b64).ok()?;
-    master_key.decrypt(&blob).ok()
+    match base64::Engine::decode(&base64::engine::general_purpose::STANDARD, b64) {
+        Ok(blob) => match master_key.decrypt(&blob) {
+            Ok(decrypted) => Some(decrypted),
+            Err(_) => Some(b64.to_string()), // Fallback to plaintext if decryption fails
+        },
+        Err(_) => Some(b64.to_string()), // Fallback to plaintext if not base64
+    }
 }
 
 // ponytail: [Demasiados argumentos] -> [Refactorizar a struct en el futuro]

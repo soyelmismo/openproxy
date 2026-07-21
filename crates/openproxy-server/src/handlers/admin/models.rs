@@ -570,7 +570,11 @@ pub(crate) async fn run_test_for_model(
             .as_ref()
             .and_then(|a| a.oauth_provider_specific.as_ref())
             .and_then(|s| serde_json::from_str::<serde_json::Value>(s).ok())
-            .and_then(|v| v.get("projectId").and_then(|p| p.as_str().map(String::from)));
+            .and_then(|v| {
+                v.get("project_id")
+                    .or_else(|| v.get("projectId"))
+                    .and_then(|p| p.as_str().map(String::from))
+            });
             
         custom_meta = Some(openproxy_types::context::CustomProviderMeta {
             access_token: api_key.clone(),
