@@ -631,8 +631,19 @@ impl PipelineRepository for SqlitePipelineRepository {
                         quota_model_details: None,
                     },
                 );
-                if let Some(ref em) = email {
-                    ag_map.insert(id.0, em.clone());
+                // Extract projectId from oauth_provider_specific JSON for antigravity accounts.
+                // Do NOT use the email column — the API needs a real GCP project ID.
+                if let Some(ref oauth_json) = oauth_prov {
+                    if let Ok(meta) = serde_json::from_str::<serde_json::Value>(oauth_json) {
+                        if let Some(pid) = meta
+                            .get("projectId")
+                            .or_else(|| meta.get("project_id"))
+                            .and_then(|v| v.as_str())
+                            .filter(|v| !v.is_empty())
+                        {
+                            ag_map.insert(id.0, pid.to_string());
+                        }
+                    }
                 }
                 if let Some(cfg_str) = extra_json
                     && let Ok(val) = serde_json::from_str::<serde_json::Value>(&cfg_str)
