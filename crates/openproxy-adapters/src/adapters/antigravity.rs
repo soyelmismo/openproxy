@@ -137,12 +137,40 @@ impl ProviderAdapter for AntigravityAdapter {
 
     fn build_chat_url(&self, _target_format: TargetFormat, _model: &ModelId) -> String {
         // Antigravity uses the Cloud Code endpoint; model goes in the body.
-        format!("{}/v1internal:generateContent", self.config.base_url)
+        // We MUST use streamGenerateContent?alt=sse because openproxy forces
+        // is_streaming=true upstream and expects an SSE stream to parse.
+        format!("{}/v1internal:streamGenerateContent?alt=sse", self.config.base_url)
     }
 
     fn models_url(&self) -> Option<String> {
         // Antigravity does not expose a /models endpoint.
         None
+    }
+
+    fn build_headers(
+        &self,
+        api_key: &str,
+        _target_format: TargetFormat,
+        _model: &ModelId,
+    ) -> Vec<(String, String)> {
+        let mut headers_vec = Vec::with_capacity(10);
+        headers_vec.push(("Authorization".into(), format!("Bearer {}", api_key)));
+        headers_vec.push(("Content-Type".into(), "application/json".into()));
+        
+        // Inject antigravity headers
+        let mut hm = http::HeaderMap::new();
+        crate::antigravity_headers::inject_antigravity_headers(&mut hm, None);
+        for (k, v) in hm.iter() {
+            if let Ok(v_str) = v.to_str() {
+                headers_vec.push((k.as_str().to_string(), v_str.to_string()));
+            }
+        }
+        
+        for (k, v) in &self.config.extra_headers {
+            headers_vec.push((k.clone(), v.clone()));
+        }
+        
+        headers_vec
     }
 
     fn wrap_request_body(

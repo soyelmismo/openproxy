@@ -282,6 +282,16 @@ struct GeminiSseProbe {
     candidates: Vec<GeminiCandidateProbe>,
     #[serde(default, rename = "usageMetadata")]
     usage_metadata: Option<GeminiUsageProbe>,
+    #[serde(default)]
+    response: Option<GeminiInnerSseProbe>,
+}
+
+#[derive(serde::Deserialize, Default)]
+struct GeminiInnerSseProbe {
+    #[serde(default)]
+    candidates: Vec<GeminiCandidateProbe>,
+    #[serde(default, rename = "usageMetadata")]
+    usage_metadata: Option<GeminiUsageProbe>,
 }
 
 #[derive(serde::Deserialize, Default)]
@@ -368,6 +378,23 @@ pub fn parse_gemini_sse_line(
     let probe: GeminiSseProbe = serde_json::from_str(payload)
         .map_err(|e| CoreError::Parse(format!("gemini sse json: {e}")))?;
 
+    // Handle Antigravity nested response structure
+    let candidates = if !probe.candidates.is_empty() {
+        &probe.candidates
+    } else if let Some(inner) = &probe.response {
+        &inner.candidates
+    } else {
+        &probe.candidates
+    };
+
+    let usage_metadata = if probe.usage_metadata.is_some() {
+        &probe.usage_metadata
+    } else if let Some(inner) = &probe.response {
+        &inner.usage_metadata
+    } else {
+        &None
+    };
+
     // Extract text from candidates[0].content.parts[].
     //
     // Each part may have a `thought: true` flag indicating it's a
@@ -382,7 +409,7 @@ pub fn parse_gemini_sse_line(
     let (text, delta_reasoning) = {
         let mut content_parts: Vec<String> = Vec::new();
         let mut reasoning_parts: Vec<String> = Vec::new();
-        if let Some(candidate) = probe.candidates.first()
+        if let Some(candidate) = candidates.first()
             && let Some(content) = &candidate.content
         {
             for part in &content.parts {
@@ -416,8 +443,7 @@ pub fn parse_gemini_sse_line(
     };
 
     // Extract finish_reason
-    let finish_reason = probe
-        .candidates
+    let finish_reason = candidates
         .first()
         .and_then(|c| c.finish_reason.as_deref())
         .map(map_gemini_finish_reason);
@@ -448,7 +474,7 @@ pub fn parse_gemini_sse_line(
     // Extract usage if present (final chunk). Uses `?` semantics to
     // match the original behavior: if any token count is missing or
     // the wrong type, the whole usage is `None`.
-    let usage = probe.usage_metadata.and_then(|u| {
+    let usage = usage_metadata.as_ref().and_then(|u| {
         Some(OpenAIUsage {
             prompt_tokens: u.prompt_tokens?.try_into().unwrap_or(u32::MAX),
             completion_tokens: u.completion_tokens?.try_into().unwrap_or(u32::MAX),

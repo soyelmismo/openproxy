@@ -562,7 +562,7 @@ pub(crate) async fn run_test_for_model(
     // 8. Build the HTTP request. The 15s timeout caps the test wall-
     //    clock cost — a hung upstream shouldn't pin a dashboard
     //    button indefinitely.
-    let headers = adapter.build_headers(&api_key, effective_target_format, &model.model_id);
+    // Headers will be built below after resolving custom_meta
     
     let mut custom_meta = None;
     if model.provider_id.as_str() == "antigravity" {
@@ -586,6 +586,8 @@ pub(crate) async fn run_test_for_model(
             codex_workspace_id: None,
         });
     }
+    
+    let mut headers = adapter.build_headers(&api_key, effective_target_format, &model.model_id);
     
     let dummy_target = openproxy_types::context::ResolvedTarget {
         target: openproxy_types::combos::ComboTarget {
