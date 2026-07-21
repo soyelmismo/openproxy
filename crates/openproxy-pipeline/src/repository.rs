@@ -108,6 +108,7 @@ pub trait PipelineRepository: Send + Sync {
         &self,
         provider_ids: &[ProviderId],
     ) -> Result<HashMap<String, String>>;
+    fn update_antigravity_project_id(&self, account_id: i64, new_project_id: &str) -> Result<()>;
 
     // Routing Logic
     fn resolve_combo_to_targets(
@@ -676,6 +677,36 @@ impl PipelineRepository for SqlitePipelineRepository {
             }
         }
         Ok((raw_map, kiro_map, ag_map))
+    }
+
+    fn update_antigravity_project_id(&self, account_id: i64, new_project_id: &str) -> Result<()> {
+        use rusqlite::OptionalExtension;
+        let conn = self.conn.lock();
+        
+        let current_json_opt: Option<String> = conn.query_row(
+            "SELECT oauth_provider_specific FROM accounts WHERE id = ?1",
+            rusqlite::params![account_id],
+            |row| row.get(0),
+        ).optional().map_err(|e| openproxy_types::error::CoreError::Database { message: "query account".into(), source: Some(Box::new(e)) })?.flatten();
+
+        let mut meta = if let Some(json_str) = current_json_opt {
+            serde_json::from_str::<serde_json::Value>(&json_str).unwrap_or_else(|_| serde_json::json!({}))
+        } else {
+            serde_json::json!({})
+        };
+
+        if let Some(obj) = meta.as_object_mut() {
+            obj.insert("projectId".to_string(), serde_json::Value::String(new_project_id.to_string()));
+        }
+
+        let new_json_str = serde_json::to_string(&meta).unwrap_or_default();
+        
+        conn.execute(
+            "UPDATE accounts SET oauth_provider_specific = ?1 WHERE id = ?2",
+            rusqlite::params![new_json_str, account_id],
+        ).map_err(|e| openproxy_types::error::CoreError::Database { message: "update account".into(), source: Some(Box::new(e)) })?;
+        
+        Ok(())
     }
 
     fn get_providers_auth_type(

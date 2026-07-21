@@ -743,3 +743,113 @@ mod tests {
         assert_eq!(details.len(), 2);
     }
 }
+
+pub const LOAD_CODE_ASSIST_URL: &str =
+    "https://daily-cloudcode-pa.googleapis.com/v1internal:loadCodeAssist";
+pub const ONBOARD_USER_URL: &str =
+    "https://daily-cloudcode-pa.googleapis.com/v1internal:onboardUser";
+
+/// Call `loadCodeAssist` and extract `projectId` (or `None` when
+/// the user is not yet on-boarded).
+pub async fn load_code_assist(
+    upstream: &std::sync::Arc<crate::upstream::UpstreamClient>,
+    access_token: &str,
+    metadata: &serde_json::Value,
+) -> std::result::Result<Option<String>, String> {
+    let body = serde_json::json!({ "metadata": metadata });
+    let body_bytes = serde_json::to_vec(&body)
+        .map_err(|e| format!("antigravity loadCodeAssist serialize: {e}"))?;
+
+    let mut req = crate::upstream::UpstreamRequest::post_json(LOAD_CODE_ASSIST_URL, bytes::Bytes::from(body_bytes));
+    if let Ok(v) = http::HeaderValue::from_str(&format!("Bearer {access_token}")) {
+        req.headers.insert(http::header::AUTHORIZATION, v);
+    }
+    crate::antigravity_headers::inject_antigravity_headers(&mut req.headers, None);
+    req.is_streaming = false;
+
+    let cancel = crate::upstream::CancellationToken::new();
+    let resp = upstream
+        .call(req, crate::upstream::TimeoutProfile::OAuth, cancel)
+        .await
+        .map_err(|e| format!("antigravity loadCodeAssist: {e}"))?;
+
+    if !resp.status.is_success() {
+        let status = resp.status.as_u16();
+        let body_str = String::from_utf8_lossy(&resp.collect().await.unwrap_or_default()).to_string();
+        return Err(format!("antigravity loadCodeAssist status {}: {}", status, body_str));
+    }
+
+    let body_bytes = resp.collect().await.map_err(|e| {
+        format!("antigravity loadCodeAssist read: {e}")
+    })?;
+
+    let value: serde_json::Value = serde_json::from_slice(&body_bytes)
+        .map_err(|e| format!("antigravity loadCodeAssist parse: {e}"))?;
+
+    let project_id = value
+        .get("cloudaicompanionProject")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string())
+        .or_else(|| {
+            value
+                .get("cloudaicompanionProject")
+                .and_then(|v| v.get("id"))
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string())
+        });
+
+    Ok(project_id)
+}
+
+/// Call `onboardUser` and return `Ok(Some(project_id))` on success,
+/// or `Ok(None)` when the server has not finished onboarding yet.
+pub async fn onboard_user(
+    upstream: &std::sync::Arc<crate::upstream::UpstreamClient>,
+    access_token: &str,
+    project_id: &str,
+    metadata: &serde_json::Value,
+) -> std::result::Result<Option<String>, String> {
+    let body = serde_json::json!({
+        "projectId": project_id,
+        "metadata": metadata,
+        "tier": "free-tier",
+    });
+    let body_bytes = serde_json::to_vec(&body)
+        .map_err(|e| format!("antigravity onboardUser serialize: {e}"))?;
+
+    let mut req = crate::upstream::UpstreamRequest::post_json(ONBOARD_USER_URL, bytes::Bytes::from(body_bytes));
+    if let Ok(v) = http::HeaderValue::from_str(&format!("Bearer {access_token}")) {
+        req.headers.insert(http::header::AUTHORIZATION, v);
+    }
+    crate::antigravity_headers::inject_antigravity_headers(&mut req.headers, None);
+    req.is_streaming = false;
+
+    let cancel = crate::upstream::CancellationToken::new();
+    let resp = upstream
+        .call(req, crate::upstream::TimeoutProfile::OAuth, cancel)
+        .await
+        .map_err(|e| format!("antigravity onboardUser: {e}"))?;
+
+    if !resp.status.is_success() {
+        let status = resp.status.as_u16();
+        let body_str = String::from_utf8_lossy(&resp.collect().await.unwrap_or_default()).to_string();
+        return Err(format!("antigravity onboardUser status {}: {}", status, body_str));
+    }
+
+    let body_bytes = resp
+        .collect()
+        .await
+        .map_err(|e| format!("antigravity onboardUser read: {e}"))?;
+
+    let value: serde_json::Value = serde_json::from_slice(&body_bytes)
+        .map_err(|e| format!("antigravity onboardUser parse: {e}"))?;
+
+    let project_id = value
+        .get("cloudaicompanionProject")
+        .and_then(|v| v.get("id"))
+        .and_then(|v| v.as_str())
+        .or_else(|| value.get("projectId").and_then(|v| v.as_str()))
+        .map(|s| s.to_string());
+
+    Ok(project_id)
+}
