@@ -450,12 +450,46 @@ async fn sync_github_lists() -> crate::error::Result<Vec<ScrapedProxy>> {
             "https://raw.githubusercontent.com/cyberh4ck3r/free-proxy-list/main/proxies.txt",
             vec!["http"],
         ),
+// ...
+// ...
         (
             "openproxyhub",
             "https://raw.githubusercontent.com/openproxyhub/proxy-exports/main/proxies.txt",
             vec!["http"],
         ),
+        (
+            "ebrasha",
+            "https://raw.githubusercontent.com/ebrasha/abdal-proxy-hub/main/https-proxy-list-by-EbraSha.txt",
+            vec!["https"],
+        ),
+        (
+            "r00tee",
+            "https://raw.githubusercontent.com/r00tee/Proxy-List/main/Socks5.txt",
+            vec!["socks5"],
+        ),
+        (
+            "hookzof",
+            "https://raw.githubusercontent.com/hookzof/socks5_list/master/proxy.txt",
+            vec!["socks5"],
+        ),
+        (
+            "anonymouswork",
+            "https://raw.githubusercontent.com/Anonym0usWork1221/Free-Proxies/main/proxy_files/https_proxies.txt",
+            vec!["https"],
+        ),
+        (
+            "komutan234",
+            "https://raw.githubusercontent.com/komutan234/Proxy-List-Free/main/proxies/http.txt",
+            vec!["http"],
+        ),
+        (
+            "yuceltoluyag",
+            "https://raw.githubusercontent.com/yuceltoluyag/GoodProxy/main/raw.txt",
+            vec!["http"],
+        ),
     ];
+// ...
+// ...
 // ...
 
     for (src_name, url_template, protocols) in sources {
