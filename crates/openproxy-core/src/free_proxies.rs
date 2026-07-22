@@ -585,38 +585,6 @@ async fn sync_github_lists() -> crate::error::Result<Vec<ScrapedProxy>> {
             vec!["http", "socks4", "socks5"],
         ),
         (
-            "openproxylist",
-            "https://api.openproxylist.xyz/{}.txt",
-            vec!["http", "socks4", "socks5"],
-        ),
-        (
-            "proxyspace",
-            "https://proxyspace.pro/{}.txt",
-            vec!["http", "socks4", "socks5"],
-        ),
-        (
-            "hproxy",
-            "https://raw.githubusercontent.com/hproxy-com/free-proxy-list/main/proxies.txt",
-            vec!["http"],
-        ),
-        (
-            "cyberh4ck3r",
-            "https://raw.githubusercontent.com/cyberh4ck3r/free-proxy-list/main/proxies.txt",
-            vec!["http"],
-        ),
-// ...
-// ...
-        (
-            "openproxyhub",
-            "https://raw.githubusercontent.com/openproxyhub/proxy-exports/main/proxies.txt",
-            vec!["http"],
-        ),
-        (
-            "ebrasha",
-            "https://raw.githubusercontent.com/ebrasha/abdal-proxy-hub/main/https-proxy-list-by-EbraSha.txt",
-            vec!["https"],
-        ),
-        (
             "r00tee",
             "https://raw.githubusercontent.com/r00tee/Proxy-List/main/Socks5.txt",
             vec!["socks5"],
@@ -668,6 +636,7 @@ async fn sync_github_lists() -> crate::error::Result<Vec<ScrapedProxy>> {
                 tracing::warn!("{} status error for {}: {}", src_name, proto, res.status);
                 continue;
             }
+// ...
             let body_bytes = match res.collect().await {
                 Ok(b) => b,
                 Err(e) => {
@@ -675,14 +644,9 @@ async fn sync_github_lists() -> crate::error::Result<Vec<ScrapedProxy>> {
                     continue;
                 }
             };
-            let text = match String::from_utf8(body_bytes.to_vec()) {
-                Ok(t) => t,
-                Err(e) => {
-                    tracing::warn!("{} decode error for {}: {}", src_name, proto, e);
-                    continue;
-                }
-            };
+            let text = String::from_utf8_lossy(&body_bytes);
             for line in text.lines() {
+// ...
                 let trimmed = line.trim();
                 if trimmed.is_empty() || trimmed.starts_with('#') {
                     continue;
