@@ -523,7 +523,7 @@ impl tower::Service<PipelineState> for RoutingService {
                         break;
                     }
                     let max_attempts = if e.is_proxy_rotated() {
-                        policy.max_attempts.max(10)
+                        policy.max_attempts.max(150)
                     } else {
                         policy.max_attempts
                     };

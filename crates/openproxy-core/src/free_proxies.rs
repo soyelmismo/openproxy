@@ -411,7 +411,7 @@ pub fn get_or_assign_provider_proxy(
     // 3. If current_proxy_id is unset, dead or in cooldown, select a new one from the alive pool
     // Order by latency_ms ascending so we pick the fastest one that is NOT in cooldown for this provider.
     let mut stmt = conn
-        .prepare("SELECT id, host, port, type FROM free_proxies WHERE status = 'alive' ORDER BY latency_ms ASC, random() LIMIT 100")
+        .prepare("SELECT id, host, port, type FROM free_proxies WHERE status = 'alive' ORDER BY latency_ms ASC, random() LIMIT 2000")
         .map_err(|e| crate::error::CoreError::Database {
             message: format!("prepare query new proxy: {}", e),
             source: Some(Box::new(e)),
