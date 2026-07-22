@@ -143,7 +143,8 @@ impl UsageTracker {
             connect_ms,
             ttft_ms,
             status_code,
-            ..
+            proxy_url,
+            proxy_status,
         } = ctx;
         let total_ms = started.elapsed().as_millis() as u64;
         let request_headers = crate::redact::redact_btreemap_sensitive(req.request_headers.clone());
@@ -166,6 +167,9 @@ impl UsageTracker {
             .attempt(attempt)
             .race_size(race_size)
             .trace_id(trace_id)
+            .proxy_url(proxy_url)
+            .proxy_status(proxy_status)
+            .is_proxy_rotated(err.is_proxy_rotated())
             .response_body_json(response_body_json)
             .request_headers(Some(request_headers))
             .is_streaming(is_streaming)
