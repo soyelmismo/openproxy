@@ -147,7 +147,7 @@ impl OAuthProvider for AntigravityOAuthProvider {
             "ideType": "ANTIGRAVITY",
         });
 
-        let project_id = match openproxy_adapters::adapters::antigravity::load_code_assist(upstream, &access_token, &metadata).await.map_err(|e| CoreError::UpstreamConnection(e))? {
+        let project_id = match openproxy_adapters::adapters::antigravity::load_code_assist(upstream, &access_token, &metadata).await.map_err(CoreError::UpstreamConnection)? {
             Some(pid) => pid,
             None => {
                 // Retry onboardUser up to 10 times with 5s delays
