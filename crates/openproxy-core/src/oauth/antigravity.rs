@@ -16,7 +16,7 @@ use serde::{Deserialize, Serialize};
 use crate::error::{CoreError, Result};
 use crate::ids::AccountId;
 use crate::oauth::{OAuthFlow, OAuthProvider};
-use crate::oauth_generic::{GenericOAuthProvider, OAuthRequestEncoding, OAuthSpec};
+use super::generic::{GenericOAuthProvider, OAuthRequestEncoding, OAuthSpec};
 use openproxy_adapters::upstream::{
     CancellationToken, TimeoutProfile, UpstreamClient, UpstreamRequest,
 };
@@ -252,7 +252,7 @@ mod tests {
 
     #[test]
     fn code_verifier_is_url_safe() {
-        let v = crate::oauth_generic::generate_code_verifier();
+        let v = crate::oauth::generic::generate_code_verifier();
         assert!(v.len() >= 43);
         assert!(v.len() <= 128);
         // Must be base64url-safe characters only.
@@ -265,15 +265,15 @@ mod tests {
     #[test]
     fn code_challenge_deterministic() {
         let verifier = "test-verifier-string";
-        let a = crate::oauth_generic::code_challenge_s256(verifier);
-        let b = crate::oauth_generic::code_challenge_s256(verifier);
+        let a = crate::oauth::generic::code_challenge_s256(verifier);
+        let b = crate::oauth::generic::code_challenge_s256(verifier);
         assert_eq!(a, b);
     }
 
     #[test]
     fn code_challenge_differs_per_verifier() {
-        let a = crate::oauth_generic::code_challenge_s256("verifier-a");
-        let b = crate::oauth_generic::code_challenge_s256("verifier-b");
+        let a = crate::oauth::generic::code_challenge_s256("verifier-a");
+        let b = crate::oauth::generic::code_challenge_s256("verifier-b");
         assert_ne!(a, b);
     }
 
@@ -295,7 +295,7 @@ mod tests {
         assert!(!verifier.is_empty());
         assert_eq!(
             challenge,
-            crate::oauth_generic::code_challenge_s256(&verifier)
+            crate::oauth::generic::code_challenge_s256(&verifier)
         );
         assert!(url.starts_with(AUTH_URL));
         assert!(url.contains("client_id=1071006060591-tmhssin2h21lcre235vtolojh4g403ep"));

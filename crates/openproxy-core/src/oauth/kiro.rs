@@ -379,7 +379,7 @@ impl OAuthProvider for KiroOAuthProvider {
     ) -> Result<Option<TokenResponse>> {
         // Read OIDC client credentials from the thread-local cache
         // (stashed by request_device_code). AWS SSO OIDC requires them.
-        let (cid, csec) = crate::oauth_kiro::peek_last_client().unwrap_or_default();
+        let (cid, csec) = self::peek_last_client().unwrap_or_default();
         let body = serde_json::json!({
             "clientId": cid,
             "clientSecret": csec,
@@ -446,7 +446,7 @@ impl OAuthProvider for KiroOAuthProvider {
         db: crate::oauth::DbRef<'_>,
     ) -> Result<TokenResponse> {
         let meta = db
-            .with_conn(|conn| crate::oauth_kiro::read_profile_meta(conn, account_id))?
+            .with_conn(|conn| self::read_profile_meta(conn, account_id))?
             .unwrap_or_else(KiroProviderMeta::default);
 
         let region_str = if meta.region.is_empty() {

@@ -9,7 +9,7 @@ use std::sync::Arc;
 
 use crate::error::{CoreError, Result};
 use crate::oauth::{DeviceAuthorizationResponse, OAuthFlow, OAuthProvider, TokenResponse};
-use crate::oauth_generic::{GenericOAuthProvider, OAuthRequestEncoding, OAuthSpec};
+use super::generic::{GenericOAuthProvider, OAuthRequestEncoding, OAuthSpec};
 use openproxy_adapters::upstream::{
     CancellationToken, TimeoutProfile, UpstreamClient, UpstreamError, UpstreamRequest,
 };
@@ -253,7 +253,7 @@ impl OAuthProvider for CodexOAuthProvider {
             ("redirect_uri", REDIRECT_URI),
         ];
 
-        let token_body = crate::oauth_generic::urlencoded_body(&params);
+        let token_body = crate::oauth::generic::urlencoded_body(&params);
         let mut token_req = UpstreamRequest::post_json(TOKEN_URL, token_body);
         token_req.headers.insert(
             http::header::CONTENT_TYPE,

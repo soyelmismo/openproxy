@@ -4,6 +4,9 @@
 //! - MiniMax: hardcoded table (only minimax-m2.1 known in MVP: 0.2/0.2).
 //! - OpenCode Zen: hardcoded small set; default NULL for unknown.
 
+pub mod cost;
+pub mod quota;
+
 use once_cell::sync::Lazy;
 use rusqlite::Connection;
 use serde::{Deserialize, Serialize};

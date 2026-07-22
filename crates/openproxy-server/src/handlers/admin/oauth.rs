@@ -202,14 +202,14 @@ pub async fn oauth_device_code(
         // upstream `device_code` only lived in the response
         // payload — a reload / state eviction / server restart
         // would force the user to restart the whole flow. See
-        // `openproxy_core::oauth_tickets` for the storage shape.
+        // `openproxy_core::oauth::tickets` for the storage shape.
         tokio::task::spawn_blocking({
             let pool = s.db_pool().clone();
             let provider = provider.clone();
             let dar = dar.clone();
             move || {
                 let w = pool.writer();
-                openproxy_core::oauth_tickets::create_ticket(&w, &provider, &dar)
+                openproxy_core::oauth::tickets::create_ticket(&w, &provider, &dar)
             }
         })
         .await
@@ -254,20 +254,20 @@ pub async fn oauth_device_poll(
             let device_code_clone = device_code.to_string();
             tokio::task::spawn_blocking(move || {
                 let w = pool.writer();
-                match openproxy_core::oauth_tickets::lookup_active(&w, &device_code_clone)? {
-                    openproxy_core::oauth_tickets::TicketStatus::Active(_) => Ok(()),
-                    openproxy_core::oauth_tickets::TicketStatus::Expired => {
+                match openproxy_core::oauth::tickets::lookup_active(&w, &device_code_clone)? {
+                    openproxy_core::oauth::tickets::TicketStatus::Active(_) => Ok(()),
+                    openproxy_core::oauth::tickets::TicketStatus::Expired => {
                         Err(ApiError(CoreError::Validation(
                             "device_code has expired; restart the OAuth flow".into(),
                         )))
                     }
-                    openproxy_core::oauth_tickets::TicketStatus::Consumed => {
+                    openproxy_core::oauth::tickets::TicketStatus::Consumed => {
                         Err(ApiError(CoreError::NotFound {
                             what: "oauth_device_ticket".into(),
                             id: device_code_clone,
                         }))
                     }
-                    openproxy_core::oauth_tickets::TicketStatus::Unknown => {
+                    openproxy_core::oauth::tickets::TicketStatus::Unknown => {
                         Err(ApiError(CoreError::NotFound {
                             what: "oauth_device_ticket".into(),
                             id: device_code_clone,
@@ -327,12 +327,12 @@ pub async fn oauth_device_poll(
                 // is a no-op for providers that don't use a
                 // dynamic client registration.
                 let provider_specific = match provider.as_str() {
-                    "kiro" => openproxy_core::oauth_kiro::take_last_client()
+                    "kiro" => openproxy_core::oauth::kiro::take_last_client()
                         .map(|(cid, csec)| {
                             serde_json::json!({
                                 "client_id": cid,
                                 "client_secret": csec,
-                                "region": openproxy_core::oauth_kiro::KiroProviderMeta::default().region,
+                                "region": openproxy_core::oauth::kiro::KiroProviderMeta::default().region,
                             })
                             .to_string()
                         }),
@@ -376,7 +376,7 @@ pub async fn oauth_device_poll(
                 let device_code_clone2 = device_code.to_string();
                 if let Err(e) = tokio::task::spawn_blocking(move || -> Result<(), ApiError> {
                     let w = pool2.writer();
-                    openproxy_core::oauth_tickets::mark_consumed(&w, &device_code_clone2)
+                    openproxy_core::oauth::tickets::mark_consumed(&w, &device_code_clone2)
                         .map_err(ApiError)?;
                     Ok(())
                 }).await.unwrap() {

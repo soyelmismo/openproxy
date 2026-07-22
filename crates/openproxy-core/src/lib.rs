@@ -31,7 +31,6 @@ pub mod analytics;
 pub mod api_keys;
 pub mod bootstrap;
 
-pub mod cost;
 pub mod discovery_scheduler;
 pub mod free_proxies;
 pub mod model_normalize;
@@ -39,16 +38,10 @@ pub mod models;
 pub mod models_dev_sync;
 pub mod notifications;
 pub mod oauth;
-pub mod oauth_antigravity;
-pub mod oauth_codex;
-pub mod oauth_generic;
-
-pub mod oauth_kiro;
-pub mod oauth_tickets;
 
 pub mod pricing;
+pub use pricing::{cost, quota};
 pub mod providers;
-pub mod quota;
 pub mod quota_sync;
 pub mod race;
 

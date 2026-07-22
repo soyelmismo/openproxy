@@ -100,7 +100,7 @@ async fn run_warmup_cycle(
                 .filter(|a| !matches!(a.health_status, crate::accounts::HealthStatus::Unhealthy))
                 .filter_map(|a| {
                     let token = accounts::decrypt_access_token(&conn, a.id, &master_key).ok()?;
-                    let project_id = crate::oauth_antigravity::read_project_id(&conn, a.id)
+                    let project_id = crate::oauth::antigravity::read_project_id(&conn, a.id)
                         .ok()
                         .flatten()?;
                     Some((a.id.0, a.id.0.to_string(), token, project_id))

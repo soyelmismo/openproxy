@@ -22,6 +22,12 @@ pub use crate::accounts::{
     decrypt_access_token, decrypt_refresh_token, list_expiring_oauth_accounts, store_oauth_tokens,
 };
 
+pub mod antigravity;
+pub mod codex;
+pub mod generic;
+pub mod kiro;
+pub mod tickets;
+
 /// A reference to either a `DbPool` or a locked/lockable database `Connection`.
 pub enum DbRef<'a> {
     Pool(&'a openproxy_db::DbPool),
@@ -327,10 +333,10 @@ macro_rules! define_oauth_provider {
 
 define_oauth_provider! {
     pub enum OAuthProviderEnum {
-        Antigravity(crate::oauth_antigravity::AntigravityOAuthProvider),
-        Codex(crate::oauth_codex::CodexOAuthProvider),
-        Generic(crate::oauth_generic::GenericOAuthProvider),
-        Kiro(crate::oauth_kiro::KiroOAuthProvider),
+        Antigravity(self::antigravity::AntigravityOAuthProvider),
+        Codex(self::codex::CodexOAuthProvider),
+        Generic(self::generic::GenericOAuthProvider),
+        Kiro(self::kiro::KiroOAuthProvider),
     }
 }
 
@@ -357,13 +363,13 @@ impl OAuthProviderRegistry {
         let reg = Self::new();
         // Antigravity (Cloud Code) — registered under both `antigravity`
         // and `antigravity-cli` since they share the same OAuth flow.
-        let antigravity = crate::oauth_antigravity::AntigravityOAuthProvider::new();
+        let antigravity = self::antigravity::AntigravityOAuthProvider::new();
         reg.register_arc_with_name("antigravity", OAuthProviderEnum::Antigravity(antigravity));
         reg.register_arc(OAuthProviderEnum::Codex(
-            crate::oauth_codex::CodexOAuthProvider::new(),
+            self::codex::CodexOAuthProvider::new(),
         ));
         reg.register_arc(OAuthProviderEnum::Kiro(
-            crate::oauth_kiro::KiroOAuthProvider::new(),
+            self::kiro::KiroOAuthProvider::new(),
         ));
         reg
     }
