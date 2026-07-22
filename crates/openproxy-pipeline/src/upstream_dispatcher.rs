@@ -444,21 +444,12 @@ impl UpstreamDispatcher {
                 );
             }
             Err(UpstreamError::Timeout(phase)) => {
-                self.check_and_trigger_proxy_rotation(
-                    &target.provider_id,
-                    crate::upstream_dispatcher::ProxyRotationTrigger::ConnectError,
-                )
-                .await;
-                // Bug fix: attribute the timeout to the CORRECT phase
-                // instead of collapsing DNS/Dial/TLS/Write/Headers all
-                // into "connect". The user configures per-phase budgets
-                // (connect_ms, request_send_ms, ttft_ms) and the error
-                // message must reflect which budget actually fired so
-                // they can tune the right knob. The old mapping (all
-                // → "connect") was a leftover from the pre-migration
-                // legacy UpstreamClient path that couldn't separate phases.
-                // Include the config field name so the operator
-                // knows which timeout to adjust in the dashboard.
+                let is_proxy_rotated = self
+                    .check_and_trigger_proxy_rotation(
+                        &target.provider_id,
+                        crate::upstream_dispatcher::ProxyRotationTrigger::ConnectError,
+                    )
+                    .await;
                 let (phase_label, config_hint) = match phase {
                     openproxy_adapters::upstream::UpstreamPhase::Dns => ("dns", "connect_ms"),
                     openproxy_adapters::upstream::UpstreamPhase::Dial => ("dial", "connect_ms"),
@@ -479,9 +470,12 @@ impl UpstreamDispatcher {
                     config_hint = config_hint,
                     "upstream phase timed out; aborting attempt"
                 );
-                let err = CoreError::UpstreamTimeout {
-                    phase: format!("{} (config: {})", phase_label, config_hint),
-                    ms: connect_and_send_ms,
+                let err = CoreError::UpstreamError {
+                    status: 504,
+                    provider: target.provider_id.to_string(),
+                    model: model.model_id.as_str().to_string(),
+                    body: format!("upstream phase `{}` timed out after {}ms (config: {})", phase_label, connect_and_send_ms, config_hint),
+                    is_proxy_rotated,
                 };
                 return self.record_and_fail(
                     req,
@@ -495,12 +489,19 @@ impl UpstreamDispatcher {
             | Err(UpstreamError::Http(msg))
             | Err(UpstreamError::Decode(msg))
             | Err(UpstreamError::Invalid(msg)) => {
-                self.check_and_trigger_proxy_rotation(
-                    &target.provider_id,
-                    crate::upstream_dispatcher::ProxyRotationTrigger::ConnectError,
-                )
-                .await;
-                let err = CoreError::UpstreamConnection(msg);
+                let is_proxy_rotated = self
+                    .check_and_trigger_proxy_rotation(
+                        &target.provider_id,
+                        crate::upstream_dispatcher::ProxyRotationTrigger::ConnectError,
+                    )
+                    .await;
+                let err = CoreError::UpstreamError {
+                    status: 502,
+                    provider: target.provider_id.to_string(),
+                    model: model.model_id.as_str().to_string(),
+                    body: format!("upstream connection error: {}", msg),
+                    is_proxy_rotated,
+                };
                 return self.record_and_fail(
                     req,
                     combo,
@@ -509,12 +510,19 @@ impl UpstreamDispatcher {
                 );
             }
             Err(_) => {
-                self.check_and_trigger_proxy_rotation(
-                    &target.provider_id,
-                    crate::upstream_dispatcher::ProxyRotationTrigger::ConnectError,
-                )
-                .await;
-                let err = CoreError::UpstreamConnection("unknown upstream error".to_string());
+                let is_proxy_rotated = self
+                    .check_and_trigger_proxy_rotation(
+                        &target.provider_id,
+                        crate::upstream_dispatcher::ProxyRotationTrigger::ConnectError,
+                    )
+                    .await;
+                let err = CoreError::UpstreamError {
+                    status: 502,
+                    provider: target.provider_id.to_string(),
+                    model: model.model_id.as_str().to_string(),
+                    body: "unknown upstream error".to_string(),
+                    is_proxy_rotated,
+                };
                 return self.record_and_fail(
                     req,
                     combo,
@@ -1443,14 +1451,12 @@ impl UpstreamDispatcher {
                 );
             }
             Err(UpstreamError::Timeout(phase)) => {
-                self.check_and_trigger_proxy_rotation(
-                    &target.provider_id,
-                    crate::upstream_dispatcher::ProxyRotationTrigger::ConnectError,
-                )
-                .await;
-                // Bug fix (PR #33): attribute the timeout to the
-                // CORRECT phase instead of collapsing all into
-                // "connect". Mirrors the non-streaming path's fix.
+                let is_proxy_rotated = self
+                    .check_and_trigger_proxy_rotation(
+                        &target.provider_id,
+                        crate::upstream_dispatcher::ProxyRotationTrigger::ConnectError,
+                    )
+                    .await;
                 let phase_label = match phase {
                     openproxy_adapters::upstream::UpstreamPhase::Dns => "dns",
                     openproxy_adapters::upstream::UpstreamPhase::Dial => "dial",
@@ -1468,9 +1474,12 @@ impl UpstreamDispatcher {
                     elapsed_ms = connect_and_send_ms,
                     "upstream phase timed out; aborting streaming attempt"
                 );
-                let err = CoreError::UpstreamTimeout {
-                    phase: phase_label.to_string(),
-                    ms: connect_and_send_ms,
+                let err = CoreError::UpstreamError {
+                    status: 504,
+                    provider: target.provider_id.to_string(),
+                    model: model.model_id.as_str().to_string(),
+                    body: format!("upstream phase `{}` timed out after {}ms", phase_label, connect_and_send_ms),
+                    is_proxy_rotated,
                 };
                 return self.record_and_fail(
                     req,
@@ -1484,12 +1493,19 @@ impl UpstreamDispatcher {
             | Err(UpstreamError::Http(msg))
             | Err(UpstreamError::Decode(msg))
             | Err(UpstreamError::Invalid(msg)) => {
-                self.check_and_trigger_proxy_rotation(
-                    &target.provider_id,
-                    crate::upstream_dispatcher::ProxyRotationTrigger::ConnectError,
-                )
-                .await;
-                let err = CoreError::UpstreamConnection(msg);
+                let is_proxy_rotated = self
+                    .check_and_trigger_proxy_rotation(
+                        &target.provider_id,
+                        crate::upstream_dispatcher::ProxyRotationTrigger::ConnectError,
+                    )
+                    .await;
+                let err = CoreError::UpstreamError {
+                    status: 502,
+                    provider: target.provider_id.to_string(),
+                    model: model.model_id.as_str().to_string(),
+                    body: format!("upstream connection error: {}", msg),
+                    is_proxy_rotated,
+                };
                 return self.record_and_fail(
                     req,
                     combo,
@@ -1498,12 +1514,19 @@ impl UpstreamDispatcher {
                 );
             }
             Err(_) => {
-                self.check_and_trigger_proxy_rotation(
-                    &target.provider_id,
-                    crate::upstream_dispatcher::ProxyRotationTrigger::ConnectError,
-                )
-                .await;
-                let err = CoreError::UpstreamConnection("unknown upstream error".to_string());
+                let is_proxy_rotated = self
+                    .check_and_trigger_proxy_rotation(
+                        &target.provider_id,
+                        crate::upstream_dispatcher::ProxyRotationTrigger::ConnectError,
+                    )
+                    .await;
+                let err = CoreError::UpstreamError {
+                    status: 502,
+                    provider: target.provider_id.to_string(),
+                    model: model.model_id.as_str().to_string(),
+                    body: "unknown upstream error".to_string(),
+                    is_proxy_rotated,
+                };
                 return self.record_and_fail(
                     req,
                     combo,
