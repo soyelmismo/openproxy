@@ -3,7 +3,7 @@
 use std::sync::Arc;
 use crate::repositories::{
     AccountRepository, ApiKeyRepository, ComboRepository, ModelRepository,
-    SqliteRepository,
+    Repository, SqliteRepository,
 };
 use openproxy_core::{api_keys as core_api_keys, models::Model};
 use openproxy_db as db;
@@ -14,11 +14,11 @@ use openproxy_types::{
 
 /// Service for managing API Keys business logic.
 pub struct ApiKeyService {
-    repo: Arc<SqliteRepository>,
+    repo: Arc<dyn ApiKeyRepository>,
 }
 
 impl ApiKeyService {
-    pub fn new(repo: Arc<SqliteRepository>) -> Self {
+    pub fn new(repo: Arc<dyn ApiKeyRepository>) -> Self {
         Self { repo }
     }
 
@@ -53,11 +53,11 @@ impl ApiKeyService {
 
 /// Service for managing Account business logic.
 pub struct AccountService {
-    repo: Arc<SqliteRepository>,
+    repo: Arc<dyn AccountRepository>,
 }
 
 impl AccountService {
-    pub fn new(repo: Arc<SqliteRepository>) -> Self {
+    pub fn new(repo: Arc<dyn AccountRepository>) -> Self {
         Self { repo }
     }
 
@@ -117,11 +117,11 @@ impl AccountService {
 
 /// Service for managing Combo business logic.
 pub struct ComboService {
-    repo: Arc<SqliteRepository>,
+    repo: Arc<dyn ComboRepository>,
 }
 
 impl ComboService {
-    pub fn new(repo: Arc<SqliteRepository>) -> Self {
+    pub fn new(repo: Arc<dyn ComboRepository>) -> Self {
         Self { repo }
     }
 
@@ -136,11 +136,11 @@ impl ComboService {
 
 /// Service for managing Model business logic.
 pub struct ModelService {
-    repo: Arc<SqliteRepository>,
+    repo: Arc<dyn ModelRepository>,
 }
 
 impl ModelService {
-    pub fn new(repo: Arc<SqliteRepository>) -> Self {
+    pub fn new(repo: Arc<dyn ModelRepository>) -> Self {
         Self { repo }
     }
 
@@ -151,7 +151,7 @@ impl ModelService {
 
 /// Container for all application services.
 pub struct Services {
-    pub repository: Arc<SqliteRepository>,
+    pub repository: Arc<dyn Repository>,
     pub api_keys: Arc<ApiKeyService>,
     pub accounts: Arc<AccountService>,
     pub combos: Arc<ComboService>,
@@ -160,11 +160,27 @@ pub struct Services {
 
 impl Services {
     pub fn new(db_pool: Arc<db::DbPool>) -> Self {
-        let repository = Arc::new(SqliteRepository::new(db_pool));
-        let api_keys = Arc::new(ApiKeyService::new(repository.clone()));
-        let accounts = Arc::new(AccountService::new(repository.clone()));
-        let combos = Arc::new(ComboService::new(repository.clone()));
-        let models = Arc::new(ModelService::new(repository.clone()));
+        let repo = Arc::new(SqliteRepository::new(db_pool));
+        Self::from_repositories(
+            repo.clone(),
+            repo.clone(),
+            repo.clone(),
+            repo.clone(),
+            repo,
+        )
+    }
+
+    pub fn from_repositories(
+        repository: Arc<dyn Repository>,
+        api_keys_repo: Arc<dyn ApiKeyRepository>,
+        accounts_repo: Arc<dyn AccountRepository>,
+        combos_repo: Arc<dyn ComboRepository>,
+        models_repo: Arc<dyn ModelRepository>,
+    ) -> Self {
+        let api_keys = Arc::new(ApiKeyService::new(api_keys_repo));
+        let accounts = Arc::new(AccountService::new(accounts_repo));
+        let combos = Arc::new(ComboService::new(combos_repo));
+        let models = Arc::new(ModelService::new(models_repo));
 
         Self {
             repository,
