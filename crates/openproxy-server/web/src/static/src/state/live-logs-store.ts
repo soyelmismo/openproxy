@@ -1,4 +1,5 @@
 import type { RecentUsageRow, StageEvent } from "../lib/types/api.js";
+import { api } from "../lib/api.js";
 
 // ----------------------------------------------------------------------------
 // Types
@@ -426,6 +427,25 @@ class LiveLogsStore {
     if (attempt) {
       attempt.detail = detail;
     }
+  }
+
+  public async fetchLogDetail(id: string, traceId: string, fallbackAttemptKey: string): Promise<boolean> {
+    const hasValidId = Boolean(id && id !== "0");
+    const queryParam = hasValidId ? `id=${encodeURIComponent(id)}` : (traceId ? `trace_id=${encodeURIComponent(traceId)}` : "");
+    if (!queryParam) return false;
+    try {
+      const payload = await api(`/usage/detail?${queryParam}`) as any;
+      if (payload && payload.row) {
+        this.setDetail(
+          hasValidId ? { kind: "row_id", id: Number(id) } : { kind: "attempt", attemptKey: fallbackAttemptKey },
+          payload.row
+        );
+        return true;
+      }
+    } catch {
+      // Ignored
+    }
+    return false;
   }
 
   public clearForTest() {

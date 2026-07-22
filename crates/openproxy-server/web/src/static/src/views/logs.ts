@@ -9,7 +9,7 @@ import {
   setMessageHandler,
   disconnectLogsWebSocket,
 } from "../state/ws.js";
-import { fetchRecordingState, toggleRecording } from "../components/recording-toggle.js";
+import { fetchRecordingState, toggleRecording } from "../handlers/log-handlers.js";
 import { mountView, requestUpdate } from "../state/reactive.js";
 import { openLogDetail } from "../components/log-detail.js";
 import { liveLogsStore } from "../state/live-logs-store.js";
