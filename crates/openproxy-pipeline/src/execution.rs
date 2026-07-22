@@ -291,12 +291,17 @@ impl Pipeline {
         target: &ComboTarget,
         ctx: FailureContext<'_>,
     ) -> PipelineResult {
+        let trace_id = if ctx.attempt > 1 {
+            format!("{}:retry{}", req.trace_id, ctx.attempt - 1)
+        } else {
+            req.trace_id.to_string()
+        };
         self.record_and_fail_with_trace_id(
-            req.clone(),
+            req,
             combo,
             target,
             ctx,
-            req.trace_id.to_string(),
+            trace_id,
         )
     }
 

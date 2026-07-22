@@ -1329,13 +1329,15 @@ export async function openLogDetail(
   
   const fallbackAttemptKey = traceId || (requestId ? `${requestId}:unknown` : id);
   
+// ...
   if (isFinalized || row == null) {
     try {
-      const queryParam = traceId ? `trace_id=${encodeURIComponent(traceId)}` : `id=${encodeURIComponent(id)}`;
+      const hasValidId = Boolean(id && id !== "0");
+      const queryParam = hasValidId ? `id=${encodeURIComponent(id)}` : (traceId ? `trace_id=${encodeURIComponent(traceId)}` : "");
       const payload = await api(`/usage/detail?${queryParam}`) as any;
       if (payload && payload.row) {
         liveLogsStore.setDetail(
-          id ? { kind: "row_id", id: Number(id) } : { kind: "attempt", attemptKey: fallbackAttemptKey },
+          hasValidId ? { kind: "row_id", id: Number(id) } : { kind: "attempt", attemptKey: fallbackAttemptKey },
           payload.row
         );
         if (isCurrentOpenLogDetailGeneration(gen)) {
@@ -1349,7 +1351,8 @@ export async function openLogDetail(
   
   if (!isCurrentOpenLogDetailGeneration(gen)) return;
   
-  state.logs.selectedIdentity = id ? { kind: "row_id", id: Number(id) } : { kind: "attempt", attemptKey: fallbackAttemptKey };
+  const hasValidId = Boolean(id && id !== "0");
+  state.logs.selectedIdentity = hasValidId ? { kind: "row_id", id: Number(id) } : { kind: "attempt", attemptKey: fallbackAttemptKey };
   pinnedRequestId = requestId;
   pinnedTraceId = traceId;
   

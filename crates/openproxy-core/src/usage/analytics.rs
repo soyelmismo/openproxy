@@ -1528,7 +1528,9 @@ pub fn detail_by_trace_id(conn: &Connection, trace_id: &str) -> Result<Option<Us
                     prompt_tokens_estimated, completion_tokens_estimated, \
                     endpoint_kind, proxy_url, proxy_status, is_proxy_rotated \
              FROM usage \
-             WHERE trace_id = ?1",
+             WHERE trace_id = ?1 \
+             ORDER BY client_response DESC, id DESC \
+             LIMIT 1",
         )
         .map_err(openproxy_db::error::map_db_error)?;
 
