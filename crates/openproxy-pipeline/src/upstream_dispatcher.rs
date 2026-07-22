@@ -1730,6 +1730,8 @@ impl UpstreamDispatcher {
             created,
             connect_and_send_ms,
             resolved_timeouts,
+            proxy_url: dctx.proxy_url.clone(),
+            proxy_status: dctx.proxy_status.clone(),
         };
 
         match state.run_stream_loop(&ctx, self, &mut stream).await {
