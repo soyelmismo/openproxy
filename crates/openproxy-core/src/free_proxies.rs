@@ -417,6 +417,7 @@ async fn sync_github_lists() -> crate::error::Result<Vec<ScrapedProxy>> {
     let client = UpstreamClient::new();
     let mut list = Vec::new();
 
+// ...
     let sources = vec![
         (
             "iplocate",
@@ -433,9 +434,25 @@ async fn sync_github_lists() -> crate::error::Result<Vec<ScrapedProxy>> {
             "https://raw.githubusercontent.com/Thordata/awesome-free-proxy-list/main/proxies/{}.txt",
             vec!["http", "https", "socks4", "socks5"],
         ),
+        (
+            "monosans",
+            "https://raw.githubusercontent.com/monosans/proxy-list/main/proxies/{}.txt",
+            vec!["http", "socks4", "socks5"],
+        ),
+        (
+            "jetkai",
+            "https://raw.githubusercontent.com/jetkai/proxy-list/main/online-proxies/txt/proxies-{}.txt",
+            vec!["http", "https", "socks4", "socks5"],
+        ),
+        (
+            "proxyscrape",
+            "https://api.proxyscrape.com/v2/?request=getproxies&protocol={}&timeout=10000&country=all",
+            vec!["http", "socks4", "socks5"],
+        ),
     ];
 
     for (src_name, url_template, protocols) in sources {
+// ...
         for proto in protocols {
             let url = url_template.replace("{}", proto);
             let req = UpstreamRequest::get(&url);
