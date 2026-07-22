@@ -76,7 +76,6 @@ pub fn get_for_target(
     .map_err(crate::error::map_db_error)
 }
 
-// ...
 pub fn clear_cooldown(
     conn: &rusqlite::Connection,
     target_id: ComboTargetId,

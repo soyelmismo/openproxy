@@ -284,7 +284,6 @@ use crate::translation::*;
         assert_eq!(gen_cfg.top_p, Some(0.9));
     }
 
-// ...
     #[test]
     fn gemini_to_openai_extracts_content() {
         let resp = GeminiResponse {
@@ -354,7 +353,6 @@ use crate::translation::*;
         };
 
         let out = gemini_to_openai(&resp);
-// ...
         assert_eq!(out.choices.len(), 1);
         assert_eq!(
             out.choices[0]

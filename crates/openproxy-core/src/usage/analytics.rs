@@ -252,7 +252,6 @@ fn to_params(v: &[Box<dyn ToSql>]) -> Vec<&dyn ToSql> {
 /// Aggregate summary over all rows matching `f`.
 pub fn summary(conn: &Connection, f: &UsageFilter) -> Result<UsageSummary> {
     let w = BuiltWhere::from_filter(f);
-// ...
     let sql = format!(
         "SELECT \
              COUNT(DISTINCT request_id)                                    AS unique_requests, \
@@ -270,7 +269,6 @@ pub fn summary(conn: &Connection, f: &UsageFilter) -> Result<UsageSummary> {
          FROM usage {}",
         w.sql,
     );
-// ...
 
     let mut stmt = conn
         .prepare(&sql)
@@ -319,7 +317,6 @@ pub fn summary(conn: &Connection, f: &UsageFilter) -> Result<UsageSummary> {
 /// Per-(provider, model) breakdown. Ordered by total cost descending.
 pub fn by_model(conn: &Connection, f: &UsageFilter) -> Result<Vec<ByModelRow>> {
     let w = BuiltWhere::from_filter(f);
-// ...
     let sql = format!(
         "SELECT \
              provider_id, \
@@ -335,7 +332,6 @@ pub fn by_model(conn: &Connection, f: &UsageFilter) -> Result<Vec<ByModelRow>> {
          ORDER BY total_cost_usd DESC, provider_id ASC, upstream_model_id ASC",
         w.sql,
     );
-// ...
 
     let mut stmt = conn
         .prepare(&sql)
@@ -378,7 +374,6 @@ pub fn by_model(conn: &Connection, f: &UsageFilter) -> Result<Vec<ByModelRow>> {
 /// time-bucketed breakdown.
 pub fn by_provider(conn: &Connection, f: &UsageFilter) -> Result<Vec<ByProviderRow>> {
     let w = BuiltWhere::from_filter(f);
-// ...
     let sql = format!(
         "SELECT \
              provider_id, \
@@ -393,7 +388,6 @@ pub fn by_provider(conn: &Connection, f: &UsageFilter) -> Result<Vec<ByProviderR
          ORDER BY total_cost_usd DESC, provider_id ASC",
         w.sql,
     );
-// ...
 
     let mut stmt = conn
         .prepare(&sql)
@@ -495,7 +489,6 @@ pub fn monthly_by_provider(
 /// and error count (rows with `status_code >= 400`).
 pub fn by_day(conn: &Connection, f: &UsageFilter) -> Result<Vec<ByDayRow>> {
     let w = BuiltWhere::from_filter(f);
-// ...
     let sql = format!(
         "SELECT \
              strftime('%Y-%m-%d', created_at)                     AS date, \
@@ -510,7 +503,6 @@ pub fn by_day(conn: &Connection, f: &UsageFilter) -> Result<Vec<ByDayRow>> {
          ORDER BY date ASC",
         w.sql,
     );
-// ...
 
     let mut stmt = conn
         .prepare(&sql)

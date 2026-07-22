@@ -28,7 +28,6 @@ pub struct ScrapedProxy {
     pub country_code: Option<String>,
 }
 
-// ...
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct SyncSummary {
     pub fetched: usize,
@@ -38,7 +37,6 @@ pub struct SyncSummary {
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct ProxySummary {
-// ...
     pub total: usize,
     pub alive: usize,
     pub dead: usize,
@@ -219,7 +217,6 @@ pub fn list_proxies(
     }
     Ok(list)
 }
-// ...
 
 pub fn get_proxy(conn: &Connection, id: &str) -> crate::error::Result<Option<FreeProxy>> {
     let mut stmt = conn
@@ -359,12 +356,9 @@ pub fn update_proxy_status(
         message: e.to_string(),
         source: Some(Box::new(e)),
     })?;
-// ...
-// ...
     Ok(())
 }
 
-// ...
 pub fn get_or_assign_provider_proxy(
     conn: &Connection,
     provider_id: &crate::ids::ProviderId,
@@ -374,7 +368,6 @@ pub fn get_or_assign_provider_proxy(
 
     // 1. Fetch provider details to see use_proxies and current_proxy_id
     let provider = match crate::providers::get(conn, provider_id)? {
-// ...
         Some(p) => p,
         None => return Ok(None),
     };
@@ -455,7 +448,6 @@ pub fn get_or_assign_provider_proxy(
 
     let new_proxy = selected_proxy.or(fallback_proxy);
 
-// ...
     if let Some((id, host, port, proto)) = new_proxy {
         crate::providers::update_current_proxy(conn, provider_id, Some(&id))?;
         return Ok(Some(format!(
@@ -471,10 +463,8 @@ pub fn get_or_assign_provider_proxy(
         provider_id
     )))
 }
-// ...
 
 pub fn upsert_scraped_proxies(
-// ...
     conn: &mut Connection,
     proxies: &[ScrapedProxy],
 ) -> crate::error::Result<()> {
@@ -571,8 +561,6 @@ async fn sync_github_lists() -> crate::error::Result<Vec<ScrapedProxy>> {
     let client = UpstreamClient::new();
     let mut list = Vec::new();
 
-// ...
-// ...
     let sources = vec![
         (
             "iplocate",
@@ -610,14 +598,8 @@ async fn sync_github_lists() -> crate::error::Result<Vec<ScrapedProxy>> {
             vec!["http"],
         ),
     ];
-// ...
-// ...
-// ...
 
     for (src_name, url_template, protocols) in sources {
-// ...
-// ...
-// ...
         for proto in protocols {
             let url = url_template.replace("{}", proto);
             let req = UpstreamRequest::get(&url);
@@ -636,7 +618,6 @@ async fn sync_github_lists() -> crate::error::Result<Vec<ScrapedProxy>> {
                 tracing::warn!("{} status error for {}: {}", src_name, proto, res.status);
                 continue;
             }
-// ...
             let body_bytes = match res.collect().await {
                 Ok(b) => b,
                 Err(e) => {
@@ -646,7 +627,6 @@ async fn sync_github_lists() -> crate::error::Result<Vec<ScrapedProxy>> {
             };
             let text = String::from_utf8_lossy(&body_bytes);
             for line in text.lines() {
-// ...
                 let trimmed = line.trim();
                 if trimmed.is_empty() || trimmed.starts_with('#') {
                     continue;
@@ -709,7 +689,6 @@ async fn sync_oneproxy() -> crate::error::Result<Vec<ScrapedProxy>> {
     let body: OneProxyApiResponse = serde_json::from_slice(&body_bytes)
         .map_err(|e| crate::error::CoreError::Internal(format!("1proxy JSON error: {}", e)))?;
 
-// ...
     let proxies = body.proxies.unwrap_or_default();
     let list = proxies
         .into_iter()
@@ -785,7 +764,6 @@ struct GeonodeResponse {
     data: Vec<GeonodeItem>,
 }
 
-// ...
 async fn sync_geonode() -> crate::error::Result<Vec<ScrapedProxy>> {
     use openproxy_adapters::upstream::{TimeoutProfile, UpstreamClient, UpstreamRequest};
     let client = UpstreamClient::new();
@@ -793,7 +771,6 @@ async fn sync_geonode() -> crate::error::Result<Vec<ScrapedProxy>> {
     req.headers.insert(http::header::ACCEPT, http::HeaderValue::from_static("application/json"));
     req.headers.insert(http::header::USER_AGENT, http::HeaderValue::from_static("Mozilla/5.0 (X11; Linux x86_64)"));
     let cancel = openproxy_adapters::upstream::CancellationToken::new();
-// ...
     let res = client
         .call(req, TimeoutProfile::ModelDiscovery, cancel)
         .await
@@ -1067,8 +1044,6 @@ pub async fn sync_all_providers(db_pool: Arc<DbPool>) -> crate::error::Result<Sy
             errors.push(format!("GProxyNet sync failed: {}", e));
         }
     }
-// ...
-// ...
 
     let mut added = 0;
     if !scraped.is_empty() {
@@ -1328,7 +1303,6 @@ mod tests {
         assert_eq!(p.country_code.as_deref(), Some("US"));
         assert_eq!(p.status, "unknown");
 
-// ...
         let list = list_proxies(&conn, None, None, None, None, None, None).unwrap();
         assert_eq!(list.len(), 1);
         assert_eq!(list[0].id, p.id);
@@ -1375,7 +1349,6 @@ mod tests {
         let list2 = list_proxies(&conn, None, None, None, None, None, None).unwrap();
         assert_eq!(list2.len(), 2);
     }
-// ...
 
     #[test]
     fn test_get_or_assign_provider_proxy_flow() {
@@ -1400,12 +1373,10 @@ mod tests {
         )
         .unwrap();
 
-// ...
         // Still no proxies in DB, so it should return Err because use_proxies = 1
         assert!(get_or_assign_provider_proxy(&conn, &provider_id).is_err());
 
         // 3. Add an alive proxy
-// ...
         let p = add_custom_proxy(
             &conn,
             "1.2.3.4".to_string(),
@@ -1420,12 +1391,10 @@ mod tests {
         let proxy = get_or_assign_provider_proxy(&conn, &provider_id).unwrap();
         assert_eq!(proxy, Some("socks5://1.2.3.4:8080".to_string()));
 
-// ...
         // Add 15m cooldown for this proxy on test-provider
         openproxy_db::cooldowns::add_provider_proxy_cooldown("test-provider", &p.id, std::time::Duration::from_secs(900));
 
         // When in cooldown, get_or_assign_provider_proxy should not assign it if other alive proxy exists or returns err if no other exists
-// ...
         let proxy_after_cooldown = get_or_assign_provider_proxy(&conn, &provider_id).unwrap();
         assert_eq!(proxy_after_cooldown, Some("socks5://1.2.3.4:8080".to_string())); // fallback when only 1 alive
 
@@ -1439,7 +1408,6 @@ mod tests {
             .unwrap();
         assert_eq!(bound_id, Some(p.id.clone()));
 
-// ...
         // Calling it again should return the same cached proxy
         let proxy2 = get_or_assign_provider_proxy(&conn, &provider_id).unwrap();
         assert_eq!(proxy2, Some("socks5://1.2.3.4:8080".to_string()));
@@ -1451,7 +1419,6 @@ mod tests {
         // search for a new one, find none, and return Err because use_proxies = 1.
         assert!(get_or_assign_provider_proxy(&conn, &provider_id).is_err());
     }
-// ...
 
     #[test]
     fn test_proxyscrape_cdn_json_parsing() {

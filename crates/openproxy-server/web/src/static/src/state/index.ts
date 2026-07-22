@@ -135,7 +135,6 @@ export interface LogsState {
   selectedIdentity: { kind: "row_id", id: number } | { kind: "attempt", attemptKey: string } | null;
 }
 
-// ...
 export interface ProxySummary {
   total: number;
   alive: number;
@@ -159,7 +158,6 @@ export interface DashboardState {
   proxies: FreeProxy[];
   proxySummary: ProxySummary | null;
   /** Cached API key rows. The shape is provider-specific; the
-// ...
    *  dashboard views hydrate it from `/admin/api-keys`. Kept
    *  loose here (out of G3 scope — G4 will narrow it). */
   apiKeys: unknown[];
@@ -215,7 +213,6 @@ export interface DashboardState {
   __healthPollRunning: boolean;
 }
 
-// ...
 export const state: DashboardState = {
   // Cached server data, refreshed on navigate() and on bgPoll.
   providers: [],
@@ -227,7 +224,6 @@ export const state: DashboardState = {
   proxySummary: null,
   apiKeys: [],
   health: null,
-// ...
   // The view currently displayed. Used by `rerenderCurrentView` so
   // background polls can re-paint in place.
   currentView: { name: null, context: null },

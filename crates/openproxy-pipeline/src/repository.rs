@@ -856,7 +856,6 @@ impl PipelineRepository for SqlitePipelineRepository {
                 source: Some(Box::new(e)),
             })?;
 
-// ...
         if let Some((id, host, port, proto)) = new_proxy {
             openproxy_db::providers::update_current_proxy(&conn, provider_id, Some(&id))?;
             return Ok(Some(format!(
@@ -872,7 +871,6 @@ impl PipelineRepository for SqlitePipelineRepository {
             provider_id
         )))
     }
-// ...
 
     fn get_proxy_status_by_url(&self, url: &str) -> Option<String> {
         let conn = self.conn.lock();

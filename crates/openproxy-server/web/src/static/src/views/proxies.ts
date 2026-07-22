@@ -28,7 +28,6 @@ interface FreeProxyRow {
   updated_at: string;
 }
 
-// ...
 // Module-local filters state
 let filterSearch = "";
 let filterSource = "";
@@ -52,7 +51,6 @@ function fetchFilteredProxies(): void {
 
   void reloadProxies(queryParams);
 }
-// ...
 
 function onSearchInput(e: Event): void {
   const target = e.target as HTMLInputElement;
@@ -95,7 +93,6 @@ async function triggerSync(): Promise<void> {
     fetchFilteredProxies();
   }
 }
-// ...
 
 function formatTimeAgo(isoString: string | null): string {
   if (!isoString) return t("proxies.table.never_validated");
@@ -116,7 +113,7 @@ function formatTimeAgo(isoString: string | null): string {
 function renderProxyRow(p: FreeProxyRow): TemplateResult {
   let statusClass = "unknown";
   let statusLabel = t("proxies.status.unknown");
-  
+
   if (p.status === "alive") {
     statusClass = "on";
     statusLabel = t("proxies.status.alive");
@@ -124,7 +121,7 @@ function renderProxyRow(p: FreeProxyRow): TemplateResult {
     statusClass = "off";
     statusLabel = t("proxies.status.dead");
   }
-  
+
   let latencyText = html`—`;
   let latencyClass = "";
   if (p.latency_ms !== null && p.latency_ms !== undefined) {
@@ -256,7 +253,7 @@ function renderProxies(): TemplateResult {
     </div>
 
     <!-- Proxies list -->
-    ${loadError 
+    ${loadError
       ? html`<div class="banner banner-error">${loadError}</div>`
       : proxies.length === 0
         ? html`<p class="empty">${t("common.empty")}</p>`

@@ -8,7 +8,6 @@ import { showToast } from "../components/toast.js";
 import { ensureModalRoot, showApiError } from "../lib/ui-utils.js";
 import { t } from "../i18n/index.js";
 
-// ...
 export async function reloadProxies(queryParams?: Record<string, string | number>): Promise<void> {
   try {
     const params = new URLSearchParams();
@@ -21,7 +20,7 @@ export async function reloadProxies(queryParams?: Record<string, string | number
     }
     const queryString = params.toString();
     const url = queryString ? `/proxies?${queryString}` : "/proxies?limit=50";
-    
+
     const [proxies, summary] = await Promise.all([
       api(url),
       api("/proxies/summary"),
@@ -33,7 +32,6 @@ export async function reloadProxies(queryParams?: Record<string, string | number
     console.error("reloadProxies failed", err);
   }
 }
-// ...
 
 export async function syncProxies(): Promise<void> {
   showToast(t("proxies.toast.sync_started"), "info");
@@ -112,8 +110,8 @@ export function showAddCustomProxy(): void {
         class="modal-bg"
         id="add-proxy-modal"
         @click=${(e: Event) => {
-          if (e.target === e.currentTarget) wrapper.remove();
-        }}
+        if (e.target === e.currentTarget) wrapper.remove();
+      }}
       >
         <div class="modal">
           <div class="modal-header">
@@ -129,9 +127,9 @@ export function showAddCustomProxy(): void {
           </div>
           <form
             @submit=${(e: Event) => {
-              e.preventDefault();
-              void createCustomProxy(e, wrapper);
-            }}
+        e.preventDefault();
+        void createCustomProxy(e, wrapper);
+      }}
           >
             <div class="modal-body">
               <div class="field">

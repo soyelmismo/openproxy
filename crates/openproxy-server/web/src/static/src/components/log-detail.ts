@@ -357,7 +357,7 @@ function parseOpenAiChatResponse(value: unknown): {
     // adding signal.
     if (typeof val === "string" && val.length === 0) continue;
     if (typeof val === "object" && val !== null && !Array.isArray(val)
-        && Object.keys(val as object).length === 0) continue;
+      && Object.keys(val as object).length === 0) continue;
     otherProperties[k] = val;
   }
   // Choice-level keys except `message` / `delta` (rendered
@@ -367,7 +367,7 @@ function parseOpenAiChatResponse(value: unknown): {
     if (val == null) continue;
     if (typeof val === "string" && val.length === 0) continue;
     if (typeof val === "object" && val !== null && !Array.isArray(val)
-        && Object.keys(val as object).length === 0) continue;
+      && Object.keys(val as object).length === 0) continue;
     // Namespaced so they don't collide with top-level keys of the
     // same name (e.g. `index`).
     otherProperties[`choice.${k}`] = val;
@@ -380,7 +380,7 @@ function parseOpenAiChatResponse(value: unknown): {
   // properties, this is not a chat-completion we recognize — fall
   // through.
   if (message == null && reasoning == null
-      && toolCalls.length === 0 && otherPropsNonNull == null) return null;
+    && toolCalls.length === 0 && otherPropsNonNull == null) return null;
   return { message, reasoning, toolCalls, otherProperties: otherPropsNonNull };
 }
 
@@ -742,7 +742,7 @@ function renderResponseTab(
           if (val == null) continue;
           if (typeof val === "string" && val.length === 0) continue;
           if (typeof val === "object" && val !== null && !Array.isArray(val)
-              && Object.keys(val as object).length === 0) continue;
+            && Object.keys(val as object).length === 0) continue;
           choiceProps[`choice.${k}`] = val;
         }
         if (Object.keys(choiceProps).length > 0) {
@@ -757,7 +757,7 @@ function renderResponseTab(
       if (val == null) continue;
       if (typeof val === "string" && val.length === 0) continue;
       if (typeof val === "object" && val !== null && !Array.isArray(val)
-          && Object.keys(val as object).length === 0) continue;
+        && Object.keys(val as object).length === 0) continue;
       topLevelProps[k] = val;
     }
     if (Object.keys(topLevelProps).length > 0) {
@@ -801,8 +801,8 @@ function renderRequestTab(requestBody: unknown, createdAt?: string): TemplateRes
   const hasRequestBody: boolean = requestBody != null
     && !(typeof requestBody === "string" && requestBody.trim() === "")
     && !(typeof requestBody === "object" && requestBody !== null
-         && !Array.isArray(requestBody) && Object.keys(requestBody as object).length === 0
-         && JSON.stringify(requestBody) === "{}");
+      && !Array.isArray(requestBody) && Object.keys(requestBody as object).length === 0
+      && JSON.stringify(requestBody) === "{}");
   if (!hasRequestBody) {
     // Bug fix: distinguish "never recorded" from "expired by TTL".
     // The recording TTL default is 300s (5 min). If the row is
@@ -951,9 +951,9 @@ function renderRequestTab(requestBody: unknown, createdAt?: string): TemplateRes
           // Build a compact summary line.
           const roleClass = role === "system" ? "log-detail-role-system"
             : role === "assistant" ? "log-detail-role-assistant"
-            : role === "user" ? "log-detail-role-user"
-            : role === "tool" ? "log-detail-role-tool"
-            : "";
+              : role === "user" ? "log-detail-role-user"
+                : role === "tool" ? "log-detail-role-tool"
+                  : "";
           let anthropicToolUses = 0;
           let anthropicToolResults = 0;
           let anthropicToolResultIds: string[] = [];
@@ -974,7 +974,7 @@ function renderRequestTab(requestBody: unknown, createdAt?: string): TemplateRes
           if (typeof name === "string") extras.push(name);
           if (typeof toolCallId === "string") extras.push(`tool_call_id: ${toolCallId}`);
           if (Array.isArray(toolCalls) && toolCalls.length > 0) extras.push(`${toolCalls.length} tool call(s)`);
-          
+
           if (anthropicToolUses > 0) extras.push(`${anthropicToolUses} tool call(s)`);
           if (anthropicToolResults > 0) {
             let resStr = `${anthropicToolResults} tool result(s)`;
@@ -1087,7 +1087,7 @@ export function renderLogDetailModal(log: LogDetailLog): TemplateResult {
   // in usage.rs); `log.error_msg` / `log.error_msg_redacted` come from
   // the detail endpoint (UsageDetailRow.error_msg in usage.rs).
   const detailErrors: unknown = (detail as Record<string, unknown>)["errors"];
-  
+
   const isInflight: boolean = log.id === 0 || log.id == null;
   const attempt = log.stages?.[0] as any;
   const synthesizedError = isInflight
@@ -1117,10 +1117,10 @@ export function renderLogDetailModal(log: LogDetailLog): TemplateResult {
   const model: string = log.model_id || log.upstream_model || log.upstream_model_id || (readString(meta, "model_id") ?? "—");
   const latency: string = log.latency_ms != null ? `${log.latency_ms} ms`
     : (log.total_ms != null ? `${log.total_ms} ms`
-    : (log.elapsed_ms != null ? `${log.elapsed_ms} ms` : "—"));
+      : (log.elapsed_ms != null ? `${log.elapsed_ms} ms` : "—"));
   const costRaw: number | null = log.cost != null ? log.cost
     : (log.usage && log.usage.cost != null ? log.usage.cost
-    : (log.cost_usd != null ? log.cost_usd : null));
+      : (log.cost_usd != null ? log.cost_usd : null));
   const status: string = log.status || (log.status_code != null ? String(log.status_code) : "—");
   const statusClass: string = statusPillClass(
     log.status_code != null
@@ -1182,8 +1182,8 @@ export function renderLogDetailModal(log: LogDetailLog): TemplateResult {
             </div>
             <div style="display: ${currentActiveTab === "errors" ? "block" : "none"}">
               ${errors != null
-                ? jsonSection("Errors", errors, "errors")
-                : html`<section class="log-detail-section" data-log-tab="errors">
+      ? jsonSection("Errors", errors, "errors")
+      : html`<section class="log-detail-section" data-log-tab="errors">
                      <h4>Errors</h4>
                      <p class="muted">No errors recorded.</p>
                    </section>`}
@@ -1326,10 +1326,9 @@ export async function openLogDetail(
 ): Promise<void> {
   const gen = bumpOpenLogDetailGeneration();
   const isFinalized = row != null && row.terminal && row.row;
-  
+
   const fallbackAttemptKey = traceId || (requestId ? `${requestId}:unknown` : id);
-  
-// ...
+
   if (isFinalized || row == null) {
     try {
       const hasValidId = Boolean(id && id !== "0");
@@ -1348,14 +1347,14 @@ export async function openLogDetail(
       // Ignored
     }
   }
-  
+
   if (!isCurrentOpenLogDetailGeneration(gen)) return;
-  
+
   const hasValidId = Boolean(id && id !== "0");
   state.logs.selectedIdentity = hasValidId ? { kind: "row_id", id: Number(id) } : { kind: "attempt", attemptKey: fallbackAttemptKey };
   pinnedRequestId = requestId;
   pinnedTraceId = traceId;
-  
+
   const root = ensureModalRoot();
   let wrapper = document.querySelector(".log-detail-modal-wrapper") as HTMLElement | null;
   if (!wrapper) {
@@ -1363,7 +1362,7 @@ export async function openLogDetail(
     wrapper.className = "log-detail-modal-wrapper";
     root.appendChild(wrapper);
   }
-  
+
   // We re-render immediately.
   renderModal();
   initializeLogDetailTabs();
@@ -1373,10 +1372,10 @@ function renderModal() {
   if (!state.logs.selectedIdentity) return;
   const attempt = liveLogsStore.selectDetail(state.logs.selectedIdentity);
   if (!attempt) return;
-  
+
   const wrapper = document.querySelector(".log-detail-modal-wrapper");
   if (!wrapper) return;
-  
+
   // Create a LogDetailLog compatible object for the modal view
   // The WS `log` row is the SSOT for live state, while `attempt.detail`
   // contains the heavy payloads from the `/usage/detail` snapshot. We merge
@@ -1394,9 +1393,9 @@ function renderModal() {
     response_headers: log.response_headers ?? detailObj.response_headers,
     stages: [safeAttempt],
     detail: undefined
-  } : { 
-    id: attempt.rowId, 
-    request_id: attempt.requestId, 
+  } : {
+    id: attempt.rowId,
+    request_id: attempt.requestId,
     trace_id: attempt.traceId,
     status_code: attempt.statusCode,
     total_ms: attempt.elapsedMsAtEvent,
@@ -1489,7 +1488,7 @@ export function hasCompleteLogDetail(row: LogDetailLog | null | undefined): bool
   if (row.errors != null || row.error != null || row.error_msg != null) return true;
   const detail: Record<string, unknown> | null | undefined = row.detail;
   if (detail && (detail["response"] != null || detail["request_body_json"] != null
-        || (Array.isArray(detail["requests"]) && (detail["requests"] as unknown[]).length > 0))) return true;
+    || (Array.isArray(detail["requests"]) && (detail["requests"] as unknown[]).length > 0))) return true;
   return false;
 }
 
@@ -1588,9 +1587,9 @@ export function buildDebugBundle(log: LogDetailLog): string {
   // Error.
   const errorMsg: string | null =
     (typeof log.error_message === "string" && log.error_message.length > 0) ? log.error_message :
-    (typeof log.error_msg === "string" && log.error_msg.length > 0) ? log.error_msg :
-    (typeof log.error_msg_redacted === "string" && log.error_msg_redacted.length > 0) ? log.error_msg_redacted :
-    null;
+      (typeof log.error_msg === "string" && log.error_msg.length > 0) ? log.error_msg :
+        (typeof log.error_msg_redacted === "string" && log.error_msg_redacted.length > 0) ? log.error_msg_redacted :
+          null;
   if (errorMsg) {
     lines.push("## Error");
     lines.push("");
@@ -1813,8 +1812,8 @@ function summarizeRequestBody(body: unknown): string {
 export async function copyDebugBundle(): Promise<void> {
   const attempt = state.logs.selectedIdentity ? liveLogsStore.selectDetail(state.logs.selectedIdentity) : null;
   const row = attempt ? (attempt.row ? { ...attempt.row, stages: [attempt] } : {
-    id: attempt.rowId, 
-    request_id: attempt.requestId, 
+    id: attempt.rowId,
+    request_id: attempt.requestId,
     trace_id: attempt.traceId,
     status_code: attempt.statusCode,
     total_ms: attempt.elapsedMsAtEvent,
@@ -1822,7 +1821,7 @@ export async function copyDebugBundle(): Promise<void> {
     upstream_model_id: attempt.upstreamModelId,
     stages: [attempt]
   }) as unknown as LogDetailLog : null;
-  
+
   if (!row) {
     showToast("No log row selected.", "warning");
     return;

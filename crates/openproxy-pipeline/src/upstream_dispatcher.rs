@@ -77,14 +77,12 @@ pub struct UpstreamDispatcher {
     pub record_bodies_and_headers: Arc<std::sync::atomic::AtomicBool>,
 }
 
-// ...
 #[derive(Debug)]
 pub(crate) enum ProxyRotationTrigger {
     Status(u16),
     ConnectError,
     RateLimited,
 }
-// ...
 
 impl UpstreamDispatcher {
     pub fn new(
@@ -146,8 +144,6 @@ impl UpstreamDispatcher {
                         }
                     };
 
-// ...
-// ...
                     if should_rotate && let Some(ref bad_proxy_id) = provider.current_proxy_id {
                         tracing::warn!(
                             provider = %provider_id,
@@ -155,13 +151,11 @@ impl UpstreamDispatcher {
                             trigger = ?trigger,
                             "proxy rotation triggered: clearing binding and adding 15m cooldown for provider"
                         );
-// ...
                         openproxy_db::cooldowns::add_provider_proxy_cooldown(
                             provider_id.as_str(),
                             bad_proxy_id,
                             std::time::Duration::from_secs(15 * 60),
                         );
-// ...
                         // Only mark proxy as "dead" on connection errors, NOT on rate limits / 429 status.
                         // Rate limiting is per-provider IP throttling, so the proxy host is still alive.
                         if matches!(trigger, crate::upstream_dispatcher::ProxyRotationTrigger::ConnectError) {
@@ -173,10 +167,8 @@ impl UpstreamDispatcher {
                             openproxy_db::providers::update_current_proxy(&conn, &provider_id, None);
                         return true;
                     }
-// ...
                 }
             }
-// ...
             false
         })
         .await
@@ -187,7 +179,6 @@ impl UpstreamDispatcher {
         *rx.borrow_and_update()
     }
 
-// ...
     pub(crate) fn record_and_fail(
         &self,
         req: PipelineRequest,
@@ -208,7 +199,6 @@ impl UpstreamDispatcher {
             trace_id,
         )
     }
-// ...
 
     pub(crate) fn record_and_fail_with_trace_id(
         &self,
@@ -1599,7 +1589,6 @@ impl UpstreamDispatcher {
             // honors the upstream-requested delay instead of using
             // the fixed exponential backoff. Mirrors the non-streaming
             // path's handling at line 3172.
-// ...
             let retry_after_ms: Option<u64> = response
                 .headers
                 .get("retry-after")
@@ -1624,7 +1613,6 @@ impl UpstreamDispatcher {
                     is_proxy_rotated,
                 }
             } else {
-// ...
                 // Diagnostic: when MiniMax returns a 400 with error
                 // code 2013 ("tool call and result not match" or
                 // "tool call result does not follow tool call"), log
