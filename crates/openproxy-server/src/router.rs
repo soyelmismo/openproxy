@@ -37,7 +37,7 @@
 
 use axum::{
     Json, Router, middleware,
-    routing::{delete, get, patch, post, put},
+    routing::{delete, get, patch, post},
 };
 use serde_json::json;
 
