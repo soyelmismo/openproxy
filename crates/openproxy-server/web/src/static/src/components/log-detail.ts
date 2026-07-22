@@ -1648,16 +1648,32 @@ export function buildDebugBundle(log: LogDetailLog): string {
     lines.push("");
   }
 
-  // Raw log row (everything we have).
+// ...
+  // Raw log row (everything we have, cleaned of nested duplicates).
+  const cleanLog: Record<string, unknown> = { ...(log as unknown as Record<string, unknown>) };
+  delete cleanLog["detail"];
+  if (Array.isArray(cleanLog["stages"])) {
+    cleanLog["stages"] = (cleanLog["stages"] as any[]).map((s: any) => {
+      if (s && typeof s === "object") {
+        const copy = { ...s };
+        delete copy.row;
+        delete copy.detail;
+        return copy;
+      }
+      return s;
+    });
+  }
+
   lines.push("## Raw Log Row");
   lines.push("");
   lines.push("```json");
-  lines.push(truncateForBundle(JSON.stringify(log, null, 2)));
+  lines.push(truncateForBundle(JSON.stringify(cleanLog, null, 2)));
   lines.push("```");
   lines.push("");
 
   return lines.join("\n");
 }
+// ...
 
 /** Truncate a string to ~10 KB for the debug bundle. Larger bodies
  *  make the bundle uncopy-pasteable. The truncation marker makes it
@@ -1811,16 +1827,24 @@ function summarizeRequestBody(body: unknown): string {
  *  textarea, selects it, and calls `document.execCommand("copy")`. */
 export async function copyDebugBundle(): Promise<void> {
   const attempt = state.logs.selectedIdentity ? liveLogsStore.selectDetail(state.logs.selectedIdentity) : null;
-  const row = attempt ? (attempt.row ? { ...attempt.row, stages: [attempt] } : {
-    id: attempt.rowId,
-    request_id: attempt.requestId,
-    trace_id: attempt.traceId,
-    status_code: attempt.statusCode,
-    total_ms: attempt.elapsedMsAtEvent,
-    provider_id: attempt.providerId,
-    upstream_model_id: attempt.upstreamModelId,
-    stages: [attempt]
-  }) as unknown as LogDetailLog : null;
+  let row: LogDetailLog | null = null;
+  if (attempt) {
+    const safeAttempt = { ...attempt, detail: undefined, row: undefined };
+    if (attempt.row) {
+      row = { ...attempt.row, stages: [safeAttempt] } as unknown as LogDetailLog;
+    } else {
+      row = {
+        id: attempt.rowId,
+        request_id: attempt.requestId,
+        trace_id: attempt.traceId,
+        status_code: attempt.statusCode,
+        total_ms: attempt.elapsedMsAtEvent,
+        provider_id: attempt.providerId,
+        upstream_model_id: attempt.upstreamModelId,
+        stages: [safeAttempt]
+      } as unknown as LogDetailLog;
+    }
+  }
 
   if (!row) {
     showToast("No log row selected.", "warning");
