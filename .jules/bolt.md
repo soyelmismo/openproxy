@@ -30,3 +30,7 @@
 **Learning:** Read-only SQLite DB calls inside a blocking thread should use `db_pool.reader()` instead of `db_pool.writer()` to prevent lock contention and executor thread blocking.
 **Action:** Use reader locks whenever possible, especially in high-throughput synchronization loops.
 
+## 2026-07-22 - Antigravity OAuth onboarding loop sequential block
+**Learning:** Optimizing retry loops for operations where the caller depends on the side-effect (such as OAuth `post_exchange` completing to proceed safely to subsequent steps) by using background tasks (`tokio::spawn`) will introduce a race condition where the caller proceeds without the necessary completed data.
+**Action:** Use exponential backoff (e.g. `std::time::Duration::from_millis(500)` doubling on retry) instead of background tasks to safely and functionally reduce latency on expected fast path responses without breaking the synchronous flow.
+

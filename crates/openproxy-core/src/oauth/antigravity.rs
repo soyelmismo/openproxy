@@ -157,8 +157,9 @@ impl OAuthProvider for AntigravityOAuthProvider {
         {
             Some(pid) => pid,
             None => {
-                // Retry onboardUser up to 10 times with 5s delays
+                // Retry onboardUser up to 10 times with exponential backoff
                 let mut result = None;
+                let mut delay = std::time::Duration::from_millis(500);
                 for attempt in 0..10 {
                     match openproxy_adapters::adapters::antigravity::onboard_user(
                         upstream,
@@ -174,7 +175,8 @@ impl OAuthProvider for AntigravityOAuthProvider {
                         }
                         Ok(None) => {
                             // Not done yet, wait and retry
-                            tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+                            tokio::time::sleep(delay).await;
+                            delay = std::cmp::min(delay * 2, std::time::Duration::from_secs(5));
                         }
                         Err(e) => {
                             tracing::warn!(attempt = attempt + 1, error = %e, "onboardUser failed");
