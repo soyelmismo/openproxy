@@ -28,6 +28,7 @@ interface FreeProxyRow {
   updated_at: string;
 }
 
+// ...
 // Module-local filters state
 let filterSearch = "";
 let filterSource = "";
@@ -36,33 +37,52 @@ let filterProtocol = "";
 let isSyncing = false;
 let loadError: string | null = null;
 let currentPage = 1;
+let searchDebounceTimer: ReturnType<typeof setTimeout> | null = null;
+
+// ...
+function fetchFilteredProxies(): void {
+  const queryParams: Record<string, string | number> = {
+    limit: 50,
+    offset: (currentPage - 1) * 50,
+  };
+  if (filterSearch) queryParams["search"] = filterSearch;
+  if (filterSource) queryParams["source"] = filterSource;
+  if (filterStatus) queryParams["status"] = filterStatus;
+  if (filterProtocol) queryParams["protocol"] = filterProtocol;
+
+  void reloadProxies(queryParams);
+}
+// ...
 
 function onSearchInput(e: Event): void {
   const target = e.target as HTMLInputElement;
-  filterSearch = target.value.trim().toLowerCase();
+  filterSearch = target.value.trim();
   currentPage = 1;
-  requestUpdate();
+  if (searchDebounceTimer) clearTimeout(searchDebounceTimer);
+  searchDebounceTimer = setTimeout(() => {
+    fetchFilteredProxies();
+  }, 300);
 }
 
 function onSourceChange(e: Event): void {
   const target = e.target as HTMLSelectElement;
   filterSource = target.value;
   currentPage = 1;
-  requestUpdate();
+  fetchFilteredProxies();
 }
 
 function onStatusChange(e: Event): void {
   const target = e.target as HTMLSelectElement;
   filterStatus = target.value;
   currentPage = 1;
-  requestUpdate();
+  fetchFilteredProxies();
 }
 
 function onProtocolChange(e: Event): void {
   const target = e.target as HTMLSelectElement;
   filterProtocol = target.value;
   currentPage = 1;
-  requestUpdate();
+  fetchFilteredProxies();
 }
 
 async function triggerSync(): Promise<void> {
@@ -72,9 +92,10 @@ async function triggerSync(): Promise<void> {
     await syncProxies();
   } finally {
     isSyncing = false;
-    requestUpdate();
+    fetchFilteredProxies();
   }
 }
+// ...
 
 function formatTimeAgo(isoString: string | null): string {
   if (!isoString) return t("proxies.table.never_validated");
@@ -143,35 +164,28 @@ function renderProxyRow(p: FreeProxyRow): TemplateResult {
   `;
 }
 
-// ...
 function renderProxies(): TemplateResult {
   const proxies = (state.proxies as FreeProxyRow[]) || [];
-  const uniqueSources: string[] = Array.from(new Set(proxies.map((p: FreeProxyRow) => p.source).filter(Boolean))).sort();
-  const uniqueProtocols: string[] = Array.from(new Set(proxies.map((p: FreeProxyRow) => p.type).filter(Boolean))).sort();
-  
-  // Calculate stats
-  const total = proxies.length;
-// ...
-  const aliveProxies = proxies.filter(p => p.status === "alive");
-  const alive = aliveProxies.length;
-  const dead = proxies.filter(p => p.status === "dead").length;
-  const avgLatency = alive > 0 
-    ? Math.round(aliveProxies.reduce((sum, p) => sum + (p.latency_ms || 0), 0) / alive) 
-    : 0;
+  const summary = (state as any).proxySummary || {
+    total: 0,
+    alive: 0,
+    dead: 0,
+    unknown: 0,
+    avg_latency_ms: null,
+    sources: [],
+    protocols: [],
+  };
 
-  // Apply filters
-  const filtered = proxies.filter(p => {
-    if (filterSearch && !p.host.toLowerCase().includes(filterSearch)) return false;
-    if (filterSource && p.source !== filterSource) return false;
-    if (filterStatus && p.status !== filterStatus) return false;
-    if (filterProtocol && p.type !== filterProtocol) return false;
-    return true;
-  });
-
-  const pageSize = 50;
-  const paginated = filtered.slice(0, currentPage * pageSize);
+  const total = summary.total;
+  const alive = summary.alive;
+  const dead = summary.dead;
+  const avgLatency = summary.avg_latency_ms;
+  const uniqueSources = summary.sources || [];
+  const uniqueProtocols = summary.protocols || [];
 
   const syncBtnLabel = isSyncing ? "Syncing..." : t("proxies.btn.sync");
+  const hasPrevPage = currentPage > 1;
+  const hasNextPage = proxies.length === 50;
 
   return html`
     <div class="page-header">
@@ -209,7 +223,7 @@ function renderProxies(): TemplateResult {
       </div>
       <div class="kpi-card kpi-latency">
         <div class="kpi-title">${t("proxies.kpi.avg_latency")}</div>
-        <div class="kpi-value">${alive > 0 ? html`${avgLatency} <small>ms</small>` : "—"}</div>
+        <div class="kpi-value">${avgLatency !== null ? html`${avgLatency} <small>ms</small>` : "—"}</div>
       </div>
     </div>
 
@@ -224,7 +238,6 @@ function renderProxies(): TemplateResult {
         />
       </div>
       <div class="filter-selects">
-// ...
         <select @change=${onProtocolChange} .value=${filterProtocol}>
           <option value="">${t("proxies.filter.all_protocols")}</option>
           ${uniqueProtocols.map((p: string) => html`<option value=${p}>${p.toUpperCase()}</option>`)}
@@ -233,7 +246,6 @@ function renderProxies(): TemplateResult {
           <option value="">${t("proxies.filter.all_sources")}</option>
           ${uniqueSources.map((s: string) => html`<option value=${s}>${s}</option>`)}
         </select>
-// ...
         <select @change=${onStatusChange} .value=${filterStatus}>
           <option value="">${t("proxies.filter.all_statuses")}</option>
           <option value="unknown">${t("proxies.status.unknown")}</option>
@@ -246,7 +258,7 @@ function renderProxies(): TemplateResult {
     <!-- Proxies list -->
     ${loadError 
       ? html`<div class="banner banner-error">${loadError}</div>`
-      : filtered.length === 0
+      : proxies.length === 0
         ? html`<p class="empty">${t("common.empty")}</p>`
         : html`
           <table>
@@ -264,16 +276,20 @@ function renderProxies(): TemplateResult {
               </tr>
             </thead>
             <tbody>
-              ${paginated.map(renderProxyRow)}
+              ${proxies.map(renderProxyRow)}
             </tbody>
           </table>
-          ${paginated.length < filtered.length ? html`
-            <div style="text-align: center; margin: 1.5rem 0;">
-              <button class="secondary" @click=${() => { currentPage++; requestUpdate(); }}>
-                Load More (${filtered.length - paginated.length} remaining)
+          <div style="display: flex; justify-content: space-between; align-items: center; margin: 1.5rem 0;">
+            <span>Page ${currentPage}</span>
+            <div style="display: flex; gap: 0.5rem;">
+              <button class="secondary small" ?disabled=${!hasPrevPage} @click=${() => { if (hasPrevPage) { currentPage--; fetchFilteredProxies(); } }}>
+                ← Previous
+              </button>
+              <button class="secondary small" ?disabled=${!hasNextPage} @click=${() => { if (hasNextPage) { currentPage++; fetchFilteredProxies(); } }}>
+                Next →
               </button>
             </div>
-          ` : ''}
+          </div>
         `
     }
   `;
@@ -281,9 +297,10 @@ function renderProxies(): TemplateResult {
 
 export async function mountProxies(): Promise<(() => void) | void> {
   loadError = null;
+  currentPage = 1;
   return createView(
     renderProxies,
-    async () => { await reloadProxies(); },
+    async () => { fetchFilteredProxies(); },
     (msg) => { loadError = msg; },
   );
 }

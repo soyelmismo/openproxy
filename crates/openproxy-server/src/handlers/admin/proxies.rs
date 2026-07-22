@@ -5,6 +5,7 @@ use axum::{
 };
 use openproxy_adapters::upstream::is_private_or_reserved;
 
+// ...
 pub async fn list_proxies(
     State(s): State<AppState>,
     Query(query): Query<ListProxiesQuery>,
@@ -15,12 +16,27 @@ pub async fn list_proxies(
             &r,
             query.source.as_deref(),
             query.status.as_deref(),
+            query.protocol.as_deref(),
+            query.search.as_deref(),
+            query.limit,
+            query.offset,
         )?;
         Ok(Json(list))
     }
 }
 
+pub async fn get_proxy_summary(
+    State(s): State<AppState>,
+) -> ApiResult<Json<openproxy_core::free_proxies::ProxySummary>> {
+    crate::api_try! {
+        let r = s.db_pool().reader();
+        let summary = openproxy_core::free_proxies::get_proxy_summary(&r)?;
+        Ok(Json(summary))
+    }
+}
+
 pub async fn sync_proxies(
+// ...
     State(s): State<AppState>,
 ) -> ApiResult<Json<openproxy_core::free_proxies::SyncSummary>> {
     let res: Result<Json<openproxy_core::free_proxies::SyncSummary>, crate::error::ApiError> = async {

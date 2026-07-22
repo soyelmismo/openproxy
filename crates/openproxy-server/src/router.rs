@@ -381,6 +381,7 @@ pub fn build_router(state: AppState) -> Router {
             "/keys/{id}/usage",
             get(handlers::admin::api_keys::api_key_usage),
         )
+// ...
         // Free proxies endpoints
         .route(
             "/proxies",
@@ -388,9 +389,14 @@ pub fn build_router(state: AppState) -> Router {
                 .post(handlers::admin::proxies::create_custom_proxy),
         )
         .route(
+            "/proxies/summary",
+            get(handlers::admin::proxies::get_proxy_summary),
+        )
+        .route(
             "/proxies/sync",
             post(handlers::admin::proxies::sync_proxies),
         )
+// ...
         .route(
             "/proxies/test-all",
             post(handlers::admin::proxies::test_all_proxies),

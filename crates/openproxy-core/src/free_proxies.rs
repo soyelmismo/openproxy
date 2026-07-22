@@ -28,6 +28,7 @@ pub struct ScrapedProxy {
     pub country_code: Option<String>,
 }
 
+// ...
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct SyncSummary {
     pub fetched: usize,
@@ -35,25 +36,148 @@ pub struct SyncSummary {
     pub errors: Vec<String>,
 }
 
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct ProxySummary {
+// ...
+    pub total: usize,
+    pub alive: usize,
+    pub dead: usize,
+    pub unknown: usize,
+    pub avg_latency_ms: Option<u32>,
+    pub sources: Vec<String>,
+    pub protocols: Vec<String>,
+}
+
+pub fn get_proxy_summary(conn: &Connection) -> crate::error::Result<ProxySummary> {
+    let mut stmt = conn
+        .prepare(
+            "SELECT \
+                COUNT(*), \
+                SUM(CASE WHEN status = 'alive' THEN 1 ELSE 0 END), \
+                SUM(CASE WHEN status = 'dead' THEN 1 ELSE 0 END), \
+                SUM(CASE WHEN status = 'unknown' THEN 1 ELSE 0 END), \
+                AVG(CASE WHEN status = 'alive' AND latency_ms IS NOT NULL THEN latency_ms ELSE NULL END) \
+             FROM free_proxies",
+        )
+        .map_err(|e| crate::error::CoreError::Database {
+            message: e.to_string(),
+            source: Some(Box::new(e)),
+        })?;
+
+    let row = stmt
+        .query_row([], |r| {
+            let total: i64 = r.get(0)?;
+            let alive: Option<i64> = r.get(1)?;
+            let dead: Option<i64> = r.get(2)?;
+            let unknown: Option<i64> = r.get(3)?;
+            let avg_latency: Option<f64> = r.get(4)?;
+            Ok((
+                total as usize,
+                alive.unwrap_or(0) as usize,
+                dead.unwrap_or(0) as usize,
+                unknown.unwrap_or(0) as usize,
+                avg_latency.map(|l| l.round() as u32),
+            ))
+        })
+        .map_err(|e| crate::error::CoreError::Database {
+            message: e.to_string(),
+            source: Some(Box::new(e)),
+        })?;
+
+    let mut sources_stmt = conn
+        .prepare("SELECT DISTINCT source FROM free_proxies WHERE source IS NOT NULL AND source != '' ORDER BY source ASC")
+        .map_err(|e| crate::error::CoreError::Database {
+            message: e.to_string(),
+            source: Some(Box::new(e)),
+        })?;
+    let sources_rows = sources_stmt
+        .query_map([], |r| r.get(0))
+        .map_err(|e| crate::error::CoreError::Database {
+            message: e.to_string(),
+            source: Some(Box::new(e)),
+        })?;
+    let sources: Vec<String> = sources_rows.filter_map(|r| r.ok()).collect();
+
+    let mut proto_stmt = conn
+        .prepare("SELECT DISTINCT type FROM free_proxies WHERE type IS NOT NULL AND type != '' ORDER BY type ASC")
+        .map_err(|e| crate::error::CoreError::Database {
+            message: e.to_string(),
+            source: Some(Box::new(e)),
+        })?;
+    let proto_rows = proto_stmt
+        .query_map([], |r| r.get(0))
+        .map_err(|e| crate::error::CoreError::Database {
+            message: e.to_string(),
+            source: Some(Box::new(e)),
+        })?;
+    let protocols: Vec<String> = proto_rows.filter_map(|r| r.ok()).collect();
+
+    Ok(ProxySummary {
+        total: row.0,
+        alive: row.1,
+        dead: row.2,
+        unknown: row.3,
+        avg_latency_ms: row.4,
+        sources,
+        protocols,
+    })
+}
+
 pub fn list_proxies(
     conn: &Connection,
     source: Option<&str>,
     status: Option<&str>,
+    protocol: Option<&str>,
+    search: Option<&str>,
+    limit: Option<usize>,
+    offset: Option<usize>,
 ) -> crate::error::Result<Vec<FreeProxy>> {
     let mut sql = "SELECT id, source, host, port, type, country_code, status, latency_ms, last_validated, created_at, updated_at FROM free_proxies WHERE 1=1".to_string();
     let mut params: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
 
     if let Some(src) = source {
-        sql.push_str(" AND source = ?");
-        params.push(Box::new(src.to_string()));
+        if !src.trim().is_empty() {
+            sql.push_str(" AND source = ?");
+            params.push(Box::new(src.to_string()));
+        }
     }
 
     if let Some(st) = status {
-        sql.push_str(" AND status = ?");
-        params.push(Box::new(st.to_string()));
+        if !st.trim().is_empty() {
+            sql.push_str(" AND status = ?");
+            params.push(Box::new(st.to_string()));
+        }
+    }
+
+    if let Some(proto) = protocol {
+        if !proto.trim().is_empty() {
+            sql.push_str(" AND type = ?");
+            params.push(Box::new(proto.to_string()));
+        }
+    }
+
+    if let Some(s) = search {
+        let trimmed = s.trim();
+        if !trimmed.is_empty() {
+            sql.push_str(" AND (host LIKE ? OR source LIKE ? OR type LIKE ? OR country_code LIKE ?)");
+            let pattern = format!("%{}%", trimmed);
+            params.push(Box::new(pattern.clone()));
+            params.push(Box::new(pattern.clone()));
+            params.push(Box::new(pattern.clone()));
+            params.push(Box::new(pattern));
+        }
     }
 
     sql.push_str(" ORDER BY status = 'alive' DESC, latency_ms ASC, updated_at DESC");
+
+    let lim = limit.unwrap_or(100).min(500);
+    sql.push_str(" LIMIT ?");
+    params.push(Box::new(lim as i64));
+
+    if let Some(off) = offset {
+        sql.push_str(" OFFSET ?");
+        params.push(Box::new(off as i64));
+    }
 
     let mut stmt = conn
         .prepare(&sql)
@@ -95,6 +219,7 @@ pub fn list_proxies(
     }
     Ok(list)
 }
+// ...
 
 pub fn get_proxy(conn: &Connection, id: &str) -> crate::error::Result<Option<FreeProxy>> {
     let mut stmt = conn
