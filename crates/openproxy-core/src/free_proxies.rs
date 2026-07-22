@@ -625,18 +625,18 @@ pub async fn test_proxy_connection(r#type: &str, host: &str, port: u16) -> Resul
     let proxy_url = format!("{}://{}:{}", r#type, host, port);
 
     let client = UpstreamClient::new();
-    let mut req = UpstreamRequest::get("https://clients3.google.com/generate_204");
+    let mut req = UpstreamRequest::get("http://cp.cloudflare.com/generate_204");
     req.proxy = Some(proxy_url);
 
-    // Tight timeout for the proxy test (equivalent to the old 5s timeout).
+    // Timeout budget for proxy probe test.
     let profile = TimeoutProfile::Custom(ResolvedTimeouts {
-        dns_ms: 2000,
-        dial_ms: 3000,
-        tls_ms: 3000,
-        write_ms: 2000,
-        headers_ms: 5000,
-        body_chunk_ms: 2000,
-        total_ms: 5000,
+        dns_ms: 3000,
+        dial_ms: 5000,
+        tls_ms: 5000,
+        write_ms: 3000,
+        headers_ms: 8000,
+        body_chunk_ms: 3000,
+        total_ms: 8000,
     });
     let cancel = openproxy_adapters::upstream::CancellationToken::new();
 
@@ -678,10 +678,11 @@ pub async fn test_single_proxy(db_pool: Arc<DbPool>, id: &str) -> crate::error::
         })?
     };
 
-    let res = test_proxy_connection(&r#type, &host, port).await;
+    let start = std::time::Instant::now();
+    let test_res = test_proxy_connection(&r#type, &host, port).await;
 
     let w = db_pool.writer();
-    match res {
+    match test_res {
         Ok(latency) => {
             update_proxy_status(&w, id, "alive", Some(latency))?;
         }
@@ -690,34 +691,8 @@ pub async fn test_single_proxy(db_pool: Arc<DbPool>, id: &str) -> crate::error::
         }
     }
 
-    let r = db_pool.reader();
-    let mut stmt = r
-        .prepare("SELECT id, source, host, port, type, country_code, status, latency_ms, last_validated, created_at, updated_at FROM free_proxies WHERE id = ?1")
-        .map_err(|e| crate::error::CoreError::Database {
-            message: e.to_string(),
-            source: Some(Box::new(e)),
-        })?;
-
-    let p = stmt
-        .query_row(rusqlite::params![id], |row| {
-            Ok(FreeProxy {
-                id: row.get(0)?,
-                source: row.get(1)?,
-                host: row.get(2)?,
-                port: row.get(3)?,
-                r#type: row.get(4)?,
-                country_code: row.get(5)?,
-                status: row.get(6)?,
-                latency_ms: row.get(7)?,
-                last_validated: row.get(8)?,
-                created_at: row.get(9)?,
-                updated_at: row.get(10)?,
-            })
-        })
-        .map_err(|e| crate::error::CoreError::Database {
-            message: e.to_string(),
-            source: Some(Box::new(e)),
-        })?;
+    let p = get_proxy(&w, id)?
+        .ok_or_else(|| crate::error::CoreError::NotFound(format!("proxy {} not found", id)))?;
 
     Ok(p)
 }
@@ -783,7 +758,15 @@ pub fn test_all_proxies_background(db_pool: Arc<DbPool>) {
                                         update_proxy_status(&w, &id_clone, "alive", Some(latency));
                                 }
                                 Err(_) => {
-                                    let _ = update_proxy_status(&w, &id_clone, "dead", None);
+                                    // Only mark dead if status was not already alive
+                                    let current_status: Option<String> = w.query_row(
+                                        "SELECT status FROM free_proxies WHERE id = ?1",
+                                        rusqlite::params![&id_clone],
+                                        |r| r.get(0),
+                                    ).ok();
+                                    if current_status.as_deref() != Some("alive") {
+                                        let _ = update_proxy_status(&w, &id_clone, "dead", None);
+                                    }
                                 }
                             }
                             Ok(())
@@ -796,9 +779,6 @@ pub fn test_all_proxies_background(db_pool: Arc<DbPool>) {
             .collect::<Vec<()>>()
             .await;
     });
-}
-
-#[cfg(test)]
 mod tests {
     use super::*;
     use rusqlite::Connection;

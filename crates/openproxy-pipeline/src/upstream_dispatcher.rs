@@ -77,11 +77,14 @@ pub struct UpstreamDispatcher {
     pub record_bodies_and_headers: Arc<std::sync::atomic::AtomicBool>,
 }
 
+// ...
+#[derive(Debug)]
 pub(crate) enum ProxyRotationTrigger {
     Status(u16),
     ConnectError,
     RateLimited,
 }
+// ...
 
 impl UpstreamDispatcher {
     pub fn new(
@@ -143,13 +146,19 @@ impl UpstreamDispatcher {
                         }
                     };
 
+// ...
                     if should_rotate && let Some(ref bad_proxy_id) = provider.current_proxy_id {
                         tracing::warn!(
                             provider = %provider_id,
                             proxy_id = %bad_proxy_id,
-                            "proxy rotation triggered: marking proxy as dead and clearing binding"
+                            trigger = ?trigger,
+                            "proxy rotation triggered: clearing binding"
                         );
-                        let _ = repo.update_proxy_status(bad_proxy_id, "dead", None);
+                        // Only mark proxy as "dead" on connection errors, NOT on rate limits / 429 status.
+                        // Rate limiting is per-provider IP throttling, so the proxy host is still alive.
+                        if matches!(trigger, crate::upstream_dispatcher::ProxyRotationTrigger::ConnectError) {
+                            let _ = repo.update_proxy_status(bad_proxy_id, "dead", None);
+                        }
                         
                         let conn = conn_clone.lock();
                         let _ =
@@ -158,6 +167,7 @@ impl UpstreamDispatcher {
                     }
                 }
             }
+// ...
             false
         })
         .await
