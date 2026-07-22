@@ -1,0 +1,42 @@
+--- crates/openproxy-core/src/accounts.rs
++++ crates/openproxy-core/src/accounts.rs
+@@ -557,6 +557,39 @@
+     }
+ }
+
++pub fn decrypt_refresh_tokens(
++    conn: &Connection,
++    ids: &[AccountId],
++    master_key: &MasterKey,
++) -> Result<std::collections::HashMap<AccountId, Result<Option<String>>>> {
++    if ids.is_empty() {
++        return Ok(std::collections::HashMap::new());
++    }
++    let mut map = std::collections::HashMap::new();
++    for chunk in ids.chunks(900) {
++        let placeholders = vec!["?"; chunk.len()].join(",");
++        let query = format!(
++            "SELECT id, refresh_token_encrypted FROM accounts WHERE id IN ({})",
++            placeholders
++        );
++        let mut stmt = conn
++            .prepare(&query)
++            .map_err(openproxy_db::error::map_db_error)?;
++        let params = rusqlite::params_from_iter(chunk.iter().map(|id| id.0));
++        let mut rows = stmt.query(params).map_err(openproxy_db::error::map_db_error)?;
++        while let Some(row) = rows.next().map_err(openproxy_db::error::map_db_error)? {
++            let id: i64 = row.get(0).map_err(openproxy_db::error::map_db_error)?;
++            let blob: Option<Vec<u8>> = row.get(1).map_err(openproxy_db::error::map_db_error)?;
++            let token = match blob {
++                Some(b) => master_key.decrypt(&b).map(Some).map_err(CoreError::from),
++                None => Ok(None),
++            };
++            map.insert(AccountId(id), token);
++        }
++    }
++    Ok(map)
++}
++
+ /// Return all OAuth accounts whose tokens expire within `within_seconds`
+ /// from now. Used by the refresh scheduler to proactively refresh tokens.
+ pub fn list_expiring_oauth_accounts(

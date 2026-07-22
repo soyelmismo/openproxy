@@ -813,24 +813,6 @@ pub async fn start_refresh_scheduler(
             "oauth refresh: accounts due for refresh"
         );
 
-        let account_ids: Vec<_> = accounts.iter().map(|a| a.id).collect();
-        let refresh_tokens = {
-            let db_pool = db_pool.clone();
-            let master_key = master_key.clone();
-            let ids = account_ids.clone();
-            tokio::task::spawn_blocking(move || {
-                let conn = db_pool.writer();
-                crate::accounts::decrypt_refresh_tokens(&conn, &ids, &master_key)
-            })
-            .await
-            .unwrap_or_else(|_| Ok(std::collections::HashMap::new()))
-            .unwrap_or_else(|e| {
-                tracing::warn!(error = %e, "oauth refresh scheduler: failed to batch decrypt refresh tokens");
-                std::collections::HashMap::new()
-            })
-        };
-
-
         for (i, account) in accounts.iter().enumerate() {
             // Anti-burst staggering: 3s delay between consecutive accounts.
             if i > 0 {
@@ -859,14 +841,18 @@ pub async fn start_refresh_scheduler(
                 }
             }
 
-            let refresh_token = match refresh_tokens.get(&account.id) {
-                Some(Ok(Some(t))) => Ok(Some(t.clone())),
-                Some(Ok(None)) => Ok(None),
-                Some(Err(e)) => Err(CoreError::Internal(e.to_string())),
-                None => {
-                    // Fallback to internal error if token couldn't be loaded in batch
-                    // (e.g. if the batch query failed entirely for this account)
-                    Err(CoreError::Internal("refresh token not found in batch".to_string()))
+            let refresh_token = {
+                let db_pool = db_pool.clone();
+                let master_key = master_key.clone();
+                let acc_id = account.id;
+                match tokio::task::spawn_blocking(move || {
+                    let conn = db_pool.writer();
+                    crate::accounts::decrypt_refresh_token(&conn, acc_id, &master_key)
+                })
+                .await
+                {
+                    Ok(res) => res,
+                    Err(e) => Err(CoreError::Internal(e.to_string())),
                 }
             };
             let refresh_token = match refresh_token {
