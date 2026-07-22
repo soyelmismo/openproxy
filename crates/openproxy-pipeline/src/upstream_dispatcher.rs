@@ -69,6 +69,16 @@ pub(crate) struct StreamFailureContext<'a> {
     pub(crate) model_name: &'a str,
 }
 
+pub trait Dispatcher: Send + Sync {
+    fn is_recording(&self) -> bool;
+}
+
+impl Dispatcher for UpstreamDispatcher {
+    fn is_recording(&self) -> bool {
+        self.is_recording()
+    }
+}
+
 #[derive(Clone)]
 pub struct UpstreamDispatcher {
     pub conn: Arc<parking_lot::Mutex<rusqlite::Connection>>,

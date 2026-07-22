@@ -22,6 +22,8 @@ pub struct KiroMeta {
     pub profile_arn: Option<String>,
 }
 
+pub use PipelineRepository as Repository;
+
 pub trait PipelineRepository: Send + Sync {
     fn load_combo(&self, combo_id: ComboId) -> Result<Option<Combo>>;
     fn list_targets(&self, combo_id: ComboId) -> Result<Vec<ComboTarget>>;

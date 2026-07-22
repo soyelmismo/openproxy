@@ -23,6 +23,8 @@ pub trait PipelineStage: Send + Sync {
     ) -> impl std::future::Future<Output = Result<PipelineResult, CoreError>> + Send;
 }
 
+pub use PipelineStage as Stage;
+
 #[derive(Clone)]
 pub enum PipelineStageEnum {
     TelemetryRecorder(crate::stages::telemetry::TelemetryRecorderStage),

@@ -24,6 +24,21 @@ pub struct UsageTracker {
     pub repo: Arc<dyn crate::repository::PipelineRepository>,
 }
 
+pub trait UsageTrackerTrait: Send + Sync {
+    fn is_recording(&self) -> bool;
+    fn set_recording(&self, enabled: bool);
+}
+
+impl UsageTrackerTrait for UsageTracker {
+    fn is_recording(&self) -> bool {
+        self.is_recording()
+    }
+
+    fn set_recording(&self, enabled: bool) {
+        self.set_recording(enabled);
+    }
+}
+
 impl UsageTracker {
     pub fn is_recording(&self) -> bool {
         self.record_bodies_and_headers.load(Ordering::Relaxed)
