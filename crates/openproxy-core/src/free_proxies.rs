@@ -444,14 +444,26 @@ async fn sync_github_lists() -> crate::error::Result<Vec<ScrapedProxy>> {
             "https://raw.githubusercontent.com/jetkai/proxy-list/main/online-proxies/txt/proxies-{}.txt",
             vec!["http", "https", "socks4", "socks5"],
         ),
+// ...
         (
             "proxyscrape",
             "https://api.proxyscrape.com/v2/?request=getproxies&protocol={}&timeout=10000&country=all",
             vec!["http", "socks4", "socks5"],
         ),
+        (
+            "vpslab",
+            "https://raw.githubusercontent.com/VPSLabCloud/VPSLab-Free-Proxy-List/main/{}_all.txt",
+            vec!["socks5", "socks4", "http"],
+        ),
+        (
+            "roosterkid",
+            "https://raw.githubusercontent.com/roosterkid/openproxylist/main/SOCKS5_RAW.txt",
+            vec!["socks5"],
+        ),
     ];
 
     for (src_name, url_template, protocols) in sources {
+// ...
 // ...
         for proto in protocols {
             let url = url_template.replace("{}", proto);
