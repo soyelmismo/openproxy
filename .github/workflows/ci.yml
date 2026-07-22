@@ -422,12 +422,32 @@ jobs:
   docker:
     name: Docker build & push
     runs-on: ubuntu-latest
-    needs: [rust-checks, e2e-tests, prepare-version]
+    needs: [rust-checks, e2e-tests, prepare-version, build]
     steps:
       - uses: actions/checkout@v4
 
-      - name: Set up QEMU (multi-arch emulation)
-        uses: docker/setup-qemu-action@v3
+      - name: Download x86_64 binary artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: build-x86_64-unknown-linux-gnu
+          path: tmp-x86_64
+
+      - name: Download aarch64 binary artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: build-aarch64-unknown-linux-gnu
+          path: tmp-aarch64
+
+      - name: Prepare binaries for Docker build
+        run: |
+          set -euo pipefail
+          mkdir -p bin/amd64 bin/arm64
+          unzip -q tmp-x86_64/openproxy-*.zip -d tmp-x86_64-unzipped
+          unzip -q tmp-aarch64/openproxy-*.zip -d tmp-aarch64-unzipped
+          cp tmp-x86_64-unzipped/openproxy-*/openproxy bin/amd64/openproxy
+          cp tmp-aarch64-unzipped/openproxy-*/openproxy bin/arm64/openproxy
+          chmod +x bin/amd64/openproxy bin/arm64/openproxy
+          rm -rf tmp-x86_64 tmp-aarch64 tmp-x86_64-unzipped tmp-aarch64-unzipped
 
       - name: Set up Buildx
         uses: docker/setup-buildx-action@v3
