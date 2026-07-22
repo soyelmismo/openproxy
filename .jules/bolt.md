@@ -34,3 +34,7 @@
 **Learning:** Optimizing retry loops for operations where the caller depends on the side-effect (such as OAuth `post_exchange` completing to proceed safely to subsequent steps) by using background tasks (`tokio::spawn`) will introduce a race condition where the caller proceeds without the necessary completed data.
 **Action:** Use exponential backoff (e.g. `std::time::Duration::from_millis(500)` doubling on retry) instead of background tasks to safely and functionally reduce latency on expected fast path responses without breaking the synchronous flow.
 
+## 2026-07-22 - [Optimized Batch Inserts in Migrations]
+**Learning:** When executing a series of SQLite migrations tracking metadata (version), batching the `INSERT` operations into a single `execute_batch` query eliminates the N parameterization round-trip overhead of cached prepared statements resulting in reduced context switching without risking parameterized data since `version` is integer-primitive.
+**Action:** For sequential metadata insertion, favor concatenated bulk batch statements via `execute_batch` over running multiple statements in a `prepare_cached` loop, but always remember to test if the string builder received at least 1 record prior to executing the batch.
+

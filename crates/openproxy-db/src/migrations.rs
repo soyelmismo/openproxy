@@ -6,7 +6,7 @@
 //! invocation against an already-migrated DB applies zero new versions.
 
 use openproxy_types::{CoreError, Result};
-use rusqlite::{Connection, params};
+use rusqlite::Connection;
 
 /// One embedded migration. `version` is the integer PK stored in
 /// `schema_migrations`. `sql` is the raw file contents.
@@ -287,27 +287,33 @@ pub fn run(conn: &mut Connection) -> Result<()> {
             message: format!("begin tx: {}", e),
         })?;
 
-    let mut stmt = tx
-        .prepare_cached("INSERT INTO schema_migrations(version) VALUES (?1)")
-        .map_err(|e| CoreError::Migration {
-            version: 0,
-            message: format!("prepare stmt: {}", e),
-        })?;
+    let mut insert_sql = String::with_capacity(1024);
+    insert_sql.push_str("INSERT INTO schema_migrations(version) VALUES ");
+    let mut first = true;
 
-    for m in pending {
+    for m in &pending {
         tx.execute_batch(m.sql).map_err(|e| CoreError::Migration {
             version: m.version,
             message: format!("{}: {}", m.name, e),
         })?;
 
-        stmt.execute(params![m.version])
-            .map_err(|e| CoreError::Migration {
-                version: m.version,
-                message: format!("{}: insert into schema_migrations: {}", m.name, e),
-            })?;
+        if !first {
+            insert_sql.push(',');
+        }
+        use std::fmt::Write;
+        write!(&mut insert_sql, "({})", m.version).expect("write to string failed");
+        first = false;
     }
 
-    drop(stmt);
+    // Since pending is checked to be non-empty above `if pending.is_empty() { return Ok(()); }`
+    // there's no need to check here. But let's just make it completely infallible statically on `first`.
+    if !first {
+        tx.execute_batch(&insert_sql)
+            .map_err(|e| CoreError::Migration {
+                version: 0,
+                message: format!("insert into schema_migrations: {}", e),
+            })?;
+    }
 
     tx.commit().map_err(|e| CoreError::Migration {
         version: 0,
