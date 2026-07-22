@@ -98,7 +98,12 @@ impl PipelineStage for UpstreamExecutorStage {
                 if !RetryPolicy::is_retryable(e, ctx.pipeline.config.idle_chunk_retryable) {
                     break;
                 }
-                if target_attempt >= policy.max_attempts {
+                let max_attempts = if e.is_proxy_rotated() {
+                    policy.max_attempts.max(10)
+                } else {
+                    policy.max_attempts
+                };
+                if target_attempt >= max_attempts {
                     break;
                 }
                 let client_disconnected = {
