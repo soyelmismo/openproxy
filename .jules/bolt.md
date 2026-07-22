@@ -22,4 +22,11 @@
 ## 2025-02-23 - Sort and Dedup key allocations
 **Learning:** Using `sort_unstable_by_key(|id| id.0.clone())` and `dedup_by_key(|id| id.0.clone())` allocates a new `String` for every single comparison during the sorting/deduping process. This creates a massive number of temporary heap allocations on hot paths.
 **Action:** Replace `by_key` with `.clone()` closures with the more explicit `sort_unstable_by(|a, b| a.0.cmp(&b.0))` and `dedup_by(|a, b| a.0 == b.0)`. This performs the exact same operation without any allocations.
-## 2024-05-18 - OAuth Refresh Batching\n**Learning:** The OAuth token refresh scheduler spawned a blocking task per account to decrypt tokens inside a loop, causing unnecessary scheduling overhead and DB locks.\n**Action:** Batch DB reads with `WHERE id IN (...)` using chunks (e.g. 900) to fetch data efficiently before looping.
+## 2024-05-18 - OAuth Refresh Batching
+**Learning:** The OAuth token refresh scheduler spawned a blocking task per account to decrypt tokens inside a loop, causing unnecessary scheduling overhead and DB locks.
+**Action:** Batch DB reads with `WHERE id IN (...)` using chunks (e.g. 900) to fetch data efficiently before looping.
+
+## 2026-07-22 - Use reader connections for read-only quota sync ops
+**Learning:** Read-only SQLite DB calls inside a blocking thread should use `db_pool.reader()` instead of `db_pool.writer()` to prevent lock contention and executor thread blocking.
+**Action:** Use reader locks whenever possible, especially in high-throughput synchronization loops.
+

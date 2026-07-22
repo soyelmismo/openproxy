@@ -162,8 +162,8 @@ pub async fn refresh_single_account_quota(
             .map(|a| (a.id().to_string(), a.metadata().quota_refresh_supported))
             .collect();
         let res = tokio::task::spawn_blocking(move || {
-            let w = db_pool.writer();
-            let acc = admin::account_for_quota_refresh(&w, account_id, master_key.as_ref())?;
+            let r = db_pool.reader();
+            let acc = admin::account_for_quota_refresh(&r, account_id, master_key.as_ref())?;
 
             let supports_quota = adapters_list
                 .iter()
@@ -180,10 +180,10 @@ pub async fn refresh_single_account_quota(
             let provider_specific = acc.oauth_provider_specific.clone();
 
             let (k, token) = if is_oauth {
-                let t = accounts::decrypt_access_token(&w, account_id, &master_key)?;
+                let t = accounts::decrypt_access_token(&r, account_id, &master_key)?;
                 (String::new(), Some(t))
             } else {
-                let k = admin::decrypt_api_key_for_account(&w, account_id, &master_key)?;
+                let k = admin::decrypt_api_key_for_account(&r, account_id, &master_key)?;
                 (k, None)
             };
             Ok(Some((provider_str, k, token, provider_specific)))
@@ -212,8 +212,8 @@ pub async fn refresh_single_account_quota(
             let db_pool = db_pool.clone();
             let master_key = master_key.clone();
             tokio::task::spawn_blocking(move || {
-                let w = db_pool.writer();
-                accounts::decrypt_refresh_token(&w, account_id, master_key.as_ref())
+                let r = db_pool.reader();
+                accounts::decrypt_refresh_token(&r, account_id, master_key.as_ref())
                     .ok()
                     .flatten()
             })
