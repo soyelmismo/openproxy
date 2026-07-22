@@ -28,7 +28,6 @@
 
 use axum::{Json, extract::State, http::HeaderMap};
 use openproxy_core::{capabilities, models};
-use openproxy_db::combos;
 use openproxy_types::{ApiKeyId, CoreError};
 
 use crate::{
@@ -63,16 +62,8 @@ pub async fn list_models(
     // Use try_writer_for to avoid blocking under admin lock contention.
     // The model list is bounded (typically <1000 rows) so 5s is plenty.
     crate::api_try! {
-        let w = state
-            .db_pool()
-            .try_writer_for(std::time::Duration::from_secs(5))
-            .ok_or_else(|| {
-                ApiError(CoreError::ServiceUnavailable(
-                    "database busy; retry in a few seconds".into(),
-                ))
-            })?;
-        let rows = models::list_active_all(&w)?;
-        let combo_rows = combos::list_combos(&w)?;
+        let rows = state.services().models.list_active_all(std::time::Duration::from_secs(5))?;
+        let combo_rows = state.services().combos.list_combos()?;
 
         let mut data: Vec<serde_json::Value> =
             rows.into_iter().map(|m| build_model_entry(&m)).collect();
@@ -83,7 +74,7 @@ pub async fn list_models(
             let effective_cw = if c.context_window.is_some() {
                 c.context_window
             } else {
-                combos::compute_effective_context_window(&w, c.id).unwrap_or(None)
+                state.services().combos.compute_effective_context_window(c.id).unwrap_or(None)
             };
             data.push(build_combo_entry(c, effective_cw));
         }
@@ -144,10 +135,7 @@ fn authenticate_chat_or_anonymous(
 
     let Some(token) = token else {
         // No Authorization header — allow only if zero active keys.
-        // `count_active` is a SELECT COUNT(*) — use the READER so this
-        // fallback check doesn't serialize through the writer mutex.
-        let r = state.db_pool().reader();
-        let active = api_keys::count_active(&r).map_err(ApiError)?;
+        let active = state.services().api_keys.count_active().map_err(ApiError)?;
         if active == 0 {
             return Ok(None); // anonymous
         }

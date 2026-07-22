@@ -8,9 +8,7 @@ pub async fn list_api_keys(
     State(s): State<AppState>,
 ) -> ApiResult<Json<Vec<core_api_keys::ApiKey>>> {
     crate::api_try! {
-        // Read-only SELECT — use the READER.
-        let r = s.db_pool().reader();
-        let list = core_api_keys::list(&r)?;
+        let list = s.services().api_keys.list()?;
         Ok(Json(list))
     }
 }
@@ -20,8 +18,7 @@ pub async fn create_api_key(
     Json(body): Json<core_api_keys::CreateApiKeyInput>,
 ) -> ApiResult<Json<serde_json::Value>> {
     crate::api_try! {
-        let w = s.db_pool().writer();
-        let (key, plaintext) = core_api_keys::create(&w, body, "admin")?;
+        let (key, plaintext) = s.services().api_keys.create(body, "admin")?;
         Ok(Json(serde_json::json!({
             "key": key,
             "plaintext": plaintext,
@@ -34,9 +31,7 @@ pub async fn get_api_key(
     Path(id): Path<i64>,
 ) -> ApiResult<Json<core_api_keys::ApiKey>> {
     crate::api_try! {
-        // Read-only SELECT — use the READER.
-        let r = s.db_pool().reader();
-        let key = core_api_keys::get_by_id(&r, ApiKeyId(id))?
+        let key = s.services().api_keys.get_by_id(ApiKeyId(id))?
             .ok_or_else(|| CoreError::Internal(format!("api_key {id} not found")))?;
         Ok(Json(key))
     }
@@ -92,9 +87,7 @@ pub async fn update_api_key(
             body.get("expires_at").map(|v| v.as_str().map(String::from));
         let expires_slice: Option<Option<&str>> = expires_owned.as_ref().map(|o| o.as_deref());
 
-        let w = s.db_pool().writer();
-        core_api_keys::update(
-            &w,
+        s.services().api_keys.update(
             ApiKeyId(id),
             core_api_keys::UpdateParams {
                 label,

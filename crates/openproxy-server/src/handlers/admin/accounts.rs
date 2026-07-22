@@ -12,10 +12,8 @@ pub async fn list_accounts(
     Query(q): Query<AccountListQuery>,
 ) -> ApiResult<Json<Vec<core_accounts::Account>>> {
     crate::api_try! {
-        // Read-only SELECT — use the READER.
-        let r = s.db_pool().reader();
         let provider = q.provider_id.map(ProviderId::new);
-        let list = core_admin::list_accounts(&r, provider.as_ref(), s.master_key().as_ref())?;
+        let list = s.services().accounts.list(provider.as_ref(), s.master_key().as_ref())?;
         Ok(Json(list))
     }
 }
@@ -25,8 +23,7 @@ pub async fn create_account(
     Json(input): Json<core_admin::CreateAccountInput>,
 ) -> ApiResult<Json<serde_json::Value>> {
     crate::api_try! {
-        let w = s.db_pool().writer();
-        let id = core_admin::create_account(&w, s.master_key().as_ref(), input)?;
+        let id = s.services().accounts.create(s.master_key().as_ref(), input)?;
         Ok(Json(serde_json::json!({ "id": id.0 })))
     }
 }
@@ -36,9 +33,8 @@ pub async fn delete_account(
     Path(id): Path<i64>,
 ) -> ApiResult<Json<serde_json::Value>> {
     crate::api_try! {
-        let w = s.db_pool().writer();
         let id = AccountId::new(id);
-        core_admin::delete_account(&w, id)?;
+        s.services().accounts.delete(id)?;
         Ok(Json(serde_json::json!({ "deleted": id.0 })))
     }
 }
@@ -54,8 +50,7 @@ pub async fn set_account_health(
             .and_then(|v| v.as_str())
             .ok_or_else(|| CoreError::Validation("missing 'health' string".into()))?;
         let health = core_accounts::HealthStatus::parse(health_str).map_err(CoreError::Validation)?;
-        let w = s.db_pool().writer();
-        core_accounts::set_health(&w, AccountId::new(id), health)?;
+        s.services().accounts.set_health(AccountId::new(id), health)?;
         Ok(Json(serde_json::json!({
             "id": id,
             "health": health_str,
@@ -69,8 +64,7 @@ pub async fn update_account_api_key(
     Json(body): Json<core_admin::UpdateAccountApiKeyInput>,
 ) -> ApiResult<Json<serde_json::Value>> {
     crate::api_try! {
-        let w = s.db_pool().writer();
-        core_admin::update_account_api_key(&w, s.master_key().as_ref(), AccountId::new(id), body)?;
+        s.services().accounts.update_api_key(s.master_key().as_ref(), AccountId::new(id), body)?;
         Ok(Json(serde_json::json!({ "id": id })))
     }
 }
@@ -80,8 +74,7 @@ pub async fn get_account_api_key(
     Path(id): Path<i64>,
 ) -> ApiResult<Json<serde_json::Value>> {
     crate::api_try! {
-        let r = s.db_pool().reader();
-        let key = core_admin::get_account_api_key(&r, s.master_key().as_ref(), AccountId::new(id))?;
+        let key = s.services().accounts.get_api_key(s.master_key().as_ref(), AccountId::new(id))?;
         Ok(Json(serde_json::json!({ "api_key": key })))
     }
 }
@@ -92,8 +85,7 @@ pub async fn update_account_label(
     Json(body): Json<core_admin::UpdateAccountLabelInput>,
 ) -> ApiResult<Json<serde_json::Value>> {
     crate::api_try! {
-        let w = s.db_pool().writer();
-        core_admin::update_account_label(&w, AccountId::new(id), body)?;
+        s.services().accounts.update_label(AccountId::new(id), body)?;
         Ok(Json(serde_json::json!({ "id": id })))
     }
 }

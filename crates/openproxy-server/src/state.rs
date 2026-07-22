@@ -34,6 +34,7 @@ pub struct AppState {
     config: AppConfig,
     db_pool: Arc<db::DbPool>,
     master_key: Arc<MasterKey>,
+    services: Arc<crate::services::Services>,
     adapters: Arc<RwLock<Vec<adapters::ProviderAdapterEnum>>>,
     /// Per-key rate limiter for /v1/chat/completions. Prevents a
     /// single API key from driving unlimited paid upstream traffic.
@@ -242,10 +243,13 @@ impl AppState {
             selection_registry.clone(),
         );
 
+        let services = Arc::new(crate::services::Services::new(db_pool.clone()));
+
         let state = Self {
             config,
             db_pool,
             master_key,
+            services,
             adapters,
             rate_limiter,
             upstream_client,
@@ -344,11 +348,13 @@ impl AppState {
         openproxy_core::notifications::init_broadcast();
 
         let (background_tx, _) = tokio::sync::mpsc::channel(1);
+        let services = Arc::new(crate::services::Services::new(db_pool.clone()));
 
         Self {
             config: config.clone(),
             db_pool,
             master_key,
+            services,
             adapters,
             rate_limiter,
 
@@ -373,6 +379,11 @@ impl AppState {
             vacuum_status,
             background_tx,
         }
+    }
+
+    /// Borrow application services.
+    pub fn services(&self) -> &crate::services::Services {
+        &self.services
     }
 
     /// Borrow the parsed configuration.
