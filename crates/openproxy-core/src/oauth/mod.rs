@@ -813,12 +813,15 @@ pub async fn start_refresh_scheduler(
             "oauth refresh: accounts due for refresh"
         );
 
-        for (i, account) in accounts.iter().enumerate() {
-            // Anti-burst staggering: 3s delay between consecutive accounts.
-            if i > 0 {
-                tokio::time::sleep(std::time::Duration::from_secs(STAGGER_DELAY_SECS)).await;
-            }
+        let mut join_set = tokio::task::JoinSet::new();
 
+        // Token bucket configuration: 1 token per STAGGER_DELAY_SECS.
+        let mut tokens: f64 = 20.0; // Allow a burst of up to 20 to start if they are ready.
+        let capacity = 20.0;
+        let fill_rate = 1.0 / (STAGGER_DELAY_SECS as f64);
+        let mut last_refill = tokio::time::Instant::now();
+
+        for account in accounts {
             let provider = match registry.get(account.provider_id.as_str()) {
                 Some(p) => p,
                 None => {
@@ -841,83 +844,126 @@ pub async fn start_refresh_scheduler(
                 }
             }
 
-            let refresh_token = {
-                let db_pool = db_pool.clone();
-                let master_key = master_key.clone();
-                let acc_id = account.id;
-                match tokio::task::spawn_blocking(move || {
-                    let conn = db_pool.writer();
-                    crate::accounts::decrypt_refresh_token(&conn, acc_id, &master_key)
-                })
-                .await
-                {
-                    Ok(res) => res,
-                    Err(e) => Err(CoreError::Internal(e.to_string())),
+            // Update token bucket
+            loop {
+                let now = tokio::time::Instant::now();
+                let elapsed = now.duration_since(last_refill).as_secs_f64();
+                tokens = (tokens + elapsed * fill_rate).min(capacity);
+                last_refill = now;
+
+                if tokens >= 1.0 {
+                    tokens -= 1.0;
+                    break;
                 }
-            };
-            let refresh_token = match refresh_token {
-                Ok(Some(rt)) => rt,
-                Ok(None) => {
-                    tracing::debug!(
-                        account = account_id,
-                        "oauth refresh: no refresh token stored, skipping"
-                    );
-                    continue;
-                }
-                Err(e) => {
-                    tracing::warn!(
-                        account = account_id,
-                        error = %e,
-                        "oauth refresh: failed to decrypt refresh token"
-                    );
-                    continue;
-                }
-            };
+                let deficit = 1.0 - tokens;
+                let wait_time = deficit / fill_rate;
+                tokio::time::sleep(std::time::Duration::from_secs_f64(wait_time)).await;
+            }
 
             last_refresh_attempts.insert(account_id, chrono::Utc::now());
 
-            match TokenRefreshCoordinator::global()
-                .refresh_and_store(
-                    account.provider_id.as_str(),
-                    provider,
-                    &refresh_token,
-                    &upstream_client,
-                    account.id,
-                    DbRef::Pool(&db_pool),
-                    &master_key,
-                )
-                .await
-            {
-                Ok(token) => {
-                    // Reset failure tracking on success.
-                    failure_counts.remove(&account_id);
-                    last_refresh_attempts.remove(&account_id);
+            let db_pool = db_pool.clone();
+            let master_key = master_key.clone();
+            let upstream_client = upstream_client.clone();
 
-                    let db_pool = db_pool.clone();
+            join_set.spawn(async move {
+                let refresh_token = {
+                    let db_pool_inner = db_pool.clone();
+                    let master_key_inner = master_key.clone();
                     let acc_id = account.id;
-                    let _ = tokio::task::spawn_blocking(move || {
-                        let conn = db_pool.writer();
-                        if let Err(e) =
-                            crate::accounts::set_health(&conn, acc_id, HealthStatus::Healthy)
-                        {
-                            tracing::warn!(
-                                account = account_id,
-                                error = %e,
-                                "oauth refresh: failed to set health to healthy"
-                            );
-                        }
+                    match tokio::task::spawn_blocking(move || {
+                        let conn = db_pool_inner.writer();
+                        crate::accounts::decrypt_refresh_token(&conn, acc_id, &master_key_inner)
                     })
-                    .await;
+                    .await
+                    {
+                        Ok(res) => res,
+                        Err(e) => Err(CoreError::Internal(e.to_string())),
+                    }
+                };
 
-                    tracing::info!(
-                        account = account_id,
-                        provider = %account.provider_id,
-                        token_type = %token.token_type,
-                        "oauth refresh: tokens refreshed successfully"
-                    );
+                let refresh_token = match refresh_token {
+                    Ok(Some(rt)) => rt,
+                    Ok(None) => {
+                        tracing::debug!(
+                            account = account_id,
+                            "oauth refresh: no refresh token stored, skipping"
+                        );
+                        return (account_id, account.provider_id.as_str().to_string(), true);
+                    }
+                    Err(e) => {
+                        tracing::warn!(
+                            account = account_id,
+                            error = %e,
+                            "oauth refresh: failed to decrypt refresh token"
+                        );
+                        return (account_id, account.provider_id.as_str().to_string(), false);
+                    }
+                };
+
+                match TokenRefreshCoordinator::global()
+                    .refresh_and_store(
+                        account.provider_id.as_str(),
+                        provider,
+                        &refresh_token,
+                        &upstream_client,
+                        account.id,
+                        DbRef::Pool(&db_pool),
+                        &master_key,
+                    )
+                    .await
+                {
+                    Ok(token) => {
+                        let db_pool_inner = db_pool.clone();
+                        let acc_id = account.id;
+                        let _ = tokio::task::spawn_blocking(move || {
+                            let conn = db_pool_inner.writer();
+                            if let Err(e) =
+                                crate::accounts::set_health(&conn, acc_id, HealthStatus::Healthy)
+                            {
+                                tracing::warn!(
+                                    account = account_id,
+                                    error = %e,
+                                    "oauth refresh: failed to set health to healthy"
+                                );
+                            }
+                        })
+                        .await;
+
+                        tracing::info!(
+                            account = account_id,
+                            provider = %account.provider_id,
+                            token_type = %token.token_type,
+                            "oauth refresh: tokens refreshed successfully"
+                        );
+
+                        // 2-second settle gap after each refresh (Auth0 protection).
+                        tokio::time::sleep(std::time::Duration::from_secs(SETTLE_GAP_SECS)).await;
+
+                        (account_id, account.provider_id.as_str().to_string(), true)
+                    }
+                    Err(e) => {
+                        tracing::warn!(
+                            account = account_id,
+                            provider = %account.provider_id,
+                            error = %e,
+                            "oauth refresh: token refresh failed"
+                        );
+
+                        // We still sleep here because this is Auth0 protection and failure might have still made a request.
+                        tokio::time::sleep(std::time::Duration::from_secs(SETTLE_GAP_SECS)).await;
+
+                        (account_id, account.provider_id.as_str().to_string(), false)
+                    }
                 }
-                Err(e) => {
-                    // Increment failure counter and update health status.
+            });
+        }
+
+        while let Some(res) = join_set.join_next().await {
+            if let Ok((account_id, provider_id_str, success)) = res {
+                if success {
+                    failure_counts.remove(&account_id);
+                } else {
                     let count = failure_counts.entry(account_id).or_insert(0);
                     *count += 1;
 
@@ -927,12 +973,11 @@ pub async fn start_refresh_scheduler(
                         HealthStatus::Degraded
                     };
 
-                    let db_pool = db_pool.clone();
-                    let acc_id = account.id;
+                    let db_pool_inner = db_pool.clone();
                     let count_val = *count;
-                    let provider_id_str = account.provider_id.as_str().to_string();
                     let _ = tokio::task::spawn_blocking(move || {
-                        let conn = db_pool.writer();
+                        let conn = db_pool_inner.writer();
+                        let acc_id = crate::ids::AccountId(account_id);
                         if let Err(update_err) =
                             crate::accounts::set_health(&conn, acc_id, new_health)
                         {
@@ -949,6 +994,7 @@ pub async fn start_refresh_scheduler(
                                 crate::notifications::CODE_OAUTH_EXPIRED,
                                 account_id
                             );
+
                             let payload = serde_json::json!({
                                 "code": crate::notifications::CODE_OAUTH_EXPIRED,
                                 "message": format!(
@@ -972,20 +1018,8 @@ pub async fn start_refresh_scheduler(
                             );
                         }
                     }).await;
-
-                    tracing::warn!(
-                        account = account_id,
-                        provider = %account.provider_id,
-                        error = %e,
-                        consecutive_failures = *count,
-                        health = new_health.as_str(),
-                        "oauth refresh: token refresh failed"
-                    );
                 }
             }
-
-            // 2-second settle gap after each refresh (Auth0 protection).
-            tokio::time::sleep(std::time::Duration::from_secs(SETTLE_GAP_SECS)).await;
         }
 
         // LEAK FIX: prune `failure_counts` / `last_refresh_attempts`

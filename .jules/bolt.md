@@ -22,3 +22,9 @@
 ## 2025-02-23 - Sort and Dedup key allocations
 **Learning:** Using `sort_unstable_by_key(|id| id.0.clone())` and `dedup_by_key(|id| id.0.clone())` allocates a new `String` for every single comparison during the sorting/deduping process. This creates a massive number of temporary heap allocations on hot paths.
 **Action:** Replace `by_key` with `.clone()` closures with the more explicit `sort_unstable_by(|a, b| a.0.cmp(&b.0))` and `dedup_by(|a, b| a.0 == b.0)`. This performs the exact same operation without any allocations.
+## 2026-07-22 - [Bolt] Token Bucket Optimization for OAuth Refresh
+**Learning:** Sequential sleep intervals to protect APIs limit throughput drastically, but naive  execution with a full token bucket triggers immediate bursts bypassing protection logic. To safely scale throughput, bounded concurrency combined with a correct initial token bucket capacity (or direct task staggering) prevents api blocks while drastically cutting latency.
+**Action:** When implementing concurrent refresh/sync flows targeting rate-limited upstreams, use a  along with a tightly controlled token bucket or pre-emptive staggering () to allow execution overlap without violating burst thresholds.
+## 2026-07-22 - [Bolt] Token Bucket Optimization for OAuth Refresh
+**Learning:** Sequential sleep intervals to protect APIs limit throughput drastically, but naive JoinSet execution with a full token bucket triggers immediate bursts bypassing protection logic. To safely scale throughput, bounded concurrency combined with a correct initial token bucket capacity (or direct task staggering) prevents api blocks while drastically cutting latency.
+**Action:** When implementing concurrent refresh/sync flows targeting rate-limited upstreams, use a tokio::task::JoinSet along with a tightly controlled token bucket or pre-emptive staggering to allow execution overlap without violating burst thresholds.
