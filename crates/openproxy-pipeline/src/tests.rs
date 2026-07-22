@@ -3623,25 +3623,9 @@ async fn streaming_dispatch_uses_upstream_client_end_to_end() {
 ///
 /// We cancel *before* the run starts (analogous to A.2) so the
 /// per-target boundary check fires on the first iteration with
-/// no upstream work attempted. The mock listener is wired up
-/// for a follow-up test that will exercise the actual
-/// stream-side `tokio::select!` (see the TODO at the end of
-/// this function).
+/// no upstream work attempted.
 #[tokio::test(flavor = "multi_thread")]
 async fn cancellation_during_streaming_aborts_response_stream() {
-    use tokio::net::TcpListener;
-
-    // Bind a localhost listener; the test points the provider
-    // at it. We don't actually drive a request through the
-    // listener here (cancelling before the run means the
-    // pipeline never reaches the dispatch loop), but the
-    // listener is left set up so a follow-up that wants to
-    // exercise the stream-side `tokio::select!` only has to
-    // drop the early `cancel_tx.send(true)` and add a
-    // mid-stream cancel task.
-    let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
-    drop(listener);
-
     let (pool, conn, _path) = fresh_pool();
     let mk = Arc::new(MasterKey::generate());
     let (combo_id, _account_id) =
@@ -3669,11 +3653,74 @@ async fn cancellation_during_streaming_aborts_response_stream() {
             other
         ),
     }
+}
 
-    // The follow-up test `cancellation_mid_sse_stream_aborts_immediately`
-    // below exercises the real stream-side `tokio::select!` by binding
-    // a localhost TcpListener that answers 200 OK + a slow SSE stream
-    // and then cancels mid-stream.
+#[tokio::test(flavor = "multi_thread")]
+async fn cancellation_mid_stream_select_aborts() {
+    use tokio::net::TcpListener;
+    use tokio::io::AsyncWriteExt;
+
+    // Use a TcpListener to act as our local mock server.
+    let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
+    let addr = listener.local_addr().unwrap();
+
+    let (pool, conn, _path) = fresh_pool();
+    let mk = Arc::new(MasterKey::generate());
+    // Point the default openrouter adapter to our local listener!
+    let (combo_id, _account_id) =
+        seed_solo_combo_at_url(&pool.writer(), "openrouter", &format!("http://{}", addr), &mk);
+
+    let mut cfg = test_config_with_adapters(mk.clone());
+    // The built-in openrouter adapter hardcodes its base_url in build_chat_url.
+    // To make it hit our local server, we extract test_config_with_mock's logic, but inline:
+    let mock = crate::test_utils::MockAdapter {
+        config: openproxy_adapters::adapters::ProviderAdapterConfig {
+            id: ProviderId::new("openrouter"),
+            base_url: format!("http://{}", addr),
+            auth_type: openproxy_adapters::adapters::AdapterAuthType::Bearer,
+            format: openproxy_adapters::adapters::AdapterFormat::Openai,
+            extra_headers: Vec::new(),
+        },
+        call_count: None,
+        fail_fetch: false,
+        models_to_return: None,
+    };
+    cfg.adapters = Arc::new(vec![openproxy_adapters::adapters::ProviderAdapterEnum::Mock(mock)]);
+
+    let p = Pipeline::new(conn, cfg);
+
+    let (mut req, cancel_tx) = make_request(combo_id);
+    Arc::make_mut(&mut req.openai_request).stream = true;
+
+    // Run pipeline in background
+    let pipeline_task = tokio::spawn(async move { p.run(req).await });
+
+    // Accept the connection from the pipeline dispatch.
+    let (mut sock, _) = listener.accept().await.unwrap();
+
+    // Send headers to start stream
+    let headers = b"HTTP/1.1 200 OK\r\n\
+                    Content-Type: text/event-stream\r\n\
+                    Transfer-Encoding: chunked\r\n\
+                    \r\n";
+    sock.write_all(headers).await.unwrap();
+
+    // Write one valid SSE chunk to advance the pipeline state into the stream loop.
+    let chunk = b"1a\r\ndata: {\"choices\":[]}\n\n\r\n";
+    sock.write_all(chunk).await.unwrap();
+
+    // Cancel mid-stream.
+    cancel_tx.send(true).unwrap();
+
+    let result = tokio::time::timeout(Duration::from_secs(3), pipeline_task)
+        .await
+        .expect("timeout")
+        .expect("join");
+
+    match &result.error {
+        Some(CoreError::ClientDisconnected) => {}
+        other => panic!("expected ClientDisconnected but got {:?}", other),
+    }
 }
 
 /// Mid-stream cancellation: the client disconnects *while the
