@@ -134,6 +134,29 @@ mod tests {
         // Round-trip via std::str to verify we did not produce invalid UTF-8.
         assert!(std::str::from_utf8(out.as_bytes()).is_ok());
     }
+
+    #[test]
+    fn api_result_ok_wraps_value() {
+        let res = ApiResult::ok(42);
+        assert_eq!(res.into_inner().unwrap(), 42);
+    }
+
+    #[test]
+    fn api_result_err_wraps_error() {
+        let core_err = CoreError::Config("test config error".to_string());
+        let api_err = ApiError(core_err);
+        let res: ApiResult<()> = ApiResult::err(api_err);
+        let inner = res.into_inner();
+        assert!(inner.is_err());
+        assert_eq!(inner.unwrap_err().0.to_string(), "config: test config error");
+    }
+
+    #[test]
+    fn api_result_into_inner_returns_result() {
+        let res = ApiResult::ok("hello".to_string());
+        let inner: Result<String, ApiError> = res.into_inner();
+        assert_eq!(inner.unwrap(), "hello");
+    }
 }
 
 // =====================================================================
