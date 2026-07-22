@@ -692,7 +692,10 @@ pub async fn test_single_proxy(db_pool: Arc<DbPool>, id: &str) -> crate::error::
     }
 
     let p = get_proxy(&w, id)?
-        .ok_or_else(|| crate::error::CoreError::NotFound(format!("proxy {} not found", id)))?;
+        .ok_or_else(|| crate::error::CoreError::NotFound {
+            what: "proxy".to_string(),
+            id: id.to_string(),
+        })?;
 
     Ok(p)
 }
@@ -743,7 +746,7 @@ pub fn test_all_proxies_background(db_pool: Arc<DbPool>) {
         let pool_clone = db_pool.clone();
 
         futures::stream::iter(proxies)
-            .map(move |(id, r#type, host, port)| {
+            .for_each_concurrent(20, move |(id, r#type, host, port)| {
                 let pool = pool_clone.clone();
                 async move {
                     let test_res = test_proxy_connection(&r#type, &host, port).await;
@@ -775,10 +778,11 @@ pub fn test_all_proxies_background(db_pool: Arc<DbPool>) {
                     .await;
                 }
             })
-            .buffer_unordered(20)
-            .collect::<Vec<()>>()
             .await;
     });
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use rusqlite::Connection;
