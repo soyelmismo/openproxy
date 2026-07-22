@@ -37,10 +37,13 @@ pub async fn get_proxy_summary(
 pub async fn sync_proxies(
     State(s): State<AppState>,
 ) -> ApiResult<Json<openproxy_core::free_proxies::SyncSummary>> {
-    let res: Result<Json<openproxy_core::free_proxies::SyncSummary>, crate::error::ApiError> = async {
-        let summary = openproxy_core::free_proxies::sync_all_providers(s.db_pool().clone()).await?;
-        Ok(Json(summary))
-    }.await;
+    let res: Result<Json<openproxy_core::free_proxies::SyncSummary>, crate::error::ApiError> =
+        async {
+            let summary =
+                openproxy_core::free_proxies::sync_all_providers(s.db_pool().clone()).await?;
+            Ok(Json(summary))
+        }
+        .await;
     res.into()
 }
 
@@ -80,10 +83,13 @@ pub async fn test_proxy(
     State(s): State<AppState>,
     Path(id): Path<String>,
 ) -> ApiResult<Json<openproxy_core::free_proxies::FreeProxy>> {
-    let res: Result<Json<openproxy_core::free_proxies::FreeProxy>, crate::error::ApiError> = async {
-        let p = openproxy_core::free_proxies::test_single_proxy(s.db_pool().clone(), &id).await?;
-        Ok(Json(p))
-    }.await;
+    let res: Result<Json<openproxy_core::free_proxies::FreeProxy>, crate::error::ApiError> =
+        async {
+            let p =
+                openproxy_core::free_proxies::test_single_proxy(s.db_pool().clone(), &id).await?;
+            Ok(Json(p))
+        }
+        .await;
     res.into()
 }
 

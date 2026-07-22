@@ -1,7 +1,7 @@
-use serde_json::{json, Value};
-use openproxy_types::{OpenAIMessage, OpenAIRequest};
-use crate::translation::types::*;
 use crate::translation::helpers::*;
+use crate::translation::types::*;
+use openproxy_types::{OpenAIMessage, OpenAIRequest};
+use serde_json::{Value, json};
 
 pub fn openai_to_anthropic(
     req: &OpenAIRequest,
@@ -364,7 +364,6 @@ pub fn map_finish_reason(stop_reason: &str) -> String {
     }
 }
 
-
 pub fn anthropic_request_to_openai(req: AnthropicRequest) -> OpenAIRequest {
     let mut messages = Vec::with_capacity(req.messages.len() + req.system.is_some() as usize);
     if let Some(sys) = req.system {
@@ -419,7 +418,8 @@ pub fn anthropic_request_to_openai(req: AnthropicRequest) -> OpenAIRequest {
                         }
                         "tool_result" => {
                             if let Some(id) = block.get("tool_use_id").and_then(|v| v.as_str()) {
-                                let res_content = block.get("content").unwrap_or(&serde_json::Value::Null);
+                                let res_content =
+                                    block.get("content").unwrap_or(&serde_json::Value::Null);
                                 tool_results.push((id.to_string(), res_content.clone()));
                             }
                         }
@@ -432,7 +432,11 @@ pub fn anthropic_request_to_openai(req: AnthropicRequest) -> OpenAIRequest {
         }
 
         if m.role == "assistant" {
-            let tc = if tool_calls.is_empty() { None } else { Some(tool_calls) };
+            let tc = if tool_calls.is_empty() {
+                None
+            } else {
+                Some(tool_calls)
+            };
             let content = if text_blocks.is_empty() && tc.is_some() {
                 // If there are only tool calls, OpenAI allows content to be null/empty string.
                 Some(serde_json::Value::Null)
@@ -493,13 +497,18 @@ pub fn anthropic_request_to_openai(req: AnthropicRequest) -> OpenAIRequest {
     }
 
     let tools = req.tools.map(translate_anthropic_tools_to_openai);
-    let tool_choice = req.tool_choice.map(translate_anthropic_tool_choice_to_openai);
+    let tool_choice = req
+        .tool_choice
+        .map(translate_anthropic_tool_choice_to_openai);
 
-    let mut extra = req.metadata.map(|m| {
-        let mut map = serde_json::Map::new();
-        map.insert("metadata".to_string(), m);
-        map
-    }).unwrap_or_default();
+    let mut extra = req
+        .metadata
+        .map(|m| {
+            let mut map = serde_json::Map::new();
+            map.insert("metadata".to_string(), m);
+            map
+        })
+        .unwrap_or_default();
 
     if let Some(output_config) = req.extra.get("output_config") {
         if let Some(format) = output_config.get("format") {
@@ -549,13 +558,20 @@ pub fn openai_response_to_anthropic(resp: OpenAIResponse) -> AnthropicResponse {
                 }
             }
         }
-        
+
         if let Some(tool_calls) = &first_choice.message.tool_calls {
             for tc in tool_calls {
                 if let (Some(id), Some(function)) = (tc.get("id"), tc.get("function")) {
-                    let name = function.get("name").and_then(|n| n.as_str()).unwrap_or_default();
-                    let arguments_str = function.get("arguments").and_then(|a| a.as_str()).unwrap_or("{}");
-                    let input = serde_json::from_str::<serde_json::Value>(arguments_str).unwrap_or_else(|_| serde_json::json!({}));
+                    let name = function
+                        .get("name")
+                        .and_then(|n| n.as_str())
+                        .unwrap_or_default();
+                    let arguments_str = function
+                        .get("arguments")
+                        .and_then(|a| a.as_str())
+                        .unwrap_or("{}");
+                    let input = serde_json::from_str::<serde_json::Value>(arguments_str)
+                        .unwrap_or_else(|_| serde_json::json!({}));
                     content.push(serde_json::json!({
                         "type": "tool_use",
                         "id": id,
@@ -565,10 +581,10 @@ pub fn openai_response_to_anthropic(resp: OpenAIResponse) -> AnthropicResponse {
                 }
             }
         }
-        
+
         finish_reason = first_choice.finish_reason.clone();
     }
-    
+
     let anthropic_stop = match finish_reason.as_deref() {
         Some("length") => Some("max_tokens".to_string()),
         Some("tool_calls") | Some("function_call") => Some("tool_use".to_string()),
@@ -576,7 +592,7 @@ pub fn openai_response_to_anthropic(resp: OpenAIResponse) -> AnthropicResponse {
         Some(_) => Some("end_turn".to_string()),
         None => None,
     };
-    
+
     let usage = resp.usage.unwrap_or(OpenAIUsage {
         prompt_tokens: 0,
         completion_tokens: 0,
@@ -673,20 +689,28 @@ fn log_anthropic_translation_diagnostics(conversation: &[AnthropicMessage]) {
 }
 
 fn translate_anthropic_tools_to_openai(ts: Vec<serde_json::Value>) -> Vec<serde_json::Value> {
-    ts.into_iter().map(|t| {
-        if let Some(obj) = t.as_object() {
-            let mut f = serde_json::Map::new();
-            if let Some(n) = obj.get("name") { f.insert("name".to_string(), n.clone()); }
-            if let Some(d) = obj.get("description") { f.insert("description".to_string(), d.clone()); }
-            if let Some(s) = obj.get("input_schema") { f.insert("parameters".to_string(), s.clone()); }
-            serde_json::json!({
-                "type": "function",
-                "function": f
-            })
-        } else {
-            t
-        }
-    }).collect()
+    ts.into_iter()
+        .map(|t| {
+            if let Some(obj) = t.as_object() {
+                let mut f = serde_json::Map::new();
+                if let Some(n) = obj.get("name") {
+                    f.insert("name".to_string(), n.clone());
+                }
+                if let Some(d) = obj.get("description") {
+                    f.insert("description".to_string(), d.clone());
+                }
+                if let Some(s) = obj.get("input_schema") {
+                    f.insert("parameters".to_string(), s.clone());
+                }
+                serde_json::json!({
+                    "type": "function",
+                    "function": f
+                })
+            } else {
+                t
+            }
+        })
+        .collect()
 }
 
 fn translate_anthropic_tool_choice_to_openai(tc: serde_json::Value) -> serde_json::Value {
