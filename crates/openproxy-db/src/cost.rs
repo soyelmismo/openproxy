@@ -192,3 +192,185 @@ pub fn record(conn: &Connection, input: &UsageInput) -> openproxy_types::Result<
 
     Ok(UsageId(rowid))
 }
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::conn::DbPool;
+    use openproxy_types::endpoint::EndpointKind;
+    use openproxy_types::ids::{ProviderId, RequestId};
+    use openproxy_types::usage::UsageInput;
+    use std::sync::atomic::AtomicU64;
+
+    fn tempdir() -> std::path::PathBuf {
+        static SEQ: AtomicU64 = AtomicU64::new(0);
+        let n = SEQ.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        let pid = std::process::id();
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let dir = std::env::temp_dir().join(format!("openproxy-cost-test-{}-{}-{}", pid, nanos, n));
+        std::fs::create_dir_all(&dir).expect("mkdir tempdir");
+        dir
+    }
+
+    #[test]
+    fn test_compute_cost_and_tps() {
+        let price = crate::pricing::Price {
+            input_per_1m: 1.0,
+            output_per_1m: 2.0,
+            kind: "chat".to_string(),
+        };
+
+        let mut input = UsageInput {
+            request_id: RequestId::new(),
+            trace_id: "trace-123".to_string(),
+            attempt: 1,
+            provider_id: ProviderId::new("test-provider"),
+            account_id: None,
+            combo_id: None,
+            combo_target_id: None,
+            model_row_id: None,
+            upstream_model_id: "test-model".to_string(),
+            prompt_tokens: Some(100),
+            completion_tokens: Some(200),
+            connect_ms: None,
+            ttft_ms: Some(100),
+            total_ms: 1100,
+            status_code: 200,
+            error_msg: None,
+            race_total: 1,
+            race_lost: false,
+            api_key_id: None,
+            request_body_json: None,
+            response_body_json: None,
+            request_headers: None,
+            response_headers: None,
+            error_message: None,
+            race_attempts: 1,
+            is_streaming: true,
+            stream_complete: true,
+            stop_reason: None,
+            compression_savings_pct: None,
+            compression_techniques: None,
+            client_response: true,
+            prompt_tokens_estimated: false,
+            completion_tokens_estimated: false,
+            endpoint_kind: EndpointKind::Chat,
+            proxy_url: None,
+            proxy_status: None,
+            is_proxy_rotated: false,
+        };
+
+        let (cost, tps) = compute(Some(price), &input);
+        assert_eq!(cost, 0.0005); // 100 * 1.0/1M + 200 * 2.0/1M = 0.0001 + 0.0004 = 0.0005
+        assert_eq!(tps, Some(200.0)); // 200 tokens / (1100ms - 100ms) * 1000 = 200.0
+
+        // Test with None TTFT
+        input.ttft_ms = None;
+        let (_, tps2) = compute(Some(crate::pricing::Price::default()), &input);
+        assert_eq!(tps2, None);
+
+        // Test with 0 completion tokens
+        input.ttft_ms = Some(100);
+        input.completion_tokens = Some(0);
+        let (_, tps3) = compute(Some(crate::pricing::Price::default()), &input);
+        assert_eq!(tps3, None);
+    }
+
+    #[test]
+    fn test_redact_error_msg() {
+        let raw_msg = "Error connecting to sk-1234567890abcdef and x-api-key: my-secret-key and Authorization: Bearer my-bearer-token.";
+        let (for_db, redacted) = redact_error_msg(raw_msg);
+
+        assert!(!for_db.contains("sk-1234567890abcdef"));
+        assert!(for_db.contains("sk-[REDACTED]"));
+
+        assert!(!for_db.contains("my-secret-key"));
+        assert!(for_db.contains("x-api-key: [REDACTED]"));
+
+        assert!(!for_db.contains("my-bearer-token"));
+        assert!(for_db.contains("Authorization: Bearer [REDACTED]"));
+
+        assert_eq!(for_db, redacted);
+
+        // Test truncation
+        let long_msg = "a".repeat(2100);
+        let (for_db2, _) = redact_error_msg(&long_msg);
+        assert!(for_db2.ends_with("...[truncated]"));
+        assert!(for_db2.len() <= 2048 + 14); // 2048 + length of "...[truncated]"
+    }
+
+    #[test]
+    fn test_record() {
+        let dir = tempdir();
+        let path = dir.join("test.db");
+        let pool = DbPool::open(&path).expect("open pool");
+
+        let mut conn = pool.writer();
+        crate::migrations::run(&mut conn).expect("run migrations");
+
+        let input = UsageInput {
+            request_id: RequestId::new(),
+            trace_id: "trace-123".to_string(),
+            attempt: 1,
+            provider_id: ProviderId::new("test-provider"),
+            account_id: None,
+            combo_id: None,
+            combo_target_id: None,
+            model_row_id: None,
+            upstream_model_id: "test-model".to_string(),
+            prompt_tokens: Some(100),
+            completion_tokens: Some(200),
+            connect_ms: Some(10),
+            ttft_ms: Some(100),
+            total_ms: 1100,
+            status_code: 200,
+            error_msg: Some("test error sk-1234567890abcdef".to_string()),
+            race_total: 1,
+            race_lost: false,
+            api_key_id: None,
+            request_body_json: None,
+            response_body_json: None,
+            request_headers: None,
+            response_headers: None,
+            error_message: None,
+            race_attempts: 1,
+            is_streaming: true,
+            stream_complete: true,
+            stop_reason: None,
+            compression_savings_pct: None,
+            compression_techniques: None,
+            client_response: true,
+            prompt_tokens_estimated: false,
+            completion_tokens_estimated: false,
+            endpoint_kind: EndpointKind::Chat,
+            proxy_url: None,
+            proxy_status: None,
+            is_proxy_rotated: false,
+        };
+
+        let result = record(&conn, &input);
+        assert!(result.is_ok(), "record failed: {:?}", result.err());
+
+        let rowid = result.unwrap();
+
+        let count: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM usage WHERE id = ?1",
+                rusqlite::params![rowid.0],
+                |row| row.get(0),
+            )
+            .expect("query");
+        assert_eq!(count, 1);
+
+        let error_msg_redacted: String = conn
+            .query_row(
+                "SELECT error_msg_redacted FROM usage WHERE id = ?1",
+                rusqlite::params![rowid.0],
+                |row| row.get(0),
+            )
+            .expect("query");
+        assert_eq!(error_msg_redacted, "test error sk-[REDACTED]");
+    }
+}
