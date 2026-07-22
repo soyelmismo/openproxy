@@ -32,6 +32,7 @@ impl AntigravityAdapter {
 
     /// Parse fetchAvailableModels response into DiscoveredModel list.
     fn parse_models_response(&self, body: &serde_json::Value) -> Option<Vec<DiscoveredModel>> {
+        tracing::info!("Antigravity fetchAvailableModels response: {}", serde_json::to_string(body).unwrap_or_default());
         let models_obj = body.get("models")?.as_object()?;
 
         let mut models = Vec::new();
@@ -136,12 +137,40 @@ impl ProviderAdapter for AntigravityAdapter {
 
     fn build_chat_url(&self, _target_format: TargetFormat, _model: &ModelId) -> String {
         // Antigravity uses the Cloud Code endpoint; model goes in the body.
-        format!("{}/v1internal:generateContent", self.config.base_url)
+        // We MUST use streamGenerateContent?alt=sse because openproxy forces
+        // is_streaming=true upstream and expects an SSE stream to parse.
+        format!("{}/v1internal:streamGenerateContent?alt=sse", self.config.base_url)
     }
 
     fn models_url(&self) -> Option<String> {
         // Antigravity does not expose a /models endpoint.
         None
+    }
+
+    fn build_headers(
+        &self,
+        api_key: &str,
+        _target_format: TargetFormat,
+        _model: &ModelId,
+    ) -> Vec<(String, String)> {
+        let mut headers_vec = Vec::with_capacity(10);
+        headers_vec.push(("Authorization".into(), format!("Bearer {}", api_key)));
+        headers_vec.push(("Content-Type".into(), "application/json".into()));
+        
+        // Inject antigravity headers
+        let mut hm = http::HeaderMap::new();
+        crate::antigravity_headers::inject_antigravity_headers(&mut hm, None);
+        for (k, v) in hm.iter() {
+            if let Ok(v_str) = v.to_str() {
+                headers_vec.push((k.as_str().to_string(), v_str.to_string()));
+            }
+        }
+        
+        for (k, v) in &self.config.extra_headers {
+            headers_vec.push((k.clone(), v.clone()));
+        }
+        
+        headers_vec
     }
 
     fn wrap_request_body(
@@ -159,19 +188,26 @@ impl ProviderAdapter for AntigravityAdapter {
                 .as_ref()
                 .and_then(|m| m.antigravity_project.clone())
                 .unwrap_or_default();
+            let physical_model = match model.as_str() {
+                "gemini-3.1-pro-high" | "gemini-3.1-pro-medium" => "gemini-pro-agent",
+                "gemini-3.5-flash-high" => "gemini-3-flash-agent",
+                other => other,
+            };
+
             let wrapped = serde_json::json!({
                 "project": project,
-                "model": model.as_str(),
+                "model": physical_model,
                 "requestType": "agent",
                 "requestId": uuid::Uuid::new_v4().to_string(),
                 "userAgent": "antigravity",
                 "request": json,
                 "enabledCreditTypes": ["GOOGLE_ONE_AI"]
             });
-            let wrapped_bytes = serde_json::to_vec(&wrapped).map_err(|e| {
-                CoreError::Parse(format!("failed to serialize wrapped request: {e}"))
-            })?;
-            return Ok(bytes::Bytes::from(wrapped_bytes));
+            let wrapped_bytes = bytes::Bytes::from(serde_json::to_vec(&wrapped).map_err(|e| {
+                CoreError::Parse(format!("failed to serialize wrapped gemini request: {e}"))
+            })?);
+            tracing::info!("Antigravity test payload: {}", serde_json::to_string(&wrapped).unwrap_or_default());
+            return Ok(wrapped_bytes);
         }
         Ok(body)
     }
@@ -742,4 +778,114 @@ mod tests {
         let details = result.model_details.unwrap();
         assert_eq!(details.len(), 2);
     }
+}
+
+pub const LOAD_CODE_ASSIST_URL: &str =
+    "https://daily-cloudcode-pa.googleapis.com/v1internal:loadCodeAssist";
+pub const ONBOARD_USER_URL: &str =
+    "https://daily-cloudcode-pa.googleapis.com/v1internal:onboardUser";
+
+/// Call `loadCodeAssist` and extract `projectId` (or `None` when
+/// the user is not yet on-boarded).
+pub async fn load_code_assist(
+    upstream: &std::sync::Arc<crate::upstream::UpstreamClient>,
+    access_token: &str,
+    metadata: &serde_json::Value,
+) -> std::result::Result<Option<String>, String> {
+    let body = serde_json::json!({ "metadata": metadata });
+    let body_bytes = serde_json::to_vec(&body)
+        .map_err(|e| format!("antigravity loadCodeAssist serialize: {e}"))?;
+
+    let mut req = crate::upstream::UpstreamRequest::post_json(LOAD_CODE_ASSIST_URL, bytes::Bytes::from(body_bytes));
+    if let Ok(v) = http::HeaderValue::from_str(&format!("Bearer {access_token}")) {
+        req.headers.insert(http::header::AUTHORIZATION, v);
+    }
+    crate::antigravity_headers::inject_antigravity_headers(&mut req.headers, None);
+    req.is_streaming = false;
+
+    let cancel = crate::upstream::CancellationToken::new();
+    let resp = upstream
+        .call(req, crate::upstream::TimeoutProfile::OAuth, cancel)
+        .await
+        .map_err(|e| format!("antigravity loadCodeAssist: {e}"))?;
+
+    if !resp.status.is_success() {
+        let status = resp.status.as_u16();
+        let body_str = String::from_utf8_lossy(&resp.collect().await.unwrap_or_default()).to_string();
+        return Err(format!("antigravity loadCodeAssist status {}: {}", status, body_str));
+    }
+
+    let body_bytes = resp.collect().await.map_err(|e| {
+        format!("antigravity loadCodeAssist read: {e}")
+    })?;
+
+    let value: serde_json::Value = serde_json::from_slice(&body_bytes)
+        .map_err(|e| format!("antigravity loadCodeAssist parse: {e}"))?;
+
+    let project_id = value
+        .get("cloudaicompanionProject")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string())
+        .or_else(|| {
+            value
+                .get("cloudaicompanionProject")
+                .and_then(|v| v.get("id"))
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string())
+        });
+
+    Ok(project_id)
+}
+
+/// Call `onboardUser` and return `Ok(Some(project_id))` on success,
+/// or `Ok(None)` when the server has not finished onboarding yet.
+pub async fn onboard_user(
+    upstream: &std::sync::Arc<crate::upstream::UpstreamClient>,
+    access_token: &str,
+    project_id: &str,
+    metadata: &serde_json::Value,
+) -> std::result::Result<Option<String>, String> {
+    let body = serde_json::json!({
+        "projectId": project_id,
+        "metadata": metadata,
+        "tier": "free-tier",
+    });
+    let body_bytes = serde_json::to_vec(&body)
+        .map_err(|e| format!("antigravity onboardUser serialize: {e}"))?;
+
+    let mut req = crate::upstream::UpstreamRequest::post_json(ONBOARD_USER_URL, bytes::Bytes::from(body_bytes));
+    if let Ok(v) = http::HeaderValue::from_str(&format!("Bearer {access_token}")) {
+        req.headers.insert(http::header::AUTHORIZATION, v);
+    }
+    crate::antigravity_headers::inject_antigravity_headers(&mut req.headers, None);
+    req.is_streaming = false;
+
+    let cancel = crate::upstream::CancellationToken::new();
+    let resp = upstream
+        .call(req, crate::upstream::TimeoutProfile::OAuth, cancel)
+        .await
+        .map_err(|e| format!("antigravity onboardUser: {e}"))?;
+
+    if !resp.status.is_success() {
+        let status = resp.status.as_u16();
+        let body_str = String::from_utf8_lossy(&resp.collect().await.unwrap_or_default()).to_string();
+        return Err(format!("antigravity onboardUser status {}: {}", status, body_str));
+    }
+
+    let body_bytes = resp
+        .collect()
+        .await
+        .map_err(|e| format!("antigravity onboardUser read: {e}"))?;
+
+    let value: serde_json::Value = serde_json::from_slice(&body_bytes)
+        .map_err(|e| format!("antigravity onboardUser parse: {e}"))?;
+
+    let project_id = value
+        .get("cloudaicompanionProject")
+        .and_then(|v| v.get("id"))
+        .and_then(|v| v.as_str())
+        .or_else(|| value.get("projectId").and_then(|v| v.as_str()))
+        .map(|s| s.to_string());
+
+    Ok(project_id)
 }

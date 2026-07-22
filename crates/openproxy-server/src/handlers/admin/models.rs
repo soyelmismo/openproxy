@@ -245,6 +245,7 @@ pub(crate) async fn run_test_for_model(
     // Capture the optional account_id AND its label. The label is
     // needed by providers whose URL embeds account-level metadata
     // (e.g. CloudFlare Workers AI uses the label as its account ID).
+    let mut raw_account_opt = None;
     let (_account_id_opt, _account_label, api_key) = if is_anonymous {
         (None, String::new(), String::new()) // Anonymous: no account, empty key
     } else {
@@ -293,6 +294,7 @@ pub(crate) async fn run_test_for_model(
                         .ok()
                         .flatten()
                 });
+                raw_account_opt = account.clone();
                 if let Some(ref acc) = account
                     && acc.auth_type == "oauth"
                 {
@@ -410,8 +412,9 @@ pub(crate) async fn run_test_for_model(
         extra: serde_json::Map::new(),
     };
 
-    // 6. Custom providers (kiro, antigravity) are not supported by the simple test path yet.
-    let is_custom_provider = matches!(model.provider_id.as_str(), "kiro" | "antigravity");
+    // 6. Custom providers (kiro) are not supported by the simple test path yet.
+    // antigravity is supported via wrap_request_body.
+    let is_custom_provider = matches!(model.provider_id.as_str(), "kiro");
 
     if is_custom_provider {
         return TestResult {
@@ -568,11 +571,70 @@ pub(crate) async fn run_test_for_model(
     // 8. Build the HTTP request. The 15s timeout caps the test wall-
     //    clock cost — a hung upstream shouldn't pin a dashboard
     //    button indefinitely.
+    // Headers will be built below after resolving custom_meta
+    
+    let mut custom_meta = None;
+    if model.provider_id.as_str() == "antigravity" {
+        let project = raw_account_opt
+            .as_ref()
+            .and_then(|a| a.oauth_provider_specific.as_ref())
+            .and_then(|s| serde_json::from_str::<serde_json::Value>(s).ok())
+            .and_then(|v| {
+                v.get("project_id")
+                    .or_else(|| v.get("projectId"))
+                    .and_then(|p| p.as_str().map(String::from))
+            });
+            
+        custom_meta = Some(openproxy_types::context::CustomProviderMeta {
+            access_token: api_key.clone(),
+            maybe_refresh: None,
+            kiro_region: None,
+            kiro_profile_arn: None,
+            antigravity_project: project,
+            antigravity_metadata: None,
+            codex_workspace_id: None,
+        });
+    }
+    
     let headers = adapter.build_headers(&api_key, effective_target_format, &model.model_id);
+    
+    let dummy_target = openproxy_types::context::ResolvedTarget {
+        target: openproxy_types::combos::ComboTarget {
+            id: openproxy_types::ids::ComboTargetId(0),
+            combo_id: openproxy_types::ids::ComboId(0),
+            provider_id: openproxy_types::ids::ProviderId::new(model.provider_id.as_str()),
+            account_id: None,
+            model_row_id: None,
+            sub_combo_id: None,
+            priority_order: 0,
+            weight: 1,
+            rate_limit_scope: openproxy_types::providers::RateLimitScope::Account,
+        },
+        model: model.clone(),
+        api_key: api_key.clone(),
+        api_key_label: Some(_account_label.clone()),
+        custom_meta,
+    };
+
     let mut req = openproxy_adapters::upstream::UpstreamRequest::post_json(
         url,
         match serde_json::to_vec(&body_value) {
-            Ok(b) => bytes::Bytes::from(b),
+            Ok(b) => {
+                match adapter.wrap_request_body(bytes::Bytes::from(b), effective_target_format, &model.model_id, &dummy_target) {
+                    Ok(wrapped) => wrapped,
+                    Err(e) => {
+                        let _ = cancel_rx;
+                        return TestResult {
+                            row_id: model_row_id,
+                            status: 500,
+                            elapsed_ms: 0,
+                            error_msg: Some(openproxy_core::cost::redact_error_msg(&format!("failed to wrap request: {}", e)).0),
+                            skipped: true,
+                            skip_reason: Some(openproxy_core::cost::redact_error_msg(&format!("failed to wrap request: {}", e)).0),
+                        };
+                    }
+                }
+            },
             Err(e) => {
                 let _ = cancel_rx;
                 return TestResult {

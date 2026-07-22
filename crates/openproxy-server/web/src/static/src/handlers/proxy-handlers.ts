@@ -8,9 +8,25 @@ import { showToast } from "../components/toast.js";
 import { ensureModalRoot, showApiError } from "../lib/ui-utils.js";
 import { t } from "../i18n/index.js";
 
-export async function reloadProxies(): Promise<void> {
+export async function reloadProxies(queryParams?: Record<string, string | number>): Promise<void> {
   try {
-    state.proxies = await api("/proxies") as typeof state.proxies;
+    const params = new URLSearchParams();
+    if (queryParams) {
+      Object.entries(queryParams).forEach(([k, v]) => {
+        if (v !== undefined && v !== null && v !== "") {
+          params.set(k, String(v));
+        }
+      });
+    }
+    const queryString = params.toString();
+    const url = queryString ? `/proxies?${queryString}` : "/proxies?limit=50";
+
+    const [proxies, summary] = await Promise.all([
+      api(url),
+      api("/proxies/summary"),
+    ]);
+    state.proxies = proxies as typeof state.proxies;
+    state.proxySummary = summary as typeof state.proxySummary;
     requestUpdate();
   } catch (err: unknown) {
     console.error("reloadProxies failed", err);
@@ -94,8 +110,8 @@ export function showAddCustomProxy(): void {
         class="modal-bg"
         id="add-proxy-modal"
         @click=${(e: Event) => {
-          if (e.target === e.currentTarget) wrapper.remove();
-        }}
+        if (e.target === e.currentTarget) wrapper.remove();
+      }}
       >
         <div class="modal">
           <div class="modal-header">
@@ -111,9 +127,9 @@ export function showAddCustomProxy(): void {
           </div>
           <form
             @submit=${(e: Event) => {
-              e.preventDefault();
-              void createCustomProxy(e, wrapper);
-            }}
+        e.preventDefault();
+        void createCustomProxy(e, wrapper);
+      }}
           >
             <div class="modal-body">
               <div class="field">

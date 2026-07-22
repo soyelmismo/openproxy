@@ -231,7 +231,7 @@ impl PipelineStage for DispatchStage {
         ctx: &mut PipelineContext,
         _next: PipelineNext<'_>,
     ) -> Result<PipelineResult, CoreError> {
-        let current = ctx.current_target.as_ref().unwrap();
+        let mut current = ctx.current_target.as_ref().unwrap().clone();
         let target = &current.target;
         let model = &current.model;
         let attempt = ctx.current_target_attempt;
@@ -291,6 +291,39 @@ impl PipelineStage for DispatchStage {
                 trace_id,
             ));
         }
+
+        if target.provider_id.as_str() == "antigravity" {
+            if let Some(custom_meta) = current.custom_meta.as_mut() {
+                if custom_meta.antigravity_project.is_none() {
+                    if let Some(ref meta_str) = custom_meta.antigravity_metadata {
+                        if let Ok(metadata) = serde_json::from_str::<serde_json::Value>(meta_str) {
+                            tracing::info!("Lazy fetching antigravity projectId for target {}", target.id.0);
+                            match openproxy_adapters::adapters::antigravity::load_code_assist(
+                                &ctx.pipeline.config.upstream_client,
+                                &custom_meta.access_token,
+                                &metadata,
+                            ).await {
+                                Ok(Some(pid)) => {
+                                    tracing::info!("Successfully fetched antigravity projectId: {}", pid);
+                                    custom_meta.antigravity_project = Some(pid.clone());
+                                    // Update DB cache
+                                    if let Some(ref account_id) = target.account_id {
+                                        if let Err(e) = ctx.pipeline.repo().update_antigravity_project_id(account_id.0, &pid) {
+                                            tracing::error!("Failed to update antigravity project id in db: {}", e);
+                                        }
+                                    }
+                                }
+                                Ok(None) => tracing::warn!("loadCodeAssist returned Ok(None)"),
+                                Err(e) => tracing::error!("loadCodeAssist failed: {}", e),
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // We update the context so the changes to `current` (e.g. antigravity_project) are passed along.
+        ctx.current_target = Some(current.clone());
 
         let api_key = current
             .custom_meta

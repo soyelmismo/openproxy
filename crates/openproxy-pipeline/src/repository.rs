@@ -108,6 +108,7 @@ pub trait PipelineRepository: Send + Sync {
         &self,
         provider_ids: &[ProviderId],
     ) -> Result<HashMap<String, String>>;
+    fn update_antigravity_project_id(&self, account_id: i64, new_project_id: &str) -> Result<()>;
 
     // Routing Logic
     fn resolve_combo_to_targets(
@@ -615,7 +616,7 @@ impl PipelineRepository for SqlitePipelineRepository {
                     ))
                 }
             ).optional().map_err(|e| openproxy_types::error::CoreError::Database { message: "query accounts".into(), source: Some(Box::new(e)) })?;
-            if let Some((api_key, label, access, refresh, expires, oauth_prov, email, extra_json)) =
+            if let Some((api_key, label, access, refresh, expires, oauth_prov, _email, extra_json)) =
                 row
             {
                 raw_map.insert(
@@ -626,13 +627,24 @@ impl PipelineRepository for SqlitePipelineRepository {
                         access_token_encrypted: access,
                         refresh_token_encrypted: refresh,
                         expires_at: expires,
-                        oauth_provider_specific: oauth_prov,
+                        oauth_provider_specific: oauth_prov.clone(),
                         quota_session_reset_at: None,
                         quota_model_details: None,
                     },
                 );
-                if let Some(ref em) = email {
-                    ag_map.insert(id.0, em.clone());
+                // Extract projectId from oauth_provider_specific JSON for antigravity accounts.
+                // Do NOT use the email column — the API needs a real GCP project ID.
+                if let Some(ref oauth_json) = oauth_prov {
+                    if let Ok(meta) = serde_json::from_str::<serde_json::Value>(oauth_json) {
+                        if let Some(pid) = meta
+                            .get("projectId")
+                            .or_else(|| meta.get("project_id"))
+                            .and_then(|v| v.as_str())
+                            .filter(|v| !v.is_empty())
+                        {
+                            ag_map.insert(id.0, pid.to_string());
+                        }
+                    }
                 }
                 if let Some(cfg_str) = extra_json
                     && let Ok(val) = serde_json::from_str::<serde_json::Value>(&cfg_str)
@@ -665,6 +677,36 @@ impl PipelineRepository for SqlitePipelineRepository {
             }
         }
         Ok((raw_map, kiro_map, ag_map))
+    }
+
+    fn update_antigravity_project_id(&self, account_id: i64, new_project_id: &str) -> Result<()> {
+        use rusqlite::OptionalExtension;
+        let conn = self.conn.lock();
+        
+        let current_json_opt: Option<String> = conn.query_row(
+            "SELECT oauth_provider_specific FROM accounts WHERE id = ?1",
+            rusqlite::params![account_id],
+            |row| row.get(0),
+        ).optional().map_err(|e| openproxy_types::error::CoreError::Database { message: "query account".into(), source: Some(Box::new(e)) })?.flatten();
+
+        let mut meta = if let Some(json_str) = current_json_opt {
+            serde_json::from_str::<serde_json::Value>(&json_str).unwrap_or_else(|_| serde_json::json!({}))
+        } else {
+            serde_json::json!({})
+        };
+
+        if let Some(obj) = meta.as_object_mut() {
+            obj.insert("projectId".to_string(), serde_json::Value::String(new_project_id.to_string()));
+        }
+
+        let new_json_str = serde_json::to_string(&meta).unwrap_or_default();
+        
+        conn.execute(
+            "UPDATE accounts SET oauth_provider_specific = ?1 WHERE id = ?2",
+            rusqlite::params![new_json_str, account_id],
+        ).map_err(|e| openproxy_types::error::CoreError::Database { message: "update account".into(), source: Some(Box::new(e)) })?;
+        
+        Ok(())
     }
 
     fn get_providers_auth_type(
@@ -824,7 +866,10 @@ impl PipelineRepository for SqlitePipelineRepository {
             )));
         }
 
-        Ok(None)
+        Err(openproxy_types::error::CoreError::Validation(format!(
+            "use_proxies is enabled for provider '{}', but no alive proxies are available in pool",
+            provider_id
+        )))
     }
 
     fn get_proxy_status_by_url(&self, url: &str) -> Option<String> {
