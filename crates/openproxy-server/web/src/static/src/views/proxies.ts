@@ -38,7 +38,6 @@ let loadError: string | null = null;
 let currentPage = 1;
 let searchDebounceTimer: ReturnType<typeof setTimeout> | null = null;
 
-// ...
 function fetchFilteredProxies(): void {
   const queryParams: Record<string, string | number> = {
     limit: 50,

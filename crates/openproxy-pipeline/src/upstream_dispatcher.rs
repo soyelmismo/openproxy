@@ -19,6 +19,8 @@ pub(crate) struct DispatchContext<'a> {
     pub(crate) race_size: u8,
     pub(crate) started: Instant,
     pub(crate) model: &'a Model,
+    pub(crate) proxy_url: Option<String>,
+    pub(crate) proxy_status: Option<String>,
 }
 
 impl<'a> DispatchContext<'a> {
@@ -34,8 +36,8 @@ impl<'a> DispatchContext<'a> {
         'a: 'e,
     {
         crate::FailureContext {
-            proxy_url: None,
-            proxy_status: None,
+            proxy_url: self.proxy_url.clone(),
+            proxy_status: self.proxy_status.clone(),
             attempt: self.attempt,
             race_size: self.race_size,
             err,
@@ -247,11 +249,13 @@ impl UpstreamDispatcher {
         race_size: u8,
         trace_id: String,
     ) -> PipelineResult {
-        let dctx = DispatchContext {
+        let mut dctx = DispatchContext {
             attempt,
             race_size,
             started,
             model,
+            proxy_url: None,
+            proxy_status: None,
         };
 
         // Gate 2: both the non-streaming path AND the streaming path
@@ -294,6 +298,8 @@ impl UpstreamDispatcher {
             None => None,
         };
         upstream_request.proxy_status = proxy_status.clone();
+        dctx.proxy_url = upstream_request.proxy.clone();
+        dctx.proxy_status = upstream_request.proxy_status.clone();
         tracing::info!(
             proxy_used = ?upstream_request.proxy,
             proxy_status = %proxy_status.as_ref().unwrap_or(&"none".to_string()),
@@ -1103,6 +1109,8 @@ impl UpstreamDispatcher {
             race_size,
             started,
             model,
+            proxy_url: proxy_url.clone(),
+            proxy_status: proxy_status.clone(),
         };
 
         let has_partial_content = acc.as_ref().is_some_and(|a| !a.is_empty());
@@ -1134,9 +1142,7 @@ impl UpstreamDispatcher {
                 }
                 None => None,
             };
-            let mut fail_ctx = dctx.fail_ctx_code(&err, Some(connect_ms), None, code);
-            fail_ctx.proxy_url = proxy_url.clone();
-            fail_ctx.proxy_status = proxy_status.clone();
+            let fail_ctx = dctx.fail_ctx_code(&err, Some(connect_ms), None, code);
             return self.record_and_fail_with_trace_id_and_partial(
                 req,
                 combo,
@@ -1163,9 +1169,7 @@ impl UpstreamDispatcher {
         } else {
             CoreError::ClientDisconnected
         };
-        let mut fail_ctx = dctx.fail_ctx_code(&err, Some(connect_ms), None, 499);
-        fail_ctx.proxy_url = proxy_url;
-        fail_ctx.proxy_status = proxy_status;
+        let fail_ctx = dctx.fail_ctx_code(&err, Some(connect_ms), None, 499);
         self.record_and_fail_with_trace_id_and_partial(
             req,
             combo,
@@ -1207,6 +1211,8 @@ impl UpstreamDispatcher {
             race_size,
             started,
             model,
+            proxy_url: proxy_url.clone(),
+            proxy_status: proxy_status.clone(),
         };
 
         let err = match e {
@@ -1253,9 +1259,7 @@ impl UpstreamDispatcher {
                                 }
                                 None => None,
                             };
-                        let mut fail_ctx = dctx.fail_ctx_code(&err, Some(connect_ms), None, code);
-                        fail_ctx.proxy_url = proxy_url.clone();
-                        fail_ctx.proxy_status = proxy_status.clone();
+                        let fail_ctx = dctx.fail_ctx_code(&err, Some(connect_ms), None, code);
                         self.record_and_fail_with_trace_id_and_partial(
                             req,
                             combo,
@@ -1296,9 +1300,7 @@ impl UpstreamDispatcher {
             }
             None => None,
         };
-        let mut fail_ctx = dctx.fail_ctx_code(&err, Some(connect_ms), None, err.http_status());
-        fail_ctx.proxy_url = proxy_url;
-        fail_ctx.proxy_status = proxy_status;
+        let fail_ctx = dctx.fail_ctx_code(&err, Some(connect_ms), None, err.http_status());
         self.record_and_fail_with_trace_id_and_partial(
             req,
             combo,
@@ -1340,6 +1342,8 @@ impl UpstreamDispatcher {
             race_size,
             started,
             model,
+            proxy_url: upstream_request.proxy.clone(),
+            proxy_status: upstream_request.proxy_status.clone(),
         };
 
         // Cancellation: the `client_disconnected` watch is the

@@ -1648,7 +1648,6 @@ export function buildDebugBundle(log: LogDetailLog): string {
     lines.push("");
   }
 
-// ...
   // Raw log row (everything we have, cleaned of nested duplicates).
   const cleanLog: Record<string, unknown> = { ...(log as unknown as Record<string, unknown>) };
   delete cleanLog["detail"];
@@ -1673,7 +1672,6 @@ export function buildDebugBundle(log: LogDetailLog): string {
 
   return lines.join("\n");
 }
-// ...
 
 /** Truncate a string to ~10 KB for the debug bundle. Larger bodies
  *  make the bundle uncopy-pasteable. The truncation marker makes it
