@@ -264,13 +264,13 @@ pub async fn oauth_device_poll(
                     openproxy_core::oauth_tickets::TicketStatus::Consumed => {
                         Err(ApiError(CoreError::NotFound {
                             what: "oauth_device_ticket".into(),
-                            id: device_code_clone.into(),
+                            id: device_code_clone,
                         }))
                     }
                     openproxy_core::oauth_tickets::TicketStatus::Unknown => {
                         Err(ApiError(CoreError::NotFound {
                             what: "oauth_device_ticket".into(),
-                            id: device_code_clone.into(),
+                            id: device_code_clone,
                         }))
                     }
                 }

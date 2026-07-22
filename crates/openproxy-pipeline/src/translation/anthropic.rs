@@ -510,22 +510,20 @@ pub fn anthropic_request_to_openai(req: AnthropicRequest) -> OpenAIRequest {
         })
         .unwrap_or_default();
 
-    if let Some(output_config) = req.extra.get("output_config") {
-        if let Some(format) = output_config.get("format") {
-            if format.get("type").and_then(|v| v.as_str()) == Some("json_schema") {
-                if let Some(schema) = format.get("schema") {
-                    let response_format = serde_json::json!({
-                        "type": "json_schema",
-                        "json_schema": {
-                            "name": "json_response",
-                            "strict": true,
-                            "schema": schema
-                        }
-                    });
-                    extra.insert("response_format".to_string(), response_format);
-                }
+    if let Some(output_config) = req.extra.get("output_config")
+        && let Some(format) = output_config.get("format")
+        && format.get("type").and_then(|v| v.as_str()) == Some("json_schema")
+        && let Some(schema) = format.get("schema")
+    {
+        let response_format = serde_json::json!({
+            "type": "json_schema",
+            "json_schema": {
+                "name": "json_response",
+                "strict": true,
+                "schema": schema
             }
-        }
+        });
+        extra.insert("response_format".to_string(), response_format);
     }
 
     OpenAIRequest {
@@ -548,15 +546,14 @@ pub fn openai_response_to_anthropic(resp: OpenAIResponse) -> AnthropicResponse {
     let mut content = Vec::new();
     let mut finish_reason = None;
     if let Some(first_choice) = resp.choices.first() {
-        if let Some(msg_content) = first_choice.message.content.as_ref() {
-            if let Some(s) = msg_content.as_str() {
-                if !s.is_empty() {
-                    content.push(serde_json::json!({
-                        "type": "text",
-                        "text": s.to_string()
-                    }));
-                }
-            }
+        if let Some(msg_content) = first_choice.message.content.as_ref()
+            && let Some(s) = msg_content.as_str()
+            && !s.is_empty()
+        {
+            content.push(serde_json::json!({
+                "type": "text",
+                "text": s.to_string()
+            }));
         }
 
         if let Some(tool_calls) = &first_choice.message.tool_calls {
@@ -714,15 +711,14 @@ fn translate_anthropic_tools_to_openai(ts: Vec<serde_json::Value>) -> Vec<serde_
 }
 
 fn translate_anthropic_tool_choice_to_openai(tc: serde_json::Value) -> serde_json::Value {
-    if let Some(obj) = tc.as_object() {
-        if obj.get("type").and_then(|v| v.as_str()) == Some("tool") {
-            if let Some(name) = obj.get("name") {
-                return serde_json::json!({
-                    "type": "function",
-                    "function": { "name": name }
-                });
-            }
-        }
+    if let Some(obj) = tc.as_object()
+        && obj.get("type").and_then(|v| v.as_str()) == Some("tool")
+        && let Some(name) = obj.get("name")
+    {
+        return serde_json::json!({
+            "type": "function",
+            "function": { "name": name }
+        });
     }
     tc
 }
