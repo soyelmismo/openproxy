@@ -964,12 +964,13 @@ mod tests {
         let proxy2 = get_or_assign_provider_proxy(&conn, &provider_id).unwrap();
         assert_eq!(proxy2, Some("socks5://1.2.3.4:8080".to_string()));
 
+// ...
         // 4. Mark the proxy as dead / inactive
         update_proxy_status(&conn, &p.id, "dead", Some(9999)).unwrap();
 
         // Since it's dead, get_or_assign_provider_proxy should detect it as dead,
-        // search for a new one, find none, and return Ok(None).
-        let proxy3 = get_or_assign_provider_proxy(&conn, &provider_id).unwrap();
-        assert_eq!(proxy3, None);
+        // search for a new one, find none, and return Err because use_proxies = 1.
+        assert!(get_or_assign_provider_proxy(&conn, &provider_id).is_err());
     }
 }
+

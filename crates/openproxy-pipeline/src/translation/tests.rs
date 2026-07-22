@@ -284,6 +284,7 @@ use crate::translation::*;
         assert_eq!(gen_cfg.top_p, Some(0.9));
     }
 
+// ...
     #[test]
     fn gemini_to_openai_extracts_content() {
         let resp = GeminiResponse {
@@ -302,6 +303,7 @@ use crate::translation::*;
                 candidates_token_count: 5,
                 total_token_count: 15,
             }),
+            response: None,
         };
 
         let out = gemini_to_openai(&resp);
@@ -336,6 +338,7 @@ use crate::translation::*;
                 finish_reason: Some("MAX_TOKENS".to_string()),
             }],
             usage_metadata: None,
+            response: None,
         };
 
         let out = gemini_to_openai(&resp);
@@ -347,9 +350,11 @@ use crate::translation::*;
         let resp = GeminiResponse {
             candidates: vec![],
             usage_metadata: None,
+            response: None,
         };
 
         let out = gemini_to_openai(&resp);
+// ...
         assert_eq!(out.choices.len(), 1);
         assert_eq!(
             out.choices[0]
