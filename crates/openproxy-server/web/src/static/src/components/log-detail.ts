@@ -86,6 +86,102 @@ function statusPillClass(s: string | null | undefined): string {
   return "warn";
 }
 
+function pruneValueForDisplay(val: unknown, depth = 0): unknown {
+  if (depth > 10 || val == null) return val;
+
+  if (typeof val === "string") {
+    const trimmed = val.trim();
+    if ((trimmed.startsWith("{") && trimmed.endsWith("}")) || (trimmed.startsWith("[") && trimmed.endsWith("]"))) {
+      try {
+        const parsed = JSON.parse(val);
+        return pruneValueForDisplay(parsed, depth + 1);
+      } catch (_e) {
+        // Fallthrough
+      }
+    }
+    return val;
+  }
+
+  if (Array.isArray(val)) {
+    return val.map((item) => pruneValueForDisplay(item, depth + 1));
+  }
+
+  if (typeof val === "object") {
+    const obj = val as Record<string, unknown>;
+    const res: Record<string, unknown> = {};
+
+    const keys = Object.keys(obj);
+    const normalKeys = keys.filter((k) => k !== "messages" && k !== "request_body_json");
+    const orderedKeys = [
+      ...normalKeys,
+      ...(keys.includes("request_body_json") ? ["request_body_json"] : []),
+      ...(keys.includes("messages") ? ["messages"] : [])
+    ];
+
+    for (const key of orderedKeys) {
+      const item = obj[key];
+      if (key === "messages" && Array.isArray(item)) {
+        const MAX_MSG_LEN = 150;
+        const MAX_MESSAGES = 10;
+        const arr = item as unknown[];
+        const pruneMsg = (msg: unknown) => {
+          if (msg && typeof msg === "object" && !Array.isArray(msg)) {
+            const m = { ...(msg as Record<string, unknown>) };
+            const content = m["content"];
+            if (typeof content === "string" && content.length > MAX_MSG_LEN) {
+              m["content"] = content.slice(0, MAX_MSG_LEN) + `… [truncated, ${content.length - MAX_MSG_LEN} chars]`;
+            } else if (Array.isArray(content)) {
+              m["content"] = (content as unknown[]).map((part) => {
+                if (part && typeof part === "object" && !Array.isArray(part)) {
+                  const p = { ...(part as Record<string, unknown>) };
+                  if (typeof p["text"] === "string" && p["text"].length > MAX_MSG_LEN) {
+                    p["text"] = p["text"].slice(0, MAX_MSG_LEN) + `… [truncated, ${p["text"].length - MAX_MSG_LEN} chars]`;
+                  }
+                  return p;
+                }
+                return part;
+              });
+            }
+            return m;
+          }
+          return msg;
+        };
+
+        if (arr.length > MAX_MESSAGES) {
+          const head = arr.slice(0, 5).map(pruneMsg);
+          const tail = arr.slice(arr.length - 2).map(pruneMsg);
+          res[key] = [...head, `… [${arr.length - 7} messages omitted, total ${arr.length} items]`, ...tail];
+        } else {
+          res[key] = arr.map(pruneMsg);
+        }
+      } else if (key === "system") {
+        const MAX_MSG_LEN = 150;
+        if (typeof item === "string" && item.length > MAX_MSG_LEN) {
+          res[key] = item.slice(0, MAX_MSG_LEN) + `… [truncated, ${item.length - MAX_MSG_LEN} chars]`;
+        } else if (Array.isArray(item)) {
+          res[key] = (item as unknown[]).map((block) => {
+            if (block && typeof block === "object" && !Array.isArray(block)) {
+              const b = { ...(block as Record<string, unknown>) };
+              if (typeof b["text"] === "string" && b["text"].length > MAX_MSG_LEN) {
+                b["text"] = b["text"].slice(0, MAX_MSG_LEN) + `… [truncated, ${b["text"].length - MAX_MSG_LEN} chars]`;
+              }
+              return b;
+            }
+            return block;
+          });
+        } else {
+          res[key] = pruneValueForDisplay(item, depth + 1);
+        }
+      } else {
+        res[key] = pruneValueForDisplay(item, depth + 1);
+      }
+    }
+    return res;
+  }
+
+  return val;
+}
+
 /** Pretty-print a JSON value for display inside a `<pre>` tag.
  *  lit-html auto-escapes the returned string when interpolated
  *  via `${...}`, so we no longer escape here. Returns "(empty)"
@@ -93,13 +189,12 @@ function statusPillClass(s: string | null | undefined): string {
  *  render. */
 function formatJson(value: unknown): string {
   if (value == null) return "(empty)";
-  let s: string;
-  try { s = typeof value === "string" ? value : JSON.stringify(value, null, 2); }
-  catch (_e: unknown) { s = String(value); }
-  if (s.length > 50000) {
-    return s.slice(0, 50000) + `\n… [UI truncated, ${s.length - 50000} more chars]`;
+  try {
+    const pruned = pruneValueForDisplay(value);
+    return typeof pruned === "string" ? pruned : JSON.stringify(pruned, null, 2);
+  } catch (_e: unknown) {
+    return String(value);
   }
-  return s;
 }
 
 function jsonSection(title: string, value: unknown, tabKey: string): TemplateResult {
@@ -1294,7 +1389,8 @@ function renderModal() {
     response_body_json: log.response_body_json ?? detailObj.response_body_json,
     request_headers: log.request_headers ?? detailObj.request_headers,
     response_headers: log.response_headers ?? detailObj.response_headers,
-    stages: [safeAttempt]
+    stages: [safeAttempt],
+    detail: undefined
   } : { 
     id: attempt.rowId, 
     request_id: attempt.requestId, 
@@ -1304,7 +1400,8 @@ function renderModal() {
     provider_id: attempt.providerId,
     upstream_model_id: attempt.upstreamModelId,
     error_message: attempt.error,
-    detail: attempt.detail,
+    request_body_json: detailObj?.request_body_json,
+    response_body_json: detailObj?.response_body_json,
     stages: [safeAttempt]
   };
   render(renderLogDetailModal(logObj as any), wrapper as HTMLElement);
