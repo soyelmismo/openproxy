@@ -966,4 +966,30 @@ mod tests {
         let proxy3 = get_or_assign_provider_proxy(&conn, &provider_id).unwrap();
         assert_eq!(proxy3, None);
     }
+
+    #[test]
+    fn test_get_proxy_status_by_url() {
+        let conn = setup_test_db();
+
+        let p = add_custom_proxy(
+            &conn,
+            "1.2.3.4".to_string(),
+            8080,
+            "socks5".to_string(),
+            None,
+        )
+        .unwrap();
+
+        // 1. Initial status should be "unknown"
+        assert_eq!(get_proxy_status_by_url(&conn, "socks5://1.2.3.4:8080"), Some("unknown".to_string()));
+
+        // 2. Change status and verify it's updated
+        update_proxy_status(&conn, &p.id, "alive", Some(100)).unwrap();
+        assert_eq!(get_proxy_status_by_url(&conn, "socks5://1.2.3.4:8080"), Some("alive".to_string()));
+
+        // 3. Test malformed URLs and non-existent proxy
+        assert_eq!(get_proxy_status_by_url(&conn, "1.2.3.4:8080"), None);
+        assert_eq!(get_proxy_status_by_url(&conn, "socks5://1.2.3.4"), None);
+        assert_eq!(get_proxy_status_by_url(&conn, "socks5://9.9.9.9:8080"), None);
+    }
 }
