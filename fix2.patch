@@ -1,0 +1,16 @@
+--- crates/openproxy-core/src/discovery_scheduler.rs
++++ crates/openproxy-core/src/discovery_scheduler.rs
+@@ -432,10 +432,10 @@
+                 }
+             } else {
+                 let result = {
+-                    let w = db_pool.writer();
+-                    accounts::decrypt_api_key(&w, acc.id, master_key.as_ref())
++                    // Don't hold the lock across the await point
++                    accounts::decrypt_api_key(&db_pool.writer(), acc.id, master_key.as_ref())
+                 };
+-
++
+                 match result {
+                     Ok(k) => (k, label),
+                     Err(e) => {
