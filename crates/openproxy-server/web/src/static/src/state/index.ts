@@ -135,6 +135,16 @@ export interface LogsState {
   selectedIdentity: { kind: "row_id", id: number } | { kind: "attempt", attemptKey: string } | null;
 }
 
+export interface ProxySummary {
+  total: number;
+  alive: number;
+  dead: number;
+  unknown: number;
+  avg_latency_ms: number | null;
+  sources: string[];
+  protocols: string[];
+}
+
 /** Shape of the cached provider-detail sub-state (per-provider
  *  selection + test results). The per-provider UI map is keyed
  *  by provider id and the test results are keyed by combo id. */
@@ -146,6 +156,7 @@ export interface DashboardState {
   modelsComplete: boolean;
   combos: Combo[];
   proxies: FreeProxy[];
+  proxySummary: ProxySummary | null;
   /** Cached API key rows. The shape is provider-specific; the
    *  dashboard views hydrate it from `/admin/api-keys`. Kept
    *  loose here (out of G3 scope — G4 will narrow it). */
@@ -210,6 +221,7 @@ export const state: DashboardState = {
   modelsComplete: false,
   combos: [],
   proxies: [],
+  proxySummary: null,
   apiKeys: [],
   health: null,
   // The view currently displayed. Used by `rerenderCurrentView` so

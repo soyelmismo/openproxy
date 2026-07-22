@@ -1275,6 +1275,10 @@ pub struct NotificationsQuery {
 pub struct ListProxiesQuery {
     pub source: Option<String>,
     pub status: Option<String>,
+    pub protocol: Option<String>,
+    pub search: Option<String>,
+    pub limit: Option<usize>,
+    pub offset: Option<usize>,
 }
 
 #[derive(serde::Deserialize)]

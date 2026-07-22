@@ -110,7 +110,15 @@ fn map_gemini_finish_reason(reason: &str) -> String {
 /// - `usage_metadata.candidates_token_count` → `usage.completion_tokens`.
 /// - `usage_metadata.total_token_count` → `usage.total_tokens`.
 pub fn gemini_to_openai(resp: &GeminiResponse) -> OpenAIResponse {
-    let candidate = resp.candidates.first();
+    let candidates = if !resp.candidates.is_empty() {
+        &resp.candidates
+    } else if let Some(inner) = &resp.response {
+        &inner.candidates
+    } else {
+        &resp.candidates
+    };
+
+    let candidate = candidates.first();
 
     let content = candidate
         .and_then(|c| c.content.as_ref())
@@ -124,7 +132,15 @@ pub fn gemini_to_openai(resp: &GeminiResponse) -> OpenAIResponse {
         .and_then(|c| c.finish_reason.as_deref())
         .map(map_gemini_finish_reason);
 
-    let usage = resp.usage_metadata.as_ref().map(|u| OpenAIUsage {
+    let usage_metadata = if resp.usage_metadata.is_some() {
+        &resp.usage_metadata
+    } else if let Some(inner) = &resp.response {
+        &inner.usage_metadata
+    } else {
+        &None
+    };
+
+    let usage = usage_metadata.as_ref().map(|u| OpenAIUsage {
         prompt_tokens: u.prompt_token_count,
         completion_tokens: u.candidates_token_count,
         total_tokens: u.total_token_count,

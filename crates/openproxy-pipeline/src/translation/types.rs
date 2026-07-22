@@ -171,6 +171,16 @@ pub struct GeminiResponse {
     pub candidates: Vec<GeminiCandidate>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub usage_metadata: Option<GeminiUsageMetadata>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub response: Option<GeminiInnerResponse>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GeminiInnerResponse {
+    #[serde(default)]
+    pub candidates: Vec<GeminiCandidate>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub usage_metadata: Option<GeminiUsageMetadata>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
