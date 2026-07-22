@@ -354,6 +354,32 @@ pub fn update_account_api_key(
     accounts::update_api_key(conn, id, input.api_key.as_deref(), master_key)
 }
 
+/// Input for [`update_account_label`].
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UpdateAccountLabelInput {
+    pub label: Option<String>,
+}
+
+/// Update the label for an existing account.
+/// Returns [`CoreError::AccountNotFound`] when `id` is missing.
+pub fn update_account_label(
+    conn: &Connection,
+    id: AccountId,
+    input: UpdateAccountLabelInput,
+) -> Result<()> {
+    accounts::update_label(conn, id, input.label.as_deref())
+}
+
+/// Get the decrypted API key for an account.
+/// Returns [`CoreError::AccountNotFound`] when `id` is missing.
+pub fn get_account_api_key(
+    conn: &Connection,
+    master_key: &MasterKey,
+    id: AccountId,
+) -> Result<String> {
+    accounts::decrypt_api_key(conn, id, master_key)
+}
+
 // =====================================================================
 // Quota refresh
 // =====================================================================

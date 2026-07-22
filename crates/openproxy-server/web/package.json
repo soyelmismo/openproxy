@@ -9,13 +9,15 @@
     "typecheck:all": "tsc --noEmit && tsc --noEmit -p tsconfig.test.json",
     "build": "node build.mjs && tsc --emitDeclarationOnly",
     "build:watch": "node build.mjs --watch",
-    "test:e2e": "cp tests/e2e/data-test.seed.db tests/e2e/data-test.db && playwright test"
+    "test:e2e": "cp tests/e2e/data-test.seed.db tests/e2e/data-test.db && playwright test",
+    "test": "vitest run src/static/src"
   },
   "devDependencies": {
     "@playwright/test": "^1.61.1",
     "@types/node": "^26.1.1",
     "esbuild": "^0.28.1",
-    "typescript": "6.0.3"
+    "typescript": "7.0.2",
+    "vitest": "^4.1.10"
   },
   "dependencies": {
     "lit-html": "^3.3.3",

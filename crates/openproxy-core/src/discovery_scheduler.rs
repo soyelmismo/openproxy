@@ -417,8 +417,11 @@ async fn run_one_tick(
             // decrypt the access token from the database so the
             // adapter can fetch account-specific models.
             if acc.auth_type == "oauth" {
-                let w = db_pool.writer();
-                match accounts::decrypt_access_token(&w, acc.id, master_key.as_ref()) {
+                let decrypt_result = {
+                    let w = db_pool.writer();
+                    accounts::decrypt_access_token(&w, acc.id, master_key.as_ref())
+                };
+                match decrypt_result {
                     Ok(k) => (k, label),
                     Err(e) => {
                         tracing::warn!(
@@ -431,12 +434,11 @@ async fn run_one_tick(
                     }
                 }
             } else {
-                let result = {
-                    // Don't hold the lock across the await point
-                    accounts::decrypt_api_key(&db_pool.writer(), acc.id, master_key.as_ref())
+                let decrypt_result = {
+                    let w = db_pool.writer();
+                    accounts::decrypt_api_key(&w, acc.id, master_key.as_ref())
                 };
-
-                match result {
+                match decrypt_result {
                     Ok(k) => (k, label),
                     Err(e) => {
                         tracing::warn!(

@@ -137,6 +137,7 @@ impl CredentialManager {
                             kiro_region,
                             kiro_profile_arn,
                             antigravity_project,
+                            antigravity_metadata,
                             codex_workspace_id,
                         ) = match t.provider_id.as_str() {
                             "kiro" => {
@@ -146,6 +147,7 @@ impl CredentialManager {
                                     meta.and_then(|m| m.profile_arn.clone()),
                                     None,
                                     None,
+                                    None,
                                 )
                             }
                             "antigravity" => {
@@ -153,11 +155,10 @@ impl CredentialManager {
                                     antigravity_map.get(&account_id.0).cloned().or_else(|| {
                                         Self::antigravity_project_from_account(raw_account)
                                     });
-                                if proj.is_none() {
-                                    tracing::error!("failed to read antigravity project");
-                                    continue;
-                                }
-                                (None, None, proj, None)
+                                
+                                let metadata = raw_account.oauth_provider_specific.clone();
+                                
+                                (None, None, proj, metadata, None)
                             }
                             "codex" => {
                                 let workspace_id = raw_account
@@ -173,9 +174,9 @@ impl CredentialManager {
                                             .filter(|v| !v.is_empty())
                                             .map(ToString::to_string)
                                     });
-                                (None, None, None, workspace_id)
+                                (None, None, None, None, workspace_id)
                             }
-                            _ => (None, None, None, None),
+                            _ => (None, None, None, None, None),
                         };
 
                         Some(CustomProviderMeta {
@@ -184,6 +185,7 @@ impl CredentialManager {
                             kiro_region,
                             kiro_profile_arn,
                             antigravity_project,
+                            antigravity_metadata,
                             codex_workspace_id,
                         })
                     } else {

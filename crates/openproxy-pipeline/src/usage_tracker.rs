@@ -52,9 +52,9 @@ impl UsageTracker {
                 let conn = self.conn.clone();
                 let repo = self.repo.clone();
                 let selection_registry = self.selection_registry.clone();
-                drop(tokio::task::spawn_blocking(move || {
+                let _ = tokio::task::spawn_blocking(move || {
                     crate::worker::process_job(&conn, repo.as_ref(), job, selection_registry);
-                }));
+                });
             } else {
                 tracing::warn!(
                     "failed to send MarkClientResponse to background worker: {}",
@@ -110,10 +110,10 @@ impl UsageTracker {
             endpoint_kind: openproxy_types::endpoint::EndpointKind::Chat,
         };
         let conn = self.conn.clone();
-        drop(tokio::task::spawn_blocking(move || {
+        let _ = tokio::task::spawn_blocking(move || {
             let lock = conn.lock();
             let _ = openproxy_db::cost::record(&lock, &input);
-        }));
+        });
     }
 
     // ponytail: [Demasiados argumentos] -> [Refactorizar a struct en el futuro]
@@ -138,7 +138,8 @@ impl UsageTracker {
             connect_ms,
             ttft_ms,
             status_code,
-            ..
+            proxy_url,
+            proxy_status,
         } = ctx;
         let total_ms = started.elapsed().as_millis() as u64;
         let request_headers = crate::redact::redact_btreemap_sensitive(req.request_headers.clone());
@@ -161,6 +162,9 @@ impl UsageTracker {
             .attempt(attempt)
             .race_size(race_size)
             .trace_id(trace_id)
+            .proxy_url(proxy_url)
+            .proxy_status(proxy_status)
+            .is_proxy_rotated(err.is_proxy_rotated())
             .response_body_json(response_body_json)
             .request_headers(Some(request_headers))
             .is_streaming(is_streaming)
@@ -530,9 +534,9 @@ impl<'a> UsageRecordBuilder<'a> {
                 let conn = self.tracker.conn.clone();
                 let repo = self.tracker.repo.clone();
                 let selection_registry = self.tracker.selection_registry.clone();
-                drop(tokio::task::spawn_blocking(move || {
+                let _ = tokio::task::spawn_blocking(move || {
                     crate::worker::process_job(&conn, repo.as_ref(), job, selection_registry);
-                }));
+                });
             } else {
                 tracing::warn!("failed to send RecordAttempt to background worker: {}", e);
             }

@@ -11,7 +11,8 @@
 import { html, type TemplateResult } from 'lit-html';
 import { state } from "../state/index.js";
 import { api } from "../state/api.js";
-import { mountView, requestUpdate } from "../state/reactive.js";
+import { requestUpdate } from "../state/reactive.js";
+import { createView } from "../lib/view-utils.js";
 import { showToast } from "../components/toast.js";
 import { showCreateKey, showEditKey } from "../handlers/key-handlers.js";
 import { showPlaintextKey } from "../components/key-display.js";
@@ -157,21 +158,17 @@ function renderKeys(): TemplateResult {
 // ---- Mount ----
 
 export async function mountKeys(): Promise<(() => void) | void> {
-  const main = document.getElementById("main");
-  if (!main) return;
   loadError = null;
-  const cleanup = mountView(main, renderKeys);
-  try {
-    const [keys, models] = await Promise.all([
-      api("/keys") as Promise<ApiKeyRow[]>,
-      api("/models") as Promise<Model[]>,
-    ]);
-    state.apiKeys = keys;
-    state.models = models;
-    requestUpdate();
-  } catch (e: unknown) {
-    loadError = e instanceof Error ? e.message : String(e);
-    requestUpdate();
-  }
-  return cleanup;
+  return createView(
+    renderKeys,
+    async () => {
+      const [keys, models] = await Promise.all([
+        api("/keys") as Promise<ApiKeyRow[]>,
+        api("/models") as Promise<Model[]>,
+      ]);
+      state.apiKeys = keys;
+      state.models = models;
+    },
+    (msg) => { loadError = msg; },
+  );
 }

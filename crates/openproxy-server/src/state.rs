@@ -213,9 +213,11 @@ impl AppState {
         .await;
 
         let timeouts_initial = config.timeouts;
-        let rate_limiter = Arc::new(crate::rate_limit::RateLimiter::new(
-            crate::rate_limit::RateLimitConfig::default(),
-        ));
+        let rate_limiter_config = crate::rate_limit::RateLimitConfig {
+            max_requests: config.server.rate_limit_requests_per_minute,
+            ..Default::default()
+        };
+        let rate_limiter = Arc::new(crate::rate_limit::RateLimiter::new(rate_limiter_config));
         spawn_rate_limiter_cleanup(rate_limiter.clone());
 
         let selection_registry = Arc::new(openproxy_types::SelectionRegistry::new());
@@ -323,9 +325,11 @@ impl AppState {
         )
         .await;
 
-        let rate_limiter = Arc::new(crate::rate_limit::RateLimiter::new(
-            crate::rate_limit::RateLimitConfig::default(),
-        ));
+        let rate_limiter_config = crate::rate_limit::RateLimitConfig {
+            max_requests: config.server.rate_limit_requests_per_minute,
+            ..Default::default()
+        };
+        let rate_limiter = Arc::new(crate::rate_limit::RateLimiter::new(rate_limiter_config));
         spawn_rate_limiter_cleanup(rate_limiter.clone());
 
         let selection_registry = Arc::new(openproxy_types::SelectionRegistry::new());
