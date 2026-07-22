@@ -574,7 +574,9 @@ pub fn decrypt_refresh_tokens(
             .prepare(&query)
             .map_err(openproxy_db::error::map_db_error)?;
         let params = rusqlite::params_from_iter(chunk.iter().map(|id| id.0));
-        let mut rows = stmt.query(params).map_err(openproxy_db::error::map_db_error)?;
+        let mut rows = stmt
+            .query(params)
+            .map_err(openproxy_db::error::map_db_error)?;
         while let Some(row) = rows.next().map_err(openproxy_db::error::map_db_error)? {
             let id: i64 = row.get(0).map_err(openproxy_db::error::map_db_error)?;
             let blob: Option<Vec<u8>> = row.get(1).map_err(openproxy_db::error::map_db_error)?;

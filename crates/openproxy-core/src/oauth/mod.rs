@@ -830,7 +830,6 @@ pub async fn start_refresh_scheduler(
             })
         };
 
-
         for (i, account) in accounts.iter().enumerate() {
             // Anti-burst staggering: 3s delay between consecutive accounts.
             if i > 0 {
@@ -866,7 +865,9 @@ pub async fn start_refresh_scheduler(
                 None => {
                     // Fallback to internal error if token couldn't be loaded in batch
                     // (e.g. if the batch query failed entirely for this account)
-                    Err(CoreError::Internal("refresh token not found in batch".to_string()))
+                    Err(CoreError::Internal(
+                        "refresh token not found in batch".to_string(),
+                    ))
                 }
             };
             let refresh_token = match refresh_token {
