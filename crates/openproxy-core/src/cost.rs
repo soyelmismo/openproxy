@@ -11,14 +11,19 @@ pub use openproxy_types::usage::UsageInput;
 
 /// Computes (cost_usd, tokens_per_sec) from pricing + tokens + timing.
 /// Per C3: tokens_per_sec is None if any guard fails.
+// ...
 pub fn compute(price: Option<pricing::Price>, input: &UsageInput) -> (f64, Option<f64>) {
-    let cost = pricing::compute_cost(
-        price,
-        input.prompt_tokens.unwrap_or(0),
-        input.completion_tokens.unwrap_or(0),
-    );
+    let cost = if input.status_code >= 400 {
+        0.0
+    } else {
+        pricing::compute_cost(
+            price,
+            input.prompt_tokens.unwrap_or(0),
+            input.completion_tokens.unwrap_or(0),
+        )
+    };
     let tps = match (input.completion_tokens, input.ttft_ms) {
-        (Some(c), Some(ttft)) if c > 0 && input.total_ms > ttft => {
+        (Some(c), Some(ttft)) if c > 0 && input.total_ms > ttft && input.status_code < 400 => {
             let denom = (input.total_ms - ttft) as f64;
             Some(c as f64 * 1000.0 / denom)
         }
@@ -26,6 +31,7 @@ pub fn compute(price: Option<pricing::Price>, input: &UsageInput) -> (f64, Optio
     };
     (cost, tps)
 }
+// ...
 
 /// Sanitize error_msg:
 /// - cap at 2KB

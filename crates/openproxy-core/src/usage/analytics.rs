@@ -252,6 +252,7 @@ fn to_params(v: &[Box<dyn ToSql>]) -> Vec<&dyn ToSql> {
 /// Aggregate summary over all rows matching `f`.
 pub fn summary(conn: &Connection, f: &UsageFilter) -> Result<UsageSummary> {
     let w = BuiltWhere::from_filter(f);
+// ...
     let sql = format!(
         "SELECT \
              COUNT(DISTINCT request_id)                                    AS unique_requests, \
@@ -260,8 +261,8 @@ pub fn summary(conn: &Connection, f: &UsageFilter) -> Result<UsageSummary> {
              SUM(CASE WHEN race_lost = 0 THEN 1 ELSE 0 END)                AS winners, \
              SUM(CASE WHEN race_lost = 1 THEN 1 ELSE 0 END)                AS losers, \
              SUM(CASE WHEN status_code >= 400 THEN 1 ELSE 0 END)            AS errors, \
-             COALESCE(SUM(prompt_tokens), 0)                                AS total_prompt_tokens, \
-             COALESCE(SUM(completion_tokens), 0)                            AS total_completion_tokens, \
+             COALESCE(SUM(CASE WHEN status_code < 400 THEN prompt_tokens ELSE 0 END), 0) AS total_prompt_tokens, \
+             COALESCE(SUM(CASE WHEN status_code < 400 THEN completion_tokens ELSE 0 END), 0) AS total_completion_tokens, \
              COALESCE(SUM(cost_usd), 0.0)                                   AS total_cost_usd, \
              AVG(ttft_ms) FILTER (WHERE ttft_ms IS NOT NULL)               AS avg_ttft_ms, \
              COALESCE(AVG(total_ms), 0.0)                                   AS avg_total_ms, \
@@ -269,6 +270,7 @@ pub fn summary(conn: &Connection, f: &UsageFilter) -> Result<UsageSummary> {
          FROM usage {}",
         w.sql,
     );
+// ...
 
     let mut stmt = conn
         .prepare(&sql)
@@ -317,6 +319,7 @@ pub fn summary(conn: &Connection, f: &UsageFilter) -> Result<UsageSummary> {
 /// Per-(provider, model) breakdown. Ordered by total cost descending.
 pub fn by_model(conn: &Connection, f: &UsageFilter) -> Result<Vec<ByModelRow>> {
     let w = BuiltWhere::from_filter(f);
+// ...
     let sql = format!(
         "SELECT \
              provider_id, \
@@ -324,14 +327,15 @@ pub fn by_model(conn: &Connection, f: &UsageFilter) -> Result<Vec<ByModelRow>> {
              COUNT(DISTINCT request_id)                       AS unique_requests, \
              COUNT(*)                                         AS total_rows, \
              SUM(CASE WHEN race_lost = 0 THEN 1 ELSE 0 END)   AS winners, \
-             COALESCE(SUM(prompt_tokens), 0)                  AS total_prompt_tokens, \
-             COALESCE(SUM(completion_tokens), 0)              AS total_completion_tokens, \
+             COALESCE(SUM(CASE WHEN status_code < 400 THEN prompt_tokens ELSE 0 END), 0) AS total_prompt_tokens, \
+             COALESCE(SUM(CASE WHEN status_code < 400 THEN completion_tokens ELSE 0 END), 0) AS total_completion_tokens, \
              COALESCE(SUM(cost_usd), 0.0)                     AS total_cost_usd \
          FROM usage {} \
          GROUP BY provider_id, upstream_model_id \
          ORDER BY total_cost_usd DESC, provider_id ASC, upstream_model_id ASC",
         w.sql,
     );
+// ...
 
     let mut stmt = conn
         .prepare(&sql)
@@ -374,20 +378,22 @@ pub fn by_model(conn: &Connection, f: &UsageFilter) -> Result<Vec<ByModelRow>> {
 /// time-bucketed breakdown.
 pub fn by_provider(conn: &Connection, f: &UsageFilter) -> Result<Vec<ByProviderRow>> {
     let w = BuiltWhere::from_filter(f);
+// ...
     let sql = format!(
         "SELECT \
              provider_id, \
              COUNT(DISTINCT request_id)                       AS unique_requests, \
              COUNT(*)                                         AS total_rows, \
              SUM(CASE WHEN race_lost = 0 THEN 1 ELSE 0 END)   AS winners, \
-             COALESCE(SUM(prompt_tokens), 0)                  AS total_prompt_tokens, \
-             COALESCE(SUM(completion_tokens), 0)              AS total_completion_tokens, \
+             COALESCE(SUM(CASE WHEN status_code < 400 THEN prompt_tokens ELSE 0 END), 0) AS total_prompt_tokens, \
+             COALESCE(SUM(CASE WHEN status_code < 400 THEN completion_tokens ELSE 0 END), 0) AS total_completion_tokens, \
              COALESCE(SUM(cost_usd), 0.0)                     AS total_cost_usd \
          FROM usage {} \
          GROUP BY provider_id \
          ORDER BY total_cost_usd DESC, provider_id ASC",
         w.sql,
     );
+// ...
 
     let mut stmt = conn
         .prepare(&sql)
@@ -441,8 +447,8 @@ pub fn monthly_by_provider(
              strftime('%Y-%m', created_at)                     AS month, \
              COUNT(DISTINCT request_id)                       AS unique_requests, \
              COUNT(*)                                         AS total_rows, \
-             COALESCE(SUM(prompt_tokens), 0)                  AS total_prompt_tokens, \
-             COALESCE(SUM(completion_tokens), 0)              AS total_completion_tokens, \
+             COALESCE(SUM(CASE WHEN status_code < 400 THEN prompt_tokens ELSE 0 END), 0) AS total_prompt_tokens, \
+             COALESCE(SUM(CASE WHEN status_code < 400 THEN completion_tokens ELSE 0 END), 0) AS total_completion_tokens, \
              COALESCE(SUM(cost_usd), 0.0)                     AS total_cost_usd \
          FROM usage {} \
          GROUP BY provider_id, month \
@@ -489,13 +495,14 @@ pub fn monthly_by_provider(
 /// and error count (rows with `status_code >= 400`).
 pub fn by_day(conn: &Connection, f: &UsageFilter) -> Result<Vec<ByDayRow>> {
     let w = BuiltWhere::from_filter(f);
+// ...
     let sql = format!(
         "SELECT \
              strftime('%Y-%m-%d', created_at)                     AS date, \
              COUNT(DISTINCT request_id)                           AS unique_requests, \
              COUNT(*)                                             AS total_rows, \
-             COALESCE(SUM(prompt_tokens), 0)                      AS total_prompt_tokens, \
-             COALESCE(SUM(completion_tokens), 0)                  AS total_completion_tokens, \
+             COALESCE(SUM(CASE WHEN status_code < 400 THEN prompt_tokens ELSE 0 END), 0) AS total_prompt_tokens, \
+             COALESCE(SUM(CASE WHEN status_code < 400 THEN completion_tokens ELSE 0 END), 0) AS total_completion_tokens, \
              COALESCE(SUM(cost_usd), 0.0)                         AS total_cost_usd, \
              SUM(CASE WHEN status_code >= 400 THEN 1 ELSE 0 END)  AS errors \
          FROM usage {} \
@@ -503,6 +510,7 @@ pub fn by_day(conn: &Connection, f: &UsageFilter) -> Result<Vec<ByDayRow>> {
          ORDER BY date ASC",
         w.sql,
     );
+// ...
 
     let mut stmt = conn
         .prepare(&sql)
