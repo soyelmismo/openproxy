@@ -263,7 +263,7 @@ async fn ping_antigravity_model(
     account_id: &str,
 ) -> bool {
     let request = build_warmup_request(model);
-    let request_payload = serde_json::to_value(openproxy_pipeline::translation::openai_to_gemini(
+    let request_payload = serde_json::to_value(openproxy_adapters::adapters::gemini::openai_to_gemini(
         &request,
         &request.messages,
     ))

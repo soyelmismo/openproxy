@@ -1,4 +1,5 @@
 use crate::translation::*;
+use openproxy_adapters::adapters::gemini::*;
 use openproxy_types::{OpenAIMessage, OpenAIRequest};
 use serde_json::{Value, json};
 
@@ -1049,7 +1050,7 @@ fn parse_image_url_to_inline_data_extracts_base64() {
         }
     });
 
-    let result = super::parse_image_url_to_inline_data(&part_json).unwrap();
+    let result = parse_image_url_to_inline_data(&part_json).unwrap();
     assert_eq!(result.mime_type, "image/jpeg");
     assert_eq!(result.data, "f00bar");
 
@@ -1057,7 +1058,7 @@ fn parse_image_url_to_inline_data_extracts_base64() {
         "type": "text",
         "text": "hello"
     });
-    assert!(super::parse_image_url_to_inline_data(&invalid_type).is_none());
+    assert!(parse_image_url_to_inline_data(&invalid_type).is_none());
 
     let invalid_url = serde_json::json!({
         "type": "image_url",
@@ -1065,5 +1066,5 @@ fn parse_image_url_to_inline_data_extracts_base64() {
             "url": "https://example.com/image.jpg"
         }
     });
-    assert!(super::parse_image_url_to_inline_data(&invalid_url).is_none());
+    assert!(parse_image_url_to_inline_data(&invalid_url).is_none());
 }

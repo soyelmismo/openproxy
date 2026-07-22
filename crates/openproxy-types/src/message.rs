@@ -52,6 +52,32 @@ pub struct OpenAIMessage {
     pub extra: serde_json::Map<String, serde_json::Value>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OpenAIResponse {
+    pub id: String,
+    /// "chat.completion"
+    pub object: String,
+    pub created: u64,
+    pub model: String,
+    pub choices: Vec<OpenAIChoice>,
+    pub usage: Option<OpenAIUsage>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OpenAIChoice {
+    pub index: u32,
+    pub message: OpenAIMessage,
+    pub finish_reason: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OpenAIUsage {
+    pub prompt_tokens: u32,
+    pub completion_tokens: u32,
+    pub total_tokens: u32,
+}
+
+
 fn deserialize_optional_content<'de, D>(
     deserializer: D,
 ) -> std::result::Result<Option<Value>, D::Error>

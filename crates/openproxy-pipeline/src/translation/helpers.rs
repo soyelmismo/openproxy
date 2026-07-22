@@ -1,4 +1,3 @@
-use crate::translation::types::*;
 use serde_json::Value;
 
 pub fn message_content_to_text(content: &Option<serde_json::Value>) -> String {
@@ -36,51 +35,4 @@ pub fn openai_content_part_to_text(part: &serde_json::Value) -> String {
     }
 }
 
-pub fn parse_image_url_to_inline_data(part: &serde_json::Value) -> Option<GeminiInlineData> {
-    let obj = part.as_object()?;
-    if obj.get("type").and_then(|v| v.as_str())? != "image_url" {
-        return None;
-    }
 
-    let url = obj.get("image_url")?.as_object()?.get("url")?.as_str()?;
-    let stripped = url.strip_prefix("data:")?;
-    let (mime_type, rest) = stripped.split_once(';')?;
-    let (_, data) = rest.split_once(',')?;
-
-    Some(GeminiInlineData {
-        mime_type: mime_type.to_string(),
-        data: data.to_string(),
-    })
-}
-
-pub fn message_content_to_gemini_parts(content: &Option<serde_json::Value>) -> Vec<GeminiPart> {
-    match content {
-        Some(Value::Array(parts)) => parts
-            .iter()
-            .map(|part| {
-                if let Some(inline_data) = parse_image_url_to_inline_data(part) {
-                    return GeminiPart {
-                        inline_data: Some(inline_data),
-                        ..Default::default()
-                    };
-                }
-                GeminiPart {
-                    text: Some(openai_content_part_to_text(part)),
-                    ..Default::default()
-                }
-            })
-            .collect(),
-        Some(Value::Null) => vec![GeminiPart {
-            text: Some(String::new()),
-            ..Default::default()
-        }],
-        Some(value) => vec![GeminiPart {
-            text: Some(value.to_string()),
-            ..Default::default()
-        }],
-        None => vec![GeminiPart {
-            text: Some(String::new()),
-            ..Default::default()
-        }],
-    }
-}

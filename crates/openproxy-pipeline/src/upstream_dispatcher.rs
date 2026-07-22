@@ -1,6 +1,7 @@
 use crate::timeouts::Timeouts;
 use crate::translation::OpenAIResponse;
 use crate::{FailureContext, PipelineRequest, PipelineResult, parse_retry_after_ms};
+use openproxy_adapters::ProviderAdapter;
 use openproxy_adapters::upstream::{CancellationToken, UpstreamError, UpstreamRequest};
 use openproxy_types::combos::{Combo, ComboTarget};
 use openproxy_types::error::CoreError;
@@ -984,25 +985,23 @@ impl UpstreamDispatcher {
                 crate::translation::anthropic_to_openai(&anthropic_resp)
             }
             openproxy_types::TargetFormat::Gemini => {
-                let gemini_resp: crate::translation::GeminiResponse =
-                    match serde_json::from_value(response_body_raw) {
-                        Ok(r) => r,
-                        Err(e) => {
-                            let err = CoreError::Parse(format!("parse gemini response: {e}"));
-                            return self.record_and_fail(
-                                req,
-                                combo,
-                                target,
-                                dctx.fail_ctx_code(
-                                    &err,
-                                    Some(connect_and_send_ms),
-                                    Some(ttft_ms),
-                                    err.http_status(),
-                                ),
-                            );
-                        }
-                    };
-                crate::translation::gemini_to_openai(&gemini_resp)
+                let adapter = openproxy_adapters::GeminiAdapter::new();
+                match adapter.translate_non_streaming_response(target_format, response_body_raw) {
+                    Ok(r) => r,
+                    Err(err) => {
+                        return self.record_and_fail(
+                            req,
+                            combo,
+                            target,
+                            dctx.fail_ctx_code(
+                                &err,
+                                Some(connect_and_send_ms),
+                                Some(ttft_ms),
+                                err.http_status(),
+                            ),
+                        );
+                    }
+                }
             }
         };
 

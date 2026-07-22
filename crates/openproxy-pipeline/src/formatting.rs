@@ -70,16 +70,12 @@ impl TargetFormatter for GeminiFormatter {
     fn format_request(
         &self,
         req: &PipelineRequest,
-        _model: &Model,
+        model: &Model,
         messages_ref: &[OpenAIMessage],
-        _stream: bool,
-        _adapter: &openproxy_adapters::adapters::ProviderAdapterEnum,
+        stream: bool,
+        adapter: &openproxy_adapters::adapters::ProviderAdapterEnum,
     ) -> Result<bytes::Bytes, CoreError> {
-        let gemini = crate::translation::openai_to_gemini(&req.openai_request, messages_ref);
-        match serde_json::to_vec(&gemini) {
-            Ok(v) => Ok(bytes::Bytes::from(v)),
-            Err(e) => Err(CoreError::Parse(format!("serialize gemini request: {}", e))),
-        }
+        adapter.format_request(TargetFormat::Gemini, &req.openai_request, &model.model_id, messages_ref, stream)
     }
 }
 

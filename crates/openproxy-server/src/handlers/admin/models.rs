@@ -155,7 +155,8 @@ pub(crate) async fn run_test_for_model(
     opts: TestOptions,
     cancel_rx: Option<tokio::sync::watch::Receiver<bool>>,
 ) -> TestResult {
-    use openproxy_pipeline::translation::{openai_to_anthropic, openai_to_gemini};
+    use openproxy_adapters::adapters::gemini::openai_to_gemini;
+    use openproxy_pipeline::translation::openai_to_anthropic;
     use openproxy_types::{OpenAIMessage, OpenAIRequest};
 
     let row_id = ModelRowId(model_row_id);

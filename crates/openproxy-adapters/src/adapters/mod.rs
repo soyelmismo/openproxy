@@ -271,6 +271,34 @@ pub trait ProviderAdapter: Send + Sync {
     ) -> std::result::Result<bytes::Bytes, openproxy_types::error::CoreError> {
         Ok(body)
     }
+
+    /// Format/translate an OpenAI request into native request body bytes for this adapter.
+    fn format_request(
+        &self,
+        target_format: TargetFormat,
+        req: &openproxy_types::OpenAIRequest,
+        model: &ModelId,
+        messages: &[openproxy_types::OpenAIMessage],
+        stream: bool,
+    ) -> std::result::Result<bytes::Bytes, openproxy_types::error::CoreError> {
+        let _ = target_format;
+        let mut view = openproxy_types::OpenAIRequestView::new(req, model.as_str(), messages, stream);
+        self.normalize_openai_request(&mut view);
+        serde_json::to_vec(&view)
+            .map(bytes::Bytes::from)
+            .map_err(|e| openproxy_types::error::CoreError::Parse(format!("serialize openai request: {}", e)))
+    }
+
+    /// Translate a non-streaming response JSON Value into an OpenAIResponse.
+    fn translate_non_streaming_response(
+        &self,
+        target_format: TargetFormat,
+        response_body: serde_json::Value,
+    ) -> std::result::Result<openproxy_types::OpenAIResponse, openproxy_types::error::CoreError> {
+        let _ = target_format;
+        serde_json::from_value(response_body)
+            .map_err(|e| openproxy_types::error::CoreError::Parse(format!("parse openai response: {e}")))
+    }
 }
 
 #[macro_export]
@@ -362,6 +390,23 @@ macro_rules! define_provider_adapter {
             pub fn normalize_openai_request(&self, view: &mut openproxy_types::OpenAIRequestView) {
                 match self { $( $(#[$varmeta])* Self::$variant(inner) => inner.normalize_openai_request(view), )+ }
             }
+            pub fn format_request(
+                &self,
+                target_format: openproxy_types::TargetFormat,
+                req: &openproxy_types::OpenAIRequest,
+                model: &openproxy_types::ModelId,
+                messages: &[openproxy_types::OpenAIMessage],
+                stream: bool,
+            ) -> std::result::Result<bytes::Bytes, openproxy_types::error::CoreError> {
+                match self { $( $(#[$varmeta])* Self::$variant(inner) => inner.format_request(target_format, req, model, messages, stream), )+ }
+            }
+            pub fn translate_non_streaming_response(
+                &self,
+                target_format: openproxy_types::TargetFormat,
+                response_body: serde_json::Value,
+            ) -> std::result::Result<openproxy_types::OpenAIResponse, openproxy_types::error::CoreError> {
+                match self { $( $(#[$varmeta])* Self::$variant(inner) => inner.translate_non_streaming_response(target_format, response_body), )+ }
+            }
             pub async fn fetch_quota(
                 &self,
                 upstream_client: &std::sync::Arc<$crate::upstream::UpstreamClient>,
@@ -443,6 +488,23 @@ macro_rules! define_provider_adapter {
                 resolved_target: &openproxy_types::context::ResolvedTarget,
             ) -> std::result::Result<bytes::Bytes, openproxy_types::error::CoreError> {
                 self.wrap_request_body(body, target_format, model, resolved_target)
+            }
+            fn format_request(
+                &self,
+                target_format: openproxy_types::TargetFormat,
+                req: &openproxy_types::OpenAIRequest,
+                model: &openproxy_types::ModelId,
+                messages: &[openproxy_types::OpenAIMessage],
+                stream: bool,
+            ) -> std::result::Result<bytes::Bytes, openproxy_types::error::CoreError> {
+                self.format_request(target_format, req, model, messages, stream)
+            }
+            fn translate_non_streaming_response(
+                &self,
+                target_format: openproxy_types::TargetFormat,
+                response_body: serde_json::Value,
+            ) -> std::result::Result<openproxy_types::OpenAIResponse, openproxy_types::error::CoreError> {
+                self.translate_non_streaming_response(target_format, response_body)
             }
         }
     }
