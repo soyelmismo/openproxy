@@ -160,6 +160,124 @@ function renderProxyRow(p: FreeProxyRow): TemplateResult {
   `;
 }
 
+function renderPageHeader(isSyncing: boolean, syncBtnLabel: string): TemplateResult {
+  return html`
+    <div class="page-header">
+      <div>
+        <h2>${t("proxies.title")}</h2>
+        <p class="subtitle">${t("proxies.subtitle")}</p>
+      </div>
+      <div class="actions">
+        <button class="primary" ?disabled=${isSyncing} @click=${triggerSync}>
+          ${isSyncing ? html`<span class="spinner"></span>` : html``}
+          ${syncBtnLabel}
+        </button>
+        <button class="secondary" @click=${() => void testAllProxies()}>
+          ${t("proxies.btn.test_all")}
+        </button>
+        <button class="secondary" @click=${showAddCustomProxy}>
+          + ${t("proxies.btn.add")}
+        </button>
+      </div>
+    </div>
+  `;
+}
+
+function renderKpisDashboard(total: number, alive: number, dead: number, avgLatency: number | null): TemplateResult {
+  return html`
+    <div class="kpi-grid">
+      <div class="kpi-card">
+        <div class="kpi-title">${t("proxies.kpi.total")}</div>
+        <div class="kpi-value">${total}</div>
+      </div>
+      <div class="kpi-card kpi-success">
+        <div class="kpi-title">${t("proxies.kpi.alive")}</div>
+        <div class="kpi-value glow-green">${alive}</div>
+      </div>
+      <div class="kpi-card kpi-error">
+        <div class="kpi-title">${t("proxies.kpi.dead")}</div>
+        <div class="kpi-value">${dead}</div>
+      </div>
+      <div class="kpi-card kpi-latency">
+        <div class="kpi-title">${t("proxies.kpi.avg_latency")}</div>
+        <div class="kpi-value">${avgLatency !== null ? html`${avgLatency} <small>ms</small>` : "—"}</div>
+      </div>
+    </div>
+  `;
+}
+
+function renderFilterBar(search: string, protocol: string, source: string, status: string, uniqueProtocols: string[], uniqueSources: string[]): TemplateResult {
+  return html`
+    <div class="filter-bar">
+      <div class="filter-search">
+        <input 
+          type="text" 
+          .value=${search}
+          placeholder=${t("proxies.filter.search_placeholder")} 
+          @input=${onSearchInput}
+        />
+      </div>
+      <div class="filter-selects">
+        <select @change=${onProtocolChange} .value=${protocol}>
+          <option value="">${t("proxies.filter.all_protocols")}</option>
+          ${uniqueProtocols.map((p: string) => html`<option value=${p}>${p.toUpperCase()}</option>`)}
+        </select>
+        <select @change=${onSourceChange} .value=${source}>
+          <option value="">${t("proxies.filter.all_sources")}</option>
+          ${uniqueSources.map((s: string) => html`<option value=${s}>${s}</option>`)}
+        </select>
+        <select @change=${onStatusChange} .value=${status}>
+          <option value="">${t("proxies.filter.all_statuses")}</option>
+          <option value="unknown">${t("proxies.status.unknown")}</option>
+          <option value="alive">${t("proxies.status.alive")}</option>
+          <option value="dead">${t("proxies.status.dead")}</option>
+        </select>
+      </div>
+    </div>
+  `;
+}
+
+function renderProxiesList(proxies: FreeProxyRow[], error: string | null, page: number, hasPrevPage: boolean, hasNextPage: boolean): TemplateResult {
+  return html`
+    ${error
+      ? html`<div class="banner banner-error">${error}</div>`
+      : proxies.length === 0
+        ? html`<p class="empty">${t("common.empty")}</p>`
+        : html`
+          <table>
+            <thead>
+              <tr>
+                <th>${t("proxies.table.col_host")}</th>
+                <th>${t("proxies.table.col_port")}</th>
+                <th>${t("proxies.table.col_type")}</th>
+                <th>${t("proxies.table.col_source")}</th>
+                <th>${t("proxies.table.col_status")}</th>
+                <th>${t("proxies.table.col_country")}</th>
+                <th>${t("proxies.table.col_latency")}</th>
+                <th>${t("proxies.table.col_last_val")}</th>
+                <th>Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${proxies.map(renderProxyRow)}
+            </tbody>
+          </table>
+          <div style="display: flex; justify-content: space-between; align-items: center; margin: 1.5rem 0;">
+            <span>Page ${page}</span>
+            <div style="display: flex; gap: 0.5rem;">
+              <button class="secondary small" ?disabled=${!hasPrevPage} @click=${() => { if (hasPrevPage) { currentPage--; fetchFilteredProxies(); } }}>
+                ← Previous
+              </button>
+              <button class="secondary small" ?disabled=${!hasNextPage} @click=${() => { if (hasNextPage) { currentPage++; fetchFilteredProxies(); } }}>
+                Next →
+              </button>
+            </div>
+          </div>
+        `
+    }
+  `;
+}
+
 function renderProxies(): TemplateResult {
   const proxies = (state.proxies as FreeProxyRow[]) || [];
   const summary = (state as any).proxySummary || {
@@ -184,110 +302,13 @@ function renderProxies(): TemplateResult {
   const hasNextPage = proxies.length === 50;
 
   return html`
-    <div class="page-header">
-      <div>
-        <h2>${t("proxies.title")}</h2>
-        <p class="subtitle">${t("proxies.subtitle")}</p>
-      </div>
-      <div class="actions">
-        <button class="primary" ?disabled=${isSyncing} @click=${triggerSync}>
-          ${isSyncing ? html`<span class="spinner"></span>` : html``}
-          ${syncBtnLabel}
-        </button>
-        <button class="secondary" @click=${() => void testAllProxies()}>
-          ${t("proxies.btn.test_all")}
-        </button>
-        <button class="secondary" @click=${showAddCustomProxy}>
-          + ${t("proxies.btn.add")}
-        </button>
-      </div>
-    </div>
-
+    ${renderPageHeader(isSyncing, syncBtnLabel)}
     <!-- KPIs dashboard -->
-    <div class="kpi-grid">
-      <div class="kpi-card">
-        <div class="kpi-title">${t("proxies.kpi.total")}</div>
-        <div class="kpi-value">${total}</div>
-      </div>
-      <div class="kpi-card kpi-success">
-        <div class="kpi-title">${t("proxies.kpi.alive")}</div>
-        <div class="kpi-value glow-green">${alive}</div>
-      </div>
-      <div class="kpi-card kpi-error">
-        <div class="kpi-title">${t("proxies.kpi.dead")}</div>
-        <div class="kpi-value">${dead}</div>
-      </div>
-      <div class="kpi-card kpi-latency">
-        <div class="kpi-title">${t("proxies.kpi.avg_latency")}</div>
-        <div class="kpi-value">${avgLatency !== null ? html`${avgLatency} <small>ms</small>` : "—"}</div>
-      </div>
-    </div>
-
+    ${renderKpisDashboard(total, alive, dead, avgLatency)}
     <!-- Filter toolbar -->
-    <div class="filter-bar">
-      <div class="filter-search">
-        <input 
-          type="text" 
-          .value=${filterSearch} 
-          placeholder=${t("proxies.filter.search_placeholder")} 
-          @input=${onSearchInput}
-        />
-      </div>
-      <div class="filter-selects">
-        <select @change=${onProtocolChange} .value=${filterProtocol}>
-          <option value="">${t("proxies.filter.all_protocols")}</option>
-          ${uniqueProtocols.map((p: string) => html`<option value=${p}>${p.toUpperCase()}</option>`)}
-        </select>
-        <select @change=${onSourceChange} .value=${filterSource}>
-          <option value="">${t("proxies.filter.all_sources")}</option>
-          ${uniqueSources.map((s: string) => html`<option value=${s}>${s}</option>`)}
-        </select>
-        <select @change=${onStatusChange} .value=${filterStatus}>
-          <option value="">${t("proxies.filter.all_statuses")}</option>
-          <option value="unknown">${t("proxies.status.unknown")}</option>
-          <option value="alive">${t("proxies.status.alive")}</option>
-          <option value="dead">${t("proxies.status.dead")}</option>
-        </select>
-      </div>
-    </div>
-
+    ${renderFilterBar(filterSearch, filterProtocol, filterSource, filterStatus, uniqueProtocols, uniqueSources)}
     <!-- Proxies list -->
-    ${loadError
-      ? html`<div class="banner banner-error">${loadError}</div>`
-      : proxies.length === 0
-        ? html`<p class="empty">${t("common.empty")}</p>`
-        : html`
-          <table>
-            <thead>
-              <tr>
-                <th>${t("proxies.table.col_host")}</th>
-                <th>${t("proxies.table.col_port")}</th>
-                <th>${t("proxies.table.col_type")}</th>
-                <th>${t("proxies.table.col_source")}</th>
-                <th>${t("proxies.table.col_status")}</th>
-                <th>${t("proxies.table.col_country")}</th>
-                <th>${t("proxies.table.col_latency")}</th>
-                <th>${t("proxies.table.col_last_val")}</th>
-                <th>Actions</th>
-              </tr>
-            </thead>
-            <tbody>
-              ${proxies.map(renderProxyRow)}
-            </tbody>
-          </table>
-          <div style="display: flex; justify-content: space-between; align-items: center; margin: 1.5rem 0;">
-            <span>Page ${currentPage}</span>
-            <div style="display: flex; gap: 0.5rem;">
-              <button class="secondary small" ?disabled=${!hasPrevPage} @click=${() => { if (hasPrevPage) { currentPage--; fetchFilteredProxies(); } }}>
-                ← Previous
-              </button>
-              <button class="secondary small" ?disabled=${!hasNextPage} @click=${() => { if (hasNextPage) { currentPage++; fetchFilteredProxies(); } }}>
-                Next →
-              </button>
-            </div>
-          </div>
-        `
-    }
+    ${renderProxiesList(proxies, loadError, currentPage, hasPrevPage, hasNextPage)}
   `;
 }
 
