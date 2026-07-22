@@ -147,13 +147,21 @@ impl UpstreamDispatcher {
                     };
 
 // ...
+// ...
                     if should_rotate && let Some(ref bad_proxy_id) = provider.current_proxy_id {
                         tracing::warn!(
                             provider = %provider_id,
                             proxy_id = %bad_proxy_id,
                             trigger = ?trigger,
-                            "proxy rotation triggered: clearing binding"
+                            "proxy rotation triggered: clearing binding and adding 15m cooldown for provider"
                         );
+// ...
+                        openproxy_db::cooldowns::add_provider_proxy_cooldown(
+                            provider_id.as_str(),
+                            bad_proxy_id,
+                            std::time::Duration::from_secs(15 * 60),
+                        );
+// ...
                         // Only mark proxy as "dead" on connection errors, NOT on rate limits / 429 status.
                         // Rate limiting is per-provider IP throttling, so the proxy host is still alive.
                         if matches!(trigger, crate::upstream_dispatcher::ProxyRotationTrigger::ConnectError) {
@@ -165,6 +173,7 @@ impl UpstreamDispatcher {
                             openproxy_db::providers::update_current_proxy(&conn, &provider_id, None);
                         return true;
                     }
+// ...
                 }
             }
 // ...

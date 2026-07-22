@@ -359,17 +359,22 @@ pub fn update_proxy_status(
         message: e.to_string(),
         source: Some(Box::new(e)),
     })?;
+// ...
+// ...
     Ok(())
 }
 
+// ...
 pub fn get_or_assign_provider_proxy(
     conn: &Connection,
     provider_id: &crate::ids::ProviderId,
 ) -> crate::error::Result<Option<String>> {
     use rusqlite::OptionalExtension;
+    use openproxy_db::cooldowns::is_provider_proxy_in_cooldown;
 
     // 1. Fetch provider details to see use_proxies and current_proxy_id
     let provider = match crate::providers::get(conn, provider_id)? {
+// ...
         Some(p) => p,
         None => return Ok(None),
     };
@@ -378,54 +383,77 @@ pub fn get_or_assign_provider_proxy(
         return Ok(None);
     }
 
-    // 2. If current_proxy_id is set, verify it is still alive/valid
+    // 2. If current_proxy_id is set, verify it is still alive/valid and NOT in cooldown for this provider
     if let Some(ref proxy_id) = provider.current_proxy_id {
-        let exists_and_alive: Option<(String, i64, String)> = conn
-            .query_row(
-                "SELECT host, port, type FROM free_proxies WHERE id = ?1 AND status = 'alive'",
-                rusqlite::params![proxy_id],
-                |row| {
-                    Ok((
-                        row.get::<_, String>(0)?,
-                        row.get::<_, i64>(1)?,
-                        row.get::<_, String>(2)?,
-                    ))
-                },
-            )
-            .optional()
-            .map_err(|e| crate::error::CoreError::Database {
-                message: format!("query current proxy: {}", e),
-                source: Some(Box::new(e)),
-            })?;
+        if !is_provider_proxy_in_cooldown(provider_id.as_str(), proxy_id) {
+            let exists_and_alive: Option<(String, i64, String)> = conn
+                .query_row(
+                    "SELECT host, port, type FROM free_proxies WHERE id = ?1 AND status = 'alive'",
+                    rusqlite::params![proxy_id],
+                    |row| {
+                        Ok((
+                            row.get::<_, String>(0)?,
+                            row.get::<_, i64>(1)?,
+                            row.get::<_, String>(2)?,
+                        ))
+                    },
+                )
+                .optional()
+                .map_err(|e| crate::error::CoreError::Database {
+                    message: format!("query current proxy: {}", e),
+                    source: Some(Box::new(e)),
+                })?;
 
-        if let Some((host, port, proto)) = exists_and_alive {
-            return Ok(Some(format!(
-                "{}://{}:{}",
-                proto.to_lowercase(),
-                host,
-                port
-            )));
+            if let Some((host, port, proto)) = exists_and_alive {
+                return Ok(Some(format!(
+                    "{}://{}:{}",
+                    proto.to_lowercase(),
+                    host,
+                    port
+                )));
+            }
         }
     }
 
-    // 3. If current_proxy_id is unset or dead, select a new one from the alive pool
-    // Order by latency_ms ascending so we pick the fastest one.
-    let new_proxy: Option<(String, String, i64, String)> = conn
-        .query_row(
-            "SELECT id, host, port, type FROM free_proxies WHERE status = 'alive' ORDER BY latency_ms ASC, random() LIMIT 1",
-            [],
-            |row| Ok((
+    // 3. If current_proxy_id is unset, dead or in cooldown, select a new one from the alive pool
+    // Order by latency_ms ascending so we pick the fastest one that is NOT in cooldown for this provider.
+    let mut stmt = conn
+        .prepare("SELECT id, host, port, type FROM free_proxies WHERE status = 'alive' ORDER BY latency_ms ASC, random() LIMIT 100")
+        .map_err(|e| crate::error::CoreError::Database {
+            message: format!("prepare query new proxy: {}", e),
+            source: Some(Box::new(e)),
+        })?;
+
+    let candidate_rows = stmt
+        .query_map([], |row| {
+            Ok((
                 row.get::<_, String>(0)?,
                 row.get::<_, String>(1)?,
                 row.get::<_, i64>(2)?,
                 row.get::<_, String>(3)?,
-            )),
-        )
-        .optional()
+            ))
+        })
         .map_err(|e| crate::error::CoreError::Database {
-            message: format!("query new proxy: {}", e),
+            message: format!("query new proxy candidates: {}", e),
             source: Some(Box::new(e)),
         })?;
+
+    let mut selected_proxy = None;
+    let mut fallback_proxy = None;
+
+    for row in candidate_rows {
+        if let Ok(item) = row {
+            if fallback_proxy.is_none() {
+                fallback_proxy = Some(item.clone());
+            }
+            if !is_provider_proxy_in_cooldown(provider_id.as_str(), &item.0) {
+                selected_proxy = Some(item);
+                break;
+            }
+        }
+    }
+
+    let new_proxy = selected_proxy.or(fallback_proxy);
 
 // ...
     if let Some((id, host, port, proto)) = new_proxy {
@@ -446,6 +474,7 @@ pub fn get_or_assign_provider_proxy(
 // ...
 
 pub fn upsert_scraped_proxies(
+// ...
     conn: &mut Connection,
     proxies: &[ScrapedProxy],
 ) -> crate::error::Result<()> {
@@ -1335,19 +1364,20 @@ mod tests {
         assert_eq!(p.country_code.as_deref(), Some("US"));
         assert_eq!(p.status, "unknown");
 
-        let list = list_proxies(&conn, None, None).unwrap();
+// ...
+        let list = list_proxies(&conn, None, None, None, None, None, None).unwrap();
         assert_eq!(list.len(), 1);
         assert_eq!(list[0].id, p.id);
 
         update_proxy_status(&conn, &p.id, "alive", Some(150)).unwrap();
 
-        let list2 = list_proxies(&conn, None, Some("alive")).unwrap();
+        let list2 = list_proxies(&conn, None, Some("alive"), None, None, None, None).unwrap();
         assert_eq!(list2.len(), 1);
         assert_eq!(list2[0].status, "alive");
         assert_eq!(list2[0].latency_ms, Some(150));
 
         delete_proxy(&conn, &p.id).unwrap();
-        let list3 = list_proxies(&conn, None, None).unwrap();
+        let list3 = list_proxies(&conn, None, None, None, None, None, None).unwrap();
         assert_eq!(list3.len(), 0);
     }
 
@@ -1374,13 +1404,14 @@ mod tests {
 
         upsert_scraped_proxies(&mut conn, &scraped).unwrap();
 
-        let list = list_proxies(&conn, None, None).unwrap();
+        let list = list_proxies(&conn, None, None, None, None, None, None).unwrap();
         assert_eq!(list.len(), 2);
 
         upsert_scraped_proxies(&mut conn, &scraped).unwrap();
-        let list2 = list_proxies(&conn, None, None).unwrap();
+        let list2 = list_proxies(&conn, None, None, None, None, None, None).unwrap();
         assert_eq!(list2.len(), 2);
     }
+// ...
 
     #[test]
     fn test_get_or_assign_provider_proxy_flow() {
@@ -1424,6 +1455,15 @@ mod tests {
         // Now it should assign and return this socks5 proxy!
         let proxy = get_or_assign_provider_proxy(&conn, &provider_id).unwrap();
         assert_eq!(proxy, Some("socks5://1.2.3.4:8080".to_string()));
+
+// ...
+        // Add 15m cooldown for this proxy on test-provider
+        openproxy_db::cooldowns::add_provider_proxy_cooldown("test-provider", &p.id, std::time::Duration::from_secs(900));
+
+        // When in cooldown, get_or_assign_provider_proxy should not assign it if other alive proxy exists or returns err if no other exists
+// ...
+        let proxy_after_cooldown = get_or_assign_provider_proxy(&conn, &provider_id).unwrap();
+        assert_eq!(proxy_after_cooldown, Some("socks5://1.2.3.4:8080".to_string())); // fallback when only 1 alive
 
         // The provider's current_proxy_id should now be bound to p.id
         let bound_id: Option<String> = conn
