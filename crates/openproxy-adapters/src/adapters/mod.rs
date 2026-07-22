@@ -494,10 +494,12 @@ pub mod nvidia_nim;
 pub mod ollama_cloud;
 pub mod opencode_zen;
 pub mod openrouter;
+pub mod factory;
 
 #[cfg(any(test, feature = "test-utils"))]
 pub use mock::MockAdapter;
 
+pub use factory::AdapterFactory;
 pub use antigravity::AntigravityAdapter;
 pub use cloudflare_workers_ai::CloudflareWorkersAIAdapter;
 pub use codex::CodexAdapter;

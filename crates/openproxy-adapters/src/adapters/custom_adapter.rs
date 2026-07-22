@@ -17,6 +17,11 @@ pub struct CustomAdapter {
 }
 
 impl CustomAdapter {
+    /// Build a `CustomAdapter` directly from `ProviderAdapterConfig`.
+    pub fn from_config(config: ProviderAdapterConfig) -> Self {
+        Self { config }
+    }
+
     /// Build a `CustomAdapter` from a DB provider row.
     ///
     /// Maps [`providers::AuthType`] → [`AdapterAuthType`] and
