@@ -148,7 +148,10 @@ mod tests {
         let res: ApiResult<()> = ApiResult::err(api_err);
         let inner = res.into_inner();
         assert!(inner.is_err());
-        assert_eq!(inner.unwrap_err().0.to_string(), "config: test config error");
+        assert_eq!(
+            inner.unwrap_err().0.to_string(),
+            "config: test config error"
+        );
     }
 
     #[test]
