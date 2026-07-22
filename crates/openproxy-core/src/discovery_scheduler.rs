@@ -1277,14 +1277,27 @@ mod tests {
 
         // After the tick, the F2 hook must have re-applied the keyword
         // rule: gpt-4 stays active, the other two flip to inactive.
-        let active = {
-            let c = pool.open_connection().expect("open conn");
-            models::list_active(&c, &CoreProviderId::new("openrouter"))
-                .expect("list_active")
-                .into_iter()
-                .map(|m| m.model_id.as_str().to_string())
-                .collect::<Vec<_>>()
-        };
+        // We poll because the database update runs on a spawn_blocking thread.
+        let mut active = vec![];
+        for _ in 0..100 {
+            active = {
+                let c = pool.open_connection().expect("open conn");
+                models::list_active(&c, &CoreProviderId::new("openrouter"))
+                    .expect("list_active")
+                    .into_iter()
+                    .map(|m| m.model_id.as_str().to_string())
+                    .collect::<Vec<_>>()
+            };
+            if active.contains(&"gpt-4".to_string())
+                && !active.contains(&"claude-3".to_string())
+                && !active.contains(&"llama-3".to_string())
+            {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+            tokio::task::yield_now().await;
+        }
+
         assert!(
             active.contains(&"gpt-4".to_string()),
             "gpt-4 must remain active after auto-activation; got {active:?}"
