@@ -234,6 +234,19 @@ pub fn generate_events(
 ) -> Result<Vec<(i64, &'static str, serde_json::Value)>> {
     let mut events = Vec::new();
 
+    let notifications_present: bool = tx
+        .query_row(
+            "SELECT COUNT(*) > 0 FROM sqlite_master WHERE type = 'table' AND name = 'notifications'",
+            [],
+            |r| r.get::<_, i64>(0),
+        )
+        .map(|n| n != 0)
+        .unwrap_or(false);
+
+    if !notifications_present {
+        return Ok(events);
+    }
+
     for d in &diff.new_models {
         let payload = serde_json::json!({
             "provider_id": provider.as_str(),

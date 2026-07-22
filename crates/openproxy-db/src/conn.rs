@@ -229,8 +229,7 @@ impl DbPool {
 /// Apply the standard pragmas required by spec §8/§9.
 fn configure_connection(conn: &Connection) -> Result<()> {
     let _ = conn.pragma_update(None, "auto_vacuum", "INCREMENTAL");
-    conn.pragma_update(None, "journal_mode", "WAL")
-        .map_err(crate::error::map_db_error)?;
+    let _ = conn.pragma_update(None, "journal_mode", "WAL");
     conn.pragma_update(None, "foreign_keys", "ON")
         .map_err(crate::error::map_db_error)?;
     conn.pragma_update(None, "busy_timeout", 5000)

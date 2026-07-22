@@ -6,7 +6,7 @@
 //! delegate to [`DiscoveryService::refresh_and_activate`] for the
 //! full lifecycle.
 
-use super::repository::ModelRepository;
+use openproxy_db::models::ModelRepository;
 use super::{DiscoveredModel, UpsertResult};
 use crate::error::Result;
 use crate::ids::ProviderId;

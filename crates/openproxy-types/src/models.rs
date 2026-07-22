@@ -24,3 +24,9 @@ pub struct Model {
     pub input_modalities_json: Option<String>,
     pub output_modalities_json: Option<String>,
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UpsertResult {
+    pub touched: usize,
+    pub new_model_ids: Vec<ModelId>,
+}

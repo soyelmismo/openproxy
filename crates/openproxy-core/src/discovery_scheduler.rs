@@ -483,10 +483,9 @@ async fn run_one_tick(
     // borrow of `db_pool` is over — the `&Arc<DbPool>` argument
     // is fine to keep borrowing because the spawned task owns
     // an `Arc` clone anyway.
-    let db_pool_clone = db_pool.clone();
-    let conn = match tokio::task::spawn_blocking(move || db_pool_clone.open_connection()).await {
-        Ok(Ok(c)) => c,
-        Ok(Err(e)) => {
+    let conn = match db_pool.open_connection() {
+        Ok(c) => c,
+        Err(e) => {
             tracing::warn!(
                 provider = %provider,
                 error = %e,
@@ -494,16 +493,7 @@ async fn run_one_tick(
             );
             return;
         }
-        Err(e) => {
-            tracing::warn!(
-                provider = %provider,
-                error = %e,
-                "discovery tick: failed to open db connection task; skipping cycle",
-            );
-            return;
-        }
     };
-
     let result = admin::refresh_models(
         conn,
         &provider,

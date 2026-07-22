@@ -12,7 +12,7 @@ pub mod capabilities;
 pub mod models;
 
 pub use accounts::{Account, HealthStatus};
-pub use models::Model;
+pub use models::{Model, UpsertResult};
 pub mod notifications;
 pub use notifications::{NotificationEvent, publish_notification};
 pub mod usage;

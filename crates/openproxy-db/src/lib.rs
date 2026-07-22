@@ -13,3 +13,4 @@ pub use conn::{DbPool, ReaderGuard, WriterGuard};
 pub use secrets::MasterKey;
 pub mod combos;
 pub mod error;
+pub mod models;

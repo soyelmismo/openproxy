@@ -294,7 +294,7 @@ async fn run_provider_refresh(
         let p = core_providers::get(&w, &provider)?;
         let keyword = p.and_then(|pp| pp.auto_activate_keyword);
         let keyword_ref = keyword.as_deref();
-        core_models::crud::apply_auto_activation(&w, &provider, keyword_ref)
+        openproxy_db::models::apply_auto_activation(&w, &provider, keyword_ref)
     })() {
         Ok(n) => n,
         Err(e) => return ApiResult::err(ApiError(e)),

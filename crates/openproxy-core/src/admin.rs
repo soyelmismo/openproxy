@@ -926,15 +926,8 @@ pub async fn refresh_models<A: openproxy_adapters::adapters::ProviderAdapter>(
     ttl_seconds: i64,
     account_label: &str,
 ) -> Result<models::UpsertResult> {
-    let provider_clone = provider.clone();
-    let (conn, provider_row) = tokio::task::spawn_blocking(move || {
-        let res = providers::get(&conn, &provider_clone);
-        (conn, res)
-    })
-    .await
-    .map_err(|e| CoreError::Internal(e.to_string()))?;
-
-    if provider_row?.is_none() {
+    let provider_row = providers::get(&conn, provider)?;
+    if provider_row.is_none() {
         return Err(CoreError::ProviderNotFound(provider.to_string()));
     }
 
@@ -942,12 +935,7 @@ pub async fn refresh_models<A: openproxy_adapters::adapters::ProviderAdapter>(
         .fetch_models_for_account(upstream_client, api_key, account_label)
         .await?;
     let ttl = Duration::from_secs(ttl_seconds.max(0) as u64);
-    let provider_clone = provider.clone();
-    tokio::task::spawn_blocking(move || {
-        models::upsert_many(&conn, &provider_clone, &discovered, ttl)
-    })
-    .await
-    .map_err(|e| CoreError::Internal(e.to_string()))?
+    models::upsert_many(&conn, provider, &discovered, ttl)
 }
 
 /// Inputs for [`set_active_bulk`]. The dashboard sends one of these from

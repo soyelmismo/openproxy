@@ -52,50 +52,36 @@
 //!   implementation [`SqliteModelRepository`].
 //! - **`discovery`** — [`DiscoveryService`] that orchestrates
 //!   fetch → upsert → auto-activate.
-pub use openproxy_types::{DiscoveredModel, Model, TargetFormat};
+pub use openproxy_types::{DiscoveredModel, Model, TargetFormat, UpsertResult};
 
 // ── Submodules ──────────────────────────────────────────────────────
-pub mod crud;
 pub mod discovery;
-pub mod repository;
 pub mod sync;
 
 #[cfg(test)]
 mod tests;
 
-// ── Re-exports ──────────────────────────────────────────────────────
-// Keep the `models::function_name` call sites working across the
-// crate without requiring callers to change to `models::crud::*`.
-pub use crud::{
-    apply_auto_activation, create_custom, delete, find_active_by_name,
-    find_active_by_provider_and_name, get_by_row_id, list_active, list_active_all, list_all,
-    mark_expired, set_active, set_active_bulk, set_test_status, upsert_many,
+// ── Re-exports from openproxy-db ────────────────────────────────────
+pub use openproxy_db::models::{
+    ModelRepository, SqliteModelRepository, apply_auto_activation, create_custom, delete,
+    find_active_by_name, find_active_by_provider_and_name, get_by_row_id, get_by_row_ids,
+    list_active, list_active_all, list_all, mark_expired, set_active, set_active_bulk,
+    set_test_status,
 };
 
 pub use discovery::DiscoveryService;
-pub use repository::{ModelRepository, SqliteModelRepository};
 
-// ── Domain types ────────────────────────────────────────────────────
-
-/// Result of [`upsert_many`]. `touched` counts inserts + updates
-/// (the previous return value, kept stable for callers that only
-/// need the size). `new_model_ids` lists the `model_id` values that
-/// were inserted as **new** rows — i.e. they did not exist in the
-/// table for this provider before this call. Updated rows are NOT
-/// included.
-///
-/// The frontend uses `new_model_ids` to surface "X new models were
-/// discovered" in the post-refresh toast (or an empty list when the
-/// refresh found nothing new). The list is ordered in the same
-/// order the upstream returned the discovered models, so the toast
-/// reads naturally ("added: gpt-5, claude-opus-4-1, …"). Each entry
-/// is the upstream `model_id` (e.g. `anthropic/claude-sonnet-4`),
-/// not the local row id — the dashboard routes/display values are
-/// keyed on `model_id`.
-#[derive(Debug, Clone)]
-pub struct UpsertResult {
-    /// Total rows touched (inserts + updates).
-    pub touched: usize,
-    /// `model_id`s that were new for this provider.
-    pub new_model_ids: Vec<crate::ids::ModelId>,
+pub fn upsert_many(
+    conn: &rusqlite::Connection,
+    provider: &crate::ids::ProviderId,
+    discovered: &[DiscoveredModel],
+    ttl: std::time::Duration,
+) -> crate::error::Result<UpsertResult> {
+    let diff = sync::compute_diff(conn, provider, discovered)?;
+    let (upsert_result, events) =
+        sync::execute_sync_transaction(conn, provider, discovered, &diff, ttl)?;
+    sync::broadcast_notifications(conn, &events);
+    Ok(upsert_result)
 }
+
+
