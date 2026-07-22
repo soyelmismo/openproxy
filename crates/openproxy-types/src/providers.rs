@@ -180,3 +180,47 @@ pub struct Provider {
     pub proxy_rotation_errors: String,
     pub rate_limit_scope: RateLimitScope,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_provider_format_as_str() {
+        assert_eq!(ProviderFormat::Openai.as_str(), "openai");
+        assert_eq!(ProviderFormat::Anthropic.as_str(), "anthropic");
+        assert_eq!(ProviderFormat::Mixed.as_str(), "mixed");
+        assert_eq!(ProviderFormat::Gemini.as_str(), "gemini");
+        assert_eq!(ProviderFormat::Responses.as_str(), "responses");
+    }
+
+    #[test]
+    fn test_provider_format_parse() {
+        assert_eq!(
+            ProviderFormat::parse("openai").unwrap(),
+            ProviderFormat::Openai
+        );
+        assert_eq!(
+            ProviderFormat::parse("anthropic").unwrap(),
+            ProviderFormat::Anthropic
+        );
+        assert_eq!(
+            ProviderFormat::parse("mixed").unwrap(),
+            ProviderFormat::Mixed
+        );
+        assert_eq!(
+            ProviderFormat::parse("gemini").unwrap(),
+            ProviderFormat::Gemini
+        );
+        assert_eq!(
+            ProviderFormat::parse("responses").unwrap(),
+            ProviderFormat::Responses
+        );
+
+        assert!(ProviderFormat::parse("invalid").is_err());
+        assert_eq!(
+            ProviderFormat::parse("invalid").unwrap_err(),
+            "invalid provider format: invalid"
+        );
+    }
+}
