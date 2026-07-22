@@ -286,7 +286,7 @@ use crate::translation::*;
 
     #[test]
     fn gemini_to_openai_extracts_content() {
-        let resp = GeminiResponse {
+        let resp = GeminiResponse { response: None,
             candidates: vec![GeminiCandidate {
                 content: Some(GeminiContent {
                     role: "model".to_string(),
@@ -325,7 +325,7 @@ use crate::translation::*;
 
     #[test]
     fn gemini_to_openai_maps_finish_reason() {
-        let resp = GeminiResponse {
+        let resp = GeminiResponse { response: None,
             candidates: vec![GeminiCandidate {
                 content: Some(GeminiContent {
                     role: "model".to_string(),
@@ -346,7 +346,7 @@ use crate::translation::*;
 
     #[test]
     fn gemini_to_openai_empty_response() {
-        let resp = GeminiResponse {
+        let resp = GeminiResponse { response: None,
             candidates: vec![],
             usage_metadata: None,
             response: None,
