@@ -355,18 +355,22 @@ mod tests {
 
         let rowid = result.unwrap();
 
-        let count: i64 = conn.query_row(
-            "SELECT count(*) FROM usage WHERE id = ?1",
-            rusqlite::params![rowid.0],
-            |row| row.get(0),
-        ).expect("query");
+        let count: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM usage WHERE id = ?1",
+                rusqlite::params![rowid.0],
+                |row| row.get(0),
+            )
+            .expect("query");
         assert_eq!(count, 1);
 
-        let error_msg_redacted: String = conn.query_row(
-            "SELECT error_msg_redacted FROM usage WHERE id = ?1",
-            rusqlite::params![rowid.0],
-            |row| row.get(0),
-        ).expect("query");
+        let error_msg_redacted: String = conn
+            .query_row(
+                "SELECT error_msg_redacted FROM usage WHERE id = ?1",
+                rusqlite::params![rowid.0],
+                |row| row.get(0),
+            )
+            .expect("query");
         assert_eq!(error_msg_redacted, "test error sk-[REDACTED]");
     }
 }
