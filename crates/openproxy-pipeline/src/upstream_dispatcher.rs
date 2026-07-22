@@ -729,7 +729,8 @@ impl UpstreamDispatcher {
                 .and_then(|v| parse_retry_after_ms(v));
             let is_rate_limited_status =
                 status_code == 429 || status_code == 408 || status_code == 503;
-            if let Some(retry_ms) = retry_after_ms.filter(|_| is_rate_limited_status) {
+            if is_rate_limited_status {
+                let retry_ms = retry_after_ms.unwrap_or(300_000);
                 if !is_proxy_rotated {
                     is_proxy_rotated = self
                         .check_and_trigger_proxy_rotation(
@@ -747,7 +748,12 @@ impl UpstreamDispatcher {
                     req,
                     combo,
                     target,
-                    dctx.fail_ctx_code(&err, Some(connect_and_send_ms), Some(ttft_ms), status_code),
+                    dctx.fail_ctx_code(
+                        &err,
+                        Some(connect_and_send_ms),
+                        Some(ttft_ms),
+                        err.http_status(),
+                    ),
                 );
             }
             // G2.3: surface an `account_invalid` system notification
@@ -1567,6 +1573,7 @@ impl UpstreamDispatcher {
             // honors the upstream-requested delay instead of using
             // the fixed exponential backoff. Mirrors the non-streaming
             // path's handling at line 3172.
+// ...
             let retry_after_ms: Option<u64> = response
                 .headers
                 .get("retry-after")
@@ -1575,7 +1582,8 @@ impl UpstreamDispatcher {
                 .and_then(parse_retry_after_ms);
             let is_rate_limited_status =
                 status_code == 429 || status_code == 408 || status_code == 503;
-            let err = if let Some(retry_ms) = retry_after_ms.filter(|_| is_rate_limited_status) {
+            let err = if is_rate_limited_status {
+                let retry_ms = retry_after_ms.unwrap_or(300_000);
                 if !is_proxy_rotated {
                     is_proxy_rotated = self
                         .check_and_trigger_proxy_rotation(
@@ -1590,6 +1598,7 @@ impl UpstreamDispatcher {
                     is_proxy_rotated,
                 }
             } else {
+// ...
                 // Diagnostic: when MiniMax returns a 400 with error
                 // code 2013 ("tool call and result not match" or
                 // "tool call result does not follow tool call"), log

@@ -302,6 +302,7 @@ pub fn get_or_assign_provider_proxy(
             source: Some(Box::new(e)),
         })?;
 
+// ...
     if let Some((id, host, port, proto)) = new_proxy {
         crate::providers::update_current_proxy(conn, provider_id, Some(&id))?;
         return Ok(Some(format!(
@@ -312,8 +313,12 @@ pub fn get_or_assign_provider_proxy(
         )));
     }
 
-    Ok(None)
+    Err(crate::error::CoreError::Validation(format!(
+        "use_proxies is enabled for provider '{}', but no alive proxies are available in pool",
+        provider_id
+    )))
 }
+// ...
 
 pub fn upsert_scraped_proxies(
     conn: &mut Connection,
@@ -925,11 +930,12 @@ mod tests {
         )
         .unwrap();
 
-        // Still no proxies in DB, so it should return Ok(None)
-        let proxy = get_or_assign_provider_proxy(&conn, &provider_id).unwrap();
-        assert_eq!(proxy, None);
+// ...
+        // Still no proxies in DB, so it should return Err because use_proxies = 1
+        assert!(get_or_assign_provider_proxy(&conn, &provider_id).is_err());
 
         // 3. Add an alive proxy
+// ...
         let p = add_custom_proxy(
             &conn,
             "1.2.3.4".to_string(),
