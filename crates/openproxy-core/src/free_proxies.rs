@@ -560,6 +560,7 @@ async fn sync_oneproxy() -> crate::error::Result<Vec<ScrapedProxy>> {
     let body: OneProxyApiResponse = serde_json::from_slice(&body_bytes)
         .map_err(|e| crate::error::CoreError::Internal(format!("1proxy JSON error: {}", e)))?;
 
+// ...
     let proxies = body.proxies.unwrap_or_default();
     let list = proxies
         .into_iter()
@@ -574,6 +575,108 @@ async fn sync_oneproxy() -> crate::error::Result<Vec<ScrapedProxy>> {
             country_code: p.country_code.filter(|c| !c.is_empty()),
         })
         .collect();
+    Ok(list)
+}
+
+#[derive(serde::Deserialize)]
+struct ProxyScrapeCdnItem {
+    ip: String,
+    port: u16,
+    protocol: String,
+    country_code: Option<String>,
+}
+
+async fn sync_proxyscrape_cdn() -> crate::error::Result<Vec<ScrapedProxy>> {
+    use openproxy_adapters::upstream::{TimeoutProfile, UpstreamClient, UpstreamRequest};
+    let client = UpstreamClient::new();
+    let req = UpstreamRequest::get("https://cdn.jsdelivr.net/gh/proxyscrape/free-proxy-list@main/proxies/all/data.json");
+    let cancel = openproxy_adapters::upstream::CancellationToken::new();
+    let res = client
+        .call(req, TimeoutProfile::ModelDiscovery, cancel)
+        .await
+        .map_err(|e| crate::error::CoreError::Internal(format!("ProxyScrape CDN HTTP error: {:?}", e)))?;
+
+    if res.status != 200 {
+        return Err(crate::error::CoreError::Internal(format!(
+            "ProxyScrape CDN HTTP status: {}",
+            res.status
+        )));
+    }
+
+    let body_bytes = res
+        .collect()
+        .await
+        .map_err(|e| crate::error::CoreError::Internal(format!("ProxyScrape CDN body error: {:?}", e)))?;
+    let items: Vec<ProxyScrapeCdnItem> = serde_json::from_slice(&body_bytes)
+        .map_err(|e| crate::error::CoreError::Internal(format!("ProxyScrape CDN JSON error: {}", e)))?;
+
+    let list = items
+        .into_iter()
+        .map(|item| ScrapedProxy {
+            source: "proxyscrape_cdn".to_string(),
+            host: item.ip,
+            port: item.port,
+            r#type: item.protocol.to_lowercase(),
+            country_code: item.country_code.filter(|c| !c.is_empty()),
+        })
+        .collect();
+    Ok(list)
+}
+
+#[derive(serde::Deserialize)]
+struct GeonodeItem {
+    ip: String,
+    port: String,
+    protocols: Vec<String>,
+    country: Option<String>,
+}
+
+#[derive(serde::Deserialize)]
+struct GeonodeResponse {
+    data: Vec<GeonodeItem>,
+}
+
+// ...
+async fn sync_geonode() -> crate::error::Result<Vec<ScrapedProxy>> {
+    use openproxy_adapters::upstream::{TimeoutProfile, UpstreamClient, UpstreamRequest};
+    let client = UpstreamClient::new();
+    let mut req = UpstreamRequest::get("https://proxylist.geonode.com/api/proxy-list?limit=500&sort_by=lastChecked&sort_type=desc");
+    req.headers.insert(http::header::ACCEPT, http::HeaderValue::from_static("application/json"));
+    req.headers.insert(http::header::USER_AGENT, http::HeaderValue::from_static("Mozilla/5.0 (X11; Linux x86_64)"));
+    let cancel = openproxy_adapters::upstream::CancellationToken::new();
+// ...
+    let res = client
+        .call(req, TimeoutProfile::ModelDiscovery, cancel)
+        .await
+        .map_err(|e| crate::error::CoreError::Internal(format!("Geonode HTTP error: {:?}", e)))?;
+
+    if res.status != 200 {
+        return Err(crate::error::CoreError::Internal(format!(
+            "Geonode HTTP status: {}",
+            res.status
+        )));
+    }
+
+    let body_bytes = res
+        .collect()
+        .await
+        .map_err(|e| crate::error::CoreError::Internal(format!("Geonode body error: {:?}", e)))?;
+    let body: GeonodeResponse = serde_json::from_slice(&body_bytes)
+        .map_err(|e| crate::error::CoreError::Internal(format!("Geonode JSON error: {}", e)))?;
+
+    let mut list = Vec::new();
+    for item in body.data {
+        if let Ok(port) = item.port.parse::<u16>() {
+            let proto = item.protocols.first().cloned().unwrap_or_else(|| "http".to_string());
+            list.push(ScrapedProxy {
+                source: "geonode".to_string(),
+                host: item.ip,
+                port,
+                r#type: proto.to_lowercase(),
+                country_code: item.country.filter(|c| !c.is_empty()),
+            });
+        }
+    }
     Ok(list)
 }
 
@@ -593,7 +696,7 @@ pub async fn sync_all_providers(db_pool: Arc<DbPool>) -> crate::error::Result<Sy
         }
     }
 
-    // 2. GitHub Lists (IPLocate, TheSpeedX, Thordata)
+    // 2. GitHub Lists (IPLocate, TheSpeedX, Thordata, etc.)
     match sync_github_lists().await {
         Ok(mut list) => {
             fetched += list.len();
@@ -614,6 +717,29 @@ pub async fn sync_all_providers(db_pool: Arc<DbPool>) -> crate::error::Result<Sy
             errors.push(format!("1proxy sync failed: {}", e));
         }
     }
+
+    // 4. ProxyScrape CDN JSON
+    match sync_proxyscrape_cdn().await {
+        Ok(mut list) => {
+            fetched += list.len();
+            scraped.append(&mut list);
+        }
+        Err(e) => {
+            errors.push(format!("ProxyScrape CDN sync failed: {}", e));
+        }
+    }
+
+    // 5. Geonode API JSON
+    match sync_geonode().await {
+        Ok(mut list) => {
+            fetched += list.len();
+            scraped.append(&mut list);
+        }
+        Err(e) => {
+            errors.push(format!("Geonode sync failed: {}", e));
+        }
+    }
+// ...
 
     let mut added = 0;
     if !scraped.is_empty() {
@@ -973,11 +1099,11 @@ mod tests {
             .unwrap();
         assert_eq!(bound_id, Some(p.id.clone()));
 
+// ...
         // Calling it again should return the same cached proxy
         let proxy2 = get_or_assign_provider_proxy(&conn, &provider_id).unwrap();
         assert_eq!(proxy2, Some("socks5://1.2.3.4:8080".to_string()));
 
-// ...
         // 4. Mark the proxy as dead / inactive
         update_proxy_status(&conn, &p.id, "dead", Some(9999)).unwrap();
 
@@ -985,5 +1111,46 @@ mod tests {
         // search for a new one, find none, and return Err because use_proxies = 1.
         assert!(get_or_assign_provider_proxy(&conn, &provider_id).is_err());
     }
+// ...
+
+    #[test]
+    fn test_proxyscrape_cdn_json_parsing() {
+        let json_data = r#"[
+            {
+                "protocol": "socks4",
+                "ip": "95.217.167.252",
+                "port": 11117,
+                "country": "Finland",
+                "country_code": "FI"
+            }
+        ]"#;
+        let items: Vec<ProxyScrapeCdnItem> = serde_json::from_str(json_data).unwrap();
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].ip, "95.217.167.252");
+        assert_eq!(items[0].port, 11117);
+        assert_eq!(items[0].protocol, "socks4");
+        assert_eq!(items[0].country_code.as_deref(), Some("FI"));
+    }
+
+    #[test]
+    fn test_geonode_json_parsing() {
+        let json_data = r#"{
+            "data": [
+                {
+                    "ip": "193.233.72.56",
+                    "port": "988",
+                    "protocols": ["socks5"],
+                    "country": "US"
+                }
+            ]
+        }"#;
+        let body: GeonodeResponse = serde_json::from_str(json_data).unwrap();
+        assert_eq!(body.data.len(), 1);
+        assert_eq!(body.data[0].ip, "193.233.72.56");
+        assert_eq!(body.data[0].port, "988");
+        assert_eq!(body.data[0].port.parse::<u16>().unwrap(), 988);
+        assert_eq!(body.data[0].protocols, vec!["socks5"]);
+    }
 }
+
 

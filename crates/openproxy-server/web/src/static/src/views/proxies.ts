@@ -143,11 +143,15 @@ function renderProxyRow(p: FreeProxyRow): TemplateResult {
   `;
 }
 
+// ...
 function renderProxies(): TemplateResult {
   const proxies = (state.proxies as FreeProxyRow[]) || [];
+  const uniqueSources: string[] = Array.from(new Set(proxies.map((p: FreeProxyRow) => p.source).filter(Boolean))).sort();
+  const uniqueProtocols: string[] = Array.from(new Set(proxies.map((p: FreeProxyRow) => p.type).filter(Boolean))).sort();
   
   // Calculate stats
   const total = proxies.length;
+// ...
   const aliveProxies = proxies.filter(p => p.status === "alive");
   const alive = aliveProxies.length;
   const dead = proxies.filter(p => p.status === "dead").length;
@@ -220,20 +224,16 @@ function renderProxies(): TemplateResult {
         />
       </div>
       <div class="filter-selects">
+// ...
         <select @change=${onProtocolChange} .value=${filterProtocol}>
           <option value="">${t("proxies.filter.all_protocols")}</option>
-          <option value="http">HTTP</option>
-          <option value="https">HTTPS</option>
-          <option value="socks4">SOCKS4</option>
-          <option value="socks5">SOCKS5</option>
+          ${uniqueProtocols.map((p: string) => html`<option value=${p}>${p.toUpperCase()}</option>`)}
         </select>
         <select @change=${onSourceChange} .value=${filterSource}>
           <option value="">${t("proxies.filter.all_sources")}</option>
-          <option value="proxifly">proxifly</option>
-          <option value="iplocate">iplocate</option>
-          <option value="1proxy">1proxy</option>
-          <option value="custom">custom</option>
+          ${uniqueSources.map((s: string) => html`<option value=${s}>${s}</option>`)}
         </select>
+// ...
         <select @change=${onStatusChange} .value=${filterStatus}>
           <option value="">${t("proxies.filter.all_statuses")}</option>
           <option value="unknown">${t("proxies.status.unknown")}</option>
