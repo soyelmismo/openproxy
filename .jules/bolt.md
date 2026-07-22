@@ -19,3 +19,6 @@
 ## 2024-05-18 - Repeated Regex Compilation in Kiro Adapter Hot Paths
 **Learning:** Found repeated `regex::Regex::new(r"[a-z]{2}-[a-z]+-[0-9]")` in `KiroAdapter::build_chat_url_for_account` and `fetch_models_for_account`. These are in the hot path for every AWS CodeWhisperer proxy request, causing unnecessary allocation and compilation overhead.
 **Action:** Use `once_cell::sync::Lazy` to compile regex once globally, reducing allocation and latency on hot paths.
+## 2025-02-23 - Sort and Dedup key allocations
+**Learning:** Using `sort_unstable_by_key(|id| id.0.clone())` and `dedup_by_key(|id| id.0.clone())` allocates a new `String` for every single comparison during the sorting/deduping process. This creates a massive number of temporary heap allocations on hot paths.
+**Action:** Replace `by_key` with `.clone()` closures with the more explicit `sort_unstable_by(|a, b| a.0.cmp(&b.0))` and `dedup_by(|a, b| a.0 == b.0)`. This performs the exact same operation without any allocations.
