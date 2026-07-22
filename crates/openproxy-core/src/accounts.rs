@@ -581,7 +581,7 @@ pub fn decrypt_refresh_tokens(
             let id: i64 = row.get(0).map_err(openproxy_db::error::map_db_error)?;
             let blob: Option<Vec<u8>> = row.get(1).map_err(openproxy_db::error::map_db_error)?;
             let token = match blob {
-                Some(b) => master_key.decrypt(&b).map(Some).map_err(CoreError::from),
+                Some(b) => master_key.decrypt(&b).map(Some),
                 None => Ok(None),
             };
             map.insert(AccountId(id), token);
