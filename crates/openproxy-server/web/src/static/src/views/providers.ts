@@ -23,8 +23,9 @@ import { state } from "../state/index.js";
 import { api } from "../state/api.js";
 import { mountView, requestUpdate } from "../state/reactive.js";
 import { showToast } from "../components/toast.js";
+import { flashButton, showApiError } from "../lib/ui-utils.js";
 import { showCreateProvider } from "../handlers/provider-handlers.js";
-import { showCreateAccount, showUpdateAccountKey } from "../handlers/account-handlers.js";
+import { showCreateAccount, showUpdateAccountKey, updateAccountLabel, copyAccountApiKey } from "../handlers/account-handlers.js";
 import { showCustomModelForm } from "../components/model-custom-form.js";
 import { OAuthLogin } from "../handlers/oauth-handlers.js";
 import { renderQuotaCell } from "./quota-cell.js";
@@ -106,14 +107,6 @@ function renderCapabilityBadges(json: string | null | undefined): TemplateResult
   return badges.length > 0 ? html`${badges}` : html`<span class="muted">—</span>`;
 }
 
-// Briefly paint a button a colour to confirm a click landed.
-function flashButton(btn: HTMLButtonElement | null, text: string, color: string): void {
-  if (!btn) return;
-  btn.textContent = text;
-  btn.style.background = color;
-  setTimeout(() => { btn.style.background = ""; }, 1500);
-}
-
 // ---- Handlers: grid ----
 
 async function onRefreshAllProviders(): Promise<void> {
@@ -130,8 +123,7 @@ async function onRefreshAllProviders(): Promise<void> {
     state.models = await api("/models") as typeof state.models;
     requestUpdate();
   } catch (err: unknown) {
-    const msg = err instanceof Error ? err.message : String(err);
-    showToast("Error: " + msg, "error");
+    showApiError(err, "Error");
   }
 }
 
@@ -162,8 +154,7 @@ async function onRenameProvider(providerId: string, currentName: string): Promis
     state.providers = await api("/providers") as typeof state.providers;
     requestUpdate();
   } catch (err: unknown) {
-    const msg = err instanceof Error ? err.message : String(err);
-    showToast("Error: " + msg, "error");
+    showApiError(err, "Error");
   }
 }
 
@@ -195,8 +186,7 @@ async function onRefreshProvider(providerId: string, e: Event | null): Promise<v
     state.models = await api("/models") as typeof state.models;
     requestUpdate();
   } catch (err: unknown) {
-    const msg = err instanceof Error ? err.message : String(err);
-    showToast("Error: " + msg, "error");
+    showApiError(err, "Error");
   } finally {
     if (btn) {
       btn.disabled = false;
@@ -222,8 +212,7 @@ async function onToggleProviderActive(providerId: string, newActive: boolean): P
     state.providers = await api("/providers") as typeof state.providers;
     requestUpdate();
   } catch (err: unknown) {
-    const msg = err instanceof Error ? err.message : String(err);
-    showToast("Error: " + msg, "error");
+    showApiError(err, "Error");
   }
 }
 
@@ -241,8 +230,7 @@ async function onConfirmDeleteProvider(providerId: string): Promise<void> {
     state.accounts = state.accounts.filter((a) => a.provider_id !== providerId);
     location.hash = "#/providers";
   } catch (err: unknown) {
-    const msg = err instanceof Error ? err.message : String(err);
-    showToast("Cannot delete: " + msg, "error");
+    showApiError(err, "Cannot delete");
   }
 }
 
@@ -274,8 +262,7 @@ async function onSetHealth(id: number, e: Event | null): Promise<void> {
     if (a) a.health_status = health;
     requestUpdate();
   } catch (err: unknown) {
-    const msg = err instanceof Error ? err.message : String(err);
-    showToast("Error: " + msg, "error");
+    showApiError(err, "Error");
   }
 }
 
@@ -307,8 +294,7 @@ async function onRefreshAccountQuota(accountId: number, e: Event | null): Promis
     requestUpdate();
   } catch (err: unknown) {
     if (btn) flashButton(btn, "✗", "#f38ba8");
-    const msg = err instanceof Error ? err.message : String(err);
-    setTimeout(() => showToast("Error: " + msg, "error"), 100);
+    showApiError(err, "Error");
   } finally {
     if (btn) {
       setTimeout(() => { btn.disabled = false; btn.textContent = oldText; }, 1500);
@@ -348,8 +334,18 @@ async function onDeleteAccount(id: number): Promise<void> {
     state.accounts = state.accounts.filter((a) => a.id !== id);
     requestUpdate();
   } catch (err: unknown) {
-    const msg = err instanceof Error ? err.message : String(err);
-    showToast("Error: " + msg, "error");
+    showApiError(err, "Error");
+  }
+}
+
+async function onApplyLocalCli(accountId: number): Promise<void> {
+  try {
+    const res = await api(`/accounts/${accountId}/apply-local-cli`, { method: "POST" }) as any;
+    if (res && res.success) {
+      showToast(`Credentials applied locally to ${res.path}`, "success");
+    }
+  } catch (err: unknown) {
+    showApiError(err, "Error applying credentials to local CLI");
   }
 }
 
@@ -381,8 +377,7 @@ async function onBulkToggleModels(providerId: string, active: boolean): Promise<
     state.models = await api("/models") as typeof state.models;
     requestUpdate();
   } catch (err: unknown) {
-    const msg2 = err instanceof Error ? err.message : String(err);
-    showToast("Error: " + msg2, "error");
+    showApiError(err, "Error");
   }
 }
 
@@ -404,8 +399,7 @@ async function onUpdateAutoActivate(providerId: string, e: Event | null): Promis
     // No requestUpdate() — the input is uncontrolled; re-rendering
     // would close any other open input on the page.
   } catch (err: unknown) {
-    const msg = err instanceof Error ? err.message : String(err);
-    showToast("Error: " + msg, "error");
+    showApiError(err, "Error");
   }
 }
 
@@ -422,8 +416,7 @@ async function onUpdateUseProxies(providerId: string, e: Event): Promise<void> {
     state.providers = await api("/providers") as typeof state.providers;
     requestUpdate();
   } catch (err: unknown) {
-    const msg = err instanceof Error ? err.message : String(err);
-    showToast("Error: " + msg, "error");
+    showApiError(err, "Error");
   }
 }
 
@@ -441,8 +434,7 @@ async function onUpdateProxyRotationErrors(providerId: string, e: Event): Promis
     state.providers = await api("/providers") as typeof state.providers;
     requestUpdate();
   } catch (err: unknown) {
-    const msg = err instanceof Error ? err.message : String(err);
-    showToast("Error: " + msg, "error");
+    showApiError(err, "Error");
   }
 }
 
@@ -537,8 +529,7 @@ async function onBulkSetSelected(providerId: string, active: boolean): Promise<v
     state.selectedModels.clear();
     requestUpdate();
   } catch (err: unknown) {
-    const msg = err instanceof Error ? err.message : String(err);
-    showToast("Error: " + msg, "error");
+    showApiError(err, "Error");
   }
 }
 
@@ -589,8 +580,7 @@ async function onBulkTestSelected(providerId: string): Promise<void> {
     }
     requestUpdate();
   } catch (err: unknown) {
-    const msg = err instanceof Error ? err.message : String(err);
-    showToast("Error: " + msg, "error");
+    showApiError(err, "Error");
   }
 }
 
@@ -608,8 +598,7 @@ async function onBulkDeleteSelected(providerId: string): Promise<void> {
     state.selectedModels.clear();
     requestUpdate();
   } catch (err: unknown) {
-    const msg = err instanceof Error ? err.message : String(err);
-    showToast("Error: " + msg, "error");
+    showApiError(err, "Error");
   }
 }
 
@@ -623,8 +612,7 @@ async function onToggleModel(rowId: number, newActive: boolean): Promise<void> {
     if (m) m.active = newActive;
     requestUpdate();
   } catch (err: unknown) {
-    const msg = err instanceof Error ? err.message : String(err);
-    showToast("Error: " + msg, "error");
+    showApiError(err, "Error");
   }
 }
 
@@ -661,8 +649,7 @@ async function onTestModel(rowId: number, e: Event | null): Promise<void> {
     requestUpdate();
   } catch (err: unknown) {
     flashButton(btn, "✗", "#f38ba8");
-    const msg = err instanceof Error ? err.message : String(err);
-    setTimeout(() => showToast("Test failed: " + msg, "error"), 100);
+    showApiError(err, "Test failed");
   } finally {
     setTimeout(() => {
       btn.disabled = false;
@@ -679,8 +666,7 @@ async function onDeleteModel(rowId: number): Promise<void> {
     state.selectedModels.delete(rowId);
     requestUpdate();
   } catch (err: unknown) {
-    const msg = err instanceof Error ? err.message : String(err);
-    showToast("Error: " + msg, "error");
+    showApiError(err, "Error");
   }
 }
 
@@ -833,7 +819,12 @@ function renderConnectionsSection(provider: Provider, accounts: Account[]): Temp
             ? html`<td>${renderQuotaCell(a)}</td>`
             : html`<td><div class="quota-cell muted"><small>not supported by this provider</small></div></td>`;
           return html`<tr>
-            <td>${a.label || a.email || "—"}</td>
+            <td>
+              <span class="editable" title="Click to rename label" @click=${() => updateAccountLabel(a.id, a.label || a.email || "")}>
+                ${a.label || a.email || "—"}
+              </span>
+              <small>✎</small>
+            </td>
             <td>${a.priority}</td>
             <td>
               <select class=${"health-select " + (a.health_status || "unknown")} @change=${(e: Event) => onSetHealth(a.id, e)}>
@@ -846,6 +837,8 @@ function renderConnectionsSection(provider: Provider, accounts: Account[]): Temp
             <td>${a.created_at || "—"}</td>
             <td>
               ${hasQuota ? html`<button class="small" @click=${(e: Event) => onRefreshAccountQuota(a.id, e)}>↻ Quota</button>` : html``}
+              ${provider.id === 'antigravity' ? html`<button class="small" @click=${() => onApplyLocalCli(a.id)}>🖥️ Apply Local</button>` : html``}
+              <button class="small" title="Copy API Key" @click=${() => copyAccountApiKey(a.id)}>📋 Copy</button>
               <button class="small" @click=${() => onShowUpdateAccountKey(a.id)}>🔑 Key</button>
               <button class="small danger" @click=${() => onDeleteAccount(a.id)}>Delete</button>
             </td>

@@ -18,6 +18,7 @@ import { html, render, type TemplateResult } from "lit-html";
 import type { Account, Model, ComboSummary, ComboTargetWithModel } from "../lib/types/api.js";
 import { requestUpdate } from "../state/reactive.js";
 import { showToast } from "../components/toast.js";
+import { ensureModalRoot, showApiError } from "../lib/ui-utils.js";
 
 // ---- PATCH helper (no re-render) ----
 //
@@ -51,19 +52,8 @@ async function patchTargetField(
     // Don't re-render — the user might be editing another field.
     // A re-render would lose their focus and unsaved changes.
     console.error("[openproxy] combo target PATCH failed:", msg);
-    showToast("Error: " + msg, "error");
+    showApiError(err, "Error");
   }
-}
-
-function ensureModalRoot(): HTMLElement {
-  let root = document.getElementById("modal-root");
-  if (!root) {
-    root = document.createElement("div");
-    root.id = "modal-root";
-    root.style.cssText = "position:relative;z-index:1000;";
-    document.body.appendChild(root);
-  }
-  return root;
 }
 
 // Targeted DOM patch for the multi-select checkbox UI on the
@@ -314,8 +304,7 @@ async function onDrop(e: DragEvent): Promise<void> {
     });
     requestUpdate();
   } catch (err: unknown) {
-    const msg = err instanceof Error ? err.message : String(err);
-    alert("Error reordering: " + msg);
+    showApiError(err, "Error reordering");
   }
 }
 
@@ -754,8 +743,7 @@ export async function addTarget(comboId: number, e: Event, wrapper?: HTMLElement
       if (wrapper) wrapper.remove(); else closeAddTarget();
       requestUpdate();
     } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : String(err);
-      alert("Error: " + msg);
+      showApiError(err, "Error");
     }
     return;
   }
@@ -862,7 +850,7 @@ export async function deleteTarget(comboId: number, targetId: number): Promise<v
     const { forceRerenderCurrentView } = await import("../state/router.js");
     forceRerenderCurrentView();
   } catch (e: unknown) {
-    showToast("Error: " + (e instanceof Error ? e.message : String(e)), "error");
+    showApiError(e, "Error");
   }
 }
 
@@ -889,8 +877,7 @@ export async function resetCooldown(comboId: number, targetId: number): Promise<
       if (resetBtn) resetBtn.remove();
     }
   } catch (e: unknown) {
-    const msg = e instanceof Error ? e.message : String(e);
-    showToast("Could not clear cooldown: " + msg, "error");
+    showApiError(e, "Could not clear cooldown");
   }
 }
 
@@ -910,8 +897,7 @@ export async function changePriority(comboId: number, targetId: number, delta: n
     await api(`/combos/${comboId}/targets/reorder`, { method: "POST", body: JSON.stringify({ target_ids: sorted.map((t) => t.id) }) });
     requestUpdate();
   } catch (e: unknown) {
-    const msg = e instanceof Error ? e.message : String(e);
-    alert("Error reordering: " + msg);
+    showApiError(e, "Error reordering");
   }
 }
 

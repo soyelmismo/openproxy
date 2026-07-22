@@ -1,6 +1,8 @@
 // lib/constants.ts — app-wide constants. Kept here so the views
 // and handlers do not litter the codebase with magic strings/numbers.
 
+import type { PriorityMode, CooldownMode } from "./types/api.js";
+
 // Human-readable label for each server-side stage. The server keys
 // are kept in the data-stage attribute (and CSS) so styling can
 // target them directly; the cell body shows the friendlier label.
@@ -62,6 +64,24 @@ export const LOG_COLUMNS: readonly LogColumn[] = [
   { key: "cost",     label: "Cost"     },
   { key: "compression", label: "Compress" },
 ];
+
+export const PRIORITY_MODE_LABELS: Record<PriorityMode, string> = {
+  strict: "Strict", lkgp: "LKGP", weighted: "Weighted",
+  least_used: "Least Used", p2c: "P2C",
+};
+
+export const PRIORITY_MODE_TOOLTIPS: Record<PriorityMode, string> = {
+  strict: "Walk targets in manual priority order. The first healthy target is always tried first.",
+  lkgp: "Least Known Good Provider — prefer the target with the most recent successful request. Falls back to priority order for never-tried targets. An exploration rate adds priority-weighted randomness: earlier targets (which the operator positioned first for speed/intelligence) are more likely to be explored than later fallback targets.",
+  weighted: "Weighted random selection — each target's probability is proportional to its weight. Set weights in the targets table below.",
+  least_used: "Prefer the target with the fewest total requests in the selection window. Useful for distributing load evenly.",
+  p2c: "Power of Two Choices — pick two random targets, choose the one with fewer recent failures. Good balance of simplicity and load distribution.",
+};
+
+export const COOLDOWN_MODE_TOOLTIPS: Record<CooldownMode, string> = {
+  flat: "Fixed cooldown duration after each failure. The target is parked for the same amount of time regardless of how many times it has failed.",
+  exponential: "Cooldown grows with each failure: base × factor^(failures-1), capped at max. A flapping target gets progressively longer cooldowns, giving it time to recover.",
+};
 
 // Localised status -> CSS class for the status-pill component.
 export function statusPillClass(code: number | null): string {

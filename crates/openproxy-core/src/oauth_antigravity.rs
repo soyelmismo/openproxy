@@ -46,12 +46,6 @@ const SCOPES: &[&str] = &[
 const AUTH_URL: &str = "https://accounts.google.com/o/oauth2/v2/auth";
 const TOKEN_URL: &str = "https://oauth2.googleapis.com/token";
 
-/// Cloud Code `loadCodeAssist` / `onboardUser` endpoints. The host is
-/// the same `daily-cloudcode-pa.googleapis.com` the chat executor uses.
-const LOAD_CODE_ASSIST_URL: &str =
-    "https://daily-cloudcode-pa.googleapis.com/v1internal:loadCodeAssist";
-const ONBOARD_USER_URL: &str = "https://daily-cloudcode-pa.googleapis.com/v1internal:onboardUser";
-
 /// Cloud Code `metadata.ideType` used when the operator has not
 /// configured a custom IDE identity. The Antigravity client sends
 /// `ANTIGRAVITY` as the IDE type.
@@ -153,13 +147,13 @@ impl OAuthProvider for AntigravityOAuthProvider {
             "ideType": "ANTIGRAVITY",
         });
 
-        let project_id = match load_code_assist(upstream, &access_token, &metadata).await? {
+        let project_id = match openproxy_adapters::adapters::antigravity::load_code_assist(upstream, &access_token, &metadata).await.map_err(CoreError::UpstreamConnection)? {
             Some(pid) => pid,
             None => {
                 // Retry onboardUser up to 10 times with 5s delays
                 let mut result = None;
                 for attempt in 0..10 {
-                    match onboard_user(upstream, &access_token, "", &metadata).await {
+                    match openproxy_adapters::adapters::antigravity::onboard_user(upstream, &access_token, "", &metadata).await {
                         Ok(Some(pid)) => {
                             result = Some(pid);
                             break;
@@ -224,127 +218,7 @@ impl OAuthProvider for AntigravityOAuthProvider {
     }
 }
 
-/// Call `loadCodeAssist` and extract `projectId` (or `None` when
-/// the user is not yet on-boarded).
-async fn load_code_assist(
-    upstream: &Arc<UpstreamClient>,
-    access_token: &str,
-    metadata: &serde_json::Value,
-) -> Result<Option<String>> {
-    let body = serde_json::json!({ "metadata": metadata });
-    let body_bytes = serde_json::to_vec(&body)
-        .map_err(|e| CoreError::Parse(format!("antigravity loadCodeAssist serialize: {e}")))?;
 
-    // Build the request with Antigravity client-identity headers using UpstreamRequest
-    let mut req = UpstreamRequest::post_json(LOAD_CODE_ASSIST_URL, bytes::Bytes::from(body_bytes));
-    if let Ok(v) = http::HeaderValue::from_str(&format!("Bearer {access_token}")) {
-        req.headers.insert(http::header::AUTHORIZATION, v);
-    }
-    openproxy_adapters::antigravity_headers::inject_antigravity_headers(&mut req.headers, None);
-    req.is_streaming = false;
-
-    let cancel = CancellationToken::new();
-    let resp = upstream
-        .call(req, TimeoutProfile::OAuth, cancel)
-        .await
-        .map_err(|e| CoreError::UpstreamConnection(format!("antigravity loadCodeAssist: {e}")))?;
-
-    if !resp.status.is_success() {
-        let status = resp.status.as_u16();
-        let body_str =
-            String::from_utf8_lossy(&resp.collect().await.unwrap_or_default()).to_string();
-        return Err(CoreError::UpstreamError {
-            status,
-            provider: "antigravity".into(),
-            model: "<post_exchange>".into(),
-            body: body_str,
-            is_proxy_rotated: false,
-        });
-    }
-
-    let body_bytes = resp.collect().await.map_err(|e| {
-        CoreError::UpstreamConnection(format!("antigravity loadCodeAssist read: {e}"))
-    })?;
-
-    let value: serde_json::Value = serde_json::from_slice(&body_bytes)
-        .map_err(|e| CoreError::Parse(format!("antigravity loadCodeAssist parse: {e}")))?;
-
-    // `cloudaicompanionProject` may be a string or an object with
-    // an `id` field depending on the upstream version. Normalize.
-    let project_id = value
-        .get("cloudaicompanionProject")
-        .and_then(|v| v.as_str())
-        .map(|s| s.to_string())
-        .or_else(|| {
-            value
-                .get("cloudaicompanionProject")
-                .and_then(|v| v.get("id"))
-                .and_then(|v| v.as_str())
-                .map(|s| s.to_string())
-        });
-
-    Ok(project_id)
-}
-
-/// Call `onboardUser` and return `Ok(Some(project_id))` on success,
-/// or `Ok(None)` when the server has not finished onboarding yet.
-async fn onboard_user(
-    upstream: &Arc<UpstreamClient>,
-    access_token: &str,
-    project_id: &str,
-    metadata: &serde_json::Value,
-) -> Result<Option<String>> {
-    let body = serde_json::json!({
-        "projectId": project_id,
-        "metadata": metadata,
-        "tier": "free-tier",
-    });
-    let body_bytes = serde_json::to_vec(&body)
-        .map_err(|e| CoreError::Parse(format!("antigravity onboardUser serialize: {e}")))?;
-
-    let mut req = UpstreamRequest::post_json(ONBOARD_USER_URL, bytes::Bytes::from(body_bytes));
-    if let Ok(v) = http::HeaderValue::from_str(&format!("Bearer {access_token}")) {
-        req.headers.insert(http::header::AUTHORIZATION, v);
-    }
-    openproxy_adapters::antigravity_headers::inject_antigravity_headers(&mut req.headers, None);
-    req.is_streaming = false;
-
-    let cancel = CancellationToken::new();
-    let resp = upstream
-        .call(req, TimeoutProfile::OAuth, cancel)
-        .await
-        .map_err(|e| CoreError::UpstreamConnection(format!("antigravity onboardUser: {e}")))?;
-
-    if !resp.status.is_success() {
-        let status = resp.status.as_u16();
-        let body_str =
-            String::from_utf8_lossy(&resp.collect().await.unwrap_or_default()).to_string();
-        return Err(CoreError::UpstreamError {
-            status,
-            provider: "antigravity".into(),
-            model: "<post_exchange>".into(),
-            body: body_str,
-            is_proxy_rotated: false,
-        });
-    }
-
-    let body_bytes = resp
-        .collect()
-        .await
-        .map_err(|e| CoreError::UpstreamConnection(format!("antigravity onboardUser read: {e}")))?;
-
-    let value: serde_json::Value = serde_json::from_slice(&body_bytes)
-        .map_err(|e| CoreError::Parse(format!("antigravity onboardUser parse: {e}")))?;
-
-    let project_id = value
-        .get("cloudaicompanionProject")
-        .and_then(|v| v.get("id"))
-        .and_then(|v| v.as_str())
-        .or_else(|| value.get("projectId").and_then(|v| v.as_str()))
-        .map(|s| s.to_string());
-
-    Ok(project_id)
-}
 
 /// Read the `projectId` stored on the account row by `post_exchange`.
 ///
