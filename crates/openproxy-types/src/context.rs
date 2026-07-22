@@ -8,6 +8,7 @@ pub struct CustomProviderMeta {
     pub kiro_region: Option<String>,
     pub kiro_profile_arn: Option<String>,
     pub antigravity_project: Option<String>,
+    pub antigravity_metadata: Option<String>,
     pub codex_workspace_id: Option<String>,
 }
 

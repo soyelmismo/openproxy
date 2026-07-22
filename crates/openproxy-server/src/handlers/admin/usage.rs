@@ -255,7 +255,9 @@ pub async fn usage_detail(
     crate::api_try! {
         // Read-only SELECT — use the READER.
         let r = s.db_pool().reader();
-        let row = if let Some(trace_id) = &q.trace_id {
+        let row = if let Some(id) = q.id.filter(|&id| id != 0) {
+            core_usage::detail_by_id(&r, id)?
+        } else if let Some(trace_id) = &q.trace_id {
             core_usage::detail_by_trace_id(&r, trace_id)?
         } else if let Some(id) = q.id {
             core_usage::detail_by_id(&r, id)?

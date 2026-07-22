@@ -346,10 +346,13 @@ async fn handle_sync_response(
 
     let body_value = match result.final_response {
         Some(resp) => serde_json::to_value(&resp).unwrap_or_else(|e| {
+            let raw_err = format!("serialize response: {e}");
+            let redacted = openproxy_core::cost::redact_error_msg(&raw_err);
+            let message = crate::error::truncate_error_message(&redacted.0);
             json!({
                 "error": {
                     "code": "internal",
-                    "message": format!("serialize response: {e}"),
+                    "message": message,
                 }
             })
         }),
