@@ -196,11 +196,26 @@ mod tests {
 
     #[test]
     fn test_provider_format_parse() {
-        assert_eq!(ProviderFormat::parse("openai").unwrap(), ProviderFormat::Openai);
-        assert_eq!(ProviderFormat::parse("anthropic").unwrap(), ProviderFormat::Anthropic);
-        assert_eq!(ProviderFormat::parse("mixed").unwrap(), ProviderFormat::Mixed);
-        assert_eq!(ProviderFormat::parse("gemini").unwrap(), ProviderFormat::Gemini);
-        assert_eq!(ProviderFormat::parse("responses").unwrap(), ProviderFormat::Responses);
+        assert_eq!(
+            ProviderFormat::parse("openai").unwrap(),
+            ProviderFormat::Openai
+        );
+        assert_eq!(
+            ProviderFormat::parse("anthropic").unwrap(),
+            ProviderFormat::Anthropic
+        );
+        assert_eq!(
+            ProviderFormat::parse("mixed").unwrap(),
+            ProviderFormat::Mixed
+        );
+        assert_eq!(
+            ProviderFormat::parse("gemini").unwrap(),
+            ProviderFormat::Gemini
+        );
+        assert_eq!(
+            ProviderFormat::parse("responses").unwrap(),
+            ProviderFormat::Responses
+        );
 
         assert!(ProviderFormat::parse("invalid").is_err());
         assert_eq!(
