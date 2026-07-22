@@ -157,7 +157,10 @@ mod tests {
         assert_eq!(Strategy::parse("priority"), Ok(Strategy::Priority));
         assert_eq!(Strategy::parse("round_robin"), Ok(Strategy::RoundRobin));
         assert_eq!(Strategy::parse("shuffle"), Ok(Strategy::Shuffle));
-        assert_eq!(Strategy::parse("unknown"), Err("invalid strategy: unknown".to_string()));
+        assert_eq!(
+            Strategy::parse("unknown"),
+            Err("invalid strategy: unknown".to_string())
+        );
     }
 
     #[test]
