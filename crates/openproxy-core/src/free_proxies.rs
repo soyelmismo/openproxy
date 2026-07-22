@@ -418,6 +418,7 @@ async fn sync_github_lists() -> crate::error::Result<Vec<ScrapedProxy>> {
     let mut list = Vec::new();
 
 // ...
+// ...
     let sources = vec![
         (
             "iplocate",
@@ -425,50 +426,8 @@ async fn sync_github_lists() -> crate::error::Result<Vec<ScrapedProxy>> {
             vec!["http", "https", "socks4", "socks5"],
         ),
         (
-            "thespeedx",
-            "https://raw.githubusercontent.com/TheSpeedX/SOCKS-List/master/{}.txt",
-            vec!["http", "socks4", "socks5"],
-        ),
-        (
-            "thordata",
-            "https://raw.githubusercontent.com/Thordata/awesome-free-proxy-list/main/proxies/{}.txt",
-            vec!["http", "https", "socks4", "socks5"],
-        ),
-        (
-            "monosans",
-            "https://raw.githubusercontent.com/monosans/proxy-list/main/proxies/{}.txt",
-            vec!["http", "socks4", "socks5"],
-        ),
-        (
-            "jetkai",
-            "https://raw.githubusercontent.com/jetkai/proxy-list/main/online-proxies/txt/proxies-{}.txt",
-            vec!["http", "https", "socks4", "socks5"],
-        ),
-// ...
-        (
-            "proxyscrape",
-            "https://api.proxyscrape.com/v2/?request=getproxies&protocol={}&timeout=10000&country=all",
-            vec!["http", "socks4", "socks5"],
-        ),
-// ...
-        (
-            "vpslab",
-            "https://raw.githubusercontent.com/VPSLabCloud/VPSLab-Free-Proxy-List/main/{}_all.txt",
-            vec!["socks5", "socks4", "http"],
-        ),
-        (
-            "roosterkid",
-            "https://raw.githubusercontent.com/roosterkid/openproxylist/main/SOCKS5_RAW.txt",
-            vec!["socks5"],
-        ),
-        (
             "hideip",
             "https://raw.githubusercontent.com/zloi-user/hideip.me/main/{}.txt",
-            vec!["http", "socks4", "socks5"],
-        ),
-        (
-            "adasd223",
-            "https://raw.githubusercontent.com/adasd223/http-proxy-list-2026/main/{}.txt",
             vec!["http", "socks4", "socks5"],
         ),
         (
@@ -480,31 +439,6 @@ async fn sync_github_lists() -> crate::error::Result<Vec<ScrapedProxy>> {
             "proxyspace",
             "https://proxyspace.pro/{}.txt",
             vec!["http", "socks4", "socks5"],
-        ),
-        (
-            "sunny9577",
-            "https://sunny9577.github.io/proxy-scraper/generated/{}_proxies.txt",
-            vec!["http", "socks4", "socks5"],
-        ),
-        (
-            "rdavydov",
-            "https://raw.githubusercontent.com/rdavydov/proxy-list/main/proxies/{}.txt",
-            vec!["http", "socks4", "socks5"],
-        ),
-        (
-            "kangproxy",
-            "https://raw.githubusercontent.com/officialputuid/KangProxy/KangProxy/http/http.txt",
-            vec!["http"],
-        ),
-        (
-            "clarketm",
-            "https://raw.githubusercontent.com/clarketm/proxy-list/master/proxy-list-raw.txt",
-            vec!["http"],
-        ),
-        (
-            "gitrecon1455",
-            "https://raw.githubusercontent.com/gitrecon1455/fresh-proxy-list/main/proxylist.txt",
-            vec!["http"],
         ),
         (
             "hproxy",
@@ -521,37 +455,8 @@ async fn sync_github_lists() -> crate::error::Result<Vec<ScrapedProxy>> {
             "https://raw.githubusercontent.com/openproxyhub/proxy-exports/main/proxies.txt",
             vec!["http"],
         ),
-        (
-            "gnxd3rftt2we",
-            "https://raw.githubusercontent.com/gnxD3RfTT2WE/socks4-proxy-feed/main/socks4.txt",
-            vec!["socks4"],
-        ),
-        (
-            "proxy4parsing",
-            "https://raw.githubusercontent.com/proxy4parsing/proxy-list/main/{}.txt",
-            vec!["http", "socks4", "socks5"],
-        ),
-        (
-            "zaeem20",
-            "https://raw.githubusercontent.com/Zaeem20/FREE_PROXIES_LIST/master/{}.txt",
-            vec!["http", "socks4", "socks5"],
-        ),
-        (
-            "aliilapro",
-            "https://raw.githubusercontent.com/ALIILAPRO/Proxy/main/{}.txt",
-            vec!["http", "socks4", "socks5"],
-        ),
-        (
-            "mmpx12",
-            "https://raw.githubusercontent.com/mmpx12/proxy-list/master/{}.txt",
-            vec!["http", "https", "socks4", "socks5"],
-        ),
-        (
-            "prxchk",
-            "https://raw.githubusercontent.com/prxchk/proxy-list/main/{}.txt",
-            vec!["http", "socks4", "socks5"],
-        ),
     ];
+// ...
 
     for (src_name, url_template, protocols) in sources {
 // ...
