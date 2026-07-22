@@ -99,3 +99,75 @@ fn now_ms() -> u64 {
         .map(|d| d.as_millis() as u64)
         .unwrap_or(0)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::Duration;
+
+    #[test]
+    fn test_new_and_basic_metrics() {
+        let registry = SelectionRegistry::new();
+        assert!(registry.is_empty());
+        assert_eq!(registry.len(), 0);
+
+        let target_1 = ComboTargetId(1);
+
+        registry.record_request(target_1);
+        assert!(!registry.is_empty());
+        assert_eq!(registry.len(), 1);
+
+        // record_request doesn't update last_success_ms
+        assert_eq!(registry.last_success_within(target_1, 10), 0);
+        // But request count should be 1
+        assert_eq!(registry.request_count_within(target_1, 10), 1);
+
+        registry.record_success(target_1);
+        assert_eq!(registry.len(), 1);
+
+        let last_success = registry.last_success_within(target_1, 10);
+        assert!(last_success > 0);
+        assert_eq!(registry.request_count_within(target_1, 10), 2);
+    }
+
+    #[test]
+    fn test_time_windows() {
+        let registry = SelectionRegistry::new();
+        let target_1 = ComboTargetId(1);
+
+        registry.record_success(target_1);
+
+        // Wait a small amount to ensure time passes
+        std::thread::sleep(Duration::from_millis(10));
+
+        // Within large window, should return values
+        assert!(registry.last_success_within(target_1, 10) > 0);
+        assert_eq!(registry.request_count_within(target_1, 10), 1);
+
+        // Outside window (0 seconds), should return 0
+        assert_eq!(registry.last_success_within(target_1, 0), 0);
+        assert_eq!(registry.request_count_within(target_1, 0), 0);
+    }
+
+    #[test]
+    fn test_prune_stale() {
+        let registry = SelectionRegistry::new();
+        let target_1 = ComboTargetId(1);
+        let target_2 = ComboTargetId(2);
+
+        registry.record_success(target_1);
+        registry.record_request(target_2);
+
+        // Wait a little bit
+        std::thread::sleep(Duration::from_millis(10));
+
+        // Pruning with large max_age should not remove anything
+        assert_eq!(registry.prune_stale(Duration::from_secs(10)), 0);
+        assert_eq!(registry.len(), 2);
+
+        // Pruning with 0 max_age should remove target_1 (since its success is now > 0ms old)
+        let removed = registry.prune_stale(Duration::from_millis(0));
+        assert_eq!(removed, 1);
+        assert_eq!(registry.len(), 1);
+    }
+}
