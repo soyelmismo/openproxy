@@ -308,7 +308,10 @@ mod tests {
     #[test]
     fn test_cooldown_mode_parse() {
         assert_eq!(CooldownMode::parse("flat"), Ok(CooldownMode::Flat));
-        assert_eq!(CooldownMode::parse("exponential"), Ok(CooldownMode::Exponential));
+        assert_eq!(
+            CooldownMode::parse("exponential"),
+            Ok(CooldownMode::Exponential)
+        );
         assert!(CooldownMode::parse("unknown").is_err());
         assert_eq!(
             CooldownMode::parse("invalid"),
@@ -318,7 +321,10 @@ mod tests {
 
     #[test]
     fn test_cooldown_mode_from_db() {
-        assert_eq!(CooldownMode::from_db(Some("exponential")), CooldownMode::Exponential);
+        assert_eq!(
+            CooldownMode::from_db(Some("exponential")),
+            CooldownMode::Exponential
+        );
         assert_eq!(CooldownMode::from_db(Some("flat")), CooldownMode::Flat);
         assert_eq!(CooldownMode::from_db(Some("unknown")), CooldownMode::Flat);
         assert_eq!(CooldownMode::from_db(None), CooldownMode::Flat);
