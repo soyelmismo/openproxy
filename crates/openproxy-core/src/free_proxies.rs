@@ -450,6 +450,7 @@ async fn sync_github_lists() -> crate::error::Result<Vec<ScrapedProxy>> {
             "https://api.proxyscrape.com/v2/?request=getproxies&protocol={}&timeout=10000&country=all",
             vec!["http", "socks4", "socks5"],
         ),
+// ...
         (
             "vpslab",
             "https://raw.githubusercontent.com/VPSLabCloud/VPSLab-Free-Proxy-List/main/{}_all.txt",
@@ -460,9 +461,100 @@ async fn sync_github_lists() -> crate::error::Result<Vec<ScrapedProxy>> {
             "https://raw.githubusercontent.com/roosterkid/openproxylist/main/SOCKS5_RAW.txt",
             vec!["socks5"],
         ),
+        (
+            "hideip",
+            "https://raw.githubusercontent.com/zloi-user/hideip.me/main/{}.txt",
+            vec!["http", "socks4", "socks5"],
+        ),
+        (
+            "adasd223",
+            "https://raw.githubusercontent.com/adasd223/http-proxy-list-2026/main/{}.txt",
+            vec!["http", "socks4", "socks5"],
+        ),
+        (
+            "openproxylist",
+            "https://api.openproxylist.xyz/{}.txt",
+            vec!["http", "socks4", "socks5"],
+        ),
+        (
+            "proxyspace",
+            "https://proxyspace.pro/{}.txt",
+            vec!["http", "socks4", "socks5"],
+        ),
+        (
+            "sunny9577",
+            "https://sunny9577.github.io/proxy-scraper/generated/{}_proxies.txt",
+            vec!["http", "socks4", "socks5"],
+        ),
+        (
+            "rdavydov",
+            "https://raw.githubusercontent.com/rdavydov/proxy-list/main/proxies/{}.txt",
+            vec!["http", "socks4", "socks5"],
+        ),
+        (
+            "kangproxy",
+            "https://raw.githubusercontent.com/officialputuid/KangProxy/KangProxy/http/http.txt",
+            vec!["http"],
+        ),
+        (
+            "clarketm",
+            "https://raw.githubusercontent.com/clarketm/proxy-list/master/proxy-list-raw.txt",
+            vec!["http"],
+        ),
+        (
+            "gitrecon1455",
+            "https://raw.githubusercontent.com/gitrecon1455/fresh-proxy-list/main/proxylist.txt",
+            vec!["http"],
+        ),
+        (
+            "hproxy",
+            "https://raw.githubusercontent.com/hproxy-com/free-proxy-list/main/proxies.txt",
+            vec!["http"],
+        ),
+        (
+            "cyberh4ck3r",
+            "https://raw.githubusercontent.com/cyberh4ck3r/free-proxy-list/main/proxies.txt",
+            vec!["http"],
+        ),
+        (
+            "openproxyhub",
+            "https://raw.githubusercontent.com/openproxyhub/proxy-exports/main/proxies.txt",
+            vec!["http"],
+        ),
+        (
+            "gnxd3rftt2we",
+            "https://raw.githubusercontent.com/gnxD3RfTT2WE/socks4-proxy-feed/main/socks4.txt",
+            vec!["socks4"],
+        ),
+        (
+            "proxy4parsing",
+            "https://raw.githubusercontent.com/proxy4parsing/proxy-list/main/{}.txt",
+            vec!["http", "socks4", "socks5"],
+        ),
+        (
+            "zaeem20",
+            "https://raw.githubusercontent.com/Zaeem20/FREE_PROXIES_LIST/master/{}.txt",
+            vec!["http", "socks4", "socks5"],
+        ),
+        (
+            "aliilapro",
+            "https://raw.githubusercontent.com/ALIILAPRO/Proxy/main/{}.txt",
+            vec!["http", "socks4", "socks5"],
+        ),
+        (
+            "mmpx12",
+            "https://raw.githubusercontent.com/mmpx12/proxy-list/master/{}.txt",
+            vec!["http", "https", "socks4", "socks5"],
+        ),
+        (
+            "prxchk",
+            "https://raw.githubusercontent.com/prxchk/proxy-list/main/{}.txt",
+            vec!["http", "socks4", "socks5"],
+        ),
     ];
 
     for (src_name, url_template, protocols) in sources {
+// ...
 // ...
 // ...
         for proto in protocols {
@@ -680,6 +772,152 @@ async fn sync_geonode() -> crate::error::Result<Vec<ScrapedProxy>> {
     Ok(list)
 }
 
+#[derive(serde::Deserialize)]
+struct ClearProxyItem {
+    ip: String,
+    port: u16,
+    protocol: String,
+    country_code: Option<String>,
+}
+
+async fn sync_clearproxy() -> crate::error::Result<Vec<ScrapedProxy>> {
+    use openproxy_adapters::upstream::{TimeoutProfile, UpstreamClient, UpstreamRequest};
+    let client = UpstreamClient::new();
+    let req = UpstreamRequest::get("https://raw.githubusercontent.com/ClearProxy/checked-proxy-list/main/http/json/all.json");
+    let cancel = openproxy_adapters::upstream::CancellationToken::new();
+    let res = client
+        .call(req, TimeoutProfile::ModelDiscovery, cancel)
+        .await
+        .map_err(|e| crate::error::CoreError::Internal(format!("ClearProxy HTTP error: {:?}", e)))?;
+
+    if res.status != 200 {
+        return Err(crate::error::CoreError::Internal(format!(
+            "ClearProxy HTTP status: {}",
+            res.status
+        )));
+    }
+
+    let body_bytes = res
+        .collect()
+        .await
+        .map_err(|e| crate::error::CoreError::Internal(format!("ClearProxy body error: {:?}", e)))?;
+    let items: Vec<ClearProxyItem> = serde_json::from_slice(&body_bytes)
+        .map_err(|e| crate::error::CoreError::Internal(format!("ClearProxy JSON error: {}", e)))?;
+
+    let list = items
+        .into_iter()
+        .map(|item| ScrapedProxy {
+            source: "clearproxy".to_string(),
+            host: item.ip,
+            port: item.port,
+            r#type: item.protocol.to_lowercase(),
+            country_code: item.country_code.filter(|c| !c.is_empty()),
+        })
+        .collect();
+    Ok(list)
+}
+
+#[derive(serde::Deserialize)]
+struct VakhovItem {
+    ip: String,
+    port: serde_json::Value,
+    country_code: Option<String>,
+}
+
+async fn sync_vakhov() -> crate::error::Result<Vec<ScrapedProxy>> {
+    use openproxy_adapters::upstream::{TimeoutProfile, UpstreamClient, UpstreamRequest};
+    let client = UpstreamClient::new();
+    let req = UpstreamRequest::get("https://vakhov.github.io/fresh-proxy-list/proxylist.json");
+    let cancel = openproxy_adapters::upstream::CancellationToken::new();
+    let res = client
+        .call(req, TimeoutProfile::ModelDiscovery, cancel)
+        .await
+        .map_err(|e| crate::error::CoreError::Internal(format!("Vakhov HTTP error: {:?}", e)))?;
+
+    if res.status != 200 {
+        return Err(crate::error::CoreError::Internal(format!(
+            "Vakhov HTTP status: {}",
+            res.status
+        )));
+    }
+
+    let body_bytes = res
+        .collect()
+        .await
+        .map_err(|e| crate::error::CoreError::Internal(format!("Vakhov body error: {:?}", e)))?;
+    let items: Vec<VakhovItem> = serde_json::from_slice(&body_bytes)
+        .map_err(|e| crate::error::CoreError::Internal(format!("Vakhov JSON error: {}", e)))?;
+
+    let mut list = Vec::new();
+    for item in items {
+        let port_u16 = match item.port {
+            serde_json::Value::Number(n) => n.as_u64().map(|v| v as u16),
+            serde_json::Value::String(s) => s.parse::<u16>().ok(),
+            _ => None,
+        };
+        if let Some(port) = port_u16 {
+            list.push(ScrapedProxy {
+                source: "vakhov".to_string(),
+                host: item.ip,
+                port,
+                r#type: "http".to_string(),
+                country_code: item.country_code.filter(|c| !c.is_empty()),
+            });
+        }
+    }
+    Ok(list)
+}
+
+#[derive(serde::Deserialize)]
+struct GProxyNetItem {
+    proxy: String,
+    protocol: Option<String>,
+    country: Option<String>,
+}
+
+async fn sync_gproxynet() -> crate::error::Result<Vec<ScrapedProxy>> {
+    use openproxy_adapters::upstream::{TimeoutProfile, UpstreamClient, UpstreamRequest};
+    let client = UpstreamClient::new();
+    let req = UpstreamRequest::get("https://raw.githubusercontent.com/gproxynet/free-proxy-list/main/proxies.json");
+    let cancel = openproxy_adapters::upstream::CancellationToken::new();
+    let res = client
+        .call(req, TimeoutProfile::ModelDiscovery, cancel)
+        .await
+        .map_err(|e| crate::error::CoreError::Internal(format!("GProxyNet HTTP error: {:?}", e)))?;
+
+    if res.status != 200 {
+        return Err(crate::error::CoreError::Internal(format!(
+            "GProxyNet HTTP status: {}",
+            res.status
+        )));
+    }
+
+    let body_bytes = res
+        .collect()
+        .await
+        .map_err(|e| crate::error::CoreError::Internal(format!("GProxyNet body error: {:?}", e)))?;
+    let items: Vec<GProxyNetItem> = serde_json::from_slice(&body_bytes)
+        .map_err(|e| crate::error::CoreError::Internal(format!("GProxyNet JSON error: {}", e)))?;
+
+    let mut list = Vec::new();
+    for item in items {
+        if let Some(pos) = item.proxy.rfind(':') {
+            let host = item.proxy[..pos].trim().to_string();
+            if let Ok(port) = item.proxy[pos + 1..].trim().parse::<u16>() {
+                let proto = item.protocol.unwrap_or_else(|| "http".to_string());
+                list.push(ScrapedProxy {
+                    source: "gproxynet".to_string(),
+                    host,
+                    port,
+                    r#type: proto.to_lowercase(),
+                    country_code: item.country.filter(|c| !c.is_empty()),
+                });
+            }
+        }
+    }
+    Ok(list)
+}
+
 pub async fn sync_all_providers(db_pool: Arc<DbPool>) -> crate::error::Result<SyncSummary> {
     let mut errors = Vec::new();
     let mut fetched = 0;
@@ -739,6 +977,40 @@ pub async fn sync_all_providers(db_pool: Arc<DbPool>) -> crate::error::Result<Sy
             errors.push(format!("Geonode sync failed: {}", e));
         }
     }
+
+    // 6. ClearProxy JSON
+    match sync_clearproxy().await {
+        Ok(mut list) => {
+            fetched += list.len();
+            scraped.append(&mut list);
+        }
+        Err(e) => {
+            errors.push(format!("ClearProxy sync failed: {}", e));
+        }
+    }
+
+    // 7. Vakhov JSON
+    match sync_vakhov().await {
+        Ok(mut list) => {
+            fetched += list.len();
+            scraped.append(&mut list);
+        }
+        Err(e) => {
+            errors.push(format!("Vakhov sync failed: {}", e));
+        }
+    }
+
+    // 8. GProxyNet JSON
+    match sync_gproxynet().await {
+        Ok(mut list) => {
+            fetched += list.len();
+            scraped.append(&mut list);
+        }
+        Err(e) => {
+            errors.push(format!("GProxyNet sync failed: {}", e));
+        }
+    }
+// ...
 // ...
 
     let mut added = 0;
