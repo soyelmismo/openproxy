@@ -13,35 +13,16 @@ import { state, type ComboTestResult } from "../state/index.js";
 import { api } from "../state/api.js";
 import { mountView, requestUpdate } from "../state/reactive.js";
 import { showToast } from "../components/toast.js";
+import { flashButton } from "../lib/ui-utils.js";
 import { showCreateCombo, testAllTargets } from "../handlers/combo-handlers.js";
 import { showAddTarget } from "../handlers/combo-target-handlers.js";
-import { statusPillClass } from "../lib/constants.js";
+import { statusPillClass, PRIORITY_MODE_LABELS, PRIORITY_MODE_TOOLTIPS, COOLDOWN_MODE_TOOLTIPS } from "../lib/constants.js";
 import type {
   Combo,
   ComboTargetWithModel,
   PriorityMode,
   CooldownMode,
 } from "../lib/types/api.js";
-
-// ---- Constants ----
-
-const PRIORITY_MODE_LABELS: Record<PriorityMode, string> = {
-  strict: "Strict", lkgp: "LKGP", weighted: "Weighted",
-  least_used: "Least Used", p2c: "P2C",
-};
-
-const PRIORITY_MODE_TOOLTIPS: Record<PriorityMode, string> = {
-  strict: "Walk targets in manual priority order. The first healthy target is always tried first.",
-  lkgp: "Least Known Good Provider — prefer the target with the most recent successful request. Falls back to priority order for never-tried targets. An exploration rate adds priority-weighted randomness: earlier targets (which the operator positioned first for speed/intelligence) are more likely to be explored than later fallback targets.",
-  weighted: "Weighted random selection — each target's probability is proportional to its weight. Set weights in the targets table below.",
-  least_used: "Prefer the target with the fewest total requests in the selection window. Useful for distributing load evenly.",
-  p2c: "Power of Two Choices — pick two random targets, choose the one with fewer recent failures. Good balance of simplicity and load distribution.",
-};
-
-const COOLDOWN_MODE_TOOLTIPS: Record<CooldownMode, string> = {
-  flat: "Fixed cooldown duration after each failure. The target is parked for the same amount of time regardless of how many times it has failed.",
-  exponential: "Cooldown grows with each failure: base × factor^(failures-1), capped at max. A flapping target gets progressively longer cooldowns, giving it time to recover.",
-};
 
 const PARAM_TOOLTIPS = {
   exploration_rate: "Probability (0.0–1.0) of trying a different target instead of the best-known one. 0.1 = 10% exploration. The exploration is priority-weighted: targets positioned first in the combo are more likely to be explored. Higher exploration rates discover alternatives faster but may pick suboptimal targets.",
@@ -187,17 +168,6 @@ async function onResetCooldown(targetId: number): Promise<void> {
 async function onTestAllTargets(e: Event): Promise<void> {
   if (!detailComboId) return;
   await testAllTargets(detailComboId, e);
-}
-
-// Briefly paint a button a colour to confirm a click landed. Mirrors the
-// helper in views/providers.ts — inlined here so combos.ts doesn't have
-// to reach into the providers view (which would create a circular
-// coupling between two top-level views).
-function flashButton(btn: HTMLButtonElement | null, text: string, color: string): void {
-  if (!btn) return;
-  btn.textContent = text;
-  btn.style.background = color;
-  setTimeout(() => { btn.style.background = ""; }, 1500);
 }
 
 // Per-row test button. Mirrors `onTestModel` in views/providers.ts:

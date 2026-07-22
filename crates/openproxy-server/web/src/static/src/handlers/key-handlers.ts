@@ -21,6 +21,7 @@ import { renderAllowedModelsChips } from "../components/model-picker.js";
 import type { Model, ApiKeyId } from "../lib/types/api.js";
 import { requestUpdate } from "../state/reactive.js";
 import { showToast } from "../components/toast.js";
+import { ensureModalRoot } from "../lib/ui-utils.js";
 
 interface KeyRow {
   id: ApiKeyId;
@@ -40,17 +41,6 @@ interface KeyBody {
 interface KeyPlaintextResponse {
   plaintext: string;
   key: { label?: string | null; key_prefix?: string | null };
-}
-
-function ensureModalRoot(): HTMLElement {
-  let root = document.getElementById("modal-root");
-  if (!root) {
-    root = document.createElement("div");
-    root.id = "modal-root";
-    root.style.cssText = "position:relative;z-index:1000;";
-    document.body.appendChild(root);
-  }
-  return root;
 }
 
 function formatExpiryAmount(iso: string): string {

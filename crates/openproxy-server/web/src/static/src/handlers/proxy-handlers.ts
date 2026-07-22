@@ -5,22 +5,28 @@ import { state } from "../state/index.js";
 import { api } from "../state/api.js";
 import { requestUpdate } from "../state/reactive.js";
 import { showToast } from "../components/toast.js";
+import { ensureModalRoot, showApiError } from "../lib/ui-utils.js";
 import { t } from "../i18n/index.js";
 
-function ensureModalRoot(): HTMLElement {
-  let root = document.getElementById("modal-root");
-  if (!root) {
-    root = document.createElement("div");
-    root.id = "modal-root";
-    root.style.cssText = "position:relative;z-index:1000;";
-    document.body.appendChild(root);
-  }
-  return root;
-}
-
-export async function reloadProxies(): Promise<void> {
+export async function reloadProxies(queryParams?: Record<string, string | number>): Promise<void> {
   try {
-    state.proxies = await api("/proxies") as typeof state.proxies;
+    const params = new URLSearchParams();
+    if (queryParams) {
+      Object.entries(queryParams).forEach(([k, v]) => {
+        if (v !== undefined && v !== null && v !== "") {
+          params.set(k, String(v));
+        }
+      });
+    }
+    const queryString = params.toString();
+    const url = queryString ? `/proxies?${queryString}` : "/proxies?limit=50";
+
+    const [proxies, summary] = await Promise.all([
+      api(url),
+      api("/proxies/summary"),
+    ]);
+    state.proxies = proxies as typeof state.proxies;
+    state.proxySummary = summary as typeof state.proxySummary;
     requestUpdate();
   } catch (err: unknown) {
     console.error("reloadProxies failed", err);
@@ -44,8 +50,7 @@ export async function syncProxies(): Promise<void> {
     }
     await reloadProxies();
   } catch (e: unknown) {
-    const msg = e instanceof Error ? e.message : String(e);
-    showToast("Sync failed: " + msg, "error");
+    showApiError(e, "Sync failed");
   }
 }
 
@@ -72,8 +77,7 @@ export async function testProxy(id: string): Promise<void> {
     }
     await reloadProxies();
   } catch (e: unknown) {
-    const msg = e instanceof Error ? e.message : String(e);
-    showToast("Test failed: " + msg, "error");
+    showApiError(e, "Test failed");
   }
 }
 
@@ -82,8 +86,7 @@ export async function testAllProxies(): Promise<void> {
     await api("/proxies/test-all", { method: "POST" });
     showToast(t("proxies.toast.test_all_started"), "info");
   } catch (e: unknown) {
-    const msg = e instanceof Error ? e.message : String(e);
-    showToast("Test All failed: " + msg, "error");
+    showApiError(e, "Test All failed");
   }
 }
 
@@ -94,8 +97,7 @@ export async function deleteProxy(id: string): Promise<void> {
     showToast(t("proxies.toast.delete_success"), "success");
     await reloadProxies();
   } catch (e: unknown) {
-    const msg = e instanceof Error ? e.message : String(e);
-    showToast("Delete failed: " + msg, "error");
+    showApiError(e, "Delete failed");
   }
 }
 
@@ -108,8 +110,8 @@ export function showAddCustomProxy(): void {
         class="modal-bg"
         id="add-proxy-modal"
         @click=${(e: Event) => {
-          if (e.target === e.currentTarget) wrapper.remove();
-        }}
+        if (e.target === e.currentTarget) wrapper.remove();
+      }}
       >
         <div class="modal">
           <div class="modal-header">
@@ -125,9 +127,9 @@ export function showAddCustomProxy(): void {
           </div>
           <form
             @submit=${(e: Event) => {
-              e.preventDefault();
-              void createCustomProxy(e, wrapper);
-            }}
+        e.preventDefault();
+        void createCustomProxy(e, wrapper);
+      }}
           >
             <div class="modal-body">
               <div class="field">
@@ -209,7 +211,6 @@ export async function createCustomProxy(e: Event, wrapper: HTMLElement): Promise
     wrapper.remove();
     await reloadProxies();
   } catch (err: unknown) {
-    const msg = err instanceof Error ? err.message : String(err);
-    showToast("Error: " + msg, "error");
+    showApiError(err, "Error");
   }
 }

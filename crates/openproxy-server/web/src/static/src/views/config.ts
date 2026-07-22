@@ -22,7 +22,8 @@
 
 import { html, type TemplateResult } from "lit-html";
 import { api } from "../state/api.js";
-import { mountView, requestUpdate } from "../state/reactive.js";
+import { requestUpdate } from "../state/reactive.js";
+import { createView } from "../lib/view-utils.js";
 import { showToast } from "../components/toast.js";
 
 interface FieldOpts {
@@ -668,67 +669,61 @@ function renderConfig(): TemplateResult {
 // ---- Mount ----
 
 export async function mountConfig(): Promise<(() => void) | void> {
-  const el = document.getElementById("main");
-  if (!el) return;
-
   loading = true;
   errorMsg = null;
   cfg = null;
-  const cleanup = mountView(el, renderConfig);
-
-  try {
-    cfg = await api("/config") as ConfigPayload;
-    const t = cfg.timeouts || {};
-    liveTimeouts = {
-      connect_ms: t.connect_ms ?? 0,
-      request_send_ms: t.request_send_ms ?? 0,
-      ttft_ms: t.ttft_ms ?? 0,
-      idle_chunk_ms: t.idle_chunk_ms ?? 0,
-      total_ms: t.total_ms ?? 0,
-    };
-    liveRecordingTtl = cfg.recording_ttl_secs ?? 300;
-    liveCompression = cfg.compression ?? "off";
-    liveIdleChunkRetryable = cfg.idle_chunk_retryable ?? false;
-    liveQuotaProtectionEnabled = cfg.quota_protection?.enabled ?? true;
-    liveQuotaProtectionThreshold = cfg.quota_protection?.threshold_percentage ?? 10;
-    // Load maintenance config + vacuum status
-    try {
-      const maint = await api("/config/maintenance") as {
-        auto_vacuum?: boolean; vacuum_interval_hours?: number; usage_retention_days?: number;
-        vacuum_status?: { last_run?: string | null; last_result?: string | null; in_progress?: boolean; next_scheduled?: string | null };
+  const cleanupView = await createView(
+    renderConfig,
+    async () => {
+      cfg = await api("/config") as ConfigPayload;
+      const t = cfg.timeouts || {};
+      liveTimeouts = {
+        connect_ms: t.connect_ms ?? 0,
+        request_send_ms: t.request_send_ms ?? 0,
+        ttft_ms: t.ttft_ms ?? 0,
+        idle_chunk_ms: t.idle_chunk_ms ?? 0,
+        total_ms: t.total_ms ?? 0,
       };
-      liveAutoVacuum = maint.auto_vacuum ?? true;
-      liveVacuumIntervalHours = maint.vacuum_interval_hours ?? 6;
-      liveUsageRetentionDays = maint.usage_retention_days ?? 7;
-      if (maint.vacuum_status) {
-        vacuumStatus = {
-          last_run: maint.vacuum_status.last_run ?? null,
-          last_result: maint.vacuum_status.last_result ?? null,
-          in_progress: maint.vacuum_status.in_progress ?? false,
-          next_scheduled: maint.vacuum_status.next_scheduled ?? null,
+      liveRecordingTtl = cfg.recording_ttl_secs ?? 300;
+      liveCompression = cfg.compression ?? "off";
+      liveIdleChunkRetryable = cfg.idle_chunk_retryable ?? false;
+      liveQuotaProtectionEnabled = cfg.quota_protection?.enabled ?? true;
+      liveQuotaProtectionThreshold = cfg.quota_protection?.threshold_percentage ?? 10;
+      // Load maintenance config + vacuum status
+      try {
+        const maint = await api("/config/maintenance") as {
+          auto_vacuum?: boolean; vacuum_interval_hours?: number; usage_retention_days?: number;
+          vacuum_status?: { last_run?: string | null; last_result?: string | null; in_progress?: boolean; next_scheduled?: string | null };
         };
+        liveAutoVacuum = maint.auto_vacuum ?? true;
+        liveVacuumIntervalHours = maint.vacuum_interval_hours ?? 6;
+        liveUsageRetentionDays = maint.usage_retention_days ?? 7;
+        if (maint.vacuum_status) {
+          vacuumStatus = {
+            last_run: maint.vacuum_status.last_run ?? null,
+            last_result: maint.vacuum_status.last_result ?? null,
+            in_progress: maint.vacuum_status.in_progress ?? false,
+            next_scheduled: maint.vacuum_status.next_scheduled ?? null,
+          };
+        }
+      } catch {
+        // Maintenance endpoint not available — keep defaults
       }
-    } catch {
-      // Maintenance endpoint not available — keep defaults
-    }
-    // Start polling vacuum status every 5s (so the button updates
-    // when a VACUUM completes)
-    if (vacuumPollHandle) clearInterval(vacuumPollHandle);
-    vacuumPollHandle = setInterval(() => void pollVacuumStatus(), 5000);
-    setBanner("info", "Live values.",
-      "The values below are the ones the server is currently using. Timeouts, Recording TTL, Compression, the Idle Chunk Retryable flag, and Database Maintenance are editable; the other sections reflect the loaded config.toml.");
-    loading = false;
-    requestUpdate();
-  } catch (e: unknown) {
-    errorMsg = e instanceof Error ? e.message : String(e);
-    loading = false;
-    requestUpdate();
-  }
+      // Start polling vacuum status every 5s (so the button updates
+      // when a VACUUM completes)
+      if (vacuumPollHandle) clearInterval(vacuumPollHandle);
+      vacuumPollHandle = setInterval(() => void pollVacuumStatus(), 5000);
+      setBanner("info", "Live values.",
+        "The values below are the ones the server is currently using. Timeouts, Recording TTL, Compression, the Idle Chunk Retryable flag, and Database Maintenance are editable; the other sections reflect the loaded config.toml.");
+      loading = false;
+    },
+    (msg) => { errorMsg = msg; loading = false; },
+  );
   return () => {
     if (vacuumPollHandle) {
       clearInterval(vacuumPollHandle);
       vacuumPollHandle = null;
     }
-    cleanup();
+    if (cleanupView) cleanupView();
   };
 }

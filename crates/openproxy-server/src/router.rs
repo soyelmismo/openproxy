@@ -37,7 +37,7 @@
 
 use axum::{
     Json, Router, middleware,
-    routing::{delete, get, post, put},
+    routing::{delete, get, patch, post},
 };
 use serde_json::json;
 
@@ -87,6 +87,25 @@ pub fn build_router(state: AppState) -> Router {
         .route(
             "/v1/chat/completions",
             post(handlers::chat::chat_completions)
+                .route_layer(middleware::from_fn(
+                    crate::disconnect::client_disconnect_middleware,
+                ))
+                .route_layer(middleware::from_fn_with_state(
+                    state.clone(),
+                    crate::middleware::rate_limit::rate_limit_middleware,
+                ))
+                .route_layer(middleware::from_fn_with_state(
+                    state.clone(),
+                    crate::middleware::routing::routing_middleware,
+                ))
+                .route_layer(middleware::from_fn_with_state(
+                    state.clone(),
+                    crate::middleware::auth::auth_middleware,
+                )),
+        )
+        .route(
+            "/v1/messages",
+            post(handlers::messages::anthropic_messages)
                 .route_layer(middleware::from_fn(
                     crate::disconnect::client_disconnect_middleware,
                 ))
@@ -192,11 +211,20 @@ pub fn build_router(state: AppState) -> Router {
         )
         .route(
             "/accounts/{id}/api-key",
-            put(handlers::admin::accounts::update_account_api_key),
+            get(handlers::admin::accounts::get_account_api_key)
+                .put(handlers::admin::accounts::update_account_api_key),
+        )
+        .route(
+            "/accounts/{id}/label",
+            patch(handlers::admin::accounts::update_account_label),
         )
         .route(
             "/accounts/{id}/refresh-quota",
             post(handlers::admin::accounts::refresh_account_quota),
+        )
+        .route(
+            "/accounts/{id}/apply-local-cli",
+            post(handlers::admin::accounts::apply_account_local_cli),
         )
         .route(
             "/combos",
@@ -358,6 +386,10 @@ pub fn build_router(state: AppState) -> Router {
             "/proxies",
             get(handlers::admin::proxies::list_proxies)
                 .post(handlers::admin::proxies::create_custom_proxy),
+        )
+        .route(
+            "/proxies/summary",
+            get(handlers::admin::proxies::get_proxy_summary),
         )
         .route(
             "/proxies/sync",

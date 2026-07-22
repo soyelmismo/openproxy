@@ -88,10 +88,36 @@ pub async fn list_models(
             data.push(build_combo_entry(c, effective_cw));
         }
 
-        Ok(Json(serde_json::json!({
-            "object": "list",
-            "data": data,
-        })))
+        let is_anthropic = headers.contains_key("anthropic-version") || headers.contains_key("x-api-key");
+        if is_anthropic {
+            let anthropic_data: Vec<serde_json::Value> = data
+                .into_iter()
+                .map(|item| {
+                    let id = item.get("id").and_then(|v| v.as_str()).unwrap_or_default();
+                    serde_json::json!({
+                        "type": "model",
+                        "id": id,
+                        "display_name": id,
+                        "created_at": "2024-02-29T00:00:00Z"
+                    })
+                })
+                .collect();
+
+            let first_id = anthropic_data.first().and_then(|v| v.get("id")).cloned().unwrap_or(serde_json::json!(""));
+            let last_id = anthropic_data.last().and_then(|v| v.get("id")).cloned().unwrap_or(serde_json::json!(""));
+
+            Ok(Json(serde_json::json!({
+                "data": anthropic_data,
+                "has_more": false,
+                "first_id": first_id,
+                "last_id": last_id,
+            })))
+        } else {
+            Ok(Json(serde_json::json!({
+                "object": "list",
+                "data": data,
+            })))
+        }
     }
 }
 
@@ -108,7 +134,13 @@ fn authenticate_chat_or_anonymous(
         .get("authorization")
         .and_then(|v| v.to_str().ok())
         .and_then(|s| s.strip_prefix("Bearer "))
-        .map(str::trim);
+        .map(str::trim)
+        .or_else(|| {
+            headers
+                .get("x-api-key")
+                .and_then(|v| v.to_str().ok())
+                .map(str::trim)
+        });
 
     let Some(token) = token else {
         // No Authorization header — allow only if zero active keys.

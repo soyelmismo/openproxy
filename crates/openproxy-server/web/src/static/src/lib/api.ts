@@ -27,6 +27,7 @@ export interface ApiOptions {
 }
 
 export async function api(path: string, opts: ApiOptions = {}): Promise<unknown> {
+  const t0: number = performance.now();
   // Build the headers as a mutable record so we can conditionally
   // attach the Authorization header. The cast through
   // `Record<string, string>` is necessary because `RequestInit.headers`
@@ -39,16 +40,17 @@ export async function api(path: string, opts: ApiOptions = {}): Promise<unknown>
   }
   const init: RequestInit = { method: opts.method || "GET", headers };
   if (opts.body) init.body = opts.body;
-  const r = await fetch("/admin/api" + path, init);
+  const r: Response = await fetch("/admin/api" + path, init);
   if (!r.ok) {
-    const txt = await r.text();
+    const txt: string = await r.text();
     throw new Error(`${r.status}: ${txt}`);
   }
   // 204 No Content (e.g. DELETE success with empty body)
   if (r.status === 204) return null;
-  const ct = r.headers.get("content-type") || "";
-  if (ct.includes("application/json")) return r.json();
-  return r.text();
+  const ct: string = r.headers.get("content-type") || "";
+  const data: unknown = ct.includes("application/json") ? await r.json() : await r.text();
+  state.lastApiLatencyMs = performance.now() - t0;
+  return data;
 }
 
 // Returns the latency in ms for the last `api()` call. Used by the

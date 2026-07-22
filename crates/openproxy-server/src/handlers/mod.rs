@@ -8,4 +8,5 @@
 pub mod admin;
 pub mod audio;
 pub mod chat;
+pub mod messages;
 pub mod models;
