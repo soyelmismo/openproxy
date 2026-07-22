@@ -163,7 +163,7 @@ pub(crate) async fn run_test_for_model(
     let start = std::time::Instant::now();
 
     // 1. Load the model row.
-    let model = match {
+    let res = {
         let w = s.db_pool().writer();
         match core_models::get_by_row_id(&w, row_id) {
             Ok(Some(m)) => Ok(m),
@@ -173,7 +173,8 @@ pub(crate) async fn run_test_for_model(
             })),
             Err(e) => Err(ApiError(e)),
         }
-    } {
+    };
+    let model = match res {
         Ok(m) => m,
         Err(ApiError(e)) => {
             return TestResult {
@@ -573,7 +574,7 @@ pub(crate) async fn run_test_for_model(
     //    clock cost — a hung upstream shouldn't pin a dashboard
     //    button indefinitely.
     // Headers will be built below after resolving custom_meta
-    
+
     let mut custom_meta = None;
     if model.provider_id.as_str() == "antigravity" {
         let project = raw_account_opt
@@ -585,7 +586,7 @@ pub(crate) async fn run_test_for_model(
                     .or_else(|| v.get("projectId"))
                     .and_then(|p| p.as_str().map(String::from))
             });
-            
+
         custom_meta = Some(openproxy_types::context::CustomProviderMeta {
             access_token: api_key.clone(),
             maybe_refresh: None,
@@ -596,9 +597,9 @@ pub(crate) async fn run_test_for_model(
             codex_workspace_id: None,
         });
     }
-    
+
     let headers = adapter.build_headers(&api_key, effective_target_format, &model.model_id);
-    
+
     let dummy_target = openproxy_types::context::ResolvedTarget {
         target: openproxy_types::combos::ComboTarget {
             id: openproxy_types::ids::ComboTargetId(0),
@@ -621,7 +622,12 @@ pub(crate) async fn run_test_for_model(
         url,
         match serde_json::to_vec(&body_value) {
             Ok(b) => {
-                match adapter.wrap_request_body(bytes::Bytes::from(b), effective_target_format, &model.model_id, &dummy_target) {
+                match adapter.wrap_request_body(
+                    bytes::Bytes::from(b),
+                    effective_target_format,
+                    &model.model_id,
+                    &dummy_target,
+                ) {
                     Ok(wrapped) => wrapped,
                     Err(e) => {
                         let _ = cancel_rx;
@@ -629,13 +635,25 @@ pub(crate) async fn run_test_for_model(
                             row_id: model_row_id,
                             status: 500,
                             elapsed_ms: 0,
-                            error_msg: Some(openproxy_core::cost::redact_error_msg(&format!("failed to wrap request: {}", e)).0),
+                            error_msg: Some(
+                                openproxy_core::cost::redact_error_msg(&format!(
+                                    "failed to wrap request: {}",
+                                    e
+                                ))
+                                .0,
+                            ),
                             skipped: true,
-                            skip_reason: Some(openproxy_core::cost::redact_error_msg(&format!("failed to wrap request: {}", e)).0),
+                            skip_reason: Some(
+                                openproxy_core::cost::redact_error_msg(&format!(
+                                    "failed to wrap request: {}",
+                                    e
+                                ))
+                                .0,
+                            ),
                         };
                     }
                 }
-            },
+            }
             Err(e) => {
                 let _ = cancel_rx;
                 return TestResult {

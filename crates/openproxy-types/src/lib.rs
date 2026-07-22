@@ -25,7 +25,10 @@ pub use ids::{
     AccountId, ApiKeyId, ComboId, ComboTargetId, ModelId, ModelRowId, ProviderId, RequestId,
     TraceId, UsageId,
 };
-pub use message::{OpenAIChoice, OpenAIMessage, OpenAIRequest, OpenAIRequestView, OpenAIResponse, OpenAIUsage, TargetFormat};
+pub use message::{
+    OpenAIChoice, OpenAIMessage, OpenAIRequest, OpenAIRequestView, OpenAIResponse, OpenAIUsage,
+    TargetFormat,
+};
 pub use providers::{
     AuthType, DiscoveredModel, Provider, ProviderFormat, ProviderMetadata, RateLimitScope,
     builtin_provider_ids, is_builtin,

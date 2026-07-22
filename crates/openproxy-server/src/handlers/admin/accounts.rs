@@ -194,7 +194,7 @@ pub async fn apply_account_local_cli(
     crate::api_try! {
         let r = s.db_pool().reader();
         let account_id = AccountId::new(id);
-        
+
         let account = core_accounts::get(&r, account_id, s.master_key().as_ref())?
             .ok_or_else(|| CoreError::AccountNotFound(account_id.0))?;
 
@@ -220,12 +220,12 @@ pub async fn apply_account_local_cli(
             .ok_or_else(|| CoreError::Validation("Could not determine home directory".into()))?
             .join(".gemini")
             .join("antigravity-cli");
-        
+
         std::fs::create_dir_all(&cli_dir)
             .map_err(|e| CoreError::Validation(format!("Failed to create ~/.gemini/antigravity-cli: {}", e)))?;
 
         let token_file = cli_dir.join("antigravity-oauth-token");
-        
+
         std::fs::write(&token_file, serde_json::to_string(&payload).unwrap())
             .map_err(|e| CoreError::Validation(format!("Failed to write to {}: {}", token_file.display(), e)))?;
 

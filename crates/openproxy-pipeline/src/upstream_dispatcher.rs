@@ -135,8 +135,9 @@ impl UpstreamDispatcher {
                 openproxy_db::providers::get(&conn, &provider_id).unwrap_or(None)
             };
 
-            if let Some(provider) = provider {
-                if provider.use_proxies {
+            if let Some(provider) = provider
+                && provider.use_proxies
+            {
                     let should_rotate = match trigger {
                         crate::upstream_dispatcher::ProxyRotationTrigger::RateLimited => true,
                         crate::upstream_dispatcher::ProxyRotationTrigger::Status(sc) => {
@@ -183,7 +184,6 @@ impl UpstreamDispatcher {
                         );
                         return true;
                     }
-                }
             }
             false
         })
@@ -207,13 +207,7 @@ impl UpstreamDispatcher {
         } else {
             req.trace_id.to_string()
         };
-        self.record_and_fail_with_trace_id(
-            req,
-            combo,
-            target,
-            ctx,
-            trace_id,
-        )
+        self.record_and_fail_with_trace_id(req, combo, target, ctx, trace_id)
     }
 
     pub(crate) fn record_and_fail_with_trace_id(
@@ -488,7 +482,10 @@ impl UpstreamDispatcher {
                     status: 504,
                     provider: target.provider_id.to_string(),
                     model: model.model_id.as_str().to_string(),
-                    body: format!("upstream phase `{}` timed out after {}ms (config: {})", phase_label, connect_and_send_ms, config_hint),
+                    body: format!(
+                        "upstream phase `{}` timed out after {}ms (config: {})",
+                        phase_label, connect_and_send_ms, config_hint
+                    ),
                     is_proxy_rotated,
                 };
                 return self.record_and_fail(
@@ -1490,7 +1487,10 @@ impl UpstreamDispatcher {
                     status: 504,
                     provider: target.provider_id.to_string(),
                     model: model.model_id.as_str().to_string(),
-                    body: format!("upstream phase `{}` timed out after {}ms", phase_label, connect_and_send_ms),
+                    body: format!(
+                        "upstream phase `{}` timed out after {}ms",
+                        phase_label, connect_and_send_ms
+                    ),
                     is_proxy_rotated,
                 };
                 return self.record_and_fail(

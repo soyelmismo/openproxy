@@ -343,11 +343,7 @@ pub fn update_api_key(
 /// Update the label of an existing account.
 ///
 /// Returns [`CoreError::AccountNotFound`] if no row matches `id`.
-pub fn update_label(
-    conn: &Connection,
-    id: AccountId,
-    label: Option<&str>,
-) -> Result<()> {
+pub fn update_label(conn: &Connection, id: AccountId, label: Option<&str>) -> Result<()> {
     let affected = conn
         .execute(
             "UPDATE accounts SET label = ?1 WHERE id = ?2",

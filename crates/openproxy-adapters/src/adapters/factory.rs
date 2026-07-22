@@ -1,6 +1,6 @@
 //! Factory for creating provider adapters dynamically.
 
-use crate::adapters::{builtin_adapters, ProviderAdapterConfig, ProviderAdapterEnum};
+use crate::adapters::{ProviderAdapterConfig, ProviderAdapterEnum, builtin_adapters};
 use openproxy_types::ProviderId;
 
 /// Factory for instantiating provider adapters via dependency injection.
@@ -26,21 +26,39 @@ impl AdapterFactory {
     /// Instantiate an adapter dynamically based on static configuration.
     pub fn create_from_config(&self, config: ProviderAdapterConfig) -> ProviderAdapterEnum {
         match config.id.as_str() {
-            "openrouter" => ProviderAdapterEnum::OpenRouter(crate::adapters::openrouter::OpenRouterAdapter::new()),
-            "minimax" => ProviderAdapterEnum::MiniMax(crate::adapters::minimax::MiniMaxAdapter::new()),
-            "opencode-zen" => ProviderAdapterEnum::OpenCodeZen(crate::adapters::opencode_zen::OpenCodeZenAdapter::new()),
-            "ollama-cloud" => ProviderAdapterEnum::OllamaCloud(crate::adapters::ollama_cloud::OllamaCloudAdapter::new()),
-            "nous-research" => ProviderAdapterEnum::NousResearch(crate::adapters::nous_research::NousResearchAdapter::new()),
-            "nvidia-nim" => ProviderAdapterEnum::NvidiaNim(crate::adapters::nvidia_nim::NvidiaNimAdapter::new()),
-            "kilocode" => ProviderAdapterEnum::Kilocode(crate::adapters::kilocode::KilocodeAdapter::new()),
-            "cloudflare-workers-ai" => {
-                ProviderAdapterEnum::CloudflareWorkersAI(crate::adapters::cloudflare_workers_ai::CloudflareWorkersAIAdapter::new())
+            "openrouter" => ProviderAdapterEnum::OpenRouter(
+                crate::adapters::openrouter::OpenRouterAdapter::new(),
+            ),
+            "minimax" => {
+                ProviderAdapterEnum::MiniMax(crate::adapters::minimax::MiniMaxAdapter::new())
             }
+            "opencode-zen" => ProviderAdapterEnum::OpenCodeZen(
+                crate::adapters::opencode_zen::OpenCodeZenAdapter::new(),
+            ),
+            "ollama-cloud" => ProviderAdapterEnum::OllamaCloud(
+                crate::adapters::ollama_cloud::OllamaCloudAdapter::new(),
+            ),
+            "nous-research" => ProviderAdapterEnum::NousResearch(
+                crate::adapters::nous_research::NousResearchAdapter::new(),
+            ),
+            "nvidia-nim" => {
+                ProviderAdapterEnum::NvidiaNim(crate::adapters::nvidia_nim::NvidiaNimAdapter::new())
+            }
+            "kilocode" => {
+                ProviderAdapterEnum::Kilocode(crate::adapters::kilocode::KilocodeAdapter::new())
+            }
+            "cloudflare-workers-ai" => ProviderAdapterEnum::CloudflareWorkersAI(
+                crate::adapters::cloudflare_workers_ai::CloudflareWorkersAIAdapter::new(),
+            ),
             "gemini" => ProviderAdapterEnum::Gemini(crate::adapters::gemini::GeminiAdapter::new()),
-            "antigravity" => ProviderAdapterEnum::Antigravity(crate::adapters::antigravity::AntigravityAdapter::new()),
+            "antigravity" => ProviderAdapterEnum::Antigravity(
+                crate::adapters::antigravity::AntigravityAdapter::new(),
+            ),
             "codex" => ProviderAdapterEnum::Codex(crate::adapters::codex::CodexAdapter::new()),
             "kiro" => ProviderAdapterEnum::Kiro(crate::adapters::kiro_ai::KiroAdapter::new()),
-            _ => ProviderAdapterEnum::Custom(crate::adapters::custom_adapter::CustomAdapter::from_config(config)),
+            _ => ProviderAdapterEnum::Custom(
+                crate::adapters::custom_adapter::CustomAdapter::from_config(config),
+            ),
         }
     }
 }

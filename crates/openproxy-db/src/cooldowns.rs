@@ -91,21 +91,28 @@ pub fn clear_cooldown(
 use std::sync::{LazyLock, RwLock};
 use std::time::Instant;
 
-static PROVIDER_PROXY_COOLDOWNS: LazyLock<RwLock<std::collections::HashMap<(String, String), Instant>>> =
-    LazyLock::new(|| RwLock::new(std::collections::HashMap::new()));
+static PROVIDER_PROXY_COOLDOWNS: LazyLock<
+    RwLock<std::collections::HashMap<(String, String), Instant>>,
+> = LazyLock::new(|| RwLock::new(std::collections::HashMap::new()));
 
-pub fn add_provider_proxy_cooldown(provider_id: &str, proxy_id: &str, duration: std::time::Duration) {
+pub fn add_provider_proxy_cooldown(
+    provider_id: &str,
+    proxy_id: &str,
+    duration: std::time::Duration,
+) {
     if let Ok(mut map) = PROVIDER_PROXY_COOLDOWNS.write() {
-        map.insert((provider_id.to_string(), proxy_id.to_string()), Instant::now() + duration);
+        map.insert(
+            (provider_id.to_string(), proxy_id.to_string()),
+            Instant::now() + duration,
+        );
     }
 }
 
 pub fn is_provider_proxy_in_cooldown(provider_id: &str, proxy_id: &str) -> bool {
-    if let Ok(map) = PROVIDER_PROXY_COOLDOWNS.read() {
-        if let Some(until) = map.get(&(provider_id.to_string(), proxy_id.to_string())) {
-            return Instant::now() < *until;
-        }
+    if let Ok(map) = PROVIDER_PROXY_COOLDOWNS.read()
+        && let Some(until) = map.get(&(provider_id.to_string(), proxy_id.to_string()))
+    {
+        return Instant::now() < *until;
     }
     false
 }
-

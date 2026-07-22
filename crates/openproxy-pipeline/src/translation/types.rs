@@ -1,6 +1,5 @@
-use serde::{Deserialize, Serialize};
 pub use openproxy_types::{OpenAIChoice, OpenAIResponse, OpenAIUsage};
-
+use serde::{Deserialize, Serialize};
 
 // =====================
 // Anthropic Messages types
@@ -80,4 +79,3 @@ pub struct AnthropicUsage {
 
 /// Default max_tokens used when the client doesn't provide one. Anthropic requires it.
 pub const DEFAULT_MAX_TOKENS: u32 = 4096;
-

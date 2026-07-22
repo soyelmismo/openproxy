@@ -75,7 +75,13 @@ impl TargetFormatter for GeminiFormatter {
         stream: bool,
         adapter: &openproxy_adapters::adapters::ProviderAdapterEnum,
     ) -> Result<bytes::Bytes, CoreError> {
-        adapter.format_request(TargetFormat::Gemini, &req.openai_request, &model.model_id, messages_ref, stream)
+        adapter.format_request(
+            TargetFormat::Gemini,
+            &req.openai_request,
+            &model.model_id,
+            messages_ref,
+            stream,
+        )
     }
 }
 

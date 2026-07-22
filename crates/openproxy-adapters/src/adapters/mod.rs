@@ -282,11 +282,14 @@ pub trait ProviderAdapter: Send + Sync {
         stream: bool,
     ) -> std::result::Result<bytes::Bytes, openproxy_types::error::CoreError> {
         let _ = target_format;
-        let mut view = openproxy_types::OpenAIRequestView::new(req, model.as_str(), messages, stream);
+        let mut view =
+            openproxy_types::OpenAIRequestView::new(req, model.as_str(), messages, stream);
         self.normalize_openai_request(&mut view);
         serde_json::to_vec(&view)
             .map(bytes::Bytes::from)
-            .map_err(|e| openproxy_types::error::CoreError::Parse(format!("serialize openai request: {}", e)))
+            .map_err(|e| {
+                openproxy_types::error::CoreError::Parse(format!("serialize openai request: {}", e))
+            })
     }
 
     /// Translate a non-streaming response JSON Value into an OpenAIResponse.
@@ -294,10 +297,12 @@ pub trait ProviderAdapter: Send + Sync {
         &self,
         target_format: TargetFormat,
         response_body: serde_json::Value,
-    ) -> std::result::Result<openproxy_types::OpenAIResponse, openproxy_types::error::CoreError> {
+    ) -> std::result::Result<openproxy_types::OpenAIResponse, openproxy_types::error::CoreError>
+    {
         let _ = target_format;
-        serde_json::from_value(response_body)
-            .map_err(|e| openproxy_types::error::CoreError::Parse(format!("parse openai response: {e}")))
+        serde_json::from_value(response_body).map_err(|e| {
+            openproxy_types::error::CoreError::Parse(format!("parse openai response: {e}"))
+        })
     }
 }
 
@@ -545,6 +550,7 @@ pub mod antigravity;
 pub mod cloudflare_workers_ai;
 pub mod codex;
 pub mod custom_adapter;
+pub mod factory;
 pub mod gemini;
 pub mod kilocode;
 pub mod kiro_ai;
@@ -556,16 +562,15 @@ pub mod nvidia_nim;
 pub mod ollama_cloud;
 pub mod opencode_zen;
 pub mod openrouter;
-pub mod factory;
 
 #[cfg(any(test, feature = "test-utils"))]
 pub use mock::MockAdapter;
 
-pub use factory::AdapterFactory;
 pub use antigravity::AntigravityAdapter;
 pub use cloudflare_workers_ai::CloudflareWorkersAIAdapter;
 pub use codex::CodexAdapter;
 pub use custom_adapter::CustomAdapter;
+pub use factory::AdapterFactory;
 pub use gemini::GeminiAdapter;
 pub use kilocode::KilocodeAdapter;
 pub use kiro_ai::KiroAdapter;

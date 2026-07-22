@@ -368,9 +368,7 @@ impl OAuthProviderRegistry {
         reg.register_arc(OAuthProviderEnum::Codex(
             self::codex::CodexOAuthProvider::new(),
         ));
-        reg.register_arc(OAuthProviderEnum::Kiro(
-            self::kiro::KiroOAuthProvider::new(),
-        ));
+        reg.register_arc(OAuthProviderEnum::Kiro(self::kiro::KiroOAuthProvider::new()));
         reg
     }
 

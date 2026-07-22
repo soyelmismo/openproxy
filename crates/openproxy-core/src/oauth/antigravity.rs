@@ -13,10 +13,10 @@
 use rusqlite::{Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 
+use super::generic::{GenericOAuthProvider, OAuthRequestEncoding, OAuthSpec};
 use crate::error::{CoreError, Result};
 use crate::ids::AccountId;
 use crate::oauth::{OAuthFlow, OAuthProvider};
-use super::generic::{GenericOAuthProvider, OAuthRequestEncoding, OAuthSpec};
 use openproxy_adapters::upstream::{
     CancellationToken, TimeoutProfile, UpstreamClient, UpstreamRequest,
 };
@@ -147,13 +147,27 @@ impl OAuthProvider for AntigravityOAuthProvider {
             "ideType": "ANTIGRAVITY",
         });
 
-        let project_id = match openproxy_adapters::adapters::antigravity::load_code_assist(upstream, &access_token, &metadata).await.map_err(CoreError::UpstreamConnection)? {
+        let project_id = match openproxy_adapters::adapters::antigravity::load_code_assist(
+            upstream,
+            &access_token,
+            &metadata,
+        )
+        .await
+        .map_err(CoreError::UpstreamConnection)?
+        {
             Some(pid) => pid,
             None => {
                 // Retry onboardUser up to 10 times with 5s delays
                 let mut result = None;
                 for attempt in 0..10 {
-                    match openproxy_adapters::adapters::antigravity::onboard_user(upstream, &access_token, "", &metadata).await {
+                    match openproxy_adapters::adapters::antigravity::onboard_user(
+                        upstream,
+                        &access_token,
+                        "",
+                        &metadata,
+                    )
+                    .await
+                    {
                         Ok(Some(pid)) => {
                             result = Some(pid);
                             break;
@@ -217,8 +231,6 @@ impl OAuthProvider for AntigravityOAuthProvider {
         Ok(())
     }
 }
-
-
 
 /// Read the `projectId` stored on the account row by `post_exchange`.
 ///

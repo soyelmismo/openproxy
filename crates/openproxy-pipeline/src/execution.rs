@@ -298,13 +298,7 @@ impl Pipeline {
         } else {
             req.trace_id.to_string()
         };
-        self.record_and_fail_with_trace_id(
-            req,
-            combo,
-            target,
-            ctx,
-            trace_id,
-        )
+        self.record_and_fail_with_trace_id(req, combo, target, ctx, trace_id)
     }
 
     pub(crate) fn record_and_fail_with_trace_id(

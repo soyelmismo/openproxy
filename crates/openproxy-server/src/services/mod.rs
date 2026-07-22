@@ -1,16 +1,13 @@
 //! Application services centralizing business logic and decoupling HTTP handlers.
 
-use std::sync::Arc;
 use crate::repositories::{
-    AccountRepository, ApiKeyRepository, ComboRepository, ModelRepository,
-    Repository, SqliteRepository,
+    AccountRepository, ApiKeyRepository, ComboRepository, ModelRepository, Repository,
+    SqliteRepository,
 };
 use openproxy_core::{api_keys as core_api_keys, models::Model};
 use openproxy_db as db;
-use openproxy_types::{
-    combos::Combo,
-    AccountId, ApiKeyId, ComboId, CoreError, ProviderId,
-};
+use openproxy_types::{AccountId, ApiKeyId, ComboId, CoreError, ProviderId, combos::Combo};
+use std::sync::Arc;
 
 /// Service for managing API Keys business logic.
 pub struct ApiKeyService {
@@ -129,7 +126,10 @@ impl ComboService {
         self.repo.list_combos()
     }
 
-    pub fn compute_effective_context_window(&self, combo_id: ComboId) -> Result<Option<i64>, CoreError> {
+    pub fn compute_effective_context_window(
+        &self,
+        combo_id: ComboId,
+    ) -> Result<Option<i64>, CoreError> {
         self.repo.compute_effective_context_window(combo_id)
     }
 }
@@ -161,13 +161,7 @@ pub struct Services {
 impl Services {
     pub fn new(db_pool: Arc<db::DbPool>) -> Self {
         let repo = Arc::new(SqliteRepository::new(db_pool));
-        Self::from_repositories(
-            repo.clone(),
-            repo.clone(),
-            repo.clone(),
-            repo.clone(),
-            repo,
-        )
+        Self::from_repositories(repo.clone(), repo.clone(), repo.clone(), repo.clone(), repo)
     }
 
     pub fn from_repositories(

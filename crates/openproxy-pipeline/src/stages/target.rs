@@ -292,33 +292,38 @@ impl PipelineStage for DispatchStage {
             ));
         }
 
-        if target.provider_id.as_str() == "antigravity" {
-            if let Some(custom_meta) = current.custom_meta.as_mut() {
-                if custom_meta.antigravity_project.is_none() {
-                    if let Some(ref meta_str) = custom_meta.antigravity_metadata {
-                        if let Ok(metadata) = serde_json::from_str::<serde_json::Value>(meta_str) {
-                            tracing::info!("Lazy fetching antigravity projectId for target {}", target.id.0);
-                            match openproxy_adapters::adapters::antigravity::load_code_assist(
-                                &ctx.pipeline.config.upstream_client,
-                                &custom_meta.access_token,
-                                &metadata,
-                            ).await {
-                                Ok(Some(pid)) => {
-                                    tracing::info!("Successfully fetched antigravity projectId: {}", pid);
-                                    custom_meta.antigravity_project = Some(pid.clone());
-                                    // Update DB cache
-                                    if let Some(ref account_id) = target.account_id {
-                                        if let Err(e) = ctx.pipeline.repo().update_antigravity_project_id(account_id.0, &pid) {
-                                            tracing::error!("Failed to update antigravity project id in db: {}", e);
-                                        }
-                                    }
-                                }
-                                Ok(None) => tracing::warn!("loadCodeAssist returned Ok(None)"),
-                                Err(e) => tracing::error!("loadCodeAssist failed: {}", e),
-                            }
-                        }
+        if target.provider_id.as_str() == "antigravity"
+            && let Some(custom_meta) = current.custom_meta.as_mut()
+            && custom_meta.antigravity_project.is_none()
+            && let Some(ref meta_str) = custom_meta.antigravity_metadata
+            && let Ok(metadata) = serde_json::from_str::<serde_json::Value>(meta_str)
+        {
+            tracing::info!(
+                "Lazy fetching antigravity projectId for target {}",
+                target.id.0
+            );
+            match openproxy_adapters::adapters::antigravity::load_code_assist(
+                &ctx.pipeline.config.upstream_client,
+                &custom_meta.access_token,
+                &metadata,
+            )
+            .await
+            {
+                Ok(Some(pid)) => {
+                    tracing::info!("Successfully fetched antigravity projectId: {}", pid);
+                    custom_meta.antigravity_project = Some(pid.clone());
+                    // Update DB cache
+                    if let Some(ref account_id) = target.account_id
+                        && let Err(e) = ctx
+                            .pipeline
+                            .repo()
+                            .update_antigravity_project_id(account_id.0, &pid)
+                    {
+                        tracing::error!("Failed to update antigravity project id in db: {}", e);
                     }
                 }
+                Ok(None) => tracing::warn!("loadCodeAssist returned Ok(None)"),
+                Err(e) => tracing::error!("loadCodeAssist failed: {}", e),
             }
         }
 

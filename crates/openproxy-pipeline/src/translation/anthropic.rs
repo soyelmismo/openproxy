@@ -616,6 +616,7 @@ pub fn openai_response_to_anthropic(resp: OpenAIResponse) -> AnthropicResponse {
 /// - tool_use IDs declared by assistant messages
 /// - tool_result IDs provided by user messages
 /// - whether every tool_use has a matching tool_result
+///
 /// This is traced at DEBUG level so it doesn't spam production logs
 /// unless RUST_LOG=debug is set.
 fn log_anthropic_translation_diagnostics(conversation: &[AnthropicMessage]) {

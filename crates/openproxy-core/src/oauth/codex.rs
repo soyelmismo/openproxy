@@ -7,9 +7,9 @@ use base64::Engine;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
+use super::generic::{GenericOAuthProvider, OAuthRequestEncoding, OAuthSpec};
 use crate::error::{CoreError, Result};
 use crate::oauth::{DeviceAuthorizationResponse, OAuthFlow, OAuthProvider, TokenResponse};
-use super::generic::{GenericOAuthProvider, OAuthRequestEncoding, OAuthSpec};
 use openproxy_adapters::upstream::{
     CancellationToken, TimeoutProfile, UpstreamClient, UpstreamError, UpstreamRequest,
 };

@@ -32,7 +32,10 @@ impl AntigravityAdapter {
 
     /// Parse fetchAvailableModels response into DiscoveredModel list.
     fn parse_models_response(&self, body: &serde_json::Value) -> Option<Vec<DiscoveredModel>> {
-        tracing::info!("Antigravity fetchAvailableModels response: {}", serde_json::to_string(body).unwrap_or_default());
+        tracing::info!(
+            "Antigravity fetchAvailableModels response: {}",
+            serde_json::to_string(body).unwrap_or_default()
+        );
         let models_obj = body.get("models")?.as_object()?;
 
         let mut models = Vec::new();
@@ -139,7 +142,10 @@ impl ProviderAdapter for AntigravityAdapter {
         // Antigravity uses the Cloud Code endpoint; model goes in the body.
         // We MUST use streamGenerateContent?alt=sse because openproxy forces
         // is_streaming=true upstream and expects an SSE stream to parse.
-        format!("{}/v1internal:streamGenerateContent?alt=sse", self.config.base_url)
+        format!(
+            "{}/v1internal:streamGenerateContent?alt=sse",
+            self.config.base_url
+        )
     }
 
     fn models_url(&self) -> Option<String> {
@@ -156,7 +162,7 @@ impl ProviderAdapter for AntigravityAdapter {
         let mut headers_vec = Vec::with_capacity(10);
         headers_vec.push(("Authorization".into(), format!("Bearer {}", api_key)));
         headers_vec.push(("Content-Type".into(), "application/json".into()));
-        
+
         // Inject antigravity headers
         let mut hm = http::HeaderMap::new();
         crate::antigravity_headers::inject_antigravity_headers(&mut hm, None);
@@ -165,11 +171,11 @@ impl ProviderAdapter for AntigravityAdapter {
                 headers_vec.push((k.as_str().to_string(), v_str.to_string()));
             }
         }
-        
+
         for (k, v) in &self.config.extra_headers {
             headers_vec.push((k.clone(), v.clone()));
         }
-        
+
         headers_vec
     }
 
@@ -206,7 +212,10 @@ impl ProviderAdapter for AntigravityAdapter {
             let wrapped_bytes = bytes::Bytes::from(serde_json::to_vec(&wrapped).map_err(|e| {
                 CoreError::Parse(format!("failed to serialize wrapped gemini request: {e}"))
             })?);
-            tracing::info!("Antigravity test payload: {}", serde_json::to_string(&wrapped).unwrap_or_default());
+            tracing::info!(
+                "Antigravity test payload: {}",
+                serde_json::to_string(&wrapped).unwrap_or_default()
+            );
             return Ok(wrapped_bytes);
         }
         Ok(body)
@@ -796,7 +805,10 @@ pub async fn load_code_assist(
     let body_bytes = serde_json::to_vec(&body)
         .map_err(|e| format!("antigravity loadCodeAssist serialize: {e}"))?;
 
-    let mut req = crate::upstream::UpstreamRequest::post_json(LOAD_CODE_ASSIST_URL, bytes::Bytes::from(body_bytes));
+    let mut req = crate::upstream::UpstreamRequest::post_json(
+        LOAD_CODE_ASSIST_URL,
+        bytes::Bytes::from(body_bytes),
+    );
     if let Ok(v) = http::HeaderValue::from_str(&format!("Bearer {access_token}")) {
         req.headers.insert(http::header::AUTHORIZATION, v);
     }
@@ -811,13 +823,18 @@ pub async fn load_code_assist(
 
     if !resp.status.is_success() {
         let status = resp.status.as_u16();
-        let body_str = String::from_utf8_lossy(&resp.collect().await.unwrap_or_default()).to_string();
-        return Err(format!("antigravity loadCodeAssist status {}: {}", status, body_str));
+        let body_str =
+            String::from_utf8_lossy(&resp.collect().await.unwrap_or_default()).to_string();
+        return Err(format!(
+            "antigravity loadCodeAssist status {}: {}",
+            status, body_str
+        ));
     }
 
-    let body_bytes = resp.collect().await.map_err(|e| {
-        format!("antigravity loadCodeAssist read: {e}")
-    })?;
+    let body_bytes = resp
+        .collect()
+        .await
+        .map_err(|e| format!("antigravity loadCodeAssist read: {e}"))?;
 
     let value: serde_json::Value = serde_json::from_slice(&body_bytes)
         .map_err(|e| format!("antigravity loadCodeAssist parse: {e}"))?;
@@ -850,10 +867,13 @@ pub async fn onboard_user(
         "metadata": metadata,
         "tier": "free-tier",
     });
-    let body_bytes = serde_json::to_vec(&body)
-        .map_err(|e| format!("antigravity onboardUser serialize: {e}"))?;
+    let body_bytes =
+        serde_json::to_vec(&body).map_err(|e| format!("antigravity onboardUser serialize: {e}"))?;
 
-    let mut req = crate::upstream::UpstreamRequest::post_json(ONBOARD_USER_URL, bytes::Bytes::from(body_bytes));
+    let mut req = crate::upstream::UpstreamRequest::post_json(
+        ONBOARD_USER_URL,
+        bytes::Bytes::from(body_bytes),
+    );
     if let Ok(v) = http::HeaderValue::from_str(&format!("Bearer {access_token}")) {
         req.headers.insert(http::header::AUTHORIZATION, v);
     }
@@ -868,8 +888,12 @@ pub async fn onboard_user(
 
     if !resp.status.is_success() {
         let status = resp.status.as_u16();
-        let body_str = String::from_utf8_lossy(&resp.collect().await.unwrap_or_default()).to_string();
-        return Err(format!("antigravity onboardUser status {}: {}", status, body_str));
+        let body_str =
+            String::from_utf8_lossy(&resp.collect().await.unwrap_or_default()).to_string();
+        return Err(format!(
+            "antigravity onboardUser status {}: {}",
+            status, body_str
+        ));
     }
 
     let body_bytes = resp

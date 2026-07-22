@@ -127,9 +127,7 @@ pub fn list_active_all(conn: &Connection) -> Result<Vec<Model>> {
         )
         .map_err(map_db_error)?;
 
-    let rows = stmt
-        .query_map([], map_row)
-        .map_err(map_db_error)?;
+    let rows = stmt.query_map([], map_row).map_err(map_db_error)?;
 
     let mut out = Vec::new();
     for r in rows {
@@ -151,9 +149,7 @@ pub fn list_all(conn: &Connection) -> Result<Vec<Model>> {
         )
         .map_err(map_db_error)?;
 
-    let rows = stmt
-        .query_map([], map_row)
-        .map_err(map_db_error)?;
+    let rows = stmt.query_map([], map_row).map_err(map_db_error)?;
 
     let mut out = Vec::new();
     for r in rows {
@@ -236,16 +232,12 @@ pub fn get_by_row_ids(conn: &Connection, row_ids: &[ModelRowId]) -> Result<Vec<M
          FROM models WHERE id IN ({})",
         placeholders
     );
-    let mut stmt = conn
-        .prepare_cached(&query)
-        .map_err(map_db_error)?;
+    let mut stmt = conn.prepare_cached(&query).map_err(map_db_error)?;
     let ids: Vec<&dyn rusqlite::ToSql> = row_ids
         .iter()
         .map(|id| &id.0 as &dyn rusqlite::ToSql)
         .collect();
-    let rows = stmt
-        .query_map(&*ids, map_row)
-        .map_err(map_db_error)?;
+    let rows = stmt.query_map(&*ids, map_row).map_err(map_db_error)?;
     let mut models = Vec::with_capacity(row_ids.len());
     for row in rows {
         models.push(row.map_err(map_db_error)?);
@@ -269,9 +261,7 @@ pub fn find_active_by_name(conn: &Connection, model_id: &str) -> Result<Option<M
              LIMIT 1",
         )
         .map_err(map_db_error)?;
-    let mut rows = stmt
-        .query_map([model_id], map_row)
-        .map_err(map_db_error)?;
+    let mut rows = stmt.query_map([model_id], map_row).map_err(map_db_error)?;
     match rows.next() {
         Some(row) => Ok(Some(row.map_err(map_db_error)?)),
         None => Ok(None),
@@ -323,16 +313,11 @@ pub fn set_test_status(conn: &Connection, id: ModelRowId, status: i32) -> Result
 }
 
 pub fn delete(conn: &Connection, id: ModelRowId) -> Result<u64> {
-    let tx = conn
-        .unchecked_transaction()
-        .map_err(map_db_error)?;
+    let tx = conn.unchecked_transaction().map_err(map_db_error)?;
 
     let removed = tx
         .execute("DELETE FROM models WHERE id = ?1", params![id.0])
-        .map_err(map_db_error_ctx(format!(
-            "delete model {}",
-            id.0
-        )))?;
+        .map_err(map_db_error_ctx(format!("delete model {}", id.0)))?;
 
     tx.commit().map_err(map_db_error)?;
 
@@ -385,7 +370,10 @@ pub fn create_custom(
         .map_err(|e| {
             let msg = e.to_string();
             if msg.contains("FOREIGN KEY") {
-                openproxy_types::CoreError::Validation(format!("provider_id does not exist: {}", provider_id))
+                openproxy_types::CoreError::Validation(format!(
+                    "provider_id does not exist: {}",
+                    provider_id
+                ))
             } else {
                 openproxy_types::CoreError::Database {
                     message: format!("create_custom model for {}: {}", provider_id, e),
@@ -402,9 +390,7 @@ pub fn apply_auto_activation(
     provider: &ProviderId,
     keyword: Option<&str>,
 ) -> Result<u64> {
-    let tx = conn
-        .unchecked_transaction()
-        .map_err(map_db_error)?;
+    let tx = conn.unchecked_transaction().map_err(map_db_error)?;
 
     let newly_active: Vec<(String, Option<String>)> = match keyword {
         Some(k) => {
@@ -536,9 +522,7 @@ pub fn upsert_many(
     let existing: std::collections::HashSet<&str> =
         existing_rows.iter().map(|(m, _, _)| m.as_str()).collect();
 
-    let tx = conn
-        .unchecked_transaction()
-        .map_err(map_db_error)?;
+    let tx = conn.unchecked_transaction().map_err(map_db_error)?;
 
     {
         let mut stmt = tx

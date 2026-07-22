@@ -83,5 +83,3 @@ pub fn upsert_many(
     sync::broadcast_notifications(conn, &events);
     Ok(upsert_result)
 }
-
-

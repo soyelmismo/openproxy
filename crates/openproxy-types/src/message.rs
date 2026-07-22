@@ -77,7 +77,6 @@ pub struct OpenAIUsage {
     pub total_tokens: u32,
 }
 
-
 fn deserialize_optional_content<'de, D>(
     deserializer: D,
 ) -> std::result::Result<Option<Value>, D::Error>

@@ -34,5 +34,3 @@ pub fn openai_content_part_to_text(part: &serde_json::Value) -> String {
         other => other.to_string(),
     }
 }
-
-

@@ -1,13 +1,10 @@
 //! Repository traits and SQLite implementation for data persistence layer.
 
-use std::sync::Arc;
-use std::time::Duration;
 use openproxy_core::{api_keys as core_api_keys, models::Model};
 use openproxy_db as db;
-use openproxy_types::{
-    combos::Combo,
-    AccountId, ApiKeyId, ComboId, CoreError, ProviderId,
-};
+use openproxy_types::{AccountId, ApiKeyId, ComboId, CoreError, ProviderId, combos::Combo};
+use std::sync::Arc;
+use std::time::Duration;
 
 /// Base repository trait providing database connection guards.
 pub trait Repository: Send + Sync {
@@ -98,7 +95,8 @@ pub trait AccountRepository: Send + Sync {
 /// Combo repository trait.
 pub trait ComboRepository: Send + Sync {
     fn list_combos(&self) -> Result<Vec<Combo>, CoreError>;
-    fn compute_effective_context_window(&self, combo_id: ComboId) -> Result<Option<i64>, CoreError>;
+    fn compute_effective_context_window(&self, combo_id: ComboId)
+    -> Result<Option<i64>, CoreError>;
 }
 
 /// Model repository trait.
@@ -209,7 +207,10 @@ impl ComboRepository for SqliteRepository {
         db::combos::list_combos(&w)
     }
 
-    fn compute_effective_context_window(&self, combo_id: ComboId) -> Result<Option<i64>, CoreError> {
+    fn compute_effective_context_window(
+        &self,
+        combo_id: ComboId,
+    ) -> Result<Option<i64>, CoreError> {
         let w = self.writer();
         db::combos::compute_effective_context_window(&w, combo_id)
     }

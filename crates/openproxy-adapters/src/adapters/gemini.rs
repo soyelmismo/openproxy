@@ -410,11 +410,13 @@ pub fn gemini_to_openai(resp: &GeminiResponse) -> openproxy_types::OpenAIRespons
         &None
     };
 
-    let usage = usage_metadata.as_ref().map(|u| openproxy_types::OpenAIUsage {
-        prompt_tokens: u.prompt_token_count,
-        completion_tokens: u.candidates_token_count,
-        total_tokens: u.total_token_count,
-    });
+    let usage = usage_metadata
+        .as_ref()
+        .map(|u| openproxy_types::OpenAIUsage {
+            prompt_tokens: u.prompt_token_count,
+            completion_tokens: u.candidates_token_count,
+            total_tokens: u.total_token_count,
+        });
 
     openproxy_types::OpenAIResponse {
         id: format!("gemini-{}", chrono::Utc::now().timestamp_millis()),
@@ -436,4 +438,3 @@ pub fn gemini_to_openai(resp: &GeminiResponse) -> openproxy_types::OpenAIRespons
         usage,
     }
 }
-
