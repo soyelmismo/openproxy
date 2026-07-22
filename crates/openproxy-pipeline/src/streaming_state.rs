@@ -202,6 +202,8 @@ pub(crate) struct StreamContext<'a> {
     pub created: u64,
     pub connect_and_send_ms: u64,
     pub resolved_timeouts: &'a crate::timeouts::Timeouts,
+    pub proxy_url: Option<String>,
+    pub proxy_status: Option<String>,
 }
 
 #[allow(clippy::large_enum_variant)]
@@ -262,8 +264,8 @@ impl StreamingState {
             return Ok(ChunkResult::Return(
                 dispatcher.fail_stream_client_disconnected(
                     crate::upstream_dispatcher::StreamFailureContext {
-                        proxy_url: None,
-                        proxy_status: None,
+                        proxy_url: ctx.proxy_url.clone(),
+                        proxy_status: ctx.proxy_status.clone(),
                         req: ctx.req.clone(),
                         combo: ctx.combo,
                         target: ctx.target,
@@ -356,8 +358,8 @@ impl<'a> crate::streaming::ChunkInterceptor for ChunkProcessor<'a> {
             return Ok(crate::streaming::ChunkEvent::Return(
                 self.dispatcher.fail_stream_client_disconnected(
                     crate::upstream_dispatcher::StreamFailureContext {
-                        proxy_url: None,
-                        proxy_status: None,
+                        proxy_url: ctx.proxy_url.clone(),
+                        proxy_status: ctx.proxy_status.clone(),
                         req: ctx.req.clone(),
                         combo: ctx.combo,
                         target: ctx.target,
@@ -438,8 +440,8 @@ impl<'a> ChunkProcessor<'a> {
                 return Ok(crate::streaming::ChunkEvent::Return(
                     self.dispatcher.fail_stream_client_disconnected(
                         crate::upstream_dispatcher::StreamFailureContext {
-                            proxy_url: None,
-                            proxy_status: None,
+                            proxy_url: ctx.proxy_url.clone(),
+                            proxy_status: ctx.proxy_status.clone(),
                             req: req.clone(),
                             combo,
                             target,
@@ -465,8 +467,8 @@ impl<'a> ChunkProcessor<'a> {
                     self.dispatcher.fail_on_sink_send_error(
                         crate::race_sink::StreamSinkError::Lost,
                         crate::upstream_dispatcher::StreamFailureContext {
-                            proxy_url: None,
-                            proxy_status: None,
+                            proxy_url: ctx.proxy_url.clone(),
+                            proxy_status: ctx.proxy_status.clone(),
                             req: req.clone(),
                             combo,
                             target,
@@ -553,8 +555,8 @@ impl<'a> ChunkProcessor<'a> {
                             combo,
                             target,
                             FailureContext {
-                                proxy_url: None,
-                                proxy_status: None,
+                                proxy_url: ctx.proxy_url.clone(),
+                                proxy_status: ctx.proxy_status.clone(),
                                 attempt,
                                 race_size,
                                 err: &err,
@@ -673,8 +675,8 @@ impl<'a> ChunkProcessor<'a> {
                         return Ok(crate::streaming::ChunkEvent::Return(
                             self.dispatcher.fail_stream_client_disconnected(
                                 crate::upstream_dispatcher::StreamFailureContext {
-                                    proxy_url: None,
-                                    proxy_status: None,
+                                    proxy_url: ctx.proxy_url.clone(),
+                                    proxy_status: ctx.proxy_status.clone(),
                                     req: req.clone(),
                                     combo,
                                     target,
@@ -714,8 +716,8 @@ impl<'a> ChunkProcessor<'a> {
                             self.dispatcher.fail_on_sink_send_error(
                                 e,
                                 crate::upstream_dispatcher::StreamFailureContext {
-                                    proxy_url: None,
-                                    proxy_status: None,
+                                    proxy_url: ctx.proxy_url.clone(),
+                                    proxy_status: ctx.proxy_status.clone(),
                                     req: req.clone(),
                                     combo,
                                     target,
@@ -854,8 +856,8 @@ impl<'a> ChunkProcessor<'a> {
                 return Ok(crate::streaming::ChunkEvent::Return(
                     self.dispatcher.fail_stream_client_disconnected(
                         crate::upstream_dispatcher::StreamFailureContext {
-                            proxy_url: None,
-                            proxy_status: None,
+                            proxy_url: ctx.proxy_url.clone(),
+                            proxy_status: ctx.proxy_status.clone(),
                             req: req.clone(),
                             combo,
                             target,
@@ -890,8 +892,8 @@ impl<'a> ChunkProcessor<'a> {
                     self.dispatcher.fail_on_sink_send_error(
                         e,
                         crate::upstream_dispatcher::StreamFailureContext {
-                            proxy_url: None,
-                            proxy_status: None,
+                            proxy_url: ctx.proxy_url.clone(),
+                            proxy_status: ctx.proxy_status.clone(),
                             req: req.clone(),
                             combo,
                             target,
@@ -1004,8 +1006,8 @@ impl<'a> ChunkProcessor<'a> {
                         return Ok(crate::streaming::ChunkEvent::Return(
                             self.dispatcher.fail_stream_client_disconnected(
                                 crate::upstream_dispatcher::StreamFailureContext {
-                                    proxy_url: None,
-                                    proxy_status: None,
+                                    proxy_url: ctx.proxy_url.clone(),
+                                    proxy_status: ctx.proxy_status.clone(),
                                     req: req.clone(),
                                     combo,
                                     target,
@@ -1031,8 +1033,8 @@ impl<'a> ChunkProcessor<'a> {
                             self.dispatcher.fail_on_sink_send_error(
                                 crate::race_sink::StreamSinkError::Lost,
                                 crate::upstream_dispatcher::StreamFailureContext {
-                                    proxy_url: None,
-                                    proxy_status: None,
+                                    proxy_url: ctx.proxy_url.clone(),
+                                    proxy_status: ctx.proxy_status.clone(),
                                     req: req.clone(),
                                     combo,
                                     target,
@@ -1162,8 +1164,8 @@ impl<'a> ChunkProcessor<'a> {
                             self.dispatcher.fail_on_sink_send_error(
                                 e,
                                 crate::upstream_dispatcher::StreamFailureContext {
-                                    proxy_url: None,
-                                    proxy_status: None,
+                                    proxy_url: ctx.proxy_url.clone(),
+                                    proxy_status: ctx.proxy_status.clone(),
                                     req: req.clone(),
                                     combo,
                                     target,
@@ -1205,8 +1207,8 @@ impl<'a> ChunkProcessor<'a> {
                         combo,
                         target,
                         crate::FailureContext {
-                            proxy_url: None,
-                            proxy_status: None,
+                            proxy_url: ctx.proxy_url.clone(),
+                            proxy_status: ctx.proxy_status.clone(),
                             attempt,
                             race_size,
                             err: &e,

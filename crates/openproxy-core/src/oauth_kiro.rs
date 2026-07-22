@@ -692,7 +692,8 @@ impl OAuthProvider for KiroOAuthProvider {
         let (access_token, mut meta) = {
             let db_pool = db_pool.clone();
             let master_key = master_key.clone();
-            let res = tokio::task::spawn_blocking(move || {
+
+            tokio::task::spawn_blocking(move || {
                 let conn = db_pool.writer();
                 let access_token =
                     crate::accounts::decrypt_access_token(&conn, account_id, &master_key)?;
@@ -726,9 +727,7 @@ impl OAuthProvider for KiroOAuthProvider {
                 Ok((access_token, meta))
             })
             .await
-            .map_err(|e| CoreError::Internal(e.to_string()))??;
-
-            res
+            .map_err(|e| CoreError::Internal(e.to_string()))??
         };
 
         // 2. Hit `ListAvailableProfiles` and pick the first profile

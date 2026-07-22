@@ -15,7 +15,7 @@
 import { html, type TemplateResult } from 'lit-html';
 import { unsafeHTML } from 'lit-html/directives/unsafe-html.js';
 import { api } from "../state/api.js";
-import { mountView, requestUpdate } from "../state/reactive.js";
+import { createView } from "../lib/view-utils.js";
 import { dailyUsageChart } from "../components/charts.js";
 import type { ByDayRow, UsageSummary } from "../lib/types/api.js";
 
@@ -169,30 +169,20 @@ function renderKeyUsage(): TemplateResult {
 }
 
 export async function mountKeyUsage(id: number): Promise<(() => void) | void> {
-  const main = document.getElementById("main");
-  if (!main) return;
   keyId = id;
   head = null;
   byDay = null;
   loadError = null;
-  const cleanup = mountView(main, renderKeyUsage);
-  try {
-    // Fetch the headline payload and the daily-usage rows in
-    // parallel. The daily-usage fetch is allowed to fail silently —
-    // we surface the failure as an empty chart (the chart helper
-    // renders a `No data for the selected range.` message) so the
-    // KPI tiles + table still render with whatever the headline
-    // payload returned.
-    const [headResp, byDayResp] = await Promise.all([
-      api(`/keys/${id}/usage`) as Promise<KeyUsageHead>,
-      api(`/usage/by-day?api_key_id=${id}`).catch((): ByDayRow[] => []) as Promise<ByDayRow[]>,
-    ]);
-    head = headResp;
-    byDay = byDayResp;
-    requestUpdate();
-  } catch (e: unknown) {
-    loadError = e instanceof Error ? e.message : String(e);
-    requestUpdate();
-  }
-  return cleanup;
+  return createView(
+    renderKeyUsage,
+    async () => {
+      const [headResp, byDayResp] = await Promise.all([
+        api(`/keys/${id}/usage`) as Promise<KeyUsageHead>,
+        api(`/usage/by-day?api_key_id=${id}`).catch((): ByDayRow[] => []) as Promise<ByDayRow[]>,
+      ]);
+      head = headResp;
+      byDay = byDayResp;
+    },
+    (msg) => { loadError = msg; },
+  );
 }

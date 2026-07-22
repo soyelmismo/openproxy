@@ -289,7 +289,7 @@ pub async fn debug_recover(State(s): State<AppState>) -> ApiResult<Json<serde_js
                         "table": table,
                         "rows": 0,
                         "status": "corrupt",
-                        "error": e.to_string()
+                        "error": openproxy_core::cost::redact_error_msg(&e.to_string()).0
                     }));
                 }
             }
