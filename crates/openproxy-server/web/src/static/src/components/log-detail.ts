@@ -86,6 +86,102 @@ function statusPillClass(s: string | null | undefined): string {
   return "warn";
 }
 
+function pruneValueForDisplay(val: unknown, depth = 0): unknown {
+  if (depth > 10 || val == null) return val;
+
+  if (typeof val === "string") {
+    const trimmed = val.trim();
+    if ((trimmed.startsWith("{") && trimmed.endsWith("}")) || (trimmed.startsWith("[") && trimmed.endsWith("]"))) {
+      try {
+        const parsed = JSON.parse(val);
+        return pruneValueForDisplay(parsed, depth + 1);
+      } catch (_e) {
+        // Fallthrough
+      }
+    }
+    return val;
+  }
+
+  if (Array.isArray(val)) {
+    return val.map((item) => pruneValueForDisplay(item, depth + 1));
+  }
+
+  if (typeof val === "object") {
+    const obj = val as Record<string, unknown>;
+    const res: Record<string, unknown> = {};
+
+    const keys = Object.keys(obj);
+    const normalKeys = keys.filter((k) => k !== "messages" && k !== "request_body_json");
+    const orderedKeys = [
+      ...normalKeys,
+      ...(keys.includes("request_body_json") ? ["request_body_json"] : []),
+      ...(keys.includes("messages") ? ["messages"] : [])
+    ];
+
+    for (const key of orderedKeys) {
+      const item = obj[key];
+      if (key === "messages" && Array.isArray(item)) {
+        const MAX_MSG_LEN = 150;
+        const MAX_MESSAGES = 10;
+        const arr = item as unknown[];
+        const pruneMsg = (msg: unknown) => {
+          if (msg && typeof msg === "object" && !Array.isArray(msg)) {
+            const m = { ...(msg as Record<string, unknown>) };
+            const content = m["content"];
+            if (typeof content === "string" && content.length > MAX_MSG_LEN) {
+              m["content"] = content.slice(0, MAX_MSG_LEN) + `… [truncated, ${content.length - MAX_MSG_LEN} chars]`;
+            } else if (Array.isArray(content)) {
+              m["content"] = (content as unknown[]).map((part) => {
+                if (part && typeof part === "object" && !Array.isArray(part)) {
+                  const p = { ...(part as Record<string, unknown>) };
+                  if (typeof p["text"] === "string" && p["text"].length > MAX_MSG_LEN) {
+                    p["text"] = p["text"].slice(0, MAX_MSG_LEN) + `… [truncated, ${p["text"].length - MAX_MSG_LEN} chars]`;
+                  }
+                  return p;
+                }
+                return part;
+              });
+            }
+            return m;
+          }
+          return msg;
+        };
+
+        if (arr.length > MAX_MESSAGES) {
+          const head = arr.slice(0, 5).map(pruneMsg);
+          const tail = arr.slice(arr.length - 2).map(pruneMsg);
+          res[key] = [...head, `… [${arr.length - 7} messages omitted, total ${arr.length} items]`, ...tail];
+        } else {
+          res[key] = arr.map(pruneMsg);
+        }
+      } else if (key === "system") {
+        const MAX_MSG_LEN = 150;
+        if (typeof item === "string" && item.length > MAX_MSG_LEN) {
+          res[key] = item.slice(0, MAX_MSG_LEN) + `… [truncated, ${item.length - MAX_MSG_LEN} chars]`;
+        } else if (Array.isArray(item)) {
+          res[key] = (item as unknown[]).map((block) => {
+            if (block && typeof block === "object" && !Array.isArray(block)) {
+              const b = { ...(block as Record<string, unknown>) };
+              if (typeof b["text"] === "string" && b["text"].length > MAX_MSG_LEN) {
+                b["text"] = b["text"].slice(0, MAX_MSG_LEN) + `… [truncated, ${b["text"].length - MAX_MSG_LEN} chars]`;
+              }
+              return b;
+            }
+            return block;
+          });
+        } else {
+          res[key] = pruneValueForDisplay(item, depth + 1);
+        }
+      } else {
+        res[key] = pruneValueForDisplay(item, depth + 1);
+      }
+    }
+    return res;
+  }
+
+  return val;
+}
+
 /** Pretty-print a JSON value for display inside a `<pre>` tag.
  *  lit-html auto-escapes the returned string when interpolated
  *  via `${...}`, so we no longer escape here. Returns "(empty)"
@@ -93,13 +189,12 @@ function statusPillClass(s: string | null | undefined): string {
  *  render. */
 function formatJson(value: unknown): string {
   if (value == null) return "(empty)";
-  let s: string;
-  try { s = typeof value === "string" ? value : JSON.stringify(value, null, 2); }
-  catch (_e: unknown) { s = String(value); }
-  if (s.length > 50000) {
-    return s.slice(0, 50000) + `\n… [UI truncated, ${s.length - 50000} more chars]`;
+  try {
+    const pruned = pruneValueForDisplay(value);
+    return typeof pruned === "string" ? pruned : JSON.stringify(pruned, null, 2);
+  } catch (_e: unknown) {
+    return String(value);
   }
-  return s;
 }
 
 function jsonSection(title: string, value: unknown, tabKey: string): TemplateResult {
@@ -262,7 +357,7 @@ function parseOpenAiChatResponse(value: unknown): {
     // adding signal.
     if (typeof val === "string" && val.length === 0) continue;
     if (typeof val === "object" && val !== null && !Array.isArray(val)
-        && Object.keys(val as object).length === 0) continue;
+      && Object.keys(val as object).length === 0) continue;
     otherProperties[k] = val;
   }
   // Choice-level keys except `message` / `delta` (rendered
@@ -272,7 +367,7 @@ function parseOpenAiChatResponse(value: unknown): {
     if (val == null) continue;
     if (typeof val === "string" && val.length === 0) continue;
     if (typeof val === "object" && val !== null && !Array.isArray(val)
-        && Object.keys(val as object).length === 0) continue;
+      && Object.keys(val as object).length === 0) continue;
     // Namespaced so they don't collide with top-level keys of the
     // same name (e.g. `index`).
     otherProperties[`choice.${k}`] = val;
@@ -285,7 +380,7 @@ function parseOpenAiChatResponse(value: unknown): {
   // properties, this is not a chat-completion we recognize — fall
   // through.
   if (message == null && reasoning == null
-      && toolCalls.length === 0 && otherPropsNonNull == null) return null;
+    && toolCalls.length === 0 && otherPropsNonNull == null) return null;
   return { message, reasoning, toolCalls, otherProperties: otherPropsNonNull };
 }
 
@@ -647,7 +742,7 @@ function renderResponseTab(
           if (val == null) continue;
           if (typeof val === "string" && val.length === 0) continue;
           if (typeof val === "object" && val !== null && !Array.isArray(val)
-              && Object.keys(val as object).length === 0) continue;
+            && Object.keys(val as object).length === 0) continue;
           choiceProps[`choice.${k}`] = val;
         }
         if (Object.keys(choiceProps).length > 0) {
@@ -662,7 +757,7 @@ function renderResponseTab(
       if (val == null) continue;
       if (typeof val === "string" && val.length === 0) continue;
       if (typeof val === "object" && val !== null && !Array.isArray(val)
-          && Object.keys(val as object).length === 0) continue;
+        && Object.keys(val as object).length === 0) continue;
       topLevelProps[k] = val;
     }
     if (Object.keys(topLevelProps).length > 0) {
@@ -706,8 +801,8 @@ function renderRequestTab(requestBody: unknown, createdAt?: string): TemplateRes
   const hasRequestBody: boolean = requestBody != null
     && !(typeof requestBody === "string" && requestBody.trim() === "")
     && !(typeof requestBody === "object" && requestBody !== null
-         && !Array.isArray(requestBody) && Object.keys(requestBody as object).length === 0
-         && JSON.stringify(requestBody) === "{}");
+      && !Array.isArray(requestBody) && Object.keys(requestBody as object).length === 0
+      && JSON.stringify(requestBody) === "{}");
   if (!hasRequestBody) {
     // Bug fix: distinguish "never recorded" from "expired by TTL".
     // The recording TTL default is 300s (5 min). If the row is
@@ -856,9 +951,9 @@ function renderRequestTab(requestBody: unknown, createdAt?: string): TemplateRes
           // Build a compact summary line.
           const roleClass = role === "system" ? "log-detail-role-system"
             : role === "assistant" ? "log-detail-role-assistant"
-            : role === "user" ? "log-detail-role-user"
-            : role === "tool" ? "log-detail-role-tool"
-            : "";
+              : role === "user" ? "log-detail-role-user"
+                : role === "tool" ? "log-detail-role-tool"
+                  : "";
           let anthropicToolUses = 0;
           let anthropicToolResults = 0;
           let anthropicToolResultIds: string[] = [];
@@ -879,7 +974,7 @@ function renderRequestTab(requestBody: unknown, createdAt?: string): TemplateRes
           if (typeof name === "string") extras.push(name);
           if (typeof toolCallId === "string") extras.push(`tool_call_id: ${toolCallId}`);
           if (Array.isArray(toolCalls) && toolCalls.length > 0) extras.push(`${toolCalls.length} tool call(s)`);
-          
+
           if (anthropicToolUses > 0) extras.push(`${anthropicToolUses} tool call(s)`);
           if (anthropicToolResults > 0) {
             let resStr = `${anthropicToolResults} tool result(s)`;
@@ -992,7 +1087,7 @@ export function renderLogDetailModal(log: LogDetailLog): TemplateResult {
   // in usage.rs); `log.error_msg` / `log.error_msg_redacted` come from
   // the detail endpoint (UsageDetailRow.error_msg in usage.rs).
   const detailErrors: unknown = (detail as Record<string, unknown>)["errors"];
-  
+
   const isInflight: boolean = log.id === 0 || log.id == null;
   const attempt = log.stages?.[0] as any;
   const synthesizedError = isInflight
@@ -1022,10 +1117,10 @@ export function renderLogDetailModal(log: LogDetailLog): TemplateResult {
   const model: string = log.model_id || log.upstream_model || log.upstream_model_id || (readString(meta, "model_id") ?? "—");
   const latency: string = log.latency_ms != null ? `${log.latency_ms} ms`
     : (log.total_ms != null ? `${log.total_ms} ms`
-    : (log.elapsed_ms != null ? `${log.elapsed_ms} ms` : "—"));
+      : (log.elapsed_ms != null ? `${log.elapsed_ms} ms` : "—"));
   const costRaw: number | null = log.cost != null ? log.cost
     : (log.usage && log.usage.cost != null ? log.usage.cost
-    : (log.cost_usd != null ? log.cost_usd : null));
+      : (log.cost_usd != null ? log.cost_usd : null));
   const status: string = log.status || (log.status_code != null ? String(log.status_code) : "—");
   const statusClass: string = statusPillClass(
     log.status_code != null
@@ -1087,8 +1182,8 @@ export function renderLogDetailModal(log: LogDetailLog): TemplateResult {
             </div>
             <div style="display: ${currentActiveTab === "errors" ? "block" : "none"}">
               ${errors != null
-                ? jsonSection("Errors", errors, "errors")
-                : html`<section class="log-detail-section" data-log-tab="errors">
+      ? jsonSection("Errors", errors, "errors")
+      : html`<section class="log-detail-section" data-log-tab="errors">
                      <h4>Errors</h4>
                      <p class="muted">No errors recorded.</p>
                    </section>`}
@@ -1231,16 +1326,17 @@ export async function openLogDetail(
 ): Promise<void> {
   const gen = bumpOpenLogDetailGeneration();
   const isFinalized = row != null && row.terminal && row.row;
-  
+
   const fallbackAttemptKey = traceId || (requestId ? `${requestId}:unknown` : id);
-  
+
   if (isFinalized || row == null) {
     try {
-      const queryParam = traceId ? `trace_id=${encodeURIComponent(traceId)}` : `id=${encodeURIComponent(id)}`;
+      const hasValidId = Boolean(id && id !== "0");
+      const queryParam = hasValidId ? `id=${encodeURIComponent(id)}` : (traceId ? `trace_id=${encodeURIComponent(traceId)}` : "");
       const payload = await api(`/usage/detail?${queryParam}`) as any;
       if (payload && payload.row) {
         liveLogsStore.setDetail(
-          id ? { kind: "row_id", id: Number(id) } : { kind: "attempt", attemptKey: fallbackAttemptKey },
+          hasValidId ? { kind: "row_id", id: Number(id) } : { kind: "attempt", attemptKey: fallbackAttemptKey },
           payload.row
         );
         if (isCurrentOpenLogDetailGeneration(gen)) {
@@ -1251,13 +1347,14 @@ export async function openLogDetail(
       // Ignored
     }
   }
-  
+
   if (!isCurrentOpenLogDetailGeneration(gen)) return;
-  
-  state.logs.selectedIdentity = id ? { kind: "row_id", id: Number(id) } : { kind: "attempt", attemptKey: fallbackAttemptKey };
+
+  const hasValidId = Boolean(id && id !== "0");
+  state.logs.selectedIdentity = hasValidId ? { kind: "row_id", id: Number(id) } : { kind: "attempt", attemptKey: fallbackAttemptKey };
   pinnedRequestId = requestId;
   pinnedTraceId = traceId;
-  
+
   const root = ensureModalRoot();
   let wrapper = document.querySelector(".log-detail-modal-wrapper") as HTMLElement | null;
   if (!wrapper) {
@@ -1265,7 +1362,7 @@ export async function openLogDetail(
     wrapper.className = "log-detail-modal-wrapper";
     root.appendChild(wrapper);
   }
-  
+
   // We re-render immediately.
   renderModal();
   initializeLogDetailTabs();
@@ -1275,10 +1372,10 @@ function renderModal() {
   if (!state.logs.selectedIdentity) return;
   const attempt = liveLogsStore.selectDetail(state.logs.selectedIdentity);
   if (!attempt) return;
-  
+
   const wrapper = document.querySelector(".log-detail-modal-wrapper");
   if (!wrapper) return;
-  
+
   // Create a LogDetailLog compatible object for the modal view
   // The WS `log` row is the SSOT for live state, while `attempt.detail`
   // contains the heavy payloads from the `/usage/detail` snapshot. We merge
@@ -1294,17 +1391,19 @@ function renderModal() {
     response_body_json: log.response_body_json ?? detailObj.response_body_json,
     request_headers: log.request_headers ?? detailObj.request_headers,
     response_headers: log.response_headers ?? detailObj.response_headers,
-    stages: [safeAttempt]
-  } : { 
-    id: attempt.rowId, 
-    request_id: attempt.requestId, 
+    stages: [safeAttempt],
+    detail: undefined
+  } : {
+    id: attempt.rowId,
+    request_id: attempt.requestId,
     trace_id: attempt.traceId,
     status_code: attempt.statusCode,
     total_ms: attempt.elapsedMsAtEvent,
     provider_id: attempt.providerId,
     upstream_model_id: attempt.upstreamModelId,
     error_message: attempt.error,
-    detail: attempt.detail,
+    request_body_json: detailObj?.request_body_json,
+    response_body_json: detailObj?.response_body_json,
     stages: [safeAttempt]
   };
   render(renderLogDetailModal(logObj as any), wrapper as HTMLElement);
@@ -1389,7 +1488,7 @@ export function hasCompleteLogDetail(row: LogDetailLog | null | undefined): bool
   if (row.errors != null || row.error != null || row.error_msg != null) return true;
   const detail: Record<string, unknown> | null | undefined = row.detail;
   if (detail && (detail["response"] != null || detail["request_body_json"] != null
-        || (Array.isArray(detail["requests"]) && (detail["requests"] as unknown[]).length > 0))) return true;
+    || (Array.isArray(detail["requests"]) && (detail["requests"] as unknown[]).length > 0))) return true;
   return false;
 }
 
@@ -1488,9 +1587,9 @@ export function buildDebugBundle(log: LogDetailLog): string {
   // Error.
   const errorMsg: string | null =
     (typeof log.error_message === "string" && log.error_message.length > 0) ? log.error_message :
-    (typeof log.error_msg === "string" && log.error_msg.length > 0) ? log.error_msg :
-    (typeof log.error_msg_redacted === "string" && log.error_msg_redacted.length > 0) ? log.error_msg_redacted :
-    null;
+      (typeof log.error_msg === "string" && log.error_msg.length > 0) ? log.error_msg :
+        (typeof log.error_msg_redacted === "string" && log.error_msg_redacted.length > 0) ? log.error_msg_redacted :
+          null;
   if (errorMsg) {
     lines.push("## Error");
     lines.push("");
@@ -1549,11 +1648,25 @@ export function buildDebugBundle(log: LogDetailLog): string {
     lines.push("");
   }
 
-  // Raw log row (everything we have).
+  // Raw log row (everything we have, cleaned of nested duplicates).
+  const cleanLog: Record<string, unknown> = { ...(log as unknown as Record<string, unknown>) };
+  delete cleanLog["detail"];
+  if (Array.isArray(cleanLog["stages"])) {
+    cleanLog["stages"] = (cleanLog["stages"] as any[]).map((s: any) => {
+      if (s && typeof s === "object") {
+        const copy = { ...s };
+        delete copy.row;
+        delete copy.detail;
+        return copy;
+      }
+      return s;
+    });
+  }
+
   lines.push("## Raw Log Row");
   lines.push("");
   lines.push("```json");
-  lines.push(truncateForBundle(JSON.stringify(log, null, 2)));
+  lines.push(truncateForBundle(JSON.stringify(cleanLog, null, 2)));
   lines.push("```");
   lines.push("");
 
@@ -1712,17 +1825,25 @@ function summarizeRequestBody(body: unknown): string {
  *  textarea, selects it, and calls `document.execCommand("copy")`. */
 export async function copyDebugBundle(): Promise<void> {
   const attempt = state.logs.selectedIdentity ? liveLogsStore.selectDetail(state.logs.selectedIdentity) : null;
-  const row = attempt ? (attempt.row ? { ...attempt.row, stages: [attempt] } : {
-    id: attempt.rowId, 
-    request_id: attempt.requestId, 
-    trace_id: attempt.traceId,
-    status_code: attempt.statusCode,
-    total_ms: attempt.elapsedMsAtEvent,
-    provider_id: attempt.providerId,
-    upstream_model_id: attempt.upstreamModelId,
-    stages: [attempt]
-  }) as unknown as LogDetailLog : null;
-  
+  let row: LogDetailLog | null = null;
+  if (attempt) {
+    const safeAttempt = { ...attempt, detail: undefined, row: undefined };
+    if (attempt.row) {
+      row = { ...attempt.row, stages: [safeAttempt] } as unknown as LogDetailLog;
+    } else {
+      row = {
+        id: attempt.rowId,
+        request_id: attempt.requestId,
+        trace_id: attempt.traceId,
+        status_code: attempt.statusCode,
+        total_ms: attempt.elapsedMsAtEvent,
+        provider_id: attempt.providerId,
+        upstream_model_id: attempt.upstreamModelId,
+        stages: [safeAttempt]
+      } as unknown as LogDetailLog;
+    }
+  }
+
   if (!row) {
     showToast("No log row selected.", "warning");
     return;

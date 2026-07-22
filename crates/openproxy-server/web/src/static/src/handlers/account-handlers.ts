@@ -171,3 +171,53 @@ export async function updateAccountKey(id: number, e: Event, wrapper?: HTMLEleme
     showApiError(err, "Error");
   }
 }
+
+export async function updateAccountLabel(id: number, currentLabel: string): Promise<void> {
+  const newLabel = prompt(`Rename account label:`, currentLabel || "");
+  if (newLabel == null) return;
+  const trimmed = newLabel.trim();
+  if (trimmed === currentLabel) return;
+  
+  try {
+    await api("/accounts/" + id + "/label", {
+      method: "PATCH",
+      body: JSON.stringify({ label: trimmed || null }),
+    });
+    state.accounts = await api("/accounts") as typeof state.accounts;
+    requestUpdate();
+  } catch (err: unknown) {
+    showApiError(err, "Error updating label");
+  }
+}
+
+export async function copyAccountApiKey(id: number): Promise<void> {
+  try {
+    const res = await api("/accounts/" + id + "/api-key", { method: "GET" }) as { api_key?: string };
+    if (res && res.api_key) {
+      if (navigator.clipboard && window.isSecureContext) {
+        await navigator.clipboard.writeText(res.api_key);
+        showToast("API key copied to clipboard", "success");
+      } else {
+        const textArea = document.createElement("textarea");
+        textArea.value = res.api_key;
+        textArea.style.position = "fixed";
+        textArea.style.left = "-999999px";
+        document.body.appendChild(textArea);
+        textArea.focus();
+        textArea.select();
+        try {
+          document.execCommand('copy');
+          showToast("API key copied to clipboard", "success");
+        } catch (err) {
+          prompt("Copy your API key:", res.api_key);
+        }
+        textArea.remove();
+      }
+    } else {
+      showToast("No API key returned", "error");
+    }
+  } catch (err: unknown) {
+    showApiError(err, "Error copying API key");
+  }
+}
+

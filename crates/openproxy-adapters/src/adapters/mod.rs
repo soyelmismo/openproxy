@@ -1209,7 +1209,7 @@ mod tests {
         let url = a.build_chat_url(TargetFormat::Gemini, &ModelId::new("claude-opus-4-6"));
         assert_eq!(
             url,
-            "https://daily-cloudcode-pa.googleapis.com/v1internal:generateContent"
+            "https://daily-cloudcode-pa.googleapis.com/v1internal:streamGenerateContent?alt=sse"
         );
     }
 

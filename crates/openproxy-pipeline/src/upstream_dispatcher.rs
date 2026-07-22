@@ -19,6 +19,8 @@ pub(crate) struct DispatchContext<'a> {
     pub(crate) race_size: u8,
     pub(crate) started: Instant,
     pub(crate) model: &'a Model,
+    pub(crate) proxy_url: Option<String>,
+    pub(crate) proxy_status: Option<String>,
 }
 
 impl<'a> DispatchContext<'a> {
@@ -34,8 +36,8 @@ impl<'a> DispatchContext<'a> {
         'a: 'e,
     {
         crate::FailureContext {
-            proxy_url: None,
-            proxy_status: None,
+            proxy_url: self.proxy_url.clone(),
+            proxy_status: self.proxy_status.clone(),
             attempt: self.attempt,
             race_size: self.race_size,
             err,
@@ -77,6 +79,7 @@ pub struct UpstreamDispatcher {
     pub record_bodies_and_headers: Arc<std::sync::atomic::AtomicBool>,
 }
 
+#[derive(Debug)]
 pub(crate) enum ProxyRotationTrigger {
     Status(u16),
     ConnectError,
@@ -147,9 +150,19 @@ impl UpstreamDispatcher {
                         tracing::warn!(
                             provider = %provider_id,
                             proxy_id = %bad_proxy_id,
-                            "proxy rotation triggered: marking proxy as dead and clearing binding"
+                            trigger = ?trigger,
+                            "proxy rotation triggered: clearing binding and adding 15m cooldown for provider"
                         );
-                        let _ = repo.update_proxy_status(bad_proxy_id, "dead", None);
+                        openproxy_db::cooldowns::add_provider_proxy_cooldown(
+                            provider_id.as_str(),
+                            bad_proxy_id,
+                            std::time::Duration::from_secs(15 * 60),
+                        );
+                        // Only mark proxy as "dead" on connection errors, NOT on rate limits / 429 status.
+                        // Rate limiting is per-provider IP throttling, so the proxy host is still alive.
+                        if matches!(trigger, crate::upstream_dispatcher::ProxyRotationTrigger::ConnectError) {
+                            let _ = repo.update_proxy_status(bad_proxy_id, "dead", None);
+                        }
                         
                         let conn = conn_clone.lock();
                         let _ =
@@ -175,12 +188,17 @@ impl UpstreamDispatcher {
         target: &ComboTarget,
         ctx: FailureContext<'_>,
     ) -> PipelineResult {
+        let trace_id = if ctx.attempt > 1 {
+            format!("{}:retry{}", req.trace_id, ctx.attempt - 1)
+        } else {
+            req.trace_id.to_string()
+        };
         self.record_and_fail_with_trace_id(
-            req.clone(),
+            req,
             combo,
             target,
             ctx,
-            req.trace_id.to_string(),
+            trace_id,
         )
     }
 
@@ -231,11 +249,13 @@ impl UpstreamDispatcher {
         race_size: u8,
         trace_id: String,
     ) -> PipelineResult {
-        let dctx = DispatchContext {
+        let mut dctx = DispatchContext {
             attempt,
             race_size,
             started,
             model,
+            proxy_url: None,
+            proxy_status: None,
         };
 
         // Gate 2: both the non-streaming path AND the streaming path
@@ -278,6 +298,8 @@ impl UpstreamDispatcher {
             None => None,
         };
         upstream_request.proxy_status = proxy_status.clone();
+        dctx.proxy_url = upstream_request.proxy.clone();
+        dctx.proxy_status = upstream_request.proxy_status.clone();
         tracing::info!(
             proxy_used = ?upstream_request.proxy,
             proxy_status = %proxy_status.as_ref().unwrap_or(&"none".to_string()),
@@ -422,21 +444,12 @@ impl UpstreamDispatcher {
                 );
             }
             Err(UpstreamError::Timeout(phase)) => {
-                self.check_and_trigger_proxy_rotation(
-                    &target.provider_id,
-                    crate::upstream_dispatcher::ProxyRotationTrigger::ConnectError,
-                )
-                .await;
-                // Bug fix: attribute the timeout to the CORRECT phase
-                // instead of collapsing DNS/Dial/TLS/Write/Headers all
-                // into "connect". The user configures per-phase budgets
-                // (connect_ms, request_send_ms, ttft_ms) and the error
-                // message must reflect which budget actually fired so
-                // they can tune the right knob. The old mapping (all
-                // → "connect") was a leftover from the pre-migration
-                // legacy UpstreamClient path that couldn't separate phases.
-                // Include the config field name so the operator
-                // knows which timeout to adjust in the dashboard.
+                let is_proxy_rotated = self
+                    .check_and_trigger_proxy_rotation(
+                        &target.provider_id,
+                        crate::upstream_dispatcher::ProxyRotationTrigger::ConnectError,
+                    )
+                    .await;
                 let (phase_label, config_hint) = match phase {
                     openproxy_adapters::upstream::UpstreamPhase::Dns => ("dns", "connect_ms"),
                     openproxy_adapters::upstream::UpstreamPhase::Dial => ("dial", "connect_ms"),
@@ -457,9 +470,12 @@ impl UpstreamDispatcher {
                     config_hint = config_hint,
                     "upstream phase timed out; aborting attempt"
                 );
-                let err = CoreError::UpstreamTimeout {
-                    phase: format!("{} (config: {})", phase_label, config_hint),
-                    ms: connect_and_send_ms,
+                let err = CoreError::UpstreamError {
+                    status: 504,
+                    provider: target.provider_id.to_string(),
+                    model: model.model_id.as_str().to_string(),
+                    body: format!("upstream phase `{}` timed out after {}ms (config: {})", phase_label, connect_and_send_ms, config_hint),
+                    is_proxy_rotated,
                 };
                 return self.record_and_fail(
                     req,
@@ -473,12 +489,19 @@ impl UpstreamDispatcher {
             | Err(UpstreamError::Http(msg))
             | Err(UpstreamError::Decode(msg))
             | Err(UpstreamError::Invalid(msg)) => {
-                self.check_and_trigger_proxy_rotation(
-                    &target.provider_id,
-                    crate::upstream_dispatcher::ProxyRotationTrigger::ConnectError,
-                )
-                .await;
-                let err = CoreError::UpstreamConnection(msg);
+                let is_proxy_rotated = self
+                    .check_and_trigger_proxy_rotation(
+                        &target.provider_id,
+                        crate::upstream_dispatcher::ProxyRotationTrigger::ConnectError,
+                    )
+                    .await;
+                let err = CoreError::UpstreamError {
+                    status: 502,
+                    provider: target.provider_id.to_string(),
+                    model: model.model_id.as_str().to_string(),
+                    body: format!("upstream connection error: {}", msg),
+                    is_proxy_rotated,
+                };
                 return self.record_and_fail(
                     req,
                     combo,
@@ -487,12 +510,19 @@ impl UpstreamDispatcher {
                 );
             }
             Err(_) => {
-                self.check_and_trigger_proxy_rotation(
-                    &target.provider_id,
-                    crate::upstream_dispatcher::ProxyRotationTrigger::ConnectError,
-                )
-                .await;
-                let err = CoreError::UpstreamConnection("unknown upstream error".to_string());
+                let is_proxy_rotated = self
+                    .check_and_trigger_proxy_rotation(
+                        &target.provider_id,
+                        crate::upstream_dispatcher::ProxyRotationTrigger::ConnectError,
+                    )
+                    .await;
+                let err = CoreError::UpstreamError {
+                    status: 502,
+                    provider: target.provider_id.to_string(),
+                    model: model.model_id.as_str().to_string(),
+                    body: "unknown upstream error".to_string(),
+                    is_proxy_rotated,
+                };
                 return self.record_and_fail(
                     req,
                     combo,
@@ -729,7 +759,8 @@ impl UpstreamDispatcher {
                 .and_then(|v| parse_retry_after_ms(v));
             let is_rate_limited_status =
                 status_code == 429 || status_code == 408 || status_code == 503;
-            if let Some(retry_ms) = retry_after_ms.filter(|_| is_rate_limited_status) {
+            if is_rate_limited_status {
+                let retry_ms = retry_after_ms.unwrap_or(300_000);
                 if !is_proxy_rotated {
                     is_proxy_rotated = self
                         .check_and_trigger_proxy_rotation(
@@ -747,7 +778,12 @@ impl UpstreamDispatcher {
                     req,
                     combo,
                     target,
-                    dctx.fail_ctx_code(&err, Some(connect_and_send_ms), Some(ttft_ms), status_code),
+                    dctx.fail_ctx_code(
+                        &err,
+                        Some(connect_and_send_ms),
+                        Some(ttft_ms),
+                        err.http_status(),
+                    ),
                 );
             }
             // G2.3: surface an `account_invalid` system notification
@@ -1081,6 +1117,8 @@ impl UpstreamDispatcher {
             race_size,
             started,
             model,
+            proxy_url: proxy_url.clone(),
+            proxy_status: proxy_status.clone(),
         };
 
         let has_partial_content = acc.as_ref().is_some_and(|a| !a.is_empty());
@@ -1112,9 +1150,7 @@ impl UpstreamDispatcher {
                 }
                 None => None,
             };
-            let mut fail_ctx = dctx.fail_ctx_code(&err, Some(connect_ms), None, code);
-            fail_ctx.proxy_url = proxy_url.clone();
-            fail_ctx.proxy_status = proxy_status.clone();
+            let fail_ctx = dctx.fail_ctx_code(&err, Some(connect_ms), None, code);
             return self.record_and_fail_with_trace_id_and_partial(
                 req,
                 combo,
@@ -1141,9 +1177,7 @@ impl UpstreamDispatcher {
         } else {
             CoreError::ClientDisconnected
         };
-        let mut fail_ctx = dctx.fail_ctx_code(&err, Some(connect_ms), None, 499);
-        fail_ctx.proxy_url = proxy_url;
-        fail_ctx.proxy_status = proxy_status;
+        let fail_ctx = dctx.fail_ctx_code(&err, Some(connect_ms), None, 499);
         self.record_and_fail_with_trace_id_and_partial(
             req,
             combo,
@@ -1185,6 +1219,8 @@ impl UpstreamDispatcher {
             race_size,
             started,
             model,
+            proxy_url: proxy_url.clone(),
+            proxy_status: proxy_status.clone(),
         };
 
         let err = match e {
@@ -1231,9 +1267,7 @@ impl UpstreamDispatcher {
                                 }
                                 None => None,
                             };
-                        let mut fail_ctx = dctx.fail_ctx_code(&err, Some(connect_ms), None, code);
-                        fail_ctx.proxy_url = proxy_url.clone();
-                        fail_ctx.proxy_status = proxy_status.clone();
+                        let fail_ctx = dctx.fail_ctx_code(&err, Some(connect_ms), None, code);
                         self.record_and_fail_with_trace_id_and_partial(
                             req,
                             combo,
@@ -1274,9 +1308,7 @@ impl UpstreamDispatcher {
             }
             None => None,
         };
-        let mut fail_ctx = dctx.fail_ctx_code(&err, Some(connect_ms), None, err.http_status());
-        fail_ctx.proxy_url = proxy_url;
-        fail_ctx.proxy_status = proxy_status;
+        let fail_ctx = dctx.fail_ctx_code(&err, Some(connect_ms), None, err.http_status());
         self.record_and_fail_with_trace_id_and_partial(
             req,
             combo,
@@ -1318,6 +1350,8 @@ impl UpstreamDispatcher {
             race_size,
             started,
             model,
+            proxy_url: upstream_request.proxy.clone(),
+            proxy_status: upstream_request.proxy_status.clone(),
         };
 
         // Cancellation: the `client_disconnected` watch is the
@@ -1417,14 +1451,12 @@ impl UpstreamDispatcher {
                 );
             }
             Err(UpstreamError::Timeout(phase)) => {
-                self.check_and_trigger_proxy_rotation(
-                    &target.provider_id,
-                    crate::upstream_dispatcher::ProxyRotationTrigger::ConnectError,
-                )
-                .await;
-                // Bug fix (PR #33): attribute the timeout to the
-                // CORRECT phase instead of collapsing all into
-                // "connect". Mirrors the non-streaming path's fix.
+                let is_proxy_rotated = self
+                    .check_and_trigger_proxy_rotation(
+                        &target.provider_id,
+                        crate::upstream_dispatcher::ProxyRotationTrigger::ConnectError,
+                    )
+                    .await;
                 let phase_label = match phase {
                     openproxy_adapters::upstream::UpstreamPhase::Dns => "dns",
                     openproxy_adapters::upstream::UpstreamPhase::Dial => "dial",
@@ -1442,9 +1474,12 @@ impl UpstreamDispatcher {
                     elapsed_ms = connect_and_send_ms,
                     "upstream phase timed out; aborting streaming attempt"
                 );
-                let err = CoreError::UpstreamTimeout {
-                    phase: phase_label.to_string(),
-                    ms: connect_and_send_ms,
+                let err = CoreError::UpstreamError {
+                    status: 504,
+                    provider: target.provider_id.to_string(),
+                    model: model.model_id.as_str().to_string(),
+                    body: format!("upstream phase `{}` timed out after {}ms", phase_label, connect_and_send_ms),
+                    is_proxy_rotated,
                 };
                 return self.record_and_fail(
                     req,
@@ -1458,12 +1493,19 @@ impl UpstreamDispatcher {
             | Err(UpstreamError::Http(msg))
             | Err(UpstreamError::Decode(msg))
             | Err(UpstreamError::Invalid(msg)) => {
-                self.check_and_trigger_proxy_rotation(
-                    &target.provider_id,
-                    crate::upstream_dispatcher::ProxyRotationTrigger::ConnectError,
-                )
-                .await;
-                let err = CoreError::UpstreamConnection(msg);
+                let is_proxy_rotated = self
+                    .check_and_trigger_proxy_rotation(
+                        &target.provider_id,
+                        crate::upstream_dispatcher::ProxyRotationTrigger::ConnectError,
+                    )
+                    .await;
+                let err = CoreError::UpstreamError {
+                    status: 502,
+                    provider: target.provider_id.to_string(),
+                    model: model.model_id.as_str().to_string(),
+                    body: format!("upstream connection error: {}", msg),
+                    is_proxy_rotated,
+                };
                 return self.record_and_fail(
                     req,
                     combo,
@@ -1472,12 +1514,19 @@ impl UpstreamDispatcher {
                 );
             }
             Err(_) => {
-                self.check_and_trigger_proxy_rotation(
-                    &target.provider_id,
-                    crate::upstream_dispatcher::ProxyRotationTrigger::ConnectError,
-                )
-                .await;
-                let err = CoreError::UpstreamConnection("unknown upstream error".to_string());
+                let is_proxy_rotated = self
+                    .check_and_trigger_proxy_rotation(
+                        &target.provider_id,
+                        crate::upstream_dispatcher::ProxyRotationTrigger::ConnectError,
+                    )
+                    .await;
+                let err = CoreError::UpstreamError {
+                    status: 502,
+                    provider: target.provider_id.to_string(),
+                    model: model.model_id.as_str().to_string(),
+                    body: "unknown upstream error".to_string(),
+                    is_proxy_rotated,
+                };
                 return self.record_and_fail(
                     req,
                     combo,
@@ -1575,7 +1624,8 @@ impl UpstreamDispatcher {
                 .and_then(parse_retry_after_ms);
             let is_rate_limited_status =
                 status_code == 429 || status_code == 408 || status_code == 503;
-            let err = if let Some(retry_ms) = retry_after_ms.filter(|_| is_rate_limited_status) {
+            let err = if is_rate_limited_status {
+                let retry_ms = retry_after_ms.unwrap_or(300_000);
                 if !is_proxy_rotated {
                     is_proxy_rotated = self
                         .check_and_trigger_proxy_rotation(
@@ -1703,6 +1753,8 @@ impl UpstreamDispatcher {
             created,
             connect_and_send_ms,
             resolved_timeouts,
+            proxy_url: dctx.proxy_url.clone(),
+            proxy_status: dctx.proxy_status.clone(),
         };
 
         match state.run_stream_loop(&ctx, self, &mut stream).await {
@@ -1769,7 +1821,10 @@ impl UpstreamDispatcher {
         // providers like nvidia-nim/minimax-m3 (Anthropic format)
         // that return 200 + empty content + null finish_reason.
         // Treat as error so the pipeline retries the next target.
-        let is_empty_stream = acc.as_ref().is_some_and(|a| a.is_empty());
+        // We only do this if stop_reason is None, because an empty
+        // stream with finish_reason="length" (max_tokens=1 cut it off)
+        // is perfectly valid.
+        let is_empty_stream = acc.as_ref().is_some_and(|a| a.is_empty()) && stop_reason.is_none();
         if is_empty_stream {
             let err = CoreError::UpstreamConnection(
                 "streaming response was empty (no content, no reasoning, no tool_calls) — treating as error for retry".to_string(),
