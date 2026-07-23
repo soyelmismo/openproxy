@@ -407,8 +407,8 @@ pub fn parse_gemini_sse_line(
     // is the thinking-then-answering interleaved case. We route the
     // text based on the `thought` flag, never on the field ordering.
     let (text, delta_reasoning) = {
-        let mut content_parts: Vec<String> = Vec::new();
-        let mut reasoning_parts: Vec<String> = Vec::new();
+        let mut content_parts = String::new();
+        let mut reasoning_parts = String::new();
         if let Some(candidate) = candidates.first()
             && let Some(content) = &candidate.content
         {
@@ -416,18 +416,17 @@ pub fn parse_gemini_sse_line(
                 if let Some(t) = part.text.as_deref() {
                     let is_thought = part.thought.unwrap_or(false);
                     if is_thought {
-                        reasoning_parts.push(t.to_string());
+                        reasoning_parts.push_str(t);
                     } else {
-                        content_parts.push(t.to_string());
+                        content_parts.push_str(t);
                     }
                 }
             }
         }
-        let joined = content_parts.concat();
         let dr = if reasoning_parts.is_empty() {
             None
         } else {
-            Some(reasoning_parts.concat())
+            Some(reasoning_parts)
         };
         // The wire payload's `delta.content` carries ONLY the
         // non-thought text (OpenAI streaming convention:
@@ -439,7 +438,7 @@ pub fn parse_gemini_sse_line(
         // the user's `content`. The thought text is routed to
         // `delta_reasoning` (which the pipeline separately feeds
         // to `append_reasoning`).
-        (joined, dr)
+        (content_parts, dr)
     };
 
     // Extract finish_reason
