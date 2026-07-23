@@ -19,7 +19,7 @@ license = "GPL-3.0"
 authors = ["openproxy contributors"]
 
 [workspace.dependencies]
-tokio = { version = "1.52", features = ["full"] }
+tokio = { version = "1.53", features = ["full"] }
 axum = "0.8"
 rusqlite = { version = "0.40", features = ["bundled"] }
 serde = { version = "1", features = ["derive"] }
