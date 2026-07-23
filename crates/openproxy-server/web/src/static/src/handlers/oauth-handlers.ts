@@ -28,7 +28,7 @@ interface AuthData {
 
 interface OAuthLoginShape {
   _currentAuth: AuthData | null;
-  _devicePollInterval?: any;
+  _devicePollInterval?: ReturnType<typeof setInterval> | null;
   startPKCE(provider: string): Promise<void>;
   pkcePopup(provider: string, authData: AuthData): Promise<void>;
   showManualPasteForm(provider: string, authData: AuthData): void;
