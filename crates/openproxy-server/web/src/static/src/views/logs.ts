@@ -173,7 +173,7 @@ function onLogsClick(e: Event): void {
       clickedRow.rowId ? String(clickedRow.rowId) : "",
       clickedRow.requestId,
       clickedRow.traceId,
-      clickedRow as any
+      clickedRow
     );
   }
 }
