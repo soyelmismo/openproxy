@@ -164,7 +164,7 @@ pub fn upsert_models_dev(body: &[u8], conn: &Connection) -> Result<usize> {
         ).map_err(openproxy_db::error::map_db_error)?;
 
         for model_val in models_obj.values() {
-            let model: ModelsDevModel = match serde_json::from_value(model_val.clone()) {
+            let model: ModelsDevModel = match serde::Deserialize::deserialize(model_val) {
                 Ok(m) => m,
                 Err(_) => continue,
             };
