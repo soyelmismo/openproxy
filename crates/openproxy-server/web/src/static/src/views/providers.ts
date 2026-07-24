@@ -340,7 +340,7 @@ async function onDeleteAccount(id: number): Promise<void> {
 
 async function onApplyLocalCli(accountId: number): Promise<void> {
   try {
-    const res = await api(`/accounts/${accountId}/apply-local-cli`, { method: "POST" }) as any;
+    const res = await api(`/accounts/${accountId}/apply-local-cli`, { method: "POST" }) as { success?: boolean; path?: string };
     if (res && res.success) {
       showToast(`Credentials applied locally to ${res.path}`, "success");
     }

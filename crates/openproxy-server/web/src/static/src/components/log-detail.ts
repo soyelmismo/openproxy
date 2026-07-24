@@ -1321,10 +1321,11 @@ export async function openLogDetail(
   id: string,
   requestId: string,
   traceId: string,
-  row?: any // AttemptState (from logs.ts)
+  row?: unknown // AttemptState (from logs.ts)
 ): Promise<void> {
   const gen = bumpOpenLogDetailGeneration();
-  const isFinalized = row != null && row.terminal && row.row;
+  const typedRow = row as Record<string, unknown> | undefined;
+  const isFinalized = typedRow != null && typedRow["terminal"] && typedRow["row"];
 
   const fallbackAttemptKey = traceId || (requestId ? `${requestId}:unknown` : id);
 

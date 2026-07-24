@@ -206,7 +206,7 @@ export function navigate(): void {
     const main: HTMLElement | null = document.getElementById("main");
     if (main) {
       const msg: string = (e instanceof Error) ? e.message : String(e);
-      delete (main as any)._$litPart$;
+      delete (main as { _$litPart$?: unknown })._$litPart$;
       main.innerHTML = '';
       render(html`<div class="banner banner-error">Error: ${msg}</div>`, main);
     }
