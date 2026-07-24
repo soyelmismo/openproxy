@@ -219,3 +219,64 @@ impl std::fmt::Debug for UpstreamConnectionPool {
             .finish()
     }
 }
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_pool_entry_creation() {
+        let entry = PoolEntry::new();
+        assert_eq!(entry.reuses.load(Ordering::SeqCst), 0);
+        assert_eq!(entry.total.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn test_pool_record_dial() {
+        let pool = UpstreamConnectionPool::new();
+        let key = HostKey::new(Scheme::Https, "example.com", 443);
+        pool.record_dial(key.clone());
+
+        assert_eq!(pool.total(), 1);
+        assert_eq!(pool.reuses(), 0);
+        assert_eq!(pool.host_count(), 1);
+        assert_eq!(pool.reuses_for(&key), 0);
+    }
+
+    #[test]
+    fn test_pool_record_reuse() {
+        let pool = UpstreamConnectionPool::new();
+        let key = HostKey::new(Scheme::Https, "example.com", 443);
+        pool.record_dial(key.clone());
+        pool.record_reuse(key.clone());
+
+        assert_eq!(pool.total(), 2);
+        assert_eq!(pool.reuses(), 1);
+        assert_eq!(pool.host_count(), 1);
+        assert_eq!(pool.reuses_for(&key), 1);
+    }
+
+    #[test]
+    fn test_pool_eviction() {
+        let pool = UpstreamConnectionPool::new();
+        let key1 = HostKey::new(Scheme::Https, "example.com", 443);
+        let key2 = HostKey::new(Scheme::Http, "test.com", 80);
+
+        pool.record_dial(key1.clone());
+        pool.record_dial(key2.clone());
+
+        assert_eq!(pool.host_count(), 2);
+
+        // Everything should be kept if max_age is large
+        let evicted = pool.evict_older_than(Duration::from_secs(3600));
+        assert_eq!(evicted, 0);
+        assert_eq!(pool.host_count(), 2);
+
+        // Sleep to ensure time advances past 0
+        std::thread::sleep(Duration::from_millis(5));
+
+        // Everything should be evicted if max_age is 0
+        let evicted = pool.evict_older_than(Duration::from_millis(0));
+        assert_eq!(evicted, 2);
+        assert_eq!(pool.host_count(), 0);
+    }
+}
