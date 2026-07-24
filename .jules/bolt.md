@@ -38,3 +38,6 @@
 **Learning:** When executing a series of SQLite migrations tracking metadata (version), batching the `INSERT` operations into a single `execute_batch` query eliminates the N parameterization round-trip overhead of cached prepared statements resulting in reduced context switching without risking parameterized data since `version` is integer-primitive.
 **Action:** For sequential metadata insertion, favor concatenated bulk batch statements via `execute_batch` over running multiple statements in a `prepare_cached` loop, but always remember to test if the string builder received at least 1 record prior to executing the batch.
 
+## 2026-07-24 - Avoid serde_json::from_value clone overhead
+**Learning:** Calling `serde_json::from_value(value.clone())` deeply clones the entire JSON AST just to immediately deserialize it into a struct, causing heavy allocation overhead. `Deserialize` traits can usually deserialize directly from `&serde_json::Value` avoiding this clone altogether.
+**Action:** Replace `serde_json::from_value::<T>(val.clone())` with `<T as serde::Deserialize>::deserialize(val)` to avoid the expensive `.clone()` on the JSON AST.
