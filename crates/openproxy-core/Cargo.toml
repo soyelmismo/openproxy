@@ -115,3 +115,7 @@ harness = false
 [[bench]]
 name = "oauth_refresh"
 harness = false
+
+[[bench]]
+name = "sync_bench"
+harness = false

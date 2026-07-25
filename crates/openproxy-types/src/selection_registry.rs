@@ -108,6 +108,14 @@ mod tests {
     #[test]
     fn test_new_and_basic_metrics() {
         let registry = SelectionRegistry::new();
+        let t = ComboTargetId(999);
+        assert_eq!(registry.last_success_within(t, 10), 0);
+        assert_eq!(registry.request_count_within(t, 10), 0);
+        registry.record_request(t);
+        assert_eq!(registry.last_success_within(t, 10), 0);
+        assert_eq!(registry.request_count_within(t, 10), 1);
+
+        let registry = SelectionRegistry::new();
         assert!(registry.is_empty());
         assert_eq!(registry.len(), 0);
 
@@ -128,6 +136,17 @@ mod tests {
         let last_success = registry.last_success_within(target_1, 10);
         assert!(last_success > 0);
         assert_eq!(registry.request_count_within(target_1, 10), 2);
+    }
+
+    #[test]
+    fn test_record_success_new_target() {
+        let registry = SelectionRegistry::new();
+        let target = ComboTargetId(42);
+
+        registry.record_success(target);
+        assert_eq!(registry.len(), 1);
+        assert_eq!(registry.request_count_within(target, 10), 1);
+        assert!(registry.last_success_within(target, 10) > 0);
     }
 
     #[test]
