@@ -325,7 +325,7 @@ async fn run_one_tick(
     // carried by `refresh_models` is `Send` but the pool's
     // `MutexGuard` is not).
     let (provider_row, accounts_list) = {
-        let w = db_pool.writer();
+        let w = db_pool.reader();
         let row = match providers::get(&w, &provider) {
             Ok(r) => r,
             Err(e) => {
@@ -418,7 +418,7 @@ async fn run_one_tick(
             // adapter can fetch account-specific models.
             if acc.auth_type == "oauth" {
                 let decrypt_result = {
-                    let w = db_pool.writer();
+                    let w = db_pool.reader();
                     accounts::decrypt_access_token(&w, acc.id, master_key.as_ref())
                 };
                 match decrypt_result {
@@ -435,7 +435,7 @@ async fn run_one_tick(
                 }
             } else {
                 let decrypt_result = {
-                    let w = db_pool.writer();
+                    let w = db_pool.reader();
                     accounts::decrypt_api_key(&w, acc.id, master_key.as_ref())
                 };
                 match decrypt_result {
