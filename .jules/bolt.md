@@ -49,6 +49,14 @@
 ## 2024-05-18 - Avoid Vector of Strings allocation
 **Learning:** Replaced a `Vec<String>` allocations for string concatenations with a single `String` allocation in a hot path (`parse_gemini_sse_line`) reducing memory allocations per chunk.
 **Action:** Use `.push_str()` on a single `String` instead of accumulating `Vec<String>` and then joining.
+## 2024-05-18 - Async Locking Clones in Loops
+**Learning:** Calling `.clone()` on a `RwLockReadGuard` holding a large collection like `adapters.read().clone()` inside an async spawn block can severely degrade performance. This introduces significant CPU overhead and blocks the executor thread while cloning deep nested types containing API clients.
+**Action:** Always extract the minimal required data (e.g. `Vec<String>`) inside a short-lived block, and pass that slice to asynchronous operations instead of the cloned state.
+
+## 2024-05-18 - Unbounded Query Regressions
+**Learning:** When trying to optimize N+1 queries using batch fetches, never replace a targeted fetch bounded by a known small constant (e.g. 10 supported providers) with an unbounded `None` filter if the row processing involves expensive decryption (e.g. `accounts::list(&conn, None, &master_key)`). This turns an optimization into a critical performance regression by reading and decrypting the entire database.
+**Action:** Validate the scale and side effects of batch queries. If the loop constraint N is very small, maintaining the targeted loop is safer than an unbounded fetch.
+
 ## 2026-07-25 - ⚡ Bolt: concurrent background refreshing with rate limiter
 **Learning:** Sequential tasks that have intentional I/O sleep staggers (like anti-burst protection `SETTLE_GAP_SECS`) heavily bound overall loop performance (latency is cumulative).
 **Action:** Use `governor::RateLimiter` coupled with `tokio::task::JoinSet` to implement a concurrent rate limiter. This maintains anti-burst thresholds over the system but bounds execution to parallel I/O calls rather than summing them all sequentially.
