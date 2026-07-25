@@ -220,6 +220,136 @@ pub fn insert(
     }
 }
 
+/// Insert multiple notification rows. Uses `INSERT OR IGNORE` and batching.
+/// Returns a Vec of `(id, payload)` matching the inserted/deduped rows.
+pub fn insert_many(
+    conn: &Connection,
+    kind: &str,
+    rows: &[(serde_json::Value, Option<String>, Option<String>)], // (payload, dedup_key, provider_id)
+) -> Result<Vec<(i64, serde_json::Value)>> {
+    if rows.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let mut all_results = Vec::with_capacity(rows.len());
+
+    for chunk in rows.chunks(500) {
+        let mut sql = String::from(
+            "INSERT OR IGNORE INTO notifications (kind, payload_json, dedup_key, provider_id) VALUES ",
+        );
+        let mut params = Vec::new();
+        let mut payload_strings = Vec::new();
+
+        for (i, row) in chunk.iter().enumerate() {
+            if i > 0 {
+                sql.push_str(", ");
+            }
+            sql.push_str(&format!(
+                "(?{}, ?{}, ?{}, ?{})",
+                i * 4 + 1,
+                i * 4 + 2,
+                i * 4 + 3,
+                i * 4 + 4
+            ));
+            payload_strings.push(serde_json::to_string(&row.0)?);
+        }
+
+        sql.push_str(" RETURNING id, dedup_key");
+
+        for (i, row) in chunk.iter().enumerate() {
+            params.push(Box::new(kind.to_string()) as Box<dyn rusqlite::ToSql>);
+            params.push(Box::new(payload_strings[i].clone()) as Box<dyn rusqlite::ToSql>);
+            params.push(Box::new(row.1.clone()) as Box<dyn rusqlite::ToSql>);
+            params.push(Box::new(row.2.clone()) as Box<dyn rusqlite::ToSql>);
+        }
+
+        let params_refs: Vec<&dyn rusqlite::ToSql> = params.iter().map(|p| p.as_ref()).collect();
+
+        let mut stmt = conn.prepare(&sql)?;
+        let mut returned_rows = stmt.query(&params_refs[..])?;
+
+        let mut inserted_ids_by_dedup = std::collections::HashMap::new();
+        let mut inserted_ids_no_dedup = Vec::new();
+
+        while let Some(r) = returned_rows.next()? {
+            let id: i64 = r.get(0)?;
+            let dedup_key: Option<String> = r.get(1)?;
+            if let Some(dk) = dedup_key {
+                inserted_ids_by_dedup.insert(dk, id);
+            } else {
+                inserted_ids_no_dedup.push(id);
+            }
+        }
+
+        let mut no_dedup_idx = 0;
+        let mut missing_dedup_keys = Vec::new();
+
+        // Pass 1: map inserted rows and collect missing dedups
+        for (i, row) in chunk.iter().enumerate() {
+            if let Some(dk) = &row.1
+                && !inserted_ids_by_dedup.contains_key(dk)
+            {
+                missing_dedup_keys.push((i, dk.clone()));
+            }
+        }
+
+        let mut existing_ids = std::collections::HashMap::new();
+        if !missing_dedup_keys.is_empty() {
+            // Need to fetch missing IDs. Since SQLite has variable limit, chunk the SELECT just in case,
+            // though 500 is within 32766 easily.
+            let placeholders = missing_dedup_keys
+                .iter()
+                .map(|_| "?")
+                .collect::<Vec<_>>()
+                .join(", ");
+            let select_sql = format!(
+                "SELECT id, dedup_key FROM notifications WHERE kind = ? AND dedup_key IN ({}) AND date(created_at) = date('now')",
+                placeholders
+            );
+
+            let mut select_params: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
+            select_params.push(Box::new(kind.to_string()));
+            for (_, dk) in &missing_dedup_keys {
+                select_params.push(Box::new(dk.clone()));
+            }
+
+            let select_params_refs: Vec<&dyn rusqlite::ToSql> =
+                select_params.iter().map(|p| p.as_ref()).collect();
+            let mut select_stmt = conn.prepare(&select_sql)?;
+            let mut select_rows = select_stmt.query(&select_params_refs[..])?;
+
+            while let Some(r) = select_rows.next()? {
+                let id: i64 = r.get(0)?;
+                let dk: String = r.get(1)?;
+                existing_ids.insert(dk, id);
+            }
+        }
+
+        // Pass 2: resolve all IDs
+        for row in chunk.iter() {
+            let id = if let Some(dk) = &row.1 {
+                if let Some(&inserted_id) = inserted_ids_by_dedup.get(dk) {
+                    Some(inserted_id)
+                } else if let Some(&existing_id) = existing_ids.get(dk) {
+                    Some(existing_id)
+                } else {
+                    None
+                }
+            } else {
+                let id = inserted_ids_no_dedup.get(no_dedup_idx).copied();
+                no_dedup_idx += 1;
+                id
+            };
+
+            if let Some(id) = id {
+                all_results.push((id, row.0.clone()));
+            }
+        }
+    }
+
+    Ok(all_results)
+}
+
 /// Same as [`insert`] but also broadcasts the event to WS clients if a new
 /// row was inserted (or an existing dedup row was found). This is the
 /// primary entry point from non-transactional code paths (e.g. system

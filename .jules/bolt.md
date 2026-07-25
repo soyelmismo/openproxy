@@ -52,6 +52,19 @@
 ## 2024-05-18 - Async Locking Clones in Loops
 **Learning:** Calling `.clone()` on a `RwLockReadGuard` holding a large collection like `adapters.read().clone()` inside an async spawn block can severely degrade performance. This introduces significant CPU overhead and blocks the executor thread while cloning deep nested types containing API clients.
 **Action:** Always extract the minimal required data (e.g. `Vec<String>`) inside a short-lived block, and pass that slice to asynchronous operations instead of the cloned state.
+
 ## 2024-05-18 - Unbounded Query Regressions
 **Learning:** When trying to optimize N+1 queries using batch fetches, never replace a targeted fetch bounded by a known small constant (e.g. 10 supported providers) with an unbounded `None` filter if the row processing involves expensive decryption (e.g. `accounts::list(&conn, None, &master_key)`). This turns an optimization into a critical performance regression by reading and decrypting the entire database.
 **Action:** Validate the scale and side effects of batch queries. If the loop constraint N is very small, maintaining the targeted loop is safer than an unbounded fetch.
+
+## 2026-07-25 - ⚡ Bolt: concurrent background refreshing with rate limiter
+**Learning:** Sequential tasks that have intentional I/O sleep staggers (like anti-burst protection `SETTLE_GAP_SECS`) heavily bound overall loop performance (latency is cumulative).
+**Action:** Use `governor::RateLimiter` coupled with `tokio::task::JoinSet` to implement a concurrent rate limiter. This maintains anti-burst thresholds over the system but bounds execution to parallel I/O calls rather than summing them all sequentially.
+
+## 2026-07-25 - ⚡ Bolt: N+1 query in deleted models notification
+**Learning:** Inserting rows individually in a loop leads to N+1 query performance issues due to DB roundtrips. Batching inserts using `INSERT OR IGNORE ... VALUES ... RETURNING id, dedup_key` allows executing bulk inserts in a single operation, while selectively querying for only missing `dedup_key` elements minimizes database load and eliminates the need for N individual queries per model.
+**Action:** When implementing database synchronizations, diff handling, or batch updates, always verify if iterations perform database insertions. If so, replace with chunked bulk operations.
+
+## 2026-07-25 - Optimize Antigravity OAuth onboard_user Retry Loop Latency
+**Learning:** Retry loops for side-effect heavy operations (like OAuth `post_exchange`) can accumulate massive tail latency if their exponential backoff delays are configured too conservatively. Even without switching to background tasks (`tokio::spawn`), which introduces race condition risks, latency can be significantly reduced simply by tuning the retry base and ceiling parameters.
+**Action:** When inspecting retry loops, optimize for responsiveness by lowering initial delays (e.g., from 500ms to 50ms) and bounding the maximum backoff (e.g., 2 seconds), scaling attempts linearly to compensate and avoid total timeouts while keeping the fast-path highly performant.
