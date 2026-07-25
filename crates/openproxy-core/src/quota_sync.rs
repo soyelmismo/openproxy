@@ -113,13 +113,12 @@ async fn run_quota_sync_cycle(
     let delay_ms = config.quota_sync.delay_between_accounts_ms;
 
     // 3. Process each account with a delay
-    let ads = adapters.read().clone();
     for account_id in accounts_to_sync {
         match refresh_single_account_quota(
             account_id,
             db_pool,
             master_key,
-            &ads,
+            &supported_providers,
             upstream_client,
             oauth_registry,
         )
@@ -150,26 +149,22 @@ pub async fn refresh_single_account_quota(
     account_id: AccountId,
     db_pool: &Arc<DbPool>,
     master_key: &Arc<MasterKey>,
-    adapters: &[ProviderAdapterEnum],
+    supported_providers: &[String],
     upstream_client: &Arc<UpstreamClient>,
     oauth_registry: &Arc<OAuthProviderRegistry>,
 ) -> crate::error::Result<Option<AccountQuota>> {
     let (provider_id_str, api_key, access_token, provider_specific) = {
         let db_pool = db_pool.clone();
         let master_key = master_key.clone();
-        let adapters_list: Vec<_> = adapters
-            .iter()
-            .map(|a| (a.id().to_string(), a.metadata().quota_refresh_supported))
-            .collect();
+        // Extract the strings to avoid cloning the whole slice into the move closure
+        let supported_providers: Vec<String> = supported_providers.to_vec();
         let res = tokio::task::spawn_blocking(move || {
             let r = db_pool.reader();
             let acc = admin::account_for_quota_refresh(&r, account_id, master_key.as_ref())?;
 
-            let supports_quota = adapters_list
+            let supports_quota = supported_providers
                 .iter()
-                .find(|(id, _)| id.as_str() == acc.provider_id.as_str())
-                .map(|(_, supported)| *supported)
-                .unwrap_or(false);
+                .any(|id| id.as_str() == acc.provider_id.as_str());
 
             if !supports_quota {
                 return Ok(None);
