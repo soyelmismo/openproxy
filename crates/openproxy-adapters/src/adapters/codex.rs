@@ -347,3 +347,38 @@ fn json_f64(value: &serde_json::Value) -> Option<f64> {
         .as_f64()
         .or_else(|| value.as_str().and_then(|s| s.parse::<f64>().ok()))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn test_parse_codex_usage_quota_valid() {
+        let body = json!({
+            "rate_limit": {
+                "primary_window": {
+                    "used_percent": 42.5,
+                    "reset_at": 1700000000.0
+                },
+                "secondary_window": {
+                    "usedPercent": 85.1,
+                    "resetAfterSeconds": 3600.0
+                }
+            }
+        });
+
+        let quota = parse_codex_usage_quota(&body).expect("should parse");
+        assert_eq!(quota.session_used, Some(43));
+        assert_eq!(quota.session_reset_at, Some("1700000000".to_string()));
+        assert_eq!(quota.weekly_used, Some(85));
+        assert!(quota.weekly_reset_at.is_some());
+    }
+
+    #[test]
+    fn test_parse_codex_usage_quota_missing_rate_limit() {
+        let body = json!({});
+        let err = parse_codex_usage_quota(&body).unwrap_err();
+        assert!(err.to_string().contains("codex quota missing rate_limit"));
+    }
+}
