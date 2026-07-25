@@ -52,3 +52,7 @@
 ## 2026-07-25 - ⚡ Bolt: N+1 query in deleted models notification
 **Learning:** Inserting rows individually in a loop leads to N+1 query performance issues due to DB roundtrips. Batching inserts using `INSERT OR IGNORE ... VALUES ... RETURNING id, dedup_key` allows executing bulk inserts in a single operation, while selectively querying for only missing `dedup_key` elements minimizes database load and eliminates the need for N individual queries per model.
 **Action:** When implementing database synchronizations, diff handling, or batch updates, always verify if iterations perform database insertions. If so, replace with chunked bulk operations.
+
+## 2026-07-25 - Optimize Antigravity OAuth onboard_user Retry Loop Latency
+**Learning:** Retry loops for side-effect heavy operations (like OAuth `post_exchange`) can accumulate massive tail latency if their exponential backoff delays are configured too conservatively. Even without switching to background tasks (`tokio::spawn`), which introduces race condition risks, latency can be significantly reduced simply by tuning the retry base and ceiling parameters.
+**Action:** When inspecting retry loops, optimize for responsiveness by lowering initial delays (e.g., from 500ms to 50ms) and bounding the maximum backoff (e.g., 2 seconds), scaling attempts linearly to compensate and avoid total timeouts while keeping the fast-path highly performant.
