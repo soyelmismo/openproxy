@@ -830,14 +830,19 @@ pub async fn start_refresh_scheduler(
             })
         };
 
-        for (i, account) in accounts.iter().enumerate() {
-            // Anti-burst staggering: 3s delay between consecutive accounts.
-            if i > 0 {
-                tokio::time::sleep(std::time::Duration::from_secs(STAGGER_DELAY_SECS)).await;
-            }
+        use governor::{Quota, RateLimiter};
+        use std::num::NonZeroU32;
+        let quota = Quota::with_period(std::time::Duration::from_secs(STAGGER_DELAY_SECS))
+            .unwrap()
+            .allow_burst(NonZeroU32::new(1).unwrap());
+        let limiter = std::sync::Arc::new(RateLimiter::direct(quota));
 
+
+        let mut join_set = tokio::task::JoinSet::new();
+
+        for account in accounts {
             let provider = match registry.get(account.provider_id.as_str()) {
-                Some(p) => p,
+                Some(p) => p.clone(),
                 None => {
                     tracing::debug!(
                         provider = %account.provider_id,
@@ -847,7 +852,6 @@ pub async fn start_refresh_scheduler(
                 }
             };
 
-            // Backoff gate: skip accounts that failed recently.
             let account_id = account.id.0;
             if let Some(last_attempt) = last_refresh_attempts.get(&account_id) {
                 let failure_count = failure_counts.get(&account_id).copied().unwrap_or(0);
@@ -861,11 +865,9 @@ pub async fn start_refresh_scheduler(
             let refresh_token = match refresh_tokens.get(&account.id) {
                 Some(Ok(Some(t))) => Ok(Some(t.clone())),
                 Some(Ok(None)) => Ok(None),
-                Some(Err(e)) => Err(CoreError::Internal(e.to_string())),
+                Some(Err(e)) => Err(crate::error::CoreError::Internal(e.to_string())),
                 None => {
-                    // Fallback to internal error if token couldn't be loaded in batch
-                    // (e.g. if the batch query failed entirely for this account)
-                    Err(CoreError::Internal(
+                    Err(crate::error::CoreError::Internal(
                         "refresh token not found in batch".to_string(),
                     ))
                 }
@@ -889,22 +891,49 @@ pub async fn start_refresh_scheduler(
                 }
             };
 
+            // We mark attempt locally first.
             last_refresh_attempts.insert(account_id, chrono::Utc::now());
 
-            match TokenRefreshCoordinator::global()
-                .refresh_and_store(
-                    account.provider_id.as_str(),
-                    provider,
-                    &refresh_token,
-                    &upstream_client,
-                    account.id,
-                    DbRef::Pool(&db_pool),
-                    &master_key,
-                )
-                .await
-            {
+            let lim = limiter.clone();
+            let upstream_client = upstream_client.clone();
+            let db_pool = db_pool.clone();
+            let master_key = master_key.clone();
+
+            join_set.spawn(async move {
+                lim.until_ready().await;
+
+                let res = TokenRefreshCoordinator::global()
+                    .refresh_and_store(
+                        account.provider_id.as_str(),
+                        provider.clone(),
+                        &refresh_token,
+                        &upstream_client,
+                        account.id,
+                        DbRef::Pool(&db_pool),
+                        &master_key,
+                    )
+                    .await;
+
+                // 2-second settle gap after each refresh (Auth0 protection).
+                tokio::time::sleep(std::time::Duration::from_secs(SETTLE_GAP_SECS)).await;
+
+                (account, res)
+            });
+        }
+
+        while let Some(res) = join_set.join_next().await {
+            let (account, result) = match res {
+                Ok(r) => r,
+                Err(e) => {
+                    tracing::error!(error = %e, "oauth refresh task panicked");
+                    continue;
+                }
+            };
+
+            let account_id = account.id.0;
+
+            match result {
                 Ok(token) => {
-                    // Reset failure tracking on success.
                     failure_counts.remove(&account_id);
                     last_refresh_attempts.remove(&account_id);
 
@@ -932,7 +961,6 @@ pub async fn start_refresh_scheduler(
                     );
                 }
                 Err(e) => {
-                    // Increment failure counter and update health status.
                     let count = failure_counts.entry(account_id).or_insert(0);
                     *count += 1;
 
@@ -998,9 +1026,6 @@ pub async fn start_refresh_scheduler(
                     );
                 }
             }
-
-            // 2-second settle gap after each refresh (Auth0 protection).
-            tokio::time::sleep(std::time::Duration::from_secs(SETTLE_GAP_SECS)).await;
         }
 
         // LEAK FIX: prune `failure_counts` / `last_refresh_attempts`
