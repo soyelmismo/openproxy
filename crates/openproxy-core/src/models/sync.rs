@@ -247,7 +247,7 @@ pub fn generate_events(
         return Ok(events);
     }
 
-    for d in &diff.new_models {
+    let new_models_rows: Vec<_> = diff.new_models.iter().map(|d| {
         let payload = serde_json::json!({
             "provider_id": provider.as_str(),
             "model_id": d.model_id.as_str(),
@@ -256,37 +256,27 @@ pub fn generate_events(
             "context_length": d.context_length,
         });
         let dedup = format!("{}:{}", provider.as_str(), d.model_id.as_str());
-        if let Some(id) = crate::notifications::insert(
-            tx,
-            crate::notifications::KIND_MODEL_NEW,
-            &payload,
-            Some(&dedup),
-            Some(provider.as_str()),
-        )
-        .ok()
-        .flatten()
-        {
+        (payload, Some(dedup), Some(provider.as_str().to_string()))
+    }).collect();
+
+    if let Ok(results) = crate::notifications::insert_many(tx, crate::notifications::KIND_MODEL_NEW, &new_models_rows) {
+        for (id, payload) in results {
             events.push((id, crate::notifications::KIND_MODEL_NEW, payload));
         }
     }
 
-    for (model_id, display_name) in diff.deleted_models() {
+    let deleted_models_rows: Vec<_> = diff.deleted_models().map(|(model_id, display_name)| {
         let payload = serde_json::json!({
             "provider_id": provider.as_str(),
             "model_id": model_id,
             "display_name": display_name,
         });
         let dedup = format!("{}:{}", provider.as_str(), model_id);
-        if let Some(id) = crate::notifications::insert(
-            tx,
-            crate::notifications::KIND_MODEL_GONE,
-            &payload,
-            Some(&dedup),
-            Some(provider.as_str()),
-        )
-        .ok()
-        .flatten()
-        {
+        (payload, Some(dedup), Some(provider.as_str().to_string()))
+    }).collect();
+
+    if let Ok(results) = crate::notifications::insert_many(tx, crate::notifications::KIND_MODEL_GONE, &deleted_models_rows) {
+        for (id, payload) in results {
             events.push((id, crate::notifications::KIND_MODEL_GONE, payload));
         }
     }
