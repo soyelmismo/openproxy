@@ -438,3 +438,20 @@ pub fn gemini_to_openai(resp: &GeminiResponse) -> openproxy_types::OpenAIRespons
         usage,
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn test_parse_image_url_to_inline_data() {
+        let part = json!({
+            "type": "image_url",
+            "image_url": { "url": "data:image/png;base64,iVBORw0KGgo=" }
+        });
+        let result = parse_image_url_to_inline_data(&part).unwrap();
+        assert_eq!(result.mime_type, "image/png");
+        assert_eq!(result.data, "iVBORw0KGgo=");
+    }
+}
