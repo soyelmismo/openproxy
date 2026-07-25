@@ -41,3 +41,7 @@
 ## 2026-07-24 - Avoid serde_json::from_value clone overhead
 **Learning:** Calling `serde_json::from_value(value.clone())` deeply clones the entire JSON AST just to immediately deserialize it into a struct, causing heavy allocation overhead. `Deserialize` traits can usually deserialize directly from `&serde_json::Value` avoiding this clone altogether.
 **Action:** Replace `serde_json::from_value::<T>(val.clone())` with `<T as serde::Deserialize>::deserialize(val)` to avoid the expensive `.clone()` on the JSON AST.
+
+## 2024-05-18 - Avoid Vector of Strings allocation
+**Learning:** Replaced a `Vec<String>` allocations for string concatenations with a single `String` allocation in a hot path (`parse_gemini_sse_line`) reducing memory allocations per chunk.
+**Action:** Use `.push_str()` on a single `String` instead of accumulating `Vec<String>` and then joining.

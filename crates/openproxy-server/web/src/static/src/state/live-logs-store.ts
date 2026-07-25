@@ -84,7 +84,7 @@ class LiveLogsStore {
   // Actions
   // --------------------------------------------------------------------------
 
-  public dispatch(envelope: LiveLogEnvelopeV2 | any) {
+  public dispatch(envelope: unknown) {
     const v2Envelope = this.normalizeWsEnvelope(envelope);
     if (!v2Envelope) return;
 
@@ -323,67 +323,71 @@ class LiveLogsStore {
   // Compatibility / Normalization
   // --------------------------------------------------------------------------
 
-  private normalizeWsEnvelope(env: any): LiveLogEnvelopeV2 | null {
-    if (env.type === "snapshot" || env.type === "attempt_event" || env.type === "usage_row" || env.type === "gap") {
-      return env as LiveLogEnvelopeV2; // Already V2
+  private normalizeWsEnvelope(env: unknown): LiveLogEnvelopeV2 | null {
+    if (typeof env !== "object" || env === null) return null;
+    const typedEnv = env as Record<string, unknown>;
+
+    if (typedEnv["type"] === "snapshot" || typedEnv["type"] === "attempt_event" || typedEnv["type"] === "usage_row" || typedEnv["type"] === "gap") {
+      return typedEnv as unknown as LiveLogEnvelopeV2; // Already V2
     }
 
     // Legacy conversions
     const now = Date.now() - this.clockOffsetMs;
-    if (env.type === "stage" && env.data) {
-      const s = env.data as StageEvent;
-      const attempt_key = s.trace_id || `${s.request_id}:unknown`;
-      const stage_rank = this.rankStage(s.stage);
-      const isTerminal = s.stage === "completed" || s.stage === "failed" || s.stage === "cancelled";
+    if (typedEnv["type"] === "stage" && typedEnv["data"]) {
+      const data = typedEnv["data"] as StageEvent;
+      const attempt_key = data.trace_id || `${data.request_id}:unknown`;
+      const stage_rank = this.rankStage(data.stage);
+      const isTerminal = data.stage === "completed" || data.stage === "failed" || data.stage === "cancelled";
       return {
         type: "attempt_event",
         cursor: 0,
         event: {
           attempt_key,
-          request_id: s.request_id,
-          ...(s.trace_id ? { trace_id: s.trace_id } : {}),
-          stage_seq: Math.floor(s.elapsed_ms), // fallback sequence
+          request_id: data.request_id,
+          ...(data.trace_id ? { trace_id: data.trace_id } : {}),
+          stage_seq: Math.floor(data.elapsed_ms), // fallback sequence
           stage_rank,
           event_time: now,
-          started_at: now - s.elapsed_ms,
+          started_at: now - data.elapsed_ms,
           terminal: isTerminal,
-          stage: s.stage,
-          ...(s.connect_ms != null ? { connect_ms: s.connect_ms } : {}),
-          ...(s.ttft_ms != null ? { ttft_ms: s.ttft_ms } : {}),
-          ...(s.error ? { error: s.error } : {}),
-          ...(s.status_code != null ? { status_code: s.status_code } : {}),
-          ...(s.provider_id ? { provider_id: s.provider_id } : {}),
-          ...(s.upstream_model_id ? { upstream_model_id: s.upstream_model_id } : {})
+          stage: data.stage,
+          ...(data.connect_ms != null ? { connect_ms: data.connect_ms } : {}),
+          ...(data.ttft_ms != null ? { ttft_ms: data.ttft_ms } : {}),
+          ...(data.error ? { error: data.error } : {}),
+          ...(data.status_code != null ? { status_code: data.status_code } : {}),
+          ...(data.provider_id ? { provider_id: data.provider_id } : {}),
+          ...(data.upstream_model_id ? { upstream_model_id: data.upstream_model_id } : {})
         }
       };
     }
 
-    if (env.type === "row" && env.data) {
+    if (typedEnv["type"] === "row" && typedEnv["data"]) {
       return {
         type: "usage_row",
         cursor: 0,
-        row: env.data as RecentUsageRow
+        row: typedEnv["data"] as RecentUsageRow
       };
     }
 
-    if (env.type === "history" && env.rows) {
+    if (typedEnv["type"] === "history" && typedEnv["rows"]) {
       // Treat history as a mini snapshot of rows
       return {
         type: "snapshot",
         cursor: 0,
         server_now: now,
-        rows: env.rows,
+        rows: typedEnv["rows"] as RecentUsageRow[],
         attempts: []
       };
     }
 
-    if (env.type === "pong") {
-      const st = typeof env.server_time === "string" ? Date.parse(env.server_time) : (env.server_time || Date.now());
-      return { type: "pong", server_time: st };
+    if (typedEnv["type"] === "pong") {
+      const server_time = typedEnv["server_time"];
+      const st = typeof server_time === "string" ? Date.parse(server_time) : (Number(server_time) || Date.now());
+      return { type: "pong", server_time: st } as unknown as LiveLogEnvelopeV2;
     }
 
-    if (env.type === "error" && env.message) {
-      return { type: "error", message: env.message };
+    if (typedEnv["type"] === "error" && typedEnv["message"]) {
+      return { type: "error", message: String(typedEnv["message"]) } as unknown as LiveLogEnvelopeV2;
     }
 
     return null;

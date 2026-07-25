@@ -280,7 +280,7 @@ function renderProxiesList(proxies: FreeProxyRow[], error: string | null, page: 
 
 function renderProxies(): TemplateResult {
   const proxies = (state.proxies as FreeProxyRow[]) || [];
-  const summary = (state as any).proxySummary || {
+  const summary = state.proxySummary || {
     total: 0,
     alive: 0,
     dead: 0,
