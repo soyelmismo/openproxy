@@ -107,7 +107,7 @@ impl ProviderAdapter for OpenRouterAdapter {
         let models: Vec<DiscoveredModel> = arr
             .iter()
             .filter_map(|raw| {
-                let entry: OpenRouterModelEntry = serde_json::from_value(raw.clone()).ok()?;
+                let entry: OpenRouterModelEntry = serde::Deserialize::deserialize(raw).ok()?;
                 // Borrow the id first so the rest of the closure can
                 // keep `&entry` borrowable; only clone the String when
                 // we need to move it into the `DiscoveredModel`.

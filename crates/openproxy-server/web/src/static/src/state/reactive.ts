@@ -63,7 +63,7 @@ export function requestUpdate(): void {
         // Previous render crashed — lit-html's internal state is
         // corrupted. Reset by clearing the container and deleting its
         // lit-html part reference, then do a fresh render from scratch.
-        delete (currentContainer as any)._$litPart$;
+        delete (currentContainer as { _$litPart$?: unknown })._$litPart$;
         currentContainer.innerHTML = '';
         renderBroken = false;
       }
@@ -77,7 +77,7 @@ export function requestUpdate(): void {
         updateScheduled = false;
         if (currentContainer && currentRenderFn && currentContainer.isConnected) {
           try {
-            delete (currentContainer as any)._$litPart$;
+            delete (currentContainer as { _$litPart$?: unknown })._$litPart$;
             currentContainer.innerHTML = '';
             render(currentRenderFn(), currentContainer);
             renderBroken = false;
@@ -104,7 +104,7 @@ export function forceUpdate(): void {
   }
   try {
     if (renderBroken) {
-      delete (currentContainer as any)._$litPart$;
+      delete (currentContainer as { _$litPart$?: unknown })._$litPart$;
       currentContainer.innerHTML = '';
       renderBroken = false;
     }

@@ -182,7 +182,7 @@ impl ProviderAdapter for CustomAdapter {
             let models: Vec<DiscoveredModel> = arr
                 .iter()
                 .filter_map(|raw| {
-                    let entry: OpenAIModelEntry = serde_json::from_value(raw.clone()).ok()?;
+                    let entry: OpenAIModelEntry = serde::Deserialize::deserialize(raw).ok()?;
                     let id = entry.id;
                     Some(DiscoveredModel {
                         model_id: ModelId::new(id.clone()),

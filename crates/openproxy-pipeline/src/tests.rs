@@ -4872,7 +4872,7 @@ async fn streaming_response_body_persists_reconstructed_openai_chat() {
     let body =
         response_body_json.expect("recording=true must produce a non-NULL response_body_json");
     // The persisted body must round-trip through OpenAIResponse.
-    let parsed: OpenAIResponse = serde_json::from_value(body.clone())
+    let parsed: OpenAIResponse = serde::Deserialize::deserialize(body)
         .expect("persisted body must round-trip through OpenAIResponse");
     let content = parsed
         .choices
@@ -4928,7 +4928,7 @@ async fn streaming_response_body_persists_reconstructed_anthropic_message_with_t
 
     let body = response_body_json.expect("recording=true must produce non-NULL body");
     let parsed: OpenAIResponse =
-        serde_json::from_value(body.clone()).expect("body must round-trip through OpenAIResponse");
+        serde::Deserialize::deserialize(body).expect("body must round-trip through OpenAIResponse");
 
     // tool_calls must have one entry with the right name and a
     // parseable arguments JSON object.
@@ -5000,7 +5000,7 @@ async fn streaming_response_body_persists_reconstructed_gemini_response() {
 
     let body = response_body_json.expect("recording=true must produce non-NULL body");
     let parsed: OpenAIResponse =
-        serde_json::from_value(body.clone()).expect("body must round-trip");
+        serde::Deserialize::deserialize(body).expect("body must round-trip");
     let content = parsed
         .choices
         .first()
@@ -5049,7 +5049,7 @@ async fn streaming_response_body_persists_reasoning_content_o1() {
 
     let body = response_body_json.expect("recording=true must produce non-NULL body");
     let parsed: OpenAIResponse =
-        serde_json::from_value(body.clone()).expect("body must round-trip");
+        serde::Deserialize::deserialize(body).expect("body must round-trip");
     // reasoning_content is flattened into message.extra at
     // deserialization time, so it surfaces as a top-level
     // sibling of `content` on the parsed struct (translation.rs:77).
@@ -5106,7 +5106,7 @@ async fn streaming_response_body_persists_anthropic_thinking() {
 
     let body = response_body_json.expect("recording=true must produce non-NULL body");
     let parsed: OpenAIResponse =
-        serde_json::from_value(body.clone()).expect("body must round-trip");
+        serde::Deserialize::deserialize(body).expect("body must round-trip");
     let reasoning = parsed.choices[0]
         .message
         .extra
@@ -5157,7 +5157,7 @@ async fn streaming_response_body_persists_gemini_thought_parts() {
     );
     let body = response_body_json.expect("recording=true must produce non-NULL body");
     let parsed: OpenAIResponse =
-        serde_json::from_value(body.clone()).expect("body must round-trip");
+        serde::Deserialize::deserialize(body).expect("body must round-trip");
     let content = parsed
         .choices
         .first()
@@ -5272,7 +5272,7 @@ async fn openai_fast_path_no_regression() {
     assert_eq!(result.status_code, 200);
     let body = response_body_json.expect("recording=true must produce non-NULL body");
     let parsed: OpenAIResponse =
-        serde_json::from_value(body.clone()).expect("body must round-trip");
+        serde::Deserialize::deserialize(body).expect("body must round-trip");
     let content = parsed
         .choices
         .first()
