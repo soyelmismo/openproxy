@@ -837,7 +837,6 @@ pub async fn start_refresh_scheduler(
             .allow_burst(NonZeroU32::new(1).unwrap());
         let limiter = std::sync::Arc::new(RateLimiter::direct(quota));
 
-
         let mut join_set = tokio::task::JoinSet::new();
 
         for account in accounts {
@@ -866,11 +865,9 @@ pub async fn start_refresh_scheduler(
                 Some(Ok(Some(t))) => Ok(Some(t.clone())),
                 Some(Ok(None)) => Ok(None),
                 Some(Err(e)) => Err(crate::error::CoreError::Internal(e.to_string())),
-                None => {
-                    Err(crate::error::CoreError::Internal(
-                        "refresh token not found in batch".to_string(),
-                    ))
-                }
+                None => Err(crate::error::CoreError::Internal(
+                    "refresh token not found in batch".to_string(),
+                )),
             };
             let refresh_token = match refresh_token {
                 Ok(Some(rt)) => rt,

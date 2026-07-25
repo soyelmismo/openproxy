@@ -1,4 +1,4 @@
-use criterion::{criterion_group, criterion_main, Criterion};
+use criterion::{Criterion, criterion_group, criterion_main};
 use std::time::Duration;
 
 fn bench_oauth_refresh(c: &mut Criterion) {
@@ -29,7 +29,6 @@ fn bench_oauth_refresh(c: &mut Criterion) {
                 .unwrap()
                 .allow_burst(NonZeroU32::new(1).unwrap());
             let limiter = Arc::new(RateLimiter::direct(quota));
-
 
             let mut join_set = tokio::task::JoinSet::new();
             for _ in 0..10 {
