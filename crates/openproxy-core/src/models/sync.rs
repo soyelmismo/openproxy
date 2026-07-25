@@ -247,35 +247,50 @@ pub fn generate_events(
         return Ok(events);
     }
 
-    let new_models_rows: Vec<_> = diff.new_models.iter().map(|d| {
-        let payload = serde_json::json!({
-            "provider_id": provider.as_str(),
-            "model_id": d.model_id.as_str(),
-            "display_name": d.display_name,
-            "target_format": d.target_format.as_str(),
-            "context_length": d.context_length,
-        });
-        let dedup = format!("{}:{}", provider.as_str(), d.model_id.as_str());
-        (payload, Some(dedup), Some(provider.as_str().to_string()))
-    }).collect();
+    let new_models_rows: Vec<_> = diff
+        .new_models
+        .iter()
+        .map(|d| {
+            let payload = serde_json::json!({
+                "provider_id": provider.as_str(),
+                "model_id": d.model_id.as_str(),
+                "display_name": d.display_name,
+                "target_format": d.target_format.as_str(),
+                "context_length": d.context_length,
+            });
+            let dedup = format!("{}:{}", provider.as_str(), d.model_id.as_str());
+            (payload, Some(dedup), Some(provider.as_str().to_string()))
+        })
+        .collect();
 
-    if let Ok(results) = crate::notifications::insert_many(tx, crate::notifications::KIND_MODEL_NEW, &new_models_rows) {
+    if let Ok(results) = crate::notifications::insert_many(
+        tx,
+        crate::notifications::KIND_MODEL_NEW,
+        &new_models_rows,
+    ) {
         for (id, payload) in results {
             events.push((id, crate::notifications::KIND_MODEL_NEW, payload));
         }
     }
 
-    let deleted_models_rows: Vec<_> = diff.deleted_models().map(|(model_id, display_name)| {
-        let payload = serde_json::json!({
-            "provider_id": provider.as_str(),
-            "model_id": model_id,
-            "display_name": display_name,
-        });
-        let dedup = format!("{}:{}", provider.as_str(), model_id);
-        (payload, Some(dedup), Some(provider.as_str().to_string()))
-    }).collect();
+    let deleted_models_rows: Vec<_> = diff
+        .deleted_models()
+        .map(|(model_id, display_name)| {
+            let payload = serde_json::json!({
+                "provider_id": provider.as_str(),
+                "model_id": model_id,
+                "display_name": display_name,
+            });
+            let dedup = format!("{}:{}", provider.as_str(), model_id);
+            (payload, Some(dedup), Some(provider.as_str().to_string()))
+        })
+        .collect();
 
-    if let Ok(results) = crate::notifications::insert_many(tx, crate::notifications::KIND_MODEL_GONE, &deleted_models_rows) {
+    if let Ok(results) = crate::notifications::insert_many(
+        tx,
+        crate::notifications::KIND_MODEL_GONE,
+        &deleted_models_rows,
+    ) {
         for (id, payload) in results {
             events.push((id, crate::notifications::KIND_MODEL_GONE, payload));
         }

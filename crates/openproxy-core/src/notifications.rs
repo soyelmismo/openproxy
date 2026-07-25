@@ -234,7 +234,9 @@ pub fn insert_many(
     let mut all_results = Vec::with_capacity(rows.len());
 
     for chunk in rows.chunks(500) {
-        let mut sql = String::from("INSERT OR IGNORE INTO notifications (kind, payload_json, dedup_key, provider_id) VALUES ");
+        let mut sql = String::from(
+            "INSERT OR IGNORE INTO notifications (kind, payload_json, dedup_key, provider_id) VALUES ",
+        );
         let mut params = Vec::new();
         let mut payload_strings = Vec::new();
 
@@ -242,7 +244,13 @@ pub fn insert_many(
             if i > 0 {
                 sql.push_str(", ");
             }
-            sql.push_str(&format!("(?{}, ?{}, ?{}, ?{})", i * 4 + 1, i * 4 + 2, i * 4 + 3, i * 4 + 4));
+            sql.push_str(&format!(
+                "(?{}, ?{}, ?{}, ?{})",
+                i * 4 + 1,
+                i * 4 + 2,
+                i * 4 + 3,
+                i * 4 + 4
+            ));
             payload_strings.push(serde_json::to_string(&row.0)?);
         }
 
@@ -279,16 +287,21 @@ pub fn insert_many(
         // Pass 1: map inserted rows and collect missing dedups
         for (i, row) in chunk.iter().enumerate() {
             if let Some(dk) = &row.1
-                && !inserted_ids_by_dedup.contains_key(dk) {
-                    missing_dedup_keys.push((i, dk.clone()));
-                }
+                && !inserted_ids_by_dedup.contains_key(dk)
+            {
+                missing_dedup_keys.push((i, dk.clone()));
+            }
         }
 
         let mut existing_ids = std::collections::HashMap::new();
         if !missing_dedup_keys.is_empty() {
             // Need to fetch missing IDs. Since SQLite has variable limit, chunk the SELECT just in case,
             // though 500 is within 32766 easily.
-            let placeholders = missing_dedup_keys.iter().map(|_| "?").collect::<Vec<_>>().join(", ");
+            let placeholders = missing_dedup_keys
+                .iter()
+                .map(|_| "?")
+                .collect::<Vec<_>>()
+                .join(", ");
             let select_sql = format!(
                 "SELECT id, dedup_key FROM notifications WHERE kind = ? AND dedup_key IN ({}) AND date(created_at) = date('now')",
                 placeholders
@@ -300,7 +313,8 @@ pub fn insert_many(
                 select_params.push(Box::new(dk.clone()));
             }
 
-            let select_params_refs: Vec<&dyn rusqlite::ToSql> = select_params.iter().map(|p| p.as_ref()).collect();
+            let select_params_refs: Vec<&dyn rusqlite::ToSql> =
+                select_params.iter().map(|p| p.as_ref()).collect();
             let mut select_stmt = conn.prepare(&select_sql)?;
             let mut select_rows = select_stmt.query(&select_params_refs[..])?;
 

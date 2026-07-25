@@ -1,4 +1,4 @@
-use criterion::{criterion_group, criterion_main, Criterion};
+use criterion::{Criterion, criterion_group, criterion_main};
 use openproxy_core::models::sync::{SyncDiff, generate_events};
 use openproxy_types::ids::ProviderId;
 use rusqlite::Connection;
@@ -15,7 +15,8 @@ fn bench_generate_events(c: &mut Criterion) {
             created_at DATETIME DEFAULT CURRENT_TIMESTAMP
         )",
         [],
-    ).unwrap();
+    )
+    .unwrap();
     conn.execute(
         "CREATE UNIQUE INDEX idx_notifications_dedup ON notifications (kind, dedup_key, date(created_at)) WHERE dedup_key IS NOT NULL",
         []
@@ -33,10 +34,14 @@ fn bench_generate_events(c: &mut Criterion) {
                 existing_rows: {
                     let mut m = Vec::new();
                     for i in 0..1000 {
-                        m.push((format!("model_{}", i), i as i64, Some(format!("Model {}", i))));
+                        m.push((
+                            format!("model_{}", i),
+                            i as i64,
+                            Some(format!("Model {}", i)),
+                        ));
                     }
                     m
-                }
+                },
             };
 
             let _ = generate_events(&tx, &provider, &diff).unwrap();
