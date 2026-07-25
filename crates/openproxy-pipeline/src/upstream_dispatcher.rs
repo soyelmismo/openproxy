@@ -1936,7 +1936,7 @@ impl UpstreamDispatcher {
             ) {
                 response_body_json
                     .as_ref()
-                    .and_then(|v| serde_json::from_value(v.clone()).ok())
+                    .and_then(|v| serde::Deserialize::deserialize(v).ok())
             } else {
                 None
             },
