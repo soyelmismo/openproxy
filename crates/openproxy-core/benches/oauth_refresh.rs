@@ -39,7 +39,7 @@ fn bench_oauth_refresh(c: &mut Criterion) {
                     tokio::time::sleep(Duration::from_millis(2)).await;
                 });
             }
-            while let Some(_) = join_set.join_next().await {}
+            while join_set.join_next().await.is_some() {}
         })
     });
     group.finish();
