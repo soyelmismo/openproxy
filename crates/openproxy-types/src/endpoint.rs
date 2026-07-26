@@ -49,7 +49,10 @@ mod tests {
         assert_eq!(EndpointKind::parse("chat").unwrap(), EndpointKind::Chat);
         assert_eq!(EndpointKind::parse("audio").unwrap(), EndpointKind::Audio);
         assert_eq!(EndpointKind::parse("image").unwrap(), EndpointKind::Image);
-        assert_eq!(EndpointKind::parse("embedding").unwrap(), EndpointKind::Embedding);
+        assert_eq!(
+            EndpointKind::parse("embedding").unwrap(),
+            EndpointKind::Embedding
+        );
         assert_eq!(EndpointKind::parse("video").unwrap(), EndpointKind::Video);
         assert!(EndpointKind::parse("unknown").is_err());
     }
