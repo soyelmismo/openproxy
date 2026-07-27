@@ -194,3 +194,52 @@ impl ProviderAdapter for CloudflareWorkersAIAdapter {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use openproxy_types::{OpenAIMessage, OpenAIRequestView};
+    use serde_json::json;
+
+    #[test]
+    fn test_normalize_openai_request() {
+        let adapter = CloudflareWorkersAIAdapter::new();
+        let mut extra_map = serde_json::Map::new();
+        extra_map.insert("extra_null".to_string(), serde_json::Value::Null);
+        extra_map.insert("extra_valid".to_string(), json!(1));
+
+        let stop = None;
+        let tools = None;
+        let tool_choice = None;
+        let user = None;
+
+        let mut view = OpenAIRequestView {
+            model: "test-model",
+            messages: std::borrow::Cow::Owned(vec![OpenAIMessage {
+                role: "user".into(),
+                content: Some(json!([{"type": "text", "text": "hello"}])),
+                name: None,
+                tool_call_id: None,
+                tool_calls: None,
+                extra: Default::default(),
+            }]),
+            temperature: Some(0.7),
+            max_tokens: None,
+            top_p: None,
+            stop: &stop,
+            tools: &tools,
+            tool_choice: &tool_choice,
+            top_k: None,
+            user: &user,
+            extra: std::borrow::Cow::Owned(extra_map),
+            stream: false,
+        };
+
+        adapter.normalize_openai_request(&mut view);
+
+        assert_eq!(view.temperature, None);
+        assert!(!view.extra.contains_key("extra_null"));
+        assert!(view.extra.contains_key("extra_valid"));
+        assert_eq!(view.messages[0].content, Some(json!("hello")));
+    }
+}
