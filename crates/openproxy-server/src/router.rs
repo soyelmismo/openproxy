@@ -615,7 +615,7 @@ mod tests {
         let (pool, _path) = fresh_pool();
         let db_pool = Arc::new(pool);
         let master_key = Arc::new(MasterKey::generate());
-        let adapters = Arc::new(RwLock::new(Vec::<adapters::ProviderAdapterEnum>::new()));
+        let adapters = Arc::new(RwLock::new(Arc::new(Vec::<adapters::ProviderAdapterEnum>::new())));
         AppState::for_test(AppConfig::default(), db_pool, master_key, adapters).await
     }
 

@@ -64,7 +64,7 @@ async fn make_state_with_key(dir: &std::path::Path) -> (AppState, String) {
     // MasterKey for tests: any 32 bytes is fine. Use the
     // built-in generator rather than baking a private constructor.
     let mk = MasterKey::generate();
-    let adapters = std::sync::Arc::new(parking_lot::RwLock::new(adapters::builtin_adapters()));
+    let adapters = std::sync::Arc::new(parking_lot::RwLock::new(std::sync::Arc::new(adapters::builtin_adapters())));
     let state = AppState::for_test(
         openproxy_core::AppConfig::default(),
         pool,
