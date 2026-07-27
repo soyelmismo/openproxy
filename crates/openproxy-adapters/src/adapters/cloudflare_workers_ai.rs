@@ -198,7 +198,7 @@ impl ProviderAdapter for CloudflareWorkersAIAdapter {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use openproxy_types::{OpenAIRequestView, OpenAIMessage};
+    use openproxy_types::{OpenAIMessage, OpenAIRequestView};
     use serde_json::json;
 
     #[test]
@@ -215,16 +215,14 @@ mod tests {
 
         let mut view = OpenAIRequestView {
             model: "test-model",
-            messages: std::borrow::Cow::Owned(vec![
-                OpenAIMessage {
-                    role: "user".into(),
-                    content: Some(json!([{"type": "text", "text": "hello"}])),
-                    name: None,
-                    tool_call_id: None,
-                    tool_calls: None,
-                    extra: Default::default(),
-                }
-            ]),
+            messages: std::borrow::Cow::Owned(vec![OpenAIMessage {
+                role: "user".into(),
+                content: Some(json!([{"type": "text", "text": "hello"}])),
+                name: None,
+                tool_call_id: None,
+                tool_calls: None,
+                extra: Default::default(),
+            }]),
             temperature: Some(0.7),
             max_tokens: None,
             top_p: None,
