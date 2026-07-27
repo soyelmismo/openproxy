@@ -1086,7 +1086,9 @@ mod tests {
         // Start with an empty adapter registry; `rebuild_adapters`
         // is responsible for filling in both the built-ins and any
         // custom rows.
-        let adapters = Arc::new(RwLock::new(Arc::new(Vec::<adapters::ProviderAdapterEnum>::new())));
+        let adapters = Arc::new(RwLock::new(Arc::new(
+            Vec::<adapters::ProviderAdapterEnum>::new(),
+        )));
         AppState::for_test(AppConfig::default(), db_pool, master_key, adapters).await
     }
 

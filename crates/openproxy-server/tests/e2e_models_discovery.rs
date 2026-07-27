@@ -313,8 +313,9 @@ async fn make_test_state(dir: &std::path::Path, adapter: &TestMockAdapter) -> Ap
     // says "do NOT modify the seed list", and the test is gated on
     // its own provider id, so a built-in refresh racing the test's
     // call can't affect this DB.
-    let adapters: Arc<parking_lot::RwLock<Arc<Vec<openproxy_adapters::adapters::ProviderAdapterEnum>>>> =
-        Arc::new(parking_lot::RwLock::new(Arc::new(vec![])));
+    let adapters: Arc<
+        parking_lot::RwLock<Arc<Vec<openproxy_adapters::adapters::ProviderAdapterEnum>>>,
+    > = Arc::new(parking_lot::RwLock::new(Arc::new(vec![])));
 
     AppState::for_test(AppConfig::default(), pool, mk, adapters).await
 }
