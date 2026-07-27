@@ -53,7 +53,7 @@ pub async fn anthropic_messages(
         retries: state.config().retries,
         max_attempts: state.config().retries.max_attempts,
         master_key: state.master_key().clone(),
-        adapters: Arc::new(state.adapters()),
+        adapters: state.adapters(),
         cooldown_secs: state.config().cooldown.cooldown_secs,
         cooldown_max_secs: state.config().cooldown.max_secs,
         cooldown_factor: state.config().cooldown.factor,

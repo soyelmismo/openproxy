@@ -107,10 +107,11 @@ pub async fn transcribe(
     };
 
     // 5. Look up the adapter and build URL.
-    let adapter = state
-        .adapters()
-        .into_iter()
+    let adapters = state.adapters();
+    let adapter = adapters
+        .iter()
         .find(|a| a.id() == &targets.provider_id)
+        .cloned()
         .ok_or_else(|| {
             ApiError(CoreError::Internal(format!(
                 "no adapter registered for provider '{}'",
@@ -125,7 +126,7 @@ pub async fn transcribe(
     // 7. Build and dispatch.
     let response = dispatch_audio_request(
         &state,
-        adapter,
+        adapter.clone(),
         &upstream_url,
         &api_key,
         &targets.upstream_model_id,

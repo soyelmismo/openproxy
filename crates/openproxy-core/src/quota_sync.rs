@@ -26,7 +26,7 @@ pub async fn start_quota_sync_scheduler(
     config: AppConfig,
     upstream_client: Arc<UpstreamClient>,
     master_key: Arc<MasterKey>,
-    adapters: Arc<RwLock<Vec<ProviderAdapterEnum>>>,
+    adapters: Arc<RwLock<Arc<Vec<ProviderAdapterEnum>>>>,
     oauth_provider_registry: Arc<OAuthProviderRegistry>,
 ) {
     if !config.quota_sync.enabled {
@@ -68,7 +68,7 @@ async fn run_quota_sync_cycle(
     config: &AppConfig,
     upstream_client: &Arc<UpstreamClient>,
     master_key: &Arc<MasterKey>,
-    adapters: &Arc<RwLock<Vec<ProviderAdapterEnum>>>,
+    adapters: &Arc<RwLock<Arc<Vec<ProviderAdapterEnum>>>>,
     oauth_registry: &Arc<OAuthProviderRegistry>,
 ) {
     tracing::debug!("[QuotaSync] Starting cycle");

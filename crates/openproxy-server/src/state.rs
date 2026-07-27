@@ -35,7 +35,7 @@ pub struct AppState {
     db_pool: Arc<db::DbPool>,
     master_key: Arc<MasterKey>,
     services: Arc<crate::services::Services>,
-    adapters: Arc<RwLock<Vec<adapters::ProviderAdapterEnum>>>,
+    adapters: Arc<RwLock<Arc<Vec<adapters::ProviderAdapterEnum>>>>,
     /// Per-key rate limiter for /v1/chat/completions. Prevents a
     /// single API key from driving unlimited paid upstream traffic.
     rate_limiter: Arc<crate::rate_limit::RateLimiter>,
@@ -171,7 +171,7 @@ impl AppState {
         )?;
 
         let master_key = Arc::new(MasterKey::from_env()?);
-        let adapters = Arc::new(RwLock::new(adapters::builtin_adapters()));
+        let adapters = Arc::new(RwLock::new(Arc::new(adapters::builtin_adapters())));
         let usage_tx = usage::init_usage_broadcast();
         let stage_tx = usage::init_stage_broadcast();
         openproxy_core::notifications::init_broadcast();
@@ -292,7 +292,7 @@ impl AppState {
         config: AppConfig,
         db_pool: Arc<db::DbPool>,
         master_key: Arc<MasterKey>,
-        adapters: Arc<RwLock<Vec<adapters::ProviderAdapterEnum>>>,
+        adapters: Arc<RwLock<Arc<Vec<adapters::ProviderAdapterEnum>>>>,
     ) -> Self {
         let recording_ttl_secs_cell =
             Arc::new(RwLock::new(db::app_config::RECORDING_TTL_DEFAULT_SECS));
@@ -316,11 +316,11 @@ impl AppState {
         })
         .await;
 
-        let adapters_snapshot = Arc::new(adapters.read().clone());
+        let adapters_snapshot = adapters.read().clone();
         let discovery_scheduler = discovery_scheduler::start(
             db_pool.clone(),
             master_key.clone(),
-            adapters_snapshot,
+            adapters_snapshot.clone(),
             upstream_client.clone(),
             openproxy_core::discovery_scheduler::DiscoverySchedulerConfig {
                 interval_secs: 3_600,
@@ -416,7 +416,7 @@ impl AppState {
     /// `Arc::clone` inside the `Vec` is the only allocation —
     /// pipelines already pay this when constructing
     /// `PipelineConfig`.
-    pub fn adapters(&self) -> Vec<adapters::ProviderAdapterEnum> {
+    pub fn adapters(&self) -> Arc<Vec<adapters::ProviderAdapterEnum>> {
         self.adapters.read().clone()
     }
 
@@ -459,7 +459,7 @@ impl AppState {
             }
         }
         // 3. Atomic swap into the shared slot.
-        *self.adapters.write() = new_adapters;
+        *self.adapters.write() = Arc::new(new_adapters);
         Ok(())
     }
 
@@ -781,7 +781,7 @@ struct SpawnBackgroundTasksArgs {
     maintenance_cell: Arc<RwLock<openproxy_types::config::MaintenanceConfig>>,
     vacuum_status: Arc<RwLock<crate::state::VacuumStatus>>,
     master_key: Arc<openproxy_db::secrets::MasterKey>,
-    adapters: Arc<RwLock<Vec<openproxy_adapters::adapters::ProviderAdapterEnum>>>,
+    adapters: Arc<RwLock<Arc<Vec<openproxy_adapters::adapters::ProviderAdapterEnum>>>>,
     upstream_client: Arc<openproxy_adapters::upstream::UpstreamClient>,
     oauth_provider_registry: Arc<openproxy_core::oauth::OAuthProviderRegistry>,
 }
@@ -983,10 +983,10 @@ async fn spawn_background_tasks(args: SpawnBackgroundTasksArgs) {
 async fn start_discovery_scheduler(
     db_pool: Arc<openproxy_db::DbPool>,
     master_key: Arc<openproxy_db::secrets::MasterKey>,
-    adapters: Arc<RwLock<Vec<openproxy_adapters::adapters::ProviderAdapterEnum>>>,
+    adapters: Arc<RwLock<Arc<Vec<openproxy_adapters::adapters::ProviderAdapterEnum>>>>,
     upstream_client: Arc<openproxy_adapters::upstream::UpstreamClient>,
 ) -> openproxy_core::discovery_scheduler::DiscoveryScheduler {
-    let adapters_clone = Arc::new(adapters.read().clone());
+    let adapters_clone = adapters.read().clone();
     openproxy_core::discovery_scheduler::start(
         db_pool,
         master_key,
@@ -1086,7 +1086,9 @@ mod tests {
         // Start with an empty adapter registry; `rebuild_adapters`
         // is responsible for filling in both the built-ins and any
         // custom rows.
-        let adapters = Arc::new(RwLock::new(Vec::<adapters::ProviderAdapterEnum>::new()));
+        let adapters = Arc::new(RwLock::new(Arc::new(
+            Vec::<adapters::ProviderAdapterEnum>::new(),
+        )));
         AppState::for_test(AppConfig::default(), db_pool, master_key, adapters).await
     }
 
