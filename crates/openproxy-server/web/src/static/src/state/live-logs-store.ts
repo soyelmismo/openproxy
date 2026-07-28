@@ -204,7 +204,7 @@ class LiveLogsStore {
       ttftMs: event.ttft_ms || null,
       statusCode: event.status_code || null,
       terminal: event.terminal,
-      terminalKind: event.terminal ? (event.stage as any) : null,
+      terminalKind: event.terminal ? (event.stage as "completed" | "failed" | "cancelled") : null,
       error: event.error || null,
       rowId: null,
       row: null,
@@ -219,7 +219,7 @@ class LiveLogsStore {
       newState.stageRank = event.stage_rank;
       newState.elapsedMsAtEvent = event.event_time - newState.startedAtMs;
       newState.terminal = event.terminal;
-      if (event.terminal) newState.terminalKind = event.stage as any;
+      if (event.terminal) newState.terminalKind = event.stage as "completed" | "failed" | "cancelled";
       if (event.connect_ms != null) newState.connectMs = event.connect_ms;
       if (event.ttft_ms != null) newState.ttftMs = event.ttft_ms;
       if (event.status_code != null) newState.statusCode = event.status_code;
@@ -438,7 +438,7 @@ class LiveLogsStore {
     const queryParam = hasValidId ? `id=${encodeURIComponent(id)}` : (traceId ? `trace_id=${encodeURIComponent(traceId)}` : "");
     if (!queryParam) return false;
     try {
-      const payload = await api(`/usage/detail?${queryParam}`) as any;
+      const payload = await api(`/usage/detail?${queryParam}`) as { row?: Record<string, unknown> };
       if (payload && payload.row) {
         this.setDetail(
           hasValidId ? { kind: "row_id", id: Number(id) } : { kind: "attempt", attemptKey: fallbackAttemptKey },
