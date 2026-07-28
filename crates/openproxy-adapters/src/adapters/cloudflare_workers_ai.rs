@@ -242,4 +242,56 @@ mod tests {
         assert!(view.extra.contains_key("extra_valid"));
         assert_eq!(view.messages[0].content, Some(json!("hello")));
     }
+
+    #[test]
+    fn test_cloudflare_urls_for_account() {
+        let adapter = CloudflareWorkersAIAdapter::new();
+        let model = ModelId::new("test-model");
+
+        // Normal label
+        let chat_url =
+            adapter.build_chat_url_for_account(TargetFormat::Openai, &model, "my-account");
+        assert_eq!(
+            chat_url,
+            "https://api.cloudflare.com/client/v4/accounts/my-account/ai/v1/chat/completions"
+        );
+
+        let models_url = adapter.models_url_for_account("my-account").unwrap();
+        assert_eq!(
+            models_url,
+            "https://api.cloudflare.com/client/v4/accounts/my-account/ai/models/search"
+        );
+
+        // Label with slashes
+        let chat_url_slashes =
+            adapter.build_chat_url_for_account(TargetFormat::Openai, &model, "my/account");
+        assert_eq!(
+            chat_url_slashes,
+            "https://api.cloudflare.com/client/v4/accounts/myaccount/ai/v1/chat/completions"
+        );
+
+        let models_url_slashes = adapter.models_url_for_account("my/account").unwrap();
+        assert_eq!(
+            models_url_slashes,
+            "https://api.cloudflare.com/client/v4/accounts/myaccount/ai/models/search"
+        );
+
+        // Label with dots
+        let chat_url_dots =
+            adapter.build_chat_url_for_account(TargetFormat::Openai, &model, "../account");
+        assert_eq!(
+            chat_url_dots,
+            "https://api.cloudflare.com/client/v4/accounts/account/ai/v1/chat/completions"
+        );
+
+        let models_url_dots = adapter.models_url_for_account("../account").unwrap();
+        assert_eq!(
+            models_url_dots,
+            "https://api.cloudflare.com/client/v4/accounts/account/ai/models/search"
+        );
+
+        // Empty label
+        assert_eq!(adapter.models_url_for_account(""), None);
+        assert_eq!(adapter.models_url_for_account("   "), None);
+    }
 }
