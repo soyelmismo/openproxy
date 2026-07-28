@@ -50,20 +50,23 @@ impl RateLimiter {
         let max = self.config.max_requests;
         let window = self.config.window;
 
-        let mut entry = self.windows.entry(key.to_string()).or_insert((0, now));
-        let (count, start) = entry.value_mut();
-
-        if now.duration_since(*start) >= window {
-            // Window expired — reset.
-            *count = 1;
-            *start = now;
-            true
-        } else if *count < max {
-            *count += 1;
-            true
-        } else {
-            false
+        if let Some(mut entry) = self.windows.get_mut(key) {
+            let (count, start) = entry.value_mut();
+            if now.duration_since(*start) >= window {
+                // Window expired — reset.
+                *count = 1;
+                *start = now;
+                return true;
+            } else if *count < max {
+                *count += 1;
+                return true;
+            } else {
+                return false;
+            }
         }
+
+        self.windows.insert(key.to_string(), (1, now));
+        true
     }
 
     /// Remove expired entries. Call periodically to prevent unbounded
