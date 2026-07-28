@@ -71,3 +71,9 @@
 ## 2026-07-28 - [Avoid DashMap String Allocation]
 **Learning:** `DashMap::entry(key.to_string()).or_insert(...)` unconditionally allocates a String on every request, even if the key already exists (which is the hot path for rate limiting).
 **Action:** Use `DashMap::get_mut(key)` with a string slice first. If it returns Some, we can update in-place without allocation. Only if it returns None do we fallback to `insert(key.to_string(), ...)`.
+## 2026-07-28 - Avoid Virtual Clock Over-advancement
+**Learning:** Advancing the tokio virtual clock excessively inside a loop (e.g.  for multiple ticks) can cause background tasks checking  loops inside bounded contexts (like ) to spin out of sync and fail tests due to missed execution boundaries.
+**Action:** When testing tokio background loops with virtual time, use short  yields rather than aggressive clock  loops if relying on specific intermediate side effects before cancellation.
+## 2026-07-28 - Avoid Virtual Clock Over-advancement
+**Learning:** Advancing the tokio virtual clock excessively inside a loop can cause background tasks checking sleep loops inside bounded contexts (like discovery scheduler) to spin out of sync and fail tests due to missed execution boundaries.
+**Action:** When testing tokio background loops with virtual time, use short sleep yields rather than aggressive clock advance loops if relying on specific intermediate side effects before cancellation.

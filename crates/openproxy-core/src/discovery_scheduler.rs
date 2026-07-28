@@ -1294,7 +1294,8 @@ mod tests {
             {
                 break;
             }
-            std::thread::sleep(Duration::from_millis(10));
+            tokio::time::advance(Duration::from_secs(1)).await;
+            tokio::time::sleep(Duration::from_millis(10)).await;
             tokio::task::yield_now().await;
         }
 
