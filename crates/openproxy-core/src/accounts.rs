@@ -927,7 +927,8 @@ mod tests {
         )
         .expect("create");
 
-        let (recovered_key, recovered_label) = decrypt_api_key_and_label(&conn, id, &mk).expect("decrypt");
+        let (recovered_key, recovered_label) =
+            decrypt_api_key_and_label(&conn, id, &mk).expect("decrypt");
         assert_eq!(recovered_key, plaintext);
         assert_eq!(recovered_label.as_deref(), Some(label));
 
@@ -952,7 +953,8 @@ mod tests {
         )
         .expect("create no label");
 
-        let (recovered_key_no_label, recovered_label_none) = decrypt_api_key_and_label(&conn, id_no_label, &mk).expect("decrypt");
+        let (recovered_key_no_label, recovered_label_none) =
+            decrypt_api_key_and_label(&conn, id_no_label, &mk).expect("decrypt");
         assert_eq!(recovered_key_no_label, "sk-roundtrip-no-label");
         assert_eq!(recovered_label_none, None);
     }
