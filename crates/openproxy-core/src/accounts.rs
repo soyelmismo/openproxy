@@ -907,6 +907,57 @@ mod tests {
     }
 
     #[test]
+    fn decrypt_api_key_and_label_roundtrip() {
+        let (pool, _path) = fresh_pool();
+        let conn = pool.writer();
+        seed_provider(&conn, "cloudflare");
+
+        let mk = MasterKey::generate();
+        let plaintext = "sk-roundtrip-xyz";
+        let label = "my-cf-account-id";
+
+        let id = create(
+            &conn,
+            &ProviderId::new("cloudflare"),
+            Some(plaintext),
+            &mk,
+            Some(label),
+            100,
+            None,
+        )
+        .expect("create");
+
+        let (recovered_key, recovered_label) = decrypt_api_key_and_label(&conn, id, &mk).expect("decrypt");
+        assert_eq!(recovered_key, plaintext);
+        assert_eq!(recovered_label.as_deref(), Some(label));
+
+        // Missing id → AccountNotFound.
+        let err = decrypt_api_key_and_label(&conn, AccountId(424242), &mk).expect_err("missing");
+        assert!(matches!(err, CoreError::AccountNotFound(424242)));
+
+        // Wrong key → decryption failure (Internal).
+        let other = MasterKey::generate();
+        let err = decrypt_api_key_and_label(&conn, id, &other).expect_err("wrong key");
+        assert!(matches!(err, CoreError::Internal(_)));
+
+        // Test account without a label
+        let id_no_label = create(
+            &conn,
+            &ProviderId::new("cloudflare"),
+            Some("sk-roundtrip-no-label"),
+            &mk,
+            None,
+            100,
+            None,
+        )
+        .expect("create no label");
+
+        let (recovered_key_no_label, recovered_label_none) = decrypt_api_key_and_label(&conn, id_no_label, &mk).expect("decrypt");
+        assert_eq!(recovered_key_no_label, "sk-roundtrip-no-label");
+        assert_eq!(recovered_label_none, None);
+    }
+
+    #[test]
     fn list_filters_by_provider() {
         let (pool, _path) = fresh_pool();
         let conn = pool.writer();
