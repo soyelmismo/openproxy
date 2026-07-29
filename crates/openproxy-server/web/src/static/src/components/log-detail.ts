@@ -1088,9 +1088,9 @@ export function renderLogDetailModal(log: LogDetailLog): TemplateResult {
   const detailErrors: unknown = (detail as Record<string, unknown>)["errors"];
 
   const isInflight: boolean = log.id === 0 || log.id == null;
-  const attempt = log.stages?.[0] as any;
+  const attempt = log.stages?.[0] as Record<string, unknown> | undefined;
   const synthesizedError = isInflight
-    ? (attempt ? `Request in progress — current stage: ${attempt.stage}` : "Request in progress...")
+    ? (attempt ? `Request in progress — current stage: ${attempt['stage']}` : "Request in progress...")
     : null;
 
   const errors: unknown = log.errors
@@ -1369,16 +1369,16 @@ function renderModal() {
   // contains the heavy payloads from the `/usage/detail` snapshot. We merge
   // them, ensuring `log` properties take precedence, except for payloads which
   // might be omitted (null) in WS events.
-  const detailObj = attempt?.detail as any;
+  const detailObj = attempt?.detail as Record<string, unknown> | undefined;
   const log = attempt.row;
   const safeAttempt = { ...attempt, detail: undefined, row: undefined };
   const logObj = detailObj && log ? {
     ...detailObj,
     ...log,
-    request_body_json: log.request_body_json ?? detailObj.request_body_json,
-    response_body_json: log.response_body_json ?? detailObj.response_body_json,
-    request_headers: log.request_headers ?? detailObj.request_headers,
-    response_headers: log.response_headers ?? detailObj.response_headers,
+    request_body_json: log.request_body_json ?? detailObj['request_body_json'],
+    response_body_json: log.response_body_json ?? detailObj['response_body_json'],
+    request_headers: log.request_headers ?? detailObj['request_headers'],
+    response_headers: log.response_headers ?? detailObj['response_headers'],
     stages: [safeAttempt],
     detail: undefined
   } : {
@@ -1390,11 +1390,11 @@ function renderModal() {
     provider_id: attempt.providerId,
     upstream_model_id: attempt.upstreamModelId,
     error_message: attempt.error,
-    request_body_json: detailObj?.request_body_json,
-    response_body_json: detailObj?.response_body_json,
+    request_body_json: detailObj?.['request_body_json'],
+    response_body_json: detailObj?.['response_body_json'],
     stages: [safeAttempt]
   };
-  render(renderLogDetailModal(logObj as any), wrapper as HTMLElement);
+  render(renderLogDetailModal(logObj as unknown as LogDetailLog), wrapper as HTMLElement);
 }
 
 // Re-render modal on clock tick so live latency updates
@@ -1640,11 +1640,11 @@ export function buildDebugBundle(log: LogDetailLog): string {
   const cleanLog: Record<string, unknown> = { ...(log as unknown as Record<string, unknown>) };
   delete cleanLog["detail"];
   if (Array.isArray(cleanLog["stages"])) {
-    cleanLog["stages"] = (cleanLog["stages"] as any[]).map((s: any) => {
+    cleanLog["stages"] = (cleanLog["stages"] as Record<string, unknown>[]).map((s: Record<string, unknown>) => {
       if (s && typeof s === "object") {
         const copy = { ...s };
-        delete copy.row;
-        delete copy.detail;
+        delete copy['row'];
+        delete copy['detail'];
         return copy;
       }
       return s;
