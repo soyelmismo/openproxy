@@ -1,6 +1,5 @@
 use criterion::{Criterion, criterion_group, criterion_main};
 use openproxy_core::free_proxies::{ScrapedProxy, upsert_scraped_proxies};
-use std::path::Path;
 
 fn benchmark_upsert(c: &mut Criterion) {
     let tmp_dir = tempfile::tempdir().unwrap();

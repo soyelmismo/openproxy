@@ -524,7 +524,7 @@ pub fn upsert_scraped_proxies(
                country_code = COALESCE(excluded.country_code, free_proxies.country_code), \
                updated_at = excluded.updated_at");
 
-        tx.execute(&sql, rusqlite::params_from_iter(params.into_iter()))
+        tx.execute(&sql, rusqlite::params_from_iter(params))
             .map_err(|e| crate::error::CoreError::Database {
                 message: e.to_string(),
                 source: Some(Box::new(e)),
