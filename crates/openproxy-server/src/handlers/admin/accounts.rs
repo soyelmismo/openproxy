@@ -4,9 +4,9 @@ use axum::{
     extract::{Path, Query, State},
 };
 use openproxy_core::accounts as core_accounts;
-use std::io::Write;
 use openproxy_core::admin as core_admin;
 use openproxy_core::providers as core_providers;
+use std::io::Write;
 
 pub async fn list_accounts(
     State(s): State<AppState>,
