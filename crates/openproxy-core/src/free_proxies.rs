@@ -482,7 +482,9 @@ pub fn upsert_scraped_proxies(
         })?;
 
     for chunk in proxies.chunks(100) {
-        let mut sql = String::from("INSERT INTO free_proxies (id, source, host, port, type, country_code, status, latency_ms, last_validated, created_at, updated_at) VALUES ");
+        let mut sql = String::from(
+            "INSERT INTO free_proxies (id, source, host, port, type, country_code, status, latency_ms, last_validated, created_at, updated_at) VALUES ",
+        );
         let mut params: Vec<rusqlite::types::Value> = Vec::with_capacity(chunk.len() * 8);
 
         for (i, p) in chunk.iter().enumerate() {
@@ -492,7 +494,14 @@ pub fn upsert_scraped_proxies(
             let base = i * 8;
             sql.push_str(&format!(
                 "(?{}, ?{}, ?{}, ?{}, ?{}, ?{}, 'unknown', NULL, NULL, ?{}, ?{})",
-                base + 1, base + 2, base + 3, base + 4, base + 5, base + 6, base + 7, base + 8
+                base + 1,
+                base + 2,
+                base + 3,
+                base + 4,
+                base + 5,
+                base + 6,
+                base + 7,
+                base + 8
             ));
 
             let id = uuid::Uuid::new_v4().to_string();
@@ -515,14 +524,11 @@ pub fn upsert_scraped_proxies(
                country_code = COALESCE(excluded.country_code, free_proxies.country_code), \
                updated_at = excluded.updated_at");
 
-        tx.execute(
-            &sql,
-            rusqlite::params_from_iter(params.into_iter())
-        )
-        .map_err(|e| crate::error::CoreError::Database {
-            message: e.to_string(),
-            source: Some(Box::new(e)),
-        })?;
+        tx.execute(&sql, rusqlite::params_from_iter(params.into_iter()))
+            .map_err(|e| crate::error::CoreError::Database {
+                message: e.to_string(),
+                source: Some(Box::new(e)),
+            })?;
     }
 
     tx.commit().map_err(|e| crate::error::CoreError::Database {

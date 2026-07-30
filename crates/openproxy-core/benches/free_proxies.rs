@@ -1,5 +1,5 @@
-use criterion::{criterion_group, criterion_main, Criterion};
-use openproxy_core::free_proxies::{upsert_scraped_proxies, ScrapedProxy};
+use criterion::{Criterion, criterion_group, criterion_main};
+use openproxy_core::free_proxies::{ScrapedProxy, upsert_scraped_proxies};
 use std::path::Path;
 
 fn benchmark_upsert(c: &mut Criterion) {
