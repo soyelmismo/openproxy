@@ -107,4 +107,33 @@ mod tests {
         assert_eq!(resolved2.ttft, Duration::from_millis(1000));
         assert_eq!(resolved2.idle_chunk, Duration::from_millis(400));
     }
+
+    #[test]
+    fn test_model_timeout_overrides_from_json() {
+        // Test None
+        let overrides = ModelTimeoutOverrides::from_json(None).unwrap();
+        assert!(overrides.is_empty());
+        assert_eq!(overrides.ttft_ms, None);
+        assert_eq!(overrides.idle_chunk_ms, None);
+
+        // Test empty string
+        let overrides = ModelTimeoutOverrides::from_json(Some("")).unwrap();
+        assert!(overrides.is_empty());
+
+        // Test valid JSON
+        let overrides = ModelTimeoutOverrides::from_json(Some(r#"{"ttft_ms": 1000, "idle_chunk_ms": 2000}"#)).unwrap();
+        assert!(!overrides.is_empty());
+        assert_eq!(overrides.ttft_ms, Some(1000));
+        assert_eq!(overrides.idle_chunk_ms, Some(2000));
+
+        // Test partial valid JSON
+        let overrides = ModelTimeoutOverrides::from_json(Some(r#"{"ttft_ms": 1000}"#)).unwrap();
+        assert!(!overrides.is_empty());
+        assert_eq!(overrides.ttft_ms, Some(1000));
+        assert_eq!(overrides.idle_chunk_ms, None);
+
+        // Test invalid JSON
+        let overrides = ModelTimeoutOverrides::from_json(Some(r#"{"ttft_ms": "not an int"}"#));
+        assert!(overrides.is_err());
+    }
 }
