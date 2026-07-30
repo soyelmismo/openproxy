@@ -472,12 +472,11 @@ async fn e2e_discovery_and_delete_on_disappear() {
     {
         let w = state.db_pool().writer();
         let rows = select_models(&w, &provider);
-        let ids: BTreeSet<String> = rows.iter().map(|r| r.model_id.clone()).collect();
+        let ids: BTreeSet<&str> = rows.iter().map(|r| r.model_id.as_str()).collect();
         assert_eq!(
             ids,
             ["a", "b", "c"]
                 .into_iter()
-                .map(String::from)
                 .collect::<BTreeSet<_>>(),
             "DB must contain exactly a, b, c"
         );
@@ -530,12 +529,11 @@ async fn e2e_discovery_and_delete_on_disappear() {
     {
         let w = state.db_pool().writer();
         let rows = select_models(&w, &provider);
-        let ids: BTreeSet<String> = rows.iter().map(|r| r.model_id.clone()).collect();
+        let ids: BTreeSet<&str> = rows.iter().map(|r| r.model_id.as_str()).collect();
         assert_eq!(
             ids,
             ["a", "b"]
                 .into_iter()
-                .map(String::from)
                 .collect::<BTreeSet<_>>(),
             "DB must contain exactly a, b; c must be gone"
         );
@@ -579,12 +577,11 @@ async fn e2e_discovery_and_delete_on_disappear() {
     {
         let w = state.db_pool().writer();
         let rows = select_models(&w, &provider);
-        let ids: BTreeSet<String> = rows.iter().map(|r| r.model_id.clone()).collect();
+        let ids: BTreeSet<&str> = rows.iter().map(|r| r.model_id.as_str()).collect();
         assert_eq!(
             ids,
             ["a", "b", "z"]
                 .into_iter()
-                .map(String::from)
                 .collect::<BTreeSet<_>>(),
             "the custom row z must survive the refresh that \
              doesn't list it"
@@ -735,7 +732,7 @@ async fn e2e_discovery_and_delete_on_disappear() {
 
         // The catalog no longer has `c`.
         let rows = select_models(&w, &provider);
-        let ids: BTreeSet<String> = rows.iter().map(|r| r.model_id.clone()).collect();
+        let ids: BTreeSet<&str> = rows.iter().map(|r| r.model_id.as_str()).collect();
         assert!(
             !ids.contains("c"),
             "the catalog row for c must be gone after the refresh: \
