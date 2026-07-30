@@ -77,3 +77,6 @@
 ## 2026-07-28 - Avoid Virtual Clock Over-advancement
 **Learning:** Advancing the tokio virtual clock excessively inside a loop can cause background tasks checking sleep loops inside bounded contexts (like discovery scheduler) to spin out of sync and fail tests due to missed execution boundaries.
 **Action:** When testing tokio background loops with virtual time, use short sleep yields rather than aggressive clock advance loops if relying on specific intermediate side effects before cancellation.
+## 2026-07-30 - Batch Notifications Insert
+**Learning:** Inserting multiple rows via a loop of prepared statements (N+1 inserts) has a noticeable SQLite overhead. Batching them via dynamically constructed `VALUES` strings significantly decreases latency.
+**Action:** Use batch inserts for loop-driven db persistence when applicable and chunk parameter bindings (e.g. up to 900) to adhere to SQLite's limits.
