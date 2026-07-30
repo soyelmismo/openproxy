@@ -6,6 +6,7 @@ use axum::{
 use openproxy_core::accounts as core_accounts;
 use openproxy_core::admin as core_admin;
 use openproxy_core::providers as core_providers;
+use std::io::Write;
 
 pub async fn list_accounts(
     State(s): State<AppState>,
@@ -233,7 +234,19 @@ pub async fn apply_account_local_cli(
 
         let token_file = cli_dir.join("antigravity-oauth-token");
 
-        std::fs::write(&token_file, serde_json::to_string(&payload).unwrap())
+        let mut open_options = std::fs::OpenOptions::new();
+        open_options.write(true).create(true).truncate(true);
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            open_options.mode(0o600);
+        }
+
+        let mut file = open_options.open(&token_file)
+            .map_err(|e| CoreError::Validation(format!("Failed to open {}: {}", token_file.display(), e)))?;
+
+        file.write_all(serde_json::to_string(&payload).unwrap().as_bytes())
             .map_err(|e| CoreError::Validation(format!("Failed to write to {}: {}", token_file.display(), e)))?;
 
         Ok(Json(serde_json::json!({

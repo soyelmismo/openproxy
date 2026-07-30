@@ -1,0 +1,24 @@
+--- crates/openproxy-core/src/models_dev_sync.rs
++++ crates/openproxy-core/src/models_dev_sync.rs
+@@ -338,9 +338,7 @@
+     if !model_rows.is_empty() {
+         for chunk in model_rows.chunks(900 / 3) {
+             let mut sql = String::from("WITH updates(provider_id, model_id, normalized) AS (VALUES ");
+-            let mut placeholders = Vec::new();
+-            for _ in 0..chunk.len() { placeholders.push("(?, ?, ?)"); }
+-            sql.push_str(&placeholders.join(", "));
++            sql.push_str(&vec!["(?, ?, ?)"; chunk.len()].join(", "));
+             sql.push_str(") UPDATE models SET model_id_normalized = updates.normalized FROM updates WHERE models.provider_id = updates.provider_id AND models.model_id = updates.model_id");
+
+             let mut params = Vec::new();
+@@ -377,9 +375,7 @@
+     if !sync_rows.is_empty() {
+         for chunk in sync_rows.chunks(900 / 3) {
+             let mut sql = String::from("WITH updates(provider_id, model_id, normalized) AS (VALUES ");
+-            let mut placeholders = Vec::new();
+-            for _ in 0..chunk.len() { placeholders.push("(?, ?, ?)"); }
+-            sql.push_str(&placeholders.join(", "));
++            sql.push_str(&vec!["(?, ?, ?)"; chunk.len()].join(", "));
+             sql.push_str(") UPDATE model_capabilities_sync SET model_id_normalized = updates.normalized FROM updates WHERE model_capabilities_sync.provider_id = updates.provider_id AND model_capabilities_sync.model_id = updates.model_id");
+
+             let mut params = Vec::new();

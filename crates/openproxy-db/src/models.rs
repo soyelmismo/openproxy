@@ -467,19 +467,43 @@ pub fn apply_auto_activation(
         .map(|n| n != 0)
         .unwrap_or(false);
 
-    if notifications_present {
-        for (model_id, display_name) in &newly_active {
-            let payload = serde_json::json!({
-                "provider_id": provider.as_str(),
-                "model_id": model_id,
-                "display_name": display_name,
-                "matched_keyword": keyword,
-            });
-            let dedup = format!("{}:{}:auto", provider.as_str(), model_id);
-            let _ = tx.execute(
-                "INSERT OR IGNORE INTO notifications (kind, payload_json, dedup_key, provider_id) VALUES (?1, ?2, ?3, ?4)",
-                params!["model_auto_activated", payload.to_string(), dedup, provider.as_str()],
-            );
+    if notifications_present && !newly_active.is_empty() {
+        for chunk in newly_active.chunks(200) {
+            let mut query = String::with_capacity(120 + chunk.len() * 30);
+            query.push_str("INSERT OR IGNORE INTO notifications (kind, payload_json, dedup_key, provider_id) VALUES ");
+
+            let mut query_params = Vec::with_capacity(chunk.len() * 4);
+
+            for (i, (model_id, display_name)) in chunk.iter().enumerate() {
+                if i > 0 {
+                    query.push_str(", ");
+                }
+                let p_start = i * 4 + 1;
+                query.push_str(&format!(
+                    "(?{}, ?{}, ?{}, ?{})",
+                    p_start,
+                    p_start + 1,
+                    p_start + 2,
+                    p_start + 3
+                ));
+
+                let payload = serde_json::json!({
+                    "provider_id": provider.as_str(),
+                    "model_id": model_id,
+                    "display_name": display_name,
+                    "matched_keyword": keyword,
+                });
+                let dedup = format!("{}:{}:auto", provider.as_str(), model_id);
+
+                query_params.push(rusqlite::types::Value::Text(
+                    "model_auto_activated".to_string(),
+                ));
+                query_params.push(rusqlite::types::Value::Text(payload.to_string()));
+                query_params.push(rusqlite::types::Value::Text(dedup));
+                query_params.push(rusqlite::types::Value::Text(provider.as_str().to_string()));
+            }
+
+            let _ = tx.execute(&query, rusqlite::params_from_iter(query_params));
         }
     }
 

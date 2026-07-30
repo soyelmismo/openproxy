@@ -1640,11 +1640,11 @@ export function buildDebugBundle(log: LogDetailLog): string {
   const cleanLog: Record<string, unknown> = { ...(log as unknown as Record<string, unknown>) };
   delete cleanLog["detail"];
   if (Array.isArray(cleanLog["stages"])) {
-    cleanLog["stages"] = (cleanLog["stages"] as any[]).map((s: any) => {
+    cleanLog["stages"] = (cleanLog["stages"] as Record<string, unknown>[]).map((s: Record<string, unknown>) => {
       if (s && typeof s === "object") {
         const copy = { ...s };
-        delete copy.row;
-        delete copy.detail;
+        delete copy["row"];
+        delete copy["detail"];
         return copy;
       }
       return s;
