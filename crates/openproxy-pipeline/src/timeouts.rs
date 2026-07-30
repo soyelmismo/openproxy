@@ -121,7 +121,9 @@ mod tests {
         assert!(overrides.is_empty());
 
         // Test valid JSON
-        let overrides = ModelTimeoutOverrides::from_json(Some(r#"{"ttft_ms": 1000, "idle_chunk_ms": 2000}"#)).unwrap();
+        let overrides =
+            ModelTimeoutOverrides::from_json(Some(r#"{"ttft_ms": 1000, "idle_chunk_ms": 2000}"#))
+                .unwrap();
         assert!(!overrides.is_empty());
         assert_eq!(overrides.ttft_ms, Some(1000));
         assert_eq!(overrides.idle_chunk_ms, Some(2000));
