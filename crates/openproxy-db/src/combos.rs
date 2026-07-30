@@ -767,18 +767,25 @@ pub fn reorder_targets(
 
                 query.push_str("WITH updates(id, priority) AS (VALUES ");
                 for (i, tid) in chunk.iter().enumerate() {
-                    if i > 0 { query.push_str(", "); }
+                    if i > 0 {
+                        query.push_str(", ");
+                    }
                     query.push_str("(?, ?)");
 
                     params.push(rusqlite::types::Value::Integer(tid.0));
-                    params.push(rusqlite::types::Value::Integer((chunk_start_priority + i + 1) as i64));
+                    params.push(rusqlite::types::Value::Integer(
+                        (chunk_start_priority + i + 1) as i64,
+                    ));
                 }
                 query.push_str(") UPDATE combo_targets SET priority_order = updates.priority FROM updates WHERE combo_targets.id = updates.id AND combo_targets.combo_id = ?");
 
                 params.push(rusqlite::types::Value::Integer(combo_id.0));
 
-                let mut stmt = tx.prepare_cached(&query).map_err(crate::error::map_db_error)?;
-                let params_refs: Vec<&dyn rusqlite::ToSql> = params.iter().map(|p| p as &dyn rusqlite::ToSql).collect();
+                let mut stmt = tx
+                    .prepare_cached(&query)
+                    .map_err(crate::error::map_db_error)?;
+                let params_refs: Vec<&dyn rusqlite::ToSql> =
+                    params.iter().map(|p| p as &dyn rusqlite::ToSql).collect();
                 stmt.execute(rusqlite::params_from_iter(params_refs))
                     .map_err(crate::error::map_db_error)?;
             }
