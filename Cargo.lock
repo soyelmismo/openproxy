@@ -1747,6 +1747,7 @@ dependencies = [
  "sha2 0.11.0",
  "socket2",
  "tdigest",
+ "tempfile",
  "thiserror",
  "tiktoken-rs",
  "tokio",
