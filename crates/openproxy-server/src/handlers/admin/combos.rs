@@ -81,7 +81,8 @@ pub async fn test_combo_targets(
                 core_combos::list_targets_with_model(&w, ComboId(id))
             }
         })
-        .await.map_err(|e| ApiError(CoreError::Internal(format!("spawn_blocking failed: {}", e))))??;
+        .await
+        .map_err(|e| ApiError(CoreError::Internal(format!("spawn_blocking failed: {}", e))))??;
 
         // The fan-out is intentionally serial. The prompt explicitly
         // asked for no parallelization in the MVP ("NO paralelizar.
