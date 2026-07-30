@@ -475,9 +475,7 @@ async fn e2e_discovery_and_delete_on_disappear() {
         let ids: BTreeSet<&str> = rows.iter().map(|r| r.model_id.as_str()).collect();
         assert_eq!(
             ids,
-            ["a", "b", "c"]
-                .into_iter()
-                .collect::<BTreeSet<_>>(),
+            ["a", "b", "c"].into_iter().collect::<BTreeSet<_>>(),
             "DB must contain exactly a, b, c"
         );
         // Every row is `active = 1` and `custom = 0` right after
@@ -532,9 +530,7 @@ async fn e2e_discovery_and_delete_on_disappear() {
         let ids: BTreeSet<&str> = rows.iter().map(|r| r.model_id.as_str()).collect();
         assert_eq!(
             ids,
-            ["a", "b"]
-                .into_iter()
-                .collect::<BTreeSet<_>>(),
+            ["a", "b"].into_iter().collect::<BTreeSet<_>>(),
             "DB must contain exactly a, b; c must be gone"
         );
         assert!(
@@ -580,9 +576,7 @@ async fn e2e_discovery_and_delete_on_disappear() {
         let ids: BTreeSet<&str> = rows.iter().map(|r| r.model_id.as_str()).collect();
         assert_eq!(
             ids,
-            ["a", "b", "z"]
-                .into_iter()
-                .collect::<BTreeSet<_>>(),
+            ["a", "b", "z"].into_iter().collect::<BTreeSet<_>>(),
             "the custom row z must survive the refresh that \
              doesn't list it"
         );
