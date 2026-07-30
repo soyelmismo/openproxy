@@ -754,21 +754,41 @@ pub fn reorder_targets(
     // `combo_id = ?3` guard is what closes the cross-combo rename
     // hole even if the validation above is ever loosened.
     {
-        let mut stmt = tx
-            .prepare("UPDATE combo_targets SET priority_order = ?1 WHERE id = ?2 AND combo_id = ?3")
-            .map_err(crate::error::map_db_error)?;
-        for (idx, tid) in ordered_ids.iter().enumerate() {
-            stmt.execute(params![(idx as i32) + 1, tid.0, combo_id.0])
-                .map_err(|e| CoreError::Database {
-                    message: format!(
-                        "reorder step {} (target={}, combo={}): {}",
-                        idx + 1,
-                        tid.0,
-                        combo_id.0,
-                        e
-                    ),
-                    source: Some(Box::new(e)),
-                })?;
+        if !ordered_ids.is_empty() {
+            let chunk_size = 400;
+            let mut query = String::with_capacity(chunk_size * 15 + 150);
+            let mut params = Vec::with_capacity(chunk_size * 2 + 1);
+
+            for (chunk_idx, chunk) in ordered_ids.chunks(chunk_size).enumerate() {
+                let chunk_start_priority = chunk_idx * chunk_size;
+
+                query.clear();
+                params.clear();
+
+                query.push_str("WITH updates(id, priority) AS (VALUES ");
+                for (i, tid) in chunk.iter().enumerate() {
+                    if i > 0 {
+                        query.push_str(", ");
+                    }
+                    query.push_str("(?, ?)");
+
+                    params.push(rusqlite::types::Value::Integer(tid.0));
+                    params.push(rusqlite::types::Value::Integer(
+                        (chunk_start_priority + i + 1) as i64,
+                    ));
+                }
+                query.push_str(") UPDATE combo_targets SET priority_order = updates.priority FROM updates WHERE combo_targets.id = updates.id AND combo_targets.combo_id = ?");
+
+                params.push(rusqlite::types::Value::Integer(combo_id.0));
+
+                let mut stmt = tx
+                    .prepare_cached(&query)
+                    .map_err(crate::error::map_db_error)?;
+                let params_refs: Vec<&dyn rusqlite::ToSql> =
+                    params.iter().map(|p| p as &dyn rusqlite::ToSql).collect();
+                stmt.execute(rusqlite::params_from_iter(params_refs))
+                    .map_err(crate::error::map_db_error)?;
+            }
         }
     }
     tx.commit().map_err(crate::error::map_db_error)?;
