@@ -106,6 +106,7 @@ tokio = { workspace = true, features = ["test-util"] }
 # Benchmark harness for the SSE chunk-forwarding hot path.
 # Used by `cargo bench -p openproxy-core --bench sse_fast_path`.
 criterion = { version = "0.8", default-features = false, features = ["async_tokio", "cargo_bench_support"] }
+tempfile = "3.10.1"
 
 [[bench]]
 name = "sse_fast_path"
@@ -118,4 +119,8 @@ harness = false
 
 [[bench]]
 name = "sync_bench"
+harness = false
+
+[[bench]]
+name = "free_proxies"
 harness = false
