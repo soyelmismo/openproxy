@@ -278,7 +278,7 @@ pub async fn oauth_device_poll(
                         }))
                     }
                 }
-            }).await.map_err(|e| ApiError(CoreError::Internal(format!("spawn_blocking failed: {}", e))))??;
+            }).await.map_err(ApiError::from)??;
         }
 
         let registry = s.oauth_provider_registry();
@@ -314,7 +314,7 @@ pub async fn oauth_device_poll(
                                 10,     // default priority
                                 None,   // extra_config_json
                             )
-                        }).await.map_err(|e| ApiError(CoreError::Internal(format!("spawn_blocking failed: {}", e))))??
+                        }).await.map_err(ApiError::from)??
                     }
                 };
                 let expires_at = token.expires_in.map(|secs| {
@@ -366,7 +366,7 @@ pub async fn oauth_device_poll(
                             provider_specific.as_deref(),
                             email.as_deref(),
                         )
-                    }).await.map_err(|e| ApiError(CoreError::Internal(format!("spawn_blocking failed: {}", e))))??;
+                    }).await.map_err(ApiError::from)??;
                 }
 
                 // LOW fix (#12): single-use enforcement. After a
@@ -383,7 +383,7 @@ pub async fn oauth_device_poll(
                     openproxy_core::oauth::tickets::mark_consumed(&w, &device_code_clone2)
                         .map_err(ApiError)?;
                     Ok(())
-                }).await.map_err(|e| ApiError(CoreError::Internal(format!("spawn_blocking failed: {}", e))))? {
+                }).await.map_err(ApiError::from).and_then(|r| r) {
                     tracing::warn!(
                         device_code = %device_code,
                         error = %e.0,
