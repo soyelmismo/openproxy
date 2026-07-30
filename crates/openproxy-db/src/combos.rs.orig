@@ -458,16 +458,24 @@ pub fn combo_in_chain(
             break;
         }
 
-        let json_arr = serde_json::to_string(&current_level).map_err(
-            crate::error::map_db_error_ctx("Failed to serialize current_level"),
-        )?;
-        let query = "SELECT DISTINCT sub_combo_id FROM combo_targets \
-                     WHERE combo_id IN (SELECT value FROM json_each(?)) AND sub_combo_id IS NOT NULL";
+        let placeholders = vec!["?"; current_level.len()].join(",");
+        let query = format!(
+            "SELECT DISTINCT sub_combo_id FROM combo_targets \
+             WHERE combo_id IN ({}) AND sub_combo_id IS NOT NULL",
+            placeholders
+        );
 
-        let mut stmt = conn.prepare(query).map_err(crate::error::map_db_error)?;
+        let mut stmt = conn.prepare(&query).map_err(crate::error::map_db_error)?;
+
+        let params_vec: Vec<&dyn rusqlite::ToSql> = current_level
+            .iter()
+            .map(|id| id as &dyn rusqlite::ToSql)
+            .collect();
 
         let sub_ids: Vec<i64> = stmt
-            .query_map([json_arr], |r| r.get::<_, Option<i64>>(0))
+            .query_map(rusqlite::params_from_iter(params_vec), |r| {
+                r.get::<_, Option<i64>>(0)
+            })
             .map_err(crate::error::map_db_error)?
             .filter_map(|x| x.ok().flatten())
             .collect();
