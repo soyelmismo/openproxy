@@ -107,116 +107,124 @@ pub fn upsert_models_dev(body: &[u8], conn: &Connection) -> Result<usize> {
     let root: HashMap<String, serde_json::Value> = serde_json::from_slice(body)
         .map_err(|e| CoreError::Parse(format!("models.dev parse: {e}")))?;
 
-    let mut total = 0usize;
-
-    for (ext_id, provider_val) in &root {
-        // We insert every models.dev provider — not just those in
-        // `PROVIDER_MAP`. The cross-provider matching in
-        // `enrich_models_from_sync` and `pricing::lookup_with_db`
-        // matches by `model_id_normalized` across all providers, so
-        // dropping the gate makes more data available (e.g. for
-        // `nous-research`, `cerebras`, `hyperbolic`, etc.).
-        //
-        // For each models.dev provider we still insert under BOTH the
-        // models.dev `ext_id` AND any mapped local provider ids. The
-        // latter keeps `auto_create_combos` working (it joins on
-        // `provider_id` and needs the local id).
-        let ext_id_str: &str = ext_id.as_str();
-        let mapped_ids: &[&str] = PROVIDER_MAP
-            .iter()
-            .find(|(ext, _)| *ext == ext_id_str)
-            .map(|(_, ids)| *ids)
-            .unwrap_or(&[]);
-
-        let mut all_ids: Vec<&str> = Vec::with_capacity(1 + mapped_ids.len());
-        all_ids.push(ext_id_str);
-        all_ids.extend_from_slice(mapped_ids);
-
-        // Get models dict for this provider.
-        let Some(models_obj) = provider_val.get("models").and_then(|v| v.as_object()) else {
-            continue;
-        };
-
-        let mut stmt = conn.prepare(
-            "INSERT INTO model_capabilities_sync \
-             (provider_id, model_id, context_length, max_output_tokens, \
-              pricing_input_per_1m, pricing_output_per_1m, pricing_cached_per_1m, \
-              tool_call, reasoning, vision, structured_output, \
-              modalities_input, modalities_output, family, status, \
-              model_id_normalized) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16) \
-             ON CONFLICT(provider_id, model_id) DO UPDATE SET \
-              context_length       = coalesce(excluded.context_length,       model_capabilities_sync.context_length),
-              max_output_tokens    = coalesce(excluded.max_output_tokens,    model_capabilities_sync.max_output_tokens),
-              pricing_input_per_1m = coalesce(excluded.pricing_input_per_1m, model_capabilities_sync.pricing_input_per_1m),
-              pricing_output_per_1m= coalesce(excluded.pricing_output_per_1m,model_capabilities_sync.pricing_output_per_1m),
-              pricing_cached_per_1m= coalesce(excluded.pricing_cached_per_1m,model_capabilities_sync.pricing_cached_per_1m),
-              tool_call     = coalesce(excluded.tool_call,     model_capabilities_sync.tool_call),
-              reasoning     = coalesce(excluded.reasoning,     model_capabilities_sync.reasoning),
-              vision        = coalesce(excluded.vision,        model_capabilities_sync.vision),
-              structured_output = coalesce(excluded.structured_output, model_capabilities_sync.structured_output),
-              modalities_input  = coalesce(excluded.modalities_input,  model_capabilities_sync.modalities_input),
-              modalities_output = coalesce(excluded.modalities_output, model_capabilities_sync.modalities_output),
-              family        = coalesce(excluded.family,        model_capabilities_sync.family),
-              status        = coalesce(excluded.status,        model_capabilities_sync.status),
-              model_id_normalized = coalesce(excluded.model_id_normalized, model_capabilities_sync.model_id_normalized),
-              fetched_at    = strftime('%Y-%m-%dT%H:%M:%SZ','now')"
-        ).map_err(openproxy_db::error::map_db_error)?;
-
-        for model_val in models_obj.values() {
-            let model: ModelsDevModel = match serde::Deserialize::deserialize(model_val) {
-                Ok(m) => m,
-                Err(_) => continue,
-            };
-
-            // Extract nested values.
-            let context = model.limit.as_ref().and_then(|l| l.context);
-            let max_output = model.limit.as_ref().and_then(|l| l.output);
-            let input_price = model.cost.as_ref().and_then(|c| c.input);
-            let output_price = model.cost.as_ref().and_then(|c| c.output);
-            let cached_price = model.cost.as_ref().and_then(|c| c.cache_read);
-
-            let mod_in = model
-                .modalities
-                .as_ref()
-                .and_then(|m| m.input.as_ref())
-                .map(|v| serde_json::to_string(v).unwrap_or_default());
-            let mod_out = model
-                .modalities
-                .as_ref()
-                .and_then(|m| m.output.as_ref())
-                .map(|v| serde_json::to_string(v).unwrap_or_default());
-
-            let normalized = crate::model_normalize::normalize_model_id(&model.id);
-
-            for our_id in &all_ids {
-                stmt.execute(rusqlite::params![
-                    our_id,
-                    &model.id,
-                    context,
-                    max_output,
-                    input_price,
-                    output_price,
-                    cached_price,
-                    model.tool_call.map(|b| b as i64),
-                    model.reasoning.map(|b| b as i64),
-                    None::<i64>, // vision not present in API
-                    model.structured_output.map(|b| b as i64),
-                    mod_in,
-                    mod_out,
-                    model.family.as_deref(),
-                    model.status.as_deref(),
-                    &normalized,
-                ])
-                .map_err(openproxy_db::error::map_db_error)?;
-                total += 1;
-            }
-        }
+    let is_in_tx = !conn.is_autocommit();
+    if !is_in_tx {
+        conn.execute("BEGIN", ())
+            .map_err(openproxy_db::error::map_db_error)?;
     }
 
-    Ok(total)
-}
+    let result = (|| -> Result<usize> {
+        let mut total = 0usize;
+        for (ext_id, provider_val) in &root {
+            let ext_id_str: &str = ext_id.as_str();
+            let mapped_ids: &[&str] = PROVIDER_MAP
+                .iter()
+                .find(|(ext, _)| *ext == ext_id_str)
+                .map(|(_, ids)| *ids)
+                .unwrap_or(&[]);
 
+            let mut all_ids: Vec<&str> = Vec::with_capacity(1 + mapped_ids.len());
+            all_ids.push(ext_id_str);
+            all_ids.extend_from_slice(mapped_ids);
+
+            let Some(models_obj) = provider_val.get("models").and_then(|v| v.as_object()) else {
+                continue;
+            };
+
+            let mut stmt = conn.prepare(
+                "INSERT INTO model_capabilities_sync \
+                 (provider_id, model_id, context_length, max_output_tokens, \
+                  pricing_input_per_1m, pricing_output_per_1m, pricing_cached_per_1m, \
+                  tool_call, reasoning, vision, structured_output, \
+                  modalities_input, modalities_output, family, status, \
+                  model_id_normalized) \
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16) \
+                 ON CONFLICT(provider_id, model_id) DO UPDATE SET \
+                  context_length       = coalesce(excluded.context_length,       model_capabilities_sync.context_length),\
+                  max_output_tokens    = coalesce(excluded.max_output_tokens,    model_capabilities_sync.max_output_tokens),\
+                  pricing_input_per_1m = coalesce(excluded.pricing_input_per_1m, model_capabilities_sync.pricing_input_per_1m),\
+                  pricing_output_per_1m= coalesce(excluded.pricing_output_per_1m,model_capabilities_sync.pricing_output_per_1m),\
+                  pricing_cached_per_1m= coalesce(excluded.pricing_cached_per_1m,model_capabilities_sync.pricing_cached_per_1m),\
+                  tool_call     = coalesce(excluded.tool_call,     model_capabilities_sync.tool_call),\
+                  reasoning     = coalesce(excluded.reasoning,     model_capabilities_sync.reasoning),\
+                  vision        = coalesce(excluded.vision,        model_capabilities_sync.vision),\
+                  structured_output = coalesce(excluded.structured_output, model_capabilities_sync.structured_output),\
+                  modalities_input  = coalesce(excluded.modalities_input,  model_capabilities_sync.modalities_input),\
+                  modalities_output = coalesce(excluded.modalities_output, model_capabilities_sync.modalities_output),\
+                  family        = coalesce(excluded.family,        model_capabilities_sync.family),\
+                  status        = coalesce(excluded.status,        model_capabilities_sync.status),\
+                  model_id_normalized = coalesce(excluded.model_id_normalized, model_capabilities_sync.model_id_normalized),\
+                  fetched_at    = strftime('%Y-%m-%dT%H:%M:%SZ','now')"
+            ).map_err(openproxy_db::error::map_db_error)?;
+
+            for model_val in models_obj.values() {
+                let model: ModelsDevModel = match serde::Deserialize::deserialize(model_val) {
+                    Ok(m) => m,
+                    Err(_) => continue,
+                };
+
+                let context = model.limit.as_ref().and_then(|l| l.context);
+                let max_output = model.limit.as_ref().and_then(|l| l.output);
+                let input_price = model.cost.as_ref().and_then(|c| c.input);
+                let output_price = model.cost.as_ref().and_then(|c| c.output);
+                let cached_price = model.cost.as_ref().and_then(|c| c.cache_read);
+
+                let mod_in = model
+                    .modalities
+                    .as_ref()
+                    .and_then(|m| m.input.as_ref())
+                    .map(|v| serde_json::to_string(v).unwrap_or_default());
+                let mod_out = model
+                    .modalities
+                    .as_ref()
+                    .and_then(|m| m.output.as_ref())
+                    .map(|v| serde_json::to_string(v).unwrap_or_default());
+
+                let normalized = crate::model_normalize::normalize_model_id(&model.id);
+
+                for our_id in &all_ids {
+                    stmt.execute(rusqlite::params![
+                        our_id,
+                        &model.id,
+                        context,
+                        max_output,
+                        input_price,
+                        output_price,
+                        cached_price,
+                        model.tool_call.map(|b| b as i64),
+                        model.reasoning.map(|b| b as i64),
+                        None::<i64>, // vision not present in API
+                        model.structured_output.map(|b| b as i64),
+                        mod_in,
+                        mod_out,
+                        model.family.as_deref(),
+                        model.status.as_deref(),
+                        &normalized,
+                    ])
+                    .map_err(openproxy_db::error::map_db_error)?;
+                    total += 1;
+                }
+            }
+        }
+        Ok(total)
+    })();
+
+    match result {
+        Ok(t) => {
+            if !is_in_tx {
+                conn.execute("COMMIT", ())
+                    .map_err(openproxy_db::error::map_db_error)?;
+            }
+            Ok(t)
+        }
+        Err(e) => {
+            if !is_in_tx {
+                let _ = conn.execute("ROLLBACK", ());
+            }
+            Err(e)
+        }
+    }
+}
 /// Fetch raw JSON bytes from models.dev.
 ///
 /// Wraps a single HTTP attempt in a retry loop: up to `MAX_RETRIES`
@@ -768,7 +776,7 @@ pub fn auto_create_combos(conn: &Connection) -> Result<usize> {
     // so the multiple INSERTS don't trigger implicit per-statement fsyncs.
     let is_in_tx = !conn.is_autocommit();
     if !is_in_tx {
-        conn.execute("BEGIN", [])
+        conn.execute("BEGIN", ())
             .map_err(openproxy_db::error::map_db_error)?;
     }
 
@@ -835,7 +843,7 @@ pub fn auto_create_combos(conn: &Connection) -> Result<usize> {
     }
 
     if !is_in_tx {
-        conn.execute("COMMIT", [])
+        conn.execute("COMMIT", ())
             .map_err(openproxy_db::error::map_db_error)?;
     }
 

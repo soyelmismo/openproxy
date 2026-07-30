@@ -77,3 +77,6 @@
 ## 2026-07-28 - Avoid Virtual Clock Over-advancement
 **Learning:** Advancing the tokio virtual clock excessively inside a loop can cause background tasks checking sleep loops inside bounded contexts (like discovery scheduler) to spin out of sync and fail tests due to missed execution boundaries.
 **Action:** When testing tokio background loops with virtual time, use short sleep yields rather than aggressive clock advance loops if relying on specific intermediate side effects before cancellation.
+## 2024-05-18 - [SQLite Batch Upsert Transactions]
+**Learning:** When performing bulk updates in SQLite with rusqlite using an immutable `&Connection`, wrapping the loop in an explicit `BEGIN`/`COMMIT` block eliminates implicit fsyncs and solves N+1 query performance bottlenecks.
+**Action:** When `.transaction()` is unavailable due to mutability constraints, use an immediately invoked closure to safely catch errors and execute a manual `ROLLBACK` to prevent leaking the database connection in a poison state. Also, always pass `()` rather than `[]` for parameterless statements like `BEGIN` to avoid type inference issues.
