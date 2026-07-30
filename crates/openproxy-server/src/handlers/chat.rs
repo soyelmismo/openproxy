@@ -287,7 +287,9 @@ async fn handle_streaming_response(
                     "code": err.http_status(),
                 }
             });
-            let error_str = serde_json::to_string(&error_json).unwrap_or_default();
+            let error_str = serde_json::to_string(&error_json).unwrap_or_else(|_| {
+                r#"{"error":{"message":"Internal server error","type":"internal_error","code":500}}"#.to_string()
+            });
             let mut frame = bytes::BytesMut::with_capacity(error_str.len() + 16);
             frame.extend_from_slice(b"data: ");
             frame.extend_from_slice(error_str.as_bytes());
