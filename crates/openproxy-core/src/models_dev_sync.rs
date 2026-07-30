@@ -336,7 +336,8 @@ pub fn backfill_model_id_normalized(conn: &Connection) -> Result<usize> {
     };
     if !model_rows.is_empty() {
         for chunk in model_rows.chunks(900 / 3) {
-            let mut sql = String::from("WITH updates(provider_id, model_id, normalized) AS (VALUES ");
+            let mut sql =
+                String::from("WITH updates(provider_id, model_id, normalized) AS (VALUES ");
             sql.push_str(&vec!["(?, ?, ?)"; chunk.len()].join(", "));
             sql.push_str(") UPDATE models SET model_id_normalized = updates.normalized FROM updates WHERE models.provider_id = updates.provider_id AND models.model_id = updates.model_id");
 
@@ -347,7 +348,9 @@ pub fn backfill_model_id_normalized(conn: &Connection) -> Result<usize> {
                 params.push(model_id.clone());
                 params.push(normalized);
             }
-            let count = conn.execute(&sql, rusqlite::params_from_iter(params)).map_err(openproxy_db::error::map_db_error)?;
+            let count = conn
+                .execute(&sql, rusqlite::params_from_iter(params))
+                .map_err(openproxy_db::error::map_db_error)?;
             total += count;
         }
     }
@@ -373,7 +376,8 @@ pub fn backfill_model_id_normalized(conn: &Connection) -> Result<usize> {
     };
     if !sync_rows.is_empty() {
         for chunk in sync_rows.chunks(900 / 3) {
-            let mut sql = String::from("WITH updates(provider_id, model_id, normalized) AS (VALUES ");
+            let mut sql =
+                String::from("WITH updates(provider_id, model_id, normalized) AS (VALUES ");
             sql.push_str(&vec!["(?, ?, ?)"; chunk.len()].join(", "));
             sql.push_str(") UPDATE model_capabilities_sync SET model_id_normalized = updates.normalized FROM updates WHERE model_capabilities_sync.provider_id = updates.provider_id AND model_capabilities_sync.model_id = updates.model_id");
 
@@ -384,7 +388,9 @@ pub fn backfill_model_id_normalized(conn: &Connection) -> Result<usize> {
                 params.push(model_id.clone());
                 params.push(normalized);
             }
-            let count = conn.execute(&sql, rusqlite::params_from_iter(params)).map_err(openproxy_db::error::map_db_error)?;
+            let count = conn
+                .execute(&sql, rusqlite::params_from_iter(params))
+                .map_err(openproxy_db::error::map_db_error)?;
             total += count;
         }
     }
