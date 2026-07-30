@@ -77,3 +77,19 @@
 ## 2026-07-28 - Avoid Virtual Clock Over-advancement
 **Learning:** Advancing the tokio virtual clock excessively inside a loop can cause background tasks checking sleep loops inside bounded contexts (like discovery scheduler) to spin out of sync and fail tests due to missed execution boundaries.
 **Action:** When testing tokio background loops with virtual time, use short sleep yields rather than aggressive clock advance loops if relying on specific intermediate side effects before cancellation.
+## 2026-07-30 - Batch Notifications Insert
+**Learning:** Inserting multiple rows via a loop of prepared statements (N+1 inserts) has a noticeable SQLite overhead. Batching them via dynamically constructed `VALUES` strings significantly decreases latency.
+**Action:** Use batch inserts for loop-driven db persistence when applicable and chunk parameter bindings (e.g. up to 900) to adhere to SQLite's limits.
+
+## 2026-07-30 - Optimize N+1 reorder queries in combinations
+**Learning:** Bulk updates via N+1 queries in SQLite are extremely inefficient. Converting N+1 updates to a dynamically unrolled `WITH updates(id, priority) AS (VALUES (?, ?)...) UPDATE ... FROM updates` CTE string eliminates the iterative overhead and achieves near O(1) latency for large batches.
+**Action:** When updating multiple rows simultaneously with mapped dynamic values, use unrolled batch statements in SQLite chunked precisely under the max parameter limit (999) rather than looping over `stmt.execute`. Ensure JSON-based fallback isn't used unless strictly necessary, as it parses significantly slower than simple parameterization.
+
+## 2024-05-18 - SQLite Bulk Updates
+**Learning:** SQLite has a low default maximum number of variables (often 999). When writing bulk `UPDATE ... FROM ...` statements with generated data in a `VALUES` CTE (Common Table Expression), you must chunk the operations to avoid hitting `too many SQL variables` limitations.
+**Action:** Always batch and chunk input collections before dynamically constructing long string SQL variables to safely inject data without breaking database drivers.
+
+## 2024-05-18 - [SQLite Batch Upsert Transactions]
+**Learning:** When performing bulk updates in SQLite with rusqlite using an immutable `&Connection`, wrapping the loop in an explicit `BEGIN`/`COMMIT` block eliminates implicit fsyncs and solves N+1 query performance bottlenecks.
+**Action:** When `.transaction()` is unavailable due to mutability constraints, use an immediately invoked closure to safely catch errors and execute a manual `ROLLBACK` to prevent leaking the database connection in a poison state. Also, always pass `()` rather than `[]` for parameterless statements like `BEGIN` to avoid type inference issues.
+

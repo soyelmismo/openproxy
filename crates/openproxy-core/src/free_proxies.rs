@@ -469,6 +469,10 @@ pub fn upsert_scraped_proxies(
     conn: &mut Connection,
     proxies: &[ScrapedProxy],
 ) -> crate::error::Result<()> {
+    if proxies.is_empty() {
+        return Ok(());
+    }
+
     let now = chrono::Utc::now().to_rfc3339();
     let tx = conn
         .transaction()
@@ -476,23 +480,57 @@ pub fn upsert_scraped_proxies(
             message: e.to_string(),
             source: Some(Box::new(e)),
         })?;
-    for p in proxies {
-        let id = uuid::Uuid::new_v4().to_string();
-        tx.execute(
-            "INSERT INTO free_proxies (id, source, host, port, type, country_code, status, latency_ms, last_validated, created_at, updated_at) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'unknown', NULL, NULL, ?7, ?8) \
-             ON CONFLICT(host, port) DO UPDATE SET \
+
+    for chunk in proxies.chunks(100) {
+        let mut sql = String::from(
+            "INSERT INTO free_proxies (id, source, host, port, type, country_code, status, latency_ms, last_validated, created_at, updated_at) VALUES ",
+        );
+        let mut params: Vec<rusqlite::types::Value> = Vec::with_capacity(chunk.len() * 8);
+
+        for (i, p) in chunk.iter().enumerate() {
+            if i > 0 {
+                sql.push_str(", ");
+            }
+            let base = i * 8;
+            sql.push_str(&format!(
+                "(?{}, ?{}, ?{}, ?{}, ?{}, ?{}, 'unknown', NULL, NULL, ?{}, ?{})",
+                base + 1,
+                base + 2,
+                base + 3,
+                base + 4,
+                base + 5,
+                base + 6,
+                base + 7,
+                base + 8
+            ));
+
+            let id = uuid::Uuid::new_v4().to_string();
+            params.push(id.into());
+            params.push(p.source.clone().into());
+            params.push(p.host.clone().into());
+            params.push(p.port.into());
+            params.push(p.r#type.clone().into());
+            match &p.country_code {
+                Some(cc) => params.push(cc.clone().into()),
+                None => params.push(rusqlite::types::Value::Null),
+            }
+            params.push(now.clone().into());
+            params.push(now.clone().into());
+        }
+
+        sql.push_str(" ON CONFLICT(host, port) DO UPDATE SET \
                source = CASE WHEN free_proxies.source = 'custom' THEN 'custom' ELSE excluded.source END, \
                type = excluded.type, \
                country_code = COALESCE(excluded.country_code, free_proxies.country_code), \
-               updated_at = excluded.updated_at",
-            rusqlite::params![id, p.source, p.host, p.port, p.r#type, p.country_code, now, now],
-        )
-        .map_err(|e| crate::error::CoreError::Database {
-            message: e.to_string(),
-            source: Some(Box::new(e)),
-        })?;
+               updated_at = excluded.updated_at");
+
+        tx.execute(&sql, rusqlite::params_from_iter(params))
+            .map_err(|e| crate::error::CoreError::Database {
+                message: e.to_string(),
+                source: Some(Box::new(e)),
+            })?;
     }
+
     tx.commit().map_err(|e| crate::error::CoreError::Database {
         message: e.to_string(),
         source: Some(Box::new(e)),

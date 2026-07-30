@@ -141,7 +141,9 @@ pub async fn anthropic_messages(
                         "message": message
                     }
                 });
-                let error_str = serde_json::to_string(&error_json).unwrap_or_default();
+                let error_str = serde_json::to_string(&error_json).unwrap_or_else(|_| {
+                    r#"{"type":"error","error":{"type":"internal_error","message":"Internal server error"}}"#.to_string()
+                });
                 let mut frame = bytes::BytesMut::with_capacity(error_str.len() + 16);
                 frame.extend_from_slice(b"event: error\ndata: ");
                 frame.extend_from_slice(error_str.as_bytes());

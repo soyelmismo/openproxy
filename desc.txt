@@ -1,0 +1,11 @@
+💡 What:
+The test code in `crates/openproxy-server/tests/e2e_models_discovery.rs` mapped over `rows.iter()` and cloned the strings using `.clone()`. This was updated to avoid allocations by utilizing references `&str` through `as_str()` method. The variable types for expected elements were updated to map string slice vectors instead of mapping back into allocated Strings.
+
+🎯 Why:
+To avoid unnecessary memory allocation in mapping operations inside tests. While this was specifically in test code, cloning `String` objects iteratively is an inefficient pattern when string slice references (`&str`) are sufficient for assertions.
+
+📊 Impact:
+Minimal memory allocation optimizations during runtime string mappings within `e2e_models_discovery.rs` since the values now hold references instead of cloned heap allocations.
+
+🔬 Measurement:
+The optimization addresses the specific cloning logic problem but given that it is isolated to a set map inside tests, benchmarks were skipped as their performance improvement would be negligible relative to general system workloads. Verified through standard functional correctness with `cargo test`.

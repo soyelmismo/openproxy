@@ -113,7 +113,9 @@ pub async fn oauth_exchange(
                     )
                 })
                 .await
-                .unwrap()?
+                .map_err(|e| {
+                    ApiError(CoreError::Internal(format!("spawn_blocking failed: {}", e)))
+                })??
             }
         };
         let expires_at = token.expires_in.map(|secs| {
@@ -149,7 +151,9 @@ pub async fn oauth_exchange(
                 )
             })
             .await
-            .unwrap()?;
+            .map_err(|e| {
+                ApiError(CoreError::Internal(format!("spawn_blocking failed: {}", e)))
+            })??;
         }
 
         // Post-exchange hook. For Antigravity this calls
@@ -213,7 +217,7 @@ pub async fn oauth_device_code(
             }
         })
         .await
-        .unwrap()?;
+        .map_err(|e| ApiError(CoreError::Internal(format!("spawn_blocking failed: {}", e))))??;
 
         Ok(Json(serde_json::json!({
             "device_code": dar.device_code,
@@ -274,7 +278,7 @@ pub async fn oauth_device_poll(
                         }))
                     }
                 }
-            }).await.unwrap()?;
+            }).await.map_err(ApiError::from)??;
         }
 
         let registry = s.oauth_provider_registry();
@@ -310,7 +314,7 @@ pub async fn oauth_device_poll(
                                 10,     // default priority
                                 None,   // extra_config_json
                             )
-                        }).await.unwrap()?
+                        }).await.map_err(ApiError::from)??
                     }
                 };
                 let expires_at = token.expires_in.map(|secs| {
@@ -362,7 +366,7 @@ pub async fn oauth_device_poll(
                             provider_specific.as_deref(),
                             email.as_deref(),
                         )
-                    }).await.unwrap()?;
+                    }).await.map_err(ApiError::from)??;
                 }
 
                 // LOW fix (#12): single-use enforcement. After a
@@ -379,7 +383,7 @@ pub async fn oauth_device_poll(
                     openproxy_core::oauth::tickets::mark_consumed(&w, &device_code_clone2)
                         .map_err(ApiError)?;
                     Ok(())
-                }).await.unwrap() {
+                }).await.map_err(ApiError::from).and_then(|r| r) {
                     tracing::warn!(
                         device_code = %device_code,
                         error = %e.0,

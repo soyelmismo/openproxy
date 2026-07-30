@@ -1643,8 +1643,8 @@ export function buildDebugBundle(log: LogDetailLog): string {
     cleanLog["stages"] = (cleanLog["stages"] as Record<string, unknown>[]).map((s: Record<string, unknown>) => {
       if (s && typeof s === "object") {
         const copy = { ...s };
-        delete copy['row'];
-        delete copy['detail'];
+        delete copy["row"];
+        delete copy["detail"];
         return copy;
       }
       return s;
