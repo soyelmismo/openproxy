@@ -1782,7 +1782,7 @@ impl UpstreamDispatcher {
             self.is_client_disconnected(&mut rx)
         };
 
-        if let Some(reason) = client_disconnected {
+        if let Some(_reason) = client_disconnected {
             tracing::warn!(
                 combo_id = combo.id.0,
                 target_id = target.id.0,
