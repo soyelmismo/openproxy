@@ -31,7 +31,7 @@ use openproxy_core::{capabilities, models};
 use openproxy_types::{ApiKeyId, CoreError};
 
 use crate::{
-    error::{ApiError, ApiResult},
+    error::ApiError,
     state::AppState,
 };
 
@@ -47,7 +47,7 @@ const DEFAULT_MAX_OUTPUT_TOKENS: i64 = 8_192;
 pub async fn list_models(
     State(state): State<AppState>,
     headers: HeaderMap,
-) -> ApiResult<Json<serde_json::Value>> {
+) -> Result<Json<serde_json::Value>, ApiError> {
     // MEDIUM-4 fix: require a chat-scope API key for /v1/models.
     // This matches OpenAI's behaviour (their /v1/models requires auth)
     // and prevents unauthenticated catalog enumeration.
@@ -56,59 +56,57 @@ pub async fn list_models(
     // so first-boot before the bootstrap key is created still works.
     let _api_key_id = match authenticate_chat_or_anonymous(&state, &headers) {
         Ok(id) => id,
-        Err(e) => return ApiResult::err(e),
+        Err(e) => return Err(e),
     };
 
     // Use try_writer_for to avoid blocking under admin lock contention.
     // The model list is bounded (typically <1000 rows) so 5s is plenty.
-    crate::api_try! {
-        let rows = state.services().models.list_active_all(std::time::Duration::from_secs(5))?;
-        let combo_rows = state.services().combos.list_combos()?;
+    let rows = state.services().models.list_active_all(std::time::Duration::from_secs(5))?;
+    let combo_rows = state.services().combos.list_combos()?;
 
-        let mut data: Vec<serde_json::Value> =
-            rows.into_iter().map(|m| build_model_entry(&m)).collect();
-        for c in &combo_rows {
-            // Compute the effective context window: explicit override
-            // on the combo row, or auto-compute (min across all
-            // targets including sub-combos recursively).
-            let effective_cw = if c.context_window.is_some() {
-                c.context_window
-            } else {
-                state.services().combos.compute_effective_context_window(c.id).unwrap_or(None)
-            };
-            data.push(build_combo_entry(c, effective_cw));
-        }
-
-        let is_anthropic = headers.contains_key("anthropic-version") || headers.contains_key("x-api-key");
-        if is_anthropic {
-            let anthropic_data: Vec<serde_json::Value> = data
-                .into_iter()
-                .map(|item| {
-                    let id = item.get("id").and_then(|v| v.as_str()).unwrap_or_default();
-                    serde_json::json!({
-                        "type": "model",
-                        "id": id,
-                        "display_name": id,
-                        "created_at": "2024-02-29T00:00:00Z"
-                    })
-                })
-                .collect();
-
-            let first_id = anthropic_data.first().and_then(|v| v.get("id")).cloned().unwrap_or(serde_json::json!(""));
-            let last_id = anthropic_data.last().and_then(|v| v.get("id")).cloned().unwrap_or(serde_json::json!(""));
-
-            Ok(Json(serde_json::json!({
-                "data": anthropic_data,
-                "has_more": false,
-                "first_id": first_id,
-                "last_id": last_id,
-            })))
+    let mut data: Vec<serde_json::Value> =
+        rows.into_iter().map(|m| build_model_entry(&m)).collect();
+    for c in &combo_rows {
+        // Compute the effective context window: explicit override
+        // on the combo row, or auto-compute (min across all
+        // targets including sub-combos recursively).
+        let effective_cw = if c.context_window.is_some() {
+            c.context_window
         } else {
-            Ok(Json(serde_json::json!({
-                "object": "list",
-                "data": data,
-            })))
-        }
+            state.services().combos.compute_effective_context_window(c.id).unwrap_or(None)
+        };
+        data.push(build_combo_entry(c, effective_cw));
+    }
+
+    let is_anthropic = headers.contains_key("anthropic-version") || headers.contains_key("x-api-key");
+    if is_anthropic {
+        let anthropic_data: Vec<serde_json::Value> = data
+            .into_iter()
+            .map(|item| {
+                let id = item.get("id").and_then(|v| v.as_str()).unwrap_or_default();
+                serde_json::json!({
+                    "type": "model",
+                    "id": id,
+                    "display_name": id,
+                    "created_at": "2024-02-29T00:00:00Z"
+                })
+            })
+            .collect();
+
+        let first_id = anthropic_data.first().and_then(|v| v.get("id")).cloned().unwrap_or(serde_json::json!(""));
+        let last_id = anthropic_data.last().and_then(|v| v.get("id")).cloned().unwrap_or(serde_json::json!(""));
+
+        Ok(Json(serde_json::json!({
+            "data": anthropic_data,
+            "has_more": false,
+            "first_id": first_id,
+            "last_id": last_id,
+        })))
+    } else {
+        Ok(Json(serde_json::json!({
+            "object": "list",
+            "data": data,
+        })))
     }
 }
 

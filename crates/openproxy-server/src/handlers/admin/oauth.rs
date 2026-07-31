@@ -10,7 +10,7 @@ use openproxy_core::oauth::OAuthProvider;
 pub async fn oauth_authorize(
     State(s): State<AppState>,
     Path(provider): Path<String>,
-) -> ApiResult<Json<serde_json::Value>> {
+) -> Result<Json<serde_json::Value>, ApiError> {
     let res: Result<Json<serde_json::Value>, crate::error::ApiError> = async move {
         let registry = s.oauth_provider_registry();
         let provider_impl = registry.get(&provider).ok_or_else(|| {
@@ -56,14 +56,14 @@ pub async fn oauth_authorize(
         })))
     }
     .await;
-    res.into()
+    res
 }
 
 pub async fn oauth_exchange(
     State(s): State<AppState>,
     Path(provider): Path<String>,
     Json(input): Json<serde_json::Value>,
-) -> ApiResult<Json<serde_json::Value>> {
+) -> Result<Json<serde_json::Value>, ApiError> {
     let res: Result<Json<serde_json::Value>, crate::error::ApiError> = async move {
         let code = input
             .get("code")
@@ -181,13 +181,13 @@ pub async fn oauth_exchange(
         })))
     }
     .await;
-    res.into()
+    res
 }
 
 pub async fn oauth_device_code(
     State(s): State<AppState>,
     Path(provider): Path<String>,
-) -> ApiResult<Json<serde_json::Value>> {
+) -> Result<Json<serde_json::Value>, ApiError> {
     let res: Result<Json<serde_json::Value>, crate::error::ApiError> = async move {
         let registry = s.oauth_provider_registry();
         let provider_impl = registry.get(&provider).ok_or_else(|| {
@@ -229,14 +229,14 @@ pub async fn oauth_device_code(
         })))
     }
     .await;
-    res.into()
+    res
 }
 
 pub async fn oauth_device_poll(
     State(s): State<AppState>,
     Path(provider): Path<String>,
     Json(input): Json<serde_json::Value>,
-) -> ApiResult<Json<serde_json::Value>> {
+) -> Result<Json<serde_json::Value>, ApiError> {
     let res: Result<Json<serde_json::Value>, crate::error::ApiError> = async move {
         let device_code = input
             .get("device_code")
@@ -419,7 +419,7 @@ pub async fn oauth_device_poll(
             }))),
         }
     }.await;
-    res.into()
+    res
 }
 
 pub async fn oauth_callback(

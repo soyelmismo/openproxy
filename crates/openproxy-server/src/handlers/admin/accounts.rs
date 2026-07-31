@@ -1,3 +1,4 @@
+use crate::extractors::DbReader;
 use super::*;
 use axum::{
     Json,
@@ -11,90 +12,76 @@ use std::io::Write;
 pub async fn list_accounts(
     State(s): State<AppState>,
     Query(q): Query<AccountListQuery>,
-) -> ApiResult<Json<Vec<core_accounts::Account>>> {
-    crate::api_try! {
-        let provider = q.provider_id.map(ProviderId::new);
-        let list = s.services().accounts.list(provider.as_ref(), s.master_key().as_ref())?;
-        Ok(Json(list))
-    }
+) -> Result<Json<Vec<core_accounts::Account>>, ApiError> {
+    let provider = q.provider_id.map(ProviderId::new);
+    let list = s.services().accounts.list(provider.as_ref(), s.master_key().as_ref())?;
+    Ok(Json(list))
 }
 
 pub async fn create_account(
     State(s): State<AppState>,
     Json(input): Json<core_admin::CreateAccountInput>,
-) -> ApiResult<Json<serde_json::Value>> {
-    crate::api_try! {
-        let id = s.services().accounts.create(s.master_key().as_ref(), input)?;
-        Ok(Json(serde_json::json!({ "id": id.0 })))
-    }
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let id = s.services().accounts.create(s.master_key().as_ref(), input)?;
+    Ok(Json(serde_json::json!({ "id": id.0 })))
 }
 
 pub async fn delete_account(
     State(s): State<AppState>,
     Path(id): Path<i64>,
-) -> ApiResult<Json<serde_json::Value>> {
-    crate::api_try! {
-        let id = AccountId::new(id);
-        s.services().accounts.delete(id)?;
-        Ok(Json(serde_json::json!({ "deleted": id.0 })))
-    }
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let id = AccountId::new(id);
+    s.services().accounts.delete(id)?;
+    Ok(Json(serde_json::json!({ "deleted": id.0 })))
 }
 
 pub async fn set_account_health(
     State(s): State<AppState>,
     Path(id): Path<i64>,
     Json(body): Json<serde_json::Value>,
-) -> ApiResult<Json<serde_json::Value>> {
-    crate::api_try! {
-        let health_str = body
-            .get("health")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| CoreError::Validation("missing 'health' string".into()))?;
-        let health = core_accounts::HealthStatus::parse(health_str).map_err(CoreError::Validation)?;
-        s.services().accounts.set_health(AccountId::new(id), health)?;
-        Ok(Json(serde_json::json!({
-            "id": id,
-            "health": health_str,
-        })))
-    }
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let health_str = body
+        .get("health")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| CoreError::Validation("missing 'health' string".into()))?;
+    let health = core_accounts::HealthStatus::parse(health_str).map_err(CoreError::Validation)?;
+    s.services().accounts.set_health(AccountId::new(id), health)?;
+    Ok(Json(serde_json::json!({
+        "id": id,
+        "health": health_str,
+    })))
 }
 
 pub async fn update_account_api_key(
     State(s): State<AppState>,
     Path(id): Path<i64>,
     Json(body): Json<core_admin::UpdateAccountApiKeyInput>,
-) -> ApiResult<Json<serde_json::Value>> {
-    crate::api_try! {
-        s.services().accounts.update_api_key(s.master_key().as_ref(), AccountId::new(id), body)?;
-        Ok(Json(serde_json::json!({ "id": id })))
-    }
+) -> Result<Json<serde_json::Value>, ApiError> {
+    s.services().accounts.update_api_key(s.master_key().as_ref(), AccountId::new(id), body)?;
+    Ok(Json(serde_json::json!({ "id": id })))
 }
 
 pub async fn get_account_api_key(
     State(s): State<AppState>,
     Path(id): Path<i64>,
-) -> ApiResult<Json<serde_json::Value>> {
-    crate::api_try! {
-        let key = s.services().accounts.get_api_key(s.master_key().as_ref(), AccountId::new(id))?;
-        Ok(Json(serde_json::json!({ "api_key": key })))
-    }
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let key = s.services().accounts.get_api_key(s.master_key().as_ref(), AccountId::new(id))?;
+    Ok(Json(serde_json::json!({ "api_key": key })))
 }
 
 pub async fn update_account_label(
     State(s): State<AppState>,
     Path(id): Path<i64>,
     Json(body): Json<core_admin::UpdateAccountLabelInput>,
-) -> ApiResult<Json<serde_json::Value>> {
-    crate::api_try! {
-        s.services().accounts.update_label(AccountId::new(id), body)?;
-        Ok(Json(serde_json::json!({ "id": id })))
-    }
+) -> Result<Json<serde_json::Value>, ApiError> {
+    s.services().accounts.update_label(AccountId::new(id), body)?;
+    Ok(Json(serde_json::json!({ "id": id })))
 }
 
 pub async fn refresh_account_quota(
     State(s): State<AppState>,
     Path(account_id): Path<i64>,
-) -> ApiResult<Json<serde_json::Value>> {
+) -> Result<Json<serde_json::Value>, ApiError> {
     tracing::info!(account_id = account_id, "refresh_account_quota: start");
     let s_clone = s.clone();
     let result: Result<Json<serde_json::Value>, ApiError> = async move {
@@ -138,7 +125,7 @@ pub async fn refresh_account_quota(
         }
     }
     .await;
-    result.into()
+    result
 }
 
 pub(crate) async fn resolve_refresh_account(
@@ -197,63 +184,61 @@ pub(crate) async fn resolve_refresh_account(
 
 pub async fn apply_account_local_cli(
     State(s): State<AppState>,
+    DbReader(r): DbReader,
     Path(id): Path<i64>,
-) -> ApiResult<Json<serde_json::Value>> {
-    crate::api_try! {
-        let r = s.db_pool().reader();
-        let account_id = AccountId::new(id);
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let account_id = AccountId::new(id);
 
-        let account = core_accounts::get(&r, account_id, s.master_key().as_ref())?
-            .ok_or_else(|| CoreError::AccountNotFound(account_id.0))?;
+    let account = core_accounts::get(&r, account_id, s.master_key().as_ref())?
+        .ok_or_else(|| CoreError::AccountNotFound(account_id.0))?;
 
-        if account.provider_id.as_str() != "antigravity" {
-            return Err(CoreError::Validation("Only antigravity accounts can be injected into agy-cli".into()).into());
-        }
-
-        let access_token = core_accounts::decrypt_access_token(&r, account_id, s.master_key().as_ref())?;
-        let refresh_token = core_accounts::decrypt_refresh_token(&r, account_id, s.master_key().as_ref())?;
-
-        let payload = serde_json::json!({
-            "token": {
-                "access_token": access_token,
-                "token_type": "Bearer",
-                "refresh_token": refresh_token.unwrap_or_default(),
-                "expiry": account.expires_at.unwrap_or_default(),
-            },
-            "auth_method": "consumer"
-        });
-
-        // Ensure ~/.gemini/antigravity-cli directory exists
-        let cli_dir = dirs::home_dir()
-            .ok_or_else(|| CoreError::Validation("Could not determine home directory".into()))?
-            .join(".gemini")
-            .join("antigravity-cli");
-
-        std::fs::create_dir_all(&cli_dir)
-            .map_err(|e| CoreError::Validation(format!("Failed to create ~/.gemini/antigravity-cli: {}", e)))?;
-
-        let token_file = cli_dir.join("antigravity-oauth-token");
-
-        let mut open_options = std::fs::OpenOptions::new();
-        open_options.write(true).create(true).truncate(true);
-
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::OpenOptionsExt;
-            open_options.mode(0o600);
-        }
-
-        let mut file = open_options.open(&token_file)
-            .map_err(|e| CoreError::Validation(format!("Failed to open {}: {}", token_file.display(), e)))?;
-
-        let payload_str = serde_json::to_string(&payload)
-            .map_err(|e| CoreError::Validation(format!("Failed to serialize payload: {}", e)))?;
-        file.write_all(payload_str.as_bytes())
-            .map_err(|e| CoreError::Validation(format!("Failed to write to {}: {}", token_file.display(), e)))?;
-
-        Ok(Json(serde_json::json!({
-            "success": true,
-            "path": token_file.to_string_lossy(),
-        })))
+    if account.provider_id.as_str() != "antigravity" {
+        return Err(CoreError::Validation("Only antigravity accounts can be injected into agy-cli".into()).into());
     }
+
+    let access_token = core_accounts::decrypt_access_token(&r, account_id, s.master_key().as_ref())?;
+    let refresh_token = core_accounts::decrypt_refresh_token(&r, account_id, s.master_key().as_ref())?;
+
+    let payload = serde_json::json!({
+        "token": {
+            "access_token": access_token,
+            "token_type": "Bearer",
+            "refresh_token": refresh_token.unwrap_or_default(),
+            "expiry": account.expires_at.unwrap_or_default(),
+        },
+        "auth_method": "consumer"
+    });
+
+    // Ensure ~/.gemini/antigravity-cli directory exists
+    let cli_dir = dirs::home_dir()
+        .ok_or_else(|| CoreError::Validation("Could not determine home directory".into()))?
+        .join(".gemini")
+        .join("antigravity-cli");
+
+    std::fs::create_dir_all(&cli_dir)
+        .map_err(|e| CoreError::Validation(format!("Failed to create ~/.gemini/antigravity-cli: {}", e)))?;
+
+    let token_file = cli_dir.join("antigravity-oauth-token");
+
+    let mut open_options = std::fs::OpenOptions::new();
+    open_options.write(true).create(true).truncate(true);
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        open_options.mode(0o600);
+    }
+
+    let mut file = open_options.open(&token_file)
+        .map_err(|e| CoreError::Validation(format!("Failed to open {}: {}", token_file.display(), e)))?;
+
+    let payload_str = serde_json::to_string(&payload)
+        .map_err(|e| CoreError::Validation(format!("Failed to serialize payload: {}", e)))?;
+    file.write_all(payload_str.as_bytes())
+        .map_err(|e| CoreError::Validation(format!("Failed to write to {}: {}", token_file.display(), e)))?;
+
+    Ok(Json(serde_json::json!({
+        "success": true,
+        "path": token_file.to_string_lossy(),
+    })))
 }

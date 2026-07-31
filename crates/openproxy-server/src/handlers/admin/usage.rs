@@ -10,144 +10,124 @@ use openproxy_core::usage as core_usage;
 pub async fn usage_summary(
     State(s): State<AppState>,
     Query(q): Query<UsageQuery>,
-) -> ApiResult<Json<core_usage::UsageSummary>> {
-    crate::api_try! {
-        let f = q.into_filter()?;
-        let result = run_analytics_query_with_filter(&s, &f, "summary", |conn, fl| {
-            core_usage::summary(conn, fl)
-        })?;
-        Ok(Json(result))
-    }
+) -> Result<Json<core_usage::UsageSummary>, ApiError> {
+    let f = q.into_filter()?;
+    let result = run_analytics_query_with_filter(&s, &f, "summary", |conn, fl| {
+        core_usage::summary(conn, fl)
+    })?;
+    Ok(Json(result))
 }
 
 pub async fn usage_by_model(
     State(s): State<AppState>,
     Query(q): Query<UsageQuery>,
-) -> ApiResult<Json<Vec<core_usage::ByModelRow>>> {
-    crate::api_try! {
-        let f = q.into_filter()?;
-        let result = run_analytics_query_with_filter(&s, &f, "by_model", |conn, fl| {
-            core_usage::by_model(conn, fl)
-        })?;
-        Ok(Json(result))
-    }
+) -> Result<Json<Vec<core_usage::ByModelRow>>, ApiError> {
+    let f = q.into_filter()?;
+    let result = run_analytics_query_with_filter(&s, &f, "by_model", |conn, fl| {
+        core_usage::by_model(conn, fl)
+    })?;
+    Ok(Json(result))
 }
 
 pub async fn usage_by_provider(
     State(s): State<AppState>,
     Query(q): Query<UsageQuery>,
-) -> ApiResult<Json<Vec<core_usage::ByProviderRow>>> {
-    crate::api_try! {
-        let f = q.into_filter()?;
-        let result = run_analytics_query_with_filter(&s, &f, "by_provider", |conn, fl| {
-            core_usage::by_provider(conn, fl)
-        })?;
-        Ok(Json(result))
-    }
+) -> Result<Json<Vec<core_usage::ByProviderRow>>, ApiError> {
+    let f = q.into_filter()?;
+    let result = run_analytics_query_with_filter(&s, &f, "by_provider", |conn, fl| {
+        core_usage::by_provider(conn, fl)
+    })?;
+    Ok(Json(result))
 }
 
 pub async fn usage_monthly_by_provider(
     State(s): State<AppState>,
     Query(q): Query<UsageQuery>,
-) -> ApiResult<Json<Vec<core_usage::MonthlyByProviderRow>>> {
-    crate::api_try! {
-        let f = q.into_filter()?;
-        let result = run_analytics_query_with_filter(&s, &f, "monthly_by_provider", |conn, fl| {
-            core_usage::monthly_by_provider(conn, fl)
-        })?;
-        Ok(Json(result))
-    }
+) -> Result<Json<Vec<core_usage::MonthlyByProviderRow>>, ApiError> {
+    let f = q.into_filter()?;
+    let result = run_analytics_query_with_filter(&s, &f, "monthly_by_provider", |conn, fl| {
+        core_usage::monthly_by_provider(conn, fl)
+    })?;
+    Ok(Json(result))
 }
 
 pub async fn usage_by_day(
     State(s): State<AppState>,
     Query(q): Query<UsageQuery>,
-) -> ApiResult<Json<Vec<core_usage::ByDayRow>>> {
-    crate::api_try! {
-        let f = q.into_filter()?;
-        let result = run_analytics_query_with_filter(&s, &f, "by_day", |conn, fl| {
-            core_usage::by_day(conn, fl)
-        })?;
-        Ok(Json(result))
-    }
+) -> Result<Json<Vec<core_usage::ByDayRow>>, ApiError> {
+    let f = q.into_filter()?;
+    let result = run_analytics_query_with_filter(&s, &f, "by_day", |conn, fl| {
+        core_usage::by_day(conn, fl)
+    })?;
+    Ok(Json(result))
 }
 
 pub async fn usage_by_account(
     State(s): State<AppState>,
     Query(q): Query<UsageQuery>,
-) -> ApiResult<Json<Vec<core_usage::ByAccountRow>>> {
-    crate::api_try! {
-        let f = q.into_filter()?;
-        let result = run_analytics_query_with_filter(&s, &f, "by_account", |conn, fl| {
-            core_usage::by_account(conn, fl)
-        })?;
-        Ok(Json(result))
-    }
+) -> Result<Json<Vec<core_usage::ByAccountRow>>, ApiError> {
+    let f = q.into_filter()?;
+    let result = run_analytics_query_with_filter(&s, &f, "by_account", |conn, fl| {
+        core_usage::by_account(conn, fl)
+    })?;
+    Ok(Json(result))
 }
 
 pub async fn usage_by_status(
     State(s): State<AppState>,
     Query(q): Query<UsageQuery>,
-) -> ApiResult<Json<Vec<core_usage::ByStatusRow>>> {
-    crate::api_try! {
-        let f = q.into_filter()?;
-        let result = run_analytics_query_with_filter(&s, &f, "by_status", |conn, fl| {
-            core_usage::by_status(conn, fl)
-        })?;
-        Ok(Json(result))
-    }
+) -> Result<Json<Vec<core_usage::ByStatusRow>>, ApiError> {
+    let f = q.into_filter()?;
+    let result = run_analytics_query_with_filter(&s, &f, "by_status", |conn, fl| {
+        core_usage::by_status(conn, fl)
+    })?;
+    Ok(Json(result))
 }
 
 pub async fn usage_errors(
     State(s): State<AppState>,
     Query(q): Query<UsageQuery>,
-) -> ApiResult<Json<Vec<core_usage::ErrorRow>>> {
-    crate::api_try! {
-        let f = q.into_filter()?;
-        let result = run_analytics_query_with_filter(&s, &f, "errors", |conn, fl| {
-            core_usage::errors(conn, fl, ERRORS_DEFAULT_LIMIT)
-        })?;
-        Ok(Json(result))
-    }
+) -> Result<Json<Vec<core_usage::ErrorRow>>, ApiError> {
+    let f = q.into_filter()?;
+    let result = run_analytics_query_with_filter(&s, &f, "errors", |conn, fl| {
+        core_usage::errors(conn, fl, ERRORS_DEFAULT_LIMIT)
+    })?;
+    Ok(Json(result))
 }
 
 pub async fn usage_latency(
     State(s): State<AppState>,
     Query(q): Query<UsageQuery>,
-) -> ApiResult<Json<analytics::LatencyPercentiles>> {
-    crate::api_try! {
-        let f = q.into_filter()?;
-        let result = run_analytics_query_with_filter(&s, &f, "latency", |conn, fl| {
-            analytics::latency_percentiles(conn, fl)
-        })?;
-        Ok(Json(result))
-    }
+) -> Result<Json<analytics::LatencyPercentiles>, ApiError> {
+    let f = q.into_filter()?;
+    let result = run_analytics_query_with_filter(&s, &f, "latency", |conn, fl| {
+        analytics::latency_percentiles(conn, fl)
+    })?;
+    Ok(Json(result))
 }
 
 pub async fn usage_races(
     State(s): State<AppState>,
     Query(q): Query<UsageQuery>,
-) -> ApiResult<Json<analytics::RaceStats>> {
-    crate::api_try! {
-        let f = q.into_filter()?;
-        let result = run_analytics_query_with_filter(&s, &f, "races", |conn, fl| {
-            analytics::race_stats(conn, fl)
-        })?;
-        Ok(Json(result))
-    }
+) -> Result<Json<analytics::RaceStats>, ApiError> {
+    let f = q.into_filter()?;
+    let result = run_analytics_query_with_filter(&s, &f, "races", |conn, fl| {
+        analytics::race_stats(conn, fl)
+    })?;
+    Ok(Json(result))
 }
 
 pub async fn recompute_usage_costs(
     State(s): State<AppState>,
-) -> ApiResult<Json<serde_json::Value>> {
+) -> Result<Json<serde_json::Value>, ApiError> {
     let updated = {
         let w = s.db_pool().writer();
         match openproxy_core::models_dev_sync::recompute_costs(&w) {
             Ok(n) => n,
-            Err(e) => return ApiResult::err(ApiError(e)),
+            Err(e) => return Err(ApiError(e)),
         }
     };
-    ApiResult::ok(Json(serde_json::json!({
+    Ok(Json(serde_json::json!({
         "message": format!("re-priced {} usage rows", updated),
         "updated": updated,
     })))
@@ -156,27 +136,25 @@ pub async fn recompute_usage_costs(
 pub async fn usage_recent(
     State(s): State<AppState>,
     Query(q): Query<RecentQuery>,
-) -> ApiResult<Json<Vec<openproxy_types::usage::RecentUsageRow>>> {
-    crate::api_try! {
-        let since_id = q.since_id.unwrap_or(0).clamp(0, USAGE_RECENT_MAX_SINCE_ID);
-        let limit = q
-            .limit
-            .unwrap_or(USAGE_RECENT_DEFAULT_LIMIT)
-            .clamp(1, USAGE_RECENT_MAX_LIMIT);
-        // Read-only SELECT — use the READER. The dashboard polls this
-        // endpoint frequently; going through the writer would
-        // serialize every poll against `cost::record` writes.
-        let r = s.db_pool().reader();
-        // SEC-MEDIUM-C fix: drop the heavy request/response payloads
-        // from the WS/REST surface — they can be multi-MB and would
-        // fan out PII to every dashboard subscriber. The detail
-        // endpoint reads them straight from the database on demand.
-        let rows = core_usage::recent(&r, since_id, limit)?
-            .into_iter()
-            .map(openproxy_types::usage::redact_for_broadcast)
-            .collect();
-        Ok(Json(rows))
-    }
+) -> Result<Json<Vec<openproxy_types::usage::RecentUsageRow>>, ApiError> {
+    let since_id = q.since_id.unwrap_or(0).clamp(0, USAGE_RECENT_MAX_SINCE_ID);
+    let limit = q
+        .limit
+        .unwrap_or(USAGE_RECENT_DEFAULT_LIMIT)
+        .clamp(1, USAGE_RECENT_MAX_LIMIT);
+    // Read-only SELECT — use the READER. The dashboard polls this
+    // endpoint frequently; going through the writer would
+    // serialize every poll against `cost::record` writes.
+    let r = s.db_pool().reader();
+    // SEC-MEDIUM-C fix: drop the heavy request/response payloads
+    // from the WS/REST surface — they can be multi-MB and would
+    // fan out PII to every dashboard subscriber. The detail
+    // endpoint reads them straight from the database on demand.
+    let rows = core_usage::recent(&r, since_id, limit)?
+        .into_iter()
+        .map(openproxy_types::usage::redact_for_broadcast)
+        .collect();
+    Ok(Json(rows))
 }
 
 pub async fn usage_stream(
@@ -248,31 +226,29 @@ pub async fn usage_detail(
     State(s): State<AppState>,
     headers: HeaderMap,
     Query(q): Query<DetailQuery>,
-) -> ApiResult<Json<UsageDetailResponse>> {
+) -> Result<Json<UsageDetailResponse>, ApiError> {
     if let Err(e) = authenticate_admin_ws(&s, &headers, None) {
-        return e.into();
+        return Err(e);
     }
-    crate::api_try! {
-        // Read-only SELECT — use the READER.
-        let r = s.db_pool().reader();
-        let row = if let Some(id) = q.id.filter(|&id| id != 0) {
-            core_usage::detail_by_id(&r, id)?
-        } else if let Some(trace_id) = &q.trace_id {
-            core_usage::detail_by_trace_id(&r, trace_id)?
-        } else if let Some(id) = q.id {
-            core_usage::detail_by_id(&r, id)?
-        } else {
-            return Err(ApiError(CoreError::Validation(
-                "Either 'id' or 'trace_id' query parameter must be provided".into(),
-            )));
-        };
-        match row {
-            Some(r) => Ok(Json(UsageDetailResponse { row: r })),
-            None => Err(ApiError(CoreError::Internal(format!(
-                "usage row not found for query {:?}",
-                q
-            )))),
-        }
+    // Read-only SELECT — use the READER.
+    let r = s.db_pool().reader();
+    let row = if let Some(id) = q.id.filter(|&id| id != 0) {
+        core_usage::detail_by_id(&r, id)?
+    } else if let Some(trace_id) = &q.trace_id {
+        core_usage::detail_by_trace_id(&r, trace_id)?
+    } else if let Some(id) = q.id {
+        core_usage::detail_by_id(&r, id)?
+    } else {
+        return Err(ApiError(CoreError::Validation(
+            "Either 'id' or 'trace_id' query parameter must be provided".into(),
+        )));
+    };
+    match row {
+        Some(r) => Ok(Json(UsageDetailResponse { row: r })),
+        None => Err(ApiError(CoreError::Internal(format!(
+            "usage row not found for query {:?}",
+            q
+        )))),
     }
 }
 

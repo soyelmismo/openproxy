@@ -12,7 +12,7 @@ use tokio_stream::wrappers::ReceiverStream;
 use crate::{
     disconnect::CancelWatch,
     error::ApiError,
-    middleware::auth::{ParsedChatRequest, ValidatedApiToken},
+    middleware::auth::ParsedChatRequest,
     state::AppState,
 };
 use openproxy_pipeline::translation::{
@@ -24,7 +24,7 @@ pub async fn anthropic_messages(
     headers: HeaderMap,
     cancel_watch: Option<axum::Extension<CancelWatch>>,
     axum::Extension(parsed_req): axum::Extension<ParsedChatRequest>,
-    auth_token: Option<axum::Extension<ValidatedApiToken>>,
+    crate::extractors::ValidatedToken(auth_token): crate::extractors::ValidatedToken,
     axum::Extension(mut resolved_route): axum::Extension<crate::middleware::routing::ResolvedRoute>,
 ) -> Result<axum::response::Response, ApiError> {
     let anthropic_req: AnthropicRequest =
@@ -40,7 +40,7 @@ pub async fn anthropic_messages(
     let cancel = cancel_watch
         .map(|axum::Extension(cw)| cw)
         .unwrap_or_default();
-    let token_inner = auth_token.map(|axum::Extension(t)| t);
+    let token_inner = auth_token;
 
     let api_key_id: Option<ApiKeyId> = token_inner.as_ref().map(|r| r.key_id);
     let combo_id = resolved_route.combo_id;

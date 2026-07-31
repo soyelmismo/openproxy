@@ -7,7 +7,7 @@ use axum::{
 pub async fn debug_logs(
     State(_s): State<AppState>,
     Query(q): Query<DebugLogsQuery>,
-) -> ApiResult<Json<DebugLogsResponse>> {
+) -> Result<Json<DebugLogsResponse>, ApiError> {
     let since = q.since.unwrap_or(0);
     let limit = q.limit.unwrap_or(100).min(1000) as usize;
 
@@ -43,19 +43,19 @@ pub async fn debug_logs(
 
     let latest_seq = entries.last().map(|e| e.seq).unwrap_or(since);
 
-    ApiResult::ok(Json(DebugLogsResponse {
+    Ok(Json(DebugLogsResponse {
         entries,
         latest_seq,
         total_in_buffer,
     }))
 }
 
-pub async fn debug_logs_clear(State(_s): State<AppState>) -> ApiResult<Json<serde_json::Value>> {
+pub async fn debug_logs_clear(State(_s): State<AppState>) -> Result<Json<serde_json::Value>, ApiError> {
     crate::debug_log::clear();
-    ApiResult::ok(Json(serde_json::json!({ "cleared": true })))
+    Ok(Json(serde_json::json!({ "cleared": true })))
 }
 
-pub async fn debug_vacuum(State(s): State<AppState>) -> ApiResult<Json<serde_json::Value>> {
+pub async fn debug_vacuum(State(s): State<AppState>) -> Result<Json<serde_json::Value>, ApiError> {
     s.set_vacuum_in_progress(true);
     let res: Result<Json<serde_json::Value>, ApiError> = async {
 
@@ -193,10 +193,10 @@ pub async fn debug_vacuum(State(s): State<AppState>) -> ApiResult<Json<serde_jso
 
     }.await;
     s.set_vacuum_in_progress(false);
-    res.into()
+    res
 }
 
-pub async fn debug_recover(State(s): State<AppState>) -> ApiResult<Json<serde_json::Value>> {
+pub async fn debug_recover(State(s): State<AppState>) -> Result<Json<serde_json::Value>, ApiError> {
     s.set_vacuum_in_progress(true);
     let res: Result<Json<serde_json::Value>, ApiError> = async {
 
@@ -343,35 +343,27 @@ pub async fn debug_recover(State(s): State<AppState>) -> ApiResult<Json<serde_js
 
     }.await;
     s.set_vacuum_in_progress(false);
-    res.into()
+    res
 }
 
 pub async fn get_recording(
+    _auth: crate::extractors::AdminAuth,
     State(s): State<AppState>,
-    headers: HeaderMap,
-) -> ApiResult<Json<serde_json::Value>> {
-    if let Err(e) = authenticate_admin_ws(&s, &headers, None) {
-        return e.into();
-    }
-    crate::api_try! { Ok(Json(serde_json::json!({ "recording": s.is_recording() }))) }
+) -> Result<Json<serde_json::Value>, ApiError> {
+    Ok(Json(serde_json::json!({ "recording": s.is_recording() })))
 }
 
 pub async fn set_recording(
+    _auth: crate::extractors::AdminAuth,
     State(s): State<AppState>,
-    headers: HeaderMap,
     Json(body): Json<serde_json::Value>,
-) -> ApiResult<Json<serde_json::Value>> {
-    if let Err(e) = authenticate_admin_ws(&s, &headers, None) {
-        return e.into();
-    }
-    crate::api_try! {
-        let enabled = body
-            .get("enabled")
-            .and_then(|v| v.as_bool())
-            .ok_or_else(|| CoreError::Validation("missing 'enabled' bool".into()))?;
-        s.set_recording(enabled);
-        Ok(Json(serde_json::json!({ "recording": enabled })))
-    }
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let enabled = body
+        .get("enabled")
+        .and_then(|v| v.as_bool())
+        .ok_or_else(|| CoreError::Validation("missing 'enabled' bool".into()))?;
+    s.set_recording(enabled);
+    Ok(Json(serde_json::json!({ "recording": enabled })))
 }
 
 pub(crate) fn json_text(value: serde_json::Value) -> Result<String, ApiError> {

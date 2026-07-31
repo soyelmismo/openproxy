@@ -13,7 +13,7 @@ pub struct ParsedChatRequest {
 
 /// Result of a successful chat authentication — the key id plus any
 /// per-key restrictions that need to be enforced after routing.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct ValidatedApiToken {
     pub(crate) key_id: ApiKeyId,
     pub(crate) allowed_combos: Option<Vec<i64>>,

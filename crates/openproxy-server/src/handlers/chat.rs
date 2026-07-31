@@ -104,13 +104,13 @@ pub async fn chat_completions(
     headers: HeaderMap,
     cancel_watch: Option<axum::Extension<crate::disconnect::CancelWatch>>,
     axum::Extension(parsed_req): axum::Extension<ParsedChatRequest>,
-    auth_token: Option<axum::Extension<ValidatedApiToken>>,
+    crate::extractors::ValidatedToken(auth_token): crate::extractors::ValidatedToken,
     axum::Extension(resolved_route): axum::Extension<crate::middleware::routing::ResolvedRoute>,
 ) -> Result<axum::response::Response, ApiError> {
     let cancel = cancel_watch
         .map(|axum::Extension(cw)| cw)
         .unwrap_or_default();
-    let token_inner = auth_token.map(|axum::Extension(t)| t);
+    let token_inner = auth_token;
     run_pipeline(
         state,
         cancel,

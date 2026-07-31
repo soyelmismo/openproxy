@@ -10,51 +10,43 @@ pub async fn toggle_model(
     State(s): State<AppState>,
     Path(id): Path<i64>,
     Json(body): Json<serde_json::Value>,
-) -> ApiResult<Json<serde_json::Value>> {
-    crate::api_try! {
-        let active = body
-            .get("active")
-            .and_then(|v| v.as_bool())
-            .ok_or_else(|| CoreError::Validation("missing 'active' bool".into()))?;
-        let w = s.db_pool().writer();
-        core_models::set_active(&w, ModelRowId(id), active)?;
-        Ok(Json(serde_json::json!({ "id": id, "active": active })))
-    }
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let active = body
+        .get("active")
+        .and_then(|v| v.as_bool())
+        .ok_or_else(|| CoreError::Validation("missing 'active' bool".into()))?;
+    let w = s.db_pool().writer();
+    core_models::set_active(&w, ModelRowId(id), active)?;
+    Ok(Json(serde_json::json!({ "id": id, "active": active })))
 }
 
 pub async fn bulk_toggle_models(
     State(s): State<AppState>,
     Json(body): Json<core_admin::BulkToggleInput>,
-) -> ApiResult<Json<serde_json::Value>> {
-    crate::api_try! {
-        let w = s.db_pool().writer();
-        let updated = core_admin::set_active_bulk(&w, body)?;
-        Ok(Json(serde_json::json!({
-            "updated": updated,
-        })))
-    }
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let w = s.db_pool().writer();
+    let updated = core_admin::set_active_bulk(&w, body)?;
+    Ok(Json(serde_json::json!({
+        "updated": updated,
+    })))
 }
 
 pub async fn delete_model(
     State(s): State<AppState>,
     Path(id): Path<i64>,
-) -> ApiResult<Json<serde_json::Value>> {
-    crate::api_try! {
-        let w = s.db_pool().writer();
-        let removed = core_models::delete(&w, ModelRowId(id))?;
-        Ok(Json(serde_json::json!({ "id": id, "deleted": removed })))
-    }
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let w = s.db_pool().writer();
+    let removed = core_models::delete(&w, ModelRowId(id))?;
+    Ok(Json(serde_json::json!({ "id": id, "deleted": removed })))
 }
 
 pub async fn create_custom_model(
     State(s): State<AppState>,
     Json(input): Json<core_admin::CreateCustomModelInput>,
-) -> ApiResult<Json<serde_json::Value>> {
-    crate::api_try! {
-        let w = s.db_pool().writer();
-        let row_id = core_admin::create_custom_model(&w, input)?;
-        Ok(Json(serde_json::json!({ "row_id": row_id.0 })))
-    }
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let w = s.db_pool().writer();
+    let row_id = core_admin::create_custom_model(&w, input)?;
+    Ok(Json(serde_json::json!({ "row_id": row_id.0 })))
 }
 
 pub async fn test_model(
@@ -62,7 +54,7 @@ pub async fn test_model(
     Path(model_row_id): Path<i64>,
     cancel_watch: Option<axum::Extension<crate::disconnect::CancelWatch>>,
     body_bytes: axum::body::Bytes,
-) -> ApiResult<Json<serde_json::Value>> {
+) -> Result<Json<serde_json::Value>, ApiError> {
     let cancel_rx = cancel_watch.map(|axum::Extension(cw)| cw.rx);
 
     let (account_id, proxy_url) = if body_bytes.is_empty() {
@@ -91,7 +83,7 @@ pub async fn test_model(
                 (aid, purl)
             }
             Err(e) => {
-                return ApiResult::err(ApiError(CoreError::Parse(format!("Invalid JSON: {}", e))));
+                return Err(ApiError(CoreError::Parse(format!("Invalid JSON: {}", e))));
             }
         }
     };
@@ -105,7 +97,7 @@ pub async fn test_model(
         cancel_rx,
     )
     .await;
-    ApiResult::ok(Json(serde_json::json!({
+    Ok(Json(serde_json::json!({
         "row_id": r.row_id,
         "status": r.status,
         "elapsed_ms": r.elapsed_ms,
@@ -116,34 +108,32 @@ pub async fn test_model(
 pub async fn list_models_admin(
     State(s): State<AppState>,
     axum::extract::Query(q): axum::extract::Query<ListModelsQuery>,
-) -> ApiResult<Json<Vec<core_models::Model>>> {
-    crate::api_try! {
-        // Read-only SELECT — use the READER.
-        let r = s.db_pool().reader();
-        let mut list = core_models::list_all(&r)?;
-        if let Some(p) = q.provider_id {
-            list.retain(|m| m.provider_id.as_str() == p);
-        }
-        Ok(Json(list))
+) -> Result<Json<Vec<core_models::Model>>, ApiError> {
+    // Read-only SELECT — use the READER.
+    let r = s.db_pool().reader();
+    let mut list = core_models::list_all(&r)?;
+    if let Some(p) = q.provider_id {
+        list.retain(|m| m.provider_id.as_str() == p);
     }
+    Ok(Json(list))
 }
 
-pub async fn sync_models_dev(State(s): State<AppState>) -> ApiResult<Json<serde_json::Value>> {
+pub async fn sync_models_dev(State(s): State<AppState>) -> Result<Json<serde_json::Value>, ApiError> {
     let upstream = s.upstream_client().clone();
     let db_pool = s.db_pool().clone();
     let result = openproxy_core::models_dev_sync::run_one_shot(db_pool, upstream).await;
     let msg = match result {
         Ok(m) => m,
-        Err(e) => return ApiResult::err(ApiError(e)),
+        Err(e) => return Err(ApiError(e)),
     };
-    ApiResult::ok(Json(serde_json::json!({ "message": msg })))
+    Ok(Json(serde_json::json!({ "message": msg })))
 }
 
 pub async fn refresh_models(
     State(s): State<AppState>,
     Path(id): Path<i64>,
     Query(q): Query<RefreshQuery>,
-) -> ApiResult<Json<serde_json::Value>> {
+) -> Result<Json<serde_json::Value>, ApiError> {
     run_refresh(s, id, q).await
 }
 
@@ -783,7 +773,7 @@ pub(crate) async fn run_refresh(
     s: AppState,
     id: i64,
     q: RefreshQuery,
-) -> ApiResult<Json<serde_json::Value>> {
+) -> Result<Json<serde_json::Value>, ApiError> {
     let row_id = ModelRowId(id);
     let ttl_seconds = q.ttl_seconds.unwrap_or(3_600);
 
@@ -792,12 +782,12 @@ pub(crate) async fn run_refresh(
         let w = s.db_pool().writer();
         let found = match core_models::get_by_row_id(&w, row_id) {
             Ok(opt) => opt,
-            Err(e) => return ApiResult::err(ApiError(e)),
+            Err(e) => return Err(ApiError(e)),
         };
         match found {
             Some(m) => m.provider_id,
             None => {
-                return ApiResult::err(ApiError(CoreError::ModelNotFound {
+                return Err(ApiError(CoreError::ModelNotFound {
                     provider: "<unknown>".into(),
                     model: format!("row_id={}", row_id.0),
                 }));
@@ -810,7 +800,7 @@ pub(crate) async fn run_refresh(
     //    DB row.
     let adapter = match resolve_adapter(&s, &provider_id, s.adapters().as_slice()) {
         Ok(a) => a.clone(),
-        Err(e) => return ApiResult::err(ApiError(e)),
+        Err(e) => return Err(ApiError(e)),
     };
 
     // 3. Resolve an account and decrypt/refresh its credential.
@@ -819,12 +809,12 @@ pub(crate) async fn run_refresh(
 
         let provider_row = match core_providers::get(&w, &provider_id) {
             Ok(p) => p,
-            Err(e) => return ApiResult::err(ApiError(e)),
+            Err(e) => return Err(ApiError(e)),
         };
         let accounts_list =
             match core_accounts::list(&w, Some(&provider_id), s.master_key().as_ref()) {
                 Ok(l) => l,
-                Err(e) => return ApiResult::err(ApiError(e)),
+                Err(e) => return Err(ApiError(e)),
             };
 
         let is_anonymous = match &provider_row {
@@ -850,9 +840,9 @@ pub(crate) async fn run_refresh(
                 match core_accounts::get(&w, account_id, s.master_key().as_ref()) {
                     Ok(Some(a)) => a,
                     Ok(None) => {
-                        return ApiResult::err(ApiError(CoreError::AccountNotFound(account_id.0)));
+                        return Err(ApiError(CoreError::AccountNotFound(account_id.0)));
                     }
-                    Err(e) => return ApiResult::err(ApiError(e)),
+                    Err(e) => return Err(ApiError(e)),
                 }
             };
             if account.auth_type == "oauth" {
@@ -861,7 +851,7 @@ pub(crate) async fn run_refresh(
                 let w = s.db_pool().writer();
                 match core_accounts::decrypt_api_key(&w, account_id, s.master_key().as_ref()) {
                     Ok(k) => k,
-                    Err(e) => return ApiResult::err(ApiError(e)),
+                    Err(e) => return Err(ApiError(e)),
                 }
             }
         }
@@ -888,7 +878,7 @@ pub(crate) async fn run_refresh(
     //    and pass it by value; the writer mutex is unaffected.
     let conn_for_refresh = match s.db_pool().open_connection() {
         Ok(c) => c,
-        Err(e) => return ApiResult::err(ApiError(e)),
+        Err(e) => return Err(ApiError(e)),
     };
     let upsert = match core_admin::refresh_models(
         conn_for_refresh,
@@ -902,10 +892,10 @@ pub(crate) async fn run_refresh(
     .await
     {
         Ok(r) => r,
-        Err(e) => return ApiResult::err(ApiError(e)),
+        Err(e) => return Err(ApiError(e)),
     };
 
-    ApiResult::ok(Json(serde_json::json!({
+    Ok(Json(serde_json::json!({
         "touched": upsert.touched,
         "new_model_ids": upsert.new_model_ids,
         "provider_id": provider_id.as_str(),

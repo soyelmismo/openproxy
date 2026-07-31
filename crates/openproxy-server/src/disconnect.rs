@@ -396,7 +396,7 @@ mod tests {
         // dance because `watch::Sender::send` overwrites the current value
         // and `borrow` reads it.
         assert!(
-            *rx.borrow(),
+            rx.borrow().is_some(),
             "watch was not fired after a body error — the disconnect \
              detector is broken"
         );
@@ -416,7 +416,7 @@ mod tests {
         assert!(matches!(first, Poll::Ready(Some(Ok(_)))));
         // Watch should still be false.
         assert!(
-            !*rx.borrow(),
+            !rx.borrow().is_some(),
             "watch fired after a successful frame — the wrapper is firing \
              on success, not just on error"
         );
@@ -425,7 +425,7 @@ mod tests {
         let second = poll_once(&mut body);
         assert!(matches!(second, Poll::Ready(None)));
         assert!(
-            !*rx.borrow(),
+            !rx.borrow().is_some(),
             "watch fired on body completion (None) — the wrapper should \
              not fire on the natural end of the stream"
         );
@@ -439,7 +439,7 @@ mod tests {
 
         drop(body);
 
-        assert!(*rx.borrow());
+        assert!(rx.borrow().is_some());
     }
 
     /// Idempotency: if a body emits multiple `Err` frames in a row
@@ -462,7 +462,7 @@ mod tests {
         // flips" from the receiver side, but we CAN check that
         // `fired` is now true (which means the first error was the
         // one that fired the watch, and the rest were no-ops).
-        assert!(*rx.borrow(), "watch never fired");
+        assert!(rx.borrow().is_some(), "watch never fired");
         assert!(
             fired.load(Ordering::SeqCst),
             "the shared `fired` latch never tripped — the idempotency \
@@ -479,9 +479,9 @@ mod tests {
         let rx2 = cw.rx.clone();
 
         // Firing via the original `cw.tx` is visible on the clone.
-        let _ = cw.tx.send(true);
-        assert!(*cw.rx.borrow(), "original rx should see the send");
-        assert!(*rx2.borrow(), "cloned rx should see the same send");
+        let _ = cw.tx.send(Some(openproxy_types::CancelReason::ClientDisconnected));
+        assert!(cw.rx.borrow().is_some(), "original rx should see the send");
+        assert!(rx2.borrow().is_some(), "cloned rx should see the same send");
     }
 
     /// A real end-to-end round trip: a `Pin<Box<dyn Body>>` that
@@ -498,7 +498,7 @@ mod tests {
 
         let result = poll_once(&mut body);
         assert!(matches!(result, Poll::Ready(Some(Err(_)))));
-        assert!(*rx.borrow(), "watch not fired through Pin<Box<dyn Body>>");
+        assert!(rx.borrow().is_some(), "watch not fired through Pin<Box<dyn Body>>");
     }
 
     /// Sanity check that the newtype compiles and runs with a
@@ -513,7 +513,7 @@ mod tests {
         let first = poll_once(&mut body);
         assert!(matches!(first, Poll::Ready(Some(Ok(_)))));
         assert!(
-            !*rx.borrow(),
+            !rx.borrow().is_some(),
             "watch fired on a non-error body — the wrapper is firing \
              on data frames, not on errors"
         );

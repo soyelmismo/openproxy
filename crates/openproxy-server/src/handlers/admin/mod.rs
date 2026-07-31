@@ -31,13 +31,13 @@
 //!
 //! ## `?` and `ApiResult`
 //!
-//! `ApiResult<T>` is a *newtype* (not the std `Result`) so the
+//! `Result<T, ApiError>` is a *newtype* (not the std `Result`) so the
 //! `IntoResponse` impl can live in this crate — orphan rules prevent
 //! impl-ing it on `Result<T, ApiError>` directly. The Rust 1.96 `Try`
 //! trait is still nightly-gated, so `?` doesn't work on `ApiResult`
 //! directly. Each handler body therefore runs in an inner `async {}`
 //! block that returns the std `Result<T, ApiError>`, and we lift it
-//! to `ApiResult<T>` via `From` at the very end.
+//! to `Result<T, ApiError>` via `From` at the very end.
 
 pub mod providers;
 
@@ -90,7 +90,7 @@ use serde_json::json;
 use std::sync::Arc;
 
 use crate::{
-    error::{ApiError, ApiResult},
+    error::ApiError,
     state::AppState,
 };
 

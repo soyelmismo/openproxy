@@ -10,36 +10,28 @@ pub async fn admin_health() -> Json<serde_json::Value> {
 
 pub async fn get_runtime_config(
     State(s): State<AppState>,
-    headers: HeaderMap,
-) -> ApiResult<Json<RuntimeConfigResponse>> {
-    if let Err(e) = authenticate_admin_ws(&s, &headers, None) {
-        return e.into();
-    }
-    crate::api_try! {
-        let cfg = s.config();
-        Ok(Json(RuntimeConfigResponse {
-            timeouts: s.timeouts(),
-            retries: cfg.retries,
-            circuit_breaker: cfg.circuit_breaker,
-            // `RacingConfig` is `Clone` but not `Copy` (the other
-            // three are); `.clone()` is fine, it's three `u*` fields.
-            racing: cfg.racing.clone(),
-            recording_ttl_secs: s.recording_ttl_secs(),
-            compression: s.compression_mode(),
-            idle_chunk_retryable: s.idle_chunk_retryable(),
-            quota_protection: s.quota_protection(),
-        }))
-    }
+    _auth: crate::extractors::AdminAuth,
+) -> Result<Json<RuntimeConfigResponse>, ApiError> {
+    let cfg = s.config();
+    Ok(Json(RuntimeConfigResponse {
+        timeouts: s.timeouts(),
+        retries: cfg.retries,
+        circuit_breaker: cfg.circuit_breaker,
+        // `RacingConfig` is `Clone` but not `Copy` (the other
+        // three are); `.clone()` is fine, it's three `u*` fields.
+        racing: cfg.racing.clone(),
+        recording_ttl_secs: s.recording_ttl_secs(),
+        compression: s.compression_mode(),
+        idle_chunk_retryable: s.idle_chunk_retryable(),
+        quota_protection: s.quota_protection(),
+    }))
 }
 
 pub async fn put_runtime_timeouts(
     State(s): State<AppState>,
-    headers: HeaderMap,
+    _auth: crate::extractors::AdminAuth,
     Json(body): Json<TimeoutsConfig>,
-) -> ApiResult<Json<serde_json::Value>> {
-    if let Err(e) = authenticate_admin_ws(&s, &headers, None) {
-        return e.into();
-    }
+) -> Result<Json<serde_json::Value>, ApiError> {
     let inner: Result<Json<serde_json::Value>, ApiError> = async {
         // 1. Persist to DB first. The UPSERT is atomic in SQLite.
         //    We let the application timestamp it (rather than relying
@@ -66,17 +58,14 @@ pub async fn put_runtime_timeouts(
         })))
     }
     .await;
-    inner.into()
+    inner
 }
 
 pub async fn put_runtime_compression(
     State(s): State<AppState>,
-    headers: HeaderMap,
+    _auth: crate::extractors::AdminAuth,
     Json(body): Json<openproxy_compression::CompressionMode>,
-) -> ApiResult<Json<serde_json::Value>> {
-    if let Err(e) = authenticate_admin_ws(&s, &headers, None) {
-        return e.into();
-    }
+) -> Result<Json<serde_json::Value>, ApiError> {
     let inner: Result<Json<serde_json::Value>, ApiError> = async {
         {
             let w = s.db_pool().writer();
@@ -90,17 +79,14 @@ pub async fn put_runtime_compression(
         })))
     }
     .await;
-    inner.into()
+    inner
 }
 
 pub async fn put_idle_chunk_retryable(
     State(s): State<AppState>,
-    headers: HeaderMap,
+    _auth: crate::extractors::AdminAuth,
     Json(body): Json<serde_json::Value>,
-) -> ApiResult<Json<serde_json::Value>> {
-    if let Err(e) = authenticate_admin_ws(&s, &headers, None) {
-        return e.into();
-    }
+) -> Result<Json<serde_json::Value>, ApiError> {
     let inner: Result<Json<serde_json::Value>, ApiError> = async {
         let val = body
             .get("idle_chunk_retryable")
@@ -126,17 +112,14 @@ pub async fn put_idle_chunk_retryable(
         })))
     }
     .await;
-    inner.into()
+    inner
 }
 
 pub async fn put_runtime_quota_protection(
     State(s): State<AppState>,
-    headers: HeaderMap,
+    _auth: crate::extractors::AdminAuth,
     Json(body): Json<openproxy_types::config::QuotaProtectionConfig>,
-) -> ApiResult<Json<serde_json::Value>> {
-    if let Err(e) = authenticate_admin_ws(&s, &headers, None) {
-        return e.into();
-    }
+) -> Result<Json<serde_json::Value>, ApiError> {
     let inner: Result<Json<serde_json::Value>, ApiError> = async {
         {
             let w = s.db_pool().writer();
@@ -156,19 +139,16 @@ pub async fn put_runtime_quota_protection(
         })))
     }
     .await;
-    inner.into()
+    inner
 }
 
 pub async fn get_maintenance_config(
     State(s): State<AppState>,
-    headers: HeaderMap,
-) -> ApiResult<Json<serde_json::Value>> {
-    if let Err(e) = authenticate_admin_ws(&s, &headers, None) {
-        return e.into();
-    }
+    _auth: crate::extractors::AdminAuth,
+) -> Result<Json<serde_json::Value>, ApiError> {
     let cfg = s.maintenance_config();
     let status = s.vacuum_status();
-    ApiResult::ok(Json(serde_json::json!({
+    Ok(Json(serde_json::json!({
         "auto_vacuum": cfg.auto_vacuum,
         "vacuum_interval_hours": cfg.interval_secs / 3600,
         "usage_retention_days": cfg.usage_retention_days,
@@ -178,12 +158,9 @@ pub async fn get_maintenance_config(
 
 pub async fn put_maintenance_config(
     State(s): State<AppState>,
-    headers: HeaderMap,
+    _auth: crate::extractors::AdminAuth,
     Json(body): Json<serde_json::Value>,
-) -> ApiResult<Json<serde_json::Value>> {
-    if let Err(e) = authenticate_admin_ws(&s, &headers, None) {
-        return e.into();
-    }
+) -> Result<Json<serde_json::Value>, ApiError> {
     let mut cfg = s.maintenance_config();
     if let Some(v) = body.get("auto_vacuum").and_then(|v| v.as_bool()) {
         cfg.auto_vacuum = v;
@@ -195,7 +172,7 @@ pub async fn put_maintenance_config(
         cfg.usage_retention_days = v as u32;
     }
     s.set_maintenance_config(cfg.clone());
-    ApiResult::ok(Json(serde_json::json!({
+    Ok(Json(serde_json::json!({
         "updated": true,
         "config": {
             "auto_vacuum": cfg.auto_vacuum,
@@ -207,36 +184,25 @@ pub async fn put_maintenance_config(
 
 pub async fn get_vacuum_status(
     State(s): State<AppState>,
-    headers: HeaderMap,
-) -> ApiResult<Json<crate::state::VacuumStatus>> {
-    if let Err(e) = authenticate_admin_ws(&s, &headers, None) {
-        return e.into();
-    }
-    ApiResult::ok(Json(s.vacuum_status()))
+    _auth: crate::extractors::AdminAuth,
+) -> Result<Json<crate::state::VacuumStatus>, ApiError> {
+    Ok(Json(s.vacuum_status()))
 }
 
 pub async fn get_recording_ttl(
     State(s): State<AppState>,
-    headers: HeaderMap,
-) -> ApiResult<Json<serde_json::Value>> {
-    if let Err(e) = authenticate_admin_ws(&s, &headers, None) {
-        return e.into();
-    }
-    crate::api_try! {
-        Ok(Json(serde_json::json!({
-            "recording_ttl_secs": s.recording_ttl_secs(),
-        })))
-    }
+    _auth: crate::extractors::AdminAuth,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    Ok(Json(serde_json::json!({
+        "recording_ttl_secs": s.recording_ttl_secs(),
+    })))
 }
 
 pub async fn put_recording_ttl(
     State(s): State<AppState>,
-    headers: HeaderMap,
+    _auth: crate::extractors::AdminAuth,
     Json(body): Json<serde_json::Value>,
-) -> ApiResult<Json<serde_json::Value>> {
-    if let Err(e) = authenticate_admin_ws(&s, &headers, None) {
-        return e.into();
-    }
+) -> Result<Json<serde_json::Value>, ApiError> {
     let inner: Result<Json<serde_json::Value>, ApiError> = async {
         let ttl_secs = body
             .get("recording_ttl_secs")
@@ -259,5 +225,5 @@ pub async fn put_recording_ttl(
         })))
     }
     .await;
-    inner.into()
+    inner
 }

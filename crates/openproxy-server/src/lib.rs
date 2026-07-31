@@ -17,6 +17,7 @@ pub mod admin_ui;
 pub mod debug_log;
 pub mod disconnect;
 pub mod error;
+pub mod extractors;
 pub mod handlers;
 pub mod middleware;
 pub mod rate_limit;

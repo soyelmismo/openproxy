@@ -8,184 +8,172 @@ use openproxy_core::admin as core_admin;
 use openproxy_core::oauth::OAuthProvider;
 use openproxy_core::providers as core_providers;
 
-pub async fn list_providers(State(s): State<AppState>) -> ApiResult<Json<Vec<ProviderWithOAuth>>> {
-    crate::api_try! {
-        // Read-only SELECT — use the READER so the dashboard's catalog
-        // polling doesn't serialize through the writer mutex.
-        let r = s.db_pool().reader();
-        let list = core_admin::list_providers(&r)?;
-        let registry = s.oauth_provider_registry();
-        let adapters = s.adapters();
-        let enriched = list
-            .into_iter()
-            .map(|p| enrich_provider_with_oauth(p, registry.as_ref(), &adapters, &r))
-            .collect();
-        Ok(Json(enriched))
-    }
+pub async fn list_providers(State(s): State<AppState>) -> Result<Json<Vec<ProviderWithOAuth>>, ApiError> {
+    // Read-only SELECT — use the READER so the dashboard's catalog
+    // polling doesn't serialize through the writer mutex.
+    let r = s.db_pool().reader();
+    let list = core_admin::list_providers(&r)?;
+    let registry = s.oauth_provider_registry();
+    let adapters = s.adapters();
+    let enriched = list
+        .into_iter()
+        .map(|p| enrich_provider_with_oauth(p, registry.as_ref(), &adapters, &r))
+        .collect();
+    Ok(Json(enriched))
 }
 
 pub async fn create_provider(
     State(s): State<AppState>,
     Json(input): Json<core_admin::CreateProviderInput>,
-) -> ApiResult<Json<serde_json::Value>> {
-    crate::api_try! {
-        // Scope the writer guard so it is dropped BEFORE
-        // rebuild_adapters re-acquires the same non-reentrant
-        // parking_lot::Mutex. Holding the guard across
-        // rebuild_adapters deadlocks the Tokio worker thread.
-        let id = {
-            let w = s.db_pool().writer();
-            core_admin::create_provider(&w, input)?
-        };
-        // Hot-reload the in-memory adapter registry so the chat
-        // pipeline can dispatch to the new provider without a
-        // process restart. A failure here is logged but does NOT
-        // roll back the DB write — the operator's intent to add
-        // the provider has already been recorded; the next admin
-        // action (or the next chat request, which already has
-        // DB-fallback via `resolve_adapter`) will pick up the new
-        // adapter on the next `rebuild_adapters`.
-        if let Err(e) = s.rebuild_adapters() {
-            tracing::warn!(
-                provider_id = id.as_str(),
-                error = %e,
-                "failed to reload adapter registry after create_provider; \
-                 chat pipeline may still fall through to DB lookup"
-            );
-        } else {
-            tracing::info!(
-                provider_id = id.as_str(),
-                "reloaded adapter registry after creating provider"
-            );
-        }
-        Ok(Json(serde_json::json!({ "id": id.as_str() })))
+) -> Result<Json<serde_json::Value>, ApiError> {
+    // Scope the writer guard so it is dropped BEFORE
+    // rebuild_adapters re-acquires the same non-reentrant
+    // parking_lot::Mutex. Holding the guard across
+    // rebuild_adapters deadlocks the Tokio worker thread.
+    let id = {
+        let w = s.db_pool().writer();
+        core_admin::create_provider(&w, input)?
+    };
+    // Hot-reload the in-memory adapter registry so the chat
+    // pipeline can dispatch to the new provider without a
+    // process restart. A failure here is logged but does NOT
+    // roll back the DB write — the operator's intent to add
+    // the provider has already been recorded; the next admin
+    // action (or the next chat request, which already has
+    // DB-fallback via `resolve_adapter`) will pick up the new
+    // adapter on the next `rebuild_adapters`.
+    if let Err(e) = s.rebuild_adapters() {
+        tracing::warn!(
+            provider_id = id.as_str(),
+            error = %e,
+            "failed to reload adapter registry after create_provider; \
+             chat pipeline may still fall through to DB lookup"
+        );
+    } else {
+        tracing::info!(
+            provider_id = id.as_str(),
+            "reloaded adapter registry after creating provider"
+        );
     }
+    Ok(Json(serde_json::json!({ "id": id.as_str() })))
 }
 
 pub async fn get_provider(
     State(s): State<AppState>,
     Path(id): Path<String>,
-) -> ApiResult<Json<ProviderWithOAuth>> {
-    crate::api_try! {
-        // Read-only SELECT — use the READER.
-        let r = s.db_pool().reader();
-        let id = ProviderId::new(id);
-        let provider = core_providers::get(&r, &id)?
-            .ok_or_else(|| CoreError::ProviderNotFound(id.to_string()))?;
-        let registry = s.oauth_provider_registry();
-        let adapters = s.adapters();
-        let enriched = enrich_provider_with_oauth(provider, registry.as_ref(), &adapters, &r);
-        Ok(Json(enriched))
-    }
+) -> Result<Json<ProviderWithOAuth>, ApiError> {
+    // Read-only SELECT — use the READER.
+    let r = s.db_pool().reader();
+    let id = ProviderId::new(id);
+    let provider = core_providers::get(&r, &id)?
+        .ok_or_else(|| CoreError::ProviderNotFound(id.to_string()))?;
+    let registry = s.oauth_provider_registry();
+    let adapters = s.adapters();
+    let enriched = enrich_provider_with_oauth(provider, registry.as_ref(), &adapters, &r);
+    Ok(Json(enriched))
 }
 
 pub async fn delete_provider(
     State(s): State<AppState>,
     Path(id): Path<String>,
-) -> ApiResult<Json<serde_json::Value>> {
-    crate::api_try! {
-        // Fast-fail on built-in ids before opening a writer. The
-        // message is the same one the service layer would produce
-        // so the dashboard's error toast is consistent regardless
-        // of which path the rejection took.
-        if seed::is_builtin(&id) {
-            return Err(ApiError(CoreError::Validation(format!(
-                "provider '{}' is a built-in and cannot be deleted. Use POST \
-                 /admin/providers/{}/active with {{\"active\": false}} to \
-                 deactivate it instead.",
-                id, id
-            ))));
-        }
-        // Scope the writer guard so it is dropped BEFORE
-        // rebuild_adapters re-acquires the same non-reentrant
-        // parking_lot::Mutex. Holding the guard across
-        // rebuild_adapters deadlocks the Tokio worker thread.
-        let pid = ProviderId::new(id.clone());
-        {
-            let w = s.db_pool().writer();
-            core_admin::delete_provider(&w, &pid)?;
-        }
-        // Hot-reload so the chat pipeline drops the
-        // `CustomAdapter` for this provider. For built-in ids we
-        // never get here (the fast-fail above rejects them), so
-        // this branch only fires for custom providers. A failure
-        // here is logged-and-continued: the DB delete has already
-        // committed, and the next admin action or DB-fallback
-        // lookup will pick up the new state.
-        if let Err(e) = s.rebuild_adapters() {
-            tracing::warn!(
-                provider_id = pid.as_str(),
-                error = %e,
-                "failed to reload adapter registry after delete_provider"
-            );
-        } else {
-            tracing::info!(
-                provider_id = pid.as_str(),
-                "reloaded adapter registry after deleting provider"
-            );
-        }
-        Ok(Json(serde_json::json!({ "deleted": pid.as_str() })))
+) -> Result<Json<serde_json::Value>, ApiError> {
+    // Fast-fail on built-in ids before opening a writer. The
+    // message is the same one the service layer would produce
+    // so the dashboard's error toast is consistent regardless
+    // of which path the rejection took.
+    if seed::is_builtin(&id) {
+        return Err(ApiError(CoreError::Validation(format!(
+            "provider '{}' is a built-in and cannot be deleted. Use POST \
+             /admin/providers/{}/active with {{\"active\": false}} to \
+             deactivate it instead.",
+            id, id
+        ))));
     }
+    // Scope the writer guard so it is dropped BEFORE
+    // rebuild_adapters re-acquires the same non-reentrant
+    // parking_lot::Mutex. Holding the guard across
+    // rebuild_adapters deadlocks the Tokio worker thread.
+    let pid = ProviderId::new(id.clone());
+    {
+        let w = s.db_pool().writer();
+        core_admin::delete_provider(&w, &pid)?;
+    }
+    // Hot-reload so the chat pipeline drops the
+    // `CustomAdapter` for this provider. For built-in ids we
+    // never get here (the fast-fail above rejects them), so
+    // this branch only fires for custom providers. A failure
+    // here is logged-and-continued: the DB delete has already
+    // committed, and the next admin action or DB-fallback
+    // lookup will pick up the new state.
+    if let Err(e) = s.rebuild_adapters() {
+        tracing::warn!(
+            provider_id = pid.as_str(),
+            error = %e,
+            "failed to reload adapter registry after delete_provider"
+        );
+    } else {
+        tracing::info!(
+            provider_id = pid.as_str(),
+            "reloaded adapter registry after deleting provider"
+        );
+    }
+    Ok(Json(serde_json::json!({ "deleted": pid.as_str() })))
 }
 
 pub async fn set_provider_active(
     State(s): State<AppState>,
     Path(id): Path<String>,
     Json(body): Json<serde_json::Value>,
-) -> ApiResult<Json<serde_json::Value>> {
-    crate::api_try! {
-        let active = body
-            .get("active")
-            .and_then(|v| v.as_bool())
-            .ok_or_else(|| CoreError::Validation("missing 'active' bool".into()))?;
-        let w = s.db_pool().writer();
-        let provider_id = ProviderId::new(id.clone());
-        core_admin::set_provider_active(&w, &provider_id, active)?;
-        Ok(Json(serde_json::json!({ "id": id, "active": active })))
-    }
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let active = body
+        .get("active")
+        .and_then(|v| v.as_bool())
+        .ok_or_else(|| CoreError::Validation("missing 'active' bool".into()))?;
+    let w = s.db_pool().writer();
+    let provider_id = ProviderId::new(id.clone());
+    core_admin::set_provider_active(&w, &provider_id, active)?;
+    Ok(Json(serde_json::json!({ "id": id, "active": active })))
 }
 
 pub async fn update_provider(
     State(s): State<AppState>,
     Path(id): Path<String>,
     Json(body): Json<core_admin::UpdateProviderInput>,
-) -> ApiResult<Json<serde_json::Value>> {
-    crate::api_try! {
-        // Scope the writer guard so it is dropped BEFORE
-        // rebuild_adapters re-acquires the same non-reentrant
-        // parking_lot::Mutex. Holding the guard across
-        // rebuild_adapters deadlocks the Tokio worker thread.
-        let provider_id = ProviderId::new(id.clone());
-        {
-            let w = s.db_pool().writer();
-            core_admin::update_provider(&w, &provider_id, body)?;
-        }
-        // Hot-reload so the chat pipeline sees the updated
-        // `base_url`/`auth_type`/`extra_headers` on the
-        // `CustomAdapter` for this provider. See the comment on
-        // `create_provider` for why we log-and-continue rather
-        // than roll back.
-        if let Err(e) = s.rebuild_adapters() {
-            tracing::warn!(
-                provider_id = id,
-                error = %e,
-                "failed to reload adapter registry after update_provider"
-            );
-        } else {
-            tracing::info!(
-                provider_id = id,
-                "reloaded adapter registry after updating provider"
-            );
-        }
-        Ok(Json(serde_json::json!({ "id": id })))
+) -> Result<Json<serde_json::Value>, ApiError> {
+    // Scope the writer guard so it is dropped BEFORE
+    // rebuild_adapters re-acquires the same non-reentrant
+    // parking_lot::Mutex. Holding the guard across
+    // rebuild_adapters deadlocks the Tokio worker thread.
+    let provider_id = ProviderId::new(id.clone());
+    {
+        let w = s.db_pool().writer();
+        core_admin::update_provider(&w, &provider_id, body)?;
     }
+    // Hot-reload so the chat pipeline sees the updated
+    // `base_url`/`auth_type`/`extra_headers` on the
+    // `CustomAdapter` for this provider. See the comment on
+    // `create_provider` for why we log-and-continue rather
+    // than roll back.
+    if let Err(e) = s.rebuild_adapters() {
+        tracing::warn!(
+            provider_id = id,
+            error = %e,
+            "failed to reload adapter registry after update_provider"
+        );
+    } else {
+        tracing::info!(
+            provider_id = id,
+            "reloaded adapter registry after updating provider"
+        );
+    }
+    Ok(Json(serde_json::json!({ "id": id })))
 }
 
 async fn run_provider_refresh(
     s: AppState,
     provider_id_str: String,
     q: ProviderRefreshQuery,
-) -> ApiResult<Json<serde_json::Value>> {
+) -> Result<Json<serde_json::Value>, ApiError> {
     let provider = ProviderId::new(provider_id_str.clone());
     let ttl_seconds = q.ttl_seconds.unwrap_or(PROVIDER_REFRESH_DEFAULT_TTL_SECS);
 
@@ -193,7 +181,7 @@ async fn run_provider_refresh(
     //    fall back to constructing a CustomAdapter from the DB row.
     let adapter = match resolve_adapter(&s, &provider, s.adapters().as_slice()) {
         Ok(a) => a.clone(),
-        Err(e) => return ApiResult::err(ApiError(e)),
+        Err(e) => return Err(ApiError(e)),
     };
 
     // 2. Provider has no /models endpoint and no custom fetch_models
@@ -210,7 +198,7 @@ async fn run_provider_refresh(
         match crate::handlers::admin::accounts::resolve_refresh_account(&s, &provider, &q).await {
             Ok((Some(account_id), _)) => Some(account_id),
             Ok((None, _)) => None,
-            Err(e) => return ApiResult::err(e),
+            Err(e) => return Err(e),
         };
 
     // 4. Decrypt or refresh the selected credential. Drop DB guards
@@ -223,9 +211,9 @@ async fn run_provider_refresh(
                 match core_accounts::get(&w, account_id, s.master_key().as_ref()) {
                     Ok(Some(a)) => a,
                     Ok(None) => {
-                        return ApiResult::err(ApiError(CoreError::AccountNotFound(account_id.0)));
+                        return Err(ApiError(CoreError::AccountNotFound(account_id.0)));
                     }
-                    Err(e) => return ApiResult::err(ApiError(e)),
+                    Err(e) => return Err(ApiError(e)),
                 }
             };
             if account.auth_type == "oauth" {
@@ -234,7 +222,7 @@ async fn run_provider_refresh(
                 let w = s.db_pool().writer();
                 match core_accounts::decrypt_api_key(&w, account_id, s.master_key().as_ref()) {
                     Ok(k) => k,
-                    Err(e) => return ApiResult::err(ApiError(e)),
+                    Err(e) => return Err(ApiError(e)),
                 }
             }
         }
@@ -259,7 +247,7 @@ async fn run_provider_refresh(
     //    `Send` across an `await`.
     let conn_for_refresh = match s.db_pool().open_connection() {
         Ok(c) => c,
-        Err(e) => return ApiResult::err(ApiError(e)),
+        Err(e) => return Err(ApiError(e)),
     };
 
     // 6. Run the refresh. This is the only `await` on the upstream
@@ -276,7 +264,7 @@ async fn run_provider_refresh(
     .await
     {
         Ok(r) => r,
-        Err(e) => return ApiResult::err(ApiError(e)),
+        Err(e) => return Err(ApiError(e)),
     };
 
     // 7. Auto-activation pass. The provider may have a substring
@@ -297,10 +285,10 @@ async fn run_provider_refresh(
         openproxy_db::models::apply_auto_activation(&w, &provider, keyword_ref)
     })() {
         Ok(n) => n,
-        Err(e) => return ApiResult::err(ApiError(e)),
+        Err(e) => return Err(ApiError(e)),
     };
 
-    ApiResult::ok(Json(serde_json::json!({
+    Ok(Json(serde_json::json!({
         "provider": provider_id_str,
         "models_refreshed": upsert.touched,
         "new_model_ids": upsert.new_model_ids,
@@ -377,6 +365,6 @@ pub async fn refresh_provider_models(
     State(s): State<AppState>,
     Path(provider_id): Path<String>,
     Query(q): Query<ProviderRefreshQuery>,
-) -> ApiResult<Json<serde_json::Value>> {
+) -> Result<Json<serde_json::Value>, ApiError> {
     run_provider_refresh(s, provider_id, q).await
 }
