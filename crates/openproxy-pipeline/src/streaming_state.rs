@@ -323,7 +323,6 @@ impl<'a> crate::streaming::ChunkInterceptor for ChunkProcessor<'a> {
         // Record TTFT on the first data-bearing line.
         if state.ttft_ms.is_none() {
             state.ttft_ms = Some(state.first_chunk_time.elapsed().as_millis() as u64);
-            let streaming_ttft_snapshot = self.dispatcher.compression_stats_cell.read().clone();
             openproxy_types::usage::publish_stage_event(openproxy_types::usage::StageEvent {
                 request_id: ctx.req.request_id.to_string(),
                 trace_id: ctx.trace_id.to_string(),
@@ -336,12 +335,6 @@ impl<'a> crate::streaming::ChunkInterceptor for ChunkProcessor<'a> {
                 status_code: Some(200),
                 error: None,
                 stop_reason: None,
-                compression_savings_pct: streaming_ttft_snapshot
-                    .as_ref()
-                    .and_then(|s| s.savings_pct_opt()),
-                compression_techniques: streaming_ttft_snapshot
-                    .as_ref()
-                    .and_then(|s| s.techniques_csv()),
                 timestamp: None,
                 endpoint_kind: None,
             });

@@ -2,8 +2,6 @@ use crate::PipelineResult;
 use crate::context::PipelineContext;
 use crate::retry::RetryPolicy;
 use crate::stage::PipelineStage;
-use openproxy_adapters::upstream::CancellationToken;
-use openproxy_types::combos::Strategy;
 use openproxy_types::error::CoreError;
 
 #[derive(Clone, Copy)]
@@ -25,12 +23,9 @@ impl PipelineStage for UpstreamExecutorStage {
             return Err(CoreError::NoHealthyTargets(combo.id.0));
         }
 
-        let race_size: usize = match combo.strategy {
-            Strategy::Priority => to_run.len(),
-            Strategy::RoundRobin | Strategy::Shuffle => (combo.race_size as usize)
-                .min(to_run.len())
-                .min(ctx.pipeline.config.racing.max_race_size as usize),
-        };
+        let race_size: usize = (combo.race_size as usize)
+            .min(to_run.len())
+            .min(ctx.pipeline.config.racing.max_race_size as usize);
 
         let mut last_result: Option<PipelineResult> = None;
 
@@ -64,6 +59,8 @@ impl PipelineStage for UpstreamExecutorStage {
             last_result = Some(race_result);
         }
 
+        let mut overall_attempt: u8 = 1;
+
         for target in to_run.iter() {
             let client_disconnected = {
                 let mut rx = ctx.req.client_disconnected.clone();
@@ -81,16 +78,16 @@ impl PipelineStage for UpstreamExecutorStage {
             }
 
             let policy = RetryPolicy::from_config(&ctx.pipeline.config.retries);
-            let mut target_attempt: u8 = 1;
+            let mut target_local_retry_count: u8 = 1;
             let mut result = ctx
                 .pipeline
                 .execute_single(
                     ctx.req.clone(),
                     combo,
                     target,
-                    target_attempt,
-                    race_size as u8,
-                    &CancellationToken::new(),
+                    overall_attempt,
+                    race_size as u8, to_run.len() as u8,
+                    &openproxy_adapters::upstream::CancellationToken::new(),
                 )
                 .await;
 
@@ -103,7 +100,7 @@ impl PipelineStage for UpstreamExecutorStage {
                 } else {
                     policy.max_attempts
                 };
-                if target_attempt >= max_attempts {
+                if target_local_retry_count >= max_attempts {
                     break;
                 }
                 let client_disconnected = {
@@ -113,7 +110,7 @@ impl PipelineStage for UpstreamExecutorStage {
                 if client_disconnected {
                     break;
                 }
-                let delay = match policy.delay_after_attempt(target_attempt) {
+                let delay = match policy.delay_after_attempt(target_local_retry_count) {
                     Some(d) => d,
                     None => break,
                 };
@@ -159,24 +156,26 @@ impl PipelineStage for UpstreamExecutorStage {
                     combo_id = combo.id.0,
                     target_id = target.target.id.0,
                     provider = %target.target.provider_id,
-                    target_attempt,
-                    next_attempt = target_attempt + 1,
+                    target_local_retry_count,
+                    next_attempt = target_local_retry_count + 1,
+                    overall_attempt,
                     delay_ms = delay.as_millis() as u64,
                     error = %e,
                     is_proxy_rotated = e.is_proxy_rotated(),
                     "target failed retryably; retrying same target"
                 );
                 tokio::time::sleep(delay).await;
-                target_attempt = target_attempt.saturating_add(1);
+                target_local_retry_count = target_local_retry_count.saturating_add(1);
+                overall_attempt = overall_attempt.saturating_add(1);
                 result = ctx
                     .pipeline
                     .execute_single(
                         ctx.req.clone(),
                         combo,
                         target,
-                        target_attempt,
-                        race_size as u8,
-                        &CancellationToken::new(),
+                        overall_attempt,
+                        race_size as u8, to_run.len() as u8,
+                        &openproxy_adapters::upstream::CancellationToken::new(),
                     )
                     .await;
             }
@@ -197,7 +196,8 @@ impl PipelineStage for UpstreamExecutorStage {
                             target_id = target.target.id.0,
                             provider = %target.target.provider_id,
                             model_row_id = ?target.target.model_row_id,
-                            attempt = target_attempt,
+                            attempts_on_target = target_local_retry_count,
+                            overall_attempt,
                             retryable = RetryPolicy::is_retryable(e, ctx.pipeline.config.idle_chunk_retryable),
                             error = %e,
                             is_proxy_rotated = e.is_proxy_rotated(),
@@ -218,11 +218,12 @@ impl PipelineStage for UpstreamExecutorStage {
                     }
                     ctx.combo_walk_log.push(format!(
                         "  target_id={} provider={} attempts={} error={}",
-                        target.target.id.0, target.target.provider_id, target_attempt, e
+                        target.target.id.0, target.target.provider_id, target_local_retry_count, e
                     ));
                     last_result = Some(result);
                 }
             }
+            overall_attempt = overall_attempt.saturating_add(1);
         }
 
         if let Some(r) = last_result

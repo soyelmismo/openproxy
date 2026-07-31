@@ -940,7 +940,9 @@ mod tests {
             first_header(&headers, "Content-Type"),
             Some("application/json")
         );
-        assert_eq!(first_header(&headers, "User-Agent"), Some("openproxy/0.1"));
+        assert_eq!(first_header(&headers, "User-Agent"), Some("opencode/1.31.0"));
+        assert_eq!(first_header(&headers, "opencode-version"), Some("1.31.0"));
+        assert_eq!(first_header(&headers, "openai-beta"), Some("responses_websockets=2026-02-06"));
     }
 
     #[test]
@@ -948,7 +950,9 @@ mod tests {
         let a = OpenCodeZenAdapter::new();
         for fmt in [TargetFormat::Openai, TargetFormat::Anthropic] {
             let headers = a.build_headers("k", fmt, &ModelId::new("m"));
-            assert_eq!(first_header(&headers, "User-Agent"), Some("openproxy/0.1"));
+            assert_eq!(first_header(&headers, "User-Agent"), Some("opencode/1.31.0"));
+            assert_eq!(first_header(&headers, "opencode-version"), Some("1.31.0"));
+            assert_eq!(first_header(&headers, "openai-beta"), Some("responses_websockets=2026-02-06"));
             assert_eq!(
                 first_header(&headers, "Content-Type"),
                 Some("application/json")

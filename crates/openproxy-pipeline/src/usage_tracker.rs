@@ -108,6 +108,8 @@ impl UsageTracker {
             race_total: 1,
             race_lost: false,
             api_key_id: req.api_key_id,
+            compression_savings_pct: None,
+            compression_techniques: None,
             request_body_json: None,
             response_body_json: None,
             request_headers: None,
@@ -117,8 +119,6 @@ impl UsageTracker {
             is_streaming: false,
             stream_complete: false,
             stop_reason: None,
-            compression_savings_pct: None,
-            compression_techniques: None,
             client_response: true,
             prompt_tokens_estimated: false,
             completion_tokens_estimated: false,
@@ -216,6 +216,7 @@ pub struct UsageRecordBuilder<'a> {
     pub(crate) status_code: u16,
     pub(crate) attempt: u8,
     pub(crate) race_size: u8,
+    pub(crate) total_targets: u8,
     pub(crate) trace_id: String,
     pub(crate) prompt_tokens: Option<u32>,
     pub(crate) completion_tokens: Option<u32>,
@@ -239,7 +240,7 @@ impl<'a> UsageRecordBuilder<'a> {
     ) -> Self {
         Self {
             tracker,
-            req,
+            req: req.clone(),
             combo,
             target,
             model: None,
@@ -250,7 +251,8 @@ impl<'a> UsageRecordBuilder<'a> {
             status_code: 0,
             attempt: 1,
             race_size: 1,
-            trace_id: "".to_string(),
+            total_targets: 1,
+            trace_id: req.trace_id.to_string(),
             prompt_tokens: None,
             completion_tokens: None,
             response_body_json: None,
@@ -299,6 +301,11 @@ impl<'a> UsageRecordBuilder<'a> {
     }
     pub fn race_size(mut self, race_size: u8) -> Self {
         self.race_size = race_size;
+        self
+    }
+
+    pub fn total_targets(mut self, total_targets: u8) -> Self {
+        self.total_targets = total_targets;
         self
     }
     pub fn trace_id(mut self, trace_id: String) -> Self {
@@ -435,7 +442,7 @@ impl<'a> UsageRecordBuilder<'a> {
             total_ms: self.total_ms,
             status_code: self.status_code,
             error_msg: self.err.map(|e| format!("{}", e)),
-            race_total: self.race_size,
+            race_total: self.total_targets,
             race_lost: self.err.is_some() && self.req.race_cancelled,
             api_key_id: self.req.api_key_id,
             request_body_json: if recording {
@@ -489,7 +496,6 @@ impl<'a> UsageRecordBuilder<'a> {
             let error_str: Option<String> = self
                 .err
                 .map(|e| openproxy_db::cost::redact_error_msg(&e.to_string()).0);
-            let terminal_snapshot = self.tracker.compression_stats_cell.read().clone();
             openproxy_types::usage::publish_stage_event(openproxy_types::usage::StageEvent {
                 request_id: self.req.request_id.to_string(),
                 trace_id: self.trace_id.to_string(),
@@ -503,10 +509,6 @@ impl<'a> UsageRecordBuilder<'a> {
                 error: error_str,
 
                 stop_reason: self.stop_reason.clone(),
-                compression_savings_pct: terminal_snapshot
-                    .as_ref()
-                    .and_then(|s| s.savings_pct_opt()),
-                compression_techniques: terminal_snapshot.as_ref().and_then(|s| s.techniques_csv()),
                 timestamp: None,
                 endpoint_kind: None,
             });

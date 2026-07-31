@@ -480,7 +480,7 @@ impl tower::Service<PipelineState> for RoutingService {
             }
 
             // 2. Sequential execution.
-            let attempt: u8 = 1;
+            let mut overall_attempt: u8 = 1;
             let mut combo_walk_log: Vec<String> = Vec::new();
 
             for (idx, target) in to_run.iter().enumerate() {
@@ -493,21 +493,22 @@ impl tower::Service<PipelineState> for RoutingService {
                         combo_id = combo.id.0,
                         target_id = target.target.id.0,
                         provider = %target.target.provider_id,
-                        attempt,
+                        attempt = overall_attempt,
                         "client cancelled between targets; aborting pipeline"
                     );
-                    return Ok(pipeline.client_disconnected_result(attempt));
+                    return Ok(pipeline.client_disconnected_result(overall_attempt));
                 }
 
                 let policy = crate::retry::RetryPolicy::from_config(&pipeline.config.retries);
-                let mut target_attempt: u8 = 1;
+                let mut target_local_retry_count: u8 = 1;
                 let mut result = pipeline
                     .execute_single(
                         state.req.clone(),
                         &combo,
                         target,
-                        target_attempt,
+                        overall_attempt,
                         race_size as u8,
+                        1,
                         &openproxy_adapters::upstream::CancellationToken::new(),
                     )
                     .await;
@@ -524,7 +525,7 @@ impl tower::Service<PipelineState> for RoutingService {
                     } else {
                         policy.max_attempts
                     };
-                    if target_attempt >= max_attempts {
+                    if target_local_retry_count >= max_attempts {
                         break;
                     }
                     let client_disconnected = {
@@ -534,7 +535,7 @@ impl tower::Service<PipelineState> for RoutingService {
                     if client_disconnected {
                         break;
                     }
-                    let delay = match policy.delay_after_attempt(target_attempt) {
+                    let delay = match policy.delay_after_attempt(target_local_retry_count) {
                         Some(d) => d,
                         None => break,
                     };
@@ -557,21 +558,23 @@ impl tower::Service<PipelineState> for RoutingService {
                         combo_id = combo.id.0,
                         target_id = target.target.id.0,
                         provider = %target.target.provider_id,
-                        target_attempt,
-                        next_attempt = target_attempt + 1,
+                        target_local_retry_count,
+                        overall_attempt,
                         delay_ms = delay.as_millis() as u64,
                         error = %e,
                         "target failed retryably; retrying same target"
                     );
                     tokio::time::sleep(delay).await;
-                    target_attempt = target_attempt.saturating_add(1);
+                    target_local_retry_count = target_local_retry_count.saturating_add(1);
+                    overall_attempt = overall_attempt.saturating_add(1);
                     result = pipeline
                         .execute_single(
                             state.req.clone(),
                             &combo,
                             target,
-                            target_attempt,
+                            overall_attempt,
                             race_size as u8,
+                            1,
                             &openproxy_adapters::upstream::CancellationToken::new(),
                         )
                         .await;
@@ -582,6 +585,8 @@ impl tower::Service<PipelineState> for RoutingService {
                     Some(e) if crate::is_upstream_health_issue(e) => Some("record"),
                     Some(_) => None,
                 };
+
+                overall_attempt = overall_attempt.saturating_add(1);
 
                 {
                     pipeline.selection_registry.record_request(target.target.id);
@@ -722,7 +727,7 @@ impl tower::Service<PipelineState> for RoutingService {
                     model_name,
                     target.target.id.0,
                     outcome,
-                    target_attempt
+                    target_local_retry_count
                 ));
 
                 if result.error.is_none() {
@@ -767,7 +772,7 @@ impl tower::Service<PipelineState> for RoutingService {
             Ok(last_result.unwrap_or_else(|| {
                 pipeline.failure(
                     CoreError::NoHealthyTargets(combo.id.0),
-                    attempt - 1,
+                    overall_attempt - 1,
                     ErrorPhase::Route,
                 )
             }))

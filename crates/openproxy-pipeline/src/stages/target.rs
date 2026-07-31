@@ -343,7 +343,6 @@ impl PipelineStage for DispatchStage {
             adapter.build_chat_url_for_account(target_format, &model.model_id, account_label_str);
         let headers = adapter.build_headers(&api_key, target_format, &model.model_id);
 
-        let compression_stats_at_connecting = ctx.pipeline.compression_stats_cell.read().clone();
         openproxy_types::usage::publish_stage_event(openproxy_types::usage::StageEvent {
             request_id: ctx.req.request_id.to_string(),
             trace_id: trace_id.to_string(),
@@ -356,12 +355,6 @@ impl PipelineStage for DispatchStage {
             status_code: None,
             error: None,
             stop_reason: None,
-            compression_savings_pct: compression_stats_at_connecting
-                .as_ref()
-                .and_then(|s| s.savings_pct_opt()),
-            compression_techniques: compression_stats_at_connecting
-                .as_ref()
-                .and_then(|s| s.techniques_csv()),
             timestamp: None,
             endpoint_kind: None,
         });

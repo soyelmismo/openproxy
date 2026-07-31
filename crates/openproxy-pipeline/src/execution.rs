@@ -154,6 +154,7 @@ impl Pipeline {
         resolved_target: &crate::context::ResolvedTarget,
         attempt: u8,
         race_size: u8,
+        total_targets: u8,
         race_cancel: &CancellationToken,
     ) -> PipelineResult {
         let mut ctx = crate::context::PipelineContext::new(req, self.clone());
@@ -161,6 +162,7 @@ impl Pipeline {
         ctx.current_target = Some(resolved_target.clone());
         ctx.current_target_attempt = attempt;
         ctx.race_size = race_size;
+        ctx.total_targets = total_targets;
         ctx.race_cancel = Some(race_cancel.clone());
         ctx.started = Some(std::time::Instant::now());
 
@@ -182,8 +184,6 @@ impl Pipeline {
             status_code: None,
             error: None,
             stop_reason: None,
-            compression_savings_pct: None,
-            compression_techniques: None,
             timestamp: Some(String::new()),
             endpoint_kind: Some(openproxy_types::endpoint::EndpointKind::Chat),
         });

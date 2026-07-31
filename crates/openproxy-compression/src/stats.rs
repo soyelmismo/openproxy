@@ -76,12 +76,17 @@ impl CompressionStats {
         }
     }
 
-    /// Técnicas como string CSV para guardar en SQL.
     pub fn techniques_csv(&self) -> Option<String> {
         if self.techniques.is_empty() {
             None
         } else {
-            Some(self.techniques.join(","))
+            let mut unique = Vec::new();
+            for t in &self.techniques {
+                if !unique.contains(t) {
+                    unique.push(t.clone());
+                }
+            }
+            Some(unique.join(","))
         }
     }
 

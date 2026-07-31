@@ -553,7 +553,6 @@ impl UpstreamDispatcher {
             // always populated here. Snapshot once per emission so
             // a concurrent retry on a different worker doesn't race
             // mid-publish.
-            let snapshot = self.compression_stats_cell.read().clone();
             openproxy_types::usage::publish_stage_event(openproxy_types::usage::StageEvent {
                 request_id: req.request_id.to_string(),
                 trace_id: trace_id.to_string(),
@@ -566,8 +565,6 @@ impl UpstreamDispatcher {
                 status_code: Some(status),
                 error: err,
                 stop_reason: None,
-                compression_savings_pct: snapshot.as_ref().and_then(|s| s.savings_pct_opt()),
-                compression_techniques: snapshot.as_ref().and_then(|s| s.techniques_csv()),
                 timestamp: None,
                 endpoint_kind: None,
             });
@@ -867,8 +864,6 @@ impl UpstreamDispatcher {
         // stuck on `waiting_ttft` between the 2xx headers
         // arriving and the (now missing) terminal `completed`
         // event being published by the success path.
-        let model_name = model.model_id.as_str().to_string();
-        let streaming_snapshot = self.compression_stats_cell.read().clone();
         // Emit `waiting_ttft` before `streaming` for stage sequence
         // consistency with the non-streaming path. The streaming path
         // previously skipped this, but now that non-streaming clients
@@ -886,8 +881,6 @@ impl UpstreamDispatcher {
             status_code: Some(status_code),
             error: None,
             stop_reason: None,
-            compression_savings_pct: None,
-            compression_techniques: None,
             timestamp: None,
             endpoint_kind: None,
         });
@@ -903,10 +896,6 @@ impl UpstreamDispatcher {
             status_code: Some(status_code),
             error: None,
             stop_reason: None,
-            compression_savings_pct: streaming_snapshot
-                .as_ref()
-                .and_then(|s| s.savings_pct_opt()),
-            compression_techniques: streaming_snapshot.as_ref().and_then(|s| s.techniques_csv()),
             timestamp: None,
             endpoint_kind: None,
         });
@@ -1709,8 +1698,6 @@ impl UpstreamDispatcher {
             status_code: Some(status_code),
             error: None,
             stop_reason: None,
-            compression_savings_pct: None,
-            compression_techniques: None,
             timestamp: None,
             endpoint_kind: None,
         });

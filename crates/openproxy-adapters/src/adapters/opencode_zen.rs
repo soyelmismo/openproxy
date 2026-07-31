@@ -78,7 +78,9 @@ impl ProviderAdapter for OpenCodeZenAdapter {
             }
         }
 
-        headers.push(("User-Agent".into(), "openproxy/0.1".into()));
+        headers.push(("User-Agent".into(), "opencode/1.31.0".into()));
+        headers.push(("opencode-version".into(), "1.31.0".into()));
+        headers.push(("openai-beta".into(), "responses_websockets=2026-02-06".into()));
         headers
     }
 

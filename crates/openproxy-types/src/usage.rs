@@ -64,10 +64,6 @@ pub struct StageEvent {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub stop_reason: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub compression_savings_pct: Option<f64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub compression_techniques: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub timestamp: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub endpoint_kind: Option<EndpointKind>,
@@ -115,28 +111,45 @@ pub struct RecentUsageRow {
     pub upstream_model_id: String,
     pub status_code: u16,
     pub total_ms: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub prompt_tokens: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub completion_tokens: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub cost_usd: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub connect_ms: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub ttft_ms: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub request_body_json: Option<serde_json::Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub response_body_json: Option<serde_json::Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub request_headers: Option<std::collections::BTreeMap<String, String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub response_headers: Option<std::collections::BTreeMap<String, String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub error_message: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub race_total: Option<u8>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub race_attempts: Option<u8>,
     pub is_streaming: bool,
     pub stream_complete: bool,
     pub race_lost: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub stop_reason: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub compression_savings_pct: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub compression_techniques: Option<String>,
     pub client_response: bool,
     pub prompt_tokens_estimated: bool,
     pub completion_tokens_estimated: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub proxy_url: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub proxy_status: Option<String>,
     pub is_proxy_rotated: bool,
     pub endpoint_kind: EndpointKind,

@@ -26,6 +26,7 @@ pub(crate) async fn run_race(
         };
     }
 
+    let total_targets = to_run.len() as u8;
     let queue: Arc<parking_lot::Mutex<VecDeque<crate::context::ResolvedTarget>>> =
         Arc::new(parking_lot::Mutex::new(VecDeque::from(to_run)));
     let last_err: Arc<parking_lot::Mutex<Option<CoreError>>> =
@@ -58,14 +59,13 @@ pub(crate) async fn run_race(
 
     #[allow(clippy::needless_range_loop)]
     for worker_idx in 0..num_workers as usize {
-        let p = pipeline.clone();
         let mut req = req.clone();
-
         let handle = race_sink.handle(worker_idx);
         req.stream_sink = Some(crate::race_sink::StreamSink::Race(handle));
         req.race_cancel = Some(worker_tokens[worker_idx].clone());
 
         let combo = combo.clone();
+        let p = pipeline.clone();
         let queue = queue.clone();
         let winner = winner.clone();
         let last_err = last_err.clone();
@@ -105,7 +105,7 @@ pub(crate) async fn run_race(
                 }
 
                 let result = p
-                    .execute_single(req.clone(), &combo, &target, 1, race_size, &worker_token)
+                    .execute_single(req.clone(), &combo, &target, 1, race_size, total_targets, &worker_token)
                     .await;
 
                 if result.error.is_none() {
