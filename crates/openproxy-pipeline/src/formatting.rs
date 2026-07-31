@@ -86,11 +86,18 @@ impl TargetFormatter for GeminiFormatter {
 }
 
 pub fn get_formatter(target_format: TargetFormat) -> Box<dyn TargetFormatter> {
-    match target_format {
-        TargetFormat::Openai => Box::new(OpenaiFormatter),
-        TargetFormat::Anthropic => Box::new(AnthropicFormatter),
-        TargetFormat::Gemini => Box::new(GeminiFormatter),
-        TargetFormat::Responses => Box::new(ResponsesFormatter),
+    macro_rules! match_formatter {
+        ($($variant:ident => $formatter:ident),* $(,)?) => {
+            match target_format {
+                $(TargetFormat::$variant => Box::new($formatter),)*
+            }
+        };
+    }
+    match_formatter! {
+        Openai => OpenaiFormatter,
+        Anthropic => AnthropicFormatter,
+        Gemini => GeminiFormatter,
+        Responses => ResponsesFormatter,
     }
 }
 
