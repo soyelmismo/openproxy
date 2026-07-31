@@ -592,48 +592,60 @@ fn map_error_body(status: u16, bytes: &[u8]) -> ClientError {
 /// cualquier otra cosa (e.g. códigos personalizados del server para
 /// cosas que aún no se han modelado en core) se trata como desconocida.
 fn core_error_from_code(code: &str, message: &str) -> Option<CoreError> {
-    match code {
-        "auth" => Some(CoreError::Auth(message.to_string())),
-        "validation" => Some(CoreError::Validation(message.to_string())),
-        "provider_not_found" => Some(CoreError::ProviderNotFound(message.to_string())),
-        "account_not_found" => parse_i64(message).map(CoreError::AccountNotFound),
-        "combo_not_found" => parse_i64(message).map(CoreError::ComboNotFound),
-        "model_not_found" => Some(CoreError::ModelNotFound {
-            // El server codifica `provider=... model=...` en el Display;
-            // no podemos desambiguarlo con certeza sin parsear el formato
-            // concreto, así que pasamos el mensaje crudo. La alternativa
-            // sería añadir un campo estructurado al envelope.
-            provider: "<see message>".to_string(),
-            model: message.to_string(),
-        }),
-        "no_healthy_targets" => parse_i64(message).map(CoreError::NoHealthyTargets),
-        "upstream_timeout" => Some(CoreError::UpstreamTimeout {
-            // El mensaje del server es "upstream timeout in phase X after Nms".
-            // No intentamos parsearlo: dejamos phase="<unknown>" y copiamos
-            // el mensaje crudo al sidecar del Display vía el mensaje.
-            phase: "<unknown>".to_string(),
-            ms: 0,
-        }),
-        "upstream_connection" => Some(CoreError::UpstreamConnection(message.to_string())),
-        "upstream_error" => Some(CoreError::UpstreamError {
-            status: 0,
-            provider: "<see message>".to_string(),
-            model: "<see message>".to_string(),
-            body: message.to_string(),
-            is_proxy_rotated: false,
-        }),
-        "rate_limited" => Some(CoreError::RateLimited {
-            provider: "<see message>".to_string(),
-            retry_after_ms: 0,
-            is_proxy_rotated: false,
-        }),
-        "parse_error" => Some(CoreError::Parse(message.to_string())),
-        "client_disconnected" => Some(CoreError::Cancelled(openproxy_types::CancelReason::ClientDisconnected)),
-        "race_lost" => Some(CoreError::RaceLost),
-        "database" | "migration" => Some(CoreError::Internal(message.to_string())),
-        "config" => Some(CoreError::Config(message.to_string())),
-        "internal" => Some(CoreError::Internal(message.to_string())),
-        _ => None,
+    macro_rules! map_core_error {
+        (
+            string => [ $( $s_pat:pat => $s_var:ident ),* $(,)? ],
+            id => [ $( $i_pat:pat => $i_var:ident ),* $(,)? ],
+            custom => [ $( $c_pat:pat => $c_expr:expr ),* $(,)? ]
+        ) => {
+            match code {
+                $( $s_pat => Some(CoreError::$s_var(message.to_string())), )*
+                $( $i_pat => parse_i64(message).map(CoreError::$i_var), )*
+                $( $c_pat => $c_expr, )*
+                _ => None,
+            }
+        };
+    }
+
+    map_core_error! {
+        string => [
+            "auth" => Auth,
+            "validation" => Validation,
+            "provider_not_found" => ProviderNotFound,
+            "upstream_connection" => UpstreamConnection,
+            "parse_error" => Parse,
+            "config" => Config,
+            "database" | "migration" | "internal" => Internal,
+        ],
+        id => [
+            "account_not_found" => AccountNotFound,
+            "combo_not_found" => ComboNotFound,
+            "no_healthy_targets" => NoHealthyTargets,
+        ],
+        custom => [
+            "model_not_found" => Some(CoreError::ModelNotFound {
+                provider: "<see message>".to_string(),
+                model: message.to_string(),
+            }),
+            "upstream_timeout" => Some(CoreError::UpstreamTimeout {
+                phase: "<unknown>".to_string(),
+                ms: 0,
+            }),
+            "upstream_error" => Some(CoreError::UpstreamError {
+                status: 0,
+                provider: "<see message>".to_string(),
+                model: "<see message>".to_string(),
+                body: message.to_string(),
+                is_proxy_rotated: false,
+            }),
+            "rate_limited" => Some(CoreError::RateLimited {
+                provider: "<see message>".to_string(),
+                retry_after_ms: 0,
+                is_proxy_rotated: false,
+            }),
+            "client_disconnected" => Some(CoreError::Cancelled(openproxy_types::CancelReason::ClientDisconnected)),
+            "race_lost" => Some(CoreError::RaceLost),
+        ]
     }
 }
 
