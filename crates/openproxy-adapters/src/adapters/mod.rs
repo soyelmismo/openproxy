@@ -528,6 +528,7 @@ define_provider_adapter! {
         NousResearch(crate::adapters::nous_research::NousResearchAdapter),
         NvidiaNim(crate::adapters::nvidia_nim::NvidiaNimAdapter),
         OllamaCloud(crate::adapters::ollama_cloud::OllamaCloudAdapter),
+        OpenCodeGo(crate::adapters::opencode_go::OpenCodeGoAdapter),
         OpenCodeZen(crate::adapters::opencode_zen::OpenCodeZenAdapter),
                 OpenRouter(crate::adapters::openrouter::OpenRouterAdapter),
         #[cfg(any(test, feature = "test-utils"))]
@@ -560,6 +561,7 @@ pub mod mock;
 pub mod nous_research;
 pub mod nvidia_nim;
 pub mod ollama_cloud;
+pub mod opencode_go;
 pub mod opencode_zen;
 pub mod openrouter;
 
@@ -578,6 +580,7 @@ pub use minimax::MiniMaxAdapter;
 pub use nous_research::NousResearchAdapter;
 pub use nvidia_nim::NvidiaNimAdapter;
 pub use ollama_cloud::OllamaCloudAdapter;
+pub use opencode_go::OpenCodeGoAdapter;
 pub use opencode_zen::OpenCodeZenAdapter;
 pub use openrouter::OpenRouterAdapter;
 
@@ -770,6 +773,7 @@ pub fn builtin_adapters() -> Vec<ProviderAdapterEnum> {
     vec![
         ProviderAdapterEnum::OpenRouter(OpenRouterAdapter::new()),
         ProviderAdapterEnum::MiniMax(MiniMaxAdapter::new()),
+        ProviderAdapterEnum::OpenCodeGo(OpenCodeGoAdapter::new()),
         ProviderAdapterEnum::OpenCodeZen(OpenCodeZenAdapter::new()),
         ProviderAdapterEnum::OllamaCloud(OllamaCloudAdapter::new()),
         ProviderAdapterEnum::NousResearch(NousResearchAdapter::new()),
@@ -990,13 +994,14 @@ mod tests {
     // ---- Factory -----------------------------------------------------
 
     #[test]
-    fn builtin_adapters_returns_twelve() {
+    fn builtin_adapters_returns_thirteen() {
         let v = builtin_adapters();
-        assert_eq!(v.len(), 12);
+        assert_eq!(v.len(), 13);
         let ids: Vec<&str> = v.iter().map(|a| a.id().as_str()).collect();
         assert!(ids.contains(&"openrouter"));
         assert!(ids.contains(&"minimax"));
         assert!(ids.contains(&"opencode-zen"));
+        assert!(ids.contains(&"opencode-go"));
         assert!(ids.contains(&"ollama-cloud"));
         assert!(ids.contains(&"nous-research"));
         assert!(ids.contains(&"nvidia-nim"));

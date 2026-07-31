@@ -32,6 +32,9 @@ impl AdapterFactory {
             "minimax" => {
                 ProviderAdapterEnum::MiniMax(crate::adapters::minimax::MiniMaxAdapter::new())
             }
+            "opencode-go" => ProviderAdapterEnum::OpenCodeGo(
+                crate::adapters::opencode_go::OpenCodeGoAdapter::new(),
+            ),
             "opencode-zen" => ProviderAdapterEnum::OpenCodeZen(
                 crate::adapters::opencode_zen::OpenCodeZenAdapter::new(),
             ),
