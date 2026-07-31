@@ -13,3 +13,7 @@
 
 ## 2024-02-15 - [DoS via unwrap() in tokio::task::spawn_blocking] Vulnerability: [Calling `.unwrap()` on the Result returned by `tokio::task::spawn_blocking` in Axum HTTP handlers can cause a crash and DoS] Learning: [Tokio spawn_blocking can fail and return a JoinError. Unwrapping it causes the server to panic, which malicious users might trigger to DoS the proxy] Prevention: [Always map the `JoinError` to a safe internal API error response, for instance using `.unwrap_or_else(|e| Err(ApiError(CoreError::Internal(format!("spawn_blocking failed: {}", e)))))?`]
 
+## 2026-07-31 - [CRITICAL] DoS via Crash (unwrap) in HTTP handlers
+**Vulnerability:** Use of `unwrap()` on `serde_json::to_string()` result within `openproxy-server/src/handlers/messages.rs` SSE handler.
+**Learning:** Calling `unwrap()` inside HTTP handler contexts can be weaponized into an unauthenticated DoS. If an attacker passes a specially crafted input that causes serialization to fail (e.g. invalid bytes, out of memory), the thread will panic, bringing down the proxy task.
+**Prevention:** Always use `.unwrap_or_else()` with a statically valid JSON fallback string (e.g. `{"type":"error"}`) in HTTP response formatting contexts to ensure safe failure.
