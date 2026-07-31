@@ -18,6 +18,9 @@ impl NvidiaNimAdapter {
         Self {
             config: ProviderAdapterConfig {
                 id: ProviderId::new("nvidia-nim"),
+                name: "NVIDIA NIM".into(),
+                anonymous_fallback: false,
+                rate_limit_scope: "account".into(),
                 base_url: "https://integrate.api.nvidia.com/v1".into(),
                 auth_type: AdapterAuthType::Bearer,
                 format: AdapterFormat::Openai,

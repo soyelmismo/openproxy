@@ -21,6 +21,9 @@ impl OpenCodeZenAdapter {
         Self {
             config: ProviderAdapterConfig {
                 id: ProviderId::new("opencode-zen"),
+                name: "OpenCode Zen".into(),
+                anonymous_fallback: true,
+                rate_limit_scope: "account".into(),
                 base_url: "https://opencode.ai/zen/v1".into(),
                 auth_type: AdapterAuthType::Bearer,
                 format: AdapterFormat::Mixed,

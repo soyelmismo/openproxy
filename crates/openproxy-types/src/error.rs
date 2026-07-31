@@ -4,6 +4,28 @@ use crate::ids::{RequestId, TraceId};
 use std::fmt;
 use thiserror::Error;
 
+/// The reason why a request was cancelled.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CancelReason {
+    ClientDisconnected,
+    WatchdogTimeout,
+}
+
+impl CancelReason {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            CancelReason::ClientDisconnected => "client_disconnected",
+            CancelReason::WatchdogTimeout => "watchdog_timeout",
+        }
+    }
+}
+
+impl fmt::Display for CancelReason {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ErrorContext {
     pub request_id: RequestId,
@@ -88,8 +110,8 @@ pub enum CoreError {
     #[error("parse error: {0}")]
     Parse(String),
 
-    #[error("client disconnected")]
-    ClientDisconnected,
+    #[error("cancelled: {0}")]
+    Cancelled(CancelReason),
 
     #[error("race cancelled: this attempt was a race loser")]
     RaceLost,
@@ -188,7 +210,7 @@ impl CoreError {
                 is_proxy_rotated: *is_proxy_rotated,
             },
             CoreError::Parse(s) => CoreError::Parse(s.clone()),
-            CoreError::ClientDisconnected => CoreError::ClientDisconnected,
+            CoreError::Cancelled(r) => CoreError::Cancelled(*r),
             CoreError::RaceLost => CoreError::RaceLost,
             CoreError::Auth(s) => CoreError::Auth(s.clone()),
             CoreError::Validation(s) => CoreError::Validation(s.clone()),
@@ -215,7 +237,8 @@ impl CoreError {
             CoreError::UpstreamError { status, .. } => *status,
             CoreError::UpstreamTimeout { .. } => 529,
             CoreError::UpstreamConnection(_) | CoreError::NoHealthyTargets(_) => 502,
-            CoreError::ClientDisconnected => 499,
+            CoreError::Cancelled(CancelReason::ClientDisconnected) => 499,
+            CoreError::Cancelled(CancelReason::WatchdogTimeout) => 504,
             CoreError::RaceLost => 499,
             CoreError::Parse(_)
             | CoreError::Database { .. }
@@ -244,7 +267,7 @@ impl CoreError {
             CoreError::UpstreamError { .. } => "upstream_error",
             CoreError::RateLimited { .. } => "rate_limited",
             CoreError::Parse(_) => "parse_error",
-            CoreError::ClientDisconnected => "client_disconnected",
+            CoreError::Cancelled(r) => r.as_str(),
             CoreError::RaceLost => "race_lost",
             CoreError::Database { .. } => "database",
             CoreError::Migration { .. } => "migration",
@@ -275,7 +298,8 @@ mod tests {
             .http_status(),
             429
         );
-        assert_eq!(CoreError::ClientDisconnected.http_status(), 499);
+        assert_eq!(CoreError::Cancelled(CancelReason::ClientDisconnected).http_status(), 499);
+        assert_eq!(CoreError::Cancelled(CancelReason::WatchdogTimeout).http_status(), 504);
         assert_eq!(
             CoreError::UpstreamTimeout {
                 phase: "ttft".into(),
@@ -294,7 +318,7 @@ mod tests {
             CoreError::Validation("x".into()),
             CoreError::ProviderNotFound("x".into()),
             CoreError::RaceLost,
-            CoreError::ClientDisconnected,
+            CoreError::Cancelled(CancelReason::ClientDisconnected),
         ] {
             codes.insert(err.code());
         }

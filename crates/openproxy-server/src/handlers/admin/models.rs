@@ -153,7 +153,7 @@ pub(crate) async fn run_test_for_model(
     account_id: Option<AccountId>,
     proxy_url: Option<String>,
     opts: TestOptions,
-    cancel_rx: Option<tokio::sync::watch::Receiver<bool>>,
+    cancel_rx: Option<tokio::sync::watch::Receiver<Option<openproxy_types::CancelReason>>>,
 ) -> TestResult {
     use openproxy_adapters::adapters::gemini::openai_to_gemini;
     use openproxy_pipeline::translation::openai_to_anthropic;
@@ -498,7 +498,7 @@ pub(crate) async fn run_test_for_model(
         );
         let mut responses_req = openai_req.clone();
         responses_req.max_tokens = None;
-        let (_cancel_tx, client_disconnected) = tokio::sync::watch::channel(false);
+        let (_cancel_tx, client_disconnected) = tokio::sync::watch::channel::<Option<openproxy_types::CancelReason>>(None);
         let pipeline_req = openproxy_pipeline::PipelineRequest {
             request_id: RequestId::new(),
             trace_id: TraceId::new(),
@@ -698,12 +698,12 @@ pub(crate) async fn run_test_for_model(
     if let Some(mut rx) = cancel_rx.clone() {
         let rx_cancel = cancel.clone();
         tokio::spawn(async move {
-            if *rx.borrow() {
+            if rx.borrow().is_some() {
                 rx_cancel.cancel();
                 return;
             }
             while rx.changed().await.is_ok() {
-                if *rx.borrow() {
+                if rx.borrow().is_some() {
                     rx_cancel.cancel();
                     return;
                 }

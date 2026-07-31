@@ -19,6 +19,9 @@ impl KilocodeAdapter {
         Self {
             config: ProviderAdapterConfig {
                 id: ProviderId::new("kilocode"),
+                name: "Kilocode".into(),
+                anonymous_fallback: false,
+                rate_limit_scope: "account".into(),
                 base_url: "https://api.kilo.ai/api/openrouter/v1".into(),
                 auth_type: AdapterAuthType::Bearer,
                 format: AdapterFormat::Openai,

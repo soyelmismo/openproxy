@@ -21,8 +21,11 @@ impl KiroAdapter {
         Self {
             config: ProviderAdapterConfig {
                 id: ProviderId::new("kiro"),
+                name: "Kiro AI".into(),
+                anonymous_fallback: false,
+                rate_limit_scope: "account".into(),
                 base_url: "https://codewhisperer.us-east-1.amazonaws.com".into(),
-                auth_type: AdapterAuthType::Bearer,
+                auth_type: AdapterAuthType::OAuth,
                 format: AdapterFormat::Openai,
                 extra_headers: vec![],
             },
@@ -90,8 +93,8 @@ impl ProviderAdapter for KiroAdapter {
 
     fn metadata(&self) -> openproxy_types::ProviderMetadata {
         let mut meta = openproxy_types::ProviderMetadata {
-            built_in: openproxy_types::is_builtin(self.id().as_str()),
-            deletable: !openproxy_types::is_builtin(self.id().as_str()),
+            built_in: true,
+            deletable: false,
             supports_quota: true,
             quota_refresh_supported: true,
             requires_oauth: true,

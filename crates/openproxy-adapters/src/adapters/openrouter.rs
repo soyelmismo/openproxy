@@ -19,6 +19,9 @@ impl OpenRouterAdapter {
         Self {
             config: ProviderAdapterConfig {
                 id: ProviderId::new("openrouter"),
+                name: "OpenRouter".into(),
+                anonymous_fallback: false,
+                rate_limit_scope: "account".into(),
                 base_url: "https://openrouter.ai/api/v1".into(),
                 auth_type: AdapterAuthType::Bearer,
                 format: AdapterFormat::Openai,
@@ -44,8 +47,8 @@ impl ProviderAdapter for OpenRouterAdapter {
 
     fn metadata(&self) -> openproxy_types::ProviderMetadata {
         let mut meta = openproxy_types::ProviderMetadata::custom_default();
-        meta.built_in = openproxy_types::is_builtin(self.id().as_str());
-        meta.deletable = !openproxy_types::is_builtin(self.id().as_str());
+        meta.built_in = true;
+        meta.deletable = false;
         meta.supports_quota = true;
         meta.quota_refresh_supported = true;
         meta

@@ -20,6 +20,9 @@ impl GeminiAdapter {
         Self {
             config: ProviderAdapterConfig {
                 id: ProviderId::new("gemini"),
+                name: "Google Gemini".into(),
+                anonymous_fallback: false,
+                rate_limit_scope: "account".into(),
                 base_url: "https://generativelanguage.googleapis.com/v1beta".into(),
                 auth_type: AdapterAuthType::GoogApiKey,
                 format: AdapterFormat::Gemini,

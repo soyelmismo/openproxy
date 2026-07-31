@@ -43,7 +43,7 @@ pub struct PipelineRequest {
     pub trace_id: TraceId,
     pub combo_id: ComboId,
     pub openai_request: Arc<openproxy_types::OpenAIRequest>,
-    pub client_disconnected: tokio::sync::watch::Receiver<bool>,
+    pub client_disconnected: tokio::sync::watch::Receiver<Option<openproxy_types::CancelReason>>,
     pub stream_sink: Option<crate::race_sink::StreamSink>,
     pub api_key_id: Option<ApiKeyId>,
     pub race_cancel: Option<openproxy_adapters::upstream::CancellationToken>,

@@ -396,12 +396,12 @@ async fn call_oauth_endpoint(
         .call(req, TimeoutProfile::OAuth, cancel)
         .await
         .map_err(|e| match e {
-            UpstreamError::Cancel => CoreError::ClientDisconnected,
+            UpstreamError::Cancel => CoreError::Cancelled(openproxy_types::CancelReason::ClientDisconnected),
             other => CoreError::UpstreamConnection(format!("{} {purpose}: {other}", spec.id)),
         })?;
     let status = response.status;
     let body = response.collect().await.map_err(|e| match e {
-        UpstreamError::Cancel => CoreError::ClientDisconnected,
+        UpstreamError::Cancel => CoreError::Cancelled(openproxy_types::CancelReason::ClientDisconnected),
         other => CoreError::UpstreamConnection(format!("{} {purpose} body read: {other}", spec.id)),
     })?;
 

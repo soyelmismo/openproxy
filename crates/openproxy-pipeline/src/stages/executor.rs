@@ -66,7 +66,7 @@ impl PipelineStage for UpstreamExecutorStage {
                 let mut rx = ctx.req.client_disconnected.clone();
                 ctx.pipeline.is_client_disconnected(&mut rx)
             };
-            if client_disconnected {
+            if let Some(reason) = client_disconnected {
                 tracing::warn!(
                     combo_id = combo.id.0,
                     target_id = target.target.id.0,
@@ -74,7 +74,7 @@ impl PipelineStage for UpstreamExecutorStage {
                     attempt = ctx.attempt,
                     "client cancelled between targets; aborting pipeline"
                 );
-                return Ok(ctx.pipeline.client_disconnected_result(ctx.attempt));
+                return Ok(ctx.pipeline.client_disconnected_result(ctx.attempt, reason));
             }
 
             let policy = RetryPolicy::from_config(&ctx.pipeline.config.retries);
@@ -107,8 +107,15 @@ impl PipelineStage for UpstreamExecutorStage {
                     let mut rx = ctx.req.client_disconnected.clone();
                     ctx.pipeline.is_client_disconnected(&mut rx)
                 };
-                if client_disconnected {
-                    break;
+                if let Some(reason) = client_disconnected {
+                    tracing::warn!(
+                        combo_id = combo.id.0,
+                        target_id = target.target.id.0,
+                        provider = %target.target.provider_id,
+                        attempt = ctx.attempt,
+                        "client cancelled before target dispatch"
+                    );
+                    return Ok(ctx.pipeline.client_disconnected_result(ctx.attempt, reason));
                 }
                 let delay = match policy.delay_after_attempt(target_local_retry_count) {
                     Some(d) => d,

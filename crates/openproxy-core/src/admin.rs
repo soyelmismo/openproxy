@@ -1550,7 +1550,7 @@ mod tests {
         crate::seed::seed_builtin_providers(&conn).expect("seed builtins");
 
         for builtin_id in crate::seed::builtin_provider_ids() {
-            let id = ProviderId::new(*builtin_id);
+            let id = ProviderId::new(&builtin_id);
             let err = delete_provider(&conn, &id).expect_err("built-in delete must fail");
             match &err {
                 CoreError::Validation(msg) => {
@@ -1560,7 +1560,7 @@ mod tests {
                         msg
                     );
                     assert!(
-                        msg.contains(builtin_id),
+                        msg.contains(&builtin_id),
                         "error message should name the provider, got: {}",
                         msg
                     );

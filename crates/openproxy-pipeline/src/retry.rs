@@ -65,7 +65,7 @@ impl RetryPolicy {
             }
             RateLimited { .. } => true,
             UpstreamError { .. } => true,
-            ClientDisconnected => false,
+            Cancelled(_) => false,
             RaceLost => false,
             _ => true,
         }

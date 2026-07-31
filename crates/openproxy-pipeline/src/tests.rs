@@ -209,7 +209,7 @@ fn seed_provider(conn: &Connection, provider_id: &str, auth_type: AuthType) {
 
 /// Build a `PipelineRequest` with sensible defaults.
 fn make_request(combo_id: ComboId) -> (PipelineRequest, watch::Sender<bool>) {
-    let (_dis_tx, dis_rx) = watch::channel(false);
+    let (_dis_tx, dis_rx) = watch::channel::<Option<openproxy_types::CancelReason>>(None);
     let req = PipelineRequest {
         request_id: RequestId::new(),
         trace_id: TraceId::new(),

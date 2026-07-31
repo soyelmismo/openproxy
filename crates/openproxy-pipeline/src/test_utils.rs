@@ -198,8 +198,8 @@ pub fn seed_provider_and_model(
 }
 
 /// Build a `PipelineRequest` with sensible defaults.
-pub fn make_request(combo_id: ComboId) -> (PipelineRequest, watch::Sender<bool>) {
-    let (_dis_tx, dis_rx) = watch::channel(false);
+pub fn make_request(combo_id: ComboId) -> (PipelineRequest, watch::Sender<Option<openproxy_types::CancelReason>>) {
+    let (_dis_tx, dis_rx) = watch::channel::<Option<openproxy_types::CancelReason>>(None);
     let req = PipelineRequest {
         request_id: RequestId::new(),
         trace_id: TraceId::new(),
@@ -335,10 +335,13 @@ pub fn test_config_with_mock(master_key: Arc<MasterKey>, base_url: String) -> Pi
     let mock = MockAdapter {
         config: ProviderAdapterConfig {
             id: ProviderId::new("mock-openai"),
+            name: "Mock OpenAI".to_string(),
             base_url,
             auth_type: AdapterAuthType::Bearer,
             format: AdapterFormat::Openai,
             extra_headers: Vec::new(),
+            anonymous_fallback: false,
+            rate_limit_scope: "account".into(),
         },
         call_count: None,
         fail_fetch: false,

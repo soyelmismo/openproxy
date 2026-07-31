@@ -21,6 +21,9 @@ impl OpenCodeGoAdapter {
         Self {
             config: ProviderAdapterConfig {
                 id: ProviderId::new("opencode-go"),
+                name: "OpenCode Go".into(),
+                anonymous_fallback: true,
+                rate_limit_scope: "account".into(),
                 base_url: "https://opencode.ai/zen/go/v1".into(),
                 auth_type: AdapterAuthType::Bearer,
                 format: AdapterFormat::Mixed,

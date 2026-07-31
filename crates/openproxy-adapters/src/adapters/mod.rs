@@ -29,10 +29,13 @@ use std::sync::Arc;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProviderAdapterConfig {
     pub id: ProviderId,
+    pub name: String,
     pub base_url: String,
     pub auth_type: AdapterAuthType,
     pub format: AdapterFormat,
     pub extra_headers: Vec<(String, String)>,
+    pub anonymous_fallback: bool,
+    pub rate_limit_scope: String,
 }
 
 /// How the adapter encodes the API key in the HTTP request.
@@ -45,8 +48,22 @@ pub enum AdapterAuthType {
     XApiKey,
     /// `x-goog-api-key: <key>` (Google Gemini API)
     GoogApiKey,
+    /// OAuth token flow
+    OAuth,
     /// No auth header sent (anonymous access).
     None,
+}
+
+impl AdapterAuthType {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            AdapterAuthType::Bearer => "bearer",
+            AdapterAuthType::XApiKey => "x-api-key",
+            AdapterAuthType::GoogApiKey => "goog-api-key",
+            AdapterAuthType::OAuth => "oauth",
+            AdapterAuthType::None => "none",
+        }
+    }
 }
 
 /// Native wire format the provider speaks for chat completions.
@@ -64,6 +81,18 @@ pub enum AdapterFormat {
     Responses,
 }
 
+impl AdapterFormat {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            AdapterFormat::Openai => "openai",
+            AdapterFormat::Anthropic => "anthropic",
+            AdapterFormat::Mixed => "mixed",
+            AdapterFormat::Gemini => "gemini",
+            AdapterFormat::Responses => "responses",
+        }
+    }
+}
+
 /// Per-provider adapter. One concrete impl per upstream.
 ///
 /// All methods are `&self` and the trait is `Send + Sync` so adapters can live
@@ -79,7 +108,7 @@ pub trait ProviderAdapter: Send + Sync {
 
     /// Provider metadata for frontend/admin
     fn metadata(&self) -> ProviderMetadata {
-        let built_in = openproxy_types::is_builtin(self.id().as_str());
+        let built_in = true;
         ProviderMetadata {
             built_in,
             deletable: !built_in,
@@ -175,7 +204,7 @@ pub trait ProviderAdapter: Send + Sync {
     /// API key.
     fn build_auth_header(&self, api_key: &str) -> Option<(String, String)> {
         match self.config().auth_type {
-            AdapterAuthType::Bearer => {
+            AdapterAuthType::Bearer | AdapterAuthType::OAuth => {
                 Some(("Authorization".into(), format!("Bearer {}", api_key)))
             }
             AdapterAuthType::GoogApiKey => Some(("x-goog-api-key".into(), api_key.to_string())),
@@ -513,6 +542,12 @@ macro_rules! define_provider_adapter {
             }
         }
     }
+}
+
+pub fn is_anonymous_fallback(provider_id: &str) -> bool {
+    builtin_adapters()
+        .iter()
+        .any(|a| a.config().id.0 == provider_id && a.config().anonymous_fallback)
 }
 
 define_provider_adapter! {

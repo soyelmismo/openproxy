@@ -22,8 +22,11 @@ impl AntigravityAdapter {
         Self {
             config: ProviderAdapterConfig {
                 id: ProviderId::new("antigravity"),
+                name: "Google Antigravity".into(),
+                anonymous_fallback: false,
+                rate_limit_scope: "account".into(),
                 base_url: DEFAULT_ANTIGRAVITY_BASE_URL.into(),
-                auth_type: AdapterAuthType::Bearer,
+                auth_type: AdapterAuthType::OAuth,
                 format: AdapterFormat::Gemini,
                 extra_headers: vec![],
             },
@@ -123,8 +126,8 @@ impl ProviderAdapter for AntigravityAdapter {
 
     fn metadata(&self) -> openproxy_types::ProviderMetadata {
         let mut meta = openproxy_types::ProviderMetadata {
-            built_in: openproxy_types::is_builtin(self.id().as_str()),
-            deletable: !openproxy_types::is_builtin(self.id().as_str()),
+            built_in: true,
+            deletable: false,
             supports_quota: true,
             quota_refresh_supported: true,
             requires_oauth: true,
@@ -427,7 +430,7 @@ impl AntigravityAdapter {
             let cancel = CancellationToken::new();
             let response = match upstream.call(req, TimeoutProfile::Quota, cancel).await {
                 Ok(r) => r,
-                Err(UpstreamError::Cancel) => return Err(CoreError::ClientDisconnected),
+                Err(UpstreamError::Cancel) => return Err(CoreError::Cancelled(openproxy_types::CancelReason::ClientDisconnected)),
                 Err(e) => {
                     last_err = Some(CoreError::UpstreamConnection(format!(
                         "retrieveUserQuotaSummary: {e}"

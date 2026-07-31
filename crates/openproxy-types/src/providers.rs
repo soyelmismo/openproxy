@@ -40,27 +40,7 @@ impl ProviderMetadata {
     }
 }
 
-pub fn builtin_provider_ids() -> &'static [&'static str] {
-    &[
-        "openrouter",
-        "minimax",
-        "opencode-zen",
-        "opencode-go",
-        "ollama-cloud",
-        "nous-research",
-        "nvidia-nim",
-        "kilocode",
-        "gemini",
-        "antigravity",
-        "codex",
-        "kiro",
-        "cloudflare-workers-ai",
-    ]
-}
 
-pub fn is_builtin(id: &str) -> bool {
-    builtin_provider_ids().contains(&id)
-}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]

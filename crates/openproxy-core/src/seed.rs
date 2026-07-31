@@ -19,194 +19,11 @@ use crate::ids::ProviderId;
 use crate::providers::{self, AuthType, ProviderFormat};
 use rusqlite::{Connection, params};
 
-/// Row describing a built-in provider preset.
-///
-/// The fields mirror the columns of the `providers` table, in insertion
-/// order. The list is computed once per call to [`seed_builtin_providers`]
-/// rather than stored in a `static` so the compiler doesn't have to
-/// parse a long tuple-typed array literal.
-struct Builtin<'a> {
-    id: &'a str,
-    name: &'a str,
-    base_url: &'a str,
-    auth_type: &'a str,
-    format: &'a str,
-    extra_headers_json: Option<&'a str>,
-    /// Optional substring matched against discovered `model_id`s to
-    /// decide whether each new row is active after a refresh. `None`
-    /// leaves all discovered models active.
-    auto_activate_keyword: Option<&'a str>,
-    rate_limit_scope: &'a str,
-}
-
-const BUILTINS: &[Builtin<'static>] = &[
-    Builtin {
-        id: "openrouter",
-        name: "OpenRouter",
-        base_url: "https://openrouter.ai/api/v1",
-        auth_type: "bearer",
-        format: "openai",
-        extra_headers_json: Some(
-            r#"{"HTTP-Referer":"https://openproxy.local","X-Title":"openproxy"}"#,
-        ),
-        auto_activate_keyword: None,
-        rate_limit_scope: "account",
-    },
-    Builtin {
-        id: "minimax",
-        name: "MiniMax Coding",
-        base_url: "https://api.minimax.io/anthropic/v1",
-        auth_type: "bearer",
-        format: "anthropic",
-        extra_headers_json: Some(r#"{"Anthropic-Version":"2023-06-01"}"#),
-        auto_activate_keyword: None,
-        rate_limit_scope: "account",
-    },
-    Builtin {
-        id: "opencode-zen",
-        name: "OpenCode Zen",
-        base_url: "https://opencode.ai/zen/v1",
-        auth_type: "bearer",
-        format: "mixed",
-        extra_headers_json: None,
-        auto_activate_keyword: None,
-        rate_limit_scope: "account",
-    },
-    Builtin {
-        id: "opencode-go",
-        name: "OpenCode Go",
-        base_url: "https://opencode.ai/zen/go/v1",
-        auth_type: "bearer",
-        format: "mixed",
-        extra_headers_json: None,
-        auto_activate_keyword: None,
-        rate_limit_scope: "account",
-    },
-    Builtin {
-        id: "ollama-cloud",
-        name: "Ollama Cloud",
-        base_url: "https://ollama.com/v1",
-        auth_type: "bearer",
-        format: "openai",
-        extra_headers_json: None,
-        auto_activate_keyword: None,
-        rate_limit_scope: "account",
-    },
-    Builtin {
-        id: "nous-research",
-        name: "Nous Research",
-        base_url: "https://inference-api.nousresearch.com/v1",
-        auth_type: "bearer",
-        format: "openai",
-        extra_headers_json: None,
-        auto_activate_keyword: None,
-        rate_limit_scope: "account",
-    },
-    Builtin {
-        id: "nvidia-nim",
-        name: "NVIDIA NIM",
-        base_url: "https://integrate.api.nvidia.com/v1",
-        auth_type: "bearer",
-        format: "openai",
-        extra_headers_json: None,
-        auto_activate_keyword: None,
-        rate_limit_scope: "account",
-    },
-    Builtin {
-        id: "kilocode",
-        name: "Kilocode",
-        base_url: "https://api.kilo.ai/api/openrouter/v1",
-        auth_type: "bearer",
-        format: "openai",
-        extra_headers_json: None,
-        auto_activate_keyword: None,
-        rate_limit_scope: "account",
-    },
-    Builtin {
-        id: "gemini",
-        name: "Gemini (Google AI Studio)",
-        base_url: "https://generativelanguage.googleapis.com/v1beta",
-        auth_type: "goog-api-key",
-        format: "gemini",
-        extra_headers_json: None,
-        auto_activate_keyword: None,
-        rate_limit_scope: "account",
-    },
-    Builtin {
-        id: "antigravity",
-        name: "Antigravity (Cloud Code)",
-        base_url: "https://daily-cloudcode-pa.googleapis.com",
-        auth_type: "oauth",
-        format: "gemini",
-        extra_headers_json: None,
-        auto_activate_keyword: None,
-        rate_limit_scope: "model",
-    },
-    Builtin {
-        id: "codex",
-        name: "Codex (ChatGPT)",
-        base_url: "https://chatgpt.com/backend-api/codex",
-        auth_type: "oauth",
-        format: "responses",
-        extra_headers_json: None,
-        auto_activate_keyword: None,
-        rate_limit_scope: "account",
-    },
-    Builtin {
-        id: "kiro",
-        name: "Kiro AI",
-        base_url: "https://codewhisperer.us-east-1.amazonaws.com",
-        auth_type: "oauth",
-        format: "openai",
-        extra_headers_json: None,
-        auto_activate_keyword: None,
-        rate_limit_scope: "account",
-    },
-    Builtin {
-        id: "cloudflare-workers-ai",
-        name: "CloudFlare Workers AI",
-        base_url: "https://api.cloudflare.com/client/v4/accounts/${account_label}/ai/v1",
-        auth_type: "bearer",
-        format: "openai",
-        extra_headers_json: None,
-        auto_activate_keyword: None,
-        rate_limit_scope: "account",
-    },
-];
-
-/// Returns the IDs of the built-in providers.
-///
-/// These are the providers that ship with the binary and are seeded
-/// into the `providers` table on first run. They are **inborrables**
-/// (cannot be deleted) because removing the row would leave dangling
-/// references in [`openproxy_adapters::adapters::builtin_adapters`] — the adapter
-/// registry still holds a clone of the id and would panic on a
-/// routing attempt for a provider that no longer exists. The
-/// `delete_provider` admin path therefore rejects built-in ids with
-/// a 400 (Validation) instructing the operator to use the
-/// "Deactivate" endpoint instead, which is the reversible
-/// alternative: it flips the `active` bit to `0` and combo-target
-/// lookups skip the provider, but the row (and its accounts/models)
-/// stays in the DB so it can be reactivated later.
-///
-/// Custom (operator-created) providers are not in this list and can
-/// be deleted normally.
-pub fn builtin_provider_ids() -> &'static [&'static str] {
-    &[
-        "openrouter",
-        "minimax",
-        "opencode-zen",
-        "opencode-go",
-        "ollama-cloud",
-        "nous-research",
-        "nvidia-nim",
-        "kilocode",
-        "gemini",
-        "antigravity",
-        "codex",
-        "kiro",
-        "cloudflare-workers-ai",
-    ]
+pub fn builtin_provider_ids() -> Vec<String> {
+    openproxy_adapters::adapters::builtin_adapters()
+        .iter()
+        .map(|a| a.config().id.0.clone())
+        .collect()
 }
 
 /// The id of the synthetic "combo" provider row used as a placeholder
@@ -223,7 +40,7 @@ pub const VIRTUAL_COMBO_PROVIDER_ID: &str = "combo";
 /// providers? Used by the admin handlers to reject delete attempts
 /// on built-ins (see [`builtin_provider_ids`] for the rationale).
 pub fn is_builtin(id: &str) -> bool {
-    builtin_provider_ids().contains(&id)
+    builtin_provider_ids().iter().any(|s| s == id)
 }
 
 /// Insert any missing built-in providers. Returns the number of rows
@@ -246,8 +63,10 @@ pub fn is_builtin(id: &str) -> bool {
 pub fn seed_builtin_providers(conn: &Connection) -> Result<usize> {
     let mut seeded = 0;
 
-    for b in BUILTINS {
-        let id_typed = ProviderId::new(b.id);
+    let adapters = openproxy_adapters::adapters::builtin_adapters();
+    for adapter in adapters {
+        let conf = adapter.config();
+        let id_typed = conf.id.clone();
 
         // Skip if the row already exists. `providers::get` returns
         // `Ok(None)` for a missing id, so the `?` only fires on a real
@@ -256,24 +75,27 @@ pub fn seed_builtin_providers(conn: &Connection) -> Result<usize> {
             continue;
         }
 
-        // The strings in `BUILTINS` are static and known-valid; a
-        // `Validation` here would be a programmer error in this file,
-        // not a user mistake, so we surface it unwrapped (the caller's
-        // `?` will turn it into a 500 with a clear message).
-        let auth = AuthType::parse(b.auth_type).expect("builtin auth_type is valid");
-        let fmt = ProviderFormat::parse(b.format).expect("builtin format is valid");
+        let auth = AuthType::parse(conf.auth_type.as_str()).expect("builtin auth_type is valid");
+        let fmt = ProviderFormat::parse(conf.format.as_str()).expect("builtin format is valid");
+
+        let extra_headers = if conf.extra_headers.is_empty() {
+            None
+        } else {
+            let map: std::collections::HashMap<_, _> = conf.extra_headers.iter().cloned().collect();
+            Some(serde_json::to_string(&map).unwrap())
+        };
 
         providers::create(
             conn,
             providers::NewProvider {
                 id: &id_typed,
-                name: b.name,
-                base_url: b.base_url,
+                name: &conf.name,
+                base_url: &conf.base_url,
                 auth_type: auth,
                 format: fmt,
-                extra_headers_json: b.extra_headers_json,
-                auto_activate_keyword: b.auto_activate_keyword,
-                rate_limit_scope: providers::RateLimitScope::parse(b.rate_limit_scope)
+                extra_headers_json: extra_headers.as_deref(),
+                auto_activate_keyword: None, // could be added to config if needed
+                rate_limit_scope: providers::RateLimitScope::parse(&conf.rate_limit_scope)
                     .expect("builtin scope is valid"),
             },
         )?;
@@ -559,24 +381,24 @@ mod tests {
         // remembered here.
         let ids = builtin_provider_ids();
         assert_eq!(ids.len(), 13);
-        assert!(ids.contains(&"openrouter"));
-        assert!(ids.contains(&"minimax"));
-        assert!(ids.contains(&"opencode-zen"));
-        assert!(ids.contains(&"ollama-cloud"));
-        assert!(ids.contains(&"nous-research"));
-        assert!(ids.contains(&"nvidia-nim"));
-        assert!(ids.contains(&"kilocode"));
-        assert!(ids.contains(&"gemini"));
-        assert!(ids.contains(&"antigravity"));
-        assert!(ids.contains(&"codex"));
-        assert!(ids.contains(&"kiro"));
-        assert!(ids.contains(&"cloudflare-workers-ai"));
+        assert!(ids.iter().any(|s| s == "openrouter"));
+        assert!(ids.iter().any(|s| s == "minimax"));
+        assert!(ids.iter().any(|s| s == "opencode-zen"));
+        assert!(ids.iter().any(|s| s == "ollama-cloud"));
+        assert!(ids.iter().any(|s| s == "nous-research"));
+        assert!(ids.iter().any(|s| s == "nvidia-nim"));
+        assert!(ids.iter().any(|s| s == "kilocode"));
+        assert!(ids.iter().any(|s| s == "gemini"));
+        assert!(ids.iter().any(|s| s == "antigravity"));
+        assert!(ids.iter().any(|s| s == "codex"));
+        assert!(ids.iter().any(|s| s == "kiro"));
+        assert!(ids.iter().any(|s| s == "cloudflare-workers-ai"));
     }
 
     #[test]
     fn is_builtin_matches_list() {
         for id in builtin_provider_ids() {
-            assert!(is_builtin(id), "{} should be marked built-in", id);
+            assert!(is_builtin(&id), "{} should be marked built-in", id);
         }
         // A handful of negative cases: built-in predicate must not
         // match custom ids (the same string used by `create_provider`)

@@ -32,8 +32,11 @@ impl CodexAdapter {
         Self {
             config: ProviderAdapterConfig {
                 id: ProviderId::new("codex"),
+                name: "Codex".into(),
+                anonymous_fallback: false,
+                rate_limit_scope: "account".into(),
                 base_url: "https://chatgpt.com/backend-api/codex".into(),
-                auth_type: AdapterAuthType::Bearer,
+                auth_type: AdapterAuthType::OAuth,
                 format: AdapterFormat::Responses,
                 extra_headers: vec![],
             },
@@ -98,8 +101,8 @@ impl ProviderAdapter for CodexAdapter {
 
     fn metadata(&self) -> openproxy_types::ProviderMetadata {
         openproxy_types::ProviderMetadata {
-            built_in: openproxy_types::is_builtin(self.id().as_str()),
-            deletable: !openproxy_types::is_builtin(self.id().as_str()),
+            built_in: true,
+            deletable: false,
             supports_quota: true,
             quota_refresh_supported: true,
             requires_oauth: true,

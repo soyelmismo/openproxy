@@ -246,7 +246,7 @@ fn calculate_watchdog_budget(state: &AppState, headers: &HeaderMap) -> u64 {
 
 fn spawn_watchdog(
     done_rx: tokio::sync::oneshot::Receiver<()>,
-    watchdog_tx: tokio::sync::watch::Sender<bool>,
+    watchdog_tx: tokio::sync::watch::Sender<Option<openproxy_types::CancelReason>>,
     budget_ms: u64,
 ) {
     tokio::spawn(async move {
@@ -257,7 +257,7 @@ fn spawn_watchdog(
                     budget_ms,
                     "watchdog timer fired — cancelling pipeline (this is a total-budget timeout, NOT a client disconnect)"
                 );
-                let _ = watchdog_tx.send(true);
+                let _ = watchdog_tx.send(Some(openproxy_types::CancelReason::WatchdogTimeout));
             }
         }
     });

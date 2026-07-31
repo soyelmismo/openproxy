@@ -233,7 +233,7 @@ pub fn error_priority(err: &CoreError) -> u8 {
         UpstreamConnection(_) => 4,
         UpstreamError { .. } => 5, // residual 1xx/3xx — shouldn't reach here
         Parse(_) => 5,
-        RaceLost | ClientDisconnected => 6,
+        RaceLost | Cancelled(_) => 6,
         _ => 6,
     }
 }

@@ -384,7 +384,7 @@ impl PipelineStage for DispatchStage {
 
         if let Some(aid) = target.account_id {
             match &result.error {
-                Some(CoreError::ClientDisconnected) => {
+                Some(CoreError::Cancelled(openproxy_types::CancelReason::ClientDisconnected)) => {
                     tracing::debug!(
                         account_id = aid.0,
                         "client cancelled; leaving circuit breaker untouched"

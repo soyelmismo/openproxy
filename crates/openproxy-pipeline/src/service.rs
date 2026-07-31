@@ -488,7 +488,7 @@ impl tower::Service<PipelineState> for RoutingService {
                     let mut rx = state.req.client_disconnected.clone();
                     pipeline.is_client_disconnected(&mut rx)
                 };
-                if client_disconnected {
+                if let Some(reason) = client_disconnected {
                     tracing::warn!(
                         combo_id = combo.id.0,
                         target_id = target.target.id.0,
@@ -496,7 +496,7 @@ impl tower::Service<PipelineState> for RoutingService {
                         attempt = overall_attempt,
                         "client cancelled between targets; aborting pipeline"
                     );
-                    return Ok(pipeline.client_disconnected_result(overall_attempt));
+                    return Ok(pipeline.client_disconnected_result(overall_attempt, reason));
                 }
 
                 let policy = crate::retry::RetryPolicy::from_config(&pipeline.config.retries);
@@ -532,8 +532,15 @@ impl tower::Service<PipelineState> for RoutingService {
                         let mut rx = state.req.client_disconnected.clone();
                         pipeline.is_client_disconnected(&mut rx)
                     };
-                    if client_disconnected {
-                        break;
+                    if let Some(reason) = client_disconnected {
+                        tracing::warn!(
+                            combo_id = combo.id.0,
+                            target_id = target.target.id.0,
+                            provider = %target.target.provider_id,
+                            attempt = overall_attempt,
+                            "client cancelled while waiting for cooldown; aborting pipeline"
+                        );
+                        return Ok(pipeline.client_disconnected_result(overall_attempt, reason));
                     }
                     let delay = match policy.delay_after_attempt(target_local_retry_count) {
                         Some(d) => d,

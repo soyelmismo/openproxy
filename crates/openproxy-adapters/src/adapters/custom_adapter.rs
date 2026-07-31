@@ -62,10 +62,13 @@ impl CustomAdapter {
         Self {
             config: ProviderAdapterConfig {
                 id: provider.id.clone(),
+                name: provider.name.clone(),
                 base_url: provider.base_url.clone(),
                 auth_type,
                 format,
                 extra_headers,
+                anonymous_fallback: false, // Custom adapters don't have this yet, false by default
+                rate_limit_scope: provider.rate_limit_scope.as_str().to_string(),
             },
         }
     }
@@ -103,7 +106,7 @@ impl ProviderAdapter for CustomAdapter {
 
     fn build_auth_header(&self, api_key: &str) -> Option<(String, String)> {
         match self.config.auth_type {
-            AdapterAuthType::Bearer => {
+            AdapterAuthType::Bearer | AdapterAuthType::OAuth => {
                 Some(("Authorization".into(), format!("Bearer {}", api_key)))
             }
             AdapterAuthType::GoogApiKey => Some(("x-goog-api-key".into(), api_key.to_string())),
@@ -153,7 +156,7 @@ impl ProviderAdapter for CustomAdapter {
             vec![]
         } else {
             match self.config.auth_type {
-                AdapterAuthType::Bearer => vec![("Authorization", format!("Bearer {api_key}"))],
+                AdapterAuthType::Bearer | AdapterAuthType::OAuth => vec![("Authorization", format!("Bearer {api_key}"))],
                 AdapterAuthType::XApiKey => vec![("x-api-key", api_key.to_string())],
                 AdapterAuthType::GoogApiKey => vec![("x-goog-api-key", api_key.to_string())],
                 AdapterAuthType::None => vec![],
@@ -250,10 +253,13 @@ mod tests {
     fn test_build_chat_url() {
         let adapter = CustomAdapter::from_config(ProviderAdapterConfig {
             id: ProviderId::new("test"),
+            name: "Test".to_string(),
             base_url: "https://api.test.com/v1".to_string(),
             auth_type: AdapterAuthType::Bearer,
             format: AdapterFormat::Mixed,
             extra_headers: vec![],
+            anonymous_fallback: false,
+            rate_limit_scope: "account".into(),
         });
 
         let model = ModelId::new("model-a");

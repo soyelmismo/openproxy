@@ -166,13 +166,13 @@ async fn register_oidc_client(
         .call(register_req, TimeoutProfile::OAuth, cancel.clone())
         .await
         .map_err(|e| match e {
-            UpstreamError::Cancel => CoreError::ClientDisconnected,
+            UpstreamError::Cancel => CoreError::Cancelled(openproxy_types::CancelReason::ClientDisconnected),
             other => CoreError::UpstreamConnection(format!("kiro client register: {other}")),
         })?;
 
     let register_status = register_response.status;
     let register_body = register_response.collect().await.map_err(|e| match e {
-        UpstreamError::Cancel => CoreError::ClientDisconnected,
+        UpstreamError::Cancel => CoreError::Cancelled(openproxy_types::CancelReason::ClientDisconnected),
         other => CoreError::UpstreamConnection(format!("kiro register body read: {other}")),
     })?;
 
@@ -264,7 +264,7 @@ impl OAuthProvider for KiroOAuthProvider {
             Ok(r) => r,
             Err(e) => {
                 return Err(match e {
-                    UpstreamError::Cancel => CoreError::ClientDisconnected,
+                    UpstreamError::Cancel => CoreError::Cancelled(openproxy_types::CancelReason::ClientDisconnected),
                     other => {
                         CoreError::UpstreamConnection(format!("kiro client register: {other}"))
                     }
@@ -277,7 +277,7 @@ impl OAuthProvider for KiroOAuthProvider {
             Ok(b) => b,
             Err(e) => {
                 return Err(match e {
-                    UpstreamError::Cancel => CoreError::ClientDisconnected,
+                    UpstreamError::Cancel => CoreError::Cancelled(openproxy_types::CancelReason::ClientDisconnected),
                     other => {
                         CoreError::UpstreamConnection(format!("kiro register body read: {other}"))
                     }
@@ -317,7 +317,7 @@ impl OAuthProvider for KiroOAuthProvider {
             Ok(r) => r,
             Err(e) => {
                 return Err(match e {
-                    UpstreamError::Cancel => CoreError::ClientDisconnected,
+                    UpstreamError::Cancel => CoreError::Cancelled(openproxy_types::CancelReason::ClientDisconnected),
                     other => {
                         CoreError::UpstreamConnection(format!("kiro device authorization: {other}"))
                     }
@@ -330,7 +330,7 @@ impl OAuthProvider for KiroOAuthProvider {
             Ok(b) => b,
             Err(e) => {
                 return Err(match e {
-                    UpstreamError::Cancel => CoreError::ClientDisconnected,
+                    UpstreamError::Cancel => CoreError::Cancelled(openproxy_types::CancelReason::ClientDisconnected),
                     other => CoreError::UpstreamConnection(format!(
                         "kiro device auth body read: {other}"
                     )),
@@ -398,7 +398,7 @@ impl OAuthProvider for KiroOAuthProvider {
             Ok(r) => r,
             Err(e) => {
                 return Err(match e {
-                    UpstreamError::Cancel => CoreError::ClientDisconnected,
+                    UpstreamError::Cancel => CoreError::Cancelled(openproxy_types::CancelReason::ClientDisconnected),
                     other => CoreError::UpstreamConnection(format!("kiro device poll: {other}")),
                 });
             }
@@ -409,7 +409,7 @@ impl OAuthProvider for KiroOAuthProvider {
             Ok(b) => b,
             Err(e) => {
                 return Err(match e {
-                    UpstreamError::Cancel => CoreError::ClientDisconnected,
+                    UpstreamError::Cancel => CoreError::Cancelled(openproxy_types::CancelReason::ClientDisconnected),
                     other => CoreError::UpstreamConnection(format!(
                         "kiro device poll body read: {other}"
                     )),
@@ -478,7 +478,7 @@ impl OAuthProvider for KiroOAuthProvider {
                 Ok(r) => r,
                 Err(e) => {
                     return Err(match e {
-                        UpstreamError::Cancel => CoreError::ClientDisconnected,
+                        UpstreamError::Cancel => CoreError::Cancelled(openproxy_types::CancelReason::ClientDisconnected),
                         other => CoreError::UpstreamConnection(format!(
                             "kiro social token refresh: {other}"
                         )),
@@ -491,7 +491,7 @@ impl OAuthProvider for KiroOAuthProvider {
                 Ok(b) => b,
                 Err(e) => {
                     return Err(match e {
-                        UpstreamError::Cancel => CoreError::ClientDisconnected,
+                        UpstreamError::Cancel => CoreError::Cancelled(openproxy_types::CancelReason::ClientDisconnected),
                         other => CoreError::UpstreamConnection(format!(
                             "kiro social token refresh body read: {other}"
                         )),
@@ -563,7 +563,7 @@ impl OAuthProvider for KiroOAuthProvider {
             Ok(r) => r,
             Err(e) => {
                 return Err(match e {
-                    UpstreamError::Cancel => CoreError::ClientDisconnected,
+                    UpstreamError::Cancel => CoreError::Cancelled(openproxy_types::CancelReason::ClientDisconnected),
                     other => CoreError::UpstreamConnection(format!("kiro token refresh: {other}")),
                 });
             }
@@ -574,7 +574,7 @@ impl OAuthProvider for KiroOAuthProvider {
             Ok(b) => b,
             Err(e) => {
                 return Err(match e {
-                    UpstreamError::Cancel => CoreError::ClientDisconnected,
+                    UpstreamError::Cancel => CoreError::Cancelled(openproxy_types::CancelReason::ClientDisconnected),
                     other => CoreError::UpstreamConnection(format!(
                         "kiro token refresh body read: {other}"
                     )),

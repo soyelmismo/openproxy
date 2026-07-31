@@ -20,7 +20,7 @@ pub use usage::{RecentUsageRow, UsageInput, publish_usage_row};
 pub mod endpoint;
 pub use endpoint::EndpointKind;
 
-pub use error::{CoreError, ErrorContext, Result};
+pub use error::{CoreError, ErrorContext, Result, CancelReason};
 pub use ids::{
     AccountId, ApiKeyId, ComboId, ComboTargetId, ModelId, ModelRowId, ProviderId, RequestId,
     TraceId, UsageId,
@@ -31,7 +31,6 @@ pub use message::{
 };
 pub use providers::{
     AuthType, DiscoveredModel, Provider, ProviderFormat, ProviderMetadata, RateLimitScope,
-    builtin_provider_ids, is_builtin,
 };
 pub mod combos;
 pub use capabilities::{

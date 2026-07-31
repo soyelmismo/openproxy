@@ -191,7 +191,7 @@ impl UpstreamDispatcher {
         .unwrap()
     }
 
-    pub(crate) fn is_client_disconnected(&self, rx: &mut watch::Receiver<bool>) -> bool {
+    pub(crate) fn is_client_disconnected(&self, rx: &mut watch::Receiver<Option<openproxy_types::CancelReason>>) -> Option<openproxy_types::CancelReason> {
         *rx.borrow_and_update()
     }
 
@@ -379,11 +379,12 @@ impl UpstreamDispatcher {
         // the chat handler always provides one). Uses the old
         // non-streaming path as a safety net.
         // building the request) we short-circuit to a structured
-        // `ClientDisconnected` result. The pre-flight is the only
-        // place we map `UpstreamError::Cancel` → `ClientDisconnected`
+        // `Cancelled(openproxy_types::CancelReason::ClientDisconnected)` result. The pre-flight is the only
+        // place we map `UpstreamError::Cancel` → `Cancelled(openproxy_types::CancelReason::ClientDisconnected)`
         // — see below for the rationale.
         let send_start = Instant::now();
-        if *req.client_disconnected.borrow() {
+        let client_disconnected = *req.client_disconnected.borrow();
+        if let Some(reason) = client_disconnected {
             let elapsed = send_start.elapsed().as_millis() as u64;
             tracing::warn!(
                 combo_id = combo.id.0,
@@ -397,10 +398,10 @@ impl UpstreamDispatcher {
                 combo,
                 target,
                 dctx.fail_ctx_code(
-                    &CoreError::ClientDisconnected,
+                    &CoreError::Cancelled(reason),
                     Some(elapsed),
                     None,
-                    CoreError::ClientDisconnected.http_status(),
+                    CoreError::Cancelled(reason).http_status(),
                 ),
             );
         }
@@ -444,10 +445,10 @@ impl UpstreamDispatcher {
                     combo,
                     target,
                     dctx.fail_ctx_code(
-                        &CoreError::ClientDisconnected,
+                        &CoreError::Cancelled(openproxy_types::CancelReason::ClientDisconnected),
                         Some(connect_and_send_ms),
                         None,
-                        CoreError::ClientDisconnected.http_status(),
+                        CoreError::Cancelled(openproxy_types::CancelReason::ClientDisconnected).http_status(),
                     ),
                 );
             }
@@ -666,10 +667,10 @@ impl UpstreamDispatcher {
                     combo,
                     target,
                     dctx.fail_ctx_code(
-                        &CoreError::ClientDisconnected,
+                        &CoreError::Cancelled(openproxy_types::CancelReason::ClientDisconnected),
                         Some(connect_and_send_ms),
                         Some(ttft_ms),
-                        CoreError::ClientDisconnected.http_status(),
+                        CoreError::Cancelled(openproxy_types::CancelReason::ClientDisconnected).http_status(),
                     ),
                 );
             }
@@ -1173,7 +1174,7 @@ impl UpstreamDispatcher {
                 "stream interrupted — client disconnected after receiving partial content".into(),
             )
         } else {
-            CoreError::ClientDisconnected
+            CoreError::Cancelled(openproxy_types::CancelReason::ClientDisconnected)
         };
         let fail_ctx = dctx.fail_ctx_code(&err, Some(connect_ms), None, 499);
         self.record_and_fail_with_trace_id_and_partial(
@@ -1279,6 +1280,7 @@ impl UpstreamDispatcher {
                         )
                     };
                 }
+                let is_watchdog_fired = watchdog_fired.is_some();
                 tracing::warn!(
                     combo_id = combo.id.0,
                     target_id = target.id.0,
@@ -1287,10 +1289,10 @@ impl UpstreamDispatcher {
                     elapsed_ms = elapsed,
                     connect_ms = connect_ms,
                     ttft_ms = ?ttft_ms,
-                    watchdog_fired,
+                    watchdog_fired = is_watchdog_fired,
                     "sink send failed: Closed — client/proxy disconnected \
                      (elapsed={}ms, connect={}ms, ttft={:?}, watchdog_fired={})",
-                    elapsed, connect_ms, ttft_ms, watchdog_fired
+                    elapsed, connect_ms, ttft_ms, is_watchdog_fired
                 );
                 CoreError::UpstreamConnection(format!(
                     "client disconnected (elapsed={}ms, connect={}ms, ttft={:?}) — \
@@ -1369,10 +1371,11 @@ impl UpstreamDispatcher {
         // Pre-flight check: if the watch has ALREADY flipped to
         // `true` (e.g. the client disconnected while we were
         // building the request) we short-circuit to a structured
-        // `ClientDisconnected` result without spinning up a hyper
+        // `Cancelled(openproxy_types::CancelReason::ClientDisconnected)` result without spinning up a hyper
         // request that we'd cancel 1 ms later.
         let send_start = Instant::now();
-        if *req.client_disconnected.borrow() {
+        let client_disconnected = *req.client_disconnected.borrow();
+        if let Some(reason) = client_disconnected {
             let elapsed = send_start.elapsed().as_millis() as u64;
             tracing::warn!(
                 combo_id = combo.id.0,
@@ -1386,10 +1389,10 @@ impl UpstreamDispatcher {
                 combo,
                 target,
                 dctx.fail_ctx_code(
-                    &CoreError::ClientDisconnected,
+                    &CoreError::Cancelled(reason),
                     Some(elapsed),
                     None,
-                    CoreError::ClientDisconnected.http_status(),
+                    CoreError::Cancelled(reason).http_status(),
                 ),
             );
         }
@@ -1417,7 +1420,7 @@ impl UpstreamDispatcher {
         // the downstream code expects. Mirrors the non-streaming
         // path's mapping 1-to-1: a per-phase `UpstreamPhase` becomes
         // the `phase` label, the `Cancel` variant becomes a
-        // structured `ClientDisconnected` result, and the rest
+        // structured `Cancelled(openproxy_types::CancelReason::ClientDisconnected)` result, and the rest
         // collapse to `UpstreamConnection`. The streaming path
         // doesn't have a "total" pre-migration mapping (it was
         // `phase: "total"` from legacy whole-request timeout),
@@ -1441,10 +1444,10 @@ impl UpstreamDispatcher {
                     combo,
                     target,
                     dctx.fail_ctx_code(
-                        &CoreError::ClientDisconnected,
+                        &CoreError::Cancelled(openproxy_types::CancelReason::ClientDisconnected),
                         Some(connect_and_send_ms),
                         None,
-                        CoreError::ClientDisconnected.http_status(),
+                        CoreError::Cancelled(openproxy_types::CancelReason::ClientDisconnected).http_status(),
                     ),
                 );
             }
@@ -1773,13 +1776,13 @@ impl UpstreamDispatcher {
         }
 
         let client_disconnected = if state.done_sent {
-            false
+            None
         } else {
             let mut rx = req.client_disconnected.clone();
             self.is_client_disconnected(&mut rx)
         };
 
-        if client_disconnected {
+        if let Some(reason) = client_disconnected {
             tracing::warn!(
                 combo_id = combo.id.0,
                 target_id = target.id.0,

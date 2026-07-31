@@ -16,10 +16,13 @@ impl MockAdapter {
         Self {
             config: ProviderAdapterConfig {
                 id: ProviderId::new(id),
+                name: format!("Mock {}", id),
                 base_url,
                 auth_type: AdapterAuthType::Bearer,
                 format,
                 extra_headers: Vec::new(),
+                anonymous_fallback: false,
+                rate_limit_scope: "account".into(),
             },
             call_count: None,
             models_to_return: None,

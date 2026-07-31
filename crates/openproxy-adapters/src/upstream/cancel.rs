@@ -126,9 +126,9 @@ impl CancellationToken {
     /// watch is one-shot from the token's point of view).
     ///
     /// The returned token owns a background task that drives the flip.
-    pub fn from_watch(mut rx: watch::Receiver<bool>) -> Self {
+    pub fn from_watch(mut rx: watch::Receiver<Option<openproxy_types::CancelReason>>) -> Self {
         let token = Self::new();
-        if *rx.borrow_and_update() {
+        if rx.borrow_and_update().is_some() {
             token.cancel();
             return token;
         }
@@ -139,7 +139,7 @@ impl CancellationToken {
             // own deadline). We only cancel when we observe an actual
             // `true` value.
             while rx.changed().await.is_ok() {
-                if *rx.borrow() {
+                if rx.borrow().is_some() {
                     inner.cancel();
                     return;
                 }
@@ -158,11 +158,11 @@ impl CancellationToken {
     /// — losers' HTTP connections are dropped at the transport level,
     /// stopping upstream token generation immediately.
     pub fn from_watch_and_token(
-        mut rx: watch::Receiver<bool>,
+        mut rx: watch::Receiver<Option<openproxy_types::CancelReason>>,
         race_token: CancellationToken,
     ) -> Self {
         let token = Self::new();
-        if *rx.borrow_and_update() || race_token.is_cancelled() {
+        if rx.borrow_and_update().is_some() || race_token.is_cancelled() {
             token.cancel();
             return token;
         }
@@ -179,7 +179,7 @@ impl CancellationToken {
             loop {
                 tokio::select! {
                     res = rx.changed() => {
-                        if res.is_err() || *rx.borrow() {
+                        if res.is_err() || rx.borrow().is_some() {
                             inner.cancel();
                             return;
                         }

@@ -149,7 +149,7 @@ pub async fn start(
     let mut task_count = 0usize;
 
     for pid_str in seed::builtin_provider_ids() {
-        let provider = ProviderId::new(*pid_str);
+        let provider = ProviderId::new(pid_str);
         let adapter = match adapters.iter().find(|a| a.id() == &provider) {
             Some(a) => a.clone(),
             None => {

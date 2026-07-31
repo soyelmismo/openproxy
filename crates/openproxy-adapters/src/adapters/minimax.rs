@@ -22,6 +22,9 @@ impl MiniMaxAdapter {
         Self {
             config: ProviderAdapterConfig {
                 id: ProviderId::new("minimax"),
+                name: "MiniMax Coding".into(),
+                anonymous_fallback: false,
+                rate_limit_scope: "account".into(),
                 base_url: "https://api.minimax.io".into(),
                 auth_type: AdapterAuthType::Bearer,
                 format: AdapterFormat::Anthropic,
@@ -41,8 +44,8 @@ impl ProviderAdapter for MiniMaxAdapter {
 
     fn metadata(&self) -> openproxy_types::ProviderMetadata {
         let mut meta = openproxy_types::ProviderMetadata::custom_default();
-        meta.built_in = openproxy_types::is_builtin(self.id().as_str());
-        meta.deletable = !openproxy_types::is_builtin(self.id().as_str());
+        meta.built_in = true;
+        meta.deletable = false;
         meta.supports_quota = true;
         meta.quota_refresh_supported = true;
         meta
@@ -150,7 +153,7 @@ impl MiniMaxAdapter {
             .call(req, TimeoutProfile::Quota, cancel)
             .await
             .map_err(|e| match e {
-                UpstreamError::Cancel => CoreError::ClientDisconnected,
+                UpstreamError::Cancel => CoreError::Cancelled(openproxy_types::CancelReason::ClientDisconnected),
                 other => CoreError::UpstreamConnection(format!("{}: {}", url, other)),
             })?;
 

@@ -628,7 +628,7 @@ fn core_error_from_code(code: &str, message: &str) -> Option<CoreError> {
             is_proxy_rotated: false,
         }),
         "parse_error" => Some(CoreError::Parse(message.to_string())),
-        "client_disconnected" => Some(CoreError::ClientDisconnected),
+        "client_disconnected" => Some(CoreError::Cancelled(openproxy_types::CancelReason::ClientDisconnected)),
         "race_lost" => Some(CoreError::RaceLost),
         "database" | "migration" => Some(CoreError::Internal(message.to_string())),
         "config" => Some(CoreError::Config(message.to_string())),

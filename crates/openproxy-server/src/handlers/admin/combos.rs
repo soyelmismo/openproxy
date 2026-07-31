@@ -136,7 +136,7 @@ pub async fn test_combo_targets(
                     continue;
                 }
                 if let Some(ref rx) = cancel_rx
-                    && *rx.borrow()
+                    && rx.borrow().is_some()
                 {
                     tracing::info!("test_combo_targets: client disconnected, aborting fan-out");
                     break;

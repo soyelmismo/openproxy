@@ -98,8 +98,8 @@ impl CancelWatchKey {
 ///
 /// Exposed so tests (and the chat handler) can mint a
 /// pre-constructed pair without going through the middleware.
-pub fn new_cancel_pair() -> (watch::Sender<bool>, watch::Receiver<bool>) {
-    watch::channel(false)
+pub fn new_cancel_pair() -> (watch::Sender<Option<openproxy_types::CancelReason>>, watch::Receiver<Option<openproxy_types::CancelReason>>) {
+    watch::channel(None)
 }
 
 /// Axum middleware: see module docs.
@@ -177,7 +177,7 @@ pub async fn client_disconnect_middleware(mut req: Request, next: Next) -> Respo
 #[derive(Debug)]
 pub struct DisconnectBody<B: HttpBody> {
     inner: B,
-    tx: watch::Sender<bool>,
+    tx: watch::Sender<Option<openproxy_types::CancelReason>>,
     fired: Arc<AtomicBool>,
     complete: bool,
 }
@@ -185,7 +185,7 @@ pub struct DisconnectBody<B: HttpBody> {
 impl<B: HttpBody> DisconnectBody<B> {
     /// Wrap `inner`. `tx` is fired (idempotently) the first time
     /// `poll_frame` returns `Err` on this body.
-    pub fn new(inner: B, tx: watch::Sender<bool>, fired: Arc<AtomicBool>) -> Self {
+    pub fn new(inner: B, tx: watch::Sender<Option<openproxy_types::CancelReason>>, fired: Arc<AtomicBool>) -> Self {
         let complete = inner.is_end_stream();
         Self {
             inner,
@@ -198,9 +198,9 @@ impl<B: HttpBody> DisconnectBody<B> {
 
 impl<B: HttpBody> Drop for DisconnectBody<B> {
     fn drop(&mut self) {
-        if !self.complete && !self.inner.is_end_stream() && !self.fired.swap(true, Ordering::AcqRel)
+        if !self.complete && !self.inner.is_end_stream() && self.fired.compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst).is_ok()
         {
-            let _ = self.tx.send(true);
+            let _ = self.tx.send(Some(openproxy_types::CancelReason::ClientDisconnected));
         }
     }
 }
@@ -223,8 +223,8 @@ impl<B: HttpBody + Unpin> HttpBody for DisconnectBody<B> {
             // `fired` latch so the response-body wrapper (which
             // shares the same `Arc<AtomicBool>`) doesn't
             // double-fire if it later sees an error too.
-            if !self.fired.swap(true, Ordering::AcqRel) {
-                let _ = self.tx.send(true);
+            if self.fired.compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst).is_ok() {
+                let _ = self.tx.send(Some(openproxy_types::CancelReason::ClientDisconnected));
             }
         }
         result
@@ -258,8 +258,8 @@ impl<B: HttpBody + Unpin> HttpBody for DisconnectBody<B> {
 /// same watch.
 #[derive(Clone, Debug)]
 pub struct CancelWatch {
-    pub tx: watch::Sender<bool>,
-    pub rx: watch::Receiver<bool>,
+    pub tx: watch::Sender<Option<openproxy_types::CancelReason>>,
+    pub rx: watch::Receiver<Option<openproxy_types::CancelReason>>,
 }
 
 impl CancelWatch {

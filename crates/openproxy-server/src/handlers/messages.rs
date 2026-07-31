@@ -102,7 +102,7 @@ pub async fn anthropic_messages(
         tokio::select! {
             _ = done_rx => {}
             _ = tokio::time::sleep(std::time::Duration::from_millis(watchdog_budget_ms)) => {
-                let _ = watchdog_tx.send(true);
+                let _ = watchdog_tx.send(Some(openproxy_types::CancelReason::WatchdogTimeout));
             }
         }
     });

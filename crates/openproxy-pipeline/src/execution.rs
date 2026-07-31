@@ -278,11 +278,11 @@ impl Pipeline {
         }
     }
 
-    pub(crate) fn client_disconnected_result(&self, attempts: u8) -> PipelineResult {
-        self.failure(CoreError::ClientDisconnected, attempts, ErrorPhase::Retry)
+    pub(crate) fn client_disconnected_result(&self, attempts: u8, reason: openproxy_types::CancelReason) -> PipelineResult {
+        self.failure(CoreError::Cancelled(reason), attempts, ErrorPhase::Retry)
     }
 
-    pub(crate) fn is_client_disconnected(&self, rx: &mut watch::Receiver<bool>) -> bool {
+    pub(crate) fn is_client_disconnected(&self, rx: &mut watch::Receiver<Option<openproxy_types::CancelReason>>) -> Option<openproxy_types::CancelReason> {
         *rx.borrow_and_update()
     }
 

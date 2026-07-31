@@ -20,6 +20,9 @@ impl OllamaCloudAdapter {
         Self {
             config: ProviderAdapterConfig {
                 id: ProviderId::new("ollama-cloud"),
+                name: "Ollama Cloud".into(),
+                anonymous_fallback: false,
+                rate_limit_scope: "account".into(),
                 base_url: "https://ollama.com/v1".into(),
                 auth_type: AdapterAuthType::Bearer,
                 format: AdapterFormat::Openai,
