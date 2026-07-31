@@ -892,7 +892,7 @@ mod tests {
         // a task for each (the other 7 built-ins are skipped at
         // the adapter lookup because we only register 4
         // adapters).
-        let provider_ids = ["openrouter", "minimax", "opencode-zen", "ollama-cloud"];
+        let provider_ids = ["openrouter", "minimax", "opencode-zen", "opencode-go", "ollama-cloud"];
 
         let (pool, _path) = fresh_pool();
         let mk = MasterKey::generate();

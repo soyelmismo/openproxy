@@ -73,6 +73,7 @@ function providerGlyph(providerId: string): string {
     "openrouter": "🟢",
     "minimax": "🟡",
     "opencode-zen": "🟣",
+    "opencode-go": "🟣",
   };
   return knownLogos[providerId] || ((providerId[0] || "?").toUpperCase());
 }

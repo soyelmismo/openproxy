@@ -73,6 +73,16 @@ const BUILTINS: &[Builtin<'static>] = &[
         rate_limit_scope: "account",
     },
     Builtin {
+        id: "opencode-go",
+        name: "OpenCode Go",
+        base_url: "https://opencode.ai/zen/go/v1",
+        auth_type: "bearer",
+        format: "mixed",
+        extra_headers_json: None,
+        auto_activate_keyword: None,
+        rate_limit_scope: "account",
+    },
+    Builtin {
         id: "ollama-cloud",
         name: "Ollama Cloud",
         base_url: "https://ollama.com/v1",
@@ -186,6 +196,7 @@ pub fn builtin_provider_ids() -> &'static [&'static str] {
         "openrouter",
         "minimax",
         "opencode-zen",
+        "opencode-go",
         "ollama-cloud",
         "nous-research",
         "nvidia-nim",
@@ -416,13 +427,14 @@ mod tests {
         let (pool, _path) = fresh_pool();
         let conn = pool.writer();
         let n = seed_builtin_providers(&conn).expect("seed");
-        assert_eq!(n, 12, "first call inserts all twelve");
+        assert_eq!(n, 13, "first call inserts all thirteen");
 
         // All twelve are present and reachable by id.
         for id in [
             "openrouter",
             "minimax",
             "opencode-zen",
+            "opencode-go",
             "ollama-cloud",
             "nous-research",
             "nvidia-nim",
@@ -445,14 +457,14 @@ mod tests {
         let (pool, _path) = fresh_pool();
         let conn = pool.writer();
         let first = seed_builtin_providers(&conn).expect("first");
-        assert_eq!(first, 12);
+        assert_eq!(first, 13);
 
         // Idempotent: running again must not insert more rows.
         let second = seed_builtin_providers(&conn).expect("second");
         assert_eq!(second, 0, "no new rows on second call");
 
         let count = providers::list(&conn).expect("list").len();
-        assert_eq!(count, 12, "still exactly twelve rows");
+        assert_eq!(count, 13, "still exactly thirteen rows");
     }
 
     #[test]
@@ -476,7 +488,7 @@ mod tests {
         .expect("pre-seed");
 
         let n = seed_builtin_providers(&conn).expect("seed");
-        assert_eq!(n, 11, "only the eleven missing ones");
+        assert_eq!(n, 12, "only the twelve missing ones");
 
         // The pre-seeded row's name was *not* overwritten.
         let p = providers::get(&conn, &ProviderId::new("openrouter"))
@@ -546,7 +558,7 @@ mod tests {
         // addition to `BUILTINS` (e.g. a new seeded provider) gets
         // remembered here.
         let ids = builtin_provider_ids();
-        assert_eq!(ids.len(), 12);
+        assert_eq!(ids.len(), 13);
         assert!(ids.contains(&"openrouter"));
         assert!(ids.contains(&"minimax"));
         assert!(ids.contains(&"opencode-zen"));

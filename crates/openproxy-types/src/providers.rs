@@ -45,6 +45,7 @@ pub fn builtin_provider_ids() -> &'static [&'static str] {
         "openrouter",
         "minimax",
         "opencode-zen",
+        "opencode-go",
         "ollama-cloud",
         "nous-research",
         "nvidia-nim",

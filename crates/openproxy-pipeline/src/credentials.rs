@@ -196,7 +196,10 @@ impl CredentialManager {
                 }
                 None => {
                     let auth_type = providers_map.get(&t.provider_id.0).map(|s| s.as_str());
-                    if auth_type == Some("none") || t.provider_id.0 == "opencode-zen" {
+                    if auth_type == Some("none")
+                        || t.provider_id.0 == "opencode-zen"
+                        || t.provider_id.0 == "opencode-go"
+                    {
                         (String::new(), None, None)
                     } else {
                         tracing::error!(

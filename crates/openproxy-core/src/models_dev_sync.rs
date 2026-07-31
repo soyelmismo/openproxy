@@ -48,7 +48,7 @@ const PROVIDER_MAP: &[(&str, &[&str])] = &[
     ("amazon", &["openrouter"]),
     ("cohere", &["openrouter"]),
     ("opencode", &["opencode-zen"]),
-    ("opencode-go", &["opencode-zen"]),
+    ("opencode-go", &["opencode-go"]),
     ("perplexity", &["openrouter"]),
     ("groq", &["openrouter"]),
     ("together", &["openrouter"]),
