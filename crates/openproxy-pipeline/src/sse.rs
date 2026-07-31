@@ -2419,7 +2419,7 @@ pub fn parse_responses_sse_stream_line(
     if let Some(u) = value
         .get("usage")
         .or_else(|| value.get("response").and_then(|r| r.get("usage")))
-        && let Ok(mut u_parsed) = serde_json::from_value::<OpenAIUsage>(u.clone())
+        && let Ok(mut u_parsed) = <OpenAIUsage as serde::Deserialize>::deserialize(u)
     {
         if u.get("input_tokens").is_some() {
             let val = u.get("input_tokens").and_then(|v| v.as_u64()).unwrap_or(0);

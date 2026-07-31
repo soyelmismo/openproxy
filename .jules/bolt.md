@@ -93,3 +93,6 @@
 **Learning:** When performing bulk updates in SQLite with rusqlite using an immutable `&Connection`, wrapping the loop in an explicit `BEGIN`/`COMMIT` block eliminates implicit fsyncs and solves N+1 query performance bottlenecks.
 **Action:** When `.transaction()` is unavailable due to mutability constraints, use an immediately invoked closure to safely catch errors and execute a manual `ROLLBACK` to prevent leaking the database connection in a poison state. Also, always pass `()` rather than `[]` for parameterless statements like `BEGIN` to avoid type inference issues.
 
+## 2026-07-31 - [Avoid serde_json::from_value clone overhead]
+**Learning:** Calling `serde_json::from_value(value.clone())` deeply clones the entire JSON AST just to immediately deserialize it into a struct, causing heavy allocation overhead. `Deserialize` traits can usually deserialize directly from `&serde_json::Value` avoiding this clone altogether.
+**Action:** Replace `serde_json::from_value::<T>(val.clone())` with `<T as serde::Deserialize>::deserialize(val)` to avoid the expensive `.clone()` on the JSON AST.
