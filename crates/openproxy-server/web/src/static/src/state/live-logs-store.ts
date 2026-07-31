@@ -428,25 +428,17 @@ class LiveLogsStore {
 
   public selectInflightRows(): AttemptState[] {
     const nowMs = Date.now() - this.clockOffsetMs;
-    const map = new Map<string, AttemptState>();
-
-    for (const a of this.attemptsByKey.values()) {
-      if (a.terminal) continue;
+    const arr = Array.from(this.attemptsByKey.values()).filter((a) => {
+      if (a.terminal) return false;
       if (a.updatedAtMs > 1_000_000_000_000 && (nowMs - a.updatedAtMs > 60_000)) {
         a.terminal = true;
         a.terminalKind = "failed";
         a.stage = "failed";
         a.error = a.error || "Inflight timeout (stale request)";
-        continue;
+        return false;
       }
-      const groupKey = a.requestId || a.attemptKey;
-      const existing = map.get(groupKey);
-      if (!existing || a.stageRank >= existing.stageRank) {
-        map.set(groupKey, a);
-      }
-    }
-
-    const arr = Array.from(map.values());
+      return true;
+    });
     arr.sort((a, b) => {
       if (b.startedAtMs !== a.startedAtMs) return b.startedAtMs - a.startedAtMs;
       return b.attemptKey.localeCompare(a.attemptKey);
@@ -455,29 +447,7 @@ class LiveLogsStore {
   }
 
   public selectFinishedRows(): AttemptState[] {
-    const map = new Map<string, AttemptState>();
-    for (const a of this.attemptsByKey.values()) {
-      if (!a.terminal) continue;
-      const groupKey = a.requestId || a.attemptKey;
-      const existing = map.get(groupKey);
-      if (!existing) {
-        map.set(groupKey, a);
-      } else {
-        const existingHasRow = Boolean(existing.rowId);
-        const aHasRow = Boolean(a.rowId);
-        if (!existingHasRow && aHasRow) {
-          map.set(groupKey, a);
-        } else if (existingHasRow === aHasRow) {
-          if ((a.rowId || 0) > (existing.rowId || 0)) {
-            map.set(groupKey, a);
-          } else if ((a.rowId || 0) === (existing.rowId || 0) && a.updatedAtMs > existing.updatedAtMs) {
-            map.set(groupKey, a);
-          }
-        }
-      }
-    }
-
-    const arr = Array.from(map.values());
+    const arr = Array.from(this.attemptsByKey.values()).filter((a) => a.terminal);
     arr.sort((a, b) => {
       if (b.startedAtMs !== a.startedAtMs) return b.startedAtMs - a.startedAtMs;
       if ((b.rowId || 0) !== (a.rowId || 0)) return (b.rowId || 0) - (a.rowId || 0);
