@@ -430,15 +430,17 @@ pub(crate) async fn stream_usage_rows(socket: WebSocket, state: AppState) {
                             outbox_send(&outbox_tx, json!({ "type": "stage", "data": event })).await;
                         }
                         Err(tokio::sync::broadcast::error::RecvError::Lagged(skipped)) => {
-                            outbox_try_send(&outbox_tx, json!({
-                                "type": "lag_warning",
-                                "skipped": skipped,
-                                "message": format!(
-                                    "stage broadcast channel lagged; {} event(s) skipped",
-                                    skipped
-                                ),
+                            tracing::warn!("stage broadcast lagged; {} event(s) skipped — sending inflight snapshot", skipped);
+                            let active = openproxy_core::usage::get_active_inflight_attempts();
+                            let snap_now = std::time::SystemTime::now()
+                                .duration_since(std::time::UNIX_EPOCH)
+                                .unwrap_or_default()
+                                .as_millis() as u64;
+                            outbox_send(&outbox_tx, json!({
+                                "type": "inflight_sync",
+                                "server_now": snap_now,
+                                "attempts": active,
                             })).await;
-                            outbox_send(&outbox_tx, json!({ "type": "resync", "since_id": last_known_id })).await;
                         }
                         Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
                     }
@@ -455,15 +457,17 @@ pub(crate) async fn stream_usage_rows(socket: WebSocket, state: AppState) {
                             outbox_send(&outbox_tx, json!({ "type": "row", "data": row })).await;
                         }
                         Err(tokio::sync::broadcast::error::RecvError::Lagged(skipped)) => {
-                            outbox_try_send(&outbox_tx, json!({
-                                "type": "lag_warning",
-                                "skipped": skipped,
-                                "message": format!(
-                                    "broadcast channel lagged; {} row(s) skipped",
-                                    skipped
-                                ),
+                            tracing::warn!("usage broadcast lagged; {} row(s) skipped — sending inflight snapshot", skipped);
+                            let active = openproxy_core::usage::get_active_inflight_attempts();
+                            let snap_now = std::time::SystemTime::now()
+                                .duration_since(std::time::UNIX_EPOCH)
+                                .unwrap_or_default()
+                                .as_millis() as u64;
+                            outbox_send(&outbox_tx, json!({
+                                "type": "inflight_sync",
+                                "server_now": snap_now,
+                                "attempts": active,
                             })).await;
-                            outbox_send(&outbox_tx, json!({ "type": "resync", "since_id": last_known_id })).await;
                         }
                         Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
                     }

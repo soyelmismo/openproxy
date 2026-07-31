@@ -40,6 +40,7 @@ export interface AttemptState {
 
 export type LiveLogEnvelopeV2 =
   | { type: "snapshot"; cursor: number; server_now: number; rows: RecentUsageRow[]; attempts: AttemptState[] }
+  | { type: "inflight_sync"; server_now: number; attempts: AttemptState[] }
   | { type: "attempt_event"; cursor: number; event: AttemptEventPayload }
   | { type: "usage_row"; cursor: number; row: RecentUsageRow }
   | { type: "gap"; from_cursor: number; to_cursor: number; reason: string }
@@ -65,16 +66,63 @@ export interface AttemptEventPayload {
 }
 
 // ----------------------------------------------------------------------------
-// Store State
+// Helpers
+// ----------------------------------------------------------------------------
+
+const STAGE_RANK: Record<string, number> = {
+  started: 0,
+  connecting: 1,
+  waiting_ttft: 2,
+  streaming: 3,
+  completed: 4,
+  failed: 4,
+  cancelled: 4,
+};
+
+function rankStage(stage: string): number {
+  return STAGE_RANK[stage] ?? -1;
+}
+
+function isTerminalStage(stage: string): boolean {
+  return stage === "completed" || stage === "failed" || stage === "cancelled";
+}
+
+function deriveTerminal(stage: string, statusCode: number | null | undefined, error: string | null | undefined): boolean {
+  return isTerminalStage(stage)
+    || (statusCode != null && statusCode >= 400)
+    || (!!error && error.length > 0);
+}
+
+function deriveTerminalKind(stage: string, statusCode: number | null | undefined): "completed" | "failed" | "cancelled" | null {
+  if (stage === "cancelled") return "cancelled";
+  if (stage === "failed" || (statusCode != null && statusCode >= 400)) return "failed";
+  if (stage === "completed") return "completed";
+  return "failed"; // fallback for terminal with unknown stage
+}
+
+/** Monotonic counter for insertion order — used as a stable tiebreaker
+ *  when multiple attempts share the same startedAtMs. */
+let insertionCounter = 0;
+
+// Extend AttemptState at runtime with a hidden ordering field.
+// Not in the interface because it's store-internal.
+const insertionOrder = new WeakMap<AttemptState, number>();
+
+function getInsertionOrder(a: AttemptState): number {
+  return insertionOrder.get(a) ?? 0;
+}
+
+// ----------------------------------------------------------------------------
+// Store
 // ----------------------------------------------------------------------------
 
 class LiveLogsStore {
   public attemptsByKey = new Map<string, AttemptState>();
   public rowsById = new Map<number, RecentUsageRow>();
   public attemptKeyByRowId = new Map<number, string>();
-  public requestGroups = new Map<string, Set<string>>(); // request_id -> Set<attempt_key>
+  public requestGroups = new Map<string, Set<string>>();
   public attemptKeyRedirects = new Map<string, string>();
-  
+
   public lastAppliedCursor = 0;
   public connectionStatus: "connecting" | "connected" | "recovering" | "recovering_failed" | "disconnected" = "disconnected";
   public lastServerNow = 0;
@@ -85,37 +133,39 @@ class LiveLogsStore {
   // --------------------------------------------------------------------------
 
   public dispatch(envelope: unknown) {
-    const v2Envelope = this.normalizeWsEnvelope(envelope);
-    if (!v2Envelope) return;
+    const v2 = this.normalizeWsEnvelope(envelope);
+    if (!v2) return;
 
-    if ("cursor" in v2Envelope && v2Envelope.cursor > 0) {
-      if (v2Envelope.cursor <= this.lastAppliedCursor && v2Envelope.type !== "snapshot") {
-        return; // Ignore old events unless it's a snapshot overriding state
+    if ("cursor" in v2 && v2.cursor > 0) {
+      if (v2.cursor <= this.lastAppliedCursor && v2.type !== "snapshot") {
+        return;
       }
     }
 
-    switch (v2Envelope.type) {
+    switch (v2.type) {
       case "snapshot":
-        this.applySnapshot(v2Envelope);
+        this.applySnapshot(v2);
+        break;
+      case "inflight_sync":
+        this.applyInflightSync(v2);
         break;
       case "attempt_event":
-        this.applyAttemptEvent(v2Envelope.event);
-        if (v2Envelope.cursor) this.lastAppliedCursor = v2Envelope.cursor;
+        this.applyAttemptEvent(v2.event);
+        if (v2.cursor) this.lastAppliedCursor = v2.cursor;
         break;
       case "usage_row":
-        this.applyUsageRow(v2Envelope.row);
-        if (v2Envelope.cursor) this.lastAppliedCursor = v2Envelope.cursor;
+        this.applyUsageRow(v2.row);
+        if (v2.cursor) this.lastAppliedCursor = v2.cursor;
         break;
       case "gap":
         this.connectionStatus = "recovering";
-        // Here we would trigger a fetch for a snapshot, handled by ws.ts usually
         break;
       case "pong":
-        this.lastServerNow = v2Envelope.server_time;
-        this.clockOffsetMs = Date.now() - v2Envelope.server_time;
+        this.lastServerNow = v2.server_time;
+        this.clockOffsetMs = Date.now() - v2.server_time;
         break;
       case "error":
-        console.error("LiveLogsStore WS Error:", v2Envelope.message);
+        console.error("LiveLogsStore WS Error:", v2.message);
         break;
     }
   }
@@ -130,16 +180,41 @@ class LiveLogsStore {
     this.clockOffsetMs = Date.now() - snapshot.server_now;
     this.connectionStatus = "connected";
 
-    // Rebuild state atomically
     this.attemptsByKey.clear();
     this.rowsById.clear();
     this.attemptKeyByRowId.clear();
     this.requestGroups.clear();
     this.attemptKeyRedirects.clear();
 
-    for (const attempt of snapshot.attempts) {
-      this.attemptsByKey.set(attempt.attemptKey, attempt);
-      this.trackRequestGroup(attempt.requestId, attempt.attemptKey);
+    // Hydrate server-side inflight attempts into proper AttemptState objects.
+    // The server sends InflightAttempt with camelCase keys that mostly match,
+    // but `row` is missing and must be set to null.
+    for (const raw of snapshot.attempts) {
+      const a: AttemptState = {
+        attemptKey: raw.attemptKey || "",
+        requestId: raw.requestId || "",
+        traceId: raw.traceId || "",
+        providerId: raw.providerId || "",
+        upstreamModelId: raw.upstreamModelId || "",
+        startedAtMs: raw.startedAtMs || 0,
+        updatedAtMs: raw.updatedAtMs || 0,
+        stage: (raw.stage || "started") as StageName,
+        stageSeq: raw.stageSeq || 0,
+        stageRank: raw.stageRank || 0,
+        elapsedMsAtEvent: raw.elapsedMsAtEvent || 0,
+        connectMs: raw.connectMs ?? null,
+        ttftMs: raw.ttftMs ?? null,
+        statusCode: raw.statusCode ?? null,
+        terminal: raw.terminal || false,
+        terminalKind: (raw.terminalKind as AttemptState["terminalKind"]) || null,
+        error: raw.error ?? null,
+        rowId: raw.rowId ?? null,
+        row: null,  // Server never sends row data in snapshot attempts
+        source: "snapshot",
+      };
+      insertionOrder.set(a, ++insertionCounter);
+      this.attemptsByKey.set(a.attemptKey, a);
+      this.trackRequestGroup(a.requestId, a.attemptKey);
     }
 
     for (const row of snapshot.rows) {
@@ -147,20 +222,79 @@ class LiveLogsStore {
     }
   }
 
+  /** Merge authoritative inflight state from server (sent on broadcast lag).
+   *  Unlike applySnapshot, this does NOT clear finished rows — it only
+   *  replaces the inflight set with the server's truth. */
+  private applyInflightSync(sync: Extract<LiveLogEnvelopeV2, { type: "inflight_sync" }>) {
+    this.clockOffsetMs = Date.now() - sync.server_now;
+
+    // Collect current inflight keys
+    const oldInflight = new Set<string>();
+    for (const [key, a] of this.attemptsByKey) {
+      if (!a.terminal) oldInflight.add(key);
+    }
+
+    // Add/update server-authoritative inflight attempts
+    const serverKeys = new Set<string>();
+    for (const raw of sync.attempts) {
+      const key = raw.attemptKey || "";
+      serverKeys.add(key);
+
+      const a: AttemptState = {
+        attemptKey: key,
+        requestId: raw.requestId || "",
+        traceId: raw.traceId || "",
+        providerId: raw.providerId || "",
+        upstreamModelId: raw.upstreamModelId || "",
+        startedAtMs: raw.startedAtMs || 0,
+        updatedAtMs: raw.updatedAtMs || 0,
+        stage: (raw.stage || "started") as StageName,
+        stageSeq: raw.stageSeq || 0,
+        stageRank: raw.stageRank || 0,
+        elapsedMsAtEvent: raw.elapsedMsAtEvent || 0,
+        connectMs: raw.connectMs ?? null,
+        ttftMs: raw.ttftMs ?? null,
+        statusCode: raw.statusCode ?? null,
+        terminal: false,
+        terminalKind: null,
+        error: raw.error ?? null,
+        rowId: null,
+        row: null,
+        source: "snapshot",
+      };
+      insertionOrder.set(a, ++insertionCounter);
+      this.attemptsByKey.set(key, a);
+      this.trackRequestGroup(a.requestId, key);
+    }
+
+    // Remove stale inflight entries that the server no longer has
+    for (const key of oldInflight) {
+      if (!serverKeys.has(key)) {
+        const stale = this.attemptsByKey.get(key);
+        if (stale && !stale.terminal) {
+          stale.terminal = true;
+          stale.terminalKind = "completed";
+          stale.stage = "completed";
+        }
+      }
+    }
+  }
+
   private applyAttemptEvent(event: AttemptEventPayload) {
+    // Redirect unknown-keyed attempts when trace_id arrives
     if (event.trace_id) {
       const unknownKey = `${event.request_id}:unknown`;
       if (this.attemptsByKey.has(unknownKey) && unknownKey !== event.attempt_key) {
         if (!this.attemptsByKey.has(event.attempt_key)) {
-          const oldAttempt = this.attemptsByKey.get(unknownKey)!;
+          const old = this.attemptsByKey.get(unknownKey)!;
           this.attemptsByKey.delete(unknownKey);
           const group = this.requestGroups.get(event.request_id);
           if (group) group.delete(unknownKey);
-          
-          oldAttempt.attemptKey = event.attempt_key;
-          oldAttempt.traceId = event.trace_id;
-          
-          this.attemptsByKey.set(event.attempt_key, oldAttempt);
+
+          old.attemptKey = event.attempt_key;
+          old.traceId = event.trace_id;
+
+          this.attemptsByKey.set(event.attempt_key, old);
           this.trackRequestGroup(event.request_id, event.attempt_key);
         } else {
           this.attemptsByKey.delete(unknownKey);
@@ -172,29 +306,21 @@ class LiveLogsStore {
 
     const existing = this.attemptsByKey.get(event.attempt_key);
 
-    // If there's already a terminal row for this attempt, ignore phase updates
-    if (existing && existing.rowId) {
-      return;
-    }
+    // If we already have a DB row for this attempt, skip phase updates
+    if (existing && existing.rowId) return;
 
-    // If existing is terminal, ignore non-terminal updates
-    if (existing && existing.terminal && !event.terminal) {
-      return;
-    }
+    // Terminal attempts stay terminal
+    if (existing && existing.terminal && !event.terminal) return;
 
-    // Sequence check for out of order non-terminal events
+    // Out-of-order guard: only accept forward progression
+    const eventRank = event.stage_rank;
     if (existing && !event.terminal) {
-      if (event.stage_seq > 0 && existing.stageSeq > 0 && existing.stageSeq > event.stage_seq) {
-        return;
-      }
-      if (existing.stageRank > event.stage_rank) {
-        return;
-      }
+      if (existing.stageRank > eventRank) return;
     }
 
-    const isTerminal = event.terminal || event.stage === "completed" || event.stage === "failed" || event.stage === "cancelled" || (event.status_code != null && event.status_code >= 400) || !!event.error;
+    const terminal = deriveTerminal(event.stage, event.status_code, event.error);
 
-    const newState: AttemptState = existing ? { ...existing } : {
+    const a: AttemptState = existing ? { ...existing } : {
       attemptKey: event.attempt_key,
       requestId: event.request_id,
       traceId: event.trace_id || "",
@@ -204,58 +330,64 @@ class LiveLogsStore {
       updatedAtMs: event.event_time,
       stage: event.stage as StageName,
       stageSeq: event.stage_seq,
-      stageRank: event.stage_rank,
+      stageRank: eventRank,
       elapsedMsAtEvent: event.event_time - event.started_at,
-      connectMs: event.connect_ms || null,
-      ttftMs: event.ttft_ms || null,
-      statusCode: event.status_code || null,
-      terminal: isTerminal,
-      terminalKind: isTerminal ? ((event.stage as "completed" | "failed" | "cancelled") || (event.status_code && event.status_code >= 400 ? "failed" : "completed")) : null,
+      connectMs: event.connect_ms ?? null,
+      ttftMs: event.ttft_ms ?? null,
+      statusCode: event.status_code ?? null,
+      terminal,
+      terminalKind: terminal ? deriveTerminalKind(event.stage, event.status_code) : null,
       error: event.error || null,
       rowId: null,
       row: null,
-      source: "live"
+      source: "live",
     };
 
-    // Update fields if merging
+    // Merge into existing
     if (existing) {
-      newState.updatedAtMs = event.event_time;
-      newState.stage = event.stage as StageName;
-      newState.stageSeq = event.stage_seq;
-      newState.stageRank = event.stage_rank;
-      newState.elapsedMsAtEvent = event.event_time - newState.startedAtMs;
-      newState.terminal = isTerminal;
-      if (isTerminal) newState.terminalKind = (event.stage as "completed" | "failed" | "cancelled") || (event.status_code && event.status_code >= 400 ? "failed" : "completed");
-      if (event.connect_ms != null) newState.connectMs = event.connect_ms;
-      if (event.ttft_ms != null) newState.ttftMs = event.ttft_ms;
-      if (event.status_code != null) newState.statusCode = event.status_code;
-      if (event.error != null) newState.error = event.error;
+      a.updatedAtMs = event.event_time;
+      a.stage = event.stage as StageName;
+      a.stageSeq = event.stage_seq;
+      a.stageRank = eventRank;
+      a.elapsedMsAtEvent = event.event_time - a.startedAtMs;
+      a.terminal = terminal;
+      if (terminal) a.terminalKind = deriveTerminalKind(event.stage, event.status_code);
+      if (event.connect_ms != null) a.connectMs = event.connect_ms;
+      if (event.ttft_ms != null) a.ttftMs = event.ttft_ms;
+      if (event.status_code != null) a.statusCode = event.status_code;
+      if (event.error != null) a.error = event.error;
+      if (event.provider_id) a.providerId = event.provider_id;
+      if (event.upstream_model_id) a.upstreamModelId = event.upstream_model_id;
     }
 
-    this.attemptsByKey.set(event.attempt_key, newState);
-    this.trackRequestGroup(newState.requestId, newState.attemptKey);
+    if (!insertionOrder.has(a)) {
+      insertionOrder.set(a, ++insertionCounter);
+    }
+
+    this.attemptsByKey.set(event.attempt_key, a);
+    this.trackRequestGroup(a.requestId, a.attemptKey);
   }
 
   private applyUsageRow(row: RecentUsageRow) {
     this.rowsById.set(row.id, row);
-    
-    // Attempt key fallback if trace_id is empty
+
     const attemptKey = row.trace_id || `${row.request_id}:unknown`;
     this.attemptKeyByRowId.set(row.id, attemptKey);
 
+    // Redirect unknown-keyed attempts
     if (row.trace_id) {
       const unknownKey = `${row.request_id}:unknown`;
       if (this.attemptsByKey.has(unknownKey) && unknownKey !== attemptKey) {
         if (!this.attemptsByKey.has(attemptKey)) {
-          const oldAttempt = this.attemptsByKey.get(unknownKey)!;
+          const old = this.attemptsByKey.get(unknownKey)!;
           this.attemptsByKey.delete(unknownKey);
           const group = this.requestGroups.get(row.request_id);
           if (group) group.delete(unknownKey);
-          
-          oldAttempt.attemptKey = attemptKey;
-          oldAttempt.traceId = row.trace_id;
-          
-          this.attemptsByKey.set(attemptKey, oldAttempt);
+
+          old.attemptKey = attemptKey;
+          old.traceId = row.trace_id;
+
+          this.attemptsByKey.set(attemptKey, old);
           this.trackRequestGroup(row.request_id, attemptKey);
         } else {
           this.attemptsByKey.delete(unknownKey);
@@ -265,16 +397,10 @@ class LiveLogsStore {
       }
     }
 
-    // A row from history or the usage feed always represents a finished
-    // (or aborted) request that has been saved to the DB. Even if
-    // `stream_complete` is false (e.g. client disconnected mid-stream),
-    // the request is terminal.
-    const isTerminal = true;
-
-    let attempt = this.attemptsByKey.get(attemptKey);
-    if (!attempt) {
+    let a = this.attemptsByKey.get(attemptKey);
+    if (!a) {
       const startedAt = Date.parse(row.created_at.endsWith("Z") ? row.created_at : row.created_at + "Z");
-      attempt = {
+      a = {
         attemptKey,
         requestId: row.request_id,
         traceId: row.trace_id,
@@ -282,43 +408,45 @@ class LiveLogsStore {
         upstreamModelId: row.upstream_model_id,
         startedAtMs: startedAt,
         updatedAtMs: startedAt + row.total_ms,
-        stage: isTerminal ? (row.status_code >= 400 ? "failed" : "completed") as StageName : "started" as StageName,
-        stageSeq: isTerminal ? 9999 : 0,
-        stageRank: isTerminal ? 4 : 0,
+        stage: (row.status_code >= 400 ? "failed" : "completed") as StageName,
+        stageSeq: 9999,
+        stageRank: 4,
         elapsedMsAtEvent: row.total_ms,
         connectMs: row.connect_ms,
         ttftMs: row.ttft_ms,
         statusCode: row.status_code,
-        terminal: isTerminal,
-        terminalKind: isTerminal ? (row.status_code >= 400 ? "failed" : "completed") : null,
+        terminal: true,
+        terminalKind: row.status_code >= 400 ? "failed" : "completed",
         error: row.error_message,
         rowId: row.id,
-        row: row,
-        source: "db"
+        row,
+        source: "db",
       };
     } else {
-      attempt.rowId = row.id;
-      attempt.row = row;
-      if (isTerminal) {
-        attempt.terminal = true;
-        attempt.terminalKind = row.status_code >= 400 ? "failed" : "completed";
-        attempt.stage = (row.status_code >= 400 ? "failed" : "completed") as StageName;
-        attempt.stageSeq = 9999;
-        attempt.stageRank = 4;
-      }
-      attempt.updatedAtMs = attempt.startedAtMs + row.total_ms;
-      attempt.elapsedMsAtEvent = row.total_ms;
-      attempt.source = "db";
-      if (row.upstream_model_id !== undefined) attempt.upstreamModelId = row.upstream_model_id || "";
-      if (row.provider_id !== undefined) attempt.providerId = row.provider_id || "";
-      if (row.trace_id !== undefined) attempt.traceId = row.trace_id || "";
-      if (row.connect_ms !== undefined) attempt.connectMs = row.connect_ms;
-      if (row.ttft_ms !== undefined) attempt.ttftMs = row.ttft_ms;
-      if (row.status_code !== undefined) attempt.statusCode = row.status_code;
-      if (row.error_message !== undefined) attempt.error = row.error_message;
+      a.rowId = row.id;
+      a.row = row;
+      a.terminal = true;
+      a.terminalKind = row.status_code >= 400 ? "failed" : "completed";
+      a.stage = (row.status_code >= 400 ? "failed" : "completed") as StageName;
+      a.stageSeq = 9999;
+      a.stageRank = 4;
+      a.updatedAtMs = a.startedAtMs + row.total_ms;
+      a.elapsedMsAtEvent = row.total_ms;
+      a.source = "db";
+      if (row.upstream_model_id !== undefined) a.upstreamModelId = row.upstream_model_id || "";
+      if (row.provider_id !== undefined) a.providerId = row.provider_id || "";
+      if (row.trace_id !== undefined) a.traceId = row.trace_id || "";
+      if (row.connect_ms !== undefined) a.connectMs = row.connect_ms;
+      if (row.ttft_ms !== undefined) a.ttftMs = row.ttft_ms;
+      if (row.status_code !== undefined) a.statusCode = row.status_code;
+      if (row.error_message !== undefined) a.error = row.error_message;
     }
 
-    this.attemptsByKey.set(attemptKey, attempt);
+    if (!insertionOrder.has(a)) {
+      insertionOrder.set(a, ++insertionCounter);
+    }
+
+    this.attemptsByKey.set(attemptKey, a);
     this.trackRequestGroup(row.request_id, attemptKey);
   }
 
@@ -330,129 +458,128 @@ class LiveLogsStore {
   }
 
   // --------------------------------------------------------------------------
-  // Compatibility / Normalization
+  // Normalization (legacy WS envelopes → V2)
   // --------------------------------------------------------------------------
 
   private normalizeWsEnvelope(env: unknown): LiveLogEnvelopeV2 | null {
     if (typeof env !== "object" || env === null) return null;
-    const typedEnv = env as Record<string, unknown>;
+    const e = env as Record<string, unknown>;
 
-    if (typedEnv["type"] === "snapshot" || typedEnv["type"] === "attempt_event" || typedEnv["type"] === "usage_row" || typedEnv["type"] === "gap") {
-      return typedEnv as unknown as LiveLogEnvelopeV2; // Already V2
+    // Already V2
+    if (e["type"] === "snapshot" || e["type"] === "inflight_sync" || e["type"] === "attempt_event" || e["type"] === "usage_row" || e["type"] === "gap") {
+      return e as unknown as LiveLogEnvelopeV2;
     }
 
-    // Legacy conversions
     const now = Date.now() - this.clockOffsetMs;
-    if (typedEnv["type"] === "stage" && typedEnv["data"]) {
-      const data = typedEnv["data"] as StageEvent;
-      const attempt_key = data.trace_id || `${data.request_id}:unknown`;
-      const stage_rank = this.rankStage(data.stage);
-      const isTerminal = data.stage === "completed" || data.stage === "failed" || data.stage === "cancelled";
+
+    // Legacy stage event → attempt_event
+    if (e["type"] === "stage" && e["data"]) {
+      const d = e["data"] as StageEvent;
+      const key = d.trace_id || `${d.request_id}:unknown`;
+      const rank = rankStage(d.stage);
+      const terminal = deriveTerminal(d.stage, d.status_code, d.error);
       return {
         type: "attempt_event",
         cursor: 0,
         event: {
-          attempt_key,
-          request_id: data.request_id,
-          ...(data.trace_id ? { trace_id: data.trace_id } : {}),
-          stage_seq: Math.floor(data.elapsed_ms), // fallback sequence
-          stage_rank,
+          attempt_key: key,
+          request_id: d.request_id,
+          ...(d.trace_id ? { trace_id: d.trace_id } : {}),
+          stage_seq: rank, // use rank as seq for monotonic ordering
+          stage_rank: rank,
           event_time: now,
-          started_at: now - data.elapsed_ms,
-          terminal: isTerminal,
-          stage: data.stage,
-          ...(data.connect_ms != null ? { connect_ms: data.connect_ms } : {}),
-          ...(data.ttft_ms != null ? { ttft_ms: data.ttft_ms } : {}),
-          ...(data.error ? { error: data.error } : {}),
-          ...(data.status_code != null ? { status_code: data.status_code } : {}),
-          ...(data.provider_id ? { provider_id: data.provider_id } : {}),
-          ...(data.upstream_model_id ? { upstream_model_id: data.upstream_model_id } : {})
-        }
+          started_at: now - d.elapsed_ms,
+          terminal,
+          stage: d.stage,
+          ...(d.connect_ms != null ? { connect_ms: d.connect_ms } : {}),
+          ...(d.ttft_ms != null ? { ttft_ms: d.ttft_ms } : {}),
+          ...(d.error ? { error: d.error } : {}),
+          ...(d.status_code != null ? { status_code: d.status_code } : {}),
+          ...(d.provider_id ? { provider_id: d.provider_id } : {}),
+          ...(d.upstream_model_id ? { upstream_model_id: d.upstream_model_id } : {}),
+        },
       };
     }
 
-    if (typedEnv["type"] === "row" && typedEnv["data"]) {
-      return {
-        type: "usage_row",
-        cursor: 0,
-        row: typedEnv["data"] as RecentUsageRow
-      };
+    // Legacy row event → usage_row
+    if (e["type"] === "row" && e["data"]) {
+      return { type: "usage_row", cursor: 0, row: e["data"] as RecentUsageRow };
     }
 
-    if (typedEnv["type"] === "history" && typedEnv["rows"]) {
-      // Treat history as a mini snapshot of rows
+    // Legacy history → snapshot (no inflight attempts)
+    if (e["type"] === "history" && e["rows"]) {
       return {
         type: "snapshot",
         cursor: 0,
         server_now: now,
-        rows: typedEnv["rows"] as RecentUsageRow[],
-        attempts: []
+        rows: e["rows"] as RecentUsageRow[],
+        attempts: [],
       };
     }
 
-    if (typedEnv["type"] === "pong") {
-      const server_time = typedEnv["server_time"];
-      const st = typeof server_time === "string" ? Date.parse(server_time) : (Number(server_time) || Date.now());
-      return { type: "pong", server_time: st } as unknown as LiveLogEnvelopeV2;
+    if (e["type"] === "pong") {
+      const st = e["server_time"];
+      const t = typeof st === "string" ? Date.parse(st) : (Number(st) || Date.now());
+      return { type: "pong", server_time: t } as unknown as LiveLogEnvelopeV2;
     }
 
-    if (typedEnv["type"] === "error" && typedEnv["message"]) {
-      return { type: "error", message: String(typedEnv["message"]) } as unknown as LiveLogEnvelopeV2;
+    if (e["type"] === "error" && e["message"]) {
+      return { type: "error", message: String(e["message"]) } as unknown as LiveLogEnvelopeV2;
+    }
+
+    // Legacy lag/resync — log but don't crash
+    if (e["type"] === "lag_warning" || e["type"] === "resync") {
+      console.warn("[openproxy] WS lag/resync:", e);
+      return null;
     }
 
     return null;
-  }
-
-  private rankStage(stage: string): number {
-    switch (stage) {
-      case "started": return 0;
-      case "connecting": return 1;
-      case "waiting_ttft": return 2;
-      case "streaming": return 3;
-      case "completed":
-      case "failed":
-      case "cancelled": return 4;
-      default: return -1;
-    }
   }
 
   // --------------------------------------------------------------------------
   // Selectors
   // --------------------------------------------------------------------------
 
+  /** Stable sort comparator: startedAtMs desc, then insertion order desc */
+  private stableSort(a: AttemptState, b: AttemptState): number {
+    const dt = b.startedAtMs - a.startedAtMs;
+    if (dt !== 0) return dt;
+    return getInsertionOrder(b) - getInsertionOrder(a);
+  }
+
   public selectLogRows(): AttemptState[] {
     const arr = Array.from(this.attemptsByKey.values());
-    arr.sort((a, b) => b.startedAtMs - a.startedAtMs);
+    arr.sort((a, b) => this.stableSort(a, b));
     return arr;
   }
 
   public selectInflightRows(): AttemptState[] {
     const nowMs = Date.now() - this.clockOffsetMs;
-    const arr = Array.from(this.attemptsByKey.values()).filter((a) => {
-      if (a.terminal) return false;
+    const arr: AttemptState[] = [];
+
+    for (const a of this.attemptsByKey.values()) {
+      if (a.terminal) continue;
+      // Safety net: auto-expire stale inflight after 60s
       if (a.updatedAtMs > 1_000_000_000_000 && (nowMs - a.updatedAtMs > 60_000)) {
         a.terminal = true;
         a.terminalKind = "failed";
         a.stage = "failed";
         a.error = a.error || "Inflight timeout (stale request)";
-        return false;
+        continue;
       }
-      return true;
-    });
-    arr.sort((a, b) => {
-      if (b.startedAtMs !== a.startedAtMs) return b.startedAtMs - a.startedAtMs;
-      return b.attemptKey.localeCompare(a.attemptKey);
-    });
+      arr.push(a);
+    }
+
+    arr.sort((a, b) => this.stableSort(a, b));
     return arr;
   }
 
   public selectFinishedRows(): AttemptState[] {
-    const arr = Array.from(this.attemptsByKey.values()).filter((a) => a.terminal);
-    arr.sort((a, b) => {
-      if (b.startedAtMs !== a.startedAtMs) return b.startedAtMs - a.startedAtMs;
-      if ((b.rowId || 0) !== (a.rowId || 0)) return (b.rowId || 0) - (a.rowId || 0);
-      return b.attemptKey.localeCompare(a.attemptKey);
-    });
+    const arr: AttemptState[] = [];
+    for (const a of this.attemptsByKey.values()) {
+      if (a.terminal) arr.push(a);
+    }
+    arr.sort((a, b) => this.stableSort(a, b));
     return arr;
   }
 
@@ -499,6 +626,7 @@ class LiveLogsStore {
     this.requestGroups.clear();
     this.attemptKeyRedirects.clear();
     this.lastAppliedCursor = 0;
+    insertionCounter = 0;
   }
 }
 
