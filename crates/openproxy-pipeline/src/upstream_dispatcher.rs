@@ -557,19 +557,19 @@ impl UpstreamDispatcher {
             openproxy_types::usage::publish_stage_event(openproxy_types::usage::StageEvent {
                 request_id: req.request_id.to_string(),
                 trace_id: trace_id.to_string(),
-                provider_id: target.provider_id.to_string(),
-                upstream_model_id: model.model_id.as_str().to_string(),
+                provider_id: None,
+                upstream_model_id: None,
                 stage: stage.into(),
                 elapsed_ms: started.elapsed().as_millis() as u64,
                 connect_ms: Some(connect_and_send_ms),
                 ttft_ms: None,
-                status_code: status,
+                status_code: Some(status),
                 error: err,
                 stop_reason: None,
                 compression_savings_pct: snapshot.as_ref().and_then(|s| s.savings_pct_opt()),
                 compression_techniques: snapshot.as_ref().and_then(|s| s.techniques_csv()),
-                timestamp: String::new(),
-                endpoint_kind: openproxy_types::endpoint::EndpointKind::Chat,
+                timestamp: None,
+                endpoint_kind: None,
             });
         };
 
@@ -877,38 +877,38 @@ impl UpstreamDispatcher {
         openproxy_types::usage::publish_stage_event(openproxy_types::usage::StageEvent {
             request_id: req.request_id.to_string(),
             trace_id: trace_id.to_string(),
-            provider_id: target.provider_id.to_string(),
-            upstream_model_id: model_name.clone(),
+            provider_id: None,
+            upstream_model_id: None,
             stage: "waiting_ttft".into(),
             elapsed_ms: started.elapsed().as_millis() as u64,
             connect_ms: Some(connect_and_send_ms),
             ttft_ms: None,
-            status_code,
+            status_code: Some(status_code),
             error: None,
             stop_reason: None,
             compression_savings_pct: None,
             compression_techniques: None,
-            timestamp: chrono::Utc::now().to_rfc3339(),
-            endpoint_kind: openproxy_types::endpoint::EndpointKind::Chat,
+            timestamp: None,
+            endpoint_kind: None,
         });
         openproxy_types::usage::publish_stage_event(openproxy_types::usage::StageEvent {
             request_id: req.request_id.to_string(),
             trace_id: trace_id.to_string(),
-            provider_id: target.provider_id.to_string(),
-            upstream_model_id: model_name,
+            provider_id: None,
+            upstream_model_id: None,
             stage: "streaming".into(),
             elapsed_ms: started.elapsed().as_millis() as u64,
             connect_ms: Some(connect_and_send_ms),
             ttft_ms: Some(ttft_ms),
-            status_code,
+            status_code: Some(status_code),
             error: None,
             stop_reason: None,
             compression_savings_pct: streaming_snapshot
                 .as_ref()
                 .and_then(|s| s.savings_pct_opt()),
             compression_techniques: streaming_snapshot.as_ref().and_then(|s| s.techniques_csv()),
-            timestamp: String::new(),
-            endpoint_kind: openproxy_types::endpoint::EndpointKind::Chat,
+            timestamp: None,
+            endpoint_kind: None,
         });
 
         // 2xx: parse into the native wire format, then translate to
@@ -1700,19 +1700,19 @@ impl UpstreamDispatcher {
         openproxy_types::usage::publish_stage_event(openproxy_types::usage::StageEvent {
             request_id: req.request_id.to_string(),
             trace_id: trace_id.to_string(),
-            provider_id: target.provider_id.to_string(),
-            upstream_model_id: model_name.clone(),
+            provider_id: None,
+            upstream_model_id: None,
             stage: "waiting_ttft".into(),
             elapsed_ms: started.elapsed().as_millis() as u64,
             connect_ms: Some(connect_and_send_ms),
             ttft_ms: None,
-            status_code,
+            status_code: Some(status_code),
             error: None,
             stop_reason: None,
             compression_savings_pct: None,
             compression_techniques: None,
-            timestamp: chrono::Utc::now().to_rfc3339(),
-            endpoint_kind: openproxy_types::endpoint::EndpointKind::Chat,
+            timestamp: None,
+            endpoint_kind: None,
         });
 
         // The first SSE chunk emits the `streaming` stage event

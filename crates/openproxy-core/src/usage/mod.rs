@@ -1617,7 +1617,7 @@ fn publish_stage_global(event: openproxy_types::usage::StageEvent) {
     let is_terminal = event.stage == "completed"
         || event.stage == "failed"
         || event.stage == "cancelled"
-        || (event.status_code >= 400 && event.status_code != 0)
+        || event.status_code.map(|s| s >= 400 && s != 0).unwrap_or(false)
         || event.error.is_some();
 
     if is_terminal {
@@ -1625,7 +1625,7 @@ fn publish_stage_global(event: openproxy_types::usage::StageEvent) {
     } else {
         let rank = stage_rank(&event.stage);
         let started_at = now_ms.saturating_sub(event.elapsed_ms);
-        let status_opt = if event.status_code != 0 { Some(event.status_code) } else { None };
+        let status_opt = event.status_code;
 
         INFLIGHT_REGISTRY.entry(attempt_key.clone()).and_modify(|item| {
             item.stage = event.stage.clone();
@@ -1636,14 +1636,14 @@ fn publish_stage_global(event: openproxy_types::usage::StageEvent) {
             if let Some(t) = event.ttft_ms { item.ttft_ms = Some(t); }
             if status_opt.is_some() { item.status_code = status_opt; }
             if event.error.is_some() { item.error = event.error.clone(); }
-            if !event.provider_id.is_empty() { item.provider_id = event.provider_id.clone(); }
-            if !event.upstream_model_id.is_empty() { item.upstream_model_id = event.upstream_model_id.clone(); }
+            if let Some(p) = &event.provider_id { if !p.is_empty() { item.provider_id = p.clone(); } }
+            if let Some(m) = &event.upstream_model_id { if !m.is_empty() { item.upstream_model_id = m.clone(); } }
         }).or_insert_with(|| openproxy_types::usage::InflightAttempt {
             attempt_key: attempt_key.clone(),
             request_id: event.request_id.clone(),
             trace_id: event.trace_id.clone(),
-            provider_id: event.provider_id.clone(),
-            upstream_model_id: event.upstream_model_id.clone(),
+            provider_id: event.provider_id.clone().unwrap_or_default(),
+            upstream_model_id: event.upstream_model_id.clone().unwrap_or_default(),
             started_at_ms: started_at,
             updated_at_ms: now_ms,
             stage: event.stage.clone(),

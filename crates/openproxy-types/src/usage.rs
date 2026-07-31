@@ -47,19 +47,30 @@ pub struct UsageInput {
 pub struct StageEvent {
     pub request_id: String,
     pub trace_id: String,
-    pub provider_id: String,
-    pub upstream_model_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub provider_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub upstream_model_id: Option<String>,
     pub stage: String,
     pub elapsed_ms: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub connect_ms: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub ttft_ms: Option<u64>,
-    pub status_code: u16,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub status_code: Option<u16>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub stop_reason: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub compression_savings_pct: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub compression_techniques: Option<String>,
-    pub timestamp: String,
-    pub endpoint_kind: EndpointKind,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub timestamp: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub endpoint_kind: Option<EndpointKind>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

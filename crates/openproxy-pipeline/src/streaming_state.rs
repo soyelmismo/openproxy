@@ -327,13 +327,13 @@ impl<'a> crate::streaming::ChunkInterceptor for ChunkProcessor<'a> {
             openproxy_types::usage::publish_stage_event(openproxy_types::usage::StageEvent {
                 request_id: ctx.req.request_id.to_string(),
                 trace_id: ctx.trace_id.to_string(),
-                provider_id: ctx.target.provider_id.to_string(),
-                upstream_model_id: ctx.model_name.to_string(),
+                provider_id: None,
+                upstream_model_id: None,
                 stage: "streaming".into(),
                 elapsed_ms: ctx.started.elapsed().as_millis() as u64,
                 connect_ms: Some(ctx.connect_and_send_ms),
                 ttft_ms: state.ttft_ms,
-                status_code: 200,
+                status_code: Some(200),
                 error: None,
                 stop_reason: None,
                 compression_savings_pct: streaming_ttft_snapshot
@@ -342,8 +342,8 @@ impl<'a> crate::streaming::ChunkInterceptor for ChunkProcessor<'a> {
                 compression_techniques: streaming_ttft_snapshot
                     .as_ref()
                     .and_then(|s| s.techniques_csv()),
-                timestamp: String::new(),
-                endpoint_kind: openproxy_types::endpoint::EndpointKind::Chat,
+                timestamp: None,
+                endpoint_kind: None,
             });
         }
 

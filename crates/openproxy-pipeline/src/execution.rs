@@ -173,19 +173,19 @@ impl Pipeline {
         openproxy_types::usage::publish_stage_event(openproxy_types::usage::StageEvent {
             request_id: ctx.req.request_id.to_string(),
             trace_id: ctx.trace_id.to_string(),
-            provider_id: resolved_target.target.provider_id.to_string(),
-            upstream_model_id: resolved_target.model.model_id.as_str().to_string(),
+            provider_id: Some(resolved_target.target.provider_id.to_string()),
+            upstream_model_id: Some(resolved_target.model.model_id.as_str().to_string()),
             stage: "started".into(),
             elapsed_ms: 0,
             connect_ms: None,
             ttft_ms: None,
-            status_code: 0,
+            status_code: None,
             error: None,
             stop_reason: None,
             compression_savings_pct: None,
             compression_techniques: None,
-            timestamp: String::new(),
-            endpoint_kind: openproxy_types::endpoint::EndpointKind::Chat,
+            timestamp: Some(String::new()),
+            endpoint_kind: Some(openproxy_types::endpoint::EndpointKind::Chat),
         });
         use crate::stage::PipelineStageEnum;
         let chain = crate::stage::PipelineChain::new(vec![

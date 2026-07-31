@@ -493,16 +493,13 @@ impl<'a> UsageRecordBuilder<'a> {
             openproxy_types::usage::publish_stage_event(openproxy_types::usage::StageEvent {
                 request_id: self.req.request_id.to_string(),
                 trace_id: self.trace_id.to_string(),
-                provider_id: self.target.provider_id.to_string(),
-                upstream_model_id: self
-                    .model
-                    .map(|m| m.model_id.as_str().to_string())
-                    .unwrap_or_default(),
+                provider_id: None,
+                upstream_model_id: None,
                 stage: stage_label.into(),
                 elapsed_ms: self.total_ms,
                 connect_ms: self.connect_ms,
                 ttft_ms: self.ttft_ms,
-                status_code: self.status_code,
+                status_code: Some(self.status_code),
                 error: error_str,
 
                 stop_reason: self.stop_reason.clone(),
@@ -510,8 +507,8 @@ impl<'a> UsageRecordBuilder<'a> {
                     .as_ref()
                     .and_then(|s| s.savings_pct_opt()),
                 compression_techniques: terminal_snapshot.as_ref().and_then(|s| s.techniques_csv()),
-                timestamp: String::new(),
-                endpoint_kind: openproxy_types::endpoint::EndpointKind::Chat,
+                timestamp: None,
+                endpoint_kind: None,
             });
         }
 

@@ -347,13 +347,13 @@ impl PipelineStage for DispatchStage {
         openproxy_types::usage::publish_stage_event(openproxy_types::usage::StageEvent {
             request_id: ctx.req.request_id.to_string(),
             trace_id: trace_id.to_string(),
-            provider_id: target.provider_id.to_string(),
-            upstream_model_id: model.model_id.as_str().to_string(),
+            provider_id: None,
+            upstream_model_id: None,
             stage: "connecting".into(),
             elapsed_ms: started.elapsed().as_millis() as u64,
             connect_ms: None,
             ttft_ms: None,
-            status_code: 0,
+            status_code: None,
             error: None,
             stop_reason: None,
             compression_savings_pct: compression_stats_at_connecting
@@ -362,8 +362,8 @@ impl PipelineStage for DispatchStage {
             compression_techniques: compression_stats_at_connecting
                 .as_ref()
                 .and_then(|s| s.techniques_csv()),
-            timestamp: String::new(),
-            endpoint_kind: openproxy_types::endpoint::EndpointKind::Chat,
+            timestamp: None,
+            endpoint_kind: None,
         });
 
         let body_bytes = ctx.body_bytes.clone().unwrap();
