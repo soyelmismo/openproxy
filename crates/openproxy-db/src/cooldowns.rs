@@ -10,34 +10,31 @@ pub struct Cooldown {
     pub updated_at: String,
 }
 
+impl crate::crud::FromRow for Cooldown {
+    fn from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Self> {
+        Ok(Cooldown {
+            combo_target_id: ComboTargetId(row.get(0)?),
+            cooldown_until: row.get(1)?,
+            reason: row.get(2)?,
+            failure_count: row.get(3)?,
+            updated_at: row.get(4)?,
+        })
+    }
+}
+
 pub fn list_for_combo(
     conn: &rusqlite::Connection,
     combo_id: ComboId,
 ) -> openproxy_types::error::Result<Vec<Cooldown>> {
-    let mut stmt = conn.prepare(
+    crate::db_query_all!(
+        conn,
         "SELECT tc.combo_target_id, tc.cooldown_until, tc.reason, tc.failure_count, tc.updated_at
          FROM target_cooldowns tc
          INNER JOIN combo_targets ct ON ct.id = tc.combo_target_id
          WHERE ct.combo_id = ?1",
-    ).map_err(crate::error::map_db_error)?;
-
-    let rows = stmt
-        .query_map(rusqlite::params![combo_id.0], |row| {
-            Ok(Cooldown {
-                combo_target_id: ComboTargetId(row.get(0)?),
-                cooldown_until: row.get(1)?,
-                reason: row.get(2)?,
-                failure_count: row.get(3)?,
-                updated_at: row.get(4)?,
-            })
-        })
-        .map_err(crate::error::map_db_error)?;
-
-    let mut out = Vec::new();
-    for r in rows {
-        out.push(r.map_err(crate::error::map_db_error)?);
-    }
-    Ok(out)
+        rusqlite::params![combo_id.0],
+        format!("list cooldowns for combo {}", combo_id.0)
+    )
 }
 
 pub fn index_for_combo(
@@ -56,36 +53,27 @@ pub fn get_for_target(
     conn: &rusqlite::Connection,
     target_id: ComboTargetId,
 ) -> openproxy_types::error::Result<Option<Cooldown>> {
-    use rusqlite::OptionalExtension;
-    conn.query_row(
+    crate::db_query_one!(
+        conn,
         "SELECT combo_target_id, cooldown_until, reason, failure_count, updated_at
          FROM target_cooldowns
          WHERE combo_target_id = ?1",
         rusqlite::params![target_id.0],
-        |row| {
-            Ok(Cooldown {
-                combo_target_id: ComboTargetId(row.get(0)?),
-                cooldown_until: row.get(1)?,
-                reason: row.get(2)?,
-                failure_count: row.get(3)?,
-                updated_at: row.get(4)?,
-            })
-        },
+        format!("get cooldown for target {}", target_id.0)
     )
-    .optional()
-    .map_err(crate::error::map_db_error)
 }
 
 pub fn clear_cooldown(
     conn: &rusqlite::Connection,
     target_id: ComboTargetId,
 ) -> openproxy_types::error::Result<()> {
-    conn.execute(
+    crate::db_execute!(
+        conn,
         "DELETE FROM target_cooldowns WHERE combo_target_id = ?1",
         rusqlite::params![target_id.0],
-    )
-    .map(|_| ())
-    .map_err(crate::error::map_db_error)
+        format!("clear cooldown for target {}", target_id.0)
+    )?;
+    Ok(())
 }
 
 use std::sync::{LazyLock, RwLock};

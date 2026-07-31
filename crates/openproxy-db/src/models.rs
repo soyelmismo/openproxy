@@ -817,3 +817,9 @@ impl ModelRepository for SqliteModelRepository {
         apply_auto_activation(&conn, provider, keyword)
     }
 }
+
+impl crate::crud::FromRow for Model {
+    fn from_row(row: &Row<'_>) -> rusqlite::Result<Self> {
+        map_row(row)
+    }
+}

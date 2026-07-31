@@ -85,14 +85,12 @@ pub fn update_current_proxy(
     id: &ProviderId,
     proxy_id: Option<&str>,
 ) -> Result<()> {
-    conn.execute(
+    crate::db_execute!(
+        conn,
         "UPDATE providers SET current_proxy_id = ?1 WHERE id = ?2",
         params![proxy_id, id.as_str()],
-    )
-    .map_err(crate::error::map_db_error_ctx(format!(
-        "update current proxy for provider {}",
-        id
-    )))?;
+        format!("update current proxy for provider {}", id)
+    )?;
     Ok(())
 }
 
@@ -148,4 +146,10 @@ fn row_to_provider(row: &rusqlite::Row<'_>) -> rusqlite::Result<Provider> {
         proxy_rotation_errors,
         rate_limit_scope,
     })
+}
+
+impl crate::crud::FromRow for Provider {
+    fn from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Self> {
+        row_to_provider(row)
+    }
 }

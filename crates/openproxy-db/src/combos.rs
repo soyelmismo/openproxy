@@ -111,11 +111,12 @@ pub fn get_combo_by_name(conn: &Connection, name: &str) -> Result<Option<Combo>>
 }
 
 pub fn delete_combo(conn: &Connection, id: ComboId) -> Result<()> {
-    conn.execute("DELETE FROM combos WHERE id = ?1", params![id.0])
-        .map_err(crate::error::map_db_error_ctx(format!(
-            "delete combo {}",
-            id.0
-        )))?;
+    crate::db_execute!(
+        conn,
+        "DELETE FROM combos WHERE id = ?1",
+        params![id.0],
+        format!("delete combo {}", id.0)
+    )?;
     Ok(())
 }
 
@@ -628,11 +629,12 @@ pub fn get_target(conn: &Connection, id: ComboTargetId) -> Result<Option<ComboTa
 }
 
 pub fn delete_target(conn: &Connection, id: ComboTargetId) -> Result<()> {
-    conn.execute("DELETE FROM combo_targets WHERE id = ?1", params![id.0])
-        .map_err(crate::error::map_db_error_ctx(format!(
-            "delete combo_target {}",
-            id.0
-        )))?;
+    crate::db_execute!(
+        conn,
+        "DELETE FROM combo_targets WHERE id = ?1",
+        params![id.0],
+        format!("delete combo_target {}", id.0)
+    )?;
     Ok(())
 }
 
@@ -1659,5 +1661,23 @@ mod tests {
         // The logic must be able to explore C3 (second branch) and find C4.
         let result = combo_in_chain(&conn, c4, c1, 10).expect("query success");
         assert!(result, "C1 should be able to reach C4 via C3");
+    }
+}
+
+impl crate::crud::FromRow for Combo {
+    fn from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Self> {
+        row_to_combo(row)
+    }
+}
+
+impl crate::crud::FromRow for ComboTarget {
+    fn from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Self> {
+        row_to_target(row)
+    }
+}
+
+impl crate::crud::FromRow for ComboTargetWithModel {
+    fn from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Self> {
+        row_to_target_with_model(row)
     }
 }
