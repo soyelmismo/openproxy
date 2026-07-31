@@ -338,27 +338,46 @@ pub trait ProviderAdapter: Send + Sync {
 #[macro_export]
 macro_rules! define_provider_adapter {
     (
-        $(#[$meta:meta])*
         pub enum ProviderAdapterEnum {
-            $( $(#[$varmeta:meta])* $variant:ident($inner:ty) ),+ $(,)?
+            builtins {
+                $( $(#[$b_varmeta:meta])* $b_variant:ident($b_inner:ty) ),+ $(,)?
+            }
+            custom {
+                $( $(#[$c_varmeta:meta])* $c_variant:ident($c_inner:ty) ),+ $(,)?
+            }
         }
     ) => {
-        $(#[$meta])*
         #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
         #[serde(tag = "provider_id", content = "config", rename_all = "kebab-case")]
         pub enum ProviderAdapterEnum {
-            $( $(#[$varmeta])* $variant($inner) ),+
+            $( $(#[$b_varmeta])* $b_variant($b_inner) ),+,
+            $( $(#[$c_varmeta])* $c_variant($c_inner) ),+
+        }
+
+        pub fn builtin_adapters() -> Vec<ProviderAdapterEnum> {
+            vec![
+                $( $(#[$b_varmeta])* ProviderAdapterEnum::$b_variant(<$b_inner>::new()) ),+
+            ]
         }
 
         impl ProviderAdapterEnum {
             pub fn id(&self) -> &openproxy_types::ProviderId {
-                match self { $( $(#[$varmeta])* Self::$variant(inner) => inner.id(), )+ }
+                match self {
+                    $( $(#[$b_varmeta])* Self::$b_variant(inner) => inner.id(), )+
+                    $( $(#[$c_varmeta])* Self::$c_variant(inner) => inner.id(), )+
+                }
             }
             pub fn config(&self) -> & $crate::adapters::ProviderAdapterConfig {
-                match self { $( $(#[$varmeta])* Self::$variant(inner) => inner.config(), )+ }
+                match self {
+                    $( $(#[$b_varmeta])* Self::$b_variant(inner) => inner.config(), )+
+                    $( $(#[$c_varmeta])* Self::$c_variant(inner) => inner.config(), )+
+                }
             }
             pub fn metadata(&self) -> openproxy_types::ProviderMetadata {
-                match self { $( $(#[$varmeta])* Self::$variant(inner) => inner.metadata(), )+ }
+                match self {
+                    $( $(#[$b_varmeta])* Self::$b_variant(inner) => inner.metadata(), )+
+                    $( $(#[$c_varmeta])* Self::$c_variant(inner) => inner.metadata(), )+
+                }
             }
             pub fn wrap_request_body(
                 &self,
@@ -367,16 +386,28 @@ macro_rules! define_provider_adapter {
                 model: &openproxy_types::ModelId,
                 resolved_target: &openproxy_types::context::ResolvedTarget,
             ) -> std::result::Result<bytes::Bytes, openproxy_types::error::CoreError> {
-                match self { $( $(#[$varmeta])* Self::$variant(inner) => inner.wrap_request_body(body, target_format, model, resolved_target), )+ }
+                match self {
+                    $( $(#[$b_varmeta])* Self::$b_variant(inner) => inner.wrap_request_body(body, target_format, model, resolved_target), )+
+                    $( $(#[$c_varmeta])* Self::$c_variant(inner) => inner.wrap_request_body(body, target_format, model, resolved_target), )+
+                }
             }
             pub fn auth_type(&self) -> $crate::adapters::AdapterAuthType {
-                match self { $( $(#[$varmeta])* Self::$variant(inner) => inner.auth_type(), )+ }
+                match self {
+                    $( $(#[$b_varmeta])* Self::$b_variant(inner) => inner.auth_type(), )+
+                    $( $(#[$c_varmeta])* Self::$c_variant(inner) => inner.auth_type(), )+
+                }
             }
             pub fn format(&self) -> $crate::adapters::AdapterFormat {
-                match self { $( $(#[$varmeta])* Self::$variant(inner) => inner.format(), )+ }
+                match self {
+                    $( $(#[$b_varmeta])* Self::$b_variant(inner) => inner.format(), )+
+                    $( $(#[$c_varmeta])* Self::$c_variant(inner) => inner.format(), )+
+                }
             }
             pub fn build_chat_url(&self, target_format: openproxy_types::TargetFormat, model: &openproxy_types::ModelId) -> String {
-                match self { $( $(#[$varmeta])* Self::$variant(inner) => inner.build_chat_url(target_format, model), )+ }
+                match self {
+                    $( $(#[$b_varmeta])* Self::$b_variant(inner) => inner.build_chat_url(target_format, model), )+
+                    $( $(#[$c_varmeta])* Self::$c_variant(inner) => inner.build_chat_url(target_format, model), )+
+                }
             }
             pub fn build_chat_url_for_account(
                 &self,
@@ -384,13 +415,22 @@ macro_rules! define_provider_adapter {
                 model: &openproxy_types::ModelId,
                 account_label: &str,
             ) -> String {
-                match self { $( $(#[$varmeta])* Self::$variant(inner) => inner.build_chat_url_for_account(target_format, model, account_label), )+ }
+                match self {
+                    $( $(#[$b_varmeta])* Self::$b_variant(inner) => inner.build_chat_url_for_account(target_format, model, account_label), )+
+                    $( $(#[$c_varmeta])* Self::$c_variant(inner) => inner.build_chat_url_for_account(target_format, model, account_label), )+
+                }
             }
             pub fn build_transcription_url(&self) -> String {
-                match self { $( $(#[$varmeta])* Self::$variant(inner) => inner.build_transcription_url(), )+ }
+                match self {
+                    $( $(#[$b_varmeta])* Self::$b_variant(inner) => inner.build_transcription_url(), )+
+                    $( $(#[$c_varmeta])* Self::$c_variant(inner) => inner.build_transcription_url(), )+
+                }
             }
             pub fn build_auth_header(&self, api_key: &str) -> Option<(String, String)> {
-                match self { $( $(#[$varmeta])* Self::$variant(inner) => inner.build_auth_header(api_key), )+ }
+                match self {
+                    $( $(#[$b_varmeta])* Self::$b_variant(inner) => inner.build_auth_header(api_key), )+
+                    $( $(#[$c_varmeta])* Self::$c_variant(inner) => inner.build_auth_header(api_key), )+
+                }
             }
             pub fn build_headers(
                 &self,
@@ -398,20 +438,32 @@ macro_rules! define_provider_adapter {
                 target_format: openproxy_types::TargetFormat,
                 model: &openproxy_types::ModelId,
             ) -> Vec<(String, String)> {
-                match self { $( $(#[$varmeta])* Self::$variant(inner) => inner.build_headers(api_key, target_format, model), )+ }
+                match self {
+                    $( $(#[$b_varmeta])* Self::$b_variant(inner) => inner.build_headers(api_key, target_format, model), )+
+                    $( $(#[$c_varmeta])* Self::$c_variant(inner) => inner.build_headers(api_key, target_format, model), )+
+                }
             }
             pub fn models_url(&self) -> Option<String> {
-                match self { $( $(#[$varmeta])* Self::$variant(inner) => inner.models_url(), )+ }
+                match self {
+                    $( $(#[$b_varmeta])* Self::$b_variant(inner) => inner.models_url(), )+
+                    $( $(#[$c_varmeta])* Self::$c_variant(inner) => inner.models_url(), )+
+                }
             }
             pub fn models_url_for_account(&self, account_label: &str) -> Option<String> {
-                match self { $( $(#[$varmeta])* Self::$variant(inner) => inner.models_url_for_account(account_label), )+ }
+                match self {
+                    $( $(#[$b_varmeta])* Self::$b_variant(inner) => inner.models_url_for_account(account_label), )+
+                    $( $(#[$c_varmeta])* Self::$c_variant(inner) => inner.models_url_for_account(account_label), )+
+                }
             }
             pub async fn fetch_models(
                 &self,
                 upstream_client: &std::sync::Arc<$crate::upstream::UpstreamClient>,
                 api_key: &str,
             ) -> openproxy_types::Result<Vec<openproxy_types::DiscoveredModel>> {
-                match self { $( $(#[$varmeta])* Self::$variant(inner) => inner.fetch_models(upstream_client, api_key).await, )+ }
+                match self {
+                    $( $(#[$b_varmeta])* Self::$b_variant(inner) => inner.fetch_models(upstream_client, api_key).await, )+
+                    $( $(#[$c_varmeta])* Self::$c_variant(inner) => inner.fetch_models(upstream_client, api_key).await, )+
+                }
             }
             pub async fn fetch_models_for_account(
                 &self,
@@ -419,10 +471,16 @@ macro_rules! define_provider_adapter {
                 api_key: &str,
                 account_label: &str,
             ) -> openproxy_types::Result<Vec<openproxy_types::DiscoveredModel>> {
-                match self { $( $(#[$varmeta])* Self::$variant(inner) => inner.fetch_models_for_account(upstream_client, api_key, account_label).await, )+ }
+                match self {
+                    $( $(#[$b_varmeta])* Self::$b_variant(inner) => inner.fetch_models_for_account(upstream_client, api_key, account_label).await, )+
+                    $( $(#[$c_varmeta])* Self::$c_variant(inner) => inner.fetch_models_for_account(upstream_client, api_key, account_label).await, )+
+                }
             }
             pub fn normalize_openai_request(&self, view: &mut openproxy_types::OpenAIRequestView) {
-                match self { $( $(#[$varmeta])* Self::$variant(inner) => inner.normalize_openai_request(view), )+ }
+                match self {
+                    $( $(#[$b_varmeta])* Self::$b_variant(inner) => inner.normalize_openai_request(view), )+
+                    $( $(#[$c_varmeta])* Self::$c_variant(inner) => inner.normalize_openai_request(view), )+
+                }
             }
             pub fn format_request(
                 &self,
@@ -432,14 +490,20 @@ macro_rules! define_provider_adapter {
                 messages: &[openproxy_types::OpenAIMessage],
                 stream: bool,
             ) -> std::result::Result<bytes::Bytes, openproxy_types::error::CoreError> {
-                match self { $( $(#[$varmeta])* Self::$variant(inner) => inner.format_request(target_format, req, model, messages, stream), )+ }
+                match self {
+                    $( $(#[$b_varmeta])* Self::$b_variant(inner) => inner.format_request(target_format, req, model, messages, stream), )+
+                    $( $(#[$c_varmeta])* Self::$c_variant(inner) => inner.format_request(target_format, req, model, messages, stream), )+
+                }
             }
             pub fn translate_non_streaming_response(
                 &self,
                 target_format: openproxy_types::TargetFormat,
                 response_body: serde_json::Value,
             ) -> std::result::Result<openproxy_types::OpenAIResponse, openproxy_types::error::CoreError> {
-                match self { $( $(#[$varmeta])* Self::$variant(inner) => inner.translate_non_streaming_response(target_format, response_body), )+ }
+                match self {
+                    $( $(#[$b_varmeta])* Self::$b_variant(inner) => inner.translate_non_streaming_response(target_format, response_body), )+
+                    $( $(#[$c_varmeta])* Self::$c_variant(inner) => inner.translate_non_streaming_response(target_format, response_body), )+
+                }
             }
             pub async fn fetch_quota(
                 &self,
@@ -448,7 +512,10 @@ macro_rules! define_provider_adapter {
                 access_token: Option<&str>,
                 provider_specific: Option<&str>,
             ) -> Option<openproxy_types::Result<openproxy_types::AccountQuota>> {
-                match self { $( $(#[$varmeta])* Self::$variant(inner) => inner.fetch_quota(upstream_client, api_key, access_token, provider_specific).await, )+ }
+                match self {
+                    $( $(#[$b_varmeta])* Self::$b_variant(inner) => inner.fetch_quota(upstream_client, api_key, access_token, provider_specific).await, )+
+                    $( $(#[$c_varmeta])* Self::$c_variant(inner) => inner.fetch_quota(upstream_client, api_key, access_token, provider_specific).await, )+
+                }
             }
         }
 
@@ -552,22 +619,26 @@ pub fn is_anonymous_fallback(provider_id: &str) -> bool {
 
 define_provider_adapter! {
     pub enum ProviderAdapterEnum {
-        Antigravity(crate::adapters::antigravity::AntigravityAdapter),
-        CloudflareWorkersAI(crate::adapters::cloudflare_workers_ai::CloudflareWorkersAIAdapter),
-        Codex(crate::adapters::codex::CodexAdapter),
-        Custom(crate::adapters::custom_adapter::CustomAdapter),
-        Gemini(crate::adapters::gemini::GeminiAdapter),
-        Kilocode(crate::adapters::kilocode::KilocodeAdapter),
-        Kiro(crate::adapters::kiro_ai::KiroAdapter),
-        MiniMax(crate::adapters::minimax::MiniMaxAdapter),
-        NousResearch(crate::adapters::nous_research::NousResearchAdapter),
-        NvidiaNim(crate::adapters::nvidia_nim::NvidiaNimAdapter),
-        OllamaCloud(crate::adapters::ollama_cloud::OllamaCloudAdapter),
-        OpenCodeGo(crate::adapters::opencode_go::OpenCodeGoAdapter),
-        OpenCodeZen(crate::adapters::opencode_zen::OpenCodeZenAdapter),
-                OpenRouter(crate::adapters::openrouter::OpenRouterAdapter),
-        #[cfg(any(test, feature = "test-utils"))]
-        Mock(crate::adapters::mock::MockAdapter),
+        builtins {
+            Antigravity(crate::adapters::antigravity::AntigravityAdapter),
+            CloudflareWorkersAI(crate::adapters::cloudflare_workers_ai::CloudflareWorkersAIAdapter),
+            Codex(crate::adapters::codex::CodexAdapter),
+            Gemini(crate::adapters::gemini::GeminiAdapter),
+            Kilocode(crate::adapters::kilocode::KilocodeAdapter),
+            Kiro(crate::adapters::kiro_ai::KiroAdapter),
+            MiniMax(crate::adapters::minimax::MiniMaxAdapter),
+            NousResearch(crate::adapters::nous_research::NousResearchAdapter),
+            NvidiaNim(crate::adapters::nvidia_nim::NvidiaNimAdapter),
+            OllamaCloud(crate::adapters::ollama_cloud::OllamaCloudAdapter),
+            OpenCodeGo(crate::adapters::opencode_go::OpenCodeGoAdapter),
+            OpenCodeZen(crate::adapters::opencode_zen::OpenCodeZenAdapter),
+            OpenRouter(crate::adapters::openrouter::OpenRouterAdapter),
+        }
+        custom {
+            Custom(crate::adapters::custom_adapter::CustomAdapter),
+            #[cfg(any(test, feature = "test-utils"))]
+            Mock(crate::adapters::mock::MockAdapter),
+        }
     }
 }
 
@@ -804,23 +875,7 @@ where
 /// MiniMax, then OpenCode Zen, then Ollama Cloud, then the remaining
 /// OpenAI-compatible providers, then Gemini and Antigravity. Callers may
 /// reorder, filter, or wrap the results.
-pub fn builtin_adapters() -> Vec<ProviderAdapterEnum> {
-    vec![
-        ProviderAdapterEnum::OpenRouter(OpenRouterAdapter::new()),
-        ProviderAdapterEnum::MiniMax(MiniMaxAdapter::new()),
-        ProviderAdapterEnum::OpenCodeGo(OpenCodeGoAdapter::new()),
-        ProviderAdapterEnum::OpenCodeZen(OpenCodeZenAdapter::new()),
-        ProviderAdapterEnum::OllamaCloud(OllamaCloudAdapter::new()),
-        ProviderAdapterEnum::NousResearch(NousResearchAdapter::new()),
-        ProviderAdapterEnum::NvidiaNim(NvidiaNimAdapter::new()),
-        ProviderAdapterEnum::Kilocode(KilocodeAdapter::new()),
-        ProviderAdapterEnum::CloudflareWorkersAI(CloudflareWorkersAIAdapter::new()),
-        ProviderAdapterEnum::Gemini(GeminiAdapter::new()),
-        ProviderAdapterEnum::Antigravity(AntigravityAdapter::new()),
-        ProviderAdapterEnum::Codex(CodexAdapter::new()),
-        ProviderAdapterEnum::Kiro(KiroAdapter::new()),
-    ]
-}
+
 
 // =====================================================================
 // Tests
