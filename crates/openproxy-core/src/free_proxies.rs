@@ -1012,6 +1012,15 @@ async fn sync_gproxynet() -> crate::error::Result<Vec<ScrapedProxy>> {
     Ok(list)
 }
 
+
+/// Sync all providers using a `ServiceContainer` for dependency injection.
+pub async fn sync_all_providers_with_container(
+    services: &crate::di::ServiceContainer,
+) -> crate::error::Result<SyncSummary> {
+    let db_pool = services.db_pool()?;
+    sync_all_providers(db_pool).await
+}
+
 pub async fn sync_all_providers(db_pool: Arc<DbPool>) -> crate::error::Result<SyncSummary> {
     let mut errors = Vec::new();
     let mut fetched = 0;

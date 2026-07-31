@@ -138,6 +138,19 @@ impl std::fmt::Debug for DiscoveryScheduler {
 /// in production. Tests typically pass `1` and a `0` initial
 /// stagger so a `#[tokio::test]` with `tokio::time::pause()` can
 /// step through ticks deterministically.
+
+/// Start the discovery scheduler using a `ServiceContainer` for dependency injection.
+pub async fn start_with_container(
+    services: &crate::di::ServiceContainer,
+    config: DiscoverySchedulerConfig,
+) -> crate::error::Result<DiscoveryScheduler> {
+    let db_pool = services.db_pool()?;
+    let master_key = services.master_key()?;
+    let adapters = services.adapters()?;
+    let upstream_client = services.upstream_client()?;
+    Ok(start(db_pool, master_key, adapters, upstream_client, config).await)
+}
+
 pub async fn start(
     db_pool: Arc<DbPool>,
     master_key: Arc<MasterKey>,

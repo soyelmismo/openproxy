@@ -18,6 +18,7 @@
 //!   an error.
 
 use crate::accounts;
+use crate::validation::{validate_base_url, Validatable};
 use crate::error::{CoreError, Result};
 use crate::ids::{AccountId, ComboId, ComboTargetId, ModelId, ModelRowId, ProviderId};
 use crate::models;
@@ -37,31 +38,7 @@ use std::time::Duration;
 
 /// Validate that a `base_url` is a well-formed HTTP(S) URL with a non-empty
 /// host. Rejects data URIs, file URIs, bare hosts, and any other scheme.
-fn validate_base_url(url: &str) -> Result<()> {
-    // ponytail: [parseo url manual] [usar crate url o http::Uri en el futuro]
-    if !(url.starts_with("http://") || url.starts_with("https://")) {
-        return Err(CoreError::Validation(format!(
-            "base_url must start with http:// or https://, got: {url}"
-        )));
-    }
-    // Strip the scheme and extract host (everything up to the first `/`,
-    // or end-of-string after `://`). Port is allowed as part of host.
-    let remainder = &url[url.find("://").unwrap() + 3..];
-    let host_end = remainder.find('/').unwrap_or(remainder.len());
-    let host_part = &remainder[..host_end];
-    // Strip port if present
-    let host = if let Some(colon_pos) = host_part.rfind(':') {
-        &host_part[..colon_pos]
-    } else {
-        host_part
-    };
-    if host.is_empty() {
-        return Err(CoreError::Validation(format!(
-            "base_url must have a non-empty host, got: {url}"
-        )));
-    }
-    Ok(())
-}
+
 
 // =====================================================================
 // Providers
@@ -83,12 +60,23 @@ pub struct CreateProviderInput {
     pub rate_limit_scope: Option<crate::providers::RateLimitScope>,
 }
 
+impl Validatable for CreateProviderInput {
+    fn validate(&self) -> Result<()> {
+        validate_base_url(&self.base_url)?;
+        AuthType::parse(&self.auth_type).map_err(CoreError::Validation)?;
+        ProviderFormat::parse(&self.format).map_err(CoreError::Validation)?;
+        Ok(())
+    }
+}
+
+
 /// Insert a new provider. Returns the [`ProviderId`] used.
 ///
 /// Errors:
 /// - [`CoreError::Validation`] on unknown `auth_type` / `format` or duplicate
 ///   id (delegated to [`providers::create`]).
 pub fn create_provider(conn: &Connection, input: CreateProviderInput) -> Result<ProviderId> {
+    input.validate()?;
     validate_base_url(&input.base_url)?;
     let id = ProviderId::new(input.id);
     let auth = AuthType::parse(&input.auth_type).map_err(CoreError::Validation)?;
@@ -178,6 +166,16 @@ pub struct UpdateProviderInput {
     pub rate_limit_scope: Option<crate::providers::RateLimitScope>,
 }
 
+impl Validatable for UpdateProviderInput {
+    fn validate(&self) -> Result<()> {
+        if let Some(ref url) = self.base_url {
+            validate_base_url(url)?;
+        }
+        Ok(())
+    }
+}
+
+
 impl<'de> Deserialize<'de> for UpdateProviderInput {
     fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
     where
@@ -254,6 +252,7 @@ pub fn update_provider(
     id: &ProviderId,
     input: UpdateProviderInput,
 ) -> Result<()> {
+    input.validate()?;
     // Validate base_url if it is being updated.
     if let Some(ref url) = input.base_url {
         validate_base_url(url)?;

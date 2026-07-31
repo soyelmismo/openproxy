@@ -864,6 +864,18 @@ pub fn auto_create_combos(conn: &Connection) -> Result<usize> {
 
 /// Background sync task: periodically fetch models.dev, enrich, and
 /// auto-create combos. Runs at the configured interval.
+
+/// Background sync task using a `ServiceContainer` for dependency injection.
+pub async fn start_sync_scheduler_with_container(
+    services: &crate::di::ServiceContainer,
+    check_interval_secs: u64,
+) -> Result<()> {
+    let db_pool = services.db_pool()?;
+    let upstream_client = services.upstream_client()?;
+    start_sync_scheduler(db_pool, upstream_client, check_interval_secs).await;
+    Ok(())
+}
+
 pub async fn start_sync_scheduler(
     db_pool: std::sync::Arc<openproxy_db::DbPool>,
     upstream_client: Arc<UpstreamClient>,

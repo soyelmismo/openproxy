@@ -12,6 +12,7 @@
 //! (`key_prefix=NULL`, `scopes=["chat"]`, `is_active=1`, etc.).
 
 use crate::error::{CoreError, Result};
+use crate::validation::Validatable;
 use crate::ids::ApiKeyId;
 use chrono::{DateTime, Utc};
 use rusqlite::{Connection, OptionalExtension, Row, params};
@@ -55,6 +56,16 @@ pub struct ApiKey {
 
 /// Input to [`create`]. All fields except `scopes` are optional; an
 /// empty `scopes` vector is rejected by the caller.
+impl Validatable for CreateApiKeyInput {
+    fn validate(&self) -> Result<()> {
+        if self.scopes.is_empty() {
+            return Err(CoreError::Validation(
+                "scopes must contain at least one entry".into(),
+            ));
+        }
+        Ok(())
+    }
+}
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CreateApiKeyInput {
     pub label: Option<String>,
@@ -144,6 +155,7 @@ pub fn create(
     input: CreateApiKeyInput,
     created_by: &str,
 ) -> Result<(ApiKey, String)> {
+    input.validate()?;
     if input.scopes.is_empty() {
         return Err(CoreError::Validation(
             "scopes must contain at least one entry".into(),
