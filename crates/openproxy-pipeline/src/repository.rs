@@ -930,7 +930,9 @@ pub fn list_targets(conn: &rusqlite::Connection, combo_id: ComboId) -> Result<Ve
              FROM combo_targets ct \
              INNER JOIN providers p ON p.id = ct.provider_id \
              WHERE ct.combo_id = ?1 AND p.active = 1 \
-                 \
+                 AND (SELECT count(*) FROM target_cooldowns tc \
+                      WHERE tc.combo_target_id = ct.id \
+                        AND datetime(tc.cooldown_until) > datetime('now')) = 0 \
              ORDER BY ct.priority_order ASC, ct.id ASC",
         )
         .map_err(|e| openproxy_types::error::CoreError::Internal(e.to_string()))?;
