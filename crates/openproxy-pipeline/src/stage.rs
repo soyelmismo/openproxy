@@ -25,8 +25,38 @@ pub trait PipelineStage: Send + Sync {
 
 pub use PipelineStage as Stage;
 
-#[derive(Clone)]
-pub enum PipelineStageEnum {
+macro_rules! define_pipeline_stages {
+    (
+        $( $variant:ident ( $type:ty ) ),* $(,)?
+    ) => {
+        #[derive(Clone)]
+        pub enum PipelineStageEnum {
+            $( $variant($type), )*
+        }
+
+        impl PipelineStage for PipelineStageEnum {
+            async fn execute(
+                &self,
+                ctx: &mut PipelineContext,
+                next: PipelineNext<'_>,
+            ) -> Result<PipelineResult, CoreError> {
+                match self {
+                    $( Self::$variant(s) => s.execute(ctx, next).await, )*
+                }
+            }
+        }
+
+        $(
+            impl From<$type> for PipelineStageEnum {
+                fn from(stage: $type) -> Self {
+                    Self::$variant(stage)
+                }
+            }
+        )*
+    };
+}
+
+define_pipeline_stages! {
     TelemetryRecorder(crate::stages::telemetry::TelemetryRecorderStage),
     QuotaEnforcer(crate::stages::quota::QuotaEnforcerStage),
     Router(crate::stages::router::RouterStage),
@@ -38,25 +68,15 @@ pub enum PipelineStageEnum {
     Dispatch(crate::stages::target::DispatchStage),
 }
 
-impl PipelineStage for PipelineStageEnum {
-    async fn execute(
-        &self,
-        ctx: &mut PipelineContext,
-        next: PipelineNext<'_>,
-    ) -> Result<PipelineResult, CoreError> {
-        match self {
-            Self::TelemetryRecorder(s) => s.execute(ctx, next).await,
-            Self::QuotaEnforcer(s) => s.execute(ctx, next).await,
-            Self::Router(s) => s.execute(ctx, next).await,
-            Self::UpstreamExecutor(s) => s.execute(ctx, next).await,
-            Self::OAuthRefresh(s) => s.execute(ctx, next).await,
-            Self::CustomAdapter(s) => s.execute(ctx, next).await,
-            Self::TimeoutResolution(s) => s.execute(ctx, next).await,
-            Self::Formatting(s) => s.execute(ctx, next).await,
-            Self::Dispatch(s) => s.execute(ctx, next).await,
-        }
-    }
+#[macro_export]
+macro_rules! pipeline_chain {
+    ( $( $stage:expr ),* $(,)? ) => {
+        $crate::stage::PipelineChain::new(vec![
+            $( $crate::stage::PipelineStageEnum::from($stage) ),*
+        ])
+    };
 }
+pub use pipeline_chain;
 
 /// A helper to compose stages.
 #[derive(Clone)]

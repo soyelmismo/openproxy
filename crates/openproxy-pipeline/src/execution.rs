@@ -9,19 +9,19 @@ impl Pipeline {
     /// Drive one chat-completion request to completion.
     pub async fn run(&self, req: PipelineRequest) -> PipelineResult {
         use crate::context::PipelineContext;
-        use crate::stage::{PipelineChain, PipelineStageEnum};
+        use crate::pipeline_chain;
         use crate::stages::{
             executor::UpstreamExecutorStage, quota::QuotaEnforcerStage, router::RouterStage,
             telemetry::TelemetryRecorderStage,
         };
 
         let ctx = PipelineContext::new(req, self.clone());
-        let chain = PipelineChain::new(vec![
-            PipelineStageEnum::TelemetryRecorder(TelemetryRecorderStage),
-            PipelineStageEnum::Router(RouterStage),
-            PipelineStageEnum::QuotaEnforcer(QuotaEnforcerStage),
-            PipelineStageEnum::UpstreamExecutor(UpstreamExecutorStage),
-        ]);
+        let chain = pipeline_chain![
+            TelemetryRecorderStage,
+            RouterStage,
+            QuotaEnforcerStage,
+            UpstreamExecutorStage,
+        ];
 
         match chain.execute(ctx).await {
             Ok(result) => result,
@@ -187,14 +187,18 @@ impl Pipeline {
             timestamp: Some(String::new()),
             endpoint_kind: Some(openproxy_types::endpoint::EndpointKind::Chat),
         });
-        use crate::stage::PipelineStageEnum;
-        let chain = crate::stage::PipelineChain::new(vec![
-            PipelineStageEnum::OAuthRefresh(crate::stages::target::OAuthRefreshStage),
-            PipelineStageEnum::CustomAdapter(crate::stages::target::CustomAdapterStage),
-            PipelineStageEnum::TimeoutResolution(crate::stages::target::TimeoutResolutionStage),
-            PipelineStageEnum::Formatting(crate::stages::target::FormattingStage),
-            PipelineStageEnum::Dispatch(crate::stages::target::DispatchStage),
-        ]);
+        use crate::pipeline_chain;
+        use crate::stages::target::{
+            CustomAdapterStage, DispatchStage, FormattingStage, OAuthRefreshStage,
+            TimeoutResolutionStage,
+        };
+        let chain = pipeline_chain![
+            OAuthRefreshStage,
+            CustomAdapterStage,
+            TimeoutResolutionStage,
+            FormattingStage,
+            DispatchStage,
+        ];
 
         match chain.execute_nested(&mut ctx).await {
             Ok(result) => result,
