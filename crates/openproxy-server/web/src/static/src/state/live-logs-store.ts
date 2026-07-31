@@ -184,10 +184,10 @@ class LiveLogsStore {
 
     // Sequence check for out of order non-terminal events
     if (existing && !event.terminal) {
-      if (existing.stageSeq > event.stage_seq) {
+      if (event.stage_seq > 0 && existing.stageSeq > 0 && existing.stageSeq > event.stage_seq) {
         return;
       }
-      if (existing.stageSeq === event.stage_seq && existing.stageRank >= event.stage_rank) {
+      if (existing.stageRank > event.stage_rank) {
         return;
       }
     }
@@ -428,24 +428,61 @@ class LiveLogsStore {
 
   public selectInflightRows(): AttemptState[] {
     const nowMs = Date.now() - this.clockOffsetMs;
-    const arr = Array.from(this.attemptsByKey.values()).filter((a) => {
-      if (a.terminal) return false;
+    const map = new Map<string, AttemptState>();
+
+    for (const a of this.attemptsByKey.values()) {
+      if (a.terminal) continue;
       if (a.updatedAtMs > 1_000_000_000_000 && (nowMs - a.updatedAtMs > 60_000)) {
         a.terminal = true;
         a.terminalKind = "failed";
         a.stage = "failed";
         a.error = a.error || "Inflight timeout (stale request)";
-        return false;
+        continue;
       }
-      return true;
+      const groupKey = a.requestId || a.attemptKey;
+      const existing = map.get(groupKey);
+      if (!existing || a.stageRank >= existing.stageRank) {
+        map.set(groupKey, a);
+      }
+    }
+
+    const arr = Array.from(map.values());
+    arr.sort((a, b) => {
+      if (b.startedAtMs !== a.startedAtMs) return b.startedAtMs - a.startedAtMs;
+      return b.attemptKey.localeCompare(a.attemptKey);
     });
-    arr.sort((a, b) => b.startedAtMs - a.startedAtMs);
     return arr;
   }
 
   public selectFinishedRows(): AttemptState[] {
-    const arr = Array.from(this.attemptsByKey.values()).filter((a) => a.terminal);
-    arr.sort((a, b) => b.startedAtMs - a.startedAtMs);
+    const map = new Map<string, AttemptState>();
+    for (const a of this.attemptsByKey.values()) {
+      if (!a.terminal) continue;
+      const groupKey = a.requestId || a.attemptKey;
+      const existing = map.get(groupKey);
+      if (!existing) {
+        map.set(groupKey, a);
+      } else {
+        const existingHasRow = Boolean(existing.rowId);
+        const aHasRow = Boolean(a.rowId);
+        if (!existingHasRow && aHasRow) {
+          map.set(groupKey, a);
+        } else if (existingHasRow === aHasRow) {
+          if ((a.rowId || 0) > (existing.rowId || 0)) {
+            map.set(groupKey, a);
+          } else if ((a.rowId || 0) === (existing.rowId || 0) && a.updatedAtMs > existing.updatedAtMs) {
+            map.set(groupKey, a);
+          }
+        }
+      }
+    }
+
+    const arr = Array.from(map.values());
+    arr.sort((a, b) => {
+      if (b.startedAtMs !== a.startedAtMs) return b.startedAtMs - a.startedAtMs;
+      if ((b.rowId || 0) !== (a.rowId || 0)) return (b.rowId || 0) - (a.rowId || 0);
+      return b.attemptKey.localeCompare(a.attemptKey);
+    });
     return arr;
   }
 

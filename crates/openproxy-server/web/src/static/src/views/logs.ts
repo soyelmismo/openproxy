@@ -65,8 +65,9 @@ function saveVisibleColumns(): void {
 function handleLogsMessage(event: MessageEvent): void {
   try {
     const env = JSON.parse(event.data) as WsEnvelope;
-    // Pass directly to the store
+    // Pass directly to the store and request reactive render update
     liveLogsStore.dispatch(env);
+    requestUpdate();
   } catch (e) {
     // Ignore invalid JSON
   }

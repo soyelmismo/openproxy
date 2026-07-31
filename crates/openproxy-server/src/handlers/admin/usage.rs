@@ -391,16 +391,18 @@ pub(crate) async fn stream_usage_rows(socket: WebSocket, state: AppState) {
         // Compute `last_known_id` BEFORE redacting (redaction
         // consumes `rows` via `into_iter`).
         let mut last_known_id: i64 = rows.iter().map(|r| r.id.0).max().unwrap_or(0);
+        let active_attempts = openproxy_core::usage::get_active_inflight_attempts();
+        let server_now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as u64;
+
         outbox_send(&outbox_tx, json!({
-            "type": "history",
-            // SECURITY: redact heavyweight fields (request/response bodies
-            // and headers) before sending the initial history batch. The
-            // live `row` events below are already redacted by
-            // `publish_usage_row` → `redact_for_broadcast`; the history
-            // batch must apply the same redaction so the initial rows
-            // don't leak bodies/headers to the dashboard. The full
-            // bodies are available on demand via /usage/detail.
-            "rows": rows.into_iter().map(openproxy_types::usage::redact_for_broadcast).collect::<Vec<_>>()
+            "type": "snapshot",
+            "cursor": 0,
+            "server_now": server_now,
+            "rows": rows.into_iter().map(openproxy_types::usage::redact_for_broadcast).collect::<Vec<_>>(),
+            "attempts": active_attempts,
         })).await;
 
         // 4. Event loop — usage_rx, stage_rx, and notification_rx are

@@ -62,6 +62,30 @@ pub struct StageEvent {
     pub endpoint_kind: EndpointKind,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InflightAttempt {
+    pub attempt_key: String,
+    pub request_id: String,
+    pub trace_id: String,
+    pub provider_id: String,
+    pub upstream_model_id: String,
+    pub started_at_ms: u64,
+    pub updated_at_ms: u64,
+    pub stage: String,
+    pub stage_seq: u32,
+    pub stage_rank: u8,
+    pub elapsed_ms_at_event: u64,
+    pub connect_ms: Option<u64>,
+    pub ttft_ms: Option<u64>,
+    pub status_code: Option<u16>,
+    pub terminal: bool,
+    pub terminal_kind: Option<String>,
+    pub error: Option<String>,
+    pub row_id: Option<i64>,
+    pub source: String,
+}
+
 pub static STAGE_EVENT_PUBLISHER: once_cell::sync::OnceCell<fn(StageEvent)> =
     once_cell::sync::OnceCell::new();
 
