@@ -34,6 +34,15 @@ impl EndpointKind {
     }
 }
 
+
+impl std::str::FromStr for EndpointKind {
+    type Err = String;
+
+    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
+        Self::parse(s)
+    }
+}
+
 impl std::fmt::Display for EndpointKind {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(self.as_str())

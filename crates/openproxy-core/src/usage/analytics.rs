@@ -931,14 +931,7 @@ pub fn recent(
             let race_attempts_u8 = u8::try_from(race_attempts).ok();
             let is_streaming_bool = is_streaming != 0;
             let stream_complete_bool = stream_complete != 0;
-            let endpoint_kind = match endpoint_kind_str.as_str() {
-                "chat" => openproxy_types::endpoint::EndpointKind::Chat,
-                "audio" => openproxy_types::endpoint::EndpointKind::Audio,
-                "image" => openproxy_types::endpoint::EndpointKind::Image,
-                "embedding" => openproxy_types::endpoint::EndpointKind::Embedding,
-                "video" => openproxy_types::endpoint::EndpointKind::Video,
-                _ => openproxy_types::endpoint::EndpointKind::Chat,
-            };
+            let endpoint_kind = endpoint_kind_str.parse().unwrap_or_default();
             Ok(openproxy_types::usage::RecentUsageRow {
                 id: UsageId(id),
                 request_id,
@@ -1121,14 +1114,7 @@ pub fn recent_desc(
             let race_attempts_u8 = u8::try_from(race_attempts).ok();
             let is_streaming_bool = is_streaming != 0;
             let stream_complete_bool = stream_complete != 0;
-            let endpoint_kind = match endpoint_kind_str.as_str() {
-                "chat" => openproxy_types::endpoint::EndpointKind::Chat,
-                "audio" => openproxy_types::endpoint::EndpointKind::Audio,
-                "image" => openproxy_types::endpoint::EndpointKind::Image,
-                "embedding" => openproxy_types::endpoint::EndpointKind::Embedding,
-                "video" => openproxy_types::endpoint::EndpointKind::Video,
-                _ => openproxy_types::endpoint::EndpointKind::Chat,
-            };
+            let endpoint_kind = endpoint_kind_str.parse().unwrap_or_default();
 
             Ok(openproxy_types::usage::RecentUsageRow {
                 id: UsageId(id),
@@ -1296,14 +1282,7 @@ pub fn row_for_broadcast_by_id(
             let race_attempts_u8 = u8::try_from(race_attempts).ok();
             let is_streaming_bool = is_streaming != 0;
             let stream_complete_bool = stream_complete != 0;
-            let endpoint_kind = match endpoint_kind_str.as_str() {
-                "chat" => openproxy_types::endpoint::EndpointKind::Chat,
-                "audio" => openproxy_types::endpoint::EndpointKind::Audio,
-                "image" => openproxy_types::endpoint::EndpointKind::Image,
-                "embedding" => openproxy_types::endpoint::EndpointKind::Embedding,
-                "video" => openproxy_types::endpoint::EndpointKind::Video,
-                _ => openproxy_types::endpoint::EndpointKind::Chat,
-            };
+            let endpoint_kind = endpoint_kind_str.parse().unwrap_or_default();
             Ok(openproxy_types::usage::RecentUsageRow {
                 id: UsageId(id),
                 request_id,
@@ -1449,14 +1428,7 @@ pub fn detail_by_id(conn: &Connection, id: i64) -> Result<Option<UsageDetailRow>
             }
             let request_headers = request_headers.and_then(|s| serde_json::from_str(&s).ok());
             let response_headers = response_headers.and_then(|s| serde_json::from_str(&s).ok());
-            let endpoint_kind = match endpoint_kind_str.as_str() {
-                "chat" => openproxy_types::endpoint::EndpointKind::Chat,
-                "audio" => openproxy_types::endpoint::EndpointKind::Audio,
-                "image" => openproxy_types::endpoint::EndpointKind::Image,
-                "embedding" => openproxy_types::endpoint::EndpointKind::Embedding,
-                "video" => openproxy_types::endpoint::EndpointKind::Video,
-                _ => openproxy_types::endpoint::EndpointKind::Chat,
-            };
+            let endpoint_kind = endpoint_kind_str.parse().unwrap_or_default();
 
             Ok(UsageDetailRow {
                 id: UsageId(id),
@@ -1605,14 +1577,7 @@ pub fn detail_by_trace_id(conn: &Connection, trace_id: &str) -> Result<Option<Us
             }
             let request_headers = request_headers.and_then(|s| serde_json::from_str(&s).ok());
             let response_headers = response_headers.and_then(|s| serde_json::from_str(&s).ok());
-            let endpoint_kind = match endpoint_kind_str.as_str() {
-                "chat" => openproxy_types::endpoint::EndpointKind::Chat,
-                "audio" => openproxy_types::endpoint::EndpointKind::Audio,
-                "image" => openproxy_types::endpoint::EndpointKind::Image,
-                "embedding" => openproxy_types::endpoint::EndpointKind::Embedding,
-                "video" => openproxy_types::endpoint::EndpointKind::Video,
-                _ => openproxy_types::endpoint::EndpointKind::Chat,
-            };
+            let endpoint_kind = endpoint_kind_str.parse().unwrap_or_default();
 
             Ok(UsageDetailRow {
                 id: UsageId(id),
