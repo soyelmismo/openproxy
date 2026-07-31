@@ -243,7 +243,7 @@ impl<S: Stream<Item = Bytes> + Unpin> Stream for OpenAIToAnthropicSseStream<S> {
                                 });
                                 out.extend_from_slice(b"event: message_start\ndata: ");
                                 out.extend_from_slice(
-                                    serde_json::to_string(&start_event).unwrap().as_bytes(),
+                                    serde_json::to_string(&start_event).unwrap_or_else(|_| r#"{"type":"error","error":{"type":"internal_error","message":"Internal server error"}}"#.to_string()).as_bytes(),
                                 );
                                 out.extend_from_slice(b"\n\n");
 
@@ -256,7 +256,7 @@ impl<S: Stream<Item = Bytes> + Unpin> Stream for OpenAIToAnthropicSseStream<S> {
                                 });
                                 out.extend_from_slice(b"event: content_block_start\ndata: ");
                                 out.extend_from_slice(
-                                    serde_json::to_string(&block_start).unwrap().as_bytes(),
+                                    serde_json::to_string(&block_start).unwrap_or_else(|_| r#"{"type":"error","error":{"type":"internal_error","message":"Internal server error"}}"#.to_string()).as_bytes(),
                                 );
                                 out.extend_from_slice(b"\n\n");
                             }
@@ -274,7 +274,7 @@ impl<S: Stream<Item = Bytes> + Unpin> Stream for OpenAIToAnthropicSseStream<S> {
                                                 b"event: content_block_stop\ndata: ",
                                             );
                                             out.extend_from_slice(
-                                                serde_json::to_string(&stop).unwrap().as_bytes(),
+                                                serde_json::to_string(&stop).unwrap_or_else(|_| r#"{"type":"error","error":{"type":"internal_error","message":"Internal server error"}}"#.to_string()).as_bytes(),
                                             );
                                             out.extend_from_slice(b"\n\n");
                                             this.in_tool_block = false;
@@ -291,7 +291,7 @@ impl<S: Stream<Item = Bytes> + Unpin> Stream for OpenAIToAnthropicSseStream<S> {
                                                 b"event: content_block_start\ndata: ",
                                             );
                                             out.extend_from_slice(
-                                                serde_json::to_string(&start).unwrap().as_bytes(),
+                                                serde_json::to_string(&start).unwrap_or_else(|_| r#"{"type":"error","error":{"type":"internal_error","message":"Internal server error"}}"#.to_string()).as_bytes(),
                                             );
                                             out.extend_from_slice(b"\n\n");
                                         }
@@ -304,7 +304,7 @@ impl<S: Stream<Item = Bytes> + Unpin> Stream for OpenAIToAnthropicSseStream<S> {
                                             b"event: content_block_delta\ndata: ",
                                         );
                                         out.extend_from_slice(
-                                            serde_json::to_string(&block_delta).unwrap().as_bytes(),
+                                            serde_json::to_string(&block_delta).unwrap_or_else(|_| r#"{"type":"error","error":{"type":"internal_error","message":"Internal server error"}}"#.to_string()).as_bytes(),
                                         );
                                         out.extend_from_slice(b"\n\n");
                                     }
@@ -318,8 +318,7 @@ impl<S: Stream<Item = Bytes> + Unpin> Stream for OpenAIToAnthropicSseStream<S> {
                                                         b"event: content_block_stop\ndata: ",
                                                     );
                                                     out.extend_from_slice(
-                                                        serde_json::to_string(&stop)
-                                                            .unwrap()
+                                                        serde_json::to_string(&stop).unwrap_or_else(|_| r#"{"type":"error","error":{"type":"internal_error","message":"Internal server error"}}"#.to_string())
                                                             .as_bytes(),
                                                     );
                                                     out.extend_from_slice(b"\n\n");
@@ -332,8 +331,7 @@ impl<S: Stream<Item = Bytes> + Unpin> Stream for OpenAIToAnthropicSseStream<S> {
                                                         b"event: content_block_stop\ndata: ",
                                                     );
                                                     out.extend_from_slice(
-                                                        serde_json::to_string(&stop)
-                                                            .unwrap()
+                                                        serde_json::to_string(&stop).unwrap_or_else(|_| r#"{"type":"error","error":{"type":"internal_error","message":"Internal server error"}}"#.to_string())
                                                             .as_bytes(),
                                                     );
                                                     out.extend_from_slice(b"\n\n");
@@ -359,8 +357,7 @@ impl<S: Stream<Item = Bytes> + Unpin> Stream for OpenAIToAnthropicSseStream<S> {
                                                     b"event: content_block_start\ndata: ",
                                                 );
                                                 out.extend_from_slice(
-                                                    serde_json::to_string(&start)
-                                                        .unwrap()
+                                                    serde_json::to_string(&start).unwrap_or_else(|_| r#"{"type":"error","error":{"type":"internal_error","message":"Internal server error"}}"#.to_string())
                                                         .as_bytes(),
                                                 );
                                                 out.extend_from_slice(b"\n\n");
@@ -379,8 +376,7 @@ impl<S: Stream<Item = Bytes> + Unpin> Stream for OpenAIToAnthropicSseStream<S> {
                                                     b"event: content_block_delta\ndata: ",
                                                 );
                                                 out.extend_from_slice(
-                                                    serde_json::to_string(&block_delta)
-                                                        .unwrap()
+                                                    serde_json::to_string(&block_delta).unwrap_or_else(|_| r#"{"type":"error","error":{"type":"internal_error","message":"Internal server error"}}"#.to_string())
                                                         .as_bytes(),
                                                 );
                                                 out.extend_from_slice(b"\n\n");
@@ -401,7 +397,7 @@ impl<S: Stream<Item = Bytes> + Unpin> Stream for OpenAIToAnthropicSseStream<S> {
                                         });
                                         out.extend_from_slice(b"event: content_block_stop\ndata: ");
                                         out.extend_from_slice(
-                                            serde_json::to_string(&stop).unwrap().as_bytes(),
+                                            serde_json::to_string(&stop).unwrap_or_else(|_| r#"{"type":"error","error":{"type":"internal_error","message":"Internal server error"}}"#.to_string()).as_bytes(),
                                         );
                                         out.extend_from_slice(b"\n\n");
                                     }
@@ -420,7 +416,7 @@ impl<S: Stream<Item = Bytes> + Unpin> Stream for OpenAIToAnthropicSseStream<S> {
                                     });
                                     out.extend_from_slice(b"event: message_delta\ndata: ");
                                     out.extend_from_slice(
-                                        serde_json::to_string(&msg_delta).unwrap().as_bytes(),
+                                        serde_json::to_string(&msg_delta).unwrap_or_else(|_| r#"{"type":"error","error":{"type":"internal_error","message":"Internal server error"}}"#.to_string()).as_bytes(),
                                     );
                                     out.extend_from_slice(b"\n\n");
 
