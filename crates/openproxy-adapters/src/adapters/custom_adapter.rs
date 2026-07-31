@@ -241,3 +241,37 @@ impl ProviderAdapter for CustomAdapter {
         Ok(vec![])
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_build_chat_url() {
+        let adapter = CustomAdapter::from_config(ProviderAdapterConfig {
+            id: ProviderId::new("test"),
+            base_url: "https://api.test.com/v1".to_string(),
+            auth_type: AdapterAuthType::Bearer,
+            format: AdapterFormat::Mixed,
+            extra_headers: vec![],
+        });
+
+        let model = ModelId::new("model-a");
+        assert_eq!(
+            adapter.build_chat_url(TargetFormat::Openai, &model),
+            "https://api.test.com/v1/chat/completions"
+        );
+        assert_eq!(
+            adapter.build_chat_url(TargetFormat::Anthropic, &model),
+            "https://api.test.com/v1/messages"
+        );
+        assert_eq!(
+            adapter.build_chat_url(TargetFormat::Gemini, &model),
+            "https://api.test.com/v1/chat/completions"
+        );
+        assert_eq!(
+            adapter.build_chat_url(TargetFormat::Responses, &model),
+            "https://api.test.com/v1/responses"
+        );
+    }
+}
