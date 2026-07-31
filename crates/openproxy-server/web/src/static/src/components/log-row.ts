@@ -122,7 +122,7 @@ export function renderLogRowHtml(
   const processing = !attempt.terminal;
   const isErrorState = (attempt.statusCode && attempt.statusCode >= 400) || attempt.statusCode === 0 || !!attempt.error || attempt.stage === "failed" || attempt.stage === "cancelled";
   const statusErr = !processing && isErrorState;
-  const streaming = attempt.row ? (!!attempt.row.is_streaming && !attempt.row.stream_complete) : (attempt.stage === "streaming");
+  const streaming = !attempt.terminal && !isErrorState && (attempt.row ? (!!attempt.row.is_streaming && !attempt.row.stream_complete) : (attempt.stage === "streaming"));
   
   const cls = [
     "log-row",

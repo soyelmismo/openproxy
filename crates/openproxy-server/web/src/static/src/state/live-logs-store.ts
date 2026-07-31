@@ -162,6 +162,10 @@ class LiveLogsStore {
           
           this.attemptsByKey.set(event.attempt_key, oldAttempt);
           this.trackRequestGroup(event.request_id, event.attempt_key);
+        } else {
+          this.attemptsByKey.delete(unknownKey);
+          const group = this.requestGroups.get(event.request_id);
+          if (group) group.delete(unknownKey);
         }
       }
     }
@@ -188,6 +192,8 @@ class LiveLogsStore {
       }
     }
 
+    const isTerminal = event.terminal || event.stage === "completed" || event.stage === "failed" || event.stage === "cancelled" || (event.status_code != null && event.status_code >= 400) || !!event.error;
+
     const newState: AttemptState = existing ? { ...existing } : {
       attemptKey: event.attempt_key,
       requestId: event.request_id,
@@ -203,8 +209,8 @@ class LiveLogsStore {
       connectMs: event.connect_ms || null,
       ttftMs: event.ttft_ms || null,
       statusCode: event.status_code || null,
-      terminal: event.terminal,
-      terminalKind: event.terminal ? (event.stage as "completed" | "failed" | "cancelled") : null,
+      terminal: isTerminal,
+      terminalKind: isTerminal ? ((event.stage as "completed" | "failed" | "cancelled") || (event.status_code && event.status_code >= 400 ? "failed" : "completed")) : null,
       error: event.error || null,
       rowId: null,
       row: null,
@@ -218,8 +224,8 @@ class LiveLogsStore {
       newState.stageSeq = event.stage_seq;
       newState.stageRank = event.stage_rank;
       newState.elapsedMsAtEvent = event.event_time - newState.startedAtMs;
-      newState.terminal = event.terminal;
-      if (event.terminal) newState.terminalKind = event.stage as "completed" | "failed" | "cancelled";
+      newState.terminal = isTerminal;
+      if (isTerminal) newState.terminalKind = (event.stage as "completed" | "failed" | "cancelled") || (event.status_code && event.status_code >= 400 ? "failed" : "completed");
       if (event.connect_ms != null) newState.connectMs = event.connect_ms;
       if (event.ttft_ms != null) newState.ttftMs = event.ttft_ms;
       if (event.status_code != null) newState.statusCode = event.status_code;
@@ -251,6 +257,10 @@ class LiveLogsStore {
           
           this.attemptsByKey.set(attemptKey, oldAttempt);
           this.trackRequestGroup(row.request_id, attemptKey);
+        } else {
+          this.attemptsByKey.delete(unknownKey);
+          const group = this.requestGroups.get(row.request_id);
+          if (group) group.delete(unknownKey);
         }
       }
     }
@@ -416,6 +426,29 @@ class LiveLogsStore {
     return arr;
   }
 
+  public selectInflightRows(): AttemptState[] {
+    const nowMs = Date.now() - this.clockOffsetMs;
+    const arr = Array.from(this.attemptsByKey.values()).filter((a) => {
+      if (a.terminal) return false;
+      if (a.updatedAtMs > 1_000_000_000_000 && (nowMs - a.updatedAtMs > 60_000)) {
+        a.terminal = true;
+        a.terminalKind = "failed";
+        a.stage = "failed";
+        a.error = a.error || "Inflight timeout (stale request)";
+        return false;
+      }
+      return true;
+    });
+    arr.sort((a, b) => b.startedAtMs - a.startedAtMs);
+    return arr;
+  }
+
+  public selectFinishedRows(): AttemptState[] {
+    const arr = Array.from(this.attemptsByKey.values()).filter((a) => a.terminal);
+    arr.sort((a, b) => b.startedAtMs - a.startedAtMs);
+    return arr;
+  }
+
   public selectDetail(identity: { kind: "row_id", id: number } | { kind: "attempt", attemptKey: string }) {
     if (identity.kind === "row_id") {
       const attemptKey = this.attemptKeyByRowId.get(identity.id);
@@ -458,6 +491,7 @@ class LiveLogsStore {
     this.attemptKeyByRowId.clear();
     this.requestGroups.clear();
     this.attemptKeyRedirects.clear();
+    this.lastAppliedCursor = 0;
   }
 }
 

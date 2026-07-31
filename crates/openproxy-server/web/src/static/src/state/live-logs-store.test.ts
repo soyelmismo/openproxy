@@ -42,4 +42,148 @@ describe("liveLogsStore detail management", () => {
     expect(apiSpy).toHaveBeenCalledWith("/usage/detail?id=10");
     apiSpy.mockRestore();
   });
+
+  it("separates inflight and finished rows correctly", () => {
+    liveLogsStore.clearForTest();
+
+    liveLogsStore.dispatch({
+      type: "attempt_event",
+      cursor: 1,
+      event: {
+        attempt_key: "tr-inflight",
+        request_id: "req-1",
+        trace_id: "tr-inflight",
+        stage: "streaming",
+        event_time: 2000,
+        started_at: 1000,
+        stage_seq: 2,
+        stage_rank: 3,
+        terminal: false,
+      },
+    });
+
+    liveLogsStore.dispatch({
+      type: "attempt_event",
+      cursor: 2,
+      event: {
+        attempt_key: "tr-finished",
+        request_id: "req-2",
+        trace_id: "tr-finished",
+        stage: "completed",
+        event_time: 3000,
+        started_at: 1500,
+        stage_seq: 9999,
+        stage_rank: 4,
+        terminal: true,
+      },
+    });
+
+    const inflight = liveLogsStore.selectInflightRows();
+    const finished = liveLogsStore.selectFinishedRows();
+
+    expect(inflight.length).toBe(1);
+    expect(inflight[0]?.attemptKey).toBe("tr-inflight");
+
+    expect(finished.length).toBe(1);
+    expect(finished[0]?.attemptKey).toBe("tr-finished");
+  });
+
+  it("cleans orphan unknownKey when trace_id event or row arrives", () => {
+    liveLogsStore.clearForTest();
+
+    liveLogsStore.dispatch({
+      type: "attempt_event",
+      cursor: 1,
+      event: {
+        attempt_key: "req-3:unknown",
+        request_id: "req-3",
+        stage: "started",
+        event_time: 1000,
+        started_at: 1000,
+        stage_seq: 0,
+        stage_rank: 0,
+        terminal: false,
+      },
+    });
+
+    expect(liveLogsStore.attemptsByKey.has("req-3:unknown")).toBe(true);
+
+    liveLogsStore.dispatch({
+      type: "attempt_event",
+      cursor: 2,
+      event: {
+        attempt_key: "tr-3",
+        request_id: "req-3",
+        trace_id: "tr-3",
+        stage: "completed",
+        event_time: 2000,
+        started_at: 1000,
+        stage_seq: 9999,
+        stage_rank: 4,
+        terminal: true,
+      },
+    });
+
+    expect(liveLogsStore.attemptsByKey.has("req-3:unknown")).toBe(false);
+    expect(liveLogsStore.attemptsByKey.has("tr-3")).toBe(true);
+  });
+
+  it("marks attempt with status code >= 400 or error as terminal", () => {
+    liveLogsStore.clearForTest();
+
+    liveLogsStore.dispatch({
+      type: "attempt_event",
+      cursor: 1,
+      event: {
+        attempt_key: "tr-err",
+        request_id: "req-err",
+        trace_id: "tr-err",
+        stage: "failed",
+        status_code: 500,
+        error: "Upstream failure",
+        event_time: 2000,
+        started_at: 1000,
+        stage_seq: 3,
+        stage_rank: 4,
+        terminal: false,
+      },
+    });
+
+    const inflight = liveLogsStore.selectInflightRows();
+    const finished = liveLogsStore.selectFinishedRows();
+
+    expect(inflight.length).toBe(0);
+    expect(finished.length).toBe(1);
+    expect(finished[0]?.terminal).toBe(true);
+    expect(finished[0]?.terminalKind).toBe("failed");
+  });
+
+  it("auto-expires stale inflight requests older than 60s", () => {
+    liveLogsStore.clearForTest();
+
+    const staleTime = Date.now() - 70_000;
+    liveLogsStore.dispatch({
+      type: "attempt_event",
+      cursor: 1,
+      event: {
+        attempt_key: "tr-stale",
+        request_id: "req-stale",
+        trace_id: "tr-stale",
+        stage: "streaming",
+        event_time: staleTime,
+        started_at: staleTime,
+        stage_seq: 1,
+        stage_rank: 3,
+        terminal: false,
+      },
+    });
+
+    const inflight = liveLogsStore.selectInflightRows();
+    const finished = liveLogsStore.selectFinishedRows();
+
+    expect(inflight.length).toBe(0);
+    expect(finished.length).toBe(1);
+    expect(finished[0]?.terminal).toBe(true);
+    expect(finished[0]?.terminalKind).toBe("failed");
+  });
 });

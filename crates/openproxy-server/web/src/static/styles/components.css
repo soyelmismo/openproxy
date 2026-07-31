@@ -614,6 +614,58 @@ body.sidebar-collapsed .sidebar-toggle { text-align: center; }
   display: flex;
   flex-direction: column;
   overflow: hidden;
+  gap: 0.25rem;
+}
+.logs-section {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  border-bottom: 1px solid var(--color-border);
+}
+.logs-section:last-child {
+  border-bottom: none;
+  flex: 1;
+}
+.logs-section-inflight {
+  max-height: 240px;
+  flex-shrink: 0;
+}
+.logs-section-finished {
+  flex: 1;
+}
+.logs-section-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.35rem 0.75rem;
+  background: var(--color-surface);
+  border-bottom: 1px solid var(--color-border);
+  font-weight: 600;
+  font-size: 0.8rem;
+  user-select: none;
+}
+.logs-section-title {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  color: var(--color-text-main, inherit);
+}
+.logs-inflight-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #3b82f6;
+  display: inline-block;
+  animation: logs-recording-pulse 1.5s ease-out infinite;
+}
+.logs-section-count {
+  background: var(--color-bg);
+  border: 1px solid var(--color-border);
+  padding: 0.1rem 0.5rem;
+  border-radius: 10px;
+  font-size: 0.72rem;
+  font-family: var(--font-mono);
+  color: var(--color-text-muted);
 }
 .logs-scroll-area {
   flex: 1;

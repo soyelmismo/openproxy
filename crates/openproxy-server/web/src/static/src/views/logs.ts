@@ -102,10 +102,11 @@ function renderColumnsMenu(): TemplateResult {
 }
 
 function renderLogsView(): TemplateResult {
-  const allRows = liveLogsStore.selectLogRows();
-  const totalRows = allRows.length;
+  const inflightRows = liveLogsStore.selectInflightRows();
+  const finishedRows = liveLogsStore.selectFinishedRows();
+  const totalFinished = finishedRows.length;
   const rpp = state.logs.rowsPerPage;
-  const totalP = Math.max(1, Math.ceil(totalRows / rpp));
+  const totalP = Math.max(1, Math.ceil(totalFinished / rpp));
   
   if (state.logs.followTail) {
     state.logs.page = 1;
@@ -116,10 +117,11 @@ function renderLogsView(): TemplateResult {
   if (state.logs.page < 1) state.logs.page = 1;
   
   const start = (state.logs.page - 1) * rpp;
-  const end = Math.min(start + rpp, totalRows);
-  const pageRows = allRows.slice(start, end);
+  const end = Math.min(start + rpp, totalFinished);
+  const pageFinishedRows = finishedRows.slice(start, end);
   
   const visibleColKeys = state.logs.visibleColumns || new Set(LOG_COLUMNS.map((c) => c.key));
+  const nowOffsetMs = clockStore.nowMs - liveLogsStore.clockOffsetMs;
 
   return html`
     <div class="logs-header">
@@ -140,17 +142,46 @@ function renderLogsView(): TemplateResult {
       </div>
     </div>
     <div class="logs" id="logs" @click=${onLogsClick}>
-      <div class="logs-scroll-area" id="logs-scroll-area">
-        ${renderHeaderRow(visibleColKeys)}
-        ${pageRows.length === 0
-          ? html`<div class="empty" style="padding:2rem;">No recent requests yet.</div>`
-          : repeat(
-              pageRows,
-              (r) => r.attemptKey,
-              (r) => html`<div data-key=${r.attemptKey}>${renderLogRowHtml(r, visibleColKeys, clockStore.nowMs - liveLogsStore.clockOffsetMs)}</div>`
-            )}
+      <!-- Section 1: In Progress -->
+      <div class="logs-section logs-section-inflight" id="logs-section-inflight">
+        <div class="logs-section-header">
+          <span class="logs-section-title">
+            <span class="logs-inflight-dot" aria-hidden="true"></span> Requests in progress
+          </span>
+          <span class="logs-section-count">${inflightRows.length}</span>
+        </div>
+        <div class="logs-scroll-area logs-scroll-area-inflight" id="logs-scroll-area-inflight">
+          ${renderHeaderRow(visibleColKeys)}
+          ${inflightRows.length === 0
+            ? html`<div class="empty empty-inflight" style="padding:1.5rem;text-align:center;color:var(--color-text-muted);">No requests in progress.</div>`
+            : repeat(
+                inflightRows,
+                (r) => r.attemptKey,
+                (r) => html`<div data-key=${r.attemptKey}>${renderLogRowHtml(r, visibleColKeys, nowOffsetMs)}</div>`
+              )}
+        </div>
       </div>
-      ${renderPagination(totalRows, totalP)}
+
+      <!-- Section 2: Finished or Erroneous -->
+      <div class="logs-section logs-section-finished" id="logs-section-finished">
+        <div class="logs-section-header">
+          <span class="logs-section-title">
+            Finished or failed
+          </span>
+          <span class="logs-section-count">${totalFinished}</span>
+        </div>
+        <div class="logs-scroll-area logs-scroll-area-finished" id="logs-scroll-area-finished">
+          ${renderHeaderRow(visibleColKeys)}
+          ${pageFinishedRows.length === 0
+            ? html`<div class="empty empty-finished" style="padding:1.5rem;text-align:center;color:var(--color-text-muted);">No recent requests yet.</div>`
+            : repeat(
+                pageFinishedRows,
+                (r) => r.attemptKey,
+                (r) => html`<div data-key=${r.attemptKey}>${renderLogRowHtml(r, visibleColKeys, nowOffsetMs)}</div>`
+              )}
+        </div>
+        ${renderPagination(totalFinished, totalP)}
+      </div>
     </div>
   `;
 }
@@ -200,8 +231,8 @@ export function logsPrevPage(): void {
   }
 }
 export function logsNextPage(): void {
-  const allRows = liveLogsStore.selectLogRows();
-  const totalP = Math.max(1, Math.ceil(allRows.length / state.logs.rowsPerPage));
+  const finishedRows = liveLogsStore.selectFinishedRows();
+  const totalP = Math.max(1, Math.ceil(finishedRows.length / state.logs.rowsPerPage));
   if (state.logs.page < totalP) {
     state.logs.page++;
     if (state.logs.page >= totalP) state.logs.followTail = false;
@@ -209,8 +240,8 @@ export function logsNextPage(): void {
   }
 }
 export function logsGoPage(p: number): void {
-  const allRows = liveLogsStore.selectLogRows();
-  const totalP = Math.max(1, Math.ceil(allRows.length / state.logs.rowsPerPage));
+  const finishedRows = liveLogsStore.selectFinishedRows();
+  const totalP = Math.max(1, Math.ceil(finishedRows.length / state.logs.rowsPerPage));
   state.logs.page = Math.max(1, Math.min(p, totalP));
   state.logs.followTail = (state.logs.page === 1);
   requestUpdate();
