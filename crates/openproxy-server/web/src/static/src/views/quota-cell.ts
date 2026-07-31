@@ -26,13 +26,26 @@ const resetHint = (ts: string | null | undefined): string => {
   } catch { return ""; }
 };
 
+function getQuotaColor(pct: number | null): string {
+  if (pct == null) return "unknown";
+  if (pct > 80) return "danger";
+  if (pct > 50) return "warn";
+  return "ok";
+}
+
+function getQuotaText(used: number | null, limit: number | null): string {
+  if (used == null) return "—";
+  if (limit === 100) return `${used}% used`;
+  return `${used} / ${limit ?? "—"}`;
+}
+
 function renderModelQuotaRows(details: ModelQuotaDetail[]): TemplateResult {
   return html`<details class="quota-model-details">
     <summary>Models (${details.length})</summary>
     <div class="quota-model-list">
       ${details.map((d) => {
         const pct = d.session_limit > 0 ? Math.round(d.session_used / d.session_limit * 100) : 0;
-        const color = pct > 80 ? "danger" : pct > 50 ? "warn" : "ok";
+        const color = getQuotaColor(pct);
         return html`<div class="quota-model-row">
           <div class="quota-model-header">
             <span class="quota-model-name">${d.model_id}</span>
@@ -60,11 +73,11 @@ export function renderQuotaCell(a: Account): TemplateResult {
     ? Math.round(a.quota_session_used / a.quota_session_limit * 100) : null;
   const weeklyPct = (a.quota_weekly_limit && a.quota_weekly_limit > 0 && a.quota_weekly_used != null)
     ? Math.round(a.quota_weekly_used / a.quota_weekly_limit * 100) : null;
-  const sessionColor = sessionPct == null ? "unknown" : sessionPct > 80 ? "danger" : sessionPct > 50 ? "warn" : "ok";
-  const weeklyColor = weeklyPct == null ? "unknown" : weeklyPct > 80 ? "danger" : weeklyPct > 50 ? "warn" : "ok";
-  const isPct = (used: number | null, limit: number | null): boolean => limit === 100 && used != null;
-  const sessionText = a.quota_session_used == null ? "—" : isPct(a.quota_session_used, a.quota_session_limit) ? `${a.quota_session_used}% used` : `${a.quota_session_used} / ${a.quota_session_limit ?? "—"}`;
-  const weeklyText = a.quota_weekly_used == null ? "—" : isPct(a.quota_weekly_used, a.quota_weekly_limit) ? `${a.quota_weekly_used}% used` : `${a.quota_weekly_used} / ${a.quota_weekly_limit ?? "—"}`;
+
+  const sessionColor = getQuotaColor(sessionPct);
+  const weeklyColor = getQuotaColor(weeklyPct);
+  const sessionText = getQuotaText(a.quota_session_used, a.quota_session_limit);
+  const weeklyText = getQuotaText(a.quota_weekly_used, a.quota_weekly_limit);
 
   return html`<div class="quota-cell">
     ${a.quota_plan_name ? html`<small class="quota-plan">${a.quota_plan_name}</small>` : null}
