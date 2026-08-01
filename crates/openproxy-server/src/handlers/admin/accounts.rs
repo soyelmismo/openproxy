@@ -246,7 +246,9 @@ pub async fn apply_account_local_cli(
         let mut file = open_options.open(&token_file)
             .map_err(|e| CoreError::Validation(format!("Failed to open {}: {}", token_file.display(), e)))?;
 
-        file.write_all(serde_json::to_string(&payload).unwrap().as_bytes())
+        let payload_str = serde_json::to_string(&payload)
+            .map_err(|e| CoreError::Validation(format!("Failed to serialize payload: {}", e)))?;
+        file.write_all(payload_str.as_bytes())
             .map_err(|e| CoreError::Validation(format!("Failed to write to {}: {}", token_file.display(), e)))?;
 
         Ok(Json(serde_json::json!({
