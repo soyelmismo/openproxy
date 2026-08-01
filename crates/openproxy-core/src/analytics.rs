@@ -175,7 +175,7 @@ impl StreamingDigest {
         }
         // Ensure any in-flight buffered values are merged before reading.
         self.flush();
-        Some(self.digest.estimate_quantile(q))
+        self.digest.estimate_quantile(q)
     }
 }
 
