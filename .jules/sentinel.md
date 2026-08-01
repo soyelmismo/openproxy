@@ -17,3 +17,4 @@
 **Vulnerability:** Use of `unwrap()` on `serde_json::to_string()` result within `openproxy-server/src/handlers/messages.rs` SSE handler.
 **Learning:** Calling `unwrap()` inside HTTP handler contexts can be weaponized into an unauthenticated DoS. If an attacker passes a specially crafted input that causes serialization to fail (e.g. invalid bytes, out of memory), the thread will panic, bringing down the proxy task.
 **Prevention:** Always use `.unwrap_or_else()` with a statically valid JSON fallback string (e.g. `{"type":"error"}`) in HTTP response formatting contexts to ensure safe failure.
+## 2026-08-01 - [DoS via Unwrap] Vulnerability: [Unwrap in serde_json::to_string during admin local CLI authentication] Learning: [Unchecked unwrap during API handlers exposes the server to DoS] Prevention: [Use map_err to map serialization errors safely and fail gracefully]
