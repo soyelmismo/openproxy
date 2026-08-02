@@ -163,6 +163,7 @@ pub struct UpdateProviderInput {
     pub auto_activate_keyword: Option<Option<String>>,
     pub use_proxies: Option<bool>,
     pub proxy_rotation_errors: Option<String>,
+    pub proxy_rotation_mode: Option<String>,
     pub rate_limit_scope: Option<crate::providers::RateLimitScope>,
 }
 
@@ -190,6 +191,7 @@ impl<'de> Deserialize<'de> for UpdateProviderInput {
             AutoActivateKeyword,
             UseProxies,
             ProxyRotationErrors,
+            ProxyRotationMode,
             RateLimitScope,
         }
 
@@ -214,6 +216,9 @@ impl<'de> Deserialize<'de> for UpdateProviderInput {
                         Field::UseProxies => out.use_proxies = Some(map.next_value()?),
                         Field::ProxyRotationErrors => {
                             out.proxy_rotation_errors = Some(map.next_value()?)
+                        }
+                        Field::ProxyRotationMode => {
+                            out.proxy_rotation_mode = Some(map.next_value()?)
                         }
                         Field::RateLimitScope => out.rate_limit_scope = Some(map.next_value()?),
                         Field::AutoActivateKeyword => {
@@ -273,6 +278,7 @@ pub fn update_provider(
         keyword,
         input.use_proxies,
         input.proxy_rotation_errors.as_deref(),
+        input.proxy_rotation_mode.as_deref(),
         input.rate_limit_scope,
     )
 }
@@ -1427,6 +1433,7 @@ mod tests {
                 auto_activate_keyword: Some(Some("claude".into())),
                 use_proxies: None,
                 proxy_rotation_errors: None,
+                proxy_rotation_mode: None,
             },
         )
         .expect("update");
@@ -1446,6 +1453,7 @@ mod tests {
                 auto_activate_keyword: Some(None),
                 use_proxies: None,
                 proxy_rotation_errors: None,
+                proxy_rotation_mode: None,
             },
         )
         .expect("clear");

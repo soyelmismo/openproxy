@@ -215,6 +215,7 @@ pub fn update(
     auto_activate_keyword: Option<Option<&str>>,
     use_proxies: Option<bool>,
     proxy_rotation_errors: Option<&str>,
+    proxy_rotation_mode: Option<&str>,
     rate_limit_scope: Option<RateLimitScope>,
 ) -> Result<()> {
     // Build the SET clause dynamically so we only touch the supplied columns.
@@ -244,6 +245,10 @@ pub fn update(
     }
     if let Some(v) = proxy_rotation_errors {
         sets.push("proxy_rotation_errors = ?");
+        bound_values.push(Box::new(v.to_string()));
+    }
+    if let Some(v) = proxy_rotation_mode {
+        sets.push("proxy_rotation_mode = ?");
         bound_values.push(Box::new(v.to_string()));
     }
     if let Some(v) = rate_limit_scope {
@@ -603,6 +608,7 @@ mod tests {
             None,
             None,
             None,
+            None,
         )
         .expect("update name");
         let p = get(&conn, &id).expect("get").expect("present");
@@ -626,6 +632,7 @@ mod tests {
             None,
             None,
             None,
+            None,
         )
         .expect("update url+headers+keyword");
         let p = get(&conn, &id).expect("get").expect("present");
@@ -635,12 +642,12 @@ mod tests {
         assert_eq!(p.auto_activate_keyword.as_deref(), Some("claude"));
 
         // Clear the keyword: Some(None) sets NULL.
-        update(&conn, &id, None, None, None, Some(None), None, None, None).expect("clear keyword");
+        update(&conn, &id, None, None, None, Some(None), None, None, None, None).expect("clear keyword");
         let p = get(&conn, &id).expect("get").expect("present");
         assert_eq!(p.auto_activate_keyword, None);
 
         // No-op update on an existing id: should not error and not touch row.
-        update(&conn, &id, None, None, None, None, None, None, None).expect("no-op");
+        update(&conn, &id, None, None, None, None, None, None, None, None).expect("no-op");
         let p = get(&conn, &id).expect("get").expect("present");
         assert_eq!(p.base_url, "https://new.example");
 
@@ -650,6 +657,7 @@ mod tests {
             &conn,
             &missing,
             Some("X"),
+            None,
             None,
             None,
             None,
