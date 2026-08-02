@@ -5,8 +5,10 @@ pub const CLINE_SPOOFING_HEADERS: &[(&str, &str)] = &[
     ("x-title", "Cline"),
     ("user-agent", "Cline/4.1.3"),
     ("x-is-multiroot", "false"),
-    ("x-client-type", "cline-sdk"),
+    ("x-client-type", "VSCode Extension"),
     ("x-client-version", "4.1.3"),
+    ("x-platform", "Visual Studio Code"),
+    ("x-platform-version", "1.96.0"), // Typical VSCode version
     ("x-core-version", "4.1.3"),
 ];
 
