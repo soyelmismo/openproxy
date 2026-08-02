@@ -1,5 +1,25 @@
 use super::*;
 
+pub const CLINE_SPOOFING_HEADERS: &[(&str, &str)] = &[
+    ("http-referer", "https://cline.bot"),
+    ("x-title", "Cline"),
+    ("user-agent", "Cline/3.5.0"),
+    ("x-is-multiroot", "false"),
+    ("x-client-type", "cline-sdk"),
+    ("x-client-version", "3.5.0"),
+    ("x-core-version", "3.5.0"),
+];
+
+pub fn apply_cline_spoofing_headers(req: &mut UpstreamRequest) {
+    for &(k, v) in CLINE_SPOOFING_HEADERS {
+        if let Ok(name) = http::header::HeaderName::try_from(k) {
+            if let Ok(val) = http::HeaderValue::try_from(v) {
+                req.headers.insert(name, val);
+            }
+        }
+    }
+}
+
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct ClineAdapter {
     config: ProviderAdapterConfig,
@@ -34,15 +54,10 @@ impl ClineAdapter {
                 base_url: "https://api.cline.bot/api/v1".into(),
                 auth_type: AdapterAuthType::OAuth,
                 format: AdapterFormat::Openai,
-                extra_headers: vec![
-                    ("HTTP-Referer".into(), "https://cline.bot".into()),
-                    ("X-Title".into(), "Cline".into()),
-                    ("User-Agent".into(), "Cline/3.5.0".into()),
-                    ("X-IS-MULTIROOT".into(), "false".into()),
-                    ("X-CLIENT-TYPE".into(), "cline-sdk".into()),
-                    ("X-CLIENT-VERSION".into(), "3.5.0".into()),
-                    ("X-CORE-VERSION".into(), "3.5.0".into()),
-                ],
+                extra_headers: CLINE_SPOOFING_HEADERS
+                    .iter()
+                    .map(|(k, v)| (k.to_string(), v.to_string()))
+                    .collect(),
             },
         }
     }
