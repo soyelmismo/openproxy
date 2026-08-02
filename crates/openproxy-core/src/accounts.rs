@@ -76,7 +76,7 @@ pub fn get(conn: &Connection, id: AccountId, master_key: &MasterKey) -> Result<O
                     quota_plan_name, quota_last_fetched_at, quota_fetch_error, \
                     quota_model_details, \
                     auth_type, email, oauth_scope, oauth_provider_specific, expires_at, \
-                    created_at \
+                    created_at, current_proxy_id \
              FROM accounts WHERE id = ?1",
             params![id.0],
             |row| row_to_account(row, master_key),
@@ -107,7 +107,7 @@ pub fn list(
                     quota_plan_name, quota_last_fetched_at, quota_fetch_error, \
                     quota_model_details, \
                     auth_type, email, oauth_scope, oauth_provider_specific, expires_at, \
-                    created_at \
+                    created_at, current_proxy_id \
              FROM accounts WHERE provider_id = ?1 \
              ORDER BY priority ASC, id ASC"
         }
@@ -119,7 +119,7 @@ pub fn list(
                     quota_plan_name, quota_last_fetched_at, quota_fetch_error, \
                     quota_model_details, \
                     auth_type, email, oauth_scope, oauth_provider_specific, expires_at, \
-                    created_at \
+                    created_at, current_proxy_id \
              FROM accounts \
              ORDER BY priority ASC, id ASC"
         }
@@ -392,6 +392,26 @@ pub fn delete(conn: &Connection, id: AccountId) -> Result<()> {
     Ok(())
 }
 
+pub fn update_current_proxy(
+    conn: &Connection,
+    id: AccountId,
+    proxy_id: Option<&str>,
+) -> Result<()> {
+    let affected = conn
+        .execute(
+            "UPDATE accounts SET current_proxy_id = ?1 WHERE id = ?2",
+            params![proxy_id, id.0],
+        )
+        .map_err(openproxy_db::error::map_db_error_ctx(format!(
+            "update current_proxy_id for account {}",
+            id.0
+        )))?;
+    if affected == 0 {
+        return Err(CoreError::AccountNotFound(id.0));
+    }
+    Ok(())
+}
+
 // =====================================================================
 // OAuth token storage / retrieval
 // =====================================================================
@@ -611,7 +631,7 @@ pub fn list_expiring_oauth_accounts(
                     quota_plan_name, quota_last_fetched_at, quota_fetch_error, \
                     quota_model_details, \
                     auth_type, email, oauth_scope, oauth_provider_specific, expires_at, \
-                    created_at \
+                    created_at, current_proxy_id \
              FROM accounts \
              WHERE auth_type = 'oauth' \
                AND expires_at IS NOT NULL \
@@ -715,6 +735,8 @@ fn row_to_account(row: &rusqlite::Row<'_>, master_key: &MasterKey) -> rusqlite::
     let oauth_provider_specific =
         decrypt_oauth_provider_specific(oauth_provider_specific_encrypted.as_deref(), master_key);
 
+    let current_proxy_id: Option<String> = row.get(23)?;
+
     Ok(Account {
         id: AccountId(id),
         provider_id: ProviderId::new(provider_id),
@@ -739,6 +761,7 @@ fn row_to_account(row: &rusqlite::Row<'_>, master_key: &MasterKey) -> rusqlite::
         oauth_provider_specific,
         expires_at,
         created_at,
+        current_proxy_id,
     })
 }
 

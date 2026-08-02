@@ -16,6 +16,9 @@ fn benchmark_upsert(c: &mut Criterion) {
             port: 8080,
             r#type: "http".to_string(),
             country_code: Some("US".to_string()),
+            username: None,
+            password: None,
+            priority: 0,
         });
     }
 

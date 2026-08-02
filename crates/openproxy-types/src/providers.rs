@@ -160,6 +160,12 @@ pub struct Provider {
     #[serde(default = "default_proxy_rotation_errors")]
     pub proxy_rotation_errors: String,
     pub rate_limit_scope: RateLimitScope,
+    #[serde(default = "default_proxy_rotation_mode")]
+    pub proxy_rotation_mode: String,
+}
+
+fn default_proxy_rotation_mode() -> String {
+    "global".to_string()
 }
 
 #[cfg(test)]

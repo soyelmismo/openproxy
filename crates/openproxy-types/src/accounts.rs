@@ -55,4 +55,5 @@ pub struct Account {
     pub oauth_provider_specific: Option<String>,
     pub expires_at: Option<String>,
     pub created_at: String,
+    pub current_proxy_id: Option<String>,
 }

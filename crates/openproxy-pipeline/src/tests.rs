@@ -5783,7 +5783,7 @@ fn test_opencode_zen_no_account_proxy_rotation() {
 
     // Should return the assigned proxy
     let proxy2 = repo
-        .get_or_assign_provider_proxy(&target.provider_id)
+        .get_or_assign_provider_proxy(&target.provider_id, None)
         .unwrap();
     assert_eq!(proxy2, Some("socks5://1.1.1.1:80".to_string()));
 
@@ -5800,7 +5800,7 @@ fn test_opencode_zen_no_account_proxy_rotation() {
 
     // Fetching again should yield None (as there are no other alive proxies)
     let proxy3 = repo
-        .get_or_assign_provider_proxy(&target.provider_id)
+        .get_or_assign_provider_proxy(&target.provider_id, None)
         .unwrap();
     assert_eq!(proxy3, None);
 }

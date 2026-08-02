@@ -415,11 +415,12 @@ pub fn update_proxy_status(
 pub fn get_or_assign_provider_proxy(
     conn: &Connection,
     provider_id: &crate::ids::ProviderId,
+    account_id: Option<&crate::ids::AccountId>,
 ) -> crate::error::Result<Option<String>> {
     use openproxy_db::cooldowns::is_provider_proxy_in_cooldown;
     use rusqlite::OptionalExtension;
 
-    // 1. Fetch provider details to see use_proxies and current_proxy_id
+    // 1. Fetch provider details
     let provider = match crate::providers::get(conn, provider_id)? {
         Some(p) => p,
         None => return Ok(None),
@@ -429,8 +430,33 @@ pub fn get_or_assign_provider_proxy(
         return Ok(None);
     }
 
+    let is_per_account = provider.proxy_rotation_mode == "account";
+    let (current_proxy_id, _account) = if is_per_account {
+        if let Some(acc_id) = account_id {
+            // Need a dummy master key just to get the account, although we only care about current_proxy_id
+            // Wait, we don't need master key to query just the current_proxy_id!
+            let acc_proxy_id: Option<String> = conn
+                .query_row(
+                    "SELECT current_proxy_id FROM accounts WHERE id = ?1",
+                    rusqlite::params![acc_id.0],
+                    |row| row.get(0),
+                )
+                .optional()
+                .map_err(|e| crate::error::CoreError::Database {
+                    message: e.to_string(),
+                    source: Some(Box::new(e)),
+                })?
+                .flatten();
+            (acc_proxy_id, Some(*acc_id))
+        } else {
+            (None, None)
+        }
+    } else {
+        (provider.current_proxy_id.clone(), None)
+    };
+
     // 2. If current_proxy_id is set, verify it is still alive/valid and NOT in cooldown for this provider
-    if let Some(ref proxy_id) = provider.current_proxy_id
+    if let Some(ref proxy_id) = current_proxy_id
         && !is_provider_proxy_in_cooldown(provider_id.as_str(), proxy_id)
     {
         let exists_and_alive: Option<(String, i64, String, Option<String>, Option<String>)> = conn
@@ -462,8 +488,20 @@ pub fn get_or_assign_provider_proxy(
         }
     }
 
-    // 3. If current_proxy_id is unset, dead or in cooldown, select a new one from the alive pool
-    // Order by latency_ms ascending so we pick the fastest one that is NOT in cooldown for this provider.
+    // Find in-use proxies by other accounts of this provider, to avoid them
+    let mut in_use_by_others = std::collections::HashSet::new();
+    if is_per_account {
+        let mut stmt = conn
+            .prepare("SELECT current_proxy_id FROM accounts WHERE provider_id = ?1 AND current_proxy_id IS NOT NULL AND id != ?2")
+            .map_err(|e| crate::error::CoreError::Database { message: e.to_string(), source: Some(Box::new(e)) })?;
+        let rows = stmt.query_map(rusqlite::params![provider_id.as_str(), account_id.map(|id| id.0).unwrap_or(0)], |row| row.get::<_, String>(0))
+            .map_err(|e| crate::error::CoreError::Database { message: e.to_string(), source: Some(Box::new(e)) })?;
+        for r in rows.flatten() {
+            in_use_by_others.insert(r);
+        }
+    }
+
+    // 3. Select a new one from the alive pool
     let mut stmt = conn
         .prepare("SELECT id, host, port, type, username, password FROM free_proxies WHERE status = 'alive' ORDER BY priority DESC, latency_ms ASC, random() LIMIT 2000")
         .map_err(|e| crate::error::CoreError::Database {
@@ -494,7 +532,7 @@ pub fn get_or_assign_provider_proxy(
         if fallback_proxy.is_none() {
             fallback_proxy = Some(item.clone());
         }
-        if !is_provider_proxy_in_cooldown(provider_id.as_str(), &item.0) {
+        if !is_provider_proxy_in_cooldown(provider_id.as_str(), &item.0) && !in_use_by_others.contains(&item.0) {
             selected_proxy = Some(item);
             break;
         }
@@ -503,7 +541,14 @@ pub fn get_or_assign_provider_proxy(
     let new_proxy = selected_proxy.or(fallback_proxy);
 
     if let Some((new_id, host, port, proto, username, password)) = new_proxy {
-        crate::providers::update_current_proxy(conn, provider_id, Some(&new_id))?;
+        if is_per_account {
+            if let Some(acc_id) = account_id {
+                crate::accounts::update_current_proxy(conn, *acc_id, Some(&new_id))?;
+            }
+        } else {
+            crate::providers::update_current_proxy(conn, provider_id, Some(&new_id))?;
+        }
+
         if let (Some(u), Some(p)) = (username, password) {
             return Ok(Some(format!("{}://{}:{}@{}:{}", proto.to_lowercase(), u, p, host, port)));
         } else {
@@ -1703,6 +1748,9 @@ mod tests {
               last_validated TEXT,
               created_at TEXT NOT NULL DEFAULT (datetime('now')),
               updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+              username TEXT,
+              password TEXT,
+              priority INTEGER DEFAULT 0,
               UNIQUE(host, port)
             );
             CREATE TABLE proxy_sources (
@@ -1710,6 +1758,8 @@ mod tests {
               name TEXT NOT NULL,
               url TEXT NOT NULL,
               priority INTEGER NOT NULL DEFAULT 0,
+              active INTEGER NOT NULL DEFAULT 1,
+              is_builtin INTEGER NOT NULL DEFAULT 0,
               created_at TEXT NOT NULL DEFAULT (datetime('now')),
               updated_at TEXT NOT NULL DEFAULT (datetime('now'))
             );
@@ -1725,11 +1775,18 @@ mod tests {
               current_proxy_id TEXT,
               proxy_rotation_errors TEXT DEFAULT '429,connect_error,timeout',
               rate_limit_scope TEXT DEFAULT 'account',
+              proxy_rotation_mode TEXT DEFAULT 'global',
               active INTEGER NOT NULL DEFAULT 1,
               created_at TEXT NOT NULL DEFAULT (datetime('now')),
               updated_at TEXT NOT NULL DEFAULT (datetime('now')),
               CHECK (format IN ('openai', 'anthropic', 'mixed', 'gemini', 'responses'))
-            );",
+            );
+            CREATE TABLE accounts (
+              id INTEGER PRIMARY KEY AUTOINCREMENT,
+              provider_id TEXT NOT NULL,
+              current_proxy_id TEXT
+            );
+            ",
         )
         .unwrap();
         conn
@@ -1821,7 +1878,7 @@ mod tests {
         ).unwrap();
 
         // No proxies in database yet. Since use_proxies = 0, should return Ok(None)
-        let proxy = get_or_assign_provider_proxy(&conn, &provider_id).unwrap();
+        let proxy = get_or_assign_provider_proxy(&conn, &provider_id, None).unwrap();
         assert_eq!(proxy, None);
 
         // 2. Enable use_proxies = 1
@@ -1832,7 +1889,7 @@ mod tests {
         .unwrap();
 
         // Still no proxies in DB, so it should return Err because use_proxies = 1
-        assert!(get_or_assign_provider_proxy(&conn, &provider_id).is_err());
+        assert!(get_or_assign_provider_proxy(&conn, &provider_id, None).is_err());
 
         // 3. Add an alive proxy
         let p = add_custom_proxy(
@@ -1848,7 +1905,7 @@ mod tests {
         update_proxy_status(&conn, &p.id, "alive", Some(100)).unwrap();
 
         // Now it should assign and return this socks5 proxy!
-        let proxy = get_or_assign_provider_proxy(&conn, &provider_id).unwrap();
+        let proxy = get_or_assign_provider_proxy(&conn, &provider_id, None).unwrap();
         assert_eq!(proxy, Some("socks5://1.2.3.4:8080".to_string()));
 
         // Add 15m cooldown for this proxy on test-provider
@@ -1859,7 +1916,7 @@ mod tests {
         );
 
         // When in cooldown, get_or_assign_provider_proxy should not assign it if other alive proxy exists or returns err if no other exists
-        let proxy_after_cooldown = get_or_assign_provider_proxy(&conn, &provider_id).unwrap();
+        let proxy_after_cooldown = get_or_assign_provider_proxy(&conn, &provider_id, None).unwrap();
         assert_eq!(
             proxy_after_cooldown,
             Some("socks5://1.2.3.4:8080".to_string())
@@ -1876,7 +1933,7 @@ mod tests {
         assert_eq!(bound_id, Some(p.id.clone()));
 
         // Calling it again should return the same cached proxy
-        let proxy2 = get_or_assign_provider_proxy(&conn, &provider_id).unwrap();
+        let proxy2 = get_or_assign_provider_proxy(&conn, &provider_id, None).unwrap();
         assert_eq!(proxy2, Some("socks5://1.2.3.4:8080".to_string()));
 
         // 4. Mark the proxy as dead / inactive
@@ -1884,7 +1941,7 @@ mod tests {
 
         // Since it's dead, get_or_assign_provider_proxy should detect it as dead,
         // search for a new one, find none, and return Err because use_proxies = 1.
-        assert!(get_or_assign_provider_proxy(&conn, &provider_id).is_err());
+        assert!(get_or_assign_provider_proxy(&conn, &provider_id, None).is_err());
     }
 
     #[test]

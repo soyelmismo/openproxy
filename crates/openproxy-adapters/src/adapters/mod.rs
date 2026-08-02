@@ -1421,6 +1421,7 @@ mod tests {
             use_proxies: false,
             current_proxy_id: None,
             proxy_rotation_errors: "429,connect_error,timeout".to_string(),
+            proxy_rotation_mode: "global".to_string(),
         }
     }
 

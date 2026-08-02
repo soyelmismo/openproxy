@@ -88,7 +88,7 @@ pub fn create(conn: &Connection, new: NewProvider<'_>) -> Result<()> {
 pub fn get(conn: &Connection, id: &ProviderId) -> Result<Option<Provider>> {
     let row = conn
         .query_row(
-            "SELECT id, name, base_url, auth_type, format, extra_headers_json, auto_activate_keyword, active, created_at, use_proxies, current_proxy_id, proxy_rotation_errors, rate_limit_scope \
+            "SELECT id, name, base_url, auth_type, format, extra_headers_json, auto_activate_keyword, active, created_at, use_proxies, current_proxy_id, proxy_rotation_errors, rate_limit_scope, proxy_rotation_mode \
              FROM providers WHERE id = ?1",
             params![id.as_str()],
             row_to_provider,
@@ -119,7 +119,7 @@ pub fn get(conn: &Connection, id: &ProviderId) -> Result<Option<Provider>> {
 pub fn list(conn: &Connection) -> Result<Vec<Provider>> {
     let mut stmt = conn
         .prepare(
-            "SELECT id, name, base_url, auth_type, format, extra_headers_json, auto_activate_keyword, active, created_at, use_proxies, current_proxy_id, proxy_rotation_errors, rate_limit_scope \
+            "SELECT id, name, base_url, auth_type, format, extra_headers_json, auto_activate_keyword, active, created_at, use_proxies, current_proxy_id, proxy_rotation_errors, rate_limit_scope, proxy_rotation_mode \
              FROM providers WHERE id != ?1 ORDER BY id",
         )
         .map_err(openproxy_db::error::map_db_error)?;
@@ -150,7 +150,7 @@ pub fn list(conn: &Connection) -> Result<Vec<Provider>> {
 pub fn list_active(conn: &Connection) -> Result<Vec<Provider>> {
     let mut stmt = conn
         .prepare(
-            "SELECT id, name, base_url, auth_type, format, extra_headers_json, auto_activate_keyword, active, created_at, use_proxies, current_proxy_id, proxy_rotation_errors, rate_limit_scope \
+            "SELECT id, name, base_url, auth_type, format, extra_headers_json, auto_activate_keyword, active, created_at, use_proxies, current_proxy_id, proxy_rotation_errors, rate_limit_scope, proxy_rotation_mode \
              FROM providers WHERE active = 1 AND id != ?1 ORDER BY id",
         )
         .map_err(openproxy_db::error::map_db_error)?;
@@ -352,6 +352,7 @@ fn row_to_provider(row: &rusqlite::Row<'_>) -> rusqlite::Result<Provider> {
     // `models::set_active`.
     let active = active != 0;
     let use_proxies = use_proxies != 0;
+    let proxy_rotation_mode: String = row.get(13)?;
 
     Ok(Provider {
         id: ProviderId::new(id),
@@ -367,6 +368,7 @@ fn row_to_provider(row: &rusqlite::Row<'_>) -> rusqlite::Result<Provider> {
         current_proxy_id,
         proxy_rotation_errors,
         rate_limit_scope,
+        proxy_rotation_mode,
     })
 }
 

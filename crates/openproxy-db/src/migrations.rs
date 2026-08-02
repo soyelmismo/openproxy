@@ -258,6 +258,11 @@ const MIGRATIONS: &[Migration] = &[
         name: "000050_proxy_sources_flags",
         sql: include_str!("../migrations/000050_proxy_sources_flags.sql"),
     },
+    Migration {
+        version: 51,
+        name: "000051_add_proxy_rotation_mode",
+        sql: include_str!("../migrations/000051_add_proxy_rotation_mode.sql"),
+    },
 ];
 
 /// Apply pending migrations on `conn`.
