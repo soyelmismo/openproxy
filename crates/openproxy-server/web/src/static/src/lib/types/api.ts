@@ -139,6 +139,7 @@ export interface Provider {
   use_proxies: boolean;
   current_proxy_id: string | null;
   proxy_rotation_errors: string;
+  proxy_rotation_mode: string;
   oauth_flows?: string[];
   metadata?: ProviderMetadata;
   active_models?: number;

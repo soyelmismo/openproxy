@@ -439,6 +439,23 @@ async function onUpdateProxyRotationErrors(providerId: string, e: Event): Promis
   }
 }
 
+async function onUpdateProxyRotationMode(providerId: string, e: Event): Promise<void> {
+  const target = e.target instanceof HTMLSelectElement ? e.target : null;
+  if (!target) return;
+  const value = target.value.trim();
+  const body = { proxy_rotation_mode: value || "global" };
+  try {
+    await api(`/providers/${encodeURIComponent(providerId)}`, {
+      method: "PATCH",
+      body: JSON.stringify(body),
+    });
+    state.providers = await api("/providers") as typeof state.providers;
+    requestUpdate();
+  } catch (err: unknown) {
+    showApiError(err, "Error");
+  }
+}
+
 // Update the per-provider search/filter state and re-render via
 // requestUpdate(). lit-html diffs the tbody against the previous
 // render — the search input keeps focus because it lives outside
@@ -923,6 +940,15 @@ function renderModelsSection(provider: Provider, providerModels: Model[], ui: Pr
                    .value=${provider.proxy_rotation_errors || "429,connect_error,timeout"}
                    @change=${(e: Event) => onUpdateProxyRotationErrors(provider.id, e)}
                    @input=${(e: Event) => onUpdateProxyRotationErrors(provider.id, e)}>
+          </label>
+          <label style="display: flex; align-items: center; gap: 0.5rem; margin: 0; font-weight: normal;">
+            Rotation mode:
+            <select style="padding: 0.25rem 0.5rem; font-size: var(--fs-sm); border: var(--border-w) var(--border-style) var(--color-border); border-radius: var(--radius-sm); background: var(--color-surface); color: var(--color-text);"
+                    @change=${(e: Event) => onUpdateProxyRotationMode(provider.id, e)}>
+              <option value="global" ?selected=${provider.proxy_rotation_mode === "global"}>Global (shared)</option>
+              <option value="account" ?selected=${provider.proxy_rotation_mode === "account"}>Per Account (unique)</option>
+              <option value="none" ?selected=${provider.proxy_rotation_mode === "none"}>None (disabled)</option>
+            </select>
           </label>
           ${provider.current_proxy_id ? html`
             <span style="font-size: var(--fs-sm); color: var(--color-text-muted); background: var(--color-surface-soft); padding: 0.25rem 0.5rem; border-radius: var(--radius-sm);">
