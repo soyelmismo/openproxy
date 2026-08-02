@@ -257,10 +257,10 @@ mod tests {
     // helper spawns a background task that races the watch.
     #[tokio::test]
     async fn from_watch_already_cancelled_starts_cancelled() {
-        let (tx, mut rx) = watch::channel(false);
+        let (tx, mut rx) = watch::channel::<Option<openproxy_types::CancelReason>>(None);
         // Flip the watch to `true` BEFORE constructing the token —
         // mirrors the pre-flight check in the chat pipeline.
-        tx.send(true).unwrap();
+        tx.send(Some(openproxy_types::CancelReason::ClientDisconnected)).unwrap();
         // Give the receiver a moment to see the change.
         rx.changed().await.unwrap();
         let token = CancellationToken::from_watch(rx);
@@ -269,12 +269,12 @@ mod tests {
 
     #[tokio::test]
     async fn from_watch_cancels_on_transition() {
-        let (tx, rx) = watch::channel(false);
+        let (tx, rx) = watch::channel::<Option<openproxy_types::CancelReason>>(None);
         let token = CancellationToken::from_watch(rx);
         assert!(!token.is_cancelled());
         // Flip the watch — the background task should observe the
         // change and flip the token.
-        tx.send(true).unwrap();
+        tx.send(Some(openproxy_types::CancelReason::ClientDisconnected)).unwrap();
         // Spin briefly to let the task run.
         for _ in 0..50 {
             if token.is_cancelled() {
@@ -330,7 +330,7 @@ mod tests {
 
     #[tokio::test]
     async fn from_watch_drops_cleanly_when_sender_dropped() {
-        let (tx, rx) = watch::channel(false);
+        let (tx, rx) = watch::channel::<Option<openproxy_types::CancelReason>>(None);
         let token = CancellationToken::from_watch(rx);
         // Drop the sender. The background task should observe the
         // closed channel via `changed()` returning Err and exit
@@ -344,12 +344,12 @@ mod tests {
 
     #[tokio::test]
     async fn from_watch_and_token_fires_on_watch_transition() {
-        let (tx, rx) = watch::channel(false);
+        let (tx, rx) = watch::channel::<Option<openproxy_types::CancelReason>>(None);
         let race_token = CancellationToken::new();
         let token = CancellationToken::from_watch_and_token(rx, race_token);
         assert!(!token.is_cancelled());
 
-        tx.send(true).unwrap();
+        tx.send(Some(openproxy_types::CancelReason::ClientDisconnected)).unwrap();
         for _ in 0..50 {
             if token.is_cancelled() {
                 break;
@@ -361,7 +361,7 @@ mod tests {
 
     #[tokio::test]
     async fn from_watch_and_token_fires_on_race_token() {
-        let (_tx, rx) = watch::channel(false);
+        let (_tx, rx) = watch::channel::<Option<openproxy_types::CancelReason>>(None);
         let race_token = CancellationToken::new();
         let token = CancellationToken::from_watch_and_token(rx, race_token.clone());
         assert!(!token.is_cancelled());
@@ -378,8 +378,8 @@ mod tests {
 
     #[tokio::test]
     async fn from_watch_and_token_already_cancelled_watch_starts_cancelled() {
-        let (tx, mut rx) = watch::channel(false);
-        tx.send(true).unwrap();
+        let (tx, mut rx) = watch::channel::<Option<openproxy_types::CancelReason>>(None);
+        tx.send(Some(openproxy_types::CancelReason::ClientDisconnected)).unwrap();
         rx.changed().await.unwrap();
         let race_token = CancellationToken::new();
         let token = CancellationToken::from_watch_and_token(rx, race_token);
@@ -388,7 +388,7 @@ mod tests {
 
     #[tokio::test]
     async fn from_watch_and_token_already_cancelled_race_token_starts_cancelled() {
-        let (_tx, rx) = watch::channel(false);
+        let (_tx, rx) = watch::channel::<Option<openproxy_types::CancelReason>>(None);
         let race_token = CancellationToken::new();
         race_token.cancel();
         let token = CancellationToken::from_watch_and_token(rx, race_token);
@@ -399,7 +399,7 @@ mod tests {
     async fn from_watch_and_token_toctou_closes() {
         // Race: cancel race_token between subscribe() and borrow()
         // The re-check after subscribe() must catch it.
-        let (_tx, rx) = watch::channel(false);
+        let (_tx, rx) = watch::channel::<Option<openproxy_types::CancelReason>>(None);
         let race_token = CancellationToken::new();
         // Cancel BEFORE creating the combined token — the pre-flight
         // check catches this. But also test the TOCTOU path by

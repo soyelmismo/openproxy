@@ -3,11 +3,11 @@ use super::*;
 pub const CLINE_SPOOFING_HEADERS: &[(&str, &str)] = &[
     ("http-referer", "https://cline.bot"),
     ("x-title", "Cline"),
-    ("user-agent", "Cline/3.5.0"),
+    ("user-agent", "Cline/4.1.3"),
     ("x-is-multiroot", "false"),
     ("x-client-type", "cline-sdk"),
-    ("x-client-version", "3.5.0"),
-    ("x-core-version", "3.5.0"),
+    ("x-client-version", "4.1.3"),
+    ("x-core-version", "4.1.3"),
 ];
 
 pub fn apply_cline_spoofing_headers(req: &mut UpstreamRequest) {
