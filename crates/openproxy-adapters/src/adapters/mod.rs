@@ -1087,10 +1087,11 @@ mod tests {
     // ---- Factory -----------------------------------------------------
 
     #[test]
-    fn builtin_adapters_returns_thirteen() {
+    fn builtin_adapters_returns_fourteen() {
         let v = builtin_adapters();
-        assert_eq!(v.len(), 13);
+        assert_eq!(v.len(), 14);
         let ids: Vec<&str> = v.iter().map(|a| a.id().as_str()).collect();
+        assert!(ids.contains(&"cline"));
         assert!(ids.contains(&"openrouter"));
         assert!(ids.contains(&"minimax"));
         assert!(ids.contains(&"opencode-zen"));
