@@ -205,6 +205,14 @@ impl ProviderAdapter for ClineAdapter {
                     *model_str = model_str.trim_end_matches("-free").to_string();
                 }
             }
+            // Cline backend ALWAYS requires stream: true, else it returns HTTP 500 "empty response content"
+            if let Some(stream_val) = obj.get("stream") {
+                if stream_val.is_boolean() {
+                    obj.insert("stream".to_string(), serde_json::Value::Bool(true));
+                }
+            } else {
+                obj.insert("stream".to_string(), serde_json::Value::Bool(true));
+            }
         }
         
         let new_body = serde_json::to_vec(&val)
