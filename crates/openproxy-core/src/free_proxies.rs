@@ -1407,7 +1407,7 @@ pub async fn sync_all_providers(db_pool: Arc<DbPool>) -> crate::error::Result<Sy
 
     let pool_for_sources = db_pool.clone();
     let sources_res = tokio::task::spawn_blocking(move || {
-        let mut w = pool_for_sources.open_connection().unwrap();
+        let w = pool_for_sources.open_connection().unwrap();
         // Ensure built-in sources exist
         let builtins = vec![
             ("builtin_proxifly", "Proxifly (Built-in)", ""),
