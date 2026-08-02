@@ -304,4 +304,26 @@ mod tests {
         );
         assert_eq!(infer_family("unknown/some-model"), None);
     }
+
+    #[test]
+    fn infer_max_output_tokens_known() {
+        assert_eq!(
+            infer_max_output_tokens("anthropic/claude-sonnet-4"),
+            Some(8_192)
+        );
+        assert_eq!(
+            infer_max_output_tokens("google/gemini-2.5-pro"),
+            Some(65_536)
+        );
+        assert_eq!(infer_max_output_tokens("openai/gpt-4o"), Some(16_384));
+        assert_eq!(
+            infer_max_output_tokens("deepseek/deepseek-chat"),
+            Some(8_192)
+        );
+    }
+
+    #[test]
+    fn infer_max_output_tokens_unknown() {
+        assert_eq!(infer_max_output_tokens("unknown/some-model"), None);
+    }
 }
