@@ -442,7 +442,7 @@ fn urlencoded_body_owned(params: &[(&str, String)]) -> bytes::Bytes {
     bytes::Bytes::from(urlencoded_string(params))
 }
 
-fn urlencoded_string(params: &[(&str, String)]) -> String {
+pub(crate) fn urlencoded_string(params: &[(&str, String)]) -> String {
     let mut s = String::new();
     for (i, (k, v)) in params.iter().enumerate() {
         if i > 0 {

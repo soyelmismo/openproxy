@@ -23,6 +23,7 @@ pub use crate::accounts::{
 };
 
 pub mod antigravity;
+pub mod cline;
 pub mod codex;
 pub mod generic;
 pub mod kiro;
@@ -256,30 +257,59 @@ macro_rules! define_oauth_provider {
     (
         $(#[$meta:meta])*
         pub enum OAuthProviderEnum {
-            $(
-                $(#[$varmeta:meta])*
-                $variant:ident($inner:ty)
-            ),+ $(,)?
+            builtins {
+                $(
+                    $(#[$b_varmeta:meta])*
+                    $b_variant:ident($b_inner:ty)
+                ),+ $(,)?
+            }
+            custom {
+                $(
+                    $(#[$c_varmeta:meta])*
+                    $c_variant:ident($c_inner:ty)
+                ),+ $(,)?
+            }
         }
     ) => {
         $(#[$meta])*
         #[derive(Clone)]
         pub enum OAuthProviderEnum {
             $(
-                $(#[$varmeta])*
-                $variant($inner)
+                $(#[$b_varmeta])*
+                $b_variant($b_inner),
+            )+
+            $(
+                $(#[$c_varmeta])*
+                $c_variant($c_inner)
             ),+
+        }
+
+        impl OAuthProviderEnum {
+            pub fn builtin_providers() -> Vec<OAuthProviderEnum> {
+                vec![
+                    $( $(#[$b_varmeta])* OAuthProviderEnum::$b_variant(<$b_inner>::new()) ),+
+                ]
+            }
         }
 
         impl OAuthProvider for OAuthProviderEnum {
             fn name(&self) -> &str {
-                match self { $( Self::$variant(inner) => inner.name(), )+ }
+                match self {
+                    $( Self::$b_variant(inner) => inner.name(), )+
+                    $( Self::$c_variant(inner) => inner.name(), )+
+                }
             }
             fn flow(&self) -> OAuthFlow {
-                match self { $( Self::$variant(inner) => inner.flow(), )+ }
+                match self {
+                    $( Self::$b_variant(inner) => inner.flow(), )+
+                    $( Self::$c_variant(inner) => inner.flow(), )+
+                }
             }
             async fn build_auth_url(&self, redirect_uri: &str) -> Result<(String, String, String, String)> {
-                match self { $( Self::$variant(inner) => inner.build_auth_url(redirect_uri).await, )+ }
+                match self {
+                    $( Self::$b_variant(inner) => inner.build_auth_url(redirect_uri).await, )+
+                    $( Self::$c_variant(inner) => inner.build_auth_url(redirect_uri).await, )+
+                }
             }
             async fn exchange_code(
                 &self,
@@ -288,20 +318,29 @@ macro_rules! define_oauth_provider {
                 upstream_client: &std::sync::Arc<openproxy_adapters::upstream::UpstreamClient>,
                 redirect_uri: &str,
             ) -> Result<TokenResponse> {
-                match self { $( Self::$variant(inner) => inner.exchange_code(code, code_verifier, upstream_client, redirect_uri).await, )+ }
+                match self {
+                    $( Self::$b_variant(inner) => inner.exchange_code(code, code_verifier, upstream_client, redirect_uri).await, )+
+                    $( Self::$c_variant(inner) => inner.exchange_code(code, code_verifier, upstream_client, redirect_uri).await, )+
+                }
             }
             async fn request_device_code(
                 &self,
                 upstream_client: &std::sync::Arc<openproxy_adapters::upstream::UpstreamClient>,
             ) -> Result<DeviceAuthorizationResponse> {
-                match self { $( Self::$variant(inner) => inner.request_device_code(upstream_client).await, )+ }
+                match self {
+                    $( Self::$b_variant(inner) => inner.request_device_code(upstream_client).await, )+
+                    $( Self::$c_variant(inner) => inner.request_device_code(upstream_client).await, )+
+                }
             }
             async fn poll_device_token(
                 &self,
                 device_code: &str,
                 upstream_client: &std::sync::Arc<openproxy_adapters::upstream::UpstreamClient>,
             ) -> Result<Option<TokenResponse>> {
-                match self { $( Self::$variant(inner) => inner.poll_device_token(device_code, upstream_client).await, )+ }
+                match self {
+                    $( Self::$b_variant(inner) => inner.poll_device_token(device_code, upstream_client).await, )+
+                    $( Self::$c_variant(inner) => inner.poll_device_token(device_code, upstream_client).await, )+
+                }
             }
             async fn refresh_token(
                 &self,
@@ -310,13 +349,22 @@ macro_rules! define_oauth_provider {
                 account_id: AccountId,
                 db: DbRef<'_>,
             ) -> Result<TokenResponse> {
-                match self { $( Self::$variant(inner) => inner.refresh_token(refresh_token, upstream_client, account_id, db).await, )+ }
+                match self {
+                    $( Self::$b_variant(inner) => inner.refresh_token(refresh_token, upstream_client, account_id, db).await, )+
+                    $( Self::$c_variant(inner) => inner.refresh_token(refresh_token, upstream_client, account_id, db).await, )+
+                }
             }
             fn provider_specific_from_token(&self, token: &TokenResponse) -> Option<String> {
-                match self { $( Self::$variant(inner) => inner.provider_specific_from_token(token), )+ }
+                match self {
+                    $( Self::$b_variant(inner) => inner.provider_specific_from_token(token), )+
+                    $( Self::$c_variant(inner) => inner.provider_specific_from_token(token), )+
+                }
             }
             fn email_from_token(&self, token: &TokenResponse) -> Option<String> {
-                match self { $( Self::$variant(inner) => inner.email_from_token(token), )+ }
+                match self {
+                    $( Self::$b_variant(inner) => inner.email_from_token(token), )+
+                    $( Self::$c_variant(inner) => inner.email_from_token(token), )+
+                }
             }
             async fn post_exchange(
                 &self,
@@ -325,7 +373,10 @@ macro_rules! define_oauth_provider {
                 master_key: &MasterKey,
                 upstream: &std::sync::Arc<openproxy_adapters::upstream::UpstreamClient>,
             ) -> Result<()> {
-                match self { $( Self::$variant(inner) => inner.post_exchange(account_id, db_pool, master_key, upstream).await, )+ }
+                match self {
+                    $( Self::$b_variant(inner) => inner.post_exchange(account_id, db_pool, master_key, upstream).await, )+
+                    $( Self::$c_variant(inner) => inner.post_exchange(account_id, db_pool, master_key, upstream).await, )+
+                }
             }
         }
     }
@@ -333,10 +384,15 @@ macro_rules! define_oauth_provider {
 
 define_oauth_provider! {
     pub enum OAuthProviderEnum {
-        Antigravity(self::antigravity::AntigravityOAuthProvider),
-        Codex(self::codex::CodexOAuthProvider),
-        Generic(self::generic::GenericOAuthProvider),
-        Kiro(self::kiro::KiroOAuthProvider),
+        builtins {
+            Antigravity(self::antigravity::AntigravityOAuthProvider),
+            Codex(self::codex::CodexOAuthProvider),
+            Cline(self::cline::ClineOAuthProvider),
+            Kiro(self::kiro::KiroOAuthProvider),
+        }
+        custom {
+            Generic(self::generic::GenericOAuthProvider),
+        }
     }
 }
 
@@ -361,14 +417,17 @@ impl OAuthProviderRegistry {
     /// Create a registry pre-populated with the built-in OAuth providers.
     pub fn builtin() -> Self {
         let reg = Self::new();
-        // Antigravity (Cloud Code) — registered under both `antigravity`
-        // and `antigravity-cli` since they share the same OAuth flow.
-        let antigravity = self::antigravity::AntigravityOAuthProvider::new();
-        reg.register_arc_with_name("antigravity", OAuthProviderEnum::Antigravity(antigravity));
-        reg.register_arc(OAuthProviderEnum::Codex(
-            self::codex::CodexOAuthProvider::new(),
-        ));
-        reg.register_arc(OAuthProviderEnum::Kiro(self::kiro::KiroOAuthProvider::new()));
+        
+        for provider in OAuthProviderEnum::builtin_providers() {
+            // Register under its default name
+            reg.register_arc(provider.clone());
+            
+            // Antigravity (Cloud Code) — also register under `antigravity-cli` alias
+            if provider.name() == "antigravity" {
+                reg.register_arc_with_name("antigravity-cli", provider);
+            }
+        }
+        
         reg
     }
 
