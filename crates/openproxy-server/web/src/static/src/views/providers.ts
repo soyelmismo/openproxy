@@ -780,7 +780,7 @@ function renderDetailHeader(provider: Provider): TemplateResult {
 function renderOAuthSection(provider: Provider): TemplateResult {
   if (provider.auth_type !== "oauth") return html``;
   const buttons: TemplateResult[] = [];
-  if (provider.oauth_flows?.includes("pkce")) {
+  if (provider.oauth_flows?.includes("pkce") || provider.oauth_flows?.includes("auth_code")) {
     buttons.push(html`<button class="primary" @click=${() => onOAuthStartPKCE(provider.id)}>Log in with ${provider.name || provider.id}</button>`);
   }
   if (provider.oauth_flows?.includes("device")) {
