@@ -5,6 +5,24 @@ pub struct ClineAdapter {
     config: ProviderAdapterConfig,
 }
 
+#[derive(serde::Deserialize, Debug)]
+struct ClineRecommendedModels {
+    #[serde(default)]
+    recommended: Vec<ClineModelEntry>,
+    #[serde(default)]
+    free: Vec<ClineModelEntry>,
+    #[serde(default)]
+    #[serde(rename = "clinePass")]
+    cline_pass: Vec<ClineModelEntry>,
+}
+
+#[derive(serde::Deserialize, Debug)]
+struct ClineModelEntry {
+    id: String,
+    #[serde(default)]
+    name: String,
+}
+
 impl ClineAdapter {
     pub fn new() -> Self {
         Self {
@@ -22,46 +40,6 @@ impl ClineAdapter {
                 ],
             },
         }
-    }
-
-    fn hardcoded_models(&self) -> Vec<DiscoveredModel> {
-        [
-            ("zai/glm-5.2", "GLM 5.2", 1040000, 128000),
-            ("x-ai/grok-4.5", "Grok 4.5", 500000, 500000),
-            ("openai/gpt-5.6-sol", "GPT-5.6 Sol", 1050000, 128000),
-            ("moonshotai/kimi-k3", "Kimi K3", 1048576, 1048576),
-            ("anthropic/claude-opus-4.8", "Claude Opus 4.8", 1000000, 128000),
-            ("openrouter/free", "Free Models Router", 200000, 128000),
-            ("deepseek/deepseek-v4-flash", "DeepSeek V4 Flash (Free)", 1048576, 65536),
-            ("tencent/hy3:free", "Tencent Hy3 (Free)", 262144, 262144),
-            ("stepfun/step-3.7-flash", "Step 3.7 Flash (Free)", 256000, 256000),
-            ("poolside/laguna-m.1:free", "Laguna M.1 (Free)", 262144, 32768),
-            ("google/gemma-4-31b-it:free", "Gemma 4 31B (Free)", 262144, 32768),
-            ("nvidia/nemotron-3-ultra-550b-a55b:free", "Nemotron 3 Ultra (Free)", 1000000, 65536),
-            ("minimax/minimax-m3", "MiniMax M3 (Free)", 1048576, 65536),
-        ]
-        .into_iter()
-        .map(|(id, name, ctx, out)| DiscoveredModel {
-            model_id: ModelId::new(id),
-            display_name: Some(name.to_string()),
-            target_format: TargetFormat::Openai,
-            context_length: Some(ctx),
-            max_output_tokens: Some(out),
-            input_modalities: None,
-            output_modalities: None,
-            model_type: Some("chat".to_string()),
-            family: None,
-            capabilities: Some(openproxy_types::ModelCapabilities {
-                vision: Some(true),
-                tool_calling: Some(true),
-                reasoning: Some(true),
-                thinking: Some(true),
-                attachment: None,
-                structured_output: None,
-                temperature: None,
-            }),
-        })
-        .collect()
     }
 }
 
@@ -113,15 +91,63 @@ impl ProviderAdapter for ClineAdapter {
     }
 
     fn models_url(&self) -> Option<String> {
-        None
+        Some("https://api.cline.bot/api/v1/ai/cline/recommended-models".into())
     }
 
     async fn fetch_models(
         &self,
-        _upstream_client: &Arc<UpstreamClient>,
+        upstream_client: &Arc<UpstreamClient>,
         _api_key: &str,
     ) -> Result<Vec<DiscoveredModel>> {
-        Ok(self.hardcoded_models())
+        let url = self.models_url().unwrap();
+
+        let body = upstream_get_json(upstream_client, &url, &[])
+            .await
+            .map_err(|e| openproxy_types::error::CoreError::UpstreamConnection(e.to_string()))?;
+
+        let payload: ClineRecommendedModels = serde_json::from_value(body)
+            .map_err(|e| openproxy_types::error::CoreError::Parse(format!("cline parse error: {}", e)))?;
+
+        let mut discovered = Vec::new();
+
+        let mut add_models = |entries: Vec<ClineModelEntry>, is_free: bool| {
+            for entry in entries {
+                let mut id = entry.id.clone();
+                if is_free && !id.ends_with(":free") && !id.contains("-free") {
+                    id.push_str(":free");
+                }
+                
+                // Fallback capabilities for unknown models
+                let caps = openproxy_types::ModelCapabilities {
+                    vision: Some(true),
+                    tool_calling: Some(true),
+                    reasoning: Some(true),
+                    thinking: Some(true),
+                    attachment: None,
+                    structured_output: None,
+                    temperature: None,
+                };
+
+                discovered.push(DiscoveredModel {
+                    model_id: ModelId::new(id),
+                    display_name: Some(entry.name),
+                    target_format: TargetFormat::Openai,
+                    context_length: Some(128000), // Defaulting context
+                    max_output_tokens: Some(8192),
+                    input_modalities: None,
+                    output_modalities: None,
+                    model_type: Some("chat".to_string()),
+                    family: None,
+                    capabilities: Some(caps),
+                });
+            }
+        };
+
+        add_models(payload.recommended, false);
+        add_models(payload.free, true);
+        add_models(payload.cline_pass, false);
+
+        Ok(discovered)
     }
 
     async fn fetch_quota(
