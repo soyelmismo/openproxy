@@ -186,4 +186,29 @@ impl ProviderAdapter for ClineAdapter {
     ) -> Option<Result<openproxy_types::AccountQuota>> {
         None
     }
+
+    fn wrap_request_body(
+        &self,
+        body: bytes::Bytes,
+        _target_format: TargetFormat,
+        _model: &ModelId,
+        _resolved_target: &openproxy_types::context::ResolvedTarget,
+    ) -> std::result::Result<bytes::Bytes, openproxy_types::error::CoreError> {
+        let mut val: serde_json::Value = serde_json::from_slice(&body)
+            .map_err(|e| openproxy_types::error::CoreError::Parse(e.to_string()))?;
+        
+        if let Some(obj) = val.as_object_mut() {
+            if let Some(serde_json::Value::String(model_str)) = obj.get_mut("model") {
+                if model_str.ends_with(":free") {
+                    *model_str = model_str.trim_end_matches(":free").to_string();
+                } else if model_str.ends_with("-free") {
+                    *model_str = model_str.trim_end_matches("-free").to_string();
+                }
+            }
+        }
+        
+        let new_body = serde_json::to_vec(&val)
+            .map_err(|e| openproxy_types::error::CoreError::Parse(e.to_string()))?;
+        Ok(bytes::Bytes::from(new_body))
+    }
 }
