@@ -222,11 +222,7 @@ const MIGRATIONS: &[Migration] = &[
         name: "000042_free_proxies",
         sql: include_str!("../migrations/000042_free_proxies.sql"),
     },
-    Migration {
-        version: 43,
-        name: "000043_provider_proxies",
-        sql: include_str!("../migrations/000043_provider_proxies.sql"),
-    },
+
     Migration {
         version: 44,
         name: "000044_add_responses_format",
@@ -251,6 +247,16 @@ const MIGRATIONS: &[Migration] = &[
         version: 48,
         name: "000048_provider_rate_limit_scope",
         sql: include_str!("../migrations/000048_provider_rate_limit_scope.sql"),
+    },
+    Migration {
+        version: 49,
+        name: "000049_proxy_sources",
+        sql: include_str!("../migrations/000049_proxy_sources.sql"),
+    },
+    Migration {
+        version: 50,
+        name: "000050_proxy_sources_flags",
+        sql: include_str!("../migrations/000050_proxy_sources_flags.sql"),
     },
 ];
 

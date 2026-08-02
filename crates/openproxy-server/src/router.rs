@@ -400,12 +400,40 @@ pub fn build_router(state: AppState) -> Router {
             post(handlers::admin::proxies::test_all_proxies),
         )
         .route(
+            "/proxies/test-url",
+            get(handlers::admin::proxies::get_proxy_test_url)
+                .put(handlers::admin::proxies::update_proxy_test_url),
+        )
+        .route(
             "/proxies/{id}",
             delete(handlers::admin::proxies::delete_proxy),
         )
         .route(
             "/proxies/{id}/test",
             post(handlers::admin::proxies::test_proxy),
+        )
+        // Proxy sources endpoints
+        .route(
+            "/proxy-sources",
+            get(handlers::admin::proxy_sources::list_sources)
+                .post(handlers::admin::proxy_sources::create_source),
+        )
+        .route(
+            "/proxy-sources/test",
+            post(handlers::admin::proxy_sources::test_source_url),
+        )
+        .route(
+            "/proxy-sources/{id}",
+            axum::routing::put(handlers::admin::proxy_sources::update_source)
+                .delete(handlers::admin::proxy_sources::delete_source),
+        )
+        .route(
+            "/proxy-sources/reorder",
+            post(handlers::admin::proxy_sources::reorder_proxy_sources),
+        )
+        .route(
+            "/proxy-sources/{id}/test",
+            post(handlers::admin::proxy_sources::test_source_by_id),
         )
         // OAuth endpoints
         // models.dev sync

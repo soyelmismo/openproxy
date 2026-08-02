@@ -970,6 +970,27 @@ function renderSortableTh(col: SortableColumn, sort: ModelSort | null, providerI
   return html`<th class=${"sortable" + (isActive ? " sorted" : "")} @click=${() => onCycleProviderSort(providerId, col.key)}>${col.label}<span class="sort-indicator">${indicator}</span></th>`;
 }
 
+async function onCopyUsageModel(text: string, e: Event): Promise<void> {
+  e.preventDefault();
+  e.stopPropagation();
+  try {
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      await navigator.clipboard.writeText(text);
+      showToast("Copied: " + text, "success");
+      return;
+    }
+    const el = document.createElement("textarea");
+    el.value = text;
+    document.body.appendChild(el);
+    el.select();
+    document.execCommand("copy");
+    document.body.removeChild(el);
+    showToast("Copied: " + text, "success");
+  } catch (err: unknown) {
+    showToast("Failed to copy", "error");
+  }
+}
+
 function renderModelRow(m: Model): TemplateResult {
   const isSelected: boolean = (state.selectedModels as Set<number>).has(m.row_id);
   const lastTest: TemplateResult = m.last_test_status != null
@@ -979,10 +1000,11 @@ function renderModelRow(m: Model): TemplateResult {
   const providerAccounts = (state.accounts || []).filter((a) => a.provider_id === m.provider_id);
   const aliveProxies = (state.proxies || []).filter((p) => p.status === "alive");
 
+  const usageModel = `${m.provider_id}/${m.model_id}`;
+
   return html`<tr id=${`model-row-${m.row_id}`} class=${(m.active ? "" : "inactive") + (isSelected ? " selected" : "")}>
     <td><input type="checkbox" ?checked=${isSelected} @change=${(e: Event) => onToggleModelSelection(m.row_id, e)}></td>
-    <td><code>${m.model_id}</code>${m.custom ? html`<span class="badge custom">custom</span>` : html``}</td>
-    <td>${m.display_name || "—"}</td>
+    <td><code style="cursor: pointer; padding: 2px 4px; border-radius: 4px; background: rgba(255, 255, 255, 0.1);" title="Click to copy usage model" @click=${(e: Event) => onCopyUsageModel(usageModel, e)}>${usageModel}</code>${m.custom ? html`<span class="badge custom">custom</span>` : html``}</td>
     <td>${m.target_format || "—"}</td>
     <td>${formatContext(m.context_length)}</td>
     <td>${formatContext(m.max_output_tokens)}</td>

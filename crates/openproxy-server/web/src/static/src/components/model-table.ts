@@ -252,8 +252,7 @@ export const SORTABLE_COLUMNS: readonly SortableColumn[] = [
   // key matches `data-sort-key`; label is the human text; value
   // is the extractor for the model row. `null` extractors mean
   // "stable" (the upstream order is preserved).
-  { key: "model_id",   label: "Model ID",   value: (m) => (m.model_id || "").toLowerCase() },
-  { key: "display",    label: "Display",    value: (m) => (m.display_name || "").toLowerCase() },
+  { key: "usage_model", label: "Model",      value: (m) => (`${m.provider_id}/${m.model_id}`).toLowerCase() },
   { key: "format",     label: "Format",     value: (m) => (m.target_format || "").toLowerCase() },
   { key: "context",    label: "Context",    value: (m) => m.context_length || 0 },
   { key: "out",        label: "Out",        value: (m) => m.max_output_tokens || 0 },

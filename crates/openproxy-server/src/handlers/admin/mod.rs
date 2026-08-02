@@ -51,6 +51,7 @@ pub mod models;
 pub mod notifications;
 pub mod oauth;
 pub mod proxies;
+pub mod proxy_sources;
 pub mod runtime;
 pub mod usage;
 
@@ -1287,6 +1288,8 @@ pub struct CreateCustomProxyInput {
     pub port: u16,
     pub r#type: String,
     pub country_code: Option<String>,
+    pub username: Option<String>,
+    pub password: Option<String>,
 }
 
 // =====================================================================

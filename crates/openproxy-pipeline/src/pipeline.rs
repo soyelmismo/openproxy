@@ -213,7 +213,6 @@ pub fn is_upstream_health_issue(err: &CoreError) -> bool {
 }
 
 pub fn parse_retry_after_ms(val: &str) -> Option<u64> {
-    const MAX_RETRY_AFTER_MS: u64 = 5 * 60 * 1000;
     let trimmed = val.trim();
     if trimmed.is_empty() {
         return None;
@@ -223,7 +222,7 @@ pub fn parse_retry_after_ms(val: &str) -> Option<u64> {
             return None;
         }
         let ms = (secs * 1000.0) as u64;
-        return Some(ms.min(MAX_RETRY_AFTER_MS));
+        return Some(ms);
     }
     if let Ok(parsed) = chrono::DateTime::parse_from_rfc2822(trimmed) {
         let now = chrono::Utc::now();
@@ -231,7 +230,7 @@ pub fn parse_retry_after_ms(val: &str) -> Option<u64> {
             return Some(0);
         }
         let diff = parsed.with_timezone(&chrono::Utc) - now;
-        return Some((diff.num_milliseconds() as u64).min(MAX_RETRY_AFTER_MS));
+        return Some(diff.num_milliseconds() as u64);
     }
     None
 }

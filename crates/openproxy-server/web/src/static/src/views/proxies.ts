@@ -8,6 +8,8 @@ import {
   syncProxies,
   testProxy,
   testAllProxies,
+  getProxyTestUrl,
+  updateProxyTestUrl,
   deleteProxy,
   showAddCustomProxy,
   reloadProxies,
@@ -37,6 +39,8 @@ let isSyncing = false;
 let loadError: string | null = null;
 let currentPage = 1;
 let searchDebounceTimer: ReturnType<typeof setTimeout> | null = null;
+let proxyTestUrl = "https://cloudflare.com/cdn-cgi/trace";
+let isSavingTestUrl = false;
 
 function fetchFilteredProxies(): void {
   const queryParams: Record<string, string | number> = {
@@ -166,6 +170,26 @@ function renderPageHeader(isSyncing: boolean, syncBtnLabel: string): TemplateRes
       <div>
         <h2>${t("proxies.title")}</h2>
         <p class="subtitle">${t("proxies.subtitle")}</p>
+        <div style="margin-top: 0.5rem; display: flex; align-items: center; gap: 0.5rem;">
+          <input 
+            type="text" 
+            .value=${proxyTestUrl} 
+            @change=${async (e: Event) => {
+              proxyTestUrl = (e.target as HTMLInputElement).value;
+              isSavingTestUrl = true;
+              requestUpdate();
+              try {
+                await updateProxyTestUrl(proxyTestUrl);
+              } finally {
+                isSavingTestUrl = false;
+                requestUpdate();
+              }
+            }}
+            placeholder="Proxy test URL..."
+            style="width: 300px; padding: 0.25rem; font-size: 0.9rem;"
+          />
+          ${isSavingTestUrl ? html`<span class="spinner" style="width: 14px; height: 14px;"></span>` : ""}
+        </div>
       </div>
       <div class="actions">
         <button class="primary" ?disabled=${isSyncing} @click=${triggerSync}>
@@ -315,6 +339,7 @@ function renderProxies(): TemplateResult {
 export async function mountProxies(): Promise<(() => void) | void> {
   loadError = null;
   currentPage = 1;
+  proxyTestUrl = await getProxyTestUrl();
   return createView(
     renderProxies,
     async () => { fetchFilteredProxies(); },

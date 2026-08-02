@@ -59,6 +59,8 @@ pub async fn create_custom_proxy(
         body.port,
         body.r#type.trim().to_string(),
         body.country_code.map(|c| c.trim().to_string()),
+        body.username.map(|u| u.trim().to_string()),
+        body.password.map(|p| p.trim().to_string()),
     )?;
     Ok(Json(p))
 }
@@ -82,4 +84,26 @@ pub async fn delete_proxy(
 ) -> Result<Json<serde_json::Value>, ApiError> {
     openproxy_core::free_proxies::delete_proxy(&w, &id)?;
     Ok(Json(serde_json::json!({ "status": "deleted" })))
+}
+
+pub async fn get_proxy_test_url(DbReader(r): DbReader) -> Result<Json<serde_json::Value>, ApiError> {
+    let url = openproxy_db::app_config::load_proxy_test_url(&r)?;
+    Ok(Json(serde_json::json!({ "proxy_test_url": url })))
+}
+
+#[derive(serde::Deserialize)]
+pub struct UpdateProxyTestUrlInput {
+    pub proxy_test_url: String,
+}
+
+pub async fn update_proxy_test_url(
+    DbWriter(w): DbWriter,
+    Json(body): Json<UpdateProxyTestUrlInput>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let url = body.proxy_test_url.trim();
+    if url.is_empty() {
+        return Err(ApiError(CoreError::Validation("url cannot be empty".into())));
+    }
+    openproxy_db::app_config::save_proxy_test_url(&w, url)?;
+    Ok(Json(serde_json::json!({ "proxy_test_url": url })))
 }

@@ -90,6 +90,29 @@ export async function testAllProxies(): Promise<void> {
   }
 }
 
+export async function getProxyTestUrl(): Promise<string> {
+  try {
+    const res = (await api("/proxies/test-url", { method: "GET" })) as { proxy_test_url: string };
+    return res.proxy_test_url;
+  } catch (e: unknown) {
+    console.error("getProxyTestUrl failed", e);
+    return "https://cloudflare.com/cdn-cgi/trace";
+  }
+}
+
+export async function updateProxyTestUrl(url: string): Promise<void> {
+  try {
+    await api("/proxies/test-url", {
+      method: "PUT",
+      body: JSON.stringify({ proxy_test_url: url }),
+    });
+    showToast("Proxy test URL updated", "success");
+  } catch (e: unknown) {
+    showApiError(e, "Failed to update proxy test URL");
+    throw e;
+  }
+}
+
 export async function deleteProxy(id: string): Promise<void> {
   if (!confirm("Are you sure you want to delete this proxy?")) return;
   try {

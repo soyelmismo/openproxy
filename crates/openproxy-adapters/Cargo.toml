@@ -13,6 +13,7 @@ test-utils = []
 ssrf-bypass = []
 
 [dependencies]
+base64.workspace = true
 openproxy-types = { path = "../openproxy-types" }
 openproxy-db = { path = "../openproxy-db" }
 serde = { workspace = true }

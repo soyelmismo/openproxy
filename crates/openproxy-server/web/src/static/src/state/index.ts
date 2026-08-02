@@ -14,6 +14,7 @@ import type {
   Model,
   Combo,
   FreeProxy,
+  ProxySource,
 } from "../lib/types/api.js";
 
 // ----------------------------------------------------------------------------
@@ -39,7 +40,8 @@ export type RouteName =
   | "config"
   | "notifications"
   | "login"
-  | "proxies";
+  | "proxies"
+  | "proxy-sources";
 
 /** Live-logs WebSocket connection status. Mirrors the `setLogsStatus`
  *  labels in `state/ws.ts`. */
@@ -156,6 +158,7 @@ export interface DashboardState {
   modelsComplete: boolean;
   combos: Combo[];
   proxies: FreeProxy[];
+  proxySources: ProxySource[];
   proxySummary: ProxySummary | null;
   /** Cached API key rows. The shape is provider-specific; the
    *  dashboard views hydrate it from `/admin/api-keys`. Kept
@@ -221,6 +224,7 @@ export const state: DashboardState = {
   modelsComplete: false,
   combos: [],
   proxies: [],
+  proxySources: [],
   proxySummary: null,
   apiKeys: [],
   health: null,

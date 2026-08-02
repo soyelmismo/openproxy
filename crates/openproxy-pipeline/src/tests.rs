@@ -46,11 +46,11 @@ fn parse_retry_after_ms_integer_seconds() {
 }
 
 #[test]
-fn parse_retry_after_ms_caps_at_5_minutes() {
-    // 3600s (1h) must be capped to 5 minutes = 300_000ms.
-    assert_eq!(parse_retry_after_ms("3600"), Some(5 * 60 * 1000));
-    // 600s (10m) also capped.
-    assert_eq!(parse_retry_after_ms("600"), Some(5 * 60 * 1000));
+fn parse_retry_after_ms_no_cap() {
+    // 3600s (1h) must NOT be capped anymore.
+    assert_eq!(parse_retry_after_ms("3600"), Some(3600 * 1000));
+    // 600s (10m)
+    assert_eq!(parse_retry_after_ms("600"), Some(600 * 1000));
     // 30s passes through.
     assert_eq!(parse_retry_after_ms("30"), Some(30_000));
 }

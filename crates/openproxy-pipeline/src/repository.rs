@@ -819,11 +819,11 @@ impl PipelineRepository for SqlitePipelineRepository {
             message: e.to_string(),
             source: Some(Box::new(e)),
         })
-    }
-
-    fn get_or_assign_provider_proxy(&self, provider_id: &ProviderId) -> Result<Option<String>> {
+    }    fn get_or_assign_provider_proxy(&self, provider_id: &ProviderId) -> Result<Option<String>> {
+        use openproxy_db::cooldowns::is_provider_proxy_in_cooldown;
         use rusqlite::OptionalExtension;
         let conn = self.conn.lock();
+        
         let provider = match openproxy_db::providers::get(&conn, provider_id)? {
             Some(p) => p,
             None => return Ok(None),
@@ -833,16 +833,20 @@ impl PipelineRepository for SqlitePipelineRepository {
             return Ok(None);
         }
 
-        if let Some(ref proxy_id) = provider.current_proxy_id {
-            let exists_and_alive: Option<(String, i64, String)> = conn
+        if let Some(ref proxy_id) = provider.current_proxy_id
+            && !is_provider_proxy_in_cooldown(provider_id.as_str(), proxy_id)
+        {
+            let exists_and_alive: Option<(String, i64, String, Option<String>, Option<String>)> = conn
                 .query_row(
-                    "SELECT host, port, type FROM free_proxies WHERE id = ?1 AND status = 'alive'",
+                    "SELECT host, port, type, username, password FROM free_proxies WHERE id = ?1 AND status = 'alive'",
                     rusqlite::params![proxy_id],
                     |row| {
                         Ok((
                             row.get::<_, String>(0)?,
                             row.get::<_, i64>(1)?,
                             row.get::<_, String>(2)?,
+                            row.get::<_, Option<String>>(3)?,
+                            row.get::<_, Option<String>>(4)?,
                         ))
                     },
                 )
@@ -852,47 +856,63 @@ impl PipelineRepository for SqlitePipelineRepository {
                     source: Some(Box::new(e)),
                 })?;
 
-            if let Some((host, port, proto)) = exists_and_alive {
-                return Ok(Some(format!(
-                    "{}://{}:{}",
-                    proto.to_lowercase(),
-                    host,
-                    port
-                )));
+            if let Some((host, port, proto, username, password)) = exists_and_alive {
+                if let (Some(u), Some(p)) = (username, password) {
+                    return Ok(Some(format!("{}://{}:{}@{}:{}", proto.to_lowercase(), u, p, host, port)));
+                } else {
+                    return Ok(Some(format!("{}://{}:{}", proto.to_lowercase(), host, port)));
+                }
             }
         }
 
-        let new_proxy: Option<(String, String, i64, String)> = conn
-            .query_row(
-                "SELECT id, host, port, type FROM free_proxies WHERE status = 'alive' ORDER BY latency_ms ASC, random() LIMIT 1",
-                [],
-                |row| Ok((
+        let mut stmt = conn
+            .prepare("SELECT id, host, port, type, username, password FROM free_proxies WHERE status = 'alive' ORDER BY priority DESC, latency_ms ASC, random() LIMIT 2000")
+            .map_err(|e| openproxy_types::error::CoreError::Database {
+                message: format!("prepare query new proxy: {}", e),
+                source: Some(Box::new(e)),
+            })?;
+
+        let candidate_rows = stmt
+            .query_map([], |row| {
+                Ok((
                     row.get::<_, String>(0)?,
                     row.get::<_, String>(1)?,
                     row.get::<_, i64>(2)?,
                     row.get::<_, String>(3)?,
-                )),
-            )
-            .optional()
+                    row.get::<_, Option<String>>(4)?,
+                    row.get::<_, Option<String>>(5)?,
+                ))
+            })
             .map_err(|e| openproxy_types::error::CoreError::Database {
-                message: format!("query new proxy: {}", e),
+                message: format!("query new proxy candidates: {}", e),
                 source: Some(Box::new(e)),
             })?;
 
-        if let Some((id, host, port, proto)) = new_proxy {
-            openproxy_db::providers::update_current_proxy(&conn, provider_id, Some(&id))?;
-            return Ok(Some(format!(
-                "{}://{}:{}",
-                proto.to_lowercase(),
-                host,
-                port
-            )));
+        let mut selected_proxy = None;
+        let mut fallback_proxy = None;
+
+        for item in candidate_rows.flatten() {
+            if fallback_proxy.is_none() {
+                fallback_proxy = Some(item.clone());
+            }
+            if !is_provider_proxy_in_cooldown(provider_id.as_str(), &item.0) {
+                selected_proxy = Some(item);
+                break;
+            }
         }
 
-        Err(openproxy_types::error::CoreError::Validation(format!(
-            "use_proxies is enabled for provider '{}', but no alive proxies are available in pool",
-            provider_id
-        )))
+        let new_proxy = selected_proxy.or(fallback_proxy);
+
+        if let Some((new_id, host, port, proto, username, password)) = new_proxy {
+            openproxy_db::providers::update_current_proxy(&conn, provider_id, Some(&new_id))?;
+            if let (Some(u), Some(p)) = (username, password) {
+                return Ok(Some(format!("{}://{}:{}@{}:{}", proto.to_lowercase(), u, p, host, port)));
+            } else {
+                return Ok(Some(format!("{}://{}:{}", proto.to_lowercase(), host, port)));
+            }
+        }
+
+        Ok(None)
     }
 
     fn get_proxy_status_by_url(&self, url: &str) -> Option<String> {

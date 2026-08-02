@@ -896,6 +896,7 @@ struct ProxyConfig {
     scheme: String,
     host: String,
     port: u16,
+    auth: Option<String>,
 }
 
 fn parse_proxy_url(url: &str) -> Result<ProxyConfig, String> {
@@ -913,7 +914,21 @@ fn parse_proxy_url(url: &str) -> Result<ProxyConfig, String> {
     let port = uri
         .port_u16()
         .ok_or_else(|| "Missing proxy port".to_string())?;
-    Ok(ProxyConfig { scheme, host, port })
+    let auth = uri.authority().and_then(|a| {
+        let auth_str = a.as_str();
+        if let Some(idx) = auth_str.find('@') {
+            Some(auth_str[..idx].to_string())
+        } else {
+            None
+        }
+    });
+
+    Ok(ProxyConfig {
+        scheme,
+        host,
+        port,
+        auth,
+    })
 }
 
 async fn run_proxy_tunnel(
@@ -1013,9 +1028,16 @@ async fn run_proxy_tunnel(
             }
         }
         "http" | "https" => {
+            let auth_header = if let Some(ref auth) = proxy.auth {
+                use base64::Engine;
+                let encoded = base64::engine::general_purpose::STANDARD.encode(auth.as_bytes());
+                format!("Proxy-Authorization: Basic {}\r\n", encoded)
+            } else {
+                "".to_string()
+            };
             let request = format!(
-                "CONNECT {}:{} HTTP/1.1\r\nHost: {}:{}\r\nProxy-Connection: Keep-Alive\r\n\r\n",
-                dest_host, dest_port, dest_host, dest_port
+                "CONNECT {}:{} HTTP/1.1\r\nHost: {}:{}\r\nProxy-Connection: Keep-Alive\r\n{}\r\n",
+                dest_host, dest_port, dest_host, dest_port, auth_header
             );
             stream.write_all(request.as_bytes()).await?;
 

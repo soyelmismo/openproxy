@@ -24,6 +24,9 @@ pub const IDLE_CHUNK_RETRYABLE_KEY: &str = "idle_chunk_retryable";
 /// Default value for `idle_chunk_retryable` (false = current behavior).
 pub const IDLE_CHUNK_RETRYABLE_DEFAULT: bool = openproxy_types::IDLE_CHUNK_RETRYABLE_DEFAULT;
 
+pub const PROXY_TEST_URL_KEY: &str = "proxy_test_url";
+pub const PROXY_TEST_URL_DEFAULT: &str = "https://cloudflare.com/cdn-cgi/trace";
+
 /// Read the persisted `compression` override, if any.
 pub fn load_compression_override_from_db(conn: &Connection) -> Result<Option<CompressionMode>> {
     let mut stmt = conn
@@ -263,6 +266,36 @@ pub fn save_quota_protection_to_db(
          ON CONFLICT(key) DO UPDATE SET value = excluded.value,
                                          updated_at = excluded.updated_at",
         params![QUOTA_PROTECTION_KEY, json, now_unix_secs],
+    )
+    .map_err(crate::error::map_db_error)?;
+    Ok(())
+}
+
+pub fn load_proxy_test_url(conn: &Connection) -> Result<String> {
+    let mut stmt = conn
+        .prepare("SELECT value FROM app_config WHERE key = ?1")
+        .map_err(crate::error::map_db_error)?;
+    let mut rows = stmt
+        .query(params![PROXY_TEST_URL_KEY])
+        .map_err(crate::error::map_db_error)?;
+    if let Ok(Some(row)) = rows.next() {
+        let raw: String = row.get(0).map_err(crate::error::map_db_error)?;
+        if let Ok(s) = serde_json::from_str::<String>(&raw) {
+            return Ok(s);
+        } else {
+            return Ok(raw);
+        }
+    }
+    Ok(PROXY_TEST_URL_DEFAULT.to_string())
+}
+
+pub fn save_proxy_test_url(conn: &Connection, url: &str) -> Result<()> {
+    let raw = serde_json::to_string(url).unwrap();
+    let now = chrono::Utc::now().timestamp();
+    conn.execute(
+        "INSERT INTO app_config (key, value, updated_at) VALUES (?1, ?2, ?3)
+         ON CONFLICT(key) DO UPDATE SET value = ?2, updated_at = ?3",
+        params![PROXY_TEST_URL_KEY, raw, now],
     )
     .map_err(crate::error::map_db_error)?;
     Ok(())

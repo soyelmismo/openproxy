@@ -70,6 +70,7 @@ import { logsPrevPage, logsNextPage, logsGoPage, logsSetFollow, toggleColumnsMen
 import { configSaveTimeouts, configSaveRecordingTtl, configSaveIdleChunkRetryable, configSaveCompression } from "../views/config.js";
 import { closeLogDetailModal, copyDebugBundle } from "../components/log-detail.js";
 import { syncProxies, testProxy, testAllProxies, deleteProxy, showAddCustomProxy } from "./proxy-handlers.js";
+import { showAddProxySource, showEditProxySource, deleteProxySource, testProxySource } from "./proxy-source-handlers.js";
 
 // ---- Action registry ----
 // Keys are the data-action values. Each value is the function to
@@ -317,6 +318,12 @@ export const HANDLERS: Record<string, ActionHandler> = {
   testAllProxies,
   deleteProxy,
   showAddCustomProxy,
+
+  // Proxy Sources
+  showAddProxySource,
+  showEditProxySource,
+  deleteProxySource,
+  testProxySource,
 };
 
 // Collect positional data-arg-N attrs from an element. Skips the

@@ -119,7 +119,13 @@ impl PipelineStage for UpstreamExecutorStage {
                 }
                 let delay = match policy.delay_after_attempt(target_local_retry_count) {
                     Some(d) => d,
-                    None => break,
+                    None => {
+                        if e.is_proxy_rotated() {
+                            std::time::Duration::from_millis(0)
+                        } else {
+                            break;
+                        }
+                    }
                 };
                 let delay = if let CoreError::RateLimited {
                     retry_after_ms,

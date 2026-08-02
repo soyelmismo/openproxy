@@ -752,3 +752,29 @@ export interface FreeProxy {
   created_at: string;
   updated_at: string;
 }
+
+export interface ProxySource {
+  id: string;
+  name: string;
+  url: string;
+  priority: number;
+  active: boolean;
+  is_builtin: boolean;
+  proxies_total: number;
+  proxies_alive: number;
+  proxies_dead: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface CreateProxySourceInput {
+  name: string;
+  url: string;
+  priority?: number;
+}
+
+export interface UpdateProxySourceInput {
+  name?: string;
+  url?: string;
+  priority?: number;
+}

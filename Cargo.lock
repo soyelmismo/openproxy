@@ -1642,6 +1642,7 @@ version = "1.0.0"
 dependencies = [
  "ahash",
  "anyhow",
+ "base64 0.22.1",
  "bytes",
  "chrono",
  "dashmap",

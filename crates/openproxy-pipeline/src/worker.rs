@@ -62,7 +62,7 @@ pub fn process_job(
         BackgroundJob::RecordAttempt {
             usage_input,
             target_id,
-            combo_id: _,
+            combo_id,
             error_msg,
             is_upstream_health_issue,
             cooldown_mode,
@@ -85,7 +85,6 @@ pub fn process_job(
                 selection_registry.record_request(target_id);
             }
 
-            // 3. Cooldown
             let cooldown_op = match error_msg {
                 None => Some("clear"),
                 Some(_) if is_upstream_health_issue => Some("record"),
@@ -93,26 +92,28 @@ pub fn process_job(
             };
 
             if let Some(op) = cooldown_op {
-                match op {
-                    "clear" => {
-                        if let Err(e) = repo.clear_cooldown(target_id) {
-                            tracing::warn!("cooldown::clear failed in background: {}", e);
+                if combo_id.0 != -1 {
+                    match op {
+                        "clear" => {
+                            if let Err(e) = repo.clear_cooldown(target_id) {
+                                tracing::warn!("cooldown::clear failed in background: {}", e);
+                            }
                         }
-                    }
-                    "record" => {
-                        let reason = error_msg.unwrap_or_else(|| "retryable failure".to_string());
-                        if let Err(e) = repo.record_cooldown(
-                            target_id,
-                            &reason,
-                            cooldown_mode,
-                            cooldown_base_secs,
-                            cooldown_max_secs,
-                            cooldown_factor,
-                        ) {
-                            tracing::warn!("cooldown::record failed in background: {}", e);
+                        "record" => {
+                            let reason = error_msg.unwrap_or_else(|| "retryable failure".to_string());
+                            if let Err(e) = repo.record_cooldown(
+                                target_id,
+                                &reason,
+                                cooldown_mode,
+                                cooldown_base_secs,
+                                cooldown_max_secs,
+                                cooldown_factor,
+                            ) {
+                                tracing::warn!("cooldown::record failed in background: {}", e);
+                            }
                         }
+                        _ => {}
                     }
-                    _ => {}
                 }
             }
         }
