@@ -71,6 +71,22 @@ impl OAuthProvider for ClineOAuthProvider {
             http::header::USER_AGENT,
             http::HeaderValue::from_static("Cline/3.5.0"),
         );
+        req.headers.insert(
+            http::header::HeaderName::from_static("x-is-multiroot"),
+            http::HeaderValue::from_static("false"),
+        );
+        req.headers.insert(
+            http::header::HeaderName::from_static("x-client-type"),
+            http::HeaderValue::from_static("cline-sdk"),
+        );
+        req.headers.insert(
+            http::header::HeaderName::from_static("x-client-version"),
+            http::HeaderValue::from_static("3.5.0"),
+        );
+        req.headers.insert(
+            http::header::HeaderName::from_static("x-core-version"),
+            http::HeaderValue::from_static("3.5.0"),
+        );
         
         let cancel = CancellationToken::new();
         let response = upstream_client
@@ -164,6 +180,22 @@ impl OAuthProvider for ClineOAuthProvider {
         req.headers.insert(
             http::header::USER_AGENT,
             http::HeaderValue::from_static("Cline/3.5.0"),
+        );
+        req.headers.insert(
+            http::header::HeaderName::from_static("x-is-multiroot"),
+            http::HeaderValue::from_static("false"),
+        );
+        req.headers.insert(
+            http::header::HeaderName::from_static("x-client-type"),
+            http::HeaderValue::from_static("cline-sdk"),
+        );
+        req.headers.insert(
+            http::header::HeaderName::from_static("x-client-version"),
+            http::HeaderValue::from_static("3.5.0"),
+        );
+        req.headers.insert(
+            http::header::HeaderName::from_static("x-core-version"),
+            http::HeaderValue::from_static("3.5.0"),
         );
         
         let cancel = CancellationToken::new();
