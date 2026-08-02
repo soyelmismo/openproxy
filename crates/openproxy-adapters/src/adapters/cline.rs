@@ -37,6 +37,11 @@ impl ClineAdapter {
                 extra_headers: vec![
                     ("HTTP-Referer".into(), "https://cline.bot".into()),
                     ("X-Title".into(), "Cline".into()),
+                    ("User-Agent".into(), "Cline/3.5.0".into()),
+                    ("X-IS-MULTIROOT".into(), "false".into()),
+                    ("X-CLIENT-TYPE".into(), "cline-sdk".into()),
+                    ("X-CLIENT-VERSION".into(), "3.5.0".into()),
+                    ("X-CORE-VERSION".into(), "3.5.0".into()),
                 ],
             },
         }
