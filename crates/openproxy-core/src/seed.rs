@@ -249,7 +249,7 @@ mod tests {
         let (pool, _path) = fresh_pool();
         let conn = pool.writer();
         let n = seed_builtin_providers(&conn).expect("seed");
-        assert_eq!(n, 13, "first call inserts all thirteen");
+        assert_eq!(n, 14, "first call inserts all fourteen");
 
         // All twelve are present and reachable by id.
         for id in [
@@ -266,6 +266,7 @@ mod tests {
             "codex",
             "kiro",
             "cloudflare-workers-ai",
+            "cline",
         ] {
             let p = providers::get(&conn, &ProviderId::new(id))
                 .expect("get")
@@ -279,14 +280,14 @@ mod tests {
         let (pool, _path) = fresh_pool();
         let conn = pool.writer();
         let first = seed_builtin_providers(&conn).expect("first");
-        assert_eq!(first, 13);
+        assert_eq!(first, 14);
 
         // Idempotent: running again must not insert more rows.
         let second = seed_builtin_providers(&conn).expect("second");
         assert_eq!(second, 0, "no new rows on second call");
 
         let count = providers::list(&conn).expect("list").len();
-        assert_eq!(count, 13, "still exactly thirteen rows");
+        assert_eq!(count, 14, "still exactly fourteen rows");
     }
 
     #[test]
@@ -310,7 +311,7 @@ mod tests {
         .expect("pre-seed");
 
         let n = seed_builtin_providers(&conn).expect("seed");
-        assert_eq!(n, 12, "only the twelve missing ones");
+        assert_eq!(n, 13, "only the thirteen missing ones");
 
         // The pre-seeded row's name was *not* overwritten.
         let p = providers::get(&conn, &ProviderId::new("openrouter"))
@@ -380,7 +381,7 @@ mod tests {
         // addition to `BUILTINS` (e.g. a new seeded provider) gets
         // remembered here.
         let ids = builtin_provider_ids();
-        assert_eq!(ids.len(), 13);
+        assert_eq!(ids.len(), 14);
         assert!(ids.iter().any(|s| s == "openrouter"));
         assert!(ids.iter().any(|s| s == "minimax"));
         assert!(ids.iter().any(|s| s == "opencode-zen"));
@@ -393,6 +394,7 @@ mod tests {
         assert!(ids.iter().any(|s| s == "codex"));
         assert!(ids.iter().any(|s| s == "kiro"));
         assert!(ids.iter().any(|s| s == "cloudflare-workers-ai"));
+        assert!(ids.iter().any(|s| s == "cline"));
     }
 
     #[test]

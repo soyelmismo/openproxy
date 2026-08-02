@@ -621,6 +621,7 @@ define_provider_adapter! {
     pub enum ProviderAdapterEnum {
         builtins {
             Antigravity(crate::adapters::antigravity::AntigravityAdapter),
+            Cline(crate::adapters::cline::ClineAdapter),
             CloudflareWorkersAI(crate::adapters::cloudflare_workers_ai::CloudflareWorkersAIAdapter),
             Codex(crate::adapters::codex::CodexAdapter),
             Gemini(crate::adapters::gemini::GeminiAdapter),
@@ -654,6 +655,7 @@ macro_rules! derive_default_from_new {
 pub(crate) use derive_default_from_new;
 
 pub mod antigravity;
+pub mod cline;
 pub mod cloudflare_workers_ai;
 pub mod codex;
 pub mod custom_adapter;
@@ -675,6 +677,7 @@ pub mod openrouter;
 pub use mock::MockAdapter;
 
 pub use antigravity::AntigravityAdapter;
+pub use cline::ClineAdapter;
 pub use cloudflare_workers_ai::CloudflareWorkersAIAdapter;
 pub use codex::CodexAdapter;
 pub use custom_adapter::CustomAdapter;

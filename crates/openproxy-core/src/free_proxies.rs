@@ -1745,6 +1745,8 @@ mod tests {
             8080,
             "http".to_string(),
             Some("US".to_string()),
+            None,
+            None,
         )
         .unwrap();
         assert_eq!(p.host, "1.2.3.4");
@@ -1839,6 +1841,8 @@ mod tests {
             8080,
             "socks5".to_string(),
             None,
+            None,
+            None,
         )
         .unwrap();
         update_proxy_status(&conn, &p.id, "alive", Some(100)).unwrap();
@@ -1932,6 +1936,8 @@ mod tests {
             8080,
             "socks5".to_string(),
             None,
+            None,
+            None,
         )
         .unwrap();
 
@@ -1967,6 +1973,7 @@ mod tests {
                 name: "Test Source".to_string(),
                 url: "http://example.com/proxies.txt".to_string(),
                 priority: Some(5),
+                active: Some(true),
             },
         )
         .unwrap();
@@ -1989,6 +1996,7 @@ mod tests {
                 name: Some("Updated Source".to_string()),
                 url: None,
                 priority: Some(10),
+                active: None,
             },
         )
         .unwrap();
