@@ -88,7 +88,7 @@ pub async fn test_model(
         }
     };
 
-    let r = run_test_for_model(
+    let (r, debug_payload) = run_test_for_model(
         &s,
         model_row_id,
         account_id,
@@ -102,6 +102,7 @@ pub async fn test_model(
         "status": r.status,
         "elapsed_ms": r.elapsed_ms,
         "error_msg": r.error_msg,
+        "debug_payload": debug_payload,
     })))
 }
 
@@ -144,7 +145,7 @@ pub(crate) async fn run_test_for_model(
     proxy_url: Option<String>,
     opts: TestOptions,
     cancel_rx: Option<tokio::sync::watch::Receiver<Option<openproxy_types::CancelReason>>>,
-) -> TestResult {
+) -> (TestResult, Option<serde_json::Value>) {
     use openproxy_adapters::adapters::gemini::openai_to_gemini;
     use openproxy_pipeline::translation::openai_to_anthropic;
     use openproxy_types::{OpenAIMessage, OpenAIRequest};
@@ -167,7 +168,7 @@ pub(crate) async fn run_test_for_model(
     let model = match res {
         Ok(m) => m,
         Err(ApiError(e)) => {
-            return TestResult {
+            return (TestResult {
                 row_id: model_row_id,
                 status: e.http_status(),
                 elapsed_ms: 0,
@@ -177,7 +178,7 @@ pub(crate) async fn run_test_for_model(
                     "model lookup failed: {}",
                     openproxy_core::cost::redact_error_msg(&e.to_string()).0
                 )),
-            };
+            }, None);
         }
     };
 
@@ -196,7 +197,7 @@ pub(crate) async fn run_test_for_model(
     //     lightweight heuristic that keeps both flows happy without
     //     adding a new parameter to the helper signature.
     if !model.active && opts.in_combo_fanout {
-        return TestResult::skipped(model_row_id, "model is inactive");
+        return (TestResult::skipped(model_row_id, "model is inactive"), None);
     }
 
     // 2. Find the adapter for that provider. Check built-in adapters
@@ -205,14 +206,14 @@ pub(crate) async fn run_test_for_model(
     let adapter = match resolve_adapter(s, &model.provider_id, s.adapters().as_slice()) {
         Ok(a) => a.clone(),
         Err(err) => {
-            return TestResult {
+            return (TestResult {
                 row_id: model_row_id,
                 status: err.http_status(),
                 elapsed_ms: 0,
                 error_msg: Some(openproxy_core::cost::redact_error_msg(&err.to_string()).0),
                 skipped: true,
                 skip_reason: Some(openproxy_core::cost::redact_error_msg(&err.to_string()).0),
-            };
+            }, None);
         }
     };
 
@@ -304,14 +305,14 @@ pub(crate) async fn run_test_for_model(
                         Err(e) => {
                             let elapsed_ms = start.elapsed().as_millis() as u64;
                             let err_msg = format!("resolve oauth token: {}", e);
-                            return TestResult {
+                            return (TestResult {
                                 row_id: model_row_id,
                                 status: e.http_status(),
                                 elapsed_ms,
                                 error_msg: Some(err_msg),
                                 skipped: false,
                                 skip_reason: None,
-                            };
+                            }, None);
                         }
                     }
                 } else {
@@ -331,7 +332,7 @@ pub(crate) async fn run_test_for_model(
                     {
                         Ok(k) => k,
                         Err(ApiError(e)) => {
-                            return TestResult {
+                            return (TestResult {
                                 row_id: model_row_id,
                                 status: e.http_status(),
                                 elapsed_ms: 0,
@@ -342,7 +343,7 @@ pub(crate) async fn run_test_for_model(
                                 skip_reason: Some(
                                     openproxy_core::cost::redact_error_msg(&e.to_string()).0,
                                 ),
-                            };
+                            }, None);
                         }
                     }
                 }
@@ -409,14 +410,14 @@ pub(crate) async fn run_test_for_model(
     let is_custom_provider = matches!(model.provider_id.as_str(), "kiro");
 
     if is_custom_provider {
-        return TestResult {
+        return (TestResult {
             row_id: model_row_id,
             status: 501,
             elapsed_ms: 0,
             error_msg: Some("Test not supported for custom providers yet".into()),
             skipped: true,
             skip_reason: Some("Test not supported for custom providers yet".into()),
-        };
+        }, None);
     }
 
     // 7. Standard adapter path: translate to the row's native format
@@ -449,14 +450,14 @@ pub(crate) async fn run_test_for_model(
             Ok(v) => (url, v),
             Err(e) => {
                 let err = CoreError::Internal(format!("serialize anthropic req: {}", e));
-                return TestResult {
+                return (TestResult {
                     row_id: model_row_id,
                     status: 500,
                     elapsed_ms: 0,
                     error_msg: Some(openproxy_core::cost::redact_error_msg(&err.to_string()).0),
                     skipped: true,
                     skip_reason: Some(openproxy_core::cost::redact_error_msg(&err.to_string()).0),
-                };
+                }, None);
             }
         }
     } else if effective_target_format == openproxy_core::models::TargetFormat::Gemini {
@@ -470,14 +471,14 @@ pub(crate) async fn run_test_for_model(
             Ok(v) => (url, v),
             Err(e) => {
                 let err = CoreError::Internal(format!("serialize gemini req: {}", e));
-                return TestResult {
+                return (TestResult {
                     row_id: model_row_id,
                     status: 500,
                     elapsed_ms: 0,
                     error_msg: Some(openproxy_core::cost::redact_error_msg(&err.to_string()).0),
                     skipped: true,
                     skip_reason: Some(openproxy_core::cost::redact_error_msg(&err.to_string()).0),
-                };
+                }, None);
             }
         }
     } else if effective_target_format == openproxy_core::models::TargetFormat::Responses {
@@ -515,7 +516,7 @@ pub(crate) async fn run_test_for_model(
                 Ok(v) => (url, v),
                 Err(e) => {
                     let err = CoreError::Internal(format!("serialize responses req: {}", e));
-                    return TestResult {
+                    return (TestResult {
                         row_id: model_row_id,
                         status: 500,
                         elapsed_ms: 0,
@@ -524,18 +525,18 @@ pub(crate) async fn run_test_for_model(
                         skip_reason: Some(
                             openproxy_core::cost::redact_error_msg(&err.to_string()).0,
                         ),
-                    };
+                    }, None);
                 }
             },
             Err(e) => {
-                return TestResult {
+                return (TestResult {
                     row_id: model_row_id,
                     status: 500,
                     elapsed_ms: 0,
                     error_msg: Some(openproxy_core::cost::redact_error_msg(&e.to_string()).0),
                     skipped: true,
                     skip_reason: Some(openproxy_core::cost::redact_error_msg(&e.to_string()).0),
-                };
+                }, None);
             }
         }
     } else {
@@ -548,14 +549,14 @@ pub(crate) async fn run_test_for_model(
             Ok(v) => (url, v),
             Err(e) => {
                 let err = CoreError::Internal(format!("serialize openai req: {}", e));
-                return TestResult {
+                return (TestResult {
                     row_id: model_row_id,
                     status: 500,
                     elapsed_ms: 0,
                     error_msg: Some(openproxy_core::cost::redact_error_msg(&err.to_string()).0),
                     skipped: true,
                     skip_reason: Some(openproxy_core::cost::redact_error_msg(&err.to_string()).0),
-                };
+                }, None);
             }
         }
     };
@@ -621,7 +622,7 @@ pub(crate) async fn run_test_for_model(
                     Ok(wrapped) => wrapped,
                     Err(e) => {
                         let _ = cancel_rx;
-                        return TestResult {
+                        return (TestResult {
                             row_id: model_row_id,
                             status: 500,
                             elapsed_ms: 0,
@@ -640,13 +641,13 @@ pub(crate) async fn run_test_for_model(
                                 ))
                                 .0,
                             ),
-                        };
+                        }, None);
                     }
                 }
             }
             Err(e) => {
                 let _ = cancel_rx;
-                return TestResult {
+                return (TestResult {
                     row_id: model_row_id,
                     status: 500,
                     elapsed_ms: 0,
@@ -665,7 +666,7 @@ pub(crate) async fn run_test_for_model(
                         ))
                         .0,
                     ),
-                };
+                }, None);
             }
         },
     );
@@ -713,8 +714,17 @@ pub(crate) async fn run_test_for_model(
         },
     );
 
-    let result = client.call(req, profile, cancel).await;
+    let result = client.call(req.clone(), profile, cancel).await;
     let elapsed_ms = start.elapsed().as_millis() as u64;
+    let mut debug_payload = None;
+    if opts.in_combo_fanout == false {
+        debug_payload = Some(serde_json::json!({
+            "request_headers": req.headers.iter().map(|(k,v)| (k.as_str().to_string(), v.to_str().unwrap_or("").to_string())).collect::<std::collections::HashMap<_,_>>(),
+            "request_url": req.url.to_string(),
+            "request_body": serde_json::from_slice::<serde_json::Value>(req.body.as_deref().unwrap_or_default()).unwrap_or_else(|_| serde_json::json!(String::from_utf8_lossy(req.body.as_deref().unwrap_or_default()).to_string())),
+        }));
+    }
+
 
     let (status, error_msg) = match result {
         Ok(response) => {
@@ -722,6 +732,9 @@ pub(crate) async fn run_test_for_model(
             if status >= 400 {
                 let body = response.collect().await.unwrap_or_default();
                 let text = String::from_utf8_lossy(&body);
+                if let Some(dp) = debug_payload.as_mut() {
+                    dp["response_body"] = serde_json::from_str(&text).unwrap_or_else(|_| serde_json::json!(text.to_string()));
+                }
                 let truncated: String = text.chars().take(TEST_ERROR_BODY_MAX_CHARS).collect();
                 (status, Some(truncated))
             } else {
@@ -748,25 +761,25 @@ pub(crate) async fn run_test_for_model(
             let w = s.db_pool().writer();
             core_models::set_test_status(&w, row_id, status_i32)
         } {
-            return TestResult {
+            return (TestResult {
                 row_id: model_row_id,
                 status: e.http_status(),
                 elapsed_ms,
                 error_msg: Some(openproxy_core::cost::redact_error_msg(&e.to_string()).0),
                 skipped: true,
                 skip_reason: Some(openproxy_core::cost::redact_error_msg(&e.to_string()).0),
-            };
+            }, None);
         }
     }
 
-    TestResult {
+    (TestResult {
         row_id: model_row_id,
         status,
         elapsed_ms,
         error_msg,
         skipped: false,
         skip_reason: None,
-    }
+    }, debug_payload)
 }
 
 pub(crate) async fn run_refresh(

@@ -1084,7 +1084,7 @@ async fn test_run_test_for_model_cancellation() {
     let (tx, rx) = tokio::sync::watch::channel::<Option<openproxy_types::CancelReason>>(None);
     tx.send(Some(openproxy_types::CancelReason::ClientDisconnected)).unwrap();
 
-    let r = run_test_for_model(
+    let (r, _) = run_test_for_model(
         &state,
         model_row_id,
         None,

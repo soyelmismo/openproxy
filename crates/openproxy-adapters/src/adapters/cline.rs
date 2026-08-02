@@ -92,7 +92,12 @@ impl ProviderAdapter for ClineAdapter {
     }
 
     fn build_auth_header(&self, access_token: &str) -> Option<(String, String)> {
-        Some(("Authorization".into(), format!("Bearer {}", access_token)))
+        let token = if access_token.starts_with("workos:") {
+            access_token.to_string()
+        } else {
+            format!("workos:{}", access_token)
+        };
+        Some(("Authorization".into(), format!("Bearer {}", token)))
     }
 
     fn build_headers(

@@ -139,7 +139,7 @@ pub async fn test_combo_targets(
                 // upstream. The helper handles the model-not-active
                 // short-circuit itself (skipped row with
                 // "model is inactive" in the error_msg).
-                let r = run_test_for_model(
+                let (r, _) = run_test_for_model(
                     &s,
                     t.model_row_id.unwrap_or(ModelRowId(0)).0,
                     t.account_id,
