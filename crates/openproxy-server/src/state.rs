@@ -316,7 +316,7 @@ impl AppState {
         })
         .await;
 
-        let adapters_snapshot = adapters.read().clone();
+        let adapters_snapshot = Arc::clone(&adapters.read());
         let discovery_scheduler = discovery_scheduler::start(
             db_pool.clone(),
             master_key.clone(),
@@ -417,7 +417,7 @@ impl AppState {
     /// pipelines already pay this when constructing
     /// `PipelineConfig`.
     pub fn adapters(&self) -> Arc<Vec<adapters::ProviderAdapterEnum>> {
-        self.adapters.read().clone()
+        Arc::clone(&self.adapters.read())
     }
 
     /// Rebuild the in-memory adapter registry from scratch.
@@ -986,7 +986,7 @@ async fn start_discovery_scheduler(
     adapters: Arc<RwLock<Arc<Vec<openproxy_adapters::adapters::ProviderAdapterEnum>>>>,
     upstream_client: Arc<openproxy_adapters::upstream::UpstreamClient>,
 ) -> openproxy_core::discovery_scheduler::DiscoveryScheduler {
-    let adapters_clone = adapters.read().clone();
+    let adapters_clone = Arc::clone(&adapters.read());
     openproxy_core::discovery_scheduler::start(
         db_pool,
         master_key,

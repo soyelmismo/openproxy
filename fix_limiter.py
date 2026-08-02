@@ -1,12 +1,7 @@
 import re
 
-with open("crates/openproxy-core/src/oauth/mod.rs", "r") as f:
+with open("crates/openproxy-server/src/rate_limit.rs", "r") as f:
     content = f.read()
 
-# Replace the while loop with nothing.
-content = content.replace("        // Consume the initial token so we don't burst the first request.\n        while limiter.check().is_ok() {}\n", "")
+# No obvious replacement here except that it looks good already. Wait, let me check the journal
 
-with open("crates/openproxy-core/src/oauth/mod.rs", "w") as f:
-    f.write(content)
-
-print("Rewritten")
