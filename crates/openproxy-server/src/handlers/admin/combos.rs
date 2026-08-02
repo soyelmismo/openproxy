@@ -82,7 +82,7 @@ pub async fn test_combo_targets(
             }
         })
         .await
-        .map_err(|e| ApiError(CoreError::Internal(format!("spawn_blocking failed: {}", e))))??;
+        .unwrap_or_else(|e| Err(CoreError::Internal(format!("spawn_blocking failed: {}", e))))?;
 
         // The fan-out is intentionally serial. The prompt explicitly
         // asked for no parallelization in the MVP ("NO paralelizar.

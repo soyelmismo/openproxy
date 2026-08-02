@@ -113,9 +113,9 @@ pub async fn oauth_exchange(
                     )
                 })
                 .await
-                .map_err(|e| {
-                    ApiError(CoreError::Internal(format!("spawn_blocking failed: {}", e)))
-                })??
+                .unwrap_or_else(|e| {
+                    Err(CoreError::Internal(format!("spawn_blocking failed: {}", e)))
+                })?
             }
         };
         let expires_at = token.expires_in.map(|secs| {
@@ -151,9 +151,9 @@ pub async fn oauth_exchange(
                 )
             })
             .await
-            .map_err(|e| {
-                ApiError(CoreError::Internal(format!("spawn_blocking failed: {}", e)))
-            })??;
+            .unwrap_or_else(|e| {
+                Err(CoreError::Internal(format!("spawn_blocking failed: {}", e)))
+            })?;
         }
 
         // Post-exchange hook. For Antigravity this calls
@@ -217,7 +217,7 @@ pub async fn oauth_device_code(
             }
         })
         .await
-        .map_err(|e| ApiError(CoreError::Internal(format!("spawn_blocking failed: {}", e))))??;
+        .unwrap_or_else(|e| Err(CoreError::Internal(format!("spawn_blocking failed: {}", e))))?;
 
         Ok(Json(serde_json::json!({
             "device_code": dar.device_code,
