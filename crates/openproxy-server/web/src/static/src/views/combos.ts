@@ -145,7 +145,7 @@ async function onChangePriority(targetId: number, delta: number): Promise<void> 
 }
 async function onResetCooldown(targetId: number): Promise<void> {
   try {
-    await api(`/combos/${detailComboId}/targets/${targetId}/cooldown`, { method: "DELETE" });
+    await api(`/combos/${detailComboId}/targets/${targetId}/clear-cooldown`, { method: "POST" });
     const t = detailTargets.find((t) => t.id === targetId);
     if (t) { t.in_cooldown = false; t.cooldown_until = null; t.cooldown_reason = null; }
     requestUpdate();
