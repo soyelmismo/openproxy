@@ -1,6 +1,7 @@
 //! Cline OAuth provider.
 
 use std::sync::Arc;
+use base64::Engine;
 use crate::error::{CoreError, Result};
 use crate::oauth::{DeviceAuthorizationResponse, OAuthFlow, OAuthProvider, TokenResponse, DbRef};
 use openproxy_adapters::upstream::{CancellationToken, TimeoutProfile, UpstreamClient, UpstreamError, UpstreamRequest};
@@ -100,14 +101,6 @@ impl OAuthProvider for ClineOAuthProvider {
             data: ClineAuthResponseData,
         }
         
-        #[derive(serde::Deserialize)]
-        struct ClineAuthResponseData {
-            #[serde(rename = "accessToken")]
-            access_token: String,
-            #[serde(rename = "refreshToken")]
-            refresh_token: Option<String>,
-        }
-        
         let resp: ClineResponse = serde_json::from_slice(&resp_body)
             .map_err(|e| CoreError::Parse(format!("cline token parse: {e}")))?;
             
@@ -115,11 +108,12 @@ impl OAuthProvider for ClineOAuthProvider {
             return Err(CoreError::Validation("Cline returned success=false".into()));
         }
         
+        let expires_in = parse_expires_in(&resp.data);
         Ok(TokenResponse {
             access_token: resp.data.access_token,
             refresh_token: resp.data.refresh_token,
             token_type: "Bearer".into(),
-            expires_in: None,
+            expires_in,
             scope: None,
             id_token: None,
         })
@@ -149,7 +143,9 @@ impl OAuthProvider for ClineOAuthProvider {
     ) -> Result<TokenResponse> {
         let body = serde_json::json!({
             "refreshToken": refresh_token,
-            "grantType": "refresh_token"
+            "refresh_token": refresh_token,
+            "grantType": "refresh_token",
+            "grant_type": "refresh_token"
         });
         
         let body_bytes = serde_json::to_vec(&body).unwrap();
@@ -191,14 +187,6 @@ impl OAuthProvider for ClineOAuthProvider {
             data: ClineAuthResponseData,
         }
         
-        #[derive(serde::Deserialize)]
-        struct ClineAuthResponseData {
-            #[serde(rename = "accessToken")]
-            access_token: String,
-            #[serde(rename = "refreshToken")]
-            refresh_token: Option<String>,
-        }
-        
         let resp: ClineResponse = serde_json::from_slice(&resp_body)
             .map_err(|e| CoreError::Parse(format!("cline token refresh parse: {e}")))?;
             
@@ -206,13 +194,132 @@ impl OAuthProvider for ClineOAuthProvider {
             return Err(CoreError::Validation("Cline refresh returned success=false".into()));
         }
         
+        let expires_in = parse_expires_in(&resp.data);
         Ok(TokenResponse {
             access_token: resp.data.access_token,
             refresh_token: resp.data.refresh_token,
             token_type: "Bearer".into(),
-            expires_in: None,
+            expires_in,
             scope: None,
             id_token: None,
         })
     }
+
+    fn email_from_token(&self, token: &TokenResponse) -> Option<String> {
+        let extract = |claims: &serde_json::Value| -> Option<String> {
+            claims
+                .get("email")
+                .and_then(|v| v.as_str())
+                .filter(|v| !v.is_empty())
+                .or_else(|| {
+                    claims
+                        .get("name")
+                        .and_then(|v| v.as_str())
+                        .filter(|v| !v.is_empty())
+                })
+                .map(ToString::to_string)
+        };
+
+        if let Some(ref id_jwt) = token.id_token {
+            if let Some(claims) = decode_jwt_payload(id_jwt) {
+                if let Some(val) = extract(&claims) {
+                    return Some(val);
+                }
+            }
+        }
+
+        let jwt = token
+            .access_token
+            .strip_prefix("Bearer ")
+            .unwrap_or(&token.access_token)
+            .strip_prefix("workos:")
+            .unwrap_or(&token.access_token);
+        let claims = decode_jwt_payload(jwt)?;
+        extract(&claims)
+    }
 }
+
+fn decode_jwt_payload(jwt: &str) -> Option<serde_json::Value> {
+    let payload = jwt.split('.').nth(1)?;
+    let bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .decode(payload)
+        .or_else(|_| base64::engine::general_purpose::URL_SAFE.decode(payload))
+        .ok()?;
+    serde_json::from_slice(&bytes).ok()
+}
+
+#[derive(serde::Deserialize)]
+struct ClineAuthResponseData {
+    #[serde(rename = "accessToken", alias = "access_token")]
+    access_token: String,
+    #[serde(rename = "refreshToken", alias = "refresh_token")]
+    refresh_token: Option<String>,
+    #[serde(rename = "expiresAt", alias = "expires_at")]
+    expires_at: Option<String>,
+    #[serde(rename = "expiresIn", alias = "expires_in")]
+    expires_in: Option<u64>,
+}
+
+fn parse_expires_in(data: &ClineAuthResponseData) -> Option<u64> {
+    if let Some(secs) = data.expires_in {
+        return Some(secs);
+    }
+    if let Some(ref ts) = data.expires_at {
+        if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(ts) {
+            let diff = dt
+                .with_timezone(&chrono::Utc)
+                .signed_duration_since(chrono::Utc::now());
+            return Some(diff.num_seconds().max(0) as u64);
+        }
+    }
+    None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_cline_auth_response_data_deserialization_and_ttl() {
+        let json_data = serde_json::json!({
+            "accessToken": "test_acc",
+            "refreshToken": "test_ref",
+            "expiresAt": (chrono::Utc::now() + chrono::Duration::seconds(3600)).to_rfc3339()
+        });
+        let data: ClineAuthResponseData = serde_json::from_value(json_data).expect("deserialize valid json");
+        assert_eq!(data.access_token, "test_acc");
+        assert_eq!(data.refresh_token.as_deref(), Some("test_ref"));
+        let expires_in = parse_expires_in(&data).expect("expires_in parsed");
+        assert!((3590..=3600).contains(&expires_in));
+
+        let snake_json = serde_json::json!({
+            "access_token": "acc2",
+            "refresh_token": "ref2",
+            "expires_in": 1800u64
+        });
+        let data_snake: ClineAuthResponseData = serde_json::from_value(snake_json).expect("deserialize snake case");
+        assert_eq!(data_snake.access_token, "acc2");
+        assert_eq!(data_snake.refresh_token.as_deref(), Some("ref2"));
+        assert_eq!(parse_expires_in(&data_snake), Some(1800));
+    }
+
+    #[test]
+    fn test_cline_email_from_token() {
+        let provider = ClineOAuthProvider::new();
+        // Construct a dummy JWT payload with email
+        let header = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(r#"{"alg":"HS256"}"#);
+        let payload = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(r#"{"email":"user@example.com","name":"Test User"}"#);
+        let token_str = format!("Bearer workos:{header}.{payload}.sig");
+        let token = TokenResponse {
+            access_token: token_str,
+            token_type: "Bearer".into(),
+            expires_in: None,
+            refresh_token: None,
+            scope: None,
+            id_token: None,
+        };
+        assert_eq!(provider.email_from_token(&token).as_deref(), Some("user@example.com"));
+    }
+}
+
+

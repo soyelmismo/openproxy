@@ -501,7 +501,8 @@ pub fn store_oauth_tokens(
                 expires_at = ?4, \
                 oauth_scope = COALESCE(?5, oauth_scope), \
                 oauth_provider_specific = COALESCE(?6, oauth_provider_specific), \
-                email = COALESCE(?7, email) \
+                email = COALESCE(?7, email), \
+                label = COALESCE(NULLIF(label, ''), ?7) \
              WHERE id = ?8",
             params![
                 access_blob,

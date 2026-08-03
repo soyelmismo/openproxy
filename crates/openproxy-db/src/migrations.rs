@@ -267,6 +267,11 @@ const MIGRATIONS: &[Migration] = &[
         name: "000051_add_proxy_rotation_mode",
         sql: include_str!("../migrations/000051_add_proxy_rotation_mode.sql"),
     },
+    Migration {
+        version: 52,
+        name: "000052_backfill_account_labels",
+        sql: include_str!("../migrations/000052_backfill_account_labels.sql"),
+    },
 ];
 
 /// Apply pending migrations on `conn`.

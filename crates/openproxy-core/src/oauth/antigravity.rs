@@ -218,7 +218,7 @@ impl OAuthProvider for AntigravityOAuthProvider {
         // 4. Update email and label on the account row if we fetched it.
         if let Some(ref email) = email {
             conn.execute(
-                "UPDATE accounts SET email = ?1, label = COALESCE(label, ?1) WHERE id = ?2",
+                "UPDATE accounts SET email = ?1, label = COALESCE(NULLIF(label, ''), ?1) WHERE id = ?2",
                 rusqlite::params![email, account_id.0],
             )
             .map_err(|e| CoreError::Database {
