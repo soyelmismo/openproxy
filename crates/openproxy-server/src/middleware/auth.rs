@@ -215,7 +215,7 @@ pub async fn auth_middleware(
             if let Some(calls) = &parsed.messages[i].tool_calls {
                 for call in calls {
                     let call_id = call.get("id").and_then(|v| v.as_str());
-                    let has_response = call_id.map_or(true, |id| {
+                    let has_response = call_id.is_none_or(|id| {
                         parsed.messages[i + 1..]
                             .iter()
                             .any(|m| m.role == "tool" && m.tool_call_id.as_deref() == Some(id))
