@@ -214,6 +214,7 @@ test('Live Logs retry: previous attempt keeps its own stage (no cross-attempt bl
   // mounted.
   await expect(page.locator('#logs >> text=Phase').first()).toBeVisible({ timeout: 5000 });
 
+  const now = Date.now();
   const eventOld: SyntheticStage = {
     request_id: 'req-retry-test-1',
     trace_id: 'tr-old',
@@ -223,7 +224,7 @@ test('Live Logs retry: previous attempt keeps its own stage (no cross-attempt bl
     ttft_ms: null,
     status_code: 0,
     error: null,
-    timestamp: '2026-06-18T02:00:00.050Z',
+    timestamp: new Date(now - 1000).toISOString(),
     provider_id: 'openrouter',
     upstream_model_id: 'gpt-4o-mini',
   };
@@ -236,7 +237,7 @@ test('Live Logs retry: previous attempt keeps its own stage (no cross-attempt bl
     ttft_ms: null,
     status_code: 0,
     error: null,
-    timestamp: '2026-06-18T02:00:01.000Z',
+    timestamp: new Date(now).toISOString(),
     provider_id: 'openrouter',
     upstream_model_id: 'gpt-4o-mini',
   };
