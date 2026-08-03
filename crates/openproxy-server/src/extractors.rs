@@ -86,11 +86,10 @@ where
         let app_state = AppState::from_ref(state);
         let query_token = parts.uri.query().and_then(|q| {
             for pair in q.split('&') {
-                if let Some((k, v)) = pair.split_once('=') {
-                    if k == "token" {
+                if let Some((k, v)) = pair.split_once('=')
+                    && k == "token" {
                         return Some(v.to_string());
                     }
-                }
             }
             None
         });

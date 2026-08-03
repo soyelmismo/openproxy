@@ -872,12 +872,6 @@ where
 // Factory
 // =====================================================================
 
-/// Return a `Vec<ProviderAdapterEnum>` containing every built-in adapter.
-///
-/// The order matches the expected "popularity" order: OpenRouter, then
-/// MiniMax, then OpenCode Zen, then Ollama Cloud, then the remaining
-/// OpenAI-compatible providers, then Gemini and Antigravity. Callers may
-/// reorder, filter, or wrap the results.
 
 // =====================================================================
 // Tests

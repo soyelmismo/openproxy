@@ -1652,16 +1652,14 @@ fn publish_stage_global(event: openproxy_types::usage::StageEvent) {
                 if event.error.is_some() {
                     item.error = event.error.clone();
                 }
-                if let Some(p) = &event.provider_id {
-                    if !p.is_empty() {
+                if let Some(p) = &event.provider_id
+                    && !p.is_empty() {
                         item.provider_id = p.clone();
                     }
-                }
-                if let Some(m) = &event.upstream_model_id {
-                    if !m.is_empty() {
+                if let Some(m) = &event.upstream_model_id
+                    && !m.is_empty() {
                         item.upstream_model_id = m.clone();
                     }
-                }
             })
             .or_insert_with(|| openproxy_types::usage::InflightAttempt {
                 attempt_key: attempt_key.clone(),

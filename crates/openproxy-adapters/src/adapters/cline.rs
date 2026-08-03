@@ -14,11 +14,10 @@ pub const CLINE_SPOOFING_HEADERS: &[(&str, &str)] = &[
 
 pub fn apply_cline_spoofing_headers(req: &mut UpstreamRequest) {
     for &(k, v) in CLINE_SPOOFING_HEADERS {
-        if let Ok(name) = http::header::HeaderName::try_from(k) {
-            if let Ok(val) = http::HeaderValue::try_from(v) {
+        if let Ok(name) = http::header::HeaderName::try_from(k)
+            && let Ok(val) = http::HeaderValue::try_from(v) {
                 req.headers.insert(name, val);
             }
-        }
     }
 }
 

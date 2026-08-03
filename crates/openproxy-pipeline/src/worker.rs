@@ -91,8 +91,8 @@ pub fn process_job(
                 Some(_) => None,
             };
 
-            if let Some(op) = cooldown_op {
-                if combo_id.0 != -1 {
+            if let Some(op) = cooldown_op
+                && combo_id.0 != -1 {
                     match op {
                         "clear" => {
                             if let Err(e) = repo.clear_cooldown(target_id) {
@@ -116,7 +116,6 @@ pub fn process_job(
                         _ => {}
                     }
                 }
-            }
         }
         BackgroundJob::MarkClientResponse {
             request_id,

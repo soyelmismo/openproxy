@@ -916,11 +916,7 @@ fn parse_proxy_url(url: &str) -> Result<ProxyConfig, String> {
         .ok_or_else(|| "Missing proxy port".to_string())?;
     let auth = uri.authority().and_then(|a| {
         let auth_str = a.as_str();
-        if let Some(idx) = auth_str.find('@') {
-            Some(auth_str[..idx].to_string())
-        } else {
-            None
-        }
+        auth_str.find('@').map(|idx| auth_str[..idx].to_string())
     });
 
     Ok(ProxyConfig {

@@ -138,7 +138,7 @@ impl std::fmt::Debug for DiscoveryScheduler {
 /// in production. Tests typically pass `1` and a `0` initial
 /// stagger so a `#[tokio::test]` with `tokio::time::pause()` can
 /// step through ticks deterministically.
-
+///
 /// Start the discovery scheduler using a `ServiceContainer` for dependency injection.
 pub async fn start_with_container(
     services: &crate::di::ServiceContainer,

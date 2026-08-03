@@ -226,9 +226,7 @@ pub async fn usage_detail(
     headers: HeaderMap,
     Query(q): Query<DetailQuery>,
 ) -> Result<Json<UsageDetailResponse>, ApiError> {
-    if let Err(e) = authenticate_admin_ws(&s, &headers, None) {
-        return Err(e);
-    }
+    authenticate_admin_ws(&s, &headers, None)?;
     // Read-only SELECT — use the READER.
     let r = s.db_pool().reader();
     let row = if let Some(id) = q.id.filter(|&id| id != 0) {

@@ -3,7 +3,7 @@ fn main() {
     let pool = DbPool::open(std::path::Path::new("/root/.openproxy/data.db")).unwrap();
     let conn = pool.open_connection().unwrap();
     let mut stmt = conn.prepare("SELECT id, host, port, type, username, password FROM free_proxies WHERE source = 'tboutme3@gmail.com' LIMIT 1").unwrap();
-    let mut rows = stmt
+    let rows = stmt
         .query_map([], |row| {
             Ok((
                 row.get::<_, String>(0)?,

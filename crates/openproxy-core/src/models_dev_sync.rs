@@ -868,7 +868,7 @@ pub fn auto_create_combos(conn: &Connection) -> Result<usize> {
 
 /// Background sync task: periodically fetch models.dev, enrich, and
 /// auto-create combos. Runs at the configured interval.
-
+///
 /// Background sync task using a `ServiceContainer` for dependency injection.
 pub async fn start_sync_scheduler_with_container(
     services: &crate::di::ServiceContainer,

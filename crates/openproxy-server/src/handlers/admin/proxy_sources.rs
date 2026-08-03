@@ -26,11 +26,10 @@ pub async fn create_source(
 
     let pool = state.db_pool().clone();
     tokio::spawn(async move {
-        if let Ok(summary) = openproxy_core::free_proxies::sync_all_providers(pool.clone()).await {
-            if summary.added > 0 || summary.fetched > 0 {
+        if let Ok(summary) = openproxy_core::free_proxies::sync_all_providers(pool.clone()).await
+            && (summary.added > 0 || summary.fetched > 0) {
                 openproxy_core::free_proxies::test_all_proxies_background(pool);
             }
-        }
     });
 
     Ok(Json(src))
@@ -76,15 +75,19 @@ pub struct TestSourceInput {
 }
 
 pub async fn test_source_by_id(
-    DbReader(r): DbReader,
+    db_reader: DbReader,
     Path(id): Path<String>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let src = get_proxy_source(&r, &id)?
-        .ok_or_else(|| CoreError::Validation(format!("proxy source '{id}' not found")))?;
-    let count = test_proxy_source_url(&src.url).await?;
+    let url = {
+        let DbReader(r) = db_reader;
+        let src = get_proxy_source(&r, &id)?
+            .ok_or_else(|| CoreError::Validation(format!("proxy source '{id}' not found")))?;
+        src.url
+    };
+    let count = test_proxy_source_url(&url).await?;
     Ok(Json(serde_json::json!({
         "id": id,
-        "url": src.url,
+        "url": url,
         "proxy_count": count
     })))
 }

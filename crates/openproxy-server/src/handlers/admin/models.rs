@@ -764,7 +764,7 @@ pub(crate) async fn run_test_for_model(
     let result = client.call(req.clone(), profile, cancel).await;
     let elapsed_ms = start.elapsed().as_millis() as u64;
     let mut debug_payload = None;
-    if opts.in_combo_fanout == false {
+    if !opts.in_combo_fanout {
         debug_payload = Some(serde_json::json!({
             "request_headers": req.headers.iter().map(|(k,v)| (k.as_str().to_string(), v.to_str().unwrap_or("").to_string())).collect::<std::collections::HashMap<_,_>>(),
             "request_url": req.url.to_string(),

@@ -287,7 +287,7 @@ impl UpstreamDispatcher {
         let proxy_result = {
             let repo = self.tracker.repo.clone();
             let provider_id = target.provider_id.clone();
-            let account_id = target.account_id.clone();
+            let account_id = target.account_id;
             tokio::task::spawn_blocking(move || {
                 repo.get_or_assign_provider_proxy(&provider_id, account_id)
             })

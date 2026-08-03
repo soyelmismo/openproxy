@@ -859,7 +859,7 @@ impl PipelineRepository for SqlitePipelineRepository {
                         source: Some(Box::new(e)),
                     })?
                     .flatten();
-                (acc_proxy_id, Some(acc_id.clone()))
+                (acc_proxy_id, Some(*acc_id))
             } else {
                 (None, None)
             }

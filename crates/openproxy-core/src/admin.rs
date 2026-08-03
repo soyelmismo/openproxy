@@ -36,8 +36,6 @@ use std::time::Duration;
 // Helpers
 // =====================================================================
 
-/// Validate that a `base_url` is a well-formed HTTP(S) URL with a non-empty
-/// host. Rejects data URIs, file URIs, bare hosts, and any other scheme.
 
 // =====================================================================
 // Providers
