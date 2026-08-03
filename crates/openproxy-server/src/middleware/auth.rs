@@ -198,12 +198,13 @@ pub async fn auth_middleware(
         }
     };
 
-    let parsed: openproxy_types::OpenAIRequest = serde_json::from_slice(&bytes).map_err(|e| {
-        let raw_err = e.to_string();
-        let redacted = openproxy_core::cost::redact_error_msg(&raw_err);
-        let message = crate::error::truncate_error_message(&redacted.0);
-        crate::error::ApiError(openproxy_types::CoreError::Parse(message))
-    })?;
+    let mut parsed: openproxy_types::OpenAIRequest =
+        serde_json::from_slice(&bytes).map_err(|e| {
+            let raw_err = e.to_string();
+            let redacted = openproxy_core::cost::redact_error_msg(&raw_err);
+            let message = crate::error::truncate_error_message(&redacted.0);
+            crate::error::ApiError(openproxy_types::CoreError::Parse(message))
+        })?;
 
     let requested_model = &parsed.model;
 
